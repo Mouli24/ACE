@@ -1,5 +1,5 @@
-import { derivePorts, portId, type Node } from '@ace/contracts';
-import { AceApiError, createAceClient } from '@ace/sdk';
+import { derivePorts, portId, type Node, type NodePortSource } from '@ace/contracts';
+import { createAceClient, type AceApiError } from '@ace/sdk';
 import { setupServer } from 'msw/node';
 
 import { newId } from '../lib/ulid';
@@ -38,7 +38,7 @@ function node(kind: 'input' | 'agent' | 'output', workflowId: string, x = 0): No
             memory: { enabled: false },
             skillIds: [],
           };
-  const base = { id, kind, config } as Pick<Node, 'id' | 'kind' | 'config'>;
+  const base = { id, kind, config } as unknown as NodePortSource;
   return {
     ...base,
     workflowId,

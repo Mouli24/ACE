@@ -12,9 +12,9 @@ import {
   type ApiError,
   type ErrorKind,
 } from '@ace/contracts';
-import { HttpResponse, http, type HttpHandler } from 'msw';
+import { HttpResponse, http, type HttpHandler, type PathParams } from 'msw';
 
-import { MockDb, isUnwritablePath } from './db';
+import { type MockDb, isUnwritablePath } from './db';
 import { applyOpsWithRules, cloneGraph, validateGraph } from './graph-rules';
 
 /**
@@ -24,7 +24,7 @@ import { applyOpsWithRules, cloneGraph, validateGraph } from './graph-rules';
 
 const API = '*/api/v1';
 
-type Ctx = { request: Request; params: Record<string, string | readonly string[]> };
+type Ctx = { request: Request; params: PathParams };
 
 const param = (ctx: Ctx, name: string): string => String(ctx.params[name] ?? '');
 

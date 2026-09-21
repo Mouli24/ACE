@@ -8,7 +8,9 @@ describe('env — engine address and mock switch (D27, round 1 §5)', () => {
   });
 
   it('VITE_ACE_URL overrides the origin and a trailing slash is dropped', () => {
-    expect(engineOrigin({ VITE_ACE_URL: 'http://127.0.0.1:47470/' })).toBe('http://127.0.0.1:47470');
+    expect(engineOrigin({ VITE_ACE_URL: 'http://127.0.0.1:47470/' })).toBe(
+      'http://127.0.0.1:47470',
+    );
   });
 
   it('derives the ws url from the origin', () => {

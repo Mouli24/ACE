@@ -53,7 +53,7 @@ export function createFakeWebSocket(db: MockDb): FakeWebSocketClass {
     static readonly CLOSED = 3 as const;
 
     readonly url: string;
-    readyState = FakeWebSocket.CONNECTING;
+    readyState: number = FakeWebSocket.CONNECTING;
     onopen: ((ev: Event) => void) | null = null;
     onmessage: ((ev: MessageEvent<string>) => void) | null = null;
     onclose: ((ev: CloseEvent) => void) | null = null;
