@@ -5,6 +5,13 @@ import type { Entry as KeyringEntry } from '@napi-rs/keyring';
 type EntryClass = typeof KeyringEntry;
 
 /**
+ * How the keychain backend is obtained. Defaults to loading `@napi-rs/keyring` lazily; hosted mode
+ * (and the tests) supply their own, which is also what keeps this class exercisable on a machine
+ * with no keychain at all.
+ */
+export type EntryLoader = () => Promise<EntryClass | undefined>;
+
+/**
  * The OS keychain (Arch §7 local adapter; a secret manager when hosted).
  *
  * BR-07 and NFR-SEC-02: this is the only place a provider key is ever stored — never the database,
@@ -19,7 +26,14 @@ export class KeychainSecretStore implements SecretStore {
   #entryClass: EntryClass | undefined;
   #probed = false;
 
-  constructor(private readonly service = 'ace-engine') {}
+  readonly #loadEntry: EntryLoader;
+
+  constructor(
+    private readonly service = 'ace-engine',
+    loadEntry?: EntryLoader,
+  ) {
+    this.#loadEntry = loadEntry ?? (() => this.#loadNativeKeyring());
+  }
 
   async isAvailable(): Promise<boolean> {
     return (await this.#load()) !== undefined;
@@ -62,15 +76,19 @@ export class KeychainSecretStore implements SecretStore {
     this.#probed = true;
 
     try {
-      const { Entry } = await import('@napi-rs/keyring');
-      // Constructing an entry is the cheapest way to find out whether the native backend loads.
-      new Entry(this.service, '__ace_probe__');
-      this.#entryClass = Entry;
+      this.#entryClass = await this.#loadEntry();
     } catch {
       this.#entryClass = undefined;
     }
 
     return this.#entryClass;
+  }
+
+  async #loadNativeKeyring(): Promise<EntryClass | undefined> {
+    const { Entry } = await import('@napi-rs/keyring');
+    // Constructing an entry is the cheapest way to find out whether the native backend loads.
+    new Entry(this.service, '__ace_probe__');
+    return Entry;
   }
 
   /** Scoped so one workspace's keys can never be read as another's (BR-18). */
