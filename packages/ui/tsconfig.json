@@ -1,0 +1,12 @@
+{
+  "extends": "../config/tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["vitest/globals"]
+  },
+  "include": ["src"],
+  "references": [{ "path": "../contracts" }]
+}

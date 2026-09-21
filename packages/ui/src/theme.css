@@ -1,0 +1,58 @@
+/*
+ * ACE Tailwind v4 theme — the "preset" (Arch §10.1). Values mirror src/tokens.ts.
+ * Consumers: `@import "tailwindcss"; @import "@ace/ui/theme.css";`
+ */
+@theme {
+  --color-canvas: #0d1117;
+  --color-canvas-dot: #2a3340;
+  --color-panel: #161b22;
+  --color-card: #1c2129;
+  --color-border: #30363d;
+  --color-fg: #e6edf3;
+  --color-fg-muted: #9da7b3;
+  --color-accent: #d8b4fe;
+  --color-accent-fg: #1a1033;
+  --color-danger: #ff8a8a;
+  --color-selection: #d8b4fe;
+
+  --color-provider-anthropic: #e0955f;
+  --color-provider-google: #6ea8ff;
+  --color-provider-openai: #5ed3a5;
+  --color-provider-openai_compatible: #b59cff;
+  --color-provider-ollama: #e8e2d6;
+  --color-provider-mock: #9aa3ad;
+
+  --color-status-IDLE: #7d8590;
+  --color-status-READY: #8fb3ff;
+  --color-status-RUNNING: #5cc8ff;
+  --color-status-WAITING: #f2c94c;
+  --color-status-COMPLETED: #4ade80;
+  --color-status-PAUSED: #c8b56a;
+  --color-status-STOPPED: #b0b8c1;
+  --color-status-BLOCKED: #f59e0b;
+  --color-status-FAILED: #f87171;
+
+  --font-human: 'Source Serif 4', 'Iowan Old Style', Georgia, serif;
+  --font-machine: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  --radius-card: 10px;
+  --radius-chip: 999px;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background-color: var(--color-canvas);
+  color: var(--color-fg);
+  font-family: var(--font-human);
+}
+
+/* FR-CAN-001: dark dotted grid. React Flow draws the dots; this is the fallback surface. */
+.ace-dotted-canvas {
+  background-color: var(--color-canvas);
+  background-image: radial-gradient(var(--color-canvas-dot) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
