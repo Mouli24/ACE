@@ -1,0 +1,29 @@
+{
+  "name": "ace",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "scripts": {
+    "dev": "concurrently --names engine,web --prefix-colors cyan,magenta \"pnpm --filter @ace/server dev\" \"pnpm --filter @ace/web dev\"",
+    "dev:engine": "pnpm --filter @ace/server dev",
+    "dev:web": "pnpm --filter @ace/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "test:e2e": "pnpm --filter @ace/web test:e2e",
+    "test:acceptance": "vitest run --config tests/acceptance/vitest.config.ts && playwright test --config tests/acceptance/playwright.config.ts",
+    "test:providers": "pnpm -r test:providers",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5",
+    "prettier": "^3.9.8",
+    "typescript": "^5.9.3"
+  }
+}
