@@ -53,3 +53,12 @@ if (typeof window !== 'undefined' && typeof window.DOMRect === 'undefined') {
     }
   } as unknown as typeof DOMRect;
 }
+
+/* Radix Select relies on pointer capture and scrollIntoView, neither of which jsdom implements. */
+if (typeof Element !== 'undefined') {
+  const proto = Element.prototype as unknown as Record<string, unknown>;
+  proto['hasPointerCapture'] ??= () => false;
+  proto['setPointerCapture'] ??= () => undefined;
+  proto['releasePointerCapture'] ??= () => undefined;
+  proto['scrollIntoView'] ??= () => undefined;
+}
