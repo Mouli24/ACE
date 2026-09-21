@@ -126,6 +126,8 @@ describe('runEngine wiring', () => {
     const { engine, shutdown } = await runEngine({
       env: { ACE_DATA_DIR: dir, ACE_PORT: '47596' },
       exit: () => undefined,
+      stdout: { write: () => undefined },
+      onSignal: () => undefined,
     });
 
     expect(engine.url).toBe('http://127.0.0.1:47596');
@@ -134,11 +136,87 @@ describe('runEngine wiring', () => {
     await engine.stop();
   }, 30_000);
 
+  it('installs the signal handlers BEFORE it announces readiness (FR-SYS-008)', async () => {
+    // The regression this pins: the banner is the readiness announcement, so a supervisor or a
+    // person can send SIGTERM the instant after it. Printing it first leaves a window where the
+    // default action kills the engine instead of shutting it down. CI hit that window reliably.
+    const order: string[] = [];
+
+    const { engine } = await runEngine({
+      env: { ACE_DATA_DIR: dir, ACE_PORT: '47594' },
+      exit: () => undefined,
+      stdout: { write: () => order.push('banner') },
+      onSignal: (signal) => order.push(`handler:${signal}`),
+    });
+
+    expect(order).toEqual(['handler:SIGINT', 'handler:SIGTERM', 'banner']);
+
+    await engine.stop();
+  }, 30_000);
+
+  it('announces readiness with the §2.10 line, carrying the live url and token', async () => {
+    const written: string[] = [];
+
+    const { engine } = await runEngine({
+      env: { ACE_DATA_DIR: dir, ACE_PORT: '47593' },
+      exit: () => undefined,
+      stdout: { write: (text) => written.push(text) },
+      onSignal: () => undefined,
+    });
+
+    expect(written).toEqual([
+      `ACE engine ready · http://127.0.0.1:47593 · open http://localhost:5173/?token=${engine.token}
+`,
+    ]);
+
+    await engine.stop();
+  }, 30_000);
+
+  it('defaults to the real process stdout and signal handlers when none are injected', async () => {
+    // Exercises the production wiring itself, not a stand-in for it. The listeners it registers on
+    // this process are removed again so they cannot affect the rest of the run.
+    const before = {
+      int: process.listenerCount('SIGINT'),
+      term: process.listenerCount('SIGTERM'),
+    };
+    const written: string[] = [];
+    const original = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((text: string) => {
+      written.push(String(text));
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      const { engine } = await runEngine({
+        env: { ACE_DATA_DIR: dir, ACE_PORT: '47592' },
+        exit: () => undefined,
+      });
+
+      expect(process.listenerCount('SIGINT')).toBe(before.int + 1);
+      expect(process.listenerCount('SIGTERM')).toBe(before.term + 1);
+      expect(written.join('')).toContain('ACE engine ready');
+
+      await engine.stop();
+    } finally {
+      process.stdout.write = original;
+      for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+        const handlers = process.listeners(signal);
+        const added = handlers[handlers.length - 1];
+        if (added !== undefined) process.removeListener(signal, added as () => void);
+      }
+    }
+  }, 30_000);
+
   it('propagates a bad config rather than starting anyway (TC-SYS-011)', async () => {
     writeFileSync(join(dir, 'ace.config.json'), JSON.stringify({ logLevel: 'chatty' }));
 
     await expect(
-      runEngine({ env: { ACE_DATA_DIR: dir }, exit: () => undefined }),
+      runEngine({
+        env: { ACE_DATA_DIR: dir },
+        exit: () => undefined,
+        stdout: { write: () => undefined },
+        onSignal: () => undefined,
+      }),
     ).rejects.toThrow(/Refusing to start/);
   }, 30_000);
 });

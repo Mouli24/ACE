@@ -37,7 +37,7 @@ afterEach(() => {
 function startProcess(env: Record<string, string>): Promise<{
   banner: string;
   proc: SpawnedEngine;
-  exited: Promise<number | null>;
+  exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
 }> {
   const proc = spawn(process.execPath, ['--import', 'tsx', MAIN], {
     cwd: REPO_ROOT,
@@ -46,7 +46,11 @@ function startProcess(env: Record<string, string>): Promise<{
   });
   child = proc;
 
-  const exited = new Promise<number | null>((resolve) => proc.on('exit', (code) => resolve(code)));
+  // Both halves matter: `code: null, signal: 'SIGTERM'` means Node's default action killed the
+  // process because no handler was installed, which is a different bug from exiting non-zero.
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
+    proc.on('exit', (code, signal) => resolve({ code, signal })),
+  );
 
   return new Promise((resolve, reject) => {
     let out = '';
@@ -115,20 +119,24 @@ describe('FR-SYS-001 ace-engine as a process', () => {
 });
 
 describe('FR-SYS-008 graceful shutdown', () => {
-  it('stops cleanly on a termination signal', async () => {
+  it('stops cleanly on a termination signal sent the instant it says it is ready', async () => {
+    // Sent with no delay on purpose. The banner is the readiness announcement, so a signal may
+    // arrive the moment after it; if the handlers were installed any later than the banner, the
+    // default action would kill the process and this would come back as signal SIGTERM.
     const { proc, exited } = await startProcess({ ACE_DATA_DIR: dir, ACE_PORT: '47598' });
 
     proc.kill('SIGTERM');
-    const code = await exited;
+    const { code, signal } = await exited;
 
     if (process.platform === 'win32') {
-      // Windows has no signal delivery: Node maps .kill() to TerminateProcess, so the handler
-      // never runs and the exit code is the OS kill code. What is asserted here is that the
-      // process really ends; the handler itself is covered by the in-process stop() tests.
+      // Windows has no signal delivery: Node maps .kill() to TerminateProcess, so no handler can
+      // run. That the process ends is all this can assert here; the handler itself is covered by
+      // the in-process tests in cli.test.ts.
       expect(code === null || typeof code === 'number').toBe(true);
       return;
     }
 
+    expect(signal).toBeNull();
     expect(code).toBe(0);
   }, 60_000);
 

@@ -7,10 +7,4 @@ import { reportStartupFailure, runEngine } from './cli.js';
  * tested without spawning anything. `main.test.ts` additionally starts this file as a real
  * subprocess, which is the only way to prove the banner and the exit code a user actually sees.
  */
-runEngine().then(
-  ({ shutdown }) => {
-    process.on('SIGINT', () => shutdown('SIGINT'));
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
-  },
-  (error: unknown) => reportStartupFailure(error),
-);
+runEngine().catch((error: unknown) => reportStartupFailure(error));

@@ -3,7 +3,7 @@ import { createWriteStream, mkdirSync, writeFileSync, type WriteStream } from 'n
 import type { Server } from 'node:http';
 import { join } from 'node:path';
 
-import { DEFAULT_WEB_ORIGIN, WS_PATH } from '@ace/contracts';
+import { WS_PATH } from '@ace/contracts';
 import { serve } from '@hono/node-server';
 import {
   LOCAL_SCOPE,
@@ -40,8 +40,6 @@ export interface StartEngineOptions {
   /** Overrides the configured port. 0 asks the OS for a free one, which the tests rely on. */
   port?: number;
   env?: Record<string, string | undefined>;
-  /** Print the §2.10 ready line. Off for tests. */
-  banner?: boolean;
 }
 
 export interface RunningEngine {
@@ -183,10 +181,10 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     });
   });
 
-  if (options.banner === true) {
-    logger.info({ subsystem: 'server', url }, 'engine ready');
-    process.stdout.write(`${readyLine(url, DEFAULT_WEB_ORIGIN, token)}\n`);
-  }
+  // Deliberately no banner here. Announcing readiness belongs to the caller, because the caller is
+  // what installs the signal handlers — and nothing should be told the engine is ready before it
+  // can shut down cleanly. See `runEngine` in cli.ts.
+  logger.info({ subsystem: 'server', url }, 'engine ready');
 
   return {
     url,

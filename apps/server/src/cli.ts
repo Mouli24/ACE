@@ -1,11 +1,18 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { startEngine, type RunningEngine } from './server.js';
+import { DEFAULT_WEB_ORIGIN } from '@ace/contracts';
+
+import { readyLine, startEngine, type RunningEngine } from './server.js';
+
+export type SignalName = 'SIGINT' | 'SIGTERM';
 
 export interface CliIo {
   env?: Record<string, string | undefined>;
+  stdout?: { write(text: string): void };
   stderr?: { write(text: string): void };
+  /** Injectable so the ordering below can be asserted without sending real signals. */
+  onSignal?: (signal: SignalName, handler: () => void) => void;
   exit?: (code: number) => void;
 }
 
@@ -40,8 +47,13 @@ export function createShutdownHandler(
 }
 
 /**
- * Start the engine for the CLI and hand back the handler the process should attach to its signals.
- * Everything here is testable in-process; `main.ts` is only the wiring to the real `process`.
+ * Start the engine for the CLI: listen, then become interruptible, then say so.
+ *
+ * **The order matters.** The banner is what tells the outside world the engine is up — a
+ * supervisor, a test harness or a person waiting to press Ctrl-C. Printing it before the signal
+ * handlers exist leaves a window in which SIGTERM takes Node's default action and kills the process
+ * outright instead of running the graceful shutdown of FR-SYS-008. That window is microseconds on
+ * an idle machine and reliably hit on a loaded CI runner, which is exactly how it was found.
  */
 export async function runEngine(io: CliIo = {}): Promise<{
   engine: RunningEngine;
@@ -49,9 +61,22 @@ export async function runEngine(io: CliIo = {}): Promise<{
 }> {
   const env = io.env ?? process.env;
   const exit = io.exit ?? ((code: number) => process.exit(code));
+  const stdout = io.stdout ?? process.stdout;
+  const onSignal =
+    io.onSignal ??
+    ((signal: SignalName, handler: () => void) => {
+      process.on(signal, handler);
+    });
 
-  const engine = await startEngine({ dataDir: resolveDataDir(env), env, banner: true });
-  return { engine, shutdown: createShutdownHandler(engine, exit) };
+  const engine = await startEngine({ dataDir: resolveDataDir(env), env });
+  const shutdown = createShutdownHandler(engine, exit);
+
+  onSignal('SIGINT', () => shutdown('SIGINT'));
+  onSignal('SIGTERM', () => shutdown('SIGTERM'));
+
+  stdout.write(`${readyLine(engine.url, DEFAULT_WEB_ORIGIN, engine.token)}\n`);
+
+  return { engine, shutdown };
 }
 
 /** Report a start-up failure the way a terminal user needs to see it (FR-SYS-010, TC-SYS-011). */
