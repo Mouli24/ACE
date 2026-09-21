@@ -1,0 +1,26 @@
+{
+  "extends": "../../packages/config/tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "incremental": false,
+    "allowImportingTsExtensions": true,
+    "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom"],
+    "baseUrl": ".",
+    "paths": {
+      "@ace/contracts": ["../../packages/contracts/src/index.ts"],
+      "@ace/sdk": ["../../packages/sdk/src/index.ts"],
+      "@ace/ui": ["../../packages/ui/src/index.ts"],
+      "@ace/ui/theme.css": ["../../packages/ui/src/theme.css"],
+      "@/*": ["src/*"]
+    }
+  },
+  "include": ["src", "e2e", "vite.config.ts", "vitest.config.ts", "playwright.config.ts"]
+}
