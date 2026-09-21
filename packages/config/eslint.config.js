@@ -92,6 +92,15 @@ export const base = tseslint.config(
         { prefer: 'type-imports', fixStyle: 'inline-type-imports' },
       ],
       eqeqeq: ['error', 'always'],
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+          ignoreRestSiblings: true,
+        },
+      ],
       'no-restricted-syntax': [
         'error',
         {
