@@ -11,6 +11,7 @@ import {
 } from '@ace/contracts';
 
 import { newId } from '../lib/ulid';
+import { publishMockEvent } from './event-bus';
 
 /** A persisted event, as the engine keeps it in `events` (§2.9): global monotonic seq. */
 export interface MockEvent {
@@ -216,8 +217,17 @@ export class MockDb {
     return this.state.edges[workflowId] ?? [];
   }
 
-  /** Commit a new graph: version + 1, and one `workflow.updated` event with the next seq. */
-  commitGraph(workflowId: string, nodes: Node[], edges: Edge[]): Workflow {
+  /**
+   * Commit a new graph: version + 1, and one `workflow.updated` event with the next seq.
+   * `silent` skips the live broadcast (the event is still persisted for `resume`), which is how a
+   * test makes this tab stale on purpose (TC-WF-005).
+   */
+  commitGraph(
+    workflowId: string,
+    nodes: Node[],
+    edges: Edge[],
+    options: { silent?: boolean } = {},
+  ): Workflow {
     const workflow = this.getWorkflow(workflowId);
     if (!workflow) throw new Error(`unknown workflow ${workflowId}`);
     workflow.version += 1;
@@ -225,12 +235,14 @@ export class MockDb {
     this.state.nodes[workflowId] = nodes;
     this.state.edges[workflowId] = edges;
     this.state.seq += 1;
-    this.state.events.push({
+    const event: MockEvent = {
       seq: this.state.seq,
       type: 'workflow.updated',
       payload: { workflowId, version: workflow.version },
-    });
+    };
+    this.state.events.push(event);
     this.save();
+    if (!options.silent) publishMockEvent(event);
     return workflow;
   }
 

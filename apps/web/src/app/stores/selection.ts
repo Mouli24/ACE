@@ -1,0 +1,20 @@
+import { create } from 'zustand';
+
+/** Which nodes and edges are selected on the Canvas (FR-CAN-003); the engine never sees this. */
+interface SelectionState {
+  nodeIds: string[];
+  edgeIds: string[];
+  /** The one node whose config panel is open: set only when exactly one node is selected. */
+  focusedNodeId: string | undefined;
+  setSelection(nodeIds: string[], edgeIds: string[]): void;
+  clear(): void;
+}
+
+export const useSelectionStore = create<SelectionState>((set) => ({
+  nodeIds: [],
+  edgeIds: [],
+  focusedNodeId: undefined,
+  setSelection: (nodeIds, edgeIds) =>
+    set({ nodeIds, edgeIds, focusedNodeId: nodeIds.length === 1 ? nodeIds[0] : undefined }),
+  clear: () => set({ nodeIds: [], edgeIds: [], focusedNodeId: undefined }),
+}));
