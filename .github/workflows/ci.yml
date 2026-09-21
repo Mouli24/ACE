@@ -73,6 +73,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Scripts run under cmd on a developer's Windows box and under sh on this runner. A
+      # backtick is inert in one and command substitution in the other, so a harmless-looking
+      # message can silently execute whatever it names. That cost a CI run once; never again.
+      - name: Refuse shell metacharacters in package scripts
+        run: |
+          node -e '
+            const { readFileSync, readdirSync, existsSync } = require("node:fs");
+            const manifests = ["package.json"];
+            for (const dir of ["packages", "apps", "tests"]) {
+              if (!existsSync(dir)) continue;
+              for (const entry of readdirSync(dir)) {
+                const file = dir + "/" + entry + "/package.json";
+                if (existsSync(file)) manifests.push(file);
+              }
+            }
+            const BACKTICK = "`";
+            let failed = false;
+            for (const file of manifests) {
+              const scripts = JSON.parse(readFileSync(file, "utf8")).scripts || {};
+              for (const name of Object.keys(scripts)) {
+                if (String(scripts[name]).includes(BACKTICK)) {
+                  console.log("::error file=" + file + "::script \"" + name + "\" contains a backtick, which is command substitution on POSIX");
+                  failed = true;
+                }
+              }
+            }
+            console.log("checked " + manifests.length + " manifests");
+            process.exit(failed ? 1 : 0);
+          '
+
       # CLAUDE.md §4 reserves these paths for later rounds. A new folder outside the
       # ownership map is drift and should be reverted, not merged.
       - name: Refuse folders reserved for later rounds
