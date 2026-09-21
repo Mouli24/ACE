@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: install · lint · typecheck · test · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm comes from the `packageManager` field in the root package.json.
+      - name: Enable corepack
+        run: corepack enable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      # No env vars are set anywhere in this job: `pnpm test` must pass without any
+      # (CLAUDE.md §2, §7). A test that needs a key is a defect, not a CI setting.
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Coverage thresholds
+        run: pnpm -r --if-present test:coverage
+
+      - name: Build
+        run: pnpm build
+
+      # The last two suites are required, never `continue-on-error`. Until the packages that
+      # own them exist they are skipped with a message saying exactly why.
+      - name: End-to-end (apps/web)
+        run: |
+          if [ -d apps/web/e2e ]; then
+            pnpm test:e2e
+          else
+            echo "SKIPPED: apps/web/e2e does not exist yet (Mouli creates it in round 1, feature M1)."
+          fi
+
+      - name: Acceptance (real engine)
+        run: |
+          if [ -f tests/acceptance/vitest.config.ts ]; then
+            pnpm test:acceptance
+          else
+            echo "SKIPPED: tests/acceptance/vitest.config.ts does not exist yet (Arhant creates it in round 1, feature A1)."
+          fi
+
+  ownership:
+    name: ownership map
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # CLAUDE.md §4 reserves these paths for later rounds. A new folder outside the
+      # ownership map is drift and should be reverted, not merged.
+      - name: Refuse folders reserved for later rounds
+        run: |
+          reserved="apps/desktop apps/cli apps/site packages/storage-cloud services/training bench"
+          failed=0
+          for path in $reserved; do
+            if [ -e "$path" ]; then
+              echo "::error::$path is reserved for a later round (CLAUDE.md §4)."
+              failed=1
+            fi
+          done
+          exit $failed
