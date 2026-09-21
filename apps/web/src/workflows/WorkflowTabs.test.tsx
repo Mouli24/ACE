@@ -30,10 +30,8 @@ describe('Workflow tabs (FR-WF-001..003)', () => {
         `/projects/${project.id}/workflows/${created.id}`,
       ),
     );
-    expect(await screen.findByRole('tab', { name: /flow 1/i })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
+    const tab = await screen.findByRole('tab', { name: /flow 1/i });
+    await waitFor(() => expect(tab).toHaveAttribute('aria-selected', 'true'));
   });
 
   it('TC-WF-002: switching tabs shows the other workflow', async () => {

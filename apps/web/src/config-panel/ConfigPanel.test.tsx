@@ -13,8 +13,8 @@ vi.mock('../canvas/Canvas', () => ({
   Canvas: ({ workflowId }: { workflowId: string }) => <div data-testid="canvas">{workflowId}</div>,
 }));
 
-vi.mock('@monaco-editor/react', () => ({
-  default: ({
+vi.mock('./monaco-loader', () => ({
+  MonacoEditor: ({
     value,
     onChange,
     'aria-label': label,

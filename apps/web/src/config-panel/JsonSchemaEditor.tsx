@@ -1,8 +1,10 @@
 import { Label } from '@ace/ui';
 import { Suspense, lazy, useEffect, useId, useState } from 'react';
 
-/** Monaco is ~2 MB; it loads only when an agent panel is open (NFR-PERF-05). */
-const MonacoEditor = lazy(() => import('@monaco-editor/react'));
+/** Monaco is several MB; it loads (from the bundle, not a CDN) only when an agent panel is open. */
+const MonacoEditor = lazy(() =>
+  import('./monaco-loader').then((m) => ({ default: m.MonacoEditor })),
+);
 
 function stringify(value: Record<string, unknown> | undefined): string {
   return value ? JSON.stringify(value, null, 2) : '';

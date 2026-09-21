@@ -50,11 +50,11 @@ async function boot(): Promise<void> {
   configureApi({ token });
   startSocket({ token, queryClient, ...(WebSocketImpl ? { WebSocket: WebSocketImpl } : {}) });
 
-  const router = createBrowserRouter(routes);
+  const router = createBrowserRouter(routes, { future: { v7_relativeSplatPath: true } });
   root.render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
+        <RouterProvider router={router} future={{ v7_startTransition: true }} />
       </QueryClientProvider>
     </StrictMode>,
   );

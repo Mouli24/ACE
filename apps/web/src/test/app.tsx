@@ -36,10 +36,13 @@ export function installMockServer(): void {
 export function renderApp(
   path: string,
 ): RenderResult & { router: ReturnType<typeof createMemoryRouter> } {
-  const router = createMemoryRouter(routes, { initialEntries: [path] });
+  const router = createMemoryRouter(routes, {
+    initialEntries: [path],
+    future: { v7_relativeSplatPath: true },
+  });
   const result = render(
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <RouterProvider router={router} future={{ v7_startTransition: true }} />
     </QueryClientProvider>,
   );
   return { ...result, router };

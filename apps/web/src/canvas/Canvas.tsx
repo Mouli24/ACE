@@ -420,7 +420,6 @@ function CanvasInner({
         onlyRenderVisibleElements
         minZoom={0.1}
         maxZoom={2.5}
-        proOptions={{ hideAttribution: true }}
         className="ace-dotted-canvas"
         style={{ background: tokens.color.canvas }}
       >
