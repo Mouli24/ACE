@@ -5,6 +5,7 @@ import { usePanelsStore } from '../app/stores/panels';
 import { BottomPanel } from '../bottom-panel/BottomPanel';
 import { Canvas } from '../canvas/Canvas';
 import { Palette } from '../canvas/Palette';
+import { useCanvasApi } from '../canvas/canvas-api';
 import { ConfigPanel } from '../config-panel/ConfigPanel';
 import { useWorkflowGraph } from './hooks';
 
@@ -18,6 +19,7 @@ export function WorkflowPage() {
   const { projectId = '', workflowId = '' } = useParams();
   const graph = useWorkflowGraph(workflowId);
   const { paletteOpen, configOpen, bottomOpen } = usePanelsStore();
+  const canvasApi = useCanvasApi((s) => s.api);
 
   if (graph.isError) {
     return (
@@ -35,7 +37,7 @@ export function WorkflowPage() {
       {paletteOpen && (
         <>
           <Panel defaultSize={14} minSize={8} maxSize={30} className="bg-panel">
-            <Palette workflowId={workflowId} />
+            <Palette workflowId={workflowId} onAdd={(kind) => canvasApi?.addNode(kind)} />
           </Panel>
           <PanelResizeHandle className={`w-px ${handle}`} />
         </>

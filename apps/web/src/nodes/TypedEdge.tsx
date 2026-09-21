@@ -35,10 +35,21 @@ export const TypedEdge = memo(function TypedEdge({
       <BaseEdge
         id={id}
         path={path}
-        style={{ stroke: selected ? 'var(--color-selection)' : 'var(--color-fg-muted)', strokeWidth: selected ? 2.5 : 1.5 }}
+        style={{
+          stroke: selected ? 'var(--color-selection)' : 'var(--color-fg-muted)',
+          strokeWidth: selected ? 2.5 : 1.5,
+        }}
       />
       <g transform={`translate(${labelX}, ${labelY})`} data-testid={`edge-label-${id}`}>
-        <rect x={-18} y={-8} width={36} height={16} rx={8} fill="var(--color-panel)" stroke="var(--color-border)" />
+        <rect
+          x={-18}
+          y={-8}
+          width={36}
+          height={16}
+          rx={8}
+          fill="var(--color-panel)"
+          stroke="var(--color-border)"
+        />
         <text
           textAnchor="middle"
           dominantBaseline="middle"

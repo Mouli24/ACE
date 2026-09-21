@@ -11,19 +11,28 @@ const WF = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
 function renderCard(node: Node, extra: Partial<Parameters<typeof NodeCardView>[0]> = {}) {
   return render(
     <ReactFlowProvider>
-      <NodeCardView node={node} state="IDLE" selected={false} connectedPortIds={new Set()} {...extra} />
+      <NodeCardView
+        node={node}
+        state="IDLE"
+        selected={false}
+        connectedPortIds={new Set()}
+        {...extra}
+      />
     </ReactFlowProvider>,
   );
 }
 
 describe('createNode (FR-NODE-001 six round-1 kinds)', () => {
-  it.each(ROUND_1_NODE_KINDS)('%s: builds a node that satisfies the contract with derived ports', (kind) => {
-    const node = createNode(kind, WF, { x: 10, y: 20 });
-    expect(NodeSchema.safeParse(node).success).toBe(true);
-    expect(NODE_CONFIG_SCHEMA_BY_KIND[kind].safeParse(node.config).success).toBe(true);
-    expect(node.position).toEqual({ x: 10, y: 20 });
-    expect({ inputs: node.inputs, outputs: node.outputs }).toEqual(derivePorts(node));
-  });
+  it.each(ROUND_1_NODE_KINDS)(
+    '%s: builds a node that satisfies the contract with derived ports',
+    (kind) => {
+      const node = createNode(kind, WF, { x: 10, y: 20 });
+      expect(NodeSchema.safeParse(node).success).toBe(true);
+      expect(NODE_CONFIG_SCHEMA_BY_KIND[kind].safeParse(node.config).success).toBe(true);
+      expect(node.position).toEqual({ x: 10, y: 20 });
+      expect({ inputs: node.inputs, outputs: node.outputs }).toEqual(derivePorts(node));
+    },
+  );
 
   it('lists exactly input, agent, model, output, merge, transform', () => {
     expect(ROUND_1_NODE_KINDS).toEqual(['input', 'agent', 'model', 'output', 'merge', 'transform']);
@@ -62,7 +71,13 @@ describe('NodeCardView (FR-NODE-005/006/010/012)', () => {
     const agent = createNode('agent', WF, { x: 0, y: 0 });
     const { rerender } = render(
       <ReactFlowProvider>
-        <NodeCardView node={agent} state="IDLE" selected={false} connectedPortIds={new Set()} provider="anthropic" />
+        <NodeCardView
+          node={agent}
+          state="IDLE"
+          selected={false}
+          connectedPortIds={new Set()}
+          provider="anthropic"
+        />
       </ReactFlowProvider>,
     );
     const card = screen.getByTestId(`node-card-${agent.id}`);
@@ -71,7 +86,13 @@ describe('NodeCardView (FR-NODE-005/006/010/012)', () => {
     expect(card).toHaveAttribute('data-state', 'IDLE');
     rerender(
       <ReactFlowProvider>
-        <NodeCardView node={agent} state="RUNNING" selected={false} connectedPortIds={new Set()} provider="anthropic" />
+        <NodeCardView
+          node={agent}
+          state="RUNNING"
+          selected={false}
+          connectedPortIds={new Set()}
+          provider="anthropic"
+        />
       </ReactFlowProvider>,
     );
     expect(card.style.getPropertyValue('--accent-color')).toBe(PROVIDER_ACCENT.anthropic);
@@ -101,6 +122,9 @@ describe('NodeCardView (FR-NODE-005/006/010/012)', () => {
   it('marks a connected handle', () => {
     const node = createNode('input', WF, { x: 0, y: 0 });
     renderCard(node, { connectedPortIds: new Set([`${node.id}:out:text`]) });
-    expect(screen.getByTestId(`port-${node.id}:out:text`)).toHaveAttribute('data-connected', 'true');
+    expect(screen.getByTestId(`port-${node.id}:out:text`)).toHaveAttribute(
+      'data-connected',
+      'true',
+    );
   });
 });

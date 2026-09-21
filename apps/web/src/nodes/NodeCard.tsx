@@ -136,7 +136,9 @@ export function NodeCardView({
       <header className="flex items-center gap-2 px-3 pt-2">
         <Icon className="h-4 w-4 shrink-0 text-fg-muted" aria-hidden />
         <span className="truncate font-human text-sm font-semibold">{node.name}</span>
-        <span className="ml-auto font-machine text-[10px] uppercase text-fg-muted">{node.kind}</span>
+        <span className="ml-auto font-machine text-[10px] uppercase text-fg-muted">
+          {node.kind}
+        </span>
       </header>
       {chip && (
         <div className="px-3 pt-1">
@@ -149,7 +151,9 @@ export function NodeCardView({
         </p>
       )}
       {node.kind === 'input' && node.config.text && (
-        <p className="line-clamp-2 px-3 pt-1 font-human text-xs text-fg-muted">{node.config.text}</p>
+        <p className="line-clamp-2 px-3 pt-1 font-human text-xs text-fg-muted">
+          {node.config.text}
+        </p>
       )}
       <div className="flex justify-between gap-4 px-0 py-2">
         <div className="flex flex-col gap-1">
