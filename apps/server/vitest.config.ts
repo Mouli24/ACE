@@ -1,6 +1,19 @@
+import { fileURLToPath } from 'node:url';
+
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@ace/contracts': fileURLToPath(
+        new URL('../../packages/contracts/src/index.ts', import.meta.url),
+      ),
+      '@ace/engine': fileURLToPath(new URL('../../packages/engine/src/index.ts', import.meta.url)),
+      '@ace/storage-local': fileURLToPath(
+        new URL('../../packages/storage-local/src/index.ts', import.meta.url),
+      ),
+    },
+  },
   test: {
     include: ['src/**/*.test.ts'],
     coverage: {
