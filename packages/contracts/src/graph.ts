@@ -24,8 +24,8 @@ export type Timestamp = z.infer<typeof TimestampSchema>;
 export const FORMAT_VERSION = 1;
 export const FormatVersionSchema = z.literal(FORMAT_VERSION);
 
-const EntityNameSchema = z.string().min(1).max(120);
-const NodeNameSchema = z.string().min(1).max(80);
+export const EntityNameSchema = z.string().min(1).max(120);
+export const NodeNameSchema = z.string().min(1).max(80);
 
 /* -------------------------------------------------------------------------- */
 /* Project and workflow                                                        */
