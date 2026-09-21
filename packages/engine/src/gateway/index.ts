@@ -1,8 +1,18 @@
-import { API_BASE_PATH, HealthResponseSchema, SettingsPatchSchema } from '@ace/contracts';
+import {
+  API_BASE_PATH,
+  CreateProjectRequestSchema,
+  CreateWorkflowRequestSchema,
+  CursorQuerySchema,
+  HealthResponseSchema,
+  SettingsPatchSchema,
+  UpdateProjectRequestSchema,
+  UpdateWorkflowRequestSchema,
+} from '@ace/contracts';
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
 
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
+import type { GraphService } from '../graph/index.js';
 import type { Auth, Repository, Scope } from '../ports/index.js';
 import { forbiddenOrigin, notFound, toApiError, unauthorized } from './errors.js';
 
@@ -13,6 +23,7 @@ export interface EngineDeps {
   scope: Scope;
   /** Reported by `GET /health`. */
   version: string;
+  graph: GraphService;
   /** The engine's own origin, always allowed in addition to `settings.allowedOrigins`. */
   selfOrigins?: string[];
 }
@@ -112,6 +123,78 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     const patch = SettingsPatchSchema.parse(await readJson(c));
     return c.json(await deps.repository.settings.update(deps.scope, patch));
   });
+
+  /* ------------------------------------------------------------- projects */
+
+  const page = (c: Context): ReturnType<typeof CursorQuerySchema.parse> =>
+    CursorQuerySchema.parse(c.req.query());
+
+  api.get('/projects', async (c) => c.json(await deps.graph.listProjects(page(c))));
+
+  api.post('/projects', async (c) => {
+    const input = CreateProjectRequestSchema.parse(await readJson(c));
+    return c.json(await deps.graph.createProject(input), 201);
+  });
+
+  api.get('/projects/:id', async (c) => c.json(await deps.graph.getProject(c.req.param('id'))));
+
+  api.patch('/projects/:id', async (c) => {
+    const { name } = UpdateProjectRequestSchema.parse(await readJson(c));
+    const id = c.req.param('id');
+    return c.json(name === undefined ? await deps.graph.getProject(id) : await deps.graph.renameProject(id, name));
+  });
+
+  api.delete('/projects/:id', async (c) => {
+    await deps.graph.deleteProject(c.req.param('id'));
+    return c.body(null, 204);
+  });
+
+  api.post('/projects/:id/open', async (c) => c.json(await deps.graph.openProject(c.req.param('id'))));
+
+  /* ------------------------------------------------------------ workflows */
+
+  api.get('/projects/:id/workflows', async (c) =>
+    c.json(await deps.graph.listWorkflows(c.req.param('id'), page(c))),
+  );
+
+  api.post('/projects/:id/workflows', async (c) => {
+    const { name } = CreateWorkflowRequestSchema.parse(await readJson(c));
+    return c.json(await deps.graph.createWorkflow(c.req.param('id'), name), 201);
+  });
+
+  api.post('/projects/:id/workflows/import', async (c) =>
+    c.json(await deps.graph.importWorkflow(c.req.param('id'), await readJson(c)), 201),
+  );
+
+  api.get('/workflows/:id', async (c) => c.json(await deps.graph.getWorkflowGraph(c.req.param('id'))));
+
+  api.patch('/workflows/:id', async (c) => {
+    const { name } = UpdateWorkflowRequestSchema.parse(await readJson(c));
+    const id = c.req.param('id');
+    if (name === undefined) return c.json((await deps.graph.getWorkflowGraph(id)).workflow);
+    return c.json(await deps.graph.renameWorkflow(id, name));
+  });
+
+  api.delete('/workflows/:id', async (c) => {
+    await deps.graph.deleteWorkflow(c.req.param('id'));
+    return c.body(null, 204);
+  });
+
+  api.post('/workflows/:id/duplicate', async (c) =>
+    c.json(await deps.graph.duplicateWorkflow(c.req.param('id')), 201),
+  );
+
+  api.post('/workflows/:id/graph-ops', async (c) =>
+    c.json(await deps.graph.applyGraphOps(c.req.param('id'), await readJson(c))),
+  );
+
+  api.post('/workflows/:id/validate', async (c) =>
+    c.json({ issues: await deps.graph.validateWorkflow(c.req.param('id')) }),
+  );
+
+  api.get('/workflows/:id/export', async (c) =>
+    c.json(await deps.graph.exportWorkflow(c.req.param('id'))),
+  );
 
   app.route(API_BASE_PATH, api);
 

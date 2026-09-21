@@ -16,17 +16,22 @@ import {
  * only honest check is "some node config, partially filled"; the engine knows the node's kind and
  * re-validates with `nodeConfigPatchSchema(kind)` before applying. Like TypeScript's `Partial`,
  * this is shallow: a patch that sets `execution` replaces the whole object.
+ *
+ * Each member is **loose**. A strict `z.object` strips keys it does not declare, and since every
+ * member here is fully optional the first one would match any patch and silently delete the very
+ * field being set — an `execution` patch would parse to `{}` and the update would do nothing. The
+ * keys have to survive request parsing so that `nodeConfigPatchSchema(kind)` can reject a bad one.
  */
 export const NodeConfigPatchSchema = z.union([
-  NODE_CONFIG_SCHEMA_BY_KIND.input.partial(),
-  NODE_CONFIG_SCHEMA_BY_KIND.output.partial(),
-  NODE_CONFIG_SCHEMA_BY_KIND.agent.partial(),
-  NODE_CONFIG_SCHEMA_BY_KIND.model.partial(),
-  NODE_CONFIG_SCHEMA_BY_KIND.merge.partial(),
-  NODE_CONFIG_SCHEMA_BY_KIND.transform.partial(),
-  NODE_CONFIG_SCHEMA_BY_KIND.retrieval.partial(),
-  NODE_CONFIG_SCHEMA_BY_KIND.guardrail.partial(),
-  NODE_CONFIG_SCHEMA_BY_KIND.custom.partial(),
+  NODE_CONFIG_SCHEMA_BY_KIND.input.partial().loose(),
+  NODE_CONFIG_SCHEMA_BY_KIND.output.partial().loose(),
+  NODE_CONFIG_SCHEMA_BY_KIND.agent.partial().loose(),
+  NODE_CONFIG_SCHEMA_BY_KIND.model.partial().loose(),
+  NODE_CONFIG_SCHEMA_BY_KIND.merge.partial().loose(),
+  NODE_CONFIG_SCHEMA_BY_KIND.transform.partial().loose(),
+  NODE_CONFIG_SCHEMA_BY_KIND.retrieval.partial().loose(),
+  NODE_CONFIG_SCHEMA_BY_KIND.guardrail.partial().loose(),
+  NODE_CONFIG_SCHEMA_BY_KIND.custom.partial().loose(),
 ]);
 export type NodeConfigPatch = z.infer<typeof NodeConfigPatchSchema>;
 

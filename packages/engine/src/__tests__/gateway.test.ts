@@ -2,6 +2,7 @@ import { ApiErrorSchema, HealthResponseSchema, SettingsSchema } from '@ace/contr
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createEngineApp, type EngineApp } from '../gateway/index.js';
+import { createGraphService } from '../graph/index.js';
 import { createLogger } from '../logging/index.js';
 import { LOCAL_SCOPE, type Auth, type Repository, type Scope } from '../ports/index.js';
 import { FakeRepository } from './fake-repository.js';
@@ -18,13 +19,16 @@ let repository: Repository;
 let app: EngineApp;
 
 function build(repo: Repository = repository): EngineApp {
+  // Silent: a test must not print, and the log is not what is under test here.
+  const logger = createLogger({ level: 'silent', destination: { write: () => undefined } });
+
   return createEngineApp({
     repository: repo,
     auth,
-    // Silent: a test must not print, and the log is not what is under test here.
-    logger: createLogger({ level: 'silent', destination: { write: () => undefined } }),
+    logger,
     scope: LOCAL_SCOPE,
     version: '0.1.0',
+    graph: createGraphService({ repository: repo, scope: LOCAL_SCOPE, logger }),
     selfOrigins: ['http://127.0.0.1:4747'],
   });
 }

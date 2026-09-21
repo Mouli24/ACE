@@ -142,6 +142,20 @@ describe('FR-NODE-007 update_node config patch is validated per kind', () => {
     expect(nodeConfigPatchSchema('retrieval').safeParse({ k: 3 }).success).toBe(true);
   });
 
+  it('keeps the patched field instead of stripping it at request level', () => {
+    // A strict union member would match any fully-optional patch and delete the key, so an
+    // `execution` patch would arrive at the engine as `{}` and silently do nothing.
+    const parsed = GraphOpSchema.parse({
+      op: 'update_node',
+      nodeId: NODE_A,
+      patch: { config: { execution: { temperature: 5 } } },
+    });
+
+    expect(parsed).toMatchObject({
+      patch: { config: { execution: { temperature: 5 } } },
+    });
+  });
+
   it('accepts an empty patch for every kind', () => {
     for (const kind of [
       'input',
