@@ -243,7 +243,7 @@ Status values: `TODO` → `IN PROGRESS` → `IN REVIEW` → `MERGED` → `VERIFI
 |---|---|---|---|---|---|---|---|---|---|
 | 1 | C1 | Round 1 contract (enums, graph entities, graph-ops, errors, settings, WS core) | Arhant | `round-1/contracts` | TODO | | | Mouli (review) | Step 0 |
 | 1 | A1 | Engine skeleton: workspace, storage, gateway, projects + workflows API, event log + WS hub | Arhant | `round-1/arhant-engine-skeleton` | TODO | | | Mouli | |
-| 1 | M1 | Web shell + Canvas: layout, React Flow canvas, nodes, typed connections, config panel, SDK v1 | Mouli | `round-1/mouli-web-canvas` | TODO | | | Arhant | |
+| 1 | M1 | Web shell + Canvas: layout, React Flow canvas, nodes, typed connections, config panel, SDK v1 | Mouli | `round-1/mouli-web-canvas` | IN REVIEW | | 2026-09-22 | Arhant | PR open; D-001 (engine `update_node` partial patch) logged, UI sends whole config as workaround |
 | 2 | C2 | Round 2 contract (providers, models, runs, node runs, envelope, run events) | Arhant | `round-2/contracts` | TODO | | | Mouli (review) | Step 0 |
 | 2 | A2 | Providers + model catalog + router + run engine (snapshot, pre-flight, scheduler, executor, envelopes, prompts, streaming) | Arhant | `round-2/arhant-providers-execution` | TODO | | | Mouli | |
 | 2 | M2 | Providers & models UI + run UI (start, live states, streaming, inspector, view prompt, history) + SDK WS resume | Mouli | `round-2/mouli-providers-run-ui` | TODO | | | Arhant | |
