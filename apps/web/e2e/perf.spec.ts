@@ -79,12 +79,10 @@ test.describe('Canvas performance (NFR-PERF-01)', () => {
     const wheel = stats(wheelFrames);
     const line = (label: string, s: ReturnType<typeof stats>) =>
       `${label}: frames=${s.n} mean=${s.mean.toFixed(2)}ms (${s.fps.toFixed(1)} fps) p95=${s.p95.toFixed(2)}ms`;
-    test
-      .info()
-      .annotations.push({
-        type: 'TC-NFR-001',
-        description: `${line('drag', drag)} · ${line('wheel', wheel)}`,
-      });
+    test.info().annotations.push({
+      type: 'TC-NFR-001',
+      description: `${line('drag', drag)} · ${line('wheel', wheel)}`,
+    });
     console.log(`TC-NFR-001 ${line('drag', drag)}`);
     console.log(`TC-NFR-001 ${line('wheel', wheel)}`);
 

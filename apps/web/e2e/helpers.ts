@@ -70,15 +70,13 @@ export async function serverGraph(page: Page, workflowId: string) {
     db.load();
     return {
       version: db.getWorkflow(id)?.version ?? -1,
-      nodes: db
-        .nodesOf(id)
-        .map((n) => ({
-          id: n.id,
-          kind: n.kind,
-          name: n.name,
-          position: n.position,
-          config: n.config,
-        })),
+      nodes: db.nodesOf(id).map((n) => ({
+        id: n.id,
+        kind: n.kind,
+        name: n.name,
+        position: n.position,
+        config: n.config,
+      })),
       edges: db.edgesOf(id).map((e) => ({ id: e.id, from: e.from, to: e.to })),
     };
   }, workflowId);

@@ -3,6 +3,7 @@ import { Plus } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
+import { ImportWorkflowButton } from '../workflows/ImportWorkflowButton';
 import { CreateWorkflowDialog } from '../workflows/WorkflowDialogs';
 import { useWorkflows } from '../workflows/hooks';
 import { useProject } from './hooks';
@@ -32,9 +33,12 @@ export function ProjectPage() {
           <h1 className="font-human text-2xl font-semibold">{project.data?.name ?? '…'}</h1>
           <p className="font-machine text-xs text-fg-muted">{project.data?.folderPath}</p>
         </div>
-        <Button onClick={() => setCreating(true)}>
-          <Plus className="h-4 w-4" /> New workflow
-        </Button>
+        <div className="flex items-start gap-2">
+          <ImportWorkflowButton projectId={projectId} />
+          <Button onClick={() => setCreating(true)}>
+            <Plus className="h-4 w-4" /> New workflow
+          </Button>
+        </div>
       </header>
       {workflows.data?.length === 0 && (
         <p className="rounded-card border border-dashed border-border p-8 text-center text-fg-muted">
