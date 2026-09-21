@@ -1,9 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { ApiErrorSchema, HealthResponseSchema, WsServerFrameSchema } from '@ace/contracts';
+import { openDatabase } from '@ace/storage-local';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 
@@ -261,4 +262,83 @@ describe('FR-SYS-007 the engine logs to its data directory', () => {
 
     expect(logs).not.toContain(engine.token);
   });
+});
+
+describe('§2.9 the WebSocket lives only at /ws', () => {
+  it('refuses an upgrade on any other path', async () => {
+    const socket = new WebSocket(`ws://127.0.0.1:${engine.port}/not-ws?token=${engine.token}`);
+    const failed = await new Promise<boolean>((resolve) => {
+      socket.on('error', () => resolve(true));
+      socket.on('open', () => {
+        socket.close();
+        resolve(false);
+      });
+    });
+
+    expect(failed).toBe(true);
+  });
+});
+
+describe('startEngine defaults', () => {
+  it('reads the port from the config when none is passed', async () => {
+    const other = mkdtempSync(join(tmpdir(), 'ace-default-port-'));
+    writeFileSync(join(other, 'ace.config.json'), JSON.stringify({ port: 47_595 }));
+
+    const started = await startEngine({ dataDir: other, env: {} });
+    expect(started.port).toBe(47_595);
+
+    await started.stop();
+    try {
+      rmSync(other, { recursive: true, force: true });
+    } catch {
+      // Windows may still hold the handle.
+    }
+  }, 30_000);
+
+  it('falls back to the real environment when none is passed', async () => {
+    const other = mkdtempSync(join(tmpdir(), 'ace-default-env-'));
+    const started = await startEngine({ dataDir: other, port: 0 });
+
+    expect(started.port).toBeGreaterThan(0);
+
+    await started.stop();
+    try {
+      rmSync(other, { recursive: true, force: true });
+    } catch {
+      // Windows may still hold the handle.
+    }
+  }, 30_000);
+
+  it('exposes the adapters later rounds build on', () => {
+    expect(engine.ports.repository).toBeDefined();
+    expect(engine.ports.blobs).toBeDefined();
+    expect(engine.ports.secrets).toBeDefined();
+  });
+});
+
+describe('NFR-REL-03 the engine backs up before it migrates', () => {
+  it('copies an existing database when a shipped migration is still pending', async () => {
+    const other = mkdtempSync(join(tmpdir(), 'ace-migrate-'));
+    const dbPath = join(other, 'ace.sqlite');
+
+    // A database that already carries a migration ledger, but not ours: opening it for real makes
+    // the shipped migration pending against a non-empty ledger, which is the case that must back up.
+    const seeded = openDatabase({
+      path: dbPath,
+      migrations: [{ id: '19990101T000000_someone_elses', up: 'CREATE TABLE legacy (id TEXT);' }],
+    });
+    seeded.sqlite.close();
+
+    const started = await startEngine({ dataDir: other, port: 0, env: {} });
+    await started.stop();
+
+    const backups = readdirSync(other).filter((name) => name.startsWith('ace-backup-'));
+    expect(backups).toHaveLength(1);
+
+    try {
+      rmSync(other, { recursive: true, force: true });
+    } catch {
+      // Windows may still hold the handle.
+    }
+  }, 30_000);
 });

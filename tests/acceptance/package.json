@@ -1,0 +1,24 @@
+{
+  "name": "@ace/acceptance",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --build",
+    "lint": "eslint .",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@ace/contracts": "workspace:*",
+    "@ace/server": "workspace:*"
+  },
+  "devDependencies": {
+    "@ace/config": "workspace:*",
+    "@playwright/test": "^1.56.1",
+    "@types/node": "^22.10.5",
+    "eslint": "^10.11.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.1",
+    "ws": "^8.21.3"
+  }
+}
