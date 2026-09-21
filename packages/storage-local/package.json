@@ -15,12 +15,26 @@
     "build": "tsc --build",
     "typecheck": "tsc --build",
     "lint": "eslint .",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@ace/config": "workspace:*",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.5",
+    "@vitest/coverage-v8": "^5.0.1",
+    "drizzle-kit": "^0.31.11",
     "eslint": "^10.11.0",
     "typescript": "^5.9.3",
     "vitest": "^5.0.1"
+  },
+  "dependencies": {
+    "@ace/contracts": "workspace:*",
+    "@ace/engine": "workspace:*",
+    "@napi-rs/keyring": "^2.1.0",
+    "better-sqlite3": "^12.4.1",
+    "drizzle-orm": "^0.45.3",
+    "ulid": "^3.0.1",
+    "zod": "^4.6.5"
   }
 }
