@@ -11,7 +11,9 @@ import {
   applyNodeChanges,
   useReactFlow,
   type Connection,
+  type EdgeChange,
   type EdgeMouseHandler,
+  type FinalConnectionState,
   type NodeChange,
   type OnSelectionChangeParams,
   type Viewport,
@@ -134,6 +136,33 @@ function CanvasInner({
     [nodes, edges],
   );
 
+  /**
+   * React Flow never calls onConnect for a drop `isValidConnection` refused, so the reason is
+   * shown here instead (FR-CON-002/003/005: refused *with* a message).
+   */
+  const onConnectEnd = useCallback(
+    (_event: MouseEvent | TouchEvent, state: FinalConnectionState) => {
+      if (state.isValid !== false || !state.fromHandle || !state.toHandle) return;
+      const attempt = {
+        source:
+          state.fromHandle.type === 'source'
+            ? (state.fromNode?.id ?? null)
+            : (state.toNode?.id ?? null),
+        sourceHandle:
+          (state.fromHandle.type === 'source' ? state.fromHandle.id : state.toHandle.id) ?? null,
+        target:
+          state.fromHandle.type === 'source'
+            ? (state.toNode?.id ?? null)
+            : (state.fromNode?.id ?? null),
+        targetHandle:
+          (state.fromHandle.type === 'source' ? state.toHandle.id : state.fromHandle.id) ?? null,
+      };
+      const verdict = checkConnection(nodes, edges, attempt);
+      if (!verdict.ok) toast.error('Connection refused', { description: verdict.reason });
+    },
+    [nodes, edges],
+  );
+
   /** Keyboard connect (NFR-USE-02): Enter on an output arms it, Enter on an input completes. */
   const onPortKey = useCallback(
     (port: Port, direction: 'in' | 'out', nodeId: string) => {
@@ -173,10 +202,11 @@ function CanvasInner({
       const byId = new Map(current.map((n) => [n.id, n]));
       return serverNodes.map((node) => {
         const prev = byId.get(node.id);
-        if (!prev) return { ...node, selected: selectedNodeIds.includes(node.id) };
+        const selected = selectedNodeIds.includes(node.id);
+        if (!prev) return { ...node, selected };
         return {
           ...node,
-          selected: prev.selected,
+          selected,
           measured: prev.measured,
           ...(prev.dragging ? { position: prev.position, dragging: true } : {}),
         };
@@ -209,6 +239,23 @@ function CanvasInner({
     () =>
       toFlowEdges(edges, nodes).map((e) => ({ ...e, selected: selectedEdgeIds.includes(e.id) })),
     [edges, nodes, selectedEdgeIds],
+  );
+
+  // Edges are fully derived from the query cache, so the only change to honour is selection.
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange[]) => {
+      const selects = changes.filter((c) => c.type === 'select');
+      if (selects.length === 0) return;
+      const { nodeIds, edgeIds } = useSelectionStore.getState();
+      const next = new Set(edgeIds);
+      for (const change of selects) {
+        if (change.type !== 'select') continue;
+        if (change.selected) next.add(change.id);
+        else next.delete(change.id);
+      }
+      setSelection(nodeIds, [...next]);
+    },
+    [setSelection],
   );
 
   const onSelectionChange = useCallback(
@@ -351,10 +398,12 @@ function CanvasInner({
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
         onSelectionChange={onSelectionChange}
         onNodesDelete={onNodesDelete}
         onEdgesDelete={onEdgesDelete}
         onConnect={tryConnect}
+        onConnectEnd={onConnectEnd}
         isValidConnection={isValidConnection}
         onEdgeContextMenu={onEdgeContextMenu}
         onPaneClick={() => setEdgeMenu(undefined)}

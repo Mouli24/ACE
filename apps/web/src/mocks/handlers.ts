@@ -86,6 +86,7 @@ export function createHandlers(db: MockDb): HttpHandler[] {
     async (ctx: Ctx): Promise<Response> => {
       if (!hasToken(ctx.request)) return unauthorized();
       db.load();
+      if (db.latencyMs > 0) await new Promise((resolve) => setTimeout(resolve, db.latencyMs));
       return handler(ctx);
     };
 

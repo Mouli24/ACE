@@ -28,6 +28,8 @@ interface Snapshot {
   edges: Record<string, Edge[]>;
   events: MockEvent[];
   seq: number;
+  /** Artificial delay per request, for the loading-state test (TC-CAN-009). */
+  latencyMs?: number;
 }
 
 export interface MockDbOptions {
@@ -81,6 +83,20 @@ export class MockDb {
     this.persist = options.persist ?? true;
     this.storageKey = options.storageKey ?? MOCK_STORAGE_KEY;
     this.load();
+  }
+
+  get latencyMs(): number {
+    return this.state.latencyMs ?? 0;
+  }
+
+  setLatency(ms: number): void {
+    this.state.latencyMs = ms;
+    this.save();
+  }
+
+  /** A fresh contract id (ULID), for callers building nodes or edges by hand. */
+  nextId(): string {
+    return newId();
   }
 
   /* ---------------------------------------------------------------- persistence */

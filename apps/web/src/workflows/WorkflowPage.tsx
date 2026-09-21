@@ -1,6 +1,7 @@
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { Link, useParams } from 'react-router-dom';
 
+import { useWorkflowSubscription } from '../app/socket';
 import { usePanelsStore } from '../app/stores/panels';
 import { BottomPanel } from '../bottom-panel/BottomPanel';
 import { Canvas } from '../canvas/Canvas';
@@ -18,6 +19,7 @@ const handle = 'bg-border transition-colors data-[resize-handle-state=drag]:bg-a
 export function WorkflowPage() {
   const { projectId = '', workflowId = '' } = useParams();
   const graph = useWorkflowGraph(workflowId);
+  useWorkflowSubscription(workflowId);
   const { paletteOpen, configOpen, bottomOpen } = usePanelsStore();
   const canvasApi = useCanvasApi((s) => s.api);
 

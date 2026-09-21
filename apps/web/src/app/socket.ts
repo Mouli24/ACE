@@ -1,5 +1,6 @@
 import { createAceSocket, type AceSocket } from '@ace/sdk';
 import type { QueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
 
 import { peekGraphSync } from '../workflows/sync-registry';
 import { queryKeys } from '../workflows/query-keys';
@@ -43,4 +44,14 @@ export function getSocket(): AceSocket | undefined {
 export function stopSocket(): void {
   socket?.close();
   socket = undefined;
+}
+
+/** Subscribe to `workflow.updated` for the open workflow while its Canvas is mounted (§2.9). */
+export function useWorkflowSubscription(workflowId: string | undefined): void {
+  useEffect(() => {
+    if (!workflowId || !socket) return;
+    const payload = { scope: 'workflow' as const, id: workflowId };
+    socket.subscribe(payload);
+    return () => socket?.unsubscribe(payload);
+  }, [workflowId]);
 }

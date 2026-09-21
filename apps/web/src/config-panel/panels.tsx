@@ -22,7 +22,7 @@ import {
 } from './fields';
 import { BUDGET_RANGE, EXECUTION_RANGES } from './validation';
 
-/** A partial config patch for the node being edited; the panel never sends a whole config. */
+/** A config patch for the node being edited; ConfigPanel completes it to the whole config (D-001). */
 export type PatchConfig<C> = (patch: Partial<C>) => void;
 
 const NO_PROVIDERS_HINT = 'add a provider in Round 2';
