@@ -1,0 +1,64 @@
+import { isSecretFieldName, looksLikeSecret } from '@ace/engine';
+
+/**
+ * BR-07 / NFR-SEC-02: secrets never reach the database.
+ *
+ * The keychain is the only place a secret lives. This guard runs on every JSON value the repository
+ * is about to write, so the rule is enforced by the storage layer rather than trusted to each
+ * caller — a node config, an event payload or a settings blob carrying a key is refused, loudly,
+ * before it can be persisted.
+ *
+ * What counts as a secret comes from `@ace/engine`, shared with the log redactor, so the database
+ * and the logs can never disagree about it.
+ */
+
+/** Thrown when a write would put a secret in a SQLite table (BR-07). */
+export class SecretWriteRejectedError extends Error {
+  override readonly name = 'SecretWriteRejectedError';
+
+  constructor(readonly path: string, reason: string) {
+    super(
+      `Refusing to write a secret to the database at "${path}": ${reason}. ` +
+        'Secrets belong in the OS keychain through SecretStore (BR-07, NFR-SEC-02).',
+    );
+  }
+}
+
+function describeValuePattern(value: string): string | undefined {
+  return looksLikeSecret(value) ? 'the value looks like a credential' : undefined;
+}
+
+/**
+ * Walks a JSON-serialisable value and throws on the first secret it finds.
+ * `path` is carried through so the error names where the secret was.
+ */
+export function assertNoSecrets(value: unknown, path = '$'): void {
+  if (typeof value === 'string') {
+    const reason = describeValuePattern(value);
+    if (reason !== undefined) throw new SecretWriteRejectedError(path, reason);
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertNoSecrets(item, `${path}[${index}]`));
+    return;
+  }
+
+  if (value !== null && typeof value === 'object') {
+    for (const [key, child] of Object.entries(value)) {
+      const childPath = `${path}.${key}`;
+
+      if (isSecretFieldName(key) && typeof child === 'string' && child !== '') {
+        throw new SecretWriteRejectedError(childPath, `"${key}" holds a secret by definition`);
+      }
+
+      assertNoSecrets(child, childPath);
+    }
+  }
+}
+
+/** Serialise for a JSON column, refusing anything that carries a secret. */
+export function toJsonColumn(value: unknown, path = '$'): string {
+  assertNoSecrets(value, path);
+  return JSON.stringify(value);
+}

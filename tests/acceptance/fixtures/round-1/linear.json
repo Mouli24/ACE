@@ -1,0 +1,174 @@
+{
+  "formatVersion": 1,
+  "exportedAt": "2026-09-21T12:00:00.000Z",
+  "name": "Linear",
+  "nodes": [
+    {
+      "id": "01M32MAWWZ115549JWD2MPKVT1",
+      "workflowId": "01M32MAWWYRHCX4DCNGTDSYGWP",
+      "name": "Input",
+      "position": {
+        "x": 80,
+        "y": 120
+      },
+      "inputs": [],
+      "outputs": [
+        {
+          "id": "01M32MAWWZ115549JWD2MPKVT1:out:text",
+          "name": "text",
+          "dataType": "text",
+          "multi": true
+        }
+      ],
+      "kind": "input",
+      "config": {
+        "artifactIds": [],
+        "outputTypes": [
+          "text"
+        ]
+      }
+    },
+    {
+      "id": "01M32MAWWZ115549JWD2MPKVT2",
+      "workflowId": "01M32MAWWYRHCX4DCNGTDSYGWP",
+      "name": "Agent",
+      "position": {
+        "x": 400,
+        "y": 120
+      },
+      "inputs": [
+        {
+          "id": "01M32MAWWZ115549JWD2MPKVT2:in:text",
+          "name": "text",
+          "dataType": "text",
+          "multi": false
+        }
+      ],
+      "outputs": [
+        {
+          "id": "01M32MAWWZ115549JWD2MPKVT2:out:text",
+          "name": "text",
+          "dataType": "text",
+          "multi": true
+        }
+      ],
+      "kind": "agent",
+      "config": {
+        "routing": {
+          "policy": "fixed",
+          "fallbackModelIds": []
+        },
+        "instructions": "Summarise the input in one sentence.",
+        "inputTypes": [
+          "text"
+        ],
+        "outputTypes": [
+          "text"
+        ],
+        "execution": {
+          "temperature": 0.7,
+          "maxTokens": 4096,
+          "timeoutMs": 120000,
+          "retries": 2
+        },
+        "contextPolicy": {
+          "budgetTokens": 4000
+        },
+        "tools": {
+          "enabled": [],
+          "maxToolCalls": 10,
+          "allowedDomains": []
+        },
+        "knowledgeBaseIds": [],
+        "memory": {
+          "enabled": false
+        },
+        "skillIds": []
+      }
+    },
+    {
+      "id": "01M32MAWWZ115549JWD2MPKVT3",
+      "workflowId": "01M32MAWWYRHCX4DCNGTDSYGWP",
+      "name": "Output",
+      "position": {
+        "x": 720,
+        "y": 120
+      },
+      "inputs": [
+        {
+          "id": "01M32MAWWZ115549JWD2MPKVT3:in:text",
+          "name": "text",
+          "dataType": "text",
+          "multi": false
+        },
+        {
+          "id": "01M32MAWWZ115549JWD2MPKVT3:in:json",
+          "name": "json",
+          "dataType": "json",
+          "multi": false
+        },
+        {
+          "id": "01M32MAWWZ115549JWD2MPKVT3:in:image",
+          "name": "image",
+          "dataType": "image",
+          "multi": false
+        },
+        {
+          "id": "01M32MAWWZ115549JWD2MPKVT3:in:audio",
+          "name": "audio",
+          "dataType": "audio",
+          "multi": false
+        },
+        {
+          "id": "01M32MAWWZ115549JWD2MPKVT3:in:video",
+          "name": "video",
+          "dataType": "video",
+          "multi": false
+        },
+        {
+          "id": "01M32MAWWZ115549JWD2MPKVT3:in:code",
+          "name": "code",
+          "dataType": "code",
+          "multi": false
+        },
+        {
+          "id": "01M32MAWWZ115549JWD2MPKVT3:in:file",
+          "name": "file",
+          "dataType": "file",
+          "multi": false
+        }
+      ],
+      "outputs": [],
+      "kind": "output",
+      "config": {}
+    }
+  ],
+  "edges": [
+    {
+      "id": "01M32MAWWZ115549JWD2MPKVT4",
+      "workflowId": "01M32MAWWYRHCX4DCNGTDSYGWP",
+      "kind": "data",
+      "from": {
+        "nodeId": "01M32MAWWZ115549JWD2MPKVT1",
+        "portId": "01M32MAWWZ115549JWD2MPKVT1:out:text"
+      },
+      "to": {
+        "nodeId": "01M32MAWWZ115549JWD2MPKVT2",
+        "portId": "01M32MAWWZ115549JWD2MPKVT2:in:text"
+      }
+    },
+    {
+      "id": "01M32MAWWZ115549JWD2MPKVT5",
+      "workflowId": "01M32MAWWYRHCX4DCNGTDSYGWP",
+      "kind": "data",
+      "from": {
+        "nodeId": "01M32MAWWZ115549JWD2MPKVT2",
+        "portId": "01M32MAWWZ115549JWD2MPKVT2:out:text"
+      },
+      "to": {
+        "nodeId": "01M32MAWWZ115549JWD2MPKVT3",
+        "portId": "01M32MAWWZ115549JWD2MPKVT3:in:text"
+      }
+    }
+  ]
+}

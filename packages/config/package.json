@@ -1,0 +1,19 @@
+{
+  "name": "@ace/config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./tsconfig.json": "./tsconfig.json",
+    "./eslint.config.js": "./eslint.config.js",
+    "./prettier.config.js": "./prettier.config.js"
+  },
+  "files": ["tsconfig.json", "eslint.config.js", "prettier.config.js"],
+  "dependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.11.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.12.0",
+    "typescript-eslint": "^8.70.1"
+  }
+}

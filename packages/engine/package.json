@@ -1,0 +1,38 @@
+{
+  "name": "@ace/engine",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build",
+    "lint": "eslint .",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@ace/config": "workspace:*",
+    "@types/node": "^22.10.5",
+    "@types/ws": "^8.5.13",
+    "@vitest/coverage-v8": "^5.0.1",
+    "eslint": "^10.11.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.1"
+  },
+  "dependencies": {
+    "@ace/contracts": "workspace:*",
+    "hono": "^4.13.8",
+    "pino": "^10.3.1",
+    "ulid": "^3.0.1",
+    "ws": "^8.21.3",
+    "zod": "^4.6.5"
+  }
+}
