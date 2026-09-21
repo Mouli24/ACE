@@ -6,7 +6,7 @@
   "scripts": {
     "typecheck": "tsc --build",
     "lint": "eslint .",
-    "test": "vitest run --passWithNoTests"
+    "test": "echo \"The acceptance suite drives a real engine and runs via `pnpm test:acceptance`, not `pnpm test` (CLAUDE.md \u00a72).\""
   },
   "dependencies": {
     "@ace/contracts": "workspace:*",
