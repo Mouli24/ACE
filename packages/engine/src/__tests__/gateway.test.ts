@@ -146,6 +146,87 @@ describe('TC-SYS-004 Foreign origin', () => {
   });
 });
 
+describe('FR-SYS-003 CORS, so a browser may actually use the allow-list', () => {
+  it('answers the preflight 204, which carries no token because a browser never sends one', async () => {
+    const response = await app.request('/api/v1/projects', {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'http://localhost:5173',
+        'Access-Control-Request-Method': 'GET',
+        'Access-Control-Request-Headers': 'authorization',
+      },
+    });
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:5173');
+  });
+
+  it('lets the preflight authorise the Authorization header the real request will send', async () => {
+    const response = await app.request('/api/v1/projects', {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'http://localhost:5173',
+        'Access-Control-Request-Method': 'GET',
+        'Access-Control-Request-Headers': 'authorization',
+      },
+    });
+
+    expect(response.headers.get('Access-Control-Allow-Headers')).toMatch(/authorization/i);
+    expect(response.headers.get('Access-Control-Allow-Methods')).toMatch(/GET/);
+  });
+
+  it('puts the allow-origin header on a real answer, without which the browser discards it', async () => {
+    const response = await app.request('/api/v1/health', {
+      headers: { ...AUTH, Origin: 'http://localhost:5173' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:5173');
+  });
+
+  it("allows the engine's own origin too", async () => {
+    const response = await app.request('/api/v1/health', {
+      headers: { ...AUTH, Origin: 'http://127.0.0.1:4747' },
+    });
+
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('http://127.0.0.1:4747');
+  });
+
+  it('keeps the header on an error, so the browser shows the real failure not a CORS one', async () => {
+    const response = await app.request('/api/v1/settings', {
+      headers: { Origin: 'http://localhost:5173' },
+    });
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:5173');
+  });
+
+  it('tells a foreign origin nothing, so the browser blocks it', async () => {
+    const response = await app.request('/api/v1/projects', {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://evil.example',
+        'Access-Control-Request-Method': 'GET',
+      },
+    });
+
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBeNull();
+  });
+
+  it('follows the stored allow-list rather than a hardcoded one', async () => {
+    await repository.settings.update(LOCAL_SCOPE, {
+      allowedOrigins: ['http://localhost:4200'],
+    });
+
+    const response = await app.request('/api/v1/health', {
+      headers: { ...AUTH, Origin: 'http://localhost:4200' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:4200');
+  });
+});
+
 describe('TC-SYS-006 Settings persist', () => {
   it('returns the §2.7 defaults before anything is changed', async () => {
     const response = await app.request('/api/v1/settings', { headers: AUTH });
