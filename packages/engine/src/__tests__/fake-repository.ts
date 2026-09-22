@@ -1,11 +1,17 @@
 import {
   SettingsSchema,
+  modelMatchesQuery,
   type CursorQuery,
   type Edge,
   type Id,
+  type Model,
+  type ModelQuery,
   type Node,
+  type NodeRun,
   type Page,
   type Project,
+  type Provider,
+  type Run,
   type Settings,
   type SettingsPatch,
   type Timestamp,
@@ -16,7 +22,11 @@ import type {
   EngineEvent,
   EventFilter,
   NewEngineEvent,
+  NodeRunPatch,
+  PriceTable,
+  ProviderPatch,
   Repository,
+  RunPatch,
   Scope,
 } from '../ports/index.js';
 
@@ -28,6 +38,11 @@ interface State {
   events: EngineEvent[];
   settings: Settings | null;
   nextSeq: number;
+  providers: Map<string, Provider>;
+  models: Map<string, Model>;
+  priceTables: Map<string, PriceTable>;
+  runs: Map<string, Run>;
+  nodeRuns: Map<string, NodeRun>;
 }
 
 function emptyState(): State {
@@ -39,6 +54,11 @@ function emptyState(): State {
     events: [],
     settings: null,
     nextSeq: 1,
+    providers: new Map(),
+    models: new Map(),
+    priceTables: new Map(),
+    runs: new Map(),
+    nodeRuns: new Map(),
   };
 }
 
@@ -51,6 +71,11 @@ function cloneState(state: State): State {
     events: [...state.events],
     settings: state.settings,
     nextSeq: state.nextSeq,
+    providers: new Map(state.providers),
+    models: new Map(state.models),
+    priceTables: new Map(state.priceTables),
+    runs: new Map(state.runs),
+    nodeRuns: new Map(state.nodeRuns),
   };
 }
 
@@ -166,6 +191,10 @@ export class FakeRepository implements Repository {
   };
 
   readonly nodes = {
+    listByProvider: async (scope: Scope, providerId: Id) =>
+      [...this.#for(scope).nodes.values()].filter(
+        (node) => 'providerId' in node.config && node.config.providerId === providerId,
+      ),
     listByWorkflow: async (scope: Scope, workflowId: Id) =>
       [...this.#for(scope).nodes.values()]
         .filter((n) => n.workflowId === workflowId)
@@ -227,6 +256,9 @@ export class FakeRepository implements Repository {
       this.#for(scope)
         .events.filter((event) => {
           if (event.seq <= afterSeq) return false;
+          if (filter.runIds !== undefined) {
+            return event.runId !== undefined && filter.runIds.includes(event.runId);
+          }
           if (event.workflowId === undefined) return filter.includeEngineScope === true;
           return filter.workflowIds?.includes(event.workflowId) ?? false;
         })
@@ -245,6 +277,146 @@ export class FakeRepository implements Repository {
       const current = state.settings ?? SettingsSchema.parse({ dataDir: '/tmp/ace' });
       const next = SettingsSchema.parse({ ...current, ...patch });
       state.settings = next;
+      return next;
+    },
+  };
+
+  /* ------------------------------------------------- round 2 (Arch §15.3) */
+
+  readonly providers = {
+    create: async (scope: Scope, provider: Provider) => {
+      this.#for(scope).providers.set(provider.id, provider);
+      return provider;
+    },
+    get: async (scope: Scope, id: Id) => this.#for(scope).providers.get(id) ?? null,
+    list: async (scope: Scope) =>
+      [...this.#for(scope).providers.values()].sort((a, b) => a.id.localeCompare(b.id)),
+    update: async (scope: Scope, id: Id, patch: ProviderPatch) => {
+      const current = this.#for(scope).providers.get(id);
+      if (current === undefined) return null;
+
+      const next: Provider = { ...current };
+      if (patch.name !== undefined) next.name = patch.name;
+      if (patch.baseUrl !== undefined) {
+        if (patch.baseUrl === null) delete next.baseUrl;
+        else next.baseUrl = patch.baseUrl;
+      }
+      if (patch.keySet !== undefined) next.keySet = patch.keySet;
+      if (patch.status !== undefined) next.status = patch.status;
+      if (patch.statusMessage !== undefined) {
+        if (patch.statusMessage === null) delete next.statusMessage;
+        else next.statusMessage = patch.statusMessage;
+      }
+      if (patch.lastCheckedAt !== undefined) next.lastCheckedAt = patch.lastCheckedAt;
+      if (patch.concurrency !== undefined) next.concurrency = patch.concurrency;
+      if (patch.updatedAt !== undefined) next.updatedAt = patch.updatedAt;
+
+      this.#for(scope).providers.set(id, next);
+      return next;
+    },
+    delete: async (scope: Scope, id: Id) => this.#for(scope).providers.delete(id),
+  };
+
+  readonly models = {
+    replaceForProvider: async (scope: Scope, providerId: Id, catalog: readonly Model[]) => {
+      const state = this.#for(scope);
+      for (const [key, model] of state.models) {
+        if (model.providerId === providerId) state.models.delete(key);
+      }
+      for (const model of catalog) state.models.set(model.id, model);
+    },
+    list: async (scope: Scope, query: ModelQuery) =>
+      [...this.#for(scope).models.values()]
+        .filter((model) => modelMatchesQuery(model, query))
+        .sort((a, b) => a.id.localeCompare(b.id)),
+    find: async (scope: Scope, providerId: Id, modelId: string) =>
+      [...this.#for(scope).models.values()].find(
+        (model) => model.providerId === providerId && model.modelId === modelId,
+      ) ?? null,
+    deleteForProvider: async (scope: Scope, providerId: Id) => {
+      const state = this.#for(scope);
+      for (const [key, model] of state.models) {
+        if (model.providerId === providerId) state.models.delete(key);
+      }
+    },
+  };
+
+  readonly priceTables = {
+    put: async (scope: Scope, table: PriceTable) => {
+      const state = this.#for(scope);
+      if (!state.priceTables.has(table.version)) state.priceTables.set(table.version, table);
+    },
+    get: async (scope: Scope, version: string) => this.#for(scope).priceTables.get(version) ?? null,
+    list: async (scope: Scope) =>
+      [...this.#for(scope).priceTables.values()].sort((a, b) => a.version.localeCompare(b.version)),
+  };
+
+  readonly runs = {
+    create: async (scope: Scope, run: Run) => {
+      this.#for(scope).runs.set(run.id, run);
+      return run;
+    },
+    get: async (scope: Scope, id: Id) => this.#for(scope).runs.get(id) ?? null,
+    listByWorkflow: async (scope: Scope, workflowId: Id, query: CursorQuery): Promise<Page<Run>> => {
+      const ordered = [...this.#for(scope).runs.values()]
+        .filter((run) => run.workflowId === workflowId)
+        .sort((a, b) => b.id.localeCompare(a.id));
+      const start =
+        query.cursor === undefined ? 0 : ordered.findIndex((run) => run.id < query.cursor!);
+      const window = ordered.slice(start === -1 ? ordered.length : start, undefined);
+      const items = window.slice(0, query.limit);
+      const nextCursor = window.length > query.limit ? items.at(-1)?.id : undefined;
+      return { items, ...(nextCursor === undefined ? {} : { nextCursor }) };
+    },
+    listActive: async (scope: Scope) =>
+      [...this.#for(scope).runs.values()]
+        .filter((run) => run.status === 'PREFLIGHT' || run.status === 'RUNNING' || run.status === 'PAUSED')
+        .sort((a, b) => a.id.localeCompare(b.id)),
+    update: async (scope: Scope, id: Id, patch: RunPatch) => {
+      const current = this.#for(scope).runs.get(id);
+      if (current === undefined) return null;
+
+      const next: Run = { ...current };
+      if (patch.status !== undefined) next.status = patch.status;
+      if (patch.haltReason !== undefined) next.haltReason = patch.haltReason;
+      if (patch.preflightIssues !== undefined) next.preflightIssues = patch.preflightIssues;
+      if (patch.totals !== undefined) next.totals = patch.totals;
+      if (patch.endedAt !== undefined) next.endedAt = patch.endedAt;
+      if (patch.durationMs !== undefined) next.durationMs = patch.durationMs;
+      if (patch.finalOutput !== undefined) next.finalOutput = patch.finalOutput;
+
+      this.#for(scope).runs.set(id, next);
+      return next;
+    },
+  };
+
+  readonly nodeRuns = {
+    create: async (scope: Scope, nodeRun: NodeRun) => {
+      this.#for(scope).nodeRuns.set(nodeRun.id, nodeRun);
+      return nodeRun;
+    },
+    get: async (scope: Scope, id: Id) => this.#for(scope).nodeRuns.get(id) ?? null,
+    listByRun: async (scope: Scope, runId: Id) =>
+      [...this.#for(scope).nodeRuns.values()]
+        .filter((nodeRun) => nodeRun.runId === runId)
+        .sort((a, b) => a.id.localeCompare(b.id)),
+    update: async (scope: Scope, id: Id, patch: NodeRunPatch) => {
+      const current = this.#for(scope).nodeRuns.get(id);
+      if (current === undefined) return null;
+
+      const next: NodeRun = { ...current };
+      if (patch.status !== undefined) next.status = patch.status;
+      if (patch.failureReason !== undefined) next.failureReason = patch.failureReason;
+      if (patch.error !== undefined) next.error = patch.error;
+      if (patch.modelUsed !== undefined) next.modelUsed = patch.modelUsed;
+      if (patch.output !== undefined) next.output = patch.output;
+      if (patch.prompt !== undefined) next.prompt = patch.prompt;
+      if (patch.usage !== undefined) next.usage = patch.usage;
+      if (patch.startedAt !== undefined) next.startedAt = patch.startedAt;
+      if (patch.endedAt !== undefined) next.endedAt = patch.endedAt;
+      if (patch.durationMs !== undefined) next.durationMs = patch.durationMs;
+
+      this.#for(scope).nodeRuns.set(id, next);
       return next;
     },
   };

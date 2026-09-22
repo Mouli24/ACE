@@ -15,6 +15,11 @@ import {
 } from '@ace/contracts';
 import type {
   EdgeRepository,
+  ModelRepository,
+  NodeRunRepository,
+  PriceTableRepository,
+  ProviderRepository,
+  RunRepository,
   EngineEvent,
   EventFilter,
   EventRepository,
@@ -30,6 +35,13 @@ import type BetterSqlite3 from 'better-sqlite3';
 import { and, asc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 
+import {
+  createModelRepository,
+  createNodeRunRepository,
+  createPriceTableRepository,
+  createProviderRepository,
+  createRunRepository,
+} from './repository-runs.js';
 import type * as schema from './schema.js';
 import { edges, events, nodes, projects, settings, workflows } from './schema.js';
 import { toJsonColumn } from './secret-guard.js';
@@ -149,9 +161,22 @@ export class SqliteRepository implements Repository {
   readonly #mutex = new Mutex();
   #depth = 0;
 
+  /* Round 2 (Arch §15.3). Built in the constructor because they close over `#db`. */
+  readonly providers: ProviderRepository;
+  readonly models: ModelRepository;
+  readonly priceTables: PriceTableRepository;
+  readonly runs: RunRepository;
+  readonly nodeRuns: NodeRunRepository;
+
   constructor(db: Db, sqlite: BetterSqlite3.Database) {
     this.#db = db;
     this.#sqlite = sqlite;
+
+    this.providers = createProviderRepository(db);
+    this.models = createModelRepository(db);
+    this.priceTables = createPriceTableRepository(db);
+    this.runs = createRunRepository(db);
+    this.nodeRuns = createNodeRunRepository(db);
   }
 
   /**
@@ -308,6 +333,28 @@ export class SqliteRepository implements Repository {
   };
 
   readonly nodes: NodeRepository = {
+    /**
+     * `config` is a JSON column, so this is a substring match on the stored provider id. The
+     * result is re-checked in TypeScript, because a LIKE could in principle match a provider id
+     * that appears somewhere else in the config.
+     */
+    listByProvider: async (scope: Scope, providerId: Id) =>
+      this.#db
+        .select()
+        .from(nodes)
+        .where(
+          and(
+            eq(nodes.workspaceId, scope.workspaceId),
+            sql`${nodes.config} LIKE ${`%"${providerId}"%`}`,
+          ),
+        )
+        .all()
+        .map(toNode)
+        .filter(
+          (node) =>
+            'providerId' in node.config && node.config.providerId === providerId,
+        ),
+
     listByWorkflow: async (scope: Scope, workflowId: Id) => {
       const rows = this.#db
         .select()
@@ -430,14 +477,20 @@ export class SqliteRepository implements Repository {
     },
 
     listAfter: async (scope: Scope, afterSeq: number, filter: EventFilter) => {
+      // A run filter is exclusive: `GET /runs/:id/events` wants that run's events and nothing
+      // else, not that run's events plus everything unscoped.
       const scoped =
-        filter.workflowIds === undefined || filter.workflowIds.length === 0
-          ? filter.includeEngineScope === true
-            ? undefined
-            : sql`1 = 0`
-          : filter.includeEngineScope === true
-            ? or(inArray(events.workflowId, filter.workflowIds), isNull(events.workflowId))
-            : inArray(events.workflowId, filter.workflowIds);
+        filter.runIds !== undefined
+          ? filter.runIds.length === 0
+            ? sql`1 = 0`
+            : inArray(events.runId, filter.runIds)
+          : filter.workflowIds === undefined || filter.workflowIds.length === 0
+            ? filter.includeEngineScope === true
+              ? undefined
+              : sql`1 = 0`
+            : filter.includeEngineScope === true
+              ? or(inArray(events.workflowId, filter.workflowIds), isNull(events.workflowId))
+              : inArray(events.workflowId, filter.workflowIds);
 
       const rows = this.#db
         .select()
