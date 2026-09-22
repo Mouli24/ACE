@@ -591,7 +591,9 @@ describe('TC-WF-006 Validation list', () => {
     const input = inputNode(workflow.id);
     const agent = agentNode(workflow.id);
     // From round 2 an agent without a model is an error, so a clean graph has one chosen.
-    agent.config = { ...agent.config, providerId: PROVIDER_ID, modelId: 'mock-text' };
+    if (agent.kind === 'agent') {
+      agent.config = { ...agent.config, providerId: PROVIDER_ID, modelId: 'mock-text' };
+    }
     const output = outputNode(workflow.id);
     await graphOps(h.app, workflow.id, 0, [
       addNode(input),
