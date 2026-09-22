@@ -78,20 +78,35 @@ const model = (overrides: Partial<Model> = {}): Model => ({
 /** An adapter that plays back whatever chunks the test hands it. */
 function scriptedAdapter(script: StreamChunk[] | (() => AsyncGenerator<StreamChunk>)) {
   const prompts: string[] = [];
+  const modelsAsked: string[] = [];
   const adapter: ProviderAdapter = {
     type: 'mock',
     check: async () => ({ status: 'CONNECTED' }),
     listModels: async () => [],
     generate(req) {
       prompts.push(req.prompt);
-      if (typeof script === 'function') return script();
+      modelsAsked.push(req.modelId);
+      const chosen = perModel?.[req.modelId] ?? script;
+      if (typeof chosen === 'function') return chosen();
       return (async function* () {
-        for (const chunk of script) yield chunk;
+        for (const chunk of chosen) yield chunk;
       })();
     },
   };
-  return { adapter, prompts };
+  return { adapter, prompts, modelsAsked };
 }
+
+/** Per-model scripts, for the fallback tests. */
+let perModel: Record<string, StreamChunk[] | (() => AsyncGenerator<StreamChunk>)> | undefined;
+
+const providerFailure = (code: string) => () =>
+  (async function* (): AsyncGenerator<StreamChunk> {
+    await Promise.resolve();
+    throw Object.assign(new Error(code), {
+      nodeError: { kind: 'provider', code, message: code, retryable: true },
+    });
+    yield { type: 'finish', reason: 'stop' };
+  })();
 
 /**
  * A router stub. The real routing rules are `@ace/providers`' job and are tested there; what an
@@ -117,6 +132,7 @@ interface Harness {
   bus: EventBus;
   events: EngineEvent[];
   prompts: string[];
+  modelsAsked: string[];
 }
 
 let adapterScript: StreamChunk[] | (() => AsyncGenerator<StreamChunk>);
@@ -131,7 +147,7 @@ async function build(): Promise<Harness> {
   const events: EngineEvent[] = [];
   await bus.subscribe((event) => events.push(event));
 
-  const { adapter, prompts } = scriptedAdapter(adapterScript);
+  const { adapter, prompts, modelsAsked } = scriptedAdapter(adapterScript);
 
   const executor = createNodeExecutor({
     bus,
@@ -146,7 +162,7 @@ async function build(): Promise<Harness> {
     tokenBatchMs: 0,
   });
 
-  return { executor, bus, events, prompts };
+  return { executor, bus, events, prompts, modelsAsked };
 }
 
 const run = (node: Node = agentNode(), envelopes: Envelope[] = [envelope()]) =>
@@ -172,6 +188,7 @@ beforeEach(async () => {
   adapterScript = textChunks('a clear and useful answer');
   models = [model()];
   routerOverride = undefined;
+  perModel = undefined;
   harness = await build();
 });
 
@@ -409,6 +426,93 @@ describe('Arch §28 a provider failure fails the node run', () => {
       modelId: 'backup',
       viaFallback: true,
     });
+  });
+
+  it('TC-RTR-002 walks the fallback chain when the primary fails with a provider error', async () => {
+    models = [
+      model({ modelId: 'primary' }),
+      model({ id: '01JBXQ8Z9KQ4R7N2VWXYZ0MDE2', modelId: 'backup' }),
+    ];
+    perModel = { primary: providerFailure('http_503') };
+    routerOverride = (node, _requirements, attemptState) => {
+      const chain = [node.modelId!, ...node.routing.fallbackModelIds];
+      const failed = new Set(attemptState.failures.map((failure) => failure.modelId));
+      const next = chain.findIndex((modelId) => !failed.has(modelId));
+      return next === -1
+        ? { ok: false, code: 'no_candidate_left', reason: 'chain exhausted' }
+        : {
+            ok: true,
+            route: { providerId: PROVIDER_ID, modelId: chain[next]!, viaFallback: next > 0 },
+          };
+    };
+    harness = await build();
+
+    const outcome = await run(
+      agentNode({ modelId: 'primary', routing: { policy: 'fallback', fallbackModelIds: ['backup'] } }),
+    );
+
+    expect(harness.modelsAsked).toEqual(['primary', 'backup']);
+    expect(outcome.status).toBe('COMPLETED');
+    expect(outcome.modelUsed).toEqual({
+      providerId: PROVIDER_ID,
+      modelId: 'backup',
+      viaFallback: true,
+    });
+  });
+
+  it('TC-RTR-003 fails with the provider error once every model in the chain has failed', async () => {
+    models = [
+      model({ modelId: 'primary' }),
+      model({ id: '01JBXQ8Z9KQ4R7N2VWXYZ0MDE2', modelId: 'backup' }),
+    ];
+    perModel = { primary: providerFailure('http_503'), backup: providerFailure('http_503') };
+    routerOverride = (node, _requirements, attemptState) => {
+      const chain = [node.modelId!, ...node.routing.fallbackModelIds];
+      const failed = new Set(attemptState.failures.map((failure) => failure.modelId));
+      const next = chain.findIndex((modelId) => !failed.has(modelId));
+      return next === -1
+        ? { ok: false, code: 'no_candidate_left', reason: 'chain exhausted' }
+        : {
+            ok: true,
+            route: { providerId: PROVIDER_ID, modelId: chain[next]!, viaFallback: next > 0 },
+          };
+    };
+    harness = await build();
+
+    const outcome = await run(
+      agentNode({ modelId: 'primary', routing: { policy: 'fallback', fallbackModelIds: ['backup'] } }),
+    );
+
+    expect(harness.modelsAsked).toEqual(['primary', 'backup']);
+    expect(outcome.status).toBe('FAILED');
+    // The provider error, not "the router ran out of options" — that is what actually happened.
+    expect(outcome.error?.kind).toBe('provider');
+    expect(outcome.failureReason).toBe('RUN_FAILED');
+  });
+
+  it('FR-RTR-002 never walks the chain after an auth error, which the next model would share', async () => {
+    models = [
+      model({ modelId: 'primary' }),
+      model({ id: '01JBXQ8Z9KQ4R7N2VWXYZ0MDE2', modelId: 'backup' }),
+    ];
+    perModel = {
+      primary: () =>
+        (async function* (): AsyncGenerator<StreamChunk> {
+          await Promise.resolve();
+          throw Object.assign(new Error('bad key'), {
+            nodeError: { kind: 'auth', code: 'http_401', message: 'bad key', retryable: false },
+          });
+          yield { type: 'finish', reason: 'stop' };
+        })(),
+    };
+    harness = await build();
+
+    const outcome = await run(
+      agentNode({ modelId: 'primary', routing: { policy: 'fallback', fallbackModelIds: ['backup'] } }),
+    );
+
+    expect(harness.modelsAsked).toEqual(['primary']);
+    expect(outcome.error?.kind).toBe('auth');
   });
 
   it('reports a refusal as an agent error (§2.6 mock-refuse)', async () => {
