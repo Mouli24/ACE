@@ -84,6 +84,94 @@ export const MIGRATIONS: readonly Migration[] = [
       );
     `,
   },
+  {
+    id: '20260922T120000_round_2_providers_and_runs',
+    up: `
+      CREATE TABLE providers (
+        id              TEXT PRIMARY KEY,
+        workspace_id    TEXT NOT NULL,
+        type            TEXT NOT NULL,
+        name            TEXT NOT NULL,
+        base_url        TEXT,
+        key_set         INTEGER NOT NULL,
+        status          TEXT NOT NULL,
+        status_message  TEXT,
+        last_checked_at TEXT,
+        concurrency     INTEGER NOT NULL,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+      );
+      CREATE INDEX providers_workspace_idx ON providers (workspace_id, id);
+
+      CREATE TABLE models (
+        id              TEXT PRIMARY KEY,
+        workspace_id    TEXT NOT NULL,
+        provider_id     TEXT NOT NULL,
+        model_id        TEXT NOT NULL,
+        display_name    TEXT NOT NULL,
+        input_types     TEXT NOT NULL,
+        output_types    TEXT NOT NULL,
+        context_window  INTEGER NOT NULL,
+        supports_tools  INTEGER NOT NULL,
+        supports_json   INTEGER NOT NULL,
+        available       INTEGER NOT NULL,
+        source          TEXT NOT NULL,
+        last_checked_at TEXT NOT NULL,
+        pricing         TEXT
+      );
+      CREATE INDEX models_provider_idx ON models (workspace_id, provider_id, model_id);
+
+      CREATE TABLE price_tables (
+        workspace_id TEXT NOT NULL,
+        version      TEXT NOT NULL,
+        data         TEXT NOT NULL,
+        created_at   TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, version)
+      );
+
+      CREATE TABLE runs (
+        id               TEXT PRIMARY KEY,
+        workspace_id     TEXT NOT NULL,
+        workflow_id      TEXT NOT NULL,
+        project_id       TEXT NOT NULL,
+        status           TEXT NOT NULL,
+        halt_reason      TEXT,
+        snapshot         TEXT NOT NULL,
+        inputs           TEXT NOT NULL,
+        preflight_issues TEXT NOT NULL,
+        totals           TEXT NOT NULL,
+        started_at       TEXT NOT NULL,
+        ended_at         TEXT,
+        duration_ms      INTEGER,
+        final_output     TEXT
+      );
+      CREATE INDEX runs_workflow_idx ON runs (workspace_id, workflow_id, id);
+      CREATE INDEX runs_status_idx ON runs (workspace_id, status);
+
+      CREATE TABLE node_runs (
+        id              TEXT PRIMARY KEY,
+        workspace_id    TEXT NOT NULL,
+        run_id          TEXT NOT NULL,
+        node_id         TEXT NOT NULL,
+        iteration       INTEGER NOT NULL,
+        attempt         INTEGER NOT NULL,
+        status          TEXT NOT NULL,
+        failure_reason  TEXT,
+        error           TEXT,
+        model_used      TEXT,
+        input_envelopes TEXT NOT NULL,
+        output          TEXT,
+        prompt          TEXT,
+        usage           TEXT NOT NULL,
+        verdicts        TEXT NOT NULL,
+        tool_calls      TEXT NOT NULL,
+        started_at      TEXT,
+        ended_at        TEXT,
+        duration_ms     INTEGER
+      );
+      CREATE INDEX node_runs_run_idx ON node_runs (workspace_id, run_id, id);
+    `,
+  },
 ];
 
 const MIGRATIONS_TABLE = `

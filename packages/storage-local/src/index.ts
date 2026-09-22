@@ -2,6 +2,7 @@ export * from './schema.js';
 export * from './migrations.js';
 export * from './db.js';
 export * from './repository.js';
+export * from './repository-runs.js';
 export * from './secret-guard.js';
 export * from './queue.js';
 export * from './pubsub.js';

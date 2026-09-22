@@ -85,6 +85,37 @@ describe('Arch §7 Repository', () => {
           throw new Error('not needed for this stub');
         },
       },
+      providers: {
+        create: async (_s, provider) => provider,
+        get: async () => null,
+        list: async () => [],
+        update: async () => null,
+        delete: async () => false,
+      },
+      models: {
+        replaceForProvider: async () => undefined,
+        list: async () => [],
+        find: async () => null,
+        deleteForProvider: async () => undefined,
+      },
+      priceTables: {
+        put: async () => undefined,
+        get: async () => null,
+        list: async () => [],
+      },
+      runs: {
+        create: async (_s, run) => run,
+        get: async () => null,
+        listByWorkflow: async () => ({ items: [] }),
+        listActive: async () => [],
+        update: async () => null,
+      },
+      nodeRuns: {
+        create: async (_s, nodeRun) => nodeRun,
+        get: async () => null,
+        listByRun: async () => [],
+        update: async () => null,
+      },
     };
 
     const inside = await repo.transaction(async (tx) => {

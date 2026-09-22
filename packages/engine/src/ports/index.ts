@@ -10,6 +10,7 @@
 
 export * from './scope.js';
 export * from './repository.js';
+export * from './run-repository.js';
 export * from './blob-store.js';
 export * from './secret-store.js';
 export * from './queue.js';
