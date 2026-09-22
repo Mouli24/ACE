@@ -1,0 +1,91 @@
+{
+  "priceTableVersion": "2026-09-a",
+  "providers": {
+    "anthropic": [
+      {
+        "modelId": "claude-opus-4-5",
+        "displayName": "Claude Opus 4.5",
+        "inputTypes": ["text", "image", "file"],
+        "outputTypes": ["text", "json", "code"],
+        "contextWindow": 200000,
+        "supportsTools": true,
+        "supportsJson": true,
+        "pricing": { "inputPer1k": 0.005, "outputPer1k": 0.025 }
+      },
+      {
+        "modelId": "claude-sonnet-4-5",
+        "displayName": "Claude Sonnet 4.5",
+        "inputTypes": ["text", "image", "file"],
+        "outputTypes": ["text", "json", "code"],
+        "contextWindow": 200000,
+        "supportsTools": true,
+        "supportsJson": true,
+        "pricing": { "inputPer1k": 0.003, "outputPer1k": 0.015 }
+      },
+      {
+        "modelId": "claude-haiku-4-5",
+        "displayName": "Claude Haiku 4.5",
+        "inputTypes": ["text", "image"],
+        "outputTypes": ["text", "json", "code"],
+        "contextWindow": 200000,
+        "supportsTools": true,
+        "supportsJson": true,
+        "pricing": { "inputPer1k": 0.001, "outputPer1k": 0.005 }
+      }
+    ],
+    "google": [
+      {
+        "modelId": "gemini-2.5-pro",
+        "displayName": "Gemini 2.5 Pro",
+        "inputTypes": ["text", "image", "audio", "video", "file"],
+        "outputTypes": ["text", "json", "code"],
+        "contextWindow": 1048576,
+        "supportsTools": true,
+        "supportsJson": true,
+        "pricing": { "inputPer1k": 0.00125, "outputPer1k": 0.01 }
+      },
+      {
+        "modelId": "gemini-2.5-flash",
+        "displayName": "Gemini 2.5 Flash",
+        "inputTypes": ["text", "image", "audio", "video", "file"],
+        "outputTypes": ["text", "json", "code"],
+        "contextWindow": 1048576,
+        "supportsTools": true,
+        "supportsJson": true,
+        "pricing": { "inputPer1k": 0.0003, "outputPer1k": 0.0025 }
+      }
+    ],
+    "openai": [
+      {
+        "modelId": "gpt-5",
+        "displayName": "GPT-5",
+        "inputTypes": ["text", "image", "file"],
+        "outputTypes": ["text", "json", "code"],
+        "contextWindow": 400000,
+        "supportsTools": true,
+        "supportsJson": true,
+        "pricing": { "inputPer1k": 0.00125, "outputPer1k": 0.01 }
+      },
+      {
+        "modelId": "gpt-5-mini",
+        "displayName": "GPT-5 mini",
+        "inputTypes": ["text", "image"],
+        "outputTypes": ["text", "json", "code"],
+        "contextWindow": 400000,
+        "supportsTools": true,
+        "supportsJson": true,
+        "pricing": { "inputPer1k": 0.00025, "outputPer1k": 0.002 }
+      },
+      {
+        "modelId": "text-embedding-3-small",
+        "displayName": "Text Embedding 3 Small",
+        "inputTypes": ["text"],
+        "outputTypes": ["json"],
+        "contextWindow": 8191,
+        "supportsTools": false,
+        "supportsJson": true,
+        "pricing": { "inputPer1k": 0.00002, "outputPer1k": 0 }
+      }
+    ]
+  }
+}
