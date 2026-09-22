@@ -191,6 +191,10 @@ export class FakeRepository implements Repository {
   };
 
   readonly nodes = {
+    listByProvider: async (scope: Scope, providerId: Id) =>
+      [...this.#for(scope).nodes.values()].filter(
+        (node) => 'providerId' in node.config && node.config.providerId === providerId,
+      ),
     listByWorkflow: async (scope: Scope, workflowId: Id) =>
       [...this.#for(scope).nodes.values()]
         .filter((n) => n.workflowId === workflowId)

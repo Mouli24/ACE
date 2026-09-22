@@ -75,6 +75,11 @@ export interface WorkflowRepository {
 
 export interface NodeRepository {
   listByWorkflow(scope: Scope, workflowId: Id): Promise<Node[]>;
+  /**
+   * Every node, in any workflow, whose config names this provider (FR-PRV-005). Deleting a
+   * provider has to name the nodes it would break before it is allowed to happen.
+   */
+  listByProvider(scope: Scope, providerId: Id): Promise<Node[]>;
   insert(scope: Scope, node: Node): Promise<void>;
   update(scope: Scope, node: Node): Promise<void>;
   delete(scope: Scope, id: Id): Promise<void>;

@@ -1,85 +1,29 @@
-import type {
-  DataType,
-  ErrorKind,
-  Id,
-  ModelPricing,
-  NodeError,
-  ProviderState,
-  ProviderType,
-} from '@ace/contracts';
+import type { ErrorKind, Id, NodeError, ProviderState } from '@ace/contracts';
 
 /**
  * The provider adapter contract (Arch §14.2) and the one place SDK and HTTP failures become ACE
  * error kinds (Arch §28).
  *
+ * The interface itself is declared in `@ace/engine`'s ports, because the engine may not import
+ * this package (CLAUDE.md §3.4 rule 3); it is re-exported here so `packages/providers` is still
+ * where an adapter author looks, with exactly one declaration behind it.
+ *
  * Every adapter maps its own errors *inside* the adapter, so nothing above this layer has to know
  * what an Anthropic 429 looks like versus an Ollama connection refusal. The engine sees a
  * `NodeError` with a kind it already has a rule for.
- *
- * D32: `ProviderStatus`, `ModelInfo` and `GenerateRequest` are named by Arch §14.2 but defined
- * nowhere, and they never cross the API seam — they live here rather than in `@ace/contracts`.
  */
 
-/* -------------------------------------------------------------------------- */
-/* The contract                                                                */
-/* -------------------------------------------------------------------------- */
-
-export interface ProviderStatus {
-  status: ProviderState;
-  message?: string;
-  latencyMs?: number;
-}
-
-/** One model as the provider describes it, before the catalog gives it a row id. */
-export interface ModelInfo {
-  modelId: string;
-  displayName: string;
-  inputTypes: DataType[];
-  outputTypes: DataType[];
-  contextWindow: number;
-  supportsTools: boolean;
-  supportsJson: boolean;
-  pricing?: ModelPricing;
-}
-
-export const FINISH_REASONS = ['stop', 'length', 'refusal', 'tool_calls', 'error'] as const;
-export type FinishReason = (typeof FINISH_REASONS)[number];
-
-/**
- * What the executor hands an adapter. The prompt is already assembled (Arch §12.5) — an adapter
- * never builds one, and there is no message list here (BR-02).
- */
-export interface GenerateRequest {
-  modelId: string;
-  /** The `## System` section, when the provider takes one separately from the prompt. */
-  system?: string;
-  prompt: string;
-  outputTypes: DataType[];
-  jsonSchema?: Record<string, unknown>;
-  maxTokens?: number;
-  temperature?: number;
-  /**
-   * Which run and which loop iteration this call belongs to. Optional and never required to
-   * produce an answer — adapters use them for tracing, and the mock keys its per-run behaviours
-   * (`mock-429-then-ok`, `mock-reject-twice`) on them.
-   */
-  runId?: Id;
-  iteration?: number;
-}
-
-export type StreamChunk =
-  | { type: 'text'; delta: string }
-  | { type: 'json'; value: unknown }
-  | { type: 'usage'; tokensIn: number; tokensOut: number }
-  | { type: 'finish'; reason: FinishReason };
-
-export interface ProviderAdapter {
-  type: ProviderType;
-  check(): Promise<ProviderStatus>;
-  listModels(): Promise<ModelInfo[]>;
-  generate(req: GenerateRequest, signal: AbortSignal): AsyncIterable<StreamChunk>;
-  embed?(texts: string[]): Promise<number[][]>;
-}
+export {
+  FINISH_REASONS,
+  type FinishReason,
+  type GenerateRequest,
+  type ModelInfo,
+  type ProviderAdapter,
+  type ProviderAdapterFactory,
+  type ProviderDetection,
+  type ProviderStatus,
+  type StreamChunk,
+} from '@ace/engine';
 
 /* -------------------------------------------------------------------------- */
 /* Error mapping (Arch §28)                                                    */
