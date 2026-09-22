@@ -6,6 +6,7 @@ export * from './logging/index.js';
 export * from './events/index.js';
 export * from './graph/index.js';
 export * from './providers/index.js';
+export * from './runs/index.js';
 export * from './envelopes/index.js';
 export * from './prompts/index.js';
 export * from './gateway/index.js';
