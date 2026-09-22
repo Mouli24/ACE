@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { ERROR_CODES, ERROR_CODE_HTTP_STATUS, ApiErrorSchema, aceError } from '../errors.js';
+import {
+  ERROR_CODES,
+  ERROR_CODE_HTTP_STATUS,
+  ApiErrorSchema,
+  ROUND_1_ERROR_CODES,
+  aceError,
+} from '../errors.js';
 
 describe('FR-SYS-006 error shape', () => {
   it('returns exactly the round 1 §2.3 envelope', () => {
@@ -69,7 +75,7 @@ describe('FR-SYS-006 error shape', () => {
 
 describe('FR-SYS-006 round 1 error codes', () => {
   it('declares exactly the nine codes of round 1 §2.3', () => {
-    expect([...ERROR_CODES]).toEqual([
+    expect([...ROUND_1_ERROR_CODES]).toEqual([
       'unauthorized',
       'forbidden_origin',
       'not_found',
@@ -80,6 +86,10 @@ describe('FR-SYS-006 round 1 error codes', () => {
       'not_implemented',
       'internal',
     ]);
+  });
+
+  it('adds only round 2 §2.5 provider_in_use on top of them', () => {
+    expect([...ERROR_CODES]).toEqual([...ROUND_1_ERROR_CODES, 'provider_in_use']);
   });
 
   it('maps every code to the HTTP status §2.3 gives it', () => {
@@ -93,6 +103,7 @@ describe('FR-SYS-006 round 1 error codes', () => {
       unsupported_format_version: 400,
       not_implemented: 501,
       internal: 500,
+      provider_in_use: 409,
     });
   });
 });
