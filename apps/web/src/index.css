@@ -1,0 +1,11 @@
+@import 'tailwindcss';
+@import '@ace/ui/theme.css';
+@import '@xyflow/react/dist/style.css';
+@source '../../../packages/ui/src';
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
