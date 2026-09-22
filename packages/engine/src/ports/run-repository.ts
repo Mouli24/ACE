@@ -16,6 +16,7 @@ import type {
   RunState,
   Timestamp,
   Usage,
+  ValidationIssue,
 } from '@ace/contracts';
 
 import type { Scope } from './scope.js';
@@ -75,6 +76,12 @@ export interface PriceTableRepository {
 /** Everything a run may change after it starts. The snapshot is deliberately absent (BR-04). */
 export interface RunPatch {
   status?: RunState;
+  /**
+   * Written exactly once, by the run service, the moment pre-flight finishes. It is a patch
+   * rather than part of `create` because the snapshot has to exist before pre-flight can check
+   * it, and BR-04 puts the snapshot in the same transaction as the row.
+   */
+  preflightIssues?: ValidationIssue[];
   haltReason?: HaltReason;
   totals?: Usage;
   endedAt?: Timestamp;
