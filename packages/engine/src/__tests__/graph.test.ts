@@ -497,6 +497,123 @@ describe('TC-CON-006 Single-input port', () => {
   });
 });
 
+/**
+ * D-001, reported by Mouli after M1 merged. The repro from the defect log, end to end through
+ * `graph-ops`: set a non-default temperature, then patch an unrelated field, and the temperature
+ * must survive. §2.6's patch is `Partial<NodeConfig>` and shallow — untouched keys keep their
+ * values.
+ */
+describe('D-001 a partial config patch leaves the fields it did not mention alone', () => {
+  async function seedAgentWithTemperature(temperature: number) {
+    const { workflow } = await seed();
+    const agent = agentNode(workflow.id);
+    await graphOps(h.app, workflow.id, 0, [addNode(agent)]);
+    await graphOps(h.app, workflow.id, 1, [
+      {
+        op: 'update_node',
+        nodeId: agent.id,
+        patch: {
+          config: { execution: { temperature, maxTokens: 2048, timeoutMs: 5000, retries: 1 } },
+        },
+      },
+    ]);
+    return { workflow, agent };
+  }
+
+  const storedAgent = async (workflowId: string) => {
+    const graph = WorkflowGraphResponseSchema.parse(
+      await body(await get(h.app, `/api/v1/workflows/${workflowId}`)),
+    );
+    const stored = graph.nodes.find((node) => node.kind === 'agent');
+    return stored?.kind === 'agent' ? stored.config : undefined;
+  };
+
+  it('keeps execution.temperature when only contextPolicy is patched', async () => {
+    const { workflow, agent } = await seedAgentWithTemperature(0.3);
+
+    const response = await graphOps(h.app, workflow.id, 2, [
+      {
+        op: 'update_node',
+        nodeId: agent.id,
+        patch: { config: { contextPolicy: { budgetTokens: 8000 } } },
+      },
+    ]);
+    expect(response.status).toBe(200);
+
+    const config = await storedAgent(workflow.id);
+    expect(config?.contextPolicy.budgetTokens).toBe(8000);
+    expect(config?.execution.temperature).toBe(0.3);
+    expect(config?.execution.maxTokens).toBe(2048);
+  });
+
+  it('keeps the rest of execution when only instructions are patched', async () => {
+    const { workflow, agent } = await seedAgentWithTemperature(0.9);
+
+    await graphOps(h.app, workflow.id, 2, [
+      { op: 'update_node', nodeId: agent.id, patch: { config: { instructions: 'Rewrite' } } },
+    ]);
+
+    const config = await storedAgent(workflow.id);
+    expect(config?.instructions).toBe('Rewrite');
+    expect(config?.execution.temperature).toBe(0.9);
+    expect(config?.execution.retries).toBe(1);
+  });
+
+  it('keeps a non-default routing policy when an unrelated field is patched', async () => {
+    const { workflow } = await seed();
+    const agent = agentNode(workflow.id);
+    await graphOps(h.app, workflow.id, 0, [addNode(agent)]);
+    await graphOps(h.app, workflow.id, 1, [
+      {
+        op: 'update_node',
+        nodeId: agent.id,
+        patch: { config: { routing: { policy: 'fallback', fallbackModelIds: ['mock-text'] } } },
+      },
+    ]);
+
+    await graphOps(h.app, workflow.id, 2, [
+      { op: 'update_node', nodeId: agent.id, patch: { config: { instructions: 'Rewrite' } } },
+    ]);
+
+    const config = await storedAgent(workflow.id);
+    expect(config?.routing.policy).toBe('fallback');
+    expect(config?.routing.fallbackModelIds).toEqual(['mock-text']);
+  });
+
+  it('still replaces a key the patch does name, because §2.6 is shallow', async () => {
+    const { workflow, agent } = await seedAgentWithTemperature(0.3);
+
+    await graphOps(h.app, workflow.id, 2, [
+      {
+        op: 'update_node',
+        nodeId: agent.id,
+        patch: {
+          config: { execution: { temperature: 0.8, maxTokens: 1024, timeoutMs: 9000, retries: 0 } },
+        },
+      },
+    ]);
+
+    const config = await storedAgent(workflow.id);
+    expect(config?.execution).toEqual({
+      temperature: 0.8,
+      maxTokens: 1024,
+      timeoutMs: 9000,
+      retries: 0,
+    });
+  });
+
+  it('still rejects an out-of-range value inside a patch (TC-NODE-006 stays true)', async () => {
+    const { workflow, agent } = await seedAgentWithTemperature(0.3);
+
+    const response = await graphOps(h.app, workflow.id, 2, [
+      { op: 'update_node', nodeId: agent.id, patch: { config: { execution: { temperature: 5 } } } },
+    ]);
+
+    expect(response.status).toBe(400);
+    expect((await storedAgent(workflow.id))?.execution.temperature).toBe(0.3);
+  });
+});
+
 describe('TC-NODE-006 Out-of-range setting', () => {
   it('refuses temperature 5 and saves nothing', async () => {
     const { workflow } = await seed();

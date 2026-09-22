@@ -141,6 +141,78 @@ describe('FR-NODE-007 update_node config patch is validated per kind', () => {
     expect(nodeConfigPatchSchema('retrieval').safeParse({ k: 21 }).success).toBe(false);
     expect(nodeConfigPatchSchema('retrieval').safeParse({ k: 3 }).success).toBe(true);
   });
+});
+
+/**
+ * D-001. `.partial()` in Zod 4 does not remove `.default()`, so a patch schema built from it
+ * returns every defaulted sibling at its default. The engine shallow-merges the patch over the
+ * stored config, so those defaults overwrite whatever the user had set — a patch that meant to
+ * change one field silently reverted several others.
+ */
+describe('D-001 a config patch carries only the fields it was given', () => {
+  it('returns nothing but the patched key for an agent', () => {
+    const patch = nodeConfigPatchSchema('agent').parse({
+      contextPolicy: { budgetTokens: 8000 },
+    });
+
+    expect(Object.keys(patch)).toEqual(['contextPolicy']);
+  });
+
+  it.each([
+    'execution',
+    'routing',
+    'tools',
+    'memory',
+    'knowledgeBaseIds',
+    'skillIds',
+  ])('does not invent %s out of its default', (field) => {
+    const patch = nodeConfigPatchSchema('agent').parse({ instructions: 'Rewrite' });
+
+    expect(patch).not.toHaveProperty(field);
+  });
+
+  it('does the same for a model node, which also defaults execution', () => {
+    const patch = nodeConfigPatchSchema('model').parse({ modelId: 'mock-text' });
+
+    expect(Object.keys(patch)).toEqual(['modelId']);
+  });
+
+  it('leaves an empty patch empty rather than filling it with a whole config', () => {
+    expect(nodeConfigPatchSchema('agent').parse({})).toEqual({});
+  });
+
+  it('still keeps a field the patch really set', () => {
+    expect(
+      nodeConfigPatchSchema('agent').parse({ execution: { temperature: 0.3, maxTokens: 2048, timeoutMs: 5000, retries: 1 } }),
+    ).toEqual({ execution: { temperature: 0.3, maxTokens: 2048, timeoutMs: 5000, retries: 1 } });
+  });
+
+  it('still rejects a value outside its range, so dropping defaults did not drop validation', () => {
+    expect(nodeConfigPatchSchema('agent').safeParse({ execution: { temperature: 5 } }).success).toBe(
+      false,
+    );
+    expect(
+      nodeConfigPatchSchema('agent').safeParse({ contextPolicy: { budgetTokens: 1 } }).success,
+    ).toBe(false);
+  });
+
+  it('does not inject defaults at request level either, whichever union member matches', () => {
+    const request = GraphOpsRequestSchema.parse({
+      baseVersion: 0,
+      ops: [
+        {
+          op: 'update_node',
+          nodeId: NODE_A,
+          patch: { config: { contextPolicy: { budgetTokens: 8000 } } },
+        },
+      ],
+    });
+
+    const op = request.ops[0];
+    expect(op?.op).toBe('update_node');
+    if (op?.op !== 'update_node') return;
+    expect(Object.keys(op.patch.config ?? {})).toEqual(['contextPolicy']);
+  });
 
   it('keeps the patched field instead of stripping it at request level', () => {
     // A strict union member would match any fully-optional patch and delete the key, so an

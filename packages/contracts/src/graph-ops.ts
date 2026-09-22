@@ -12,32 +12,82 @@ import {
 } from './graph.js';
 
 /**
+ * Remove `.default()` from a field, however many times it was applied.
+ *
+ * D-001: `.partial()` makes a key optional but leaves its `.default()` in place, so a patch that
+ * never mentioned `execution` still parses to one. The engine then shallow-merges that over the
+ * stored config and silently reverts whatever the user had set.
+ */
+function withoutDefault(field: z.ZodType): z.ZodType {
+  let current = field;
+  while (current instanceof z.ZodDefault) current = current.unwrap() as z.ZodType;
+  return current;
+}
+
+/**
+ * The patch schema for one config schema: every key optional, no key able to invent itself.
+ *
+ * Derived from the config schema rather than hand-written as a parallel `AgentConfigPatchSchema`.
+ * A second copy of the field list is a second thing to remember, and the day someone adds a field
+ * to `AgentConfig` and forgets the patch schema is the day D-001 comes back wearing a new hat.
+ */
+function patchSchemaOf<T extends z.ZodObject>(schema: T) {
+  return z
+    .object(
+      Object.fromEntries(
+        Object.entries(schema.shape).map(([key, field]) => [key, withoutDefault(field as z.ZodType)]),
+      ),
+    )
+    .partial();
+}
+
+/**
+ * The patch schema per node kind — what the engine validates a patch against once it knows the
+ * node's kind. Shallow, like TypeScript's `Partial`: a patch that names `execution` replaces the
+ * whole `execution` object (and that object's own defaults still fill in what it left out), while
+ * a key the patch never names is not touched at all.
+ */
+export const NODE_CONFIG_PATCH_SCHEMA_BY_KIND = {
+  input: patchSchemaOf(NODE_CONFIG_SCHEMA_BY_KIND.input),
+  output: patchSchemaOf(NODE_CONFIG_SCHEMA_BY_KIND.output),
+  agent: patchSchemaOf(NODE_CONFIG_SCHEMA_BY_KIND.agent),
+  model: patchSchemaOf(NODE_CONFIG_SCHEMA_BY_KIND.model),
+  merge: patchSchemaOf(NODE_CONFIG_SCHEMA_BY_KIND.merge),
+  transform: patchSchemaOf(NODE_CONFIG_SCHEMA_BY_KIND.transform),
+  retrieval: patchSchemaOf(NODE_CONFIG_SCHEMA_BY_KIND.retrieval),
+  guardrail: patchSchemaOf(NODE_CONFIG_SCHEMA_BY_KIND.guardrail),
+  custom: patchSchemaOf(NODE_CONFIG_SCHEMA_BY_KIND.custom),
+} as const;
+
+/**
  * `Partial<NodeConfig>` (round 1 §2.6). The patch carries no `kind`, so at request-parse time the
  * only honest check is "some node config, partially filled"; the engine knows the node's kind and
- * re-validates with `nodeConfigPatchSchema(kind)` before applying. Like TypeScript's `Partial`,
- * this is shallow: a patch that sets `execution` replaces the whole object.
+ * re-validates with `nodeConfigPatchSchema(kind)` before applying.
  *
  * Each member is **loose**. A strict `z.object` strips keys it does not declare, and since every
  * member here is fully optional the first one would match any patch and silently delete the very
  * field being set — an `execution` patch would parse to `{}` and the update would do nothing. The
  * keys have to survive request parsing so that `nodeConfigPatchSchema(kind)` can reject a bad one.
+ *
+ * These members are default-free too (D-001). Whichever one happens to match first must not add a
+ * key the caller never sent, because the engine parses *this* output, not the raw request body.
  */
 export const NodeConfigPatchSchema = z.union([
-  NODE_CONFIG_SCHEMA_BY_KIND.input.partial().loose(),
-  NODE_CONFIG_SCHEMA_BY_KIND.output.partial().loose(),
-  NODE_CONFIG_SCHEMA_BY_KIND.agent.partial().loose(),
-  NODE_CONFIG_SCHEMA_BY_KIND.model.partial().loose(),
-  NODE_CONFIG_SCHEMA_BY_KIND.merge.partial().loose(),
-  NODE_CONFIG_SCHEMA_BY_KIND.transform.partial().loose(),
-  NODE_CONFIG_SCHEMA_BY_KIND.retrieval.partial().loose(),
-  NODE_CONFIG_SCHEMA_BY_KIND.guardrail.partial().loose(),
-  NODE_CONFIG_SCHEMA_BY_KIND.custom.partial().loose(),
+  NODE_CONFIG_PATCH_SCHEMA_BY_KIND.input.loose(),
+  NODE_CONFIG_PATCH_SCHEMA_BY_KIND.output.loose(),
+  NODE_CONFIG_PATCH_SCHEMA_BY_KIND.agent.loose(),
+  NODE_CONFIG_PATCH_SCHEMA_BY_KIND.model.loose(),
+  NODE_CONFIG_PATCH_SCHEMA_BY_KIND.merge.loose(),
+  NODE_CONFIG_PATCH_SCHEMA_BY_KIND.transform.loose(),
+  NODE_CONFIG_PATCH_SCHEMA_BY_KIND.retrieval.loose(),
+  NODE_CONFIG_PATCH_SCHEMA_BY_KIND.guardrail.loose(),
+  NODE_CONFIG_PATCH_SCHEMA_BY_KIND.custom.loose(),
 ]);
 export type NodeConfigPatch = z.infer<typeof NodeConfigPatchSchema>;
 
 /** The strict patch schema for one node kind — what the engine validates against. */
 export function nodeConfigPatchSchema<K extends NodeKind>(kind: K) {
-  return NODE_CONFIG_SCHEMA_BY_KIND[kind].partial();
+  return NODE_CONFIG_PATCH_SCHEMA_BY_KIND[kind];
 }
 
 export const NodePatchSchema = z.object({
