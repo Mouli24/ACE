@@ -256,6 +256,9 @@ export class FakeRepository implements Repository {
       this.#for(scope)
         .events.filter((event) => {
           if (event.seq <= afterSeq) return false;
+          if (filter.runIds !== undefined) {
+            return event.runId !== undefined && filter.runIds.includes(event.runId);
+          }
           if (event.workflowId === undefined) return filter.includeEngineScope === true;
           return filter.workflowIds?.includes(event.workflowId) ?? false;
         })

@@ -51,6 +51,11 @@ export type NewEngineEvent = Omit<EngineEvent, 'seq'>;
 /** Which events `listAfter` should return. */
 export interface EventFilter {
   workflowIds?: Id[];
+  /**
+   * Events of these runs, whatever workflow they belong to. `GET /runs/:id/events` uses it, so
+   * replaying one run does not mean reading the whole log and filtering in memory.
+   */
+  runIds?: Id[];
   /** True when the caller is subscribed to the engine scope and wants unscoped events too. */
   includeEngineScope?: boolean;
 }

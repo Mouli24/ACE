@@ -477,14 +477,20 @@ export class SqliteRepository implements Repository {
     },
 
     listAfter: async (scope: Scope, afterSeq: number, filter: EventFilter) => {
+      // A run filter is exclusive: `GET /runs/:id/events` wants that run's events and nothing
+      // else, not that run's events plus everything unscoped.
       const scoped =
-        filter.workflowIds === undefined || filter.workflowIds.length === 0
-          ? filter.includeEngineScope === true
-            ? undefined
-            : sql`1 = 0`
-          : filter.includeEngineScope === true
-            ? or(inArray(events.workflowId, filter.workflowIds), isNull(events.workflowId))
-            : inArray(events.workflowId, filter.workflowIds);
+        filter.runIds !== undefined
+          ? filter.runIds.length === 0
+            ? sql`1 = 0`
+            : inArray(events.runId, filter.runIds)
+          : filter.workflowIds === undefined || filter.workflowIds.length === 0
+            ? filter.includeEngineScope === true
+              ? undefined
+              : sql`1 = 0`
+            : filter.includeEngineScope === true
+              ? or(inArray(events.workflowId, filter.workflowIds), isNull(events.workflowId))
+              : inArray(events.workflowId, filter.workflowIds);
 
       const rows = this.#db
         .select()
