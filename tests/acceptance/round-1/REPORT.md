@@ -33,10 +33,15 @@ Automated — `tests/acceptance/round-1/arhant-tests-mouli.e2e.ts`, 13 tests, al
 | FR-WF-007/008 export from the UI → import → identical node/edge count and configs | ok     |
 | NFR-USE-02 keyboard only: add, connect, delete                                    | ok     |
 
-Manual pass: the 200-node fixture (`?fixture=200`) pans and zooms at 56–58 fps (TC-NFR-001 prints
-its measurement on every run); panes resize to their minimum without clipping; a 3,000-character
-paste into Instructions saves in one `graph-ops`; killing the engine mid-drag surfaces the toast
-and the queued ops flush after restart.
+Manual pass (§8.1 asks for ten minutes of abuse) — **partly done**, honestly recorded:
+
+- done: the 200-node fixture (`?fixture=200`) pans and zooms at 56–58 fps, measured on every run by
+  TC-NFR-001, which prints drag and wheel means; several interactive passes through the Canvas in a
+  real browser while diagnosing the findings below, including fit-to-view, the minimap, selection,
+  duplicate, delete and config-panel edits against the real engine.
+- **not done**: pane resize to the minimum, a 3,000-character paste into Instructions, killing the
+  engine mid-drag and verifying recovery, browser zoom at 50 % and 200 %. These are still open for
+  whoever runs the manual pass; nothing here claims them as verified.
 
 Findings, all fixed on this branch and re-verified:
 
@@ -75,9 +80,13 @@ through `@ace/sdk`, all green:
 | D-001 regression: a patch touching one config field leaves its siblings alone                                                                    | ok     |
 | D-002 regression: allow-origin header present, preflight answered without a token, foreign origin still 403                                      | ok     |
 
-Manual pass: clean clone → `pnpm install && pnpm typecheck && pnpm lint && pnpm test && pnpm build`
-with no env vars, all green; the engine answers only on `127.0.0.1`; a `kill -9` during a burst of
-graph-ops leaves the database openable and the graph consistent (no half-applied batch).
+Manual pass (§8.2) — **partly done**, honestly recorded:
+
+- done: `pnpm install && pnpm typecheck && pnpm lint && pnpm test && pnpm build` with no env vars,
+  all green, in this working tree (not a fresh clone); atomicity of a mixed batch is covered
+  automatically by TC-NFR-006.
+- **not done**: a genuinely clean clone, `curl` from another device on the LAN, and `kill -9`
+  during a burst of 200 graph-ops followed by a restart. Still open for the manual pass.
 
 Findings:
 
