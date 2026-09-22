@@ -37,6 +37,12 @@ export interface EngineEvent {
   runId?: Id;
   payload: unknown;
   createdAt: Timestamp;
+  /**
+   * True for an event that is published to live subscribers but never written to the log
+   * (round 2 §2.4: `node.token`). A transient event has no meaningful `seq` and is never replayed
+   * by `resume`, because the `node.output` that follows carries the same text in one piece.
+   */
+  transient?: boolean;
 }
 
 /** An event before the log has given it a `seq`. */
