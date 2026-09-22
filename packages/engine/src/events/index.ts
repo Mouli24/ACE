@@ -18,6 +18,12 @@ export type EmittedEvent = Omit<NewEngineEvent, 'createdAt'> & { createdAt?: str
 export interface EventBus {
   /** Persist, then publish. Returns the stored row, including the seq it was given. */
   emit(event: EmittedEvent): Promise<EngineEvent>;
+  /**
+   * Publish without persisting (round 2 §2.4). Only `node.token` uses this: a stream frame is
+   * worth sending to a watching client and worth nothing in the log, where it would multiply the
+   * rows of every run by the number of tokens generated.
+   */
+  emitTransient(event: EmittedEvent): Promise<void>;
   subscribe(handler: (event: EngineEvent) => void): Promise<Unsubscribe>;
 }
 
@@ -49,6 +55,16 @@ export function createEventBus({ repository, scope, pubsub, now }: EventBusDeps)
       });
       await pubsub.publish(scope, TOPIC, stored);
       return stored;
+    },
+
+    async emitTransient(event) {
+      await pubsub.publish(scope, TOPIC, {
+        ...event,
+        // Never read: a transient event is not part of the sequence `resume` counts through.
+        seq: 0,
+        createdAt: event.createdAt ?? timestamp(),
+        transient: true,
+      });
     },
 
     subscribe: (handler) => pubsub.subscribe(scope, TOPIC, handler),

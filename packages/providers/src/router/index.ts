@@ -1,4 +1,14 @@
-import type { DataType, ErrorKind, Id, ModelPricing, RoutingPolicy } from '@ace/contracts';
+import type { ErrorKind, Id } from '@ace/contracts';
+
+import type {
+  AttemptState,
+  ModelRouter,
+  RouteRefusalCode,
+  RouteResult,
+  RouterModel,
+  RoutingNodeConfig,
+  RoutingRequirements,
+} from '@ace/engine';
 
 /**
  * The model router (FR-RTR-001..007, Arch §14.3).
@@ -6,68 +16,24 @@ import type { DataType, ErrorKind, Id, ModelPricing, RoutingPolicy } from '@ace/
  * Pure selection over the catalog: it reads rows, it never calls a provider, and the same inputs
  * always give the same route. Which model actually answered is recorded on the node run
  * (FR-RTR-006), and a fallback is flagged so the Canvas can say so.
+ *
+ * The interface lives in `@ace/engine`'s ports (CLAUDE.md §3.4 rule 3) and is re-exported here.
  */
 
-/** The fields of a catalog row the router needs. */
-export interface RouterModel {
-  providerId: Id;
-  modelId: string;
-  available: boolean;
-  inputTypes: DataType[];
-  outputTypes: DataType[];
-  pricing?: ModelPricing;
-}
+export {
+  ROUTE_REFUSAL_CODES,
+  type AttemptState,
+  type ModelRouter,
+  type Route,
+  type RouteRefusalCode,
+  type RouteResult,
+  type RouterModel,
+  type RoutingNodeConfig,
+  type RoutingRequirements,
+} from '@ace/engine';
 
-export interface RoutingNodeConfig {
-  providerId?: Id;
-  modelId?: string;
-  routing: { policy: RoutingPolicy; fallbackModelIds: string[] };
-}
-
-/** The data types this node has to be able to read and produce. */
-export interface RoutingRequirements {
-  inputTypes: readonly DataType[];
-  outputTypes: readonly DataType[];
-}
-
-/** What has already gone wrong on this node run, in the order it happened. */
-export interface AttemptState {
-  failures: readonly { modelId: string; kind: ErrorKind }[];
-}
-
-export interface Route {
-  providerId: Id;
-  modelId: string;
-  viaFallback: boolean;
-}
-
-export const ROUTE_REFUSAL_CODES = [
-  'missing_model',
-  'unavailable_model',
-  'incompatible_model',
-  'no_candidate_left',
-  'not_supported_yet',
-  'policy_not_allowed',
-] as const;
-export type RouteRefusalCode = (typeof ROUTE_REFUSAL_CODES)[number];
-
-export type RouteResult =
-  | { ok: true; route: Route }
-  | { ok: false; code: RouteRefusalCode; reason: string };
-
-export interface Router {
-  resolve(
-    node: RoutingNodeConfig,
-    requirements: RoutingRequirements,
-    attemptState: AttemptState,
-  ): RouteResult;
-  /** FR-RTR-007: a bench arm must be reproducible, so only fixed routing is allowed. */
-  resolveForBench(
-    node: RoutingNodeConfig,
-    requirements: RoutingRequirements,
-    attemptState: AttemptState,
-  ): RouteResult;
-}
+/** The router as this package builds it. */
+export type Router = ModelRouter;
 
 /**
  * Error kinds a different model could plausibly survive (FR-RTR-002).
