@@ -11,6 +11,13 @@ import type {
   Workflow,
 } from '@ace/contracts';
 
+import type {
+  ModelRepository,
+  NodeRunRepository,
+  PriceTableRepository,
+  ProviderRepository,
+  RunRepository,
+} from './run-repository.js';
 import type { Scope } from './scope.js';
 
 /**
@@ -115,4 +122,11 @@ export interface Repository {
   edges: EdgeRepository;
   events: EventRepository;
   settings: SettingsRepository;
+
+  /* Round 2 (Arch §15.3). */
+  providers: ProviderRepository;
+  models: ModelRepository;
+  priceTables: PriceTableRepository;
+  runs: RunRepository;
+  nodeRuns: NodeRunRepository;
 }

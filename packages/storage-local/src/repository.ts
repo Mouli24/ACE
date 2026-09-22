@@ -15,6 +15,11 @@ import {
 } from '@ace/contracts';
 import type {
   EdgeRepository,
+  ModelRepository,
+  NodeRunRepository,
+  PriceTableRepository,
+  ProviderRepository,
+  RunRepository,
   EngineEvent,
   EventFilter,
   EventRepository,
@@ -30,6 +35,13 @@ import type BetterSqlite3 from 'better-sqlite3';
 import { and, asc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 
+import {
+  createModelRepository,
+  createNodeRunRepository,
+  createPriceTableRepository,
+  createProviderRepository,
+  createRunRepository,
+} from './repository-runs.js';
 import type * as schema from './schema.js';
 import { edges, events, nodes, projects, settings, workflows } from './schema.js';
 import { toJsonColumn } from './secret-guard.js';
@@ -149,9 +161,22 @@ export class SqliteRepository implements Repository {
   readonly #mutex = new Mutex();
   #depth = 0;
 
+  /* Round 2 (Arch §15.3). Built in the constructor because they close over `#db`. */
+  readonly providers: ProviderRepository;
+  readonly models: ModelRepository;
+  readonly priceTables: PriceTableRepository;
+  readonly runs: RunRepository;
+  readonly nodeRuns: NodeRunRepository;
+
   constructor(db: Db, sqlite: BetterSqlite3.Database) {
     this.#db = db;
     this.#sqlite = sqlite;
+
+    this.providers = createProviderRepository(db);
+    this.models = createModelRepository(db);
+    this.priceTables = createPriceTableRepository(db);
+    this.runs = createRunRepository(db);
+    this.nodeRuns = createNodeRunRepository(db);
   }
 
   /**
