@@ -9,6 +9,7 @@ import {
   UpdateWorkflowRequestSchema,
 } from '@ace/contracts';
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
+import { cors } from 'hono/cors';
 
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
@@ -39,6 +40,32 @@ export function bearerToken(header: string | undefined): string | undefined {
   if (header === undefined) return undefined;
   const match = /^Bearer\s+(.+)$/i.exec(header.trim());
   return match?.[1]?.trim();
+}
+
+/**
+ * The browser half of FR-SYS-003.
+ *
+ * `originGuard` below decides whether a request may come *in*; this decides whether the browser is
+ * allowed to hand the answer *back* to the page. Both are needed: without the header a browser
+ * throws away an otherwise perfectly good 200, which is what a page sees as `Failed to fetch`.
+ *
+ * Mounted ahead of `authGuard` on purpose. A CORS preflight carries no `Authorization` header — the
+ * browser is asking permission *before* it is willing to send credentials — so a token check in
+ * front of it would 401 every preflight and no cross-origin request would ever be made.
+ */
+function corsLayer(deps: EngineDeps): MiddlewareHandler<{ Variables: EngineVariables }> {
+  return cors({
+    // Deliberately the same two sources `originGuard` reads, so the pair can never disagree: an
+    // origin added to settings would otherwise pass the guard and still be blocked by the browser.
+    origin: async (origin) => {
+      const settings = await deps.repository.settings.get(deps.scope);
+      const allowed = new Set([...settings.allowedOrigins, ...(deps.selfOrigins ?? [])]);
+      return allowed.has(origin) ? origin : null;
+    },
+    allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization', 'x-request-id'],
+    maxAge: 600,
+  });
 }
 
 /**
@@ -103,6 +130,7 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   });
 
   app.use('*', requestId());
+  app.use('*', corsLayer(deps));
   app.use('*', originGuard(deps));
   app.use('*', authGuard(deps));
 
