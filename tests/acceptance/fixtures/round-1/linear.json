@@ -23,9 +23,7 @@
       "kind": "input",
       "config": {
         "artifactIds": [],
-        "outputTypes": [
-          "text"
-        ]
+        "outputTypes": ["text"]
       }
     },
     {
@@ -59,12 +57,8 @@
           "fallbackModelIds": []
         },
         "instructions": "Summarise the input in one sentence.",
-        "inputTypes": [
-          "text"
-        ],
-        "outputTypes": [
-          "text"
-        ],
+        "inputTypes": ["text"],
+        "outputTypes": ["text"],
         "execution": {
           "temperature": 0.7,
           "maxTokens": 4096,

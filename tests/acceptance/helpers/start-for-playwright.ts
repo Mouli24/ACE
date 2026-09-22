@@ -9,9 +9,14 @@ import { startTestEngine } from './engine.js';
  * environment variable back from a started server.
  */
 const port = Number(process.argv[2] ?? 47_470);
+const webPort = Number(process.argv[3] ?? 47_471);
 
 // A fixed port here, not a random one: Playwright polls a URL it was given up front.
-const engine = await startTestEngine({ port });
+const engine = await startTestEngine({
+  port,
+  // The preview origin the web app is served from; without it the browser gets a 403 (D27).
+  allowedOrigins: [`http://127.0.0.1:${webPort}`, `http://localhost:${webPort}`],
+});
 
 writeFileSync(
   join(process.cwd(), '.playwright-engine.json'),

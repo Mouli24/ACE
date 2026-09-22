@@ -32,7 +32,7 @@ export default defineConfig({
 
   webServer: [
     {
-      command: `node --import tsx helpers/start-for-playwright.ts ${ENGINE_PORT}`,
+      command: `node --import tsx helpers/start-for-playwright.ts ${ENGINE_PORT} ${WEB_PORT}`,
       url: `${ENGINE_URL}/api/v1/health`,
       reuseExistingServer: false,
       stdout: 'pipe',

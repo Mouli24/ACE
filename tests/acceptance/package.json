@@ -1,5 +1,5 @@
 {
-  "//": "This suite drives a REAL engine and runs via `pnpm test:acceptance` from the workspace root, never `pnpm test` (CLAUDE.md §2). It has no `test` script on purpose, so `pnpm -r test` skips it.",
+  "//": "This suite drives a REAL engine and runs via `pnpm test:acceptance` from the workspace root, never `pnpm test` (CLAUDE.md \u00a72). It has no `test` script on purpose, so `pnpm -r test` skips it.",
   "name": "@ace/acceptance",
   "version": "0.0.0",
   "private": true,
@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@ace/contracts": "workspace:*",
+    "@ace/sdk": "workspace:*",
     "@ace/server": "workspace:*"
   },
   "devDependencies": {

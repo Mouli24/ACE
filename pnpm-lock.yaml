@@ -471,6 +471,9 @@ importers:
       '@ace/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@ace/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       '@ace/server':
         specifier: workspace:*
         version: link:../../apps/server
