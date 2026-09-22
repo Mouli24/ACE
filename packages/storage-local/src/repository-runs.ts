@@ -400,6 +400,10 @@ export function createRunRepository(db: Db): RunRepository {
       const values = definedOnly({
         status: patch.status,
         haltReason: patch.haltReason,
+        preflightIssues:
+          patch.preflightIssues === undefined
+            ? undefined
+            : toJsonColumn(patch.preflightIssues, `run(${id}).preflightIssues`),
         totals: patch.totals === undefined ? undefined : toJsonColumn(patch.totals, `run(${id}).totals`),
         endedAt: patch.endedAt,
         durationMs: patch.durationMs,

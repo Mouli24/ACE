@@ -376,6 +376,7 @@ export class FakeRepository implements Repository {
       const next: Run = { ...current };
       if (patch.status !== undefined) next.status = patch.status;
       if (patch.haltReason !== undefined) next.haltReason = patch.haltReason;
+      if (patch.preflightIssues !== undefined) next.preflightIssues = patch.preflightIssues;
       if (patch.totals !== undefined) next.totals = patch.totals;
       if (patch.endedAt !== undefined) next.endedAt = patch.endedAt;
       if (patch.durationMs !== undefined) next.durationMs = patch.durationMs;
