@@ -102,3 +102,13 @@ both now have a permanent regression test in the suite above.
 > the harness and `packages/engine` to Arhant, and §6.2 says the tester never fixes the other's
 > code. Mouli wrote and fixed them here on a one-off instruction from the repository owner to close
 > the Round 1 gate; Arhant should still review this branch, and the normal split resumes in Round 2.
+
+## Decisions recorded from this verification (`docs/DECISIONS.md`)
+
+| ID  | What                                                                                                                 |
+| --- | -------------------------------------------------------------------------------------------------------------------- |
+| D28 | An op naming an unknown node, edge or port is a 400 `validation_failed`, not a 404                                   |
+| D29 | The acceptance harness allows the preview origin through `PATCH /settings`, and pins `vite preview --host 127.0.0.1` |
+| D30 | Viewport-only rendering is off — a deviation from §5 item 6, with the A/B measurement that justifies it              |
+| D31 | New and duplicated nodes go to the first free slot in view, not to a fixed offset                                    |
+| D32 | Why this branch crosses the ownership map, and that it is not a precedent                                            |
