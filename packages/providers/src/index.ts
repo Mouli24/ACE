@@ -16,3 +16,4 @@ export * from './adapters/openai-compatible.js';
 export * from './adapters/ollama.js';
 export * from './catalog/index.js';
 export * from './router/index.js';
+export * from './factory.js';

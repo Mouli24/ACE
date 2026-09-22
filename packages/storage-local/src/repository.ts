@@ -333,6 +333,28 @@ export class SqliteRepository implements Repository {
   };
 
   readonly nodes: NodeRepository = {
+    /**
+     * `config` is a JSON column, so this is a substring match on the stored provider id. The
+     * result is re-checked in TypeScript, because a LIKE could in principle match a provider id
+     * that appears somewhere else in the config.
+     */
+    listByProvider: async (scope: Scope, providerId: Id) =>
+      this.#db
+        .select()
+        .from(nodes)
+        .where(
+          and(
+            eq(nodes.workspaceId, scope.workspaceId),
+            sql`${nodes.config} LIKE ${`%"${providerId}"%`}`,
+          ),
+        )
+        .all()
+        .map(toNode)
+        .filter(
+          (node) =>
+            'providerId' in node.config && node.config.providerId === providerId,
+        ),
+
     listByWorkflow: async (scope: Scope, workflowId: Id) => {
       const rows = this.#db
         .select()
