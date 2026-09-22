@@ -33,7 +33,6 @@ import {
 } from "@ace/contracts";
 
 import {
-  HttpError,
   invalidPath,
   notFound,
   notImplemented,
@@ -417,7 +416,7 @@ function findPort(
  * names a node, edge or port this workflow does not have is such an op — a 404 would say "the
  * workflow is gone", which is a different thing and would tell a client to stop retrying.
  */
-function unknownRef(what: string, id: string): HttpError {
+function unknownRef(what: string, id: string) {
   return validationFailed(`${what} ${id} is not part of this workflow.`, [
     {
       severity: "error",

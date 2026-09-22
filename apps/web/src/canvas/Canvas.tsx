@@ -32,6 +32,7 @@ import { PALETTE_DRAG_TYPE } from './Palette';
 import { useCanvasApi } from './canvas-api';
 import { checkConnection } from './connect';
 import { duplicateNodes } from './duplicate';
+import { freeSlotNear } from './placement';
 import { toFlowEdges, toFlowNodes } from './to-flow';
 
 export interface CanvasProps {
@@ -46,7 +47,7 @@ export function Canvas({ workflowId }: CanvasProps) {
   if (!graph.data) {
     return (
       <div
-        className="ace-dotted-canvas flex h-full items-center justify-center"
+        className="ace-dotted-canvas absolute inset-0 flex items-center justify-center"
         data-testid="canvas-loading"
         role="status"
         aria-live="polite"
@@ -298,20 +299,42 @@ function CanvasInner({
   const addNodeAtCenter = useCallback(
     (kind: Round1NodeKind) => {
       const bounds = wrapper.current?.getBoundingClientRect();
-      const center = flow.screenToFlowPosition({
-        x: (bounds?.left ?? 0) + (bounds?.width ?? 800) / 2,
-        y: (bounds?.top ?? 0) + (bounds?.height ?? 600) / 2,
-      });
-      const jitter = nodes.length * 12;
-      return addNodeAt(kind, { x: center.x - 90 + jitter, y: center.y - 40 + jitter });
+      const left = bounds?.left ?? 0;
+      const top = bounds?.top ?? 0;
+      const width = bounds?.width ?? 800;
+      const height = bounds?.height ?? 600;
+      const topLeft = flow.screenToFlowPosition({ x: left, y: top });
+      const bottomRight = flow.screenToFlowPosition({ x: left + width, y: top + height });
+      const center = flow.screenToFlowPosition({ x: left + width / 2, y: top + height / 2 });
+      const visible = {
+        x: topLeft.x,
+        y: topLeft.y,
+        width: bottomRight.x - topLeft.x,
+        height: bottomRight.y - topLeft.y,
+      };
+
+      // the first free spot: never on top of another card, whose ports would become unreachable
+      const slot = freeSlotNear(nodes, { x: center.x - 90, y: center.y - 40 }, visible);
+      const node = addNodeAt(kind, slot);
+
+      // when the view was too crowded to hold it, bring the new node into sight
+      const inView =
+        slot.x >= visible.x &&
+        slot.y >= visible.y &&
+        slot.x <= visible.x + visible.width &&
+        slot.y <= visible.y + visible.height;
+      if (!inView) {
+        requestAnimationFrame(() => void flow.fitView({ padding: 0.2, duration: 200 }));
+      }
+      return node;
     },
-    [addNodeAt, flow, nodes.length],
+    [addNodeAt, flow, nodes],
   );
 
   const duplicateSelection = useCallback(() => {
     const selected = nodes.filter((n) => selectedNodeIds.includes(n.id));
     if (selected.length === 0) return;
-    const copies = duplicateNodes(selected);
+    const copies = duplicateNodes(selected, nodes);
     sync.enqueue(copies.map((node) => ({ op: 'add_node' as const, node })));
     setSelection(
       copies.map((n) => n.id),
@@ -387,7 +410,7 @@ function CanvasInner({
   return (
     <div
       ref={wrapper}
-      className="relative h-full w-full"
+      className="absolute inset-0"
       data-testid="canvas"
       onDragOver={onDragOver}
       onDrop={onDrop}
@@ -417,7 +440,10 @@ function CanvasInner({
         panOnScroll
         zoomOnPinch
         zoomOnDoubleClick={false}
-        onlyRenderVisibleElements
+        // Culling leaves off-screen nodes unmeasured, so `fitView` cannot bring them back and a
+        // node added outside the view becomes unreachable. Rendering all 200 fixture nodes costs
+        // less than the noise in TC-NFR-001, so the trade is not worth it.
+        onlyRenderVisibleElements={false}
         minZoom={0.1}
         maxZoom={2.5}
         className="ace-dotted-canvas"

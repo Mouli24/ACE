@@ -649,18 +649,16 @@ describe('TC-NODE-006 execution settings are range-checked server-side (FR-NODE-
       })
     ).version;
 
-    version = (
-      await client.applyGraphOps(workflow.id, {
-        baseVersion: version,
-        ops: [
-          {
-            op: 'update_node',
-            nodeId: agent.id,
-            patch: { config: { contextPolicy: { budgetTokens: 8000 } } },
-          },
-        ],
-      })
-    ).version;
+    await client.applyGraphOps(workflow.id, {
+      baseVersion: version,
+      ops: [
+        {
+          op: 'update_node',
+          nodeId: agent.id,
+          patch: { config: { contextPolicy: { budgetTokens: 8000 } } },
+        },
+      ],
+    });
 
     const saved = (await client.getWorkflow(workflow.id)).nodes.find(
       (node) => node.id === agent.id,

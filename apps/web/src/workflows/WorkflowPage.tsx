@@ -46,7 +46,9 @@ export function WorkflowPage() {
       )}
       <Panel minSize={30}>
         <PanelGroup direction="vertical" className="h-full">
-          <Panel minSize={30}>
+          {/* `relative` + an absolutely filled Canvas: a percentage height inside a flex-sized
+              panel collapses to 0, which left the Canvas unmeasurable (no fit, no minimap). */}
+          <Panel minSize={30} className="relative min-h-0">
             <Canvas workflowId={workflowId} />
           </Panel>
           {bottomOpen && (

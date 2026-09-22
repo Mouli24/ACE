@@ -1,5 +1,6 @@
 import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { startTestEngine } from './engine.js';
 
@@ -18,8 +19,11 @@ const engine = await startTestEngine({
   allowedOrigins: [`http://127.0.0.1:${webPort}`, `http://localhost:${webPort}`],
 });
 
+/** Next to the config, not in `process.cwd()`: Playwright starts this with its own directory. */
+const handleFile = join(dirname(fileURLToPath(import.meta.url)), '..', '.playwright-engine.json');
+
 writeFileSync(
-  join(process.cwd(), '.playwright-engine.json'),
+  handleFile,
   JSON.stringify({ url: engine.url, wsUrl: engine.wsUrl, token: engine.token }, null, 2),
 );
 

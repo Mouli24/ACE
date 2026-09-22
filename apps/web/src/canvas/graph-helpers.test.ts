@@ -98,7 +98,12 @@ describe('duplicateNodes (FR-CAN-006)', () => {
     expect(copy?.id).not.toBe(configured.id);
     expect(copy?.name).toBe('Writer');
     expect(copy?.kind === 'agent' && copy.config.instructions).toBe('hi');
-    expect(copy?.position).toEqual({ x: 140, y: 140 });
+    // offset, and never on top of the original (its ports would be unreachable)
+    expect(copy?.position.x).toBeGreaterThan(configured.position.x);
+    expect(
+      Math.abs((copy?.position.x ?? 0) - configured.position.x) >= 260 ||
+        Math.abs((copy?.position.y ?? 0) - configured.position.y) >= 160,
+    ).toBe(true);
     expect(copy?.outputs[0]?.id.startsWith(copy?.id ?? '!')).toBe(true);
     // editing the copy must not touch the original: no shared references
     expect(copy?.config).not.toBe(configured.config);
