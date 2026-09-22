@@ -1,0 +1,236 @@
+import type {
+  DataType,
+  ErrorKind,
+  Id,
+  ModelPricing,
+  NodeError,
+  ProviderState,
+  ProviderType,
+} from '@ace/contracts';
+
+/**
+ * The provider adapter contract (Arch §14.2) and the one place SDK and HTTP failures become ACE
+ * error kinds (Arch §28).
+ *
+ * Every adapter maps its own errors *inside* the adapter, so nothing above this layer has to know
+ * what an Anthropic 429 looks like versus an Ollama connection refusal. The engine sees a
+ * `NodeError` with a kind it already has a rule for.
+ *
+ * D32: `ProviderStatus`, `ModelInfo` and `GenerateRequest` are named by Arch §14.2 but defined
+ * nowhere, and they never cross the API seam — they live here rather than in `@ace/contracts`.
+ */
+
+/* -------------------------------------------------------------------------- */
+/* The contract                                                                */
+/* -------------------------------------------------------------------------- */
+
+export interface ProviderStatus {
+  status: ProviderState;
+  message?: string;
+  latencyMs?: number;
+}
+
+/** One model as the provider describes it, before the catalog gives it a row id. */
+export interface ModelInfo {
+  modelId: string;
+  displayName: string;
+  inputTypes: DataType[];
+  outputTypes: DataType[];
+  contextWindow: number;
+  supportsTools: boolean;
+  supportsJson: boolean;
+  pricing?: ModelPricing;
+}
+
+export const FINISH_REASONS = ['stop', 'length', 'refusal', 'tool_calls', 'error'] as const;
+export type FinishReason = (typeof FINISH_REASONS)[number];
+
+/**
+ * What the executor hands an adapter. The prompt is already assembled (Arch §12.5) — an adapter
+ * never builds one, and there is no message list here (BR-02).
+ */
+export interface GenerateRequest {
+  modelId: string;
+  /** The `## System` section, when the provider takes one separately from the prompt. */
+  system?: string;
+  prompt: string;
+  outputTypes: DataType[];
+  jsonSchema?: Record<string, unknown>;
+  maxTokens?: number;
+  temperature?: number;
+  /**
+   * Which run and which loop iteration this call belongs to. Optional and never required to
+   * produce an answer — adapters use them for tracing, and the mock keys its per-run behaviours
+   * (`mock-429-then-ok`, `mock-reject-twice`) on them.
+   */
+  runId?: Id;
+  iteration?: number;
+}
+
+export type StreamChunk =
+  | { type: 'text'; delta: string }
+  | { type: 'json'; value: unknown }
+  | { type: 'usage'; tokensIn: number; tokensOut: number }
+  | { type: 'finish'; reason: FinishReason };
+
+export interface ProviderAdapter {
+  type: ProviderType;
+  check(): Promise<ProviderStatus>;
+  listModels(): Promise<ModelInfo[]>;
+  generate(req: GenerateRequest, signal: AbortSignal): AsyncIterable<StreamChunk>;
+  embed?(texts: string[]): Promise<number[][]>;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Error mapping (Arch §28)                                                    */
+/* -------------------------------------------------------------------------- */
+
+/** Thrown by an adapter that has already decided what kind of failure this is. */
+export class ProviderCallError extends Error {
+  override readonly name = 'ProviderCallError';
+
+  constructor(readonly nodeError: NodeError) {
+    super(nodeError.message);
+  }
+}
+
+/** Transport-level failures, which are worth retrying because the request never landed. */
+const NETWORK_CODES: ReadonlySet<string> = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ENOTFOUND',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+  'EPIPE',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_SOCKET',
+]);
+
+/** Names Node, undici and the DOM use for "the caller gave up". */
+const ABORT_NAMES: ReadonlySet<string> = new Set(['AbortError', 'TimeoutError']);
+
+export interface ErrorContext {
+  providerId?: Id;
+}
+
+export function isAbortError(error: unknown): boolean {
+  return error instanceof Error && ABORT_NAMES.has(error.name);
+}
+
+function kindForStatus(status: number): { kind: ErrorKind; retryable: boolean } {
+  if (status === 401 || status === 403) return { kind: 'auth', retryable: false };
+  if (status === 429) return { kind: 'provider', retryable: true };
+  if (status >= 500) return { kind: 'provider', retryable: true };
+  // Everything else in the 4xx range is the request's own fault — a model that does not exist, a
+  // body the provider will not accept. Retrying sends exactly the same request, so pre-flight and
+  // the config are what has to change (Arch §28 invalid_config).
+  return { kind: 'invalid_config', retryable: false };
+}
+
+/** Build the NodeError an HTTP status deserves (Arch §28). */
+export function statusToNodeError(
+  status: number,
+  message: string,
+  context: ErrorContext = {},
+): NodeError {
+  const { kind, retryable } = kindForStatus(status);
+
+  return {
+    kind,
+    code: `http_${status}`,
+    message: `Provider responded ${status}: ${message}`,
+    retryable,
+    ...(context.providerId === undefined ? {} : { providerId: context.providerId }),
+  };
+}
+
+function errorCode(error: object): string | undefined {
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? code : undefined;
+}
+
+function errorStatus(error: object): number | undefined {
+  for (const key of ['status', 'statusCode'] as const) {
+    const value = (error as Record<string, unknown>)[key];
+    if (typeof value === 'number') return value;
+  }
+  return undefined;
+}
+
+/**
+ * Turn anything an SDK or `fetch` threw into a `NodeError` (Arch §28).
+ *
+ * An unrecognised failure becomes a `provider` error that is **not** retried: a bug in an adapter
+ * would otherwise be re-sent with backoff until the attempt budget runs out, which turns one
+ * wrong call into several and hides the cause.
+ */
+export function mapProviderError(error: unknown, context: ErrorContext = {}): NodeError {
+  if (error instanceof ProviderCallError) return error.nodeError;
+
+  const withProvider = (nodeError: NodeError): NodeError =>
+    context.providerId === undefined ? nodeError : { ...nodeError, providerId: context.providerId };
+
+  if (isAbortError(error)) {
+    return withProvider({
+      kind: 'user_cancelled',
+      code: 'aborted',
+      message: 'The call was cancelled before it finished.',
+      retryable: false,
+    });
+  }
+
+  if (typeof error === 'object' && error !== null) {
+    const status = errorStatus(error);
+    if (status !== undefined) {
+      return statusToNodeError(status, describe(error), context);
+    }
+
+    const code = errorCode(error);
+    if (code !== undefined && NETWORK_CODES.has(code)) {
+      return withProvider({
+        kind: 'network',
+        code,
+        message: `Could not reach the provider: ${describe(error)}`,
+        retryable: true,
+      });
+    }
+
+    // `fetch` reports every transport failure as a TypeError with no code of its own.
+    if (error instanceof TypeError) {
+      return withProvider({
+        kind: 'network',
+        code: 'fetch_failed',
+        message: `Could not reach the provider: ${describe(error)}`,
+        retryable: true,
+      });
+    }
+  }
+
+  return withProvider({
+    kind: 'provider',
+    code: 'unknown',
+    message: `The provider call failed: ${describe(error)}`,
+    retryable: false,
+  });
+}
+
+function describe(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return typeof error === 'string' ? error : JSON.stringify(error);
+}
+
+/**
+ * What a failed call says about the provider itself (FR-PRV-003, Arch §19.3).
+ *
+ * Only failures that are genuinely about the provider move its state. A 500 says the request
+ * failed, not that the provider is unusable, so the state stays `UNKNOWN` until a `check()` says
+ * otherwise — marking it down on one bad response would make a transient blip look like an outage.
+ */
+export function providerStateForError(error: NodeError): ProviderState {
+  if (error.kind === 'auth') return 'AUTH_FAILED';
+  if (error.kind === 'network') return 'UNREACHABLE';
+  if (error.code === 'http_429') return 'RATE_LIMITED';
+  return 'UNKNOWN';
+}
