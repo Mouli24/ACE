@@ -66,7 +66,7 @@ export function isConnectionAllowed(
  * The issue codes round 1 §2.5 lists, in its order. `missing_model` is a warning this round and
  * becomes an error from round 2; `loop_not_supported` exists only while loop edges are refused.
  */
-export const VALIDATION_ISSUE_CODES = [
+export const ROUND_1_VALIDATION_ISSUE_CODES = [
   'unconnected_required_input',
   'no_input_node',
   'no_output_node',
@@ -76,6 +76,26 @@ export const VALIDATION_ISSUE_CODES = [
   'invalid_execution_setting',
   'missing_model',
   'loop_not_supported',
+] as const;
+
+/**
+ * The codes round 2 §2.5 adds. The first four are raised by `/validate`; `missing_input`,
+ * `not_supported_yet` and `unknown_placeholder` are raised by pre-flight (§2.7) and land on the
+ * run as `preflightIssues`. `not_supported_yet` is removed code by code as later rounds land.
+ */
+export const ROUND_2_VALIDATION_ISSUE_CODES = [
+  'provider_missing',
+  'provider_unreachable',
+  'unavailable_model',
+  'incompatible_model',
+  'missing_input',
+  'not_supported_yet',
+  'unknown_placeholder',
+] as const;
+
+export const VALIDATION_ISSUE_CODES = [
+  ...ROUND_1_VALIDATION_ISSUE_CODES,
+  ...ROUND_2_VALIDATION_ISSUE_CODES,
 ] as const;
 export const ValidationIssueCodeSchema = z.enum(VALIDATION_ISSUE_CODES);
 export type ValidationIssueCode = z.infer<typeof ValidationIssueCodeSchema>;

@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { DATA_TYPES, type DataType } from '../enums.js';
 import type { Port } from '../graph.js';
 import {
+  ROUND_1_VALIDATION_ISSUE_CODES,
   VALIDATION_ISSUE_CODES,
+  ValidationIssueCodeSchema,
   ValidationIssueSchema,
   isConnectionAllowed,
 } from '../validation.js';
@@ -100,7 +102,7 @@ describe('TC-CON-006 Single-input port', () => {
 
 describe('FR-WF-006 ValidationIssue', () => {
   it('declares exactly the codes of round 1 §2.5', () => {
-    expect([...VALIDATION_ISSUE_CODES]).toEqual([
+    expect([...ROUND_1_VALIDATION_ISSUE_CODES]).toEqual([
       'unconnected_required_input',
       'no_input_node',
       'no_output_node',
@@ -111,6 +113,32 @@ describe('FR-WF-006 ValidationIssue', () => {
       'missing_model',
       'loop_not_supported',
     ]);
+  });
+
+  it('adds the seven codes round 2 §2.5 names, and no others', () => {
+    expect([...VALIDATION_ISSUE_CODES]).toEqual([
+      ...ROUND_1_VALIDATION_ISSUE_CODES,
+      'provider_missing',
+      'provider_unreachable',
+      'unavailable_model',
+      'incompatible_model',
+      'missing_input',
+      'not_supported_yet',
+      'unknown_placeholder',
+    ]);
+  });
+
+  it('parses a pre-flight issue that names the node it blocks', () => {
+    const issue = {
+      severity: 'error',
+      code: 'incompatible_model',
+      message: 'mock-text cannot read image input',
+      nodeId: NODE_A,
+    };
+
+    expect(ValidationIssueSchema.parse(issue)).toEqual(issue);
+    expect(ValidationIssueCodeSchema.safeParse('incompatible_model').success).toBe(true);
+    expect(ValidationIssueCodeSchema.safeParse('model_is_wrong').success).toBe(false);
   });
 
   it('accepts an issue with a node id and one with an edge id', () => {
