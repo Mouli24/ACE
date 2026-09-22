@@ -80,6 +80,21 @@ export const unsupportedFormatVersion = (found: unknown, expected: number): Http
 export const notImplemented = (what: string): HttpError =>
   new HttpError('workflow', 'not_implemented', `${what} is not supported yet.`);
 
+/* Round 2 (§2.5). */
+
+/**
+ * FR-PRV-005: deleting a provider that nodes still name needs `?confirm=true`. The refusal
+ * carries the node ids, because "this would break three nodes" is only useful if the user can
+ * see which three.
+ */
+export const providerInUse = (nodeIds: readonly string[]): HttpError =>
+  new HttpError(
+    'invalid_config',
+    'provider_in_use',
+    `${nodeIds.length} node${nodeIds.length === 1 ? '' : 's'} still use this provider. Delete it with ?confirm=true to remove it anyway.`,
+    { nodeIds: [...nodeIds] },
+  );
+
 /**
  * Turn anything thrown inside a handler into the §2.3 envelope.
  *
