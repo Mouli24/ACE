@@ -26,6 +26,9 @@ importers:
       '@ace/engine':
         specifier: workspace:*
         version: link:../../packages/engine
+      '@ace/providers':
+        specifier: workspace:^
+        version: link:../../packages/providers
       '@ace/storage-local':
         specifier: workspace:*
         version: link:../../packages/storage-local
