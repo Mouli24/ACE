@@ -1,4 +1,4 @@
-import { NODE_STATES, PROVIDER_TYPES } from '@ace/contracts';
+import { NODE_STATES, PROVIDER_STATES, PROVIDER_TYPES } from '@ace/contracts';
 
 import { contrastRatio, tokens } from '../tokens.js';
 
@@ -31,9 +31,16 @@ describe('NFR-USE-02 design tokens meet WCAG AA', () => {
     expect(contrastRatio(tokens.color.status[state], tokens.color.card)).toBeGreaterThanOrEqual(3);
   });
 
+  it.each(PROVIDER_STATES)('provider status %s ≥ 3:1 against the panel', (state) => {
+    expect(
+      contrastRatio(tokens.color.providerStatus[state], tokens.color.panel),
+    ).toBeGreaterThanOrEqual(3);
+  });
+
   it('has one status colour per NodeState and one accent per ProviderType', () => {
     expect(Object.keys(tokens.color.status).sort()).toEqual([...NODE_STATES].sort());
     expect(Object.keys(tokens.color.provider).sort()).toEqual([...PROVIDER_TYPES].sort());
+    expect(Object.keys(tokens.color.providerStatus).sort()).toEqual([...PROVIDER_STATES].sort());
   });
 
   it('names a serif face for human text and a monospace face for machine text', () => {
