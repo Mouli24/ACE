@@ -132,10 +132,13 @@ test.describe('Canvas (FR-CAN-001..007, 010)', () => {
     await settled(page, seeded.workflowId, 2);
     const graph = await serverGraph(page, seeded.workflowId);
     const copy = graph.nodes.find((n) => n.id !== original)!;
-    expect(copy.position).toEqual({
-      x: graph.nodes[0]!.position.x + 40,
-      y: graph.nodes[0]!.position.y + 40,
-    });
+    // offset, and never covering the original — its ports must stay reachable (FR-CAN-006)
+    const source = graph.nodes.find((n) => n.id === original)!;
+    expect(copy.position).not.toEqual(source.position);
+    const apart =
+      Math.abs(copy.position.x - source.position.x) >= 200 ||
+      Math.abs(copy.position.y - source.position.y) >= 120;
+    expect(apart).toBe(true);
     expect((copy.config as { instructions: string }).instructions).toBe('Original instructions');
     // the copy is selected after duplicating; rename it
     await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);

@@ -1,5 +1,5 @@
 import { cn } from '@ace/ui';
-import type { DragEvent, KeyboardEvent } from 'react';
+import type { DragEvent } from 'react';
 
 import { KIND_ICON } from '../nodes/NodeCard';
 import { NODE_KIND_LABEL, ROUND_1_NODE_KINDS, type Round1NodeKind } from '../nodes/factory';
@@ -28,12 +28,6 @@ export function Palette({ workflowId, onAdd }: PaletteProps) {
     event.dataTransfer.setData(PALETTE_DRAG_TYPE, kind);
     event.dataTransfer.effectAllowed = 'move';
   };
-  const onKeyDown = (event: KeyboardEvent, kind: Round1NodeKind) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      onAdd?.(kind);
-    }
-  };
 
   return (
     <aside
@@ -54,7 +48,6 @@ export function Palette({ workflowId, onAdd }: PaletteProps) {
             data-testid={`palette-${kind}`}
             onDragStart={(e) => onDragStart(e, kind)}
             onClick={() => onAdd?.(kind)}
-            onKeyDown={(e) => onKeyDown(e, kind)}
             className={cn(
               'flex cursor-grab items-start gap-2 rounded-md border border-transparent px-2 py-1.5 text-left',
               'hover:border-border hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent',

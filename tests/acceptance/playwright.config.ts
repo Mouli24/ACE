@@ -20,28 +20,39 @@ const ENGINE_URL = `http://127.0.0.1:${ENGINE_PORT}`;
 export default defineConfig({
   testDir: './round-1',
   testMatch: /.*\.e2e\.ts/,
-  timeout: 60_000,
+  // a real engine, a real production build and a real browser: 60 s is too tight for the
+  // config-panel tests, which make one HTTP round trip per field.
+  timeout: 120_000,
   fullyParallel: false,
   workers: 1,
+  // One retry, so a trace is captured for a failure without paying for it on the happy path.
+  retries: 1,
   reporter: [['list'], ['html', { open: 'never' }]],
 
   use: {
     baseURL: `http://127.0.0.1:${WEB_PORT}`,
-    trace: 'retain-on-failure',
+    // Tracing snapshots the DOM after every action; on a React Flow canvas with a config panel
+    // that costs minutes per test, which is what pushed these past the timeout. Only on a retry.
+    trace: 'on-first-retry',
   },
 
   webServer: [
     {
-      command: `node --import tsx helpers/start-for-playwright.ts ${ENGINE_PORT}`,
+      command: `node --import tsx helpers/start-for-playwright.ts ${ENGINE_PORT} ${WEB_PORT}`,
       url: `${ENGINE_URL}/api/v1/health`,
       reuseExistingServer: false,
       stdout: 'pipe',
+      timeout: 120_000,
     },
     {
-      command: `pnpm --filter @ace/web preview --port ${WEB_PORT} --strictPort`,
+      // `--host 127.0.0.1`: without it vite preview binds ::1 only, and the 127.0.0.1 poll below
+      // (and `baseURL`) never connect on Windows.
+      command: `pnpm --filter @ace/web preview --port ${WEB_PORT} --strictPort --host 127.0.0.1`,
       url: `http://127.0.0.1:${WEB_PORT}`,
       reuseExistingServer: false,
       env: { VITE_ACE_URL: ENGINE_URL },
+      // `preview` builds first (D27), and the production build bundles Monaco: far past 60 s.
+      timeout: 300_000,
     },
   ],
 });

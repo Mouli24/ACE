@@ -25,6 +25,13 @@ export interface TestEngine {
 export interface StartTestEngineOptions {
   /** A fixed port, for Playwright's webServer which must be told where to poll. Default: any free one. */
   port?: number;
+  /**
+   * Extra origins the engine must answer (D27). The Playwright half serves the web app from a
+   * preview port that is in neither `settings.allowedOrigins` (§2.7 lists only the dev ports) nor
+   * the engine's own origins, so without this every request from the page is a 403 with no
+   * `Access-Control-Allow-Origin` and the browser reports "Failed to fetch".
+   */
+  allowedOrigins?: string[];
 }
 
 export async function startTestEngine(options: StartTestEngineOptions = {}): Promise<TestEngine> {
@@ -37,6 +44,10 @@ export async function startTestEngine(options: StartTestEngineOptions = {}): Pro
   } catch (error) {
     rmSync(dataDir, { recursive: true, force: true });
     throw error;
+  }
+
+  if (options.allowedOrigins && options.allowedOrigins.length > 0) {
+    await allowOrigins(engine, options.allowedOrigins);
   }
 
   return {
@@ -54,6 +65,24 @@ export async function startTestEngine(options: StartTestEngineOptions = {}): Pro
       }
     },
   };
+}
+
+/**
+ * Append origins to `settings.allowedOrigins` through the public API, so the engine is configured
+ * the way a user would configure it rather than by reaching into its database.
+ */
+async function allowOrigins(engine: RunningEngine, origins: string[]): Promise<void> {
+  const headers = authHeaders(engine.token);
+  const current = await fetch(`${engine.url}/api/v1/settings`, { headers });
+  if (!current.ok) throw new Error(`could not read settings: ${current.status}`);
+  const settings = (await current.json()) as { allowedOrigins: string[] };
+  const merged = [...new Set([...settings.allowedOrigins, ...origins])];
+  const patched = await fetch(`${engine.url}/api/v1/settings`, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ allowedOrigins: merged }),
+  });
+  if (!patched.ok) throw new Error(`could not allow origins: ${patched.status}`);
 }
 
 /** Headers every REST call in the suite needs (§2.8). */
