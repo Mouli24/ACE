@@ -2,6 +2,7 @@ import { createAceSocket, type AceSocket } from '@ace/sdk';
 import type { QueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 
+import { patchProviderStatus } from '../providers/status-patch';
 import { peekGraphSync } from '../workflows/sync-registry';
 import { queryKeys } from '../workflows/query-keys';
 import { wsUrl } from './env';
@@ -31,6 +32,8 @@ export function startSocket(options: StartSocketOptions): AceSocket {
     if (sync) void sync.onRemoteVersion(version);
     else void options.queryClient.invalidateQueries({ queryKey: queryKeys.workflow(workflowId) });
   });
+  // FR-PRV-004: provider status is engine-scope and patches the cache, so no screen reloads.
+  socket.on('provider.status', (payload) => patchProviderStatus(options.queryClient, payload));
   socket.subscribe({ scope: 'engine' });
   socket.connect();
   return socket;

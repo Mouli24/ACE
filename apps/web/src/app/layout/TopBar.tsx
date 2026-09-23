@@ -3,11 +3,12 @@ import { Settings } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 
 import { useProject } from '../../projects/hooks';
+import { ProviderStatusBar } from '../../providers/ProviderStatusBar';
 import { WorkflowTabs } from '../../workflows/WorkflowTabs';
 
 /**
- * Top bar (round 1 §5 step 3): project name, workflow tabs, and placeholders where provider
- * status (round 2) and run controls (round 2) will go.
+ * Top bar: project name, workflow tabs, live provider status (FR-PRV-004) and the slot where run
+ * controls land in Round 3.
  */
 export function TopBar() {
   const { projectId, workflowId } = useParams();
@@ -36,8 +37,8 @@ export function TopBar() {
         </div>
       )}
       {!projectId && <div className="flex-1" />}
-      <Badge title="Provider status arrives in Round 2">providers · Round 2</Badge>
-      <Badge title="Run controls arrive in Round 2">run controls · Round 2</Badge>
+      <ProviderStatusBar />
+      <Badge title="Pause, stop and retry arrive in Round 3">run controls · Round 3</Badge>
       <Button asChild variant="ghost" size="icon" aria-label="Settings">
         <Link to="/settings">
           <Settings className="h-4 w-4" />
