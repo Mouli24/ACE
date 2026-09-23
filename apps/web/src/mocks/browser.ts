@@ -4,6 +4,7 @@ import { MockDb } from './db';
 import { createFakeWebSocket } from './fake-socket';
 import { seedPerfFixture } from './fixture';
 import { createHandlers } from './handlers';
+import { createRound2Handlers, setScenario } from './handlers-round2';
 import { createNode, type Round1NodeKind } from '../nodes/factory';
 import { applyOpsWithRules } from './graph-rules';
 
@@ -17,6 +18,8 @@ declare global {
       reset(): void;
       /** Delay every mock response by `ms` (persists across reloads) — TC-CAN-009. */
       setLatency(ms: number): void;
+      /** Which scripted run scenario the next run plays (§5 item 11). */
+      setScenario(name: Parameters<typeof setScenario>[0]): void;
       /** Create a project + workflow with one node per kind, laid out left to right. */
       seedGraph(
         kinds: Round1NodeKind[],
@@ -41,7 +44,7 @@ declare global {
  */
 export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
   const db = new MockDb({ persist: true });
-  const worker = setupWorker(...createHandlers(db));
+  const worker = setupWorker(...createRound2Handlers(db), ...createHandlers(db));
   await worker.start({ onUnhandledRequest: 'bypass', quiet: true });
 
   window.__aceMock = {
@@ -58,6 +61,9 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
     },
     setLatency(ms) {
       db.setLatency(ms);
+    },
+    setScenario(name) {
+      setScenario(name);
     },
     seedGraph(kinds, options = {}) {
       db.load();

@@ -1,7 +1,7 @@
 import {
   WS_CLOSE_UNAUTHORIZED,
   WsClientFrameSchema,
-  type WsServerFrame,
+  type ServerFrame,
   type WsSubscribePayload,
 } from '@ace/contracts';
 
@@ -81,18 +81,28 @@ export function createFakeWebSocket(db: MockDb): FakeWebSocketClass {
       }, 0);
     }
 
-    private emit(frame: WsServerFrame): void {
+    private emit(frame: ServerFrame): void {
       if (this.readyState !== FakeWebSocket.OPEN) return;
       this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(frame) }));
     }
 
+    /**
+     * §2.4: a workflow subscription delivers `workflow.updated` and every run event of that
+     * workflow's runs; `provider.status` is engine scope.
+     */
     private wants(event: MockEvent): boolean {
-      return this.subscriptions.has(event.payload.workflowId);
+      if (event.scope === 'engine') return this.engineScope;
+      return event.workflowId !== undefined && this.subscriptions.has(event.workflowId);
     }
 
     private deliver(event: MockEvent): void {
       if (!this.wants(event)) return;
-      this.emit({ type: event.type, payload: event.payload, seq: event.seq });
+      const frame = {
+        type: event.type,
+        payload: event.payload,
+        ...(event.seq === undefined ? {} : { seq: event.seq }),
+      } as ServerFrame;
+      this.emit(frame);
     }
 
     send(data: string): void {

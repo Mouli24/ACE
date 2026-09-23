@@ -9,11 +9,12 @@ import { routes } from '../app/routes';
 import { useSelectionStore } from '../app/stores/selection';
 import { MockDb } from '../mocks/db';
 import { createHandlers } from '../mocks/handlers';
+import { createRound2Handlers, stopScenario } from '../mocks/handlers-round2';
 import { resetGraphSyncRegistry } from '../workflows/sync-registry';
 
 /** One mock engine per test file; `installMockServer()` wires the lifecycle hooks. */
 export const db = new MockDb({ persist: false });
-export const server = setupServer(...createHandlers(db));
+export const server = setupServer(...createRound2Handlers(db), ...createHandlers(db));
 
 export let queryClient = new QueryClient();
 
@@ -23,6 +24,7 @@ export function installMockServer(): void {
     configureApi({ token: 'mock', baseUrl: 'http://mock.local' });
   });
   beforeEach(() => {
+    stopScenario();
     db.reset();
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     resetGraphSyncRegistry();
