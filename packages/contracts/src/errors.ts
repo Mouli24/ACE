@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { ErrorKindSchema, type ErrorKind } from './enums.js';
+import { IdSchema } from './graph.js';
 
 /**
  * The single error envelope every `/api/v1` response uses (round 1 §2.3, FR-SYS-006, Arch §20.1).
@@ -17,7 +18,7 @@ export const ApiErrorSchema = z.object({
 export type ApiError = z.infer<typeof ApiErrorSchema>;
 
 /** The error codes round 1 §2.3 uses, in the order it lists them. */
-export const ERROR_CODES = [
+export const ROUND_1_ERROR_CODES = [
   'unauthorized',
   'forbidden_origin',
   'not_found',
@@ -28,6 +29,11 @@ export const ERROR_CODES = [
   'not_implemented',
   'internal',
 ] as const;
+
+/** Codes round 2 §2.5 adds: deleting a provider a node still references needs `?confirm=true`. */
+export const ROUND_2_ERROR_CODES = ['provider_in_use'] as const;
+
+export const ERROR_CODES = [...ROUND_1_ERROR_CODES, ...ROUND_2_ERROR_CODES] as const;
 export const ErrorCodeSchema = z.enum(ERROR_CODES);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
 
@@ -42,6 +48,7 @@ export const ERROR_CODE_HTTP_STATUS: Readonly<Record<ErrorCode, number>> = {
   unsupported_format_version: 400,
   not_implemented: 501,
   internal: 500,
+  provider_in_use: 409,
 };
 
 /** `details` shapes §2.3 names explicitly. */
@@ -50,6 +57,10 @@ export type StaleVersionDetails = z.infer<typeof StaleVersionDetailsSchema>;
 
 export const InvalidPathDetailsSchema = z.object({ path: z.string() });
 export type InvalidPathDetails = z.infer<typeof InvalidPathDetailsSchema>;
+
+/** `DELETE /providers/:id` without `confirm=true` while nodes still name it (round 2 §2.5). */
+export const ProviderInUseDetailsSchema = z.object({ nodeIds: z.array(IdSchema) });
+export type ProviderInUseDetails = z.infer<typeof ProviderInUseDetailsSchema>;
 
 /**
  * Error kinds Arch §28 (repeated in CLAUDE.md §10) says are retried with backoff. Used only as the

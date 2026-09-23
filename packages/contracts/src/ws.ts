@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+import {
+  ENGINE_EVENT_FRAME_SCHEMAS,
+  RUN_EVENT_FRAME_SCHEMAS,
+  SeqSchema,
+} from './events.js';
 import { IdSchema } from './graph.js';
 
 /**
@@ -7,7 +12,8 @@ import { IdSchema } from './graph.js';
  *
  * Frames are JSON `{ type, payload }`. Server frames about a run or a workflow also carry the
  * global monotonic `seq` they were persisted with, which is what `resume { afterSeq }` replays
- * from; `hello` is neither, so it carries its seq in the payload only.
+ * from; `hello` is neither, so it carries its seq in the payload only, and `node.token` is
+ * transient, so it has none at all (round 2 §2.4).
  */
 
 export const WS_PATH = '/ws';
@@ -50,8 +56,7 @@ export type WsClientFrame = z.infer<typeof WsClientFrameSchema>;
 /* Server -> client (round 1)                                                  */
 /* -------------------------------------------------------------------------- */
 
-/** The global event sequence: monotonic, append-only, the anchor for `resume`. */
-export const SeqSchema = z.number().int().min(0);
+/* `SeqSchema` lives in `events.ts` with the log it numbers, and is re-exported by the barrel. */
 
 export const WsHelloPayloadSchema = z.object({ seq: SeqSchema });
 export type WsHelloPayload = z.infer<typeof WsHelloPayloadSchema>;
@@ -62,12 +67,35 @@ export const WsWorkflowUpdatedPayloadSchema = z.object({
 });
 export type WsWorkflowUpdatedPayload = z.infer<typeof WsWorkflowUpdatedPayloadSchema>;
 
-export const WsServerFrameSchema = z.discriminatedUnion('type', [
+const CORE_SERVER_FRAME_SCHEMAS = [
   z.object({ type: z.literal('hello'), payload: WsHelloPayloadSchema }),
   z.object({
     type: z.literal('workflow.updated'),
     payload: WsWorkflowUpdatedPayloadSchema,
     seq: SeqSchema,
   }),
-]);
+] as const;
+
+/**
+ * The two frames round 1 §2.9 defines. Kept as its own union so the round 2 contract is purely
+ * additive: `@ace/sdk` still narrows `frame.seq` on every member of it (D31).
+ */
+export const WsServerFrameSchema = z.discriminatedUnion('type', CORE_SERVER_FRAME_SCHEMAS);
 export type WsServerFrame = z.infer<typeof WsServerFrameSchema>;
+
+/**
+ * Every frame the server may send: the round 1 core plus round 2's run and engine events (§2.4),
+ * so one `safeParse` covers the whole socket. `node.token` is the one member without a `seq`, so
+ * a client that tracks `lastSeq` must check for it before resuming (§5 item 1).
+ */
+export const ServerFrameSchema = z.discriminatedUnion('type', [
+  ...CORE_SERVER_FRAME_SCHEMAS,
+  ...RUN_EVENT_FRAME_SCHEMAS,
+  ...ENGINE_EVENT_FRAME_SCHEMAS,
+]);
+export type ServerFrame = z.infer<typeof ServerFrameSchema>;
+
+/** `true` when this frame was persisted with a `seq` and therefore replays on `resume`. */
+export function isPersistedFrame(frame: ServerFrame): frame is Extract<ServerFrame, { seq: number }> {
+  return 'seq' in frame;
+}

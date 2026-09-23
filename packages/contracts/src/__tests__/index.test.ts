@@ -36,9 +36,31 @@ describe('FR-SYS-006 contracts barrel', () => {
     ['export', 'WorkflowExportSchema'],
     ['ws', 'WsClientFrameSchema'],
     ['ws', 'WS_CLOSE_UNAUTHORIZED'],
+    ['ws', 'ServerFrameSchema'],
+    ['ws', 'isPersistedFrame'],
     ['api', 'HealthResponseSchema'],
     ['api', 'pageSchema'],
     ['api', 'API_BASE_PATH'],
+    ['providers', 'ProviderSchema'],
+    ['providers', 'CreateProviderRequestSchema'],
+    ['providers', 'ProviderCheckResultSchema'],
+    ['providers', 'ProviderDetectResponseSchema'],
+    ['models', 'ModelSchema'],
+    ['models', 'ModelQuerySchema'],
+    ['models', 'modelMatchesQuery'],
+    ['envelope', 'PartSchema'],
+    ['envelope', 'EnvelopeSchema'],
+    ['envelope', 'validateAgainstContract'],
+    ['runs', 'RunSchema'],
+    ['runs', 'RunSummarySchema'],
+    ['runs', 'NodeRunSchema'],
+    ['runs', 'UsageSchema'],
+    ['runs', 'StartRunRequestSchema'],
+    ['events', 'EventSchema'],
+    ['events', 'RunEventSchema'],
+    ['events', 'EngineEventSchema'],
+    ['events', 'SeqSchema'],
+    ['events', 'RUN_EVENT_TYPES'],
   ])('re-exports %s -> %s', (_module, symbol) => {
     expect(contracts).toHaveProperty(symbol);
   });
@@ -63,26 +85,28 @@ describe('FR-SYS-006 contracts barrel', () => {
     }
   });
 
-  it('keeps an importable, still-empty placeholder for all thirteen later-round modules', () => {
-    const placeholders = {
-      providers,
-      models,
-      runs,
-      envelope,
-      events,
-      guardrails,
-      tools,
-      artifacts,
-      chat,
-      knowledge,
-      memory,
-      usage,
-      templates,
-    };
+  it('fills the five modules round 2 §2 defines', () => {
+    const filled = { providers, models, runs, envelope, events };
 
-    expect(Object.keys(placeholders)).toHaveLength(13);
-    for (const [name, module] of Object.entries(placeholders)) {
-      expect(module, `${name}.ts should be importable`).toBeDefined();
+    expect(Object.keys(filled)).toHaveLength(5);
+    for (const [name, module] of Object.entries(filled)) {
+      expect(Object.keys(module).length, `${name}.ts should export its contract`).toBeGreaterThan(
+        0,
+      );
     }
+  });
+
+  it('keeps an importable, still-empty placeholder for the eight later-round modules', () => {
+    const placeholders = { guardrails, tools, artifacts, chat, knowledge, memory, usage, templates };
+
+    expect(Object.keys(placeholders)).toHaveLength(8);
+    for (const [name, module] of Object.entries(placeholders)) {
+      expect(Object.keys(module), `${name}.ts should still be empty`).toEqual([]);
+    }
+  });
+
+  it('exports SeqSchema exactly once, so the star exports never make it ambiguous', () => {
+    expect(contracts.SeqSchema).toBeDefined();
+    expect(contracts.SeqSchema).toBe(events.SeqSchema);
   });
 });
