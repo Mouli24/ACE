@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 
 import { useSelectionStore } from '../app/stores/selection';
+import { useRunStore } from '../runs/run-store';
 import { useCanvasApi } from '../canvas/canvas-api';
 import { KIND_ICON } from '../nodes/NodeCard';
 import { NODE_KIND_LABEL, type Round1NodeKind } from '../nodes/factory';
@@ -41,6 +42,11 @@ export function ConfigPanel({ workflowId }: { workflowId: string }) {
 
 function NodeEditor({ node, workflowId }: { node: Node; workflowId: string }) {
   const sync = useGraphSync(workflowId);
+  /**
+   * FR-NODE-009: a run executes the snapshot it froze at start (BR-04), so an edit made while a run
+   * is in flight cannot affect it. The panel says so rather than pretending the edit took hold.
+   */
+  const runActive = useRunStore((store) => store.active && store.workflowId === workflowId);
   const clearSelection = useSelectionStore((s) => s.clear);
   const canvas = useCanvasApi((s) => s.api);
   const Icon = KIND_ICON[node.kind as Round1NodeKind];
@@ -75,6 +81,17 @@ function NodeEditor({ node, workflowId }: { node: Node; workflowId: string }) {
           {node.id.slice(-6)}
         </span>
       </header>
+
+      {runActive && (
+        <p
+          role="status"
+          data-testid="applies-next-run"
+          className="rounded-md border border-border bg-card px-3 py-2 text-xs text-fg-muted"
+        >
+          A run is in flight. Edits apply to the next run — this one keeps the values it started
+          with.
+        </p>
+      )}
 
       <TextField
         label="Name"

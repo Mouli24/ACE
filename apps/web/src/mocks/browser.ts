@@ -29,6 +29,19 @@ declare global {
         kinds: Round1NodeKind[],
         options?: { projectName?: string; workflowName?: string },
       ): { projectId: string; workflowId: string; nodeIds: string[] };
+      /**
+       * A workflow a run can actually execute (round 2): Input → Agent → Output with the mock
+       * provider chosen, so an e2e test can press Start without walking the config panel first.
+       */
+      seedRunnable(options?: { text?: string; modelId?: string; outputTypes?: string[] }): {
+        projectId: string;
+        workflowId: string;
+        providerId: string;
+        inputId: string;
+        agentId: string;
+        outputId: string;
+        edgeIds: string[];
+      };
       /** Connect two seeded nodes by port name through the same rules the handlers use. */
       connect(
         workflowId: string,
@@ -46,8 +59,27 @@ declare global {
  * plays the engine's side of `/ws`. State lives in localStorage so a second tab is a second
  * client of the same engine.
  */
+/**
+ * Which scenario the next run plays, kept in localStorage beside the mock database. A Playwright
+ * test picks the scenario and then navigates, and a navigation reloads the module — without this
+ * the choice would silently revert to the happy path on the way to the Canvas.
+ */
+const SCENARIO_KEY = 'ace.mock.scenario';
+
+type ScenarioName = Parameters<typeof setScenario>[0];
+
+function restoreScenario(): void {
+  try {
+    const stored = localStorage.getItem(SCENARIO_KEY);
+    if (stored) setScenario(stored as ScenarioName);
+  } catch {
+    // private mode or blocked storage: the default scenario is fine
+  }
+}
+
 export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
   const db = new MockDb({ persist: true });
+  restoreScenario();
   const worker = setupWorker(...createRound2Handlers(db), ...createHandlers(db));
   await worker.start({ onUnhandledRequest: 'bypass', quiet: true });
 
@@ -62,12 +94,23 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
     },
     reset() {
       db.reset();
+      try {
+        localStorage.removeItem(SCENARIO_KEY);
+      } catch {
+        // ignored, as above
+      }
+      setScenario('linear-complete');
     },
     setLatency(ms) {
       db.setLatency(ms);
     },
     setScenario(name) {
       setScenario(name);
+      try {
+        localStorage.setItem(SCENARIO_KEY, name);
+      } catch {
+        // nothing to do: the scenario still applies to this page
+      }
     },
     dropSocket() {
       dropMockSockets();
@@ -85,6 +128,53 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
       );
       db.commitGraph(workflow.id, nodes, [], { silent: true });
       return { projectId: project.id, workflowId: workflow.id, nodeIds: nodes.map((n) => n.id) };
+    },
+    seedRunnable(options = {}) {
+      db.load();
+      const project = db.createProject({ name: 'E2E run' });
+      const workflow = db.createWorkflow(project.id, 'Runnable');
+      const provider = db.createProvider({ type: 'mock', name: 'Mock' });
+
+      const input = createNode('input', workflow.id, { x: 80, y: 140 });
+      input.config = {
+        ...input.config,
+        text: options.text ?? 'summarise the report',
+      } as typeof input.config;
+      const agent = createNode('agent', workflow.id, { x: 400, y: 140 });
+      agent.config = {
+        ...agent.config,
+        providerId: provider.id,
+        modelId: options.modelId ?? 'mock-text',
+        ...(options.outputTypes ? { outputTypes: options.outputTypes } : {}),
+      } as unknown as typeof agent.config;
+      const output = createNode('output', workflow.id, { x: 720, y: 140 });
+
+      const edges = [
+        {
+          id: db.nextId(),
+          workflowId: workflow.id,
+          kind: 'data' as const,
+          from: { nodeId: input.id, portId: input.outputs[0]!.id },
+          to: { nodeId: agent.id, portId: agent.inputs[0]!.id },
+        },
+        {
+          id: db.nextId(),
+          workflowId: workflow.id,
+          kind: 'data' as const,
+          from: { nodeId: agent.id, portId: agent.outputs[0]!.id },
+          to: { nodeId: output.id, portId: output.inputs[0]!.id },
+        },
+      ];
+      db.commitGraph(workflow.id, [input, agent, output], edges, { silent: true });
+      return {
+        projectId: project.id,
+        workflowId: workflow.id,
+        providerId: provider.id,
+        inputId: input.id,
+        agentId: agent.id,
+        outputId: output.id,
+        edgeIds: edges.map((edge) => edge.id),
+      };
     },
     connect(workflowId, fromNodeId, fromPort, toNodeId, toPort) {
       db.load();

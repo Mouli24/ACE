@@ -12,4 +12,8 @@ export const queryKeys = {
   /** Every model list, whatever its filter — what a refresh invalidates (FR-MOD-006). */
   modelsRoot: () => ['models'] as const,
   models: (query: object) => ['models', query] as const,
+  runs: (workflowId: string) => ['runs', workflowId] as const,
+  projectRuns: (projectId: string) => ['project-runs', projectId] as const,
+  run: (runId: string) => ['run', runId] as const,
+  nodeRuns: (runId: string) => ['node-runs', runId] as const,
 };

@@ -11,6 +11,7 @@ import {
 } from '@ace/contracts';
 
 import { JsonSchemaEditor } from './JsonSchemaEditor';
+import { FallbackModels, ProviderAndModel } from './ProviderAndModel';
 import {
   DataTypeGroup,
   Field,
@@ -25,36 +26,10 @@ import { BUDGET_RANGE, EXECUTION_RANGES } from './validation';
 /** A config patch for the node being edited; ConfigPanel completes it to the whole config (D-001). */
 export type PatchConfig<C> = (patch: Partial<C>) => void;
 
-const NO_PROVIDERS_HINT = 'add a provider in Round 2';
-
 /** D12: only fixed and fallback are offered in v1. */
 const ROUTING_OPTIONS = ROUTING_POLICIES.filter((p) => p === 'fixed' || p === 'fallback').map(
   (p) => ({ value: p, label: p }),
 );
-
-function ProviderAndModel() {
-  return (
-    <>
-      <SelectField
-        label="Provider"
-        value={undefined}
-        options={[]}
-        onChange={() => undefined}
-        disabled
-        placeholder="none"
-        hint={NO_PROVIDERS_HINT}
-      />
-      <SelectField
-        label="Model"
-        value={undefined}
-        options={[]}
-        onChange={() => undefined}
-        disabled
-        placeholder="no model"
-      />
-    </>
-  );
-}
 
 function ExecutionFields({
   execution,
@@ -107,12 +82,24 @@ export function AgentPanel({
 }) {
   return (
     <>
-      <ProviderAndModel />
+      <ProviderAndModel
+        providerId={config.providerId}
+        modelId={config.modelId}
+        inputTypes={config.inputTypes}
+        outputTypes={config.outputTypes}
+        onChange={patch}
+      />
       <SelectField
         label="Routing policy"
         value={config.routing.policy}
         options={ROUTING_OPTIONS}
         onChange={(policy) => patch({ routing: { ...config.routing, policy } })}
+      />
+      <FallbackModels
+        policy={config.routing.policy}
+        providerId={config.providerId}
+        fallbackModelIds={config.routing.fallbackModelIds}
+        onChange={(fallbackModelIds) => patch({ routing: { ...config.routing, fallbackModelIds } })}
       />
       <TextAreaField
         label="Instructions"
@@ -163,7 +150,13 @@ export function ModelPanel({
 }) {
   return (
     <>
-      <ProviderAndModel />
+      <ProviderAndModel
+        providerId={config.providerId}
+        modelId={config.modelId}
+        inputTypes={config.inputTypes}
+        outputTypes={config.outputTypes}
+        onChange={patch}
+      />
       <TextAreaField
         label="System prompt"
         value={config.systemPrompt ?? ''}

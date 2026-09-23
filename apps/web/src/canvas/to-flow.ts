@@ -1,4 +1,4 @@
-import type { Edge, Node, Port } from '@ace/contracts';
+import type { Edge, Node, Port, Provider, ProviderType } from '@ace/contracts';
 
 import type { AceFlowNode } from '../nodes/NodeCard';
 import type { AceFlowEdge } from '../nodes/TypedEdge';
@@ -11,18 +11,33 @@ export function toFlowNodes(
   edges: readonly Edge[],
   armedPortId: string | undefined,
   onPortKey: PortKeyHandler,
+  providers: readonly Provider[] = [],
 ): AceFlowNode[] {
   const connected = new Set<string>();
   for (const edge of edges) {
     connected.add(edge.from.portId);
     connected.add(edge.to.portId);
   }
-  return nodes.map((node) => ({
-    id: node.id,
-    type: 'ace',
-    position: node.position,
-    data: { node, connectedPortIds: connected, armedPortId, onPortKey },
-  }));
+  const typeById = new Map<string, ProviderType>(providers.map((p) => [p.id, p.type]));
+  return nodes.map((node) => {
+    const providerId = (node.config as { providerId?: string }).providerId;
+    const provider = providerId === undefined ? undefined : typeById.get(providerId);
+    // FR-PRV-005: the node still names a provider, but the engine no longer has it.
+    const providerMissing = providerId !== undefined && provider === undefined;
+    return {
+      id: node.id,
+      type: 'ace',
+      position: node.position,
+      data: {
+        node,
+        connectedPortIds: connected,
+        armedPortId,
+        onPortKey,
+        ...(provider === undefined ? {} : { provider }),
+        ...(providerMissing ? { providerMissing: true } : {}),
+      },
+    };
+  });
 }
 
 /** Contract edges → React Flow edges; the label data type comes from the source port. */

@@ -1,14 +1,15 @@
-import { Badge, Button } from '@ace/ui';
+import { Button } from '@ace/ui';
 import { Settings } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 
 import { useProject } from '../../projects/hooks';
 import { ProviderStatusBar } from '../../providers/ProviderStatusBar';
+import { RunBar } from '../../runs/RunBar';
 import { WorkflowTabs } from '../../workflows/WorkflowTabs';
 
 /**
- * Top bar: project name, workflow tabs, live provider status (FR-PRV-004) and the slot where run
- * controls land in Round 3.
+ * Top bar: project name, workflow tabs, live provider status (FR-PRV-004), and — on a Canvas —
+ * Start with the run's status and totals (FR-EXE-001, FR-OBS-002). Pause/stop/retry are Round 3.
  */
 export function TopBar() {
   const { projectId, workflowId } = useParams();
@@ -38,7 +39,7 @@ export function TopBar() {
       )}
       {!projectId && <div className="flex-1" />}
       <ProviderStatusBar />
-      <Badge title="Pause, stop and retry arrive in Round 3">run controls · Round 3</Badge>
+      {workflowId && <RunBar workflowId={workflowId} />}
       <Button asChild variant="ghost" size="icon" aria-label="Settings">
         <Link to="/settings">
           <Settings className="h-4 w-4" />

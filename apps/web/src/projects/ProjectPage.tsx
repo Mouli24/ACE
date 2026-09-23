@@ -34,6 +34,9 @@ export function ProjectPage() {
           <p className="font-machine text-xs text-fg-muted">{project.data?.folderPath}</p>
         </div>
         <div className="flex items-start gap-2">
+          <Button asChild variant="secondary">
+            <Link to={`/projects/${projectId}/runs`}>Runs</Link>
+          </Button>
           <ImportWorkflowButton projectId={projectId} />
           <Button onClick={() => setCreating(true)}>
             <Plus className="h-4 w-4" /> New workflow

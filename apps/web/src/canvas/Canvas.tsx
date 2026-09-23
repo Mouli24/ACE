@@ -24,6 +24,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 import { useSelectionStore } from '../app/stores/selection';
 import { useViewportStore } from '../app/stores/viewport';
 import { newId } from '../lib/ulid';
+import { useProviders } from '../providers/hooks';
 import { nodeTypes, type AceFlowNode } from '../nodes/NodeCard';
 import { edgeTypes } from '../nodes/TypedEdge';
 import { createNode, type Round1NodeKind } from '../nodes/factory';
@@ -191,9 +192,11 @@ function CanvasInner({
 
   /* ---------------------------------------------------------------- nodes */
 
+  // Providers decide the accent colour and the "provider missing" badge (FR-NODE-010, FR-PRV-005).
+  const providers = useProviders();
   const serverNodes = useMemo(
-    () => toFlowNodes(nodes, edges, armedPortId, onPortKey),
-    [nodes, edges, armedPortId, onPortKey],
+    () => toFlowNodes(nodes, edges, armedPortId, onPortKey, providers.data ?? []),
+    [nodes, edges, armedPortId, onPortKey, providers.data],
   );
   const [flowNodes, setFlowNodes] = useState<AceFlowNode[]>(serverNodes);
 
