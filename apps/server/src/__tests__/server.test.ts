@@ -3,7 +3,15 @@ import { networkInterfaces } from 'node:os';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { ApiErrorSchema, HealthResponseSchema, WsServerFrameSchema } from '@ace/contracts';
+import {
+  ApiErrorSchema,
+  HealthResponseSchema,
+  ProjectSchema,
+  ProviderSchema,
+  RunSchema,
+  WorkflowGraphResponseSchema,
+  WsServerFrameSchema,
+} from '@ace/contracts';
 import { openDatabase } from '@ace/storage-local';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
@@ -340,5 +348,40 @@ describe('NFR-REL-03 the engine backs up before it migrates', () => {
     } catch {
       // Windows may still hold the handle.
     }
+  }, 30_000);
+});
+
+describe('Round 2 wiring: a run goes through the real router, provider check and gate', () => {
+  it('runs the linear mock workflow to COMPLETE', async () => {
+    const api = (path: string, init: RequestInit = {}) =>
+      fetch(`${engine.url}/api/v1${path}`, {
+        ...init,
+        headers: { ...authHeaders(), 'Content-Type': 'application/json', ...init.headers },
+      });
+    const post = async (path: string, body: unknown): Promise<unknown> => {
+      const response = await api(path, { method: 'POST', body: JSON.stringify(body) });
+      expect(response.status, `${path}: ${await response.clone().text()}`).toBeLessThan(300);
+      return response.json();
+    };
+
+    const provider = ProviderSchema.parse(await post('/providers', { type: 'mock', name: 'Mock' }));
+    await post(`/providers/${provider.id}/refresh-models`, {});
+    const project = ProjectSchema.parse(await post('/projects', { name: 'Wiring' }));
+
+    const fixture = readFileSync(
+      new URL('../../../../tests/acceptance/fixtures/round-2/linear-mock.json', import.meta.url),
+      'utf8',
+    ).replaceAll('01M3R2PV0000000000000000PV', provider.id);
+    const imported = WorkflowGraphResponseSchema.parse(
+      await post(`/projects/${project.id}/workflows/import`, JSON.parse(fixture)),
+    );
+
+    let run = RunSchema.parse(await post(`/workflows/${imported.workflow.id}/runs`, {}));
+    for (let i = 0; i < 100 && ['PREFLIGHT', 'RUNNING'].includes(run.status); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      run = RunSchema.parse(await (await api(`/runs/${run.id}`)).json());
+    }
+
+    expect(run.status, JSON.stringify(run.preflightIssues)).toBe('COMPLETE');
   }, 30_000);
 });
