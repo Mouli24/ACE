@@ -1,12 +1,5 @@
-import {
-  mkdirSync,
-  statSync,
-  accessSync,
-  constants,
-  writeFileSync,
-  unlinkSync,
-} from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, statSync, accessSync, constants, writeFileSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
 
 import {
   EdgeSchema,
@@ -30,7 +23,7 @@ import {
   type Workflow,
   type WorkflowExport,
   type WorkflowGraphResponse,
-} from "@ace/contracts";
+} from '@ace/contracts';
 
 import {
   invalidPath,
@@ -39,17 +32,17 @@ import {
   staleVersion,
   unsupportedFormatVersion,
   validationFailed,
-} from "../gateway/errors.js";
-import { newId } from "../ids.js";
-import type { Logger } from "../logging/index.js";
-import type { Repository, Scope } from "../ports/index.js";
-import { findCycle } from "./cycles.js";
-import { remapGraph } from "./ids.js";
-import { validateGraph } from "./validate.js";
+} from '../gateway/errors.js';
+import { newId } from '../ids.js';
+import type { Logger } from '../logging/index.js';
+import type { Repository, Scope } from '../ports/index.js';
+import { findCycle } from './cycles.js';
+import { remapGraph } from './ids.js';
+import { validateGraph } from './validate.js';
 
-export * from "./cycles.js";
-export * from "./validate.js";
-export * from "./ids.js";
+export * from './cycles.js';
+export * from './validate.js';
+export * from './ids.js';
 
 export interface GraphServiceDeps {
   repository: Repository;
@@ -91,36 +84,27 @@ function ensureWritableFolder(folderPath: string): void {
   try {
     mkdirSync(folderPath, { recursive: true });
   } catch (error) {
-    throw invalidPath(
-      folderPath,
-      `the folder could not be created (${(error as Error).message})`,
-    );
+    throw invalidPath(folderPath, `the folder could not be created (${(error as Error).message})`);
   }
 
   let stats;
   try {
     stats = statSync(folderPath);
   } catch (error) {
-    throw invalidPath(
-      folderPath,
-      `the folder could not be read (${(error as Error).message})`,
-    );
+    throw invalidPath(folderPath, `the folder could not be read (${(error as Error).message})`);
   }
 
   if (!stats.isDirectory()) {
-    throw invalidPath(folderPath, "it is a file, not a folder");
+    throw invalidPath(folderPath, 'it is a file, not a folder');
   }
 
   try {
     accessSync(folderPath, constants.W_OK);
     const probe = join(folderPath, `.ace-write-probe-${newId()}`);
-    writeFileSync(probe, "");
+    writeFileSync(probe, '');
     unlinkSync(probe);
   } catch (error) {
-    throw invalidPath(
-      folderPath,
-      `it is not writable (${(error as Error).message})`,
-    );
+    throw invalidPath(folderPath, `it is not writable (${(error as Error).message})`);
   }
 }
 
@@ -134,9 +118,7 @@ export function createGraphService(deps: GraphServiceDeps): GraphService {
     return workflow;
   }
 
-  async function loadGraph(
-    workflowId: Id,
-  ): Promise<{ nodes: Node[]; edges: Edge[] }> {
+  async function loadGraph(workflowId: Id): Promise<{ nodes: Node[]; edges: Edge[] }> {
     return {
       nodes: await repository.nodes.listByWorkflow(scope, workflowId),
       edges: await repository.edges.listByWorkflow(scope, workflowId),
@@ -148,7 +130,7 @@ export function createGraphService(deps: GraphServiceDeps): GraphService {
 
     async createProject({ name, folderPath }) {
       const id = newId();
-      const resolved = folderPath ?? join(process.cwd(), "ace-projects", id);
+      const resolved = folderPath ?? join(process.cwd(), 'ace-projects', id);
       ensureWritableFolder(resolved);
 
       const timestamp = now();
@@ -179,8 +161,7 @@ export function createGraphService(deps: GraphServiceDeps): GraphService {
     },
 
     async deleteProject(id) {
-      if (!(await repository.projects.delete(scope, id)))
-        throw notFound(`Project ${id}`);
+      if (!(await repository.projects.delete(scope, id))) throw notFound(`Project ${id}`);
     },
 
     /** FR-PRJ-004: opening a project is what makes it the one reopened next launch. */
@@ -274,8 +255,7 @@ export function createGraphService(deps: GraphServiceDeps): GraphService {
 
       // BR-01: the engine owns the truth, so a client writing against an older version is told to
       // refetch rather than having its edits silently reordered on top (§2.6, TC-WF-005).
-      if (request.baseVersion !== workflow.version)
-        throw staleVersion(workflow.version);
+      if (request.baseVersion !== workflow.version) throw staleVersion(workflow.version);
 
       const { nodes, edges } = await loadGraph(workflowId);
       const nodeById = new Map(nodes.map((node) => [node.id, node]));
@@ -290,11 +270,11 @@ export function createGraphService(deps: GraphServiceDeps): GraphService {
         // intermediate shape, only its result has to be acyclic (FR-CON-003).
         const cycle = findCycle([...edgeById.values()]);
         if (cycle !== null) {
-          throw validationFailed("That edge would close a cycle.", [
+          throw validationFailed('That edge would close a cycle.', [
             {
-              severity: "error",
-              code: "cycle",
-              message: `These nodes form a cycle: ${cycle.join(" -> ")}. Only a loop edge may close one.`,
+              severity: 'error',
+              code: 'cycle',
+              message: `These nodes form a cycle: ${cycle.join(' -> ')}. Only a loop edge may close one.`,
             },
           ]);
         }
@@ -307,12 +287,8 @@ export function createGraphService(deps: GraphServiceDeps): GraphService {
 
         return {
           version,
-          nodes: [...nodeById.values()].sort((a, b) =>
-            a.id.localeCompare(b.id),
-          ),
-          edges: [...edgeById.values()].sort((a, b) =>
-            a.id.localeCompare(b.id),
-          ),
+          nodes: [...nodeById.values()].sort((a, b) => a.id.localeCompare(b.id)),
+          edges: [...edgeById.values()].sort((a, b) => a.id.localeCompare(b.id)),
         };
       });
 
@@ -349,8 +325,7 @@ export function createGraphService(deps: GraphServiceDeps): GraphService {
       // The version is checked before the body is parsed, so an old file gets the specific
       // "unsupported format version" answer rather than a generic schema error (TC-WF-008).
       const found = (raw as { formatVersion?: unknown } | null)?.formatVersion;
-      if (found !== FORMAT_VERSION)
-        throw unsupportedFormatVersion(found, FORMAT_VERSION);
+      if (found !== FORMAT_VERSION) throw unsupportedFormatVersion(found, FORMAT_VERSION);
 
       const parsed = WorkflowExportSchema.parse(raw);
 
@@ -398,14 +373,9 @@ function withDerivedPorts(node: Node): Node {
   return { ...node, inputs: ports.inputs, outputs: ports.outputs } as Node;
 }
 
-function findPort(
-  nodeById: Map<Id, Node>,
-  portIdValue: string,
-): Port | undefined {
+function findPort(nodeById: Map<Id, Node>, portIdValue: string): Port | undefined {
   for (const node of nodeById.values()) {
-    const port = [...node.inputs, ...node.outputs].find(
-      (p) => p.id === portIdValue,
-    );
+    const port = [...node.inputs, ...node.outputs].find((p) => p.id === portIdValue);
     if (port !== undefined) return port;
   }
   return undefined;
@@ -419,8 +389,8 @@ function findPort(
 function unknownRef(what: string, id: string) {
   return validationFailed(`${what} ${id} is not part of this workflow.`, [
     {
-      severity: "error",
-      code: "validation_failed",
+      severity: 'error',
+      code: 'validation_failed',
       message: `${what} ${id} is not part of this workflow.`,
     },
   ]);
@@ -430,18 +400,16 @@ async function applyOp(op: GraphOp, ctx: OpContext): Promise<void> {
   const { tx, scope, workflowId, nodeById, edgeById } = ctx;
 
   switch (op.op) {
-    case "add_node": {
-      const node = withDerivedPorts(
-        NodeSchema.parse({ ...op.node, workflowId }),
-      );
+    case 'add_node': {
+      const node = withDerivedPorts(NodeSchema.parse({ ...op.node, workflowId }));
       nodeById.set(node.id, node);
       await tx.nodes.insert(scope, node);
       return;
     }
 
-    case "update_node": {
+    case 'update_node': {
       const current = nodeById.get(op.nodeId);
-      if (current === undefined) throw unknownRef("Node", op.nodeId);
+      if (current === undefined) throw unknownRef('Node', op.nodeId);
 
       // The patch is validated against the schema of *this* node's kind — the request-level union
       // cannot do that, because §2.6's patch carries no discriminator.
@@ -462,9 +430,9 @@ async function applyOp(op: GraphOp, ctx: OpContext): Promise<void> {
       return;
     }
 
-    case "move_node": {
+    case 'move_node': {
       const current = nodeById.get(op.nodeId);
-      if (current === undefined) throw unknownRef("Node", op.nodeId);
+      if (current === undefined) throw unknownRef('Node', op.nodeId);
 
       const node = { ...current, position: op.position } as Node;
       nodeById.set(node.id, node);
@@ -472,13 +440,12 @@ async function applyOp(op: GraphOp, ctx: OpContext): Promise<void> {
       return;
     }
 
-    case "delete_node": {
-      if (!nodeById.has(op.nodeId)) throw unknownRef("Node", op.nodeId);
+    case 'delete_node': {
+      if (!nodeById.has(op.nodeId)) throw unknownRef('Node', op.nodeId);
 
       // §2.6: the engine deletes the node's edges with it, so no edge is left dangling.
       for (const [id, edge] of edgeById) {
-        if (edge.from.nodeId === op.nodeId || edge.to.nodeId === op.nodeId)
-          edgeById.delete(id);
+        if (edge.from.nodeId === op.nodeId || edge.to.nodeId === op.nodeId) edgeById.delete(id);
       }
       nodeById.delete(op.nodeId);
 
@@ -487,16 +454,16 @@ async function applyOp(op: GraphOp, ctx: OpContext): Promise<void> {
       return;
     }
 
-    case "add_edge": {
+    case 'add_edge': {
       const edge = EdgeSchema.parse({ ...op.edge, workflowId });
 
       // Loop edges are declared in §2.4 but the engine refuses them until round 3.
-      if (edge.kind === "loop") throw notImplemented("Loop edges");
+      if (edge.kind === 'loop') throw notImplemented('Loop edges');
 
       const source = findPort(nodeById, edge.from.portId);
       const target = findPort(nodeById, edge.to.portId);
-      if (source === undefined) throw unknownRef("Port", edge.from.portId);
-      if (target === undefined) throw unknownRef("Port", edge.to.portId);
+      if (source === undefined) throw unknownRef('Port', edge.from.portId);
+      if (target === undefined) throw unknownRef('Port', edge.to.portId);
 
       const existingIntoTarget = [...edgeById.values()].filter(
         (e) => e.to.portId === edge.to.portId,
@@ -506,7 +473,7 @@ async function applyOp(op: GraphOp, ctx: OpContext): Promise<void> {
       if (!check.ok) {
         throw validationFailed(check.reason, [
           {
-            severity: "error",
+            severity: 'error',
             code: check.code,
             message: check.reason,
             edgeId: edge.id,
@@ -519,15 +486,15 @@ async function applyOp(op: GraphOp, ctx: OpContext): Promise<void> {
       return;
     }
 
-    case "update_edge": {
+    case 'update_edge': {
       const current = edgeById.get(op.edgeId);
-      if (current === undefined) throw unknownRef("Edge", op.edgeId);
-      if (op.patch.loop !== undefined) throw notImplemented("Loop edges");
+      if (current === undefined) throw unknownRef('Edge', op.edgeId);
+      if (op.patch.loop !== undefined) throw notImplemented('Loop edges');
       return;
     }
 
-    case "delete_edge": {
-      if (!edgeById.has(op.edgeId)) throw unknownRef("Edge", op.edgeId);
+    case 'delete_edge': {
+      if (!edgeById.has(op.edgeId)) throw unknownRef('Edge', op.edgeId);
       edgeById.delete(op.edgeId);
       await tx.edges.delete(scope, op.edgeId);
       return;

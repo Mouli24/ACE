@@ -20,7 +20,8 @@
     "test:providers": "pnpm -r test:providers",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test:acceptance:e2e": "node -e \"process.exit(require('node:fs').existsSync('apps/web')?0:1)\" && playwright test --config tests/acceptance/playwright.config.ts || echo \"SKIPPED: apps/web does not exist yet (Mouli creates it in round 1, feature M1).\""
+    "test:manual-pass": "playwright test --config tests/acceptance/manual-pass.config.ts",
+  "test:acceptance:e2e": "node -e \"if(require('node:fs').existsSync('apps/web')){process.exit(1)}console.log('SKIPPED: apps/web does not exist yet (Mouli creates it in round 1, feature M1).')\" || playwright test --config tests/acceptance/playwright.config.ts"
   },
   "devDependencies": {
     "concurrently": "^10.0.5",

@@ -20,6 +20,9 @@ const ENGINE_URL = `http://127.0.0.1:${ENGINE_PORT}`;
 export default defineConfig({
   testDir: './round-1',
   testMatch: /.*\.e2e\.ts/,
+  // The §8 manual pass starts and kills its own engine, so it cannot run against the `webServer`
+  // below; it has its own config and its own `pnpm test:manual-pass`.
+  testIgnore: /manual-pass\.e2e\.ts/,
   // a real engine, a real production build and a real browser: 60 s is too tight for the
   // config-panel tests, which make one HTTP round trip per field.
   timeout: 120_000,
