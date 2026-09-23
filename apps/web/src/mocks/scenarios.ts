@@ -1,8 +1,9 @@
-import type { Edge, Node, NodeState, Run, Usage } from '@ace/contracts';
+import type { Edge, Node, NodeRun, NodeState, Part, Run, Usage } from '@ace/contracts';
 
 import { newId } from '../lib/ulid';
 import { MOCK_PRICING } from './catalog';
 import type { MockEvent } from './db';
+import { assemblePrompt, buildEnvelope, promptVersion } from './prompt';
 
 /**
  * Scripted run scenarios (round 2 §5 item 11). Each one turns a workflow graph into the exact
@@ -14,6 +15,8 @@ export type ScenarioName =
   | 'linear-complete'
   | 'fallback-used'
   | 'contract-violation'
+  /** Not a frame script: it makes pre-flight fail, so the run is BLOCKED and nothing is emitted. */
+  | 'preflight-blocked'
   | 'slow-stream'
   | 'all-nine-states'
   | 'socket-drop';
@@ -22,6 +25,12 @@ export interface ScriptedFrame {
   /** Milliseconds after the previous frame. */
   after: number;
   event: Omit<MockEvent, 'seq'> & { transient?: boolean };
+  /**
+   * The `NodeRun` record as it stands once this frame has played. The engine persists node runs as
+   * it goes and the inspector reads them back from `GET /runs/:id/node-runs` (FR-EXE-010), so the
+   * mock writes them at the same moments the frames announce.
+   */
+  nodeRun?: NodeRun;
   /** `socket-drop` uses this to cut the connection part-way through. */
   dropSocket?: boolean;
 }
@@ -112,23 +121,95 @@ const tokenFrame = (
   },
 });
 
+/**
+ * The `NodeRun` the engine would have written for this node (§2.3, FR-EXE-010): the envelopes that
+ * fed it, the prompt that was assembled from them (§2.8), and whatever the run has produced so far.
+ */
+function nodeRunRecord(
+  ctx: Context,
+  node: Node,
+  nodeRunId: string,
+  reads: Part[],
+  patch: Partial<NodeRun>,
+): NodeRun {
+  const config = node.config as {
+    instructions?: string;
+    systemPrompt?: string;
+    outputTypes?: string[];
+    outputContract?: { jsonSchema?: Record<string, unknown> };
+    contextPolicy?: { budgetTokens: number };
+  };
+  const instructions = config.instructions ?? config.systemPrompt ?? '';
+  const contract = {
+    outputTypes: config.outputTypes?.length ? config.outputTypes : ['text'],
+    ...(config.outputContract?.jsonSchema === undefined
+      ? {}
+      : { jsonSchema: config.outputContract.jsonSchema }),
+  };
+  const upstream = ctx.edges.find((edge) => edge.to.nodeId === node.id);
+  const envelope = buildEnvelope({
+    id: newId(),
+    runId: ctx.run.id,
+    fromNodeId: upstream?.from.nodeId ?? node.id,
+    toNodeId: node.id,
+    reads,
+    budgetTokens: config.contextPolicy?.budgetTokens ?? 4000,
+    outputTypes: contract.outputTypes,
+    ...(contract.jsonSchema === undefined ? {} : { jsonSchema: contract.jsonSchema }),
+    createdAt: ctx.run.startedAt,
+  });
+  return {
+    id: nodeRunId,
+    runId: ctx.run.id,
+    nodeId: node.id,
+    iteration: 1,
+    attempt: 1,
+    status: 'RUNNING',
+    inputEnvelopes: [envelope],
+    prompt: {
+      version: promptVersion(instructions, contract),
+      text: assemblePrompt({ instructions, reads, contract }),
+    },
+    usage: usage(0, 0),
+    verdicts: [],
+    toolCalls: [],
+    startedAt: ctx.run.startedAt,
+    ...patch,
+  };
+}
+
 /** One executed node: READY → RUNNING → streamed tokens → output → COMPLETED, then its edges. */
 function runNode(
   ctx: Context,
   node: Node,
-  options: { tokenDelay: number; words: number; viaFallback?: boolean; modelId?: string },
+  options: {
+    tokenDelay: number;
+    words: number;
+    viaFallback?: boolean;
+    modelId?: string;
+    reads?: Part[];
+  },
 ): { frames: ScriptedFrame[]; nodeRunId: string; text: string; usage: Usage } {
   const nodeRunId = newId();
   const deltas = streamText(node, options.words);
   const text = deltas.join('').trim();
   const spent = usage(12, deltas.length * 2);
+  const reads = options.reads ?? [];
+  const modelUsed = {
+    providerId: (node.config as { providerId?: string }).providerId ?? newId(),
+    modelId: options.modelId ?? (node.config as { modelId?: string }).modelId ?? 'mock-text',
+    viaFallback: options.viaFallback ?? false,
+  };
+  const record = (patch: Partial<NodeRun>): NodeRun =>
+    nodeRunRecord(ctx, node, nodeRunId, reads, patch);
 
   const frames: ScriptedFrame[] = [
     stateFrame(ctx, nodeRunId, node.id, 'READY', 20),
-    stateFrame(ctx, nodeRunId, node.id, 'RUNNING', 30),
+    { ...stateFrame(ctx, nodeRunId, node.id, 'RUNNING', 30), nodeRun: record({}) },
     ...deltas.map((delta) => tokenFrame(ctx, nodeRunId, delta, options.tokenDelay)),
     {
       after: 30,
+      nodeRun: record({ output: [{ type: 'text', text }], usage: spent, modelUsed }),
       event: {
         type: 'node.output',
         scope: 'workflow',
@@ -139,16 +220,21 @@ function runNode(
           nodeId: node.id,
           output: [{ type: 'text', text }],
           usage: spent,
-          modelUsed: {
-            providerId: (node.config as { providerId?: string }).providerId ?? newId(),
-            modelId:
-              options.modelId ?? (node.config as { modelId?: string }).modelId ?? 'mock-text',
-            viaFallback: options.viaFallback ?? false,
-          },
+          modelUsed,
         },
       },
     },
-    stateFrame(ctx, nodeRunId, node.id, 'COMPLETED', 20),
+    {
+      ...stateFrame(ctx, nodeRunId, node.id, 'COMPLETED', 20),
+      nodeRun: record({
+        status: 'COMPLETED',
+        output: [{ type: 'text', text }],
+        usage: spent,
+        modelUsed,
+        endedAt: new Date(Date.parse(ctx.run.startedAt) + 400).toISOString(),
+        durationMs: 400,
+      }),
+    },
   ];
 
   for (const edge of ctx.edges.filter((e) => e.from.nodeId === node.id)) {
@@ -248,6 +334,9 @@ const NINE_STATES: NodeState[] = [
 ];
 
 export function buildScenario(name: ScenarioName, ctx: Context): ScriptedFrame[] {
+  // a blocked run never starts, so there is no frame to play (§2.7: zero provider calls)
+  if (name === 'preflight-blocked') return [];
+
   const order = executionOrder(ctx.nodes, ctx.edges);
   const outputNode = ctx.nodes.find((node) => node.kind === 'output');
   const frames: ScriptedFrame[] = [started(ctx)];
@@ -257,7 +346,10 @@ export function buildScenario(name: ScenarioName, ctx: Context): ScriptedFrame[]
     if (target) {
       const nodeRunId = newId();
       for (const status of NINE_STATES) {
-        frames.push(stateFrame(ctx, nodeRunId, target.id, status, 60));
+        frames.push({
+          ...stateFrame(ctx, nodeRunId, target.id, status, 60),
+          nodeRun: nodeRunRecord(ctx, target, nodeRunId, [], { status }),
+        });
       }
     }
     frames.push(...completed(ctx, 'HALTED', sumUsage([])));
@@ -268,11 +360,26 @@ export function buildScenario(name: ScenarioName, ctx: Context): ScriptedFrame[]
     const target = order[0];
     if (target) {
       const nodeRunId = newId();
+      const error = {
+        kind: 'agent' as const,
+        code: 'contract_violation',
+        message: 'The model returned JSON that does not match the output contract.',
+        retryable: false,
+      };
       frames.push(stateFrame(ctx, nodeRunId, target.id, 'READY', 20));
-      frames.push(stateFrame(ctx, nodeRunId, target.id, 'RUNNING', 30));
+      frames.push({
+        ...stateFrame(ctx, nodeRunId, target.id, 'RUNNING', 30),
+        nodeRun: nodeRunRecord(ctx, target, nodeRunId, [], {}),
+      });
       frames.push(tokenFrame(ctx, nodeRunId, '{ "oops": ', 30));
       frames.push({
         after: 30,
+        nodeRun: nodeRunRecord(ctx, target, nodeRunId, [], {
+          status: 'RUNNING',
+          output: [{ type: 'text', text: '{ "oops": ' }],
+          error,
+          failureReason: 'CONTRACT_VIOLATION',
+        }),
         event: {
           type: 'node.error',
           scope: 'workflow',
@@ -281,17 +388,22 @@ export function buildScenario(name: ScenarioName, ctx: Context): ScriptedFrame[]
             runId: ctx.run.id,
             nodeRunId,
             nodeId: target.id,
-            error: {
-              kind: 'agent',
-              code: 'contract_violation',
-              message: 'The model returned JSON that does not match the output contract.',
-              retryable: false,
-            },
+            error,
             failureReason: 'CONTRACT_VIOLATION',
           },
         },
       });
-      frames.push(stateFrame(ctx, nodeRunId, target.id, 'FAILED', 20, 'CONTRACT_VIOLATION'));
+      frames.push({
+        ...stateFrame(ctx, nodeRunId, target.id, 'FAILED', 20, 'CONTRACT_VIOLATION'),
+        nodeRun: nodeRunRecord(ctx, target, nodeRunId, [], {
+          status: 'FAILED',
+          output: [{ type: 'text', text: '{ "oops": ' }],
+          error,
+          failureReason: 'CONTRACT_VIOLATION',
+          endedAt: new Date(Date.parse(ctx.run.startedAt) + 300).toISOString(),
+          durationMs: 300,
+        }),
+      });
     }
     frames.push(...completed(ctx, 'HALTED', usage(12, 4)));
     return frames;
@@ -302,10 +414,22 @@ export function buildScenario(name: ScenarioName, ctx: Context): ScriptedFrame[]
   const spent: Usage[] = [];
   let lastText = '';
 
+  const inputText = ctx.nodes
+    .filter((node) => node.kind === 'input')
+    .map((node) => (node.config as { text?: string }).text)
+    .find((text) => text !== undefined && text !== '');
+
   order.forEach((node, index) => {
+    const reads: Part[] =
+      index === 0
+        ? inputText === undefined
+          ? []
+          : [{ type: 'text', text: inputText }]
+        : [{ type: 'text', text: lastText }];
     const result = runNode(ctx, node, {
       tokenDelay,
       words,
+      reads,
       viaFallback: name === 'fallback-used' && index === 0,
       ...(name === 'fallback-used' && index === 0 ? { modelId: 'mock-text-fallback' } : {}),
     });

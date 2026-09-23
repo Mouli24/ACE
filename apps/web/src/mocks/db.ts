@@ -394,6 +394,26 @@ export class MockDb {
     };
   }
 
+  /**
+   * Force a provider's state and announce it, the way the engine's scheduled re-check would
+   * (FR-PRV-004). Only the test hooks call this; a real check goes through `checkProvider`.
+   */
+  setProviderStatus(id: string, status: Provider['status'], message?: string): Provider | undefined {
+    const provider = this.getProvider(id);
+    if (!provider) return undefined;
+    provider.status = status;
+    if (message === undefined) delete provider.statusMessage;
+    else provider.statusMessage = message;
+    provider.lastCheckedAt = now();
+    this.save();
+    this.emit({
+      type: 'provider.status',
+      payload: { providerId: id, status, ...(message === undefined ? {} : { message }) },
+      scope: 'engine',
+    });
+    return provider;
+  }
+
   /* ---------------------------------------------------------------- models */
 
   listModels(): Model[] {

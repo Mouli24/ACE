@@ -328,6 +328,76 @@ describe('runs and the scripted scenarios (§2.4, §5 item 11)', () => {
     expect(all.some((event) => event.type === 'node.token')).toBe(false);
   });
 
+  it('records a NodeRun with its envelopes and prompt as the run goes (FR-EXE-010, TC-PRM-005)', async () => {
+    const { workflow, nodes } = await runnableWorkflow();
+    const run = await client.startRun(workflow.id);
+    await vi.waitFor(async () => expect((await client.getRun(run.id)).status).toBe('COMPLETE'), {
+      timeout: 5000,
+    });
+
+    const nodeRuns = await client.listNodeRuns(run.id);
+    const agentRun = nodeRuns.find((nodeRun) => nodeRun.nodeId === nodes.agent.id);
+    expect(agentRun?.status).toBe('COMPLETED');
+    expect(agentRun?.output).toEqual([{ type: 'text', text: expect.any(String) }]);
+    expect(agentRun?.usage.tokensOut).toBeGreaterThan(0);
+    expect(agentRun?.modelUsed?.modelId).toBe('mock-text');
+    expect(agentRun?.durationMs).toBeGreaterThan(0);
+    // the envelope is what fed it, and it carries the upstream text as untrusted reads (BR-02/BR-13)
+    expect(agentRun?.inputEnvelopes).toHaveLength(1);
+    expect(agentRun?.inputEnvelopes[0]?.context.trust).toBe('untrusted');
+    expect(agentRun?.inputEnvelopes[0]?.reads).toEqual([{ type: 'text', text: 'hello' }]);
+    // "View prompt" reads this text back; §2.8 order, and the version travels with it
+    expect(agentRun?.prompt?.text).toContain('## Output contract');
+    expect(agentRun?.prompt?.version).toMatch(/^[0-9a-f]{12}$/);
+    expect(await client.getNodeRun(agentRun!.id)).toMatchObject({ id: agentRun!.id });
+  });
+
+  it('a failing node run keeps its error and the partial output (TC-EXE-005 shapes)', async () => {
+    setScenario('contract-violation');
+    const { workflow, nodes } = await runnableWorkflow();
+    const run = await client.startRun(workflow.id);
+    await vi.waitFor(async () => expect((await client.getRun(run.id)).status).toBe('HALTED'), {
+      timeout: 5000,
+    });
+    const nodeRuns = await client.listNodeRuns(run.id);
+    const failed = nodeRuns.find((nodeRun) => nodeRun.nodeId === nodes.agent.id);
+    expect(failed?.status).toBe('FAILED');
+    expect(failed?.failureReason).toBe('CONTRACT_VIOLATION');
+    expect(failed?.error).toMatchObject({ kind: 'agent', retryable: false });
+  });
+
+  it('preflight-blocked: a valid graph still blocks and nothing is emitted (FR-EXE-003)', async () => {
+    setScenario('preflight-blocked');
+    const { workflow } = await runnableWorkflow();
+    const before = db.events.length;
+    const run = await client.startRun(workflow.id);
+    expect(run.status).toBe('BLOCKED');
+    expect(run.preflightIssues).toHaveLength(1);
+    expect(run.preflightIssues[0]).toMatchObject({
+      code: 'provider_unreachable',
+      severity: 'error',
+    });
+    expect(run.preflightIssues[0]?.nodeId).toBeTruthy();
+    await tick(200);
+    expect(db.events.length).toBe(before);
+  });
+
+  it('socket-drop cuts the connection mid-run, and a resume replays what was missed (TC-EXE-013)', async () => {
+    setScenario('socket-drop');
+    const { workflow } = await runnableWorkflow();
+    const socket = createFakeSocketClient(workflow.id);
+    await client.startRun(workflow.id);
+    await vi.waitFor(() => expect(socket.closedCode).toBe(1006), { timeout: 5000 });
+
+    // a fresh client asks from the last seq it folded and ends up with the same view
+    const resumed = createFakeSocketClient(workflow.id);
+    await tick(10);
+    resumed.resume(socket.buffer.view.lastSeq);
+    await vi.waitFor(() => expect(resumed.buffer.view.status).toBe('COMPLETE'), { timeout: 5000 });
+    socket.close();
+    resumed.close();
+  });
+
   it('a run history lists newest first (FR-EXE-012)', async () => {
     const { workflow } = await runnableWorkflow();
     await client.startRun(workflow.id);
@@ -346,6 +416,10 @@ function createFakeSocketClient(
 ) {
   const buffer = new RunEventBuffer();
   const socket = new FakeWS(`ws://mock.local/ws?token=mock`);
+  const state = { closedCode: undefined as number | undefined };
+  socket.onclose = (event) => {
+    state.closedCode = (event as CloseEvent).code;
+  };
   socket.onmessage = (event) => {
     const frame = JSON.parse(String((event as MessageEvent<string>).data)) as {
       type: string;
@@ -359,5 +433,13 @@ function createFakeSocketClient(
       JSON.stringify({ type: 'subscribe', payload: { scope: 'workflow', id: workflowId } }),
     );
   };
-  return { buffer, close: () => socket.close() };
+  return {
+    buffer,
+    get closedCode() {
+      return state.closedCode;
+    },
+    resume: (afterSeq: number) =>
+      socket.send(JSON.stringify({ type: 'resume', payload: { afterSeq } })),
+    close: () => socket.close(),
+  };
 }

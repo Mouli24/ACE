@@ -19,6 +19,7 @@ import { HttpResponse, http, type HttpHandler, type PathParams } from 'msw';
 import { newId } from '../lib/ulid';
 import { DETECTED_OLLAMA } from './catalog';
 import { type MockDb } from './db';
+import { dropMockSockets } from './fake-socket';
 import { buildScenario, type ScenarioName } from './scenarios';
 
 /**
@@ -200,16 +201,27 @@ export function createRound2Handlers(db: MockDb): HttpHandler[] {
       playing.push(
         setTimeout(() => {
           if (frame.dropSocket) {
-            db.emit({ type: 'hello', scope: 'engine', payload: { seq: db.seq }, transient: true });
+            // cut every open mock socket, the way an engine restart would (TC-EXE-013)
+            dropMockSockets();
             return;
           }
+          if (frame.nodeRun) db.upsertNodeRun(frame.nodeRun);
           const emitted = db.emit(frame.event);
           if (frame.event.type === 'run.completed') {
-            const payload = emitted.payload as { status: Run['status']; totals: Run['totals'] };
+            const payload = emitted.payload as {
+              status: Run['status'];
+              totals: Run['totals'];
+              haltReason?: Run['haltReason'];
+              finalOutput?: Run['finalOutput'];
+            };
+            const endedAt = new Date().toISOString();
             db.updateRun(run.id, {
               status: payload.status,
               totals: payload.totals,
-              endedAt: new Date().toISOString(),
+              ...(payload.haltReason === undefined ? {} : { haltReason: payload.haltReason }),
+              ...(payload.finalOutput === undefined ? {} : { finalOutput: payload.finalOutput }),
+              endedAt,
+              durationMs: Math.max(0, Date.parse(endedAt) - Date.parse(run.startedAt)),
             });
           }
         }, elapsed),
@@ -284,7 +296,7 @@ export function createRound2Handlers(db: MockDb): HttpHandler[] {
             409,
             'workflow',
             'provider_in_use',
-            `${nodeIds.length} node${nodeIds.length === 1 ? '' : 's'} still use this provider.`,
+            `${nodeIds.length} node${nodeIds.length === 1 ? ' still uses' : 's still use'} this provider.`,
             { nodeIds },
           );
         }
@@ -349,6 +361,16 @@ export function createRound2Handlers(db: MockDb): HttpHandler[] {
           parsed.data.inputs ?? {},
           new Set(db.listProviders().map((p) => p.id)),
         );
+        if (scenario === 'preflight-blocked' && issues.length === 0) {
+          // the scenario is the pre-flight failure itself, so a valid graph still blocks (§2.7)
+          const target = nodes.find((node) => node.kind === 'agent' || node.kind === 'model');
+          issues.push({
+            severity: 'error',
+            code: 'provider_unreachable',
+            message: `"${target?.name ?? 'An agent'}" cannot reach its provider.`,
+            ...(target === undefined ? {} : { nodeId: target.id }),
+          });
+        }
 
         const run: Run = {
           id: newId(),

@@ -1,8 +1,8 @@
 import { setupWorker } from 'msw/browser';
 
 import { MockDb } from './db';
-import { createFakeWebSocket } from './fake-socket';
 import { seedPerfFixture } from './fixture';
+import { createFakeWebSocket, dropMockSockets } from './fake-socket';
 import { createHandlers } from './handlers';
 import { createRound2Handlers, setScenario } from './handlers-round2';
 import { createNode, type Round1NodeKind } from '../nodes/factory';
@@ -20,6 +20,10 @@ declare global {
       setLatency(ms: number): void;
       /** Which scripted run scenario the next run plays (§5 item 11). */
       setScenario(name: Parameters<typeof setScenario>[0]): void;
+      /** Cut every open socket, as an engine restart would (TC-EXE-013). */
+      dropSocket(): void;
+      /** Announce a provider state change without a reload (FR-PRV-004, TC-PRV-005). */
+      setProviderStatus(id: string, status: string, message?: string): void;
       /** Create a project + workflow with one node per kind, laid out left to right. */
       seedGraph(
         kinds: Round1NodeKind[],
@@ -64,6 +68,13 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
     },
     setScenario(name) {
       setScenario(name);
+    },
+    dropSocket() {
+      dropMockSockets();
+    },
+    setProviderStatus(id, status, message) {
+      db.load();
+      db.setProviderStatus(id, status as Parameters<typeof db.setProviderStatus>[1], message);
     },
     seedGraph(kinds, options = {}) {
       db.load();

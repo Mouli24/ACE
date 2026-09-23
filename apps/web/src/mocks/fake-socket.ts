@@ -42,6 +42,16 @@ function closeEvent(code: number, reason = ''): CloseEvent {
   return Object.assign(new Event('close'), { code, reason, wasClean: code === 1000 }) as CloseEvent;
 }
 
+/**
+ * Every open fake socket, so a scenario (or a test) can drop the connection the way an engine
+ * restart would and watch the SDK reconnect and `resume` (FR-EXE-014, TC-EXE-013).
+ */
+const live = new Set<FakeWebSocketInstance>();
+
+export function dropMockSockets(code = 1006): void {
+  for (const socket of [...live]) socket.serverClose(code);
+}
+
 export function createFakeWebSocket(db: MockDb): FakeWebSocketClass {
   const instances: FakeWebSocketInstance[] = [];
 
@@ -74,6 +84,7 @@ export function createFakeWebSocket(db: MockDb): FakeWebSocketClass {
           return;
         }
         this.readyState = FakeWebSocket.OPEN;
+        live.add(this);
         this.unsubscribe = subscribeMockEvents((event) => this.deliver(event));
         this.onopen?.(new Event('open'));
         db.load();
@@ -141,6 +152,7 @@ export function createFakeWebSocket(db: MockDb): FakeWebSocketClass {
     private finish(code: number, reason: string): void {
       if (this.readyState === FakeWebSocket.CLOSED) return;
       this.readyState = FakeWebSocket.CLOSED;
+      live.delete(this);
       this.unsubscribe?.();
       this.unsubscribe = undefined;
       this.onclose?.(closeEvent(code, reason));
