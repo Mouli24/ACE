@@ -267,3 +267,115 @@ describe('createAceSocket (round 1 §2.9, FR-EXE-014, Arch §21.4)', () => {
     socket.close();
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Round 2 — run and engine frames (§2.4)                                      */
+/* -------------------------------------------------------------------------- */
+
+const RUN = '01ARZ3NDEKTSV4RRFFQ69G5FB0';
+const NODE_RUN = '01ARZ3NDEKTSV4RRFFQ69G5FB1';
+const NODE = '01ARZ3NDEKTSV4RRFFQ69G5FB2';
+
+const nodeState = (seq: number, status: string) => ({
+  type: 'node.state',
+  payload: {
+    runId: RUN,
+    nodeRunId: NODE_RUN,
+    nodeId: NODE,
+    iteration: 1,
+    attempt: 1,
+    status,
+  },
+  seq,
+});
+
+const token = (delta: string) => ({
+  type: 'node.token',
+  payload: { runId: RUN, nodeRunId: NODE_RUN, delta },
+});
+
+describe('run-scope frames (round 2 §2.4)', () => {
+  it('dispatches every run frame type to its handler', () => {
+    const socket = makeSocket();
+    const seen: string[] = [];
+    for (const type of [
+      'run.started',
+      'node.state',
+      'node.token',
+      'node.output',
+      'node.error',
+      'edge.transfer',
+      'usage.updated',
+      'run.completed',
+      'provider.status',
+    ] as const) {
+      socket.on(type, () => seen.push(type));
+    }
+    socket.connect();
+    latest().serverOpen();
+    latest().serverSend({ type: 'hello', payload: { seq: 0 } });
+    latest().serverSend(nodeState(1, 'RUNNING') as never);
+    latest().serverSend(token('he') as never);
+    latest().serverSend({
+      type: 'provider.status',
+      payload: { providerId: NODE, status: 'CONNECTED' },
+      seq: 2,
+    } as never);
+    expect(seen).toEqual(['node.state', 'node.token', 'provider.status']);
+    socket.close();
+  });
+
+  it('`node.token` carries no seq, so it never moves the resume anchor (§2.4)', () => {
+    const socket = makeSocket();
+    socket.connect();
+    latest().serverOpen();
+    latest().serverSend({ type: 'hello', payload: { seq: 5 } });
+    latest().serverSend(nodeState(6, 'RUNNING') as never);
+    expect(socket.lastSeq).toBe(6);
+    latest().serverSend(token('a') as never);
+    latest().serverSend(token('b') as never);
+    expect(socket.lastSeq).toBe(6);
+    socket.close();
+  });
+
+  it('every streamed token is delivered, even though they share no seq', () => {
+    const socket = makeSocket();
+    const deltas: string[] = [];
+    socket.on('node.token', (payload) => deltas.push(payload.delta));
+    socket.connect();
+    latest().serverOpen();
+    latest().serverSend({ type: 'hello', payload: { seq: 0 } });
+    for (const delta of ['Hel', 'lo ', 'wor', 'ld']) {
+      latest().serverSend(token(delta) as never);
+    }
+    expect(deltas.join('')).toBe('Hello world');
+    socket.close();
+  });
+
+  it('after a drop it resumes from the last persisted seq and replays run frames once', () => {
+    const socket = makeSocket();
+    const states: Array<{ status: string; seq: number }> = [];
+    socket.on('node.state', (payload, frame) =>
+      states.push({ status: payload.status, seq: frame.seq }),
+    );
+    socket.subscribe({ scope: 'workflow', id: WF });
+    socket.connect();
+    latest().serverOpen();
+    latest().serverSend({ type: 'hello', payload: { seq: 10 } });
+    latest().serverSend(nodeState(11, 'READY') as never);
+    latest().serverSend(token('mid-stream') as never);
+    latest().serverSend(nodeState(12, 'RUNNING') as never);
+
+    latest().serverClose();
+    vi.advanceTimersByTime(100);
+    latest().serverOpen();
+    latest().serverSend({ type: 'hello', payload: { seq: 20 } });
+    expect(latest().sent).toContainEqual({ type: 'resume', payload: { afterSeq: 12 } });
+
+    // the server replays from 12; 12 is a duplicate and must not be delivered twice
+    latest().serverSend(nodeState(12, 'RUNNING') as never);
+    latest().serverSend(nodeState(13, 'COMPLETED') as never);
+    expect(states.map((s) => s.status)).toEqual(['READY', 'RUNNING', 'COMPLETED']);
+    socket.close();
+  });
+});

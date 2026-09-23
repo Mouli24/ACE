@@ -1,8 +1,9 @@
 import {
+  ServerFrameSchema,
   WS_CLOSE_UNAUTHORIZED,
-  WsServerFrameSchema,
+  isPersistedFrame,
+  type ServerFrame,
   type WsClientFrame,
-  type WsServerFrame,
   type WsSubscribePayload,
   type WsUnsubscribePayload,
 } from '@ace/contracts';
@@ -12,6 +13,9 @@ import {
  *
  * - `hello { seq }` on the first connection seeds `lastSeq`; on a reconnect it is ignored so the
  *   events missed while offline are not skipped.
+ * - Round 2 adds the run and engine frames of §2.4 on the same socket: `ServerFrameSchema` covers
+ *   the core, run and engine unions, and `isPersistedFrame` separates the ones that carry a seq
+ *   from transient `node.token`.
  * - Every server frame with a `seq` at or below `lastSeq` is dropped, so a replay never delivers
  *   a frame twice; every accepted frame advances `lastSeq`.
  * - A drop (any close but our own or 4401) schedules a reconnect with exponential backoff; once
@@ -21,8 +25,8 @@ import {
 export type AceSocketStatus =
   'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed' | 'unauthorized';
 
-export type ServerFrameType = WsServerFrame['type'];
-export type ServerFrameOf<T extends ServerFrameType> = Extract<WsServerFrame, { type: T }>;
+export type ServerFrameType = ServerFrame['type'];
+export type ServerFrameOf<T extends ServerFrameType> = Extract<ServerFrame, { type: T }>;
 export type FrameHandler<T extends ServerFrameType> = (
   payload: ServerFrameOf<T>['payload'],
   frame: ServerFrameOf<T>,
@@ -83,7 +87,7 @@ export function createAceSocket(options: AceSocketOptions): AceSocket {
     if (ws && ws.readyState === WS.OPEN) ws.send(JSON.stringify(frame));
   }
 
-  function dispatch(frame: WsServerFrame): void {
+  function dispatch(frame: ServerFrame): void {
     const set = handlers.get(frame.type);
     if (!set) return;
     for (const handler of set) handler(frame.payload, frame);
@@ -96,7 +100,7 @@ export function createAceSocket(options: AceSocketOptions): AceSocket {
     } catch {
       return;
     }
-    const parsed = WsServerFrameSchema.safeParse(raw);
+    const parsed = ServerFrameSchema.safeParse(raw);
     if (!parsed.success) return;
     const frame = parsed.data;
 
@@ -105,6 +109,13 @@ export function createAceSocket(options: AceSocketOptions): AceSocket {
         hadHello = true;
         lastSeq = Math.max(lastSeq, frame.payload.seq);
       }
+      dispatch(frame);
+      return;
+    }
+
+    // `node.token` is transient: it carries no seq, is never persisted and so is never replayed.
+    // It must still be delivered, and it must not move the anchor `resume` asks from (§2.4).
+    if (!isPersistedFrame(frame)) {
       dispatch(frame);
       return;
     }

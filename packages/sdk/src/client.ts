@@ -1,5 +1,17 @@
 import {
   API_BASE_PATH,
+  CreateProviderRequestSchema,
+  EventSchema,
+  ModelListResponseSchema,
+  NodeRunSchema,
+  ProviderCheckResultSchema,
+  ProviderDetectResponseSchema,
+  ProviderSchema,
+  RefreshModelsResponseSchema,
+  RunSchema,
+  RunSummarySchema,
+  StartRunRequestSchema,
+  UpdateProviderRequestSchema,
   CreateProjectRequestSchema,
   CreateWorkflowRequestSchema,
   GraphOpsRequestSchema,
@@ -16,6 +28,18 @@ import {
   WorkflowSchema,
   pageSchema,
   type CreateProjectRequest,
+  type Event,
+  type ModelListResponse,
+  type ModelQuery,
+  type NodeRun,
+  type Provider,
+  type ProviderCheckResult,
+  type ProviderDetectResponse,
+  type RefreshModelsResponse,
+  type Run,
+  type RunSummary,
+  type StartRunRequest,
+  type UpdateProviderRequest,
   type CreateWorkflowRequest,
   type CursorQuery,
   type GraphOpsRequest,
@@ -33,7 +57,7 @@ import {
   type WorkflowExport,
   type WorkflowGraphResponse,
 } from '@ace/contracts';
-import type { z } from 'zod';
+import { z } from 'zod';
 
 import { AceApiError } from './errors.js';
 
@@ -48,15 +72,29 @@ export interface AceClientOptions {
 
 type ListQuery = Partial<Pick<CursorQuery, 'cursor' | 'limit'>>;
 
+/** Anything that goes into a query string; `undefined` members are left out. */
+type Query = Record<string, string | number | boolean | undefined>;
+
 const ProjectPageSchema = pageSchema(ProjectSchema);
+const ProviderPageSchema = pageSchema(ProviderSchema);
+const RunSummaryPageSchema = pageSchema(RunSummarySchema);
+const NodeRunListSchema = z.array(NodeRunSchema);
+const EventListSchema = z.array(EventSchema);
+
+/**
+ * §2.1 marks `concurrency` optional on the request while the schema gives it a default, so the
+ * *output* type demands it. Callers get the input type, which is what §2.1 describes.
+ */
+export type CreateProviderBody = z.input<typeof CreateProviderRequestSchema>;
 const WorkflowPageSchema = pageSchema(WorkflowSchema);
 const NoContentSchema = { parse: (): undefined => undefined };
 
-function joinUrl(baseUrl: string, path: string, query?: ListQuery): string {
+function joinUrl(baseUrl: string, path: string, query?: Query): string {
   const origin = baseUrl.replace(/\/+$/, '');
   const url = new URL(`${origin}${API_BASE_PATH}${path}`);
-  if (query?.cursor !== undefined) url.searchParams.set('cursor', query.cursor);
-  if (query?.limit !== undefined) url.searchParams.set('limit', String(query.limit));
+  for (const [key, value] of Object.entries(query ?? {})) {
+    if (value !== undefined) url.searchParams.set(key, String(value));
+  }
   return url.toString();
 }
 
@@ -72,7 +110,7 @@ export function createAceClient(options: AceClientOptions) {
     path: string,
     responseSchema: { parse(value: unknown): T },
     body?: { schema: z.ZodType; value: unknown },
-    query?: ListQuery,
+    query?: Query,
   ): Promise<T> {
     let payload: string | undefined;
     if (body) {
@@ -172,6 +210,61 @@ export function createAceClient(options: AceClientOptions) {
         schema: WorkflowExportSchema,
         value: file,
       }),
+
+    /* Providers (round 2 §2.5) */
+    listProviders: (query?: ListQuery): Promise<Page<Provider>> =>
+      request('GET', '/providers', ProviderPageSchema, undefined, query),
+    createProvider: (body: CreateProviderBody): Promise<Provider> =>
+      request('POST', '/providers', ProviderSchema, {
+        schema: CreateProviderRequestSchema,
+        value: body,
+      }),
+    getProvider: (id: Id): Promise<Provider> => request('GET', `/providers/${id}`, ProviderSchema),
+    updateProvider: (id: Id, body: UpdateProviderRequest): Promise<Provider> =>
+      request('PATCH', `/providers/${id}`, ProviderSchema, {
+        schema: UpdateProviderRequestSchema,
+        value: body,
+      }),
+    /**
+     * Without `confirm` the engine answers 409 `provider_in_use` and names the nodes that still
+     * reference it (§2.5); the UI shows those before asking again with `confirm: true`.
+     */
+    deleteProvider: (id: Id, options: { confirm?: boolean } = {}): Promise<void> =>
+      request('DELETE', `/providers/${id}`, NoContentSchema, undefined, {
+        ...(options.confirm ? { confirm: true } : {}),
+      }),
+    checkProvider: (id: Id): Promise<ProviderCheckResult> =>
+      request('POST', `/providers/${id}/check`, ProviderCheckResultSchema),
+    refreshModels: (id: Id): Promise<RefreshModelsResponse> =>
+      request('POST', `/providers/${id}/refresh-models`, RefreshModelsResponseSchema),
+    detectProviders: (): Promise<ProviderDetectResponse> =>
+      request('GET', '/providers/detect', ProviderDetectResponseSchema),
+
+    /* Models */
+    listModels: (query: ModelQuery = {}): Promise<ModelListResponse> =>
+      request('GET', '/models', ModelListResponseSchema, undefined, {
+        providerId: query.providerId,
+        inputType: query.inputType,
+        outputType: query.outputType,
+        available: query.available,
+      }),
+
+    /* Runs */
+    startRun: (workflowId: Id, body: StartRunRequest = {}): Promise<Run> =>
+      request('POST', `/workflows/${workflowId}/runs`, RunSchema, {
+        schema: StartRunRequestSchema,
+        value: body,
+      }),
+    listRuns: (workflowId: Id, query?: ListQuery): Promise<Page<RunSummary>> =>
+      request('GET', `/workflows/${workflowId}/runs`, RunSummaryPageSchema, undefined, query),
+    getRun: (runId: Id): Promise<Run> => request('GET', `/runs/${runId}`, RunSchema),
+    listNodeRuns: (runId: Id): Promise<NodeRun[]> =>
+      request('GET', `/runs/${runId}/node-runs`, NodeRunListSchema),
+    getNodeRun: (nodeRunId: Id): Promise<NodeRun> =>
+      request('GET', `/node-runs/${nodeRunId}`, NodeRunSchema),
+    /** `afterSeq` is how a reconnecting client catches up outside the socket (Arch §21.4). */
+    listRunEvents: (runId: Id, query: { afterSeq?: number } = {}): Promise<Event[]> =>
+      request('GET', `/runs/${runId}/events`, EventListSchema, undefined, query),
   };
 }
 
