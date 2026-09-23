@@ -16,6 +16,8 @@ import {
   Label,
 } from '@ace/ui';
 import { FolderOpen, MoreHorizontal, Plus } from 'lucide-react';
+
+import { QueryError } from '../app/QueryError';
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
@@ -49,9 +51,12 @@ export function ProjectsPage() {
 
       {projects.isPending && <p className="text-fg-muted">Loading projects…</p>}
       {projects.isError && (
-        <p role="alert" className="text-danger">
-          Could not load projects: {projects.error.message}
-        </p>
+        <QueryError
+          error={projects.error}
+          what="project list"
+          backTo="/settings"
+          backLabel="Open settings"
+        />
       )}
       {projects.data?.length === 0 && (
         <p className="rounded-card border border-dashed border-border p-8 text-center text-fg-muted">

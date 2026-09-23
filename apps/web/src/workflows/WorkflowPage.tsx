@@ -1,6 +1,7 @@
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 
+import { QueryError } from '../app/QueryError';
 import { useWorkflowSubscription } from '../app/socket';
 import { usePanelsStore } from '../app/stores/panels';
 import { BottomPanel } from '../bottom-panel/BottomPanel';
@@ -25,12 +26,12 @@ export function WorkflowPage() {
 
   if (graph.isError) {
     return (
-      <p role="alert" className="p-6 text-danger">
-        Workflow not found.{' '}
-        <Link to={`/projects/${projectId}`} className="underline">
-          Back to the project
-        </Link>
-      </p>
+      <QueryError
+        error={graph.error}
+        what="workflow"
+        backTo={`/projects/${projectId}`}
+        backLabel="Back to the project"
+      />
     );
   }
 

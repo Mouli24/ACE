@@ -1,7 +1,8 @@
 import { screen, waitFor, within } from '@testing-library/react';
+import { HttpResponse, http } from 'msw';
 import userEvent from '@testing-library/user-event';
 
-import { db, installMockServer, renderApp } from '../test/app';
+import { db, installMockServer, renderApp, server } from '../test/app';
 
 installMockServer();
 
@@ -83,5 +84,44 @@ describe('Workflow tabs (FR-WF-001..003)', () => {
     );
     expect(db.listWorkflows(project.id).map((w) => w.name)).toEqual(['Gamma']);
     await waitFor(() => expect(router.state.location.pathname).toBe(`/projects/${project.id}`));
+  });
+});
+
+describe('D-009 a failed workflow load says what actually happened (NFR-USE-03)', () => {
+  it('a stale session token reads as a session problem, not as a missing workflow', async () => {
+    const project = db.createProject({ name: 'P' });
+    const workflow = db.createWorkflow(project.id, 'Flow');
+    server.use(
+      http.get('*/api/v1/workflows/:id', () =>
+        HttpResponse.json(
+          {
+            error: {
+              kind: 'auth',
+              code: 'unauthorized',
+              message: 'A valid session token is required.',
+              retryable: false,
+            },
+          },
+          { status: 401 },
+        ),
+      ),
+    );
+
+    renderApp(`/projects/${project.id}/workflows/${workflow.id}`);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/session is no longer valid/i);
+    expect(alert).toHaveTextContent(/\?token=/);
+    expect(alert).not.toHaveTextContent(/not found/i);
+    // navigating away cannot fix a stale token, so no link is offered
+    expect(within(alert).queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('a genuinely missing workflow still says not found and offers the way back', async () => {
+    const project = db.createProject({ name: 'P' });
+    renderApp(`/projects/${project.id}/workflows/01ARZ3NDEKTSV4RRFFQ69G5FAV`);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/workflow not found/i);
+    expect(within(alert).getByRole('link', { name: /back to the project/i })).toBeInTheDocument();
   });
 });

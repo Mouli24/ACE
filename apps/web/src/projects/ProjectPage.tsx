@@ -3,6 +3,7 @@ import { Plus } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
+import { QueryError } from '../app/QueryError';
 import { ImportWorkflowButton } from '../workflows/ImportWorkflowButton';
 import { CreateWorkflowDialog } from '../workflows/WorkflowDialogs';
 import { useWorkflows } from '../workflows/hooks';
@@ -16,14 +17,7 @@ export function ProjectPage() {
   const [creating, setCreating] = useState(false);
 
   if (project.isError) {
-    return (
-      <p role="alert" className="p-6 text-danger">
-        Project not found.{' '}
-        <Link to="/projects" className="underline">
-          Back to projects
-        </Link>
-      </p>
-    );
+    return <QueryError error={project.error} what="project" />;
   }
 
   return (
