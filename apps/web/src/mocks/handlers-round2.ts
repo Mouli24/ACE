@@ -18,6 +18,7 @@ import { HttpResponse, http, type HttpHandler, type PathParams } from 'msw';
 
 import { newId } from '../lib/ulid';
 import { DETECTED_OLLAMA } from './catalog';
+import { validateGraph } from './graph-rules';
 import { type MockDb } from './db';
 import { dropMockSockets } from './fake-socket';
 import { buildScenario, type ScenarioName } from './scenarios';
@@ -71,6 +72,59 @@ export function preflight(
   nodes: Node[],
   models: Model[],
   inputs: Record<string, unknown>,
+  providerIds: Set<string>,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [...modelIssues(nodes, models, providerIds)];
+
+  for (const node of nodes) {
+    if (node.kind === 'input') {
+      const config = node.config as { text?: string; artifactIds: string[] };
+      const supplied = inputs[node.id];
+      if (!config.text && config.artifactIds.length === 0 && supplied === undefined) {
+        issues.push({
+          severity: 'error',
+          code: 'missing_input',
+          message: `"${node.name}" has nothing to send.`,
+          nodeId: node.id,
+        });
+      }
+    }
+
+    if (
+      node.kind === 'merge' ||
+      node.kind === 'retrieval' ||
+      node.kind === 'guardrail' ||
+      node.kind === 'custom'
+    ) {
+      issues.push({
+        severity: 'error',
+        code: 'not_supported_yet',
+        message: `${node.kind} nodes run from a later round.`,
+        nodeId: node.id,
+      });
+    }
+  }
+
+  if (!nodes.some((node) => node.kind === 'output')) {
+    issues.push({
+      severity: 'error',
+      code: 'no_output_node',
+      message: 'The workflow has no Output node.',
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * The model half of pre-flight, on its own because `GET /validate` shows the same three issues
+ * before a run is ever started (FR-MOD-005): `provider_missing`, `unavailable_model` and
+ * `incompatible_model`. One implementation, so the validation panel and the pre-flight that
+ * refuses the run can never disagree about the same graph.
+ */
+export function modelIssues(
+  nodes: Node[],
+  models: Model[],
   providerIds: Set<string>,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
@@ -137,41 +191,6 @@ export function preflight(
         });
       }
     }
-
-    if (node.kind === 'input') {
-      const config = node.config as { text?: string; artifactIds: string[] };
-      const supplied = inputs[node.id];
-      if (!config.text && config.artifactIds.length === 0 && supplied === undefined) {
-        issues.push({
-          severity: 'error',
-          code: 'missing_input',
-          message: `"${node.name}" has nothing to send.`,
-          nodeId: node.id,
-        });
-      }
-    }
-
-    if (
-      node.kind === 'merge' ||
-      node.kind === 'retrieval' ||
-      node.kind === 'guardrail' ||
-      node.kind === 'custom'
-    ) {
-      issues.push({
-        severity: 'error',
-        code: 'not_supported_yet',
-        message: `${node.kind} nodes run from a later round.`,
-        nodeId: node.id,
-      });
-    }
-  }
-
-  if (!nodes.some((node) => node.kind === 'output')) {
-    issues.push({
-      severity: 'error',
-      code: 'no_output_node',
-      message: 'The workflow has no Output node.',
-    });
   }
 
   return issues;
@@ -318,6 +337,32 @@ export function createRound2Handlers(db: MockDb): HttpHandler[] {
       guard((ctx) => {
         const result = db.refreshModels(param(ctx, 'id'));
         return result ? HttpResponse.json(result) : notFound('Provider');
+      }),
+    ),
+
+    /* ------------------------------------------------------- validate (FR-MOD-005) */
+    /**
+     * The round 1 graph checks plus the model-catalogue ones, so `unavailable_model`,
+     * `provider_missing` and `incompatible_model` are visible in the validation panel before a run
+     * is ever started. This handler is registered ahead of the round 1 one, which it replaces.
+     */
+    http.post(
+      `${API}/workflows/:id/validate`,
+      guard((ctx) => {
+        const workflowId = param(ctx, 'id');
+        if (!db.getWorkflow(workflowId)) return notFound('Workflow');
+        const nodes = db.nodesOf(workflowId);
+        const providerIds = new Set(db.listProviders().map((provider) => provider.id));
+        return HttpResponse.json({
+          issues: [
+            // The round 1 placeholder warning for "no model yet" is dropped: modelIssues says it
+            // properly now, as the error that pre-flight will also refuse the run for (D50).
+            ...validateGraph(nodes, db.edgesOf(workflowId)).filter(
+              (issue) => issue.code !== 'missing_model',
+            ),
+            ...modelIssues(nodes, db.listModels(), providerIds),
+          ],
+        });
       }),
     ),
 
