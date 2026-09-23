@@ -236,11 +236,18 @@ function CanvasInner({
     [sync],
   );
 
-  const flowEdges = useMemo(
-    () =>
-      toFlowEdges(edges, nodes).map((e) => ({ ...e, selected: selectedEdgeIds.includes(e.id) })),
-    [edges, nodes, selectedEdgeIds],
-  );
+  const flowEdges = useMemo(() => {
+    // React Flow drops an edge whose endpoints it does not know yet and does not retry, so an
+    // edge is handed over only once both its nodes are mounted; this memo re-runs when they are.
+    const mounted = new Set(flowNodes.map((node) => node.id));
+    const connectable = edges.filter(
+      (edge) => mounted.has(edge.from.nodeId) && mounted.has(edge.to.nodeId),
+    );
+    return toFlowEdges(connectable, nodes).map((e) => ({
+      ...e,
+      selected: selectedEdgeIds.includes(e.id),
+    }));
+  }, [edges, nodes, flowNodes, selectedEdgeIds]);
 
   // Edges are fully derived from the query cache, so the only change to honour is selection.
   const onEdgesChange = useCallback(
