@@ -57,7 +57,7 @@ export type ModelQuery = z.infer<typeof ModelQuerySchema>;
 
 /**
  * Does one catalog row satisfy a query? Pure, so the engine's `GET /models` and the config
- * panel's client-side narrowing cannot disagree about what "supports image input" means (D29).
+ * panel's client-side narrowing cannot disagree about what "supports image input" means (D52).
  * A type filter asks whether the model *covers* that type, not whether it is the only one.
  */
 export function modelMatchesQuery(model: Model, query: ModelQuery): boolean {

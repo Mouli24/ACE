@@ -371,7 +371,7 @@ describe('TC-EXE-005 validateAgainstContract — JSON schema', () => {
     expect(validateAgainstContract([json({ note: 7 })], nullable).ok).toBe(false);
   });
 
-  it('names the keywords it understands, so a contract author knows the subset (D30)', () => {
+  it('names the keywords it understands, so a contract author knows the subset (D53)', () => {
     expect([...SUPPORTED_JSON_SCHEMA_KEYWORDS]).toEqual([
       'type',
       'enum',

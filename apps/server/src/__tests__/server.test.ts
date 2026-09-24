@@ -3,7 +3,15 @@ import { networkInterfaces } from 'node:os';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { ApiErrorSchema, HealthResponseSchema, WsServerFrameSchema } from '@ace/contracts';
+import {
+  ApiErrorSchema,
+  HealthResponseSchema,
+  ProjectSchema,
+  ProviderSchema,
+  RunSchema,
+  WorkflowGraphResponseSchema,
+  WsServerFrameSchema,
+} from '@ace/contracts';
 import { openDatabase } from '@ace/storage-local';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
@@ -341,4 +349,76 @@ describe('NFR-REL-03 the engine backs up before it migrates', () => {
       // Windows may still hold the handle.
     }
   }, 30_000);
+});
+
+describe('Round 2 wiring: a run goes through the real router, provider check and gate', () => {
+  const api = (path: string, init: RequestInit = {}) =>
+    fetch(`${engine.url}/api/v1${path}`, {
+      ...init,
+      headers: { ...authHeaders(), 'Content-Type': 'application/json', ...init.headers },
+    });
+  const post = async (path: string, body: unknown): Promise<unknown> => {
+    const response = await api(path, { method: 'POST', body: JSON.stringify(body) });
+    expect(response.status, `${path}: ${await response.clone().text()}`).toBeLessThan(300);
+    return response.json();
+  };
+
+  /** Imports a round 2 fixture against a fresh mock provider and returns the workflow id. */
+  async function importFixture(file: string): Promise<string> {
+    const provider = ProviderSchema.parse(await post('/providers', { type: 'mock', name: 'Mock' }));
+    await post(`/providers/${provider.id}/refresh-models`, {});
+    const project = ProjectSchema.parse(await post('/projects', { name: 'Wiring' }));
+
+    const fixture = readFileSync(
+      new URL(`../../../../tests/acceptance/fixtures/round-2/${file}`, import.meta.url),
+      'utf8',
+    ).replaceAll('01M3R2PV0000000000000000PV', provider.id);
+    const imported = WorkflowGraphResponseSchema.parse(
+      await post(`/projects/${project.id}/workflows/import`, JSON.parse(fixture)),
+    );
+    return imported.workflow.id;
+  }
+
+  async function waitForEnd(runId: string): Promise<ReturnType<typeof RunSchema.parse>> {
+    let run = RunSchema.parse(await (await api(`/runs/${runId}`)).json());
+    for (let i = 0; i < 200 && ['PREFLIGHT', 'RUNNING'].includes(run.status); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      run = RunSchema.parse(await (await api(`/runs/${runId}`)).json());
+    }
+    return run;
+  }
+
+  it('runs the linear mock workflow to COMPLETE', async () => {
+    const workflowId = await importFixture('linear-mock.json');
+
+    const started = RunSchema.parse(await post(`/workflows/${workflowId}/runs`, {}));
+    const run = await waitForEnd(started.id);
+
+    expect(run.status, JSON.stringify(run.preflightIssues)).toBe('COMPLETE');
+  }, 30_000);
+
+  it('FR-EXE-008 answers POST /runs while the run is still going (D65)', async () => {
+    const workflowId = await importFixture('slow.json');
+
+    const began = Date.now();
+    const started = RunSchema.parse(await post(`/workflows/${workflowId}/runs`, {}));
+
+    // mock-slow streams for about two seconds; the response must not wait for it.
+    expect(Date.now() - began).toBeLessThan(1_000);
+    expect(started.status).toBe('RUNNING');
+    expect(started.endedAt).toBeUndefined();
+
+    const run = await waitForEnd(started.id);
+    expect(run.status).toBe('COMPLETE');
+  }, 30_000);
+
+  it('D64 lists providers as { items }, like every other collection', async () => {
+    await post('/providers', { type: 'mock', name: 'Mock' });
+
+    const response = await api('/providers');
+    const body = (await response.json()) as { items: unknown[] };
+
+    expect(response.status).toBe(200);
+    expect(body.items.map((item) => ProviderSchema.parse(item).name)).toEqual(['Mock']);
+  });
 });

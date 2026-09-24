@@ -78,7 +78,7 @@ const CORE_SERVER_FRAME_SCHEMAS = [
 
 /**
  * The two frames round 1 §2.9 defines. Kept as its own union so the round 2 contract is purely
- * additive: `@ace/sdk` still narrows `frame.seq` on every member of it (D31).
+ * additive: `@ace/sdk` still narrows `frame.seq` on every member of it (D54).
  */
 export const WsServerFrameSchema = z.discriminatedUnion('type', CORE_SERVER_FRAME_SCHEMAS);
 export type WsServerFrame = z.infer<typeof WsServerFrameSchema>;

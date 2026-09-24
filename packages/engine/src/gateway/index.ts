@@ -1,21 +1,36 @@
 import {
   API_BASE_PATH,
   CreateProjectRequestSchema,
+  CreateProviderRequestSchema,
   CreateWorkflowRequestSchema,
   CursorQuerySchema,
+  EventsQuerySchema,
   HealthResponseSchema,
+  ModelQuerySchema,
   SettingsPatchSchema,
+  StartRunRequestSchema,
   UpdateProjectRequestSchema,
+  UpdateProviderRequestSchema,
   UpdateWorkflowRequestSchema,
 } from '@ace/contracts';
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
 
+import type { EventBus } from '../events/index.js';
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
 import type { GraphService } from '../graph/index.js';
+import type { ProviderService } from '../providers/index.js';
 import type { Auth, Repository, Scope } from '../ports/index.js';
-import { forbiddenOrigin, notFound, toApiError, unauthorized } from './errors.js';
+import type { RunService } from '../runs/index.js';
+import {
+  forbiddenOrigin,
+  notFound,
+  notImplemented,
+  providerInUse,
+  toApiError,
+  unauthorized,
+} from './errors.js';
 
 export interface EngineDeps {
   repository: Repository;
@@ -27,6 +42,11 @@ export interface EngineDeps {
   graph: GraphService;
   /** The engine's own origin, always allowed in addition to `settings.allowedOrigins`. */
   selfOrigins?: string[];
+
+  /* Round 2. Optional so a round 1 harness still builds an app without them. */
+  providers?: ProviderService;
+  runs?: RunService;
+  bus?: EventBus;
 }
 
 export interface EngineVariables {
@@ -157,6 +177,21 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   const page = (c: Context): ReturnType<typeof CursorQuerySchema.parse> =>
     CursorQuerySchema.parse(c.req.query());
 
+  /**
+   * Round 2's services. A round 1 app is built without them, and a request that needs one gets
+   * `not_implemented` rather than a crash — the same answer the gateway already gives for a
+   * feature that has not landed.
+   */
+  const providers = (_c: Context): ProviderService => {
+    if (deps.providers === undefined) throw notImplemented('providers');
+    return deps.providers;
+  };
+
+  const runs = (_c: Context): RunService => {
+    if (deps.runs === undefined) throw notImplemented('runs');
+    return deps.runs;
+  };
+
   api.get('/projects', async (c) => c.json(await deps.graph.listProjects(page(c))));
 
   api.post('/projects', async (c) => {
@@ -223,6 +258,108 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.get('/workflows/:id/export', async (c) =>
     c.json(await deps.graph.exportWorkflow(c.req.param('id'))),
   );
+
+
+  /* ------------------------------------------------------------- providers */
+
+  /**
+   * Registered before `/providers/:id`, because `detect` is a word and `:id` would swallow it
+   * (FR-PRV-007).
+   */
+  api.get('/providers/detect', async (c) => c.json(await providers(c).detect()));
+
+  // Wrapped like every other collection (`/projects`, `/models`, `/workflows/:id/runs`); D64.
+  api.get('/providers', async (c) => c.json({ items: await providers(c).list() }));
+
+  api.post('/providers', async (c) => {
+    const input = CreateProviderRequestSchema.parse(await readJson(c));
+    return c.json(await providers(c).create(input), 201);
+  });
+
+  api.get('/providers/:id', async (c) => {
+    const provider = await providers(c).get(c.req.param('id'));
+    if (provider === null) throw notFound(`provider ${c.req.param('id')}`);
+    return c.json(provider);
+  });
+
+  api.patch('/providers/:id', async (c) => {
+    const patch = UpdateProviderRequestSchema.parse(await readJson(c));
+    const provider = await providers(c).update(c.req.param('id'), patch);
+    if (provider === null) throw notFound(`provider ${c.req.param('id')}`);
+    return c.json(provider);
+  });
+
+  api.delete('/providers/:id', async (c) => {
+    // FR-PRV-005: without `confirm=true` a provider a node still names is refused, and the
+    // refusal carries the node ids so the UI can say exactly what it would break.
+    const confirm = c.req.query('confirm') === 'true';
+    const result = await providers(c).remove(c.req.param('id'), { confirm });
+
+    if (!result.ok) throw providerInUse(result.nodeIds);
+    return c.body(null, 204);
+  });
+
+  api.post('/providers/:id/check', async (c) => c.json(await providers(c).check(c.req.param('id'))));
+
+  api.post('/providers/:id/refresh-models', async (c) =>
+    c.json(await providers(c).refreshModels(c.req.param('id'))),
+  );
+
+  api.get('/models', async (c) => {
+    const query = ModelQuerySchema.parse(c.req.query());
+    const items = await providers(c).listModels(query);
+    const refreshedAt =
+      items.reduce<string | undefined>(
+        (latest, model) =>
+          latest === undefined || model.lastCheckedAt > latest ? model.lastCheckedAt : latest,
+        undefined,
+      ) ?? new Date(0).toISOString();
+
+    return c.json({ items, refreshedAt });
+  });
+
+  /* ------------------------------------------------------------------ runs */
+
+  api.post('/workflows/:id/runs', async (c) => {
+    const request = StartRunRequestSchema.parse(await readJson(c));
+    // 201 even when pre-flight blocks it: a blocked run is a recorded run (§2.5, FR-EXE-003).
+    // Answered as soon as the run is recorded and pre-flighted, never at its end: the client
+    // subscribes after this response, and `node.token` is never replayed (§2.4, §5 item 6).
+    const { run } = await runs(c).beginRun(c.req.param('id'), request);
+    return c.json(run, 201);
+  });
+
+  api.get('/workflows/:id/runs', async (c) =>
+    c.json(await runs(c).listRuns(c.req.param('id'), page(c))),
+  );
+
+  api.get('/runs/:id', async (c) => c.json(await runs(c).getRun(c.req.param('id'))));
+
+  api.get('/runs/:id/node-runs', async (c) => c.json(await runs(c).listNodeRuns(c.req.param('id'))));
+
+  api.get('/runs/:id/events', async (c) => {
+    const { afterSeq } = EventsQuerySchema.parse(c.req.query());
+    const runId = c.req.param('id');
+
+    // Scoped to this run in the query, not filtered in memory afterwards (FR-EXE-014).
+    const events = await deps.repository.events.listAfter(deps.scope, afterSeq ?? 0, {
+      runIds: [runId],
+    });
+
+    return c.json(
+      events
+        .map((event) => ({
+          seq: event.seq,
+          at: event.createdAt,
+          ...(event.runId === undefined ? {} : { runId: event.runId }),
+          ...(event.workflowId === undefined ? {} : { workflowId: event.workflowId }),
+          type: event.type,
+          payload: event.payload,
+        })),
+    );
+  });
+
+  api.get('/node-runs/:id', async (c) => c.json(await runs(c).getNodeRun(c.req.param('id'))));
 
   app.route(API_BASE_PATH, api);
 

@@ -332,7 +332,7 @@ describe('FR-EXE-014 run events travel on the round 1 socket', () => {
     ).toBe('provider.status');
   });
 
-  it('leaves the round 1 union alone, so @ace/sdk keeps compiling until M2 (D31)', () => {
+  it('leaves the round 1 union alone, so @ace/sdk keeps compiling until M2 (D54)', () => {
     expect(WsServerFrameSchema.safeParse(frames['node.token']).success).toBe(false);
     expect(WsServerFrameSchema.parse({ type: 'hello', payload: { seq: 0 } }).type).toBe('hello');
   });

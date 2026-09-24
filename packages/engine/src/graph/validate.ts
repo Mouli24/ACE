@@ -1,22 +1,51 @@
 import {
   ExecutionSettingsSchema,
   isConnectionAllowed,
+  type DataType,
   type Edge,
+  type Model,
   type Node,
   type Port,
+  type Provider,
   type ValidationIssue,
 } from '@ace/contracts';
 
 import { findCycle } from './cycles.js';
 
 /**
+ * What `validate` needs to know beyond the graph itself (round 2 §2.5).
+ *
+ * Optional: a caller with no catalog to hand — an import, a test — still gets every structural
+ * check. When it is supplied, the provider and model checks of FR-PRV-005 and FR-MOD-005 run too.
+ */
+export interface ValidationContext {
+  providers?: readonly Provider[];
+  models?: readonly Model[];
+}
+
+/** Does this model cover everything the node needs to read and produce? */
+function covers(model: Model, inputTypes: DataType[], outputTypes: DataType[]): boolean {
+  return (
+    inputTypes.every((type) => model.inputTypes.includes(type)) &&
+    outputTypes.every((type) => model.outputTypes.includes(type))
+  );
+}
+
+/**
  * `POST /workflows/:id/validate` (FR-WF-006, TC-WF-006), using the §2.5 codes.
  *
- * Round 1 reports `missing_model` as a warning; from round 2 it becomes an error, because a run
- * cannot start without one. `loop_not_supported` exists only while loop edges are refused.
+ * From round 2 `missing_model` is an **error**, not a warning: a run cannot start without one,
+ * and round 1's own note said this is where that changes. `loop_not_supported` exists only while
+ * loop edges are refused.
  */
-export function validateGraph(nodes: readonly Node[], edges: readonly Edge[]): ValidationIssue[] {
+export function validateGraph(
+  nodes: readonly Node[],
+  edges: readonly Edge[],
+  context: ValidationContext = {},
+): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
+  const providersById = new Map((context.providers ?? []).map((p) => [p.id, p]));
+  const hasCatalog = context.models !== undefined;
 
   if (!nodes.some((node) => node.kind === 'input')) {
     issues.push({
@@ -49,13 +78,44 @@ export function validateGraph(nodes: readonly Node[], edges: readonly Edge[]): V
     }
 
     if (node.kind === 'agent' || node.kind === 'model') {
-      if (node.config.modelId === undefined || node.config.modelId === '') {
+      const { providerId, modelId } = node.config;
+
+      if (modelId === undefined || modelId === '' || providerId === undefined) {
         issues.push({
-          severity: 'warning',
+          severity: 'error',
           code: 'missing_model',
-          message: `"${node.name}" has no model chosen yet.`,
+          message: `"${node.name}" has no provider and model chosen yet.`,
           nodeId: node.id,
         });
+      } else if (context.providers !== undefined && !providersById.has(providerId)) {
+        // FR-PRV-005: the provider was removed with confirmation and these are the nodes it left.
+        issues.push({
+          severity: 'error',
+          code: 'provider_missing',
+          message: `"${node.name}" uses a provider that no longer exists.`,
+          nodeId: node.id,
+        });
+      } else if (hasCatalog) {
+        const model = (context.models ?? []).find(
+          (candidate) => candidate.providerId === providerId && candidate.modelId === modelId,
+        );
+
+        if (model === undefined || !model.available) {
+          // FR-MOD-005 / TC-MOD-004: name the node and the model, so the fix is obvious.
+          issues.push({
+            severity: 'error',
+            code: 'unavailable_model',
+            message: `"${node.name}" uses "${modelId}", which is not available on its provider.`,
+            nodeId: node.id,
+          });
+        } else if (!covers(model, node.config.inputTypes, node.config.outputTypes)) {
+          issues.push({
+            severity: 'error',
+            code: 'incompatible_model',
+            message: `"${modelId}" cannot handle the data types "${node.name}" is configured for.`,
+            nodeId: node.id,
+          });
+        }
       }
 
       const execution = ExecutionSettingsSchema.safeParse(node.config.execution);

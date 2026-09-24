@@ -11,6 +11,13 @@ import type {
   Workflow,
 } from '@ace/contracts';
 
+import type {
+  ModelRepository,
+  NodeRunRepository,
+  PriceTableRepository,
+  ProviderRepository,
+  RunRepository,
+} from './run-repository.js';
 import type { Scope } from './scope.js';
 
 /**
@@ -30,6 +37,12 @@ export interface EngineEvent {
   runId?: Id;
   payload: unknown;
   createdAt: Timestamp;
+  /**
+   * True for an event that is published to live subscribers but never written to the log
+   * (round 2 §2.4: `node.token`). A transient event has no meaningful `seq` and is never replayed
+   * by `resume`, because the `node.output` that follows carries the same text in one piece.
+   */
+  transient?: boolean;
 }
 
 /** An event before the log has given it a `seq`. */
@@ -38,6 +51,11 @@ export type NewEngineEvent = Omit<EngineEvent, 'seq'>;
 /** Which events `listAfter` should return. */
 export interface EventFilter {
   workflowIds?: Id[];
+  /**
+   * Events of these runs, whatever workflow they belong to. `GET /runs/:id/events` uses it, so
+   * replaying one run does not mean reading the whole log and filtering in memory.
+   */
+  runIds?: Id[];
   /** True when the caller is subscribed to the engine scope and wants unscoped events too. */
   includeEngineScope?: boolean;
 }
@@ -68,6 +86,11 @@ export interface WorkflowRepository {
 
 export interface NodeRepository {
   listByWorkflow(scope: Scope, workflowId: Id): Promise<Node[]>;
+  /**
+   * Every node, in any workflow, whose config names this provider (FR-PRV-005). Deleting a
+   * provider has to name the nodes it would break before it is allowed to happen.
+   */
+  listByProvider(scope: Scope, providerId: Id): Promise<Node[]>;
   insert(scope: Scope, node: Node): Promise<void>;
   update(scope: Scope, node: Node): Promise<void>;
   delete(scope: Scope, id: Id): Promise<void>;
@@ -115,4 +138,11 @@ export interface Repository {
   edges: EdgeRepository;
   events: EventRepository;
   settings: SettingsRepository;
+
+  /* Round 2 (Arch §15.3). */
+  providers: ProviderRepository;
+  models: ModelRepository;
+  priceTables: PriceTableRepository;
+  runs: RunRepository;
+  nodeRuns: NodeRunRepository;
 }

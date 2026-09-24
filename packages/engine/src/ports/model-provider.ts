@@ -1,0 +1,96 @@
+import type {
+  DataType,
+  Model,
+  ModelPricing,
+  Provider,
+  ProviderState,
+  ProviderType,
+} from '@ace/contracts';
+
+/**
+ * The model-serving port (Arch §7, §14.2).
+ *
+ * The contract lives here, with the other ports, because `packages/engine` may import only
+ * `@ace/contracts` and its own ports (CLAUDE.md §3.4 rule 3). `@ace/providers` implements it and
+ * re-exports these types, so `ProviderAdapter` is still what `packages/providers/src/adapter.ts`
+ * hands out — there is simply one declaration of it rather than two that could drift.
+ */
+
+export interface ProviderStatus {
+  status: ProviderState;
+  message?: string;
+  latencyMs?: number;
+}
+
+/** One model as a provider describes it, before the catalog gives it a row id. */
+export interface ModelInfo {
+  modelId: string;
+  displayName: string;
+  inputTypes: DataType[];
+  outputTypes: DataType[];
+  contextWindow: number;
+  supportsTools: boolean;
+  supportsJson: boolean;
+  pricing?: ModelPricing;
+}
+
+export const FINISH_REASONS = ['stop', 'length', 'refusal', 'tool_calls', 'error'] as const;
+export type FinishReason = (typeof FINISH_REASONS)[number];
+
+/**
+ * What the executor hands an adapter. The prompt is already assembled (Arch §12.5) — an adapter
+ * never builds one, and there is no message list here (BR-02).
+ */
+export interface GenerateRequest {
+  modelId: string;
+  /** The `## System` section, when the provider takes one separately from the prompt. */
+  system?: string;
+  prompt: string;
+  outputTypes: DataType[];
+  jsonSchema?: Record<string, unknown>;
+  maxTokens?: number;
+  temperature?: number;
+  /**
+   * Which run and which loop iteration this call belongs to. Optional and never needed to produce
+   * an answer — adapters use them for tracing, and the mock keys its per-run behaviours on them.
+   */
+  runId?: string;
+  iteration?: number;
+}
+
+export type StreamChunk =
+  | { type: 'text'; delta: string }
+  | { type: 'json'; value: unknown }
+  | { type: 'usage'; tokensIn: number; tokensOut: number }
+  | { type: 'finish'; reason: FinishReason };
+
+export interface ProviderAdapter {
+  type: ProviderType;
+  check(): Promise<ProviderStatus>;
+  listModels(): Promise<ModelInfo[]>;
+  generate(req: GenerateRequest, signal: AbortSignal): AsyncIterable<StreamChunk>;
+  embed?(texts: string[]): Promise<number[][]>;
+}
+
+/** What a local runtime probe found (FR-PRV-007). */
+export interface ProviderDetection {
+  ollama?: { baseUrl: string; detected: boolean };
+}
+
+/**
+ * Builds an adapter for a stored provider row, and answers the two catalog questions the engine
+ * cannot answer itself: what the manifest says, and what is running locally.
+ *
+ * `apps/server` is the only place that binds this to `@ace/providers`.
+ */
+export interface ProviderAdapterFactory {
+  create(provider: Provider, apiKey: string | undefined): ProviderAdapter;
+  /** Manifest entries for a provider type — empty when its models are always discovered. */
+  manifestFor(type: ProviderType): ModelInfo[];
+  /** Merge a provider's own listing with the manifest (FR-MOD-001, FR-MOD-002). */
+  mergeCatalog(
+    discovered: readonly ModelInfo[],
+    manifest: readonly ModelInfo[],
+  ): (ModelInfo & { source: Model['source'] })[];
+  detect(): Promise<ProviderDetection>;
+}

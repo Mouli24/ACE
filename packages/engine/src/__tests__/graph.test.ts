@@ -660,6 +660,8 @@ describe('TC-NODE-006 Out-of-range setting', () => {
 /* Validate, export, import                                                    */
 /* -------------------------------------------------------------------------- */
 
+const PROVIDER_ID = '01JBXQ8Z9KQ4R7N2VWXYZ0PRVD';
+
 describe('TC-WF-006 Validation list', () => {
   it('reports an unconnected input with the node it belongs to', async () => {
     const { workflow } = await seed();
@@ -689,7 +691,7 @@ describe('TC-WF-006 Validation list', () => {
     expect(issues.map((i) => i.code)).toContain('no_output_node');
   });
 
-  it('reports a missing model as a warning this round, not an error', async () => {
+  it('reports a missing model as an error from round 2, because a run cannot start without one', async () => {
     const { workflow } = await seed();
     await graphOps(h.app, workflow.id, 0, [addNode(agentNode(workflow.id))]);
 
@@ -698,13 +700,17 @@ describe('TC-WF-006 Validation list', () => {
     );
 
     const missing = issues.find((i) => i.code === 'missing_model');
-    expect(missing?.severity).toBe('warning');
+    expect(missing?.severity).toBe('error');
   });
 
   it('finds nothing wrong with a connected Input -> Agent -> Output', async () => {
     const { workflow } = await seed();
     const input = inputNode(workflow.id);
     const agent = agentNode(workflow.id);
+    // From round 2 an agent without a model is an error, so a clean graph has one chosen.
+    if (agent.kind === 'agent') {
+      agent.config = { ...agent.config, providerId: PROVIDER_ID, modelId: 'mock-text' };
+    }
     const output = outputNode(workflow.id);
     await graphOps(h.app, workflow.id, 0, [
       addNode(input),

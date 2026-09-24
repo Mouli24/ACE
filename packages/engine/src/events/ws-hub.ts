@@ -51,10 +51,17 @@ export function createWsHub({ bus, repository, scope, auth, logger }: WsHubDeps)
 
   /**
    * A run or workflow frame carries the global `seq` alongside the payload (§2.9); that is the
-   * number `resume { afterSeq }` is measured against.
+   * number `resume { afterSeq }` is measured against. A transient frame carries none, because it
+   * was never written down and cannot be replayed (round 2 §2.4).
    */
   function send(socket: HubSocket, event: EngineEvent): void {
-    socket.send(JSON.stringify({ type: event.type, payload: event.payload, seq: event.seq }));
+    socket.send(
+      JSON.stringify(
+        event.transient === true
+          ? { type: event.type, payload: event.payload }
+          : { type: event.type, payload: event.payload, seq: event.seq },
+      ),
+    );
   }
 
   return {

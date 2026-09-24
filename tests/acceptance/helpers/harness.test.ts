@@ -89,7 +89,7 @@ describe('round-1 fixtures', () => {
     expect(imported.edges).toHaveLength(2);
   });
 
-  it('validates clean once imported, so it is usable as a starting point', async () => {
+  it('validates clean apart from the model to pick, so it is usable as a starting point', async () => {
     const project = (await (
       await fetch(`${url}/api/v1/projects`, {
         method: 'POST',
@@ -115,6 +115,9 @@ describe('round-1 fixtures', () => {
       })
     ).json()) as { issues: { severity: string; code: string }[] };
 
-    expect(issues.filter((i) => i.severity === 'error')).toEqual([]);
+    // Round-1 fixtures predate providers, and from round 2 `missing_model` is an error (§2.5).
+    // That is the only thing a harness has to fill in; anything else would be a broken fixture.
+    const errors = issues.filter((i) => i.severity === 'error');
+    expect(errors.map((i) => i.code).filter((code) => code !== 'missing_model')).toEqual([]);
   });
 });

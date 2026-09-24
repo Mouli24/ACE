@@ -102,7 +102,7 @@ export type Envelope = z.infer<typeof EnvelopeSchema>;
 export type ContractCheck = { ok: true } | { ok: false; reason: string };
 
 /**
- * The JSON Schema keywords an output contract may use (D30). A deliberately small subset — enough
+ * The JSON Schema keywords an output contract may use (D53). A deliberately small subset — enough
  * for the shapes an agent is asked to return, small enough to stay dependency-free in a package
  * the browser bundles. Unknown keywords are ignored rather than rejected, so a richer schema
  * still validates on the parts this subset understands.

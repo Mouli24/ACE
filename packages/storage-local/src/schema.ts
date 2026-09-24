@@ -109,3 +109,119 @@ export const settings = sqliteTable(
   },
   (table) => [primaryKey({ columns: [table.workspaceId] })],
 );
+
+
+/* -------------------------------------------------------------------------- */
+/* Round 2 (Arch §15.3): providers, catalog, price tables, runs, node runs     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * There is deliberately no key column here. A provider's API key lives in the OS keychain through
+ * `SecretStore`; this table records only whether one is set (FR-PRV-002, BR-07).
+ */
+export const providers = sqliteTable(
+  'providers',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    type: text('type').notNull(),
+    name: text('name').notNull(),
+    baseUrl: text('base_url'),
+    keySet: integer('key_set', { mode: 'boolean' }).notNull(),
+    status: text('status').notNull(),
+    statusMessage: text('status_message'),
+    lastCheckedAt: text('last_checked_at'),
+    concurrency: integer('concurrency').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [index('providers_workspace_idx').on(table.workspaceId, table.id)],
+);
+
+/** One row per provider model, refreshed wholesale so a withdrawn model disappears. */
+export const models = sqliteTable(
+  'models',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    providerId: text('provider_id').notNull(),
+    modelId: text('model_id').notNull(),
+    displayName: text('display_name').notNull(),
+    /** JSON DataType[]. */
+    inputTypes: text('input_types').notNull(),
+    outputTypes: text('output_types').notNull(),
+    contextWindow: integer('context_window').notNull(),
+    supportsTools: integer('supports_tools', { mode: 'boolean' }).notNull(),
+    supportsJson: integer('supports_json', { mode: 'boolean' }).notNull(),
+    available: integer('available', { mode: 'boolean' }).notNull(),
+    source: text('source').notNull(),
+    lastCheckedAt: text('last_checked_at').notNull(),
+    /** JSON ModelPricing, null for a model with no published price. */
+    pricing: text('pricing'),
+  },
+  (table) => [index('models_provider_idx').on(table.workspaceId, table.providerId, table.modelId)],
+);
+
+/** Immutable price tables (FR-OBS-003): a past estimate must stay reproducible. */
+export const priceTables = sqliteTable(
+  'price_tables',
+  {
+    workspaceId: text('workspace_id').notNull(),
+    version: text('version').notNull(),
+    data: text('data').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.workspaceId, table.version] })],
+);
+
+/** `snapshot` is written with the row and never updated (BR-04). */
+export const runs = sqliteTable(
+  'runs',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    workflowId: text('workflow_id').notNull(),
+    projectId: text('project_id').notNull(),
+    status: text('status').notNull(),
+    haltReason: text('halt_reason'),
+    snapshot: text('snapshot').notNull(),
+    inputs: text('inputs').notNull(),
+    preflightIssues: text('preflight_issues').notNull(),
+    totals: text('totals').notNull(),
+    startedAt: text('started_at').notNull(),
+    endedAt: text('ended_at'),
+    durationMs: integer('duration_ms'),
+    finalOutput: text('final_output'),
+  },
+  (table) => [
+    index('runs_workflow_idx').on(table.workspaceId, table.workflowId, table.id),
+    index('runs_status_idx').on(table.workspaceId, table.status),
+  ],
+);
+
+export const nodeRuns = sqliteTable(
+  'node_runs',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    runId: text('run_id').notNull(),
+    nodeId: text('node_id').notNull(),
+    iteration: integer('iteration').notNull(),
+    attempt: integer('attempt').notNull(),
+    status: text('status').notNull(),
+    failureReason: text('failure_reason'),
+    error: text('error'),
+    modelUsed: text('model_used'),
+    inputEnvelopes: text('input_envelopes').notNull(),
+    output: text('output'),
+    /** JSON `{ version, text }`, redacted before it gets here (FR-PRM-005). */
+    prompt: text('prompt'),
+    usage: text('usage').notNull(),
+    verdicts: text('verdicts').notNull(),
+    toolCalls: text('tool_calls').notNull(),
+    startedAt: text('started_at'),
+    endedAt: text('ended_at'),
+    durationMs: integer('duration_ms'),
+  },
+  (table) => [index('node_runs_run_idx').on(table.workspaceId, table.runId, table.id)],
+);
