@@ -268,7 +268,8 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
    */
   api.get('/providers/detect', async (c) => c.json(await providers(c).detect()));
 
-  api.get('/providers', async (c) => c.json(await providers(c).list()));
+  // Wrapped like every other collection (`/projects`, `/models`, `/workflows/:id/runs`); D64.
+  api.get('/providers', async (c) => c.json({ items: await providers(c).list() }));
 
   api.post('/providers', async (c) => {
     const input = CreateProviderRequestSchema.parse(await readJson(c));
@@ -322,7 +323,10 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.post('/workflows/:id/runs', async (c) => {
     const request = StartRunRequestSchema.parse(await readJson(c));
     // 201 even when pre-flight blocks it: a blocked run is a recorded run (§2.5, FR-EXE-003).
-    return c.json(await runs(c).startRun(c.req.param('id'), request), 201);
+    // Answered as soon as the run is recorded and pre-flighted, never at its end: the client
+    // subscribes after this response, and `node.token` is never replayed (§2.4, §5 item 6).
+    const { run } = await runs(c).beginRun(c.req.param('id'), request);
+    return c.json(run, 201);
   });
 
   api.get('/workflows/:id/runs', async (c) =>

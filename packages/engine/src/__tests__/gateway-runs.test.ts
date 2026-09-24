@@ -135,9 +135,14 @@ async function build(): Promise<void> {
       },
     },
     runs: {
-      startRun: async (workflowId, request) => {
+      beginRun: async (workflowId, request) => {
         calls.started.push({ workflowId, request });
-        return run({ workflowId });
+        // A run that never ends: the route must answer anyway (§5 item 6).
+        const { endedAt: _endedAt, durationMs: _durationMs, ...running } = run({ workflowId });
+        return { run: { ...running, status: 'RUNNING' }, done: new Promise<Run>(() => undefined) };
+      },
+      startRun: async () => {
+        throw new Error('the gateway must not wait for the end of a run');
       },
       getRun: async () => run(),
       listRuns: async () => ({ items: [summaryOf(run())] }),
@@ -196,7 +201,8 @@ describe('§2.5 provider endpoints', () => {
     const response = await get('/providers');
 
     expect(response.status).toBe(200);
-    expect(await body<Provider[]>(response)).toEqual([provider()]);
+    // Every collection answers `{ items }` (D64); `@ace/sdk` parses it with `pageSchema`.
+    expect(await body<{ items: Provider[] }>(response)).toEqual({ items: [provider()] });
   });
 
   it('creates one with 201', async () => {
@@ -313,6 +319,15 @@ describe('§2.5 run endpoints', () => {
 
     expect(response.status).toBe(201);
     expect(calls.started[0]?.workflowId).toBe(WORKFLOW_ID);
+  });
+
+  it('FR-EXE-008 answers while the run is still going, so the client can watch it (D65)', async () => {
+    const response = await post(`/workflows/${WORKFLOW_ID}/runs`, {});
+
+    expect(response.status).toBe(201);
+    const started = await body<Run>(response);
+    expect(started.status).toBe('RUNNING');
+    expect(started.endedAt).toBeUndefined();
   });
 
   it('FR-NODE-011 passes the inputs the dialog collected', async () => {

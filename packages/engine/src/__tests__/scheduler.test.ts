@@ -339,6 +339,37 @@ describe('TC-EXE-001 a linear workflow runs to COMPLETE', () => {
   });
 });
 
+describe('TC-OBS-003 a new price table does not change an old run', () => {
+  it('keeps the old run on the price it ran at, and prices the next run at the new one', async () => {
+    const input = inputNode();
+    const agent = agentNode();
+    const output = outputNode();
+    await harness.seed([input, agent, output], [edge(input, agent), edge(agent, output)]);
+
+    const before = await harness.service.startRun(workflowId, {});
+    const beforeNodeRuns = await harness.repository.nodeRuns.listByRun(scope, before.id);
+    expect(before.totals.priceTableVersion).toBe('mock-v1');
+    expect(before.totals.costUsd).toBeGreaterThan(0);
+
+    // The catalog moves to a price table ten times dearer.
+    await harness.repository.models.replaceForProvider(scope, PROVIDER_ID, [
+      {
+        ...model,
+        pricing: { inputPer1k: 0.01, outputPer1k: 0.02, priceTableVersion: 'mock-v2' },
+      },
+    ]);
+    const after = await harness.service.startRun(workflowId, {});
+
+    expect(after.totals.priceTableVersion).toBe('mock-v2');
+    expect(after.totals.costUsd).toBeCloseTo(before.totals.costUsd * 10, 10);
+
+    // "View old run": the stored run and its node runs still say what they said.
+    const old = await harness.service.getRun(before.id);
+    expect(old.totals).toEqual(before.totals);
+    expect(await harness.repository.nodeRuns.listByRun(scope, before.id)).toEqual(beforeNodeRuns);
+  });
+});
+
 /* -------------------------------------------------------------------------- */
 /* Ordering                                                                    */
 /* -------------------------------------------------------------------------- */
@@ -504,6 +535,73 @@ describe('TC-EXE-003 a blocked pre-flight is still a recorded run', () => {
 
     expect(run.snapshot.nodes).toHaveLength(2);
     expect(await harness.repository.runs.get(scope, run.id)).not.toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Starting a run does not wait for its end                                    */
+/* -------------------------------------------------------------------------- */
+
+describe('FR-EXE-008 beginRun answers while the run is still going (D65)', () => {
+  it('returns RUNNING with the provider call still in flight, and done settles COMPLETE', async () => {
+    const input = inputNode();
+    const agent = agentNode();
+    const output = outputNode();
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    behaviour = () => {
+      calls += 1;
+      return { text: 'late' };
+    };
+    const base = adapter();
+    await harness.seed([input, agent, output], [edge(input, agent), edge(agent, output)]);
+    const generate = base.generate.bind(base);
+    base.generate = (req, signal) =>
+      (async function* () {
+        await held;
+        yield* generate(req, signal);
+      })();
+    const service = createRunService({
+      repository: harness.repository,
+      scope,
+      bus: harness.bus,
+      logger: createLogger({ level: 'silent', destination: { write: () => undefined } }),
+      now: () => NOW,
+      router,
+      adapterFor: async () => base,
+      checkProvider: async () => ({ status: 'CONNECTED', checkedAt: NOW }),
+      runGated: async (_providerId, fn) => fn(),
+      tokenBatchMs: 0,
+    });
+
+    const { run, done } = await service.beginRun(workflowId, {});
+
+    expect(run.status).toBe('RUNNING');
+    expect(run.endedAt).toBeUndefined();
+    expect(calls).toBe(0);
+    expect(service.activeRunCount()).toBe(1);
+
+    release();
+    const finished = await done;
+
+    expect(finished.status).toBe('COMPLETE');
+    expect(finished.id).toBe(run.id);
+    expect(service.activeRunCount()).toBe(0);
+  });
+
+  it('returns a pre-flight-blocked run as BLOCKED, with done already settled', async () => {
+    const input = inputNode();
+    const agent = agentNode('Agent', { modelId: undefined });
+    await harness.seed([input, agent], [edge(input, agent)]);
+
+    const { run, done } = await harness.service.beginRun(workflowId, {});
+
+    expect(run.status).toBe('BLOCKED');
+    expect(run.preflightIssues.length).toBeGreaterThan(0);
+    expect((await done).status).toBe('BLOCKED');
   });
 });
 

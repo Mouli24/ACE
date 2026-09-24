@@ -46,7 +46,22 @@ export * from './summary.js';
  * nothing, because the scheduler is not looking at it.
  */
 
+/** A run that has been recorded and pre-flighted, and the promise of its end. */
+export interface BegunRun {
+  /** The row as it stands once pre-flight is over: `RUNNING`, or `BLOCKED` with its issues. */
+  run: Run;
+  /** Settles with the final row when the scheduler stops driving the run. Never rejects. */
+  done: Promise<Run>;
+}
+
 export interface RunService {
+  /**
+   * Records the run, pre-flights it and starts the scheduler in the background. This is what
+   * `POST /workflows/:id/runs` answers with: the client subscribes after the response, so the run
+   * must still be in flight when it arrives (§2.4, §5 item 6).
+   */
+  beginRun(workflowId: Id, request: StartRunRequest): Promise<BegunRun>;
+  /** `beginRun` and then wait for the end — for callers that want the finished run. */
   startRun(workflowId: Id, request: StartRunRequest): Promise<Run>;
   getRun(runId: Id): Promise<Run>;
   listRuns(workflowId: Id, page: CursorQuery): Promise<Page<RunSummary>>;
@@ -400,8 +415,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
   /* --------------------------------------------------------------- service */
 
-  return {
-    async startRun(workflowId, request) {
+  const service: RunService = {
+    async beginRun(workflowId, request) {
       const workflow = await repository.workflows.get(scope, workflowId);
       if (workflow === null) throw notFound(`workflow ${workflowId}`);
 
@@ -472,7 +487,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
           { subsystem: 'runs', runId: run.id, issues: issues.length },
           'run blocked by pre-flight',
         );
-        return withIssues;
+        return { run: withIssues, done: Promise.resolve(withIssues) };
       }
 
       const running = (await repository.runs.update(scope, run.id, { status: 'RUNNING' })) ?? run;
@@ -485,24 +500,28 @@ export function createRunService(deps: RunServiceDeps): RunService {
       });
 
       const controller = new AbortController();
-      const driving = drive(running, controller.signal);
+      const done = drive(running, controller.signal)
+        .catch(async (error: unknown) => {
+          // The drive threw rather than halting cleanly; the row is still the truth about the run.
+          logger.error({ subsystem: 'runs', runId: run.id, err: error }, 'run failed');
+          return (await repository.runs.get(scope, run.id)) ?? running;
+        })
+        .finally(() => active.delete(run.id));
+
       active.set(run.id, {
         controller,
-        done: driving.then(
+        done: done.then(
           () => undefined,
           () => undefined,
         ),
       });
 
-      try {
-        return await driving;
-      } catch (error) {
-        // The drive threw rather than halting cleanly; the row is still the truth about the run.
-        logger.error({ subsystem: 'runs', runId: run.id, err: error }, 'run failed');
-        return (await repository.runs.get(scope, run.id)) ?? running;
-      } finally {
-        active.delete(run.id);
-      }
+      return { run: running, done };
+    },
+
+    async startRun(workflowId, request) {
+      const { done } = await service.beginRun(workflowId, request);
+      return done;
     },
 
     async getRun(runId) {
@@ -534,6 +553,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
     activeRunCount: () => active.size,
   };
+
+  return service;
 }
 
 /** Catalog rows as the router wants them — exported for the composition root. */
