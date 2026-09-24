@@ -40,7 +40,12 @@ export function createProviderAdapterFactory(
     create(provider: Provider, apiKey: string | undefined): ProviderAdapter {
       switch (provider.type) {
         case 'mock':
-          return mock;
+          // Its own view of the shared mock: §2.6's check reads this row (D-025), while the call
+          // log still spans the whole run.
+          return mock.forProvider({
+            ...(apiKey === undefined ? {} : { apiKey }),
+            ...(provider.baseUrl === undefined ? {} : { baseUrl: provider.baseUrl }),
+          });
 
         case 'anthropic':
           return createAnthropicAdapter({

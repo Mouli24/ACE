@@ -487,6 +487,24 @@ describe('Round 2 wiring: a run goes through the real router, provider check and
     expect(peak, `peak concurrent provider calls was ${peak}`).toBeLessThanOrEqual(2);
   }, 60_000);
 
+  it.each([
+    [{ apiKey: 'bad' }, 'AUTH_FAILED'],
+    [{ apiKey: 'ratelimited' }, 'RATE_LIMITED'],
+    [{ baseUrl: 'http://unreachable.local' }, 'UNREACHABLE'],
+    [{}, 'CONNECTED'],
+  ] as const)(
+    'D-025 a mock provider created with %o checks as %s over the API (TC-PRV-003/004)',
+    async (row, expected) => {
+      const provider = ProviderSchema.parse(
+        await post('/providers', { type: 'mock', name: 'Mock', ...row }),
+      );
+
+      const checked = (await post(`/providers/${provider.id}/check`, {})) as { status: string };
+
+      expect(checked.status).toBe(expected);
+    },
+  );
+
   it('D64 lists providers as { items }, like every other collection', async () => {
     await post('/providers', { type: 'mock', name: 'Mock' });
 

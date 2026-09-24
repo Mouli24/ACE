@@ -9,6 +9,10 @@ export default defineConfig({
         new URL('../../packages/contracts/src/index.ts', import.meta.url),
       ),
       '@ace/engine': fileURLToPath(new URL('../../packages/engine/src/index.ts', import.meta.url)),
+      // Without this the server tests ran a stale `dist/` of the adapters whenever it lagged src.
+      '@ace/providers': fileURLToPath(
+        new URL('../../packages/providers/src/index.ts', import.meta.url),
+      ),
       '@ace/storage-local': fileURLToPath(
         new URL('../../packages/storage-local/src/index.ts', import.meta.url),
       ),

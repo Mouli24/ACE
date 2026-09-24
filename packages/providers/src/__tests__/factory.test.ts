@@ -1,4 +1,5 @@
 import type { Provider, ProviderType } from '@ace/contracts';
+import type { ProviderAdapter } from '@ace/engine';
 import { HttpResponse, http } from 'msw';
 import { setupServer } from 'msw/node';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -64,14 +65,46 @@ describe('Arch §14.1 every provider type maps to its own adapter', () => {
     );
   });
 
-  it('hands back one shared mock, so its call log spans a whole run', () => {
+  it('shares one mock call log across every mock adapter, so it spans a whole run', async () => {
     const mock = createMockAdapter({ sleep: async () => {} });
     const shared = createProviderAdapterFactory({ mock });
+    const drain = async (adapter: ProviderAdapter, prompt: string): Promise<void> => {
+      for await (const _chunk of adapter.generate(
+        { modelId: 'mock-text', prompt, outputTypes: ['text'] },
+        new AbortController().signal,
+      )) {
+        // Only the call log matters here.
+      }
+    };
 
-    expect(shared.create(provider('mock'), undefined)).toBe(mock);
-    expect(shared.create(provider('mock'), undefined)).toBe(
-      shared.create(provider('mock'), undefined),
-    );
+    await drain(shared.create(provider('mock'), undefined), 'first');
+    await drain(shared.create(provider('mock'), 'another-key'), 'second');
+
+    expect(mock.calls().map((call) => call.prompt)).toEqual(['first', 'second']);
+  });
+});
+
+describe('D-025 a mock provider answers §2.6 from its own row (TC-PRV-003, TC-PRV-004)', () => {
+  const factory = createProviderAdapterFactory({ mock: createMockAdapter({ sleep: async () => {} }) });
+
+  it.each([
+    ['bad', undefined, 'AUTH_FAILED'],
+    ['ratelimited', undefined, 'RATE_LIMITED'],
+    [undefined, 'http://unreachable.local', 'UNREACHABLE'],
+    ['any-other-key', undefined, 'CONNECTED'],
+    [undefined, undefined, 'CONNECTED'],
+  ] as const)('apiKey %s, baseUrl %s → %s', async (apiKey, baseUrl, expected) => {
+    const adapter = factory.create(provider('mock', baseUrl), apiKey);
+
+    expect((await adapter.check()).status).toBe(expected);
+  });
+
+  it('keeps two mock providers apart: one bad key does not fail the other', async () => {
+    const bad = factory.create(provider('mock'), 'bad');
+    const good = factory.create(provider('mock'), 'fine');
+
+    expect((await bad.check()).status).toBe('AUTH_FAILED');
+    expect((await good.check()).status).toBe('CONNECTED');
   });
 });
 
