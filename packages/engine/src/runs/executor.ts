@@ -46,6 +46,16 @@ export interface ExecuteNodeInput {
   /** What `StartRunRequest.inputs` supplied, keyed by Input node id (FR-NODE-011). */
   runInputs: Record<Id, Part[]>;
   signal: AbortSignal;
+  /**
+   * Called once, when the node starts doing its work: for an agent that is the moment it holds its
+   * provider's concurrency slot, so a node queued behind the limit stays READY (D66, FR-PRV-009).
+   */
+  onStarted?: () => Promise<void>;
+  /**
+   * Called when an agent's provider call ends, still holding the slot — the moment its node run
+   * ends, so node-run spans on one provider never overlap more than its limit allows (D66).
+   */
+  onEnded?: () => void;
 }
 
 export interface NodeExecutionOutcome {
@@ -191,6 +201,11 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
     if (node.kind !== "agent" && node.kind !== "model") {
       throw new Error(`executeAgent called for a ${node.kind} node`);
     }
+    // Once per node run: a fallback to a second provider waits at that gate too, but the node has
+    // already started (D66).
+    let starting: Promise<void> | undefined;
+    const started = (): Promise<void> =>
+      (starting ??= input.onStarted?.() ?? Promise.resolve());
 
     const instructions =
       node.kind === "agent"
@@ -343,6 +358,16 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
       try {
         await deps.runGated(chosen.providerId, async () => {
+          await started();
+          try {
+            await callModel();
+          } finally {
+            // Still inside the gate: the next node's startedAt can never precede this endedAt.
+            input.onEnded?.();
+          }
+        });
+
+        async function callModel(): Promise<void> {
           const adapter = await deps.adapterFor(chosen.providerId);
           const stream = adapter.generate(
             {
@@ -382,7 +407,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
                 break;
             }
           }
-        });
+        }
       } catch (error) {
         tokens.stop();
         const nodeError = toNodeError(error);
@@ -549,10 +574,13 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
   }
 
   return {
-    execute(input) {
-      return input.node.kind === "agent" || input.node.kind === "model"
-        ? executeAgent(input)
-        : executeOther(input);
+    async execute(input) {
+      if (input.node.kind === "agent" || input.node.kind === "model") {
+        return executeAgent(input);
+      }
+      // Nothing to queue for: an input, transform or output node starts the moment it is dispatched.
+      await input.onStarted?.();
+      return executeOther(input);
     },
   };
 }

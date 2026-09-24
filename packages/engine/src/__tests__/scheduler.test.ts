@@ -714,6 +714,44 @@ describe('TC-PRV-009 / TC-NFR-005 concurrency limits are respected', () => {
     expect(concurrentPeak).toBeLessThanOrEqual(2);
   });
 
+  it('D66 keeps a node queued for its provider READY, so RUNNING never exceeds the limit', async () => {
+    providerConcurrency = 2;
+    harness = await build(20);
+
+    const input = inputNode();
+    const agents = [1, 2, 3, 4, 5].map((n) => agentNode(`A${n}`));
+    const output = outputNode();
+    behaviour = () => ({ text: 'ok', delayMs: 10 });
+    await harness.seed(
+      [input, ...agents, output],
+      [...agents.map((agent) => edge(input, agent)), edge(agents[0]!, output)],
+    );
+
+    const run = await harness.service.startRun(workflowId, {});
+    expect(run.status).toBe('COMPLETE');
+
+    // Replay the node.state frames in order and count the agent node runs that are RUNNING.
+    const agentIds = new Set(agents.map((agent) => agent.id));
+    const running = new Set<string>();
+    let peak = 0;
+    for (const event of harness.events) {
+      if (event.type !== 'node.state') continue;
+      const payload = event.payload as { nodeId: string; nodeRunId: string; status: NodeState };
+      if (!agentIds.has(payload.nodeId)) continue;
+      if (payload.status === 'RUNNING') running.add(payload.nodeRunId);
+      else running.delete(payload.nodeRunId);
+      peak = Math.max(peak, running.size);
+    }
+    expect(peak).toBe(2);
+
+    // Every agent still walked READY → RUNNING → COMPLETED, and has its startedAt.
+    for (const agent of agents) {
+      expect(statesOf(harness.events, agent.id)).toEqual(['READY', 'RUNNING', 'COMPLETED']);
+    }
+    const nodeRuns = await harness.repository.nodeRuns.listByRun(scope, run.id);
+    expect(nodeRuns.every((nodeRun) => nodeRun.startedAt !== undefined)).toBe(true);
+  });
+
   it('never runs more nodes at once than the engine setting allows', async () => {
     harness = await build(3);
     providerConcurrency = 99;
