@@ -209,7 +209,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
         usage: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
         verdicts: [],
         toolCalls: [],
-        startedAt: now(),
+        // No startedAt yet: it is stamped when the node starts, not when it joins its provider's
+        // queue (D66).
       };
 
       await repository.nodeRuns.create(scope, nodeRun);
@@ -301,8 +302,12 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
     }
 
-    async function finish(node: Node, nodeRun: NodeRun, outcome: NodeExecutionOutcome): Promise<void> {
-      const endedAt = now();
+    async function finish(
+      node: Node,
+      nodeRun: NodeRun,
+      outcome: NodeExecutionOutcome,
+      endedAt: string = now(),
+    ): Promise<void> {
       usages.push(outcome.usage);
 
       await repository.nodeRuns.update(scope, nodeRun.id, {
@@ -337,10 +342,20 @@ export function createRunService(deps: RunServiceDeps): RunService {
     }
 
     async function dispatch(node: Node): Promise<void> {
+      // `states` is the scheduler's own bookkeeping: dispatched, so never picked up twice. The node
+      // run itself stays READY until it holds its provider slot (D66, FR-PRV-009).
       states.set(node.id, 'RUNNING');
       const nodeRun = await beginNodeRun(node);
-      await repository.nodeRuns.update(scope, nodeRun.id, { status: 'RUNNING' });
-      await emitNodeState(run, nodeRun, 'RUNNING');
+
+      let running = false;
+      /** When an agent's provider call ended, if it made one; otherwise the node ends at finish. */
+      let endedAt: string | undefined;
+      const markRunning = async (): Promise<void> => {
+        if (running) return;
+        running = true;
+        await repository.nodeRuns.update(scope, nodeRun.id, { status: 'RUNNING', startedAt: now() });
+        await emitNodeState(run, nodeRun, 'RUNNING');
+      };
 
       const outcome = await executor.execute({
         runId: run.id,
@@ -352,9 +367,16 @@ export function createRunService(deps: RunServiceDeps): RunService {
         attempt: 1,
         runInputs: run.inputs,
         signal,
+        onStarted: markRunning,
+        onEnded: () => {
+          endedAt = now();
+        },
       });
 
-      await finish(node, nodeRun, outcome);
+      // A node that failed before it got a slot (no route, say) still passes through RUNNING, so
+      // every node run follows Arch §19.1: READY → RUNNING → a terminal state.
+      await markRunning();
+      await finish(node, nodeRun, outcome, endedAt);
     }
 
     /* The loop of Arch §12.3: mark ready, dispatch up to the limit, wait, repeat. */

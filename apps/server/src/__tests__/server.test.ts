@@ -481,9 +481,18 @@ describe('Round 2 wiring: a run goes through the real router, provider check and
     expect((await waitForEnd(started.id)).status).toBe('COMPLETE');
     const all = [...spans.values()];
     expect(all).toHaveLength(5);
-    const peak = Math.max(
-      ...all.map((span) => all.filter((other) => other.from <= span.to && span.from <= other.to).length),
-    );
+    // How many streamed at the same instant: a sweep over the spans, ends first on a tie.
+    let streaming = 0;
+    let peak = 0;
+    for (const edge of all
+      .flatMap((span) => [
+        { at: span.from, delta: 1 },
+        { at: span.to, delta: -1 },
+      ])
+      .sort((a, b) => a.at - b.at || a.delta - b.delta)) {
+      streaming += edge.delta;
+      peak = Math.max(peak, streaming);
+    }
     expect(peak, `peak concurrent provider calls was ${peak}`).toBeLessThanOrEqual(2);
   }, 60_000);
 

@@ -11,7 +11,11 @@ import { createEventBus, type EventBus } from '../events/index.js';
 import { createLogger } from '../logging/index.js';
 import type { EngineEvent, ModelRouter, ProviderAdapter, StreamChunk } from '../ports/index.js';
 import { LOCAL_SCOPE } from '../ports/index.js';
-import { createNodeExecutor, type NodeExecutor } from '../runs/executor.js';
+import {
+  createNodeExecutor,
+  type NodeExecutionOutcome,
+  type NodeExecutor,
+} from '../runs/executor.js';
 import { FakeRepository } from './fake-repository.js';
 import { InProcessPubSubStub } from './pubsub-stub.js';
 
@@ -656,5 +660,73 @@ describe('FR-EXE-010 cancellation', () => {
 
     expect(outcome.status).toBe('FAILED');
     expect(outcome.error?.kind).toBe('user_cancelled');
+  });
+});
+
+describe('D66 onStarted marks the moment the node holds its provider slot', () => {
+  const runCounting = async (
+    node: Node,
+  ): Promise<{ outcome: NodeExecutionOutcome; starts: number; order: string[] }> => {
+    let starts = 0;
+    const order: string[] = [];
+    const outcome = await harness.executor.execute({
+      runId: RUN_ID,
+      workflowId: WORKFLOW_ID,
+      nodeRunId: NODE_RUN_ID,
+      node,
+      envelopes: [envelope()],
+      iteration: 1,
+      attempt: 1,
+      runInputs: {},
+      signal: new AbortController().signal,
+      onStarted: async () => {
+        starts += 1;
+        order.push('started');
+      },
+      onEnded: () => order.push('ended'),
+    });
+    return { outcome, starts, order };
+  };
+
+  it('calls it once for an agent that runs, and onEnded after it', async () => {
+    const { outcome, starts, order } = await runCounting(agentNode());
+
+    expect(outcome.status).toBe('COMPLETED');
+    expect(starts).toBe(1);
+    expect(order).toEqual(['started', 'ended']);
+  });
+
+  it('calls it once even when the chain falls back to a second model', async () => {
+    models = [
+      model({ modelId: 'primary' }),
+      model({ id: '01JBXQ8Z9KQ4R7N2VWXYZ0MDE2', modelId: 'backup' }),
+    ];
+    perModel = { primary: providerFailure('http_503') };
+    routerOverride = (node, _requirements, attemptState) => {
+      const chain = [node.modelId!, ...node.routing.fallbackModelIds];
+      const failed = new Set(attemptState.failures.map((failure) => failure.modelId));
+      const next = chain.findIndex((modelId) => !failed.has(modelId));
+      return next === -1
+        ? { ok: false, code: 'no_candidate_left', reason: 'chain exhausted' }
+        : {
+            ok: true,
+            route: { providerId: PROVIDER_ID, modelId: chain[next]!, viaFallback: next > 0 },
+          };
+    };
+    harness = await build();
+
+    const { outcome, starts } = await runCounting(
+      agentNode({ modelId: 'primary', routing: { policy: 'fallback', fallbackModelIds: ['backup'] } }),
+    );
+
+    expect(outcome.status).toBe('COMPLETED');
+    expect(starts).toBe(1);
+  });
+
+  it('never calls it when no route is found, so the scheduler supplies the RUNNING step', async () => {
+    const { outcome, starts } = await runCounting(agentNode({ modelId: 'not-in-the-catalog' }));
+
+    expect(outcome.status).toBe('FAILED');
+    expect(starts).toBe(0);
   });
 });
