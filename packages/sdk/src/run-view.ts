@@ -81,10 +81,12 @@ export class RunEventBuffer {
   apply(frame: ServerFrame): void {
     if (frame.type === 'hello' || frame.type === 'workflow.updated') return;
 
-    const payload = frame.payload as { runId?: Id };
-    if (this.runId !== undefined && payload.runId !== undefined && payload.runId !== this.runId) {
-      return;
-    }
+    // `run.started` nests the id at `payload.run.id`; every other run frame carries `payload.runId`.
+    // Reading only the flat field let another run's `run.started` past the guard and retarget the
+    // buffer, leaving the previous run's node views in place beside it.
+    const incoming =
+      frame.type === 'run.started' ? frame.payload.run.id : (frame.payload as { runId?: Id }).runId;
+    if (this.runId !== undefined && incoming !== undefined && incoming !== this.runId) return;
 
     if (isPersistedFrame(frame)) {
       if (this.seen.has(frame.seq)) return;

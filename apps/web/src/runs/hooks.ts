@@ -15,14 +15,30 @@ import { useRunStore } from './run-store';
  * buffer drops any frame it has already folded, so a drop mid-run costs nothing but the gap
  * (FR-EXE-014, TC-EXE-013).
  */
-export function useRunEvents(): void {
+export function useRunEvents(workflowId?: Id): void {
   const apply = useRunStore((store) => store.apply);
+  const queryClient = useQueryClient();
   useEffect(() => {
     const socket = getSocket();
     if (!socket) return;
     const offs = RUN_EVENT_TYPES.map((type) => socket.on(type, (_payload, frame) => apply(frame)));
+
+    /**
+     * When the run ends, the records the engine kept are the ones the inspector and the history
+     * read, and they are only complete now — so this is where they are refetched. The live overlay
+     * needs no refetch at all; it is the frames.
+     */
+    offs.push(
+      socket.on('run.completed', ({ runId }) => {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.nodeRuns(runId) });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
+        if (workflowId !== undefined) {
+          void queryClient.invalidateQueries({ queryKey: queryKeys.runs(workflowId) });
+        }
+      }),
+    );
     return () => offs.forEach((off) => off());
-  }, [apply]);
+  }, [apply, queryClient, workflowId]);
 }
 
 /** The connection state behind the top bar's "reconnecting" notice (FR-EXE-014). */
@@ -42,15 +58,19 @@ export function useSocketStatus(): AceSocketStatus {
  * (FR-EXE-003), so it is a success here and the screen renders the issues.
  */
 export function useStartRun(workflowId: Id) {
+  const arm = useRunStore((store) => store.arm);
   const begin = useRunStore((store) => store.begin);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: StartRunRequest) => api().startRun(workflowId, body),
+    // Armed before the request goes out, so a frame that beats the 201 is still folded (§2.4).
+    onMutate: () => arm(workflowId),
     onSuccess: (run: Run) => {
       begin(workflowId, run.id, run.status);
       queryClient.setQueryData(queryKeys.run(run.id), run);
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs(workflowId) });
     },
+    onError: () => useRunStore.getState().reset(),
   });
 }
 
@@ -77,25 +97,18 @@ export function useRun(runId: Id | undefined) {
  * opens a node.
  */
 export function useNodeRuns(runId: Id | undefined) {
-  const revision = useRunStore((store) => store.revision);
-  const query = useQuery({
-    queryKey: queryKeys.nodeRuns(runId ?? ''),
+  /**
+   * A node that finished mid-run has a record before the run does, and the inspector may already be
+   * open on it, so the list is refetched on a settled node as well as on `run.completed` (which
+   * `useRunEvents` invalidates). `completedNodeRuns` only changes when a node reaches a terminal
+   * state, which is a handful of times per run rather than once per token.
+   */
+  const settled = useRunStore((store) => store.settledCount);
+  return useQuery({
+    queryKey: [...queryKeys.nodeRuns(runId ?? ''), settled],
     queryFn: () => api().listNodeRuns(runId ?? ''),
     enabled: Boolean(runId),
   });
-  const active = useRunStore((store) => store.active);
-  const queryClient = useQueryClient();
-  useEffect(() => {
-    if (!runId || !active) return;
-    // One refetch per frame batch would be wasteful; the overlay covers the live view, so this
-    // only needs to catch up when the run settles.
-    const timer = setTimeout(
-      () => void queryClient.invalidateQueries({ queryKey: queryKeys.nodeRuns(runId) }),
-      300,
-    );
-    return () => clearTimeout(timer);
-  }, [runId, active, revision, queryClient]);
-  return query;
 }
 
 /** A finished run's node runs — no live refresh, because the record cannot change (BR-04). */

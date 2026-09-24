@@ -376,7 +376,9 @@ export function createRound2Handlers(db: MockDb): HttpHandler[] {
         const filter = query.success ? query.data : {};
         return HttpResponse.json({
           items: db.listModels().filter((model) => modelMatchesQuery(model, filter)),
-          refreshedAt: new Date().toISOString(),
+          // The catalogue's own timestamp, not this request's: a "refreshed" line that always says
+          // "now" could never show that a refresh had happened (FR-MOD-006).
+          refreshedAt: db.catalogRefreshedAt(),
         });
       }),
     ),
@@ -463,18 +465,25 @@ export function createRound2Handlers(db: MockDb): HttpHandler[] {
     http.get(
       `${API}/runs/:id/events`,
       guard((ctx) => {
+        const runId = param(ctx, 'id');
+        if (!db.getRun(runId)) return notFound('Run');
         const query = EventsQuerySchema.safeParse(
           Object.fromEntries(new URL(ctx.request.url).searchParams),
         );
         const afterSeq = query.success ? (query.data.afterSeq ?? 0) : 0;
         return HttpResponse.json(
-          db.eventsAfter(afterSeq).map((event) => ({
-            seq: event.seq,
-            at: new Date().toISOString(),
-            type: event.type,
-            payload: event.payload,
-            ...(event.workflowId === undefined ? {} : { workflowId: event.workflowId }),
-          })),
+          db
+            .eventsAfter(afterSeq)
+            // This run's events only: the endpoint is scoped by `:id`, and replaying another run's
+            // frames into a resume would put states on nodes that never ran here.
+            .filter((event) => (event.payload as { runId?: string }).runId === runId)
+            .map((event) => ({
+              seq: event.seq,
+              at: new Date().toISOString(),
+              type: event.type,
+              payload: event.payload,
+              ...(event.workflowId === undefined ? {} : { workflowId: event.workflowId }),
+            })),
         );
       }),
     ),

@@ -26,7 +26,7 @@ export function WorkflowPage() {
   const graph = useWorkflowGraph(workflowId);
   useWorkflowSubscription(workflowId);
   // Every §2.4 run frame folds into the overlay store while this screen is mounted (FR-EXE-008/009).
-  useRunEvents();
+  useRunEvents(workflowId);
   const { paletteOpen, configOpen, bottomOpen } = usePanelsStore();
   const canvasApi = useCanvasApi((s) => s.api);
 

@@ -1,4 +1,6 @@
+import { createNode } from '../nodes/factory';
 import { NODE_SLOT, freeSlotNear, type VisibleArea } from './placement';
+import { toFlowNodes } from './to-flow';
 
 const at = (x: number, y: number) => ({ position: { x, y } });
 const visible: VisibleArea = { x: 0, y: 0, width: 1200, height: 700 };
@@ -44,5 +46,33 @@ describe('freeSlotNear (FR-CAN-002: a node from the palette must be visible and 
     const slot = freeSlotNear([at(10, -3)], { x: 10.6, y: -3.2 });
     expect(Number.isInteger(slot.x)).toBe(true);
     expect(Number.isInteger(slot.y)).toBe(true);
+  });
+});
+
+describe('FR-PRV-005 the "provider missing" badge waits for the provider list', () => {
+  const node = (providerId?: string) => {
+    const agent = createNode('agent', '01ARZ3NDEKTSV4RRFFQ69G5FAV', { x: 0, y: 0 });
+    agent.config = {
+      ...agent.config,
+      ...(providerId ? { providerId } : {}),
+    } as typeof agent.config;
+    return agent;
+  };
+
+  it('claims nothing while GET /providers is still in flight', () => {
+    const agent = node('01ARZ3NDEKTSV4RRFFQ69G5FP1');
+    const [flow] = toFlowNodes([agent], [], undefined, () => undefined, [], false);
+    expect(flow?.data.providerMissing).toBeUndefined();
+  });
+
+  it('claims it once the list has arrived without that provider', () => {
+    const agent = node('01ARZ3NDEKTSV4RRFFQ69G5FP1');
+    const [flow] = toFlowNodes([agent], [], undefined, () => undefined, [], true);
+    expect(flow?.data.providerMissing).toBe(true);
+  });
+
+  it('says nothing about a node that names no provider', () => {
+    const [flow] = toFlowNodes([node()], [], undefined, () => undefined, [], true);
+    expect(flow?.data.providerMissing).toBeUndefined();
   });
 });

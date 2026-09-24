@@ -45,6 +45,8 @@ interface Snapshot {
   /** Keys never leave the mock keychain, exactly as BR-07 requires of the engine. */
   providerKeys: Record<string, string>;
   models: Model[];
+  /** When the catalogue was last discovered — what `GET /models` reports (FR-MOD-006). */
+  catalogRefreshedAt?: string;
   runs: Run[];
   nodeRuns: NodeRun[];
   /** Artificial delay per request, for the loading-state test (TC-CAN-009). */
@@ -398,7 +400,11 @@ export class MockDb {
    * Force a provider's state and announce it, the way the engine's scheduled re-check would
    * (FR-PRV-004). Only the test hooks call this; a real check goes through `checkProvider`.
    */
-  setProviderStatus(id: string, status: Provider['status'], message?: string): Provider | undefined {
+  setProviderStatus(
+    id: string,
+    status: Provider['status'],
+    message?: string,
+  ): Provider | undefined {
     const provider = this.getProvider(id);
     if (!provider) return undefined;
     provider.status = status;
@@ -428,8 +434,21 @@ export class MockDb {
       ...this.state.models.filter((m) => m.providerId !== id),
       ...catalogFor(provider, refreshedAt),
     ];
+    this.state.catalogRefreshedAt = refreshedAt;
     this.save();
     return { models: this.state.models.filter((m) => m.providerId === id), refreshedAt };
+  }
+
+  /**
+   * When the catalogue was last discovered (FR-MOD-006). Kept on the state rather than minted per
+   * request: a timestamp that always reads "now" cannot show that a refresh happened.
+   */
+  catalogRefreshedAt(): string {
+    return (
+      this.state.catalogRefreshedAt ??
+      this.state.models[0]?.lastCheckedAt ??
+      new Date(0).toISOString()
+    );
   }
 
   /* ---------------------------------------------------------------- runs */

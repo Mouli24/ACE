@@ -63,3 +63,25 @@ body {
   background-image: radial-gradient(var(--color-canvas-dot) 1px, transparent 1px);
   background-size: 20px 20px;
 }
+
+/*
+ * FR-EXE-015: the edge an envelope just travelled. The dash marches from source to target, so the
+ * direction of the handoff is visible, and `prefers-reduced-motion` gets the colour without the
+ * movement (NFR-USE-02).
+ */
+@keyframes ace-edge-flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+.ace-edge-flowing {
+  stroke-dasharray: 6 6;
+  animation: ace-edge-flow 0.6s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ace-edge-flowing {
+    animation: none;
+  }
+}

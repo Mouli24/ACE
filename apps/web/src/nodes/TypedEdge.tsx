@@ -1,6 +1,6 @@
 import type { DataType, EdgeKind } from '@ace/contracts';
 import { BaseEdge, getBezierPath, type Edge as FlowEdge, type EdgeProps } from '@xyflow/react';
-import { memo } from 'react';
+import { memo, useEffect, useState } from 'react';
 
 import { useEdgeTransfer } from '../runs/run-store';
 
@@ -36,7 +36,23 @@ export const TypedEdge = memo(function TypedEdge({
   });
   const label = data?.dataType ?? '';
   const transfer = useEdgeTransfer(id);
-  const recent = transfer !== undefined && Date.now() - transfer.at < TRANSFER_HIGHLIGHT_MS;
+  /**
+   * The highlight has to switch itself off: comparing `Date.now()` during render never re-runs,
+   * because nothing about this edge changes once the transfer has been folded, so the edge stayed
+   * lit for the rest of the session.
+   */
+  const [recent, setRecent] = useState(false);
+  useEffect(() => {
+    if (transfer === undefined) return;
+    const left = TRANSFER_HIGHLIGHT_MS - (Date.now() - transfer.at);
+    if (left <= 0) {
+      setRecent(false);
+      return;
+    }
+    setRecent(true);
+    const timer = setTimeout(() => setRecent(false), left);
+    return () => clearTimeout(timer);
+  }, [transfer]);
   return (
     <g
       data-testid={`edge-${id}`}

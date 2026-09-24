@@ -194,3 +194,35 @@ describe('RunEventBuffer folds run events into a RunView (§2.4)', () => {
     expect(buffer.view.totals).toEqual(usage());
   });
 });
+
+describe('FR-EXE-014 the buffer belongs to one run', () => {
+  it('ignores another run’s run.started instead of retargeting itself', () => {
+    const buffer = new RunEventBuffer();
+    buffer.apply({
+      seq: 1,
+      type: 'run.started',
+      payload: {
+        run: { id: RUN, workflowId: A, status: 'RUNNING', startedAt: NOW, totals: usage() },
+      },
+    } as ServerFrame);
+    buffer.apply(state(2, A, RA, 'RUNNING'));
+
+    // A second run starts elsewhere — the same socket carries it, this buffer must not follow.
+    buffer.apply({
+      seq: 3,
+      type: 'run.started',
+      payload: {
+        run: {
+          id: '01ARZ3NDEKTSV4RRFFQ69G5FZZ',
+          workflowId: A,
+          status: 'RUNNING',
+          startedAt: NOW,
+          totals: usage(),
+        },
+      },
+    } as ServerFrame);
+
+    expect(buffer.view.runId).toBe(RUN);
+    expect(buffer.view.nodeState(A)).toBe('RUNNING');
+  });
+});

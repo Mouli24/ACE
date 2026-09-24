@@ -12,6 +12,8 @@ export function toFlowNodes(
   armedPortId: string | undefined,
   onPortKey: PortKeyHandler,
   providers: readonly Provider[] = [],
+  /** False while `GET /providers` is in flight: an empty list then means "unknown", not "gone". */
+  providersKnown = true,
 ): AceFlowNode[] {
   const connected = new Set<string>();
   for (const edge of edges) {
@@ -22,8 +24,9 @@ export function toFlowNodes(
   return nodes.map((node) => {
     const providerId = (node.config as { providerId?: string }).providerId;
     const provider = providerId === undefined ? undefined : typeById.get(providerId);
-    // FR-PRV-005: the node still names a provider, but the engine no longer has it.
-    const providerMissing = providerId !== undefined && provider === undefined;
+    // FR-PRV-005: the node still names a provider, but the engine no longer has it. Only claimed
+    // once the list has actually arrived, or every node would flash the badge on first paint.
+    const providerMissing = providersKnown && providerId !== undefined && provider === undefined;
     return {
       id: node.id,
       type: 'ace',

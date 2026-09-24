@@ -195,8 +195,9 @@ function CanvasInner({
   // Providers decide the accent colour and the "provider missing" badge (FR-NODE-010, FR-PRV-005).
   const providers = useProviders();
   const serverNodes = useMemo(
-    () => toFlowNodes(nodes, edges, armedPortId, onPortKey, providers.data ?? []),
-    [nodes, edges, armedPortId, onPortKey, providers.data],
+    () =>
+      toFlowNodes(nodes, edges, armedPortId, onPortKey, providers.data ?? [], providers.isSuccess),
+    [nodes, edges, armedPortId, onPortKey, providers.data, providers.isSuccess],
   );
   const [flowNodes, setFlowNodes] = useState<AceFlowNode[]>(serverNodes);
 
@@ -239,10 +240,25 @@ function CanvasInner({
     [sync],
   );
 
+  /**
+   * Which nodes React Flow currently knows, as a string rather than the node array: `flowNodes` is
+   * replaced on every drag pointer move, and depending on it rebuilt all 400 edge objects per frame
+   * (NFR-PERF-01). Membership is what the edge filter below needs, and that only changes when a
+   * node is added or removed.
+   */
+  const mountedIds = useMemo(
+    () =>
+      flowNodes
+        .map((node) => node.id)
+        .sort()
+        .join(','),
+    [flowNodes],
+  );
+
   const flowEdges = useMemo(() => {
     // React Flow drops an edge whose endpoints it does not know yet and does not retry, so an
     // edge is handed over only once both its nodes are mounted; this memo re-runs when they are.
-    const mounted = new Set(flowNodes.map((node) => node.id));
+    const mounted = new Set(mountedIds === '' ? [] : mountedIds.split(','));
     const connectable = edges.filter(
       (edge) => mounted.has(edge.from.nodeId) && mounted.has(edge.to.nodeId),
     );
@@ -250,7 +266,7 @@ function CanvasInner({
       ...e,
       selected: selectedEdgeIds.includes(e.id),
     }));
-  }, [edges, nodes, flowNodes, selectedEdgeIds]);
+  }, [edges, nodes, mountedIds, selectedEdgeIds]);
 
   // Edges are fully derived from the query cache, so the only change to honour is selection.
   const onEdgesChange = useCallback(

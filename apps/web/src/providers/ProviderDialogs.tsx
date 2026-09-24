@@ -153,7 +153,7 @@ export function AddProviderDialog({
                 <Input
                   id="provider-base-url"
                   className="font-machine"
-                  value={effectiveBaseUrl}
+                  value={baseUrl}
                   onChange={(event) => setBaseUrl(event.target.value)}
                   required
                 />
@@ -225,6 +225,9 @@ export function EditProviderDialog({
         id: provider.id,
         name: name.trim(),
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+        // `baseUrl` is optional in the patch, so an emptied field cannot clear it — the contract has
+        // no way to say "remove this". The field is required for the two types that need one, and
+        // for the others there is nothing to clear, so an empty box means "leave it alone".
         ...(baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
         concurrency: Number(concurrency) || provider.concurrency,
       },
@@ -265,6 +268,7 @@ export function EditProviderDialog({
                 className="font-machine"
                 value={baseUrl}
                 onChange={(event) => setBaseUrl(event.target.value)}
+                required
               />
             </div>
           )}

@@ -21,11 +21,18 @@ interface RunOverlayState {
   finalOutput: Record<Id, Part[]> | undefined;
   /** Bumped on every applied frame; the cheap way to invalidate the derived selectors. */
   revision: number;
+  /**
+   * How many node runs have reached a terminal state (Arch §19.1). It moves a handful of times per
+   * run rather than once per token, which makes it the right thing to key a refetch on.
+   */
+  settledCount: number;
   /** True from `POST /runs` until `run.completed`; the UI allows one active run per workflow. */
   active: boolean;
   /** The workflow whose run this is, so another workflow's Canvas stays clean. */
   workflowId: Id | undefined;
 
+  /** Clear the fold and claim the workflow, before the start request is sent. */
+  arm(workflowId: Id): void;
   begin(workflowId: Id, runId: Id, status: RunState): void;
   apply(frame: ServerFrame): void;
   reset(): void;
@@ -45,6 +52,14 @@ const buffer = new RunEventBuffer();
 
 const IDLE: NodeState = 'IDLE';
 
+/** Terminal node states (Arch §19.1): once a node is here its record on the engine is complete. */
+const TERMINAL: ReadonlySet<NodeState> = new Set<NodeState>([
+  'COMPLETED',
+  'FAILED',
+  'STOPPED',
+  'BLOCKED',
+]);
+
 export const useRunStore = create<RunOverlayState>((set) => ({
   runId: undefined,
   status: undefined,
@@ -52,31 +67,55 @@ export const useRunStore = create<RunOverlayState>((set) => ({
   totals: undefined,
   finalOutput: undefined,
   revision: 0,
+  settledCount: 0,
   active: false,
   workflowId: undefined,
 
   /**
-   * A run was accepted. `run.started` carries the same facts, but the button must go busy before
-   * the first frame arrives, and a BLOCKED run never sends one at all (FR-EXE-003).
+   * Called before `POST /runs`. The engine may emit frames before its 201 reaches us — with an
+   * instant provider the whole run can be over by then — so the fold is cleared *here*. Clearing it
+   * on the response instead erased those frames for good: `node.token` is transient and `resume`
+   * would not replay them, because the socket's `lastSeq` has already passed them (§2.4).
    */
-  begin: (workflowId, runId, status) => {
+  arm: (workflowId) => {
     buffer.reset();
     set({
       workflowId,
-      runId,
-      status,
+      runId: undefined,
+      status: undefined,
       haltReason: undefined,
       totals: undefined,
       finalOutput: undefined,
       revision: 0,
-      active: status === 'RUNNING' || status === 'PREFLIGHT' || status === 'PAUSED',
+      settledCount: 0,
+      active: true,
     });
+  },
+
+  /**
+   * The run was accepted. `run.started` carries the same facts, but a BLOCKED run never sends one
+   * (FR-EXE-003), and frames already folded by `arm` are kept: this only names the run and, when
+   * the engine answers with a finished or blocked run, settles the status.
+   */
+  begin: (workflowId, runId, status) => {
+    set((state) => ({
+      workflowId,
+      runId,
+      // A frame that arrived first is ahead of this response; it decides the status.
+      status: state.revision > 0 && state.status !== undefined ? state.status : status,
+      active:
+        state.revision > 0 && state.status !== undefined
+          ? state.active
+          : status === 'RUNNING' || status === 'PREFLIGHT' || status === 'PAUSED',
+    }));
   },
 
   apply: (frame) => {
     buffer.apply(frame);
     const view = buffer.view;
+    const settled = view.nodeRuns().filter((run) => TERMINAL.has(run.status)).length;
     set((state) => ({
+      settledCount: settled,
       runId: view.runId ?? state.runId,
       status: view.status ?? state.status,
       haltReason: view.haltReason,
@@ -99,6 +138,7 @@ export const useRunStore = create<RunOverlayState>((set) => ({
       totals: undefined,
       finalOutput: undefined,
       revision: 0,
+      settledCount: 0,
       active: false,
       workflowId: undefined,
     });

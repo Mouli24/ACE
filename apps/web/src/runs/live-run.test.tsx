@@ -1,8 +1,9 @@
 import type { Edge, Node } from '@ace/contracts';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { startSocket, stopSocket } from '../app/socket';
+import { useSelectionStore } from '../app/stores/selection';
 import { createFakeWebSocket, dropMockSockets } from '../mocks/fake-socket';
 import { setScenario } from '../mocks/handlers-round2';
 import { createNode } from '../nodes/factory';
@@ -207,5 +208,38 @@ describe('TC-EXE-014 an envelope delivery marks the edge it travelled', () => {
     const transfer = useRunStore.getState().lastTransfer(agentEdge.id);
     expect(transfer?.summary.length).toBeLessThanOrEqual(120);
     expect(transfer?.fromNodeId).toBe(agentEdge.from.nodeId);
+  });
+});
+
+describe('FR-EXE-010/012 a pane left open during the run catches up when it ends', () => {
+  it('fills the inspector that was already open, and moves the history row off RUNNING', async () => {
+    setScenario('slow-stream');
+    const { project, workflow, agent } = seedRunnableWorkflow({ inputText: 'go' });
+    const user = userEvent.setup();
+    openCanvas(project.id, workflow.id);
+    await screen.findByTestId('canvas');
+
+    // Open both panes *before* starting, which is the case the earlier code never refetched for:
+    // the queries mounted while the run had nothing recorded yet and nothing invalidated them.
+    act(() => useSelectionStore.getState().setSelection([agent.id], []));
+    await user.click(screen.getByRole('tab', { name: 'Inspector' }));
+    expect(await screen.findByText(/start a run to inspect it/i)).toBeInTheDocument();
+
+    await user.click(startButton());
+
+    const inspector = await screen.findByTestId('inspector');
+    await waitFor(
+      () => expect(within(inspector).getByTestId('inspector-facts')).toBeInTheDocument(),
+      { timeout: 15_000 },
+    );
+    expect(within(inspector).getByTestId('inspector-facts')).toHaveTextContent('mock-text');
+
+    await user.click(screen.getByRole('tab', { name: 'Runs' }));
+    const row = await screen.findByTestId(/^run-row-/);
+    await waitFor(() => expect(row).toHaveAttribute('data-status', 'COMPLETE'), {
+      timeout: 15_000,
+    });
+    // FR-EXE-012 asks for the duration in the history, which only exists once the run has ended.
+    expect(row).not.toHaveTextContent(/RUNNING/);
   });
 });

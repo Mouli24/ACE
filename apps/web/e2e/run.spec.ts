@@ -70,6 +70,17 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
 
     await expect(agentEdge).toHaveAttribute('data-animating', 'true', { timeout: 15_000 });
     await expect(agentEdge.locator('title')).not.toHaveText('no data yet');
+
+    // The class has to name a real animation, and the highlight has to switch itself off again
+    // (D-018: it did neither — the keyframes did not exist and nothing re-rendered the edge).
+    const animation = await agentEdge
+      .locator('.ace-edge-flowing')
+      .first()
+      .evaluate((el) => getComputedStyle(el).animationName);
+    expect(animation).toBe('ace-edge-flow');
+
+    await expect(agentEdge).toHaveAttribute('data-animating', 'false', { timeout: 10_000 });
+    await expect(agentEdge).toHaveAttribute('data-transferred', 'true');
   });
 
   test('TC-RTR-004 + FR-NODE-012: the card names the fallback model and the Output shows the result', async ({

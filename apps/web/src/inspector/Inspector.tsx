@@ -14,7 +14,7 @@ import {
   SelectValue,
   StatusRing,
 } from '@ace/ui';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { useSelectionStore } from '../app/stores/selection';
 import { useNodeRuns } from '../runs/hooks';
@@ -33,6 +33,8 @@ export function Inspector({ workflowId }: { workflowId: string }) {
   const nodeRuns = useNodeRuns(runId);
   const [promptOpen, setPromptOpen] = useState(false);
   const [attemptIndex, setAttemptIndex] = useState(0);
+  // Another node's third attempt is not this node's; the selector would otherwise render blank.
+  useEffect(() => setAttemptIndex(0), [focusedNodeId, runId]);
 
   const forNode = (nodeRuns.data ?? []).filter((run) => run.nodeId === focusedNodeId);
   const nodeRun = forNode[Math.min(attemptIndex, Math.max(forNode.length - 1, 0))];
