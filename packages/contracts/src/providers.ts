@@ -17,7 +17,7 @@ export const ProviderNameSchema = z.string().min(1).max(80);
 export const ProviderBaseUrlSchema = z.url();
 
 /**
- * How many calls the engine may have in flight against one provider (FR-PRV-009). D28: the bound
+ * How many calls the engine may have in flight against one provider (FR-PRV-009). D51: the bound
  * is §2.1's 1..64 and the default is the engine-wide `DEFAULT_CONCURRENCY`, so a provider added
  * without a limit is throttled by the global semaphore alone rather than by a number no doc names.
  */
