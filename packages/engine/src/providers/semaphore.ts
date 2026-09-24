@@ -24,9 +24,12 @@ export function createSemaphore(limit: number): Semaphore {
   const queue: (() => void)[] = [];
 
   const release = (): void => {
-    active -= 1;
-    // FIFO: the call that has been waiting longest goes next, so nothing can be starved.
-    queue.shift()?.();
+    // FIFO: the call that has been waiting longest goes next, so nothing can be starved. The slot
+    // is handed to it directly rather than freed: freeing it first left a gap before the waiter
+    // woke in which a newcomer could take the slot as well (D-027).
+    const next = queue.shift();
+    if (next === undefined) active -= 1;
+    else next();
   };
 
   return {
@@ -36,9 +39,11 @@ export function createSemaphore(limit: number): Semaphore {
 
     async run<T>(fn: () => Promise<T>): Promise<T> {
       if (active >= limit) {
+        // Woken by `release`, which passes its slot on: `active` already counts this call.
         await new Promise<void>((resolve) => queue.push(resolve));
+      } else {
+        active += 1;
       }
-      active += 1;
 
       try {
         return await fn();

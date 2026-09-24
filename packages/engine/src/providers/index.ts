@@ -92,8 +92,12 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
   const now = deps.now ?? (() => new Date().toISOString());
   const nextId = deps.nextId ?? newId;
 
-  /** One gate per provider, kept alive across calls so the limit actually limits. */
-  const gates = new Map<Id, Semaphore>();
+  /**
+   * One gate per provider, kept alive across calls so the limit actually limits. The lookup is
+   * cached, not the gate it resolves to: nodes dispatched together all ask before the first lookup
+   * finishes, and caching only the result let each of them build its own gate (D-027).
+   */
+  const gates = new Map<Id, Promise<Semaphore>>();
 
   /** `keySet` is never trusted from the row; it is what the keychain says right now. */
   async function withKeySet(provider: Provider): Promise<Provider> {
@@ -303,9 +307,12 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       const existing = gates.get(id);
       if (existing !== undefined) return existing;
 
-      const provider = await load(id);
-      const gate = createSemaphore(provider.concurrency);
+      const gate = load(id).then((provider) => createSemaphore(provider.concurrency));
       gates.set(id, gate);
+      // A failed lookup (say, a provider removed mid-dispatch) must not stay cached.
+      gate.catch(() => {
+        if (gates.get(id) === gate) gates.delete(id);
+      });
       return gate;
     },
   };

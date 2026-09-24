@@ -200,6 +200,11 @@ export interface MockAdapterOptions {
 }
 
 export interface MockProviderAdapter extends ProviderAdapter {
+  /**
+   * This mock as one provider row sees it: `check()` answers §2.6 from that row's `apiKey` and
+   * `baseUrl`, while generation, the call log and the per-run counters stay shared (D-025).
+   */
+  forProvider(row: Pick<MockAdapterOptions, 'apiKey' | 'baseUrl'>): ProviderAdapter;
   calls(): MockCall[];
   /** Highest number of calls that were ever in flight at once. */
   maxConcurrent(): number;
@@ -375,36 +380,41 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
     }
   }
 
-  return {
+  /** §2.6's provider-level answers, from whichever row is asking. */
+  async function checkAs(
+    row: Pick<MockAdapterOptions, 'apiKey' | 'baseUrl'>,
+  ): Promise<ProviderStatus> {
+    const startedAt = now();
+
+    if (row.baseUrl !== undefined && row.baseUrl.includes('unreachable')) {
+      return {
+        status: 'UNREACHABLE',
+        message: `Could not reach ${row.baseUrl}.`,
+        latencyMs: now() - startedAt,
+      };
+    }
+    if (row.apiKey === 'bad') {
+      return {
+        status: 'AUTH_FAILED',
+        message: 'The mock provider rejected the key "bad".',
+        latencyMs: now() - startedAt,
+      };
+    }
+    if (row.apiKey === 'ratelimited') {
+      return {
+        status: 'RATE_LIMITED',
+        message: 'The mock provider is rate limiting this key.',
+        latencyMs: now() - startedAt,
+      };
+    }
+
+    return { status: 'CONNECTED', latencyMs: now() - startedAt };
+  }
+
+  const adapter: MockProviderAdapter = {
     type: 'mock',
 
-    async check(): Promise<ProviderStatus> {
-      const startedAt = now();
-
-      if (options.baseUrl !== undefined && options.baseUrl.includes('unreachable')) {
-        return {
-          status: 'UNREACHABLE',
-          message: `Could not reach ${options.baseUrl}.`,
-          latencyMs: now() - startedAt,
-        };
-      }
-      if (options.apiKey === 'bad') {
-        return {
-          status: 'AUTH_FAILED',
-          message: 'The mock provider rejected the key "bad".',
-          latencyMs: now() - startedAt,
-        };
-      }
-      if (options.apiKey === 'ratelimited') {
-        return {
-          status: 'RATE_LIMITED',
-          message: 'The mock provider is rate limiting this key.',
-          latencyMs: now() - startedAt,
-        };
-      }
-
-      return { status: 'CONNECTED', latencyMs: now() - startedAt };
-    },
+    check: () => checkAs(options),
 
     listModels: async () => MOCK_MODELS.map((model) => ({ ...model })),
 
@@ -450,5 +460,15 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
       peak = 0;
       inFlight = 0;
     },
+
+    forProvider: (row) => ({
+      type: 'mock',
+      check: () => checkAs(row),
+      listModels: adapter.listModels,
+      generate: adapter.generate,
+      embed: adapter.embed,
+    }),
   };
+
+  return adapter;
 }

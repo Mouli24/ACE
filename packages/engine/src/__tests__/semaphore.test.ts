@@ -67,6 +67,34 @@ describe('TC-PRV-009 a semaphore never lets more than its limit run at once', ()
     expect(peak).toBe(2);
   });
 
+  it('hands a freed slot to the longest waiter, so a newcomer cannot slip in beside it', async () => {
+    // A release used to free the slot and wake the waiter a microtask later; a call arriving in
+    // that gap took the slot too, and the waiter then ran beside it — over the limit (D-027).
+    for (let depth = 0; depth < 8; depth++) {
+      const semaphore = createSemaphore(1);
+      let running = 0;
+      let peak = 0;
+      const body = async (): Promise<void> => {
+        running += 1;
+        peak = Math.max(peak, running);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        running -= 1;
+      };
+
+      const first = deferred();
+      const holder = semaphore.run(() => first.promise);
+      const waiter = semaphore.run(body);
+
+      first.resolve();
+      let tick: Promise<void> = Promise.resolve();
+      for (let i = 0; i < depth; i++) tick = tick.then(() => undefined);
+      const newcomer = tick.then(() => semaphore.run(body));
+
+      await Promise.all([holder, waiter, newcomer]);
+      expect(peak, `newcomer at microtask depth ${depth}`).toBe(1);
+    }
+  });
+
   it('releases the slot when a call throws, so one failure cannot wedge the provider', async () => {
     const semaphore = createSemaphore(1);
 
