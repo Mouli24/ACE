@@ -206,27 +206,16 @@ describe('TC-PRV-003/004 a check maps to the right provider state', () => {
     expect(result.checkedAt).toBeTruthy();
   });
 
-  /*
-   * D-025: the mock adapter is one shared instance that never sees the provider row it was built
-   * for, so §2.6's provider-level behaviours answer CONNECTED through the API.
-   *
-   * `it.fails` rather than `it.skip`: the check keeps running on every CI, it stays green only while
-   * the defect is real, and the moment the factory is fixed it turns red with "expected test to fail"
-   * — which is the reminder to delete these two blocks and fold the cases back into one assertion.
-   * A skip would have quietly outlived the bug.
-   */
-  it.fails('D-025: apiKey "bad" should be AUTH_FAILED, and answers CONNECTED', async () => {
+  // D-025, fixed in #17: each mock provider now checks against its own row (§2.6).
+  it('D-025: apiKey "bad" answers AUTH_FAILED', async () => {
     expect(await checkedStatus('check-bad', { apiKey: 'bad' })).toBe('AUTH_FAILED');
   });
 
-  it.fails(
-    'D-025: apiKey "ratelimited" should be RATE_LIMITED, and answers CONNECTED',
-    async () => {
-      expect(await checkedStatus('check-ratelimited', { apiKey: 'ratelimited' })).toBe(
-        'RATE_LIMITED',
-      );
-    },
-  );
+  it('D-025: apiKey "ratelimited" answers RATE_LIMITED', async () => {
+    expect(await checkedStatus('check-ratelimited', { apiKey: 'ratelimited' })).toBe(
+      'RATE_LIMITED',
+    );
+  });
 });
 
 describe('TC-MOD-001/002/003 the catalog is discovered, sourced and filterable', () => {
@@ -600,13 +589,10 @@ describe('TC-OBS-002/003 the totals are the sum of the node runs, on a recorded 
 
 describe('TC-PRV-009 a provider’s concurrency limit is respected', () => {
   /*
-   * D-027: `semaphoreFor` misses its cache, awaits `load(id)`, and only then stores the gate, so
-   * five nodes dispatched in one tick each build their own semaphore of size 2 and the limit means
-   * nothing. (My first diagnosis blamed the executor for never calling `runGated`; it does, at
-   * `executor.ts:345` — corrected on Arhant's review of PR #11.) `it.fails` for the same reason as
-   * above: when the lookup is shared this turns red and asks to be unmarked.
+   * D-027, fixed in #17 (one gate per provider), and D66: a node queued behind the limit stays READY
+   * and is stamped `startedAt` only when it holds a slot, so node-run spans show the limit too.
    */
-  it.fails('D-027: five agents overlap on a provider limited to two', async () => {
+  it('D-027: five agents never run more than two at once on a provider limited to two', async () => {
     const limited = await client.createProvider({
       type: 'mock',
       name: 'Limited',
@@ -662,10 +648,19 @@ describe('TC-PRV-009 a provider’s concurrency limit is respected', () => {
       .map((r) => ({ from: Date.parse(r.startedAt ?? ''), to: Date.parse(r.endedAt ?? '') }))
       .filter((span) => Number.isFinite(span.from) && Number.isFinite(span.to));
     expect(spans.length).toBe(5);
+    // A sweep over the start and end instants, ends first on a tie: counting the spans that touch
+    // one span overstates it, because a slot handed on mid-span meets two spans, one after another.
+    const edges = spans
+      .flatMap((span) => [
+        { at: span.from, delta: 1 },
+        { at: span.to, delta: -1 },
+      ])
+      .sort((a, b) => a.at - b.at || a.delta - b.delta);
+    let running = 0;
     let peak = 0;
-    for (const span of spans) {
-      const overlapping = spans.filter((other) => other.from < span.to && span.from < other.to);
-      peak = Math.max(peak, overlapping.length);
+    for (const edge of edges) {
+      running += edge.delta;
+      peak = Math.max(peak, running);
     }
     expect(peak, `peak overlap was ${peak}`).toBeLessThanOrEqual(2);
   });
