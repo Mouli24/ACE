@@ -13,6 +13,12 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.tsx'],
     include: ['src/**/*.test.{ts,tsx}'],
     css: false,
+    /**
+     * A Radix menu or Select driven by userEvent takes seconds in jsdom, and v8 coverage
+     * instrumentation roughly doubles it — the default 5 s budget failed three different tests
+     * from one `--coverage` run to the next. This is the runner's patience, not an assertion.
+     */
+    testTimeout: 20_000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary'],

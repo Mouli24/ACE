@@ -1,13 +1,19 @@
 import type { DataType, EdgeKind } from '@ace/contracts';
 import { BaseEdge, getBezierPath, type Edge as FlowEdge, type EdgeProps } from '@xyflow/react';
-import { memo } from 'react';
+import { memo, useEffect, useState } from 'react';
+
+import { useEdgeTransfer } from '../runs/run-store';
+
+/** How long an `edge.transfer` keeps the edge animated (FR-EXE-015). */
+const TRANSFER_HIGHLIGHT_MS = 2_000;
 
 export type FlowEdgeData = { dataType: DataType; kind: EdgeKind };
 export type AceFlowEdge = FlowEdge<FlowEdgeData, 'typed'>;
 
 /**
- * A data edge (FR-CON-006): the label is the port data type; hovering says "no data yet" until a
- * run has transferred something (round 2 fills the summary in).
+ * A data edge (FR-CON-006). The label is the port data type, and the title says "no data yet" until
+ * a run delivers an envelope over it — then it carries the engine's own ≤120-character summary and
+ * the edge animates for a moment, so a glance at the Canvas shows where the run is (FR-EXE-015).
  */
 export const TypedEdge = memo(function TypedEdge({
   id,
@@ -29,15 +35,43 @@ export const TypedEdge = memo(function TypedEdge({
     targetPosition,
   });
   const label = data?.dataType ?? '';
+  const transfer = useEdgeTransfer(id);
+  /**
+   * The highlight has to switch itself off: comparing `Date.now()` during render never re-runs,
+   * because nothing about this edge changes once the transfer has been folded, so the edge stayed
+   * lit for the rest of the session.
+   */
+  const [recent, setRecent] = useState(false);
+  useEffect(() => {
+    if (transfer === undefined) return;
+    const left = TRANSFER_HIGHLIGHT_MS - (Date.now() - transfer.at);
+    if (left <= 0) {
+      setRecent(false);
+      return;
+    }
+    setRecent(true);
+    const timer = setTimeout(() => setRecent(false), left);
+    return () => clearTimeout(timer);
+  }, [transfer]);
   return (
-    <g data-testid={`edge-${id}`} data-datatype={label}>
-      <title>no data yet</title>
+    <g
+      data-testid={`edge-${id}`}
+      data-datatype={label}
+      data-transferred={transfer ? 'true' : 'false'}
+      data-animating={recent ? 'true' : 'false'}
+    >
+      <title>{transfer ? transfer.summary : 'no data yet'}</title>
       <BaseEdge
         id={id}
         path={path}
+        className={recent ? 'ace-edge-flowing' : undefined}
         style={{
-          stroke: selected ? 'var(--color-selection)' : 'var(--color-fg-muted)',
-          strokeWidth: selected ? 2.5 : 1.5,
+          stroke: recent
+            ? 'var(--color-status-RUNNING)'
+            : selected
+              ? 'var(--color-selection)'
+              : 'var(--color-fg-muted)',
+          strokeWidth: selected || recent ? 2.5 : 1.5,
         }}
       />
       <g transform={`translate(${labelX}, ${labelY})`} data-testid={`edge-label-${id}`}>

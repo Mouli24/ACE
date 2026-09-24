@@ -6,4 +6,14 @@ export const queryKeys = {
   workflows: (projectId: string) => ['workflows', projectId] as const,
   workflow: (id: string) => ['workflow', id] as const,
   validation: (id: string) => ['validation', id] as const,
+  providers: () => ['providers'] as const,
+  provider: (id: string) => ['provider', id] as const,
+  providerDetect: () => ['providers', 'detect'] as const,
+  /** Every model list, whatever its filter — what a refresh invalidates (FR-MOD-006). */
+  modelsRoot: () => ['models'] as const,
+  models: (query: object) => ['models', query] as const,
+  runs: (workflowId: string) => ['runs', workflowId] as const,
+  projectRuns: (projectId: string) => ['project-runs', projectId] as const,
+  run: (runId: string) => ['run', runId] as const,
+  nodeRuns: (runId: string) => ['node-runs', runId] as const,
 };

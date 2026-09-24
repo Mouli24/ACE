@@ -32,6 +32,13 @@
   --color-status-BLOCKED: #f59e0b;
   --color-status-FAILED: #f87171;
 
+  --color-provider-status-UNKNOWN: #9da7b3;
+  --color-provider-status-CHECKING: #8fb3ff;
+  --color-provider-status-CONNECTED: #4ade80;
+  --color-provider-status-AUTH_FAILED: #ff8a8a;
+  --color-provider-status-UNREACHABLE: #f59e0b;
+  --color-provider-status-RATE_LIMITED: #f2c94c;
+
   --font-human: 'Source Serif 4', 'Iowan Old Style', Georgia, serif;
   --font-machine: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
 
@@ -55,4 +62,26 @@ body {
   background-color: var(--color-canvas);
   background-image: radial-gradient(var(--color-canvas-dot) 1px, transparent 1px);
   background-size: 20px 20px;
+}
+
+/*
+ * FR-EXE-015: the edge an envelope just travelled. The dash marches from source to target, so the
+ * direction of the handoff is visible, and `prefers-reduced-motion` gets the colour without the
+ * movement (NFR-USE-02).
+ */
+@keyframes ace-edge-flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+.ace-edge-flowing {
+  stroke-dasharray: 6 6;
+  animation: ace-edge-flow 0.6s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ace-edge-flowing {
+    animation: none;
+  }
 }

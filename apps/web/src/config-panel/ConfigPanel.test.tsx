@@ -64,7 +64,8 @@ describe('Config panel (FR-NODE-002/003/007/008)', () => {
     expect(q.getByLabelText(/^name$/i)).toBeInTheDocument();
     expect(q.getByLabelText(/provider/i)).toBeInTheDocument();
     expect(q.getByLabelText(/^model$/i)).toBeInTheDocument();
-    expect(q.getByText(/add a provider in round 2/i)).toBeInTheDocument();
+    // Round 2: with no provider on the engine the picker says where to add one (FR-NODE-003).
+    expect(q.getByText(/add a provider on the providers screen/i)).toBeInTheDocument();
     expect(q.getByLabelText(/routing policy/i)).toBeInTheDocument();
     expect(q.getByLabelText(/instructions/i)).toBeInTheDocument();
     expect(q.getByRole('group', { name: /input types/i })).toBeInTheDocument();
@@ -240,7 +241,8 @@ describe('Config panel (FR-NODE-002/003/007/008)', () => {
   it('Model panel: system prompt, types and execution settings', async () => {
     const { panel, user, workflow, node } = await openPanel('model');
     const q = within(panel);
-    expect(q.getByText(/add a provider in round 2/i)).toBeInTheDocument();
+    // Round 2: with no provider on the engine the picker says where to add one (FR-NODE-003).
+    expect(q.getByText(/add a provider on the providers screen/i)).toBeInTheDocument();
     await user.type(q.getByLabelText(/system prompt/i), 'Be terse.');
     await user.tab();
     await settled(workflow.id);

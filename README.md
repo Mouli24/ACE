@@ -74,3 +74,38 @@ docs/              PRD, FRS, architecture, decision log, defect log, team prompt
 
 See `CLAUDE.md` for the team process, `docs/ACE-FRS.md` for requirements and `docs/DECISIONS.md`
 for every decision made along the way.
+
+## Round 2 — providers, models and runs (web)
+
+The mock engine is enough to drive everything below with no keys and no network: `VITE_ACE_MOCK=1
+pnpm dev:web`, or `pnpm dev` for the real engine once A2 has landed.
+
+- **`/providers`** — add a provider per type (the `mock` one needs nothing), Test it, rotate or
+  remove its key, set its concurrency. A key is written, never read back: the API returns
+  `keySet: true/false` and nothing else. The second tab is the model catalogue, filterable by
+  provider, input type, output type and availability, with a per-provider refresh.
+- **The Canvas** — pick a provider and model on an agent, then press **Start** in the top bar. An
+  Input node with nothing to send is asked for text first. While the run is in flight each card
+  shows its state ring, the text streaming in, and the model that answered; the edge an envelope
+  travelled lights up; the Output node shows the final result; the top bar carries the run's status
+  and its tokens and cost.
+- **Inspector** (right pane, next to Configure) — for the selected node: the envelope it was given
+  with its budget and trust label, its output, the model used, tokens, cost, duration, any error,
+  and the prompt version with a **View prompt** drawer showing the exact text that was sent.
+- **Runs** — a Runs tab per workflow, `/projects/:projectId/runs` for the project, and
+  `/runs/:runId` for one run with its snapshot read-only.
+
+Pause, stop, retry, approvals and guardrail screens are Round 3; the run-control slot in the top bar
+says so.
+
+### Driving a scenario by hand
+
+In mock mode the browser console can script a run, which is what the e2e suite does:
+
+```js
+window.__aceMock.setScenario("slow-stream"); // or fallback-used, contract-violation,
+// preflight-blocked, all-nine-states, socket-drop
+window.__aceMock.seedRunnable(); // Input → Agent → Output on the mock provider
+window.__aceMock.dropSocket(); // cut the connection mid-run and watch it resume
+window.__aceMock.setProviderStatus(id, "AUTH_FAILED", "key rejected");
+```

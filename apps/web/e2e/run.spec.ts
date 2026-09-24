@@ -1,0 +1,244 @@
+import { expect, test, type Page } from '@playwright/test';
+
+import { freshApp, nodeCard } from './helpers';
+
+// Type-only: brings `window.__aceMock` into scope.
+import type {} from '../src/mocks/browser';
+
+type Scenario = Parameters<NonNullable<Window['__aceMock']>['setScenario']>[0];
+
+interface Runnable {
+  projectId: string;
+  workflowId: string;
+  providerId: string;
+  inputId: string;
+  agentId: string;
+  outputId: string;
+  edgeIds: string[];
+}
+
+/** Seed Input → Agent → Output on the mock provider, pick a scenario and open the Canvas. */
+async function openRunnable(
+  page: Page,
+  scenario: Scenario,
+  options: { text?: string; modelId?: string; outputTypes?: string[] } = {},
+): Promise<Runnable> {
+  await freshApp(page);
+  const seeded = await page.evaluate((opts) => window.__aceMock!.seedRunnable(opts), options);
+  // The choice is stored, so it survives the navigation to the Canvas below.
+  await page.evaluate((name) => window.__aceMock!.setScenario(name), scenario);
+  await page.goto(`/projects/${seeded.projectId}/workflows/${seeded.workflowId}`);
+  await expect(page.getByTestId('canvas')).toBeVisible();
+  await expect(page.locator('.react-flow__node').first()).toBeVisible();
+  return seeded;
+}
+
+const start = (page: Page) => page.getByTestId('run-bar').getByRole('button', { name: 'Start' });
+
+test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
+  test('TC-EXE-007 + TC-EXE-008: streamed text lands on the card and the states are distinct', async ({
+    page,
+  }) => {
+    const seeded = await openRunnable(page, 'slow-stream');
+    await start(page).click();
+
+    const card = nodeCard(page, seeded.agentId);
+    // The ring follows the node's own state machine (Arch §19.1).
+    await expect(card).toHaveAttribute('data-state', 'RUNNING', { timeout: 10_000 });
+    const ring = card.getByTestId('status-ring');
+    await expect(ring).toHaveAttribute('aria-label', 'running');
+
+    // The card streams under the node's id, so the locator does not depend on the run's ids.
+    const streamed = card.getByTestId(`stream-${seeded.agentId}`);
+    await expect(streamed).toBeVisible();
+    const first = (await streamed.textContent()) ?? '';
+    // TC-EXE-007: the text grows while the node is still running, not only at the end.
+    await expect
+      .poll(async () => ((await streamed.textContent()) ?? '').length, { timeout: 10_000 })
+      .toBeGreaterThan(first.length);
+
+    await expect(card).toHaveAttribute('data-state', 'COMPLETED', { timeout: 20_000 });
+    await expect(card.getByTestId('status-ring')).toHaveAttribute('aria-label', 'completed');
+  });
+
+  test('TC-EXE-014: the edge animates when an envelope travels it', async ({ page }) => {
+    const seeded = await openRunnable(page, 'linear-complete');
+    const agentEdge = page.getByTestId(`edge-${seeded.edgeIds[1]}`);
+    await expect(agentEdge).toHaveAttribute('data-transferred', 'false');
+
+    await start(page).click();
+
+    await expect(agentEdge).toHaveAttribute('data-animating', 'true', { timeout: 15_000 });
+    await expect(agentEdge.locator('title')).not.toHaveText('no data yet');
+
+    // The class has to name a real animation, and the highlight has to switch itself off again
+    // (D-018: it did neither — the keyframes did not exist and nothing re-rendered the edge).
+    const animation = await agentEdge
+      .locator('.ace-edge-flowing')
+      .first()
+      .evaluate((el) => getComputedStyle(el).animationName);
+    expect(animation).toBe('ace-edge-flow');
+
+    await expect(agentEdge).toHaveAttribute('data-animating', 'false', { timeout: 10_000 });
+    await expect(agentEdge).toHaveAttribute('data-transferred', 'true');
+  });
+
+  test('TC-RTR-004 + FR-NODE-012: the card names the fallback model and the Output shows the result', async ({
+    page,
+  }) => {
+    const seeded = await openRunnable(page, 'fallback-used');
+    await start(page).click();
+
+    await expect(page.getByTestId(`used-model-${seeded.agentId}`)).toHaveText(
+      /used: mock-text-fallback \(fallback\)/,
+      { timeout: 15_000 },
+    );
+    await expect(page.getByTestId(`final-output-${seeded.outputId}`)).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(page.getByTestId('run-status')).toHaveAttribute('data-status', 'COMPLETE');
+    await expect(page.getByTestId('run-totals')).toContainText('$');
+  });
+
+  test('TC-NODE-009: the provider accent does not change while the state does', async ({ page }) => {
+    const seeded = await openRunnable(page, 'slow-stream');
+    const card = nodeCard(page, seeded.agentId);
+    const accent = () =>
+      card.evaluate((el) => getComputedStyle(el).getPropertyValue('--accent-color').trim());
+
+    const before = await accent();
+    expect(before).not.toBe('');
+
+    await start(page).click();
+    await expect(card).toHaveAttribute('data-state', 'RUNNING', { timeout: 10_000 });
+    expect(await accent()).toBe(before);
+
+    await expect(card).toHaveAttribute('data-state', 'COMPLETED', { timeout: 20_000 });
+    expect(await accent()).toBe(before);
+  });
+
+  test('FR-EXE-003: a blocked run shows its pre-flight issues and selects the node', async ({
+    page,
+  }) => {
+    await openRunnable(page, 'preflight-blocked');
+    await start(page).click();
+
+    const panel = page.getByTestId('preflight-issues');
+    await expect(panel).toBeVisible({ timeout: 10_000 });
+    await expect(panel).toContainText('provider_unreachable');
+
+    await panel.getByRole('button', { name: /show node/i }).first().click();
+    await expect(page.locator('[data-selected="true"]')).toHaveCount(1);
+  });
+
+  test('TC-EXE-013: dropping the socket mid-run leaves the same overlay after the resume', async ({
+    page,
+  }) => {
+    const seeded = await openRunnable(page, 'slow-stream');
+    await start(page).click();
+
+    const card = nodeCard(page, seeded.agentId);
+    await expect(card).toHaveAttribute('data-state', 'RUNNING', { timeout: 10_000 });
+
+    await page.evaluate(() => window.__aceMock!.dropSocket());
+    await expect(page.getByTestId('socket-reconnecting')).toBeVisible();
+
+    // The run finishes anyway: the SDK reconnects, resumes after its last seq and folds the rest.
+    await expect(card).toHaveAttribute('data-state', 'COMPLETED', { timeout: 30_000 });
+    await expect(page.getByTestId('run-status')).toHaveAttribute('data-status', 'COMPLETE');
+    await expect(page.getByTestId('socket-reconnecting')).toBeHidden();
+  });
+
+  test('TC-EXE-009 + TC-PRM-004/005: the inspector shows the run and the prompt as sent', async ({
+    page,
+  }) => {
+    const seeded = await openRunnable(page, 'linear-complete');
+    await start(page).click();
+    await expect(page.getByTestId('run-status')).toHaveAttribute('data-status', 'COMPLETE', {
+      timeout: 15_000,
+    });
+
+    await nodeCard(page, seeded.agentId).click();
+    await page.getByRole('tab', { name: 'Inspector' }).click();
+
+    const inspector = page.getByTestId('inspector');
+    await expect(inspector.getByTestId('inspector-facts')).toContainText('mock-text');
+    await expect(inspector.getByTestId('envelope-trust')).toBeVisible();
+    await expect(inspector.getByTestId('prompt-version')).toContainText('version');
+
+    await inspector.getByRole('button', { name: 'View prompt' }).click();
+    const prompt = page.getByTestId('prompt-text');
+    await expect(prompt).toContainText('UNTRUSTED');
+    await expect(prompt).toContainText('summarise the report');
+  });
+
+  test('TC-EXE-011: the run history lists the run, newest first, and opens its page', async ({
+    page,
+  }) => {
+    const seeded = await openRunnable(page, 'linear-complete');
+    await start(page).click();
+    await expect(page.getByTestId('run-status')).toHaveAttribute('data-status', 'COMPLETE', {
+      timeout: 15_000,
+    });
+
+    await page.getByRole('tab', { name: 'Runs' }).click();
+    const rows = page.getByTestId('runs-table').locator('tr[data-testid^="run-row-"]');
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first()).toHaveAttribute('data-status', 'COMPLETE');
+
+    await rows.first().getByRole('link').click();
+    await expect(page.getByTestId('run-detail-status')).toHaveAttribute('data-status', 'COMPLETE');
+    await expect(page.getByTestId('run-detail-nodes').locator('li')).toHaveCount(3);
+
+    // The project-level list finds the same run.
+    await page.goto(`/projects/${seeded.projectId}/runs`);
+    await expect(page.getByTestId('runs-table').first()).toBeVisible();
+  });
+});
+
+test.describe('Round 2 providers UI in a real browser (FR-PRV-004)', () => {
+  test('TC-PRV-005: a provider.status frame updates the top bar with no reload', async ({
+    page,
+  }) => {
+    const seeded = await openRunnable(page, 'linear-complete');
+    const chip = page.getByTestId('provider-status-bar').getByTestId(`provider-status-${seeded.providerId}`);
+    await expect(chip).toHaveAttribute('data-status', 'UNKNOWN');
+
+    await page.evaluate(
+      (id) => window.__aceMock!.setProviderStatus(id, 'CONNECTED', 'all good'),
+      seeded.providerId,
+    );
+
+    await expect(chip).toHaveAttribute('data-status', 'CONNECTED');
+  });
+
+  test('TC-PRV-001..003: a provider can be added and tested from the screen', async ({ page }) => {
+    await freshApp(page);
+    await page.goto('/providers');
+
+    await page.getByRole('button', { name: /add provider/i }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Type').click();
+    await page.getByRole('option', { name: 'Mock' }).click();
+    await dialog.getByLabel('Name').fill('My mock');
+    await dialog.getByRole('button', { name: 'Add provider' }).click();
+
+    const row = page.locator('[data-testid^="provider-row-"]').first();
+    await expect(row).toContainText('My mock');
+    await expect(row).toContainText('key set: no');
+
+    await row.getByRole('button', { name: 'Test' }).click();
+    await expect(row.locator('[data-testid^="provider-status-"]')).toHaveAttribute(
+      'data-status',
+      'CONNECTED',
+    );
+
+    // TC-MOD-003: the models tab lists the mock catalogue and filters it.
+    await page.getByRole('tab', { name: 'Models' }).click();
+    await expect(page.getByTestId('models-table')).toBeVisible();
+    await page.getByLabel('Input type').click();
+    await page.getByRole('option', { name: 'image' }).click();
+    await expect(page.locator('[data-testid^="model-row-"]')).toHaveCount(1);
+    await expect(page.getByTestId('model-row-mock-vision')).toBeVisible();
+  });
+});

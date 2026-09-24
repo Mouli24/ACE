@@ -1,12 +1,26 @@
 import { THEMES, type Theme } from '@ace/contracts';
-import { Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@ace/ui';
+import {
+  Label,
+  ProviderStatusChip,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@ace/ui';
+import { Link } from 'react-router-dom';
 
+import { useProviders } from '../providers/hooks';
 import { usePatchSettings, useSettings } from './hooks';
 
-/** `/settings` — theme only in round 1 (round 1 §5 step 3). */
+/**
+ * `/settings` — the theme, and provider status (FR-PRV-004). The chips read the same providers
+ * query the top bar does, patched by `provider.status`, so all three places agree without a reload.
+ */
 export function SettingsPage() {
   const settings = useSettings();
   const patch = usePatchSettings();
+  const providers = useProviders();
 
   return (
     <main className="mx-auto flex w-full max-w-xl flex-col gap-6 px-4 py-10">
@@ -33,6 +47,40 @@ export function SettingsPage() {
           Light and system themes render in a later round; dark is the design.
         </p>
       </div>
+
+      <section className="flex flex-col gap-2" data-testid="settings-providers">
+        <h2 className="font-human text-sm font-semibold">Providers</h2>
+        {providers.data?.length === 0 ? (
+          <p className="text-xs text-fg-muted">
+            None yet —{' '}
+            <Link to="/providers" className="underline">
+              add one
+            </Link>
+            .
+          </p>
+        ) : (
+          <ul className="flex flex-wrap gap-2">
+            {providers.data?.map((provider) => (
+              <li key={provider.id}>
+                <ProviderStatusChip
+                  data-testid={`provider-status-${provider.id}`}
+                  name={provider.name}
+                  status={provider.status}
+                  {...(provider.statusMessage === undefined
+                    ? {}
+                    : { message: provider.statusMessage })}
+                  {...(provider.lastCheckedAt === undefined
+                    ? {}
+                    : { lastCheckedAt: provider.lastCheckedAt })}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+        <Link to="/providers" className="font-machine text-xs underline">
+          manage providers and models
+        </Link>
+      </section>
     </main>
   );
 }

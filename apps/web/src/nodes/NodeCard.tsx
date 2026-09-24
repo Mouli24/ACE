@@ -1,9 +1,18 @@
-import type { Node, NodeState, Port, ProviderType } from '@ace/contracts';
-import { Badge, PROVIDER_ACCENT, STATUS_RING, cn, tokens } from '@ace/ui';
+import type { ModelUsed, Node, NodeState, Part, Port, ProviderType } from '@ace/contracts';
+import {
+  Badge,
+  PROVIDER_ACCENT,
+  STATUS_RING,
+  StatusRing,
+  StreamingText,
+  cn,
+  tokens,
+} from '@ace/ui';
 import { Handle, Position, type NodeProps, type Node as FlowNode } from '@xyflow/react';
 import { Bot, Cpu, Flag, GitMerge, TextCursorInput, Wand2, type LucideIcon } from 'lucide-react';
 import { memo, type CSSProperties, type KeyboardEvent } from 'react';
 
+import { useNodeOverlay } from '../runs/run-store';
 import type { Round1NodeKind } from './factory';
 
 export const KIND_ICON: Record<Round1NodeKind, LucideIcon> = {
@@ -19,6 +28,10 @@ export const KIND_ICON: Record<Round1NodeKind, LucideIcon> = {
 export type FlowNodeData = {
   node: Node;
   connectedPortIds: Set<string>;
+  /** The node's provider type, for the accent border (FR-NODE-010). */
+  provider?: ProviderType;
+  /** Set when the node's provider is gone (FR-PRV-005). */
+  providerMissing?: boolean;
   /** Keyboard connect (NFR-USE-02): the output port armed with Enter, if any. */
   armedPortId: string | undefined;
   onPortKey: (port: Port, direction: 'in' | 'out', nodeId: string) => void;
@@ -27,14 +40,30 @@ export type AceFlowNode = FlowNode<FlowNodeData, 'ace'>;
 
 export interface NodeCardViewProps {
   node: Node;
-  /** Status ring (FR-NODE-010). Always IDLE in round 1; the run engine drives it from round 2. */
+  /** Status ring; driven by the run overlay's `node.state` frames (FR-EXE-009). */
   state: NodeState;
   selected: boolean;
   connectedPortIds: Set<string>;
-  /** Provider accent border; `undefined` until a provider is chosen (round 2). */
+  /** Provider accent border, fixed per provider type and never moved by state (FR-NODE-010). */
   provider?: ProviderType;
   armedPortId?: string;
   onPortKey?: (port: Port, direction: 'in' | 'out') => void;
+  /** Text streamed by this node's current run, as it arrives (FR-EXE-008). */
+  streamedText?: string;
+  /** What the router actually used, so a fallback is visible on the card (FR-RTR-006). */
+  modelUsed?: ModelUsed;
+  /** The run's final output for this node — Output nodes render it (FR-NODE-012). */
+  finalOutput?: Part[];
+  /** The node names a provider the engine no longer has (FR-PRV-005). */
+  providerMissing?: boolean;
+}
+
+/** Enough of a `Part` to show on a card; the inspector renders the typed view (round 4 adds more). */
+function partText(part: Part): string {
+  if (part.type === 'text') return part.text;
+  if (part.type === 'json') return JSON.stringify(part.value);
+  if (part.type === 'code') return part.text;
+  return `[${part.type}]`;
 }
 
 function modelLabel(node: Node): string {
@@ -111,6 +140,10 @@ export function NodeCardView({
   provider,
   armedPortId,
   onPortKey,
+  streamedText,
+  modelUsed,
+  finalOutput,
+  providerMissing,
 }: NodeCardViewProps) {
   const Icon = KIND_ICON[node.kind as Round1NodeKind] ?? Bot;
   const chip = modelLabel(node);
@@ -136,20 +169,51 @@ export function NodeCardView({
       <header className="flex items-center gap-2 px-3 pt-2">
         <Icon className="h-4 w-4 shrink-0 text-fg-muted" aria-hidden />
         <span className="truncate font-human text-sm font-semibold">{node.name}</span>
-        <span className="ml-auto font-machine text-[10px] uppercase text-fg-muted">
-          {node.kind}
-        </span>
+        <StatusRing state={state} className="ml-auto" />
+        <span className="font-machine text-[10px] uppercase text-fg-muted">{node.kind}</span>
       </header>
       {chip && (
-        <div className="px-3 pt-1">
+        <div className="flex flex-wrap items-center gap-1 px-3 pt-1">
           <Badge>{chip}</Badge>
+          {providerMissing && (
+            <Badge
+              data-testid={`provider-missing-${node.id}`}
+              className="border-danger text-danger"
+              title="This node's provider was removed; choose another before running."
+            >
+              provider missing
+            </Badge>
+          )}
         </div>
       )}
-      {node.kind === 'output' && (
-        <p className="px-3 pt-1 font-human text-xs italic text-fg-muted">
-          final result appears here after a run
+      {/* FR-RTR-006: what actually answered, and whether the router had to fall back. */}
+      {modelUsed && (
+        <p
+          className="px-3 pt-1 font-machine text-[10px] text-fg-muted"
+          data-testid={`used-model-${node.id}`}
+        >
+          used: {modelUsed.modelId}
+          {modelUsed.viaFallback ? ' (fallback)' : ''}
         </p>
       )}
+      {streamedText && (
+        <div className="px-3 pt-1">
+          <StreamingText text={streamedText} nodeRunId={node.id} />
+        </div>
+      )}
+      {node.kind === 'output' &&
+        (finalOutput === undefined ? (
+          <p className="px-3 pt-1 font-human text-xs italic text-fg-muted">
+            final result appears here after a run
+          </p>
+        ) : (
+          <p
+            className="line-clamp-4 px-3 pt-1 font-human text-xs text-fg"
+            data-testid={`final-output-${node.id}`}
+          >
+            {finalOutput.map((part) => partText(part)).join('\n')}
+          </p>
+        ))}
       {node.kind === 'input' && node.config.text && (
         <p className="line-clamp-2 px-3 pt-1 font-human text-xs text-fg-muted">
           {node.config.text}
@@ -185,16 +249,26 @@ export function NodeCardView({
   );
 }
 
-/** The React Flow wrapper: memoised so a pan or an unrelated edit never re-renders it (NFR-PERF-01). */
+/**
+ * The React Flow wrapper: memoised so a pan or an unrelated edit never re-renders it (NFR-PERF-01).
+ * The live overlay is read here rather than passed through `data`, so one node's token does not
+ * rebuild the whole node array (NFR-PERF-04).
+ */
 export const FlowNodeCard = memo(function FlowNodeCard({ data, selected }: NodeProps<AceFlowNode>) {
+  const overlay = useNodeOverlay(data.node.id);
   return (
     <NodeCardView
       node={data.node}
-      state="IDLE"
+      state={overlay.state}
       selected={Boolean(selected)}
       connectedPortIds={data.connectedPortIds}
       armedPortId={data.armedPortId}
       onPortKey={(port, direction) => data.onPortKey(port, direction, data.node.id)}
+      streamedText={overlay.streamedText}
+      {...(overlay.modelUsed === undefined ? {} : { modelUsed: overlay.modelUsed })}
+      {...(overlay.finalOutput === undefined ? {} : { finalOutput: overlay.finalOutput })}
+      {...(data.providerMissing ? { providerMissing: true } : {})}
+      {...(data.provider === undefined ? {} : { provider: data.provider })}
     />
   );
 });

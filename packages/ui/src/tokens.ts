@@ -1,4 +1,4 @@
-import type { NodeState, ProviderType } from '@ace/contracts';
+import type { NodeState, ProviderState, ProviderType } from '@ace/contracts';
 
 /**
  * ACE design tokens (Arch §10.1 design system, CLAUDE.md §2): a dark dotted Canvas, one accent
@@ -28,6 +28,20 @@ export const STATUS_RING: Readonly<Record<NodeState, string>> = {
   FAILED: '#f87171',
 };
 
+/**
+ * One colour per `ProviderState` (round 2 §5 step 2). A provider's state is about reachability, so
+ * the scale is deliberately not the node-state scale: CONNECTED is green, the three fault states
+ * are warm, and UNKNOWN/CHECKING stay neutral so an unchecked provider never reads as broken.
+ */
+export const PROVIDER_STATUS: Readonly<Record<ProviderState, string>> = {
+  UNKNOWN: '#9da7b3',
+  CHECKING: '#8fb3ff',
+  CONNECTED: '#4ade80',
+  AUTH_FAILED: '#ff8a8a',
+  UNREACHABLE: '#f59e0b',
+  RATE_LIMITED: '#f2c94c',
+};
+
 export const tokens = {
   color: {
     canvas: '#0d1117',
@@ -43,6 +57,7 @@ export const tokens = {
     selection: '#d8b4fe',
     provider: PROVIDER_ACCENT,
     status: STATUS_RING,
+    providerStatus: PROVIDER_STATUS,
   },
   font: {
     human: '"Source Serif 4", "Iowan Old Style", Georgia, serif',

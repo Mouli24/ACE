@@ -1,0 +1,187 @@
+import type { Id, NodeState, Part, RunState, ServerFrame, Usage } from '@ace/contracts';
+import { RunEventBuffer, type EdgeTransferView, type NodeRunView } from '@ace/sdk';
+import { create } from 'zustand';
+import { useShallow } from 'zustand/react/shallow';
+
+/**
+ * The live run overlay (Arch §10.1: Zustand for the live overlay). The engine owns the truth, so
+ * this store holds no decisions of its own — it is the folded `§2.4` event stream and nothing else.
+ *
+ * The fold itself lives in `@ace/sdk`'s `RunEventBuffer`, which is what the acceptance tests use
+ * against the real engine; the store only republishes its view so React can subscribe. A monotonic
+ * `revision` is what changes on every frame: the view object is stable, so components select the
+ * one field they render and a token for node A never re-renders node B.
+ */
+interface RunOverlayState {
+  /** The run the overlay is showing, if any. */
+  runId: Id | undefined;
+  status: RunState | undefined;
+  haltReason: string | undefined;
+  totals: Usage | undefined;
+  finalOutput: Record<Id, Part[]> | undefined;
+  /** Bumped on every applied frame; the cheap way to invalidate the derived selectors. */
+  revision: number;
+  /**
+   * How many node runs have reached a terminal state (Arch §19.1). It moves a handful of times per
+   * run rather than once per token, which makes it the right thing to key a refetch on.
+   */
+  settledCount: number;
+  /** True from `POST /runs` until `run.completed`; the UI allows one active run per workflow. */
+  active: boolean;
+  /** The workflow whose run this is, so another workflow's Canvas stays clean. */
+  workflowId: Id | undefined;
+
+  /** Clear the fold and claim the workflow, before the start request is sent. */
+  arm(workflowId: Id): void;
+  begin(workflowId: Id, runId: Id, status: RunState): void;
+  apply(frame: ServerFrame): void;
+  reset(): void;
+
+  nodeState(nodeId: Id): NodeState;
+  nodeRun(nodeId: Id): NodeRunView | undefined;
+  nodeRunById(nodeRunId: Id): NodeRunView | undefined;
+  nodeRuns(): NodeRunView[];
+  streamedText(nodeRunId: Id): string;
+  lastTransfer(edgeId: Id): EdgeTransferView | undefined;
+  /** What a reconnect must ask the engine to replay (FR-EXE-014). */
+  lastSeq(): number;
+}
+
+/** One buffer per store; `reset()` clears it rather than replacing it, so selectors stay valid. */
+const buffer = new RunEventBuffer();
+
+const IDLE: NodeState = 'IDLE';
+
+/** Terminal node states (Arch §19.1): once a node is here its record on the engine is complete. */
+const TERMINAL: ReadonlySet<NodeState> = new Set<NodeState>([
+  'COMPLETED',
+  'FAILED',
+  'STOPPED',
+  'BLOCKED',
+]);
+
+export const useRunStore = create<RunOverlayState>((set) => ({
+  runId: undefined,
+  status: undefined,
+  haltReason: undefined,
+  totals: undefined,
+  finalOutput: undefined,
+  revision: 0,
+  settledCount: 0,
+  active: false,
+  workflowId: undefined,
+
+  /**
+   * Called before `POST /runs`. The engine may emit frames before its 201 reaches us — with an
+   * instant provider the whole run can be over by then — so the fold is cleared *here*. Clearing it
+   * on the response instead erased those frames for good: `node.token` is transient and `resume`
+   * would not replay them, because the socket's `lastSeq` has already passed them (§2.4).
+   */
+  arm: (workflowId) => {
+    buffer.reset();
+    set({
+      workflowId,
+      runId: undefined,
+      status: undefined,
+      haltReason: undefined,
+      totals: undefined,
+      finalOutput: undefined,
+      revision: 0,
+      settledCount: 0,
+      active: true,
+    });
+  },
+
+  /**
+   * The run was accepted. `run.started` carries the same facts, but a BLOCKED run never sends one
+   * (FR-EXE-003), and frames already folded by `arm` are kept: this only names the run and, when
+   * the engine answers with a finished or blocked run, settles the status.
+   */
+  begin: (workflowId, runId, status) => {
+    set((state) => ({
+      workflowId,
+      runId,
+      // A frame that arrived first is ahead of this response; it decides the status.
+      status: state.revision > 0 && state.status !== undefined ? state.status : status,
+      active:
+        state.revision > 0 && state.status !== undefined
+          ? state.active
+          : status === 'RUNNING' || status === 'PREFLIGHT' || status === 'PAUSED',
+    }));
+  },
+
+  apply: (frame) => {
+    buffer.apply(frame);
+    const view = buffer.view;
+    const settled = view.nodeRuns().filter((run) => TERMINAL.has(run.status)).length;
+    set((state) => ({
+      settledCount: settled,
+      runId: view.runId ?? state.runId,
+      status: view.status ?? state.status,
+      haltReason: view.haltReason,
+      totals: view.totals,
+      finalOutput: view.finalOutput,
+      revision: state.revision + 1,
+      active:
+        view.status === undefined
+          ? state.active
+          : view.status === 'RUNNING' || view.status === 'PAUSED' || view.status === 'PREFLIGHT',
+    }));
+  },
+
+  reset: () => {
+    buffer.reset();
+    set({
+      runId: undefined,
+      status: undefined,
+      haltReason: undefined,
+      totals: undefined,
+      finalOutput: undefined,
+      revision: 0,
+      settledCount: 0,
+      active: false,
+      workflowId: undefined,
+    });
+  },
+
+  nodeState: (nodeId) => buffer.view.nodeState(nodeId) ?? IDLE,
+  nodeRun: (nodeId) => buffer.view.nodeRun(nodeId),
+  nodeRunById: (nodeRunId) => buffer.view.nodeRunById(nodeRunId),
+  nodeRuns: () => buffer.view.nodeRuns(),
+  streamedText: (nodeRunId) => buffer.view.streamedText(nodeRunId),
+  lastTransfer: (edgeId) => buffer.view.lastTransfer(edgeId),
+  lastSeq: () => buffer.view.lastSeq,
+}));
+
+/**
+ * What one node card renders (FR-EXE-008/009, FR-RTR-006, FR-NODE-012). Selecting through
+ * `revision` keeps the subscription cheap: the fields are primitives, so a frame that changes
+ * nothing about this node does not re-render it.
+ */
+export function useNodeOverlay(nodeId: Id): {
+  state: NodeState;
+  streamedText: string;
+  modelUsed: NodeRunView['modelUsed'];
+  finalOutput: Part[] | undefined;
+} {
+  return useRunStore(
+    useShallow((store) => {
+      void store.revision;
+      const run = store.nodeRun(nodeId);
+      return {
+        state: run?.status ?? IDLE,
+        streamedText: run === undefined ? '' : store.streamedText(run.nodeRunId),
+        modelUsed: run?.modelUsed,
+        finalOutput: store.finalOutput?.[nodeId],
+      };
+    }),
+  );
+}
+
+/** FR-EXE-015: the most recent transfer on this edge, for the animation. */
+export function useEdgeTransfer(edgeId: Id): EdgeTransferView | undefined {
+  return useRunStore((store) => {
+    void store.revision;
+    return store.lastTransfer(edgeId);
+  });
+}

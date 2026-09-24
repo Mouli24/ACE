@@ -1,7 +1,7 @@
 import {
   WS_CLOSE_UNAUTHORIZED,
   WsClientFrameSchema,
-  type WsServerFrame,
+  type ServerFrame,
   type WsSubscribePayload,
 } from '@ace/contracts';
 
@@ -42,6 +42,16 @@ function closeEvent(code: number, reason = ''): CloseEvent {
   return Object.assign(new Event('close'), { code, reason, wasClean: code === 1000 }) as CloseEvent;
 }
 
+/**
+ * Every open fake socket, so a scenario (or a test) can drop the connection the way an engine
+ * restart would and watch the SDK reconnect and `resume` (FR-EXE-014, TC-EXE-013).
+ */
+const live = new Set<FakeWebSocketInstance>();
+
+export function dropMockSockets(code = 1006): void {
+  for (const socket of [...live]) socket.serverClose(code);
+}
+
 export function createFakeWebSocket(db: MockDb): FakeWebSocketClass {
   const instances: FakeWebSocketInstance[] = [];
 
@@ -74,6 +84,7 @@ export function createFakeWebSocket(db: MockDb): FakeWebSocketClass {
           return;
         }
         this.readyState = FakeWebSocket.OPEN;
+        live.add(this);
         this.unsubscribe = subscribeMockEvents((event) => this.deliver(event));
         this.onopen?.(new Event('open'));
         db.load();
@@ -81,18 +92,28 @@ export function createFakeWebSocket(db: MockDb): FakeWebSocketClass {
       }, 0);
     }
 
-    private emit(frame: WsServerFrame): void {
+    private emit(frame: ServerFrame): void {
       if (this.readyState !== FakeWebSocket.OPEN) return;
       this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(frame) }));
     }
 
+    /**
+     * §2.4: a workflow subscription delivers `workflow.updated` and every run event of that
+     * workflow's runs; `provider.status` is engine scope.
+     */
     private wants(event: MockEvent): boolean {
-      return this.subscriptions.has(event.payload.workflowId);
+      if (event.scope === 'engine') return this.engineScope;
+      return event.workflowId !== undefined && this.subscriptions.has(event.workflowId);
     }
 
     private deliver(event: MockEvent): void {
       if (!this.wants(event)) return;
-      this.emit({ type: event.type, payload: event.payload, seq: event.seq });
+      const frame = {
+        type: event.type,
+        payload: event.payload,
+        ...(event.seq === undefined ? {} : { seq: event.seq }),
+      } as ServerFrame;
+      this.emit(frame);
     }
 
     send(data: string): void {
@@ -131,6 +152,7 @@ export function createFakeWebSocket(db: MockDb): FakeWebSocketClass {
     private finish(code: number, reason: string): void {
       if (this.readyState === FakeWebSocket.CLOSED) return;
       this.readyState = FakeWebSocket.CLOSED;
+      live.delete(this);
       this.unsubscribe?.();
       this.unsubscribe = undefined;
       this.onclose?.(closeEvent(code, reason));

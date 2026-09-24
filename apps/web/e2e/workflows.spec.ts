@@ -9,7 +9,8 @@ test.describe('Workflows (FR-WF-001..005)', () => {
     await page.getByRole('button', { name: 'New project' }).click();
     await page.getByRole('dialog').getByLabel('Name').fill('P');
     await page.getByRole('dialog').getByRole('button', { name: 'Create' }).click();
-    await page.getByRole('link', { name: 'P' }).click();
+    // `exact` matters now: the top bar's "no providers" link would also match a substring "P".
+    await page.getByRole('link', { name: 'P', exact: true }).click();
     await page.getByRole('button', { name: 'New workflow' }).click();
     await page.getByRole('dialog').getByLabel('Name').fill('Flow 1');
     await page.getByRole('dialog').getByRole('button', { name: 'Create' }).click();
