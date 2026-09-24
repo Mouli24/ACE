@@ -164,10 +164,22 @@ describe('TC-EXE-013 a socket drop mid-run leaves the overlay identical', () => 
       { timeout: 8_000 },
     );
 
+    /*
+     * §7.1's row asks for the overlay to end *identical to* `GET /runs/:id/node-runs`, which is
+     * stronger than "no duplicates and everything COMPLETED" — that would also pass if the fold had
+     * quietly lost a node, or ended a node in a state the engine never recorded (Arhant's review of
+     * PR #11, comment 3). So the comparison is against the records themselves.
+     */
     const view = useRunStore.getState();
-    const states = view.nodeRuns().map((run) => run.status);
-    // Every node that ran ended COMPLETED exactly once — no duplicate node runs from the replay.
-    expect(states.every((status) => status === 'COMPLETED')).toBe(true);
+    const runId = view.runId as string;
+    const recorded = db.listNodeRuns(runId);
+
+    expect(recorded.length).toBeGreaterThan(0);
+    expect(view.nodeRuns()).toHaveLength(recorded.length);
+    for (const nodeRun of recorded) {
+      expect(view.nodeState(nodeRun.nodeId), `state of ${nodeRun.nodeId}`).toBe(nodeRun.status);
+    }
+    // One node run per node: a replayed frame must not have folded into a second view.
     expect(new Set(view.nodeRuns().map((run) => run.nodeId)).size).toBe(view.nodeRuns().length);
   });
 });

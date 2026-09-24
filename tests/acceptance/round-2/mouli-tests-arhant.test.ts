@@ -600,9 +600,11 @@ describe('TC-OBS-002/003 the totals are the sum of the node runs, on a recorded 
 
 describe('TC-PRV-009 a provider’s concurrency limit is respected', () => {
   /*
-   * D-027: `runGated` is handed to the executor and never called, so `adapter.generate` runs
-   * ungated and all five agents overlap. `it.fails` for the same reason as above — when the executor
-   * acquires the gate this turns red and asks to be unmarked.
+   * D-027: `semaphoreFor` misses its cache, awaits `load(id)`, and only then stores the gate, so
+   * five nodes dispatched in one tick each build their own semaphore of size 2 and the limit means
+   * nothing. (My first diagnosis blamed the executor for never calling `runGated`; it does, at
+   * `executor.ts:345` — corrected on Arhant's review of PR #11.) `it.fails` for the same reason as
+   * above: when the lookup is shared this turns red and asks to be unmarked.
    */
   it.fails('D-027: five agents overlap on a provider limited to two', async () => {
     const limited = await client.createProvider({
