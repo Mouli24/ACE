@@ -407,6 +407,18 @@ describe('TC-PRV-009 each provider gets its own concurrency gate', () => {
     );
   });
 
+  it('D-027 hands back one gate to callers that ask at the same moment', async () => {
+    // Five agents dispatched together all ask before any lookup has finished. Each used to miss
+    // the cache, build its own gate of size 2, and so run unlimited.
+    const provider = await harness.created({ concurrency: 2 });
+
+    const gates = await Promise.all(
+      Array.from({ length: 5 }, () => harness.service.semaphoreFor(provider.id)),
+    );
+
+    expect(new Set(gates).size).toBe(1);
+  });
+
   it('gives two providers two independent gates', async () => {
     const one = await harness.created({ name: 'One', concurrency: 1 });
     const two = await harness.created({ name: 'Two', concurrency: 4 });

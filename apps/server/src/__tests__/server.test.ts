@@ -11,6 +11,7 @@ import {
   RunSchema,
   WorkflowGraphResponseSchema,
   WsServerFrameSchema,
+  type WorkflowExport,
 } from '@ace/contracts';
 import { openDatabase } from '@ace/storage-local';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -364,17 +365,29 @@ describe('Round 2 wiring: a run goes through the real router, provider check and
   };
 
   /** Imports a round 2 fixture against a fresh mock provider and returns the workflow id. */
-  async function importFixture(file: string): Promise<string> {
-    const provider = ProviderSchema.parse(await post('/providers', { type: 'mock', name: 'Mock' }));
+  async function importFixture(
+    file: string,
+    options: { concurrency?: number; patch?: (exported: WorkflowExport) => void } = {},
+  ): Promise<string> {
+    const provider = ProviderSchema.parse(
+      await post('/providers', {
+        type: 'mock',
+        name: 'Mock',
+        ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
+      }),
+    );
     await post(`/providers/${provider.id}/refresh-models`, {});
     const project = ProjectSchema.parse(await post('/projects', { name: 'Wiring' }));
 
-    const fixture = readFileSync(
-      new URL(`../../../../tests/acceptance/fixtures/round-2/${file}`, import.meta.url),
-      'utf8',
-    ).replaceAll('01M3R2PV0000000000000000PV', provider.id);
+    const exported = JSON.parse(
+      readFileSync(
+        new URL(`../../../../tests/acceptance/fixtures/round-2/${file}`, import.meta.url),
+        'utf8',
+      ).replaceAll('01M3R2PV0000000000000000PV', provider.id),
+    ) as WorkflowExport;
+    options.patch?.(exported);
     const imported = WorkflowGraphResponseSchema.parse(
-      await post(`/projects/${project.id}/workflows/import`, JSON.parse(fixture)),
+      await post(`/projects/${project.id}/workflows/import`, exported),
     );
     return imported.workflow.id;
   }
@@ -411,6 +424,68 @@ describe('Round 2 wiring: a run goes through the real router, provider check and
     const run = await waitForEnd(started.id);
     expect(run.status).toBe('COMPLETE');
   }, 30_000);
+
+  it('D-027 never streams from more agents at once than the provider allows (TC-PRV-009)', async () => {
+    // Five mock-slow agents fed by one Input, on a provider limited to two. Node runs are stamped
+    // at dispatch, before the gate, so overlap is measured where the limit applies: the provider
+    // call, seen as the span of each node run's streamed tokens.
+    const workflowId = await importFixture('slow.json', {
+      concurrency: 2,
+      patch: (exported) => {
+        const input = exported.nodes.find((node) => node.kind === 'input');
+        const agent = exported.nodes.find((node) => node.kind === 'agent');
+        if (input === undefined || agent === undefined) throw new Error('fixture shape changed');
+        for (const i of [1, 2, 3, 4]) {
+          const id = `${agent.id.slice(0, -1)}${i}`;
+          const port = <P extends { name: string }>(p: P, dir: 'in' | 'out'): P => ({
+            ...p,
+            id: `${id}:${dir}:${p.name}`,
+          });
+          const copy = {
+            ...structuredClone(agent),
+            id,
+            name: `Agent ${i}`,
+            inputs: agent.inputs.map((p) => port(p, 'in')),
+            outputs: agent.outputs.map((p) => port(p, 'out')),
+          };
+          exported.nodes.push(copy);
+          exported.edges.push({
+            ...structuredClone(exported.edges[0]!),
+            id: `${id.slice(0, -2)}E${i}`,
+            from: { nodeId: input.id, portId: input.outputs[0]!.id },
+            to: { nodeId: id, portId: copy.inputs[0]!.id },
+          });
+        }
+      },
+    });
+
+    const socket = new WebSocket(`${engine.wsUrl}?token=${engine.token}`);
+    const spans = new Map<string, { from: number; to: number }>();
+    let completed = false;
+    socket.on('message', (data) => {
+      const frame = JSON.parse(String(data)) as { type: string; payload: { nodeRunId?: string } };
+      if (frame.type === 'run.completed') completed = true;
+      if (frame.type !== 'node.token' || frame.payload.nodeRunId === undefined) return;
+      const at = Date.now();
+      const span = spans.get(frame.payload.nodeRunId);
+      spans.set(frame.payload.nodeRunId, { from: span?.from ?? at, to: at });
+    });
+    await new Promise((resolve) => socket.on('open', resolve));
+    socket.send(JSON.stringify({ type: 'subscribe', payload: { scope: 'workflow', id: workflowId } }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const started = RunSchema.parse(await post(`/workflows/${workflowId}/runs`, {}));
+    for (let i = 0; i < 400 && !completed; i++) await new Promise((r) => setTimeout(r, 50));
+    socket.close();
+
+    expect((await waitForEnd(started.id)).status).toBe('COMPLETE');
+    const all = [...spans.values()];
+    expect(all).toHaveLength(5);
+    const peak = Math.max(
+      ...all.map((span) => all.filter((other) => other.from <= span.to && span.from <= other.to).length),
+    );
+    expect(peak, `peak concurrent provider calls was ${peak}`).toBeLessThanOrEqual(2);
+  }, 60_000);
 
   it('D64 lists providers as { items }, like every other collection', async () => {
     await post('/providers', { type: 'mock', name: 'Mock' });
