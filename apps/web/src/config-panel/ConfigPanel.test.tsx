@@ -69,7 +69,9 @@ describe('Config panel (FR-NODE-002/003/007/008)', () => {
     expect(q.getByLabelText(/instructions/i)).toBeInTheDocument();
     expect(q.getByRole('group', { name: /input types/i })).toBeInTheDocument();
     expect(q.getByRole('group', { name: /output types/i })).toBeInTheDocument();
-    expect(q.getByLabelText(/json schema/i)).toBeInTheDocument();
+    // Monaco is lazily imported, so its label exists before its control does: on a cold CI
+    // runner the `getBy` form raced the import and failed with "no form control was found".
+    expect(await q.findByLabelText(/json schema/i)).toBeInTheDocument();
     expect(q.getByLabelText(/temperature/i)).toHaveValue(0.7);
     expect(q.getByLabelText(/max tokens/i)).toHaveValue(4096);
     expect(q.getByLabelText(/timeout/i)).toHaveValue(120000);
@@ -174,7 +176,7 @@ describe('Config panel (FR-NODE-002/003/007/008)', () => {
   it('JSON schema editor: invalid JSON is an inline error, valid JSON is saved as outputContract', async () => {
     const { panel, user, workflow, node } = await openPanel('agent');
     const q = within(panel);
-    const editor = q.getByLabelText(/json schema/i);
+    const editor = await q.findByLabelText(/json schema/i);
     await user.clear(editor);
     await user.type(editor, '{{ not json');
     expect(q.getByRole('alert')).toHaveTextContent(/valid json/i);
