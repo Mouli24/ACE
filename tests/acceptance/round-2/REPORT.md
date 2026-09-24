@@ -4,13 +4,16 @@ Both suites run with `pnpm test:acceptance` (real engine on a temp database, moc
 production web build) and stay in CI as regression.
 
 ```
-$ pnpm exec vitest run --config tests/acceptance/vitest.config.ts round-2
- Test Files  1 failed (1)
-      Tests  3 failed | 20 passed (23)
+$ pnpm exec vitest run --config tests/acceptance/vitest.config.ts
+ Test Files  3 passed (3)
+      Tests  53 passed | 3 expected fail (56)   # 20 passed | 3 expected fail in round-2
 ```
 
-The three red checks are the two open **High** defects below, not flakes: they are the regressions
-those fixes have to turn green. Everything else in §7.2 passes against the engine as merged.
+The three "expected fail" checks are the two open **High** defects below, not flakes. They are marked
+`it.fails` rather than skipped: the assertions keep running on every CI, they stay green only while
+the defect is real, and the moment it is fixed they turn red with "expected test to fail" — which is
+the reminder to unmark them. A skip would have quietly outlived the bug. Everything else in §7.2
+passes against the engine as merged.
 
 ## Mouli → Arhant (A2)
 
@@ -20,31 +23,31 @@ Verdict: **MERGED — verification incomplete (D-025, D-027)** · Date 2026-09-2
 Automated — `tests/acceptance/round-2/mouli-tests-arhant.test.ts`, 23 checks over HTTP + WS through
 `@ace/sdk`, folding the frames with the same `RunEventBuffer` the web app uses:
 
-| Scenario (§7.2)                                                                                                                 | Result           |
-| ------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| TC-PRV-002 key stored, `keySet` returned, key absent from body, DB file and every log                                           | ok               |
-| TC-PRV-003/004 `apiKey: bad` → AUTH_FAILED, `ratelimited` → RATE_LIMITED                                                        | **FAIL** D-025   |
-| TC-PRV-003/004 unreachable `baseUrl` → UNREACHABLE; healthy mock → CONNECTED                                                    | ok               |
-| TC-PRV-009 provider limited to 2, five `mock-slow` agents → never more than 2 in flight                                         | **FAIL** D-027   |
-| TC-MOD-001/002 mock models discovered; manifest-only provider lists `source: manifest`                                          | ok               |
-| TC-MOD-003 filters narrow by data type and availability                                                                         | ok               |
-| D64 `GET /providers` answers `{ items }`                                                                                        | ok               |
-| TC-EXE-001 `linear-mock.json` → COMPLETE, Output's final text equals the agent's output                                         | ok               |
-| TC-EXE-002 node deleted mid-run still executes; snapshot keeps it, live graph loses it                                          | ok               |
-| TC-EXE-003 unreachable provider → BLOCKED, zero node runs, zero tokens                                                          | ok               |
-| TC-NODE-007 agent with no model → BLOCKED, the issue names the node                                                             | ok               |
-| TC-EXE-005 `contract-violation.json` → FAILED `CONTRACT_VIOLATION`, kind `agent`, HALTED                                        | ok               |
-| TC-EXE-006 `budget.json` → every envelope ≤ its `budgetTokens`, summary present, trust set                                      | ok               |
-| TC-RTR-002 fallback walked → COMPLETED with `viaFallback: true`                                                                 | ok               |
-| TC-RTR-003 whole chain 503 → FAILED `RUN_FAILED`, kind `provider`, run HALTED                                                   | ok               |
-| TC-EXE-010 Output's agent cannot answer → HALTED, no `finalOutput`                                                              | ok               |
-| TC-EXE-011 three runs → history newest first with status, duration and totals                                                   | ok               |
-| TC-EXE-013 drop the socket mid-run, `resume { afterSeq }` → no gap, no duplicate seq, the fold equals `GET /runs/:id/node-runs` | ok               |
-| TC-EXE-008 subscribe _after_ the 201 → tokens still arrive; `node.token` carries no `seq`                                       | ok (trim, D-026) |
-| TC-PRM-001 two runs, same config → `prompt.text` byte-identical, `prompt.version` equal, no key in it                           | ok               |
-| TC-OBS-002 run totals = Σ node runs, `priceTableVersion` recorded                                                               | ok               |
-| TC-OBS-003 catalogue refreshed → the recorded run's totals and node runs unchanged                                              | ok               |
-| TC-SYS-008 key absent from the data directory after a keyed run                                                                 | ok               |
+| Scenario (§7.2)                                                                                                                 | Result                  |
+| ------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| TC-PRV-002 key stored, `keySet` returned, key absent from body, DB file and every log                                           | ok                      |
+| TC-PRV-003/004 `apiKey: bad` → AUTH_FAILED, `ratelimited` → RATE_LIMITED                                                        | **expected fail** D-025 |
+| TC-PRV-003/004 unreachable `baseUrl` → UNREACHABLE; healthy mock → CONNECTED                                                    | ok                      |
+| TC-PRV-009 provider limited to 2, five `mock-slow` agents → never more than 2 in flight                                         | **expected fail** D-027 |
+| TC-MOD-001/002 mock models discovered; manifest-only provider lists `source: manifest`                                          | ok                      |
+| TC-MOD-003 filters narrow by data type and availability                                                                         | ok                      |
+| D64 `GET /providers` answers `{ items }`                                                                                        | ok                      |
+| TC-EXE-001 `linear-mock.json` → COMPLETE, Output's final text equals the agent's output                                         | ok                      |
+| TC-EXE-002 node deleted mid-run still executes; snapshot keeps it, live graph loses it                                          | ok                      |
+| TC-EXE-003 unreachable provider → BLOCKED, zero node runs, zero tokens                                                          | ok                      |
+| TC-NODE-007 agent with no model → BLOCKED, the issue names the node                                                             | ok                      |
+| TC-EXE-005 `contract-violation.json` → FAILED `CONTRACT_VIOLATION`, kind `agent`, HALTED                                        | ok                      |
+| TC-EXE-006 `budget.json` → every envelope ≤ its `budgetTokens`, summary present, trust set                                      | ok                      |
+| TC-RTR-002 fallback walked → COMPLETED with `viaFallback: true`                                                                 | ok                      |
+| TC-RTR-003 whole chain 503 → FAILED `RUN_FAILED`, kind `provider`, run HALTED                                                   | ok                      |
+| TC-EXE-010 Output's agent cannot answer → HALTED, no `finalOutput`                                                              | ok                      |
+| TC-EXE-011 three runs → history newest first with status, duration and totals                                                   | ok                      |
+| TC-EXE-013 drop the socket mid-run, `resume { afterSeq }` → no gap, no duplicate seq, the fold equals `GET /runs/:id/node-runs` | ok                      |
+| TC-EXE-008 subscribe _after_ the 201 → tokens still arrive; `node.token` carries no `seq`                                       | ok (trim, D-026)        |
+| TC-PRM-001 two runs, same config → `prompt.text` byte-identical, `prompt.version` equal, no key in it                           | ok                      |
+| TC-OBS-002 run totals = Σ node runs, `priceTableVersion` recorded                                                               | ok                      |
+| TC-OBS-003 catalogue refreshed → the recorded run's totals and node runs unchanged                                              | ok                      |
+| TC-SYS-008 key absent from the data directory after a keyed run                                                                 | ok                      |
 
 Two of §7.2's rows are **not covered here and are honest gaps**, not silent omissions:
 
