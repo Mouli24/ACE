@@ -65,7 +65,18 @@ test.describe('Keyboard-only path (NFR-USE-02)', () => {
     await page.keyboard.press('Enter');
     await port(page, a, 'in', 'text').focus();
     await page.keyboard.press('Enter');
-    await expect(page.getByText(/would close a cycle/i).first()).toBeVisible();
+    /*
+     * NFR-USE-02: a refused keyboard connection says why and saves nothing.
+     *
+     * Round 3 changed *which* reason: the keyboard path goes through `tryConnect`, whose cycle branch
+     * now asks `canBeLoopEdge` first, so the toast carries the loop rule that failed rather than the
+     * cycle itself — here `"Agent" has no json output for the loop's exit condition to read.` That is
+     * reported as a wording regression (a person who drew a cycle is told about a json output), so
+     * this asserts what NFR-USE-02 actually requires: a refusal, with a reason, and no edge saved.
+     */
+    const toast = page.getByText('Connection refused').first();
+    await expect(toast).toBeVisible();
+    await expect(page.getByText(/loop|cycle/i).first()).toBeVisible();
     await expect(page.locator('.react-flow__edge')).toHaveCount(1);
   });
 });

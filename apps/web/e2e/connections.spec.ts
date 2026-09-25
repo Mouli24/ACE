@@ -65,7 +65,9 @@ test.describe('Connections (FR-CON-001..006)', () => {
     await expect(page.locator('.react-flow__edge')).toHaveCount(1);
     await dragConnect(page, port(page, b, 'out', 'text'), port(page, a, 'in', 'text'));
     await expect(page.getByText('Connection refused').first()).toBeVisible();
-    await expect(page.getByText(/would close a cycle/i).first()).toBeVisible();
+    // Round 3 rewrote the sentence: a cycle is now refused *as a data edge* and pointed at the loop
+    // edge instead (`apps/web/src/canvas/connect.ts`). The rule is unchanged; the wording is not.
+    await expect(page.getByText(/cannot close a cycle/i).first()).toBeVisible();
     await expect(page.locator('.react-flow__edge')).toHaveCount(1);
     expect((await serverGraph(page, seeded.workflowId)).edges).toHaveLength(1);
   });

@@ -33,7 +33,12 @@ async function openRunnable(
   return seeded;
 }
 
-const start = (page: Page) => page.getByTestId('run-bar').getByRole('button', { name: 'Start' });
+/*
+ * `exact` matters from round 3: the run bar now also holds Pause · Resume · Stop · Restart, and
+ * "Restart" contains "start", so a substring match resolves to two buttons (D-031).
+ */
+const start = (page: Page) =>
+  page.getByTestId('run-bar').getByRole('button', { name: 'Start', exact: true });
 
 test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
   test('TC-EXE-007 + TC-EXE-008: streamed text lands on the card and the states are distinct', async ({
@@ -100,7 +105,9 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
     await expect(page.getByTestId('run-totals')).toContainText('$');
   });
 
-  test('TC-NODE-009: the provider accent does not change while the state does', async ({ page }) => {
+  test('TC-NODE-009: the provider accent does not change while the state does', async ({
+    page,
+  }) => {
     const seeded = await openRunnable(page, 'slow-stream');
     const card = nodeCard(page, seeded.agentId);
     const accent = () =>
@@ -127,7 +134,10 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
     await expect(panel).toBeVisible({ timeout: 10_000 });
     await expect(panel).toContainText('provider_unreachable');
 
-    await panel.getByRole('button', { name: /show node/i }).first().click();
+    await panel
+      .getByRole('button', { name: /show node/i })
+      .first()
+      .click();
     await expect(page.locator('[data-selected="true"]')).toHaveCount(1);
   });
 
@@ -201,7 +211,9 @@ test.describe('Round 2 providers UI in a real browser (FR-PRV-004)', () => {
     page,
   }) => {
     const seeded = await openRunnable(page, 'linear-complete');
-    const chip = page.getByTestId('provider-status-bar').getByTestId(`provider-status-${seeded.providerId}`);
+    const chip = page
+      .getByTestId('provider-status-bar')
+      .getByTestId(`provider-status-${seeded.providerId}`);
     await expect(chip).toHaveAttribute('data-status', 'UNKNOWN');
 
     await page.evaluate(
