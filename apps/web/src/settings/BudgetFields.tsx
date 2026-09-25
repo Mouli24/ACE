@@ -1,0 +1,120 @@
+import { BudgetUsdSchema } from '@ace/contracts';
+import { Input } from '@ace/ui';
+import { useEffect, useId, useState, type KeyboardEvent } from 'react';
+
+import { Field } from '../config-panel/fields';
+
+/**
+ * A cap the contract accepts, or why it does not. Empty is not an error: no cap is `null`, which is
+ * how a PATCH removes one (D72).
+ */
+export function readBudget(raw: string): { value: number | null } | { error: string } {
+  if (raw.trim() === '') return { value: null };
+  const parsed = BudgetUsdSchema.safeParse(Number(raw));
+  return parsed.success ? { value: parsed.data } : { error: 'Must be an amount above 0.' };
+}
+
+const blurOnEnter = (event: KeyboardEvent<HTMLInputElement>) => {
+  if (event.key === 'Enter') (event.target as HTMLInputElement).blur();
+};
+
+/** One money box: blank means no cap, and an amount the contract refuses is never saved. */
+function BudgetField({
+  label,
+  hint,
+  testId,
+  value,
+  onSave,
+  disabled,
+}: {
+  label: string;
+  hint: string;
+  testId: string;
+  value: number | null | undefined;
+  onSave: (value: number | null) => void;
+  disabled?: boolean;
+}) {
+  const id = useId();
+  const asText = value === null || value === undefined ? '' : String(value);
+  const [draft, setDraft] = useState(asText);
+  useEffect(() => setDraft(asText), [asText]);
+
+  const read = readBudget(draft);
+  const error = 'error' in read ? read.error : undefined;
+
+  const commit = () => {
+    if ('error' in read) return;
+    const current = value === undefined ? null : value;
+    if (read.value !== current) onSave(read.value);
+  };
+
+  return (
+    <Field label={label} htmlFor={id} {...(error === undefined ? { hint } : { error })}>
+      <Input
+        id={id}
+        type="number"
+        inputMode="decimal"
+        step="0.01"
+        min="0"
+        placeholder="no cap"
+        value={draft}
+        disabled={disabled}
+        data-testid={testId}
+        aria-invalid={error === undefined ? undefined : true}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={blurOnEnter}
+        className="font-machine"
+      />
+    </Field>
+  );
+}
+
+/**
+ * The two spending caps of FR-GRD-008: what every run together may spend in a day (engine settings,
+ * `Settings.dailyBudgetUsd`) and what one run of this project may spend (`Project.maxCostPerRunUsd`).
+ * The third cap, max tokens per node, is already in a node's execution settings.
+ *
+ * Both are validated by the contract's own `BudgetUsdSchema`, so a zero or a negative cap is refused
+ * inline and never saved — a run must not be stopped by a cap the engine would have rejected. A
+ * blank box is no cap and saves `null`, which is how a PATCH removes one. Saving goes through the
+ * callbacks: this component knows nothing about which resource each cap belongs to.
+ */
+export function BudgetFields({
+  dailyBudgetUsd,
+  maxCostPerRunUsd,
+  onSaveDailyBudget,
+  onSaveMaxCostPerRun,
+  disabled,
+}: {
+  dailyBudgetUsd: number | null | undefined;
+  maxCostPerRunUsd: number | null | undefined;
+  onSaveDailyBudget: (value: number | null) => void;
+  onSaveMaxCostPerRun: (value: number | null) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <section className="flex flex-col gap-4" data-testid="budget-fields">
+      <h2 className="font-human text-sm font-semibold">Budgets</h2>
+      <BudgetField
+        label="Daily budget (USD)"
+        hint="What every run together may spend in a day. Blank is no cap."
+        testId="daily-budget"
+        value={dailyBudgetUsd}
+        onSave={onSaveDailyBudget}
+        {...(disabled === undefined ? {} : { disabled })}
+      />
+      <BudgetField
+        label="Max cost per run (USD)"
+        hint="A run of this project that would cost more halts, reason budget_exceeded."
+        testId="max-cost-per-run"
+        value={maxCostPerRunUsd}
+        onSave={onSaveMaxCostPerRun}
+        {...(disabled === undefined ? {} : { disabled })}
+      />
+      <p className="text-xs text-fg-muted">
+        Max tokens per node is set on the node itself, under execution settings.
+      </p>
+    </section>
+  );
+}
