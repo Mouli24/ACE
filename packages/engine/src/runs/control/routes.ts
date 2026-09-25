@@ -1,6 +1,7 @@
 import { RetryRequestSchema, RerunRequestSchema } from '@ace/contracts';
 import { Hono, type Context, type Env } from 'hono';
 
+import { notImplemented } from '../../gateway/errors.js';
 import type { RunControls } from './service.js';
 
 /**
@@ -26,10 +27,22 @@ async function readBody(c: Context): Promise<unknown> {
   }
 }
 
+/**
+ * `resolve` is a getter rather than the service itself so that a harness can build an app before
+ * the controls exist, and so that an app built without them answers `not_implemented` rather than
+ * crashing — the same answer the gateway already gives for the round-2 services it was built
+ * without.
+ */
 export function createRunControlRoutes<E extends Env>(
-  controls: () => RunControls,
+  resolve: () => RunControls | undefined,
 ): Hono<E> {
   const routes = new Hono<E>();
+
+  const controls = (): RunControls => {
+    const service = resolve();
+    if (service === undefined) throw notImplemented('run controls');
+    return service;
+  };
 
   routes.post('/runs/:id/pause', async (c) => c.json(await controls().pause(c.req.param('id'))));
   routes.post('/runs/:id/resume', async (c) => c.json(await controls().resume(c.req.param('id'))));

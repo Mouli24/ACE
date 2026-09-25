@@ -208,3 +208,25 @@ describe('§2.5 POST /node-runs/:id/retry and /runs/:id/nodes/:nodeId/rerun', ()
     expect(response.status).toBe(404);
   });
 });
+
+describe('An app built without the controls answers `not_implemented`, not a 500', () => {
+  it('refuses every control endpoint the way the gateway refuses a service it lacks', async () => {
+    const hono = new Hono();
+    hono.onError((error, c) => {
+      const { status, body } = toApiError(error);
+      return c.json(body, status as 400);
+    });
+    hono.route('/api/v1', createRunControlRoutes(() => undefined));
+
+    for (const path of [
+      '/api/v1/runs/01JBXQ8Z9KQ4R7N2VWXYZ0RN55/pause',
+      '/api/v1/runs/01JBXQ8Z9KQ4R7N2VWXYZ0RN55/resume',
+      '/api/v1/runs/01JBXQ8Z9KQ4R7N2VWXYZ0RN55/stop',
+      '/api/v1/runs/01JBXQ8Z9KQ4R7N2VWXYZ0RN55/restart',
+    ]) {
+      const response = await hono.request(path, { method: 'POST' });
+      expect(response.status).toBe(501);
+      expect(((await response.json()) as ApiError).error.code).toBe('not_implemented');
+    }
+  });
+});
