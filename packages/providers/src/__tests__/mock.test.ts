@@ -1,3 +1,4 @@
+import { ReviewContractSchema } from '@ace/contracts';
 import { describe, expect, it } from 'vitest';
 
 import type { StreamChunk } from '../adapter.js';
@@ -88,7 +89,7 @@ describe('TC-PRV-003 / TC-PRV-004 the mock simulates every provider failure', ()
 /* -------------------------------------------------------------------------- */
 
 describe('TC-MOD-001 the mock lists every model of §2.6', () => {
-  it('lists exactly the fifteen models, in the order §2.6 tabulates them', async () => {
+  it('lists exactly the sixteen models, in the order §2.6 tabulates them', async () => {
     const models = await adapter().listModels();
 
     expect(models.map((m) => m.modelId)).toEqual([
@@ -104,6 +105,7 @@ describe('TC-MOD-001 the mock lists every model of §2.6', () => {
       'mock-leak',
       'mock-repeat',
       'mock-reject-twice',
+      'mock-reject-always',
       'mock-tool',
       'mock-vision',
       'mock-embed',
@@ -253,6 +255,15 @@ describe('Arch §28 the mock raises every error kind the engine has a rule for',
     expect(finishOf(chunks)?.reason).toBe('refusal');
     expect(textOf(chunks).toLowerCase()).toContain('cannot');
   });
+
+  it('mock-refuse emits no json, so a json contract cannot be satisfied by it', async () => {
+    // What makes it the `agent` kind: the answer is well formed and simply does not meet the
+    // contract, which is the one failure worth a contract-repair retry (round 3 §2.1).
+    const chunks = await collect(run('mock-refuse', 'answer as json', { outputTypes: ['json'] }));
+
+    expect(chunks.some((chunk) => chunk.type === 'json')).toBe(false);
+    expect(() => JSON.parse(textOf(chunks))).toThrow();
+  });
 });
 
 describe('FR-PRV-010 mock-timeout honours the AbortSignal', () => {
@@ -336,6 +347,199 @@ describe('Round 3 fixtures the mock already provides (§9 hand-off)', () => {
 
     expect(text).toContain('FAKEFAKEFAKEFAKEFAKE0000');
     expect(text).toMatch(/sk-ant-api03-/);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Round 3 additions                                                           */
+/* -------------------------------------------------------------------------- */
+
+describe('FR-PAR-005 mock-reject-always never approves, so a loop can only end at its maximum', () => {
+  it('returns the ReviewContract §4 item 8 specifies, and nothing else', async () => {
+    const value = jsonOf(await collect(run('mock-reject-always', 'x', { outputTypes: ['json'] })));
+
+    expect(value).toEqual({ score: 4, verdict: 'changes_requested', issues: ['needs work'] });
+  });
+
+  it('is a valid ReviewContract, so REVIEW_CONTRACT_SCHEMA accepts it', async () => {
+    const value = jsonOf(await collect(run('mock-reject-always', 'x', { outputTypes: ['json'] })));
+
+    expect(ReviewContractSchema.safeParse(value).success).toBe(true);
+  });
+
+  it('answers identically on every iteration, however many the caller asks for', async () => {
+    const mock = adapter();
+    const verdicts: unknown[] = [];
+    for (const iteration of [1, 2, 3, 4, 50]) {
+      verdicts.push(
+        jsonOf(
+          await collect(
+            mock.generate(
+              {
+                modelId: 'mock-reject-always',
+                prompt: `draft ${iteration}`,
+                outputTypes: ['json'],
+                iteration,
+              },
+              new AbortController().signal,
+            ),
+          ),
+        ),
+      );
+    }
+
+    expect(new Set(verdicts.map((v) => JSON.stringify(v))).size).toBe(1);
+  });
+});
+
+describe('FR-ERR-005 the attempt-dependent models count one node at a time', () => {
+  it('mock-429-then-ok gives every node in a run its own two failures', async () => {
+    const mock = adapter();
+    const call = async (prompt: string): Promise<StreamChunk[]> =>
+      collect(
+        mock.generate(
+          { modelId: 'mock-429-then-ok', prompt, outputTypes: ['text'], runId: 'run-a' },
+          new AbortController().signal,
+        ),
+      );
+
+    // Node A burns its two attempts. An automatic retry re-sends the identical prompt (§2.1).
+    await expect(call('node A prompt')).rejects.toMatchObject({ nodeError: { code: 'http_429' } });
+    await expect(call('node A prompt')).rejects.toMatchObject({ nodeError: { code: 'http_429' } });
+    await call('node A prompt');
+
+    // Node B, in the same run, still starts at attempt 1 rather than inheriting A's history.
+    await expect(call('node B prompt')).rejects.toMatchObject({ nodeError: { code: 'http_429' } });
+  });
+
+  it('mock-reject-twice walks its script even when the caller sends no iteration', async () => {
+    const mock = adapter();
+    const verdict = async (prompt: string): Promise<unknown> => {
+      const chunks = await collect(
+        mock.generate(
+          { modelId: 'mock-reject-twice', prompt, outputTypes: ['json'], runId: 'run-a' },
+          new AbortController().signal,
+        ),
+      );
+      return (jsonOf(chunks) as { verdict: string }).verdict;
+    };
+
+    expect(await verdict('draft one')).toBe('changes_requested');
+    expect(await verdict('draft two')).toBe('changes_requested');
+    expect(await verdict('draft three')).toBe('approved');
+  });
+});
+
+describe('FR-CTL-003 a stop aborts an in-flight call at once', () => {
+  it('mock-slow sleeps the two seconds §2.6 promises', async () => {
+    let slept = 0;
+    const mock = createMockAdapter({
+      sleep: async (ms) => {
+        slept += ms;
+      },
+    });
+
+    await collect(
+      mock.generate(
+        { modelId: 'mock-slow', prompt: 'x', outputTypes: ['text'] },
+        new AbortController().signal,
+      ),
+    );
+
+    expect(slept).toBe(2000);
+  });
+
+  it('stops mid-stream on a real clock in milliseconds, not after the whole two seconds', async () => {
+    const controller = new AbortController();
+    const real = createMockAdapter();
+    const iterator = real
+      .generate({ modelId: 'mock-slow', prompt: 'x', outputTypes: ['text'] }, controller.signal)
+      [Symbol.asyncIterator]();
+
+    await iterator.next();
+    const abortedAt = Date.now();
+    controller.abort();
+
+    await expect(iterator.next()).rejects.toMatchObject({
+      nodeError: { kind: 'user_cancelled', code: 'aborted', retryable: false },
+    });
+    // The abort must not wait out the 20 ms token timer, let alone the rest of the stream.
+    expect(Date.now() - abortedAt).toBeLessThan(2000);
+  });
+
+  it('records the aborted call as failed, so a stop is visible in the log', async () => {
+    const controller = new AbortController();
+    const mock = adapter();
+    const pending = collect(
+      mock.generate(
+        { modelId: 'mock-slow', prompt: 'x', outputTypes: ['text'] },
+        controller.signal,
+      ),
+    );
+
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+
+    expect(mock.calls()[0]?.failed).toBe(true);
+    expect(mock.calls()[0]?.endedAt).toBeDefined();
+  });
+});
+
+describe('Arch §28 a timeout abort is a retryable network failure, a stop is not', () => {
+  it('mock-timeout reports network when the abort reason is a TimeoutError', async () => {
+    const controller = new AbortController();
+    const pending = collect(
+      adapter().generate(
+        { modelId: 'mock-timeout', prompt: 'x', outputTypes: ['text'] },
+        controller.signal,
+      ),
+    );
+
+    controller.abort(new DOMException('The operation timed out.', 'TimeoutError'));
+
+    await expect(pending).rejects.toMatchObject({
+      nodeError: { kind: 'network', code: 'timeout', retryable: true },
+    });
+  });
+
+  it('really is the reason AbortSignal.timeout() sets, not a name this file invented', async () => {
+    const signal = AbortSignal.timeout(5);
+    const pending = collect(
+      adapter().generate({ modelId: 'mock-timeout', prompt: 'x', outputTypes: ['text'] }, signal),
+    );
+
+    await expect(pending).rejects.toMatchObject({ nodeError: { kind: 'network' } });
+  });
+
+  it('classifies a timeout in the middle of a stream the same way', async () => {
+    const controller = new AbortController();
+    const real = createMockAdapter();
+    const iterator = real
+      .generate({ modelId: 'mock-slow', prompt: 'x', outputTypes: ['text'] }, controller.signal)
+      [Symbol.asyncIterator]();
+
+    await iterator.next();
+    controller.abort(new DOMException('The operation timed out.', 'TimeoutError'));
+
+    await expect(iterator.next()).rejects.toMatchObject({
+      nodeError: { kind: 'network', retryable: true },
+    });
+  });
+
+  it('leaves a plain user stop as user_cancelled, which is never retried', async () => {
+    const controller = new AbortController();
+    const pending = collect(
+      adapter().generate(
+        { modelId: 'mock-timeout', prompt: 'x', outputTypes: ['text'] },
+        controller.signal,
+      ),
+    );
+
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({
+      nodeError: { kind: 'user_cancelled', retryable: false },
+    });
   });
 });
 

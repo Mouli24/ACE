@@ -95,6 +95,13 @@ const SPECS: readonly MockModelSpec[] = [
     supportsJson: true,
   },
   {
+    modelId: 'mock-reject-always',
+    displayName: 'Mock reject always',
+    inputTypes: ['text', 'json'],
+    outputTypes: ['json'],
+    supportsJson: true,
+  },
+  {
     modelId: 'mock-tool',
     displayName: 'Mock tool user',
     inputTypes: ['text'],
@@ -216,7 +223,29 @@ const realSleep = (ms: number): Promise<void> =>
     setTimeout(resolve, ms);
   });
 
-function abortError(): ProviderCallError {
+/**
+ * Why the caller aborted, as far as the abort reason says.
+ *
+ * A bare `controller.abort()` is a user stop — `user_cancelled`, never retried (Arch §28). An
+ * abort whose reason is a `TimeoutError` is the caller giving up on a provider that went quiet,
+ * which is a `network` failure and *is* retryable: `AbortSignal.timeout(execution.timeoutMs)`,
+ * alone or inside `AbortSignal.any([...])`, sets exactly that reason, so `mock-timeout` can drive
+ * the `network` error kind without the port growing a field (round 3 §4 item 2).
+ */
+function abortError(signal?: AbortSignal): ProviderCallError {
+  const reason: unknown = signal?.reason;
+  const name =
+    typeof reason === 'object' && reason !== null ? (reason as { name?: unknown }).name : undefined;
+
+  if (name === 'TimeoutError') {
+    return new ProviderCallError({
+      kind: 'network',
+      code: 'timeout',
+      message: 'The provider produced nothing before the call timed out.',
+      retryable: true,
+    });
+  }
+
   return new ProviderCallError({
     kind: 'user_cancelled',
     code: 'aborted',
@@ -229,10 +258,49 @@ function abortError(): ProviderCallError {
 function untilAborted(signal: AbortSignal): Promise<never> {
   return new Promise((_resolve, reject) => {
     if (signal.aborted) {
-      reject(abortError());
+      reject(abortError(signal));
       return;
     }
-    signal.addEventListener('abort', () => reject(abortError()), { once: true });
+    signal.addEventListener('abort', () => reject(abortError(signal)), { once: true });
+  });
+}
+
+/**
+ * Wait `ms`, or give up the instant the signal aborts — whichever comes first.
+ *
+ * Every await inside `generate()` goes through this, which is what makes `POST /runs/:id/stop`
+ * cancel a call in the millisecond it is issued rather than at the next token boundary
+ * (FR-CTL-003: streams closed within 2 s, and `mock-slow` alone sleeps 100 x 20 ms). The abort
+ * listener is dropped when the timer wins, so a completed stream leaves nothing attached to a
+ * signal that may abort later.
+ */
+function pause(
+  ms: number,
+  signal: AbortSignal,
+  sleep: (ms: number) => Promise<void>,
+): Promise<void> {
+  if (signal.aborted) return Promise.reject(abortError(signal));
+
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const onAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      reject(abortError(signal));
+    };
+
+    const finish = (settle: () => void): void => {
+      signal.removeEventListener('abort', onAbort);
+      if (settled) return;
+      settled = true;
+      settle();
+    };
+
+    signal.addEventListener('abort', onAbort, { once: true });
+    void sleep(ms).then(
+      () => finish(resolve),
+      (error: unknown) => finish(() => reject(error)),
+    );
   });
 }
 
@@ -241,18 +309,50 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
   const now = options.now ?? (() => Date.now());
 
   const log: MockCall[] = [];
-  /** `mock-429-then-ok` counts per run, so two runs each get their own two failures. */
-  const attemptsPerRun = new Map<string, number>();
+  /**
+   * How many times each *call* has been made, and how many times each *node* has been called.
+   *
+   * The port hands an adapter a run and a loop iteration but no node id, so the mock keys its
+   * attempt-dependent behaviours on what it does get. An automatic retry re-sends the identical
+   * prompt (round 3 §2.1), so (run, model, prompt) is one node's attempt series — which is what
+   * `mock-429-then-ok` counts. (run, model) is one node's whole call history, the fallback
+   * `mock-reject-twice` uses when the caller sends no `iteration`.
+   */
+  const attempts = new Map<string, number>();
+  const callsPerNode = new Map<string, number>();
   let inFlight = 0;
   let peak = 0;
 
+  /** Next attempt number for this exact call: 1 the first time, 2 on the first retry. */
+  const nextAttempt = (req: GenerateRequest): number => {
+    const key = `${req.runId ?? 'no-run'}|${req.modelId}|${hash(req.prompt)}`;
+    const attempt = (attempts.get(key) ?? 0) + 1;
+    attempts.set(key, attempt);
+    return attempt;
+  };
+
+  /**
+   * Which loop iteration this is. `iteration` from the caller when there is one (1-based, Arch
+   * §12.4); otherwise the nth call to this model in this run, so a review model still walks its
+   * script when a caller leaves the field out.
+   */
+  const nextIteration = (req: GenerateRequest): number => {
+    const key = `${req.runId ?? 'no-run'}|${req.modelId}`;
+    const nth = (callsPerNode.get(key) ?? 0) + 1;
+    callsPerNode.set(key, nth);
+    return req.iteration ?? nth;
+  };
+
   async function* body(req: GenerateRequest, signal: AbortSignal): AsyncGenerator<StreamChunk> {
     const tokensIn = countWords(req.prompt);
+    // Counted on every call, whichever model it is, so the two numbers mean the same thing for
+    // all of them and a model that ignores one still advances it for the next.
+    const attempt = nextAttempt(req);
+    const iteration = nextIteration(req);
 
     const stream = async function* (text: string[], delayMs: number): AsyncGenerator<StreamChunk> {
       for (const word of text) {
-        if (signal.aborted) throw abortError();
-        await sleep(delayMs);
+        await pause(delayMs, signal, sleep);
         yield { type: 'text', delta: `${word} ` };
       }
     };
@@ -285,13 +385,23 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
       }
 
       case 'mock-reject-twice': {
-        const approved = (req.iteration ?? 1) >= 3;
+        const approved = iteration >= 3;
         const value = {
           echo: req.prompt,
           verdict: approved ? 'approved' : 'changes_requested',
           score: approved ? 9 : 4,
           issues: approved ? [] : ['tighten the argument'],
         };
+        yield { type: 'json', value };
+        yield { type: 'usage', tokensIn, tokensOut: countWords(JSON.stringify(value)) };
+        yield { type: 'finish', reason: 'stop' };
+        return;
+      }
+
+      case 'mock-reject-always': {
+        // The §2.4 ReviewContract and nothing else, byte for byte on every call: a Review->Fix
+        // loop on this model can only end at its maximum (round 3 §4 item 8, `review-never`).
+        const value = { score: 4, verdict: 'changes_requested', issues: ['needs work'] };
         yield { type: 'json', value };
         yield { type: 'usage', tokensIn, tokensOut: countWords(JSON.stringify(value)) };
         yield { type: 'finish', reason: 'stop' };
@@ -314,10 +424,7 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
         throw new ProviderCallError(statusToNodeError(401, 'mock invalid api key'));
 
       case 'mock-429-then-ok': {
-        const key = req.runId ?? 'no-run';
-        const seen = (attemptsPerRun.get(key) ?? 0) + 1;
-        attemptsPerRun.set(key, seen);
-        if (seen <= 2) throw new ProviderCallError(statusToNodeError(429, 'mock rate limited'));
+        if (attempt <= 2) throw new ProviderCallError(statusToNodeError(429, 'mock rate limited'));
 
         const text = words(req.prompt, TEXT_WORDS);
         yield* stream(text, TEXT_DELAY_MS);
@@ -456,7 +563,8 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
 
     reset() {
       log.length = 0;
-      attemptsPerRun.clear();
+      attempts.clear();
+      callsPerNode.clear();
       peak = 0;
       inFlight = 0;
     },
