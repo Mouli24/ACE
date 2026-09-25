@@ -5,6 +5,7 @@ import {
   type ApprovalRequest,
   type BudgetHalt,
   type Edge,
+  type GuardrailPolicyRef,
   type HaltReason,
   type Node,
   type NodeError,
@@ -125,6 +126,11 @@ interface Context {
   edges: Edge[];
   /** The project's per-run cost cap, which `budget-halt` is measured against (§2.3, D80). */
   maxCostPerRunUsd?: number;
+  /**
+   * The policy a node was checked against, at the version it had when the run started: the node's
+   * own override, or the project default (FR-GRD-002). Resolved by the caller, which holds the db.
+   */
+  policyFor?: (node: Node) => GuardrailPolicyRef | undefined;
 }
 
 /** Which iteration and attempt a frame belongs to — both 1 unless a loop or a retry says otherwise. */
@@ -230,6 +236,8 @@ function nodeRunRecord(
     verdicts: [],
     toolCalls: [],
     startedAt: ctx.run.startedAt,
+    // Which policy, at which version, checked this node run (FR-GRD-002) — the inspector names it.
+    ...(ctx.policyFor?.(node) === undefined ? {} : { guardrailPolicy: ctx.policyFor(node) }),
     ...patch,
   };
 }

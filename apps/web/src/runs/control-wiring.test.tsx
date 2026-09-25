@@ -1,4 +1,10 @@
-import { allowedRunActions, RUN_ACTIONS, type Edge, type Node } from '@ace/contracts';
+import {
+  allowedRunActions,
+  RUN_ACTIONS,
+  type Edge,
+  type Node,
+  type RunState,
+} from '@ace/contracts';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -109,7 +115,47 @@ async function startRun(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('TC-CTL-006 the run controls follow allowedActions and nothing else', () => {
-  it('offers exactly what the engine allows while running, then while paused', async () => {
+  /*
+   * The assertion is never a second table: `allowedRunActions` is the contract's own, which is what
+   * the engine wrote into `Run.allowedActions` and what the toolbar was handed. A button enabled
+   * outside that set would be a 409 waiting to happen (FR-CTL-006).
+   *
+   * It is checked against whatever state the toolbar reports rather than a state the test expects, so
+   * the rule is what is under test and not the timing of the run.
+   */
+  const expectTableToHold = async (): Promise<RunState> =>
+    waitFor(
+      () => {
+        const status = screen
+          .getByTestId('run-controls')
+          .getAttribute('data-status') as RunState | null;
+        expect(status).not.toBeNull();
+        const allowed = allowedRunActions(status as RunState);
+        for (const name of RUN_ACTIONS) {
+          const button = action(name);
+          if (allowed.includes(name)) expect(button).toBeEnabled();
+          else expect(button).toBeDisabled();
+        }
+        return status as RunState;
+      },
+      // A control is a round trip, and an instrumented run is slower than the default second.
+      { timeout: 5_000 },
+    );
+
+  const atStatus = async (status: RunState) => {
+    await waitFor(
+      () => expect(screen.getByTestId('run-controls')).toHaveAttribute('data-status', status),
+      { timeout: 5_000 },
+    );
+    return expectTableToHold();
+  };
+
+  it('holds the table through paused, resumed and complete', async () => {
+    /*
+     * The `paused` scenario pauses itself at its hold and continues on a resume, so the three states
+     * arrive without a manual control racing the script. The manual Pause is the next test's job, on
+     * a scenario that does not pause itself.
+     */
     setScenario('paused');
     const { project, workflow } = seedRunnableWorkflow();
     const user = userEvent.setup();
@@ -118,44 +164,41 @@ describe('TC-CTL-006 the run controls follow allowedActions and nothing else', (
 
     await startRun(user);
 
-    /*
-     * The assertion is not a second table: `allowedRunActions` is the contract's own, which is what
-     * the engine wrote into `Run.allowedActions` and what the toolbar was handed. A button that is
-     * enabled outside that set would be a 409 waiting to happen (FR-CTL-006).
-     */
-    const expectEnabledToMatch = async (status: 'RUNNING' | 'PAUSED') => {
-      const allowed = allowedRunActions(status);
-      /*
-       * One `waitFor` over the whole table, not a wait on the status followed by assertions: a
-       * control in flight disables every button until the engine answers, so a status that has
-       * already arrived by frame can be a moment ahead of the buttons.
-       */
-      await waitFor(
-        () => {
-          expect(screen.getByTestId('run-controls')).toHaveAttribute('data-status', status);
-          for (const name of RUN_ACTIONS) {
-            const button = action(name);
-            if (allowed.includes(name)) expect(button).toBeEnabled();
-            else expect(button).toBeDisabled();
-          }
-        },
-        // A control is a round trip, and an instrumented run is slower than the default second.
-        { timeout: 5_000 },
-      );
-    };
-
-    await expectEnabledToMatch('RUNNING');
-
-    // The `paused` scenario holds mid-run, so Pause is a real call the engine answers PAUSED.
-    await user.click(action('pause'));
-    await expectEnabledToMatch('PAUSED');
+    await atStatus('PAUSED');
+    expect(action('resume')).toBeEnabled();
+    expect(action('pause')).toBeDisabled();
 
     await user.click(action('resume'));
-    await expectEnabledToMatch('RUNNING');
+    await atStatus('COMPLETE');
+    // A finished run offers one thing: another run from the same snapshot (FR-CTL-004).
+    expect(action('restart')).toBeEnabled();
+    expect(action('stop')).toBeDisabled();
+  });
+
+  it('FR-CTL-001: Pause holds a run that was going, and Resume lets it finish', async () => {
+    // `slow-stream` streams for a while and never pauses itself, so the pause here is only ours.
+    setScenario('slow-stream');
+    const { project, workflow } = seedRunnableWorkflow();
+    const user = userEvent.setup();
+    openCanvas(project.id, workflow.id);
+    await screen.findByTestId('canvas');
+
+    await startRun(user);
+    await atStatus('RUNNING');
+
+    await user.click(action('pause'));
+    await atStatus('PAUSED');
+
+    await user.click(action('resume'));
+    await waitFor(
+      () => expect(screen.getByTestId('run-controls')).not.toHaveAttribute('data-status', 'PAUSED'),
+      { timeout: 5_000 },
+    );
+    await expectTableToHold();
   });
 
   it('FR-CTL-003: Stop asks first, and the halt says who stopped it in plain words', async () => {
-    setScenario('paused');
+    setScenario('slow-stream');
     const { project, workflow } = seedRunnableWorkflow();
     const user = userEvent.setup();
     openCanvas(project.id, workflow.id);
@@ -168,8 +211,9 @@ describe('TC-CTL-006 the run controls follow allowedActions and nothing else', (
     const confirm = await screen.findByTestId('stop-confirm');
     await user.click(within(confirm).getByTestId('stop-confirm-stop'));
 
-    await waitFor(() =>
-      expect(screen.getByTestId('run-status')).toHaveAttribute('data-status', 'HALTED'),
+    await waitFor(
+      () => expect(screen.getByTestId('run-status')).toHaveAttribute('data-status', 'HALTED'),
+      { timeout: 5_000 },
     );
     expect(await screen.findByTestId('halt-reason')).toHaveTextContent('stopped by you');
   });

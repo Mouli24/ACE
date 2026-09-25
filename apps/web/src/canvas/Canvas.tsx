@@ -35,7 +35,7 @@ import { useRunStore } from '../runs/run-store';
 import { useGraphSync, useWorkflowGraph } from '../workflows/hooks';
 import { PALETTE_DRAG_TYPE } from './Palette';
 import { useCanvasApi } from './canvas-api';
-import { checkConnection } from './connect';
+import { checkConnection, type ConnectionAttempt } from './connect';
 import { duplicateNodes } from './duplicate';
 import { freeSlotNear } from './placement';
 import { toFlowEdges, toFlowNodes } from './to-flow';
@@ -103,34 +103,54 @@ function CanvasInner({
 
   /* ---------------------------------------------------------------- connections */
 
+  /*
+   * Whether a drawn arrow that a data edge may not be could be the loop edge instead (FR-CON-003 and
+   * FR-CON-007 are the same drop seen twice).
+   *
+   * This is where the offer belongs: an *existing* data edge can never qualify — its target being
+   * upstream of its source would already be the cycle the graph forbids — so the arrow has to be
+   * caught as it is drawn. The contract decides; where it refuses, its reason is the second half of
+   * what the operator is told, after the cycle itself.
+   */
+  const loopOffer = useCallback(
+    (attempt: ConnectionAttempt): { candidate?: LoopEdgeCandidate; reason?: string } => {
+      if (attempt.source === null || attempt.target === null) return {};
+      const check = canBeLoopEdge(
+        {
+          id: newId(),
+          from: { nodeId: attempt.source, portId: attempt.sourceHandle ?? '' },
+          to: { nodeId: attempt.target, portId: attempt.targetHandle ?? '' },
+        },
+        nodes,
+        edges,
+      );
+      if (!check.ok) return { reason: check.reason };
+      return {
+        candidate: {
+          from: { nodeId: attempt.source, portId: attempt.sourceHandle ?? '' },
+          to: { nodeId: attempt.target, portId: attempt.targetHandle ?? '' },
+          fromNodeName: nodes.find((n) => n.id === attempt.source)?.name ?? 'this node',
+          toNodeName: nodes.find((n) => n.id === attempt.target)?.name ?? 'that node',
+        },
+      };
+    },
+    [nodes, edges],
+  );
+
   const tryConnect = useCallback(
     (attempt: Connection) => {
       const verdict = checkConnection(nodes, edges, attempt);
       if (!verdict.ok) {
-        /*
-         * A cycle is refused as a *data* edge and offered as a loop edge instead (FR-CON-003 and
-         * FR-CON-007 are the same drop seen twice). This is where the offer belongs: an existing data
-         * edge can never qualify — its target being upstream of its source would already be the cycle
-         * the graph forbids — so the arrow has to be caught as it is drawn. The contract decides
-         * whether it qualifies; where it refuses, its reason is what the operator is told.
-         */
-        if (verdict.code === 'cycle' && attempt.source !== null && attempt.target !== null) {
-          const candidate = {
-            id: newId(),
-            from: { nodeId: attempt.source, portId: attempt.sourceHandle ?? '' },
-            to: { nodeId: attempt.target, portId: attempt.targetHandle ?? '' },
-          };
-          const loopCheck = canBeLoopEdge(candidate, nodes, edges);
-          if (loopCheck.ok) {
-            setLoopCandidate({
-              from: candidate.from,
-              to: candidate.to,
-              fromNodeName: nodes.find((n) => n.id === attempt.source)?.name ?? 'this node',
-              toNodeName: nodes.find((n) => n.id === attempt.target)?.name ?? 'that node',
-            });
+        if (verdict.code === 'cycle') {
+          const offer = loopOffer(attempt);
+          if (offer.candidate !== undefined) {
+            setLoopCandidate(offer.candidate);
             return false;
           }
-          toast.error('Connection refused', { description: loopCheck.reason });
+          // Why it is refused *and* why it cannot be the loop edge either (NFR-USE-03).
+          toast.error('Connection refused', {
+            description: `${verdict.reason}${offer.reason === undefined ? '' : ` ${offer.reason}`}`,
+          });
           return false;
         }
         toast.error('Connection refused', { description: verdict.reason });
@@ -150,7 +170,7 @@ function CanvasInner({
       ]);
       return true;
     },
-    [nodes, edges, sync, workflowId],
+    [nodes, edges, sync, workflowId, loopOffer],
   );
 
   const isValidConnection = useCallback(
@@ -163,14 +183,22 @@ function CanvasInner({
             sourceHandle?: string | null;
             targetHandle?: string | null;
           },
-    ) =>
-      checkConnection(nodes, edges, {
+    ) => {
+      const normalised = {
         source: attempt.source,
         target: attempt.target,
         sourceHandle: attempt.sourceHandle ?? null,
         targetHandle: attempt.targetHandle ?? null,
-      }).ok,
-    [nodes, edges],
+      };
+      if (checkConnection(nodes, edges, normalised).ok) return true;
+      /*
+       * A cycle that could be the loop edge is *valid to drop* — React Flow calls `onConnect` only
+       * for a connection this accepts, and `tryConnect` is where the offer is made. Without this the
+       * loop editor was unreachable: the drop was refused before anything could offer it (FR-CON-007).
+       */
+      return loopOffer(normalised).candidate !== undefined;
+    },
+    [nodes, edges, loopOffer],
   );
 
   /**
@@ -195,9 +223,13 @@ function CanvasInner({
           (state.fromHandle.type === 'source' ? state.toHandle.id : state.fromHandle.id) ?? null,
       };
       const verdict = checkConnection(nodes, edges, attempt);
-      if (!verdict.ok) toast.error('Connection refused', { description: verdict.reason });
+      if (verdict.ok) return;
+      const offer = verdict.code === 'cycle' ? loopOffer(attempt) : {};
+      toast.error('Connection refused', {
+        description: `${verdict.reason}${offer.reason === undefined ? '' : ` ${offer.reason}`}`,
+      });
     },
-    [nodes, edges],
+    [nodes, edges, loopOffer],
   );
 
   /** Keyboard connect (NFR-USE-02): Enter on an output arms it, Enter on an input completes. */

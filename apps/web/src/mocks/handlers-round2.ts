@@ -11,6 +11,7 @@ import {
   type ApiError,
   type BudgetHalt,
   type ErrorKind,
+  type GuardrailPolicyRef,
   type Model,
   type Node,
   type Run,
@@ -130,8 +131,25 @@ export function playScenario(db: MockDb, run: Run): void {
       nodes: run.snapshot.nodes,
       edges: run.snapshot.edges,
       ...(cap === undefined || cap === null ? {} : { maxCostPerRunUsd: cap }),
+      policyFor: (node) => policyRefFor(db, run.projectId, node),
     }),
   );
+}
+
+/**
+ * The policy a node run is checked against (FR-GRD-002): the node's `guardrailPolicyId` override, or
+ * the project default. The version is read now, so a later PATCH does not change what the record
+ * says — a verdict belongs to the rules that produced it.
+ */
+export function policyRefFor(
+  db: MockDb,
+  projectId: string,
+  node: Node,
+): GuardrailPolicyRef | undefined {
+  const override = (node.config as { guardrailPolicyId?: string }).guardrailPolicyId;
+  const policy =
+    override === undefined ? db.projectDefaultPolicy(projectId) : db.getPolicy(override);
+  return policy === undefined ? undefined : { id: policy.id, version: policy.version };
 }
 
 /**

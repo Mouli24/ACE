@@ -294,11 +294,14 @@ function useApprovalDecision(
   return useMutation({
     mutationFn: ({ nodeRunId, ...body }: ApprovalDecisionVariables) => decide(nodeRunId, body),
     /*
-     * The card disappears on `node.approval_decided`, which the engine sends either way, so nothing
-     * is removed from the overlay here. The records carry the decision and its time (FR-GRD-013).
+     * Nothing is removed from the overlay here: `node.approval_decided` is what takes a card down,
+     * and the engine sends it either way (BR-01). The *queries* do need telling, though — the run
+     * page reads `GET /runs/:id/approvals` and has no socket of its own, so without this the answered
+     * card stayed on screen and pressing Approve again earned a 409.
      */
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.nodeRunsRoot() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.approvalsRoot() });
     },
   });
 }

@@ -193,6 +193,13 @@ test.describe('Guardrail policies (FR-GRD-001/011/018, TC-GRD-001/016)', () => {
    * `config = { ...current.config, ...parsed.data }`). The key therefore keeps its old id, so an
    * agent put on an override can never be put back on the project default — which is exactly what
    * FR-GRD-002 says the default option is for.
+   *
+   * This is a gap in the seam, not a bug in the screen: no patch can remove a key from a node config,
+   * because `update_node` merges (the engine does the same — `packages/engine/src/graph/index.ts`).
+   * Clearing needs `AgentConfig.guardrailPolicyId` to accept `null`, the way D72 made the budget caps
+   * nullable for exactly this reason. Tracked as issue #21 (Arhant's, `packages/contracts`); the marker
+   * stays until it is answered, so the day the contract allows clearing, this test turns green and
+   * says so.
    */
   test('TC-GRD-002: choosing the project default again clears the node override', async ({
     page,
@@ -236,17 +243,14 @@ test.describe('Guardrail policies (FR-GRD-001/011/018, TC-GRD-001/016)', () => {
   });
 
   /*
-   * DEFECT (reported, not fixed here): the inspector renders "policy <id> · version <n>" only when the
-   * node run carries `guardrailPolicy` (`apps/web/src/inspector/Inspector.tsx`), and the mock engine
-   * never writes that field — neither `nodeRunRecord` in `apps/web/src/mocks/scenarios.ts` nor
-   * `startAttempt` in `handlers-round3.ts` sets it. So TC-GRD-002's second half ("the inspector shows
-   * the override id/version") cannot be reached at all in mock mode. The web side is right; the mock
-   * engine has the gap, and only the real engine will tell whether the UI half works.
+   * TC-GRD-002's second half. The mock engine stamps each node run with the policy it was checked
+   * against — the node's override or the project default, at the version it had when the run started
+   * (`policyRefFor` in `apps/web/src/mocks/handlers-round2.ts`) — which is what the inspector names.
+   * Writing that field is what made this reachable at all; before it, the field was never set.
    */
   test('TC-GRD-002: the inspector names the policy version a node run was checked against', async ({
     page,
   }) => {
-    test.fail();
     const seeded = await openRound3(page, 'chain', 'linear-complete');
     await startRun(page).click();
     await expect(page.getByTestId('run-status')).toHaveAttribute('data-status', 'COMPLETE', {
