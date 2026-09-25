@@ -14,7 +14,10 @@ import {
   type Workflow,
 } from '@ace/contracts';
 import type {
+  ApprovalRepository,
   EdgeRepository,
+  GuardrailPolicyRepository,
+  GuardrailVerdictRepository,
   ModelRepository,
   NodeRunRepository,
   PriceTableRepository,
@@ -35,6 +38,12 @@ import type BetterSqlite3 from 'better-sqlite3';
 import { and, asc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 
+import { buildDefaultPolicy } from './default-policy.js';
+import {
+  createApprovalRepository,
+  createGuardrailPolicyRepository,
+  createGuardrailVerdictRepository,
+} from './repository-guardrails.js';
 import {
   createModelRepository,
   createNodeRunRepository,
@@ -84,6 +93,8 @@ function toProject(row: ProjectRow): Project {
     name: row.name,
     folderPath: row.folderPath,
     ...(row.lastOpenedAt === null ? {} : { lastOpenedAt: row.lastOpenedAt }),
+    // A cap that was never set and one that was removed read the same: no cap (D72).
+    ...(row.maxCostPerRunUsd === null ? {} : { maxCostPerRunUsd: row.maxCostPerRunUsd }),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -168,6 +179,11 @@ export class SqliteRepository implements Repository {
   readonly runs: RunRepository;
   readonly nodeRuns: NodeRunRepository;
 
+  /* Round 3 (Arch §15.3). */
+  readonly guardrailPolicies: GuardrailPolicyRepository;
+  readonly guardrailVerdicts: GuardrailVerdictRepository;
+  readonly approvals: ApprovalRepository;
+
   constructor(db: Db, sqlite: BetterSqlite3.Database) {
     this.#db = db;
     this.#sqlite = sqlite;
@@ -177,6 +193,14 @@ export class SqliteRepository implements Repository {
     this.priceTables = createPriceTableRepository(db);
     this.runs = createRunRepository(db);
     this.nodeRuns = createNodeRunRepository(db);
+
+    // The round 3 repositories write two rows at once — a verdict and its node run's copy — so they
+    // borrow this repository's transaction rather than opening one of their own, which also means
+    // they join a transaction the caller already opened.
+    const inTransaction = <T>(fn: () => Promise<T>): Promise<T> => this.transaction(() => fn());
+    this.guardrailPolicies = createGuardrailPolicyRepository(db, inTransaction);
+    this.guardrailVerdicts = createGuardrailVerdictRepository(db, inTransaction);
+    this.approvals = createApprovalRepository(db, inTransaction);
   }
 
   /**
@@ -204,21 +228,38 @@ export class SqliteRepository implements Repository {
   }
 
   readonly projects: ProjectRepository = {
-    create: async (scope: Scope, project: Project) => {
-      this.#db
-        .insert(projects)
-        .values({
-          id: project.id,
-          workspaceId: scope.workspaceId,
-          name: project.name,
-          folderPath: project.folderPath,
-          lastOpenedAt: project.lastOpenedAt ?? null,
-          createdAt: project.createdAt,
-          updatedAt: project.updatedAt,
-        })
-        .run();
-      return project;
-    },
+    /**
+     * The project and its default guardrail policy, in one transaction (FR-GRD-018, D10).
+     *
+     * It happens here rather than in the project service because it is an invariant of the store:
+     * every project has a default policy, including one created by an import, a template or a test.
+     * The check list comes from `defaultGuardrailChecks` in `@ace/contracts`, the same definition
+     * the migration's backfill uses, so a project created today and one backfilled yesterday get
+     * byte-identical checks.
+     */
+    create: async (scope: Scope, project: Project) =>
+      this.transaction(async () => {
+        this.#db
+          .insert(projects)
+          .values({
+            id: project.id,
+            workspaceId: scope.workspaceId,
+            name: project.name,
+            folderPath: project.folderPath,
+            lastOpenedAt: project.lastOpenedAt ?? null,
+            maxCostPerRunUsd: project.maxCostPerRunUsd ?? null,
+            createdAt: project.createdAt,
+            updatedAt: project.updatedAt,
+          })
+          .run();
+
+        await this.guardrailPolicies.create(
+          scope,
+          buildDefaultPolicy(project.id, project.createdAt),
+        );
+
+        return project;
+      }),
 
     get: async (scope: Scope, id: Id) => {
       const row = this.#db
@@ -248,13 +289,22 @@ export class SqliteRepository implements Repository {
     update: async (
       scope: Scope,
       id: Id,
-      patch: { name?: string; lastOpenedAt?: Timestamp; updatedAt: Timestamp },
+      patch: {
+        name?: string;
+        lastOpenedAt?: Timestamp;
+        maxCostPerRunUsd?: number | null;
+        updatedAt: Timestamp;
+      },
     ) => {
       this.#db
         .update(projects)
         .set({
           ...(patch.name === undefined ? {} : { name: patch.name }),
           ...(patch.lastOpenedAt === undefined ? {} : { lastOpenedAt: patch.lastOpenedAt }),
+          // `null` removes the cap, `undefined` leaves whatever is stored alone (D72).
+          ...(patch.maxCostPerRunUsd === undefined
+            ? {}
+            : { maxCostPerRunUsd: patch.maxCostPerRunUsd }),
           updatedAt: patch.updatedAt,
         })
         .where(and(eq(projects.workspaceId, scope.workspaceId), eq(projects.id, id)))

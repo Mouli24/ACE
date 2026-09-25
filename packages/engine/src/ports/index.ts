@@ -11,6 +11,7 @@
 export * from './scope.js';
 export * from './repository.js';
 export * from './run-repository.js';
+export * from './guardrail-repository.js';
 export * from './model-provider.js';
 export * from './model-router.js';
 export * from './blob-store.js';

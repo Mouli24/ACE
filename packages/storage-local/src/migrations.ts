@@ -1,5 +1,10 @@
 import type BetterSqlite3 from 'better-sqlite3';
 
+import { backfillDefaultPolicies } from './default-policy.js';
+
+/** Named so a test can apply the chain up to, but not including, round 3 (FR-GRD-018). */
+export const ROUND_3_MIGRATION_ID = '20260926T120000_round_3_guardrails_approvals_and_budgets';
+
 /**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
@@ -8,6 +13,15 @@ import type BetterSqlite3 from 'better-sqlite3';
 export interface Migration {
   id: string;
   up: string;
+  /**
+   * An optional data step, run in the same transaction immediately after `up`.
+   *
+   * Some backfills cannot be written as SQL: the round 3 default policy needs fresh ULIDs and the
+   * check list from `@ace/contracts`, and retyping that list as a SQL literal is exactly the second
+   * copy that drifts. A function keeps one definition and still commits with the schema change, so
+   * a database is never left with the new tables but not the rows they require.
+   */
+  seed?: (sqlite: BetterSqlite3.Database) => void;
 }
 
 export const MIGRATIONS: readonly Migration[] = [
@@ -172,6 +186,76 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX node_runs_run_idx ON node_runs (workspace_id, run_id, id);
     `,
   },
+  {
+    id: ROUND_3_MIGRATION_ID,
+    up: `
+      CREATE TABLE guardrail_policies (
+        id                 TEXT PRIMARY KEY,
+        workspace_id       TEXT NOT NULL,
+        project_id         TEXT NOT NULL,
+        name               TEXT NOT NULL,
+        version            INTEGER NOT NULL,
+        is_project_default INTEGER NOT NULL,
+        checks             TEXT NOT NULL,
+        created_at         TEXT NOT NULL,
+        updated_at         TEXT NOT NULL
+      );
+      CREATE INDEX guardrail_policies_project_idx
+        ON guardrail_policies (workspace_id, project_id, id);
+      -- One default per project is a constraint, not a convention (FR-GRD-018).
+      CREATE UNIQUE INDEX guardrail_policies_default_idx
+        ON guardrail_policies (workspace_id, project_id) WHERE is_project_default = 1;
+
+      -- No value column, ever: a verdict records the types it redacted, never the text (FR-GRD-014).
+      CREATE TABLE guardrail_verdicts (
+        id             TEXT PRIMARY KEY,
+        workspace_id   TEXT NOT NULL,
+        node_run_id    TEXT NOT NULL,
+        point          TEXT NOT NULL,
+        check_type     TEXT NOT NULL,
+        action         TEXT NOT NULL,
+        passed         INTEGER NOT NULL,
+        reason         TEXT NOT NULL,
+        redacted_types TEXT,
+        at             TEXT NOT NULL
+      );
+      CREATE INDEX guardrail_verdicts_node_run_idx
+        ON guardrail_verdicts (workspace_id, node_run_id, id);
+
+      CREATE TABLE approvals (
+        id           TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        run_id       TEXT NOT NULL,
+        node_run_id  TEXT NOT NULL,
+        node_id      TEXT NOT NULL,
+        node_name    TEXT NOT NULL,
+        point        TEXT NOT NULL,
+        check_type   TEXT NOT NULL,
+        reason       TEXT NOT NULL,
+        preview      TEXT NOT NULL,
+        requested_at TEXT NOT NULL,
+        decision     TEXT,
+        note         TEXT,
+        decided_at   TEXT
+      );
+      CREATE INDEX approvals_run_idx ON approvals (workspace_id, run_id, decision);
+      CREATE INDEX approvals_node_run_idx ON approvals (workspace_id, node_run_id, decision);
+
+      -- Round 3 §2.3: the per-run cost cap the budget check compares against.
+      ALTER TABLE projects ADD COLUMN max_cost_per_run_usd REAL;
+
+      -- Round 3 additions to NodeRun (§2.1, §2.2, §2.4).
+      ALTER TABLE node_runs ADD COLUMN approvals TEXT;
+      ALTER TABLE node_runs ADD COLUMN guardrail_policy TEXT;
+      ALTER TABLE node_runs ADD COLUMN loop_stop TEXT;
+      ALTER TABLE node_runs ADD COLUMN reused_from_node_run_id TEXT;
+      CREATE INDEX node_runs_started_idx ON node_runs (workspace_id, started_at);
+    `,
+    /** Every project that existed before this migration gets the §2.2 default (FR-GRD-018). */
+    seed: (sqlite) => {
+      backfillDefaultPolicies(sqlite);
+    },
+  },
 ];
 
 const MIGRATIONS_TABLE = `
@@ -208,6 +292,9 @@ export function applyMigrations(
   for (const migration of pending) {
     const run = sqlite.transaction(() => {
       sqlite.exec(migration.up);
+      // The data step commits with the schema change, so the tables and the rows they require can
+      // never be half applied.
+      migration.seed?.(sqlite);
       sqlite
         .prepare('INSERT INTO _ace_migrations (id, applied_at) VALUES (?, ?)')
         .run(migration.id, new Date().toISOString());

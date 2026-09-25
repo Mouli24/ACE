@@ -26,7 +26,7 @@ import type {
   RunRepository,
   Scope,
 } from '@ace/engine';
-import { and, asc, desc, eq, inArray, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, like, lt, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 
@@ -127,6 +127,14 @@ function toNodeRun(row: NodeRunRow): NodeRun {
     usage: JSON.parse(row.usage),
     verdicts: JSON.parse(row.verdicts),
     toolCalls: JSON.parse(row.toolCalls),
+    ...(row.approvals === null ? {} : { approvals: JSON.parse(row.approvals) }),
+    ...(row.guardrailPolicy === null
+      ? {}
+      : { guardrailPolicy: JSON.parse(row.guardrailPolicy) }),
+    ...(row.loopStop === null ? {} : { loopStop: row.loopStop }),
+    ...(row.reusedFromNodeRunId === null
+      ? {}
+      : { reusedFromNodeRunId: row.reusedFromNodeRunId }),
     ...(row.startedAt === null ? {} : { startedAt: row.startedAt }),
     ...(row.endedAt === null ? {} : { endedAt: row.endedAt }),
     ...(row.durationMs === null ? {} : { durationMs: row.durationMs }),
@@ -455,6 +463,16 @@ export function createNodeRunRepository(db: Db): NodeRunRepository {
           usage: toJsonColumn(nodeRun.usage, `${at}.usage`),
           verdicts: toJsonColumn(nodeRun.verdicts, `${at}.verdicts`),
           toolCalls: toJsonColumn(nodeRun.toolCalls, `${at}.toolCalls`),
+          approvals:
+            nodeRun.approvals === undefined
+              ? null
+              : toJsonColumn(nodeRun.approvals, `${at}.approvals`),
+          guardrailPolicy:
+            nodeRun.guardrailPolicy === undefined
+              ? null
+              : toJsonColumn(nodeRun.guardrailPolicy, `${at}.guardrailPolicy`),
+          loopStop: nodeRun.loopStop ?? null,
+          reusedFromNodeRunId: nodeRun.reusedFromNodeRunId ?? null,
           startedAt: nodeRun.startedAt ?? null,
           endedAt: nodeRun.endedAt ?? null,
           durationMs: nodeRun.durationMs ?? null,
@@ -492,6 +510,12 @@ export function createNodeRunRepository(db: Db): NodeRunRepository {
         output: patch.output === undefined ? undefined : toJsonColumn(patch.output, `${at}.output`),
         prompt: patch.prompt === undefined ? undefined : toJsonColumn(patch.prompt, `${at}.prompt`),
         usage: patch.usage === undefined ? undefined : toJsonColumn(patch.usage, `${at}.usage`),
+        guardrailPolicy:
+          patch.guardrailPolicy === undefined
+            ? undefined
+            : toJsonColumn(patch.guardrailPolicy, `${at}.guardrailPolicy`),
+        loopStop: patch.loopStop,
+        reusedFromNodeRunId: patch.reusedFromNodeRunId,
         startedAt: patch.startedAt,
         endedAt: patch.endedAt,
         durationMs: patch.durationMs,
@@ -510,6 +534,29 @@ export function createNodeRunRepository(db: Db): NodeRunRepository {
         .where(and(eq(nodeRuns.workspaceId, scope.workspaceId), eq(nodeRuns.id, id)))
         .get();
       return row === undefined ? null : toNodeRun(row);
+    },
+
+    /**
+     * The day's spend for the `daily_budget` check (round 3 §2.3, FR-GRD-008).
+     *
+     * Summed in SQL over `json_extract(usage, '$.costUsd')`: the alternative is reading every node
+     * run of the day into memory to add up one number of each. `started_at` is an ISO timestamp, so
+     * a calendar day is a prefix match, and a node run that never started has no cost to count.
+     */
+    dailyCostUsd: async (scope: Scope, day: string) => {
+      const row = db
+        .select({
+          total: sql<number>`COALESCE(SUM(json_extract(${nodeRuns.usage}, '$.costUsd')), 0)`,
+        })
+        .from(nodeRuns)
+        .where(
+          and(
+            eq(nodeRuns.workspaceId, scope.workspaceId),
+            like(nodeRuns.startedAt, `${day}%`),
+          ),
+        )
+        .get();
+      return row?.total ?? 0;
     },
   };
 }

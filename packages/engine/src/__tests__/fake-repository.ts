@@ -1,8 +1,13 @@
 import {
+  DEFAULT_GUARDRAIL_POLICY_NAME,
   SettingsSchema,
+  defaultGuardrailChecks,
   modelMatchesQuery,
+  type ApprovalDecision,
+  type ApprovalRequest,
   type CursorQuery,
   type Edge,
+  type GuardrailPolicy,
   type Id,
   type Model,
   type ModelQuery,
@@ -15,12 +20,14 @@ import {
   type Settings,
   type SettingsPatch,
   type Timestamp,
+  type Verdict,
   type Workflow,
 } from '@ace/contracts';
 
 import type {
   EngineEvent,
   EventFilter,
+  GuardrailPolicyPatch,
   NewEngineEvent,
   NodeRunPatch,
   PriceTable,
@@ -28,7 +35,9 @@ import type {
   Repository,
   RunPatch,
   Scope,
+  StoredApproval,
 } from '../ports/index.js';
+import { newId } from '../ids.js';
 
 interface State {
   projects: Map<string, Project>;
@@ -43,6 +52,9 @@ interface State {
   priceTables: Map<string, PriceTable>;
   runs: Map<string, Run>;
   nodeRuns: Map<string, NodeRun>;
+  guardrailPolicies: Map<string, GuardrailPolicy>;
+  guardrailVerdicts: Verdict[];
+  approvals: Map<string, StoredApproval>;
 }
 
 function emptyState(): State {
@@ -59,6 +71,9 @@ function emptyState(): State {
     priceTables: new Map(),
     runs: new Map(),
     nodeRuns: new Map(),
+    guardrailPolicies: new Map(),
+    guardrailVerdicts: [],
+    approvals: new Map(),
   };
 }
 
@@ -76,6 +91,9 @@ function cloneState(state: State): State {
     priceTables: new Map(state.priceTables),
     runs: new Map(state.runs),
     nodeRuns: new Map(state.nodeRuns),
+    guardrailPolicies: new Map(state.guardrailPolicies),
+    guardrailVerdicts: [...state.guardrailVerdicts],
+    approvals: new Map(state.approvals),
   };
 }
 
@@ -133,8 +151,23 @@ export class FakeRepository implements Repository {
   }
 
   readonly projects = {
+    /** Creates the default guardrail policy with the project, as the real adapter does (FR-GRD-018). */
     create: async (scope: Scope, project: Project) => {
-      this.#for(scope).projects.set(project.id, project);
+      const state = this.#for(scope);
+      state.projects.set(project.id, project);
+
+      const policy: GuardrailPolicy = {
+        id: newId(),
+        projectId: project.id,
+        name: DEFAULT_GUARDRAIL_POLICY_NAME,
+        version: 1,
+        isProjectDefault: true,
+        checks: defaultGuardrailChecks(newId),
+        createdAt: project.createdAt,
+        updatedAt: project.createdAt,
+      };
+      state.guardrailPolicies.set(policy.id, policy);
+
       return project;
     },
     get: async (scope: Scope, id: Id) => this.#for(scope).projects.get(id) ?? null,
@@ -412,11 +445,122 @@ export class FakeRepository implements Repository {
       if (patch.output !== undefined) next.output = patch.output;
       if (patch.prompt !== undefined) next.prompt = patch.prompt;
       if (patch.usage !== undefined) next.usage = patch.usage;
+      if (patch.guardrailPolicy !== undefined) next.guardrailPolicy = patch.guardrailPolicy;
+      if (patch.loopStop !== undefined) next.loopStop = patch.loopStop;
+      if (patch.reusedFromNodeRunId !== undefined) {
+        next.reusedFromNodeRunId = patch.reusedFromNodeRunId;
+      }
       if (patch.startedAt !== undefined) next.startedAt = patch.startedAt;
       if (patch.endedAt !== undefined) next.endedAt = patch.endedAt;
       if (patch.durationMs !== undefined) next.durationMs = patch.durationMs;
 
       this.#for(scope).nodeRuns.set(id, next);
+      return next;
+    },
+    /** The day's spend, the way SQLite sums it (round 3 §2.3): by `startedAt`'s calendar date. */
+    dailyCostUsd: async (scope: Scope, day: string) =>
+      [...this.#for(scope).nodeRuns.values()]
+        .filter((nodeRun) => nodeRun.startedAt?.startsWith(day) === true)
+        .reduce((total, nodeRun) => total + nodeRun.usage.costUsd, 0),
+  };
+
+  /* Round 3 (Arch §15.3). */
+
+  readonly guardrailPolicies = {
+    create: async (scope: Scope, policy: GuardrailPolicy) => {
+      this.#for(scope).guardrailPolicies.set(policy.id, policy);
+      return policy;
+    },
+    get: async (scope: Scope, id: Id) => this.#for(scope).guardrailPolicies.get(id) ?? null,
+    listByProject: async (scope: Scope, projectId: Id) =>
+      [...this.#for(scope).guardrailPolicies.values()]
+        .filter((policy) => policy.projectId === projectId)
+        .sort((a, b) => a.id.localeCompare(b.id)),
+    getProjectDefault: async (scope: Scope, projectId: Id) =>
+      [...this.#for(scope).guardrailPolicies.values()].find(
+        (policy) => policy.projectId === projectId && policy.isProjectDefault,
+      ) ?? null,
+    update: async (scope: Scope, id: Id, patch: GuardrailPolicyPatch) => {
+      const current = this.#for(scope).guardrailPolicies.get(id);
+      if (current === undefined) return null;
+
+      const next: GuardrailPolicy = { ...current };
+      if (patch.name !== undefined) next.name = patch.name;
+      if (patch.version !== undefined) next.version = patch.version;
+      if (patch.checks !== undefined) next.checks = patch.checks;
+      if (patch.updatedAt !== undefined) next.updatedAt = patch.updatedAt;
+
+      this.#for(scope).guardrailPolicies.set(id, next);
+      return next;
+    },
+    setDefault: async (scope: Scope, id: Id) => {
+      const policies = this.#for(scope).guardrailPolicies;
+      const target = policies.get(id);
+      if (target === undefined) return null;
+
+      for (const [key, policy] of policies) {
+        if (policy.projectId === target.projectId && policy.isProjectDefault) {
+          policies.set(key, { ...policy, isProjectDefault: false });
+        }
+      }
+      const next: GuardrailPolicy = { ...target, isProjectDefault: true };
+      policies.set(id, next);
+      return next;
+    },
+    delete: async (scope: Scope, id: Id) => this.#for(scope).guardrailPolicies.delete(id),
+    nodesUsing: async (scope: Scope, id: Id) =>
+      [...this.#for(scope).nodes.values()].filter(
+        (node) => 'guardrailPolicyId' in node.config && node.config.guardrailPolicyId === id,
+      ),
+  };
+
+  readonly guardrailVerdicts = {
+    /** Mirrors onto the node run, exactly as the SQLite adapter does (FR-GRD-015). */
+    append: async (scope: Scope, verdict: Verdict) => {
+      const state = this.#for(scope);
+      state.guardrailVerdicts.push(verdict);
+
+      const nodeRun = state.nodeRuns.get(verdict.nodeRunId);
+      if (nodeRun !== undefined) {
+        state.nodeRuns.set(nodeRun.id, { ...nodeRun, verdicts: [...nodeRun.verdicts, verdict] });
+      }
+      return verdict;
+    },
+    listByNodeRun: async (scope: Scope, nodeRunId: Id) =>
+      this.#for(scope).guardrailVerdicts.filter((verdict) => verdict.nodeRunId === nodeRunId),
+  };
+
+  readonly approvals = {
+    create: async (scope: Scope, request: ApprovalRequest) => {
+      this.#for(scope).approvals.set(request.id, { request });
+      return request;
+    },
+    get: async (scope: Scope, id: Id) => this.#for(scope).approvals.get(id) ?? null,
+    findPendingByNodeRun: async (scope: Scope, nodeRunId: Id) =>
+      [...this.#for(scope).approvals.values()].find(
+        (stored) => stored.request.nodeRunId === nodeRunId && stored.decision === undefined,
+      )?.request ?? null,
+    listPendingByRun: async (scope: Scope, runId: Id) =>
+      [...this.#for(scope).approvals.values()]
+        .filter((stored) => stored.request.runId === runId && stored.decision === undefined)
+        .map((stored) => stored.request)
+        .sort((a, b) => a.id.localeCompare(b.id)),
+    decide: async (scope: Scope, decision: ApprovalDecision) => {
+      const state = this.#for(scope);
+      const stored = state.approvals.get(decision.requestId);
+      if (stored === undefined) return null;
+      if (stored.decision !== undefined) return stored;
+
+      const next: StoredApproval = { request: stored.request, decision };
+      state.approvals.set(decision.requestId, next);
+
+      const nodeRun = state.nodeRuns.get(stored.request.nodeRunId);
+      if (nodeRun !== undefined) {
+        state.nodeRuns.set(nodeRun.id, {
+          ...nodeRun,
+          approvals: [...(nodeRun.approvals ?? []), decision],
+        });
+      }
       return next;
     },
   };

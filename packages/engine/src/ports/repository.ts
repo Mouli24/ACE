@@ -12,6 +12,11 @@ import type {
 } from '@ace/contracts';
 
 import type {
+  ApprovalRepository,
+  GuardrailPolicyRepository,
+  GuardrailVerdictRepository,
+} from './guardrail-repository.js';
+import type {
   ModelRepository,
   NodeRunRepository,
   PriceTableRepository,
@@ -61,13 +66,23 @@ export interface EventFilter {
 }
 
 export interface ProjectRepository {
+  /**
+   * Creates the project **and its default guardrail policy**, in one transaction (FR-GRD-018, D10).
+   * No caller has to remember the policy, and no project can exist without one.
+   */
   create(scope: Scope, project: Project): Promise<Project>;
   get(scope: Scope, id: Id): Promise<Project | null>;
   list(scope: Scope, page: CursorQuery): Promise<Page<Project>>;
   update(
     scope: Scope,
     id: Id,
-    patch: { name?: string; lastOpenedAt?: Timestamp; updatedAt: Timestamp },
+    patch: {
+      name?: string;
+      lastOpenedAt?: Timestamp;
+      /** Round 3 §2.3: the per-run cost cap. `null` removes it, `undefined` leaves it (D72). */
+      maxCostPerRunUsd?: number | null;
+      updatedAt: Timestamp;
+    },
   ): Promise<Project | null>;
   delete(scope: Scope, id: Id): Promise<boolean>;
 }
@@ -145,4 +160,9 @@ export interface Repository {
   priceTables: PriceTableRepository;
   runs: RunRepository;
   nodeRuns: NodeRunRepository;
+
+  /* Round 3 (Arch §15.3). */
+  guardrailPolicies: GuardrailPolicyRepository;
+  guardrailVerdicts: GuardrailVerdictRepository;
+  approvals: ApprovalRepository;
 }

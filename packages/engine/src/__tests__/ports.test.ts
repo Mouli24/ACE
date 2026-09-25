@@ -116,6 +116,28 @@ describe('Arch §7 Repository', () => {
         get: async () => null,
         listByRun: async () => [],
         update: async () => null,
+        dailyCostUsd: async () => 0,
+      },
+      guardrailPolicies: {
+        create: async (_s, policy) => policy,
+        get: async () => null,
+        listByProject: async () => [],
+        getProjectDefault: async () => null,
+        update: async () => null,
+        setDefault: async () => null,
+        delete: async () => false,
+        nodesUsing: async () => [],
+      },
+      guardrailVerdicts: {
+        append: async (_s, verdict) => verdict,
+        listByNodeRun: async () => [],
+      },
+      approvals: {
+        create: async (_s, request) => request,
+        get: async () => null,
+        findPendingByNodeRun: async () => null,
+        listPendingByRun: async () => [],
+        decide: async () => null,
       },
     };
 

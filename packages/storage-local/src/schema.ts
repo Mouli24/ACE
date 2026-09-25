@@ -1,4 +1,13 @@
-import { index, integer, primaryKey, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
+import {
+  index,
+  integer,
+  primaryKey,
+  real,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core';
 
 /**
  * The six tables round 1 needs (A1 item 2). The rest of Arch §15.3 arrives with the rounds that
@@ -18,6 +27,8 @@ export const projects = sqliteTable(
     name: text('name').notNull(),
     folderPath: text('folder_path').notNull(),
     lastOpenedAt: text('last_opened_at'),
+    /** Round 3 §2.3: the per-run cost cap, null when the project has none (FR-GRD-008). */
+    maxCostPerRunUsd: real('max_cost_per_run_usd'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },
@@ -217,11 +228,121 @@ export const nodeRuns = sqliteTable(
     /** JSON `{ version, text }`, redacted before it gets here (FR-PRM-005). */
     prompt: text('prompt'),
     usage: text('usage').notNull(),
+    /**
+     * JSON `Verdict[]`, the denormalised copy the `NodeRun` contract requires. `guardrail_verdicts`
+     * is the table of record; the verdict repository writes both in one transaction so the two can
+     * never drift, and nothing else may write this column.
+     */
     verdicts: text('verdicts').notNull(),
     toolCalls: text('tool_calls').notNull(),
+    /** JSON `ApprovalDecision[]`, kept in step with `approvals` by the approval repository. */
+    approvals: text('approvals'),
+    /** JSON `GuardrailPolicyRef` — the policy and version this node run was checked against. */
+    guardrailPolicy: text('guardrail_policy'),
+    /** On a loop's last iteration: why the loop stopped (round 3 §2.4). */
+    loopStop: text('loop_stop'),
+    /** Set when Start from node reused an earlier node run instead of executing (FR-EXE-013). */
+    reusedFromNodeRunId: text('reused_from_node_run_id'),
     startedAt: text('started_at'),
     endedAt: text('ended_at'),
     durationMs: integer('duration_ms'),
   },
-  (table) => [index('node_runs_run_idx').on(table.workspaceId, table.runId, table.id)],
+  (table) => [
+    index('node_runs_run_idx').on(table.workspaceId, table.runId, table.id),
+    /** The daily budget aggregate scans a day's node runs (round 3 §2.3, FR-GRD-008). */
+    index('node_runs_started_idx').on(table.workspaceId, table.startedAt),
+  ],
+);
+
+/* -------------------------------------------------------------------------- */
+/* Round 3 (Arch §15.3): guardrail policies, verdicts, approvals               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A policy version (round 3 §2.2, FR-GRD-001). A PATCH never edits in place — the caller writes
+ * version + 1 — so this table holds every version and `id` is the version's own row id.
+ *
+ * At most one row per project may carry `is_project_default` (FR-GRD-018). The partial unique index
+ * makes that a database constraint rather than a convention the repository has to remember;
+ * `setDefault` still moves the flag inside one transaction so the invariant is never briefly false.
+ */
+export const guardrailPolicies = sqliteTable(
+  'guardrail_policies',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    projectId: text('project_id').notNull(),
+    name: text('name').notNull(),
+    version: integer('version').notNull(),
+    isProjectDefault: integer('is_project_default', { mode: 'boolean' }).notNull(),
+    /** JSON `GuardrailCheck[]`. */
+    checks: text('checks').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    index('guardrail_policies_project_idx').on(table.workspaceId, table.projectId, table.id),
+    uniqueIndex('guardrail_policies_default_idx')
+      .on(table.workspaceId, table.projectId)
+      .where(sql`is_project_default = 1`),
+  ],
+);
+
+/**
+ * One check's outcome on one node run (FR-GRD-014, FR-GRD-015).
+ *
+ * There is deliberately **no value column**. A redact verdict records the *types* it replaced and
+ * nothing else — the text it found never reaches a table. `Verdict` is a strict contract with no
+ * value field, and this column list is asserted by a test so one cannot be added quietly.
+ */
+export const guardrailVerdicts = sqliteTable(
+  'guardrail_verdicts',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    nodeRunId: text('node_run_id').notNull(),
+    point: text('point').notNull(),
+    checkType: text('check_type').notNull(),
+    action: text('action').notNull(),
+    passed: integer('passed', { mode: 'boolean' }).notNull(),
+    reason: text('reason').notNull(),
+    /** JSON `string[]` of type names such as `["email"]`, null when nothing was redacted. */
+    redactedTypes: text('redacted_types'),
+    at: text('at').notNull(),
+  },
+  (table) => [
+    index('guardrail_verdicts_node_run_idx').on(table.workspaceId, table.nodeRunId, table.id),
+  ],
+);
+
+/**
+ * An `ask_user` request and, once it is answered, its decision (FR-GRD-013).
+ *
+ * `decision`, `note` and `decided_at` are null while the node is WAITING, which is what makes
+ * "pending" a query rather than a second table: `GET /runs/:id/approvals` filters on
+ * (workspace, run, decision IS NULL), and the index is in that order.
+ */
+export const approvals = sqliteTable(
+  'approvals',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    runId: text('run_id').notNull(),
+    nodeRunId: text('node_run_id').notNull(),
+    nodeId: text('node_id').notNull(),
+    nodeName: text('node_name').notNull(),
+    point: text('point').notNull(),
+    checkType: text('check_type').notNull(),
+    reason: text('reason').notNull(),
+    /** ≤ 500 chars and already redacted: a preview carrying a credential is refused (BR-07). */
+    preview: text('preview').notNull(),
+    requestedAt: text('requested_at').notNull(),
+    decision: text('decision'),
+    note: text('note'),
+    decidedAt: text('decided_at'),
+  },
+  (table) => [
+    index('approvals_run_idx').on(table.workspaceId, table.runId, table.decision),
+    index('approvals_node_run_idx').on(table.workspaceId, table.nodeRunId, table.decision),
+  ],
 );
