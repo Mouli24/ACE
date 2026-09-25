@@ -16,4 +16,7 @@ export const queryKeys = {
   projectRuns: (projectId: string) => ['project-runs', projectId] as const,
   run: (runId: string) => ['run', runId] as const,
   nodeRuns: (runId: string) => ['node-runs', runId] as const,
+  /** Every policy list, whatever its project — what a write invalidates (FR-GRD-001). */
+  guardrailPoliciesRoot: () => ['guardrail-policies'] as const,
+  guardrailPolicies: (projectId: string) => ['guardrail-policies', projectId] as const,
 };

@@ -6,15 +6,8 @@ import type {
 } from '@ace/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import {
-  createGuardrailPolicy,
-  deleteGuardrailPolicy,
-  listGuardrailPolicies,
-  setDefaultGuardrailPolicy,
-  testGuardrailPolicy,
-  updateGuardrailPolicy,
-} from './api';
-import { guardrailKeys } from './query-keys';
+import { api } from '../app/api';
+import { queryKeys } from '../workflows/query-keys';
 
 /**
  * The guardrail policy screen's data (round 3 §2.5, FR-GRD-001, 018). Shaped like
@@ -24,8 +17,9 @@ import { guardrailKeys } from './query-keys';
  */
 export function useGuardrailPolicies(projectId: string | undefined) {
   return useQuery({
-    queryKey: guardrailKeys.policies(projectId ?? ''),
-    queryFn: () => listGuardrailPolicies(projectId ?? ''),
+    queryKey: queryKeys.guardrailPolicies(projectId ?? ''),
+    // The engine answers `{ items }` like every other collection (D64/D78).
+    queryFn: async () => (await api().listGuardrailPolicies({ projectId: projectId ?? '' })).items,
     enabled: Boolean(projectId),
   });
 }
@@ -33,7 +27,7 @@ export function useGuardrailPolicies(projectId: string | undefined) {
 function usePoliciesInvalidator() {
   const queryClient = useQueryClient();
   return () => {
-    void queryClient.invalidateQueries({ queryKey: guardrailKeys.policiesRoot() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.guardrailPoliciesRoot() });
   };
 }
 
@@ -46,7 +40,7 @@ export interface CreatePolicyVariables {
 export function useCreateGuardrailPolicy() {
   const done = usePoliciesInvalidator();
   return useMutation({
-    mutationFn: (body: CreatePolicyVariables) => createGuardrailPolicy(body),
+    mutationFn: (body: CreatePolicyVariables) => api().createGuardrailPolicy(body),
     onSuccess: () => done(),
   });
 }
@@ -56,7 +50,7 @@ export function useUpdateGuardrailPolicy() {
   const done = usePoliciesInvalidator();
   return useMutation({
     mutationFn: ({ id, ...body }: UpdateGuardrailPolicyRequest & { id: Id }) =>
-      updateGuardrailPolicy(id, body),
+      api().updateGuardrailPolicy(id, body),
     onSuccess: () => done(),
   });
 }
@@ -65,7 +59,7 @@ export function useUpdateGuardrailPolicy() {
 export function useSetDefaultGuardrailPolicy() {
   const done = usePoliciesInvalidator();
   return useMutation({
-    mutationFn: (id: Id) => setDefaultGuardrailPolicy(id),
+    mutationFn: (id: Id) => api().setDefaultGuardrailPolicy(id),
     onSuccess: () => done(),
   });
 }
@@ -78,7 +72,7 @@ export function useDeleteGuardrailPolicy() {
   const done = usePoliciesInvalidator();
   return useMutation({
     mutationFn: ({ id, confirm }: { id: Id; confirm?: boolean }) =>
-      deleteGuardrailPolicy(id, confirm),
+      api().deleteGuardrailPolicy(id, confirm === undefined ? {} : { confirm }),
     onSuccess: () => done(),
   });
 }
@@ -89,6 +83,7 @@ export function useDeleteGuardrailPolicy() {
  */
 export function useTestGuardrailPolicy() {
   return useMutation({
-    mutationFn: ({ id, ...body }: PolicyTestRequest & { id: Id }) => testGuardrailPolicy(id, body),
+    mutationFn: ({ id, ...body }: PolicyTestRequest & { id: Id }) =>
+      api().testGuardrailPolicy(id, body),
   });
 }
