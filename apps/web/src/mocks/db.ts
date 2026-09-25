@@ -1,8 +1,13 @@
 import {
   DEFAULT_ALLOWED_ORIGINS,
   DEFAULT_CONCURRENCY,
+  DEFAULT_GUARDRAIL_POLICY_NAME,
   DEFAULT_THEME,
+  defaultGuardrailChecks,
+  type ApprovalRequest,
   type Edge,
+  type GuardrailCheck,
+  type GuardrailPolicy,
   type Node,
   type Project,
   type Settings,
@@ -49,6 +54,10 @@ interface Snapshot {
   catalogRefreshedAt?: string;
   runs: Run[];
   nodeRuns: NodeRun[];
+  /** Round 3: one row per policy; a PATCH bumps its `version` (FR-GRD-001). */
+  guardrailPolicies: GuardrailPolicy[];
+  /** Approval requests still waiting for a decision — what `GET /runs/:id/approvals` answers. */
+  approvals: ApprovalRequest[];
   /** Artificial delay per request, for the loading-state test (TC-CAN-009). */
   latencyMs?: number;
 }
@@ -92,6 +101,8 @@ function emptySnapshot(): Snapshot {
     models: [],
     runs: [],
     nodeRuns: [],
+    guardrailPolicies: [],
+    approvals: [],
   };
 }
 
@@ -184,11 +195,25 @@ export class MockDb {
       updatedAt: ts,
     };
     this.state.projects.push(project);
+    // Every project is born with the §2.2 default policy (FR-GRD-018, D10, D77)
+    this.state.guardrailPolicies.push({
+      id: newId(),
+      projectId: project.id,
+      name: DEFAULT_GUARDRAIL_POLICY_NAME,
+      version: 1,
+      isProjectDefault: true,
+      checks: defaultGuardrailChecks(() => newId()),
+      createdAt: ts,
+      updatedAt: ts,
+    });
     this.save();
     return project;
   }
 
-  updateProject(id: string, patch: { name?: string; lastOpenedAt?: string }): Project | undefined {
+  updateProject(
+    id: string,
+    patch: { name?: string; lastOpenedAt?: string; maxCostPerRunUsd?: number | null },
+  ): Project | undefined {
     const project = this.getProject(id);
     if (!project) return undefined;
     Object.assign(project, patch, { updatedAt: now() });
@@ -199,6 +224,9 @@ export class MockDb {
   deleteProject(id: string): boolean {
     const before = this.state.projects.length;
     this.state.projects = this.state.projects.filter((p) => p.id !== id);
+    this.state.guardrailPolicies = this.state.guardrailPolicies.filter(
+      (policy) => policy.projectId !== id,
+    );
     for (const wf of this.state.workflows.filter((w) => w.projectId === id))
       this.deleteWorkflow(wf.id);
     if (this.state.settings.lastProjectId === id) delete this.state.settings.lastProjectId;
@@ -491,6 +519,120 @@ export class MockDb {
     else this.state.nodeRuns[index] = nodeRun;
     this.save();
     return nodeRun;
+  }
+
+  /* ------------------------------------------------- guardrail policies (round 3 §2.5) */
+
+  listPolicies(projectId?: string): GuardrailPolicy[] {
+    return this.state.guardrailPolicies.filter(
+      (policy) => projectId === undefined || policy.projectId === projectId,
+    );
+  }
+
+  getPolicy(id: string): GuardrailPolicy | undefined {
+    return this.state.guardrailPolicies.find((policy) => policy.id === id);
+  }
+
+  /** The policy a node run is checked against when no agent overrides it (FR-GRD-002). */
+  projectDefaultPolicy(projectId: string): GuardrailPolicy | undefined {
+    return this.state.guardrailPolicies.find(
+      (policy) => policy.projectId === projectId && policy.isProjectDefault,
+    );
+  }
+
+  createPolicy(input: {
+    projectId: string;
+    name: string;
+    checks: GuardrailCheck[];
+  }): GuardrailPolicy {
+    const ts = now();
+    const policy: GuardrailPolicy = {
+      id: newId(),
+      projectId: input.projectId,
+      name: input.name,
+      version: 1,
+      // the engine owns the default flag: it is moved with set-default, never set on create (D78)
+      isProjectDefault: false,
+      checks: input.checks,
+      createdAt: ts,
+      updatedAt: ts,
+    };
+    this.state.guardrailPolicies.push(policy);
+    this.save();
+    return policy;
+  }
+
+  /** A PATCH never edits a version in place: it writes version + 1 (FR-GRD-001, Arch §13.4). */
+  patchPolicy(
+    id: string,
+    patch: { name?: string; checks?: GuardrailCheck[] },
+  ): GuardrailPolicy | undefined {
+    const policy = this.getPolicy(id);
+    if (!policy) return undefined;
+    if (patch.name !== undefined) policy.name = patch.name;
+    if (patch.checks !== undefined) policy.checks = patch.checks;
+    policy.version += 1;
+    policy.updatedAt = now();
+    this.save();
+    return policy;
+  }
+
+  deletePolicy(id: string): boolean {
+    const before = this.state.guardrailPolicies.length;
+    this.state.guardrailPolicies = this.state.guardrailPolicies.filter(
+      (policy) => policy.id !== id,
+    );
+    this.save();
+    return this.state.guardrailPolicies.length < before;
+  }
+
+  /** One default per project: the flag moves rather than being added (FR-GRD-018). */
+  setProjectDefaultPolicy(id: string): GuardrailPolicy | undefined {
+    const policy = this.getPolicy(id);
+    if (!policy) return undefined;
+    for (const other of this.state.guardrailPolicies) {
+      if (other.projectId !== policy.projectId) continue;
+      other.isProjectDefault = other.id === id;
+    }
+    policy.updatedAt = now();
+    this.save();
+    return policy;
+  }
+
+  /** Agent nodes that override with this policy — what the 409 `policy_in_use` lists (D78). */
+  nodesUsingPolicy(id: string): string[] {
+    const used: string[] = [];
+    for (const nodes of Object.values(this.state.nodes)) {
+      for (const node of nodes) {
+        const config = node.config as { guardrailPolicyId?: string };
+        if (config.guardrailPolicyId === id) used.push(node.id);
+      }
+    }
+    return used;
+  }
+
+  /* ------------------------------------------------- approvals (round 3 §2.5, FR-GRD-013) */
+
+  addApproval(request: ApprovalRequest): ApprovalRequest {
+    this.state.approvals.push(request);
+    this.save();
+    return request;
+  }
+
+  /** Pending only: a decided request is removed, so this list is what still needs an answer. */
+  pendingApprovals(runId: string): ApprovalRequest[] {
+    return this.state.approvals.filter((request) => request.runId === runId);
+  }
+
+  pendingApprovalForNodeRun(nodeRunId: string): ApprovalRequest | undefined {
+    return this.state.approvals.find((request) => request.nodeRunId === nodeRunId);
+  }
+
+  resolveApproval(requestId: string): boolean {
+    const before = this.state.approvals.length;
+    this.state.approvals = this.state.approvals.filter((request) => request.id !== requestId);
+    this.save();
+    return this.state.approvals.length < before;
   }
 
   /* ---------------------------------------------------------------- events */

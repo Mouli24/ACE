@@ -105,6 +105,8 @@ export interface BuildEnvelopeInput {
   outputTypes: string[];
   jsonSchema?: Record<string, unknown>;
   createdAt: string;
+  /** Which loop iteration handed this over; 1 unless a loop edge re-queued the target (§2.4). */
+  iteration?: number;
 }
 
 /**
@@ -117,7 +119,7 @@ export function buildEnvelope(input: BuildEnvelopeInput): Envelope {
     runId: input.runId,
     fromNodeId: input.fromNodeId,
     toNodeId: input.toNodeId,
-    iteration: 1,
+    iteration: input.iteration ?? 1,
     reads: input.reads,
     context: {
       budgetTokens: input.budgetTokens,
