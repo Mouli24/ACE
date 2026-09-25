@@ -1,0 +1,100 @@
+import type { BudgetHalt, HaltReason } from '@ace/contracts';
+import { OctagonX } from 'lucide-react';
+
+/**
+ * Why a run HALTED, in words (round 3 §5 item 3, FR-GRD-008, NFR-USE-03). The enum stays the
+ * contract — `HaltReason` is what the engine sends and what the tests assert — and this module is
+ * the only place that turns one into a sentence, so the run bar, the Errors tab and the Events tab
+ * all read the same.
+ *
+ * A halt never reads as "an error happened": it says what ended the run and, where there is one,
+ * the single thing to change to get further (NFR-USE-03).
+ */
+
+/**
+ * Costs are compared at four decimal places by the engine, so that is what is shown — with the
+ * trailing zeros dropped, because "$0.012 > $0.01 cap" is the sentence §5 item 3 asks for and
+ * "$0.0120 > $0.0100" is not. Never fewer than two decimals, so a cap still reads as money.
+ */
+export function money(value: number): string {
+  const trimmed = value.toFixed(4).replace(/0+$/, '');
+  const [whole = '0', fraction = ''] = (trimmed.endsWith('.') ? `${trimmed}00` : trimmed).split(
+    '.',
+  );
+  return `$${whole}.${fraction.padEnd(2, '0')}`;
+}
+
+/**
+ * What ended the run. `budgetHalt` is what makes the budget sentence exact (D80); a run recorded
+ * without one — the field is optional — still gets a whole sentence rather than an enum name.
+ */
+export function haltReasonText(reason: HaltReason, budgetHalt?: BudgetHalt): string {
+  switch (reason) {
+    case 'stopped':
+      return 'stopped by you';
+    case 'budget_exceeded':
+      return budgetHalt === undefined
+        ? 'budget exceeded'
+        : `budget exceeded: ${money(budgetHalt.costUsd)} > ${money(budgetHalt.capUsd)} cap`;
+    case 'failure':
+      return 'a node failed';
+    case 'shutdown':
+      return 'the engine shut down';
+    case 'crash':
+      return 'the engine crashed';
+  }
+}
+
+/** The next step: for a budget halt, which of the two caps to raise — they live in two places. */
+export function haltReasonAdvice(reason: HaltReason, budgetHalt?: BudgetHalt): string {
+  switch (reason) {
+    case 'stopped':
+      return 'Nothing failed. Restart the run when you are ready.';
+    case 'budget_exceeded': {
+      if (budgetHalt === undefined) return 'Raise the cap, or make the run cheaper, then restart.';
+      const cap =
+        budgetHalt.scope === 'run'
+          ? "Raise this project's max cost per run, or make the run cheaper."
+          : 'Raise the daily budget in Settings, or wait for tomorrow.';
+      return budgetHalt.projected
+        ? `${cap} The figure includes the next node's projected cost, so the run spent less than that.`
+        : cap;
+    }
+    case 'failure':
+      return 'Open the Errors tab to see which node failed, then retry it.';
+    case 'shutdown':
+      return 'Start the engine again, then restart the run.';
+    case 'crash':
+      return 'Start the engine again and restart the run; the run up to the crash is recorded.';
+  }
+}
+
+export interface HaltReasonNoteProps {
+  reason: HaltReason;
+  /** Set by the engine only when `reason` is `budget_exceeded` (D80). */
+  budgetHalt?: BudgetHalt;
+  /** Hide the second line where the surrounding card already says what to do. */
+  hideAdvice?: boolean;
+  className?: string;
+}
+
+/** The halt in words, with the next step under it (FR-GRD-008, NFR-USE-03). */
+export function HaltReasonNote({ reason, budgetHalt, hideAdvice, className }: HaltReasonNoteProps) {
+  return (
+    <div
+      data-testid="halt-reason"
+      data-reason={reason}
+      className={['flex items-start gap-2', className].filter(Boolean).join(' ')}
+    >
+      <OctagonX className="mt-0.5 h-4 w-4 shrink-0 text-status-STOPPED" aria-hidden />
+      <div className="flex flex-col gap-0.5">
+        <p className="font-human text-sm">Run halted — {haltReasonText(reason, budgetHalt)}</p>
+        {!hideAdvice && (
+          <p className="font-human text-xs text-fg-muted" data-testid="halt-reason-advice">
+            {haltReasonAdvice(reason, budgetHalt)}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
