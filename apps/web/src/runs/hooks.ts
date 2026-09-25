@@ -1,7 +1,7 @@
 import { RUN_EVENT_TYPES, type Id, type Run, type StartRunRequest } from '@ace/contracts';
 import type { AceSocketStatus } from '@ace/sdk';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { api } from '../app/api';
 import { getSocket } from '../app/socket';
@@ -127,36 +127,41 @@ export function useNodeRunsOnce(runId: Id | undefined) {
  */
 export function useAdoptActiveRun(workflowId: Id | undefined): void {
   const adopt = useRunStore((store) => store.adopt);
-  const [adopted, setAdopted] = useState<string>();
+  /*
+   * A ref, not state: there is nothing to render here, and a `setState` after the await re-rendered
+   * the Canvas a few hundred milliseconds after mount — right where a drag-to-connect begins, which
+   * React Flow then lost. Nothing to adopt has to mean nothing happens.
+   */
+  const asked = useRef<string>();
 
   useEffect(() => {
-    if (workflowId === undefined || adopted === workflowId) return;
+    if (workflowId === undefined || asked.current === workflowId) return;
+    asked.current = workflowId;
     let cancelled = false;
     void (async () => {
-      const page = await api().listRuns(workflowId);
-      const newest = page.items[0];
-      // Only a run that is still going: a finished one belongs to the history, not to the Canvas.
-      const live =
-        newest !== undefined &&
-        (newest.status === 'RUNNING' ||
-          newest.status === 'PAUSED' ||
-          newest.status === 'PREFLIGHT');
-      if (!live || cancelled) {
-        setAdopted(workflowId);
-        return;
+      try {
+        const page = await api().listRuns(workflowId);
+        const newest = page.items[0];
+        // Only a run that is still going: a finished one belongs to the history, not the Canvas.
+        const live =
+          newest !== undefined &&
+          (newest.status === 'RUNNING' ||
+            newest.status === 'PAUSED' ||
+            newest.status === 'PREFLIGHT');
+        if (!live || cancelled) return;
+        const [run, nodeRuns] = await Promise.all([
+          api().getRun(newest.id),
+          api().listNodeRuns(newest.id),
+        ]);
+        if (!cancelled) adopt(workflowId, run, nodeRuns);
+      } catch {
+        // A workflow with no run history is the normal case; nothing to adopt is not an error.
       }
-      const [run, nodeRuns] = await Promise.all([
-        api().getRun(newest.id),
-        api().listNodeRuns(newest.id),
-      ]);
-      if (cancelled) return;
-      adopt(workflowId, run, nodeRuns);
-      setAdopted(workflowId);
     })();
     return () => {
       cancelled = true;
     };
-  }, [workflowId, adopted, adopt]);
+  }, [workflowId, adopt]);
 }
 
 /** Which Input nodes still have nothing to send — what the input dialog asks for (FR-NODE-011). */
