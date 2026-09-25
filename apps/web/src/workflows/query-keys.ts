@@ -18,6 +18,8 @@ export const queryKeys = {
   /** Every node-run list, whatever its run — what an approval decision invalidates (FR-GRD-013). */
   nodeRunsRoot: () => ['node-runs'] as const,
   nodeRuns: (runId: string) => ['node-runs', runId] as const,
+  /** Every approvals list — what a decision invalidates, wherever it was taken (FR-GRD-013). */
+  approvalsRoot: () => ['approvals'] as const,
   approvals: (runId: string) => ['approvals', runId] as const,
   /** Every policy list, whatever its project — what a write invalidates (FR-GRD-001). */
   guardrailPoliciesRoot: () => ['guardrail-policies'] as const,

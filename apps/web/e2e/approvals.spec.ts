@@ -236,16 +236,13 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
   });
 
   /*
-   * DEFECT (reported, not fixed here): on `/runs/:runId` nothing takes the card away once it has been
-   * answered. `useApprovals` is keyed on the live overlay's `revision`, and that page runs no
-   * workflow subscription, so `node.approval_decided` never reaches it and the decision mutation does
-   * not invalidate the approvals query either (`apps/web/src/runs/hooks.ts`, `useApprovalDecision`
-   * invalidates node runs only). The answered question stays on screen, and pressing Approve again
-   * earns a 409 `invalid_run_state`.
+   * The run page has no socket of its own — `useApprovals` is keyed on the live overlay's `revision`,
+   * which only moves on the Canvas — so what takes an answered card away here is the decision
+   * invalidating the approvals query (`useApprovalDecision` in `apps/web/src/runs/hooks.ts`). This
+   * test is why that invalidation exists: without it the card stayed and a second Approve earned a
+   * 409 `invalid_run_state`.
    */
   test('FR-GRD-013: an answered approval leaves the run page', async ({ page }) => {
-    // Expected to fail until the defect above is fixed; it is left in so the defect stays tracked.
-    test.fail();
     const seeded = await openRound3(page, 'chain', 'waiting-approval');
     const [writer] = seeded.agentIds as [string];
 

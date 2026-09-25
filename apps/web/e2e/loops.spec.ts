@@ -141,27 +141,16 @@ test.describe('Loop edges (FR-CON-007, TC-CON-007)', () => {
   });
 
   /*
-   * DEFECT (reported, not fixed here): a loop edge cannot be created through the Canvas at all, so
-   * `MakeLoopEdgeDialog` is unreachable and FR-CON-007's create path has no working UI.
-   *
-   *  - Drawing the cycle: `isValidConnection` (`apps/web/src/canvas/Canvas.tsx` line 156) answers
-   *    `checkConnection(...).ok`, which is false for a cycle, so React Flow never calls `onConnect` —
-   *    and `tryConnect`'s `verdict.code === 'cycle'` branch, the only place that sets `loopCandidate`,
-   *    never runs. `onConnectEnd` fires instead and shows the toast "A data edge cannot close a cycle.
-   *    Draw it as a loop edge instead", which is advice the Canvas gives and cannot take.
-   *  - The context menu: `EdgeMenuItems` offers "Make loop edge" only for an existing *data* edge, and
-   *    `canBeLoopEdge` requires that edge's target to be upstream of its source — which is the cycle a
-   *    data edge can never be. Canvas.tsx says so itself ("an existing data edge can never qualify…
-   *    so the arrow has to be caught as it is drawn"), and that catch is the branch above.
-   *
-   * Either fix works: let `isValidConnection` pass a cycle through to `onConnect`, or raise the offer
-   * from `onConnectEnd`, where the refused drop already lands.
+   * The loop edge is offered where the cycle is drawn (D89). `isValidConnection` accepts a cycle that
+   * `canBeLoopEdge` would allow — React Flow calls `onConnect` only for a connection it accepts — and
+   * `tryConnect` opens the editor instead of refusing. Before that, the dialog was unreachable: the
+   * drop was refused before anything could offer it, and the context menu cannot substitute, because
+   * an existing data edge whose target is upstream of its source is the cycle a data edge can never be.
    *
    * The drag below is made as favourable as it can be — a free input port of a matching type — so
-   * nothing but that ordering can be blamed for the refusal.
+   * nothing but the offer itself can be blamed for the outcome.
    */
   test('FR-CON-007: drawing a cycle offers to make it the loop edge', async ({ page }) => {
-    test.fail();
     const seeded = await openRound3(page, 'loop', 'linear-complete', {
       omitLoopEdge: true,
       writerJsonInput: true,
@@ -172,24 +161,37 @@ test.describe('Loop edges (FR-CON-007, TC-CON-007)', () => {
     await expect(page.getByTestId('make-loop-edge')).toBeVisible();
   });
 
-  test('FR-CON-007: a refused cycle says what to do, and the edge menu says why it cannot', async ({
-    page,
-  }) => {
-    const seeded = await openRound3(page, 'loop', 'linear-complete', {
-      omitLoopEdge: true,
-      writerJsonInput: true,
-    });
+  test('FR-CON-007: a cycle that cannot be a loop edge says both why', async ({ page }) => {
+    /*
+     * A cycle the contract will not take as a loop edge either: the shape keeps its loop edge, so a
+     * second one over the same body is refused `loop_bodies_overlap` — a node belongs to one loop only
+     * (D84). That is what makes this the case for the *message* rather than the offer; a cycle that
+     * does qualify opens the editor instead, which the test above covers.
+     */
+    const seeded = await openRound3(page, 'loop', 'linear-complete', { writerJsonInput: true });
     const [writer, reviewer] = seeded.agentIds as [string, string];
     const before = (await engineEdges(page, seeded.workflowId)).length;
 
-    // The drop is refused with a reason rather than silently (FR-CON-003), and saves nothing.
+    // Refused with a reason rather than silently (FR-CON-003), and nothing is saved.
     await dragConnect(page, port(page, reviewer, 'out', 'json'), port(page, writer, 'in', 'json'));
     await expect(page.getByText('Connection refused').first()).toBeVisible();
+    // Both halves, so the operator hears what was wrong and why the loop edge is not the way out
+    // either (NFR-USE-03).
     await expect(page.getByText(/cannot close a cycle/i).first()).toBeVisible();
+    await expect(page.getByText(/one loop only/i).first()).toBeVisible();
     expect(await engineEdges(page, seeded.workflowId)).toHaveLength(before);
+  });
 
-    // A forward data edge is not a cycle, so the menu item is offered disabled, carrying the
-    // contract's own reason rather than disappearing and leaving the operator guessing.
+  test('FR-CON-007: the edge menu offers "Make loop edge" disabled, with the reason', async ({
+    page,
+  }) => {
+    const seeded = await openRound3(page, 'loop', 'linear-complete', { omitLoopEdge: true });
+    const [writer, reviewer] = seeded.agentIds as [string, string];
+
+    /*
+     * A forward data edge is not a cycle, so the item is offered *disabled* carrying the contract's
+     * own reason, rather than disappearing and leaving the operator guessing why.
+     */
     const forward = (await engineEdges(page, seeded.workflowId)).find(
       (edge) => edge.from === writer && edge.to === reviewer,
     )!;
