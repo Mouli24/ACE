@@ -1,7 +1,17 @@
 import type { Edge, Node, Port, Provider, ProviderType } from '@ace/contracts';
 
+import { LOOP_EDGE_TYPE, type AceLoopFlowEdge } from '../edges/loop/LoopEdge';
 import type { AceFlowNode } from '../nodes/NodeCard';
 import type { AceFlowEdge } from '../nodes/TypedEdge';
+
+/** Either kind of edge React Flow is handed: a typed data edge, or the one loop edge (FR-CON-007). */
+export type AceAnyFlowEdge = AceFlowEdge | AceLoopFlowEdge;
+
+/** What the live run knows about a loop edge, so the badge can count iterations (FR-PAR-005). */
+export interface LoopLiveState {
+  iteration?: number;
+  running?: boolean;
+}
 
 export type PortKeyHandler = (port: Port, direction: 'in' | 'out', nodeId: string) => void;
 
@@ -43,17 +53,47 @@ export function toFlowNodes(
   });
 }
 
-/** Contract edges → React Flow edges; the label data type comes from the source port. */
-export function toFlowEdges(edges: readonly Edge[], nodes: readonly Node[]): AceFlowEdge[] {
+/**
+ * Contract edges → React Flow edges; the label data type comes from the source port.
+ *
+ * A `kind: 'loop'` edge becomes the dashed loop edge instead (FR-CON-007). Its `loop` config is what
+ * the engine stored, and `live` — the iteration the run is on — is looked up per edge rather than
+ * read from a store here, so this stays pure and testable.
+ */
+export function toFlowEdges(
+  edges: readonly Edge[],
+  nodes: readonly Node[],
+  live: (edge: Edge) => LoopLiveState = () => ({}),
+): AceAnyFlowEdge[] {
   const portType = new Map<string, Port['dataType']>();
   for (const node of nodes) for (const port of node.outputs) portType.set(port.id, port.dataType);
-  return edges.map((edge) => ({
-    id: edge.id,
-    source: edge.from.nodeId,
-    sourceHandle: edge.from.portId,
-    target: edge.to.nodeId,
-    targetHandle: edge.to.portId,
-    type: 'typed',
-    data: { dataType: portType.get(edge.from.portId) ?? 'text', kind: edge.kind },
-  }));
+  return edges.map((edge): AceAnyFlowEdge => {
+    const ends = {
+      id: edge.id,
+      source: edge.from.nodeId,
+      sourceHandle: edge.from.portId,
+      target: edge.to.nodeId,
+      targetHandle: edge.to.portId,
+    };
+    // A loop edge with no config cannot exist on the engine (BR-05), but a stale cache could hold
+    // one; it is drawn as the data edge it structurally is rather than crashing the Canvas.
+    if (edge.kind === 'loop' && edge.loop !== undefined) {
+      const { iteration, running } = live(edge);
+      return {
+        ...ends,
+        type: LOOP_EDGE_TYPE,
+        data: {
+          kind: 'loop',
+          loop: edge.loop,
+          ...(iteration === undefined ? {} : { iteration }),
+          ...(running === undefined ? {} : { running }),
+        },
+      };
+    }
+    return {
+      ...ends,
+      type: 'typed',
+      data: { dataType: portType.get(edge.from.portId) ?? 'text', kind: edge.kind },
+    };
+  });
 }

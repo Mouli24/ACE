@@ -1,4 +1,10 @@
-import { RUN_EVENT_TYPES, type Id, type Run, type StartRunRequest } from '@ace/contracts';
+import {
+  RUN_EVENT_TYPES,
+  type ApprovalDecisionRequest,
+  type Id,
+  type Run,
+  type StartRunRequest,
+} from '@ace/contracts';
 import type { AceSocketStatus } from '@ace/sdk';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
@@ -37,6 +43,23 @@ export function useRunEvents(workflowId?: Id): void {
         }
       }),
     );
+    /*
+     * Pause, resume and a halt each change `status`, `allowedActions` and `pausedAt` on the run row
+     * (FR-CTL-006). The overlay already has them from the frame — this is for everything reading the
+     * record: the history row, and any screen opened after the fact (BR-01).
+     */
+    for (const type of ['run.started', 'run.paused', 'run.resumed'] as const) {
+      offs.push(
+        socket.on(type, (_payload, frame) => {
+          const runId = frame.type === 'run.started' ? frame.payload.run.id : frame.payload.runId;
+          void queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
+          if (workflowId !== undefined) {
+            void queryClient.invalidateQueries({ queryKey: queryKeys.runs(workflowId) });
+          }
+        }),
+      );
+    }
+
     return () => offs.forEach((off) => off());
   }, [apply, queryClient, workflowId]);
 }
@@ -176,3 +199,95 @@ export function inputNodesNeedingText(
     })
     .map((node) => ({ id: node.id, name: node.name }));
 }
+
+/* -------------------------------------------------------------------------- */
+/* Run controls (round 3 §2.1, FR-CTL-001..006)                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The four run controls. Each is a POST that answers the updated `Run`, which is written straight
+ * into the cache: the engine decided the new status and the new `allowedActions`, so the toolbar
+ * re-renders from its answer and never from a local guess (BR-01, FR-CTL-006).
+ *
+ * Nothing here is optimistic. A control outside the allowed set is a 409 `invalid_run_state`, and
+ * the toolbar only offers what `allowedActions` lists, so an optimistic flip would be a lie in the
+ * one case it mattered.
+ */
+function useRunControl(action: (runId: Id) => Promise<Run>) {
+  const queryClient = useQueryClient();
+  const begin = useRunStore((store) => store.begin);
+  const arm = useRunStore((store) => store.arm);
+  return useMutation({
+    mutationFn: (runId: Id) => action(runId),
+    onSuccess: (run: Run) => {
+      queryClient.setQueryData(queryKeys.run(run.id), run);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs(run.workflowId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.nodeRuns(run.id) });
+      /*
+       * A restart is a *new* run on the same snapshot (FR-CTL-004), so the overlay is cleared and
+       * re-armed on it; pause, resume and stop keep folding the run already on screen.
+       */
+      if (run.restartedFromRunId !== undefined) {
+        arm(run.workflowId);
+        begin(run.workflowId, run.id, run.status);
+      }
+    },
+  });
+}
+
+export const usePauseRun = () => useRunControl((runId) => api().pauseRun(runId));
+export const useResumeRun = () => useRunControl((runId) => api().resumeRun(runId));
+export const useStopRun = () => useRunControl((runId) => api().stopRun(runId));
+export const useRestartRun = () => useRunControl((runId) => api().restartRun(runId));
+
+/** `POST /node-runs/:id/retry` — attempt + 1, optionally with everything downstream (FR-ERR-003/004). */
+export function useRetryNodeRun() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ nodeRunId, withDownstream }: { nodeRunId: Id; withDownstream: boolean }) =>
+      api().retryNodeRun(nodeRunId, { withDownstream }),
+    onSuccess: (nodeRun) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.nodeRuns(nodeRun.runId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.run(nodeRun.runId) });
+    },
+  });
+}
+
+/** `POST /runs/:id/nodes/:nodeId/rerun` — that node alone, on the latest upstream output (FR-CTL-005). */
+export function useRerunNode() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ runId, nodeId }: { runId: Id; nodeId: Id }) => api().rerunNode(runId, nodeId),
+    onSuccess: (nodeRun) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.nodeRuns(nodeRun.runId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.run(nodeRun.runId) });
+    },
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Approvals (round 3 §2.3, FR-GRD-013)                                        */
+/* -------------------------------------------------------------------------- */
+
+export interface ApprovalDecisionVariables extends ApprovalDecisionRequest {
+  nodeRunId: Id;
+}
+
+function useApprovalDecision(decide: (nodeRunId: Id, body: ApprovalDecisionRequest) => Promise<unknown>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ nodeRunId, ...body }: ApprovalDecisionVariables) => decide(nodeRunId, body),
+    /*
+     * The card disappears on `node.approval_decided`, which the engine sends either way, so nothing
+     * is removed from the overlay here. The records carry the decision and its time (FR-GRD-013).
+     */
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.nodeRunsRoot() });
+    },
+  });
+}
+
+export const useApproveNodeRun = () =>
+  useApprovalDecision((nodeRunId, body) => api().approveNodeRun(nodeRunId, body));
+export const useRejectNodeRun = () =>
+  useApprovalDecision((nodeRunId, body) => api().rejectNodeRun(nodeRunId, body));

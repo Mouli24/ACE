@@ -15,7 +15,10 @@ export const queryKeys = {
   runs: (workflowId: string) => ['runs', workflowId] as const,
   projectRuns: (projectId: string) => ['project-runs', projectId] as const,
   run: (runId: string) => ['run', runId] as const,
+  /** Every node-run list, whatever its run — what an approval decision invalidates (FR-GRD-013). */
+  nodeRunsRoot: () => ['node-runs'] as const,
   nodeRuns: (runId: string) => ['node-runs', runId] as const,
+  approvals: (runId: string) => ['approvals', runId] as const,
   /** Every policy list, whatever its project — what a write invalidates (FR-GRD-001). */
   guardrailPoliciesRoot: () => ['guardrail-policies'] as const,
   guardrailPolicies: (projectId: string) => ['guardrail-policies', projectId] as const,

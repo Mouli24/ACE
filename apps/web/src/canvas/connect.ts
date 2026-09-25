@@ -41,7 +41,8 @@ export function checkConnection(
     return {
       ok: false,
       code: 'cycle',
-      reason: 'This connection would close a cycle. Loop edges arrive in Round 3.',
+      reason:
+        'A data edge cannot close a cycle. Draw it as a loop edge instead — that is the one cycle a workflow may have.',
     };
   }
   return { ok: true, source, target, fromNodeId: from.id, toNodeId: to.id };
