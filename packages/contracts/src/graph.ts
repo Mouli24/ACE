@@ -260,24 +260,34 @@ export type Node = z.infer<typeof NodeSchema>;
 
 export const LOOP_ON_MAX = ['continue', 'fail'] as const;
 
+const MAX_ITERATIONS_MESSAGE = 'must be a whole number from 1 to 50';
+
 /**
- * As round 1 declared it. The exit path grammar is checked by `validateLoopConfig` when an edge is
- * written, not here, so an edge stored before round 3 still loads (NFR-VER-01, D73).
+ * What round 1 declared, worded for the loop edge editor (NFR-USE-03). The exit path grammar is
+ * checked by `validateLoopConfig` when an edge is written, not here, so an edge stored before
+ * round 3 still loads (NFR-VER-01, D73).
  */
 export const LoopConfigSchema = z.object({
-  maxIterations: z.number().int().min(1).max(50),
+  maxIterations: z
+    .number({ error: MAX_ITERATIONS_MESSAGE })
+    .int(MAX_ITERATIONS_MESSAGE)
+    .min(1, MAX_ITERATIONS_MESSAGE)
+    .max(50, MAX_ITERATIONS_MESSAGE),
   exitCondition: z.object({
     path: z.string(),
-    equals: z.union([z.string(), z.number(), z.boolean()]),
+    equals: z.union([z.string(), z.number(), z.boolean()], {
+      error: 'must be a string, a number or true/false',
+    }),
   }),
-  onMax: z.enum(LOOP_ON_MAX),
+  onMax: z.enum(LOOP_ON_MAX, { error: 'must be continue or fail' }),
 });
 export type LoopConfig = z.infer<typeof LoopConfigSchema>;
 
 /**
  * A dotted path into a node's json output: `verdict`, `review.verdict`, `issues.0` or `issues[0]`.
- * Exactly what the engine's path reader resolves, so a path the editor accepts is one the loop can
- * read (round 3 §2.4, D73). JSONPath's `$.` prefix is not part of it.
+ * A subset of what the engine's path reader resolves — no leading index, no dashed or non-ASCII
+ * keys, no JSONPath `$.` — so a path the editor accepts is always one the loop can read
+ * (§2.4, D73).
  */
 export const DOTTED_PATH_REGEX = /^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+|\[\d+\])*$/;
 export const DottedPathSchema = z

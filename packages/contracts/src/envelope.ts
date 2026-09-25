@@ -103,7 +103,7 @@ export type Envelope = z.infer<typeof EnvelopeSchema>;
 /** One input a merge node received. */
 export const MergeInputSchema = z.strictObject({
   /** The merge node's own input port it arrived on, by id (D78). */
-  port: PortIdSchema,
+  port: PortIdSchema.regex(/:in:/, 'must be an input port of the merge node'),
   /** The node that fed it — what the Canvas labels the slot with during a run. */
   nodeId: IdSchema,
   parts: z.array(PartSchema),

@@ -472,6 +472,31 @@ describe('FR-CON-007 validateLoopConfig', () => {
     expect(result.ok ? '' : result.reason).toContain('exitCondition.path');
   });
 
+  it('says in plain words what a loop needs (NFR-USE-03)', () => {
+    const reasonFor = (loop: LoopConfig) => {
+      const result = validateLoopConfig({ ...backEdge, loop }, demo);
+      return result.ok ? '' : result.reason;
+    };
+
+    for (const maxIterations of [0, 51, 2.5]) {
+      expect(reasonFor({ ...loopConfig, maxIterations }), `${maxIterations}`).toContain(
+        'a whole number from 1 to 50',
+      );
+    }
+    expect(reasonFor({ ...loopConfig, onMax: 'retry' as LoopConfig['onMax'] })).toContain(
+      'continue or fail',
+    );
+    expect(
+      reasonFor({ ...loopConfig, exitCondition: { path: 'verdict', equals: null as never } }),
+    ).toContain('a string, a number or true/false');
+  });
+
+  it('gives the same plain words for a bound the loop edge editor checks inline', () => {
+    const result = LoopConfigSchema.safeParse({ ...loopConfig, maxIterations: 51 });
+
+    expect(result.error?.issues[0]?.message).toContain('a whole number from 1 to 50');
+  });
+
   it('refuses a loop config that is not an object at all', () => {
     const result = validateLoopConfig({ ...backEdge, loop: null as unknown as LoopConfig }, demo);
 

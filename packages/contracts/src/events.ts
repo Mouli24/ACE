@@ -168,7 +168,11 @@ export const GuardrailVerdictPayloadSchema = z.strictObject({
 });
 export type GuardrailVerdictPayload = z.infer<typeof GuardrailVerdictPayloadSchema>;
 
-/** A loop edge re-queued its target; `stop` is set on the iteration that ended the loop (§2.4). */
+/**
+ * Without `stop`: a loop edge re-queued its target, and `iteration` is the iteration the target now
+ * starts (2, 3, …). With `stop`: nothing was re-queued — the loop ended after `iteration`, the last
+ * one run, for that reason (§2.4).
+ */
 export const LoopIterationPayloadSchema = z.strictObject({
   runId: IdSchema,
   edgeId: IdSchema,
