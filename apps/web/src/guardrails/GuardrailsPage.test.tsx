@@ -9,14 +9,12 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
-import { newId } from '../lib/ulid';
-import { db, installMockServer, renderWithQuery, server } from '../test/app';
+import { createNode } from '../nodes/factory';
+import { db, installMockServer, renderWithQuery } from '../test/app';
 import { GuardrailsPage } from './GuardrailsPage';
-import { createPolicyMockEngine, type PolicyMockEngine } from './policy-mock-handlers';
 
 installMockServer();
 
-let engine: PolicyMockEngine;
 let projectId: string;
 let defaultPolicy: GuardrailPolicy;
 
@@ -24,10 +22,10 @@ beforeEach(() => {
   // The one REST client is configured with a token by the harness; this screen's calls read the
   // token from where round 1 §2.10 keeps it.
   sessionStorage.setItem(SESSION_TOKEN_STORAGE_KEY, 'mock');
-  engine = createPolicyMockEngine();
-  server.use(...engine.handlers);
+  // Every project is born with the §2.2 default policy, which is the thing FR-GRD-018 is about —
+  // so the screen is tested against the policy the mock engine actually created, not a seeded fake.
   projectId = db.createProject({ name: 'Demo' }).id;
-  defaultPolicy = engine.seedDefault(projectId);
+  defaultPolicy = db.projectDefaultPolicy(projectId) as GuardrailPolicy;
 });
 
 /** The route is `/guardrails` (Arch §33.3); it is not in `routes.tsx` yet, so it is mounted here. */
@@ -51,6 +49,15 @@ async function pick(
 ) {
   await actor.click(screen.getByRole('combobox', { name: triggerName }));
   await actor.click(await screen.findByRole('option', { name: optionName }));
+}
+
+/** An Agent node that overrides the project default with `policyId`; returns the node's id. */
+function useThePolicy(policyId: string): string {
+  const workflow = db.createWorkflow(projectId, 'Uses the policy');
+  const agent = createNode('agent', workflow.id, { x: 0, y: 0 });
+  agent.config = { ...agent.config, guardrailPolicyId: policyId } as typeof agent.config;
+  db.commitGraph(workflow.id, [agent], []);
+  return agent.id;
 }
 
 describe('TC-GRD-001 policy lifecycle', () => {
@@ -82,7 +89,7 @@ describe('TC-GRD-001 policy lifecycle', () => {
     await actor.click(within(dialog).getByRole('button', { name: 'Create policy' }));
 
     const created = await waitFor(() => {
-      const found = engine.list(projectId).find((policy) => policy.name === 'Strict');
+      const found = db.listPolicies(projectId).find((policy) => policy.name === 'Strict');
       if (!found) throw new Error('not created yet');
       return found;
     });
@@ -104,7 +111,7 @@ describe('TC-GRD-001 policy lifecycle', () => {
     await waitFor(() =>
       expect(screen.getByTestId(`policy-version-${created.id}`)).toHaveTextContent('version 2'),
     );
-    const saved = engine.get(created.id);
+    const saved = db.getPolicy(created.id);
     expect(saved?.version).toBe(2);
     expect(saved?.checks.find((check) => check.type === 'pii')?.action).toBe('block');
     expect(saved?.checks.find((check) => check.type === 'size_limit')?.params['maxChars']).toBe(
@@ -119,8 +126,11 @@ describe('TC-GRD-001 policy lifecycle', () => {
       expect(screen.queryByTestId(`policy-default-${defaultPolicy.id}`)).toBeNull(),
     );
 
-    /* Delete: 409 policy_in_use first, then the same call with confirm=true (§2.5). */
-    engine.inUseNodeIds = [newId()];
+    /*
+     * Delete: 409 `policy_in_use` first, then the same call with confirm=true (§2.5). What makes it
+     * in use is an Agent node naming it — the same thing the engine counts (FR-GRD-002).
+     */
+    const usingNodeId = useThePolicy(created.id);
     await actor.click(
       within(screen.getByTestId(`policy-row-${created.id}`)).getByRole('button', {
         name: 'Delete',
@@ -130,11 +140,12 @@ describe('TC-GRD-001 policy lifecycle', () => {
     await actor.click(within(confirmDialog).getByRole('button', { name: 'Delete' }));
 
     const inUse = await screen.findByTestId('policy-in-use');
-    expect(inUse).toHaveTextContent('Agents still use this policy.');
-    expect(inUse).toHaveTextContent(engine.inUseNodeIds[0] as string);
+    // The engine's own 409 message is what is shown, so the screen never invents a count.
+    expect(inUse).toHaveTextContent('1 node still uses this policy.');
+    expect(inUse).toHaveTextContent(usingNodeId);
 
     await actor.click(screen.getByRole('button', { name: 'Delete anyway' }));
-    await waitFor(() => expect(engine.get(created.id)).toBeUndefined());
+    await waitFor(() => expect(db.getPolicy(created.id)).toBeUndefined());
     await waitFor(() => expect(screen.queryByTestId(`policy-row-${created.id}`)).toBeNull());
   });
 });
@@ -165,10 +176,9 @@ describe('TC-GRD-016 all five actions are configurable on a check', () => {
     await pick(actor, 'Action for pii at input', GUARDRAIL_ACTION_LABEL[action]);
     await actor.click(screen.getByRole('button', { name: 'Save as new version' }));
 
-    await waitFor(() => expect(engine.patches).toHaveLength(1));
-    const patched = engine.patches[0]?.body.checks?.find((check) => check.type === 'pii');
+    await waitFor(() => expect(db.getPolicy(defaultPolicy.id)?.version).toBe(2));
+    const patched = db.getPolicy(defaultPolicy.id)?.checks.find((check) => check.type === 'pii');
     expect(patched?.action).toBe(action);
-    expect(engine.get(defaultPolicy.id)?.version).toBe(2);
   });
 
   it('turns a check off without removing it, and offers only the types the point allows', async () => {
@@ -185,8 +195,8 @@ describe('TC-GRD-016 all five actions are configurable on a check', () => {
     await actor.click(offered[0] as HTMLElement);
 
     await actor.click(screen.getByRole('button', { name: 'Save as new version' }));
-    await waitFor(() => expect(engine.patches).toHaveLength(1));
-    const checks = engine.patches[0]?.body.checks ?? [];
+    await waitFor(() => expect(db.getPolicy(defaultPolicy.id)?.version).toBe(2));
+    const checks = db.getPolicy(defaultPolicy.id)?.checks ?? [];
     expect(checks.find((check) => check.type === 'pii')?.enabled).toBe(false);
     expect(checks.find((check) => check.type === 'blocked_topics')?.point).toBe('input');
   });
