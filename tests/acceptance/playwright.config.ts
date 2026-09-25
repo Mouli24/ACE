@@ -21,7 +21,7 @@ export default defineConfig({
   // Every round's e2e cross-test, not just round 1: the gate asks for `pnpm test:acceptance` to run
   // both of a round's files, and a new round-N folder should need no change here.
   testDir: '.',
-  testMatch: /round-\d+[\/].*\.e2e\.ts/,
+  testMatch: /round-\d+[/\\].*\.e2e\.ts/,
   // The §8 manual pass starts and kills its own engine, so it cannot run against the `webServer`
   // below; it has its own config and its own `pnpm test:manual-pass`.
   testIgnore: /manual-pass\.e2e\.ts/,

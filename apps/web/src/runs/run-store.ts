@@ -33,6 +33,11 @@ interface RunOverlayState {
 
   /** Clear the fold and claim the workflow, before the start request is sent. */
   arm(workflowId: Id): void;
+  /**
+   * Rebuild the overlay from what the engine has recorded, for a run this client did not start —
+   * after a reload, or when a Canvas is opened while a run is already going (FR-EXE-014).
+   */
+  adopt(workflowId: Id, run: AdoptableRun, nodeRuns: readonly AdoptableNodeRun[]): void;
   begin(workflowId: Id, runId: Id, status: RunState): void;
   apply(frame: ServerFrame): void;
   reset(): void;
@@ -45,6 +50,28 @@ interface RunOverlayState {
   lastTransfer(edgeId: Id): EdgeTransferView | undefined;
   /** What a reconnect must ask the engine to replay (FR-EXE-014). */
   lastSeq(): number;
+}
+
+/** The parts of a `Run` the overlay needs to adopt one; a `Run` itself carries far more. */
+export interface AdoptableRun {
+  id: Id;
+  status: RunState;
+  haltReason?: string;
+  totals: Usage;
+  finalOutput?: Record<Id, Part[]>;
+}
+
+/** The parts of a `NodeRun` the overlay can rebuild a card from. */
+export interface AdoptableNodeRun {
+  id: Id;
+  nodeId: Id;
+  iteration: number;
+  attempt: number;
+  status: NodeState;
+  failureReason?: string;
+  modelUsed?: NodeRunView['modelUsed'];
+  output?: Part[];
+  usage: Usage;
 }
 
 /** One buffer per store; `reset()` clears it rather than replacing it, so selectors stay valid. */
@@ -108,6 +135,65 @@ export const useRunStore = create<RunOverlayState>((set) => ({
           ? state.active
           : status === 'RUNNING' || status === 'PREFLIGHT' || status === 'PAUSED',
     }));
+  },
+
+  /**
+   * A fresh page seeds the socket's `lastSeq` from `hello`, which is the *current* seq, so `resume`
+   * replays nothing from before the load — by design, or every reload would replay all of history.
+   * The overlay therefore rebuilds itself from the records instead, and live frames carry on from
+   * there. What cannot come back is the text streamed before the reload: `node.token` is transient
+   * and never persisted (§2.4), so a reloaded card shows its state and output but not the typing.
+   */
+  adopt: (workflowId, run, nodeRuns) => {
+    buffer.reset();
+    /*
+     * Each synthetic frame needs its own seq: the buffer drops a persisted frame whose seq it has
+     * already folded, so reusing one number would silently discard every frame after the first.
+     * They go negative on purpose — a real seq is ≥ 0, so these never collide with one and never
+     * advance the `lastSeq` a reconnect would resume from.
+     */
+    let syntheticSeq = -1;
+    for (const nodeRun of nodeRuns) {
+      buffer.apply({
+        seq: syntheticSeq--,
+        type: 'node.state',
+        payload: {
+          runId: run.id,
+          nodeRunId: nodeRun.id,
+          nodeId: nodeRun.nodeId,
+          iteration: nodeRun.iteration,
+          attempt: nodeRun.attempt,
+          status: nodeRun.status,
+          ...(nodeRun.failureReason === undefined ? {} : { failureReason: nodeRun.failureReason }),
+        },
+      } as unknown as ServerFrame);
+      if (nodeRun.output !== undefined) {
+        buffer.apply({
+          seq: syntheticSeq--,
+          type: 'node.output',
+          payload: {
+            runId: run.id,
+            nodeRunId: nodeRun.id,
+            nodeId: nodeRun.nodeId,
+            output: nodeRun.output,
+            usage: nodeRun.usage,
+            ...(nodeRun.modelUsed === undefined ? {} : { modelUsed: nodeRun.modelUsed }),
+          },
+        } as unknown as ServerFrame);
+      }
+    }
+    const view = buffer.view;
+    set({
+      workflowId,
+      runId: run.id,
+      status: run.status,
+      haltReason: run.haltReason,
+      totals: run.totals,
+      finalOutput: run.finalOutput,
+      revision: 1,
+      settledCount: view.nodeRuns().filter((nodeRun) => TERMINAL.has(nodeRun.status)).length,
+      active: run.status === 'RUNNING' || run.status === 'PAUSED' || run.status === 'PREFLIGHT',
+    });
   },
 
   apply: (frame) => {

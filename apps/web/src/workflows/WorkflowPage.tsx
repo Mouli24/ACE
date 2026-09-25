@@ -12,7 +12,7 @@ import { ConfigPanel } from '../config-panel/ConfigPanel';
 import { Inspector } from '../inspector/Inspector';
 import { PreflightIssues } from '../runs/PreflightIssues';
 import { RunsList } from '../runs/RunsList';
-import { useRunEvents } from '../runs/hooks';
+import { useAdoptActiveRun, useRunEvents } from '../runs/hooks';
 import { useWorkflowGraph } from './hooks';
 
 const handle = 'bg-border transition-colors data-[resize-handle-state=drag]:bg-accent';
@@ -27,6 +27,8 @@ export function WorkflowPage() {
   useWorkflowSubscription(workflowId);
   // Every §2.4 run frame folds into the overlay store while this screen is mounted (FR-EXE-008/009).
   useRunEvents(workflowId);
+  // A reload mid-run rebuilds the overlay from the engine's records (FR-EXE-014, D-028).
+  useAdoptActiveRun(workflowId);
   const { paletteOpen, configOpen, bottomOpen } = usePanelsStore();
   const canvasApi = useCanvasApi((s) => s.api);
 
