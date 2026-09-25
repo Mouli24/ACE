@@ -104,13 +104,14 @@ Provider level: `apiKey: 'bad'` → check `AUTH_FAILED`; `apiKey: 'ratelimited'`
 | `mock-json` | text, json → json | Returns `{ "echo": <input text>, "verdict": "approved", "score": 8, "issues": [] }` |
 | `mock-bad-json` | text → json | Returns `{ "oops": ` (malformed) → CONTRACT_VIOLATION |
 | `mock-503` | text → text | Always throws provider error 503 (`kind: 'provider'`, retryable) |
-| `mock-429-then-ok` | text → text | 429 on the first two calls per run, then behaves as `mock-text` (Round 3 retry tests) |
+| `mock-429-then-ok` | text → text | 429 on the first two attempts, then behaves as `mock-text` (Round 3 retry tests). Round 3: counted per (run, model, prompt) rather than per run, so every node in a run gets its own two failures |
 | `mock-401` | text → text | Auth error (`kind: 'auth'`, not retryable) |
-| `mock-timeout` | text → text | Never yields; honours `AbortSignal` |
+| `mock-timeout` | text → text | Never yields; honours `AbortSignal`. Round 3: an abort whose reason is a `TimeoutError` (what `AbortSignal.timeout()` sets) is reported as `kind: 'network'`, retryable; a bare `abort()` stays `user_cancelled` |
 | `mock-refuse` | text → text | Returns a refusal text and `finishReason: 'refusal'` (`kind: 'agent'`) |
 | `mock-leak` | text → text | Output contains `sk-ant-api03-FAKEFAKEFAKEFAKEFAKE0000` (Round 3 leak tests) |
 | `mock-repeat` | text → text | Identical output on every call regardless of input (Round 3 loop tests) |
 | `mock-reject-twice` | text, json → json | `verdict: "changes_requested"` on iterations 1–2, `"approved"` on 3 (Round 3 loop tests) |
+| `mock-reject-always` | text, json → json | Always `{ score: 4, verdict: "changes_requested", issues: ["needs work"] }` — added in Round 3 (§4 item 8) for the loop that can only end at its maximum |
 | `mock-tool` | text → text | Requests tool `echo` then answers (Round 4) |
 | `mock-vision` | text, image → text | Describes the image name/size (Round 4) |
 | `mock-embed` | embedding model | Stable 64-dim vectors (Round 5) |
