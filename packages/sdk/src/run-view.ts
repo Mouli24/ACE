@@ -3,12 +3,15 @@ import {
   isPersistedFrame,
   zeroUsage,
   type ApprovalRequest,
+  type BudgetHalt,
+  type HaltReason,
   type Id,
   type ModelUsed,
   type NodeError,
   type NodeState,
   type Part,
   type RunAction,
+  type RunEvent,
   type RunState,
   type ServerFrame,
   type Usage,
@@ -45,7 +48,9 @@ export interface EdgeTransferView {
 export interface RunView {
   runId: Id | undefined;
   status: RunState | undefined;
-  haltReason: string | undefined;
+  haltReason: HaltReason | undefined;
+  /** Set only when `haltReason` is `budget_exceeded`, so a run view can say which cap tripped. */
+  budgetHalt: BudgetHalt | undefined;
   totals: Usage;
   /** The highest persisted seq folded in; what `resume { afterSeq }` should ask from. */
   lastSeq: number;
@@ -68,6 +73,8 @@ export interface RunView {
   verdicts(nodeRunId: Id): Verdict[];
   /** The highest iteration this node has reached; `0` before it has run (FR-PAR-005). */
   iterations(nodeId: Id): number;
+  /** Every persisted frame in arrival order — what the Events tab lists (§5 item 7). */
+  events(): PersistedRunEvent[];
   nodeState(nodeId: Id): NodeState;
   nodeRun(nodeId: Id): NodeRunView | undefined;
   nodeRunById(nodeRunId: Id): NodeRunView | undefined;
@@ -76,6 +83,13 @@ export interface RunView {
   lastTransfer(edgeId: Id): EdgeTransferView | undefined;
   nodeRuns(): NodeRunView[];
 }
+
+/**
+ * A run event that carries a `seq`: everything in §2.4 except `node.token`, which is transient and
+ * never persisted. Narrowing by the field rather than by a type list means a frame added to the
+ * contract later is included without a second list to remember.
+ */
+export type PersistedRunEvent = Extract<RunEvent, { seq: number }>;
 
 /** A node the run has not touched yet is IDLE (Arch §19.1), so the Canvas can render immediately. */
 const DEFAULT_STATE: NodeState = 'IDLE';
@@ -89,7 +103,14 @@ const DEFAULT_STATE: NodeState = 'IDLE';
 export class RunEventBuffer {
   private runId: Id | undefined;
   private status: RunState | undefined;
-  private haltReason: string | undefined;
+  private haltReason: HaltReason | undefined;
+  private budgetHalt: BudgetHalt | undefined;
+  /**
+   * Every persisted frame, in arrival order, for the Events tab. Pushed inside the `seq` guard
+   * below, so a `resume` replay appends nothing twice; `node.token` never reaches here because it
+   * carries no seq (§2.4).
+   */
+  private readonly log: PersistedRunEvent[] = [];
   private totals: Usage = zeroUsage();
   private finalOutput: Record<Id, Part[]> | undefined;
   private pausedAt: string | undefined;
@@ -119,6 +140,9 @@ export class RunEventBuffer {
       if (this.seen.has(frame.seq)) return;
       this.seen.add(frame.seq);
       if (frame.seq > this.lastSeq) this.lastSeq = frame.seq;
+      // `hello` and `workflow.updated` are already gone by here; `provider.status` is engine scope
+      // and belongs to the providers screen, not to a run's event list.
+      if (frame.type !== 'provider.status') this.log.push(frame);
     }
 
     switch (frame.type) {
@@ -133,6 +157,7 @@ export class RunEventBuffer {
         this.runId ??= frame.payload.runId;
         this.status = frame.payload.status;
         this.haltReason = frame.payload.haltReason;
+        this.budgetHalt = frame.payload.budgetHalt;
         this.totals = frame.payload.totals;
         this.finalOutput = frame.payload.finalOutput;
         // A run that ended is no longer paused, including one stopped while PAUSED (D76).
@@ -270,6 +295,8 @@ export class RunEventBuffer {
     this.runId = undefined;
     this.status = undefined;
     this.haltReason = undefined;
+    this.budgetHalt = undefined;
+    this.log.length = 0;
     this.totals = zeroUsage();
     this.finalOutput = undefined;
     this.pausedAt = undefined;
@@ -294,10 +321,12 @@ export class RunEventBuffer {
       lastSeq: this.lastSeq,
       finalOutput: this.finalOutput,
       pausedAt: this.pausedAt,
+      budgetHalt: this.budgetHalt,
       allowedActions: status === undefined ? undefined : allowedRunActions(status),
       approvals: () => [...this.pendingApprovals.values()],
       verdicts: (nodeRunId) => [...(this.verdictsByNodeRunId.get(nodeRunId) ?? [])],
       iterations: (nodeId) => this.iterationByNodeId.get(nodeId) ?? 0,
+      events: () => [...this.log],
       nodeState: (nodeId) => this.nodeRun(nodeId)?.status ?? DEFAULT_STATE,
       nodeRun: (nodeId) => this.nodeRun(nodeId),
       nodeRunById: (nodeRunId) => this.byNodeRunId.get(nodeRunId),
