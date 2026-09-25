@@ -1,5 +1,4 @@
 import {
-  type GuardrailAction,
   type Id,
   type LoopStopReason,
   type RunEvent,
@@ -13,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@ace/ui';
+import { GUARDRAIL_ACTION_LABEL } from '@ace/ui';
 import { useMemo, useState } from 'react';
 
 import { haltReasonText, money } from '../runs/controls/HaltReason';
@@ -47,15 +47,6 @@ export interface EventsTabProps {
   /** Select the node on the Canvas from a row. */
   onShowNode?: (nodeId: Id) => void;
 }
-
-/** "ask user" is the label; `ask_user` is the contract (CLAUDE.md §7). */
-const GUARDRAIL_ACTION_LABEL: Readonly<Record<GuardrailAction, string>> = {
-  pass: 'pass',
-  warn: 'warn',
-  redact: 'redact',
-  ask_user: 'ask user',
-  block: 'block',
-};
 
 /** Why a loop ended, in words (§2.4, FR-PAR-003..006, FR-GRD-009). */
 const LOOP_STOP_LABEL: Readonly<Record<LoopStopReason, string>> = {
