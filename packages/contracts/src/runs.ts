@@ -6,9 +6,18 @@ import {
   HaltReasonSchema,
   NodeStateSchema,
   RunStateSchema,
+  type ErrorKind,
+  type RunState,
 } from './enums.js';
 import { EnvelopeSchema, PartSchema } from './envelope.js';
-import { EdgeSchema, IdSchema, NodeSchema, TimestampSchema } from './graph.js';
+import {
+  EdgeSchema,
+  IdSchema,
+  LoopStopReasonSchema,
+  NodeSchema,
+  TimestampSchema,
+} from './graph.js';
+import { ApprovalDecisionSchema, GuardrailPolicyRefSchema, VerdictSchema } from './guardrails.js';
 import { ValidationIssueSchema } from './validation.js';
 
 /**
@@ -52,6 +61,33 @@ export const NodeErrorSchema = z.object({
 export type NodeError = z.infer<typeof NodeErrorSchema>;
 
 /* -------------------------------------------------------------------------- */
+/* Run controls (round 3 §2.1, FR-CTL-001..006)                                */
+/* -------------------------------------------------------------------------- */
+
+export const RUN_ACTIONS = ['pause', 'resume', 'stop', 'restart'] as const;
+export const RunActionSchema = z.enum(RUN_ACTIONS);
+export type RunAction = z.infer<typeof RunActionSchema>;
+
+const ALLOWED_RUN_ACTIONS: Readonly<Record<RunState, readonly RunAction[]>> = {
+  PREFLIGHT: [],
+  RUNNING: ['pause', 'stop'],
+  PAUSED: ['resume', 'stop'],
+  COMPLETE: ['restart'],
+  BLOCKED: ['restart'],
+  HALTED: ['restart'],
+};
+
+/**
+ * The controls a run in this state accepts: what the engine writes into `Run.allowedActions`, and
+ * outside of which it answers 409 `invalid_run_state` (FR-CTL-006). One table for the engine and
+ * the web mocks (D76). Stop is allowed while paused because nodes that were running when the run
+ * paused may still be finishing; restart is allowed from any ending, and starts a new run.
+ */
+export function allowedRunActions(status: RunState): RunAction[] {
+  return [...ALLOWED_RUN_ACTIONS[status]];
+}
+
+/* -------------------------------------------------------------------------- */
 /* Run                                                                         */
 /* -------------------------------------------------------------------------- */
 
@@ -81,6 +117,14 @@ export const RunSchema = z.object({
   endedAt: TimestampSchema.optional(),
   durationMs: z.number().int().min(0).optional(),
   finalOutput: PartsByNodeIdSchema.optional(),
+  /**
+   * `allowedRunActions(status)`, written by the engine so the UI never guesses (FR-CTL-006).
+   * Optional until round 3's engine and UI have both merged; a later contracts PR requires it (D71).
+   */
+  allowedActions: z.array(RunActionSchema).optional(),
+  pausedAt: TimestampSchema.optional(),
+  /** Set on the new run a restart creates: same snapshot, same inputs (FR-CTL-004). */
+  restartedFromRunId: IdSchema.optional(),
 });
 export type Run = z.infer<typeof RunSchema>;
 
@@ -130,9 +174,19 @@ export const NodeRunSchema = z.object({
   output: z.array(PartSchema).optional(),
   prompt: NodeRunPromptSchema.optional(),
   usage: UsageSchema,
-  /** `Verdict` arrives in round 3 and `ToolCall` in round 4; both lists exist from now. */
-  verdicts: z.array(z.unknown()),
+  /** Every guardrail verdict on this node run, stored and emitted (FR-GRD-015). */
+  verdicts: z.array(VerdictSchema),
+  /** `ToolCall` arrives in round 4; the list exists from now. */
   toolCalls: z.array(z.unknown()),
+  /**
+   * Each approval decision with its time (FR-GRD-013). Optional until round 3's engine and UI
+   * have both merged; a later contracts PR requires it (D71).
+   */
+  approvals: z.array(ApprovalDecisionSchema).optional(),
+  /** The policy, at the version, this node run was checked against (FR-GRD-002). */
+  guardrailPolicy: GuardrailPolicyRefSchema.optional(),
+  /** On a loop's last iteration: why the loop stopped (§2.4). */
+  loopStop: LoopStopReasonSchema.optional(),
   startedAt: TimestampSchema.optional(),
   endedAt: TimestampSchema.optional(),
   durationMs: z.number().int().min(0).optional(),
@@ -143,9 +197,51 @@ export type NodeRun = z.infer<typeof NodeRunSchema>;
 /* Starting a run                                                              */
 /* -------------------------------------------------------------------------- */
 
-/** `POST /workflows/:id/runs`. `startFromNodeId` is honoured from round 3 (FR-EXE-013). */
+/**
+ * `POST /workflows/:id/runs`. From round 3 `startFromNodeId` is honoured: the node runs upstream
+ * of it in the workflow's latest run are reused, not re-called (FR-EXE-013).
+ */
 export const StartRunRequestSchema = z.object({
   inputs: PartsByNodeIdSchema.optional(),
   startFromNodeId: IdSchema.optional(),
 });
 export type StartRunRequest = z.infer<typeof StartRunRequestSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* Retries (round 3 §2.1, FR-ERR-003..005, Arch §28)                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `POST /node-runs/:id/retry` → the new `NodeRun`: attempt + 1 with the same inputs (FR-ERR-003),
+ * and with `withDownstream` everything reachable after it runs again too (FR-ERR-004).
+ */
+export const RetryRequestSchema = z.object({ withDownstream: z.boolean() });
+export type RetryRequest = z.infer<typeof RetryRequestSchema>;
+
+/** `POST /runs/:id/nodes/:nodeId/rerun` → that node alone, on the latest upstream outputs (FR-CTL-005). */
+export const RerunRequestSchema = z.object({});
+export type RerunRequest = z.infer<typeof RerunRequestSchema>;
+
+export const AUTO_RETRY_MODES = ['backoff', 'contract_repair', 'never'] as const;
+export type AutoRetryMode = (typeof AUTO_RETRY_MODES)[number];
+
+/**
+ * What the engine does by itself after a failure of each kind (§2.1, FR-ERR-005). Every automatic
+ * retry is a new node run with attempt + 1. `backoff` waits `500 ms · 2^attempt`, capped at 8 s,
+ * up to `execution.retries` times; `contract_repair` retries once with the validation reason
+ * appended to the prompt, after which CONTRACT_VIOLATION stands. Nothing else is retried.
+ */
+export const AUTO_RETRY_POLICY: Readonly<Record<ErrorKind, AutoRetryMode>> = Object.freeze({
+  user_cancelled: 'never',
+  agent: 'contract_repair',
+  provider: 'backoff',
+  auth: 'never',
+  network: 'backoff',
+  invalid_config: 'never',
+  workflow: 'never',
+  guardrail: 'never',
+});
+
+export const RETRY_BACKOFF_BASE_MS = 500;
+export const RETRY_BACKOFF_MAX_MS = 8_000;
+export const CONTRACT_REPAIR_RETRIES = 1;

@@ -70,6 +70,19 @@ describe('FR-SYS-006 contracts barrel', () => {
     ['guardrails', 'ApprovalDecisionSchema'],
     ['guardrails', 'PolicyTestResponseSchema'],
     ['guardrails', 'defaultGuardrailChecks'],
+    ['graph', 'validateLoopConfig'],
+    ['graph', 'LOOP_REFUSAL_CODES'],
+    ['graph', 'DottedPathSchema'],
+    ['graph', 'LoopStopReasonSchema'],
+    ['graph', 'ReviewContractSchema'],
+    ['graph', 'REVIEW_CONTRACT_SCHEMA'],
+    ['envelope', 'MergeOutputSchema'],
+    ['validation', 'ROUND_3_VALIDATION_ISSUE_CODES'],
+    ['runs', 'RunActionSchema'],
+    ['runs', 'allowedRunActions'],
+    ['runs', 'RetryRequestSchema'],
+    ['runs', 'RerunRequestSchema'],
+    ['runs', 'AUTO_RETRY_POLICY'],
   ])('re-exports %s -> %s', (_module, symbol) => {
     expect(contracts).toHaveProperty(symbol);
   });
