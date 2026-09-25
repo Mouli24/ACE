@@ -85,3 +85,29 @@ body {
     animation: none;
   }
 }
+
+/*
+ * FR-CON-007: a loop edge is the one legal cycle, so it must not read as an ordinary arrow. Dashed
+ * and in the WAITING colour, which is the palette's "this will come round again" hue, and with the
+ * dash marching *backwards* so the direction of the jump is visible.
+ */
+@keyframes ace-loop-flow {
+  to {
+    stroke-dashoffset: 24;
+  }
+}
+
+.ace-loop-edge {
+  stroke: var(--color-status-WAITING);
+  stroke-dasharray: 4 4;
+}
+
+.ace-loop-edge-running {
+  animation: ace-loop-flow 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ace-loop-edge-running {
+    animation: none;
+  }
+}
