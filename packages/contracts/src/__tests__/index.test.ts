@@ -83,6 +83,12 @@ describe('FR-SYS-006 contracts barrel', () => {
     ['runs', 'RetryRequestSchema'],
     ['runs', 'RerunRequestSchema'],
     ['runs', 'AUTO_RETRY_POLICY'],
+    ['events', 'RunPausedPayloadSchema'],
+    ['events', 'RunResumedPayloadSchema'],
+    ['events', 'NodeApprovalRequiredPayloadSchema'],
+    ['events', 'NodeApprovalDecidedPayloadSchema'],
+    ['events', 'GuardrailVerdictPayloadSchema'],
+    ['events', 'LoopIterationPayloadSchema'],
   ])('re-exports %s -> %s', (_module, symbol) => {
     expect(contracts).toHaveProperty(symbol);
   });

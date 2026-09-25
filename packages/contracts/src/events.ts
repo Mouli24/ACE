@@ -7,16 +7,18 @@ import {
   ProviderStateSchema,
 } from './enums.js';
 import { PartSchema } from './envelope.js';
-import { IdSchema, TimestampSchema } from './graph.js';
+import { IdSchema, LoopStopReasonSchema, TimestampSchema } from './graph.js';
+import { ApprovalDecisionSchema, ApprovalRequestSchema, VerdictSchema } from './guardrails.js';
 import { ModelUsedSchema, NodeErrorSchema, RunSummarySchema, UsageSchema } from './runs.js';
 
 /**
- * The event log and the run events that ride the WebSocket (round 2 §2.4, FR-EXE-014, Arch §20.3).
+ * The event log and the run events that ride the WebSocket (round 2 §2.4, round 3 §2.6,
+ * FR-EXE-014, Arch §20.3).
  *
  * Every event but one is persisted with a global monotonic `seq`, which is what `resume
  * { afterSeq }` replays from. `node.token` is the exception: it is a transient stream frame, so
  * it carries no `seq` and is never written down — a reconnecting client rebuilds the text from
- * the `node.output` that follows.
+ * the `node.output` that follows. Round 3's six events are all persisted.
  */
 
 /** The global event sequence: monotonic, append-only, the anchor for `resume` (round 1 §2.9). */
@@ -126,6 +128,48 @@ export const ProviderStatusPayloadSchema = z.strictObject({
 });
 export type ProviderStatusPayload = z.infer<typeof ProviderStatusPayloadSchema>;
 
+/* Round 3 §2.6 — all persisted. `run.completed` may now halt `stopped` or `budget_exceeded`. */
+
+/** No new dispatch; nodes already running finish (FR-CTL-001, D4). */
+export const RunPausedPayloadSchema = z.strictObject({ runId: IdSchema });
+export type RunPausedPayload = z.infer<typeof RunPausedPayloadSchema>;
+
+/** Dispatch continues where the run paused (FR-CTL-002). */
+export const RunResumedPayloadSchema = z.strictObject({ runId: IdSchema });
+export type RunResumedPayload = z.infer<typeof RunResumedPayloadSchema>;
+
+/** An `ask_user` check put a node in WAITING; the card shows this request (FR-GRD-013). */
+export const NodeApprovalRequiredPayloadSchema = z.strictObject({
+  runId: IdSchema,
+  request: ApprovalRequestSchema,
+});
+export type NodeApprovalRequiredPayload = z.infer<typeof NodeApprovalRequiredPayloadSchema>;
+
+export const NodeApprovalDecidedPayloadSchema = z.strictObject({
+  runId: IdSchema,
+  nodeRunId: IdSchema,
+  decision: ApprovalDecisionSchema,
+});
+export type NodeApprovalDecidedPayload = z.infer<typeof NodeApprovalDecidedPayloadSchema>;
+
+/** Every verdict is emitted as well as stored on its node run (FR-GRD-015). */
+export const GuardrailVerdictPayloadSchema = z.strictObject({
+  runId: IdSchema,
+  nodeRunId: IdSchema,
+  verdict: VerdictSchema,
+});
+export type GuardrailVerdictPayload = z.infer<typeof GuardrailVerdictPayloadSchema>;
+
+/** A loop edge re-queued its target; `stop` is set on the iteration that ended the loop (§2.4). */
+export const LoopIterationPayloadSchema = z.strictObject({
+  runId: IdSchema,
+  edgeId: IdSchema,
+  targetNodeId: IdSchema,
+  iteration: z.number().int().min(1),
+  stop: LoopStopReasonSchema.optional(),
+});
+export type LoopIterationPayload = z.infer<typeof LoopIterationPayloadSchema>;
+
 /* -------------------------------------------------------------------------- */
 /* Frames                                                                      */
 /* -------------------------------------------------------------------------- */
@@ -149,13 +193,19 @@ export const RUN_EVENT_FRAME_SCHEMAS = [
   persistedFrame('node.error', NodeErrorPayloadSchema),
   persistedFrame('edge.transfer', EdgeTransferPayloadSchema),
   persistedFrame('usage.updated', UsageUpdatedPayloadSchema),
+  persistedFrame('run.paused', RunPausedPayloadSchema),
+  persistedFrame('run.resumed', RunResumedPayloadSchema),
+  persistedFrame('node.approval_required', NodeApprovalRequiredPayloadSchema),
+  persistedFrame('node.approval_decided', NodeApprovalDecidedPayloadSchema),
+  persistedFrame('guardrail.verdict', GuardrailVerdictPayloadSchema),
+  persistedFrame('loop.iteration', LoopIterationPayloadSchema),
 ] as const;
 
 export const ENGINE_EVENT_FRAME_SCHEMAS = [
   persistedFrame('provider.status', ProviderStatusPayloadSchema),
 ] as const;
 
-/** Server → client, run scope (§2.4). */
+/** Server → client, run scope (round 2 §2.4, round 3 §2.6). */
 export const RunEventSchema = z.discriminatedUnion('type', RUN_EVENT_FRAME_SCHEMAS);
 export type RunEvent = z.infer<typeof RunEventSchema>;
 
@@ -176,6 +226,12 @@ export const RUN_EVENT_TYPES = [
   'node.error',
   'edge.transfer',
   'usage.updated',
+  'run.paused',
+  'run.resumed',
+  'node.approval_required',
+  'node.approval_decided',
+  'guardrail.verdict',
+  'loop.iteration',
 ] as const;
 export type RunEventType = (typeof RUN_EVENT_TYPES)[number];
 
