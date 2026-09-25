@@ -1,6 +1,7 @@
 import {
   derivePorts,
   isConnectionAllowed,
+  validateLoopConfig,
   nodeConfigPatchSchema,
   portId,
   type Edge,
@@ -105,19 +106,21 @@ export function applyOpsWithRules(
 
       case 'add_edge': {
         const edge = op.edge;
-        if (edge.kind === 'loop') {
-          return {
-            ok: false,
-            status: 501,
-            code: 'not_implemented',
-            message: 'Loop edges arrive in round 3.',
-            issues: [
-              issue('loop_not_supported', 'Loop edges arrive in round 3.', { edgeId: edge.id }),
-            ],
-          };
-        }
         if (nextEdges.some((e) => e.id === edge.id)) {
           return fail([issue('validation_failed', `Edge ${edge.id} already exists.`)]);
+        }
+        /*
+         * A loop edge is the graph's one legal cycle from round 3 (FR-CON-007, BR-05), so it is
+         * judged by the contract's own `validateLoopConfig` rather than by the data-edge rules: the
+         * port compatibility and the cycle check below would both refuse it on principle. Its
+         * refusal code is the issue code, which is what puts "maxIterations must be 1..50" in front
+         * of the operator with a 400 (TC-CON-007).
+         */
+        if (edge.kind === 'loop') {
+          const check = validateLoopConfig(edge, { nodes: nextNodes, edges: nextEdges });
+          if (!check.ok) return fail([issue(check.code, check.reason, { edgeId: edge.id })]);
+          nextEdges.push(edge);
+          break;
         }
         const from = nextNodes.find((n) => n.id === edge.from.nodeId);
         const to = nextNodes.find((n) => n.id === edge.to.nodeId);
@@ -148,7 +151,16 @@ export function applyOpsWithRules(
         const index = nextEdges.findIndex((e) => e.id === op.edgeId);
         const current = nextEdges[index];
         if (!current) return fail([issue('validation_failed', `Unknown edge ${op.edgeId}.`)]);
-        nextEdges[index] = { ...current, ...(op.patch.loop ? { loop: op.patch.loop } : {}) };
+        const patched = { ...current, ...(op.patch.loop ? { loop: op.patch.loop } : {}) };
+        // The same rule as on the way in: an out-of-range edit is refused, not stored (TC-CON-007).
+        if (patched.kind === 'loop') {
+          const check = validateLoopConfig(patched, {
+            nodes: nextNodes,
+            edges: nextEdges.filter((e) => e.id !== patched.id),
+          });
+          if (!check.ok) return fail([issue(check.code, check.reason, { edgeId: patched.id })]);
+        }
+        nextEdges[index] = patched;
         break;
       }
 
