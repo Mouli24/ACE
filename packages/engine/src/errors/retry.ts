@@ -23,7 +23,7 @@ import {
  */
 
 /** How long to wait after `attempt` failed, before `attempt + 1` (D95). */
-export function backoffDelayMs(
+export function retryBackoffDelayMs(
   attempt: number,
   options: { baseMs?: number; maxMs?: number } = {},
 ): number {
@@ -36,12 +36,12 @@ export function backoffDelayMs(
 }
 
 /** Every wait a node with this retry budget would make, in order — for tests and for the UI. */
-export function backoffSchedule(
+export function retryBackoffSchedule(
   retries: number,
   options: { baseMs?: number; maxMs?: number } = {},
 ): number[] {
   return Array.from({ length: Math.max(0, retries) }, (_unused, index) =>
-    backoffDelayMs(index + 1, options),
+    retryBackoffDelayMs(index + 1, options),
   );
 }
 
@@ -119,7 +119,7 @@ export function autoRetryDecision(input: AutoRetryInput): AutoRetryDecision {
     };
   }
 
-  const delayMs = backoffDelayMs(attempt);
+  const delayMs = retryBackoffDelayMs(attempt);
   return {
     retry: true,
     mode,

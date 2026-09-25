@@ -35,6 +35,7 @@ export * from './preflight.js';
 export * from './transform.js';
 export * from './machines/index.js';
 export * from './lifecycle.js';
+export * from './control/index.js';
 export * from './summary.js';
 
 /**
