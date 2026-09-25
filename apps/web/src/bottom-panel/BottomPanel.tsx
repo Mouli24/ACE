@@ -1,18 +1,70 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@ace/ui';
+import { useMemo } from 'react';
 
 import { usePanelsStore, type BottomTab } from '../app/stores/panels';
+import { useSelectionStore } from '../app/stores/selection';
+import { ErrorsTab, type ErrorsTabNodeRun } from '../errors/ErrorsTab';
+import { useProviders } from '../providers/hooks';
+import { useNodeRuns, useRetryNodeRun } from '../runs/hooks';
+import { useRunStore } from '../runs/run-store';
+import { useWorkflowGraph } from '../workflows/hooks';
+import { EventsTab } from './EventsTab';
 import { ValidationTab } from './ValidationTab';
 
+/** Round 4 fills this one; until then it says so rather than showing an empty pane. */
 const LATER: Array<{ tab: BottomTab; label: string; round: string }> = [
-  { tab: 'events', label: 'Events', round: 'Round 3' },
-  { tab: 'errors', label: 'Errors', round: 'Round 3' },
   { tab: 'timeline', label: 'Timeline', round: 'Round 4' },
 ];
 
-/** Bottom pane (Arch §33.1 step 5): Validation now; Events/Errors/Timeline say when they arrive. */
+/** Bottom pane (Arch §33.1 step 5): Validation, Events and Errors; Timeline says when it arrives. */
 export function BottomPanel({ workflowId }: { workflowId: string }) {
   const tab = usePanelsStore((s) => s.bottomTab);
   const setTab = usePanelsStore((s) => s.setBottomTab);
+  const select = useSelectionStore((s) => s.setSelection);
+  const graph = useWorkflowGraph(workflowId);
+  const providers = useProviders();
+
+  /*
+   * The run this workflow is showing. Events come from the folded frames, because that is the live
+   * history; the failures come from the engine's node runs, because a card names a provider and an
+   * attempt the overlay does not carry. Both agree — the fold is the same events the records were
+   * written from (BR-01).
+   */
+  const run = useRunStore((store) => (store.workflowId === workflowId ? store : undefined));
+  const runId = run?.runId;
+  const revision = useRunStore((store) => store.revision);
+  const nodeRuns = useNodeRuns(runId);
+
+  const events = useMemo(
+    () => (run === undefined ? [] : run.events().map((event) => ({ event }))),
+    // `revision` is what changes when a frame lands; the store object itself is stable.
+    [run, revision],
+  );
+
+  /** A `NodeRun` record keys itself `id`; the tab asks for `nodeRunId`, so the two are joined here. */
+  const errorRows = useMemo<ErrorsTabNodeRun[]>(
+    () =>
+      (nodeRuns.data ?? []).map((nodeRun) => ({
+        nodeRunId: nodeRun.id,
+        nodeId: nodeRun.nodeId,
+        status: nodeRun.status,
+        attempt: nodeRun.attempt,
+        ...(nodeRun.failureReason === undefined ? {} : { failureReason: nodeRun.failureReason }),
+        ...(nodeRun.error === undefined ? {} : { error: nodeRun.error }),
+      })),
+    [nodeRuns.data],
+  );
+
+  const retry = useRetryNodeRun();
+
+  const providerNames = useMemo(
+    () => Object.fromEntries((providers.data ?? []).map((provider) => [provider.id, provider.name])),
+    [providers.data],
+  );
+
+  const nodes = graph.data?.nodes ?? [];
+  const edges = graph.data?.edges ?? [];
+
   return (
     <Tabs
       value={tab}
@@ -21,15 +73,39 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
     >
       <TabsList className="px-2">
         <TabsTrigger value="validation">Validation</TabsTrigger>
+        <TabsTrigger value="events">Events</TabsTrigger>
+        <TabsTrigger value="errors">Errors</TabsTrigger>
         {LATER.map((t) => (
           <TabsTrigger key={t.tab} value={t.tab}>
             {t.label}
           </TabsTrigger>
         ))}
       </TabsList>
+
       <TabsContent value="validation" className="min-h-0 flex-1 overflow-auto">
         <ValidationTab workflowId={workflowId} />
       </TabsContent>
+
+      <TabsContent value="events" className="min-h-0 flex-1 overflow-auto">
+        <EventsTab entries={events} nodes={nodes} onShowNode={(nodeId) => select([nodeId], [])} />
+      </TabsContent>
+
+      <TabsContent value="errors" className="min-h-0 flex-1 overflow-auto">
+        <ErrorsTab
+          nodes={nodes}
+          edges={edges}
+          nodeRuns={errorRows}
+          {...(run?.haltReason === undefined ? {} : { haltReason: run.haltReason })}
+          {...(run?.budgetHalt === undefined ? {} : { budgetHalt: run.budgetHalt })}
+          providerNames={providerNames}
+          onRetry={(nodeRunId) => retry.mutate({ nodeRunId, withDownstream: false })}
+          {...(retry.isPending && retry.variables !== undefined
+            ? { retryingNodeRunId: retry.variables.nodeRunId }
+            : {})}
+          onShowNode={(nodeId) => select([nodeId], [])}
+        />
+      </TabsContent>
+
       {LATER.map((t) => (
         <TabsContent key={t.tab} value={t.tab} className="p-4 text-sm text-fg-muted">
           {t.label} — available in {t.round}.

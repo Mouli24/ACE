@@ -1,4 +1,4 @@
-import type { Edge, Node, Port } from '@ace/contracts';
+import type { Edge, LoopConfig, Node, Port } from '@ace/contracts';
 import { Button, toast, tokens } from '@ace/ui';
 import {
   Background,
@@ -23,11 +23,19 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 
 import { useSelectionStore } from '../app/stores/selection';
 import { useViewportStore } from '../app/stores/viewport';
+import { loopEdgeType } from '../edges/loop/LoopEdge';
+import {
+  MakeLoopEdgeDialog,
+  type LoopEdgeCandidate,
+} from '../edges/loop/MakeLoopEdgeDialog';
+import { canBeLoopEdge } from '../edges/loop/can-be-loop-edge';
 import { newId } from '../lib/ulid';
 import { useProviders } from '../providers/hooks';
 import { nodeTypes, type AceFlowNode } from '../nodes/NodeCard';
 import { edgeTypes } from '../nodes/TypedEdge';
 import { createNode, type Round1NodeKind } from '../nodes/factory';
+import { ApprovalsDock } from '../runs/approvals/ApprovalsDock';
+import { useRunStore } from '../runs/run-store';
 import { useGraphSync, useWorkflowGraph } from '../workflows/hooks';
 import { PALETTE_DRAG_TYPE } from './Palette';
 import { useCanvasApi } from './canvas-api';
@@ -35,6 +43,9 @@ import { checkConnection } from './connect';
 import { duplicateNodes } from './duplicate';
 import { freeSlotNear } from './placement';
 import { toFlowEdges, toFlowNodes } from './to-flow';
+
+/** Both edge renderers: the typed data edge, and round 3's loop edge (FR-CON-007). */
+const aceEdgeTypes = { ...edgeTypes, ...loopEdgeType };
 
 export interface CanvasProps {
   workflowId: string;
@@ -90,6 +101,8 @@ function CanvasInner({
   const setViewport = useViewportStore((s) => s.setViewport);
   const [armedPortId, setArmedPortId] = useState<string>();
   const [edgeMenu, setEdgeMenu] = useState<{ edgeId: string; x: number; y: number }>();
+  /** A drawn arrow that closes a cycle and could legally be the loop edge (FR-CON-007). */
+  const [loopCandidate, setLoopCandidate] = useState<LoopEdgeCandidate>();
   const wrapper = useRef<HTMLDivElement>(null);
 
   /* ---------------------------------------------------------------- connections */
@@ -98,6 +111,32 @@ function CanvasInner({
     (attempt: Connection) => {
       const verdict = checkConnection(nodes, edges, attempt);
       if (!verdict.ok) {
+        /*
+         * A cycle is refused as a *data* edge and offered as a loop edge instead (FR-CON-003 and
+         * FR-CON-007 are the same drop seen twice). This is where the offer belongs: an existing data
+         * edge can never qualify — its target being upstream of its source would already be the cycle
+         * the graph forbids — so the arrow has to be caught as it is drawn. The contract decides
+         * whether it qualifies; where it refuses, its reason is what the operator is told.
+         */
+        if (verdict.code === 'cycle' && attempt.source !== null && attempt.target !== null) {
+          const candidate = {
+            id: newId(),
+            from: { nodeId: attempt.source, portId: attempt.sourceHandle ?? '' },
+            to: { nodeId: attempt.target, portId: attempt.targetHandle ?? '' },
+          };
+          const loopCheck = canBeLoopEdge(candidate, nodes, edges);
+          if (loopCheck.ok) {
+            setLoopCandidate({
+              from: candidate.from,
+              to: candidate.to,
+              fromNodeName: nodes.find((n) => n.id === attempt.source)?.name ?? 'this node',
+              toNodeName: nodes.find((n) => n.id === attempt.target)?.name ?? 'that node',
+            });
+            return false;
+          }
+          toast.error('Connection refused', { description: loopCheck.reason });
+          return false;
+        }
         toast.error('Connection refused', { description: verdict.reason });
         return false;
       }
@@ -255,6 +294,14 @@ function CanvasInner({
     [flowNodes],
   );
 
+  /*
+   * The loop badge's numbers (FR-PAR-005). `revision` is what moves when a frame lands, and a loop
+   * iteration is a handful of frames per run — so reading it here costs one extra edge rebuild per
+   * iteration, not one per token.
+   */
+  const runRevision = useRunStore((store) => store.revision);
+  const runIsLive = useRunStore((store) => store.workflowId === workflowId && store.status === 'RUNNING');
+
   const flowEdges = useMemo(() => {
     // React Flow drops an edge whose endpoints it does not know yet and does not retry, so an
     // edge is handed over only once both its nodes are mounted; this memo re-runs when they are.
@@ -262,11 +309,18 @@ function CanvasInner({
     const connectable = edges.filter(
       (edge) => mounted.has(edge.from.nodeId) && mounted.has(edge.to.nodeId),
     );
-    return toFlowEdges(connectable, nodes).map((e) => ({
+    const store = useRunStore.getState();
+    // The iteration a loop edge shows is the one its *target* is on: that is the node the loop
+    // sends work back to, and the node whose re-runs are being counted.
+    const live = (edge: Edge) => {
+      const iteration = store.workflowId === workflowId ? store.iterations(edge.to.nodeId) : 0;
+      return iteration > 0 ? { iteration, running: runIsLive } : { running: runIsLive };
+    };
+    return toFlowEdges(connectable, nodes, live).map((e) => ({
       ...e,
       selected: selectedEdgeIds.includes(e.id),
     }));
-  }, [edges, nodes, mountedIds, selectedEdgeIds]);
+  }, [edges, nodes, mountedIds, selectedEdgeIds, workflowId, runRevision, runIsLive]);
 
   // Edges are fully derived from the query cache, so the only change to honour is selection.
   const onEdgesChange = useCallback(
@@ -428,6 +482,31 @@ function CanvasInner({
     });
   }, []);
 
+  /** The one graph-op a confirmed loop edge needs: `add_edge` with `kind: 'loop'` (§2.6). */
+  const createLoopEdge = useCallback(
+    (candidate: LoopEdgeCandidate, loop: LoopConfig) => {
+      sync.enqueue([
+        // One batch is one transaction (§2.6): a conversion never leaves both edges on the graph.
+        ...(candidate.replacesEdgeId === undefined
+          ? []
+          : [{ op: 'delete_edge' as const, edgeId: candidate.replacesEdgeId }]),
+        {
+          op: 'add_edge',
+          edge: {
+            id: newId(),
+            workflowId,
+            kind: 'loop',
+            from: candidate.from,
+            to: candidate.to,
+            loop,
+          },
+        },
+      ]);
+      setLoopCandidate(undefined);
+    },
+    [sync, workflowId],
+  );
+
   const onMoveEnd = useCallback(
     (_event: unknown, viewport: Viewport) => setViewport(workflowId, viewport),
     [setViewport, workflowId],
@@ -445,7 +524,7 @@ function CanvasInner({
         nodes={flowNodes}
         edges={flowEdges}
         nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
+        edgeTypes={aceEdgeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onSelectionChange={onSelectionChange}
@@ -512,25 +591,112 @@ function CanvasInner({
           </Button>
         </Panel>
       </ReactFlow>
+      <ApprovalsDock workflowId={workflowId} />
+
+      {loopCandidate && (
+        <MakeLoopEdgeDialog
+          candidate={loopCandidate}
+          onCancel={() => setLoopCandidate(undefined)}
+          onCreate={(loop) => createLoopEdge(loopCandidate, loop)}
+        />
+      )}
+
       {edgeMenu && (
         <div
           role="menu"
           className="absolute z-20 rounded-md border border-border bg-panel p-1 shadow-md"
           style={{ left: edgeMenu.x, top: edgeMenu.y }}
         >
-          <button
-            type="button"
-            role="menuitem"
-            className="block w-full rounded-sm px-3 py-1.5 text-left text-sm text-danger hover:bg-border/60"
-            onClick={() => {
+          <EdgeMenuItems
+            edge={edges.find((edge) => edge.id === edgeMenu.edgeId)}
+            nodes={nodes}
+            edges={edges}
+            onMakeLoop={(candidate) => {
+              setEdgeMenu(undefined);
+              setLoopCandidate(candidate);
+            }}
+            onEditLoop={(edgeId) => {
+              setEdgeMenu(undefined);
+              setSelection([], [edgeId]);
+            }}
+            onDelete={() => {
               sync.enqueue([{ op: 'delete_edge', edgeId: edgeMenu.edgeId }]);
               setEdgeMenu(undefined);
             }}
-          >
-            Delete connection
-          </button>
+          />
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * What the edge context menu offers (round 3 §5 item 8).
+ *
+ * "Make loop edge" asks the contract, never a rule of its own, and when the contract refuses it says
+ * why rather than hiding: the usual answer for an existing data edge is that its target is not
+ * upstream of its source, which is exactly what the operator needs to hear. A loop edge already on
+ * the graph offers its settings instead — they live in the config panel, on the edge's selection.
+ */
+function EdgeMenuItems({
+  edge,
+  nodes,
+  edges,
+  onMakeLoop,
+  onEditLoop,
+  onDelete,
+}: {
+  edge: Edge | undefined;
+  nodes: Node[];
+  edges: Edge[];
+  onMakeLoop: (candidate: LoopEdgeCandidate) => void;
+  onEditLoop: (edgeId: string) => void;
+  onDelete: () => void;
+}) {
+  const itemClass =
+    'block w-full rounded-sm px-3 py-1.5 text-left text-sm hover:bg-border/60 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent';
+
+  // A loop edge's target being upstream of its source is judged on the graph *without* this edge:
+  // converting it removes it, so it must not count as part of the path it is being checked against.
+  const check =
+    edge === undefined || edge.kind === 'loop'
+      ? undefined
+      : canBeLoopEdge(
+          edge,
+          nodes,
+          edges.filter((other) => other.id !== edge.id),
+        );
+
+  return (
+    <>
+      {edge?.kind === 'loop' ? (
+        <button type="button" role="menuitem" className={itemClass} onClick={() => onEditLoop(edge.id)}>
+          Loop settings
+        </button>
+      ) : (
+        <button
+          type="button"
+          role="menuitem"
+          className={itemClass}
+          disabled={check === undefined || !check.ok}
+          title={check === undefined || check.ok ? undefined : check.reason}
+          onClick={() => {
+            if (edge === undefined) return;
+            onMakeLoop({
+              from: edge.from,
+              to: edge.to,
+              fromNodeName: nodes.find((node) => node.id === edge.from.nodeId)?.name ?? 'this node',
+              toNodeName: nodes.find((node) => node.id === edge.to.nodeId)?.name ?? 'that node',
+              replacesEdgeId: edge.id,
+            });
+          }}
+        >
+          Make loop edge
+        </button>
+      )}
+      <button type="button" role="menuitem" className={`${itemClass} text-danger`} onClick={onDelete}>
+        Delete connection
+      </button>
+    </>
   );
 }

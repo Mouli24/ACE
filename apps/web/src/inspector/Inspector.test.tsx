@@ -67,7 +67,8 @@ async function runAndInspect(
   renderApp(`/projects/${seeded.project.id}/workflows/${seeded.workflow.id}`);
   await screen.findByTestId('canvas');
 
-  await user.click(within(screen.getByTestId('run-bar')).getByRole('button', { name: /start/i }));
+  // 'Start' exactly: round 3 put Restart in the same bar.
+  await user.click(within(screen.getByTestId('run-bar')).getByRole('button', { name: 'Start' }));
   await waitFor(() => expect(useRunStore.getState().nodeRun(seeded.agent.id)).toBeDefined(), {
     timeout: 5_000,
   });

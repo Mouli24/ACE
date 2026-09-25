@@ -52,9 +52,12 @@ function seedRunnableWorkflow(options: { inputText?: string } = {}) {
   return { project, workflow, provider, input, agent, output, edges };
 }
 
-/** The run bar's own Start, not the palette's "start" anything else. */
+/**
+ * The run bar's own Start — exactly, not the palette's "start" anything else and not round 3's
+ * Restart beside it.
+ */
 const startButton = () =>
-  within(screen.getByTestId('run-bar')).getByRole('button', { name: /start/i });
+  within(screen.getByTestId('run-bar')).getByRole('button', { name: 'Start' });
 
 function openCanvas(projectId: string, workflowId: string) {
   startSocket({

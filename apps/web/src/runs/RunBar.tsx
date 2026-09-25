@@ -1,6 +1,5 @@
-import type { Node, Part, RunState } from '@ace/contracts';
+import type { Id, Node, Part, RunAction, RunState } from '@ace/contracts';
 import {
-  Badge,
   Button,
   Dialog,
   DialogContent,
@@ -13,10 +12,20 @@ import {
 } from '@ace/ui';
 import { Play } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
 
 import { useWorkflowGraph } from '../workflows/hooks';
-import { inputNodesNeedingText, useSocketStatus, useStartRun } from './hooks';
+import { RunControls } from './controls/RunControls';
+import {
+  inputNodesNeedingText,
+  usePauseRun,
+  useRestartRun,
+  useResumeRun,
+  useSocketStatus,
+  useStartRun,
+  useStopRun,
+} from './hooks';
 import { useRunStore } from './run-store';
 
 /** Run state → how the badge reads. The enum name stays the contract (BR-03: COMPLETE ≠ HALTED). */
@@ -35,25 +44,50 @@ const money = (value: number) => `$${value.toFixed(4)}`;
  * Start, run status and totals in the top bar (FR-EXE-001, FR-OBS-002). One active run per workflow:
  * while a run is in flight the button is disabled rather than queuing a second one.
  *
- * Pause, stop and retry are Round 3 — the slot beside this stays a disabled "Round 3" badge.
+ * Round 3 puts Pause · Resume · Stop · Restart beside it (FR-CTL-001..004). Which of the four is
+ * live is not decided here: `RunControls` enables a button only because `Run.allowedActions` names
+ * it, and that list comes from the engine through the overlay (FR-CTL-006, BR-01).
  */
 export function RunBar({ workflowId }: { workflowId: string }) {
   const graph = useWorkflowGraph(workflowId);
+  const navigate = useNavigate();
   const start = useStartRun(workflowId);
   const socketStatus = useSocketStatus();
   const [dialogNodes, setDialogNodes] = useState<Array<{ id: string; name: string }>>();
 
   // A fresh object per call would re-render forever; the shallow compare is what makes it stable.
   const run = useRunStore(
-    useShallow((store) => ({
-      status: store.workflowId === workflowId ? store.status : undefined,
-      haltReason: store.workflowId === workflowId ? store.haltReason : undefined,
-      totals: store.workflowId === workflowId ? store.totals : undefined,
-      active: store.workflowId === workflowId && store.active,
-    })),
+    useShallow((store) => {
+      const mine = store.workflowId === workflowId;
+      return {
+        runId: mine ? store.runId : undefined,
+        status: mine ? store.status : undefined,
+        haltReason: mine ? store.haltReason : undefined,
+        budgetHalt: mine ? store.budgetHalt : undefined,
+        allowedActions: mine ? store.allowedActions : undefined,
+        totals: mine ? store.totals : undefined,
+        active: mine && store.active,
+      };
+    }),
   );
 
   const nodes = graph.data?.nodes ?? [];
+
+  /*
+   * One mutation per control rather than one that switches: each has its own `isPending`, and a
+   * restart writes a *new* run into the overlay, which the others must not do (FR-CTL-004).
+   */
+  const pause = usePauseRun();
+  const resume = useResumeRun();
+  const stop = useStopRun();
+  const restart = useRestartRun();
+  const busy = pause.isPending || resume.isPending || stop.isPending || restart.isPending;
+
+  const onAction = async (action: RunAction) => {
+    if (run.runId === undefined) return;
+    const mutation = { pause, resume, stop, restart }[action];
+    return mutation.mutateAsync(run.runId);
+  };
 
   const launch = (inputs?: Record<string, Part[]>) => {
     start.mutate(inputs === undefined ? {} : { inputs });
@@ -100,7 +134,16 @@ export function RunBar({ workflowId }: { workflowId: string }) {
         <Play className="h-4 w-4" /> Start
       </Button>
 
-      <Badge title="Pause, stop and retry arrive in Round 3">run controls · Round 3</Badge>
+      <RunControls
+        {...(run.runId === undefined ? {} : { runId: run.runId })}
+        {...(run.status === undefined ? {} : { status: run.status })}
+        {...(run.allowedActions === undefined ? {} : { allowedActions: run.allowedActions })}
+        {...(run.haltReason === undefined ? {} : { haltReason: run.haltReason })}
+        {...(run.budgetHalt === undefined ? {} : { budgetHalt: run.budgetHalt })}
+        onAction={onAction}
+        onOpenRun={(runId: Id) => navigate(`/runs/${runId}`)}
+        busy={busy}
+      />
 
       {dialogNodes && (
         <InputDialog

@@ -27,6 +27,11 @@ export interface ApprovalCardProps extends Omit<HTMLAttributes<HTMLElement>, 'ch
   pending?: boolean;
   /** The decision already taken, if any — the card then reports it instead of asking again. */
   decided?: 'approve' | 'reject';
+  /**
+   * Whether `A` and `R` act on this card. Default true; a stack of cards gives it to the top one
+   * only, or one key press would answer two questions.
+   */
+  keyboard?: boolean;
   note?: string;
   onNoteChange?: (note: string) => void;
   onApprove: () => void;
@@ -47,6 +52,7 @@ export function ApprovalCard({
   request,
   pending = false,
   decided,
+  keyboard = true,
   note,
   onNoteChange,
   onApprove,
@@ -55,7 +61,7 @@ export function ApprovalCard({
   ...props
 }: ApprovalCardProps) {
   useEffect(() => {
-    if (decided !== undefined || pending) return;
+    if (!keyboard || decided !== undefined || pending) return;
     const onKeyDown = (event: KeyboardEvent) => {
       // Never steal a letter the person is typing into the note or anywhere else.
       const target = event.target as HTMLElement | null;
@@ -73,7 +79,7 @@ export function ApprovalCard({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [decided, pending, onApprove, onReject]);
+  }, [keyboard, decided, pending, onApprove, onReject]);
 
   return (
     <section

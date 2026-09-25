@@ -1,5 +1,23 @@
-import type { Id, NodeState, Part, RunState, ServerFrame, Usage } from '@ace/contracts';
-import { RunEventBuffer, type EdgeTransferView, type NodeRunView } from '@ace/sdk';
+import type {
+  ApprovalRequest,
+  BudgetHalt,
+  HaltReason,
+  Id,
+  NodeState,
+  Part,
+  RunAction,
+  RunState,
+  ServerFrame,
+  Usage,
+  Verdict,
+} from '@ace/contracts';
+import { allowedRunActions } from '@ace/contracts';
+import {
+  RunEventBuffer,
+  type EdgeTransferView,
+  type NodeRunView,
+  type PersistedRunEvent,
+} from '@ace/sdk';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -16,7 +34,13 @@ interface RunOverlayState {
   /** The run the overlay is showing, if any. */
   runId: Id | undefined;
   status: RunState | undefined;
-  haltReason: string | undefined;
+  haltReason: HaltReason | undefined;
+  /** Set only alongside `haltReason: 'budget_exceeded'` — which cap tripped (FR-GRD-008, D80). */
+  budgetHalt: BudgetHalt | undefined;
+  /** What the run in this state accepts, from the contract's one table (FR-CTL-006, D76). */
+  allowedActions: RunAction[] | undefined;
+  /** When the pause landed, so the run bar can say how long it has been held (FR-CTL-002). */
+  pausedAt: string | undefined;
   totals: Usage | undefined;
   finalOutput: Record<Id, Part[]> | undefined;
   /** Bumped on every applied frame; the cheap way to invalidate the derived selectors. */
@@ -48,6 +72,14 @@ interface RunOverlayState {
   nodeRuns(): NodeRunView[];
   streamedText(nodeRunId: Id): string;
   lastTransfer(edgeId: Id): EdgeTransferView | undefined;
+  /** Approvals still waiting on a person, newest last (FR-GRD-013). */
+  approvals(): ApprovalRequest[];
+  /** Every guardrail verdict recorded against this node run (FR-GRD-015). */
+  verdicts(nodeRunId: Id): Verdict[];
+  /** How many iterations this node has run, for the loop selector (FR-CON-007). */
+  iterations(nodeId: Id): number;
+  /** The persisted frames in order, for the events tab (FR-OBS-002). */
+  events(): PersistedRunEvent[];
   /** What a reconnect must ask the engine to replay (FR-EXE-014). */
   lastSeq(): number;
 }
@@ -56,7 +88,10 @@ interface RunOverlayState {
 export interface AdoptableRun {
   id: Id;
   status: RunState;
-  haltReason?: string;
+  haltReason?: HaltReason;
+  budgetHalt?: BudgetHalt;
+  allowedActions?: RunAction[];
+  pausedAt?: string;
   totals: Usage;
   finalOutput?: Record<Id, Part[]>;
 }
@@ -91,6 +126,9 @@ export const useRunStore = create<RunOverlayState>((set) => ({
   runId: undefined,
   status: undefined,
   haltReason: undefined,
+  budgetHalt: undefined,
+  allowedActions: undefined,
+  pausedAt: undefined,
   totals: undefined,
   finalOutput: undefined,
   revision: 0,
@@ -111,6 +149,9 @@ export const useRunStore = create<RunOverlayState>((set) => ({
       runId: undefined,
       status: undefined,
       haltReason: undefined,
+      budgetHalt: undefined,
+      allowedActions: undefined,
+      pausedAt: undefined,
       totals: undefined,
       finalOutput: undefined,
       revision: 0,
@@ -188,6 +229,11 @@ export const useRunStore = create<RunOverlayState>((set) => ({
       runId: run.id,
       status: run.status,
       haltReason: run.haltReason,
+      budgetHalt: run.budgetHalt,
+      // The engine writes `allowedActions`; where an older engine omits it, the contract's table
+      // answers the same thing from the status (D71/D76) rather than the UI guessing.
+      allowedActions: run.allowedActions ?? allowedRunActions(run.status),
+      pausedAt: run.pausedAt,
       totals: run.totals,
       finalOutput: run.finalOutput,
       revision: 1,
@@ -205,6 +251,9 @@ export const useRunStore = create<RunOverlayState>((set) => ({
       runId: view.runId ?? state.runId,
       status: view.status ?? state.status,
       haltReason: view.haltReason,
+      budgetHalt: view.budgetHalt,
+      allowedActions: view.allowedActions ?? state.allowedActions,
+      pausedAt: view.pausedAt,
       totals: view.totals,
       finalOutput: view.finalOutput,
       revision: state.revision + 1,
@@ -221,6 +270,9 @@ export const useRunStore = create<RunOverlayState>((set) => ({
       runId: undefined,
       status: undefined,
       haltReason: undefined,
+      budgetHalt: undefined,
+      allowedActions: undefined,
+      pausedAt: undefined,
       totals: undefined,
       finalOutput: undefined,
       revision: 0,
@@ -236,6 +288,10 @@ export const useRunStore = create<RunOverlayState>((set) => ({
   nodeRuns: () => buffer.view.nodeRuns(),
   streamedText: (nodeRunId) => buffer.view.streamedText(nodeRunId),
   lastTransfer: (edgeId) => buffer.view.lastTransfer(edgeId),
+  approvals: () => buffer.view.approvals(),
+  verdicts: (nodeRunId) => buffer.view.verdicts(nodeRunId),
+  iterations: (nodeId) => buffer.view.iterations(nodeId),
+  events: () => buffer.view.events(),
   lastSeq: () => buffer.view.lastSeq,
 }));
 
