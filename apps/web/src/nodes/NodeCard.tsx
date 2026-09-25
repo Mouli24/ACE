@@ -30,7 +30,9 @@ import {
 } from 'lucide-react';
 import { memo, type CSSProperties, type KeyboardEvent } from 'react';
 
-import { useNodeOverlay } from '../runs/run-store';
+import { findBlockingNodeId } from '../errors/blocked';
+import { useNodeOverlay, useRunStore } from '../runs/run-store';
+import { useWorkflowGraph } from '../workflows/hooks';
 import type { Round1NodeKind } from './factory';
 
 export const KIND_ICON: Record<Round1NodeKind, LucideIcon> = {
@@ -53,8 +55,6 @@ export type FlowNodeData = {
   /** Keyboard connect (NFR-USE-02): the output port armed with Enter, if any. */
   armedPortId: string | undefined;
   onPortKey: (port: Port, direction: 'in' | 'out', nodeId: string) => void;
-  /** The node the run stopped at, for a BLOCKED card's "blocked by <node>" (FR-ERR-006). */
-  blockedByName?: string;
 };
 export type AceFlowNode = FlowNode<FlowNodeData, 'ace'>;
 
@@ -332,6 +332,7 @@ export function NodeCardView({
  */
 export const FlowNodeCard = memo(function FlowNodeCard({ data, selected }: NodeProps<AceFlowNode>) {
   const overlay = useNodeOverlay(data.node.id);
+  const blockedByName = useBlockedByName(data.node, overlay.state === 'BLOCKED');
   return (
     <NodeCardView
       node={data.node}
@@ -344,7 +345,7 @@ export const FlowNodeCard = memo(function FlowNodeCard({ data, selected }: NodeP
       {...(overlay.modelUsed === undefined ? {} : { modelUsed: overlay.modelUsed })}
       {...(overlay.finalOutput === undefined ? {} : { finalOutput: overlay.finalOutput })}
       {...(overlay.failureReason === undefined ? {} : { failureReason: overlay.failureReason })}
-      {...(data.blockedByName === undefined ? {} : { blockedByName: data.blockedByName })}
+      {...(blockedByName === undefined ? {} : { blockedByName })}
       {...(data.providerMissing ? { providerMissing: true } : {})}
       {...(data.provider === undefined ? {} : { provider: data.provider })}
     />
@@ -352,3 +353,28 @@ export const FlowNodeCard = memo(function FlowNodeCard({ data, selected }: NodeP
 });
 
 export const nodeTypes = { ace: FlowNodeCard };
+
+/**
+ * The name of the node whose failure blocked this one (FR-ERR-006, TC-ERR-007).
+ *
+ * The engine reports the state, not the cause, so it is resolved from the graph — and only for a card
+ * that is actually BLOCKED: every other card returns before any of it is computed, which is what
+ * keeps a 200-node Canvas from walking the graph once per node per frame (NFR-PERF-01). The graph
+ * comes from the cache this Canvas already filled, so there is no extra request.
+ */
+function useBlockedByName(node: Node, blocked: boolean): string | undefined {
+  const graph = useWorkflowGraph(node.workflowId);
+  return useRunStore((store) => {
+    void store.revision;
+    if (!blocked || graph.data === undefined) return undefined;
+    const stoppers = new Set(
+      store
+        .nodeRuns()
+        .filter((run) => run.status === 'FAILED' || run.status === 'STOPPED')
+        .map((run) => run.nodeId),
+    );
+    if (stoppers.size === 0) return undefined;
+    const blockedBy = findBlockingNodeId(node.id, graph.data.edges, stoppers);
+    return graph.data.nodes.find((each) => each.id === blockedBy)?.name;
+  });
+}
