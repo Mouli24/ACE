@@ -153,6 +153,13 @@ describe('BR-15 data guardrails have no policy representation', () => {
     expect(result.error?.issues[0]?.message).toContain('always on');
   });
 
+  it('keeps that reason for data alone — any other unknown point gets the usual one', () => {
+    const result = GuardrailCheckSchema.safeParse({ ...check, point: 'everywhere' });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.message).not.toContain('always on');
+  });
+
   it('FR-GRD-010 has no field that could switch a data guardrail off', () => {
     expect(GuardrailPolicySchema.safeParse({ ...policy, dataGuardrails: false }).success).toBe(
       false,

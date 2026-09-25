@@ -391,9 +391,11 @@ export function validateLoopConfig(
 
   const parsed = LoopEdgeConfigSchema.safeParse(edge.loop);
   if (!parsed.success) {
-    const [issue] = parsed.error.issues;
-    const where = issue === undefined ? 'config' : issue.path.map(String).join('.');
-    return refuse('invalid_loop_config', `Loop ${where}: ${issue?.message ?? 'invalid'}.`);
+    const problems = parsed.error.issues.map((issue) => {
+      const where = issue.path.length === 0 ? 'config' : issue.path.map(String).join('.');
+      return `${where}: ${issue.message}`;
+    });
+    return refuse('invalid_loop_config', `Loop ${problems.join('; ')}.`);
   }
 
   const source = graph.nodes.find((node) => node.id === edge.from.nodeId);

@@ -24,6 +24,7 @@ import {
   WorkflowSchema,
   validateLoopConfig,
   type AgentConfig,
+  type LoopConfig,
   type Port,
 } from '../graph.js';
 import { isConnectionAllowed } from '../validation.js';
@@ -462,6 +463,29 @@ describe('FR-CON-007 validateLoopConfig', () => {
     expect(result.ok ? '' : result.reason).toContain('exitCondition.path');
   });
 
+  it('names every problem with a config at once, so the editor can show them together', () => {
+    const twice = { ...loopConfig, maxIterations: 0, exitCondition: { path: '$.x', equals: 'a' } };
+    const result = validateLoopConfig({ ...backEdge, loop: twice }, demo);
+
+    expect(result).toMatchObject({ ok: false, code: 'invalid_loop_config' });
+    expect(result.ok ? '' : result.reason).toContain('maxIterations');
+    expect(result.ok ? '' : result.reason).toContain('exitCondition.path');
+  });
+
+  it('refuses a loop config that is not an object at all', () => {
+    const result = validateLoopConfig({ ...backEdge, loop: null as unknown as LoopConfig }, demo);
+
+    expect(result).toMatchObject({ ok: false, code: 'invalid_loop_config' });
+    expect(result.ok ? '' : result.reason).toMatch(/^Loop config: /);
+  });
+
+  it('refuses a loop edge whose source is not in the graph', () => {
+    const result = validateLoopConfig(backEdge, { ...demo, nodes: [brief, writer, publish] });
+
+    expect(result).toMatchObject({ ok: false, code: 'loop_source_not_json' });
+    expect(result.ok ? '' : result.reason).toContain('The loop source');
+  });
+
   it('refuses a source with no json output for the exit condition to read, naming it', () => {
     const textReviewer = graphNode(NODE_C, 'Reviewer', ['text']);
     const result = validateLoopConfig(
@@ -503,6 +527,25 @@ describe('FR-CON-007 validateLoopConfig', () => {
     };
 
     expect(validateLoopConfig(backEdge, longer)).toEqual({ ok: true });
+  });
+
+  it('walks branches that meet without going round twice, and still refuses', () => {
+    // The Writer feeds the Editor and Publish, and the Editor feeds Publish too, so Publish is
+    // reached twice. The Reviewer is on no path from the Writer at all.
+    const editor = graphNode(NODE_E, 'Editor', ['text']);
+    const diamond = {
+      nodes: [writer, editor, reviewer, publish],
+      edges: [
+        dataEdge(EDGE_ID, NODE_B, 'text', NODE_E, 'text'),
+        dataEdge(EDGE_ID_2, NODE_B, 'text', NODE_D, 'text'),
+        dataEdge(EDGE_ID_3, NODE_E, 'text', NODE_D, 'text'),
+      ],
+    };
+
+    expect(validateLoopConfig(backEdge, diamond)).toMatchObject({
+      ok: false,
+      code: 'loop_target_not_upstream',
+    });
   });
 
   it('only counts data edges as the way upstream', () => {
