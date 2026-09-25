@@ -139,6 +139,11 @@ describe('FR-WF-006 ValidationIssue', () => {
     }
   });
 
+  it('FR-EXE-013 names a start node whose upstream never produced an output (D83)', () => {
+    expect(ROUND_3_VALIDATION_ISSUE_CODES).toContain('missing_upstream_output');
+    expect(ValidationIssueCodeSchema.safeParse('missing_upstream_output').success).toBe(true);
+  });
+
   it('FR-GRD-008 names a run pre-flight blocks because the daily budget is spent', () => {
     expect(ROUND_3_VALIDATION_ISSUE_CODES).toContain('daily_budget_exceeded');
     expect(ValidationIssueCodeSchema.safeParse('daily_budget_exceeded').success).toBe(true);
