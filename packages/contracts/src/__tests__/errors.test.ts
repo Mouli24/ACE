@@ -4,9 +4,12 @@ import {
   ERROR_CODES,
   ERROR_CODE_HTTP_STATUS,
   ApiErrorSchema,
+  PolicyInUseDetailsSchema,
   ROUND_1_ERROR_CODES,
+  ROUND_3_ERROR_CODES,
   aceError,
 } from '../errors.js';
+import { NODE_A } from './fixtures.js';
 
 describe('FR-SYS-006 error shape', () => {
   it('returns exactly the round 1 §2.3 envelope', () => {
@@ -88,8 +91,14 @@ describe('FR-SYS-006 round 1 error codes', () => {
     ]);
   });
 
-  it('adds only round 2 §2.5 provider_in_use on top of them', () => {
-    expect([...ERROR_CODES]).toEqual([...ROUND_1_ERROR_CODES, 'provider_in_use']);
+  it('adds round 2 §2.5 provider_in_use, then round 3 §2.5 invalid_run_state and policy_in_use', () => {
+    expect([...ROUND_3_ERROR_CODES]).toEqual(['invalid_run_state', 'policy_in_use']);
+    expect([...ERROR_CODES]).toEqual([
+      ...ROUND_1_ERROR_CODES,
+      'provider_in_use',
+      'invalid_run_state',
+      'policy_in_use',
+    ]);
   });
 
   it('maps every code to the HTTP status §2.3 gives it', () => {
@@ -104,6 +113,15 @@ describe('FR-SYS-006 round 1 error codes', () => {
       not_implemented: 501,
       internal: 500,
       provider_in_use: 409,
+      invalid_run_state: 409,
+      policy_in_use: 409,
     });
+  });
+});
+
+describe('R3 §2.5 409 details', () => {
+  it('FR-GRD-001 names the agents that still use a policy (policy_in_use)', () => {
+    expect(PolicyInUseDetailsSchema.parse({ nodeIds: [NODE_A] })).toEqual({ nodeIds: [NODE_A] });
+    expect(PolicyInUseDetailsSchema.safeParse({ nodeIds: ['node-a'] }).success).toBe(false);
   });
 });

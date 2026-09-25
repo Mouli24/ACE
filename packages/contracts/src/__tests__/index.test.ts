@@ -61,6 +61,15 @@ describe('FR-SYS-006 contracts barrel', () => {
     ['events', 'EngineEventSchema'],
     ['events', 'SeqSchema'],
     ['events', 'RUN_EVENT_TYPES'],
+    ['errors', 'PolicyInUseDetailsSchema'],
+    ['guardrails', 'GUARDRAIL_CHECK_TYPES'],
+    ['guardrails', 'GuardrailCheckSchema'],
+    ['guardrails', 'GuardrailPolicySchema'],
+    ['guardrails', 'VerdictSchema'],
+    ['guardrails', 'ApprovalRequestSchema'],
+    ['guardrails', 'ApprovalDecisionSchema'],
+    ['guardrails', 'PolicyTestResponseSchema'],
+    ['guardrails', 'defaultGuardrailChecks'],
   ])('re-exports %s -> %s', (_module, symbol) => {
     expect(contracts).toHaveProperty(symbol);
   });
@@ -96,10 +105,16 @@ describe('FR-SYS-006 contracts barrel', () => {
     }
   });
 
-  it('keeps an importable, still-empty placeholder for the eight later-round modules', () => {
-    const placeholders = { guardrails, tools, artifacts, chat, knowledge, memory, usage, templates };
+  it('fills the module round 3 §2 adds', () => {
+    expect(Object.keys(guardrails).length, 'guardrails.ts should export its contract').toBeGreaterThan(
+      0,
+    );
+  });
 
-    expect(Object.keys(placeholders)).toHaveLength(8);
+  it('keeps an importable, still-empty placeholder for the seven later-round modules', () => {
+    const placeholders = { tools, artifacts, chat, knowledge, memory, usage, templates };
+
+    expect(Object.keys(placeholders)).toHaveLength(7);
     for (const [name, module] of Object.entries(placeholders)) {
       expect(Object.keys(module), `${name}.ts should still be empty`).toEqual([]);
     }

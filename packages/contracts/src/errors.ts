@@ -33,7 +33,17 @@ export const ROUND_1_ERROR_CODES = [
 /** Codes round 2 §2.5 adds: deleting a provider a node still references needs `?confirm=true`. */
 export const ROUND_2_ERROR_CODES = ['provider_in_use'] as const;
 
-export const ERROR_CODES = [...ROUND_1_ERROR_CODES, ...ROUND_2_ERROR_CODES] as const;
+/**
+ * Codes round 3 §2.5 adds: a control, retry or approval the run or node run is not in a state for
+ * (FR-CTL-006), and deleting a guardrail policy agents still use without `?confirm=true`.
+ */
+export const ROUND_3_ERROR_CODES = ['invalid_run_state', 'policy_in_use'] as const;
+
+export const ERROR_CODES = [
+  ...ROUND_1_ERROR_CODES,
+  ...ROUND_2_ERROR_CODES,
+  ...ROUND_3_ERROR_CODES,
+] as const;
 export const ErrorCodeSchema = z.enum(ERROR_CODES);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
 
@@ -49,6 +59,8 @@ export const ERROR_CODE_HTTP_STATUS: Readonly<Record<ErrorCode, number>> = {
   not_implemented: 501,
   internal: 500,
   provider_in_use: 409,
+  invalid_run_state: 409,
+  policy_in_use: 409,
 };
 
 /** `details` shapes §2.3 names explicitly. */
@@ -61,6 +73,10 @@ export type InvalidPathDetails = z.infer<typeof InvalidPathDetailsSchema>;
 /** `DELETE /providers/:id` without `confirm=true` while nodes still name it (round 2 §2.5). */
 export const ProviderInUseDetailsSchema = z.object({ nodeIds: z.array(IdSchema) });
 export type ProviderInUseDetails = z.infer<typeof ProviderInUseDetailsSchema>;
+
+/** `DELETE /guardrail-policies/:id` without `confirm=true` while agents still use it (round 3 §2.5). */
+export const PolicyInUseDetailsSchema = z.object({ nodeIds: z.array(IdSchema) });
+export type PolicyInUseDetails = z.infer<typeof PolicyInUseDetailsSchema>;
 
 /**
  * Error kinds Arch §28 (repeated in CLAUDE.md §10) says are retried with backoff. Used only as the
