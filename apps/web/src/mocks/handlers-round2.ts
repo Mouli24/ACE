@@ -5,9 +5,11 @@ import {
   StartRunRequestSchema,
   UpdateProviderRequestSchema,
   aceError,
+  allowedRunActions,
   modelMatchesQuery,
   zeroUsage,
   type ApiError,
+  type BudgetHalt,
   type ErrorKind,
   type Model,
   type Node,
@@ -21,7 +23,8 @@ import { DETECTED_OLLAMA } from './catalog';
 import { validateGraph } from './graph-rules';
 import { type MockDb } from './db';
 import { dropMockSockets } from './fake-socket';
-import { buildScenario, type ScenarioName } from './scenarios';
+import { pausePlayback, startPlayback, stopAllPlayback } from './playback';
+import { buildScenario, type ScenarioName, type ScriptedFrame } from './scenarios';
 
 /**
  * MSW handlers for the round 2 endpoints (§2.5), plus the pre-flight of §2.7 and the scripted run
@@ -55,11 +58,80 @@ export function currentScenario(): ScenarioName {
   return scenario;
 }
 
-/** Cancels the timers of a scenario still playing, so tests never leak into one another. */
-let playing: ReturnType<typeof setTimeout>[] = [];
+/** Cancels every scenario still playing, so tests never leak into one another. */
 export function stopScenario(): void {
-  for (const timer of playing) clearTimeout(timer);
-  playing = [];
+  stopAllPlayback();
+}
+
+/**
+ * Play one scripted frame: the node run as it stands, what it changes about the run, any approval it
+ * raises, then the frame itself. Node runs are *merged* rather than replaced, so a decision the
+ * approve handler wrote onto a node run survives the frames that come after it.
+ */
+function applyFrame(db: MockDb, run: Run, frame: ScriptedFrame): void {
+  if (frame.dropSocket === true) {
+    // cut every open mock socket, the way an engine restart would (TC-EXE-013)
+    dropMockSockets();
+    return;
+  }
+  if (frame.nodeRun !== undefined) {
+    const existing = db.getNodeRun(frame.nodeRun.id);
+    db.upsertNodeRun(existing === undefined ? frame.nodeRun : { ...existing, ...frame.nodeRun });
+  }
+  if (frame.run !== undefined) db.updateRun(run.id, frame.run);
+  if (frame.approval !== undefined) db.addApproval(frame.approval);
+
+  const emitted = db.emit(frame.event);
+  if (frame.event.type === 'run.completed') {
+    const payload = emitted.payload as {
+      status: Run['status'];
+      totals: Run['totals'];
+      haltReason?: Run['haltReason'];
+      finalOutput?: Run['finalOutput'];
+      budgetHalt?: BudgetHalt;
+    };
+    const endedAt = new Date().toISOString();
+    db.updateRun(run.id, {
+      status: payload.status,
+      totals: payload.totals,
+      ...(payload.haltReason === undefined ? {} : { haltReason: payload.haltReason }),
+      ...(payload.finalOutput === undefined ? {} : { finalOutput: payload.finalOutput }),
+      ...(payload.budgetHalt === undefined ? {} : { budgetHalt: payload.budgetHalt }),
+      allowedActions: allowedRunActions(payload.status),
+      endedAt,
+      durationMs: Math.max(0, Date.parse(endedAt) - Date.parse(run.startedAt)),
+    });
+  }
+
+  // a `paused` or `waiting-approval` script stops here until a control or a decision arrives
+  if (frame.hold === true) pausePlayback(run.id);
+}
+
+/** Queue these frames as this run's story, replacing whatever it was playing. */
+export function playFrames(db: MockDb, run: Run, frames: readonly ScriptedFrame[]): void {
+  startPlayback(
+    run.id,
+    frames.map((frame) => ({ after: frame.after, play: () => applyFrame(db, run, frame) })),
+  );
+}
+
+/**
+ * Queue this run's scenario (round 2 §5 item 11). The frames come from the run's own snapshot, so a
+ * restart replays the graph the run froze rather than whatever the workflow looks like now (BR-04).
+ */
+export function playScenario(db: MockDb, run: Run): void {
+  const cap = db.getProject(run.projectId)?.maxCostPerRunUsd;
+  playFrames(
+    db,
+    run,
+    buildScenario(scenario, {
+      run,
+      workflowId: run.workflowId,
+      nodes: run.snapshot.nodes,
+      edges: run.snapshot.edges,
+      ...(cap === undefined || cap === null ? {} : { maxCostPerRunUsd: cap }),
+    }),
+  );
 }
 
 /**
@@ -90,12 +162,8 @@ export function preflight(
       }
     }
 
-    if (
-      node.kind === 'merge' ||
-      node.kind === 'retrieval' ||
-      node.kind === 'guardrail' ||
-      node.kind === 'custom'
-    ) {
+    // merge runs from round 3 (§2.4, FR-PAR-002); the rest still arrive later
+    if (node.kind === 'retrieval' || node.kind === 'guardrail' || node.kind === 'custom') {
       issues.push({
         severity: 'error',
         code: 'not_supported_yet',
@@ -205,48 +273,6 @@ export function createRound2Handlers(db: MockDb): HttpHandler[] {
       if (db.latencyMs > 0) await new Promise((resolve) => setTimeout(resolve, db.latencyMs));
       return handler(ctx);
     };
-
-  /** Play a scenario's frames on the mock event bus, with their delays. */
-  const play = (run: Run, workflowId: string): void => {
-    const frames = buildScenario(scenario, {
-      run,
-      workflowId,
-      nodes: db.nodesOf(workflowId),
-      edges: db.edgesOf(workflowId),
-    });
-    let elapsed = 0;
-    for (const frame of frames) {
-      elapsed += frame.after;
-      playing.push(
-        setTimeout(() => {
-          if (frame.dropSocket) {
-            // cut every open mock socket, the way an engine restart would (TC-EXE-013)
-            dropMockSockets();
-            return;
-          }
-          if (frame.nodeRun) db.upsertNodeRun(frame.nodeRun);
-          const emitted = db.emit(frame.event);
-          if (frame.event.type === 'run.completed') {
-            const payload = emitted.payload as {
-              status: Run['status'];
-              totals: Run['totals'];
-              haltReason?: Run['haltReason'];
-              finalOutput?: Run['finalOutput'];
-            };
-            const endedAt = new Date().toISOString();
-            db.updateRun(run.id, {
-              status: payload.status,
-              totals: payload.totals,
-              ...(payload.haltReason === undefined ? {} : { haltReason: payload.haltReason }),
-              ...(payload.finalOutput === undefined ? {} : { finalOutput: payload.finalOutput }),
-              endedAt,
-              durationMs: Math.max(0, Date.parse(endedAt) - Date.parse(run.startedAt)),
-            });
-          }
-        }, elapsed),
-      );
-    }
-  };
 
   return [
     /* ---------------------------------------------------------------- providers */
@@ -430,9 +456,11 @@ export function createRound2Handlers(db: MockDb): HttpHandler[] {
           preflightIssues: issues,
           totals: zeroUsage(),
           startedAt: new Date().toISOString(),
+          // the engine writes the controls this state allows, so the UI never guesses (FR-CTL-006)
+          allowedActions: allowedRunActions(issues.length > 0 ? 'BLOCKED' : 'RUNNING'),
         };
         db.addRun(run);
-        if (issues.length === 0) play(run, workflowId);
+        if (issues.length === 0) playScenario(db, run);
         return HttpResponse.json(run, { status: 201 });
       }),
     ),

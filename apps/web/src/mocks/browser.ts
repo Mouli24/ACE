@@ -1,3 +1,4 @@
+import { type GuardrailCheckType } from '@ace/contracts';
 import { setupWorker } from 'msw/browser';
 
 import { MockDb } from './db';
@@ -5,6 +6,7 @@ import { seedPerfFixture } from './fixture';
 import { createFakeWebSocket, dropMockSockets } from './fake-socket';
 import { createHandlers } from './handlers';
 import { createRound2Handlers, setScenario } from './handlers-round2';
+import { createRound3Handlers, decideApproval, requireApproval } from './handlers-round3';
 import { createNode, type Round1NodeKind } from '../nodes/factory';
 import { applyOpsWithRules } from './graph-rules';
 
@@ -42,6 +44,19 @@ declare global {
         outputId: string;
         edgeIds: string[];
       };
+      /**
+       * Round 3: put a node run into WAITING with an approval card, without waiting for a scenario
+       * to reach one (FR-GRD-013). Answers the request id, or undefined if there is no such run.
+       */
+      requireApproval(
+        nodeRunId: string,
+        options?: { checkType?: GuardrailCheckType; reason?: string; preview?: string },
+      ): string | undefined;
+      /** Round 3: decide a pending approval from a test, as the card's buttons would. */
+      approve(nodeRunId: string, note?: string): boolean;
+      reject(nodeRunId: string, note?: string): boolean;
+      /** Round 3: the approval requests of a run that are still waiting for a decision. */
+      pendingApprovals(runId: string): { id: string; nodeRunId: string; nodeName: string }[];
       /** Connect two seeded nodes by port name through the same rules the handlers use. */
       connect(
         workflowId: string,
@@ -80,7 +95,11 @@ function restoreScenario(): void {
 export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
   const db = new MockDb({ persist: true });
   restoreScenario();
-  const worker = setupWorker(...createRound2Handlers(db), ...createHandlers(db));
+  const worker = setupWorker(
+    ...createRound3Handlers(db),
+    ...createRound2Handlers(db),
+    ...createHandlers(db),
+  );
   await worker.start({ onUnhandledRequest: 'bypass', quiet: true });
 
   window.__aceMock = {
@@ -175,6 +194,26 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
         outputId: output.id,
         edgeIds: edges.map((edge) => edge.id),
       };
+    },
+    requireApproval(nodeRunId, options = {}) {
+      db.load();
+      return requireApproval(db, nodeRunId, options)?.id;
+    },
+    approve(nodeRunId, note) {
+      db.load();
+      return decideApproval(db, nodeRunId, 'approve', note).ok;
+    },
+    reject(nodeRunId, note) {
+      db.load();
+      return decideApproval(db, nodeRunId, 'reject', note).ok;
+    },
+    pendingApprovals(runId) {
+      db.load();
+      return db.pendingApprovals(runId).map((request) => ({
+        id: request.id,
+        nodeRunId: request.nodeRunId,
+        nodeName: request.nodeName,
+      }));
     },
     connect(workflowId, fromNodeId, fromPort, toNodeId, toPort) {
       db.load();
