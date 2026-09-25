@@ -4,11 +4,12 @@ import {
   SUPPORTED_JSON_SCHEMA_KEYWORDS,
   EnvelopeContractSchema,
   EnvelopeSchema,
+  MergeOutputSchema,
   PartSchema,
   validateAgainstContract,
   type Part,
 } from '../envelope.js';
-import { ARTIFACT_ID, ENVELOPE_ID, NODE_A, NODE_B, NOW, RUN_ID } from './fixtures.js';
+import { ARTIFACT_ID, ENVELOPE_ID, NODE_A, NODE_B, NODE_C, NOW, RUN_ID } from './fixtures.js';
 
 const envelope = {
   id: ENVELOPE_ID,
@@ -371,7 +372,7 @@ describe('TC-EXE-005 validateAgainstContract — JSON schema', () => {
     expect(validateAgainstContract([json({ note: 7 })], nullable).ok).toBe(false);
   });
 
-  it('names the keywords it understands, so a contract author knows the subset (D53)', () => {
+  it('names the keywords it understands, so a contract author knows the subset (D53, D74)', () => {
     expect([...SUPPORTED_JSON_SCHEMA_KEYWORDS]).toEqual([
       'type',
       'enum',
@@ -380,7 +381,37 @@ describe('TC-EXE-005 validateAgainstContract — JSON schema', () => {
       'properties',
       'additionalProperties',
       'items',
+      'minimum',
+      'maximum',
     ]);
+  });
+
+  it('holds a number to its minimum and maximum, bounds included (D74)', () => {
+    const bounded = {
+      outputTypes: ['json' as const],
+      jsonSchema: {
+        type: 'object',
+        properties: { score: { type: 'number', minimum: 0, maximum: 10 } },
+      },
+    };
+
+    expect(validateAgainstContract([json({ score: 0 })], bounded)).toEqual({ ok: true });
+    expect(validateAgainstContract([json({ score: 10 })], bounded)).toEqual({ ok: true });
+
+    const low = validateAgainstContract([json({ score: -1 })], bounded);
+    expect(low.ok).toBe(false);
+    expect(low.ok ? '' : low.reason).toContain('"score" must be >= 0');
+
+    const high = validateAgainstContract([json({ score: 11 })], bounded);
+    expect(high.ok).toBe(false);
+    expect(high.ok ? '' : high.reason).toContain('"score" must be <= 10');
+  });
+
+  it('applies the bounds to numbers only, as JSON Schema does', () => {
+    const boundedOnly = { outputTypes: ['json' as const], jsonSchema: { minimum: 5 } };
+
+    expect(validateAgainstContract([json('a string')], boundedOnly)).toEqual({ ok: true });
+    expect(validateAgainstContract([json(4)], boundedOnly).ok).toBe(false);
   });
 
   it('never applies the json schema to a text part', () => {
@@ -390,6 +421,45 @@ describe('TC-EXE-005 validateAgainstContract — JSON schema', () => {
         outputTypes: ['text', 'json'],
       }),
     ).toEqual({ ok: true });
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Merge output — round 3 §2.4                                                 */
+/* -------------------------------------------------------------------------- */
+
+describe('FR-PAR-002 the merge node output', () => {
+  const output = {
+    inputs: [
+      { port: `${NODE_C}:in:in`, nodeId: NODE_A, parts: [{ type: 'text', text: 'left branch' }] },
+      {
+        port: `${NODE_C}:in:in_json`,
+        nodeId: NODE_B,
+        parts: [{ type: 'json', value: { right: true } }],
+      },
+    ],
+  };
+
+  it('lists what each input port received and from which node, in order', () => {
+    expect(MergeOutputSchema.parse(output)).toEqual(output);
+  });
+
+  it('names the port by its id, not its bare name', () => {
+    const [first] = output.inputs;
+
+    expect(MergeOutputSchema.safeParse({ inputs: [{ ...first, port: 'in' }] }).success).toBe(false);
+  });
+
+  it('carries parts, never loose text', () => {
+    const [first] = output.inputs;
+
+    expect(MergeOutputSchema.safeParse({ inputs: [{ ...first, parts: 'left' }] }).success).toBe(
+      false,
+    );
+  });
+
+  it('is strict, like every shape in this module', () => {
+    expect(MergeOutputSchema.safeParse({ ...output, mode: 'all' }).success).toBe(false);
   });
 });
 

@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { DATA_TYPES, type DataType } from '../enums.js';
-import type { Port } from '../graph.js';
+import { LOOP_REFUSAL_CODES, type Port } from '../graph.js';
 import {
   ROUND_1_VALIDATION_ISSUE_CODES,
+  ROUND_3_VALIDATION_ISSUE_CODES,
   VALIDATION_ISSUE_CODES,
   ValidationIssueCodeSchema,
   ValidationIssueSchema,
@@ -115,7 +116,7 @@ describe('FR-WF-006 ValidationIssue', () => {
     ]);
   });
 
-  it('adds the seven codes round 2 §2.5 names, and no others', () => {
+  it('adds the seven codes round 2 §2.5 names, then round 3', () => {
     expect([...VALIDATION_ISSUE_CODES]).toEqual([
       ...ROUND_1_VALIDATION_ISSUE_CODES,
       'provider_missing',
@@ -125,7 +126,21 @@ describe('FR-WF-006 ValidationIssue', () => {
       'missing_input',
       'not_supported_yet',
       'unknown_placeholder',
+      ...ROUND_3_VALIDATION_ISSUE_CODES,
     ]);
+  });
+
+  it('FR-CON-007 reports a refused loop edge by the code validateLoopConfig gives it', () => {
+    expect([...ROUND_3_VALIDATION_ISSUE_CODES]).toEqual(
+      expect.arrayContaining([...LOOP_REFUSAL_CODES]),
+    );
+    for (const code of LOOP_REFUSAL_CODES) {
+      expect(ValidationIssueCodeSchema.safeParse(code).success, code).toBe(true);
+    }
+  });
+
+  it('keeps loop_not_supported, which the engine no longer raises — codes are only ever added (NFR-VER-01)', () => {
+    expect(VALIDATION_ISSUE_CODES).toContain('loop_not_supported');
   });
 
   it('parses a pre-flight issue that names the node it blocks', () => {

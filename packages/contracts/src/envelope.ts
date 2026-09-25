@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { DataTypeSchema, type DataType } from './enums.js';
-import { IdSchema, TimestampSchema } from './graph.js';
+import { IdSchema, PortIdSchema, TimestampSchema } from './graph.js';
 
 /**
  * Parts and the envelope (round 2 §2.2, Arch §12.4, BR-02, BR-13, ADR-008).
@@ -96,6 +96,28 @@ export const EnvelopeSchema = z.strictObject({
 export type Envelope = z.infer<typeof EnvelopeSchema>;
 
 /* -------------------------------------------------------------------------- */
+/* Merge output (round 3 §2.4, FR-PAR-002)                                     */
+/* -------------------------------------------------------------------------- */
+
+/** One input a merge node received. */
+export const MergeInputSchema = z.strictObject({
+  /** The merge node's own input port it arrived on, by id (D78). */
+  port: PortIdSchema,
+  /** The node that fed it — what the Canvas labels the slot with during a run. */
+  nodeId: IdSchema,
+  parts: z.array(PartSchema),
+});
+export type MergeInput = z.infer<typeof MergeInputSchema>;
+
+/**
+ * The value of the one `json` part a merge node emits, ordered by input port order. In `all` mode
+ * it holds every connected input; in `any` mode only the first to arrive — the other branches
+ * still complete and are recorded on their own node runs, but do not feed the merge.
+ */
+export const MergeOutputSchema = z.strictObject({ inputs: z.array(MergeInputSchema) });
+export type MergeOutput = z.infer<typeof MergeOutputSchema>;
+
+/* -------------------------------------------------------------------------- */
 /* Output contract checking (FR-EXE-006, TC-EXE-005)                           */
 /* -------------------------------------------------------------------------- */
 
@@ -105,7 +127,8 @@ export type ContractCheck = { ok: true } | { ok: false; reason: string };
  * The JSON Schema keywords an output contract may use (D53). A deliberately small subset — enough
  * for the shapes an agent is asked to return, small enough to stay dependency-free in a package
  * the browser bundles. Unknown keywords are ignored rather than rejected, so a richer schema
- * still validates on the parts this subset understands.
+ * still validates on the parts this subset understands. `minimum` and `maximum` joined in round 3
+ * so the review contract's 0..10 score is enforced, not just written down (D74).
  */
 export const SUPPORTED_JSON_SCHEMA_KEYWORDS = [
   'type',
@@ -115,6 +138,8 @@ export const SUPPORTED_JSON_SCHEMA_KEYWORDS = [
   'properties',
   'additionalProperties',
   'items',
+  'minimum',
+  'maximum',
 ] as const;
 
 type JsonSchemaLike = Record<string, unknown>;
@@ -162,6 +187,16 @@ function checkJsonSchema(value: unknown, schema: JsonSchemaLike, path: string): 
   const actualType = jsonTypeOf(value);
   if (expectedTypes.length > 0 && !expectedTypes.some((t) => typeMatches(actualType, t))) {
     return `${at} must be ${expectedTypes.join(' or ')}, got ${actualType}`;
+  }
+
+  // Bounds apply to numbers only, as in JSON Schema; both are inclusive.
+  if (typeof value === 'number') {
+    if (typeof schema.minimum === 'number' && value < schema.minimum) {
+      return `${at} must be >= ${schema.minimum}`;
+    }
+    if (typeof schema.maximum === 'number' && value > schema.maximum) {
+      return `${at} must be <= ${schema.maximum}`;
+    }
   }
 
   if (isPlainObject(value)) {

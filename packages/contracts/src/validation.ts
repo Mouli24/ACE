@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import type { DataType } from './enums.js';
-import { IdSchema, type Port } from './graph.js';
+import { IdSchema, LOOP_REFUSAL_CODES, type Port } from './graph.js';
 
 /* -------------------------------------------------------------------------- */
 /* Connection rule (FR-CON-002 / FR-CON-005, round 1 §2.5)                     */
@@ -93,9 +93,17 @@ export const ROUND_2_VALIDATION_ISSUE_CODES = [
   'unknown_placeholder',
 ] as const;
 
+/**
+ * The codes round 3 adds. A loop edge `validateLoopConfig` refuses (§2.4) is reported by the code
+ * it was refused with, the way `isConnectionAllowed`'s refusals are. `loop_not_supported` stays in
+ * round 1's list although the engine no longer raises it: codes are only ever added (NFR-VER-01).
+ */
+export const ROUND_3_VALIDATION_ISSUE_CODES = [...LOOP_REFUSAL_CODES] as const;
+
 export const VALIDATION_ISSUE_CODES = [
   ...ROUND_1_VALIDATION_ISSUE_CODES,
   ...ROUND_2_VALIDATION_ISSUE_CODES,
+  ...ROUND_3_VALIDATION_ISSUE_CODES,
 ] as const;
 export const ValidationIssueCodeSchema = z.enum(VALIDATION_ISSUE_CODES);
 export type ValidationIssueCode = z.infer<typeof ValidationIssueCodeSchema>;
