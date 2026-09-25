@@ -11,15 +11,19 @@ import {
   RunEventSchema,
   TRANSIENT_EVENT_TYPES,
 } from '../events.js';
+import { LOOP_STOP_REASONS } from '../graph.js';
 import { ServerFrameSchema, WsServerFrameSchema, isPersistedFrame } from '../ws.js';
 import {
+  APPROVAL_ID,
   EDGE_ID,
+  LOOP_EDGE_ID,
   NODE_A,
   NODE_B,
   NODE_RUN_ID,
   NOW,
   PROVIDER_ID,
   RUN_ID,
+  VERDICT_ID,
   WORKFLOW_ID,
 } from './fixtures.js';
 
@@ -31,6 +35,38 @@ const summary = {
   status: 'RUNNING',
   startedAt: NOW,
   totals: usage,
+};
+
+const approvalRequest = {
+  id: APPROVAL_ID,
+  runId: RUN_ID,
+  nodeRunId: NODE_RUN_ID,
+  nodeId: NODE_A,
+  nodeName: 'Writer',
+  point: 'output',
+  checkType: 'pii',
+  reason: 'The output contains an email address.',
+  preview: 'You can reach the team at the address below.',
+  requestedAt: NOW,
+};
+
+const approvalDecision = {
+  requestId: APPROVAL_ID,
+  decision: 'reject',
+  note: 'No customer addresses in drafts.',
+  decidedAt: NOW,
+};
+
+const verdict = {
+  id: VERDICT_ID,
+  nodeRunId: NODE_RUN_ID,
+  point: 'output',
+  checkType: 'pii',
+  action: 'redact',
+  passed: false,
+  reason: 'An email address was found in the output.',
+  redactedTypes: ['email'],
+  at: NOW,
 };
 
 /** One valid frame per type of §2.4, in the order §2.4 lists them. */
@@ -92,6 +128,30 @@ const frames: Record<string, { type: string; payload: unknown; seq?: number }> =
     seq: 6,
   },
   'usage.updated': { type: 'usage.updated', payload: { runId: RUN_ID, totals: usage }, seq: 7 },
+
+  /* Round 3 §2.6 */
+  'run.paused': { type: 'run.paused', payload: { runId: RUN_ID }, seq: 8 },
+  'run.resumed': { type: 'run.resumed', payload: { runId: RUN_ID }, seq: 9 },
+  'node.approval_required': {
+    type: 'node.approval_required',
+    payload: { runId: RUN_ID, request: approvalRequest },
+    seq: 10,
+  },
+  'node.approval_decided': {
+    type: 'node.approval_decided',
+    payload: { runId: RUN_ID, nodeRunId: NODE_RUN_ID, decision: approvalDecision },
+    seq: 11,
+  },
+  'guardrail.verdict': {
+    type: 'guardrail.verdict',
+    payload: { runId: RUN_ID, nodeRunId: NODE_RUN_ID, verdict },
+    seq: 12,
+  },
+  'loop.iteration': {
+    type: 'loop.iteration',
+    payload: { runId: RUN_ID, edgeId: LOOP_EDGE_ID, targetNodeId: NODE_A, iteration: 2 },
+    seq: 13,
+  },
 };
 
 /** Indexed access is checked in this workspace, so fixture lookup fails loudly instead. */
@@ -101,8 +161,8 @@ const payloadOf = (type: string): Record<string, unknown> => {
   return frame.payload as Record<string, unknown>;
 };
 
-describe('FR-EXE-014 RunEvent covers every type of §2.4', () => {
-  it('declares exactly the eight run event types', () => {
+describe('FR-EXE-014 RunEvent covers every type of round 2 §2.4 and round 3 §2.6', () => {
+  it('declares exactly the fourteen run event types', () => {
     expect([...RUN_EVENT_TYPES]).toEqual([
       'run.started',
       'run.completed',
@@ -112,6 +172,12 @@ describe('FR-EXE-014 RunEvent covers every type of §2.4', () => {
       'node.error',
       'edge.transfer',
       'usage.updated',
+      'run.paused',
+      'run.resumed',
+      'node.approval_required',
+      'node.approval_decided',
+      'guardrail.verdict',
+      'loop.iteration',
     ]);
   });
 
@@ -244,6 +310,88 @@ describe('§2.4 run event payloads', () => {
       }).success,
     ).toBe(false);
   });
+});
+
+describe('round 3 §2.6 control, approval, verdict and loop events', () => {
+  const frame = (type: string, payload: unknown, seq = 20) => ({ type, payload, seq });
+
+  it('FR-CTL-001 FR-CTL-002 says only which run paused or resumed', () => {
+    for (const type of ['run.paused', 'run.resumed']) {
+      expect(RunEventSchema.safeParse(frame(type, { runId: RUN_ID })).success, type).toBe(true);
+      expect(
+        RunEventSchema.safeParse(frame(type, { runId: RUN_ID, pausedAt: NOW })).success,
+        type,
+      ).toBe(false);
+    }
+  });
+
+  it('FR-GRD-013 carries the whole approval request, its preview capped at 500', () => {
+    const long = { ...approvalRequest, preview: 'x'.repeat(501) };
+
+    expect(
+      RunEventSchema.safeParse(frame('node.approval_required', { runId: RUN_ID, request: long }))
+        .success,
+    ).toBe(false);
+  });
+
+  it('TC-GRD-008 carries the decision with the time it was made', () => {
+    const { decidedAt: _decidedAt, ...untimed } = approvalDecision;
+
+    expect(
+      RunEventSchema.safeParse(
+        frame('node.approval_decided', {
+          runId: RUN_ID,
+          nodeRunId: NODE_RUN_ID,
+          decision: untimed,
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it('TC-GRD-018 never carries a redacted value on a verdict (FR-GRD-014, FR-GRD-015)', () => {
+    const leaky = { ...verdict, value: 'ada@example.com' };
+
+    expect(
+      RunEventSchema.safeParse(
+        frame('guardrail.verdict', { runId: RUN_ID, nodeRunId: NODE_RUN_ID, verdict: leaky }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it('FR-PAR-005 numbers loop iterations from 1', () => {
+    const payload = payloadOf('loop.iteration');
+
+    expect(
+      RunEventSchema.safeParse(frame('loop.iteration', { ...payload, iteration: 0 })).success,
+    ).toBe(false);
+  });
+
+  it.each([...LOOP_STOP_REASONS])('FR-PAR-003 says the loop stopped on %s', (stop) => {
+    const payload = payloadOf('loop.iteration');
+
+    expect(
+      RunEventSchema.safeParse(frame('loop.iteration', { ...payload, iteration: 3, stop })).success,
+    ).toBe(true);
+  });
+
+  it('refuses a stop reason §2.4 does not name', () => {
+    const payload = payloadOf('loop.iteration');
+
+    expect(
+      RunEventSchema.safeParse(frame('loop.iteration', { ...payload, stop: 'timeout' })).success,
+    ).toBe(false);
+  });
+
+  it.each(['stopped', 'budget_exceeded'])(
+    'FR-CTL-003 FR-GRD-008 ends a run HALTED %s',
+    (haltReason) => {
+      expect(
+        RunEventSchema.safeParse(
+          frame('run.completed', { runId: RUN_ID, status: 'HALTED', haltReason, totals: usage }),
+        ).success,
+      ).toBe(true);
+    },
+  );
 });
 
 describe('FR-PRV-004 EngineEvent', () => {
