@@ -348,7 +348,7 @@ describe('FR-GRD-018 the default policy every project gets (D10)', () => {
       ['output', 'secret_leak', 'block', {}],
       ['output', 'moderation', 'warn', {}],
       ['output', 'contract', 'block', {}],
-      ['cost', 'max_cost_per_run', 'warn', {}],
+      ['cost', 'max_cost_per_run', 'block', {}],
       ['cost', 'daily_budget', 'block', {}],
       ['loop', 'max_iterations', 'block', { max: 50 }],
       ['loop', 'max_tool_calls', 'block', { max: 25 }],
@@ -373,6 +373,16 @@ describe('FR-GRD-018 the default policy every project gets (D10)', () => {
     for (const type of ['tool_allowed', 'path_confinement', 'domain_allowlist']) {
       expect(actionOf('tool', type), type).toBe('block');
     }
+  });
+
+  it('TC-GRD-012 halts a run at its cost cap and the day at its budget (D79, FR-GRD-008)', () => {
+    const checks = defaultGuardrailChecks(sequentialIds());
+    const costActions = checks.filter((c) => c.point === 'cost').map((c) => [c.type, c.action]);
+
+    expect(costActions).toEqual([
+      ['max_cost_per_run', 'block'],
+      ['daily_budget', 'block'],
+    ]);
   });
 
   it('asks the user before any destructive tool action (BR-14)', () => {

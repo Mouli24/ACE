@@ -11,6 +11,7 @@ import {
 } from './enums.js';
 import { EnvelopeSchema, PartSchema } from './envelope.js';
 import {
+  BudgetUsdSchema,
   EdgeSchema,
   IdSchema,
   LoopStopReasonSchema,
@@ -88,6 +89,30 @@ export function allowedRunActions(status: RunState): RunAction[] {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Budget halts (round 3 §2.3, FR-GRD-008, D80)                                */
+/* -------------------------------------------------------------------------- */
+
+/** Which cap tripped: the project's per-run cap, or the day's budget from the settings. */
+export const BUDGET_SCOPES = ['run', 'daily'] as const;
+export const BudgetScopeSchema = z.enum(BUDGET_SCOPES);
+export type BudgetScope = z.infer<typeof BudgetScopeSchema>;
+
+/**
+ * Why a run halted `budget_exceeded`, as it stood at that moment — the cap can change afterwards —
+ * so the run view can say "budget exceeded: $0.012 > $0.01 cap" and which cap to raise
+ * (NFR-USE-03). `costUsd` is what was compared with the cap: the run's total for `run`, the day's
+ * for `daily`, plus the next node's projected cost when `projected` (the halt came before a
+ * dispatch, so the run may have spent less than `costUsd`).
+ */
+export const BudgetHaltSchema = z.strictObject({
+  scope: BudgetScopeSchema,
+  capUsd: BudgetUsdSchema,
+  costUsd: z.number().min(0),
+  projected: z.boolean(),
+});
+export type BudgetHalt = z.infer<typeof BudgetHaltSchema>;
+
+/* -------------------------------------------------------------------------- */
 /* Run                                                                         */
 /* -------------------------------------------------------------------------- */
 
@@ -126,6 +151,8 @@ export const RunSchema = z.object({
   pausedAt: TimestampSchema.optional(),
   /** Set on the new run a restart creates: same snapshot, same inputs (FR-CTL-004). */
   restartedFromRunId: IdSchema.optional(),
+  /** Set only when `haltReason` is `budget_exceeded` (D80). */
+  budgetHalt: BudgetHaltSchema.optional(),
 });
 export type Run = z.infer<typeof RunSchema>;
 

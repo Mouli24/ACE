@@ -583,3 +583,48 @@ describe('FR-PAR-003 FR-PAR-006 the last iteration says why its loop stopped', (
     expect(NodeRunSchema.safeParse({ ...nodeRun, loopStop: 'timeout' }).success).toBe(false);
   });
 });
+
+describe('FR-GRD-008 a budget halt says which cap tripped, and by how much (D80)', () => {
+  const budgetHalt = { scope: 'run', capUsd: 0.01, costUsd: 0.012, projected: false };
+  const halted = { ...run, status: 'HALTED', haltReason: 'budget_exceeded' };
+
+  it('records the cap in force, what was compared with it, and whether that was projected', () => {
+    expect(RunSchema.parse({ ...halted, budgetHalt }).budgetHalt).toEqual(budgetHalt);
+  });
+
+  it('tells the run cap from the daily budget, so the UI knows which one to raise', () => {
+    for (const scope of ['run', 'daily']) {
+      expect(RunSchema.safeParse({ ...halted, budgetHalt: { ...budgetHalt, scope } }).success).toBe(
+        true,
+      );
+    }
+    expect(
+      RunSchema.safeParse({ ...halted, budgetHalt: { ...budgetHalt, scope: 'project' } }).success,
+    ).toBe(false);
+  });
+
+  it('records a halt on projected cost, before the run spent its cap (§2.3)', () => {
+    const projected = { scope: 'run', capUsd: 0.01, costUsd: 0.013, projected: true };
+
+    expect(RunSchema.parse({ ...halted, budgetHalt: projected }).budgetHalt?.projected).toBe(true);
+  });
+
+  it('refuses a cap that is no cap, and a negative cost', () => {
+    expect(
+      RunSchema.safeParse({ ...halted, budgetHalt: { ...budgetHalt, capUsd: 0 } }).success,
+    ).toBe(false);
+    expect(
+      RunSchema.safeParse({ ...halted, budgetHalt: { ...budgetHalt, costUsd: -1 } }).success,
+    ).toBe(false);
+  });
+
+  it('carries no key it does not name', () => {
+    expect(
+      RunSchema.safeParse({ ...halted, budgetHalt: { ...budgetHalt, note: 'over' } }).success,
+    ).toBe(false);
+  });
+
+  it('is absent on a run that did not halt on a budget', () => {
+    expect(RunSchema.parse(run).budgetHalt).toBeUndefined();
+  });
+});

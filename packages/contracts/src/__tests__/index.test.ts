@@ -83,6 +83,7 @@ describe('FR-SYS-006 contracts barrel', () => {
     ['runs', 'RetryRequestSchema'],
     ['runs', 'RerunRequestSchema'],
     ['runs', 'AUTO_RETRY_POLICY'],
+    ['runs', 'BudgetHaltSchema'],
     ['events', 'RunPausedPayloadSchema'],
     ['events', 'RunResumedPayloadSchema'],
     ['events', 'NodeApprovalRequiredPayloadSchema'],

@@ -382,6 +382,22 @@ describe('round 3 §2.6 control, approval, verdict and loop events', () => {
     ).toBe(false);
   });
 
+  it('D80 says which budget halted the run, and by how much', () => {
+    const budgetHalt = { scope: 'daily', capUsd: 5, costUsd: 5.2, projected: true };
+
+    expect(
+      RunEventSchema.safeParse(
+        frame('run.completed', {
+          runId: RUN_ID,
+          status: 'HALTED',
+          haltReason: 'budget_exceeded',
+          totals: usage,
+          budgetHalt,
+        }),
+      ).success,
+    ).toBe(true);
+  });
+
   it.each(['stopped', 'budget_exceeded'])(
     'FR-CTL-003 FR-GRD-008 ends a run HALTED %s',
     (haltReason) => {
