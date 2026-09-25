@@ -120,6 +120,45 @@ export function useNodeRunsOnce(runId: Id | undefined) {
   });
 }
 
+/**
+ * Adopt the workflow's active run when a Canvas opens (FR-EXE-014). A reload loses the in-memory
+ * overlay, and the socket cannot help: it seeds `lastSeq` from `hello`, so `resume` replays nothing
+ * from before the load. The records are the way back — after which live frames carry on normally.
+ */
+export function useAdoptActiveRun(workflowId: Id | undefined): void {
+  const adopt = useRunStore((store) => store.adopt);
+  const [adopted, setAdopted] = useState<string>();
+
+  useEffect(() => {
+    if (workflowId === undefined || adopted === workflowId) return;
+    let cancelled = false;
+    void (async () => {
+      const page = await api().listRuns(workflowId);
+      const newest = page.items[0];
+      // Only a run that is still going: a finished one belongs to the history, not to the Canvas.
+      const live =
+        newest !== undefined &&
+        (newest.status === 'RUNNING' ||
+          newest.status === 'PAUSED' ||
+          newest.status === 'PREFLIGHT');
+      if (!live || cancelled) {
+        setAdopted(workflowId);
+        return;
+      }
+      const [run, nodeRuns] = await Promise.all([
+        api().getRun(newest.id),
+        api().listNodeRuns(newest.id),
+      ]);
+      if (cancelled) return;
+      adopt(workflowId, run, nodeRuns);
+      setAdopted(workflowId);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [workflowId, adopted, adopt]);
+}
+
 /** Which Input nodes still have nothing to send — what the input dialog asks for (FR-NODE-011). */
 export function inputNodesNeedingText(
   nodes: Array<{ id: string; kind: string; name: string; config: unknown }>,

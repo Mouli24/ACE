@@ -141,8 +141,10 @@ TC-NFR-004  paint within 200 ms of a frame — component test, sub-ms
 
 ### §1 demo script
 
-Walked against the real engine (temp data dir, mock provider) from the API side, every step scripted
-so the numbers are recorded rather than claimed:
+Walked twice: through the **UI** by `tests/acceptance/round-2/demo-script.e2e.ts` (one test, every
+step in order, against the real engine — **1 passed in 59.3 s**), and through the **API** by a script
+whose output is pasted below. Round 1 settled why it is automated rather than narrated (D41): a pass
+performed once and written up is a claim the next person cannot re-check.
 
 ```
  1. ok  add provider "Mock" — keySet: false
@@ -158,7 +160,39 @@ so the numbers are recorded rather than claimed:
 11. ok  the slow run finishes — 3141 ms
 ```
 
-**Still open on this line, and not claimable by one person:** the gate asks for the script to be
-walked _by both of us_ through the UI, and for one run against a real provider or a local Ollama.
-Neither has happened. The UI half of every step above is covered by the Playwright suite; the "by
-both" part and the real-provider run are not, and are the last manual items in §8.
+**The walk earned its keep on the last line.** "Reload during a slow run → states and text still
+correct" had never been exercised: my TC-EXE-013 and the §7.1 row both _cut the socket_ and let it
+reconnect, which is not the same as reloading the page. Reloading left the Canvas blank — every card
+back to IDLE while the engine held the real states — because the overlay lives in memory and a fresh
+page seeds the socket's `lastSeq` from `hello`, so `resume` replays nothing from before the load.
+Fixed as **D-028** (`useAdoptActiveRun` rebuilds the overlay from `GET /runs/:id` and
+`/runs/:id/node-runs`). One honest limit, asserted where it matters: the text streamed before a
+reload is gone for good, because `node.token` is transient by contract (§2.4).
+
+### A real provider: local Ollama
+
+The gate asks for one run against a real provider or Ollama. Done with a local Ollama rather than a
+cloud key — no secret in anyone's shell, repeatable on any machine, and it exercises the
+`openai_compatible` path that Ollama and LM Studio share (D70).
+
+```
+ollama serve · smollm2:135m (271 MB)
+
+GET  /providers/detect                → { ollama: { detected: true, baseUrl: …:11434 } }
+POST /providers        type: ollama    → created
+POST /providers/:id/check              → CONNECTED in 4 ms
+POST /providers/:id/refresh-models     → ['smollm2:135m']
+POST /workflows/:id/runs               → 201 RUNNING
+GET  /runs/:id                         → COMPLETE in 53 425 ms
+                                          totals 217 in / 654 out, costUsd 0
+node run                               → COMPLETED · model smollm2:135m · prompt ee7bead8676f
+final output                           → real generated prose, 200+ chars
+```
+
+`costUsd: 0` is correct rather than missing: a local model has no price table, and FR-OBS-003 stamps
+the version in force — there is none to stamp. The prompt version is the same `ee7bead8676f` the mock
+run produced, which is the point of TC-PRM-001: the prompt depends on the config, not on who answers.
+
+**What is still a human act:** the two of us looking at this together and judging whether it _looks_
+right. The steps are now re-checkable by anyone in 60 seconds; the judgement is not automatable and is
+not claimed here.
