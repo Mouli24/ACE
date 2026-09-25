@@ -250,6 +250,11 @@ export const NodeSchema = z.discriminatedUnion('kind', [
 export type Node = z.infer<typeof NodeSchema>;
 
 export const LOOP_ON_MAX = ['continue', 'fail'] as const;
+
+/**
+ * As round 1 declared it. The exit path grammar is checked by `validateLoopConfig` when an edge is
+ * written, not here, so an edge stored before round 3 still loads (NFR-VER-01, D73).
+ */
 export const LoopConfigSchema = z.object({
   maxIterations: z.number().int().min(1).max(50),
   exitCondition: z.object({
@@ -259,6 +264,26 @@ export const LoopConfigSchema = z.object({
   onMax: z.enum(LOOP_ON_MAX),
 });
 export type LoopConfig = z.infer<typeof LoopConfigSchema>;
+
+/**
+ * A dotted path into a node's json output: `verdict`, `review.verdict`, `issues.0` or `issues[0]`.
+ * Exactly what the engine's path reader resolves, so a path the editor accepts is one the loop can
+ * read (round 3 §2.4, D73). JSONPath's `$.` prefix is not part of it.
+ */
+export const DOTTED_PATH_REGEX = /^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+|\[\d+\])*$/;
+export const DottedPathSchema = z
+  .string()
+  .regex(DOTTED_PATH_REGEX, 'must be a dotted path such as verdict or review.issues.0');
+
+/** What a loop edge's config must satisfy on the way in: `LoopConfig`, with a readable exit path. */
+const LoopEdgeConfigSchema = LoopConfigSchema.extend({
+  exitCondition: LoopConfigSchema.shape.exitCondition.extend({ path: DottedPathSchema }),
+});
+
+/** Why a loop ended, recorded on its last iteration's node run as `loopStop` (§2.4, FR-GRD-009). */
+export const LOOP_STOP_REASONS = ['exit_condition', 'max_iterations', 'repeated_output'] as const;
+export const LoopStopReasonSchema = z.enum(LOOP_STOP_REASONS);
+export type LoopStopReason = z.infer<typeof LoopStopReasonSchema>;
 
 const EdgeEndpointSchema = z.object({ nodeId: IdSchema, portId: PortIdSchema });
 export type EdgeEndpoint = z.infer<typeof EdgeEndpointSchema>;
@@ -272,6 +297,154 @@ export const EdgeSchema = z.object({
   loop: LoopConfigSchema.optional(),
 });
 export type Edge = z.infer<typeof EdgeSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* Loop edges (round 3 §2.4, FR-CON-003, FR-CON-007, BR-05)                    */
+/* -------------------------------------------------------------------------- */
+
+/** Why `validateLoopConfig` refused an edge. Each is also a validation issue code. */
+export const LOOP_REFUSAL_CODES = [
+  'loop_config_missing',
+  'loop_config_on_data_edge',
+  'invalid_loop_config',
+  'loop_source_not_json',
+  'loop_target_not_upstream',
+] as const;
+export type LoopRefusalCode = (typeof LOOP_REFUSAL_CODES)[number];
+
+export type LoopConfigCheck =
+  | { ok: true }
+  | { ok: false; code: LoopRefusalCode; reason: string };
+
+/** What `validateLoopConfig` reads of a graph: node outputs, and which way the data edges run. */
+export interface LoopGraph {
+  nodes: readonly Pick<Node, 'id' | 'name' | 'outputs'>[];
+  edges: readonly Pick<Edge, 'kind' | 'from' | 'to'>[];
+}
+
+const refuse = (code: LoopRefusalCode, reason: string): LoopConfigCheck => ({
+  ok: false,
+  code,
+  reason,
+});
+
+/** True when a path of data edges runs from `from` to `to`. Loop edges never count (BR-05). */
+function reaches(from: Id, to: Id, edges: LoopGraph['edges']): boolean {
+  const next = new Map<Id, Id[]>();
+  for (const edge of edges) {
+    if (edge.kind !== 'data') continue;
+    next.set(edge.from.nodeId, [...(next.get(edge.from.nodeId) ?? []), edge.to.nodeId]);
+  }
+
+  const seen = new Set<Id>();
+  const queue = [...(next.get(from) ?? [])];
+  for (let i = 0; i < queue.length; i += 1) {
+    const id = queue[i];
+    if (id === undefined || seen.has(id)) continue;
+    if (id === to) return true;
+    seen.add(id);
+    queue.push(...(next.get(id) ?? []));
+  }
+  return false;
+}
+
+/**
+ * Decide whether an edge may exist as drawn, as far as loops are concerned (§2.4). Pure — the
+ * engine's graph-ops and the Canvas's loop edge editor must reach the same verdict.
+ *
+ * A loop edge carries a loop config whose exit path is a dotted path, starts at a node with a json
+ * output for that path to read, and leads back to a node strictly upstream along data edges — so
+ * never onto itself. A data edge carries no loop config at all.
+ *
+ * `isConnectionAllowed` does not apply to a loop edge (D73). It is not a data connection: its
+ * target's inputs are already fed, and the §1 demo's Reviewer sends json back into the Writer's
+ * text input. The loop edge re-queues its target for the next iteration instead.
+ */
+export function validateLoopConfig(
+  edge: Pick<Edge, 'kind' | 'from' | 'to' | 'loop'>,
+  graph: LoopGraph,
+): LoopConfigCheck {
+  if (edge.kind !== 'loop') {
+    return edge.loop === undefined
+      ? { ok: true }
+      : refuse(
+          'loop_config_on_data_edge',
+          'A data edge cannot carry a loop config — make it a loop edge instead.',
+        );
+  }
+
+  if (edge.loop === undefined) {
+    return refuse(
+      'loop_config_missing',
+      'A loop edge needs a maximum number of iterations, an exit condition and what to do at the maximum.',
+    );
+  }
+
+  const parsed = LoopEdgeConfigSchema.safeParse(edge.loop);
+  if (!parsed.success) {
+    const [issue] = parsed.error.issues;
+    const where = issue === undefined ? 'config' : issue.path.map(String).join('.');
+    return refuse('invalid_loop_config', `Loop ${where}: ${issue?.message ?? 'invalid'}.`);
+  }
+
+  const source = graph.nodes.find((node) => node.id === edge.from.nodeId);
+  if (source === undefined || !source.outputs.some((port) => port.dataType === 'json')) {
+    const name = source === undefined ? 'The loop source' : `"${source.name}"`;
+    return refuse(
+      'loop_source_not_json',
+      `${name} has no json output for the loop's exit condition to read.`,
+    );
+  }
+
+  if (!reaches(edge.to.nodeId, edge.from.nodeId, graph.edges)) {
+    return refuse(
+      'loop_target_not_upstream',
+      `A loop edge must lead back to a node upstream of "${source.name}".`,
+    );
+  }
+
+  return { ok: true };
+}
+
+/* -------------------------------------------------------------------------- */
+/* The standard review contract (round 3 §2.4, FR-PAR-004, FR-PAR-007)         */
+/* -------------------------------------------------------------------------- */
+
+export const REVIEW_VERDICTS = ['approved', 'changes_requested'] as const;
+export const REVIEW_SCORE_MIN = 0;
+export const REVIEW_SCORE_MAX = 10;
+
+/** `ReviewContract`. Extra keys are allowed — `mock-reject-twice` echoes its prompt beside these. */
+export const ReviewContractSchema = z.object({
+  score: z.number().min(REVIEW_SCORE_MIN).max(REVIEW_SCORE_MAX),
+  verdict: z.enum(REVIEW_VERDICTS),
+  issues: z.array(z.string()),
+});
+export type ReviewContract = z.infer<typeof ReviewContractSchema>;
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const inner of Object.values(value)) deepFreeze(inner);
+  }
+  return value;
+}
+
+/**
+ * `ReviewContract` as a JSON Schema, ready to drop into an agent's `outputContract.jsonSchema`, so
+ * a review is checked by `validateAgainstContract` like any other output (FR-PAR-007) and a loop
+ * can exit on `verdict` (FR-PAR-004). Written in the D53 subset plus `minimum`/`maximum` (D74), and
+ * frozen all the way down: one agent's contract can never change it for the next.
+ */
+export const REVIEW_CONTRACT_SCHEMA = deepFreeze({
+  type: 'object',
+  required: ['score', 'verdict', 'issues'],
+  properties: {
+    score: { type: 'number', minimum: REVIEW_SCORE_MIN, maximum: REVIEW_SCORE_MAX },
+    verdict: { type: 'string', enum: [...REVIEW_VERDICTS] },
+    issues: { type: 'array', items: { type: 'string' } },
+  },
+} as const);
 
 /* -------------------------------------------------------------------------- */
 /* Port derivation (FR-NODE-006, §2.4)                                         */
