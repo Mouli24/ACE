@@ -4,21 +4,24 @@ Both suites run with `pnpm test:acceptance` (real engine on a temp database, moc
 production web build) and stay in CI as regression.
 
 ```
-$ pnpm exec vitest run --config tests/acceptance/vitest.config.ts
- Test Files  3 passed (3)
-      Tests  53 passed | 3 expected fail (56)   # 20 passed | 3 expected fail in round-2
+$ pnpm test:acceptance
+ Test Files  3 passed (3)          # helpers/harness + round-1 and round-2 vitest suites
+      Tests  56 passed (56)
+ 25 passed (2.1m)                  # round-1 and round-2 Playwright suites, 1 flaky (D-012)
 ```
 
-The three "expected fail" checks are the two open **High** defects below, not flakes. They are marked
-`it.fails` rather than skipped: the assertions keep running on every CI, they stay green only while
-the defect is real, and the moment it is fixed they turn red with "expected test to fail" — which is
-the reminder to unmark them. A skip would have quietly outlived the bug. Everything else in §7.2
-passes against the engine as merged.
+Both round-2 files are in and green. The `it.fails` markers that stood in for D-025 and D-027 are
+gone: #17 and #18 fixed both defects, and #18 removed the markers in the same change — which is what
+they were for. The one flaky test is round 1's `NFR-USE-02` keyboard path (D-012), unchanged by this
+round.
 
 ## Mouli → Arhant (A2)
 
-Verdict: **MERGED — verification incomplete (D-025, D-027)** · Date 2026-09-25 · Commit tested
-`8d01799` (`main`, A2 merged) with M2 rebased on top.
+Verdict: **VERIFIED** · Date 2026-09-25 · Commit tested `88f06ba` (`main`, after #17 and #18)
+
+Re-run after the fixes: **23 passed, nothing expected-fail**. The first pass, on `8d01799`, was 20
+passed + 3 expected-fail and is kept in the findings below, because what those three caught is the
+reason this row can say VERIFIED now.
 
 Automated — `tests/acceptance/round-2/mouli-tests-arhant.test.ts`, 23 checks over HTTP + WS through
 `@ace/sdk`, folding the frames with the same `RunEventBuffer` the web app uses:
@@ -88,10 +91,74 @@ what neither asserts is that the wired engine uses them. D-025 also blocks a sce
 
 ## Arhant → Mouli (M2)
 
-_Arhant's section — `tests/acceptance/round-2/arhant-tests-mouli.e2e.ts` and the §7.1 manual pass._
+Verdict: **VERIFIED** · Date 2026-09-25 · Commit tested `88f06ba`
 
-Verdict: _pending_
+Automated — `tests/acceptance/round-2/arhant-tests-mouli.e2e.ts`, 13 scenarios in Playwright driving
+the production web build against the real engine (temp database, mock provider). **13 passed in
+1.4 min, no retries.**
 
-Note for that suite, from this side: the §7.1 row "mock provider with `apiKey: bad` → Test →
-AUTH_FAILED" cannot pass until **D-025** is fixed — the UI renders whatever `POST /check` returns, and
-the engine currently returns CONNECTED for that provider.
+| Scenario (§7.1)                                                                                                                                       | Result |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| TC-PRV-001/002 mock addable with no key; `openai` with a fake key → "key set: yes", key in neither the DOM nor any provider response                  | ok     |
+| TC-PRV-003/004 `apiKey: bad` → AUTH_FAILED with a message; unreachable `baseUrl` → UNREACHABLE                                                        | ok     |
+| TC-PRV-005 key rotated and checked through the API while the page is open → chip changes, no reload                                                   | ok     |
+| TC-PRV-006 remove an in-use provider → the 409 names the node → the node shows "provider missing"                                                     | ok     |
+| TC-NODE-003/004 agent taking text+image → `mock-text` disabled "no image input", `mock-vision` chosen → chip follows and the engine agrees            | ok     |
+| TC-NODE-008 edit instructions during a `mock-slow` run → notice shown, that run's prompt unchanged, the next run's prompt has the new text            | ok     |
+| TC-NODE-010 empty Input node → dialog → the typed text lands in the run's `inputs`, the graph is not edited behind the user                           | ok     |
+| TC-EXE-007/008/014 `mock-slow`: text grows while RUNNING, ring labelled per state, the agent's edge animates, Output shows the engine's `finalOutput` | ok     |
+| TC-RTR-004 `mock-503` primary + fallback → card reads "used: … (fallback)" and matches `modelUsed`                                                    | ok     |
+| TC-EXE-003 agent with no model → BLOCKED panel names the node, zero node runs, "show node" selects it                                                 | ok     |
+| TC-EXE-009 / TC-PRM-005 inspector fields match the node run; **View prompt is byte-equal to `GET /node-runs/:id` `prompt.text`**                      | ok     |
+| TC-EXE-011 three runs → rows in the engine's order, each carrying its own totals                                                                      | ok     |
+| TC-EXE-013 the WebSocket is cut mid-run → the run still finishes and every card's final state equals `GET /runs/:id/node-runs`                        | ok     |
+
+Two things worth naming about how this suite is written:
+
+- Every "is it really so?" assertion goes to the engine over REST. The UI is the thing under test, so
+  it cannot also be the source of truth — the prompt drawer is compared with `GET /node-runs/:id`, the
+  overlay's final states with `GET /runs/:id/node-runs`, the chosen model with the stored graph.
+- Two scenarios select the node **before** Start rather than during the run. A card grows once it
+  carries streamed text, and a grown card can slide under its neighbour at fit-to-view zoom; clicking
+  it then fails for a layout reason and looks like a selection bug. The earlier version of this file
+  was flaky for exactly that, twice.
+
+**Authorship, stated plainly:** §7.1 assigns this file to Arhant. It was written by Mouli on the
+repository owner's instruction to close the round 2 gate (D67), the same arrangement as round 1's D32.
+A self-written cross-test is weaker than a partner's by construction — nobody catches their own blind
+spot — so it is worth Arhant reading it, and the two M2 defects that a partner's eye did catch
+(D-027's wrong cause, TC-EXE-013 being weaker than its name) are the evidence for why.
+
+### TC-NFR numbers (gate item), measured on this machine
+
+```
+TC-NFR-002  102 nodes dispatched in 38 ms  = 0.37 ms per node          (limit 50 ms)
+TC-NFR-003  first node.token 62.2 ms after the adapter yielded          (limit 200 ms)
+TC-NFR-005  22 node runs at concurrency 20 in 4 ms, no errors
+TC-NFR-001  200-node fixture: 58.7 fps wheel, 56.8 fps drag             (target ≈60)
+TC-NFR-004  paint within 200 ms of a frame — component test, sub-ms
+```
+
+### §1 demo script
+
+Walked against the real engine (temp data dir, mock provider) from the API side, every step scripted
+so the numbers are recorded rather than claimed:
+
+```
+ 1. ok  add provider "Mock" — keySet: false
+ 2. ok  Test → CONNECTED — 0 ms
+ 3. ok  models listed — 15 models
+ 4. ok  Start → the run is recorded and already going — 201 RUNNING
+ 5. ok  run COMPLETE
+ 6. ok  Output node carries the final result — 278 chars
+ 7. ok  inspector data — 95↓ 40↑ $0.000175 · mock-text · prompt ee7bead8676f
+ 8. ok  fallback walked — used: mock-text (fallback)
+ 9. ok  contract violation is its own failure — CONTRACT_VIOLATION · kind agent · run HALTED
+10. ok  a reload mid-run can rebuild the states — 5 node.state events persisted for replay
+11. ok  the slow run finishes — 3141 ms
+```
+
+**Still open on this line, and not claimable by one person:** the gate asks for the script to be
+walked _by both of us_ through the UI, and for one run against a real provider or a local Ollama.
+Neither has happened. The UI half of every step above is covered by the Playwright suite; the "by
+both" part and the real-provider run are not, and are the last manual items in §8.

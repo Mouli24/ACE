@@ -18,8 +18,10 @@ const WEB_PORT = 47_471;
 const ENGINE_URL = `http://127.0.0.1:${ENGINE_PORT}`;
 
 export default defineConfig({
-  testDir: './round-1',
-  testMatch: /.*\.e2e\.ts/,
+  // Every round's e2e cross-test, not just round 1: the gate asks for `pnpm test:acceptance` to run
+  // both of a round's files, and a new round-N folder should need no change here.
+  testDir: '.',
+  testMatch: /round-\d+[\/].*\.e2e\.ts/,
   // The §8 manual pass starts and kills its own engine, so it cannot run against the `webServer`
   // below; it has its own config and its own `pnpm test:manual-pass`.
   testIgnore: /manual-pass\.e2e\.ts/,
