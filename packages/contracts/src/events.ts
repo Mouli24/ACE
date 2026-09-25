@@ -9,7 +9,13 @@ import {
 import { PartSchema } from './envelope.js';
 import { IdSchema, LoopStopReasonSchema, TimestampSchema } from './graph.js';
 import { ApprovalDecisionSchema, ApprovalRequestSchema, VerdictSchema } from './guardrails.js';
-import { ModelUsedSchema, NodeErrorSchema, RunSummarySchema, UsageSchema } from './runs.js';
+import {
+  BudgetHaltSchema,
+  ModelUsedSchema,
+  NodeErrorSchema,
+  RunSummarySchema,
+  UsageSchema,
+} from './runs.js';
 
 /**
  * The event log and the run events that ride the WebSocket (round 2 §2.4, round 3 §2.6,
@@ -64,6 +70,8 @@ export const RunCompletedPayloadSchema = z.strictObject({
   haltReason: HaltReasonSchema.optional(),
   totals: UsageSchema,
   finalOutput: PartsByNodeIdSchema.optional(),
+  /** Round 3: set only when `haltReason` is `budget_exceeded` (D80). */
+  budgetHalt: BudgetHaltSchema.optional(),
 });
 export type RunCompletedPayload = z.infer<typeof RunCompletedPayloadSchema>;
 

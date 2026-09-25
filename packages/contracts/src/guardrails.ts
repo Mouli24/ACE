@@ -88,6 +88,10 @@ function pointsFor(type: GuardrailCheckType): PolicyGuardrailPoint[] {
 /* Checks and policies (FR-GRD-001, 002, 011)                                  */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * One check of a policy. The point/type rule is a refinement, so Zod refuses `.pick`, `.omit` and
+ * `.partial` on this schema — validate a whole check with it rather than deriving a smaller one.
+ */
 export const GuardrailCheckSchema = z
   .strictObject({
     id: IdSchema,
@@ -178,9 +182,11 @@ type DefaultCheck = Pick<GuardrailCheck, 'point' | 'type' | 'action' | 'params'>
 
 /**
  * §2.2's default policy, in its order: warn on content issues, block secret leaks and tool abuse
- * (D10). The two cost checks carry no params because their caps are the project's
- * `maxCostPerRunUsd` and the settings' `dailyBudgetUsd` (§2.3). Tool checks are declared now and
- * evaluated from round 4.
+ * (D10). At the cost point a check's action decides (D79): `block` halts the run
+ * `budget_exceeded`, so `max_cost_per_run` is `block` here where §2.2 wrote `warn` — the §1 demo,
+ * TC-GRD-012 and FR-GRD-008 all halt on the default policy. The two cost checks carry no params:
+ * their caps are the project's `maxCostPerRunUsd` and the settings' `dailyBudgetUsd` (§2.3) unless
+ * a policy sets `params.usd`. Tool checks are declared now and evaluated from round 4.
  */
 const DEFAULT_CHECKS: readonly DefaultCheck[] = [
   { point: 'input', type: 'pii', action: 'warn', params: {} },
@@ -189,7 +195,7 @@ const DEFAULT_CHECKS: readonly DefaultCheck[] = [
   { point: 'output', type: 'secret_leak', action: 'block', params: {} },
   { point: 'output', type: 'moderation', action: 'warn', params: {} },
   { point: 'output', type: 'contract', action: 'block', params: {} },
-  { point: 'cost', type: 'max_cost_per_run', action: 'warn', params: {} },
+  { point: 'cost', type: 'max_cost_per_run', action: 'block', params: {} },
   { point: 'cost', type: 'daily_budget', action: 'block', params: {} },
   { point: 'loop', type: 'max_iterations', action: 'block', params: { max: 50 } },
   { point: 'loop', type: 'max_tool_calls', action: 'block', params: { max: 25 } },
