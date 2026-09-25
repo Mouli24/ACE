@@ -1,4 +1,5 @@
 import type {
+  BudgetHalt,
   CursorQuery,
   DataType,
   HaltReason,
@@ -13,6 +14,7 @@ import type {
   Provider,
   ProviderState,
   Run,
+  RunAction,
   RunState,
   Timestamp,
   Usage,
@@ -87,6 +89,14 @@ export interface RunPatch {
   endedAt?: Timestamp;
   durationMs?: number;
   finalOutput?: Record<Id, Part[]>;
+  /** "Paused since"; `null` removes it on a resume (round 3 §2.1, D106, following D72). */
+  pausedAt?: Timestamp | null;
+  /** `allowedRunActions(status)`, stamped wherever the status changes (FR-CTL-006, D71). */
+  allowedActions?: RunAction[];
+  /** Set only alongside `haltReason: 'budget_exceeded'` (FR-GRD-008, D80). */
+  budgetHalt?: BudgetHalt;
+  /** Set on the run a restart created: same snapshot, same inputs (FR-CTL-004). */
+  restartedFromRunId?: Id;
 }
 
 export interface RunRepository {

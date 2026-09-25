@@ -8,7 +8,7 @@ import {
 } from '@ace/contracts';
 import { describe, expect, it } from 'vitest';
 
-import { autoRetryDecision, autoRetryMode, backoffDelayMs, backoffSchedule } from '../index.js';
+import { autoRetryDecision, autoRetryMode, retryBackoffDelayMs, retryBackoffSchedule } from '../index.js';
 
 const errorOf = (kind: ErrorKind, code = 'x'): NodeError => ({
   kind,
@@ -19,37 +19,37 @@ const errorOf = (kind: ErrorKind, code = 'x'): NodeError => ({
 
 describe('TC-ERR-005 Automatic retry policy (FR-ERR-005, R3 §2.1, D95)', () => {
   it('the backoff is 500 ms · 2^(attempt-1), capped at 8 s, with no jitter', () => {
-    expect(backoffDelayMs(1)).toBe(500);
-    expect(backoffDelayMs(2)).toBe(1_000);
-    expect(backoffDelayMs(3)).toBe(2_000);
-    expect(backoffDelayMs(4)).toBe(4_000);
-    expect(backoffDelayMs(5)).toBe(8_000);
-    expect(backoffDelayMs(6)).toBe(8_000);
-    expect(backoffDelayMs(50)).toBe(RETRY_BACKOFF_MAX_MS);
+    expect(retryBackoffDelayMs(1)).toBe(500);
+    expect(retryBackoffDelayMs(2)).toBe(1_000);
+    expect(retryBackoffDelayMs(3)).toBe(2_000);
+    expect(retryBackoffDelayMs(4)).toBe(4_000);
+    expect(retryBackoffDelayMs(5)).toBe(8_000);
+    expect(retryBackoffDelayMs(6)).toBe(8_000);
+    expect(retryBackoffDelayMs(50)).toBe(RETRY_BACKOFF_MAX_MS);
   });
 
   it('the first wait is exactly the base from the contract', () => {
-    expect(backoffDelayMs(1)).toBe(RETRY_BACKOFF_BASE_MS);
+    expect(retryBackoffDelayMs(1)).toBe(RETRY_BACKOFF_BASE_MS);
   });
 
   it('is deterministic — the same attempt always waits the same, so a test can assert it', () => {
-    const first = Array.from({ length: 20 }, () => backoffDelayMs(3));
+    const first = Array.from({ length: 20 }, () => retryBackoffDelayMs(3));
     expect(new Set(first).size).toBe(1);
   });
 
   it('treats attempt 0 and negatives as the first attempt rather than dividing the base', () => {
-    expect(backoffDelayMs(0)).toBe(500);
-    expect(backoffDelayMs(-4)).toBe(500);
+    expect(retryBackoffDelayMs(0)).toBe(500);
+    expect(retryBackoffDelayMs(-4)).toBe(500);
   });
 
   it('a schedule is the sequence of waits a node with that budget would make', () => {
-    expect(backoffSchedule(4)).toEqual([500, 1_000, 2_000, 4_000]);
-    expect(backoffSchedule(0)).toEqual([]);
-    expect(backoffSchedule(-1)).toEqual([]);
+    expect(retryBackoffSchedule(4)).toEqual([500, 1_000, 2_000, 4_000]);
+    expect(retryBackoffSchedule(0)).toEqual([]);
+    expect(retryBackoffSchedule(-1)).toEqual([]);
   });
 
   it('honours an overridden base and cap without changing the shape of the curve', () => {
-    expect(backoffSchedule(4, { baseMs: 100, maxMs: 300 })).toEqual([100, 200, 300, 300]);
+    expect(retryBackoffSchedule(4, { baseMs: 100, maxMs: 300 })).toEqual([100, 200, 300, 300]);
   });
 
   it('every mode comes from the contract table, never from a second copy', () => {
