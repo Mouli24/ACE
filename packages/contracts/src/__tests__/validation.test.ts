@@ -144,7 +144,7 @@ describe('FR-WF-006 ValidationIssue', () => {
     expect(ValidationIssueCodeSchema.safeParse('daily_budget_exceeded').success).toBe(true);
   });
 
-  it('keeps loop_not_supported, now unused — codes are only ever added (NFR-VER-01)', () => {
+  it('keeps loop_not_supported, which A3 retires — codes are only ever added (NFR-VER-01)', () => {
     expect(VALIDATION_ISSUE_CODES).toContain('loop_not_supported');
   });
 

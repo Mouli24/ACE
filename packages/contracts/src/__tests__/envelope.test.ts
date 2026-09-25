@@ -480,6 +480,14 @@ describe('FR-PAR-002 the merge node output', () => {
     expect(MergeOutputSchema.safeParse({ inputs: [{ ...first, port: 'in' }] }).success).toBe(false);
   });
 
+  it('names one of the merge node inputs, never an output port', () => {
+    const [first] = output.inputs;
+
+    expect(
+      MergeOutputSchema.safeParse({ inputs: [{ ...first, port: `${NODE_C}:out:out` }] }).success,
+    ).toBe(false);
+  });
+
   it('carries parts, never loose text', () => {
     const [first] = output.inputs;
 

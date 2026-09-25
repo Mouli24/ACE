@@ -258,9 +258,11 @@ export type AutoRetryMode = (typeof AUTO_RETRY_MODES)[number];
 
 /**
  * What the engine does by itself after a failure of each kind (§2.1, FR-ERR-005). Every automatic
- * retry is a new node run with attempt + 1. `backoff` waits `500 ms · 2^attempt`, capped at 8 s,
- * up to `execution.retries` times; `contract_repair` retries once with the validation reason
- * appended to the prompt, after which CONTRACT_VIOLATION stands. Nothing else is retried.
+ * retry is a new node run with attempt + 1. `backoff` retries up to `execution.retries` times,
+ * waiting from `RETRY_BACKOFF_BASE_MS` and doubling each time up to `RETRY_BACKOFF_MAX_MS` — §2.1
+ * writes it `500 ms · 2^attempt`; A3 pins the exponent and any jitter in DECISIONS.md, as the round
+ * 3 exit gate asks. `contract_repair` retries once with the validation reason appended to the
+ * prompt, after which CONTRACT_VIOLATION stands. Nothing else is retried.
  */
 export const AUTO_RETRY_POLICY: Readonly<Record<ErrorKind, AutoRetryMode>> = Object.freeze({
   user_cancelled: 'never',
