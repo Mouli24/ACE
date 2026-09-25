@@ -74,7 +74,7 @@ export type InvalidPathDetails = z.infer<typeof InvalidPathDetailsSchema>;
 export const ProviderInUseDetailsSchema = z.object({ nodeIds: z.array(IdSchema) });
 export type ProviderInUseDetails = z.infer<typeof ProviderInUseDetailsSchema>;
 
-/** `DELETE /guardrail-policies/:id` without `confirm=true` while agents still use it (round 3 §2.5). */
+/** `DELETE /guardrail-policies/:id` without `confirm=true` while agents use it (round 3 §2.5). */
 export const PolicyInUseDetailsSchema = z.object({ nodeIds: z.array(IdSchema) });
 export type PolicyInUseDetails = z.infer<typeof PolicyInUseDetailsSchema>;
 

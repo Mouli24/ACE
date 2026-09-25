@@ -15,7 +15,7 @@ import {
   WorkflowGraphResponseSchema,
   pageSchema,
 } from '../api.js';
-import { ProjectSchema } from '../graph.js';
+import { ProjectSchema, type Project } from '../graph.js';
 import { NOW, PROJECT_ID, WORKFLOW_ID } from './fixtures.js';
 
 describe('TC-SYS-005 Health check', () => {
@@ -146,5 +146,34 @@ describe('FR-WF-006 validate response', () => {
 
   it('accepts an empty issue list', () => {
     expect(ValidateWorkflowResponseSchema.parse({ issues: [] })).toEqual({ issues: [] });
+  });
+});
+
+describe('FR-GRD-008 PATCH /projects/:id takes a run cost cap (round 3 §2.3)', () => {
+  it('sets a cap, and a null removes it (D72)', () => {
+    expect(UpdateProjectRequestSchema.parse({ maxCostPerRunUsd: 0.01 })).toEqual({
+      maxCostPerRunUsd: 0.01,
+    });
+    expect(UpdateProjectRequestSchema.parse({ maxCostPerRunUsd: null })).toEqual({
+      maxCostPerRunUsd: null,
+    });
+  });
+
+  it.each([0, -1])('refuses a cap of %s', (maxCostPerRunUsd) => {
+    expect(UpdateProjectRequestSchema.safeParse({ maxCostPerRunUsd }).success).toBe(false);
+  });
+
+  it('applies to a project as it is — a null reads as no cap (D72)', () => {
+    // Typed, so `tsc` keeps the patch assignable where a handler merges it into the project.
+    const patch: Partial<Project> = UpdateProjectRequestSchema.parse({ maxCostPerRunUsd: null });
+    const project = ProjectSchema.parse({
+      id: PROJECT_ID,
+      name: 'Demo',
+      folderPath: 'D:/projects/demo',
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+
+    expect(ProjectSchema.parse({ ...project, ...patch }).maxCostPerRunUsd).toBeNull();
   });
 });

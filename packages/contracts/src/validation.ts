@@ -95,10 +95,15 @@ export const ROUND_2_VALIDATION_ISSUE_CODES = [
 
 /**
  * The codes round 3 adds. A loop edge `validateLoopConfig` refuses (§2.4) is reported by the code
- * it was refused with, the way `isConnectionAllowed`'s refusals are. `loop_not_supported` stays in
- * round 1's list although the engine no longer raises it: codes are only ever added (NFR-VER-01).
+ * it was refused with, the way `isConnectionAllowed`'s refusals are; `daily_budget_exceeded` is
+ * pre-flight's, when today's spend has reached `Settings.dailyBudgetUsd` (§2.3).
+ * `loop_not_supported` stays in round 1's list although the engine no longer raises it: codes are
+ * only ever added (NFR-VER-01).
  */
-export const ROUND_3_VALIDATION_ISSUE_CODES = [...LOOP_REFUSAL_CODES] as const;
+export const ROUND_3_VALIDATION_ISSUE_CODES = [
+  ...LOOP_REFUSAL_CODES,
+  'daily_budget_exceeded',
+] as const;
 
 export const VALIDATION_ISSUE_CODES = [
   ...ROUND_1_VALIDATION_ISSUE_CODES,

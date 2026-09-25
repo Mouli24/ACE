@@ -91,7 +91,7 @@ describe('FR-SYS-006 round 1 error codes', () => {
     ]);
   });
 
-  it('adds round 2 §2.5 provider_in_use, then round 3 §2.5 invalid_run_state and policy_in_use', () => {
+  it('adds provider_in_use, then round 3 §2.5 invalid_run_state and policy_in_use', () => {
     expect([...ROUND_3_ERROR_CODES]).toEqual(['invalid_run_state', 'policy_in_use']);
     expect([...ERROR_CODES]).toEqual([
       ...ROUND_1_ERROR_CODES,

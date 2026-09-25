@@ -31,11 +31,20 @@ export const NodeNameSchema = z.string().min(1).max(80);
 /* Project and workflow                                                        */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * A spending cap in USD (round 3 §2.3). A set cap is above zero. A PATCH removes it with `null`,
+ * and a record reads `null` — like absence — as no cap, so a patch can be merged into the record
+ * it patches as it is (D72).
+ */
+export const BudgetUsdSchema = z.number().positive();
+
 export const ProjectSchema = z.object({
   id: IdSchema,
   name: EntityNameSchema,
   folderPath: z.string(),
   lastOpenedAt: TimestampSchema.optional(),
+  /** A run that would cost more halts `budget_exceeded` (round 3 §2.3, FR-GRD-008). */
+  maxCostPerRunUsd: BudgetUsdSchema.nullable().optional(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 });
@@ -275,7 +284,7 @@ export const DottedPathSchema = z
   .string()
   .regex(DOTTED_PATH_REGEX, 'must be a dotted path such as verdict or review.issues.0');
 
-/** What a loop edge's config must satisfy on the way in: `LoopConfig`, with a readable exit path. */
+/** A loop edge's config on the way in: `LoopConfig`, with an exit path the engine can read. */
 const LoopEdgeConfigSchema = LoopConfigSchema.extend({
   exitCondition: LoopConfigSchema.shape.exitCondition.extend({ path: DottedPathSchema }),
 });
@@ -376,7 +385,7 @@ export function validateLoopConfig(
   if (edge.loop === undefined) {
     return refuse(
       'loop_config_missing',
-      'A loop edge needs a maximum number of iterations, an exit condition and what to do at the maximum.',
+      'A loop edge needs max iterations, an exit condition and what to do at the maximum.',
     );
   }
 
@@ -414,7 +423,9 @@ export const REVIEW_VERDICTS = ['approved', 'changes_requested'] as const;
 export const REVIEW_SCORE_MIN = 0;
 export const REVIEW_SCORE_MAX = 10;
 
-/** `ReviewContract`. Extra keys are allowed — `mock-reject-twice` echoes its prompt beside these. */
+/**
+ * `ReviewContract`. Extra keys are allowed: `mock-reject-twice` echoes its prompt beside these.
+ */
 export const ReviewContractSchema = z.object({
   score: z.number().min(REVIEW_SCORE_MIN).max(REVIEW_SCORE_MAX),
   verdict: z.enum(REVIEW_VERDICTS),

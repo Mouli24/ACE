@@ -119,9 +119,10 @@ describe('FR-SYS-006 contracts barrel', () => {
   });
 
   it('fills the module round 3 §2 adds', () => {
-    expect(Object.keys(guardrails).length, 'guardrails.ts should export its contract').toBeGreaterThan(
-      0,
-    );
+    expect(
+      Object.keys(guardrails).length,
+      'guardrails.ts should export its contract',
+    ).toBeGreaterThan(0);
   });
 
   it('keeps an importable, still-empty placeholder for the seven later-round modules', () => {
