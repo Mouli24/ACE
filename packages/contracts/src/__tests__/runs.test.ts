@@ -27,6 +27,7 @@ import {
   NODE_A,
   NODE_B,
   NODE_RUN_ID,
+  NODE_RUN_ID_2,
   NOW,
   POLICY_ID,
   PROJECT_ID,
@@ -626,5 +627,23 @@ describe('FR-GRD-008 a budget halt says which cap tripped, and by how much (D80)
 
   it('is absent on a run that did not halt on a budget', () => {
     expect(RunSchema.parse(run).budgetHalt).toBeUndefined();
+  });
+});
+
+describe('FR-EXE-013 a node run Start from node reuses says where it came from (D83)', () => {
+  it('records the node run it copies', () => {
+    expect(
+      NodeRunSchema.parse({ ...nodeRun, reusedFromNodeRunId: NODE_RUN_ID_2 }).reusedFromNodeRunId,
+    ).toBe(NODE_RUN_ID_2);
+  });
+
+  it('is absent on a node run that actually ran', () => {
+    expect(NodeRunSchema.parse(nodeRun).reusedFromNodeRunId).toBeUndefined();
+  });
+
+  it('refuses a reference that is not a ULID', () => {
+    expect(
+      NodeRunSchema.safeParse({ ...nodeRun, reusedFromNodeRunId: 'nr-1' }).success,
+    ).toBe(false);
   });
 });

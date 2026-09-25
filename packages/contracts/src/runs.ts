@@ -215,6 +215,11 @@ export const NodeRunSchema = z.object({
   guardrailPolicy: GuardrailPolicyRefSchema.optional(),
   /** On a loop's last iteration: why the loop stopped (§2.4). */
   loopStop: LoopStopReasonSchema.optional(),
+  /**
+   * Set when Start from node copied this node run from an earlier run instead of executing it:
+   * the node run whose output it carries. Usage is zero, and nothing was called (FR-EXE-013, D83).
+   */
+  reusedFromNodeRunId: IdSchema.optional(),
   startedAt: TimestampSchema.optional(),
   endedAt: TimestampSchema.optional(),
   durationMs: z.number().int().min(0).optional(),

@@ -11,6 +11,7 @@ import {
   EdgeSchema,
   ExecutionSettingsSchema,
   IdSchema,
+  LOOP_REFUSAL_CODES,
   LOOP_STOP_REASONS,
   LoopConfigSchema,
   LoopStopReasonSchema,
@@ -22,6 +23,7 @@ import {
   ReviewContractSchema,
   TimestampSchema,
   WorkflowSchema,
+  loopBody,
   validateLoopConfig,
   type AgentConfig,
   type LoopConfig,
@@ -32,7 +34,10 @@ import {
   EDGE_ID,
   EDGE_ID_2,
   EDGE_ID_3,
+  EDGE_ID_4,
   LOOP_EDGE_ID,
+  LOOP_EDGE_ID_2,
+  LOOP_EDGE_ID_3,
   NODE_A,
   NODE_B,
   NODE_C,
@@ -398,6 +403,34 @@ describe('FR-PAR-004 the exit condition reads a dotted path into the json output
   });
 });
 
+describe('FR-PAR-003 DC-8 the body a loop edge repeats', () => {
+  it('is every node on a data path from the target back to the source, both included', () => {
+    expect(loopBody(backEdge, demo.edges)).toEqual(new Set([NODE_B, NODE_C]));
+  });
+
+  it('takes in every node between them, however many', () => {
+    const edges = [
+      dataEdge(EDGE_ID, NODE_A, 'text', NODE_B, 'text'),
+      dataEdge(EDGE_ID_2, NODE_B, 'text', NODE_E, 'text'),
+      dataEdge(EDGE_ID_3, NODE_E, 'text', NODE_C, 'text'),
+      dataEdge(EDGE_ID_4, NODE_C, 'json', NODE_D, 'json'),
+    ];
+
+    expect(loopBody(backEdge, edges)).toEqual(new Set([NODE_B, NODE_E, NODE_C]));
+  });
+
+  it('declares the six ways validateLoopConfig refuses an edge', () => {
+    expect([...LOOP_REFUSAL_CODES]).toEqual([
+      'loop_config_missing',
+      'loop_config_on_data_edge',
+      'invalid_loop_config',
+      'loop_source_not_json',
+      'loop_target_not_upstream',
+      'loop_bodies_overlap',
+    ]);
+  });
+});
+
 describe('FR-PAR-003 FR-GRD-009 loop stop reasons', () => {
   it('declares the three reasons §2.4 records on the last iteration', () => {
     expect([...LOOP_STOP_REASONS]).toEqual(['exit_condition', 'max_iterations', 'repeated_output']);
@@ -570,6 +603,49 @@ describe('FR-CON-007 validateLoopConfig', () => {
     expect(validateLoopConfig(backEdge, diamond)).toMatchObject({
       ok: false,
       code: 'loop_target_not_upstream',
+    });
+  });
+
+  describe('DN-4 / D84 a node repeats in one loop at most', () => {
+    // Brief → Writer → Reviewer → Editor → Checker, with loop 1 (Reviewer → Writer) in place.
+    const editor = graphNode(NODE_D, 'Editor', ['text']);
+    const checker = graphNode(NODE_E, 'Checker', ['json']);
+    const loopFrom = (id: string, from: string, to: string) => ({
+      id,
+      workflowId: WORKFLOW_ID,
+      kind: 'loop' as const,
+      from: { nodeId: from, portId: `${from}:out:json` },
+      to: { nodeId: to, portId: `${to}:in:text` },
+      loop: loopConfig,
+    });
+    const loop1 = loopFrom(LOOP_EDGE_ID, NODE_C, NODE_B);
+    const chain = {
+      nodes: [brief, writer, reviewer, editor, checker],
+      edges: [
+        dataEdge(EDGE_ID, NODE_A, 'text', NODE_B, 'text'),
+        dataEdge(EDGE_ID_2, NODE_B, 'text', NODE_C, 'text'),
+        dataEdge(EDGE_ID_3, NODE_C, 'json', NODE_D, 'text'),
+        dataEdge(EDGE_ID_4, NODE_D, 'text', NODE_E, 'text'),
+        loop1,
+      ],
+    };
+
+    it('accepts a second loop that follows the first', () => {
+      expect(validateLoopConfig(loopFrom(LOOP_EDGE_ID_2, NODE_E, NODE_D), chain)).toEqual({
+        ok: true,
+      });
+    });
+
+    it('refuses a loop that would repeat a node another loop already repeats, naming it', () => {
+      const result = validateLoopConfig(loopFrom(LOOP_EDGE_ID_3, NODE_E, NODE_B), chain);
+
+      expect(result).toMatchObject({ ok: false, code: 'loop_bodies_overlap' });
+      expect(result.ok ? '' : result.reason).toContain('"Writer"');
+      expect(result.ok ? '' : result.reason).toContain('"Reviewer"');
+    });
+
+    it('does not count a loop edge as overlapping itself', () => {
+      expect(validateLoopConfig(loop1, chain)).toEqual({ ok: true });
     });
   });
 

@@ -328,6 +328,7 @@ export const LOOP_REFUSAL_CODES = [
   'invalid_loop_config',
   'loop_source_not_json',
   'loop_target_not_upstream',
+  'loop_bodies_overlap',
 ] as const;
 export type LoopRefusalCode = (typeof LOOP_REFUSAL_CODES)[number];
 
@@ -335,10 +336,13 @@ export type LoopConfigCheck =
   | { ok: true }
   | { ok: false; code: LoopRefusalCode; reason: string };
 
-/** What `validateLoopConfig` reads of a graph: node outputs, and which way the data edges run. */
+/**
+ * What `validateLoopConfig` reads of a graph: node outputs, which way the data edges run, and the
+ * other loop edges.
+ */
 export interface LoopGraph {
   nodes: readonly Pick<Node, 'id' | 'name' | 'outputs'>[];
-  edges: readonly Pick<Edge, 'kind' | 'from' | 'to'>[];
+  edges: readonly Pick<Edge, 'id' | 'kind' | 'from' | 'to'>[];
 }
 
 const refuse = (code: LoopRefusalCode, reason: string): LoopConfigCheck => ({
@@ -367,20 +371,54 @@ function reaches(from: Id, to: Id, edges: LoopGraph['edges']): boolean {
   return false;
 }
 
+/** Every node reachable from `start` along `next`, `start` included. */
+function walk(start: Id, next: ReadonlyMap<Id, readonly Id[]>): Set<Id> {
+  const seen = new Set<Id>([start]);
+  const queue: Id[] = [start];
+  for (let i = 0; i < queue.length; i += 1) {
+    for (const id of next.get(queue[i] ?? '') ?? []) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      queue.push(id);
+    }
+  }
+  return seen;
+}
+
+/**
+ * The nodes a loop edge repeats: every node on a data path from its target back to its source,
+ * both included. One definition, so the engine's scheduler and the Canvas agree on what an
+ * iteration re-runs (D84).
+ */
+export function loopBody(edge: Pick<Edge, 'from' | 'to'>, edges: LoopGraph['edges']): Set<Id> {
+  const forward = new Map<Id, Id[]>();
+  const backward = new Map<Id, Id[]>();
+  for (const each of edges) {
+    if (each.kind !== 'data') continue;
+    forward.set(each.from.nodeId, [...(forward.get(each.from.nodeId) ?? []), each.to.nodeId]);
+    backward.set(each.to.nodeId, [...(backward.get(each.to.nodeId) ?? []), each.from.nodeId]);
+  }
+
+  const fromTarget = walk(edge.to.nodeId, forward);
+  const toSource = walk(edge.from.nodeId, backward);
+  return new Set([...fromTarget].filter((id) => toSource.has(id)));
+}
+
 /**
  * Decide whether an edge may exist as drawn, as far as loops are concerned (§2.4). Pure — the
  * engine's graph-ops and the Canvas's loop edge editor must reach the same verdict.
  *
  * A loop edge carries a loop config whose exit path is a dotted path, starts at a node with a json
  * output for that path to read, and leads back to a node strictly upstream along data edges — so
- * never onto itself. A data edge carries no loop config at all.
+ * never onto itself. No node may sit in two loop bodies, because a node run has one iteration
+ * number to count with (D84). A data edge carries no loop config at all.
  *
  * `isConnectionAllowed` does not apply to a loop edge (D73). It is not a data connection: its
  * target's inputs are already fed, and the §1 demo's Reviewer sends json back into the Writer's
  * text input. The loop edge re-queues its target for the next iteration instead.
  */
 export function validateLoopConfig(
-  edge: Pick<Edge, 'kind' | 'from' | 'to' | 'loop'>,
+  edge: Pick<Edge, 'id' | 'kind' | 'from' | 'to' | 'loop'>,
   graph: LoopGraph,
 ): LoopConfigCheck {
   if (edge.kind !== 'loop') {
@@ -421,6 +459,22 @@ export function validateLoopConfig(
     return refuse(
       'loop_target_not_upstream',
       `A loop edge must lead back to a node upstream of "${source.name}".`,
+    );
+  }
+
+  const body = loopBody(edge, graph.edges);
+  for (const other of graph.edges) {
+    if (other.kind !== 'loop' || other.id === edge.id) continue;
+    const shared = [...loopBody(other, graph.edges)].filter((id) => body.has(id));
+    if (shared.length === 0) continue;
+
+    const names = shared
+      .map((id) => `"${graph.nodes.find((node) => node.id === id)?.name ?? id}"`)
+      .join(', ');
+    return refuse(
+      'loop_bodies_overlap',
+      `This loop would repeat ${names}, which another loop already repeats; ` +
+        'a node can belong to one loop only.',
     );
   }
 

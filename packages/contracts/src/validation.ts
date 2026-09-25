@@ -95,14 +95,16 @@ export const ROUND_2_VALIDATION_ISSUE_CODES = [
 
 /**
  * The codes round 3 adds. A loop edge `validateLoopConfig` refuses (§2.4) is reported by the code
- * it was refused with, the way `isConnectionAllowed`'s refusals are; `daily_budget_exceeded` is
- * pre-flight's, when today's spend has reached `Settings.dailyBudgetUsd` (§2.3).
+ * it was refused with, the way `isConnectionAllowed`'s refusals are. Two are pre-flight's:
+ * `daily_budget_exceeded`, when today's spend has reached `Settings.dailyBudgetUsd` (§2.3), and
+ * `missing_upstream_output`, when Start from node needs an output no earlier run produced (D83).
  * `loop_not_supported` stays in round 1's list after A3 stops raising it, when loop edges are
  * accepted: codes are only ever added (NFR-VER-01).
  */
 export const ROUND_3_VALIDATION_ISSUE_CODES = [
   ...LOOP_REFUSAL_CODES,
   'daily_budget_exceeded',
+  'missing_upstream_output',
 ] as const;
 
 export const VALIDATION_ISSUE_CODES = [
