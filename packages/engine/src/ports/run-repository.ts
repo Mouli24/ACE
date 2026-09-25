@@ -107,10 +107,21 @@ export interface NodeRunPatch {
   output?: Part[];
   prompt?: NodeRun['prompt'];
   usage?: Usage;
+  /** The policy and version this node run was checked against (round 3 §2.1, FR-GRD-002). */
+  guardrailPolicy?: NodeRun['guardrailPolicy'];
+  /** On a loop's last iteration: why the loop stopped (round 3 §2.4). */
+  loopStop?: NodeRun['loopStop'];
+  /** Start from node reused an earlier node run instead of executing (FR-EXE-013, D83). */
+  reusedFromNodeRunId?: Id;
   startedAt?: Timestamp;
   endedAt?: Timestamp;
   durationMs?: number;
 }
+/**
+ * `verdicts` and `approvals` are deliberately absent: they are written through
+ * `GuardrailVerdictRepository.append` and `ApprovalRepository.decide`, which keep the node run's
+ * copy and the table of record in step. One write path means they cannot drift.
+ */
 
 export interface NodeRunRepository {
   create(scope: Scope, nodeRun: NodeRun): Promise<NodeRun>;
@@ -118,6 +129,14 @@ export interface NodeRunRepository {
   /** In the order they were created, which is the order they were dispatched. */
   listByRun(scope: Scope, runId: Id): Promise<NodeRun[]>;
   update(scope: Scope, id: Id, patch: NodeRunPatch): Promise<NodeRun | null>;
+  /**
+   * What every node run that started on one UTC day cost, summed (round 3 §2.3, FR-GRD-008).
+   *
+   * `day` is a calendar date, `YYYY-MM-DD`. This is the number the `daily_budget` check compares
+   * with `Settings.dailyBudgetUsd`, and it is aggregated in SQL rather than by reading a day's node
+   * runs into memory. A day with no node runs is 0, never null.
+   */
+  dailyCostUsd(scope: Scope, day: string): Promise<number>;
 }
 
 /** The data types a model must cover — used by `ModelQuery` filtering in the store. */
