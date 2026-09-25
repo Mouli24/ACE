@@ -2,6 +2,7 @@ import type { RouteObject } from 'react-router-dom';
 
 import { ProjectPage } from '../projects/ProjectPage';
 import { ProjectsPage } from '../projects/ProjectsPage';
+import { GuardrailsPage } from '../guardrails/GuardrailsPage';
 import { ProvidersPage } from '../providers/ProvidersPage';
 import { ProjectRunsPage } from '../runs/ProjectRunsPage';
 import { RunDetailPage } from '../runs/RunDetailPage';
@@ -10,7 +11,7 @@ import { WorkflowPage } from '../workflows/WorkflowPage';
 import { HomeRedirect } from './HomeRedirect';
 import { AppShell } from './layout/AppShell';
 
-/** Routes (Arch §33.3): `/`, `/projects`, `/projects/:id`, the Canvas, `/providers`, `/settings`. */
+/** Routes (Arch §33.3): `/`, `/projects`, `/projects/:id`, the Canvas, `/providers`, `/guardrails`, `/settings`. */
 export const routes: RouteObject[] = [
   {
     path: '/',
@@ -23,6 +24,7 @@ export const routes: RouteObject[] = [
       { path: 'projects/:projectId/runs', element: <ProjectRunsPage /> },
       { path: 'runs/:runId', element: <RunDetailPage /> },
       { path: 'providers', element: <ProvidersPage /> },
+      { path: 'guardrails', element: <GuardrailsPage /> },
       { path: 'settings', element: <SettingsPage /> },
     ],
   },

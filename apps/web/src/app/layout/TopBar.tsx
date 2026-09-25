@@ -1,5 +1,5 @@
 import { Button } from '@ace/ui';
-import { Settings } from 'lucide-react';
+import { Settings, ShieldCheck } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 
 import { useProject } from '../../projects/hooks';
@@ -40,6 +40,11 @@ export function TopBar() {
       {!projectId && <div className="flex-1" />}
       <ProviderStatusBar />
       {workflowId && <RunBar workflowId={workflowId} />}
+      <Button asChild variant="ghost" size="icon" aria-label="Guardrail policies">
+        <Link to="/guardrails">
+          <ShieldCheck className="h-4 w-4" />
+        </Link>
+      </Button>
       <Button asChild variant="ghost" size="icon" aria-label="Settings">
         <Link to="/settings">
           <Settings className="h-4 w-4" />
