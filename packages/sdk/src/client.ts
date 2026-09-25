@@ -1,7 +1,16 @@
 import {
   API_BASE_PATH,
+  ApprovalDecisionRequestSchema,
+  ApprovalRequestSchema,
+  CreateGuardrailPolicyRequestSchema,
   CreateProviderRequestSchema,
   EventSchema,
+  GuardrailPolicySchema,
+  PolicyTestRequestSchema,
+  PolicyTestResponseSchema,
+  RerunRequestSchema,
+  RetryRequestSchema,
+  UpdateGuardrailPolicyRequestSchema,
   ModelListResponseSchema,
   NodeRunSchema,
   ProviderCheckResultSchema,
@@ -27,8 +36,17 @@ import {
   WorkflowGraphResponseSchema,
   WorkflowSchema,
   pageSchema,
+  type ApprovalDecisionRequest,
+  type ApprovalRequest,
+  type CreateGuardrailPolicyRequest,
   type CreateProjectRequest,
   type Event,
+  type GuardrailPolicy,
+  type GuardrailPolicyQuery,
+  type PolicyTestRequest,
+  type PolicyTestResponse,
+  type RetryRequest,
+  type UpdateGuardrailPolicyRequest,
   type ModelListResponse,
   type ModelQuery,
   type NodeRun,
@@ -80,6 +98,9 @@ const ProviderPageSchema = pageSchema(ProviderSchema);
 const RunSummaryPageSchema = pageSchema(RunSummarySchema);
 const NodeRunListSchema = z.array(NodeRunSchema);
 const EventListSchema = z.array(EventSchema);
+/** `GET /runs/:id/approvals` answers a bare array, the way §2.5 writes it (D78). */
+const ApprovalRequestListSchema = z.array(ApprovalRequestSchema);
+const GuardrailPolicyPageSchema = pageSchema(GuardrailPolicySchema);
 
 /**
  * §2.1 marks `concurrency` optional on the request while the schema gives it a default, so the
@@ -265,6 +286,88 @@ export function createAceClient(options: AceClientOptions) {
     /** `afterSeq` is how a reconnecting client catches up outside the socket (Arch §21.4). */
     listRunEvents: (runId: Id, query: { afterSeq?: number } = {}): Promise<Event[]> =>
       request('GET', `/runs/${runId}/events`, EventListSchema, undefined, query),
+
+    /* Run controls (round 3 §2.5, FR-CTL-001..006) */
+
+    /**
+     * The four controls. Each answers the `Run`, so the UI takes `status`, `pausedAt` and
+     * `allowedActions` from the reply instead of guessing; a control the current state does not
+     * allow answers 409 `invalid_run_state` (FR-CTL-006, D76).
+     */
+    pauseRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/pause`, RunSchema),
+    resumeRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/resume`, RunSchema),
+    stopRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/stop`, RunSchema),
+    /** Answers the **new** run, which carries `restartedFromRunId` (FR-CTL-004). */
+    restartRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/restart`, RunSchema),
+
+    /* Retries and re-runs (round 3 §2.1, FR-ERR-003/004, FR-CTL-005) */
+
+    /** `withDownstream` re-runs everything reachable after the node too (FR-ERR-004). */
+    retryNodeRun: (nodeRunId: Id, body: RetryRequest): Promise<NodeRun> =>
+      request('POST', `/node-runs/${nodeRunId}/retry`, NodeRunSchema, {
+        schema: RetryRequestSchema,
+        value: body,
+      }),
+    /** That node alone, on the latest upstream outputs (FR-CTL-005). */
+    rerunNode: (runId: Id, nodeId: Id): Promise<NodeRun> =>
+      request('POST', `/runs/${runId}/nodes/${nodeId}/rerun`, NodeRunSchema, {
+        schema: RerunRequestSchema,
+        value: {},
+      }),
+
+    /* Approvals (round 3 §2.5, FR-GRD-013) */
+
+    /** The route is the decision; the note is optional and is logged with it. */
+    approveNodeRun: (nodeRunId: Id, body: ApprovalDecisionRequest = {}): Promise<NodeRun> =>
+      request('POST', `/node-runs/${nodeRunId}/approve`, NodeRunSchema, {
+        schema: ApprovalDecisionRequestSchema,
+        value: body,
+      }),
+    /** A reject fails the node GUARDRAIL_VIOLATION (BR-03, Arch §19.1). */
+    rejectNodeRun: (nodeRunId: Id, body: ApprovalDecisionRequest = {}): Promise<NodeRun> =>
+      request('POST', `/node-runs/${nodeRunId}/reject`, NodeRunSchema, {
+        schema: ApprovalDecisionRequestSchema,
+        value: body,
+      }),
+    /** The pending requests, for a card the UI can show after a reload (Arch §21.2). */
+    listApprovals: (runId: Id): Promise<ApprovalRequest[]> =>
+      request('GET', `/runs/${runId}/approvals`, ApprovalRequestListSchema),
+
+    /* Guardrail policies (round 3 §2.5, FR-GRD-001, 002, 011, 018) */
+
+    listGuardrailPolicies: (query: GuardrailPolicyQuery = {}): Promise<Page<GuardrailPolicy>> =>
+      request('GET', '/guardrail-policies', GuardrailPolicyPageSchema, undefined, {
+        projectId: query.projectId,
+      }),
+    createGuardrailPolicy: (body: CreateGuardrailPolicyRequest): Promise<GuardrailPolicy> =>
+      request('POST', '/guardrail-policies', GuardrailPolicySchema, {
+        schema: CreateGuardrailPolicyRequestSchema,
+        value: body,
+      }),
+    getGuardrailPolicy: (id: Id): Promise<GuardrailPolicy> =>
+      request('GET', `/guardrail-policies/${id}`, GuardrailPolicySchema),
+    /** A PATCH never edits in place: the reply is version + 1 (FR-GRD-001, Arch §13.4). */
+    updateGuardrailPolicy: (id: Id, body: UpdateGuardrailPolicyRequest): Promise<GuardrailPolicy> =>
+      request('PATCH', `/guardrail-policies/${id}`, GuardrailPolicySchema, {
+        schema: UpdateGuardrailPolicyRequestSchema,
+        value: body,
+      }),
+    /**
+     * Without `confirm` a policy a node still references answers 409 `policy_in_use` with
+     * `{ nodeIds }` (§2.5, D78); the UI names those nodes before asking again.
+     */
+    deleteGuardrailPolicy: (id: Id, options: { confirm?: boolean } = {}): Promise<void> =>
+      request('DELETE', `/guardrail-policies/${id}`, NoContentSchema, undefined, {
+        ...(options.confirm ? { confirm: true } : {}),
+      }),
+    /** Try text against the policy without a run: verdicts with neither id (FR-GRD-001). */
+    testGuardrailPolicy: (id: Id, body: PolicyTestRequest): Promise<PolicyTestResponse> =>
+      request('POST', `/guardrail-policies/${id}/test`, PolicyTestResponseSchema, {
+        schema: PolicyTestRequestSchema,
+        value: body,
+      }),
+    setDefaultGuardrailPolicy: (id: Id): Promise<GuardrailPolicy> =>
+      request('POST', `/guardrail-policies/${id}/set-default`, GuardrailPolicySchema),
   };
 }
 

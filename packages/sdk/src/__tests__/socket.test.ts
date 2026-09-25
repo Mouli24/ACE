@@ -379,3 +379,179 @@ describe('run-scope frames (round 2 §2.4)', () => {
     socket.close();
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Round 3 — control, approval, verdict and loop frames (§2.6)                 */
+/* -------------------------------------------------------------------------- */
+
+const REQUEST = '01ARZ3NDEKTSV4RRFFQ69G5FC2';
+const VERDICT = '01ARZ3NDEKTSV4RRFFQ69G5FC3';
+const LOOP_EDGE = '01ARZ3NDEKTSV4RRFFQ69G5FE2';
+const AT = '2026-09-26T00:00:00.000Z';
+
+const approvalRequest = {
+  id: REQUEST,
+  runId: RUN,
+  nodeRunId: NODE_RUN,
+  nodeId: NODE,
+  nodeName: 'Reviewer',
+  point: 'tool',
+  checkType: 'destructive_action',
+  reason: 'the tool would delete a folder',
+  preview: 'rm -rf /tmp/demo',
+  requestedAt: AT,
+};
+
+const verdict = {
+  id: VERDICT,
+  nodeRunId: NODE_RUN,
+  point: 'output',
+  checkType: 'pii',
+  action: 'redact',
+  passed: true,
+  reason: 'one email address was redacted',
+  redactedTypes: ['email'],
+  at: AT,
+};
+
+describe('round 3 frames (§2.6, FR-CTL-001/002, FR-GRD-013/015, FR-PAR-005)', () => {
+  it('dispatches all six new frame types to their handlers', () => {
+    const socket = makeSocket();
+    const seen: string[] = [];
+    for (const type of [
+      'run.paused',
+      'run.resumed',
+      'node.approval_required',
+      'node.approval_decided',
+      'guardrail.verdict',
+      'loop.iteration',
+    ] as const) {
+      socket.on(type, () => seen.push(type));
+    }
+    socket.connect();
+    latest().serverOpen();
+    latest().serverSend({ type: 'hello', payload: { seq: 0 } });
+    latest().serverSend({ type: 'run.paused', payload: { runId: RUN }, seq: 1 } as never);
+    latest().serverSend({ type: 'run.resumed', payload: { runId: RUN }, seq: 2 } as never);
+    latest().serverSend({
+      type: 'node.approval_required',
+      payload: { runId: RUN, request: approvalRequest },
+      seq: 3,
+    } as never);
+    latest().serverSend({
+      type: 'node.approval_decided',
+      payload: {
+        runId: RUN,
+        nodeRunId: NODE_RUN,
+        decision: { requestId: REQUEST, decision: 'approve', decidedAt: AT },
+      },
+      seq: 4,
+    } as never);
+    latest().serverSend({
+      type: 'guardrail.verdict',
+      payload: { runId: RUN, nodeRunId: NODE_RUN, verdict },
+      seq: 5,
+    } as never);
+    latest().serverSend({
+      type: 'loop.iteration',
+      payload: { runId: RUN, edgeId: LOOP_EDGE, targetNodeId: NODE, iteration: 2 },
+      seq: 6,
+    } as never);
+
+    expect(seen).toEqual([
+      'run.paused',
+      'run.resumed',
+      'node.approval_required',
+      'node.approval_decided',
+      'guardrail.verdict',
+      'loop.iteration',
+    ]);
+    socket.close();
+  });
+
+  it('the payload a handler receives is the typed one from the contract', () => {
+    const socket = makeSocket();
+    const redacted: string[] = [];
+    const stops: Array<string | undefined> = [];
+    const approvals: string[] = [];
+    // These read `payload.verdict.redactedTypes`, `payload.stop` and `payload.request.nodeName`:
+    // the frame union is what narrows them, so a wrong field would not compile.
+    socket.on('guardrail.verdict', (payload) =>
+      redacted.push(...(payload.verdict.redactedTypes ?? [])),
+    );
+    socket.on('loop.iteration', (payload) => stops.push(payload.stop));
+    socket.on('node.approval_required', (payload) => approvals.push(payload.request.nodeName));
+
+    socket.connect();
+    latest().serverOpen();
+    latest().serverSend({ type: 'hello', payload: { seq: 0 } });
+    latest().serverSend({
+      type: 'guardrail.verdict',
+      payload: { runId: RUN, nodeRunId: NODE_RUN, verdict },
+      seq: 1,
+    } as never);
+    latest().serverSend({
+      type: 'node.approval_required',
+      payload: { runId: RUN, request: approvalRequest },
+      seq: 2,
+    } as never);
+    latest().serverSend({
+      type: 'loop.iteration',
+      payload: {
+        runId: RUN,
+        edgeId: LOOP_EDGE,
+        targetNodeId: NODE,
+        iteration: 3,
+        stop: 'max_iterations',
+      },
+      seq: 3,
+    } as never);
+
+    expect(redacted).toEqual(['email']);
+    expect(approvals).toEqual(['Reviewer']);
+    expect(stops).toEqual(['max_iterations']);
+    socket.close();
+  });
+
+  it('all six are persisted, so they move the resume anchor and replay only once', () => {
+    const socket = makeSocket();
+    const verdicts: number[] = [];
+    socket.on('guardrail.verdict', (_payload, frame) => verdicts.push(frame.seq));
+    socket.connect();
+    latest().serverOpen();
+    latest().serverSend({ type: 'hello', payload: { seq: 40 } });
+    latest().serverSend({ type: 'run.paused', payload: { runId: RUN }, seq: 41 } as never);
+    latest().serverSend({
+      type: 'guardrail.verdict',
+      payload: { runId: RUN, nodeRunId: NODE_RUN, verdict },
+      seq: 42,
+    } as never);
+    expect(socket.lastSeq).toBe(42);
+
+    latest().serverClose();
+    vi.advanceTimersByTime(100);
+    latest().serverOpen();
+    expect(latest().sent).toContainEqual({ type: 'resume', payload: { afterSeq: 42 } });
+    // the replay includes 42 again: it must not reach the handler twice
+    latest().serverSend({
+      type: 'guardrail.verdict',
+      payload: { runId: RUN, nodeRunId: NODE_RUN, verdict },
+      seq: 42,
+    } as never);
+    expect(verdicts).toEqual([42]);
+    socket.close();
+  });
+
+  it('a frame with a key the contract does not name is dropped, not half-applied', () => {
+    const socket = makeSocket();
+    const handler = vi.fn();
+    socket.on('run.paused', handler);
+    socket.connect();
+    latest().serverOpen();
+    latest().serverSend({ type: 'hello', payload: { seq: 0 } });
+    latest().serverSend({ type: 'run.paused', payload: { runId: RUN, pausedAt: AT }, seq: 1 });
+    expect(handler).not.toHaveBeenCalled();
+    expect(socket.lastSeq).toBe(0);
+    socket.close();
+  });
+});

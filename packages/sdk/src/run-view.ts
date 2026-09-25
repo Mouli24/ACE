@@ -1,14 +1,18 @@
 import {
+  allowedRunActions,
   isPersistedFrame,
   zeroUsage,
+  type ApprovalRequest,
   type Id,
   type ModelUsed,
   type NodeError,
   type NodeState,
   type Part,
+  type RunAction,
   type RunState,
   type ServerFrame,
   type Usage,
+  type Verdict,
 } from '@ace/contracts';
 
 /**
@@ -46,6 +50,24 @@ export interface RunView {
   /** The highest persisted seq folded in; what `resume { afterSeq }` should ask from. */
   lastSeq: number;
   finalOutput: Record<Id, Part[]> | undefined;
+  /**
+   * When the run paused (FR-CTL-001), cleared by `run.resumed` (FR-CTL-002). `run.paused` carries
+   * nothing but the run id, so this is when the frame arrived; `Run.pausedAt` from
+   * `GET /runs/:id` is the engine's own value.
+   */
+  pausedAt: string | undefined;
+  /**
+   * The controls this run state accepts, undefined before the first frame names a status. No run
+   * event carries `allowedActions`, so this is `allowedRunActions(status)` — the same table the
+   * engine writes into `Run.allowedActions` and the web mocks call (FR-CTL-006, D71, D76).
+   */
+  allowedActions: RunAction[] | undefined;
+  /** The approval requests still waiting for a decision, oldest first (FR-GRD-013). */
+  approvals(): ApprovalRequest[];
+  /** Every guardrail verdict seen for one node run, in arrival order (FR-GRD-015). */
+  verdicts(nodeRunId: Id): Verdict[];
+  /** The highest iteration this node has reached; `0` before it has run (FR-PAR-005). */
+  iterations(nodeId: Id): number;
   nodeState(nodeId: Id): NodeState;
   nodeRun(nodeId: Id): NodeRunView | undefined;
   nodeRunById(nodeRunId: Id): NodeRunView | undefined;
@@ -70,12 +92,17 @@ export class RunEventBuffer {
   private haltReason: string | undefined;
   private totals: Usage = zeroUsage();
   private finalOutput: Record<Id, Part[]> | undefined;
+  private pausedAt: string | undefined;
   private lastSeq = -1;
   private readonly seen = new Set<number>();
   private readonly byNodeRunId = new Map<Id, NodeRunView>();
   private readonly nodeRunIdByNodeId = new Map<Id, Id>();
   private readonly text = new Map<Id, string>();
   private readonly transfers = new Map<Id, EdgeTransferView>();
+  /** Keyed by request id, which is what a decision names, so a decision removes exactly one. */
+  private readonly pendingApprovals = new Map<Id, ApprovalRequest>();
+  private readonly verdictsByNodeRunId = new Map<Id, Verdict[]>();
+  private readonly iterationByNodeId = new Map<Id, number>();
 
   /** Fold one frame in. Frames for another run, and repeats of a persisted frame, are ignored. */
   apply(frame: ServerFrame): void {
@@ -108,6 +135,8 @@ export class RunEventBuffer {
         this.haltReason = frame.payload.haltReason;
         this.totals = frame.payload.totals;
         this.finalOutput = frame.payload.finalOutput;
+        // A run that ended is no longer paused, including one stopped while PAUSED (D76).
+        this.pausedAt = undefined;
         return;
       }
 
@@ -119,6 +148,7 @@ export class RunEventBuffer {
         view.status = frame.payload.status;
         if (frame.payload.failureReason !== undefined)
           view.failureReason = frame.payload.failureReason;
+        this.noteIteration(frame.payload.nodeId, frame.payload.iteration);
         return;
       }
 
@@ -162,9 +192,61 @@ export class RunEventBuffer {
         return;
       }
 
+      /* Round 3 §2.6 */
+
+      case 'run.paused': {
+        this.runId ??= frame.payload.runId;
+        // The frame says the run paused but not what its status became; Arch §19.2 draws only
+        // RUNNING ⇄ PAUSED, so PAUSED is the state the pause left it in — and it is what
+        // `allowedActions` has to read to offer Resume rather than Pause (FR-CTL-002, D76).
+        this.status = 'PAUSED';
+        this.pausedAt = new Date().toISOString();
+        return;
+      }
+
+      case 'run.resumed': {
+        this.runId ??= frame.payload.runId;
+        this.status = 'RUNNING';
+        this.pausedAt = undefined;
+        return;
+      }
+
+      case 'node.approval_required': {
+        this.runId ??= frame.payload.runId;
+        this.pendingApprovals.set(frame.payload.request.id, frame.payload.request);
+        return;
+      }
+
+      case 'node.approval_decided': {
+        this.runId ??= frame.payload.runId;
+        this.pendingApprovals.delete(frame.payload.decision.requestId);
+        return;
+      }
+
+      case 'guardrail.verdict': {
+        this.runId ??= frame.payload.runId;
+        const list = this.verdictsByNodeRunId.get(frame.payload.nodeRunId);
+        if (list) list.push(frame.payload.verdict);
+        else this.verdictsByNodeRunId.set(frame.payload.nodeRunId, [frame.payload.verdict]);
+        return;
+      }
+
+      case 'loop.iteration': {
+        this.runId ??= frame.payload.runId;
+        // With `stop` the iteration named is the last one that ran, without it the one now
+        // starting (§2.6) — either way it is an iteration the target reached.
+        this.noteIteration(frame.payload.targetNodeId, frame.payload.iteration);
+        return;
+      }
+
       default:
         return;
     }
+  }
+
+  private noteIteration(nodeId: Id, iteration: number): void {
+    const highest = this.iterationByNodeId.get(nodeId);
+    if (highest === undefined || iteration > highest) this.iterationByNodeId.set(nodeId, iteration);
   }
 
   private upsert(nodeRunId: Id, nodeId: Id): NodeRunView {
@@ -190,22 +272,32 @@ export class RunEventBuffer {
     this.haltReason = undefined;
     this.totals = zeroUsage();
     this.finalOutput = undefined;
+    this.pausedAt = undefined;
     this.lastSeq = -1;
     this.seen.clear();
     this.byNodeRunId.clear();
     this.nodeRunIdByNodeId.clear();
     this.text.clear();
     this.transfers.clear();
+    this.pendingApprovals.clear();
+    this.verdictsByNodeRunId.clear();
+    this.iterationByNodeId.clear();
   }
 
   get view(): RunView {
+    const status = this.status;
     return {
       runId: this.runId,
-      status: this.status,
+      status,
       haltReason: this.haltReason,
       totals: this.totals,
       lastSeq: this.lastSeq,
       finalOutput: this.finalOutput,
+      pausedAt: this.pausedAt,
+      allowedActions: status === undefined ? undefined : allowedRunActions(status),
+      approvals: () => [...this.pendingApprovals.values()],
+      verdicts: (nodeRunId) => [...(this.verdictsByNodeRunId.get(nodeRunId) ?? [])],
+      iterations: (nodeId) => this.iterationByNodeId.get(nodeId) ?? 0,
       nodeState: (nodeId) => this.nodeRun(nodeId)?.status ?? DEFAULT_STATE,
       nodeRun: (nodeId) => this.nodeRun(nodeId),
       nodeRunById: (nodeRunId) => this.byNodeRunId.get(nodeRunId),
