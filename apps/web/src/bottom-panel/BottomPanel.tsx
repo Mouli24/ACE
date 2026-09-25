@@ -58,7 +58,8 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
   const retry = useRetryNodeRun();
 
   const providerNames = useMemo(
-    () => Object.fromEntries((providers.data ?? []).map((provider) => [provider.id, provider.name])),
+    () =>
+      Object.fromEntries((providers.data ?? []).map((provider) => [provider.id, provider.name])),
     [providers.data],
   );
 

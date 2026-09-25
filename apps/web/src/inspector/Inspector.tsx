@@ -44,8 +44,7 @@ export function Inspector({ workflowId }: { workflowId: string }) {
   const rerun = useRerunNode();
   const start = useStartRun(workflowId);
   const busy = retry.isPending || rerun.isPending || start.isPending;
-  const nodeName =
-    graph.data?.nodes.find((node) => node.id === focusedNodeId)?.name ?? 'this node';
+  const nodeName = graph.data?.nodes.find((node) => node.id === focusedNodeId)?.name ?? 'this node';
 
   return (
     <section
@@ -129,11 +128,11 @@ export function Inspector({ workflowId }: { workflowId: string }) {
           </Section>
 
           {/*
-            * Every guardrail verdict on this node run, and for a redaction the types removed and
-            * never the value (FR-GRD-014/015, TC-GRD-018/019). The policy it was checked against is
-            * named with its version, so a verdict can be traced to the rules that produced it
-            * (FR-GRD-002).
-            */}
+           * Every guardrail verdict on this node run, and for a redaction the types removed and
+           * never the value (FR-GRD-014/015, TC-GRD-018/019). The policy it was checked against is
+           * named with its version, so a verdict can be traced to the rules that produced it
+           * (FR-GRD-002).
+           */}
           <Section title="Verdicts">
             {nodeRun.guardrailPolicy && (
               <p className="font-machine text-[10px] text-fg-muted" data-testid="inspector-policy">
