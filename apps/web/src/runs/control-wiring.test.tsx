@@ -124,15 +124,24 @@ describe('TC-CTL-006 the run controls follow allowedActions and nothing else', (
      * enabled outside that set would be a 409 waiting to happen (FR-CTL-006).
      */
     const expectEnabledToMatch = async (status: 'RUNNING' | 'PAUSED') => {
-      await waitFor(() =>
-        expect(screen.getByTestId('run-controls')).toHaveAttribute('data-status', status),
-      );
       const allowed = allowedRunActions(status);
-      for (const name of RUN_ACTIONS) {
-        const button = action(name);
-        if (allowed.includes(name)) expect(button).toBeEnabled();
-        else expect(button).toBeDisabled();
-      }
+      /*
+       * One `waitFor` over the whole table, not a wait on the status followed by assertions: a
+       * control in flight disables every button until the engine answers, so a status that has
+       * already arrived by frame can be a moment ahead of the buttons.
+       */
+      await waitFor(
+        () => {
+          expect(screen.getByTestId('run-controls')).toHaveAttribute('data-status', status);
+          for (const name of RUN_ACTIONS) {
+            const button = action(name);
+            if (allowed.includes(name)) expect(button).toBeEnabled();
+            else expect(button).toBeDisabled();
+          }
+        },
+        // A control is a round trip, and an instrumented run is slower than the default second.
+        { timeout: 5_000 },
+      );
     };
 
     await expectEnabledToMatch('RUNNING');
