@@ -1,0 +1,178 @@
+{
+  "formatVersion": 1,
+  "exportedAt": "2026-09-26T09:00:00.000Z",
+  "name": "PII asks before it leaves",
+  "nodes": [
+    {
+      "id": "01M3R3GG0000000000000000NA",
+      "workflowId": "01M3R3GG0000000000000000WF",
+      "kind": "input",
+      "name": "Input",
+      "position": {
+        "x": 80,
+        "y": 200
+      },
+      "inputs": [],
+      "outputs": [
+        {
+          "id": "01M3R3GG0000000000000000NA:out:text",
+          "name": "text",
+          "dataType": "text",
+          "multi": true
+        }
+      ],
+      "config": {
+        "text": "Confirm the handover and send it to dana.ellis@example.com when it is ready.",
+        "artifactIds": [],
+        "outputTypes": [
+          "text"
+        ]
+      }
+    },
+    {
+      "id": "01M3R3GG0000000000000000NB",
+      "workflowId": "01M3R3GG0000000000000000WF",
+      "kind": "agent",
+      "name": "Writer",
+      "position": {
+        "x": 400,
+        "y": 200
+      },
+      "inputs": [
+        {
+          "id": "01M3R3GG0000000000000000NB:in:text",
+          "name": "text",
+          "dataType": "text",
+          "multi": false
+        }
+      ],
+      "outputs": [
+        {
+          "id": "01M3R3GG0000000000000000NB:out:json",
+          "name": "json",
+          "dataType": "json",
+          "multi": true
+        }
+      ],
+      "config": {
+        "providerId": "01M3R3PV0000000000000000PV",
+        "modelId": "mock-json",
+        "routing": {
+          "policy": "fixed",
+          "fallbackModelIds": []
+        },
+        "instructions": "Confirm the handover. Repeat the email address you were given, in full, so the reader knows where it went.",
+        "inputTypes": [
+          "text"
+        ],
+        "outputTypes": [
+          "json"
+        ],
+        "execution": {
+          "temperature": 0.7,
+          "maxTokens": 4096,
+          "timeoutMs": 120000,
+          "retries": 2
+        },
+        "contextPolicy": {
+          "budgetTokens": 4000
+        },
+        "tools": {
+          "enabled": [],
+          "maxToolCalls": 10,
+          "allowedDomains": []
+        },
+        "knowledgeBaseIds": [],
+        "memory": {
+          "enabled": false
+        },
+        "skillIds": [],
+        "guardrailPolicyId": "01M3R3PC0000000000000000PC"
+      }
+    },
+    {
+      "id": "01M3R3GG0000000000000000NC",
+      "workflowId": "01M3R3GG0000000000000000WF",
+      "kind": "output",
+      "name": "Output",
+      "position": {
+        "x": 760,
+        "y": 200
+      },
+      "inputs": [
+        {
+          "id": "01M3R3GG0000000000000000NC:in:text",
+          "name": "text",
+          "dataType": "text",
+          "multi": false
+        },
+        {
+          "id": "01M3R3GG0000000000000000NC:in:json",
+          "name": "json",
+          "dataType": "json",
+          "multi": false
+        },
+        {
+          "id": "01M3R3GG0000000000000000NC:in:image",
+          "name": "image",
+          "dataType": "image",
+          "multi": false
+        },
+        {
+          "id": "01M3R3GG0000000000000000NC:in:audio",
+          "name": "audio",
+          "dataType": "audio",
+          "multi": false
+        },
+        {
+          "id": "01M3R3GG0000000000000000NC:in:video",
+          "name": "video",
+          "dataType": "video",
+          "multi": false
+        },
+        {
+          "id": "01M3R3GG0000000000000000NC:in:code",
+          "name": "code",
+          "dataType": "code",
+          "multi": false
+        },
+        {
+          "id": "01M3R3GG0000000000000000NC:in:file",
+          "name": "file",
+          "dataType": "file",
+          "multi": false
+        }
+      ],
+      "outputs": [],
+      "config": {}
+    }
+  ],
+  "edges": [
+    {
+      "id": "01M3R3GG0000000000000000EA",
+      "workflowId": "01M3R3GG0000000000000000WF",
+      "kind": "data",
+      "from": {
+        "nodeId": "01M3R3GG0000000000000000NA",
+        "portId": "01M3R3GG0000000000000000NA:out:text"
+      },
+      "to": {
+        "nodeId": "01M3R3GG0000000000000000NB",
+        "portId": "01M3R3GG0000000000000000NB:in:text"
+      }
+    },
+    {
+      "id": "01M3R3GG0000000000000000EB",
+      "workflowId": "01M3R3GG0000000000000000WF",
+      "kind": "data",
+      "from": {
+        "nodeId": "01M3R3GG0000000000000000NB",
+        "portId": "01M3R3GG0000000000000000NB:out:json"
+      },
+      "to": {
+        "nodeId": "01M3R3GG0000000000000000NC",
+        "portId": "01M3R3GG0000000000000000NC:in:json"
+      }
+    }
+  ]
+}

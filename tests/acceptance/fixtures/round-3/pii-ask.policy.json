@@ -1,0 +1,14 @@
+{
+  "projectId": "01M3R3PJ0000000000000000PJ",
+  "name": "Ask before PII leaves a node",
+  "checks": [
+    {
+      "id": "01M3R3PC0000000000000000CA",
+      "point": "output",
+      "type": "pii",
+      "action": "ask_user",
+      "enabled": true,
+      "params": {}
+    }
+  ]
+}
