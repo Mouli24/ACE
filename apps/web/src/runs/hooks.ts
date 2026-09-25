@@ -269,6 +269,20 @@ export function useRerunNode() {
 /* Approvals (round 3 §2.3, FR-GRD-013)                                        */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * `GET /runs/:id/approvals` — what is still waiting on a person (FR-GRD-013). Refetched whenever an
+ * approval frame lands, which is what `approvalRevision` tracks: the socket says when to ask, the
+ * engine says what is pending (BR-01).
+ */
+export function useApprovals(runId: Id | undefined) {
+  const revision = useRunStore((store) => store.revision);
+  return useQuery({
+    queryKey: [...queryKeys.approvals(runId ?? ''), revision],
+    queryFn: () => api().listApprovals(runId ?? ''),
+    enabled: Boolean(runId),
+  });
+}
+
 export interface ApprovalDecisionVariables extends ApprovalDecisionRequest {
   nodeRunId: Id;
 }

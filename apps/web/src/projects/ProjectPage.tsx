@@ -3,16 +3,18 @@ import { Plus } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
+import { BudgetFields } from '../settings/BudgetFields';
 import { ImportWorkflowButton } from '../workflows/ImportWorkflowButton';
 import { CreateWorkflowDialog } from '../workflows/WorkflowDialogs';
 import { useWorkflows } from '../workflows/hooks';
-import { useProject } from './hooks';
+import { useProject, useUpdateProject } from './hooks';
 
 /** `/projects/:projectId` — the project with its workflows; pick one to open the Canvas. */
 export function ProjectPage() {
   const { projectId = '' } = useParams();
   const project = useProject(projectId);
   const workflows = useWorkflows(projectId);
+  const updateProject = useUpdateProject();
   const [creating, setCreating] = useState(false);
 
   if (project.isError) {
@@ -60,6 +62,18 @@ export function ProjectPage() {
           </li>
         ))}
       </ul>
+      {/* FR-GRD-008: what one run of this project may spend before it halts `budget_exceeded`. */}
+      <BudgetFields
+        fields="run"
+        dailyBudgetUsd={undefined}
+        maxCostPerRunUsd={project.data?.maxCostPerRunUsd}
+        onSaveDailyBudget={() => undefined}
+        onSaveMaxCostPerRun={(maxCostPerRunUsd) =>
+          updateProject.mutate({ id: projectId, maxCostPerRunUsd })
+        }
+        disabled={!project.data}
+      />
+
       {creating && (
         <CreateWorkflowDialog projectId={projectId} onClose={() => setCreating(false)} />
       )}

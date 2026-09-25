@@ -11,11 +11,15 @@ import {
 import { Link } from 'react-router-dom';
 
 import { useProviders } from '../providers/hooks';
+import { BudgetFields } from './BudgetFields';
 import { usePatchSettings, useSettings } from './hooks';
 
 /**
- * `/settings` — the theme, and provider status (FR-PRV-004). The chips read the same providers
- * query the top bar does, patched by `provider.status`, so all three places agree without a reload.
+ * `/settings` — the theme, the daily spending cap and provider status (FR-PRV-004, FR-GRD-008).
+ *
+ * The chips read the same providers query the top bar does, patched by `provider.status`, so all
+ * three places agree without a reload. The per-run cap belongs to a project, so it is on the project
+ * page rather than here.
  */
 export function SettingsPage() {
   const settings = useSettings();
@@ -47,6 +51,15 @@ export function SettingsPage() {
           Light and system themes render in a later round; dark is the design.
         </p>
       </div>
+
+      <BudgetFields
+        fields="daily"
+        dailyBudgetUsd={settings.data?.dailyBudgetUsd}
+        maxCostPerRunUsd={undefined}
+        onSaveDailyBudget={(dailyBudgetUsd) => patch.mutate({ dailyBudgetUsd })}
+        onSaveMaxCostPerRun={() => undefined}
+        disabled={!settings.data}
+      />
 
       <section className="flex flex-col gap-2" data-testid="settings-providers">
         <h2 className="font-human text-sm font-semibold">Providers</h2>

@@ -1,4 +1,12 @@
-import type { ModelUsed, Node, NodeState, Part, Port, ProviderType } from '@ace/contracts';
+import type {
+  FailureReason,
+  ModelUsed,
+  Node,
+  NodeState,
+  Part,
+  Port,
+  ProviderType,
+} from '@ace/contracts';
 import {
   Badge,
   PROVIDER_ACCENT,
@@ -9,7 +17,17 @@ import {
   tokens,
 } from '@ace/ui';
 import { Handle, Position, type NodeProps, type Node as FlowNode } from '@xyflow/react';
-import { Bot, Cpu, Flag, GitMerge, TextCursorInput, Wand2, type LucideIcon } from 'lucide-react';
+import {
+  Bot,
+  Cpu,
+  Flag,
+  GitMerge,
+  Lock,
+  TextCursorInput,
+  TriangleAlert,
+  Wand2,
+  type LucideIcon,
+} from 'lucide-react';
 import { memo, type CSSProperties, type KeyboardEvent } from 'react';
 
 import { useNodeOverlay } from '../runs/run-store';
@@ -35,6 +53,8 @@ export type FlowNodeData = {
   /** Keyboard connect (NFR-USE-02): the output port armed with Enter, if any. */
   armedPortId: string | undefined;
   onPortKey: (port: Port, direction: 'in' | 'out', nodeId: string) => void;
+  /** The node the run stopped at, for a BLOCKED card's "blocked by <node>" (FR-ERR-006). */
+  blockedByName?: string;
 };
 export type AceFlowNode = FlowNode<FlowNodeData, 'ace'>;
 
@@ -56,7 +76,19 @@ export interface NodeCardViewProps {
   finalOutput?: Part[];
   /** The node names a provider the engine no longer has (FR-PRV-005). */
   providerMissing?: boolean;
+  /** Why the node failed, so the card says which kind of failure it was (FR-ERR-002, BR-03). */
+  failureReason?: FailureReason;
+  /** The upstream node that stopped the run, on a BLOCKED card (FR-ERR-006). */
+  blockedByName?: string;
 }
+
+/** Each failure reason in the words a person reads; the enum value stays the contract's (BR-03). */
+const FAILURE_TEXT: Readonly<Record<FailureReason, string>> = {
+  RUN_FAILED: 'failed',
+  CONTRACT_VIOLATION: 'output did not match the contract',
+  GUARDRAIL_VIOLATION: 'blocked by a guardrail',
+  BLOCKED: 'never ran',
+};
 
 /** Enough of a `Part` to show on a card; the inspector renders the typed view (round 4 adds more). */
 function partText(part: Part): string {
@@ -144,6 +176,8 @@ export function NodeCardView({
   modelUsed,
   finalOutput,
   providerMissing,
+  failureReason,
+  blockedByName,
 }: NodeCardViewProps) {
   const Icon = KIND_ICON[node.kind as Round1NodeKind] ?? Bot;
   const chip = modelLabel(node);
@@ -151,6 +185,13 @@ export function NodeCardView({
     '--accent-color': provider ? PROVIDER_ACCENT[provider] : tokens.color.border,
     '--ring-color': STATUS_RING[state],
   } as CSSProperties;
+
+  /*
+   * BLOCKED is greyed and locked because nothing went wrong here — the run never reached this node
+   * (FR-ERR-006). STOPPED gets no fault styling at all: a cancellation the operator asked for must
+   * not read as a fault (FR-ERR-007), so only FAILED is ever tinted with the danger colour.
+   */
+  const isBlocked = state === 'BLOCKED';
 
   return (
     <div
@@ -164,10 +205,19 @@ export function NodeCardView({
         'border-l-4 border-l-[var(--accent-color)]',
         'ring-2 ring-[var(--ring-color)] ring-offset-2 ring-offset-canvas',
         selected && 'outline outline-2 outline-offset-4 outline-selection',
+        isBlocked && 'opacity-70 grayscale',
       )}
     >
       <header className="flex items-center gap-2 px-3 pt-2">
-        <Icon className="h-4 w-4 shrink-0 text-fg-muted" aria-hidden />
+        {isBlocked ? (
+          <Lock
+            className="h-4 w-4 shrink-0 text-fg-muted"
+            aria-label="blocked"
+            data-testid={`blocked-lock-${node.id}`}
+          />
+        ) : (
+          <Icon className="h-4 w-4 shrink-0 text-fg-muted" aria-hidden />
+        )}
         <span className="truncate font-human text-sm font-semibold">{node.name}</span>
         <StatusRing state={state} className="ml-auto" />
         <span className="font-machine text-[10px] uppercase text-fg-muted">{node.kind}</span>
@@ -185,6 +235,32 @@ export function NodeCardView({
             </Badge>
           )}
         </div>
+      )}
+      {isBlocked && (
+        <p
+          className="px-3 pt-1 font-human text-xs text-fg-muted"
+          data-testid={`blocked-by-${node.id}`}
+        >
+          {blockedByName === undefined ? 'blocked upstream' : `blocked by ${blockedByName}`}
+        </p>
+      )}
+      {state === 'STOPPED' && (
+        <p
+          className="px-3 pt-1 font-human text-xs text-fg-muted"
+          data-testid={`stopped-note-card-${node.id}`}
+        >
+          stopped — not a failure
+        </p>
+      )}
+      {state === 'FAILED' && failureReason !== undefined && (
+        <p
+          className="flex items-center gap-1 px-3 pt-1 font-human text-xs text-danger"
+          data-testid={`failure-${node.id}`}
+          data-reason={failureReason}
+        >
+          <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden />
+          {FAILURE_TEXT[failureReason]}
+        </p>
       )}
       {/* FR-RTR-006: what actually answered, and whether the router had to fall back. */}
       {modelUsed && (
@@ -267,6 +343,8 @@ export const FlowNodeCard = memo(function FlowNodeCard({ data, selected }: NodeP
       streamedText={overlay.streamedText}
       {...(overlay.modelUsed === undefined ? {} : { modelUsed: overlay.modelUsed })}
       {...(overlay.finalOutput === undefined ? {} : { finalOutput: overlay.finalOutput })}
+      {...(overlay.failureReason === undefined ? {} : { failureReason: overlay.failureReason })}
+      {...(data.blockedByName === undefined ? {} : { blockedByName: data.blockedByName })}
       {...(data.providerMissing ? { providerMissing: true } : {})}
       {...(data.provider === undefined ? {} : { provider: data.provider })}
     />
