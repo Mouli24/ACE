@@ -7,6 +7,8 @@ export * from './components/textarea.js';
 export * from './components/label.js';
 export * from './components/badge.js';
 export * from './components/status.js';
+export * from './components/approval-card.js';
+export * from './components/verdict-badge.js';
 export * from './components/streaming-text.js';
 export * from './components/checkbox.js';
 export * from './components/dialog.js';
