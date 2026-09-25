@@ -419,6 +419,17 @@ describe('FR-PAR-003 DC-8 the body a loop edge repeats', () => {
     expect(loopBody(backEdge, edges)).toEqual(new Set([NODE_B, NODE_E, NODE_C]));
   });
 
+  it('takes in both sides of a branch inside the loop (FR-PAR-001)', () => {
+    const edges = [
+      dataEdge(EDGE_ID, NODE_B, 'text', NODE_D, 'text'),
+      dataEdge(EDGE_ID_2, NODE_B, 'text', NODE_E, 'text'),
+      dataEdge(EDGE_ID_3, NODE_D, 'text', NODE_C, 'text'),
+      dataEdge(EDGE_ID_4, NODE_E, 'text', NODE_C, 'text'),
+    ];
+
+    expect(loopBody(backEdge, edges)).toEqual(new Set([NODE_B, NODE_D, NODE_E, NODE_C]));
+  });
+
   it('declares the six ways validateLoopConfig refuses an edge', () => {
     expect([...LOOP_REFUSAL_CODES]).toEqual([
       'loop_config_missing',
@@ -646,6 +657,13 @@ describe('FR-CON-007 validateLoopConfig', () => {
 
     it('does not count a loop edge as overlapping itself', () => {
       expect(validateLoopConfig(loop1, chain)).toEqual({ ok: true });
+    });
+
+    it('names a shared node the graph does not list by its id, never as undefined', () => {
+      const withoutWriter = { ...chain, nodes: chain.nodes.filter((node) => node.id !== NODE_B) };
+      const result = validateLoopConfig(loopFrom(LOOP_EDGE_ID_3, NODE_E, NODE_B), withoutWriter);
+
+      expect(result.ok ? '' : result.reason).toContain(`"${NODE_B}", "Reviewer"`);
     });
   });
 
