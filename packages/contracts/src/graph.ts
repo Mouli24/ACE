@@ -375,8 +375,9 @@ function reaches(from: Id, to: Id, edges: LoopGraph['edges']): boolean {
 function walk(start: Id, next: ReadonlyMap<Id, readonly Id[]>): Set<Id> {
   const seen = new Set<Id>([start]);
   const queue: Id[] = [start];
-  for (let i = 0; i < queue.length; i += 1) {
-    for (const id of next.get(queue[i] ?? '') ?? []) {
+  // The queue grows while it is read, so this visits every reachable node once, breadth first.
+  for (const current of queue) {
+    for (const id of next.get(current) ?? []) {
       if (seen.has(id)) continue;
       seen.add(id);
       queue.push(id);
