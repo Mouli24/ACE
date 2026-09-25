@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { DataTypeSchema, type DataType } from './enums.js';
 import { IdSchema, PortIdSchema, TimestampSchema } from './graph.js';
+import { VerdictSchema } from './guardrails.js';
 
 /**
  * Parts and the envelope (round 2 §2.2, Arch §12.4, BR-02, BR-13, ADR-008).
@@ -89,8 +90,8 @@ export const EnvelopeSchema = z.strictObject({
   reads: z.array(PartSchema),
   context: EnvelopeContextSchema,
   contract: EnvelopeContractSchema,
-  /** `Verdict` arrives in round 3; until then the engine writes an empty list or nothing. */
-  guardrailVerdicts: z.array(z.unknown()).optional(),
+  /** The input-point verdicts on this envelope's reads (round 3 §2.2, Arch §12.4). */
+  guardrailVerdicts: z.array(VerdictSchema).optional(),
   createdAt: TimestampSchema,
 });
 export type Envelope = z.infer<typeof EnvelopeSchema>;

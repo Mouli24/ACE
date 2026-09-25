@@ -1,26 +1,39 @@
 import { describe, expect, it } from 'vitest';
 
-import { ERROR_KINDS } from '../enums.js';
+import { ERROR_KINDS, RUN_STATES } from '../enums.js';
+import { aceError } from '../errors.js';
 import {
+  AUTO_RETRY_POLICY,
+  CONTRACT_REPAIR_RETRIES,
   NodeErrorSchema,
   NodeRunSchema,
+  RETRY_BACKOFF_BASE_MS,
+  RETRY_BACKOFF_MAX_MS,
+  RUN_ACTIONS,
+  RerunRequestSchema,
+  RetryRequestSchema,
   RunSchema,
   RunSummarySchema,
   StartRunRequestSchema,
   UsageSchema,
   ZERO_USAGE,
+  allowedRunActions,
   zeroUsage,
 } from '../runs.js';
 import {
+  APPROVAL_ID,
   EDGE_ID,
   ENVELOPE_ID,
   NODE_A,
   NODE_B,
   NODE_RUN_ID,
   NOW,
+  POLICY_ID,
   PROJECT_ID,
   PROVIDER_ID,
   RUN_ID,
+  RUN_ID_2,
+  VERDICT_ID,
   WORKFLOW_ID,
 } from './fixtures.js';
 
@@ -372,5 +385,201 @@ describe('FR-EXE-001 StartRunRequest', () => {
   it('takes the node to start from, which the engine honours from round 3 (FR-EXE-013)', () => {
     expect(StartRunRequestSchema.parse({ startFromNodeId: NODE_B }).startFromNodeId).toBe(NODE_B);
     expect(StartRunRequestSchema.safeParse({ startFromNodeId: 'node-b' }).success).toBe(false);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Run controls — round 3 §2.1                                                 */
+/* -------------------------------------------------------------------------- */
+
+describe('FR-CTL-006 the controls a run allows', () => {
+  it('declares the four controls', () => {
+    expect([...RUN_ACTIONS]).toEqual(['pause', 'resume', 'stop', 'restart']);
+  });
+
+  it.each([
+    ['PREFLIGHT', []],
+    ['RUNNING', ['pause', 'stop']],
+    ['PAUSED', ['resume', 'stop']],
+    ['COMPLETE', ['restart']],
+    ['BLOCKED', ['restart']],
+    ['HALTED', ['restart']],
+  ] as const)('allows %s -> %j', (status, actions) => {
+    expect(allowedRunActions(status)).toEqual(actions);
+  });
+
+  it('enables Resume only while paused — the FR-CTL-006 example', () => {
+    for (const status of RUN_STATES) {
+      expect(allowedRunActions(status).includes('resume'), status).toBe(status === 'PAUSED');
+    }
+  });
+
+  it('hands every caller its own list', () => {
+    const first = allowedRunActions('RUNNING');
+    first.push('restart');
+
+    expect(allowedRunActions('RUNNING')).toEqual(['pause', 'stop']);
+  });
+});
+
+describe('FR-CTL-001..006 control fields on Run', () => {
+  it('carries the actions the engine allows, so the UI never guesses (FR-CTL-006)', () => {
+    const parsed = RunSchema.parse({
+      ...run,
+      status: 'RUNNING',
+      allowedActions: ['pause', 'stop'],
+    });
+
+    expect(parsed.allowedActions).toEqual(['pause', 'stop']);
+  });
+
+  it('refuses an action that is not a run control', () => {
+    expect(RunSchema.safeParse({ ...run, allowedActions: ['retry'] }).success).toBe(false);
+  });
+
+  it('still parses a run that carries no allowed actions (D71)', () => {
+    expect(RunSchema.parse(run).allowedActions).toBeUndefined();
+  });
+
+  it('records when it was paused (FR-CTL-001)', () => {
+    expect(RunSchema.parse({ ...run, status: 'PAUSED', pausedAt: NOW }).pausedAt).toBe(NOW);
+    expect(RunSchema.safeParse({ ...run, pausedAt: 'yesterday' }).success).toBe(false);
+  });
+
+  it('names the run a restart came from (FR-CTL-004)', () => {
+    expect(RunSchema.parse({ ...run, restartedFromRunId: RUN_ID_2 }).restartedFromRunId).toBe(
+      RUN_ID_2,
+    );
+    expect(RunSchema.safeParse({ ...run, restartedFromRunId: 'run-1' }).success).toBe(false);
+  });
+});
+
+describe('FR-ERR-003 FR-ERR-004 FR-CTL-005 retry and re-run bodies', () => {
+  it('retries one node, or the node and everything reachable after it', () => {
+    expect(RetryRequestSchema.parse({ withDownstream: false })).toEqual({ withDownstream: false });
+    expect(RetryRequestSchema.parse({ withDownstream: true })).toEqual({ withDownstream: true });
+  });
+
+  it('makes the caller say which', () => {
+    expect(RetryRequestSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('re-runs a single node with no body at all', () => {
+    expect(RerunRequestSchema.parse({})).toEqual({});
+  });
+});
+
+describe('FR-ERR-005 the automatic retry policy (Arch §28)', () => {
+  it('backs off on provider and network errors, repairs a contract once, and never retries the rest', () => {
+    expect(AUTO_RETRY_POLICY).toEqual({
+      user_cancelled: 'never',
+      agent: 'contract_repair',
+      provider: 'backoff',
+      auth: 'never',
+      network: 'backoff',
+      invalid_config: 'never',
+      workflow: 'never',
+      guardrail: 'never',
+    });
+  });
+
+  it('agrees with the retryable default aceError gives each kind', () => {
+    for (const kind of ERROR_KINDS) {
+      expect(aceError(kind, 'x', 'y').error.retryable, kind).toBe(
+        AUTO_RETRY_POLICY[kind] === 'backoff',
+      );
+    }
+  });
+
+  it('starts backing off at 500 ms and never waits longer than 8 s', () => {
+    expect(RETRY_BACKOFF_BASE_MS).toBe(500);
+    expect(RETRY_BACKOFF_MAX_MS).toBe(8_000);
+  });
+
+  it('repairs a contract once before CONTRACT_VIOLATION stands', () => {
+    expect(CONTRACT_REPAIR_RETRIES).toBe(1);
+  });
+
+  it('cannot be changed at run time', () => {
+    expect(Object.isFrozen(AUTO_RETRY_POLICY)).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* What a node run records in round 3                                          */
+/* -------------------------------------------------------------------------- */
+
+describe('FR-GRD-015 a node run keeps its verdicts', () => {
+  const verdict = {
+    id: VERDICT_ID,
+    nodeRunId: NODE_RUN_ID,
+    point: 'output',
+    checkType: 'secret_leak',
+    action: 'block',
+    passed: false,
+    reason: 'A key-shaped string was found in the output.',
+    at: NOW,
+  };
+
+  it('stores each verdict as a Verdict', () => {
+    expect(NodeRunSchema.parse({ ...nodeRun, verdicts: [verdict] }).verdicts).toEqual([verdict]);
+  });
+
+  it('refuses something that is not a verdict', () => {
+    expect(NodeRunSchema.safeParse({ ...nodeRun, verdicts: [{ note: 'fine' }] }).success).toBe(
+      false,
+    );
+  });
+
+  it('TC-GRD-018 refuses a stored verdict that carries the value it redacted (FR-GRD-014)', () => {
+    expect(
+      NodeRunSchema.safeParse({ ...nodeRun, verdicts: [{ ...verdict, value: 'sk-fake-key-0000' }] })
+        .success,
+    ).toBe(false);
+  });
+});
+
+describe('FR-GRD-013 a node run keeps its approval decisions', () => {
+  const decision = { requestId: APPROVAL_ID, decision: 'approve', decidedAt: NOW };
+
+  it('TC-GRD-008 records each decision with its time', () => {
+    expect(NodeRunSchema.parse({ ...nodeRun, approvals: [decision] }).approvals).toEqual([
+      decision,
+    ]);
+  });
+
+  it('still parses a node run that carries no approvals list (D71)', () => {
+    expect(NodeRunSchema.parse(nodeRun).approvals).toBeUndefined();
+  });
+
+  it('refuses a decision that was not timed', () => {
+    const { decidedAt: _decidedAt, ...untimed } = decision;
+
+    expect(NodeRunSchema.safeParse({ ...nodeRun, approvals: [untimed] }).success).toBe(false);
+  });
+});
+
+describe('FR-GRD-002 a node run names the policy version it was checked against', () => {
+  it('records the policy id and version', () => {
+    const ref = { id: POLICY_ID, version: 2 };
+
+    expect(NodeRunSchema.parse({ ...nodeRun, guardrailPolicy: ref }).guardrailPolicy).toEqual(ref);
+  });
+
+  it('refuses a version below 1', () => {
+    expect(
+      NodeRunSchema.safeParse({ ...nodeRun, guardrailPolicy: { id: POLICY_ID, version: 0 } })
+        .success,
+    ).toBe(false);
+  });
+});
+
+describe('FR-PAR-003 FR-PAR-006 the last iteration says why its loop stopped', () => {
+  it.each(['exit_condition', 'max_iterations', 'repeated_output'])('records %s', (loopStop) => {
+    expect(NodeRunSchema.parse({ ...nodeRun, iteration: 3, loopStop }).loopStop).toBe(loopStop);
+  });
+
+  it('refuses a reason §2.4 does not name', () => {
+    expect(NodeRunSchema.safeParse({ ...nodeRun, loopStop: 'timeout' }).success).toBe(false);
   });
 });

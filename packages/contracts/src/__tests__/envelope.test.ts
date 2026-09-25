@@ -9,7 +9,17 @@ import {
   validateAgainstContract,
   type Part,
 } from '../envelope.js';
-import { ARTIFACT_ID, ENVELOPE_ID, NODE_A, NODE_B, NODE_C, NOW, RUN_ID } from './fixtures.js';
+import {
+  ARTIFACT_ID,
+  ENVELOPE_ID,
+  NODE_A,
+  NODE_B,
+  NODE_C,
+  NODE_RUN_ID,
+  NOW,
+  RUN_ID,
+  VERDICT_ID,
+} from './fixtures.js';
 
 const envelope = {
   id: ENVELOPE_ID,
@@ -197,6 +207,26 @@ describe('FR-EXE-005 Envelope', () => {
       [],
     );
     expect(EnvelopeSchema.parse(envelope).guardrailVerdicts).toBeUndefined();
+  });
+
+  it('types them as Verdicts from round 3', () => {
+    const verdict = {
+      id: VERDICT_ID,
+      nodeRunId: NODE_RUN_ID,
+      point: 'input',
+      checkType: 'prompt_injection',
+      action: 'warn',
+      passed: false,
+      reason: 'The input asks the model to ignore its instructions.',
+      at: NOW,
+    };
+
+    expect(
+      EnvelopeSchema.parse({ ...envelope, guardrailVerdicts: [verdict] }).guardrailVerdicts,
+    ).toEqual([verdict]);
+    expect(
+      EnvelopeSchema.safeParse({ ...envelope, guardrailVerdicts: [{ passed: true }] }).success,
+    ).toBe(false);
   });
 
   it('refuses node ids and a run id that are not ULIDs', () => {
