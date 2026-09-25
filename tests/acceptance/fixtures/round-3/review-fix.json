@@ -1,0 +1,301 @@
+{
+  "formatVersion": 1,
+  "exportedAt": "2026-09-26T09:00:00.000Z",
+  "name": "Review and fix",
+  "nodes": [
+    {
+      "id": "01M3R3AA0000000000000000NA",
+      "workflowId": "01M3R3AA0000000000000000WF",
+      "kind": "input",
+      "name": "Input",
+      "position": {
+        "x": 80,
+        "y": 200
+      },
+      "inputs": [],
+      "outputs": [
+        {
+          "id": "01M3R3AA0000000000000000NA:out:text",
+          "name": "text",
+          "dataType": "text",
+          "multi": true
+        }
+      ],
+      "config": {
+        "text": "Draft a short paragraph on the quarterly result.",
+        "artifactIds": [],
+        "outputTypes": [
+          "text"
+        ]
+      }
+    },
+    {
+      "id": "01M3R3AA0000000000000000NB",
+      "workflowId": "01M3R3AA0000000000000000WF",
+      "kind": "agent",
+      "name": "Writer",
+      "position": {
+        "x": 400,
+        "y": 200
+      },
+      "inputs": [
+        {
+          "id": "01M3R3AA0000000000000000NB:in:text",
+          "name": "text",
+          "dataType": "text",
+          "multi": false
+        }
+      ],
+      "outputs": [
+        {
+          "id": "01M3R3AA0000000000000000NB:out:text",
+          "name": "text",
+          "dataType": "text",
+          "multi": true
+        }
+      ],
+      "config": {
+        "providerId": "01M3R3PV0000000000000000PV",
+        "modelId": "mock-text",
+        "routing": {
+          "policy": "fixed",
+          "fallbackModelIds": []
+        },
+        "instructions": "Write a short paragraph on the input. When the reviewer asks for changes, rewrite it addressing every issue listed.",
+        "inputTypes": [
+          "text"
+        ],
+        "outputTypes": [
+          "text"
+        ],
+        "execution": {
+          "temperature": 0.7,
+          "maxTokens": 4096,
+          "timeoutMs": 120000,
+          "retries": 2
+        },
+        "contextPolicy": {
+          "budgetTokens": 4000
+        },
+        "tools": {
+          "enabled": [],
+          "maxToolCalls": 10,
+          "allowedDomains": []
+        },
+        "knowledgeBaseIds": [],
+        "memory": {
+          "enabled": false
+        },
+        "skillIds": []
+      }
+    },
+    {
+      "id": "01M3R3AA0000000000000000NC",
+      "workflowId": "01M3R3AA0000000000000000WF",
+      "kind": "agent",
+      "name": "Reviewer",
+      "position": {
+        "x": 760,
+        "y": 200
+      },
+      "inputs": [
+        {
+          "id": "01M3R3AA0000000000000000NC:in:text",
+          "name": "text",
+          "dataType": "text",
+          "multi": false
+        }
+      ],
+      "outputs": [
+        {
+          "id": "01M3R3AA0000000000000000NC:out:json",
+          "name": "json",
+          "dataType": "json",
+          "multi": true
+        }
+      ],
+      "config": {
+        "providerId": "01M3R3PV0000000000000000PV",
+        "modelId": "mock-reject-twice",
+        "routing": {
+          "policy": "fixed",
+          "fallbackModelIds": []
+        },
+        "instructions": "Review the draft. Answer with a score out of ten, a verdict and the issues you found.",
+        "inputTypes": [
+          "text"
+        ],
+        "outputTypes": [
+          "json"
+        ],
+        "execution": {
+          "temperature": 0.7,
+          "maxTokens": 4096,
+          "timeoutMs": 120000,
+          "retries": 2
+        },
+        "contextPolicy": {
+          "budgetTokens": 4000
+        },
+        "tools": {
+          "enabled": [],
+          "maxToolCalls": 10,
+          "allowedDomains": []
+        },
+        "knowledgeBaseIds": [],
+        "memory": {
+          "enabled": false
+        },
+        "skillIds": [],
+        "outputContract": {
+          "jsonSchema": {
+            "type": "object",
+            "required": [
+              "score",
+              "verdict",
+              "issues"
+            ],
+            "properties": {
+              "score": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 10
+              },
+              "verdict": {
+                "type": "string",
+                "enum": [
+                  "approved",
+                  "changes_requested"
+                ]
+              },
+              "issues": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "01M3R3AA0000000000000000ND",
+      "workflowId": "01M3R3AA0000000000000000WF",
+      "kind": "output",
+      "name": "Output",
+      "position": {
+        "x": 1080,
+        "y": 200
+      },
+      "inputs": [
+        {
+          "id": "01M3R3AA0000000000000000ND:in:text",
+          "name": "text",
+          "dataType": "text",
+          "multi": false
+        },
+        {
+          "id": "01M3R3AA0000000000000000ND:in:json",
+          "name": "json",
+          "dataType": "json",
+          "multi": false
+        },
+        {
+          "id": "01M3R3AA0000000000000000ND:in:image",
+          "name": "image",
+          "dataType": "image",
+          "multi": false
+        },
+        {
+          "id": "01M3R3AA0000000000000000ND:in:audio",
+          "name": "audio",
+          "dataType": "audio",
+          "multi": false
+        },
+        {
+          "id": "01M3R3AA0000000000000000ND:in:video",
+          "name": "video",
+          "dataType": "video",
+          "multi": false
+        },
+        {
+          "id": "01M3R3AA0000000000000000ND:in:code",
+          "name": "code",
+          "dataType": "code",
+          "multi": false
+        },
+        {
+          "id": "01M3R3AA0000000000000000ND:in:file",
+          "name": "file",
+          "dataType": "file",
+          "multi": false
+        }
+      ],
+      "outputs": [],
+      "config": {}
+    }
+  ],
+  "edges": [
+    {
+      "id": "01M3R3AA0000000000000000EA",
+      "workflowId": "01M3R3AA0000000000000000WF",
+      "kind": "data",
+      "from": {
+        "nodeId": "01M3R3AA0000000000000000NA",
+        "portId": "01M3R3AA0000000000000000NA:out:text"
+      },
+      "to": {
+        "nodeId": "01M3R3AA0000000000000000NB",
+        "portId": "01M3R3AA0000000000000000NB:in:text"
+      }
+    },
+    {
+      "id": "01M3R3AA0000000000000000EB",
+      "workflowId": "01M3R3AA0000000000000000WF",
+      "kind": "data",
+      "from": {
+        "nodeId": "01M3R3AA0000000000000000NB",
+        "portId": "01M3R3AA0000000000000000NB:out:text"
+      },
+      "to": {
+        "nodeId": "01M3R3AA0000000000000000NC",
+        "portId": "01M3R3AA0000000000000000NC:in:text"
+      }
+    },
+    {
+      "id": "01M3R3AA0000000000000000EC",
+      "workflowId": "01M3R3AA0000000000000000WF",
+      "kind": "data",
+      "from": {
+        "nodeId": "01M3R3AA0000000000000000NC",
+        "portId": "01M3R3AA0000000000000000NC:out:json"
+      },
+      "to": {
+        "nodeId": "01M3R3AA0000000000000000ND",
+        "portId": "01M3R3AA0000000000000000ND:in:json"
+      }
+    },
+    {
+      "id": "01M3R3AA0000000000000000EZ",
+      "workflowId": "01M3R3AA0000000000000000WF",
+      "kind": "loop",
+      "from": {
+        "nodeId": "01M3R3AA0000000000000000NC",
+        "portId": "01M3R3AA0000000000000000NC:out:json"
+      },
+      "to": {
+        "nodeId": "01M3R3AA0000000000000000NB",
+        "portId": "01M3R3AA0000000000000000NB:in:text"
+      },
+      "loop": {
+        "maxIterations": 3,
+        "exitCondition": {
+          "path": "verdict",
+          "equals": "approved"
+        },
+        "onMax": "continue"
+      }
+    }
+  ]
+}
