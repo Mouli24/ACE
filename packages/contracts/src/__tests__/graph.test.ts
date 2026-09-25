@@ -4,6 +4,7 @@ import type { DataType } from '../enums.js';
 import { validateAgainstContract } from '../envelope.js';
 import {
   AgentConfigSchema,
+  BudgetUsdSchema,
   DEFAULT_EXECUTION_SETTINGS,
   DOTTED_PATH_REGEX,
   DottedPathSchema,
@@ -93,6 +94,27 @@ describe('FR-PRJ-001 Project entity', () => {
 
   it('accepts a name of exactly 120 chars', () => {
     expect(ProjectSchema.safeParse({ ...project, name: 'x'.repeat(120) }).success).toBe(true);
+  });
+});
+
+describe('FR-GRD-008 a project can cap what one run may cost', () => {
+  const project = {
+    id: PROJECT_ID,
+    name: 'Demo',
+    folderPath: 'D:/projects/demo',
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+
+  it('takes a cap in USD, or none at all — absent, or null once removed (D72)', () => {
+    expect(ProjectSchema.parse({ ...project, maxCostPerRunUsd: 0.01 }).maxCostPerRunUsd).toBe(0.01);
+    expect(ProjectSchema.parse(project).maxCostPerRunUsd).toBeUndefined();
+    expect(ProjectSchema.parse({ ...project, maxCostPerRunUsd: null }).maxCostPerRunUsd).toBeNull();
+  });
+
+  it.each([0, -0.01, Infinity])('refuses a cap of %s — a set cap is above zero (D72)', (cap) => {
+    expect(ProjectSchema.safeParse({ ...project, maxCostPerRunUsd: cap }).success).toBe(false);
+    expect(BudgetUsdSchema.safeParse(cap).success).toBe(false);
   });
 });
 
@@ -323,7 +345,7 @@ const dataEdge = (id: string, from: string, fromType: DataType, to: string, toTy
   to: { nodeId: to, portId: `${to}:in:${toType}` },
 });
 
-/** The §1 demo: Brief → Writer → Reviewer → Publish, with a loop edge Reviewer → Writer. */
+/** The §1 demo: Brief → Writer → Reviewer → Publish, and a loop edge Reviewer → Writer. */
 const brief = graphNode(NODE_A, 'Brief', ['text']);
 const writer = graphNode(NODE_B, 'Writer', ['text']);
 const reviewer = graphNode(NODE_C, 'Reviewer', ['json']);

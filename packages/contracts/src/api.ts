@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import {
+  BudgetUsdSchema,
   EdgeSchema,
   EntityNameSchema,
   NodeSchema,
@@ -67,7 +68,11 @@ export const CreateProjectRequestSchema = z.object({
 });
 export type CreateProjectRequest = z.infer<typeof CreateProjectRequestSchema>;
 
-export const UpdateProjectRequestSchema = z.object({ name: EntityNameSchema.optional() });
+export const UpdateProjectRequestSchema = z.object({
+  name: EntityNameSchema.optional(),
+  /** Round 3 §2.3: the run cost cap; `null` removes it (D72). */
+  maxCostPerRunUsd: BudgetUsdSchema.nullable().optional(),
+});
 export type UpdateProjectRequest = z.infer<typeof UpdateProjectRequestSchema>;
 
 /* -------------------------------------------------------------------------- */

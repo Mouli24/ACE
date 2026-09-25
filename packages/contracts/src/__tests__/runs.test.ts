@@ -470,7 +470,7 @@ describe('FR-ERR-003 FR-ERR-004 FR-CTL-005 retry and re-run bodies', () => {
 });
 
 describe('FR-ERR-005 the automatic retry policy (Arch §28)', () => {
-  it('backs off on provider and network errors, repairs a contract once, and never retries the rest', () => {
+  it('backs off provider and network errors, repairs contracts once, retries nothing else', () => {
     expect(AUTO_RETRY_POLICY).toEqual({
       user_cancelled: 'never',
       agent: 'contract_repair',

@@ -6,6 +6,7 @@ import {
   SettingsPatchSchema,
   SettingsSchema,
   THEMES,
+  type Settings,
 } from '../settings.js';
 import { PROJECT_ID } from './fixtures.js';
 
@@ -85,5 +86,30 @@ describe('FR-SYS-005 PATCH /settings takes a partial', () => {
 
   it('does not invent defaults for fields the patch leaves out', () => {
     expect(SettingsPatchSchema.parse({ theme: 'light' })).toEqual({ theme: 'light' });
+  });
+});
+
+describe('FR-GRD-008 the daily budget (round 3 §2.3)', () => {
+  it('is absent until the user sets one — no default, no cap', () => {
+    expect(SettingsSchema.parse(minimal).dailyBudgetUsd).toBeUndefined();
+    expect(SettingsSchema.parse({ ...minimal, dailyBudgetUsd: 5 }).dailyBudgetUsd).toBe(5);
+  });
+
+  it.each([0, -1])('refuses a budget of %s — a set cap is above zero (D72)', (dailyBudgetUsd) => {
+    expect(SettingsSchema.safeParse({ ...minimal, dailyBudgetUsd }).success).toBe(false);
+    expect(SettingsPatchSchema.safeParse({ dailyBudgetUsd }).success).toBe(false);
+  });
+
+  it('is removed by a null in PATCH /settings (D72)', () => {
+    expect(SettingsPatchSchema.parse({ dailyBudgetUsd: null })).toEqual({ dailyBudgetUsd: null });
+  });
+
+  it('reads a null as no cap, so a patch applies to the settings as it is (D72)', () => {
+    expect(SettingsSchema.parse({ ...minimal, dailyBudgetUsd: null }).dailyBudgetUsd).toBeNull();
+
+    // Typed, so `tsc` keeps the patch assignable where the engine and the web mocks merge it.
+    const patch: Partial<Settings> = SettingsPatchSchema.parse({ dailyBudgetUsd: null });
+    const merged: Settings = { ...SettingsSchema.parse(minimal), ...patch };
+    expect(SettingsSchema.parse(merged).dailyBudgetUsd).toBeNull();
   });
 });

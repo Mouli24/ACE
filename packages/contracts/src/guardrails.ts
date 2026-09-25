@@ -4,11 +4,12 @@ import { GuardrailActionSchema, GuardrailPointSchema, type GuardrailPoint } from
 import { IdSchema, NodeNameSchema, TimestampSchema, type Id } from './graph.js';
 
 /**
- * Guardrail policies, checks, verdicts and approvals (round 3 §2.2, FR-GRD-001..015, 018, Arch §13).
+ * Guardrail policies, checks, verdicts and approvals (round 3 §2.2, FR-GRD-001..015 and 018,
+ * Arch §13).
  *
  * Every body in this module is strict. A key the contract does not name is exactly how an off
  * switch for a data guardrail would slip into a policy (BR-15, FR-GRD-010), or how a redacted
- * value would ride along on a verdict (FR-GRD-014) — so it is a parse error, never a silent extra.
+ * value would ride along on a verdict (FR-GRD-014) — so it is a parse error, not a silent extra.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -145,7 +146,10 @@ export const GuardrailPolicyRefSchema = z.strictObject({
 });
 export type GuardrailPolicyRef = z.infer<typeof GuardrailPolicyRefSchema>;
 
-/** `POST /guardrail-policies` → `GuardrailPolicy`. The engine numbers versions and owns the default flag. */
+/**
+ * `POST /guardrail-policies` → `GuardrailPolicy`. The engine numbers the versions and owns the
+ * default flag (`POST /guardrail-policies/:id/set-default`).
+ */
 export const CreateGuardrailPolicyRequestSchema = z.strictObject({
   projectId: IdSchema,
   name: GuardrailPolicyNameSchema,
@@ -160,7 +164,7 @@ export const UpdateGuardrailPolicyRequestSchema = z.strictObject({
 });
 export type UpdateGuardrailPolicyRequest = z.infer<typeof UpdateGuardrailPolicyRequestSchema>;
 
-/** `GET /guardrail-policies?projectId` → `{ items: GuardrailPolicy[] }`, like every collection (D64). */
+/** `GET /guardrail-policies?projectId` → `{ items: GuardrailPolicy[] }` (D64). */
 export const GuardrailPolicyQuerySchema = z.object({ projectId: IdSchema.optional() });
 export type GuardrailPolicyQuery = z.infer<typeof GuardrailPolicyQuerySchema>;
 
@@ -268,7 +272,7 @@ export const APPROVAL_DECISION_KINDS = ['approve', 'reject'] as const;
 export const ApprovalDecisionKindSchema = z.enum(APPROVAL_DECISION_KINDS);
 export type ApprovalDecisionKind = z.infer<typeof ApprovalDecisionKindSchema>;
 
-/** The decision, logged with its time (FR-GRD-013). A reject fails the node `GUARDRAIL_VIOLATION`. */
+/** The decision, logged with its time (FR-GRD-013). A reject fails the node GUARDRAIL_VIOLATION. */
 export const ApprovalDecisionSchema = z.strictObject({
   requestId: IdSchema,
   decision: ApprovalDecisionKindSchema,

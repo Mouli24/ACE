@@ -119,7 +119,8 @@ export const RunSchema = z.object({
   finalOutput: PartsByNodeIdSchema.optional(),
   /**
    * `allowedRunActions(status)`, written by the engine so the UI never guesses (FR-CTL-006).
-   * Optional until round 3's engine and UI have both merged; a later contracts PR requires it (D71).
+   * Optional until round 3's engine and UI have both merged; a later contracts PR requires it
+   * (D71).
    */
   allowedActions: z.array(RunActionSchema).optional(),
   pausedAt: TimestampSchema.optional(),
@@ -218,7 +219,10 @@ export type StartRunRequest = z.infer<typeof StartRunRequestSchema>;
 export const RetryRequestSchema = z.object({ withDownstream: z.boolean() });
 export type RetryRequest = z.infer<typeof RetryRequestSchema>;
 
-/** `POST /runs/:id/nodes/:nodeId/rerun` → that node alone, on the latest upstream outputs (FR-CTL-005). */
+/**
+ * `POST /runs/:id/nodes/:nodeId/rerun` → the new `NodeRun`: that node alone, on the latest
+ * upstream outputs (FR-CTL-005).
+ */
 export const RerunRequestSchema = z.object({});
 export type RerunRequest = z.infer<typeof RerunRequestSchema>;
 

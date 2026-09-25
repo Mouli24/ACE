@@ -139,7 +139,12 @@ describe('FR-WF-006 ValidationIssue', () => {
     }
   });
 
-  it('keeps loop_not_supported, which the engine no longer raises — codes are only ever added (NFR-VER-01)', () => {
+  it('FR-GRD-008 names a run pre-flight blocks because the daily budget is spent', () => {
+    expect(ROUND_3_VALIDATION_ISSUE_CODES).toContain('daily_budget_exceeded');
+    expect(ValidationIssueCodeSchema.safeParse('daily_budget_exceeded').success).toBe(true);
+  });
+
+  it('keeps loop_not_supported, now unused — codes are only ever added (NFR-VER-01)', () => {
     expect(VALIDATION_ISSUE_CODES).toContain('loop_not_supported');
   });
 

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { IdSchema } from './graph.js';
+import { BudgetUsdSchema, IdSchema } from './graph.js';
 
 /** Engine settings (round 1 §2.7, FR-SYS-005/010). */
 
@@ -28,6 +28,8 @@ export const SettingsSchema = z.object({
   lastProjectId: IdSchema.optional(),
   onboardingCompleted: z.boolean().default(DEFAULT_ONBOARDING_COMPLETED),
   allowedOrigins: z.array(z.string()).default(defaultAllowedOrigins),
+  /** What all runs together may spend in a day; absent or null is no cap (§2.3, D72). */
+  dailyBudgetUsd: BudgetUsdSchema.nullable().optional(),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 
@@ -43,5 +45,7 @@ export const SettingsPatchSchema = z.object({
   lastProjectId: IdSchema.optional(),
   onboardingCompleted: z.boolean().optional(),
   allowedOrigins: z.array(z.string()).optional(),
+  /** `null` removes the daily budget (D72). */
+  dailyBudgetUsd: BudgetUsdSchema.nullable().optional(),
 });
 export type SettingsPatch = z.infer<typeof SettingsPatchSchema>;
