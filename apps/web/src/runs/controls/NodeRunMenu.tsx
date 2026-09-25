@@ -1,0 +1,103 @@
+import type { Id, NodeState } from '@ace/contracts';
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@ace/ui';
+import { MoreHorizontal } from 'lucide-react';
+
+/**
+ * The node-level controls (round 3 §5 item 2): Retry · Retry with downstream · Re-run this node ·
+ * Start from this node (FR-ERR-003, FR-ERR-004, FR-CTL-005, FR-EXE-013).
+ *
+ * Each item is one engine call, and the caller makes it — the menu takes callbacks, so the same
+ * component serves the Canvas context menu and the inspector's button row:
+ *
+ *   Retry                 `POST /node-runs/:nodeRunId/retry  { withDownstream: false }`
+ *   Retry with downstream `POST /node-runs/:nodeRunId/retry  { withDownstream: true }`
+ *   Re-run this node      `POST /runs/:runId/nodes/:nodeId/rerun`
+ *   Start from this node  `POST /workflows/:workflowId/runs  { startFromNodeId: nodeId }`
+ *
+ * Unlike the run controls, these are *node* actions and the contract carries no `allowedActions` for
+ * them, so what is enabled follows the FRS: a retry needs a node run that failed (FR-ERR-003/004),
+ * a re-run needs a node run to take the latest upstream outputs from (FR-CTL-005), and starting
+ * from a node needs neither — it starts a new run (FR-EXE-013).
+ */
+export interface NodeRunMenuProps {
+  nodeId: Id;
+  nodeName: string;
+  /** The node's state in the run being looked at. */
+  state: NodeState;
+  /** The node's latest node run, if the run has reached it. */
+  nodeRunId?: Id;
+  onRetry: () => void;
+  onRetryWithDownstream: () => void;
+  onRerunNode: () => void;
+  onStartFromNode: () => void;
+  busy?: boolean;
+}
+
+export function NodeRunMenu({
+  nodeId,
+  nodeName,
+  state,
+  nodeRunId,
+  onRetry,
+  onRetryWithDownstream,
+  onRerunNode,
+  onStartFromNode,
+  busy,
+}: NodeRunMenuProps) {
+  const hasNodeRun = nodeRunId !== undefined;
+  const canRetry = hasNodeRun && state === 'FAILED' && !busy;
+  const canRerun = hasNodeRun && !busy;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          size="sm"
+          variant="ghost"
+          data-testid={`node-actions-${nodeId}`}
+          aria-label={`Run actions for ${nodeName}`}
+        >
+          <MoreHorizontal className="h-4 w-4" aria-hidden />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        <DropdownMenuItem
+          data-testid={`node-action-retry-${nodeId}`}
+          disabled={!canRetry}
+          onSelect={onRetry}
+        >
+          Retry
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          data-testid={`node-action-retry-downstream-${nodeId}`}
+          disabled={!canRetry}
+          onSelect={onRetryWithDownstream}
+        >
+          Retry with downstream
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          data-testid={`node-action-rerun-${nodeId}`}
+          disabled={!canRerun}
+          onSelect={onRerunNode}
+        >
+          Re-run this node
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          data-testid={`node-action-start-from-${nodeId}`}
+          disabled={busy === true}
+          onSelect={onStartFromNode}
+        >
+          Start from this node
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
