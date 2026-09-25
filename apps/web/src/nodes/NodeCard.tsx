@@ -28,9 +28,10 @@ import {
   Wand2,
   type LucideIcon,
 } from 'lucide-react';
-import { memo, type CSSProperties, type KeyboardEvent } from 'react';
+import { memo, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 
 import { findBlockingNodeId } from '../errors/blocked';
+import { NodeApproval, NodeErrorCard, NodeRunActions } from '../runs/NodeRunAttachments';
 import { useNodeOverlay, useRunStore } from '../runs/run-store';
 import { useWorkflowGraph } from '../workflows/hooks';
 import type { Round1NodeKind } from './factory';
@@ -68,6 +69,8 @@ export interface NodeCardViewProps {
   provider?: ProviderType;
   armedPortId?: string;
   onPortKey?: (port: Port, direction: 'in' | 'out') => void;
+  /** The node's run actions, when a run has reached it — a slot so this view stays pure. */
+  actions?: ReactNode;
   /** Text streamed by this node's current run, as it arrives (FR-EXE-008). */
   streamedText?: string;
   /** What the router actually used, so a fallback is visible on the card (FR-RTR-006). */
@@ -178,6 +181,7 @@ export function NodeCardView({
   providerMissing,
   failureReason,
   blockedByName,
+  actions,
 }: NodeCardViewProps) {
   const Icon = KIND_ICON[node.kind as Round1NodeKind] ?? Bot;
   const chip = modelLabel(node);
@@ -221,6 +225,7 @@ export function NodeCardView({
         <span className="truncate font-human text-sm font-semibold">{node.name}</span>
         <StatusRing state={state} className="ml-auto" />
         <span className="font-machine text-[10px] uppercase text-fg-muted">{node.kind}</span>
+        {actions}
       </header>
       {chip && (
         <div className="flex flex-wrap items-center gap-1 px-3 pt-1">
@@ -334,21 +339,27 @@ export const FlowNodeCard = memo(function FlowNodeCard({ data, selected }: NodeP
   const overlay = useNodeOverlay(data.node.id);
   const blockedByName = useBlockedByName(data.node, overlay.state === 'BLOCKED');
   return (
-    <NodeCardView
-      node={data.node}
-      state={overlay.state}
-      selected={Boolean(selected)}
-      connectedPortIds={data.connectedPortIds}
-      armedPortId={data.armedPortId}
-      onPortKey={(port, direction) => data.onPortKey(port, direction, data.node.id)}
-      streamedText={overlay.streamedText}
-      {...(overlay.modelUsed === undefined ? {} : { modelUsed: overlay.modelUsed })}
-      {...(overlay.finalOutput === undefined ? {} : { finalOutput: overlay.finalOutput })}
-      {...(overlay.failureReason === undefined ? {} : { failureReason: overlay.failureReason })}
-      {...(blockedByName === undefined ? {} : { blockedByName })}
-      {...(data.providerMissing ? { providerMissing: true } : {})}
-      {...(data.provider === undefined ? {} : { provider: data.provider })}
-    />
+    <div className="flex flex-col items-start">
+      <NodeCardView
+        node={data.node}
+        state={overlay.state}
+        selected={Boolean(selected)}
+        connectedPortIds={data.connectedPortIds}
+        armedPortId={data.armedPortId}
+        onPortKey={(port, direction) => data.onPortKey(port, direction, data.node.id)}
+        streamedText={overlay.streamedText}
+        actions={<NodeRunActions node={data.node} />}
+        {...(overlay.modelUsed === undefined ? {} : { modelUsed: overlay.modelUsed })}
+        {...(overlay.finalOutput === undefined ? {} : { finalOutput: overlay.finalOutput })}
+        {...(overlay.failureReason === undefined ? {} : { failureReason: overlay.failureReason })}
+        {...(blockedByName === undefined ? {} : { blockedByName })}
+        {...(data.providerMissing ? { providerMissing: true } : {})}
+        {...(data.provider === undefined ? {} : { provider: data.provider })}
+      />
+      {/* Anchored to the node, because each is about this node and nothing else (§5 items 3, 4). */}
+      <NodeErrorCard node={data.node} />
+      <NodeApproval node={data.node} />
+    </div>
   );
 });
 

@@ -24,17 +24,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 import { useSelectionStore } from '../app/stores/selection';
 import { useViewportStore } from '../app/stores/viewport';
 import { loopEdgeType } from '../edges/loop/LoopEdge';
-import {
-  MakeLoopEdgeDialog,
-  type LoopEdgeCandidate,
-} from '../edges/loop/MakeLoopEdgeDialog';
+import { MakeLoopEdgeDialog, type LoopEdgeCandidate } from '../edges/loop/MakeLoopEdgeDialog';
 import { canBeLoopEdge } from '../edges/loop/can-be-loop-edge';
 import { newId } from '../lib/ulid';
 import { useProviders } from '../providers/hooks';
 import { nodeTypes, type AceFlowNode } from '../nodes/NodeCard';
 import { edgeTypes } from '../nodes/TypedEdge';
 import { createNode, type Round1NodeKind } from '../nodes/factory';
-import { ApprovalsDock } from '../runs/approvals/ApprovalsDock';
 import { useRunStore } from '../runs/run-store';
 import { useGraphSync, useWorkflowGraph } from '../workflows/hooks';
 import { PALETTE_DRAG_TYPE } from './Palette';
@@ -300,7 +296,9 @@ function CanvasInner({
    * iteration, not one per token.
    */
   const runRevision = useRunStore((store) => store.revision);
-  const runIsLive = useRunStore((store) => store.workflowId === workflowId && store.status === 'RUNNING');
+  const runIsLive = useRunStore(
+    (store) => store.workflowId === workflowId && store.status === 'RUNNING',
+  );
 
   const flowEdges = useMemo(() => {
     // React Flow drops an edge whose endpoints it does not know yet and does not retry, so an
@@ -591,8 +589,6 @@ function CanvasInner({
           </Button>
         </Panel>
       </ReactFlow>
-      <ApprovalsDock workflowId={workflowId} />
-
       {loopCandidate && (
         <MakeLoopEdgeDialog
           candidate={loopCandidate}
@@ -670,7 +666,12 @@ function EdgeMenuItems({
   return (
     <>
       {edge?.kind === 'loop' ? (
-        <button type="button" role="menuitem" className={itemClass} onClick={() => onEditLoop(edge.id)}>
+        <button
+          type="button"
+          role="menuitem"
+          className={itemClass}
+          onClick={() => onEditLoop(edge.id)}
+        >
           Loop settings
         </button>
       ) : (
@@ -694,7 +695,12 @@ function EdgeMenuItems({
           Make loop edge
         </button>
       )}
-      <button type="button" role="menuitem" className={`${itemClass} text-danger`} onClick={onDelete}>
+      <button
+        type="button"
+        role="menuitem"
+        className={`${itemClass} text-danger`}
+        onClick={onDelete}
+      >
         Delete connection
       </button>
     </>

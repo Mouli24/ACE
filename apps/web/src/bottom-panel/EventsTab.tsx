@@ -1,9 +1,4 @@
-import {
-  type Id,
-  type LoopStopReason,
-  type RunEvent,
-  type Timestamp,
-} from '@ace/contracts';
+import { type Id, type LoopStopReason, type RunEvent, type Timestamp } from '@ace/contracts';
 import {
   NODE_STATE_META,
   Select,

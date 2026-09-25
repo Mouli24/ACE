@@ -12,7 +12,7 @@ import { ShieldAlert } from 'lucide-react';
 import { useState } from 'react';
 
 import { useApprovals } from '../hooks';
-import { ApprovalStack } from './ApprovalsDock';
+import { ApprovalStack } from './ApprovalStack';
 
 /**
  * How many approvals are waiting, in the top bar (round 3 §5 item 4, FR-GRD-013).
@@ -47,7 +47,9 @@ export function ApprovalsBadge({ runId }: { runId: Id | undefined }) {
             <div className="flex flex-col gap-3" data-testid="approvals-list">
               <DialogHeader>
                 <DialogTitle>
-                  {pending.length === 1 ? 'One node is waiting' : `${pending.length} nodes are waiting`}
+                  {pending.length === 1
+                    ? 'One node is waiting'
+                    : `${pending.length} nodes are waiting`}
                 </DialogTitle>
                 <DialogDescription>
                   Each of these stopped at a guardrail that asks you. Nothing continues until you

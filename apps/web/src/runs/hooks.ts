@@ -287,7 +287,9 @@ export interface ApprovalDecisionVariables extends ApprovalDecisionRequest {
   nodeRunId: Id;
 }
 
-function useApprovalDecision(decide: (nodeRunId: Id, body: ApprovalDecisionRequest) => Promise<unknown>) {
+function useApprovalDecision(
+  decide: (nodeRunId: Id, body: ApprovalDecisionRequest) => Promise<unknown>,
+) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ nodeRunId, ...body }: ApprovalDecisionVariables) => decide(nodeRunId, body),
