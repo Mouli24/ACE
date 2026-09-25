@@ -78,11 +78,13 @@ describe('Config panel (FR-NODE-002/003/007/008)', () => {
     expect(q.getByLabelText(/timeout/i)).toHaveValue(120000);
     expect(q.getByLabelText(/retries/i)).toHaveValue(2);
     expect(q.getByLabelText(/context budget/i)).toHaveValue(4000);
+    // Round 3 made the guardrail policy a real picker (FR-GRD-002); the rest still announce
+    // their round.
+    expect(q.getByLabelText(/guardrail policy/i)).toBeInTheDocument();
     for (const [label, round] of [
       ['tools', 'Round 4'],
       ['skills', 'Round 6+'],
       ['memory', 'Round 5'],
-      ['guardrail policy', 'Round 3'],
       ['knowledge bases', 'Round 5'],
     ] as const) {
       const field = q.getByTestId(`later-${label.replace(/\s+/g, '-')}`);

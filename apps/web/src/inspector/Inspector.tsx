@@ -1,4 +1,4 @@
-import type { Envelope, NodeRun, Part } from '@ace/contracts';
+import type { Envelope, Id, NodeRun, Part } from '@ace/contracts';
 import {
   Badge,
   Button,
@@ -7,18 +7,17 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   StatusRing,
 } from '@ace/ui';
 import { useEffect, useState } from 'react';
 
 import { useSelectionStore } from '../app/stores/selection';
-import { useNodeRuns } from '../runs/hooks';
+import { IterationSelector } from '../edges/loop/IterationSelector';
+import { VerdictList } from '../guardrails/VerdictList';
+import { NodeRunMenu } from '../runs/controls/NodeRunMenu';
+import { useRerunNode, useRetryNodeRun, useStartRun, useNodeRuns } from '../runs/hooks';
 import { useRunStore } from '../runs/run-store';
+import { useWorkflowGraph } from '../workflows/hooks';
 
 const money = (value: number) => `$${value.toFixed(6)}`;
 
@@ -31,13 +30,22 @@ export function Inspector({ workflowId }: { workflowId: string }) {
   const focusedNodeId = useSelectionStore((s) => s.focusedNodeId);
   const runId = useRunStore((store) => (store.workflowId === workflowId ? store.runId : undefined));
   const nodeRuns = useNodeRuns(runId);
+  const graph = useWorkflowGraph(workflowId);
   const [promptOpen, setPromptOpen] = useState(false);
-  const [attemptIndex, setAttemptIndex] = useState(0);
-  // Another node's third attempt is not this node's; the selector would otherwise render blank.
-  useEffect(() => setAttemptIndex(0), [focusedNodeId, runId]);
+  /** Which node run of this node is on show; the newest until one is picked. */
+  const [pickedNodeRunId, setPickedNodeRunId] = useState<Id>();
+  // Another node's third iteration is not this node's; the selector would otherwise render blank.
+  useEffect(() => setPickedNodeRunId(undefined), [focusedNodeId, runId]);
 
   const forNode = (nodeRuns.data ?? []).filter((run) => run.nodeId === focusedNodeId);
-  const nodeRun = forNode[Math.min(attemptIndex, Math.max(forNode.length - 1, 0))];
+  const nodeRun = forNode.find((run) => run.id === pickedNodeRunId) ?? forNode[forNode.length - 1];
+
+  const retry = useRetryNodeRun();
+  const rerun = useRerunNode();
+  const start = useStartRun(workflowId);
+  const busy = retry.isPending || rerun.isPending || start.isPending;
+  const nodeName =
+    graph.data?.nodes.find((node) => node.id === focusedNodeId)?.name ?? 'this node';
 
   return (
     <section
@@ -53,25 +61,15 @@ export function Inspector({ workflowId }: { workflowId: string }) {
         <p className="text-sm text-fg-muted">This node has not run yet.</p>
       )}
 
-      {nodeRun && (
+      {nodeRun && focusedNodeId !== undefined && (
         <>
-          {/* Iterations and retries arrive in Round 3; the selector is already the way in. */}
+          {/* Every iteration of this node, with what each produced (FR-PAR-005, TC-PAR-006). */}
           {forNode.length > 1 && (
-            <Select
-              value={String(attemptIndex)}
-              onValueChange={(value) => setAttemptIndex(Number(value))}
-            >
-              <SelectTrigger aria-label="Node run">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {forNode.map((run, index) => (
-                  <SelectItem key={run.id} value={String(index)}>
-                    iteration {run.iteration} · attempt {run.attempt}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <IterationSelector
+              runs={forNode}
+              selectedNodeRunId={nodeRun.id}
+              onSelect={setPickedNodeRunId}
+            />
           )}
 
           <header className="flex items-center gap-2">
@@ -81,7 +79,23 @@ export function Inspector({ workflowId }: { workflowId: string }) {
                 {nodeRun.failureReason}
               </Badge>
             )}
-            <span className="ml-auto font-machine text-[10px] text-fg-muted" title={nodeRun.id}>
+            <NodeRunMenu
+              nodeId={focusedNodeId}
+              nodeName={nodeName}
+              state={nodeRun.status}
+              nodeRunId={nodeRun.id}
+              busy={busy}
+              onRetry={() => retry.mutate({ nodeRunId: nodeRun.id, withDownstream: false })}
+              onRetryWithDownstream={() =>
+                retry.mutate({ nodeRunId: nodeRun.id, withDownstream: true })
+              }
+              onRerunNode={() => {
+                if (runId !== undefined) rerun.mutate({ runId, nodeId: focusedNodeId });
+              }}
+              // FR-EXE-013: a new run that reuses everything upstream rather than calling it again.
+              onStartFromNode={() => start.mutate({ startFromNodeId: focusedNodeId })}
+            />
+            <span className="font-machine text-[10px] text-fg-muted" title={nodeRun.id}>
               {nodeRun.id.slice(-6)}
             </span>
           </header>
@@ -113,6 +127,45 @@ export function Inspector({ workflowId }: { workflowId: string }) {
               ))
             )}
           </Section>
+
+          {/*
+            * Every guardrail verdict on this node run, and for a redaction the types removed and
+            * never the value (FR-GRD-014/015, TC-GRD-018/019). The policy it was checked against is
+            * named with its version, so a verdict can be traced to the rules that produced it
+            * (FR-GRD-002).
+            */}
+          <Section title="Verdicts">
+            {nodeRun.guardrailPolicy && (
+              <p className="font-machine text-[10px] text-fg-muted" data-testid="inspector-policy">
+                policy {nodeRun.guardrailPolicy.id.slice(-6)} · version{' '}
+                {nodeRun.guardrailPolicy.version}
+              </p>
+            )}
+            <VerdictList verdicts={nodeRun.verdicts} />
+          </Section>
+
+          {nodeRun.approvals !== undefined && nodeRun.approvals.length > 0 && (
+            <Section title="Approvals">
+              <ul className="flex flex-col gap-1" data-testid="inspector-approvals">
+                {nodeRun.approvals.map((decision) => (
+                  <li
+                    key={decision.requestId}
+                    data-testid={`approval-decision-${decision.requestId}`}
+                    data-decision={decision.decision}
+                    className="flex flex-col gap-0.5 rounded-card border border-border bg-card p-2 text-xs"
+                  >
+                    <span className="font-machine">
+                      {decision.decision === 'approve' ? 'approved' : 'rejected'} ·{' '}
+                      {new Date(decision.decidedAt).toLocaleTimeString()}
+                    </span>
+                    {decision.note !== undefined && (
+                      <span className="text-fg-muted">{decision.note}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </Section>
+          )}
 
           <Section title="Output">
             {nodeRun.output === undefined ? (

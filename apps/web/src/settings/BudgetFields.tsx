@@ -80,38 +80,51 @@ function BudgetField({
  * blank box is no cap and saves `null`, which is how a PATCH removes one. Saving goes through the
  * callbacks: this component knows nothing about which resource each cap belongs to.
  */
+/**
+ * Which caps to show. The two live on different resources, so they live on different screens — the
+ * daily budget under Settings, the per-run cap on the project — and `both` is what a test or a future
+ * single screen uses.
+ */
+export type BudgetFieldSet = 'both' | 'daily' | 'run';
+
 export function BudgetFields({
   dailyBudgetUsd,
   maxCostPerRunUsd,
   onSaveDailyBudget,
   onSaveMaxCostPerRun,
+  fields = 'both',
   disabled,
 }: {
   dailyBudgetUsd: number | null | undefined;
   maxCostPerRunUsd: number | null | undefined;
   onSaveDailyBudget: (value: number | null) => void;
   onSaveMaxCostPerRun: (value: number | null) => void;
+  fields?: BudgetFieldSet;
   disabled?: boolean;
 }) {
   return (
     <section className="flex flex-col gap-4" data-testid="budget-fields">
       <h2 className="font-human text-sm font-semibold">Budgets</h2>
-      <BudgetField
-        label="Daily budget (USD)"
-        hint="What every run together may spend in a day. Blank is no cap."
-        testId="daily-budget"
-        value={dailyBudgetUsd}
-        onSave={onSaveDailyBudget}
-        {...(disabled === undefined ? {} : { disabled })}
-      />
-      <BudgetField
-        label="Max cost per run (USD)"
-        hint="A run of this project that would cost more halts, reason budget_exceeded."
-        testId="max-cost-per-run"
-        value={maxCostPerRunUsd}
-        onSave={onSaveMaxCostPerRun}
-        {...(disabled === undefined ? {} : { disabled })}
-      />
+      {fields !== 'run' && (
+        <BudgetField
+          label="Daily budget (USD)"
+          hint="What every run together may spend in a day. Blank is no cap."
+          testId="daily-budget"
+          value={dailyBudgetUsd}
+          onSave={onSaveDailyBudget}
+          {...(disabled === undefined ? {} : { disabled })}
+        />
+      )}
+      {fields !== 'daily' && (
+        <BudgetField
+          label="Max cost per run (USD)"
+          hint="A run of this project that would cost more halts, reason budget_exceeded."
+          testId="max-cost-per-run"
+          value={maxCostPerRunUsd}
+          onSave={onSaveMaxCostPerRun}
+          {...(disabled === undefined ? {} : { disabled })}
+        />
+      )}
       <p className="text-xs text-fg-muted">
         Max tokens per node is set on the node itself, under execution settings.
       </p>

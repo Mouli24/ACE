@@ -4,6 +4,7 @@ import {
   zeroUsage,
   type ApprovalRequest,
   type BudgetHalt,
+  type FailureReason,
   type HaltReason,
   type Id,
   type ModelUsed,
@@ -28,7 +29,8 @@ export interface NodeRunView {
   iteration: number;
   attempt: number;
   status: NodeState;
-  failureReason?: string;
+  /** The contract's own reason, never a string: CONTRACT_VIOLATION and RUN_FAILED stay apart (BR-03). */
+  failureReason?: FailureReason;
   error?: NodeError;
   modelUsed?: ModelUsed;
   output?: Part[];

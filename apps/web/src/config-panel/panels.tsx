@@ -1,15 +1,22 @@
 import {
-  MERGE_MODES,
+  REVIEW_CONTRACT_SCHEMA,
   ROUTING_POLICIES,
   TRANSFORM_OPS,
   type AgentConfig,
+  type Id,
   type InputConfig,
   type MergeConfig,
   type ModelConfig,
   type Node,
   type TransformConfig,
 } from '@ace/contracts';
+import { Button } from '@ace/ui';
 
+import { PolicyPicker } from '../guardrails/PolicyPicker';
+import { MergeModeField } from '../nodes/merge/MergeModeField';
+import { MergeSlots, type MergeSlot } from '../nodes/merge/MergeSlots';
+import { useRunStore } from '../runs/run-store';
+import { useWorkflowGraph } from '../workflows/hooks';
 import { JsonSchemaEditor } from './JsonSchemaEditor';
 import { FallbackModels, ProviderAndModel } from './ProviderAndModel';
 import {
@@ -76,10 +83,15 @@ function ExecutionFields({
 export function AgentPanel({
   config,
   patch,
+  projectId,
 }: {
   config: AgentConfig;
   patch: PatchConfig<AgentConfig>;
+  /** The project whose guardrail policies this node may override with (FR-GRD-002). */
+  projectId?: Id;
 }) {
+  const reviewContract = JSON.stringify(REVIEW_CONTRACT_SCHEMA);
+  const usesReviewContract = JSON.stringify(config.outputContract?.jsonSchema) === reviewContract;
   return (
     <>
       <ProviderAndModel
@@ -122,6 +134,29 @@ export function AgentPanel({
         value={config.outputContract?.jsonSchema}
         onCommit={(jsonSchema) => patch({ outputContract: jsonSchema ? { jsonSchema } : {} })}
       />
+      {/*
+       * The contract a Review→Fix loop needs, in one press (§5 item 8): score, verdict and issues,
+       * exactly as the contract defines them — so the loop's exit condition can read `verdict` and
+       * the output is checked like any other (FR-PAR-004, FR-PAR-007).
+       */}
+      <Button
+        variant="secondary"
+        size="sm"
+        data-testid="use-review-contract"
+        disabled={usesReviewContract}
+        title={
+          usesReviewContract
+            ? 'This agent already outputs the standard review contract.'
+            : 'Fill the output contract with score, verdict and issues.'
+        }
+        onClick={() =>
+          patch({
+            outputContract: { jsonSchema: JSON.parse(reviewContract) as Record<string, unknown> },
+          })
+        }
+      >
+        Use standard review contract
+      </Button>
       <ExecutionFields
         execution={config.execution}
         onChange={(execution) => patch({ execution })}
@@ -135,7 +170,11 @@ export function AgentPanel({
       <LaterField label="Tools" round="Round 4" testId="tools" />
       <LaterField label="Skills" round="Round 6+" testId="skills" />
       <LaterField label="Memory" round="Round 5" testId="memory" />
-      <LaterField label="Guardrail policy" round="Round 3" testId="guardrail-policy" />
+      <PolicyPicker
+        projectId={projectId}
+        value={config.guardrailPolicyId}
+        onChange={(guardrailPolicyId) => patch({ guardrailPolicyId })}
+      />
       <LaterField label="Knowledge bases" round="Round 5" testId="knowledge-bases" />
     </>
   );
@@ -207,21 +246,48 @@ export function InputPanel({
   );
 }
 
+/**
+ * The merge node's panel (FR-PAR-002): the mode, and one slot per connected input labelled with the
+ * node feeding it. The arrival times come from the live overlay's edge transfers, which is what makes
+ * "first past the post" visible in `any` mode during a run.
+ */
 export function MergePanel({
+  node,
   config,
   patch,
+  workflowId,
 }: {
+  node: Node;
   config: MergeConfig;
   patch: PatchConfig<MergeConfig>;
+  workflowId: string;
 }) {
+  const graph = useWorkflowGraph(workflowId);
+  const revision = useRunStore((store) => store.revision);
+  const edges = graph.data?.edges ?? [];
+  const nodes = graph.data?.nodes ?? [];
+
+  const slots: MergeSlot[] = node.inputs.flatMap((port) => {
+    const edge = edges.find((each) => each.to.portId === port.id);
+    if (edge === undefined) return [];
+    const transfer = useRunStore.getState().lastTransfer(edge.id);
+    void revision;
+    return [
+      {
+        portId: port.id,
+        portName: port.name,
+        fromNodeId: edge.from.nodeId,
+        fromNodeName: nodes.find((each) => each.id === edge.from.nodeId)?.name ?? 'unknown node',
+        ...(transfer === undefined ? {} : { arrivedAt: new Date(transfer.at).toISOString() }),
+      },
+    ];
+  });
+
   return (
-    <SelectField
-      label="Mode"
-      value={config.mode}
-      options={MERGE_MODES.map((m) => ({ value: m, label: m }))}
-      onChange={(mode) => patch({ mode })}
-      hint="all: wait for every input · any: continue on the first"
-    />
+    <>
+      <MergeModeField value={config.mode} onChange={(mode) => patch({ mode })} />
+      <MergeSlots slots={slots} mode={config.mode} />
+    </>
   );
 }
 
@@ -292,19 +358,37 @@ export function OutputPanel() {
 export function KindPanel({
   node,
   patch,
+  workflowId,
+  projectId,
 }: {
   node: Node;
   patch: (patch: Partial<Node['config']>) => void;
+  workflowId: string;
+  /** The node's project, for the guardrail policy picker (FR-GRD-002). */
+  projectId?: Id;
 }) {
   switch (node.kind) {
     case 'agent':
-      return <AgentPanel config={node.config} patch={patch as PatchConfig<AgentConfig>} />;
+      return (
+        <AgentPanel
+          config={node.config}
+          patch={patch as PatchConfig<AgentConfig>}
+          {...(projectId === undefined ? {} : { projectId })}
+        />
+      );
     case 'model':
       return <ModelPanel config={node.config} patch={patch as PatchConfig<ModelConfig>} />;
     case 'input':
       return <InputPanel config={node.config} patch={patch as PatchConfig<InputConfig>} />;
     case 'merge':
-      return <MergePanel config={node.config} patch={patch as PatchConfig<MergeConfig>} />;
+      return (
+        <MergePanel
+          node={node}
+          config={node.config}
+          patch={patch as PatchConfig<MergeConfig>}
+          workflowId={workflowId}
+        />
+      );
     case 'transform':
       return <TransformPanel config={node.config} patch={patch as PatchConfig<TransformConfig>} />;
     case 'output':

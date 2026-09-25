@@ -1,6 +1,7 @@
 import type {
   ApprovalRequest,
   BudgetHalt,
+  FailureReason,
   HaltReason,
   Id,
   NodeState,
@@ -103,7 +104,7 @@ export interface AdoptableNodeRun {
   iteration: number;
   attempt: number;
   status: NodeState;
-  failureReason?: string;
+  failureReason?: FailureReason;
   modelUsed?: NodeRunView['modelUsed'];
   output?: Part[];
   usage: Usage;
@@ -305,6 +306,7 @@ export function useNodeOverlay(nodeId: Id): {
   streamedText: string;
   modelUsed: NodeRunView['modelUsed'];
   finalOutput: Part[] | undefined;
+  failureReason: FailureReason | undefined;
 } {
   return useRunStore(
     useShallow((store) => {
@@ -315,6 +317,7 @@ export function useNodeOverlay(nodeId: Id): {
         streamedText: run === undefined ? '' : store.streamedText(run.nodeRunId),
         modelUsed: run?.modelUsed,
         finalOutput: store.finalOutput?.[nodeId],
+        failureReason: run?.failureReason,
       };
     }),
   );

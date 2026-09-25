@@ -1,10 +1,12 @@
-import type { Node, WorkflowGraphResponse } from '@ace/contracts';
+import type { Edge, LoopConfig, Node, WorkflowGraphResponse } from '@ace/contracts';
 import { Button } from '@ace/ui';
-import { Copy, Trash2 } from 'lucide-react';
+import { Copy, Repeat, Trash2 } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
+import { useParams } from 'react-router-dom';
 
 import { useSelectionStore } from '../app/stores/selection';
+import { LoopConfigFields } from '../edges/loop/LoopConfigFields';
 import { useRunStore } from '../runs/run-store';
 import { useCanvasApi } from '../canvas/canvas-api';
 import { KIND_ICON } from '../nodes/NodeCard';
@@ -14,12 +16,22 @@ import { queryKeys } from '../workflows/query-keys';
 import { TextField } from './fields';
 import { KindPanel } from './panels';
 
-/** Right pane (FR-NODE-002): the selected node's configuration, every edit an `update_node` op. */
+/**
+ * Right pane (FR-NODE-002): the selected node's configuration, every edit an `update_node` op.
+ *
+ * From round 3 a selected loop edge has settings of its own (FR-CON-007), so the pane shows whichever
+ * one thing is selected — a node, or the loop edge.
+ */
 export function ConfigPanel({ workflowId }: { workflowId: string }) {
   const focusedNodeId = useSelectionStore((s) => s.focusedNodeId);
   const selectedCount = useSelectionStore((s) => s.nodeIds.length);
+  const selectedEdgeIds = useSelectionStore((s) => s.edgeIds);
   const graph = useWorkflowGraph(workflowId);
   const node = graph.data?.nodes.find((n) => n.id === focusedNodeId);
+  const edge =
+    selectedEdgeIds.length === 1
+      ? graph.data?.edges.find((each) => each.id === selectedEdgeIds[0])
+      : undefined;
 
   return (
     <aside
@@ -29,6 +41,8 @@ export function ConfigPanel({ workflowId }: { workflowId: string }) {
     >
       {node ? (
         <NodeEditor key={node.id} node={node} workflowId={workflowId} />
+      ) : edge?.kind === 'loop' ? (
+        <LoopEdgeEditor key={edge.id} edge={edge} workflowId={workflowId} />
       ) : (
         <p className="p-4 text-sm text-fg-muted">
           {selectedCount > 1
@@ -40,8 +54,69 @@ export function ConfigPanel({ workflowId }: { workflowId: string }) {
   );
 }
 
+/**
+ * The loop edge's settings (FR-CON-007, TC-CON-007). A committed change is one `update_edge` op, and
+ * only a draft the contract accepts commits — 0 and 51 iterations never leave the editor.
+ */
+function LoopEdgeEditor({ edge, workflowId }: { edge: Edge; workflowId: string }) {
+  const sync = useGraphSync(workflowId);
+  const graph = useWorkflowGraph(workflowId);
+  const clearSelection = useSelectionStore((s) => s.clear);
+  const runActive = useRunStore((store) => store.active && store.workflowId === workflowId);
+  const nameOf = (nodeId: string) =>
+    graph.data?.nodes.find((node) => node.id === nodeId)?.name ?? 'unknown node';
+
+  const commit = (loop: LoopConfig) =>
+    sync.enqueue([{ op: 'update_edge', edgeId: edge.id, patch: { loop } }]);
+
+  return (
+    <div className="flex flex-col gap-4 p-4" data-testid="loop-edge-editor">
+      <header className="flex items-center gap-2">
+        <Repeat className="h-4 w-4 text-fg-muted" aria-hidden />
+        <h2 className="font-human text-sm font-semibold">Loop edge</h2>
+        <span className="ml-auto font-machine text-[10px] text-fg-muted" title={edge.id}>
+          {edge.id.slice(-6)}
+        </span>
+      </header>
+
+      <p className="font-human text-xs text-fg-muted">
+        {nameOf(edge.from.nodeId)} sends its output back to {nameOf(edge.to.nodeId)}.
+      </p>
+
+      {runActive && (
+        <p
+          role="status"
+          data-testid="applies-next-run"
+          className="rounded-md border border-border bg-card px-3 py-2 text-xs text-fg-muted"
+        >
+          A run is in flight. Edits apply to the next run — this one keeps the values it started
+          with.
+        </p>
+      )}
+
+      {edge.loop && <LoopConfigFields value={edge.loop} onCommit={commit} />}
+
+      <footer className="mt-2 flex gap-2 border-t border-border pt-4">
+        <Button
+          variant="destructive"
+          size="sm"
+          aria-label="Delete loop edge"
+          onClick={() => {
+            sync.enqueue([{ op: 'delete_edge', edgeId: edge.id }]);
+            clearSelection();
+          }}
+        >
+          <Trash2 className="h-3.5 w-3.5" /> Delete
+        </Button>
+      </footer>
+    </div>
+  );
+}
+
 function NodeEditor({ node, workflowId }: { node: Node; workflowId: string }) {
   const sync = useGraphSync(workflowId);
+  // The project the Canvas was opened under; the guardrail policy picker lists its policies.
+  const { projectId } = useParams<{ projectId: string }>();
   /**
    * FR-NODE-009: a run executes the snapshot it froze at start (BR-04), so an edit made while a run
    * is in flight cannot affect it. The panel says so rather than pretending the edit took hold.
@@ -103,7 +178,12 @@ function NodeEditor({ node, workflowId }: { node: Node; workflowId: string }) {
         }
       />
 
-      <KindPanel node={node} patch={patchConfig} />
+      <KindPanel
+        node={node}
+        patch={patchConfig}
+        workflowId={workflowId}
+        {...(projectId === undefined ? {} : { projectId })}
+      />
 
       <footer className="mt-2 flex gap-2 border-t border-border pt-4">
         <Button
