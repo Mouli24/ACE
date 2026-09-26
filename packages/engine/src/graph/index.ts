@@ -59,6 +59,11 @@ export interface GraphService {
   listProjects(page: CursorQuery): Promise<Page<Project>>;
   getProject(id: Id): Promise<Project>;
   renameProject(id: Id, name: string): Promise<Project>;
+  /**
+   * `PATCH /projects/:id` — the whole patch, not only the name. `maxCostPerRunUsd: null` removes the
+   * per-run cap and `undefined` leaves it alone, the way D72 reads a removed budget (FR-GRD-008).
+   */
+  updateProject(id: Id, patch: { name?: string; maxCostPerRunUsd?: number | null }): Promise<Project>;
   deleteProject(id: Id): Promise<void>;
   openProject(id: Id): Promise<Project>;
 
@@ -149,6 +154,16 @@ export function createGraphService(deps: GraphServiceDeps): GraphService {
       const project = await repository.projects.get(scope, id);
       if (project === null) throw notFound(`Project ${id}`);
       return project;
+    },
+
+    async updateProject(id, patch) {
+      const updated = await repository.projects.update(scope, id, {
+        ...(patch.name === undefined ? {} : { name: patch.name }),
+        ...(patch.maxCostPerRunUsd === undefined ? {} : { maxCostPerRunUsd: patch.maxCostPerRunUsd }),
+        updatedAt: now(),
+      });
+      if (updated === null) throw notFound(`Project ${id}`);
+      return updated;
     },
 
     async renameProject(id, name) {

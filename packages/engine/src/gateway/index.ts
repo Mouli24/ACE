@@ -218,9 +218,14 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.get('/projects/:id', async (c) => c.json(await deps.graph.getProject(c.req.param('id'))));
 
   api.patch('/projects/:id', async (c) => {
-    const { name } = UpdateProjectRequestSchema.parse(await readJson(c));
+    const patch = UpdateProjectRequestSchema.parse(await readJson(c));
     const id = c.req.param('id');
-    return c.json(name === undefined ? await deps.graph.getProject(id) : await deps.graph.renameProject(id, name));
+    // Every field of the patch, not just the name: `maxCostPerRunUsd` is the cap FR-GRD-008 halts a
+    // run against, and reading only `name` here made it unsettable through the API.
+    if (patch.name === undefined && patch.maxCostPerRunUsd === undefined) {
+      return c.json(await deps.graph.getProject(id));
+    }
+    return c.json(await deps.graph.updateProject(id, patch));
   });
 
   api.delete('/projects/:id', async (c) => {
