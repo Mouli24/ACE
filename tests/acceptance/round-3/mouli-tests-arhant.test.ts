@@ -1502,27 +1502,28 @@ describe('TC-GRD-008/009 an ask_user check waits for a person', () => {
 /* Parallel branches, merge and loops (FR-PAR-001..007, FR-CON-007)            */
 /* ========================================================================== */
 
-/** Point the agents that feed the merge node at `modelId`; leave whatever is downstream alone. */
-function patchBranchModels(exported: WorkflowExport, models: string[]): void {
-  const merge = exported.nodes.find((node) => node.kind === 'merge');
-  if (!merge) throw new Error('fixture has no merge node');
-  const feeders = exported.edges
-    .filter((edge) => edge.kind === 'data' && edge.to.nodeId === merge.id)
-    .map((edge) => edge.from.nodeId);
-  feeders.forEach((nodeId, index) => {
-    const node = exported.nodes.find((candidate) => candidate.id === nodeId);
-    if (node?.kind === 'agent') {
-      (node.config as { modelId?: string }).modelId = models[index] ?? (models[0] as string);
-    }
-  });
-  expect(feeders.length, 'the merge fixture has two branches').toBe(2);
-}
-
 const mergeNodeOf = (nodes: Node[]): Node => {
   const merge = nodes.find((node) => node.kind === 'merge');
   expect(merge, 'the fixture has a merge node').toBeDefined();
   return merge as Node;
 };
+
+/**
+ * The nodes that actually feed the merge, in the snapshot's edge order.
+ *
+ * Read from the graph rather than guessed from a model id. Both merge fixtures put a **json** agent
+ * downstream of the merge as well (the Writer reads the merge's json part), so "the node runs whose
+ * model is mock-slow or mock-json" quietly catches three nodes, not two — and a branch identified by
+ * its model stops being identifiable the moment a fixture reuses one.
+ */
+function branchNodesOf(imported: Imported, merge: Node): Node[] {
+  const feeders = imported.edges
+    .filter((edge) => edge.kind === 'data' && edge.to.nodeId === merge.id)
+    .map((edge) => imported.nodes.find((node) => node.id === edge.from.nodeId))
+    .filter((node): node is Node => node !== undefined);
+  expect(feeders.length, 'the merge fixture has two branches').toBe(2);
+  return feeders;
+}
 
 interface MergeInput {
   port: string;
@@ -1552,8 +1553,10 @@ describe('TC-PAR-002 merge "all" waits for every connected input', () => {
      * fixture can show: that `all` waits for every connected input and the merge output is in port
      * order.
      */
-    const { workflowId, nodes } = await importFixture('parallel-merge-all.json');
+    const imported = await importFixture('parallel-merge-all.json');
+    const { workflowId, nodes } = imported;
     const merge = mergeNodeOf(nodes);
+    const branchNodes = branchNodesOf(imported, merge);
 
     const startedAt = Date.now();
     const run = await settled((await client.startRun(workflowId)).id);
@@ -1565,9 +1568,7 @@ describe('TC-PAR-002 merge "all" waits for every connected input', () => {
 
     // FR-PAR-002 "all": the merge starts only after every connected input has arrived.
     const mergeRun = oneFor(nodeRuns, merge.id);
-    const branches = nodeRuns.filter((nodeRun) =>
-      ['mock-slow', 'mock-json'].includes(nodeRun.modelUsed?.modelId ?? ''),
-    );
+    const branches = branchNodes.map((node) => oneFor(nodeRuns, node.id));
     expect(branches).toHaveLength(2);
     const lastBranchEnd = Math.max(...branches.map((nodeRun) => Date.parse(nodeRun.endedAt ?? '')));
     expect(Date.parse(mergeRun.startedAt ?? '')).toBeGreaterThanOrEqual(lastBranchEnd);
@@ -1591,19 +1592,31 @@ describe('TC-PAR-002 merge "all" waits for every connected input', () => {
 
 describe('TC-PAR-003 merge "any" takes the first arrival and records the rest', () => {
   it('starts on the fast branch, and the slow branch still completes without feeding the merge', async () => {
-    const { workflowId, nodes } = await importFixture('parallel-merge-any.json', {
-      patch: (exported) => patchBranchModels(exported, ['mock-text', 'mock-slow']),
-    });
+    /*
+     * The fixture is already asymmetric where this check needs it to be: the text branch is on
+     * `mock-slow`, which sleeps 100 x 20 ms, and the json branch is on `mock-json`, which answers in
+     * one chunk. Re-pointing the branches at other models (as this check first did, at `mock-text`
+     * and `mock-slow`) moves the slow one onto the json branch, whose node declares
+     * `outputTypes: ['json']` — and `mock-slow` produces text, so `validateGraph`'s `covers` raises
+     * `incompatible_model` and the run is BLOCKED at pre-flight with nothing measured.
+     */
+    const imported = await importFixture('parallel-merge-any.json');
+    const { workflowId, nodes } = imported;
     const merge = mergeNodeOf(nodes);
+    const branchNodes = branchNodesOf(imported, merge);
+    const modelOf = (node: Node): string =>
+      (node.config as { modelId?: string }).modelId ?? '';
+    const fastNode = branchNodes.find((node) => modelOf(node) === 'mock-json') as Node;
+    const slowNode = branchNodes.find((node) => modelOf(node) === 'mock-slow') as Node;
+    expect(fastNode, 'the fixture has a fast json branch').toBeDefined();
+    expect(slowNode, 'the fixture has a slow text branch').toBeDefined();
 
     const run = await settled((await client.startRun(workflowId)).id);
     const nodeRuns = await client.listNodeRuns(run.id);
 
-    expect(run.status).toBe('COMPLETE');
-    const fast = nodeRuns.find((nodeRun) => nodeRun.modelUsed?.modelId === 'mock-text') as NodeRun;
-    const slow = nodeRuns.find((nodeRun) => nodeRun.modelUsed?.modelId === 'mock-slow') as NodeRun;
-    expect(fast).toBeDefined();
-    expect(slow).toBeDefined();
+    expect(run.status, `pre-flight said ${JSON.stringify(run.preflightIssues)}`).toBe('COMPLETE');
+    const fast = oneFor(nodeRuns, fastNode.id);
+    const slow = oneFor(nodeRuns, slowNode.id);
 
     const mergeRun = oneFor(nodeRuns, merge.id);
     expect(Date.parse(mergeRun.startedAt ?? '')).toBeLessThan(Date.parse(slow.endedAt ?? ''));
