@@ -25,6 +25,8 @@ import { notFound } from '../gateway/errors.js';
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
 import type { ModelRouter, ProviderAdapter, Repository, Scope } from '../ports/index.js';
+import { createMergeArrivalLog, executeMergeNode, isMergeReady } from '../merge/index.js';
+import { downstreamOf } from './control/graph.js';
 import { createRunGate, type RunGate, type RunGateRegistry } from './control/gate.js';
 import { sumUsage } from './cost.js';
 import { createNodeExecutor, type NodeExecutionOutcome, type NodeExecutor } from './executor.js';
@@ -155,6 +157,13 @@ export function createRunService(deps: RunServiceDeps): RunService {
    * single-input port, at least one for a `multi` port (§2.6 of round 1's port model, Arch §12.3).
    */
   function isReady(node: Node, edges: readonly Edge[], delivered: ReadonlySet<Id>): boolean {
+    /*
+     * A merge is the one node whose readiness is not a property of its ports (FR-PAR-002): both of
+     * its input ports are `multi`, so the generic rule below *is* the `any` behaviour and `all`
+     * would be unreachable. `isMergeReady` reads the mode instead.
+     */
+    if (node.kind === 'merge') return isMergeReady(node, edges, delivered);
+
     const incoming = edges.filter((edge) => edge.to.nodeId === node.id);
     if (incoming.length === 0) return true;
 
@@ -173,22 +182,14 @@ export function createRunService(deps: RunServiceDeps): RunService {
     return true;
   }
 
-  /** Everything downstream of a node, transitively — what a failure takes with it. */
-  function downstreamOf(nodeId: Id, edges: readonly Edge[]): Set<Id> {
-    const reached = new Set<Id>();
-    const queue = [nodeId];
-
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      for (const edge of edges) {
-        if (edge.from.nodeId !== current || reached.has(edge.to.nodeId)) continue;
-        reached.add(edge.to.nodeId);
-        queue.push(edge.to.nodeId);
-      }
-    }
-
-    return reached;
-  }
+  /*
+   * D112: "everything downstream" walks **data edges only**, which is `downstreamOf` in
+   * `control/graph.ts`. A loop edge points backwards by construction (D73), so following it would
+   * make every node in a loop body downstream of every other — and `blockDownstream` on a failing
+   * loop source would reach back into its own body and block the Writer that feeds it. The
+   * scheduler's own copy of this walk did exactly that; it was harmless only while loop edges were
+   * refused.
+   */
 
   /* ------------------------------------------------------------- the drive */
 
@@ -205,6 +206,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const deliveredEdges = new Set<Id>();
     const usages: Usage[] = [];
     const finalOutput: Record<Id, Part[]> = {};
+    /** What arrived at each merge node, in order and with its port (FR-PAR-002, §2.4). */
+    const mergeArrivals = createMergeArrivalLog();
 
     /** One node run row per node, created when the node is first dispatched. */
     async function beginNodeRun(node: Node): Promise<NodeRun> {
@@ -267,6 +270,17 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
 
       for (const edge of outgoing) {
+        // Recorded *before* the edge counts as delivered: `isMergeReady` reads `deliveredEdges`, so
+        // a merge that became ready on this edge must already find its arrival in the log (§2.4).
+        if (nodeById.get(edge.to.nodeId)?.kind === 'merge') {
+          mergeArrivals.record(edge.to.nodeId, {
+            edgeId: edge.id,
+            portId: edge.to.portId,
+            fromNodeId: node.id,
+            parts,
+          });
+        }
+
         deliveredEdges.add(edge.id);
         await bus.emit({
           type: 'edge.transfer',
@@ -367,21 +381,39 @@ export function createRunService(deps: RunServiceDeps): RunService {
         await emitNodeState(run, nodeRun, 'RUNNING');
       };
 
-      const outcome = await executor.execute({
-        runId: run.id,
-        workflowId: run.workflowId,
-        nodeRunId: nodeRun.id,
-        node,
-        envelopes: envelopesFor.get(node.id) ?? [],
-        iteration: 1,
-        attempt: 1,
-        runInputs: run.inputs,
-        signal,
-        onStarted: markRunning,
-        onEnded: () => {
-          endedAt = now();
-        },
-      });
+      const outcome =
+        node.kind === 'merge'
+          ? await (async (): Promise<NodeExecutionOutcome> => {
+              // A merge calls no provider and costs nothing, so it starts the instant it is
+              // dispatched; its output is a function of what arrived (FR-PAR-002).
+              await markRunning();
+              return executeMergeNode(
+                {
+                  runId: run.id,
+                  workflowId: run.workflowId,
+                  nodeRunId: nodeRun.id,
+                  node,
+                  edges,
+                  arrivals: mergeArrivals.arrivals(node.id),
+                },
+                { bus },
+              );
+            })()
+          : await executor.execute({
+              runId: run.id,
+              workflowId: run.workflowId,
+              nodeRunId: nodeRun.id,
+              node,
+              envelopes: envelopesFor.get(node.id) ?? [],
+              iteration: 1,
+              attempt: 1,
+              runInputs: run.inputs,
+              signal,
+              onStarted: markRunning,
+              onEnded: () => {
+                endedAt = now();
+              },
+            });
 
       // A node that failed before it got a slot (no route, say) still passes through RUNNING, so
       // every node run follows Arch §19.1: READY → RUNNING → a terminal state.
