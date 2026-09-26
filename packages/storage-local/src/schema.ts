@@ -203,6 +203,20 @@ export const runs = sqliteTable(
     endedAt: text('ended_at'),
     durationMs: integer('duration_ms'),
     finalOutput: text('final_output'),
+    /**
+     * "Paused since" (round 3 §2.1, FR-CTL-002). A resume clears the column rather than leaving
+     * the timestamp of a pause the run is no longer in (D106).
+     */
+    pausedAt: text('paused_at'),
+    /**
+     * JSON `RunAction[]` — `allowedRunActions(status)`, stamped wherever the status is set, so the
+     * UI never guesses which controls a run accepts (FR-CTL-006, D71, D76).
+     */
+    allowedActions: text('allowed_actions'),
+    /** JSON `BudgetHalt`: which cap tripped and by how much, set only on a `budget_exceeded` halt (FR-GRD-008, D80). */
+    budgetHalt: text('budget_halt'),
+    /** The run a restart copied its snapshot and inputs from (FR-CTL-004). */
+    restartedFromRunId: text('restarted_from_run_id'),
   },
   (table) => [
     index('runs_workflow_idx').on(table.workspaceId, table.workflowId, table.id),
