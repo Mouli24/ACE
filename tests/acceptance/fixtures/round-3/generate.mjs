@@ -254,9 +254,15 @@ function parallelMerge({ file, name, tag, mode }) {
           instructions: 'Score the input and answer as json.',
         }),
         mergeNode(wf, merge, mode),
+        /*
+         * On `mock-json`, not `mock-text`: this Writer reads the merge's json output, and
+         * `mock-text`'s catalogue entry takes text only — so pre-flight refused the whole fixture
+         * `incompatible_model` before a single node ran (FR-MM-005).
+         */
         agentNode(wf, writer, 'Writer', { x: 1080, y: 200 }, {
-          modelId: 'mock-text',
+          modelId: 'mock-json',
           inputTypes: ['json'],
+          outputTypes: ['json'],
           instructions: 'Write one paragraph from the merged inputs.',
         }),
         outputNode(wf, output, 'Output', { x: 1400, y: 200 }),
@@ -267,7 +273,7 @@ function parallelMerge({ file, name, tag, mode }) {
         dataEdge(wf, id(tag, 'EC'), analyst, 'text', merge, 'in'),
         dataEdge(wf, id(tag, 'ED'), scorer, 'json', merge, 'in_json'),
         dataEdge(wf, id(tag, 'EE'), merge, 'out', writer, 'json'),
-        dataEdge(wf, id(tag, 'EF'), writer, 'text', output, 'text'),
+        dataEdge(wf, id(tag, 'EF'), writer, 'json', output, 'json'),
       ],
     ),
   );

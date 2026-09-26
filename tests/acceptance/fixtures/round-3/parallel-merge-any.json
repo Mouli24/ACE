@@ -203,15 +203,15 @@
       ],
       "outputs": [
         {
-          "id": "01M3R3DD0000000000000000NE:out:text",
-          "name": "text",
-          "dataType": "text",
+          "id": "01M3R3DD0000000000000000NE:out:json",
+          "name": "json",
+          "dataType": "json",
           "multi": true
         }
       ],
       "config": {
         "providerId": "01M3R3PV0000000000000000PV",
-        "modelId": "mock-text",
+        "modelId": "mock-json",
         "routing": {
           "policy": "fixed",
           "fallbackModelIds": []
@@ -221,7 +221,7 @@
           "json"
         ],
         "outputTypes": [
-          "text"
+          "json"
         ],
         "execution": {
           "temperature": 0.7,
@@ -373,11 +373,11 @@
       "kind": "data",
       "from": {
         "nodeId": "01M3R3DD0000000000000000NE",
-        "portId": "01M3R3DD0000000000000000NE:out:text"
+        "portId": "01M3R3DD0000000000000000NE:out:json"
       },
       "to": {
         "nodeId": "01M3R3DD0000000000000000NF",
-        "portId": "01M3R3DD0000000000000000NF:in:text"
+        "portId": "01M3R3DD0000000000000000NF:in:json"
       }
     }
   ]
