@@ -160,6 +160,17 @@ async function build(): Promise<void> {
         toolCalls: [],
         prompt: { version: 'abc123def456', text: '## System\n...' },
       }),
+      // Round 3's three: the gateway never calls them — `RunControls` does — so a stub that throws
+      // is the honest fake. A silent one would let a route reach them unnoticed.
+      driveRecordedRun: async () => {
+        throw new Error('the gateway must not drive a recorded run');
+      },
+      drivePartialRun: async () => {
+        throw new Error('the gateway must not drive a partial run');
+      },
+      envelopesFor: async () => {
+        throw new Error('the gateway must not rebuild envelopes');
+      },
       shutdown: async () => undefined,
       activeRunCount: () => 0,
     },
