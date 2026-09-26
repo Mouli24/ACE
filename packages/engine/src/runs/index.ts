@@ -1,4 +1,5 @@
 import {
+  allowedRunActions,
   DEFAULT_CONCURRENCY,
   type CursorQuery,
   type Edge,
@@ -443,6 +444,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
     const updated = await repository.runs.update(scope, run.id, {
       status: complete ? 'COMPLETE' : 'HALTED',
+      // FR-CTL-006 / D71: the engine states which controls the run now accepts, so the UI never
+      // guesses and the 409 the routes answer comes off the same table.
+      allowedActions: allowedRunActions(complete ? 'COMPLETE' : 'HALTED'),
       ...(complete ? {} : { haltReason }),
       totals,
       endedAt,
@@ -488,6 +492,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
           workflowId,
           projectId: workflow.projectId,
           status: 'PREFLIGHT',
+          allowedActions: allowedRunActions('PREFLIGHT'),
           snapshot: { version: workflow.version, nodes, edges },
           inputs: request.inputs ?? {},
           preflightIssues: [],
@@ -518,10 +523,16 @@ export function createRunService(deps: RunServiceDeps): RunService {
         const withIssues =
           (await repository.runs.update(scope, run.id, {
             status: 'BLOCKED',
+            allowedActions: allowedRunActions('BLOCKED'),
             preflightIssues: issues,
             endedAt: now(),
             durationMs: 0,
-          })) ?? { ...run, status: 'BLOCKED' as const, preflightIssues: issues };
+          })) ?? {
+            ...run,
+            status: 'BLOCKED' as const,
+            allowedActions: allowedRunActions('BLOCKED'),
+            preflightIssues: issues,
+          };
 
         await bus.emit({
           type: 'run.started',
@@ -543,7 +554,11 @@ export function createRunService(deps: RunServiceDeps): RunService {
         return { run: withIssues, done: Promise.resolve(withIssues) };
       }
 
-      const running = (await repository.runs.update(scope, run.id, { status: 'RUNNING' })) ?? run;
+      const running =
+        (await repository.runs.update(scope, run.id, {
+          status: 'RUNNING',
+          allowedActions: allowedRunActions('RUNNING'),
+        })) ?? run;
 
       await bus.emit({
         type: 'run.started',
