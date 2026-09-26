@@ -8,18 +8,25 @@ import {
 import type { Server } from "node:http";
 import { join } from "node:path";
 
-import { WS_PATH } from "@ace/contracts";
+import { WS_PATH, type GuardrailCheck } from "@ace/contracts";
 import { serve } from "@hono/node-server";
 import {
   LOCAL_SCOPE,
+  controlStoresFor,
+  createApprovalService,
+  createBudgetService,
   createEngineApp,
   createEventBus,
   createGraphService,
+  createGuardrailEvaluator,
   createLogger,
+  createPolicyService,
   createProviderService,
+  createRunControls,
   createRunGateRegistry,
   createRunService,
   createWsHub,
+  guardrailStoreFor,
   haltActiveRuns,
   loadEngineConfig,
   logDirectory,
@@ -27,11 +34,21 @@ import {
   pruneOldLogs,
   recoverAfterCrash,
   workflowUpdatedEvent,
+  type CheckInput,
+  type CheckRunner,
   type EngineEvent,
   type Logger,
   type ProviderService,
   type RunService,
+  type SecretMasker,
 } from "@ace/engine";
+import {
+  SECRET_RULES,
+  evaluateCheck,
+  findSpans,
+  redactSpans,
+  type GuardrailInput,
+} from "@ace/guardrails";
 import { createProviderAdapterFactory, createRouter } from "@ace/providers";
 import {
   FsBlobStore,
@@ -44,6 +61,46 @@ import {
 import { WebSocketServer } from "ws";
 
 export const ENGINE_VERSION = "0.1.0";
+
+/**
+ * `CheckInput` (the engine's port) → `GuardrailInput` (what the rule packs read).
+ *
+ * The two shapes say the same things differently on purpose: the engine names the *point* it is at
+ * — loop counters, cost figures — while a check reads one measured `value` against one `limit`. This
+ * is where the engine's vocabulary is turned into theirs, and it is the whole of the seam.
+ *
+ * `undefined` is silence, never a pass: a check handed nothing it can judge must not produce a
+ * verdict, which is why each branch only sets a field it actually has (`evaluateCheck`'s rule 1).
+ */
+export function guardrailInputFor(
+  check: GuardrailCheck,
+  input: CheckInput,
+): GuardrailInput {
+  const base: GuardrailInput = {
+    ...(input.text === undefined ? {} : { text: input.text }),
+    ...(input.parts === undefined ? {} : { parts: input.parts }),
+    ...(input.contract === undefined ? {} : { contract: input.contract }),
+  };
+
+  switch (check.type) {
+    case "max_iterations":
+      return input.loop === undefined ? base : { ...base, value: input.loop.iteration };
+    case "max_tool_calls":
+      return input.loop === undefined ? base : { ...base, value: input.loop.toolCalls };
+    case "repeated_output":
+      return input.loop === undefined
+        ? base
+        : { ...base, outputHashes: input.loop.outputHashes };
+    case "max_tokens_per_node":
+    case "max_cost_per_run":
+    case "daily_budget":
+      return input.cost === undefined
+        ? base
+        : { ...base, value: input.cost.costUsd, limit: input.cost.capUsd };
+    default:
+      return base;
+  }
+}
 
 /** FR-SYS-001 / NFR-SEC-01: the engine binds the loopback interface and nothing else. */
 export const BIND_HOST = "127.0.0.1";
@@ -197,6 +254,102 @@ export async function startEngine(
     })),
   );
 
+  /* ------------------------------------------------------- guardrails (R3) */
+
+  /*
+   * The one place `@ace/guardrails` meets the engine (Arch §13.2, CLAUDE.md §3.4 rule 3). The engine
+   * declares `CheckRunner` and `SecretMasker`; the rule packs implement them, and the translation
+   * between the two vocabularies lives here rather than in either package.
+   */
+  const checks: CheckRunner = {
+    evaluate: (check, input) => evaluateCheck(check, guardrailInputFor(check, input)),
+  };
+
+  /** The data guardrail: always on, configured by nothing (FR-GRD-010, BR-15, D86). */
+  const masker: SecretMasker = {
+    mask: (text) => {
+      const redaction = redactSpans(text, findSpans(text, SECRET_RULES));
+      return { text: redaction.sanitized, types: redaction.redactedTypes };
+    },
+  };
+
+  const guardrailStore = guardrailStoreFor(repository, LOCAL_SCOPE);
+
+  const guardrailPolicies = createPolicyService({
+    scope: LOCAL_SCOPE,
+    policies: guardrailStore.policies,
+    projects: guardrailStore.projects,
+    policyUsage: guardrailStore.policyUsage,
+    checks,
+  });
+
+  /** The `node.state` frame that goes with a node run the approval flow moved (Arch §19.1). */
+  const emitNodeState = async (
+    runId: string,
+    nodeRun: Awaited<ReturnType<typeof repository.nodeRuns.get>>,
+    status: "WAITING" | "RUNNING",
+  ): Promise<void> => {
+    if (nodeRun === null) return;
+    const run = await repository.runs.get(LOCAL_SCOPE, runId);
+    await bus.emit({
+      type: "node.state",
+      ...(run === null ? {} : { workflowId: run.workflowId }),
+      runId,
+      payload: {
+        runId,
+        nodeRunId: nodeRun.id,
+        nodeId: nodeRun.nodeId,
+        iteration: nodeRun.iteration,
+        attempt: nodeRun.attempt,
+        status,
+      },
+    });
+  };
+
+  const approvals = createApprovalService({
+    scope: LOCAL_SCOPE,
+    approvals: guardrailStore.approvals,
+    nodeRuns: guardrailStore.nodeRuns,
+    bus,
+    /*
+     * FR-GRD-013: the node is WAITING while a person decides, and the provider slot is already free
+     * — output evaluation runs after `runGated` returned (D66). The row is moved here rather than in
+     * the scheduler because the scheduler is the thing suspended on the answer.
+     */
+    onWaiting: async (request) => {
+      const row = await repository.nodeRuns.update(LOCAL_SCOPE, request.nodeRunId, {
+        status: "WAITING",
+      });
+      await emitNodeState(request.runId, row, "WAITING");
+    },
+    onDecided: async (request, decision) => {
+      // Approved: the node picks up exactly where it paused. Rejected: it stays WAITING until the
+      // evaluator fails it, so the row never claims to be running something nobody allowed.
+      if (decision.decision !== "approve") return;
+      const row = await repository.nodeRuns.update(LOCAL_SCOPE, request.nodeRunId, {
+        status: "RUNNING",
+      });
+      await emitNodeState(request.runId, row, "RUNNING");
+    },
+  });
+
+  const guardrails = createGuardrailEvaluator({
+    scope: LOCAL_SCOPE,
+    checks,
+    masker,
+    verdicts: guardrailStore.verdicts,
+    bus,
+    approvals,
+  });
+
+  const budgets = createBudgetService({
+    scope: LOCAL_SCOPE,
+    projects: guardrailStore.projects,
+    settings: guardrailStore.settings,
+    usage: guardrailStore.usage,
+    verdicts: guardrails,
+  });
+
   const runs = createRunService({
     gates,
     repository,
@@ -214,6 +367,21 @@ export async function startEngine(
     },
     runGated: async (providerId, fn) =>
       (await providers.semaphoreFor(providerId)).run(fn),
+    policies: guardrailPolicies,
+    guardrails,
+    budgets,
+    approvals,
+  });
+
+  const controls = createRunControls({
+    ...controlStoresFor(repository, LOCAL_SCOPE),
+    bus,
+    gates,
+    logger: logger.child({ subsystem: "runs" }),
+    // The controls never execute anything themselves; these three are the scheduler (FR-CTL-004/005).
+    driveRecordedRun: (run) => runs.driveRecordedRun(run),
+    drivePartialRun: (plan) => runs.drivePartialRun(plan),
+    envelopesFor: (run, nodeId) => runs.envelopesFor(run, nodeId),
   });
 
   /* FR-SYS-009: anything the store still believes is running died with the last process. */
@@ -252,6 +420,10 @@ export async function startEngine(
     runs,
     bus,
     selfOrigins,
+    /* Round 3's three sub-routers (§2.5, D121). */
+    controls,
+    guardrailPolicies,
+    approvals,
   });
 
   /* -------------------------------------------------------------------- http */

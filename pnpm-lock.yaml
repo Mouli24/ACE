@@ -26,6 +26,9 @@ importers:
       '@ace/engine':
         specifier: workspace:*
         version: link:../../packages/engine
+      '@ace/guardrails':
+        specifier: workspace:*
+        version: link:../../packages/guardrails
       '@ace/providers':
         specifier: workspace:^
         version: link:../../packages/providers
@@ -5531,7 +5534,7 @@ snapshots:
       obug: 2.2.1
       std-env: 4.2.0
       tinyrainbow: 3.1.1
-      vitest: 5.0.1(@types/node@22.20.4)(@vitest/coverage-v8@5.0.1)(jsdom@27.4.0)(msw@2.15.0(@types/node@22.20.4)(typescript@5.9.3))(vite@7.3.6(@types/node@22.20.4)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
+      vitest: 5.0.1(@types/node@22.20.4)(@vitest/coverage-v8@5.0.1)(jsdom@27.4.0)(msw@2.15.0(@types/node@22.20.4)(typescript@5.9.3))(vite@8.3.0(@types/node@22.20.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15))
 
   '@vitest/istanbul-lib-coverage@1.0.1': {}
 

@@ -33,6 +33,7 @@
   "dependencies": {
     "@ace/contracts": "workspace:*",
     "@ace/engine": "workspace:*",
+    "@ace/guardrails": "workspace:*",
     "@ace/providers": "workspace:^",
     "@ace/storage-local": "workspace:*",
     "@hono/node-server": "^2.1.1",
