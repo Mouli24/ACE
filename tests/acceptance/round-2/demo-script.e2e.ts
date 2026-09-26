@@ -57,7 +57,9 @@ interface Graph {
 }
 
 const card = (page: Page, nodeId: string) => page.getByTestId(`node-card-${nodeId}`);
-const start = (page: Page) => page.getByTestId('run-bar').getByRole('button', { name: 'Start' });
+// `exact`, because round 3 put Restart in the same bar and "Start" is a substring of it.
+const start = (page: Page) =>
+  page.getByTestId('run-bar').getByRole('button', { name: 'Start', exact: true });
 const nodeOf = (graph: Graph, kind: string) => graph.nodes.find((n) => n.kind === kind) as Node;
 
 /** Import a fixture for a step of the script, pointed at the provider the UI just created. */

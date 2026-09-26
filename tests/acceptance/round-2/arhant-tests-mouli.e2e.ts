@@ -162,7 +162,8 @@ async function selectCard(page: Page, nodeId: string): Promise<void> {
   await expect(card(page, nodeId)).toHaveAttribute('data-selected', 'true');
 }
 const startButton = (page: Page): Locator =>
-  page.getByTestId('run-bar').getByRole('button', { name: 'Start' });
+  // `exact`, because round 3 put Restart in the same bar and "Start" is a substring of it.
+  page.getByTestId('run-bar').getByRole('button', { name: 'Start', exact: true });
 
 const nodeOf = (graph: Graph, kind: string): Node =>
   graph.nodes.find((node) => node.kind === kind) as Node;
