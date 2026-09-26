@@ -5,7 +5,7 @@ import { createEventBus } from '../events/index.js';
 import { newId } from '../ids.js';
 import { createLogger } from '../logging/index.js';
 import { LOCAL_SCOPE, type EngineEvent, type ModelRouter, type ProviderAdapter } from '../ports/index.js';
-import { createRunService } from '../runs/index.js';
+import { createRunGateRegistry, createRunService } from '../runs/index.js';
 import { FakeRepository } from './fake-repository.js';
 import { InProcessPubSubStub } from './pubsub-stub.js';
 
@@ -171,6 +171,7 @@ async function runGraph(nodeCount: number, concurrency: number) {
   for (const edge of edges) await repository.edges.insert(scope, edge);
 
   const service = createRunService({
+    gates: createRunGateRegistry(),
     repository,
     scope,
     bus,
@@ -278,6 +279,7 @@ describe('TC-NFR-003 the first token reaches a subscriber well inside 200 ms', (
     for (const edge of edges) await repository.edges.insert(scope, edge);
 
     const service = createRunService({
+      gates: createRunGateRegistry(),
       repository,
       scope,
       bus,
