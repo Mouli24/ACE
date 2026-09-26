@@ -12,9 +12,7 @@ import {
   type Part,
 } from '@ace/contracts';
 
-import { readPath } from './path.js';
-
-export * from './path.js';
+import { readPath } from '../runs/transform.js';
 
 /**
  * Loop edges (FR-CON-007, FR-PAR-003..007, FR-GRD-009, Arch §12.3, round 3 §2.4).
@@ -50,6 +48,12 @@ export function jsonValueOf(parts: readonly Part[]): unknown {
 
 /**
  * Whether the loop may stop because it got what it was waiting for (FR-PAR-004).
+ *
+ * The path is read by the transform node's `readPath`, deliberately and not by a second reader:
+ * `{{a.b}}` in a template, `extract_json_field`'s path and a loop's exit path are the same dotted
+ * grammar, and it is the grammar `DOTTED_PATH_REGEX` lets the loop edge editor save (D73). A path
+ * that resolves to nothing reads as `undefined`, so a reviewer that answered without the field has
+ * simply not met the condition — which is a loop decision, not a crash.
  *
  * Strict equality, with no coercion: `"8"` is not `8`, and a reviewer that answered
  * `verdict: "Approved"` has not met `equals: "approved"`. A loop that silently accepted a near

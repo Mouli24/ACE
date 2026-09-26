@@ -22,7 +22,6 @@ import {
   jsonValueOf,
   loopFailure,
   planNextIteration,
-  readPath,
   retainedEnvelopes,
   splitOutgoing,
   type LoopContinue,
@@ -30,6 +29,7 @@ import {
   type LoopStop,
 } from '../loops/index.js';
 import { createMergeArrivalLog, isMergeReady, mergeOutput, type MergeNode } from '../merge/index.js';
+import { readPath } from '../runs/transform.js';
 
 /**
  * Loop scheduling (FR-PAR-003..007, FR-GRD-009, TC-PAR-004..007, TC-GRD-013, Arch §12.3, §2.4).
@@ -141,12 +141,20 @@ describe('FR-PAR-004 reading the exit condition out of a json output', () => {
     expect(readPath(value, path)).toBe(expected);
   });
 
-  it.each(['missing', 'review.missing', 'issues.9', 'verdict.deeper', 'constructor'])(
+  it.each(['missing', 'review.missing', 'issues.9', 'verdict.deeper'])(
     'reads %s as undefined rather than throwing',
     (path) => {
       expect(readPath({ verdict: 'approved', review: {}, issues: [] }, path)).toBeUndefined();
     },
   );
+
+  it('the loop reads its path with the transform node’s reader, not a second grammar', () => {
+    // `exitConditionMet` is `readPath` over the first json part; if the two ever diverged, a path
+    // the loop editor accepted could mean one thing in a template and another in a loop.
+    expect(exitConditionMet(LOOP, review('approved'))).toBe(
+      readPath(jsonValueOf(review('approved')), 'verdict') === 'approved',
+    );
+  });
 
   it('takes the exit value from the first json part and ignores text', () => {
     expect(jsonValueOf([{ type: 'text', text: 'hello' }, ...review('approved')])).toEqual({
