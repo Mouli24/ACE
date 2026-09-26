@@ -267,6 +267,54 @@ describe('FR-GRD-001 Policy CRUD', () => {
     expect(patched?.isProjectDefault).toBe(true);
   });
 
+  it('keeps the version it superseded, readable by getVersion (Arch §13.4, BR-04)', async () => {
+    const project = await db.repository.projects.create(scope, makeProject());
+    const policy = await db.repository.guardrailPolicies.getProjectDefault(scope, project.id);
+    const id = policy?.id ?? '';
+    const before = policy?.checks ?? [];
+
+    await db.repository.guardrailPolicies.update(scope, id, {
+      name: 'Loose',
+      version: 2,
+      checks: [],
+      updatedAt: '2026-09-26T11:00:00.000Z',
+    });
+
+    // A node run recorded `{ id, version: 1 }`; that has to still answer what it was judged against.
+    const v1 = await db.repository.guardrailPolicies.getVersion(scope, id, 1);
+    expect(v1?.version).toBe(1);
+    expect(v1?.name).toBe(policy?.name);
+    expect(v1?.checks).toEqual(before);
+
+    const v2 = await db.repository.guardrailPolicies.getVersion(scope, id, 2);
+    expect(v2?.checks).toEqual([]);
+    expect(await db.repository.guardrailPolicies.getVersion(scope, id, 3)).toBeNull();
+
+    // One policy at two versions is still one policy, and only the latest carries the default flag.
+    const listed = await db.repository.guardrailPolicies.listByProject(scope, project.id);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.version).toBe(2);
+    expect(v1?.isProjectDefault).toBe(false);
+    expect(await db.repository.guardrailPolicies.getProjectDefault(scope, project.id)).toMatchObject(
+      { id, version: 2 },
+    );
+
+    // Without a project id it is every policy in the workspace, latest version each.
+    expect(await db.repository.guardrailPolicies.listByProject(scope)).toEqual(listed);
+  });
+
+  it('deletes every version of a policy, not only the latest', async () => {
+    const project = await db.repository.projects.create(scope, makeProject());
+    const policy = await db.repository.guardrailPolicies.getProjectDefault(scope, project.id);
+    const id = policy?.id ?? '';
+
+    await db.repository.guardrailPolicies.update(scope, id, { version: 2, checks: [] });
+    expect(await db.repository.guardrailPolicies.delete(scope, id)).toBe(true);
+
+    expect(await db.repository.guardrailPolicies.getVersion(scope, id, 1)).toBeNull();
+    expect(await db.repository.guardrailPolicies.getVersion(scope, id, 2)).toBeNull();
+  });
+
   it('leaves the row alone for an empty patch, and answers null for an unknown id', async () => {
     const project = await db.repository.projects.create(scope, makeProject());
     const policy = await db.repository.guardrailPolicies.getProjectDefault(scope, project.id);

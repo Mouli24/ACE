@@ -121,6 +121,7 @@ describe('Arch §7 Repository', () => {
       guardrailPolicies: {
         create: async (_s, policy) => policy,
         get: async () => null,
+        getVersion: async () => null,
         listByProject: async () => [],
         getProjectDefault: async () => null,
         update: async () => null,

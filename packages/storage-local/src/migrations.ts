@@ -189,8 +189,11 @@ export const MIGRATIONS: readonly Migration[] = [
   {
     id: ROUND_3_MIGRATION_ID,
     up: `
+      -- One row per policy version: a PATCH inserts version + 1 and never rewrites what came
+      -- before it, so the policy id and version a node run recorded still resolve years later
+      -- (FR-GRD-001, FR-GRD-002, Arch 13.4, BR-04).
       CREATE TABLE guardrail_policies (
-        id                 TEXT PRIMARY KEY,
+        id                 TEXT NOT NULL,
         workspace_id       TEXT NOT NULL,
         project_id         TEXT NOT NULL,
         name               TEXT NOT NULL,
@@ -198,11 +201,14 @@ export const MIGRATIONS: readonly Migration[] = [
         is_project_default INTEGER NOT NULL,
         checks             TEXT NOT NULL,
         created_at         TEXT NOT NULL,
-        updated_at         TEXT NOT NULL
+        updated_at         TEXT NOT NULL,
+        PRIMARY KEY (id, version)
       );
       CREATE INDEX guardrail_policies_project_idx
         ON guardrail_policies (workspace_id, project_id, id);
-      -- One default per project is a constraint, not a convention (FR-GRD-018).
+      -- One default per project is a constraint, not a convention (FR-GRD-018). Only the latest
+      -- version of the default policy carries the flag, which is what keeps this index unique while
+      -- the table holds every version.
       CREATE UNIQUE INDEX guardrail_policies_default_idx
         ON guardrail_policies (workspace_id, project_id) WHERE is_project_default = 1;
 

@@ -125,13 +125,43 @@ export function createGuardrailPolicyRepository(
     updatedAt: policy.updatedAt,
   });
 
-  const read = (scope: Scope, id: Id): GuardrailPolicy | null => {
-    const row = db
+  /** Every stored version of one policy, oldest first. */
+  const versions = (scope: Scope, id: Id): PolicyRow[] =>
+    db
       .select()
       .from(guardrailPolicies)
       .where(and(eq(guardrailPolicies.workspaceId, scope.workspaceId), eq(guardrailPolicies.id, id)))
-      .get();
+      .orderBy(asc(guardrailPolicies.version))
+      .all();
+
+  /** The latest version — what every read of a policy answers (FR-GRD-001). */
+  const read = (scope: Scope, id: Id): GuardrailPolicy | null => {
+    const row = versions(scope, id).at(-1);
     return row === undefined ? null : toPolicy(row);
+  };
+
+  /** The latest version of each policy, oldest policy first. */
+  const latestOf = (rows: readonly PolicyRow[]): GuardrailPolicy[] => {
+    const byId = new Map<string, PolicyRow>();
+    for (const row of rows) {
+      const seen = byId.get(row.id);
+      if (seen === undefined || row.version > seen.version) byId.set(row.id, row);
+    }
+    return [...byId.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).map(toPolicy);
+  };
+
+  /** Clears the flag on every row of the project, so the unique index has room for the new one. */
+  const clearDefault = (scope: Scope, projectId: Id): void => {
+    db.update(guardrailPolicies)
+      .set({ isProjectDefault: false })
+      .where(
+        and(
+          eq(guardrailPolicies.workspaceId, scope.workspaceId),
+          eq(guardrailPolicies.projectId, projectId),
+          eq(guardrailPolicies.isProjectDefault, true),
+        ),
+      )
+      .run();
   };
 
   return {
@@ -142,19 +172,36 @@ export function createGuardrailPolicyRepository(
 
     get: async (scope: Scope, id: Id) => read(scope, id),
 
-    listByProject: async (scope: Scope, projectId: Id) =>
-      db
+    getVersion: async (scope: Scope, id: Id, version: number) => {
+      const row = db
         .select()
         .from(guardrailPolicies)
         .where(
           and(
             eq(guardrailPolicies.workspaceId, scope.workspaceId),
-            eq(guardrailPolicies.projectId, projectId),
+            eq(guardrailPolicies.id, id),
+            eq(guardrailPolicies.version, version),
           ),
         )
-        .orderBy(asc(guardrailPolicies.id))
-        .all()
-        .map(toPolicy),
+        .get();
+      return row === undefined ? null : toPolicy(row);
+    },
+
+    listByProject: async (scope: Scope, projectId?: Id) =>
+      latestOf(
+        db
+          .select()
+          .from(guardrailPolicies)
+          .where(
+            projectId === undefined
+              ? eq(guardrailPolicies.workspaceId, scope.workspaceId)
+              : and(
+                  eq(guardrailPolicies.workspaceId, scope.workspaceId),
+                  eq(guardrailPolicies.projectId, projectId),
+                ),
+          )
+          .all(),
+      ),
 
     getProjectDefault: async (scope: Scope, projectId: Id) => {
       const row = db
@@ -171,52 +218,77 @@ export function createGuardrailPolicyRepository(
       return row === undefined ? null : toPolicy(row);
     },
 
-    update: async (scope: Scope, id: Id, patch: GuardrailPolicyPatch) => {
-      const values = {
-        ...(patch.name === undefined ? {} : { name: patch.name }),
-        ...(patch.version === undefined ? {} : { version: patch.version }),
-        ...(patch.checks === undefined
-          ? {}
-          : { checks: toJsonColumn(patch.checks, `guardrailPolicy(${id}).checks`) }),
-        ...(patch.updatedAt === undefined ? {} : { updatedAt: patch.updatedAt }),
-      };
+    /**
+     * A patch naming a higher version **inserts** it and leaves every earlier version untouched
+     * (FR-GRD-001, Arch §13.4). The default flag travels to the new row rather than being copied,
+     * so `guardrail_policies_default_idx` stays unique while the table holds the whole history.
+     */
+    update: async (scope: Scope, id: Id, patch: GuardrailPolicyPatch) =>
+      inTransaction(async () => {
+        const current = versions(scope, id).at(-1);
+        if (current === undefined) return null;
 
-      if (Object.keys(values).length > 0) {
-        db.update(guardrailPolicies)
-          .set(values)
-          .where(
-            and(eq(guardrailPolicies.workspaceId, scope.workspaceId), eq(guardrailPolicies.id, id)),
-          )
-          .run();
-      }
+        const next = patch.version;
+        if (next !== undefined && next > current.version) {
+          const merged: GuardrailPolicy = toPolicy({
+            ...current,
+            version: next,
+            ...(patch.name === undefined ? {} : { name: patch.name }),
+            ...(patch.checks === undefined
+              ? {}
+              : { checks: toJsonColumn(patch.checks, `guardrailPolicy(${id}).checks`) }),
+            ...(patch.updatedAt === undefined ? {} : { updatedAt: patch.updatedAt }),
+          });
 
-      return read(scope, id);
-    },
+          if (current.isProjectDefault) clearDefault(scope, current.projectId);
+          db.insert(guardrailPolicies).values(rowFor(scope, merged)).run();
+          return read(scope, id);
+        }
+
+        const values = {
+          ...(patch.name === undefined ? {} : { name: patch.name }),
+          ...(patch.checks === undefined
+            ? {}
+            : { checks: toJsonColumn(patch.checks, `guardrailPolicy(${id}).checks`) }),
+          ...(patch.updatedAt === undefined ? {} : { updatedAt: patch.updatedAt }),
+        };
+
+        if (Object.keys(values).length > 0) {
+          db.update(guardrailPolicies)
+            .set(values)
+            .where(
+              and(
+                eq(guardrailPolicies.workspaceId, scope.workspaceId),
+                eq(guardrailPolicies.id, id),
+                eq(guardrailPolicies.version, current.version),
+              ),
+            )
+            .run();
+        }
+
+        return read(scope, id);
+      }),
 
     /**
      * Clears the project's flag before setting the new one: the partial unique index would refuse
-     * the other order, and a reader between the two statements must never see two defaults.
+     * the other order, and a reader between the two statements must never see two defaults. Only
+     * the **latest** version is flagged, which is what lets one index cover a versioned table.
      */
     setDefault: async (scope: Scope, id: Id) =>
       inTransaction(async () => {
-        const current = read(scope, id);
-        if (current === null) return null;
+        const current = versions(scope, id).at(-1);
+        if (current === undefined) return null;
 
-        db.update(guardrailPolicies)
-          .set({ isProjectDefault: false })
-          .where(
-            and(
-              eq(guardrailPolicies.workspaceId, scope.workspaceId),
-              eq(guardrailPolicies.projectId, current.projectId),
-              eq(guardrailPolicies.isProjectDefault, true),
-            ),
-          )
-          .run();
+        clearDefault(scope, current.projectId);
 
         db.update(guardrailPolicies)
           .set({ isProjectDefault: true })
           .where(
-            and(eq(guardrailPolicies.workspaceId, scope.workspaceId), eq(guardrailPolicies.id, id)),
+            and(
+              eq(guardrailPolicies.workspaceId, scope.workspaceId),
+              eq(guardrailPolicies.id, id),
+              eq(guardrailPolicies.version, current.version),
+            ),
           )
           .run();
 

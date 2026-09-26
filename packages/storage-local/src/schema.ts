@@ -269,7 +269,7 @@ export const nodeRuns = sqliteTable(
 export const guardrailPolicies = sqliteTable(
   'guardrail_policies',
   {
-    id: text('id').primaryKey(),
+    id: text('id').notNull(),
     workspaceId: text('workspace_id').notNull(),
     projectId: text('project_id').notNull(),
     name: text('name').notNull(),
@@ -281,6 +281,7 @@ export const guardrailPolicies = sqliteTable(
     updatedAt: text('updated_at').notNull(),
   },
   (table) => [
+    primaryKey({ columns: [table.id, table.version] }),
     index('guardrail_policies_project_idx').on(table.workspaceId, table.projectId, table.id),
     uniqueIndex('guardrail_policies_default_idx')
       .on(table.workspaceId, table.projectId)
