@@ -90,6 +90,35 @@ describe('FR-SYS-006 contracts barrel', () => {
     ['events', 'NodeApprovalDecidedPayloadSchema'],
     ['events', 'GuardrailVerdictPayloadSchema'],
     ['events', 'LoopIterationPayloadSchema'],
+    ['artifacts', 'ArtifactSchema'],
+    ['artifacts', 'isAllowedUpload'],
+    ['artifacts', 'ALLOWED_UPLOAD_MIME_TYPES'],
+    ['artifacts', 'DEFAULT_MAX_UPLOAD_MB'],
+    ['tools', 'ToolDefinitionSchema'],
+    ['tools', 'ToolCallSchema'],
+    ['tools', 'McpServerSchema'],
+    ['tools', 'CreateMcpServerRequestSchema'],
+    ['tools', 'BUILTIN_TOOL_NAMES'],
+    ['chat', 'MessageSchema'],
+    ['chat', 'MessageQuerySchema'],
+    ['chat', 'PostMessageRequestSchema'],
+    ['chat', 'ChatThreadSchema'],
+    ['chat', 'ChatMessageSchema'],
+    ['chat', 'ChatRequestSchema'],
+    ['chat', 'MESSAGE_TYPES'],
+    ['guardrails', 'ChatVerdictSchema'],
+    ['errors', 'ROUND_4_ERROR_CODES'],
+    ['errors', 'UploadTooLargeDetailsSchema'],
+    ['errors', 'GuardrailBlockedDetailsSchema'],
+    ['validation', 'ROUND_4_VALIDATION_ISSUE_CODES'],
+    ['settings', 'DOCKER_SANDBOX_MODES'],
+    ['events', 'ToolCallPayloadSchema'],
+    ['events', 'MessageCreatedPayloadSchema'],
+    ['events', 'ChatMessagePayloadSchema'],
+    ['events', 'ChatTokenPayloadSchema'],
+    ['events', 'McpStatusPayloadSchema'],
+    ['events', 'ThreadEventSchema'],
+    ['events', 'THREAD_EVENT_TYPES'],
   ])('re-exports %s -> %s', (_module, symbol) => {
     expect(contracts).toHaveProperty(symbol);
   });
@@ -132,10 +161,21 @@ describe('FR-SYS-006 contracts barrel', () => {
     ).toBeGreaterThan(0);
   });
 
-  it('keeps an importable, still-empty placeholder for the seven later-round modules', () => {
-    const placeholders = { tools, artifacts, chat, knowledge, memory, usage, templates };
+  it('fills the three modules round 4 §2 adds', () => {
+    const filled = { tools, artifacts, chat };
 
-    expect(Object.keys(placeholders)).toHaveLength(7);
+    expect(Object.keys(filled)).toHaveLength(3);
+    for (const [name, module] of Object.entries(filled)) {
+      expect(Object.keys(module).length, `${name}.ts should export its contract`).toBeGreaterThan(
+        0,
+      );
+    }
+  });
+
+  it('keeps an importable, still-empty placeholder for the four later-round modules', () => {
+    const placeholders = { knowledge, memory, usage, templates };
+
+    expect(Object.keys(placeholders)).toHaveLength(4);
     for (const [name, module] of Object.entries(placeholders)) {
       expect(Object.keys(module), `${name}.ts should still be empty`).toEqual([]);
     }

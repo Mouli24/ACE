@@ -7,6 +7,7 @@ import {
   PolicyInUseDetailsSchema,
   ROUND_1_ERROR_CODES,
   ROUND_3_ERROR_CODES,
+  ROUND_4_ERROR_CODES,
   aceError,
 } from '../errors.js';
 import { NODE_A } from './fixtures.js';
@@ -98,6 +99,15 @@ describe('FR-SYS-006 round 1 error codes', () => {
       'provider_in_use',
       'invalid_run_state',
       'policy_in_use',
+      ...ROUND_4_ERROR_CODES,
+    ]);
+  });
+
+  it('adds the three codes round 4 §2.1 and §2.3 name', () => {
+    expect([...ROUND_4_ERROR_CODES]).toEqual([
+      'upload_too_large',
+      'unsupported_type',
+      'guardrail_blocked',
     ]);
   });
 
@@ -115,6 +125,9 @@ describe('FR-SYS-006 round 1 error codes', () => {
       provider_in_use: 409,
       invalid_run_state: 409,
       policy_in_use: 409,
+      upload_too_large: 413,
+      unsupported_type: 415,
+      guardrail_blocked: 422,
     });
   });
 });

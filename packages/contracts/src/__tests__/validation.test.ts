@@ -5,6 +5,7 @@ import { LOOP_REFUSAL_CODES, type Port } from '../graph.js';
 import {
   ROUND_1_VALIDATION_ISSUE_CODES,
   ROUND_3_VALIDATION_ISSUE_CODES,
+  ROUND_4_VALIDATION_ISSUE_CODES,
   VALIDATION_ISSUE_CODES,
   ValidationIssueCodeSchema,
   ValidationIssueSchema,
@@ -127,7 +128,16 @@ describe('FR-WF-006 ValidationIssue', () => {
       'not_supported_yet',
       'unknown_placeholder',
       ...ROUND_3_VALIDATION_ISSUE_CODES,
+      ...ROUND_4_VALIDATION_ISSUE_CODES,
     ]);
+  });
+
+  it('adds the two codes round 4 §2.4 names, and repurposes none', () => {
+    expect([...ROUND_4_VALIDATION_ISSUE_CODES]).toEqual([
+      'tool_not_registered',
+      'mcp_server_unreachable',
+    ]);
+    expect(VALIDATION_ISSUE_CODES).toContain('incompatible_model');
   });
 
   it('FR-CON-007 reports a refused loop edge by the code validateLoopConfig gives it', () => {

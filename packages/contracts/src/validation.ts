@@ -82,6 +82,9 @@ export const ROUND_1_VALIDATION_ISSUE_CODES = [
  * The codes round 2 §2.5 adds. The first four are raised by `/validate`; `missing_input`,
  * `not_supported_yet` and `unknown_placeholder` are raised by pre-flight (§2.7) and land on the
  * run as `preflightIssues`. `not_supported_yet` is removed code by code as later rounds land.
+ *
+ * From round 4 `incompatible_model` also covers file, image, audio and video inputs: an image on
+ * its way to a text-only model is this code (round 4 §2.4, FR-MM-005, TC-MM-005).
  */
 export const ROUND_2_VALIDATION_ISSUE_CODES = [
   'provider_missing',
@@ -107,10 +110,26 @@ export const ROUND_3_VALIDATION_ISSUE_CODES = [
   'missing_upstream_output',
 ] as const;
 
+/**
+ * The codes round 4 §2.4 adds. `tool_not_registered` is an error: an agent has a tool enabled that
+ * no longer exists, typically because its MCP server was removed (FR-TOOL-002, FR-TOOL-007).
+ * `mcp_server_unreachable` is a **warning** — the run can proceed without that server's tools, the
+ * way `missing_model` was a warning in round 1.
+ *
+ * Round 4 adds no code for a data type a model cannot accept: `incompatible_model` already covers
+ * it and now also covers file, image, audio and video inputs (FR-MM-005), because codes are only
+ * ever added, never repurposed away from a consumer (NFR-VER-01).
+ */
+export const ROUND_4_VALIDATION_ISSUE_CODES = [
+  'tool_not_registered',
+  'mcp_server_unreachable',
+] as const;
+
 export const VALIDATION_ISSUE_CODES = [
   ...ROUND_1_VALIDATION_ISSUE_CODES,
   ...ROUND_2_VALIDATION_ISSUE_CODES,
   ...ROUND_3_VALIDATION_ISSUE_CODES,
+  ...ROUND_4_VALIDATION_ISSUE_CODES,
 ] as const;
 export const ValidationIssueCodeSchema = z.enum(VALIDATION_ISSUE_CODES);
 export type ValidationIssueCode = z.infer<typeof ValidationIssueCodeSchema>;

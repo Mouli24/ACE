@@ -4,6 +4,7 @@ import {
   ENGINE_EVENT_FRAME_SCHEMAS,
   RUN_EVENT_FRAME_SCHEMAS,
   SeqSchema,
+  THREAD_EVENT_FRAME_SCHEMAS,
 } from './events.js';
 import { IdSchema } from './graph.js';
 
@@ -21,7 +22,12 @@ export const WS_PATH = '/ws';
 /** Close code for a missing or wrong token (§2.9, FR-SYS-002). */
 export const WS_CLOSE_UNAUTHORIZED = 4401;
 
-export const WS_SCOPES = ['workflow', 'engine'] as const;
+/**
+ * What a client may subscribe to. Round 4 §2.5 adds `thread`: a direct chat streams on its own
+ * subscription, so an open chat panel receives `chat.token` and `chat.message` without the run
+ * traffic of the workflow it belongs to — and a chat touches no run at all (FR-CHAT-005).
+ */
+export const WS_SCOPES = ['workflow', 'engine', 'thread'] as const;
 export const WsScopeSchema = z.enum(WS_SCOPES);
 export type WsScope = z.infer<typeof WsScopeSchema>;
 
@@ -29,10 +35,14 @@ export type WsScope = z.infer<typeof WsScopeSchema>;
 /* Client -> server                                                            */
 /* -------------------------------------------------------------------------- */
 
-/** A workflow subscription names its workflow; an engine subscription takes no id. */
+/**
+ * A workflow subscription names its workflow and a thread subscription its thread (round 4 §2.5);
+ * an engine subscription takes no id.
+ */
 export const WsSubscribePayloadSchema = z.discriminatedUnion('scope', [
   z.object({ scope: z.literal('workflow'), id: IdSchema }),
   z.object({ scope: z.literal('engine') }),
+  z.object({ scope: z.literal('thread'), id: IdSchema }),
 ]);
 export type WsSubscribePayload = z.infer<typeof WsSubscribePayloadSchema>;
 
@@ -84,13 +94,15 @@ export const WsServerFrameSchema = z.discriminatedUnion('type', CORE_SERVER_FRAM
 export type WsServerFrame = z.infer<typeof WsServerFrameSchema>;
 
 /**
- * Every frame the server may send: the round 1 core plus round 2's run and engine events (§2.4),
- * so one `safeParse` covers the whole socket. `node.token` is the one member without a `seq`, so
- * a client that tracks `lastSeq` must check for it before resuming (§5 item 1).
+ * Every frame the server may send: the round 1 core, round 2's run and engine events (§2.4) and
+ * round 4's thread events (§2.5), so one `safeParse` covers the whole socket. `node.token` and
+ * `chat.token` are the members without a `seq`, so a client that tracks `lastSeq` must check for
+ * them before resuming (§5 item 1).
  */
 export const ServerFrameSchema = z.discriminatedUnion('type', [
   ...CORE_SERVER_FRAME_SCHEMAS,
   ...RUN_EVENT_FRAME_SCHEMAS,
+  ...THREAD_EVENT_FRAME_SCHEMAS,
   ...ENGINE_EVENT_FRAME_SCHEMAS,
 ]);
 export type ServerFrame = z.infer<typeof ServerFrameSchema>;

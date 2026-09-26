@@ -6,6 +6,7 @@ import {
   NodeStateSchema,
   ProviderStateSchema,
 } from './enums.js';
+import { ChatMessageSchema, MessageSchema } from './chat.js';
 import { PartSchema } from './envelope.js';
 import { IdSchema, LoopStopReasonSchema, TimestampSchema } from './graph.js';
 import { ApprovalDecisionSchema, ApprovalRequestSchema, VerdictSchema } from './guardrails.js';
@@ -16,15 +17,20 @@ import {
   RunSummarySchema,
   UsageSchema,
 } from './runs.js';
+import { McpServerStatusSchema, ToolCallSchema } from './tools.js';
 
 /**
- * The event log and the run events that ride the WebSocket (round 2 §2.4, round 3 §2.6,
- * FR-EXE-014, Arch §20.3).
+ * The event log and the events that ride the WebSocket (round 2 §2.4, round 3 §2.6,
+ * round 4 §2.5, FR-EXE-014, Arch §20.3).
  *
- * Every event but one is persisted with a global monotonic `seq`, which is what `resume
- * { afterSeq }` replays from. `node.token` is the exception: it is a transient stream frame, so
- * it carries no `seq` and is never written down — a reconnecting client rebuilds the text from
- * the `node.output` that follows. Round 3's six events are all persisted.
+ * Almost every event is persisted with a global monotonic `seq`, which is what `resume
+ * { afterSeq }` replays from. Two are not: `node.token` and round 4's `chat.token` are transient
+ * stream frames, so they carry no `seq` and are never written down — a reconnecting client
+ * rebuilds the text from the `node.output` or `chat.message` that follows. Round 3's six events
+ * are all persisted; of round 4's five, four are.
+ *
+ * Events come in three families, by the subscription they ride: run events on a `workflow`
+ * subscription, thread events on a `thread` one (round 4 §2.5), engine events on `engine`.
  */
 
 /** The global event sequence: monotonic, append-only, the anchor for `resume` (round 1 §2.9). */
@@ -182,6 +188,48 @@ export const LoopIterationPayloadSchema = z.strictObject({
 });
 export type LoopIterationPayload = z.infer<typeof LoopIterationPayloadSchema>;
 
+/* Round 4 §2.5 — four persisted, one transient. */
+
+/** One logged tool call, as it happened (FR-TOOL-009, TC-TOOL-010). */
+export const ToolCallPayloadSchema = z.strictObject({
+  runId: IdSchema,
+  nodeRunId: IdSchema,
+  toolCall: ToolCallSchema,
+});
+export type ToolCallPayload = z.infer<typeof ToolCallPayloadSchema>;
+
+/** A new row of the workflow's timeline (FR-CHAT-001); it rides the workflow subscription. */
+export const MessageCreatedPayloadSchema = z.strictObject({
+  workflowId: IdSchema,
+  message: MessageSchema,
+});
+export type MessageCreatedPayload = z.infer<typeof MessageCreatedPayloadSchema>;
+
+/**
+ * A finished turn of a direct chat — the reply the `chat.token` deltas were building, or a blocked
+ * one (FR-CHAT-006, FR-CHAT-008). Persisted, but on the thread, never on a run (FR-CHAT-005).
+ */
+export const ChatMessagePayloadSchema = z.strictObject({
+  threadId: IdSchema,
+  message: ChatMessageSchema,
+});
+export type ChatMessagePayload = z.infer<typeof ChatMessagePayloadSchema>;
+
+/** Batched like `node.token`, and transient for the same reason (FR-CHAT-006). */
+export const ChatTokenPayloadSchema = z.strictObject({
+  threadId: IdSchema,
+  delta: z.string(),
+});
+export type ChatTokenPayload = z.infer<typeof ChatTokenPayloadSchema>;
+
+/** An MCP server came up, went away, or changed how many tools it offers (FR-TOOL-007, D16). */
+export const McpStatusPayloadSchema = z.strictObject({
+  serverId: IdSchema,
+  status: McpServerStatusSchema,
+  toolCount: z.number().int().min(0),
+});
+export type McpStatusPayload = z.infer<typeof McpStatusPayloadSchema>;
+
 /* -------------------------------------------------------------------------- */
 /* Frames                                                                      */
 /* -------------------------------------------------------------------------- */
@@ -211,17 +259,34 @@ export const RUN_EVENT_FRAME_SCHEMAS = [
   persistedFrame('node.approval_decided', NodeApprovalDecidedPayloadSchema),
   persistedFrame('guardrail.verdict', GuardrailVerdictPayloadSchema),
   persistedFrame('loop.iteration', LoopIterationPayloadSchema),
+  persistedFrame('tool.call', ToolCallPayloadSchema),
+  persistedFrame('message.created', MessageCreatedPayloadSchema),
+] as const;
+
+/**
+ * Round 4 §2.5's chat frames. Their own family, because they ride the new `thread` subscription
+ * and a direct chat belongs to no run (FR-CHAT-005) — putting `chat.token` among the run events
+ * would also make `PERSISTED_RUN_EVENT_TYPES` shorter by a type no run ever sees.
+ */
+export const THREAD_EVENT_FRAME_SCHEMAS = [
+  persistedFrame('chat.message', ChatMessagePayloadSchema),
+  transientFrame('chat.token', ChatTokenPayloadSchema),
 ] as const;
 
 export const ENGINE_EVENT_FRAME_SCHEMAS = [
   persistedFrame('provider.status', ProviderStatusPayloadSchema),
+  persistedFrame('mcp.status', McpStatusPayloadSchema),
 ] as const;
 
 /** Server → client, run scope (round 2 §2.4, round 3 §2.6). */
 export const RunEventSchema = z.discriminatedUnion('type', RUN_EVENT_FRAME_SCHEMAS);
 export type RunEvent = z.infer<typeof RunEventSchema>;
 
-/** Server → client, engine scope (§2.4). */
+/** Server → client, thread scope (round 4 §2.5). */
+export const ThreadEventSchema = z.discriminatedUnion('type', THREAD_EVENT_FRAME_SCHEMAS);
+export type ThreadEvent = z.infer<typeof ThreadEventSchema>;
+
+/** Server → client, engine scope (§2.4, round 4 §2.5). */
 export const EngineEventSchema = z.discriminatedUnion('type', ENGINE_EVENT_FRAME_SCHEMAS);
 export type EngineEvent = z.infer<typeof EngineEventSchema>;
 
@@ -244,21 +309,32 @@ export const RUN_EVENT_TYPES = [
   'node.approval_decided',
   'guardrail.verdict',
   'loop.iteration',
+  'tool.call',
+  'message.created',
 ] as const;
 export type RunEventType = (typeof RUN_EVENT_TYPES)[number];
 
-export const ENGINE_EVENT_TYPES = ['provider.status'] as const;
+export const THREAD_EVENT_TYPES = ['chat.message', 'chat.token'] as const;
+export type ThreadEventType = (typeof THREAD_EVENT_TYPES)[number];
+
+export const ENGINE_EVENT_TYPES = ['provider.status', 'mcp.status'] as const;
 export type EngineEventType = (typeof ENGINE_EVENT_TYPES)[number];
 
-/** Not persisted, no `seq`, never replayed by `resume` (§2.4). */
-export const TRANSIENT_EVENT_TYPES = ['node.token'] as const;
+/** Not persisted, no `seq`, never replayed by `resume` (§2.4, round 4 §2.5). */
+export const TRANSIENT_EVENT_TYPES = ['node.token', 'chat.token'] as const;
 export type TransientEventType = (typeof TRANSIENT_EVENT_TYPES)[number];
 
 export type PersistedRunEventType = Exclude<RunEventType, TransientEventType>;
+export type PersistedThreadEventType = Exclude<ThreadEventType, TransientEventType>;
 
-const isTransient = (type: RunEventType): type is TransientEventType =>
-  (TRANSIENT_EVENT_TYPES as readonly RunEventType[]).includes(type);
+const isTransient = (type: RunEventType | ThreadEventType): type is TransientEventType =>
+  (TRANSIENT_EVENT_TYPES as readonly string[]).includes(type);
 
 export const PERSISTED_RUN_EVENT_TYPES = RUN_EVENT_TYPES.filter(
   (type): type is PersistedRunEventType => !isTransient(type),
+);
+
+/** The same derivation for the thread family: `chat.message` is kept, `chat.token` is not. */
+export const PERSISTED_THREAD_EVENT_TYPES = THREAD_EVENT_TYPES.filter(
+  (type): type is PersistedThreadEventType => !isTransient(type),
 );
