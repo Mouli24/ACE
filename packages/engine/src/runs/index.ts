@@ -18,6 +18,7 @@ import {
   type RunSummary,
   type StartRunRequest,
   type Usage,
+  type ValidationIssue,
 } from '@ace/contracts';
 
 import type { ApprovalService } from '../approvals/index.js';
@@ -45,6 +46,7 @@ import {
 import { createMergeArrivalLog, executeMergeNode, isMergeReady } from '../merge/index.js';
 import { downstreamOf } from './control/graph.js';
 import { createRunGate, type RunGate, type RunGateRegistry } from './control/gate.js';
+import type { PartialRunPlan } from './control/service.js';
 import { sumUsage } from './cost.js';
 import {
   createNodeExecutor,
@@ -94,6 +96,26 @@ export interface RunService {
   listRuns(workflowId: Id, page: CursorQuery): Promise<Page<RunSummary>>;
   listNodeRuns(runId: Id): Promise<NodeRun[]>;
   getNodeRun(nodeRunId: Id): Promise<NodeRun>;
+
+  /* Round 3: what `RunControls` is built on (FR-CTL-004, FR-CTL-005, FR-ERR-003, FR-ERR-004). */
+
+  /**
+   * Pre-flights and drives a run row somebody else recorded — the second half of `beginRun`. What
+   * `POST /runs/:id/restart` answers with: the new run as it stands once it is under way, never at
+   * its end (FR-CTL-004).
+   */
+  driveRecordedRun(run: Run): Promise<Run>;
+  /**
+   * Re-opens a recorded run and drives the node runs in the plan, plus everything after them when
+   * the plan says so (D81, FR-CTL-005, FR-ERR-003, FR-ERR-004). Resolves once it is going again.
+   */
+  drivePartialRun(plan: PartialRunPlan): Promise<Run>;
+  /**
+   * The envelopes a node would receive from the **latest** COMPLETED upstream outputs of this run —
+   * what a re-run executes on (FR-CTL-005). Without it a re-run runs with no reads at all.
+   */
+  envelopesFor(run: Run, nodeId: Id): Promise<Envelope[]>;
+
   /** Aborts every in-flight call and waits for the dispatch loops to unwind (FR-SYS-008). */
   shutdown(): Promise<void>;
   /** How many runs are still being driven by this process. */
@@ -144,6 +166,19 @@ export function transferSummary(parts: readonly Part[]): string {
   return `${kinds || 'nothing'} · ~${tokens} tokens`.slice(0, 120);
 }
 
+/**
+ * What a drive is told about a run that has already been recorded (FR-CTL-005, FR-ERR-003/004).
+ *
+ * `nodeRuns` are the rows a control created and already answered a client with: they are executed
+ * rather than created again. `withDownstream` extends that to everything reachable after them along
+ * data edges (FR-ERR-004, D112). Everything the run already recorded is seeded as it was, so a
+ * re-run of one node does not restart the graph.
+ */
+export interface DriveSeed {
+  nodeRuns: readonly NodeRun[];
+  withDownstream: boolean;
+}
+
 /** Node states that mean the run still has work in flight (Arch §19.2). */
 const BUSY_STATES: ReadonlySet<NodeState> = new Set<NodeState>(['RUNNING', 'READY', 'WAITING']);
 
@@ -186,6 +221,60 @@ export function createRunService(deps: RunServiceDeps): RunService {
         ...(failureReason === undefined ? {} : { failureReason }),
       },
     });
+  }
+
+  /**
+   * One envelope, from one node to one node (Arch §12.4, BR-02).
+   *
+   * Written once and used twice: by the scheduler's `deliver` while a run is going, and by
+   * `envelopesFor` when a control rebuilds what a node would read from the latest upstream outputs
+   * (FR-CTL-005). Two copies of this arithmetic would be two answers to "what did that node read?".
+   */
+  function envelopeBetween(
+    run: Run,
+    from: Node,
+    to: Node,
+    parts: Part[],
+    iteration: number,
+  ): Envelope {
+    const budgetTokens =
+      to.kind === 'agent' ? to.config.contextPolicy.budgetTokens : Number.MAX_SAFE_INTEGER;
+    const outputTypes =
+      to.kind === 'agent' || to.kind === 'model' ? to.config.outputTypes : ['text' as const];
+
+    return buildEnvelope(
+      {
+        id: nextId(),
+        runId: run.id,
+        fromNodeId: from.id,
+        toNodeId: to.id,
+        iteration,
+        parts,
+        budgetTokens,
+        // BR-13: only an Input node's content is trusted.
+        trust: trustForSource(from.kind),
+        contract: contractFor(
+          outputTypes,
+          to.kind === 'agent' ? to.config.outputContract?.jsonSchema : undefined,
+        ),
+        createdAt: now(),
+      },
+      summariser,
+    );
+  }
+
+  /** The latest attempt of the latest iteration of each node, from a run's whole node-run list. */
+  function latestByNode(rows: readonly NodeRun[]): Map<Id, NodeRun> {
+    const latest = new Map<Id, NodeRun>();
+    for (const row of rows) {
+      const seen = latest.get(row.nodeId);
+      const newer =
+        seen === undefined ||
+        row.iteration > seen.iteration ||
+        (row.iteration === seen.iteration && row.attempt >= seen.attempt);
+      if (newer) latest.set(row.nodeId, row);
+    }
+    return latest;
   }
 
   /* ------------------------------------------------------------- readiness */
@@ -236,7 +325,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
   /* ------------------------------------------------------------- the drive */
 
-  async function drive(run: Run, gate: RunGate): Promise<Run> {
+  async function drive(run: Run, gate: RunGate, seed?: DriveSeed): Promise<Run> {
     const signal = gate.signal;
     const { nodes, edges } = run.snapshot;
     const settings = await repository.settings.get(scope);
@@ -259,6 +348,12 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const policyByNode = new Map<Id, GuardrailPolicy>();
     /** Set once, by the first cap a node crossed; the run then dispatches nothing more (§2.3, D80). */
     let budgetHalt: BudgetHalt | undefined;
+    /**
+     * Node runs someone else already created for this drive to execute: the row a retry, a re-run or
+     * Start-from made. `dispatch` consumes the row rather than creating a second one, because the
+     * client is already holding that row's id (FR-CTL-005, FR-ERR-003, FR-EXE-013).
+     */
+    const plannedRuns = new Map<Id, NodeRun>();
     /** The catalogue, read once: the cost point needs the price of the model a node would use. */
     const catalog = await repository.models.list(scope, {});
 
@@ -443,33 +538,13 @@ export function createRunService(deps: RunServiceDeps): RunService {
       for (const targetId of targets) {
         const target = nodeById.get(targetId);
         if (target === undefined) continue;
+        // A node the controls handed a fixed set of inputs runs on exactly those (FR-ERR-003).
+        if (plannedRuns.has(targetId)) continue;
 
-        const budgetTokens =
-          target.kind === 'agent' ? target.config.contextPolicy.budgetTokens : Number.MAX_SAFE_INTEGER;
-        const outputTypes =
-          target.kind === 'agent' || target.kind === 'model' ? target.config.outputTypes : ['text' as const];
-
-        const envelope = buildEnvelope(
-          {
-            id: nextId(),
-            runId: run.id,
-            fromNodeId: node.id,
-            toNodeId: targetId,
-            iteration,
-            parts,
-            budgetTokens,
-            // BR-13: only an Input node's content is trusted.
-            trust: trustForSource(node.kind),
-            contract: contractFor(
-              outputTypes,
-              target.kind === 'agent' ? target.config.outputContract?.jsonSchema : undefined,
-            ),
-            createdAt: now(),
-          },
-          summariser,
-        );
-
-        envelopesFor.set(targetId, [...(envelopesFor.get(targetId) ?? []), envelope]);
+        envelopesFor.set(targetId, [
+          ...(envelopesFor.get(targetId) ?? []),
+          envelopeBetween(run, node, target, parts, iteration),
+        ]);
       }
 
       for (const edge of outgoing) {
@@ -736,14 +811,19 @@ export function createRunService(deps: RunServiceDeps): RunService {
       const maxRetries =
         node.kind === 'agent' || node.kind === 'model' ? node.config.execution.retries : 0;
 
-      let attempt = 1;
+      let attempt = plannedRuns.get(node.id)?.attempt ?? 1;
       let contractRepairs = 0;
       let repairReason: string | undefined;
 
       await resolvePolicy(node);
 
       for (;;) {
-        const nodeRun = await beginNodeRun(node, iteration, attempt);
+        // The row a control already created and already answered the client with, used once. A second
+        // row here would leave the client holding the id of a node run that never ran.
+        const planned = plannedRuns.get(node.id);
+        plannedRuns.delete(node.id);
+        const nodeRun = planned ?? (await beginNodeRun(node, iteration, attempt));
+        if (planned !== undefined) await emitNodeState(run, planned, 'READY');
 
         /*
          * The cost point, *before* the call (§2.3, FR-GRD-008): `totals + maxTokens × price` would
@@ -854,6 +934,78 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
     }
 
+    /*
+     * A drive that re-opens a run someone already recorded: a retry, a re-run, or a run that starts
+     * from a node (FR-CTL-005, FR-ERR-003, FR-ERR-004, FR-EXE-013).
+     *
+     * Two things have to be true afterwards. The planned nodes must be dispatchable — IDLE, with the
+     * inputs their rows carry — and everything else must look exactly as it did when the run
+     * stopped, so a re-run of one node does not restart the graph and does not leave the run HALTED
+     * because an Output node it never touched is not COMPLETED in this process's memory.
+     */
+    if (seed !== undefined) {
+      const forced = new Set<Id>(seed.nodeRuns.map((row) => row.nodeId));
+      if (seed.withDownstream) {
+        for (const nodeId of [...forced]) {
+          for (const reached of downstreamOf(nodeId, edges)) forced.add(reached);
+        }
+      }
+
+      for (const row of seed.nodeRuns) {
+        plannedRuns.set(row.nodeId, row);
+        envelopesFor.set(row.nodeId, [...row.inputEnvelopes]);
+        iterations.set(row.nodeId, row.iteration);
+      }
+
+      const recorded = latestByNode(await repository.nodeRuns.listByRun(scope, run.id));
+
+      for (const [nodeId, row] of recorded) {
+        const node = nodeById.get(nodeId);
+        if (node === undefined) continue;
+
+        if (forced.has(nodeId)) {
+          // Runs again. A forced node with no row of its own is fed by whatever re-runs above it.
+          states.set(nodeId, 'IDLE');
+          if (!plannedRuns.has(nodeId)) {
+            iterations.set(nodeId, row.iteration);
+            envelopesFor.set(nodeId, []);
+          }
+          continue;
+        }
+
+        states.set(nodeId, row.status);
+        iterations.set(nodeId, row.iteration);
+        if (row.status !== 'COMPLETED') continue;
+
+        if (node.kind === 'output' && row.output !== undefined) finalOutput[nodeId] = row.output;
+
+        // Its output crossed its edges in the drive that recorded it: the readiness bookkeeping is
+        // rebuilt, the events are not — the transfer is already on the log, and emitting it again
+        // would invent a second history for one delivery (BR-04).
+        const outgoing = edges.filter(
+          (edge) => edge.kind === 'data' && edge.from.nodeId === nodeId,
+        );
+        for (const edge of outgoing) {
+          const target = nodeById.get(edge.to.nodeId);
+          if (target === undefined) continue;
+          if (target.kind === 'merge' && !plannedRuns.has(target.id)) {
+            mergeArrivals.record(target.id, {
+              edgeId: edge.id,
+              portId: edge.to.portId,
+              fromNodeId: nodeId,
+              parts: row.output ?? [],
+            });
+          }
+          deliveredEdges.add(edge.id);
+          if (plannedRuns.has(target.id)) continue;
+          envelopesFor.set(target.id, [
+            ...(envelopesFor.get(target.id) ?? []),
+            envelopeBetween(run, node, target, row.output ?? [], row.iteration),
+          ]);
+        }
+      }
+    }
+
     /* The loop of Arch §12.3: mark ready, dispatch up to the limit, wait, repeat. */
     const inFlight = new Set<Promise<void>>();
 
@@ -956,6 +1108,132 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
   /* --------------------------------------------------------------- service */
 
+  /** Start driving a run that has been pre-flighted, and register its gate (FR-CTL-001..003). */
+  function startDriving(run: Run, seed?: DriveSeed): Promise<Run> {
+    const gate = createRunGate(run.id);
+    const unregister = deps.gates.register(gate);
+
+    const done = drive(run, gate, seed)
+      .catch(async (error: unknown) => {
+        // The drive threw rather than halting cleanly; the row is still the truth about the run.
+        logger.error({ subsystem: 'runs', runId: run.id, err: error }, 'run failed');
+        return (await repository.runs.get(scope, run.id)) ?? run;
+      })
+      .finally(() => {
+        unregister();
+        active.delete(run.id);
+      });
+
+    active.set(run.id, {
+      gate,
+      done: done.then(
+        () => undefined,
+        () => undefined,
+      ),
+    });
+
+    return done;
+  }
+
+  /**
+   * Everything `beginRun` does once the run row exists: pre-flight, then drive (FR-EXE-003, BR-08).
+   *
+   * Extracted because `POST /runs/:id/restart` needs exactly this half and nothing of the half above
+   * it — a restart records its own run on the *source run's* snapshot (BR-04, FR-CTL-004), so it
+   * must not go back to the live tables for a fresh one.
+   */
+  async function begin(
+    run: Run,
+    extra: { issues?: ValidationIssue[]; seed?: DriveSeed } = {},
+  ): Promise<BegunRun> {
+    const workflowId = run.workflowId;
+
+    const [providers, models] = await Promise.all([
+      repository.providers.list(scope),
+      repository.models.list(scope, {}),
+    ]);
+
+    const issues = [
+      ...(extra.issues ?? []),
+      ...(await preflight({
+        nodes: run.snapshot.nodes,
+        edges: run.snapshot.edges,
+        inputs: run.inputs,
+        providers,
+        models,
+        checkProvider: deps.checkProvider,
+      })),
+    ];
+
+    /*
+     * §2.3: today's spend is already at the daily cap, so the run is BLOCKED with
+     * `daily_budget_exceeded` and **zero** provider calls. Checked against the project's default
+     * policy, because pre-flight is about the run rather than about one node.
+     */
+    if (deps.budgets !== undefined) {
+      const policy =
+        deps.policies === undefined ? null : await deps.policies.resolve(run.projectId);
+      issues.push(...(await deps.budgets.preflightIssues({ projectId: run.projectId, policy })));
+    }
+
+    // Every issue `preflight` itself raises is an error; only a `warn` daily budget can be a
+    // warning, and D79 says that one reports and lets the run start.
+    if (issues.some((issue) => issue.severity === 'error')) {
+      // BLOCKED, with zero generate() calls (BR-08). Still a run: it is recorded, inspectable
+      // and listed in the history, because "why did it not start" is a question worth keeping.
+      const withIssues =
+        (await repository.runs.update(scope, run.id, {
+          status: 'BLOCKED',
+          allowedActions: allowedRunActions('BLOCKED'),
+          preflightIssues: issues,
+          endedAt: now(),
+          durationMs: 0,
+        })) ?? {
+          ...run,
+          status: 'BLOCKED' as const,
+          allowedActions: allowedRunActions('BLOCKED'),
+          preflightIssues: issues,
+        };
+
+      await bus.emit({
+        type: 'run.started',
+        workflowId,
+        runId: run.id,
+        payload: { run: toSummary(withIssues) },
+      });
+      await bus.emit({
+        type: 'run.completed',
+        workflowId,
+        runId: run.id,
+        payload: { runId: run.id, status: 'BLOCKED', totals: withIssues.totals },
+      });
+
+      logger.info(
+        { subsystem: 'runs', runId: run.id, issues: issues.length },
+        'run blocked by pre-flight',
+      );
+      return { run: withIssues, done: Promise.resolve(withIssues) };
+    }
+
+    const running =
+      (await repository.runs.update(scope, run.id, {
+        status: 'RUNNING',
+        allowedActions: allowedRunActions('RUNNING'),
+        // A warning pre-flight raised is kept on the row: a run that started with a note is still
+        // a run whose note the user should see (D79).
+        ...(issues.length === 0 ? {} : { preflightIssues: issues }),
+      })) ?? run;
+
+    await bus.emit({
+      type: 'run.started',
+      workflowId,
+      runId: run.id,
+      payload: { run: toSummary(running) },
+    });
+
+    return { run: running, done: startDriving(running, extra.seed) };
+  }
+
   const service: RunService = {
     async beginRun(workflowId, request) {
       const workflow = await repository.workflows.get(scope, workflowId);
@@ -987,110 +1265,46 @@ export function createRunService(deps: RunServiceDeps): RunService {
         return tx.runs.create(scope, created);
       });
 
-      const [providers, models] = await Promise.all([
-        repository.providers.list(scope),
-        repository.models.list(scope, {}),
-      ]);
+      return begin(run);
+    },
 
-      const issues = await preflight({
-        nodes: run.snapshot.nodes,
-        edges: run.snapshot.edges,
-        inputs: run.inputs,
-        providers,
-        models,
-        checkProvider: deps.checkProvider,
+    async driveRecordedRun(run) {
+      return (await begin(run)).run;
+    },
+
+    async drivePartialRun(plan) {
+      // No pre-flight: the run has already been through it, and D82 makes its snapshot — not the
+      // live workflow — what it executes. What is new is only which nodes run again.
+      void startDriving(plan.run, {
+        nodeRuns: plan.nodeRuns,
+        withDownstream: plan.withDownstream,
       });
+      return plan.run;
+    },
 
-      /*
-       * §2.3: today's spend is already at the daily cap, so the run is BLOCKED with
-       * `daily_budget_exceeded` and **zero** provider calls. Checked against the project's default
-       * policy, because pre-flight is about the run rather than about one node.
-       */
-      if (deps.budgets !== undefined) {
-        const policy =
-          deps.policies === undefined ? null : await deps.policies.resolve(run.projectId);
-        issues.push(
-          ...(await deps.budgets.preflightIssues({ projectId: run.projectId, policy })),
-        );
+    async envelopesFor(run, nodeId) {
+      const node = run.snapshot.nodes.find((candidate) => candidate.id === nodeId);
+      if (node === undefined) throw notFound(`node ${nodeId} in run ${run.id}`);
+
+      const rows = await repository.nodeRuns.listByRun(scope, run.id);
+      const completed = latestByNode(rows.filter((row) => row.status === 'COMPLETED'));
+
+      const envelopes: Envelope[] = [];
+      const seen = new Set<Id>();
+
+      for (const edge of run.snapshot.edges) {
+        if (edge.kind !== 'data' || edge.to.nodeId !== nodeId) continue;
+        if (seen.has(edge.from.nodeId)) continue;
+
+        const from = run.snapshot.nodes.find((candidate) => candidate.id === edge.from.nodeId);
+        const row = completed.get(edge.from.nodeId);
+        if (from === undefined || row === undefined) continue;
+
+        seen.add(edge.from.nodeId);
+        envelopes.push(envelopeBetween(run, from, node, row.output ?? [], row.iteration));
       }
 
-      // Every issue `preflight` itself raises is an error; only a `warn` daily budget can be a
-      // warning, and D79 says that one reports and lets the run start.
-      if (issues.some((issue) => issue.severity === 'error')) {
-        // BLOCKED, with zero generate() calls (BR-08). Still a run: it is recorded, inspectable
-        // and listed in the history, because "why did it not start" is a question worth keeping.
-        const withIssues =
-          (await repository.runs.update(scope, run.id, {
-            status: 'BLOCKED',
-            allowedActions: allowedRunActions('BLOCKED'),
-            preflightIssues: issues,
-            endedAt: now(),
-            durationMs: 0,
-          })) ?? {
-            ...run,
-            status: 'BLOCKED' as const,
-            allowedActions: allowedRunActions('BLOCKED'),
-            preflightIssues: issues,
-          };
-
-        await bus.emit({
-          type: 'run.started',
-          workflowId,
-          runId: run.id,
-          payload: { run: toSummary(withIssues) },
-        });
-        await bus.emit({
-          type: 'run.completed',
-          workflowId,
-          runId: run.id,
-          payload: { runId: run.id, status: 'BLOCKED', totals: withIssues.totals },
-        });
-
-        logger.info(
-          { subsystem: 'runs', runId: run.id, issues: issues.length },
-          'run blocked by pre-flight',
-        );
-        return { run: withIssues, done: Promise.resolve(withIssues) };
-      }
-
-      const running =
-        (await repository.runs.update(scope, run.id, {
-          status: 'RUNNING',
-          allowedActions: allowedRunActions('RUNNING'),
-          // A warning pre-flight raised is kept on the row: a run that started with a note is still
-          // a run whose note the user should see (D79).
-          ...(issues.length === 0 ? {} : { preflightIssues: issues }),
-        })) ?? run;
-
-      await bus.emit({
-        type: 'run.started',
-        workflowId,
-        runId: run.id,
-        payload: { run: toSummary(running) },
-      });
-
-      const gate = createRunGate(run.id);
-      const unregister = deps.gates.register(gate);
-      const done = drive(running, gate)
-        .catch(async (error: unknown) => {
-          // The drive threw rather than halting cleanly; the row is still the truth about the run.
-          logger.error({ subsystem: 'runs', runId: run.id, err: error }, 'run failed');
-          return (await repository.runs.get(scope, run.id)) ?? running;
-        })
-        .finally(() => {
-          unregister();
-          active.delete(run.id);
-        });
-
-      active.set(run.id, {
-        gate,
-        done: done.then(
-          () => undefined,
-          () => undefined,
-        ),
-      });
-
-      return { run: running, done };
+      return envelopes;
     },
 
     async startRun(workflowId, request) {
