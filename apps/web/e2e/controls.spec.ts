@@ -98,10 +98,12 @@ test.describe('Run controls (FR-CTL-001..004, FR-CTL-006)', () => {
     /*
      * FR-CTL-001: no new dispatch. A paused run emits nothing, so its event log stops moving — the
      * positive check behind a negative claim, and it fails if the queue kept playing. The window is
-     * many times one frame of this script (60 ms between tokens).
+     * four frames of this script (250 ms between tokens at the slow pace, D200), so a queue that
+     * kept going could not slip through it. Longer is stronger here, not weaker: this is a window in
+     * which nothing may happen, not a wait for something to happen.
      */
     const frozenAt = await lastEventSeq(page);
-    await page.waitForTimeout(800);
+    await page.waitForTimeout(1_000);
     expect(await lastEventSeq(page)).toBe(frozenAt);
 
     const runId = (await engineRun(page, seeded.workflowId))!.id;
