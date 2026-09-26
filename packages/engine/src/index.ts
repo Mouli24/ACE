@@ -11,6 +11,7 @@ export * from './graph/index.js';
 export * from './providers/index.js';
 export * from './guardrails/index.js';
 export * from './approvals/index.js';
+export * from './approvals/routes.js';
 export * from './budgets/index.js';
 export * from './runs/index.js';
 export * from './envelopes/index.js';
