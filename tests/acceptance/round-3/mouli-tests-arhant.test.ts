@@ -1572,7 +1572,19 @@ describe('TC-PAR-002 merge "all" waits for every connected input', () => {
     expect(branches).toHaveLength(2);
     const lastBranchEnd = Math.max(...branches.map((nodeRun) => Date.parse(nodeRun.endedAt ?? '')));
     expect(Date.parse(mergeRun.startedAt ?? '')).toBeGreaterThanOrEqual(lastBranchEnd);
-    console.log(`TC-PAR-002 merge waited for both branches; run wall ${wallMs} ms`);
+
+    /*
+     * FR-PAR-001, the half of it this fixture can show: the branches were in flight *together*, so
+     * the merge's wait is a join and not a queue. Measured from the engine's own timestamps — the
+     * json branch answers inside the slow branch's two seconds, so both spans are open at once.
+     */
+    const [first, second] = branches as [NodeRun, NodeRun];
+    const together = overlapMs(first, second);
+    expect(peakOverlap(branches), 'both branches in flight at once').toBe(2);
+    expect(together, 'the branches overlapped in time').toBeGreaterThan(0);
+    console.log(
+      `TC-PAR-002 merge waited for both branches; overlap ${together} ms, run wall ${wallMs} ms`,
+    );
 
     const inputs = mergeInputs(mergeRun);
     expect(inputs).toHaveLength(2);
