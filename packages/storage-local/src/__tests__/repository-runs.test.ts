@@ -1,4 +1,4 @@
-import type { Model, NodeRun, Provider, Run } from '@ace/contracts';
+import { allowedRunActions, type BudgetHalt, type Model, type NodeRun, type Provider, type Run } from '@ace/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createTempDb, type TempDb } from './temp-db.js';
@@ -336,6 +336,128 @@ describe('BR-04 runs repository', () => {
       ...(first.nextCursor === undefined ? {} : { cursor: first.nextCursor }),
     });
     expect(second.items.map((r) => r.id)).toEqual(['01JBXQ8Z9KQ4R7N2VWXYZ0RN51']);
+  });
+
+  it('FR-CTL-006 carries `allowedActions` from the contract’s own table, not a second copy', async () => {
+    // Created PREFLIGHT, which `allowedRunActions` says accepts nothing — an empty array, which is
+    // exactly the value a dropped column used to be indistinguishable from.
+    await db.repository.runs.create(
+      scope,
+      run({ status: 'PREFLIGHT', allowedActions: allowedRunActions('PREFLIGHT') }),
+    );
+
+    expect((await db.repository.runs.get(scope, RUN_ID))?.allowedActions).toEqual(
+      allowedRunActions('PREFLIGHT'),
+    );
+
+    // Pre-flight passes: the status and the actions are stamped together (D71, D76).
+    const running = await db.repository.runs.update(scope, RUN_ID, {
+      status: 'RUNNING',
+      allowedActions: allowedRunActions('RUNNING'),
+    });
+    expect(running?.allowedActions).toEqual(['pause', 'stop']);
+    expect((await db.repository.runs.get(scope, RUN_ID))?.allowedActions).toEqual([
+      'pause',
+      'stop',
+    ]);
+
+    // And each later status brings its own row of the table through SQLite unchanged.
+    for (const status of ['PAUSED', 'COMPLETE', 'BLOCKED', 'HALTED'] as const) {
+      const patched = await db.repository.runs.update(scope, RUN_ID, {
+        status,
+        allowedActions: allowedRunActions(status),
+      });
+      expect(patched?.allowedActions, `allowedActions for a ${status} run`).toEqual(
+        allowedRunActions(status),
+      );
+    }
+  });
+
+  it('FR-CTL-002 writes `pausedAt` on a pause and removes it on a resume', async () => {
+    await db.repository.runs.create(
+      scope,
+      run({ status: 'RUNNING', allowedActions: allowedRunActions('RUNNING') }),
+    );
+
+    const paused = await db.repository.runs.update(scope, RUN_ID, {
+      status: 'PAUSED',
+      pausedAt: '2026-09-26T11:00:00.000Z',
+      allowedActions: allowedRunActions('PAUSED'),
+    });
+    expect(paused?.pausedAt).toBe('2026-09-26T11:00:00.000Z');
+
+    // An unrelated patch leaves the timestamp alone: `undefined` is not a removal.
+    const untouched = await db.repository.runs.update(scope, RUN_ID, {
+      totals: { tokensIn: 1, tokensOut: 2, costUsd: 0 },
+    });
+    expect(untouched?.pausedAt).toBe('2026-09-26T11:00:00.000Z');
+
+    // `null` is (D106, following D72): "paused since" has no meaning once the run is running.
+    const resumed = await db.repository.runs.update(scope, RUN_ID, {
+      status: 'RUNNING',
+      pausedAt: null,
+      allowedActions: allowedRunActions('RUNNING'),
+    });
+    expect(resumed?.pausedAt).toBeUndefined();
+    expect('pausedAt' in (resumed ?? {})).toBe(false);
+    expect((await db.repository.runs.get(scope, RUN_ID))?.pausedAt).toBeUndefined();
+  });
+
+  it('FR-GRD-008 round-trips a budget halt whole, beside its halt reason', async () => {
+    const budgetHalt: BudgetHalt = { scope: 'daily', capUsd: 0.01, costUsd: 0.012, projected: true };
+    await db.repository.runs.create(
+      scope,
+      run({ status: 'RUNNING', allowedActions: allowedRunActions('RUNNING') }),
+    );
+
+    const halted = await db.repository.runs.update(scope, RUN_ID, {
+      status: 'HALTED',
+      haltReason: 'budget_exceeded',
+      budgetHalt,
+      endedAt: NOW,
+      allowedActions: allowedRunActions('HALTED'),
+    });
+
+    // Whole, not summarised: D80 exists so the run view can name the cap and the overspend.
+    expect(halted?.budgetHalt).toEqual(budgetHalt);
+    expect(halted?.haltReason).toBe('budget_exceeded');
+    expect((await db.repository.runs.get(scope, RUN_ID))?.budgetHalt).toEqual(budgetHalt);
+  });
+
+  it('FR-CTL-004 records which run a restart came from, on create and on update', async () => {
+    const RESTART_ID = '01JBXQ8Z9KQ4R7N2VWXYZ0RN99';
+    await db.repository.runs.create(scope, run({ status: 'HALTED', haltReason: 'stopped' }));
+
+    // A restart is a new run, so the marker normally arrives with the row.
+    await db.repository.runs.create(
+      scope,
+      run({
+        id: RESTART_ID,
+        status: 'PREFLIGHT',
+        restartedFromRunId: RUN_ID,
+        allowedActions: allowedRunActions('PREFLIGHT'),
+      }),
+    );
+    expect((await db.repository.runs.get(scope, RESTART_ID))?.restartedFromRunId).toBe(RUN_ID);
+
+    // The patch path has to work too: the port declares it, so the column must honour it.
+    const patched = await db.repository.runs.update(scope, RUN_ID, {
+      restartedFromRunId: RESTART_ID,
+    });
+    expect(patched?.restartedFromRunId).toBe(RESTART_ID);
+  });
+
+  it('FR-CTL-006 leaves the round 3 fields absent on a run that never set them', async () => {
+    // The `undefined` half of every case above: nothing invents an empty array or a timestamp.
+    await db.repository.runs.create(scope, run());
+
+    const stored = await db.repository.runs.get(scope, RUN_ID);
+
+    expect(stored?.allowedActions).toBeUndefined();
+    expect(stored?.pausedAt).toBeUndefined();
+    expect(stored?.budgetHalt).toBeUndefined();
+    expect(stored?.restartedFromRunId).toBeUndefined();
+    expect(stored).toEqual(run());
   });
 
   it('lists the runs that were still going when the engine stopped (FR-SYS-009)', async () => {

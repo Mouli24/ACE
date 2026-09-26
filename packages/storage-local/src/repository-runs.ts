@@ -107,6 +107,12 @@ function toRun(row: RunRow): Run {
     ...(row.endedAt === null ? {} : { endedAt: row.endedAt }),
     ...(row.durationMs === null ? {} : { durationMs: row.durationMs }),
     ...(row.finalOutput === null ? {} : { finalOutput: JSON.parse(row.finalOutput) }),
+    // Round 3 (§2.1, §2.3). A run written before the run-columns migration reads NULL here and the
+    // field stays absent, which is what `Run` allows while these are optional (D71).
+    ...(row.pausedAt === null ? {} : { pausedAt: row.pausedAt }),
+    ...(row.allowedActions === null ? {} : { allowedActions: JSON.parse(row.allowedActions) }),
+    ...(row.budgetHalt === null ? {} : { budgetHalt: JSON.parse(row.budgetHalt) }),
+    ...(row.restartedFromRunId === null ? {} : { restartedFromRunId: row.restartedFromRunId }),
   });
 }
 
@@ -356,6 +362,16 @@ export function createRunRepository(db: Db): RunRepository {
             run.finalOutput === undefined
               ? null
               : toJsonColumn(run.finalOutput, `run(${run.id}).finalOutput`),
+          pausedAt: run.pausedAt ?? null,
+          allowedActions:
+            run.allowedActions === undefined
+              ? null
+              : toJsonColumn(run.allowedActions, `run(${run.id}).allowedActions`),
+          budgetHalt:
+            run.budgetHalt === undefined
+              ? null
+              : toJsonColumn(run.budgetHalt, `run(${run.id}).budgetHalt`),
+          restartedFromRunId: run.restartedFromRunId ?? null,
         })
         .run();
       return run;
@@ -419,6 +435,18 @@ export function createRunRepository(db: Db): RunRepository {
           patch.finalOutput === undefined
             ? undefined
             : toJsonColumn(patch.finalOutput, `run(${id}).finalOutput`),
+        // `null` reaches the column as NULL and removes the timestamp on a resume; `undefined` is
+        // dropped by `definedOnly` and leaves it alone (D106, following D72).
+        pausedAt: patch.pausedAt,
+        allowedActions:
+          patch.allowedActions === undefined
+            ? undefined
+            : toJsonColumn(patch.allowedActions, `run(${id}).allowedActions`),
+        budgetHalt:
+          patch.budgetHalt === undefined
+            ? undefined
+            : toJsonColumn(patch.budgetHalt, `run(${id}).budgetHalt`),
+        restartedFromRunId: patch.restartedFromRunId,
       });
 
       if (Object.keys(values).length > 0) {

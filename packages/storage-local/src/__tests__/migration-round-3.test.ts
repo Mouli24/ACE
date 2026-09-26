@@ -13,6 +13,7 @@ import {
   applyMigrations,
   MIGRATIONS,
   ROUND_3_MIGRATION_ID,
+  ROUND_3_RUN_COLUMNS_MIGRATION_ID,
 } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
 
@@ -27,6 +28,12 @@ import { SqliteRepository } from '../repository.js';
 const BEFORE_ROUND_3 = MIGRATIONS.slice(
   0,
   MIGRATIONS.findIndex((migration) => migration.id === ROUND_3_MIGRATION_ID),
+);
+
+/** The chain as it stood before the run columns: everything up to and including the guardrails. */
+const BEFORE_RUN_COLUMNS = MIGRATIONS.slice(
+  0,
+  MIGRATIONS.findIndex((migration) => migration.id === ROUND_3_RUN_COLUMNS_MIGRATION_ID),
 );
 
 let dir: string;
@@ -86,7 +93,10 @@ describe('FR-GRD-018 The migration backfills a project that existed before it ra
     before.sqlite.close();
 
     const after = openDatabase({ path });
-    expect(after.appliedMigrations).toEqual([ROUND_3_MIGRATION_ID]);
+    expect(after.appliedMigrations).toEqual([
+      ROUND_3_MIGRATION_ID,
+      ROUND_3_RUN_COLUMNS_MIGRATION_ID,
+    ]);
 
     const rows = after.sqlite.prepare(SELECT_POLICIES).all() as PolicyRow[];
     expect(rows).toHaveLength(3);
@@ -194,5 +204,105 @@ describe('FR-GRD-018 The migration backfills a project that existed before it ra
     expect(appliedMigrations(opened.sqlite).has(broken.id)).toBe(false);
 
     opened.sqlite.close();
+  });
+});
+
+/**
+ * The run-controls columns (`paused_at`, `allowed_actions`, `budget_halt`,
+ * `restarted_from_run_id`). The contract, the port and the scheduler all carried these four before
+ * the table did, which is why every write of them was silently dropped: a repository `update` takes
+ * a patch object, so an extra key is not a type error.
+ */
+describe('FR-CTL-006 The run-controls migration adds four columns to an existing runs table', () => {
+  const LEGACY_RUN_ID = '01JBXQ8Z9KQ4R7N2VWXYZ0EGA1';
+  const WORKFLOW_ID = '01JBXQ8Z9KQ4R7N2VWXYZ0WKFW';
+  const PROJECT_ID = '01JBXQ8Z9KQ4R7N2VWXYZ0PRJC';
+
+  /** A finished run written straight into the schema as it was before the run columns existed. */
+  function insertLegacyRun(sqlite: ReturnType<typeof openDatabase>['sqlite']): void {
+    sqlite
+      .prepare(
+        `INSERT INTO runs (id, workspace_id, workflow_id, project_id, status, halt_reason,
+                           snapshot, inputs, preflight_issues, totals, started_at, ended_at,
+                           duration_ms, final_output)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        LEGACY_RUN_ID,
+        'local',
+        WORKFLOW_ID,
+        PROJECT_ID,
+        'COMPLETE',
+        null,
+        JSON.stringify({ version: 2, nodes: [], edges: [] }),
+        JSON.stringify({}),
+        JSON.stringify([]),
+        JSON.stringify({ tokensIn: 7, tokensOut: 11, costUsd: 0.002 }),
+        '2026-09-24T09:00:00.000Z',
+        '2026-09-24T09:00:04.000Z',
+        4000,
+        null,
+      );
+  }
+
+  it('adds the four columns without a data step', () => {
+    const before = openDatabase({ path, migrations: BEFORE_RUN_COLUMNS });
+    expect(before.appliedMigrations).toContain(ROUND_3_MIGRATION_ID);
+    expect(before.appliedMigrations).not.toContain(ROUND_3_RUN_COLUMNS_MIGRATION_ID);
+
+    // The bug this migration fixes, reproduced: the columns simply were not there.
+    const columnsBefore = (
+      before.sqlite.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]
+    ).map((column) => column.name);
+    expect(columnsBefore).not.toContain('allowed_actions');
+    before.sqlite.close();
+
+    const after = openDatabase({ path });
+    expect(after.appliedMigrations).toEqual([ROUND_3_RUN_COLUMNS_MIGRATION_ID]);
+
+    const columnsAfter = (
+      after.sqlite.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]
+    ).map((column) => column.name);
+    expect(columnsAfter).toContain('paused_at');
+    expect(columnsAfter).toContain('allowed_actions');
+    expect(columnsAfter).toContain('budget_halt');
+    expect(columnsAfter).toContain('restarted_from_run_id');
+
+    after.sqlite.close();
+  });
+
+  it('leaves a run written before it intact, with the new fields absent rather than malformed', async () => {
+    const before = openDatabase({ path, migrations: BEFORE_RUN_COLUMNS });
+    insertLegacyRun(before.sqlite);
+    before.sqlite.close();
+
+    const after = openDatabase({ path });
+    const repository = new SqliteRepository(after.db, after.sqlite);
+
+    // It still parses as a `Run` — an empty string or a `'null'` literal in a JSON column would
+    // throw here rather than read as absent.
+    const run = await repository.runs.get({ workspaceId: 'local' }, LEGACY_RUN_ID);
+
+    expect(run).not.toBeNull();
+    expect(run?.status).toBe('COMPLETE');
+    expect(run?.totals).toEqual({ tokensIn: 7, tokensOut: 11, costUsd: 0.002 });
+    expect(run?.durationMs).toBe(4000);
+
+    // Absent, not invented. `allowedActions` is the engine's record of what it allowed at the
+    // time; deriving it now for a run that finished before the column existed would be writing
+    // history the engine never wrote (BR-04, D71).
+    expect(run?.allowedActions).toBeUndefined();
+    expect(run?.pausedAt).toBeUndefined();
+    expect(run?.budgetHalt).toBeUndefined();
+    expect(run?.restartedFromRunId).toBeUndefined();
+    expect('allowedActions' in (run ?? {})).toBe(false);
+
+    // And it is still updatable: the new columns take a value on an old row.
+    const patched = await repository.runs.update({ workspaceId: 'local' }, LEGACY_RUN_ID, {
+      allowedActions: ['restart'],
+    });
+    expect(patched?.allowedActions).toEqual(['restart']);
+
+    after.sqlite.close();
   });
 });

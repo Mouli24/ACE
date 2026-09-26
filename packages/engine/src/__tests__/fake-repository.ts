@@ -425,6 +425,15 @@ export class FakeRepository implements Repository {
       if (patch.endedAt !== undefined) next.endedAt = patch.endedAt;
       if (patch.durationMs !== undefined) next.durationMs = patch.durationMs;
       if (patch.finalOutput !== undefined) next.finalOutput = patch.finalOutput;
+      // Round 3 (§2.1, §2.3). `pausedAt: null` removes the timestamp, the way the SQLite store
+      // writes NULL into the column on a resume (D106, following D72); `undefined` leaves it alone.
+      if (patch.pausedAt === null) delete next.pausedAt;
+      else if (patch.pausedAt !== undefined) next.pausedAt = patch.pausedAt;
+      if (patch.allowedActions !== undefined) next.allowedActions = patch.allowedActions;
+      if (patch.budgetHalt !== undefined) next.budgetHalt = patch.budgetHalt;
+      if (patch.restartedFromRunId !== undefined) {
+        next.restartedFromRunId = patch.restartedFromRunId;
+      }
 
       this.#for(scope).runs.set(id, next);
       return next;

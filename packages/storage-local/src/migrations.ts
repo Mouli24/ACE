@@ -6,6 +6,17 @@ import { backfillDefaultPolicies } from './default-policy.js';
 export const ROUND_3_MIGRATION_ID = '20260926T120000_round_3_guardrails_approvals_and_budgets';
 
 /**
+ * Round 3's second migration in this package, and the reason it is a second one: the guardrails
+ * migration above is written and tested, and rule 5 of CLAUDE.md §3.4 is that a migration is never
+ * edited — a correction is a new migration. D104 preferred one migration per round per package, and
+ * this is the exception that proves the older rule wins when the two disagree (D170).
+ *
+ * Named so a test can apply the chain up to, but not including, the run columns.
+ */
+export const ROUND_3_RUN_COLUMNS_MIGRATION_ID =
+  '20260926T140000_round_3_run_controls_and_budget_halt';
+
+/**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
  * written.
@@ -261,6 +272,26 @@ export const MIGRATIONS: readonly Migration[] = [
     seed: (sqlite) => {
       backfillDefaultPolicies(sqlite);
     },
+  },
+  {
+    id: ROUND_3_RUN_COLUMNS_MIGRATION_ID,
+    up: `
+      -- Round 3 additions to Run. The contract, the port and the scheduler all carry these four
+      -- since C3; the table did not, so every write of them was silently dropped and
+      -- 'GET /runs/:id' answered 'allowedActions: undefined' (FR-CTL-002, FR-CTL-004, FR-CTL-006,
+      -- FR-GRD-008).
+      --
+      -- No backfill and no data step. A run that predates this migration reads the four as NULL,
+      -- which 'toRun' leaves absent, and that is the honest answer: 'allowedActions' is the engine's
+      -- record of what it allowed at the time, 'paused_at' and the other two are events that either
+      -- happened or did not. Inventing 'allowedRunActions(status)' for a finished run would be
+      -- writing history the engine never wrote (BR-04). 'Run.allowedActions' is optional exactly so
+      -- that an old row stays valid (D71).
+      ALTER TABLE runs ADD COLUMN paused_at TEXT;
+      ALTER TABLE runs ADD COLUMN allowed_actions TEXT;
+      ALTER TABLE runs ADD COLUMN budget_halt TEXT;
+      ALTER TABLE runs ADD COLUMN restarted_from_run_id TEXT;
+    `,
   },
 ];
 
