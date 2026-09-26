@@ -14,6 +14,7 @@ import {
   runStatus,
   setRunCostCap,
   startRun,
+  stillAllows,
   stopRun,
 } from './round3';
 
@@ -27,7 +28,14 @@ import {
  */
 test.describe('Round 3 §1 — the operator can control, understand and constrain a run', () => {
   test('§1: pause, resume, and the loop that ran three times', async ({ page }) => {
-    const seeded = await openRound3(page, 'loop', 'loop-3-iterations');
+    /*
+     * `pace: 'slow'` is what makes the pause below reachable. At the default pace this loop's six
+     * node runs are over in 1.49 s measured, and on the 2-vCPU CI runner the Pause click landed
+     * after COMPLETE — the run had already finished while Playwright was still scrolling the button
+     * into view (D200). `slow` is `mock-slow`'s pace against the real engine, so what this walks is
+     * what an operator would actually be looking at.
+     */
+    const seeded = await openRound3(page, 'loop', 'loop-3-iterations', { pace: 'slow' });
     const [writer] = seeded.agentIds as [string];
     const loopEdgeId = seeded.loopEdgeId!;
 
@@ -38,6 +46,7 @@ test.describe('Round 3 §1 — the operator can control, understand and constrai
     await expect(runStatus(page)).toHaveAttribute('data-status', 'RUNNING', { timeout: 10_000 });
 
     // Pause and resume, each offered only because the engine said so (FR-CTL-006).
+    await stillAllows(page, seeded.workflowId, 'pause');
     await runAction(page, 'pause').click();
     await expect(runStatus(page)).toHaveAttribute('data-status', 'PAUSED', { timeout: 10_000 });
     const paused = await engineRun(page, seeded.workflowId);
@@ -46,6 +55,7 @@ test.describe('Round 3 §1 — the operator can control, understand and constrai
       enabled: [...paused!.allowedActions].sort(),
     });
 
+    await stillAllows(page, seeded.workflowId, 'resume');
     await runAction(page, 'resume').click();
     await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE', { timeout: 30_000 });
 

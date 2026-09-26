@@ -5,7 +5,7 @@ import { MockDb } from './db';
 import { seedPerfFixture } from './fixture';
 import { createFakeWebSocket, dropMockSockets } from './fake-socket';
 import { createHandlers } from './handlers';
-import { createRound2Handlers, setScenario } from './handlers-round2';
+import { createRound2Handlers, setScenario, setStreamPace } from './handlers-round2';
 import { createRound3Handlers, decideApproval, requireApproval } from './handlers-round3';
 import { createNode, type Round1NodeKind } from '../nodes/factory';
 import { applyOpsWithRules } from './graph-rules';
@@ -22,6 +22,12 @@ declare global {
       setLatency(ms: number): void;
       /** Which scripted run scenario the next run plays (§5 item 11). */
       setScenario(name: Parameters<typeof setScenario>[0]): void;
+      /**
+       * How fast the next run streams (persists across reloads, like the scenario). `slow` is
+       * `mock-slow`'s pace against the real engine — what a test needs when it has to click a run
+       * control while the run is still live (D200).
+       */
+      setStreamPace(pace: Parameters<typeof setStreamPace>[0]): void;
       /** Cut every open socket, as an engine restart would (TC-EXE-013). */
       dropSocket(): void;
       /** Announce a provider state change without a reload (FR-PRV-004, TC-PRV-005). */
@@ -80,13 +86,18 @@ declare global {
  * the choice would silently revert to the happy path on the way to the Canvas.
  */
 const SCENARIO_KEY = 'ace.mock.scenario';
+/** The pace, kept the same way and for the same reason (D200). */
+const PACE_KEY = 'ace.mock.pace';
 
 type ScenarioName = Parameters<typeof setScenario>[0];
+type StreamPace = Parameters<typeof setStreamPace>[0];
 
 function restoreScenario(): void {
   try {
     const stored = localStorage.getItem(SCENARIO_KEY);
     if (stored) setScenario(stored as ScenarioName);
+    const storedPace = localStorage.getItem(PACE_KEY);
+    if (storedPace) setStreamPace(storedPace as StreamPace);
   } catch {
     // private mode or blocked storage: the default scenario is fine
   }
@@ -115,10 +126,12 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
       db.reset();
       try {
         localStorage.removeItem(SCENARIO_KEY);
+        localStorage.removeItem(PACE_KEY);
       } catch {
         // ignored, as above
       }
       setScenario('linear-complete');
+      setStreamPace('normal');
     },
     setLatency(ms) {
       db.setLatency(ms);
@@ -129,6 +142,14 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
         localStorage.setItem(SCENARIO_KEY, name);
       } catch {
         // nothing to do: the scenario still applies to this page
+      }
+    },
+    setStreamPace(pace) {
+      setStreamPace(pace);
+      try {
+        localStorage.setItem(PACE_KEY, pace);
+      } catch {
+        // nothing to do: the pace still applies to this page
       }
     },
     dropSocket() {

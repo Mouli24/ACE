@@ -21,6 +21,7 @@ import type {} from '../src/mocks/browser';
  */
 
 export type Scenario = Parameters<NonNullable<Window['__aceMock']>['setScenario']>[0];
+export type Pace = Parameters<NonNullable<Window['__aceMock']>['setStreamPace']>[0];
 
 /** Which graph to build. `chain` is two agents in a row; the other two are named after their node. */
 export type Shape = 'chain' | 'merge' | 'loop';
@@ -49,7 +50,8 @@ export const NODE_NAMES = {
 
 /**
  * Seed a graph, choose the scenario the next run plays, and open the Canvas on it. The scenario is
- * chosen before the navigation because the mock keeps it in localStorage (round 2 §5 item 11).
+ * chosen before the navigation because the mock keeps it in localStorage (round 2 §5 item 11); the
+ * pace is chosen the same way and for the same reason (D200).
  */
 export async function openRound3(
   page: Page,
@@ -63,11 +65,20 @@ export async function openRound3(
     reviewerTextOutput?: boolean;
     /** Give the Writer a spare json input, so a backward drag lands on a free, matching port. */
     writerJsonInput?: boolean;
+    /**
+     * `slow` makes every node stream at `mock-slow`'s pace against the real engine (~2 s a node).
+     * A test that clicks a run control needs it: at the default pace the whole story can be over
+     * before the click lands, which is how the §1 loop walk failed on CI (D200).
+     */
+    pace?: Pace;
   } = {},
 ): Promise<Seeded3> {
   await freshApp(page);
   const seeded = await seedShape(page, shape, options);
   await page.evaluate((name) => window.__aceMock!.setScenario(name), scenario);
+  if (options.pace !== undefined) {
+    await page.evaluate((pace) => window.__aceMock!.setStreamPace(pace), options.pace);
+  }
   await page.goto(`/projects/${seeded.projectId}/workflows/${seeded.workflowId}`);
   await expect(page.getByTestId('canvas')).toBeVisible();
   await expect(page.locator('.react-flow__node').first()).toBeVisible();
@@ -500,6 +511,20 @@ export async function controlState(page: Page): Promise<ControlState> {
 
 export const runAction = (page: Page, action: string): Locator =>
   page.getByTestId('run-controls').getByTestId(`run-action-${action}`);
+
+/**
+ * A control is only meaningful while the engine still allows it, and a run does not wait for a test.
+ * Reading `allowedActions` off the engine before the click turns the one failure this class produces
+ * into a sentence: a bare `toHaveAttribute` timeout says only "not PAUSED", which is what both the
+ * `slow-stream` defect and the §1 loop walk (D200) failed with, twice, on a loaded CI runner.
+ */
+export async function stillAllows(page: Page, workflowId: string, action: string): Promise<void> {
+  const run = await engineRun(page, workflowId);
+  expect(
+    run?.allowedActions ?? [],
+    `the engine no longer allows ${action}: the run is ${run?.status} — the tour raced the run`,
+  ).toContain(action);
+}
 
 /** `exact`, because the run bar's own "Restart" contains "start" (D-031). */
 export const startRun = (page: Page): Locator =>
