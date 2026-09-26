@@ -25,8 +25,18 @@ import { findUnknownPlaceholders } from '../prompts/index.js';
  * can start".
  */
 
-/** Node kinds the round 2 executor can run. The rest are refused until their round lands. */
-export const SUPPORTED_NODE_KINDS: readonly NodeKind[] = ['input', 'agent', 'model', 'transform', 'output'];
+/**
+ * Node kinds the executor can run. The rest are refused until their round lands — `merge` joined in
+ * round 3, when the scheduler learned to wait for its inputs (FR-PAR-002).
+ */
+export const SUPPORTED_NODE_KINDS: readonly NodeKind[] = [
+  'input',
+  'agent',
+  'model',
+  'merge',
+  'transform',
+  'output',
+];
 
 export interface PreflightInput {
   nodes: readonly Node[];

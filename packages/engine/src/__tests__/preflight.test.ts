@@ -280,7 +280,8 @@ describe('§2.7 item 4 — TC-PRM-003 placeholders must resolve', () => {
 });
 
 describe('§2.7 item 5 — node kinds that arrive in a later round', () => {
-  it.each(['merge', 'retrieval', 'guardrail', 'custom'] as const)(
+  // `merge` left this list in round 3 (FR-PAR-002); the rest still wait for their round.
+  it.each(['retrieval', 'guardrail', 'custom'] as const)(
     'refuses a %s node with not_supported_yet',
     async (kind) => {
       const unsupported = { ...outputNode(), id: '01JBXQ8Z9KQ4R7N2VWXYZ0LATR', kind, name: kind };
