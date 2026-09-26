@@ -35,8 +35,9 @@ function covers(model: Model, inputTypes: DataType[], outputTypes: DataType[]): 
  * `POST /workflows/:id/validate` (FR-WF-006, TC-WF-006), using the §2.5 codes.
  *
  * From round 2 `missing_model` is an **error**, not a warning: a run cannot start without one,
- * and round 1's own note said this is where that changes. `loop_not_supported` exists only while
- * loop edges are refused.
+ * and round 1's own note said this is where that changes. From round 3 a loop edge is legal and
+ * `loop_not_supported` is no longer raised — its own rules are `validateLoopConfig`'s, enforced
+ * where the edge is written rather than re-judged here (§2.4, FR-CON-007).
  */
 export function validateGraph(
   nodes: readonly Node[],
@@ -135,21 +136,18 @@ export function validateGraph(
     for (const port of [...node.inputs, ...node.outputs]) portsById.set(port.id, { port, node });
   }
 
+  // Loop edges do not occupy an input port (D73), so they are not counted against one: the loop
+  // back into a Writer's single text input must not make the brief look like a second connection.
   const edgesIntoPort = new Map<string, number>();
   for (const edge of edges) {
+    if (edge.kind !== 'data') continue;
     edgesIntoPort.set(edge.to.portId, (edgesIntoPort.get(edge.to.portId) ?? 0) + 1);
   }
 
   for (const edge of edges) {
-    if (edge.kind === 'loop') {
-      issues.push({
-        severity: 'error',
-        code: 'loop_not_supported',
-        message: 'Loop edges are not supported yet.',
-        edgeId: edge.id,
-      });
-      continue;
-    }
+    // From round 3 a loop edge is legal (FR-CON-003, FR-CON-007). Its own rules were checked by
+    // `validateLoopConfig` when it was written, and `isConnectionAllowed` never applied to it.
+    if (edge.kind === 'loop') continue;
 
     const source = portsById.get(edge.from.portId);
     const target = portsById.get(edge.to.portId);

@@ -10,6 +10,7 @@ import {
   derivePorts,
   isConnectionAllowed,
   nodeConfigPatchSchema,
+  validateLoopConfig,
   type CursorQuery,
   type Edge,
   type GraphOp,
@@ -28,7 +29,6 @@ import {
 import {
   invalidPath,
   notFound,
-  notImplemented,
   staleVersion,
   unsupportedFormatVersion,
   validationFailed,
@@ -396,6 +396,39 @@ function unknownRef(what: string, id: string) {
   ]);
 }
 
+/**
+ * A loop edge as it would stand in the finished graph, or a 400 `validation_failed` naming the rule
+ * it broke (§2.4, FR-CON-007, TC-CON-007).
+ *
+ * The check runs against the batch's graph so far *including this edge*, so `loop_bodies_overlap`
+ * and `loop_target_not_upstream` are judged on the shape the client is actually asking for. A
+ * `maxIterations` of 0 or 51 comes back through `invalid_loop_config`, as a 400 and not a 500 —
+ * `LoopConfigSchema` accepts it inside `Edge` on the way in so an edge stored by an older engine
+ * still loads (D73), which makes this the only place the range is enforced.
+ */
+function requireValidLoop(
+  edge: Edge,
+  nodeById: Map<Id, Node>,
+  edgeById: Map<Id, Edge>,
+): void {
+  const check = validateLoopConfig(edge, {
+    nodes: [...nodeById.values()],
+    edges: [...edgeById.values()].map((other) => (other.id === edge.id ? edge : other)).concat(
+      edgeById.has(edge.id) ? [] : [edge],
+    ),
+  });
+  if (check.ok) return;
+
+  throw validationFailed(check.reason, [
+    {
+      severity: 'error',
+      code: check.code,
+      message: check.reason,
+      edgeId: edge.id,
+    } satisfies ValidationIssue,
+  ]);
+}
+
 async function applyOp(op: GraphOp, ctx: OpContext): Promise<void> {
   const { tx, scope, workflowId, nodeById, edgeById } = ctx;
 
@@ -457,16 +490,27 @@ async function applyOp(op: GraphOp, ctx: OpContext): Promise<void> {
     case 'add_edge': {
       const edge = EdgeSchema.parse({ ...op.edge, workflowId });
 
-      // Loop edges are declared in §2.4 but the engine refuses them until round 3.
-      if (edge.kind === 'loop') throw notImplemented('Loop edges');
-
       const source = findPort(nodeById, edge.from.portId);
       const target = findPort(nodeById, edge.to.portId);
       if (source === undefined) throw unknownRef('Port', edge.from.portId);
       if (target === undefined) throw unknownRef('Port', edge.to.portId);
 
+      // Every edge goes past the loop rules, not only the loop ones: a *data* edge carrying a loop
+      // config is refused by name (`loop_config_on_data_edge`) rather than by whatever its types
+      // happen to say, so the client is told what it actually got wrong (§2.4, NFR-USE-03).
+      requireValidLoop(edge, nodeById, edgeById);
+
+      // A loop edge is not a data connection (D73): its target's inputs are already fed and it
+      // re-queues that target instead, so `isConnectionAllowed` does not apply to it.
+      if (edge.kind === 'loop') {
+        edgeById.set(edge.id, edge);
+        await tx.edges.insert(scope, edge);
+        return;
+      }
+
+      // Loop edges do not occupy an input port, so they are not counted against it (D73).
       const existingIntoTarget = [...edgeById.values()].filter(
-        (e) => e.to.portId === edge.to.portId,
+        (e) => e.kind === 'data' && e.to.portId === edge.to.portId,
       ).length;
 
       const check = isConnectionAllowed(source, target, existingIntoTarget);
@@ -489,7 +533,14 @@ async function applyOp(op: GraphOp, ctx: OpContext): Promise<void> {
     case 'update_edge': {
       const current = edgeById.get(op.edgeId);
       if (current === undefined) throw unknownRef('Edge', op.edgeId);
-      if (op.patch.loop !== undefined) throw notImplemented('Loop edges');
+      // `EdgePatch` carries nothing but `loop`, so a patch without one has nothing to apply.
+      if (op.patch.loop === undefined) return;
+
+      const updated: Edge = { ...current, loop: op.patch.loop };
+      requireValidLoop(updated, nodeById, edgeById);
+
+      edgeById.set(updated.id, updated);
+      await tx.edges.update(scope, updated);
       return;
     }
 

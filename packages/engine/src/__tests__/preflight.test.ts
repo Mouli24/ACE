@@ -298,16 +298,23 @@ describe('§2.7 item 5 — node kinds that arrive in a later round', () => {
     expect(codes(await run())).not.toContain('not_supported_yet');
   });
 
-  it('refuses a loop edge, which arrives in round 3', async () => {
+  it('no longer refuses a loop edge: round 3 accepts them (FR-CON-003, FR-CON-007)', async () => {
     const loop: Edge = {
       id: '01JBXQ8Z9KQ4R7N2VWXYZ0LOOP',
       workflowId: WORKFLOW,
       kind: 'loop',
       from: { nodeId: AGENT_ID, portId: `${AGENT_ID}:out:text` },
       to: { nodeId: AGENT_ID, portId: `${AGENT_ID}:in:text` },
+      loop: {
+        maxIterations: 3,
+        exitCondition: { path: 'verdict', equals: 'approved' },
+        onMax: 'continue',
+      },
     };
 
-    expect(codes(await run({ edges: [...edges(), loop] }))).toContain('loop_not_supported');
+    // A loop edge's own rules are `validateLoopConfig`'s, enforced where the edge is written
+    // (graph-ops); pre-flight neither re-judges them nor blocks the run for having one.
+    expect(codes(await run({ edges: [...edges(), loop] }))).not.toContain('loop_not_supported');
   });
 });
 
