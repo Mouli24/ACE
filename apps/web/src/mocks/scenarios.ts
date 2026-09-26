@@ -132,6 +132,8 @@ function streamText(node: Node, count: number, seedOffset = 0): string[] {
  * same way: `loop-3-iterations` plays six node runs at the `normal` pace and finishes in 1.49 s
  * measured, against a click that can take longer than that to land. The pace belongs to the run the
  * harness asks for, not to the name of the story — which is why it is a knob (D200).
+ *
+ * What a pace is made of matters as much as how long it lasts: see `PACE` below.
  */
 export type StreamPace = 'normal' | 'slow';
 
@@ -142,7 +144,14 @@ interface Pace {
 
 const PACE: Record<StreamPace, Pace> = {
   normal: { tokenDelay: 8, words: 5 },
-  slow: { tokenDelay: 60, words: 33 },
+  /*
+   * ~2 s a node, spent on eight far-apart tokens rather than thirty-three close ones. The duration is
+   * what a control needs; the frame *count* is pure cost, and it is paid in React renders on the node
+   * card. At 33 words the §1 loop walk's six node runs meant 198 streamed frames and took 23-50 s of
+   * wall clock against a 60 s test timeout — for a script only 12.5 s long. Eight tokens at 250 ms is
+   * the same 2 s with a quarter of the renders.
+   */
+  slow: { tokenDelay: 250, words: 8 },
 };
 
 interface Context {
