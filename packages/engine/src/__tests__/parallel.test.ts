@@ -21,7 +21,7 @@ import {
   type StreamChunk,
 } from '../ports/index.js';
 import { createNodeExecutor } from '../runs/executor.js';
-import { createRunService, type RunService } from '../runs/index.js';
+import { createRunGateRegistry, createRunService, type RunService } from '../runs/index.js';
 import { FakeRepository } from './fake-repository.js';
 import { InProcessPubSubStub } from './pubsub-stub.js';
 
@@ -195,6 +195,7 @@ async function runService(
   for (const edge of graph.edges) await repository.edges.insert(LOCAL_SCOPE, edge);
 
   return createRunService({
+    gates: createRunGateRegistry(),
     repository,
     scope: LOCAL_SCOPE,
     bus,

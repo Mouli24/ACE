@@ -14,7 +14,7 @@ import { createEventBus, type EventBus } from '../events/index.js';
 import { newId } from '../ids.js';
 import { createLogger } from '../logging/index.js';
 import { LOCAL_SCOPE, type EngineEvent, type ModelRouter, type ProviderAdapter } from '../ports/index.js';
-import { createRunService, type RunService } from '../runs/index.js';
+import { createRunGateRegistry, createRunService, type RunService } from '../runs/index.js';
 import { FakeRepository } from './fake-repository.js';
 import { InProcessPubSubStub } from './pubsub-stub.js';
 
@@ -197,6 +197,7 @@ async function build(concurrency = 20): Promise<Harness> {
 
   const gate = { inFlight: 0 };
   const service = createRunService({
+    gates: createRunGateRegistry(),
     repository,
     scope,
     bus,
@@ -565,6 +566,7 @@ describe('FR-EXE-008 beginRun answers while the run is still going (D65)', () =>
         yield* generate(req, signal);
       })();
     const service = createRunService({
+      gates: createRunGateRegistry(),
       repository: harness.repository,
       scope,
       bus: harness.bus,

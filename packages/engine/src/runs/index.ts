@@ -24,6 +24,7 @@ import { notFound } from '../gateway/errors.js';
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
 import type { ModelRouter, ProviderAdapter, Repository, Scope } from '../ports/index.js';
+import { createRunGate, type RunGate, type RunGateRegistry } from './control/gate.js';
 import { sumUsage } from './cost.js';
 import { createNodeExecutor, type NodeExecutionOutcome, type NodeExecutor } from './executor.js';
 import { preflight } from './preflight.js';
@@ -83,6 +84,12 @@ export interface RunServiceDeps {
   adapterFor: (providerId: Id) => Promise<ProviderAdapter>;
   checkProvider: (providerId: Id) => Promise<ProviderCheckResult>;
   runGated: <T>(providerId: Id, fn: () => Promise<T>) => Promise<T>;
+  /**
+   * Which runs this process is driving (FR-CTL-001..003, D110). The scheduler registers a gate per
+   * run and the controls look it up: it is the only thing a route handler and a running `drive()`
+   * share, and it is owned by the composition root so both see the same map.
+   */
+  gates: RunGateRegistry;
   summariser?: Summariser;
   now?: () => string;
   nextId?: () => string;
@@ -116,7 +123,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
   });
 
   /** Every run this process is currently driving, so shutdown can abort them (FR-SYS-008). */
-  const active = new Map<Id, { controller: AbortController; done: Promise<void> }>();
+  const active = new Map<Id, { gate: RunGate; done: Promise<void> }>();
 
   async function emitNodeState(
     run: Run,
@@ -184,7 +191,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
   /* ------------------------------------------------------------- the drive */
 
-  async function drive(run: Run, signal: AbortSignal): Promise<Run> {
+  async function drive(run: Run, gate: RunGate): Promise<Run> {
+    const signal = gate.signal;
     const { nodes, edges } = run.snapshot;
     const settings = await repository.settings.get(scope);
     const limit = settings.concurrency > 0 ? settings.concurrency : DEFAULT_CONCURRENCY;
@@ -522,17 +530,21 @@ export function createRunService(deps: RunServiceDeps): RunService {
         payload: { run: toSummary(running) },
       });
 
-      const controller = new AbortController();
-      const done = drive(running, controller.signal)
+      const gate = createRunGate(run.id);
+      const unregister = deps.gates.register(gate);
+      const done = drive(running, gate)
         .catch(async (error: unknown) => {
           // The drive threw rather than halting cleanly; the row is still the truth about the run.
           logger.error({ subsystem: 'runs', runId: run.id, err: error }, 'run failed');
           return (await repository.runs.get(scope, run.id)) ?? running;
         })
-        .finally(() => active.delete(run.id));
+        .finally(() => {
+          unregister();
+          active.delete(run.id);
+        });
 
       active.set(run.id, {
-        controller,
+        gate,
         done: done.then(
           () => undefined,
           () => undefined,
@@ -570,7 +582,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
     },
 
     async shutdown() {
-      for (const { controller } of active.values()) controller.abort();
+      // Every gate, not only this service's: a run driven through a control still has a gate here
+      // and `shutdown` is the one halt that must reach all of them (FR-SYS-008, FR-CTL-003).
+      for (const gate of deps.gates.all()) gate.shutdown();
+      for (const { gate } of active.values()) gate.shutdown();
       await Promise.allSettled([...active.values()].map((entry) => entry.done));
     },
 

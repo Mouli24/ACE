@@ -17,6 +17,7 @@ import {
   createGraphService,
   createLogger,
   createProviderService,
+  createRunGateRegistry,
   createRunService,
   createWsHub,
   haltActiveRuns,
@@ -166,6 +167,9 @@ export async function startEngine(
 
   const factory = createProviderAdapterFactory();
 
+  /* FR-CTL-001..003: the one gate registry the scheduler registers into and the controls read. */
+  const gates = createRunGateRegistry();
+
   const providers = createProviderService({
     repository,
     scope: LOCAL_SCOPE,
@@ -194,6 +198,7 @@ export async function startEngine(
   );
 
   const runs = createRunService({
+    gates,
     repository,
     scope: LOCAL_SCOPE,
     bus,
