@@ -392,13 +392,23 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const inFlight = new Set<Promise<void>>();
 
     while (!signal.aborted) {
+      // FR-CTL-001/002: a paused gate simply does not resolve, so no new node starts while the run
+      // is paused and the ones already in flight are left to finish. `false` means it was aborted.
+      if (!(await gate.waitUntilDispatchable())) break;
+
       const ready = nodes.filter(
         (node) => states.get(node.id) === 'IDLE' && isReady(node, edges, deliveredEdges),
       );
 
       for (const node of ready) {
         if (inFlight.size >= limit) break;
-        const promise = dispatch(node).finally(() => inFlight.delete(promise));
+        // Tracked on the gate as well as in `inFlight`, so `stop` can wait for the last in-flight
+        // node before it writes the run row (FR-CTL-003).
+        const release = gate.track(node.id);
+        const promise = dispatch(node).finally(() => {
+          release();
+          inFlight.delete(promise);
+        });
         inFlight.add(promise);
       }
 
