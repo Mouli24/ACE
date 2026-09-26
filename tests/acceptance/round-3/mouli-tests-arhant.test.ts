@@ -64,7 +64,17 @@ const client: AceClient = createAceClient({ baseUrl: url, token });
 
 const FIXTURES = join(process.cwd(), 'tests', 'acceptance', 'fixtures', 'round-3');
 /** Every agent node in a fixture names this placeholder; the harness rewrites it (fixtures README). */
-const PLACEHOLDER_PROVIDER = '01M3R2PV0000000000000000PV';
+/*
+ * Round 3's fixtures carry their own placeholders (`01M3R3…`), not round 2's (`01M3R2…`) — see
+ * `tests/acceptance/fixtures/round-3/README.md`. Rewriting the wrong one left every agent pointing at
+ * a provider row that does not exist, so each fixture run was BLOCKED at pre-flight with no node run
+ * to inspect, and twenty-odd checks failed in thirty milliseconds for the same reason.
+ */
+const PLACEHOLDER_PROVIDER = '01M3R3PV0000000000000000PV';
+/** `pii-ask.policy.json`'s `projectId`, rewritten to the project under test. */
+const PLACEHOLDER_PROJECT = '01M3R3PJ0000000000000000PJ';
+/** The Writer's `guardrailPolicyId` in `pii-ask.json`, rewritten to the created policy's id. */
+const PLACEHOLDER_POLICY = '01M3R3PC0000000000000000PC';
 
 /** The round 3 fixtures A3 owns (§4 item 8). A missing one is reported, never written here. */
 const FIXTURE_FILES = [
@@ -173,6 +183,8 @@ interface ImportOptions {
   /** Which project to import into; a scenario that changes a project setting gets its own. */
   projectId?: Id;
   providerId?: Id;
+  /** The real policy id to write over `pii-ask.json`'s placeholder (fixtures README). */
+  policyId?: Id;
   patch?: (exported: WorkflowExport) => void;
 }
 
@@ -191,9 +203,12 @@ async function importExport(
   options: ImportOptions = {},
 ): Promise<Imported> {
   for (const node of exported.nodes) {
-    const config = node.config as { providerId?: string };
+    const config = node.config as { providerId?: string; guardrailPolicyId?: string };
     if (config.providerId === PLACEHOLDER_PROVIDER) {
       config.providerId = options.providerId ?? mockProviderId;
+    }
+    if (config.guardrailPolicyId === PLACEHOLDER_POLICY && options.policyId !== undefined) {
+      config.guardrailPolicyId = options.policyId;
     }
   }
   options.patch?.(exported);
