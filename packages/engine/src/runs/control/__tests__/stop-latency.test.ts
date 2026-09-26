@@ -179,7 +179,7 @@ describe('TC-CTL-003 Stop closes provider streams within 2 s (FR-CTL-003)', () =
     expect(closedAt()).toBeDefined();
 
     // The stop is what ended it, and the node run and the run both say so (BR-03, BR-12).
-    expect(outcome.status).toBe('FAILED');
+    expect(outcome.status).toBe('STOPPED');
     expect(outcome.error?.kind).toBe('user_cancelled');
     expect(halted).toMatchObject({ status: 'HALTED', haltReason: 'stopped' });
     expect(stores.nodeRunRows.get(NODE_RUN_ID)?.status).toBe('STOPPED');

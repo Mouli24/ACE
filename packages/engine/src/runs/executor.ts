@@ -8,11 +8,14 @@ import {
   type ModelUsed,
   type Node,
   type NodeError,
+  type NodeState,
   type Part,
   type Usage,
+  type Verdict,
 } from "@ace/contracts";
 
 import { createBatcher } from "../events/batcher.js";
+import { classifyError, failureReasonFor, nodeStateFor } from "../errors/index.js";
 import type { EventBus } from "../events/index.js";
 import type { Logger } from "../logging/index.js";
 import type {
@@ -56,16 +59,68 @@ export interface ExecuteNodeInput {
    * ends, so node-run spans on one provider never overlap more than its limit allows (D66).
    */
   onEnded?: () => void;
+  /**
+   * The guardrail points for this node run, or absent when the app is built without a guardrail
+   * engine — in which case nothing is checked and the executor validates the contract itself, the
+   * round-2 behaviour.
+   */
+  guardrails?: NodeGuardrails;
+  /**
+   * FR-ERR-005: the validation reason of the attempt this one is repairing, appended to the
+   * instructions. Set only on the single contract-repair retry (§2.1).
+   */
+  repairReason?: string;
+}
+
+/**
+ * What a guardrail point decided about what was flowing through (FR-GRD-007, FR-GRD-011..015).
+ *
+ * `continue` carries the content on — possibly rewritten, which is how a `redact` reaches the prompt
+ * and the stored output (FR-GRD-014). `failed` names the reason the node run records, so a guardrail
+ * block stays `GUARDRAIL_VIOLATION` and a contract failure stays `CONTRACT_VIOLATION` (D9, D85).
+ */
+export type GuardrailStep<T> =
+  | ({ kind: "continue"; verdicts?: Verdict[] } & T)
+  | { kind: "failed"; failureReason: FailureReason; error: NodeError; verdicts?: Verdict[] };
+
+/**
+ * The guardrail points the executor runs, supplied per node run by the scheduler (Arch §13.1).
+ *
+ * The executor calls them and does nothing else about guardrails: it does not resolve a policy, does
+ * not store a verdict and does not know what `ask_user` means. That matters at the output point in
+ * particular — the hook runs *before* `node.output` is emitted, so a masked secret is masked
+ * everywhere, including on the socket (BR-07, D86).
+ */
+export interface NodeGuardrails {
+  /** The input point: every envelope's reads, before prompt assembly (FR-GRD-003). */
+  beforePrompt(
+    envelopes: readonly Envelope[],
+  ): Promise<GuardrailStep<{ envelopes: Envelope[] }>>;
+  /**
+   * The output point, before the contract decides (FR-GRD-007, §4 item 4). When this is wired it
+   * **owns** the contract check too, so an output is validated exactly once (D85).
+   */
+  afterOutput(
+    parts: Part[],
+    contract?: EnvelopeContract,
+  ): Promise<GuardrailStep<{ parts: Part[] }>>;
 }
 
 export interface NodeExecutionOutcome {
-  status: "COMPLETED" | "FAILED";
+  /**
+   * `NodeState` rather than the two round-2 values: a cancelled node ends `STOPPED`, not `FAILED`
+   * (FR-ERR-007), and an upstream that never produced anything leaves this one `BLOCKED`
+   * (FR-ERR-006). The state is `nodeStateFor(error)`, which is the one table for it (Arch §19.1).
+   */
+  status: NodeState;
   output: Part[];
   usage: Usage;
   failureReason?: FailureReason;
   error?: NodeError;
   modelUsed?: ModelUsed;
   prompt?: { version: string; text: string };
+  /** Every verdict the points above recorded, in the order they were recorded (FR-GRD-015). */
+  verdicts?: Verdict[];
 }
 
 export interface NodeExecutorDeps {
@@ -99,38 +154,13 @@ function readsOf(envelopes: readonly Envelope[]): Part[] {
     .flatMap((envelope) => envelope.reads);
 }
 
-/** The error an adapter threw, already mapped, or a generic provider failure. */
-function toNodeError(error: unknown): NodeError {
-  const mapped = (error as { nodeError?: NodeError }).nodeError;
-  if (mapped !== undefined) return mapped;
-
-  if (
-    error instanceof Error &&
-    (error.name === "AbortError" || error.name === "TimeoutError")
-  ) {
-    return {
-      kind: "user_cancelled",
-      code: "aborted",
-      message: "The call was cancelled before it finished.",
-      retryable: false,
-    };
-  }
-
-  return {
-    kind: "provider",
-    code: "unknown",
-    message: error instanceof Error ? error.message : String(error),
-    retryable: false,
-  };
-}
-
-/** Arch §28: an error kind decides the failure reason a node run records (BR-03). */
-function failureReasonFor(error: NodeError): FailureReason {
-  if (error.kind === "guardrail") return "GUARDRAIL_VIOLATION";
-  if (error.kind === "invalid_config" || error.kind === "workflow")
-    return "BLOCKED";
-  return "RUN_FAILED";
-}
+/*
+ * There is no private classifier here any more: `classifyError` is the one in `../errors/` and the
+ * eight kinds of Arch §28 are decided in exactly one place (FR-ERR-001). Two deliberate changes come
+ * with it (D109): a `TimeoutError` is `network` and retryable rather than a cancellation — Arch §28
+ * groups timeouts with network failures, and `AbortSignal.timeout()` is what raises it — while a bare
+ * `AbortError` stays `user_cancelled`; and an HTTP status carried on the thrown error decides.
+ */
 
 export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
   const batchMs = deps.tokenBatchMs ?? TOKEN_BATCH_MS;
@@ -142,28 +172,37 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
     usage: Usage = NO_USAGE,
     extra: Partial<NodeExecutionOutcome> = {},
   ): Promise<NodeExecutionOutcome> {
-    const failureReason = extra.failureReason ?? failureReasonFor(error);
+    const status = extra.status ?? nodeStateFor(error);
+    // FR-ERR-007: a node the user stopped has not failed, so it records no failure reason. Writing
+    // `RUN_FAILED` beside `STOPPED` is exactly the conflation BR-03 forbids.
+    const failureReason =
+      extra.failureReason ?? (status === "STOPPED" ? undefined : failureReasonFor(error));
 
-    await deps.bus.emit({
-      type: "node.error",
-      workflowId: input.workflowId,
-      runId: input.runId,
-      payload: {
+    // A cancellation is not an error frame. `node.error` carries a required `failureReason` and the
+    // UI paints one red; a node the user stopped has neither (FR-ERR-007). Its `node.state` frame
+    // says `STOPPED`, and the node run still records the `user_cancelled` error behind it.
+    if (failureReason !== undefined) {
+      await deps.bus.emit({
+        type: "node.error",
+        workflowId: input.workflowId,
         runId: input.runId,
-        nodeRunId: input.nodeRunId,
-        nodeId: input.node.id,
-        error,
-        failureReason,
-      },
-    });
+        payload: {
+          runId: input.runId,
+          nodeRunId: input.nodeRunId,
+          nodeId: input.node.id,
+          error,
+          failureReason,
+        },
+      });
+    }
 
     return {
-      status: "FAILED",
       output: [],
       usage,
       error,
-      failureReason,
+      ...(failureReason === undefined ? {} : { failureReason }),
       ...extra,
+      status,
     };
   }
 
@@ -222,9 +261,35 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         : { maxTokens: node.config.execution.maxTokens }),
     };
 
+    /* The collected verdicts of both points, carried on the outcome for the report (FR-GRD-015). */
+    const verdicts: Verdict[] = [];
+
+    /*
+     * The input point, before assembly (FR-GRD-003, §4 item 4). It runs here rather than in the
+     * scheduler for one reason: a `redact` has to reach the prompt, and the prompt is built on the
+     * next line.
+     */
+    let envelopes = input.envelopes;
+    if (input.guardrails !== undefined) {
+      const checked = await input.guardrails.beforePrompt(envelopes);
+      verdicts.push(...(checked.verdicts ?? []));
+      if (checked.kind === "failed") {
+        return fail(input, checked.error, NO_USAGE, {
+          failureReason: checked.failureReason,
+          verdicts,
+        });
+      }
+      envelopes = checked.envelopes;
+    }
+
     const prompt = assemblePrompt({
-      instructions,
-      envelopes: input.envelopes,
+      // FR-ERR-005 / §2.1: the one contract-repair retry is the same prompt with the validation
+      // reason appended, so the model is told what was wrong with its last answer.
+      instructions:
+        input.repairReason === undefined
+          ? instructions
+          : `${instructions}\n\nYour previous answer was rejected: ${input.repairReason}\nAnswer again, satisfying the output contract exactly.`,
+      envelopes,
       contract,
       iteration: input.iteration,
     });
@@ -281,17 +346,23 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         // TC-RTR-003: when the chain is exhausted the useful answer is what actually went wrong,
         // not "the router ran out of options".
         return lastProviderError === undefined
-          ? fail(input, {
-              kind: "invalid_config",
-              code: route.code,
-              message: route.reason,
-              retryable: false,
-            })
+          ? fail(
+              input,
+              {
+                kind: "invalid_config",
+                code: route.code,
+                message: route.reason,
+                retryable: false,
+              },
+              NO_USAGE,
+              { verdicts: [...verdicts] },
+            )
           : fail(input, lastProviderError, lastUsage, {
               ...(lastModelUsed === undefined
                 ? {}
                 : { modelUsed: lastModelUsed }),
               prompt: promptRecord,
+              verdicts: [...verdicts],
             });
       }
 
@@ -410,7 +481,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         }
       } catch (error) {
         tokens.stop();
-        const nodeError = toNodeError(error);
+        const nodeError = classifyError(error);
         const usage = usageFor(tokensIn, tokensOut, pricing);
 
         // Only these two are worth another model; everything else stops here (FR-RTR-002).
@@ -491,33 +562,59 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
           output.push({ type: "text", text: text.trim() });
       }
 
-      const check = validateAgainstContract(output, contract);
-      if (!check.ok) {
-        return {
-          kind: "done",
-          result: await fail(
-            input,
-            {
-              kind: "agent",
-              code: "contract_violation",
-              message: check.reason,
-              retryable: false,
-            },
-            usage,
-            {
+      /*
+       * The output point (§4 item 4, FR-GRD-007). When a guardrail engine is wired it owns the
+       * contract check as well, so the output is validated once and a contract failure is still
+       * `CONTRACT_VIOLATION` whatever the policy says (D85). It runs here, outside `runGated` and
+       * before `node.output` is emitted: the provider slot is already free for whoever is waiting
+       * (D66) and a masked secret is masked on the socket too (BR-07, D86).
+       */
+      let flowing = output;
+      if (input.guardrails !== undefined) {
+        const checked = await input.guardrails.afterOutput(flowing, contract);
+        verdicts.push(...(checked.verdicts ?? []));
+        if (checked.kind === "failed") {
+          return {
+            kind: "done",
+            result: await fail(input, checked.error, usage, {
               modelUsed,
               prompt: promptRecord,
-              failureReason: "CONTRACT_VIOLATION",
-            },
-          ),
-        };
+              failureReason: checked.failureReason,
+              verdicts: [...verdicts],
+            }),
+          };
+        }
+        flowing = checked.parts;
+      } else {
+        const check = validateAgainstContract(flowing, contract);
+        if (!check.ok) {
+          return {
+            kind: "done",
+            result: await fail(
+              input,
+              {
+                kind: "agent",
+                code: "contract_violation",
+                message: check.reason,
+                retryable: false,
+              },
+              usage,
+              {
+                modelUsed,
+                prompt: promptRecord,
+                failureReason: "CONTRACT_VIOLATION",
+              },
+            ),
+          };
+        }
       }
 
       return {
         kind: "done",
-        result: await succeed(input, output, usage, {
+        result: await succeed(input, flowing, usage, {
           modelUsed,
           prompt: promptRecord,
+          verdicts: [...verdicts],
         }),
       };
     }
@@ -541,6 +638,25 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             : node.config.text === undefined || node.config.text === ""
               ? []
               : [{ type: "text", text: node.config.text }];
+
+        /*
+         * §4 item 4 puts "the Input node content" at the **input** point, so the content the user
+         * typed is checked on the node that produced it, with a verdict that says `input`. The
+         * scheduler's adapter routes an Input node's `afterOutput` to `evaluateInput` for exactly
+         * this; the executor only knows it has a hook to call before it announces the output.
+         */
+        if (input.guardrails !== undefined) {
+          const checked = await input.guardrails.afterOutput(parts);
+          if (checked.kind === "failed") {
+            return fail(input, checked.error, NO_USAGE, {
+              failureReason: checked.failureReason,
+              ...(checked.verdicts === undefined ? {} : { verdicts: checked.verdicts }),
+            });
+          }
+          return succeed(input, checked.parts, NO_USAGE, {
+            ...(checked.verdicts === undefined ? {} : { verdicts: checked.verdicts }),
+          });
+        }
 
         return succeed(input, parts, NO_USAGE);
       }
