@@ -572,8 +572,14 @@ export function buildScenario(name: ScenarioName, ctx: Context): ScriptedFrame[]
   const round3 = buildRound3Scenario(name, ctx, order, outputNode);
   if (round3 !== undefined) return [...frames, ...round3];
 
+  /*
+   * `slow-stream` exists to be paused, stopped and reloaded mid-flight, so it has to outlast a
+   * browser test's own latency: 33 words at 60 ms is about 2 s per node, which is what `mock-slow`
+   * costs against the real engine. At its first pace — 12 words, 720 ms a node — a two-node chain
+   * was over in 1.5 s, and on a loaded CI runner the Pause click landed after the run had finished.
+   */
   const tokenDelay = name === 'slow-stream' ? 60 : 8;
-  const words = name === 'slow-stream' ? 12 : 5;
+  const words = name === 'slow-stream' ? 33 : 5;
   const spent: Usage[] = [];
   let lastText = '';
 
