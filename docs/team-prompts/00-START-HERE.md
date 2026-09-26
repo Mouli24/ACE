@@ -2,6 +2,8 @@
 
 Read this before opening any other file. It answers one question: **what do I paste, into which session, in what order, and who does it.**
 
+> **Since round 3 there is one developer.** Arhant stopped after round 2; the repo owner builds both sides (`D94`). The pack is deliberately not rewritten — the sequence below still records who did what, and it is the sequence a returning second developer inherits. What differs per round is §4.1; `CLAUDE.md` §6.3 has the review and cross-testing rules, and what one person cannot replace.
+
 ---
 
 ## 1. First, the decision: use ONE pack
@@ -68,6 +70,18 @@ Each round is **5 required Claude sessions**. Sessions marked ║ run at the sam
 | **G** | both | *no session* — gate | Tick every line of the round's **§8** (§9 in Round 1), update `CLAUDE.md` §9, `git tag round-N` | verification passed |
 
 **Nobody opens the next round file until the tag exists.** Waiting is correct: review, verify, close defects.
+
+### 4.1 Since round 3 — one developer (`D94`)
+
+Same five sessions, same order, same files. What differs:
+
+| # | Two people | One developer |
+|---|---|---|
+| **S1 → R** | Mouli reviews Arhant's contract PR | the contract is still its own PR, reviewed in a **fresh session** against §2 of the round file — one that has not read the engine |
+| **S2 ║ S3** | one feature per machine, at the same time | one feature at a time, split across Claude agents in isolated worktrees: one disjoint area each, shared files wired by hand (`D88`) |
+| **R** | each reviews the other's PR | the owner works the `CLAUDE.md` §6.1 checklist on his own PR |
+| **S4 ║ S5** | each verifies the other's feature | both cross-test files are still written, to the same paths, **from §2 and §7 of the round file before the implementation is read** — round 3's §7.2 suite landed with 36 of 39 checks red before A3 existed |
+| **G** | both tick the round's gate | one person walks it and records what was seen, instead of ticking "by both" |
 
 ---
 
