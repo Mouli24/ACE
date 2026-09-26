@@ -53,6 +53,13 @@ const source = (name: string): Node => {
   };
 };
 
+/**
+ * The **id** of one of a merge's input ports. D78: a merge input names the port it arrived on by
+ * port id, not by name, so every expectation below is written against the id the node really has.
+ */
+const portIdOf = (merge: MergeNode, portName: 'in' | 'in_json'): string =>
+  merge.inputs.find((port) => port.name === portName)!.id;
+
 function into(from: Node, merge: MergeNode, portName: 'in' | 'in_json'): Edge {
   const to = merge.inputs.find((port) => port.name === portName)!;
   return {
@@ -111,8 +118,8 @@ describe('TC-PAR-002 Merge node — all', () => {
     expect(output).toHaveLength(1);
     expect(output[0]?.type).toBe('json');
     expect(inputsOf(output)).toEqual([
-      { port: 'in', nodeId: left.id, parts: text('left') },
-      { port: 'in', nodeId: right.id, parts: text('right') },
+      { port: portIdOf(merge, 'in'), nodeId: left.id, parts: text('left') },
+      { port: portIdOf(merge, 'in'), nodeId: right.id, parts: text('right') },
     ]);
   });
 });
@@ -131,7 +138,10 @@ describe('TC-PAR-002 Merge node — output order is the input port order', () =>
       arrival(textEdge, text('from text')),
     ]);
 
-    expect(jsonFirst.map((input) => input.port)).toEqual(['in', 'in_json']);
+    expect(jsonFirst.map((input) => input.port)).toEqual([
+      portIdOf(merge, 'in'),
+      portIdOf(merge, 'in_json'),
+    ]);
     expect(jsonFirst.map((input) => input.nodeId)).toEqual([onText.id, onJson.id]);
   });
 
@@ -168,7 +178,9 @@ describe('TC-PAR-002 Merge node — any', () => {
       arrival(fastEdge, text('fast')),
     ]);
 
-    expect(ordered).toEqual([{ port: 'in', nodeId: slow.id, parts: text('slow') }]);
+    expect(ordered).toEqual([
+      { port: portIdOf(merge, 'in'), nodeId: slow.id, parts: text('slow') },
+    ]);
   });
 
   it('a later branch is in the log — it ran and was recorded — but does not feed the merge', () => {
@@ -178,7 +190,7 @@ describe('TC-PAR-002 Merge node — any', () => {
 
     expect(log.arrivals(merge.id)).toHaveLength(2);
     expect(mergeInputs(merge, edges, log.arrivals(merge.id))).toEqual([
-      { port: 'in', nodeId: fast.id, parts: text('fast') },
+      { port: portIdOf(merge, 'in'), nodeId: fast.id, parts: text('fast') },
     ]);
   });
 });
@@ -199,7 +211,7 @@ describe('FR-PAR-002 an arrival the graph does not explain', () => {
     ]);
 
     expect(ordered.map((input) => input.nodeId)).toEqual([stranger.id, known.id]);
-    expect(ordered[0]?.port).toBe('in');
+    expect(ordered[0]?.port).toBe(portIdOf(merge, 'in'));
   });
 
   it('two unexplained arrivals keep the order they arrived in', () => {
