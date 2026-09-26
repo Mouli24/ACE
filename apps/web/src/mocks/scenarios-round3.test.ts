@@ -21,9 +21,10 @@ import { newId } from '../lib/ulid';
 import { MockDb } from './db';
 import { createFakeWebSocket } from './fake-socket';
 import { createHandlers } from './handlers';
-import { createRound2Handlers, setScenario, stopScenario } from './handlers-round2';
+import { createRound2Handlers, setScenario, setStreamPace, stopScenario } from './handlers-round2';
 import { createRound3Handlers } from './handlers-round3';
 import { isPlaybackPaused, pendingPlaybackSteps } from './playback';
+import { buildScenario, type ScenarioName, type StreamPace } from './scenarios';
 
 /**
  * The round 3 scenarios (§2.6): each one drives the mock engine over HTTP and watches both halves —
@@ -45,6 +46,7 @@ beforeEach(() => {
   stopScenario();
   db.reset();
   setScenario('linear-complete');
+  setStreamPace('normal');
 });
 afterEach(() => stopScenario());
 
@@ -438,6 +440,61 @@ describe('loop-3-iterations (§2.6, FR-PAR-003..005)', () => {
     expect(reviewerRuns.at(-1)?.loopStop).toBe('max_iterations');
     expect(reviewerRuns.filter((each) => each.loopStop !== undefined)).toHaveLength(1);
     socket.close();
+  });
+});
+
+/**
+ * The pace a control has to land in (D200).
+ *
+ * Twice now a round 3 control test has failed on CI for one reason: the scripted run was over before
+ * the click arrived. `slow-stream` was fixed by making it stream slowly; the §1 loop walk then failed
+ * the same way, because `loop-3-iterations` plays six node runs at the `normal` pace and is done in
+ * about a second and a half. Neither fix left anything behind that would notice a regression, which
+ * is what these two do — in ms of script rather than in wall clock, so they say the same thing on any
+ * machine.
+ */
+describe('stream pace (D200)', () => {
+  /** How long the whole script takes to play, in the delays it asks the queue for. */
+  const spanMs = (name: ScenarioName, run: Run, pace: StreamPace): number =>
+    buildScenario(name, {
+      run,
+      workflowId: run.workflowId,
+      nodes: run.snapshot.nodes,
+      edges: run.snapshot.edges,
+      pace,
+    }).reduce((total, frame) => total + frame.after, 0);
+
+  it('a slow run outlasts a browser click; the normal pace is why it has to be asked for', async () => {
+    const { workflow } = loopGraph();
+    const run = await startRun(workflow.id);
+    // this test reads the script, not the clock: nothing needs to play
+    stopScenario();
+
+    /*
+     * The bound is 5 s, not "longer than now": a Playwright click on a loaded 2-vCPU runner, with
+     * tracing snapshotting the DOM around it, can take a large fraction of a second, and the run has
+     * to survive several of them (read allowedActions, click, wait for PAUSED). The CI failure this
+     * guards measured a 1.49 s run against a click that landed after it.
+     */
+    expect(spanMs('loop-3-iterations', run, 'slow')).toBeGreaterThanOrEqual(5_000);
+    // And the reason the pace is opt-in: at the default it is over in a fraction of that.
+    expect(spanMs('loop-3-iterations', run, 'normal')).toBeLessThan(2_000);
+
+    // `slow-stream` is the scenario whose name is its pace, so it is slow whatever the harness says.
+    expect(spanMs('slow-stream', run, 'normal')).toBeGreaterThanOrEqual(4_000);
+  });
+
+  it('the pace reaches a real run through the handlers, not only through buildScenario', async () => {
+    setScenario('loop-3-iterations');
+    setStreamPace('slow');
+    const { workflow } = loopGraph();
+    const run = await startRun(workflow.id);
+
+    // Half a second in, a slow run has not even finished its first node — so a control still applies.
+    await tick(500);
+    expect((await runOf(run.id)).status).toBe('RUNNING');
+    expect(pendingPlaybackSteps(run.id)).toBeGreaterThan(0);
+    expect(allowedRunActions('RUNNING')).toContain('pause');
   });
 });
 

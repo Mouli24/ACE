@@ -25,7 +25,7 @@ import { validateGraph } from './graph-rules';
 import { type MockDb } from './db';
 import { dropMockSockets } from './fake-socket';
 import { pausePlayback, startPlayback, stopAllPlayback } from './playback';
-import { buildScenario, type ScenarioName, type ScriptedFrame } from './scenarios';
+import { buildScenario, type ScenarioName, type ScriptedFrame, type StreamPace } from './scenarios';
 
 /**
  * MSW handlers for the round 2 endpoints (§2.5), plus the pre-flight of §2.7 and the scripted run
@@ -57,6 +57,19 @@ export function setScenario(next: ScenarioName): void {
 }
 export function currentScenario(): ScenarioName {
   return scenario;
+}
+
+/**
+ * How fast a run streams (D200). Independent of the scenario, because the pace is a property of the
+ * harness's needs rather than of the story: a test that clicks a control needs the run it is clicking
+ * to still be live, whichever story it is telling.
+ */
+let pace: StreamPace = 'normal';
+export function setStreamPace(next: StreamPace): void {
+  pace = next;
+}
+export function currentStreamPace(): StreamPace {
+  return pace;
 }
 
 /** Cancels every scenario still playing, so tests never leak into one another. */
@@ -130,6 +143,7 @@ export function playScenario(db: MockDb, run: Run): void {
       workflowId: run.workflowId,
       nodes: run.snapshot.nodes,
       edges: run.snapshot.edges,
+      pace,
       ...(cap === undefined || cap === null ? {} : { maxCostPerRunUsd: cap }),
       policyFor: (node) => policyRefFor(db, run.projectId, node),
     }),

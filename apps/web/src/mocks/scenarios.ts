@@ -119,11 +119,39 @@ function streamText(node: Node, count: number, seedOffset = 0): string[] {
   return Array.from({ length: count }, (_, i) => `${WORDS[(seed + i) % WORDS.length]} `);
 }
 
+/**
+ * How fast a scripted node streams its tokens.
+ *
+ * `normal` is the pace every scenario was written at — fast, because most tests only need the frames
+ * to arrive in the right order. `slow` is what `mock-slow` costs against the real engine, about 2 s a
+ * node, and it exists for one reason: a run control can only be clicked while the run is still live,
+ * and a browser test's own click latency on a loaded 2-vCPU runner is a large fraction of a second.
+ *
+ * That reason has now produced the same defect twice. `slow-stream` streamed 12 words at 60 ms, so a
+ * two-node chain was over in 1.5 s and Pause landed after COMPLETE. The §1 loop walk then failed the
+ * same way: `loop-3-iterations` plays six node runs at the `normal` pace and finishes in 1.49 s
+ * measured, against a click that can take longer than that to land. The pace belongs to the run the
+ * harness asks for, not to the name of the story — which is why it is a knob (D200).
+ */
+export type StreamPace = 'normal' | 'slow';
+
+interface Pace {
+  tokenDelay: number;
+  words: number;
+}
+
+const PACE: Record<StreamPace, Pace> = {
+  normal: { tokenDelay: 8, words: 5 },
+  slow: { tokenDelay: 60, words: 33 },
+};
+
 interface Context {
   run: Run;
   workflowId: string;
   nodes: Node[];
   edges: Edge[];
+  /** The pace this run streams at (D200); `normal` unless the harness asked for `slow`. */
+  pace?: StreamPace;
   /** The project's per-run cost cap, which `budget-halt` is measured against (§2.3, D80). */
   maxCostPerRunUsd?: number;
   /**
@@ -493,9 +521,20 @@ const NINE_STATES: NodeState[] = [
   'FAILED',
 ];
 
-export function buildScenario(name: ScenarioName, ctx: Context): ScriptedFrame[] {
+export function buildScenario(name: ScenarioName, given: Context): ScriptedFrame[] {
   // a blocked run never starts, so there is no frame to play (§2.7: zero provider calls)
   if (name === 'preflight-blocked') return [];
+
+  /*
+   * The one place a pace is decided. `slow-stream` is the scenario whose name *is* its pace, so it
+   * pins `slow` whatever the harness asked for; every other scenario takes the harness's choice.
+   * Everything below reads it off the context through `stream`, so no script carries a pace of its
+   * own (D200).
+   */
+  const ctx: Context = {
+    ...given,
+    pace: name === 'slow-stream' ? 'slow' : (given.pace ?? 'normal'),
+  };
 
   const order = executionOrder(ctx.nodes, ctx.edges);
   const outputNode = ctx.nodes.find((node) => node.kind === 'output');
@@ -572,14 +611,7 @@ export function buildScenario(name: ScenarioName, ctx: Context): ScriptedFrame[]
   const round3 = buildRound3Scenario(name, ctx, order, outputNode);
   if (round3 !== undefined) return [...frames, ...round3];
 
-  /*
-   * `slow-stream` exists to be paused, stopped and reloaded mid-flight, so it has to outlast a
-   * browser test's own latency: 33 words at 60 ms is about 2 s per node, which is what `mock-slow`
-   * costs against the real engine. At its first pace — 12 words, 720 ms a node — a two-node chain
-   * was over in 1.5 s, and on a loaded CI runner the Pause click landed after the run had finished.
-   */
-  const tokenDelay = name === 'slow-stream' ? 60 : 8;
-  const words = name === 'slow-stream' ? 33 : 5;
+  const { tokenDelay, words } = stream(ctx);
   const spent: Usage[] = [];
   let lastText = '';
 
@@ -628,8 +660,8 @@ export function buildScenario(name: ScenarioName, ctx: Context): ScriptedFrame[]
 /* Round 3 scenarios (§2.6): the eight stories the control and safety UI reads  */
 /* -------------------------------------------------------------------------- */
 
-/** The streaming pace the round 3 scripts share; `slow-stream` is the one that dawdles. */
-const STREAM = { tokenDelay: 8, words: 5 } as const;
+/** The pace this run streams at — the only place a script asks (D200). */
+const stream = (ctx: Context): Pace => PACE[ctx.pace ?? 'normal'];
 
 /** What the first executed node reads: the Input node's text, when there is one. */
 function inputReads(ctx: Context): Part[] {
@@ -661,7 +693,7 @@ function runChain(
   let lastText = textOf(reads);
   for (const node of nodes) {
     const result = runNode(ctx, node, {
-      ...STREAM,
+      ...stream(ctx),
       reads: currentReads,
       ...(options.round === undefined ? {} : { round: options.round }),
       ...(options.seedOffset === undefined ? {} : { seedOffset: options.seedOffset }),
@@ -753,7 +785,7 @@ function pausedScript(
 
   const frames: ScriptedFrame[] = [];
   const spent: Usage[] = [];
-  const opening = runNode(ctx, first, { ...STREAM, reads: inputReads(ctx) });
+  const opening = runNode(ctx, first, { ...stream(ctx), reads: inputReads(ctx) });
   frames.push(...opening.frames);
   spent.push(opening.usage);
   let lastText = opening.text;
@@ -775,7 +807,7 @@ function pausedScript(
 
   // resumed: the node the pause caught is READY again (the handler says so) and carries on
   const resumed = runNode(ctx, next, {
-    ...STREAM,
+    ...stream(ctx),
     reads,
     nodeRunId: nextRunId,
     skipReady: true,
@@ -904,7 +936,7 @@ function waitingApprovalScript(
   // approved: the node picks up where it paused, with its verdicts still on the record
   const spent: Usage[] = [];
   const resumed = runNode(ctx, target, {
-    ...STREAM,
+    ...stream(ctx),
     reads,
     nodeRunId,
     skipReady: true,
@@ -942,7 +974,7 @@ function budgetHaltScript(ctx: Context, order: Node[]): ScriptedFrame[] | undefi
   // the halt comes *before* the next dispatch, so the run stopped below the cap (§2.3, D80)
   const projectedUsd = round6(capUsd * 1.2);
 
-  const opening = runNode(ctx, first, { ...STREAM, reads: inputReads(ctx) });
+  const opening = runNode(ctx, first, { ...stream(ctx), reads: inputReads(ctx) });
   const frames: ScriptedFrame[] = [...opening.frames];
   for (const totals of climbing) {
     frames.push({
@@ -1005,7 +1037,7 @@ function loopScript(
   for (let iteration = 1; iteration <= iterations; iteration += 1) {
     for (const node of bodyNodes) {
       const result = runNode(ctx, node, {
-        ...STREAM,
+        ...stream(ctx),
         reads,
         round: { iteration },
         // a different slice of the word list per iteration, so no two outputs read alike
@@ -1088,7 +1120,7 @@ function mergeAnyScript(
   const spent: Usage[] = [];
   const reads = inputReads(ctx);
 
-  const first = runNode(ctx, firstBranch, { ...STREAM, reads });
+  const first = runNode(ctx, firstBranch, { ...stream(ctx), reads });
   frames.push(...first.frames);
   spent.push(first.usage);
 
@@ -1139,7 +1171,7 @@ function mergeAnyScript(
   }
 
   // the later branch still finishes and is still recorded — it just never reaches the merge
-  const later = runNode(ctx, laterBranch, { ...STREAM, reads, skipTransfers: true });
+  const later = runNode(ctx, laterBranch, { ...stream(ctx), reads, skipTransfers: true });
   frames.push(...later.frames);
   spent.push(later.usage);
 
@@ -1194,7 +1226,7 @@ function retryScript(
     frames.push(...failFrames(ctx, target, nodeRunId, error, 'RUN_FAILED', record, { attempt }));
   }
 
-  const third = runNode(ctx, target, { ...STREAM, reads, round: { attempt: 3 } });
+  const third = runNode(ctx, target, { ...stream(ctx), reads, round: { attempt: 3 } });
   frames.push(...third.frames);
   const spent: Usage[] = [third.usage];
 
@@ -1284,7 +1316,7 @@ export function buildAttemptScript(
     ...(options.iteration === undefined ? {} : { iteration: options.iteration }),
   };
   const attempt = runNode(ctx, node, {
-    ...STREAM,
+    ...stream(ctx),
     reads: options.reads,
     nodeRunId: options.nodeRunId,
     skipReady: true,
