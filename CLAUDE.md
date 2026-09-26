@@ -1,4 +1,4 @@
-# CLAUDE.md — ACE (two-person build: Arhant + Mouli)
+# CLAUDE.md — ACE (a two-person build: Arhant + Mouli; one developer since round 3 — §6.3)
 
 This file is loaded by Claude Code in every session. Read all of it before touching anything.
 It is the **starting file** of the team prompt pack in `docs/team-prompts/`. When this file and the spec docs disagree, the spec docs win and the conflict becomes a DECISION NEEDED (§7).
@@ -172,9 +172,13 @@ PR title: `feat(<scope>): <feature name> [R<N>]`; PR body = the Deliverable repo
 
 **Nobody starts Round N+1 until Round N is tagged.** Waiting is the correct state: review the partner's PR, run your cross-tests, close defects.
 
+Since round 3 there is **one developer** (D94). The steps, their order and the branch names stand; the roles do not — §6.3.
+
 ---
 
 ## 6. Review and cross-testing
+
+§6.1 and §6.2 are the two-person process. They produced rounds 1 and 2 and they stand if a second developer returns; §6.3 is what happens meanwhile.
 
 ### 6.1 PR review (before merge, by the partner, ≤ 20 min)
 1. Coverage table in the PR body: every FR of the feature, its TC IDs, the test file. Nothing from a later round.
@@ -193,6 +197,20 @@ PR title: `feat(<scope>): <feature name> [R<N>]`; PR body = the Deliverable repo
 Both run with `pnpm test:acceptance` and stay in CI forever (regression). Each round file lists exactly which TC IDs and scenarios each person must cover. The tester **never fixes** the other's code — findings go to `docs/defect-log.md` with severity (FRS §8.5: critical / high / medium / low); the owner fixes; the tester re-runs. Critical and high block the round; medium and low may be carried with a note in REPORT.md.
 
 Outcome is written in `tests/acceptance/round-N/REPORT.md` and in the Feature Log row: `VERIFIED by <name>, <date>` or `MERGED — verification failed (D-0nn)`.
+
+### 6.3 While there is one developer (since round 3 — D94)
+
+Arhant stopped after round 2. §3's map and the two sections above are left as written — D94 says why — and this is what happens until a second developer returns.
+
+| Step | Two people | One developer |
+|---|---|---|
+| Step 0 review | Mouli reviews the contracts PR | still its own PR, reviewed in a fresh session against the round file's "Shared contract" section |
+| Step 1 build | one feature per machine, in parallel | one feature, split across Claude agents in isolated worktrees — one disjoint area each, shared files wired by hand (D88) |
+| Step 2 review (§6.1) | the partner | the owner, same five checks; the §3 ownership check becomes "inside the paths this round's prompt names" |
+| Step 3 cross-test (§6.2) | each tests the other's feature | both files, same names and paths, written by the owner **from §2 and §7 of the round file before reading the implementation** |
+| Round gate (§9.1) | "walked by both" | walked once and recorded with what was seen — never ticked as if two had |
+
+**What that recovers, and what it does not.** A cross-test derived from the code it checks is worth nothing, so it is written first, from the spec: `tests/acceptance/round-3/mouli-tests-arhant.test.ts` landed with 36 of its 39 checks red before A3 existed, and those failures were the to-build list. That recovers coverage. It does not recover a second pair of eyes on a design decision, and nothing else does either — in round 2 Arhant's review corrected a wrong diagnosis of D-027 (the concurrency gate, blamed on the executor) and caught TC-EXE-013 asserting less than its name claimed (D67); in round 3, with no such review, every component test for the loop editor passed while `isValidConnection` kept a loop edge unreachable in the browser, found only because the Playwright suite was written last (§9, M3). So: write the test that drives the real thing, write it before the code where that is possible, and read a green unit suite as evidence that the units work, not that the feature exists.
 
 ---
 
@@ -233,11 +251,13 @@ Outcome is written in `tests/acceptance/round-N/REPORT.md` and in the Feature Lo
 5. Implement with TDD in small commits. One feature per session; if it does not fit, end with a handoff paragraph (done / green TCs / last SHA / next) and resume in a fresh session with preamble + paragraph.
 6. Finish with the **Deliverable report**: FR/TC table with status, real `pnpm test` output, coverage per package, `typecheck`/`lint` output, files changed, open DECISION NEEDED items. Paste it into the PR body.
 
+With one developer (§6.3): step 4's ownership check reads against the paths this round's prompt names, and a feature too wide for one session is split across parallel agents in isolated worktrees rather than across two machines (D88).
+
 ---
 
 ## 9. Feature Log — update every time a feature is completed
 
-Status values: `TODO` → `IN PROGRESS` → `IN REVIEW` → `MERGED` → `VERIFIED` (or `BLOCKED`). Edit **only your own rows**. `VERIFIED` is written by the **partner** after cross-testing.
+Status values: `TODO` → `IN PROGRESS` → `IN REVIEW` → `MERGED` → `VERIFIED` (or `BLOCKED`). Edit **only your own rows**. `VERIFIED` is written by the **partner** after cross-testing — or, with one developer, by the spec-first cross-test suite and the round gate (§6.3).
 
 | Round | ID | Feature | Owner | Branch | Status | Merged SHA | Date | Verified by | Notes |
 |---|---|---|---|---|---|---|---|---|---|
@@ -247,15 +267,15 @@ Status values: `TODO` → `IN PROGRESS` → `IN REVIEW` → `MERGED` → `VERIFI
 | 2 | C2 | Round 2 contract (providers, models, runs, node runs, envelope, run events) | Arhant | `round-2/contracts` | VERIFIED | 2ea7917 | 2026-09-25 | Mouli (review) | Step 0, merged contracts-only as the review asked. Exercised end to end since: the engine, the SDK, the web app and both round-2 acceptance suites all parse against these schemas — `Provider`/`Model`/`ModelQuery`, the `Envelope` (with its rejection of any message-list key, BR-02), `Run`/`NodeRun`, and the run/engine `ServerFrame` unions. `packages/contracts` is 474/474 green. Decisions D51–D65. One seam gap surfaced in use and was closed by A2: §2.5 never said whether `GET /providers` is wrapped, the engine answered a bare array and the SDK expected `{ items }` — now `{ items }` (D64). |
 | 2 | A2 | Providers + model catalog + router + run engine (snapshot, pre-flight, scheduler, executor, envelopes, prompts, streaming) | Arhant | `round-2/arhant-providers-execution` | VERIFIED | 88f06ba | 2026-09-25 | Mouli | PR #12, rebased on `main`; review round 1 addressed. Green with zero env vars: typecheck, lint, build, test 1389 passed + 3 todo (contracts 474 · engine 439 · providers 146 · storage-local 98 · server 43 · web 127 · ui 39 · sdk 23). Coverage stmts/branches: engine 93.2/84.3 · providers 94.2/81.8 · storage-local 98.4/88.1 · server 96.5/81.6 · contracts 99.7/93.9. NFR on this machine: TC-NFR-002 0.35 ms dispatch per node · TC-NFR-003 first `node.token` 49.7 ms after the adapter yielded · TC-NFR-005 22 nodes at concurrency 20, no errors. `POST /workflows/:id/runs` answers at pre-flight, not at the end (D65); `GET /providers` is `{ items }` (D64). Decisions D51-D65 (C2's and A2's, renumbered per D42). Not here: TC-PRV-008 (D56, rounds 6+); TC-EXE-009 and TC-EXE-013 client halves land with M2; TC-RTR-006 `todo` per D12. Fixtures: `tests/acceptance/fixtures/round-2/` — the provider id is a placeholder the harness rewrites. **Cross-tested by Mouli 2026-09-25** (`tests/acceptance/round-2/mouli-tests-arhant.test.ts`, 23 checks over HTTP + WS): 20 green, 3 red. MERGED — verification incomplete: D-025 (the mock adapter never sees its provider row, so §2.6's `apiKey: 'bad'` / `'ratelimited'` states are unreachable through the API) and D-027 (FR-PRV-009's limit is unenforced: `semaphoreFor` stores its gate only after an `await`, so nodes dispatched in one tick each build their own — my first diagnosis blamed the executor and was corrected on Arhant's review) are **High and block the round**; D-024 Medium, D-026 Low. Verified live: D65's POST answers in 17 ms and a client subscribing after it still receives every `node.token`; keys absent from the data directory; TC-OBS-003 immutability by `toEqual`. Report: `tests/acceptance/round-2/REPORT.md`. | **VERIFIED by Mouli 2026-09-25** — `tests/acceptance/round-2/mouli-tests-arhant.test.ts`, 23 checks over HTTP + WS, all green after #17 and #18. Cross-testing found four defects: D-025 and D-027 (both High, both fixed — the mock adapter never saw its provider row; the concurrency gate was rebuilt per caller), D-024 (Medium, OPEN, issue #16) and D-026 (Low, OPEN). Measured live rather than taken on trust: `POST /runs` answers 201 RUNNING in 17 ms and a client subscribing after it still receives every `node.token`; peak concurrency exactly 2 on a provider limited to 2; keys absent from every file under the data dir; a recorded run's totals unchanged by a catalogue refresh. TC-NFR-002 0.37 ms/node · TC-NFR-003 62.2 ms first token · TC-NFR-005 22 nodes at concurrency 20. Report: `tests/acceptance/round-2/REPORT.md`. |
 | 2 | M2 | Providers & models UI + run UI (start, live states, streaming, inspector, view prompt, history) + SDK WS resume | Mouli | `round-2/mouli-providers-run-ui` | VERIFIED | 8dbb28d | 2026-09-25 | Arhant | All 11 items of R2 §5 built, then rebased onto `main` with A2 merged. **PR #11 — APPROVED by Arhant, CI green, mergeable; awaiting merge.** Gates at `f267476`: typecheck · lint 0/0 · `pnpm test` 1529 passed / 3 todo (web 220 · sdk 42 · ui 67) · `pnpm test:e2e` 40 · acceptance 53 passed + 3 expected fail · coverage web 79.5 % / sdk 95.3 % / ui 99.1 % · 58.7 fps on the 200-node fixture. Two review rounds landed defects of my own: a code review found 13 issues of which 10 were real (D-015–D-023, two High — an inspector or Runs list left open during a run never caught up), and Arhant's §6.1 review corrected D-027's cause and a weak TC-EXE-013. Decisions D43–D50. My §7.2 cross-test of A2 is in (`tests/acceptance/round-2/mouli-tests-arhant.test.ts`, 23 checks, 20 pass + 3 `it.fails` on open A2 defects). Next: merge, then Arhant's §7.1 e2e suite. | Merged in PR #11 (approved by Arhant, CI green). **VERIFIED 2026-09-25** by `tests/acceptance/round-2/arhant-tests-mouli.e2e.ts` — 13 §7.1 scenarios in Playwright against the real engine and the production build, 13 passed in 1.4 min with no retries. That file is Arhant's by §7.1 and was written by Mouli on the owner's instruction (D67), so it is worth his read: a self-written cross-test cannot catch its author's blind spot, and the two M2 defects a partner's eye did catch (D-027's wrong cause, TC-EXE-013 weaker than its name) are the proof. M2's own defects from two review rounds: D-015..D-023 (two High: an inspector or Runs list left open during a run never caught up). Gates: `pnpm test` 1546 · `pnpm test:e2e` 40 · acceptance 56 + 25 · coverage web 79.5 % / sdk 95.3 % / ui 99.1 %. Decisions D43–D50. |
-| 3 | C3 | Round 3 contract (controls, approvals, guardrail policies/verdicts, loop + merge config, review contract) | Arhant | `round-3/contracts` | TODO | | | Mouli (review) | Step 0 |
+| 3 | C3 | Round 3 contract (controls, approvals, guardrail policies/verdicts, loop + merge config, review contract) | Arhant → Mouli (D94) | `round-3/contracts` | TODO | | | Mouli (review) | Step 0. C3 itself is Arhant's, written and reviewed before he stopped (D71–D86); the follow-up PR D71 names — `approvals` and `allowedActions` required once A3 and M3 are in — falls to Mouli (D94). |
 | 3 | A3 | Run controls + error model/retries + guardrail engine (input/output/cost/loop, actions, approvals) + parallel/merge + loop edges | Arhant → Mouli (D94) | `round-3/arhant-control-guardrails-loops` | IN PROGRESS | | | — (no partner; see D94) | Arhant has stopped working on ACE, so this is built by Mouli on the owner's instruction (D94). The ownership map in §3.1 is left as written and the branch keeps its name, so the docs and the log still line up. §6.1 review and §6.2 cross-testing have no second pair of eyes for it |
 | 3 | M3 | Controls toolbar + error cards + approval card + policy editor + verdicts + merge/loop UI + iterations + events/errors panel | Mouli | `round-3/mouli-control-guardrails-ui` | TODO | | | Arhant | |
-| 4 | C4 | Round 4 contract (artifacts, tools, tool calls, MCP servers, messages, chat threads) | Arhant | `round-4/contracts` | TODO | | | Mouli (review) | Step 0 |
-| 4 | A4 | Artifact store + multimodal envelopes + tool registry/loop/sandbox/HTTP/search/MCP + tool guardrails + chat service | Arhant | `round-4/arhant-multimodal-tools-chat` | TODO | | | Mouli | |
-| 4 | M4 | Uploads/drop + typed output renderers + chat panel (timeline, direct chat) + tools UI + tool calls in inspector | Mouli | `round-4/mouli-multimodal-chat-ui` | TODO | | | Arhant | |
-| 5 | C5 | Round 5 contract (knowledge bases, chunks, retrieval node, memory, usage, trace, templates, backup) | Arhant | `round-5/contracts` | TODO | | | Mouli (review) | Step 0 |
-| 5 | A5 | Knowledge bases (ingest, hybrid search, retrieval node) + context builder/summaries/context guardrails + memory + usage/trace + templates + export/import/backup | Arhant | `round-5/arhant-knowledge-memory-usage` | TODO | | | Mouli | |
-| 5 | M5 | Knowledge screens + retrieval/sources UI + memory view + usage/trace views + onboarding wizard + canvas productivity + settings + responsive | Mouli | `round-5/mouli-knowledge-onboarding-ui` | TODO | | | Arhant | |
+| 4 | C4 | Round 4 contract (artifacts, tools, tool calls, MCP servers, messages, chat threads) | Arhant → Mouli (D94) | `round-4/contracts` | TODO | | | — (no partner; see D94) | Step 0 |
+| 4 | A4 | Artifact store + multimodal envelopes + tool registry/loop/sandbox/HTTP/search/MCP + tool guardrails + chat service | Arhant → Mouli (D94) | `round-4/arhant-multimodal-tools-chat` | TODO | | | — (no partner; see D94) | |
+| 4 | M4 | Uploads/drop + typed output renderers + chat panel (timeline, direct chat) + tools UI + tool calls in inspector | Mouli | `round-4/mouli-multimodal-chat-ui` | TODO | | | — (no partner; see D94) | |
+| 5 | C5 | Round 5 contract (knowledge bases, chunks, retrieval node, memory, usage, trace, templates, backup) | Arhant → Mouli (D94) | `round-5/contracts` | TODO | | | — (no partner; see D94) | Step 0 |
+| 5 | A5 | Knowledge bases (ingest, hybrid search, retrieval node) + context builder/summaries/context guardrails + memory + usage/trace + templates + export/import/backup | Arhant → Mouli (D94) | `round-5/arhant-knowledge-memory-usage` | TODO | | | — (no partner; see D94) | |
+| 5 | M5 | Knowledge screens + retrieval/sources UI + memory view + usage/trace views + onboarding wizard + canvas productivity + settings + responsive | Mouli | `round-5/mouli-knowledge-onboarding-ui` | TODO | | | — (no partner; see D94) | |
 
 ### 9.1 Round gates
 
