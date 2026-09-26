@@ -40,17 +40,34 @@ export interface GuardrailPolicyPatch {
 
 export interface GuardrailPolicyRepository {
   create(scope: Scope, policy: GuardrailPolicy): Promise<GuardrailPolicy>;
+  /** The **latest** version of that policy. */
   get(scope: Scope, id: Id): Promise<GuardrailPolicy | null>;
-  /** Oldest first, the order they were created. */
-  listByProject(scope: Scope, projectId: Id): Promise<GuardrailPolicy[]>;
+  /**
+   * One exact version — what a recorded `NodeRun.guardrailPolicy: { id, version }` resolves to
+   * (FR-GRD-002, Arch §13.4, BR-04). A version is written once and never rewritten, so this answers
+   * the same checks a year later as the run was actually judged against.
+   */
+  getVersion(scope: Scope, id: Id, version: number): Promise<GuardrailPolicy | null>;
+  /**
+   * The latest version of each policy, oldest policy first. Without a `projectId` it is every
+   * policy in the workspace, which is what `GET /guardrail-policies` answers when the query omits
+   * the project (`GuardrailPolicyQuerySchema.projectId` is optional).
+   */
+  listByProject(scope: Scope, projectId?: Id): Promise<GuardrailPolicy[]>;
   /** The project's default, which FR-GRD-018 guarantees exists for every project. */
   getProjectDefault(scope: Scope, projectId: Id): Promise<GuardrailPolicy | null>;
+  /**
+   * A patch that names a **higher** version inserts that version and leaves the ones before it
+   * alone (FR-GRD-001); a patch that names none edits the latest row in place, which is only ever
+   * used for a correction, never for a user's PATCH.
+   */
   update(scope: Scope, id: Id, patch: GuardrailPolicyPatch): Promise<GuardrailPolicy | null>;
   /**
    * Moves the default flag to this policy inside one transaction, so a project never has two
    * defaults and never briefly has none. Null when there is no such policy.
    */
   setDefault(scope: Scope, id: Id): Promise<GuardrailPolicy | null>;
+  /** Every version of it. `false` when there was nothing to remove. */
   delete(scope: Scope, id: Id): Promise<boolean>;
   /**
    * Every node, in any workflow, whose config names this policy — what the 409 `policy_in_use`

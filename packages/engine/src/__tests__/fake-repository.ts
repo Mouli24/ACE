@@ -132,6 +132,14 @@ export class FakeRepository implements Repository {
     return state;
   }
 
+  /** The highest stored version of one policy — what every read of a policy answers. */
+  #latestPolicy(scope: Scope, id: Id): GuardrailPolicy | null {
+    const rows = [...this.#for(scope).guardrailPolicies.values()]
+      .filter((policy) => policy.id === id)
+      .sort((a, b) => a.version - b.version);
+    return rows.at(-1) ?? null;
+  }
+
   async transaction<T>(fn: (tx: Repository) => Promise<T>): Promise<T> {
     if (this.#depth > 0) return fn(this);
 
@@ -166,7 +174,7 @@ export class FakeRepository implements Repository {
         createdAt: project.createdAt,
         updatedAt: project.createdAt,
       };
-      state.guardrailPolicies.set(policy.id, policy);
+      state.guardrailPolicies.set(`${policy.id}:${policy.version}`, policy);
 
       return project;
     },
@@ -466,23 +474,37 @@ export class FakeRepository implements Repository {
 
   /* Round 3 (Arch §15.3). */
 
+  /**
+   * Keyed `${id}:${version}`, because the real table is: a PATCH inserts a version and never
+   * rewrites the ones before it (FR-GRD-001, Arch §13.4). A fake that kept one row per policy would
+   * pass every test here and still make `getVersion` a lie.
+   */
   readonly guardrailPolicies = {
     create: async (scope: Scope, policy: GuardrailPolicy) => {
-      this.#for(scope).guardrailPolicies.set(policy.id, policy);
+      this.#for(scope).guardrailPolicies.set(`${policy.id}:${policy.version}`, policy);
       return policy;
     },
-    get: async (scope: Scope, id: Id) => this.#for(scope).guardrailPolicies.get(id) ?? null,
-    listByProject: async (scope: Scope, projectId: Id) =>
-      [...this.#for(scope).guardrailPolicies.values()]
-        .filter((policy) => policy.projectId === projectId)
-        .sort((a, b) => a.id.localeCompare(b.id)),
+    get: async (scope: Scope, id: Id) => this.#latestPolicy(scope, id),
+    getVersion: async (scope: Scope, id: Id, version: number) =>
+      this.#for(scope).guardrailPolicies.get(`${id}:${version}`) ?? null,
+    listByProject: async (scope: Scope, projectId?: Id) => {
+      const ids = new Set(
+        [...this.#for(scope).guardrailPolicies.values()].map((policy) => policy.id),
+      );
+      return [...ids]
+        .map((id) => this.#latestPolicy(scope, id))
+        .filter((policy): policy is GuardrailPolicy => policy !== null)
+        .filter((policy) => projectId === undefined || policy.projectId === projectId)
+        .sort((a, b) => a.id.localeCompare(b.id));
+    },
     getProjectDefault: async (scope: Scope, projectId: Id) =>
       [...this.#for(scope).guardrailPolicies.values()].find(
         (policy) => policy.projectId === projectId && policy.isProjectDefault,
       ) ?? null,
     update: async (scope: Scope, id: Id, patch: GuardrailPolicyPatch) => {
-      const current = this.#for(scope).guardrailPolicies.get(id);
-      if (current === undefined) return null;
+      const policies = this.#for(scope).guardrailPolicies;
+      const current = this.#latestPolicy(scope, id);
+      if (current === null) return null;
 
       const next: GuardrailPolicy = { ...current };
       if (patch.name !== undefined) next.name = patch.name;
@@ -490,13 +512,18 @@ export class FakeRepository implements Repository {
       if (patch.checks !== undefined) next.checks = patch.checks;
       if (patch.updatedAt !== undefined) next.updatedAt = patch.updatedAt;
 
-      this.#for(scope).guardrailPolicies.set(id, next);
+      // A higher version is a new row; the flag travels with it, so only one row per project ever
+      // carries `isProjectDefault` (the store's unique index).
+      if (next.version > current.version && current.isProjectDefault) {
+        policies.set(`${current.id}:${current.version}`, { ...current, isProjectDefault: false });
+      }
+      policies.set(`${next.id}:${next.version}`, next);
       return next;
     },
     setDefault: async (scope: Scope, id: Id) => {
       const policies = this.#for(scope).guardrailPolicies;
-      const target = policies.get(id);
-      if (target === undefined) return null;
+      const target = this.#latestPolicy(scope, id);
+      if (target === null) return null;
 
       for (const [key, policy] of policies) {
         if (policy.projectId === target.projectId && policy.isProjectDefault) {
@@ -504,10 +531,19 @@ export class FakeRepository implements Repository {
         }
       }
       const next: GuardrailPolicy = { ...target, isProjectDefault: true };
-      policies.set(id, next);
+      policies.set(`${next.id}:${next.version}`, next);
       return next;
     },
-    delete: async (scope: Scope, id: Id) => this.#for(scope).guardrailPolicies.delete(id),
+    delete: async (scope: Scope, id: Id) => {
+      const policies = this.#for(scope).guardrailPolicies;
+      let removed = false;
+      for (const [key, policy] of [...policies]) {
+        if (policy.id !== id) continue;
+        policies.delete(key);
+        removed = true;
+      }
+      return removed;
+    },
     nodesUsing: async (scope: Scope, id: Id) =>
       [...this.#for(scope).nodes.values()].filter(
         (node) => 'guardrailPolicyId' in node.config && node.config.guardrailPolicyId === id,
