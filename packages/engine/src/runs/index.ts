@@ -27,7 +27,7 @@ import type { EvaluationTarget, GuardrailEvaluator } from '../guardrails/evaluat
 import { policyRef, type PolicyService } from '../guardrails/policy-service.js';
 import { contractFor, createTruncatingSummariser, estimatePartsTokens, trustForSource, type Summariser } from '../envelopes/index.js';
 import { buildEnvelope } from '../envelopes/index.js';
-import { autoRetryDecision } from '../errors/index.js';
+import { autoRetryDecision, upstreamFailedError } from '../errors/index.js';
 import type { EventBus } from '../events/index.js';
 import { notFound } from '../gateway/errors.js';
 import { newId } from '../ids.js';
@@ -594,6 +594,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
           attempt: 1,
           status: 'BLOCKED',
           failureReason: 'BLOCKED',
+          // FR-ERR-006: a BLOCKED node names what blocked it, so "Blocked by "Gatekeeper", which did
+          // not finish." is on the row rather than only in the run's shape.
+          error: upstreamFailedError(node.name, node.id).nodeError,
           inputEnvelopes: envelopesFor.get(blockedId) ?? [],
           usage: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
           verdicts: [],
