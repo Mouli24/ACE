@@ -408,7 +408,8 @@ describe('Arch §28 a provider failure fails the node run', () => {
 
     const outcome = await run();
 
-    expect(outcome.status).toBe('FAILED');
+    // Arch §28: an invalid config is BLOCKED — no model was called, so nothing failed (FR-ERR-006).
+    expect(outcome.status).toBe('BLOCKED');
     expect(outcome.error?.kind).toBe('invalid_config');
   });
 
@@ -612,7 +613,8 @@ describe('FR-EXE-004 the other node kinds run without a provider', () => {
 
     const outcome = await run(transform, [envelope([{ type: 'json', value: {} }])]);
 
-    expect(outcome.status).toBe('FAILED');
+    // Arch §28: a workflow error is BLOCKED — the node could not be reached, it did not fail.
+    expect(outcome.status).toBe('BLOCKED');
     expect(outcome.error?.kind).toBe('workflow');
   });
 
@@ -658,7 +660,8 @@ describe('FR-EXE-010 cancellation', () => {
       signal: controller.signal,
     });
 
-    expect(outcome.status).toBe('FAILED');
+    // FR-ERR-007: a cancellation is STOPPED, and never counted among the failures.
+    expect(outcome.status).toBe('STOPPED');
     expect(outcome.error?.kind).toBe('user_cancelled');
   });
 });
@@ -726,7 +729,8 @@ describe('D66 onStarted marks the moment the node holds its provider slot', () =
   it('never calls it when no route is found, so the scheduler supplies the RUNNING step', async () => {
     const { outcome, starts } = await runCounting(agentNode({ modelId: 'not-in-the-catalog' }));
 
-    expect(outcome.status).toBe('FAILED');
+    // BLOCKED from round 3: a model that is not in the catalogue is an invalid config (Arch §28).
+    expect(outcome.status).toBe('BLOCKED');
     expect(starts).toBe(0);
   });
 });
