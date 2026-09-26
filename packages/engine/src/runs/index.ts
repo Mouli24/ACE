@@ -47,6 +47,7 @@ import { createMergeArrivalLog, executeMergeNode, isMergeReady } from '../merge/
 import { downstreamOf } from './control/graph.js';
 import { createRunGate, type RunGate, type RunGateRegistry } from './control/gate.js';
 import type { PartialRunPlan } from './control/service.js';
+import { planStartFrom } from './control/start-from.js';
 import { sumUsage } from './cost.js';
 import {
   createNodeExecutor,
@@ -1265,7 +1266,41 @@ export function createRunService(deps: RunServiceDeps): RunService {
         return tx.runs.create(scope, created);
       });
 
-      return begin(run);
+      if (request.startFromNodeId === undefined) return begin(run);
+
+      /*
+       * Start from a node (FR-EXE-013, TC-EXE-012, D83). Every node above the chosen one has its
+       * last COMPLETED node run **copied** — zero usage, `reusedFromNodeRunId` set — so nothing is
+       * called again and the inspector still shows what the start node actually read. An upstream
+       * node no earlier run ever completed blocks the run at pre-flight with
+       * `missing_upstream_output`, naming it.
+       */
+      const plan = await planStartFrom({
+        startFromNodeId: request.startFromNodeId,
+        nodes: run.snapshot.nodes,
+        edges: run.snapshot.edges,
+        runId: run.id,
+        // Newest first, as `planStartFrom` reads them, and without this run itself.
+        earlierRuns: (
+          await repository.runs.listByWorkflow(scope, workflowId, { limit: 50 })
+        ).items.filter((candidate) => candidate.id !== run.id),
+        nodeRunsOf: (runId) => repository.nodeRuns.listByRun(scope, runId),
+        nextId,
+        now,
+      });
+
+      // Only when the plan is whole: inserting copies for a run that is about to be BLOCKED would
+      // leave a blocked run holding node runs it never had (TC-EXE-012's second half).
+      if (plan.issues.length === 0) {
+        for (const reused of plan.reused) await repository.nodeRuns.create(scope, reused);
+      }
+
+      return begin(run, {
+        issues: plan.issues,
+        // The copies are already COMPLETED rows, so the generic seed marks them COMPLETED and
+        // delivers their outputs; the start node is IDLE and becomes ready when they land.
+        seed: { nodeRuns: [], withDownstream: false },
+      });
     },
 
     async driveRecordedRun(run) {
