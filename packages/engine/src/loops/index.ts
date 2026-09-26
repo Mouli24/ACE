@@ -169,11 +169,14 @@ export interface LoopDecisionInput {
  * 1. `exit_condition` first, because a loop that got its answer has succeeded — it must not be
  *    reported as having run out of iterations on the very iteration that approved the work, and
  *    `onMax` never applies to it (FR-PAR-006 is about *reaching the maximum*).
- * 2. `repeated_output` next, because "this node has stopped changing its answer" is the more
- *    useful thing to tell the user than "the counter ran out", and it can fire well before the
- *    maximum (FR-GRD-009).
- * 3. `max_iterations` last (FR-PAR-003): the cap is the lower of the edge's own `maxIterations`
- *    and the policy's, so neither can be raised past the other by editing one of them (§2.4).
+ * 2. `max_iterations` next (FR-PAR-003, D130): the cap is the lower of the edge's own
+ *    `maxIterations` and the policy's, so neither can be raised past the other by editing one of
+ *    them (§2.4). When the cap is reached the loop was going to stop on this iteration whatever
+ *    else was true, so the cap is the reason it stopped — which is what makes TC-PAR-005's
+ *    "reviewer never approves, max 3 → exactly 3 iterations" the max-iterations case even though a
+ *    reviewer that never approves is, by construction, repeating itself.
+ * 3. `repeated_output` last (FR-GRD-009): "this node has stopped changing its answer" is worth
+ *    saying, and it fires where it is the *only* reason the loop stopped — before the maximum.
  */
 export function decideLoop(input: LoopDecisionInput): LoopDecision {
   const { edge, iteration } = input;
@@ -197,25 +200,6 @@ export function decideLoop(input: LoopDecisionInput): LoopDecision {
     };
   }
 
-  const times = input.repeatedOutputTimes;
-  if (times !== undefined && times > 0) {
-    const repeats = input.repeats ?? new Map<Id, number>();
-    const stuck = [...body].find((nodeId) => (repeats.get(nodeId) ?? 0) >= times);
-    if (stuck !== undefined) {
-      return {
-        ...common,
-        kind: 'stop',
-        reason: 'repeated_output',
-        after,
-        repeatedOn: stuck,
-        message:
-          `"${name(stuck)}" produced the same output ${times} times in a row, so the loop back to ` +
-          `"${name(targetNodeId)}" was stopped at iteration ${iteration}. ` +
-          'Change the instructions, the model or the temperature so the next iteration can differ.',
-      };
-    }
-  }
-
   const policyMax = input.policyMaxIterations;
   const cap =
     policyMax === undefined ? edge.loop.maxIterations : Math.min(edge.loop.maxIterations, policyMax);
@@ -233,6 +217,25 @@ export function decideLoop(input: LoopDecisionInput): LoopDecision {
         `becoming ${JSON.stringify(edge.loop.exitCondition.equals)}. ` +
         'Raise the maximum, relax the exit condition, or set the loop to continue with the last output.',
     };
+  }
+
+  const times = input.repeatedOutputTimes;
+  if (times !== undefined && times > 0) {
+    const repeats = input.repeats ?? new Map<Id, number>();
+    const stuck = [...body].find((nodeId) => (repeats.get(nodeId) ?? 0) >= times);
+    if (stuck !== undefined) {
+      return {
+        ...common,
+        kind: 'stop',
+        reason: 'repeated_output',
+        after,
+        repeatedOn: stuck,
+        message:
+          `"${name(stuck)}" produced the same output ${times} times in a row, so the loop back to ` +
+          `"${name(targetNodeId)}" was stopped at iteration ${iteration}. ` +
+          'Change the instructions, the model or the temperature so the next iteration can differ.',
+      };
+    }
   }
 
   return { ...common, kind: 'continue', iteration: iteration + 1 };

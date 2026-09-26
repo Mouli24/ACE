@@ -328,6 +328,9 @@ describe('TC-GRD-013 Repeated output stops the loop', () => {
   });
 
   it('stops with repeated_output when a body node has answered the same thing 3 times', () => {
+    // Iteration 3 of a maximum of 10, so `repeated_output` is the *only* reason the loop could
+    // stop here. On the last allowed iteration the cap is the reason instead (D130), which the
+    // boundary test below pins.
     const decision = decideLoop({
       edge,
       edges,
@@ -343,9 +346,36 @@ describe('TC-GRD-013 Repeated output stops the loop', () => {
     expect(decision.message).toContain('"Writer" produced the same output 3 times in a row');
   });
 
+  /**
+   * D130: when the cap and a stuck output coincide, the cap is the reason. FR-PAR-003's own test
+   * row — TC-PAR-005, "reviewer never approves, max 3 → exactly 3 iterations" — is exactly this
+   * case, because a reviewer that never approves is by construction repeating itself.
+   */
+  it('reports max_iterations, not repeated_output, on the last allowed iteration (D130)', () => {
+    const capped = loopBack(reviewer, writer, LOOP);
+    const decision = decideLoop({
+      edge: capped,
+      edges: [data, capped],
+      iteration: 3,
+      output: review('changes_requested'),
+      repeatedOutputTimes: 3,
+      repeats: new Map([
+        [writer.id, 3],
+        [reviewer.id, 3],
+      ]),
+    }) as LoopStop;
+
+    expect(capped.loop.maxIterations).toBe(3);
+    expect(decision.reason).toBe('max_iterations');
+  });
+
   it('then applies the onMax behaviour — continue delivers, fail is RUN_FAILED', () => {
     const repeats = new Map([[writer.id, 3]]);
-    const failing = loopBack(reviewer, writer, { ...LOOP, onMax: 'fail' });
+    const failing = loopBack(reviewer, writer, {
+      ...LOOP,
+      maxIterations: 10,
+      onMax: 'fail',
+    });
 
     const continued = decideLoop({
       edge,
@@ -364,6 +394,7 @@ describe('TC-GRD-013 Repeated output stops the loop', () => {
       repeats,
     }) as LoopStop;
 
+    expect(continued.reason).toBe('repeated_output');
     expect(continued.after).toBe('deliver');
     expect(failed.after).toBe('fail');
     expect(loopFailure(failed).error.code).toBe('loop_repeated_output');
