@@ -440,6 +440,19 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
         async function callModel(): Promise<void> {
           const adapter = await deps.adapterFor(chosen.providerId);
+          /*
+           * `execution.timeoutMs` is the node's own clock, and it starts here — after the provider
+           * slot is held, never when the node was queued for it (D66). `AbortSignal.timeout` sets a
+           * `TimeoutError` reason, which the adapter reads to raise a retryable `network` failure
+           * rather than a cancellation (D97, Arch §28).
+           */
+          const timeoutMs =
+            node.kind === 'agent' || node.kind === 'model' ? node.config.execution.timeoutMs : 0;
+          const callSignal =
+            timeoutMs > 0
+              ? AbortSignal.any([input.signal, AbortSignal.timeout(timeoutMs)])
+              : input.signal;
+
           const stream = adapter.generate(
             {
               modelId: chosen.modelId,
@@ -456,7 +469,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               runId: input.runId,
               iteration: input.iteration,
             },
-            input.signal,
+            callSignal,
           );
 
           for await (const chunk of stream as AsyncIterable<StreamChunk>) {

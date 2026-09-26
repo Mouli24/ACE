@@ -21,6 +21,7 @@ import {
 
 import { contractFor, createTruncatingSummariser, estimatePartsTokens, trustForSource, type Summariser } from '../envelopes/index.js';
 import { buildEnvelope } from '../envelopes/index.js';
+import { autoRetryDecision } from '../errors/index.js';
 import type { EventBus } from '../events/index.js';
 import { notFound } from '../gateway/errors.js';
 import { newId } from '../ids.js';
@@ -428,13 +429,18 @@ export function createRunService(deps: RunServiceDeps): RunService {
       await deliver(source, output, plan.iteration, [loopEdge]);
     }
 
-    async function finish(
-      node: Node,
+    /**
+     * Write what one attempt produced onto its own row and account for what it spent.
+     *
+     * Separate from `finish` because an attempt the engine is about to retry is a complete, recorded
+     * attempt — FR-ERR-005's `retry-429` has two FAILED rows and a COMPLETED one — and yet it must
+     * not deliver anything, must not block what is downstream of it and must not decide a loop.
+     */
+    async function recordAttempt(
       nodeRun: NodeRun,
       outcome: NodeExecutionOutcome,
-      endedAt: string = now(),
+      endedAt: string,
     ): Promise<void> {
-      const iteration = nodeRun.iteration;
       usages.push(outcome.usage);
 
       await repository.nodeRuns.update(scope, nodeRun.id, {
@@ -456,6 +462,16 @@ export function createRunService(deps: RunServiceDeps): RunService {
         runId: run.id,
         payload: { runId: run.id, totals: sumUsage(usages) },
       });
+    }
+
+    async function finish(
+      node: Node,
+      nodeRun: NodeRun,
+      outcome: NodeExecutionOutcome,
+      endedAt: string = now(),
+    ): Promise<void> {
+      const iteration = nodeRun.iteration;
+      await recordAttempt(nodeRun, outcome, endedAt);
 
       /*
        * What the node ends as. The loop block below can change it — a stop with `onMax: 'fail'`
@@ -544,60 +560,128 @@ export function createRunService(deps: RunServiceDeps): RunService {
       if (status !== 'COMPLETED' && !requeued) await blockDownstream(node);
     }
 
+    /** A wait the abort can cut short — a stop must not sit out a retry backoff (FR-CTL-003). */
+    function backoff(delayMs: number): Promise<void> {
+      if (delayMs <= 0 || signal.aborted) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, delayMs);
+        signal.addEventListener(
+          'abort',
+          () => {
+            clearTimeout(timer);
+            resolve();
+          },
+          { once: true },
+        );
+      });
+    }
+
+    /**
+     * One node, through as many attempts as FR-ERR-005 allows it (§2.1, Arch §28, D105).
+     *
+     * `provider` and `network` failures come back with the exponential backoff; `agent` gets the one
+     * contract repair, which re-sends the same prompt with the validation reason appended; `auth`,
+     * `invalid_config`, `workflow`, `guardrail` and `user_cancelled` never come back at all. Each
+     * attempt is its own node run at `attempt + 1`, so the history shows what was tried.
+     *
+     * `execution.retries` is read off the **snapshot** node, never the live workflow (D82).
+     */
     async function dispatch(node: Node, iteration: number): Promise<void> {
       // `states` is the scheduler's own bookkeeping: dispatched, so never picked up twice. The node
       // run itself stays READY until it holds its provider slot (D66, FR-PRV-009).
       states.set(node.id, 'RUNNING');
-      const nodeRun = await beginNodeRun(node, iteration);
 
-      let running = false;
-      /** When an agent's provider call ended, if it made one; otherwise the node ends at finish. */
-      let endedAt: string | undefined;
-      const markRunning = async (): Promise<void> => {
-        if (running) return;
-        running = true;
-        await repository.nodeRuns.update(scope, nodeRun.id, { status: 'RUNNING', startedAt: now() });
-        await emitNodeState(run, nodeRun, 'RUNNING');
-      };
+      const maxRetries =
+        node.kind === 'agent' || node.kind === 'model' ? node.config.execution.retries : 0;
 
-      const outcome =
-        node.kind === 'merge'
-          ? await (async (): Promise<NodeExecutionOutcome> => {
-              // A merge calls no provider and costs nothing, so it starts the instant it is
-              // dispatched; its output is a function of what arrived (FR-PAR-002).
-              await markRunning();
-              return executeMergeNode(
-                {
-                  runId: run.id,
-                  workflowId: run.workflowId,
-                  nodeRunId: nodeRun.id,
-                  node,
-                  edges,
-                  arrivals: mergeArrivals.arrivals(node.id),
+      let attempt = 1;
+      let contractRepairs = 0;
+      let repairReason: string | undefined;
+
+      for (;;) {
+        const nodeRun = await beginNodeRun(node, iteration, attempt);
+
+        let running = false;
+        /** When an agent's provider call ended, if it made one; else the node ends at finish. */
+        let endedAt: string | undefined;
+        const markRunning = async (): Promise<void> => {
+          if (running) return;
+          running = true;
+          await repository.nodeRuns.update(scope, nodeRun.id, {
+            status: 'RUNNING',
+            startedAt: now(),
+          });
+          await emitNodeState(run, nodeRun, 'RUNNING');
+        };
+
+        const outcome =
+          node.kind === 'merge'
+            ? await (async (): Promise<NodeExecutionOutcome> => {
+                // A merge calls no provider and costs nothing, so it starts the instant it is
+                // dispatched; its output is a function of what arrived (FR-PAR-002).
+                await markRunning();
+                return executeMergeNode(
+                  {
+                    runId: run.id,
+                    workflowId: run.workflowId,
+                    nodeRunId: nodeRun.id,
+                    node,
+                    edges,
+                    arrivals: mergeArrivals.arrivals(node.id),
+                  },
+                  { bus },
+                );
+              })()
+            : await executor.execute({
+                runId: run.id,
+                workflowId: run.workflowId,
+                nodeRunId: nodeRun.id,
+                node,
+                envelopes: envelopesFor.get(node.id) ?? [],
+                iteration,
+                attempt,
+                runInputs: run.inputs,
+                signal,
+                onStarted: markRunning,
+                onEnded: () => {
+                  endedAt = now();
                 },
-                { bus },
-              );
-            })()
-          : await executor.execute({
-              runId: run.id,
-              workflowId: run.workflowId,
-              nodeRunId: nodeRun.id,
-              node,
-              envelopes: envelopesFor.get(node.id) ?? [],
-              iteration,
-              attempt: nodeRun.attempt,
-              runInputs: run.inputs,
-              signal,
-              onStarted: markRunning,
-              onEnded: () => {
-                endedAt = now();
-              },
-            });
+                ...(repairReason === undefined ? {} : { repairReason }),
+              });
 
-      // A node that failed before it got a slot (no route, say) still passes through RUNNING, so
-      // every node run follows Arch §19.1: READY → RUNNING → a terminal state.
-      await markRunning();
-      await finish(node, nodeRun, outcome, endedAt);
+        // A node that failed before it got a slot (no route, say) still passes through RUNNING, so
+        // every node run follows Arch §19.1: READY → RUNNING → a terminal state.
+        await markRunning();
+
+        if (outcome.status === 'FAILED' && outcome.error !== undefined && !signal.aborted) {
+          const decision = autoRetryDecision({
+            error: outcome.error,
+            attempt,
+            maxRetries,
+            contractRepairs,
+          });
+
+          if (decision.retry) {
+            // The attempt that failed is a recorded attempt: its row is FAILED and its usage counts,
+            // it simply does not block anything or end the node (FR-ERR-003, FR-ERR-005).
+            await recordAttempt(nodeRun, outcome, endedAt ?? now());
+            await emitNodeState(run, nodeRun, 'FAILED', outcome.failureReason);
+
+            await backoff(decision.delayMs);
+            if (signal.aborted) return;
+
+            attempt = decision.nextAttempt;
+            if (decision.repairPrompt) {
+              contractRepairs += 1;
+              repairReason = outcome.error.message;
+            }
+            continue;
+          }
+        }
+
+        await finish(node, nodeRun, outcome, endedAt);
+        return;
+      }
     }
 
     /* The loop of Arch §12.3: mark ready, dispatch up to the limit, wait, repeat. */
