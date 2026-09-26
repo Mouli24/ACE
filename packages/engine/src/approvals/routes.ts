@@ -1,7 +1,7 @@
 import { ApprovalDecisionRequestSchema, type ApprovalDecisionKind, type Id } from '@ace/contracts';
 import { Hono, type Context } from 'hono';
 
-import { HttpError } from '../gateway/errors.js';
+import { HttpError, notImplemented } from '../gateway/errors.js';
 import {
   ApprovalAlreadyDecidedError,
   ApprovalNotFoundError,
@@ -51,17 +51,28 @@ async function readJson(c: Context): Promise<unknown> {
   }
 }
 
-export function createApprovalRoutes(approvals: ApprovalService): ApprovalRouter {
+/**
+ * `service` may be `undefined`: an app built without an approval service answers these routes 501
+ * `not_implemented`, which is the gateway's own convention for a service it was built without.
+ */
+export function createApprovalRoutes(service: ApprovalService | undefined): ApprovalRouter {
   const router: ApprovalRouter = new Hono<{ Variables: { requestId: string } }>();
 
-  router.get('/runs/:id/approvals', async (c) => c.json(await approvals.listPending(c.req.param('id'))));
+  const approvals = (): ApprovalService => {
+    if (service === undefined) throw notImplemented('approvals');
+    return service;
+  };
+
+  router.get('/runs/:id/approvals', async (c) =>
+    c.json(await approvals().listPending(c.req.param('id'))),
+  );
 
   const decide = (kind: ApprovalDecisionKind) => async (c: Context) => {
     const { note } = ApprovalDecisionRequestSchema.parse(await readJson(c));
     const nodeRunId = c.req.param('id') ?? '';
 
     try {
-      const { nodeRun } = await approvals.decide(nodeRunId, kind, note);
+      const { nodeRun } = await approvals().decide(nodeRunId, kind, note);
       if (nodeRun === null) throw nodeRunNotFound(nodeRunId);
       return c.json(nodeRun);
     } catch (error) {

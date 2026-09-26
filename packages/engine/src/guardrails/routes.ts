@@ -7,7 +7,7 @@ import {
 } from '@ace/contracts';
 import { Hono, type Context } from 'hono';
 
-import { HttpError } from '../gateway/errors.js';
+import { HttpError, notImplemented } from '../gateway/errors.js';
 import { PolicyNotFoundError, ProjectNotFoundError, type PolicyService } from './policy-service.js';
 
 /**
@@ -68,34 +68,44 @@ async function answering<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-export function createGuardrailRoutes(policies: PolicyService): GuardrailRouter {
+/**
+ * `service` may be `undefined`: an app built without a policy service answers every route below
+ * 501 `not_implemented`, which is what the gateway already does for a round-2 service it was built
+ * without. Every handler goes through `policies()` for exactly that reason.
+ */
+export function createGuardrailRoutes(service: PolicyService | undefined): GuardrailRouter {
   const router: GuardrailRouter = new Hono<{ Variables: { requestId: string } }>();
+
+  const policies = (): PolicyService => {
+    if (service === undefined) throw notImplemented('guardrail policies');
+    return service;
+  };
 
   // Wrapped like every other collection, `{ items }` (D64).
   router.get('/guardrail-policies', async (c) => {
     const { projectId } = GuardrailPolicyQuerySchema.parse(c.req.query());
-    return c.json({ items: await policies.list(projectId) });
+    return c.json({ items: await policies().list(projectId) });
   });
 
   router.post('/guardrail-policies', async (c) => {
     const input = CreateGuardrailPolicyRequestSchema.parse(await readJson(c));
-    return c.json(await answering(() => policies.create(input)), 201);
+    return c.json(await answering(() => policies().create(input)), 201);
   });
 
   router.get('/guardrail-policies/:id', async (c) =>
-    c.json(await answering(() => policies.get(c.req.param('id')))),
+    c.json(await answering(() => policies().get(c.req.param('id')))),
   );
 
   // FR-GRD-001: never in place. The answer is version + 1, and the version the run history points
   // at is still readable.
   router.patch('/guardrail-policies/:id', async (c) => {
     const patch = UpdateGuardrailPolicyRequestSchema.parse(await readJson(c));
-    return c.json(await answering(() => policies.update(c.req.param('id'), patch)));
+    return c.json(await answering(() => policies().update(c.req.param('id'), patch)));
   });
 
   router.delete('/guardrail-policies/:id', async (c) => {
     const confirm = c.req.query('confirm') === 'true';
-    const result = await answering(() => policies.remove(c.req.param('id'), { confirm }));
+    const result = await answering(() => policies().remove(c.req.param('id'), { confirm }));
 
     if (!result.ok) throw policyInUse(result.nodeIds, result.projectDefault);
     return c.body(null, 204);
@@ -103,11 +113,11 @@ export function createGuardrailRoutes(policies: PolicyService): GuardrailRouter 
 
   router.post('/guardrail-policies/:id/test', async (c) => {
     const request = PolicyTestRequestSchema.parse(await readJson(c));
-    return c.json(await answering(() => policies.test(c.req.param('id'), request)));
+    return c.json(await answering(() => policies().test(c.req.param('id'), request)));
   });
 
   router.post('/guardrail-policies/:id/set-default', async (c) =>
-    c.json(await answering(() => policies.setDefault(c.req.param('id')))),
+    c.json(await answering(() => policies().setDefault(c.req.param('id')))),
   );
 
   return router;

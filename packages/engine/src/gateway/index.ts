@@ -22,7 +22,10 @@ import type { Logger } from '../logging/index.js';
 import type { GraphService } from '../graph/index.js';
 import type { ProviderService } from '../providers/index.js';
 import type { Auth, Repository, Scope } from '../ports/index.js';
-import type { RunService } from '../runs/index.js';
+import type { ApprovalService } from '../approvals/index.js';
+import { createApprovalRoutes } from '../approvals/routes.js';
+import { createGuardrailRoutes, type PolicyService } from '../guardrails/index.js';
+import { createRunControlRoutes, type RunControls, type RunService } from '../runs/index.js';
 import {
   forbiddenOrigin,
   notFound,
@@ -47,6 +50,19 @@ export interface EngineDeps {
   providers?: ProviderService;
   runs?: RunService;
   bus?: EventBus;
+
+  /*
+   * Round 3 (§2.5). Optional for the same reason, and the sub-routers already answer 501
+   * `not_implemented` when they are handed `undefined` — so an app built without them refuses the
+   * route rather than crashing on it (D121).
+   */
+
+  /** `POST /runs/:id/pause` · `/resume` · `/stop` · `/restart`, retry and re-run (FR-CTL-001..006). */
+  controls?: RunControls;
+  /** `/guardrail-policies` (FR-GRD-001, FR-GRD-010). */
+  guardrailPolicies?: PolicyService;
+  /** `/runs/:id/approvals`, `/node-runs/:id/approve` and `/reject` (FR-GRD-013). */
+  approvals?: ApprovalService;
 }
 
 export interface EngineVariables {
@@ -360,6 +376,16 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   });
 
   api.get('/node-runs/:id', async (c) => c.json(await runs(c).getNodeRun(c.req.param('id'))));
+
+  /*
+   * Round 3's routes, three sub-routers mounted with one line each (§2.5, D121). They go on before
+   * `api` is mounted so they sit inside the same `/api/v1` prefix and inherit the request-id, CORS,
+   * origin and auth middleware above — a route that skipped `authGuard` would be a hole in
+   * FR-SYS-002.
+   */
+  api.route('/', createRunControlRoutes(() => deps.controls));
+  api.route('/', createGuardrailRoutes(deps.guardrailPolicies));
+  api.route('/', createApprovalRoutes(deps.approvals));
 
   app.route(API_BASE_PATH, api);
 
