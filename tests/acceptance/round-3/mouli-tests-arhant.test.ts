@@ -1395,8 +1395,35 @@ describe('TC-GRD-015 no API path switches a data guardrail off', () => {
 });
 
 describe('TC-GRD-008/009 an ask_user check waits for a person', () => {
+  /*
+   * `pii-ask.json` cannot carry its own policy — `WorkflowExport` holds a workflow and nothing else
+   * — so the fixture ships `pii-ask.policy.json`, a `CreateGuardrailPolicyRequest` the harness POSTs
+   * itself and then threads back into the Writer's `guardrailPolicyId` (fixtures README, "What
+   * `WorkflowExport` cannot carry"). Skipping that step is silent rather than loud: `resolve` falls
+   * back to the project default (D10), which warns on content and has no `ask_user` check at all, so
+   * the run simply completes and the wait for an approval request times out with nothing to show.
+   */
+  let askPolicyId: Id;
+
+  beforeAll(async () => {
+    const sidecar = JSON.parse(
+      readFileSync(join(FIXTURES, 'pii-ask.policy.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(sidecar['projectId'], 'the sidecar carries the project placeholder').toBe(
+      PLACEHOLDER_PROJECT,
+    );
+    const policy = await postPolicy('/guardrail-policies', {
+      ...sidecar,
+      projectId,
+    });
+    expect(policy.checks.map((check) => `${check.point}:${check.type}:${check.action}`)).toEqual([
+      'output:pii:ask_user',
+    ]);
+    askPolicyId = policy.id;
+  });
+
   it('approve: the node continues and the decision is logged with its time', async () => {
-    const { workflowId } = await importFixture('pii-ask.json');
+    const { workflowId } = await importFixture('pii-ask.json', { policyId: askPolicyId });
     const watcher = await watch(workflowId);
 
     const started = await client.startRun(workflowId);
@@ -1440,7 +1467,7 @@ describe('TC-GRD-008/009 an ask_user check waits for a person', () => {
   }, 90_000);
 
   it('reject: the node fails GUARDRAIL_VIOLATION, not CONTRACT_VIOLATION', async () => {
-    const { workflowId } = await importFixture('pii-ask.json');
+    const { workflowId } = await importFixture('pii-ask.json', { policyId: askPolicyId });
     const watcher = await watch(workflowId);
 
     const started = await client.startRun(workflowId);
