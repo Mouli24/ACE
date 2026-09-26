@@ -1,6 +1,7 @@
 import {
   allowedRunActions,
   DEFAULT_CONCURRENCY,
+  type BudgetHalt,
   type CursorQuery,
   type Edge,
   type Envelope,
@@ -19,6 +20,10 @@ import {
   type Usage,
 } from '@ace/contracts';
 
+import type { ApprovalService } from '../approvals/index.js';
+import type { BudgetService } from '../budgets/index.js';
+import type { EvaluationTarget, GuardrailEvaluator } from '../guardrails/evaluator.js';
+import type { PolicyService } from '../guardrails/policy-service.js';
 import { contractFor, createTruncatingSummariser, estimatePartsTokens, trustForSource, type Summariser } from '../envelopes/index.js';
 import { buildEnvelope } from '../envelopes/index.js';
 import { autoRetryDecision } from '../errors/index.js';
@@ -105,6 +110,22 @@ export interface RunServiceDeps {
    * share, and it is owned by the composition root so both see the same map.
    */
   gates: RunGateRegistry;
+
+  /*
+   * Round 3's services. Optional, exactly as round 2's are on `EngineDeps`: a harness that only
+   * exercises the scheduler builds a run service without them, and then nothing is checked, nothing
+   * is budgeted and no approval can be asked for — never a crash.
+   */
+
+  /** Resolves the policy each node is judged against: project default → agent override (FR-GRD-002). */
+  policies?: PolicyService;
+  /** The input and output points, and the verdict store behind them (FR-GRD-003, 007, 011..015). */
+  guardrails?: GuardrailEvaluator;
+  /** The cost point: projected before a dispatch, actual after each node (FR-GRD-008, §2.3). */
+  budgets?: BudgetService;
+  /** `ask_user`: rejects whatever is still waiting when a run ends without an answer (FR-GRD-013). */
+  approvals?: Pick<ApprovalService, 'cancelPending'>;
+
   summariser?: Summariser;
   now?: () => string;
   nextId?: () => string;
@@ -231,6 +252,48 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const iterations = new Map<Id, number>(nodes.map((node) => [node.id, 1]));
     /** The policy each node was judged against, so the loop point can read its params (FR-GRD-002). */
     const policyByNode = new Map<Id, GuardrailPolicy>();
+    /** Set once, by the first cap a node crossed; the run then dispatches nothing more (§2.3, D80). */
+    let budgetHalt: BudgetHalt | undefined;
+    /** The catalogue, read once: the cost point needs the price of the model a node would use. */
+    const catalog = await repository.models.list(scope, {});
+
+    /**
+     * The policy this node is judged against (FR-GRD-002): the agent's override, else the project
+     * default. Resolved once per node and remembered, so the node run's `guardrailPolicy` ref, the
+     * output point and the loop point all name the same version.
+     */
+    async function resolvePolicy(node: Node): Promise<GuardrailPolicy | null> {
+      const known = policyByNode.get(node.id);
+      if (known !== undefined) return known;
+      if (deps.policies === undefined) return null;
+
+      const policy = await deps.policies.resolve(run.projectId, node);
+      if (policy !== null) policyByNode.set(node.id, policy);
+      return policy;
+    }
+
+    /** What a guardrail or a budget check is told about the node run it is judging. */
+    function targetFor(node: Node, nodeRun: NodeRun): EvaluationTarget {
+      return {
+        runId: run.id,
+        workflowId: run.workflowId,
+        nodeRunId: nodeRun.id,
+        nodeId: node.id,
+        nodeName: node.name,
+        iteration: nodeRun.iteration,
+        policy: policyByNode.get(node.id) ?? null,
+      };
+    }
+
+    /** The price row of the model this node would call, for the projected cost (§2.3). */
+    function pricingFor(node: Node): { pricing?: (typeof catalog)[number]['pricing'] } {
+      if (node.kind !== 'agent' && node.kind !== 'model') return {};
+      const { providerId, modelId } = node.config;
+      const row = catalog.find(
+        (model) => model.providerId === providerId && model.modelId === modelId,
+      );
+      return row?.pricing === undefined ? {} : { pricing: row.pricing };
+    }
 
     /**
      * The `loop` point's params from the policy this node was judged against (§2.2, §2.4).
@@ -473,6 +536,17 @@ export function createRunService(deps: RunServiceDeps): RunService {
       const iteration = nodeRun.iteration;
       await recordAttempt(nodeRun, outcome, endedAt);
 
+      // The cost point, *after* the call: a model that answered longer than its projection, or a cap
+      // lowered mid-run (§2.3). The node keeps its result; the run stops dispatching.
+      if (deps.budgets !== undefined) {
+        const actual = await deps.budgets.afterNode({
+          target: targetFor(node, nodeRun),
+          projectId: run.projectId,
+          totals: sumUsage(usages),
+        });
+        if (actual.halt !== undefined) budgetHalt ??= actual.halt;
+      }
+
       /*
        * What the node ends as. The loop block below can change it — a stop with `onMax: 'fail'`
        * turns a COMPLETED loop source into FAILED (FR-PAR-006) — so the state is announced *after*
@@ -598,8 +672,35 @@ export function createRunService(deps: RunServiceDeps): RunService {
       let contractRepairs = 0;
       let repairReason: string | undefined;
 
+      await resolvePolicy(node);
+
       for (;;) {
         const nodeRun = await beginNodeRun(node, iteration, attempt);
+
+        /*
+         * The cost point, *before* the call (§2.3, FR-GRD-008): `totals + maxTokens × price` would
+         * cross a cap, so the run halts before spending the money — which is the only version of a
+         * budget that is actually a budget. The node run exists but never starts, so it ends STOPPED
+         * rather than FAILED: nothing about it went wrong (BR-03, FR-ERR-007).
+         */
+        if (deps.budgets !== undefined) {
+          const projected = await deps.budgets.beforeDispatch({
+            target: targetFor(node, nodeRun),
+            projectId: run.projectId,
+            totals: sumUsage(usages),
+            node,
+            ...pricingFor(node),
+          });
+
+          if (projected.halt !== undefined) {
+            budgetHalt ??= projected.halt;
+            const at = now();
+            await repository.nodeRuns.update(scope, nodeRun.id, { status: 'STOPPED', endedAt: at });
+            states.set(node.id, 'STOPPED');
+            await emitNodeState(run, nodeRun, 'STOPPED');
+            return;
+          }
+        }
 
         let running = false;
         /** When an agent's provider call ended, if it made one; else the node ends at finish. */
@@ -687,7 +788,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
     /* The loop of Arch §12.3: mark ready, dispatch up to the limit, wait, repeat. */
     const inFlight = new Set<Promise<void>>();
 
-    while (!signal.aborted) {
+    // §2.3: once a cap has been crossed the run dispatches nothing further. What is already in
+    // flight is left to finish, exactly as a pause leaves it — a budget stops spending, it does not
+    // throw away money already spent.
+    while (!signal.aborted && budgetHalt === undefined) {
       // FR-CTL-001/002: a paused gate simply does not resolve, so no new node starts while the run
       // is paused and the ones already in flight are left to finish. `false` means it was aborted.
       if (!(await gate.waitUntilDispatchable())) break;
@@ -721,9 +825,16 @@ export function createRunService(deps: RunServiceDeps): RunService {
       outputNodes.every((node) => states.get(node.id) === 'COMPLETED');
     const stillBusy = [...states.values()].some((state) => BUSY_STATES.has(state));
 
-    const complete = allOutputsDone && !stillBusy && !signal.aborted;
+    const complete =
+      allOutputsDone && !stillBusy && !signal.aborted && budgetHalt === undefined;
     const endedAt = now();
     const totals = sumUsage(usages);
+
+    // Nobody is left to answer an approval on a run that is ending, so what is still pending is
+    // rejected rather than left to wait for ever (FR-GRD-013, FR-CTL-003).
+    if (deps.approvals !== undefined) {
+      await deps.approvals.cancelPending(run.id, 'The run ended before this was decided.');
+    }
 
     /*
      * FR-CTL-003: a Stop has already written HALTED `stopped` and emitted `run.completed` from the
@@ -735,7 +846,14 @@ export function createRunService(deps: RunServiceDeps): RunService {
       return (await repository.runs.get(scope, run.id)) ?? run;
     }
 
-    const haltReason = gate.abortCause() ?? 'failure';
+    const haltReason =
+      gate.abortCause() ?? (budgetHalt === undefined ? 'failure' : 'budget_exceeded');
+    // D80: `haltReason` alone cannot say "budget exceeded: $0.012 > $0.01 cap" — at the projected
+    // check the totals are still *below* the cap, and the snapshot does not hold the cap.
+    const halt =
+      complete || budgetHalt === undefined || haltReason !== 'budget_exceeded'
+        ? {}
+        : { budgetHalt };
 
     const updated = await repository.runs.update(scope, run.id, {
       status: complete ? 'COMPLETE' : 'HALTED',
@@ -743,6 +861,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
       // guesses and the 409 the routes answer comes off the same table.
       allowedActions: allowedRunActions(complete ? 'COMPLETE' : 'HALTED'),
       ...(complete ? {} : { haltReason }),
+      ...halt,
       totals,
       endedAt,
       durationMs: Math.max(0, Date.parse(endedAt) - Date.parse(run.startedAt)),
@@ -757,6 +876,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
         runId: run.id,
         status: complete ? 'COMPLETE' : 'HALTED',
         ...(complete ? {} : { haltReason }),
+        ...halt,
         totals,
         finalOutput,
       },
@@ -812,7 +932,22 @@ export function createRunService(deps: RunServiceDeps): RunService {
         checkProvider: deps.checkProvider,
       });
 
-      if (issues.length > 0) {
+      /*
+       * §2.3: today's spend is already at the daily cap, so the run is BLOCKED with
+       * `daily_budget_exceeded` and **zero** provider calls. Checked against the project's default
+       * policy, because pre-flight is about the run rather than about one node.
+       */
+      if (deps.budgets !== undefined) {
+        const policy =
+          deps.policies === undefined ? null : await deps.policies.resolve(run.projectId);
+        issues.push(
+          ...(await deps.budgets.preflightIssues({ projectId: run.projectId, policy })),
+        );
+      }
+
+      // Every issue `preflight` itself raises is an error; only a `warn` daily budget can be a
+      // warning, and D79 says that one reports and lets the run start.
+      if (issues.some((issue) => issue.severity === 'error')) {
         // BLOCKED, with zero generate() calls (BR-08). Still a run: it is recorded, inspectable
         // and listed in the history, because "why did it not start" is a question worth keeping.
         const withIssues =
@@ -853,6 +988,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
         (await repository.runs.update(scope, run.id, {
           status: 'RUNNING',
           allowedActions: allowedRunActions('RUNNING'),
+          // A warning pre-flight raised is kept on the row: a run that started with a note is still
+          // a run whose note the user should see (D79).
+          ...(issues.length === 0 ? {} : { preflightIssues: issues }),
         })) ?? run;
 
       await bus.emit({
