@@ -29,9 +29,11 @@ export interface MergeArrival {
 }
 
 /**
- * One entry of the merge's json output. `port` is the input port's **name**, not its id: §2.4 calls
- * the field `port` where every edge endpoint in the contract calls its own `portId`, and a name is
- * unique within a node and readable in an inspector, where `01J...:in:in_json` is not.
+ * One entry of the merge's json output. `port` is the input **port id**, not the port's name: §2.4
+ * only calls the field `port`, and D78 settled which of the two it holds. An id is what a client
+ * already has — the merge node's `inputs[]` and every edge endpoint are keyed by it — so a
+ * consumer can put an arrival back against the port that received it without a second lookup,
+ * which is exactly what "ordered by input port order" has to be checkable against.
  */
 export interface MergeInput {
   port: string;
@@ -91,7 +93,6 @@ export function mergeInputs(
 
   const portOrder = new Map(node.inputs.map((port, index) => [port.id, index]));
   const edgeOrder = new Map(incoming.map((edge, index) => [edge.id, index]));
-  const nameOf = new Map(node.inputs.map((port) => [port.id, port.name]));
   const last = node.inputs.length;
 
   return [...fed]
@@ -107,7 +108,7 @@ export function mergeInputs(
       return edgeDelta !== 0 ? edgeDelta : a.index - b.index;
     })
     .map(({ arrival }) => ({
-      port: nameOf.get(arrival.portId) ?? arrival.portId,
+      port: arrival.portId,
       nodeId: arrival.fromNodeId,
       parts: arrival.parts,
     }));
