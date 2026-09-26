@@ -23,7 +23,7 @@ import {
 import type { ApprovalService } from '../approvals/index.js';
 import type { BudgetService } from '../budgets/index.js';
 import type { EvaluationTarget, GuardrailEvaluator } from '../guardrails/evaluator.js';
-import type { PolicyService } from '../guardrails/policy-service.js';
+import { policyRef, type PolicyService } from '../guardrails/policy-service.js';
 import { contractFor, createTruncatingSummariser, estimatePartsTokens, trustForSource, type Summariser } from '../envelopes/index.js';
 import { buildEnvelope } from '../envelopes/index.js';
 import { autoRetryDecision } from '../errors/index.js';
@@ -46,7 +46,12 @@ import { createMergeArrivalLog, executeMergeNode, isMergeReady } from '../merge/
 import { downstreamOf } from './control/graph.js';
 import { createRunGate, type RunGate, type RunGateRegistry } from './control/gate.js';
 import { sumUsage } from './cost.js';
-import { createNodeExecutor, type NodeExecutionOutcome, type NodeExecutor } from './executor.js';
+import {
+  createNodeExecutor,
+  type NodeExecutionOutcome,
+  type NodeExecutor,
+  type NodeGuardrails,
+} from './executor.js';
 import { preflight } from './preflight.js';
 import { toSummary } from './summary.js';
 
@@ -285,6 +290,62 @@ export function createRunService(deps: RunServiceDeps): RunService {
       };
     }
 
+    /**
+     * The guardrail points for one node run (FR-GRD-003, 007, 011..015, Arch §13.1).
+     *
+     * The executor calls these and knows nothing else about guardrails: it does not resolve a
+     * policy, does not store a verdict — every verdict goes through `guardrailVerdicts.append`
+     * inside the evaluator, never by patching the node run (D101) — and does not know what
+     * `ask_user` means. `undefined` when the app was built without an evaluator, in which case the
+     * executor validates the contract itself, which is the round-2 behaviour.
+     */
+    function guardrailsFor(node: Node, nodeRun: NodeRun): { guardrails?: NodeGuardrails } {
+      const evaluator = deps.guardrails;
+      if (evaluator === undefined) return {};
+      const target = targetFor(node, nodeRun);
+
+      return {
+        guardrails: {
+          async beforePrompt(envelopes) {
+            const outcome = await evaluator.evaluateEnvelopes({ target, envelopes });
+            return outcome.kind === 'failed'
+              ? {
+                  kind: 'failed',
+                  failureReason: outcome.failureReason,
+                  error: outcome.error,
+                  verdicts: outcome.verdicts,
+                }
+              : { kind: 'continue', envelopes: outcome.envelopes, verdicts: outcome.verdicts };
+          },
+
+          async afterOutput(parts, contract) {
+            /*
+             * §4 item 4 puts "the Input node content" at the **input** point, so an Input node's
+             * output is judged there and its verdicts say `input`. Everything else is the output
+             * point, where the contract is decided too (D85).
+             */
+            const outcome =
+              node.kind === 'input'
+                ? await evaluator.evaluateInput({ target, parts })
+                : await evaluator.evaluateOutput({
+                    target,
+                    parts,
+                    ...(contract === undefined ? {} : { contract }),
+                  });
+
+            return outcome.kind === 'failed'
+              ? {
+                  kind: 'failed',
+                  failureReason: outcome.failureReason,
+                  error: outcome.error,
+                  verdicts: outcome.verdicts,
+                }
+              : { kind: 'continue', parts: outcome.parts, verdicts: outcome.verdicts };
+          },
+        },
+      };
+    }
+
     /** The price row of the model this node would call, for the projected cost (§2.3). */
     function pricingFor(node: Node): { pricing?: (typeof catalog)[number]['pricing'] } {
       if (node.kind !== 'agent' && node.kind !== 'model') return {};
@@ -343,7 +404,14 @@ export function createRunService(deps: RunServiceDeps): RunService {
         inputEnvelopes: envelopesFor.get(node.id) ?? [],
         usage: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
         verdicts: [],
+        approvals: [],
         toolCalls: [],
+        // FR-GRD-002: which policy, at which version, judged this node run — recorded on the row so
+        // "what was this run checked against?" still has an answer a year later (BR-04, Arch §13.4).
+        ...(() => {
+          const policy = policyByNode.get(node.id);
+          return policy === undefined ? {} : { guardrailPolicy: policyRef(policy) };
+        })(),
         // No startedAt yet: it is stamped when the node starts, not when it joins its provider's
         // queue (D66).
       };
@@ -747,6 +815,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
                 onEnded: () => {
                   endedAt = now();
                 },
+                ...guardrailsFor(node, nodeRun),
                 ...(repairReason === undefined ? {} : { repairReason }),
               });
 
