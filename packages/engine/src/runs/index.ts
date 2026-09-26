@@ -4,6 +4,7 @@ import {
   type CursorQuery,
   type Edge,
   type Envelope,
+  type GuardrailPolicy,
   type Id,
   type Model,
   type Node,
@@ -25,6 +26,16 @@ import { notFound } from '../gateway/errors.js';
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
 import type { ModelRouter, ProviderAdapter, Repository, Scope } from '../ports/index.js';
+import {
+  DEFAULT_REPEATED_OUTPUT_TIMES,
+  createLoopCoordinator,
+  decideLoop,
+  loopFailure,
+  planNextIteration,
+  retainedEnvelopes,
+  splitOutgoing,
+  type LoopContinue,
+} from '../loops/index.js';
 import { createMergeArrivalLog, executeMergeNode, isMergeReady } from '../merge/index.js';
 import { downstreamOf } from './control/graph.js';
 import { createRunGate, type RunGate, type RunGateRegistry } from './control/gate.js';
@@ -164,7 +175,12 @@ export function createRunService(deps: RunServiceDeps): RunService {
      */
     if (node.kind === 'merge') return isMergeReady(node, edges, delivered);
 
-    const incoming = edges.filter((edge) => edge.to.nodeId === node.id);
+    /*
+     * Data edges only. A loop edge into this node is not a precondition for running it — it points
+     * backwards (D73), so requiring it would deadlock the very first iteration of every loop. The
+     * loop re-queues its target instead, which is `requeue` below.
+     */
+    const incoming = edges.filter((edge) => edge.to.nodeId === node.id && edge.kind === 'data');
     if (incoming.length === 0) return true;
 
     const byPort = new Map<string, Edge[]>();
@@ -208,15 +224,57 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const finalOutput: Record<Id, Part[]> = {};
     /** What arrived at each merge node, in order and with its port (FR-PAR-002, §2.4). */
     const mergeArrivals = createMergeArrivalLog();
+    /** Which node belongs to which loop, what each has repeated, what each last produced (§2.4). */
+    const loops = createLoopCoordinator(edges);
+    /** The iteration each node is at. Only a loop body node ever climbs (FR-PAR-005). */
+    const iterations = new Map<Id, number>(nodes.map((node) => [node.id, 1]));
+    /** The policy each node was judged against, so the loop point can read its params (FR-GRD-002). */
+    const policyByNode = new Map<Id, GuardrailPolicy>();
 
-    /** One node run row per node, created when the node is first dispatched. */
-    async function beginNodeRun(node: Node): Promise<NodeRun> {
+    /**
+     * The `loop` point's params from the policy this node was judged against (§2.2, §2.4).
+     *
+     * `repeatedOutputTimes` absent means the check is not configured and FR-GRD-009 does not fire,
+     * which is why it is read from the policy rather than defaulted here: a project that switched
+     * `repeated_output` off must get a loop that only its own maximum stops.
+     */
+    function loopPointParams(nodeId: Id): {
+      policyMaxIterations?: number;
+      repeatedOutputTimes?: number;
+    } {
+      const checks = (policyByNode.get(nodeId)?.checks ?? []).filter(
+        (check) => check.enabled && check.point === 'loop',
+      );
+      const positive = (value: unknown): number | undefined =>
+        typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+
+      const max = checks.find((check) => check.type === 'max_iterations');
+      const repeat = checks.find((check) => check.type === 'repeated_output');
+
+      return {
+        ...(max === undefined
+          ? {}
+          : (() => {
+              const value = positive(max.params['max']) ?? positive(max.params['maxIterations']);
+              return value === undefined ? {} : { policyMaxIterations: value };
+            })()),
+        ...(repeat === undefined
+          ? {}
+          : {
+              repeatedOutputTimes:
+                positive(repeat.params['times']) ?? DEFAULT_REPEATED_OUTPUT_TIMES,
+            }),
+      };
+    }
+
+    /** One node run row per node per iteration, created when that iteration is dispatched. */
+    async function beginNodeRun(node: Node, iteration: number, attempt = 1): Promise<NodeRun> {
       const nodeRun: NodeRun = {
         id: nextId(),
         runId: run.id,
         nodeId: node.id,
-        iteration: 1,
-        attempt: 1,
+        iteration,
+        attempt,
         status: 'READY',
         inputEnvelopes: envelopesFor.get(node.id) ?? [],
         usage: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
@@ -232,9 +290,22 @@ export function createRunService(deps: RunServiceDeps): RunService {
       return nodeRun;
     }
 
-    /** Deliver a completed node's output along its outgoing edges (FR-EXE-005, FR-EXE-015). */
-    async function deliver(node: Node, parts: Part[]): Promise<void> {
-      const outgoing = edges.filter((edge) => edge.from.nodeId === node.id && edge.kind === 'data');
+    /**
+     * Deliver a completed node's output along its outgoing edges (FR-EXE-005, FR-EXE-015).
+     *
+     * `only` names the edges to travel down, which is what a loop needs: while the loop is going
+     * round a body node delivers *inward* only (§2.4), and the re-queue delivers along the loop edge
+     * itself. Absent, it is every outgoing data edge — the ordinary case.
+     */
+    async function deliver(
+      node: Node,
+      parts: Part[],
+      iteration: number,
+      only?: readonly Edge[],
+    ): Promise<void> {
+      const outgoing =
+        only ?? edges.filter((edge) => edge.from.nodeId === node.id && edge.kind === 'data');
+      if (outgoing.length === 0) return;
       const targets = new Set(outgoing.map((edge) => edge.to.nodeId));
 
       for (const targetId of targets) {
@@ -252,7 +323,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
             runId: run.id,
             fromNodeId: node.id,
             toNodeId: targetId,
-            iteration: 1,
+            iteration,
             parts,
             budgetTokens,
             // BR-13: only an Input node's content is trusted.
@@ -291,7 +362,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
             edgeId: edge.id,
             fromNodeId: edge.from.nodeId,
             toNodeId: edge.to.nodeId,
-            iteration: 1,
+            iteration,
             summary: transferSummary(parts),
           },
         });
@@ -326,12 +397,44 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
     }
 
+    /**
+     * Put the loop body back to the start of its next iteration (FR-PAR-003, §2.4, Arch §12.3).
+     *
+     * Everything *inside* the body is forgotten and everything from *outside* it is kept, which is
+     * `planNextIteration`'s whole rule: iteration 2 of a Review→Fix loop is a Writer that still has
+     * the original brief plus the reviewer's critique, never a Writer with no brief.
+     */
+    async function requeue(
+      source: Node,
+      output: Part[],
+      loopEdge: Edge,
+      decision: LoopContinue,
+    ): Promise<void> {
+      const plan = planNextIteration(decision, edges, nodes);
+
+      for (const edgeId of plan.clearEdgeIds) deliveredEdges.delete(edgeId);
+      // Scoped to the body: a branch feeding a merge from outside does not run again, so dropping
+      // its arrival would leave an `all` merge waiting for something that never comes back.
+      for (const mergeNodeId of plan.mergeNodeIds) mergeArrivals.clear(mergeNodeId, plan.body);
+
+      for (const nodeId of plan.body) {
+        envelopesFor.set(nodeId, retainedEnvelopes(envelopesFor.get(nodeId) ?? [], plan.body));
+        iterations.set(nodeId, plan.iteration);
+        states.set(nodeId, 'IDLE');
+      }
+
+      // Last, and after the reset: the critique travels back along the loop edge into the iteration
+      // about to start, and `retainedEnvelopes` above would have thrown it away.
+      await deliver(source, output, plan.iteration, [loopEdge]);
+    }
+
     async function finish(
       node: Node,
       nodeRun: NodeRun,
       outcome: NodeExecutionOutcome,
       endedAt: string = now(),
     ): Promise<void> {
+      const iteration = nodeRun.iteration;
       usages.push(outcome.usage);
 
       await repository.nodeRuns.update(scope, nodeRun.id, {
@@ -345,9 +448,6 @@ export function createRunService(deps: RunServiceDeps): RunService {
         endedAt,
       });
 
-      states.set(node.id, outcome.status);
-      await emitNodeState(run, nodeRunByNode.get(node.id)!, outcome.status, outcome.failureReason);
-
       // Totals are the running sum of the node runs, so the number a client sees mid-run is the
       // same arithmetic as the number stored at the end (TC-OBS-002).
       await bus.emit({
@@ -357,19 +457,98 @@ export function createRunService(deps: RunServiceDeps): RunService {
         payload: { runId: run.id, totals: sumUsage(usages) },
       });
 
+      /*
+       * What the node ends as. The loop block below can change it — a stop with `onMax: 'fail'`
+       * turns a COMPLETED loop source into FAILED (FR-PAR-006) — so the state is announced *after*
+       * the loop has decided, never before. Announcing COMPLETED first and correcting it a moment
+       * later would put a green node on the Canvas that the next frame paints red.
+       */
+      let status = outcome.status;
+      let failureReason = outcome.failureReason;
+      let requeued = false;
+
       if (outcome.status === 'COMPLETED') {
         if (node.kind === 'output') finalOutput[node.id] = outcome.output;
-        await deliver(node, outcome.output);
-      } else {
-        await blockDownstream(node);
+
+        const loopEdgeOfNode = loops.loopFor(node.id);
+        const body = loopEdgeOfNode === undefined ? undefined : loops.body(loopEdgeOfNode.id);
+        // Every body node's last output is remembered: `repeated_output` counts them (FR-GRD-009)
+        // and the outward deliveries held back while the loop ran are flushed from it (§2.4).
+        if (body !== undefined) loops.remember(node.id, outcome.output);
+
+        const { inside } = splitOutgoing(node.id, edges, body);
+        await deliver(node, outcome.output, iteration, inside);
+
+        /* Every loop this node is the source of decides now (FR-PAR-003..006, FR-GRD-009). */
+        for (const loopEdge of loops.loopEdgesFrom(node.id)) {
+          const decision = decideLoop({
+            edge: loopEdge,
+            edges,
+            iteration,
+            output: outcome.output,
+            repeats: loops.repeats(),
+            nameOf: (id) => nodeById.get(id)?.name ?? id,
+            ...loopPointParams(node.id),
+          });
+
+          await bus.emit({
+            type: 'loop.iteration',
+            workflowId: run.workflowId,
+            runId: run.id,
+            payload: {
+              runId: run.id,
+              edgeId: loopEdge.id,
+              targetNodeId: decision.targetNodeId,
+              iteration: decision.iteration,
+              ...(decision.kind === 'stop' ? { stop: decision.reason } : {}),
+            },
+          });
+
+          if (decision.kind === 'continue') {
+            await requeue(node, outcome.output, loopEdge, decision);
+            requeued = true;
+            continue;
+          }
+
+          // §2.4: the reason goes on the last iteration's node run of the loop source.
+          await repository.nodeRuns.update(scope, nodeRun.id, { loopStop: decision.reason });
+
+          if (decision.after === 'fail') {
+            const failure = loopFailure(decision);
+            status = 'FAILED';
+            failureReason = failure.failureReason;
+            await repository.nodeRuns.update(scope, nodeRun.id, {
+              status: 'FAILED',
+              failureReason: failure.failureReason,
+              error: failure.error,
+            });
+            continue;
+          }
+
+          // onMax `continue`, or the exit condition: the body's outward deliveries, held back for
+          // exactly this moment, go out now — with the *last* iteration's output (FR-PAR-006).
+          for (const held of loops.held(loopEdge.id, edges)) {
+            const from = nodeById.get(held.nodeId);
+            if (from === undefined) continue;
+            await deliver(from, held.parts, iterations.get(held.nodeId) ?? iteration, held.edges);
+          }
+        }
       }
+
+      // The requeue has already put the whole body back to IDLE at the next iteration, so only the
+      // scheduler's own bookkeeping is conditional; the frame names this node run, which really did
+      // finish, so the inspector still sees the iteration close.
+      if (!requeued) states.set(node.id, status);
+      await emitNodeState(run, nodeRun, status, failureReason);
+
+      if (status !== 'COMPLETED' && !requeued) await blockDownstream(node);
     }
 
-    async function dispatch(node: Node): Promise<void> {
+    async function dispatch(node: Node, iteration: number): Promise<void> {
       // `states` is the scheduler's own bookkeeping: dispatched, so never picked up twice. The node
       // run itself stays READY until it holds its provider slot (D66, FR-PRV-009).
       states.set(node.id, 'RUNNING');
-      const nodeRun = await beginNodeRun(node);
+      const nodeRun = await beginNodeRun(node, iteration);
 
       let running = false;
       /** When an agent's provider call ended, if it made one; otherwise the node ends at finish. */
@@ -405,8 +584,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
               nodeRunId: nodeRun.id,
               node,
               envelopes: envelopesFor.get(node.id) ?? [],
-              iteration: 1,
-              attempt: 1,
+              iteration,
+              attempt: nodeRun.attempt,
               runInputs: run.inputs,
               signal,
               onStarted: markRunning,
@@ -438,7 +617,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
         // Tracked on the gate as well as in `inFlight`, so `stop` can wait for the last in-flight
         // node before it writes the run row (FR-CTL-003).
         const release = gate.track(node.id);
-        const promise = dispatch(node).finally(() => {
+        const promise = dispatch(node, iterations.get(node.id) ?? 1).finally(() => {
           release();
           inFlight.delete(promise);
         });
