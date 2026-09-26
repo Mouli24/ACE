@@ -429,9 +429,21 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const endedAt = now();
     const totals = sumUsage(usages);
 
+    /*
+     * FR-CTL-003: a Stop has already written HALTED `stopped` and emitted `run.completed` from the
+     * control, on the clock the two-second budget is measured against. Writing again here would
+     * overwrite that row's `endedAt` and put a second `run.completed` on the socket for one run, so
+     * the drive leaves it alone and simply returns what the control wrote.
+     */
+    if (gate.abortCause() === 'stopped') {
+      return (await repository.runs.get(scope, run.id)) ?? run;
+    }
+
+    const haltReason = gate.abortCause() ?? 'failure';
+
     const updated = await repository.runs.update(scope, run.id, {
       status: complete ? 'COMPLETE' : 'HALTED',
-      ...(complete ? {} : { haltReason: signal.aborted ? 'shutdown' : 'failure' }),
+      ...(complete ? {} : { haltReason }),
       totals,
       endedAt,
       durationMs: Math.max(0, Date.parse(endedAt) - Date.parse(run.startedAt)),
@@ -445,7 +457,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
       payload: {
         runId: run.id,
         status: complete ? 'COMPLETE' : 'HALTED',
-        ...(complete ? {} : { haltReason: signal.aborted ? 'shutdown' : 'failure' }),
+        ...(complete ? {} : { haltReason }),
         totals,
         finalOutput,
       },
