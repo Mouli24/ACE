@@ -200,6 +200,11 @@ test.describe('Guardrail policies (FR-GRD-001/011/018, TC-GRD-001/016)', () => {
    * nullable for exactly this reason. Tracked as issue #21 (Arhant's, `packages/contracts`); the marker
    * stays until it is answered, so the day the contract allows clearing, this test turns green and
    * says so.
+   *
+   * `test.fail()` means Playwright counts this among the passes and prints it `✘`, which is what it
+   * looks like in a CI log — it has never failed a run. The last poll is the one that cannot pass, so
+   * it is given a second rather than the default five: there is no point spending four seconds of a
+   * serial suite waiting for an answer the seam is known not to have (D202).
    */
   test('TC-GRD-002: choosing the project default again clears the node override', async ({
     page,
@@ -234,11 +239,14 @@ test.describe('Guardrail policies (FR-GRD-001/011/018, TC-GRD-001/016)', () => {
     await picker.click();
     await page.getByRole('option', { name: `project default (${projectDefault.name})` }).click();
     await expect
-      .poll(async () => {
-        const graph = await serverGraph(page, seeded.workflowId);
-        const node = graph.nodes.find((each) => each.id === seeded.agentIds[0]);
-        return (node?.config as { guardrailPolicyId?: string }).guardrailPolicyId ?? 'none';
-      })
+      .poll(
+        async () => {
+          const graph = await serverGraph(page, seeded.workflowId);
+          const node = graph.nodes.find((each) => each.id === seeded.agentIds[0]);
+          return (node?.config as { guardrailPolicyId?: string }).guardrailPolicyId ?? 'none';
+        },
+        { timeout: 1_000 },
+      )
       .toBe('none');
   });
 
