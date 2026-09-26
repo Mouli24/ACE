@@ -46,20 +46,37 @@ test.describe('Run controls (FR-CTL-001..004, FR-CTL-006)', () => {
       expect(await controlState(page)).toEqual({ allowed, enabled: allowed });
     };
 
+    /**
+     * A control is only meaningful while the engine still allows it, and a run does not wait for a
+     * test. So each leg first reads `allowedActions` off the engine and says so if the action has
+     * already gone — a bare `toHaveAttribute` timeout would have said only "not PAUSED", which is
+     * what this test failed with on a slow CI runner once.
+     */
+    const stillAllows = async (action: string) => {
+      const run = await engineRun(page, seeded.workflowId);
+      expect(
+        run?.allowedActions ?? [],
+        `the engine no longer allows ${action}: the run is ${run?.status} — the tour raced the run`,
+      ).toContain(action);
+    };
+
     await startRun(page).click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'RUNNING', { timeout: 10_000 });
+    await expect(runStatus(page)).toHaveAttribute('data-status', 'RUNNING', { timeout: 20_000 });
     await agree('RUNNING');
 
+    await stillAllows('pause');
     await runAction(page, 'pause').click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'PAUSED', { timeout: 10_000 });
+    await expect(runStatus(page)).toHaveAttribute('data-status', 'PAUSED', { timeout: 20_000 });
     await agree('PAUSED');
 
+    await stillAllows('resume');
     await runAction(page, 'resume').click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'RUNNING', { timeout: 10_000 });
+    await expect(runStatus(page)).toHaveAttribute('data-status', 'RUNNING', { timeout: 20_000 });
     await agree('RUNNING');
 
+    await stillAllows('stop');
     await stopRun(page);
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'HALTED', { timeout: 10_000 });
+    await expect(runStatus(page)).toHaveAttribute('data-status', 'HALTED', { timeout: 20_000 });
     await agree('HALTED');
   });
 
