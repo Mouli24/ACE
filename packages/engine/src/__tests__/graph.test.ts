@@ -423,7 +423,7 @@ describe('TC-CON-003 Plain cycle', () => {
     expect(response.status).toBe(200);
   });
 
-  it('refuses a loop edge with not_implemented this round', async () => {
+  it('refuses a loop edge that carries no loop config (round 3, FR-CON-007)', async () => {
     const { workflow } = await seed();
     const a = agentNode(workflow.id, ['text'], ['text']);
     const b = agentNode(workflow.id, ['text'], ['text']);
@@ -432,8 +432,10 @@ describe('TC-CON-003 Plain cycle', () => {
     const loop = { ...edgeBetween(workflow.id, a.id, 'text', b.id, 'text'), kind: 'loop' as const };
     const response = await graphOps(h.app, workflow.id, 1, [addEdge(loop)]);
 
-    expect(response.status).toBe(501);
-    expect(ApiErrorSchema.parse(await response.json()).error.code).toBe('not_implemented');
+    // Loop edges are accepted from round 3; what is refused is one with no maximum, exit condition
+    // or on-max behaviour. The accepting cases live in `loop-edges.test.ts` (TC-CON-007).
+    expect(response.status).toBe(400);
+    expect(ApiErrorSchema.parse(await response.json()).error.code).toBe('validation_failed');
   });
 });
 
