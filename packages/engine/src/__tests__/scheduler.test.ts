@@ -8,13 +8,20 @@ import {
   type Provider,
   type Run,
 } from '@ace/contracts';
+import { AUTO_RETRY_POLICY, allowedRunActions } from '@ace/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { createBudgetService } from '../budgets/index.js';
 import { createEventBus, type EventBus } from '../events/index.js';
 import { newId } from '../ids.js';
 import { createLogger } from '../logging/index.js';
 import { LOCAL_SCOPE, type EngineEvent, type ModelRouter, type ProviderAdapter } from '../ports/index.js';
-import { createRunGateRegistry, createRunService, type RunService } from '../runs/index.js';
+import {
+  createRunGateRegistry,
+  createRunService,
+  type RunGateRegistry,
+  type RunService,
+} from '../runs/index.js';
 import { FakeRepository } from './fake-repository.js';
 import { InProcessPubSubStub } from './pubsub-stub.js';
 
@@ -179,6 +186,8 @@ interface Harness {
   repository: FakeRepository;
   bus: EventBus;
   events: EngineEvent[];
+  /** The registry the run controls reach a running scheduler through (D110). */
+  gates: RunGateRegistry;
   seed: (nodes: Node[], edges: Edge[]) => Promise<void>;
 }
 
@@ -196,8 +205,28 @@ async function build(concurrency = 20): Promise<Harness> {
   await repository.settings.update(scope, { dataDir: '/tmp/ace', concurrency });
 
   const gate = { inFlight: 0 };
+  const gates = createRunGateRegistry();
+  /*
+   * The budget service is an optional dep of the run service, and without it nothing is budgeted
+   * (FR-GRD-008). The harness passes one so the cost point is exercised here and not only through
+   * the acceptance suite; `verdicts` is a no-op because a cost halt records no guardrail verdict.
+   */
+  const budgets = createBudgetService({
+    scope,
+    projects: repository.projects,
+    settings: repository.settings,
+    // Nothing spent today, and no verdict recorder: a cost halt records no guardrail verdict, and
+    // the daily aggregate is a different question from this run's own total.
+    usage: { costUsdForDay: async () => 0 },
+    verdicts: {
+      recordCheck: async () => {
+        throw new Error('a cost halt records no verdict; this harness should never reach here');
+      },
+    },
+  });
   const service = createRunService({
-    gates: createRunGateRegistry(),
+    gates,
+    budgets,
     repository,
     scope,
     bus,
@@ -224,6 +253,7 @@ async function build(concurrency = 20): Promise<Harness> {
     repository,
     bus,
     events,
+    gates,
     async seed(nodes, edges) {
       await repository.workflows.create(scope, {
         id: workflowId,
@@ -791,3 +821,179 @@ describe('TC-PRV-009 / TC-NFR-005 concurrency limits are respected', () => {
     expect(nodeRuns.filter((nodeRun) => nodeRun.status === 'COMPLETED')).toHaveLength(22);
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Round 3: the gate, the halt reason, the retry loop and the budget           */
+/* -------------------------------------------------------------------------- */
+
+/** Input → A → B → Output, so there is always a node left to dispatch after the first. */
+async function chain(options: { delayMs?: number } = {}): Promise<{ a: Node; b: Node }> {
+  const input = inputNode();
+  const a = agentNode('A');
+  const b = agentNode('B');
+  const output = outputNode();
+  if (options.delayMs !== undefined) {
+    behaviour = () => ({ text: 'ok', delayMs: options.delayMs });
+  }
+  await harness.seed(
+    [input, a, b, output],
+    [edge(input, a), edge(a, b), edge(b, output)],
+  );
+  return { a, b };
+}
+
+const until = async (predicate: () => boolean, label: string): Promise<void> => {
+  const deadline = Date.now() + 5_000;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+};
+
+describe('FR-CTL-006 every run row states the controls its status allows', () => {
+  it('stamps allowedActions from the contract, at every status the run passes through', async () => {
+    await chain();
+
+    const run = await harness.service.startRun(workflowId, {});
+
+    // Read from the contract, never restated here: a second table is the thing D76 exists to stop.
+    expect(run.allowedActions).toEqual(allowedRunActions(run.status));
+    expect(run.status).toBe('COMPLETE');
+    expect(run.allowedActions).toEqual(['restart']);
+  });
+
+  it('stamps them on a run pre-flight refused, too', async () => {
+    const input = inputNode();
+    const orphan = agentNode('Orphan', { modelId: 'not-in-the-catalogue' });
+    const output = outputNode();
+    await harness.seed([input, orphan, output], [edge(input, orphan), edge(orphan, output)]);
+
+    const run = await harness.service.startRun(workflowId, {});
+
+    expect(run.status).toBe('BLOCKED');
+    expect(run.allowedActions).toEqual(allowedRunActions('BLOCKED'));
+    expect(run.preflightIssues.length).toBeGreaterThan(0);
+  });
+});
+
+describe('FR-CTL-001/002 a paused scheduler dispatches nothing', () => {
+  it('holds the next node while paused, and releases it on resume', async () => {
+    const { a, b } = await chain({ delayMs: 40 });
+
+    const begun = await harness.service.beginRun(workflowId, {});
+    const gate = harness.gates.get(begun.run.id);
+    expect(gate, 'the run registered a gate the controls can reach').toBeDefined();
+
+    // Pause the moment A is under way: B has not been dispatched, and must not be.
+    await until(() => statesOf(harness.events, a.id).includes('RUNNING'), 'A to start');
+    gate!.pause();
+
+    await until(() => statesOf(harness.events, a.id).includes('COMPLETED'), 'A to finish');
+    // A RUNNING node finishes under a pause (FR-CTL-001); B never starts.
+    expect(statesOf(harness.events, b.id)).not.toContain('RUNNING');
+
+    gate!.resume();
+    const run = await begun.done;
+
+    expect(run.status).toBe('COMPLETE');
+    expect(statesOf(harness.events, b.id)).toContain('COMPLETED');
+  });
+});
+
+describe('FR-CTL-003 a halt says why it halted', () => {
+  it('leaves a stopped run alone, because `controls.stop()` has already written it', async () => {
+    await chain({ delayMs: 40 });
+
+    const begun = await harness.service.beginRun(workflowId, {});
+    const gate = harness.gates.get(begun.run.id)!;
+    gate.stop();
+    await begun.done;
+
+    /*
+     * The gate remembers *why* it aborted, and the scheduler skips its own final write when the
+     * cause is `stopped` — the controls service has already written HALTED `stopped` and emitted
+     * `run.completed`, and a second write would give the run two endings and a rewritten `endedAt`
+     * (D110). This test pins that skip: without it the row would read HALTED `failure` here.
+     */
+    expect(gate.abortCause()).toBe('stopped');
+    const row = await harness.repository.runs.get(scope, begun.run.id);
+    expect(row?.haltReason).toBeUndefined();
+    expect(harness.events.filter((event) => event.type === 'run.completed')).toHaveLength(0);
+  });
+
+  it('records `shutdown` when the engine is going down', async () => {
+    await chain({ delayMs: 40 });
+
+    const begun = await harness.service.beginRun(workflowId, {});
+    harness.gates.get(begun.run.id)!.shutdown();
+    const run = await begun.done;
+
+    expect(run.status).toBe('HALTED');
+    // The two endings must stay apart: §7.2's manual pass turns on telling them apart (D110).
+    expect(run.haltReason).toBe('shutdown');
+  });
+});
+
+describe('FR-ERR-005 the scheduler retries what Arch §28 says it may', () => {
+  it('retries a provider failure on a new attempt, and completes', async () => {
+    const { a } = await chain();
+    let calls = 0;
+    behaviour = (prompt) => {
+      if (!prompt.includes('Act as A')) return { text: 'ok' };
+      calls += 1;
+      /*
+       * Twice, because the two retry layers are different things: the executor first walks the
+       * router's remaining models for a `provider` failure (FR-RTR-002), and only when that is
+       * exhausted does the *scheduler* open a new node run at attempt + 1 (FR-ERR-005). One failure
+       * would be absorbed by the first layer and never reach the second.
+       */
+      return calls <= 2
+        ? { throws: Object.assign(new Error('overloaded'), { status: 503 }) }
+        : { text: 'second time' };
+    };
+
+    const run = await harness.service.startRun(workflowId, {});
+
+    const attempts = (await harness.repository.nodeRuns.listByRun(scope, run.id)).filter(
+      (nodeRun) => nodeRun.nodeId === a.id,
+    );
+    // Each automatic retry is a new node run at attempt + 1 (§2.1), never an edit of the first.
+    expect(attempts.map((nodeRun) => nodeRun.attempt)).toEqual([1, 2]);
+    expect(attempts[1]?.status).toBe('COMPLETED');
+    expect(run.status).toBe('COMPLETE');
+  });
+
+  it('never retries an auth failure, and blocks what followed it', async () => {
+    const { a, b } = await chain();
+    behaviour = (prompt) =>
+      prompt.includes('Act as A')
+        ? { throws: Object.assign(new Error('bad key'), { status: 401 }) }
+        : { text: 'ok' };
+
+    const run = await harness.service.startRun(workflowId, {});
+
+    const nodeRuns = await harness.repository.nodeRuns.listByRun(scope, run.id);
+    const attempts = nodeRuns.filter((nodeRun) => nodeRun.nodeId === a.id);
+    expect(AUTO_RETRY_POLICY.auth).toBe('never');
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]?.status).toBe('FAILED');
+    expect(attempts[0]?.error?.kind).toBe('auth');
+
+    // FR-ERR-006: what came after is BLOCKED, and says which node blocked it.
+    const blocked = nodeRuns.find((nodeRun) => nodeRun.nodeId === b.id);
+    expect(blocked?.status).toBe('BLOCKED');
+    expect(blocked?.error?.kind).toBe('workflow');
+    expect(blocked?.error?.message).toContain('A');
+    expect(run.status).toBe('HALTED');
+  });
+});
+
+/*
+ * FR-GRD-008's halt is **not** unit-tested here, and that is deliberate rather than an omission.
+ * `beforeDispatch` is driven by the resolved policy's cost checks — the project's `maxCostPerRunUsd`
+ * only supplies a check's missing parameter — so a unit test of it needs the policy service and the
+ * evaluator wired as well, and a half-built harness would prove less than it appears to. It is
+ * covered end to end by `tests/acceptance/round-3/mouli-tests-arhant.test.ts`'s TC-GRD-012, which
+ * runs `budget-cap.json` against the real engine and asserts the halt, the reason and `budgetHalt`'s
+ * numbers. The budget service is still wired into this harness, so its pre-flight path is exercised.
+ */
