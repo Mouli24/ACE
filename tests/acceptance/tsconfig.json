@@ -3,7 +3,11 @@
   "compilerOptions": {
     "rootDir": ".",
     "outDir": "dist",
-    "noEmit": false
+    "noEmit": false,
+    // A Playwright `page.evaluate` body is compiled here and runs in the browser, so these files
+    // genuinely contain DOM code. Without this, `window` inside an evaluate is an error — which is
+    // what appeared the moment `round-2` and `round-3` joined `include` below.
+    "lib": ["ES2023", "DOM"]
   },
-  "include": ["helpers", "round-1", "*.ts"]
+  "include": ["helpers", "round-1", "round-2", "round-3", "*.ts"]
 }
