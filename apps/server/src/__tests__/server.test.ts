@@ -5,12 +5,16 @@ import { join } from 'node:path';
 
 import {
   ApiErrorSchema,
+  GuardrailPolicySchema,
   HealthResponseSchema,
+  NodeRunSchema,
   ProjectSchema,
   ProviderSchema,
   RunSchema,
   WorkflowGraphResponseSchema,
   WsServerFrameSchema,
+  type ApprovalRequest,
+  type GuardrailCheck,
   type WorkflowExport,
 } from '@ace/contracts';
 import { openDatabase } from '@ace/storage-local';
@@ -20,6 +24,7 @@ import WebSocket from 'ws';
 import {
   BIND_HOST,
   generateSessionToken,
+  guardrailInputFor,
   readyLine,
   startEngine,
   type RunningEngine,
@@ -523,4 +528,216 @@ describe('Round 2 wiring: a run goes through the real router, provider check and
     expect(response.status).toBe(200);
     expect(body.items.map((item) => ProviderSchema.parse(item).name)).toEqual(['Mock']);
   });
+});
+
+/*
+ * `guardrailInputFor` is the translation the server owns between the engine's `CheckInput` and the
+ * rule packs' `GuardrailInput` (CLAUDE.md §3.4 rule 3). It is a pure function, so it is tested
+ * directly rather than driven through a run: every branch of its switch corresponds to a family of
+ * checks, and the point of the test is that each family reads the field it needs and no other.
+ */
+describe('guardrailInputFor maps each check family to the field it reads (FR-GRD-004..010)', () => {
+  const check = (type: GuardrailCheck['type'], point: GuardrailCheck['point']): GuardrailCheck => ({
+    id: '01M3R3PC0000000000000000CA',
+    point,
+    type,
+    action: 'block',
+    enabled: true,
+    params: {},
+  });
+
+  it('carries text, parts and contract through for a content check', () => {
+    const mapped = guardrailInputFor(check('pii', 'output'), {
+      point: 'output',
+      text: 'a body',
+      parts: [{ type: 'text', text: 'a body' }],
+      contract: { outputTypes: ['text'] },
+    });
+    expect(mapped).toEqual({
+      text: 'a body',
+      parts: [{ type: 'text', text: 'a body' }],
+      contract: { outputTypes: ['text'] },
+    });
+  });
+
+  it('reads the iteration counter for max_iterations, and nothing when there is no loop', () => {
+    const input = { point: 'loop' as const, text: '', loop: { iteration: 4, toolCalls: 1, outputHashes: [] } };
+    expect(guardrailInputFor(check('max_iterations', 'loop'), input).value).toBe(4);
+    // The same check with no loop figures falls back to the base — it adds no `value`.
+    expect(guardrailInputFor(check('max_iterations', 'loop'), { point: 'loop', text: '' }).value).toBeUndefined();
+  });
+
+  it('reads the tool-call counter for max_tool_calls', () => {
+    const input = { point: 'loop' as const, text: '', loop: { iteration: 1, toolCalls: 7, outputHashes: [] } };
+    expect(guardrailInputFor(check('max_tool_calls', 'loop'), input).value).toBe(7);
+  });
+
+  it('reads the output hashes for repeated_output', () => {
+    const input = { point: 'loop' as const, text: '', loop: { iteration: 3, toolCalls: 0, outputHashes: ['a', 'a', 'a'] } };
+    expect(guardrailInputFor(check('repeated_output', 'loop'), input).outputHashes).toEqual(['a', 'a', 'a']);
+    expect(guardrailInputFor(check('repeated_output', 'loop'), { point: 'loop', text: '' }).outputHashes).toBeUndefined();
+  });
+
+  it.each(['max_cost_per_run', 'daily_budget', 'max_tokens_per_node'] as const)(
+    'reads the cost figures for %s as value + limit',
+    (type) => {
+      const input = { point: 'cost' as const, text: '', cost: { costUsd: 0.5, capUsd: 0.4, projected: true } };
+      const mapped = guardrailInputFor(check(type, 'cost'), input);
+      expect(mapped.value).toBe(0.5);
+      expect(mapped.limit).toBe(0.4);
+      // No cost figures: the base is returned, with neither value nor limit.
+      const bare = guardrailInputFor(check(type, 'cost'), { point: 'cost', text: '' });
+      expect(bare.value).toBeUndefined();
+      expect(bare.limit).toBeUndefined();
+    },
+  );
+
+  it('returns the base unchanged for a check that needs no extra field (default)', () => {
+    const mapped = guardrailInputFor(check('required_citations', 'output'), { point: 'output', text: 'cited' });
+    expect(mapped).toEqual({ text: 'cited' });
+  });
+});
+
+/*
+ * Round 3 wiring: the guardrail engine, the approval flow and the run controls, exercised through
+ * the real HTTP + WS server (temp DB, mock provider). The engine's own units cover the services;
+ * what this covers is the *wiring in server.ts* — `emitNodeState`, `onWaiting`/`onDecided` and the
+ * three callbacks the controls drive the scheduler through. The acceptance suite proves the same
+ * paths end to end; these keep them in `apps/server`'s own coverage.
+ */
+describe('Round 3 wiring: guardrail approvals and run controls over the real server', () => {
+  const PLACEHOLDER_PROVIDER = '01M3R3PV0000000000000000PV';
+  const PLACEHOLDER_POLICY = '01M3R3PC0000000000000000PC';
+
+  const api = (path: string, init: RequestInit = {}) =>
+    fetch(`${engine.url}/api/v1${path}`, {
+      ...init,
+      headers: { ...authHeaders(), 'Content-Type': 'application/json', ...init.headers },
+    });
+  const post = async (path: string, body: unknown): Promise<unknown> => {
+    const response = await api(path, { method: 'POST', body: JSON.stringify(body) });
+    expect(response.status, `${path}: ${await response.clone().text()}`).toBeLessThan(300);
+    return response.json();
+  };
+
+  async function fixtureProvider(): Promise<string> {
+    const provider = ProviderSchema.parse(await post('/providers', { type: 'mock', name: 'Mock' }));
+    await post(`/providers/${provider.id}/refresh-models`, {});
+    return provider.id;
+  }
+
+  /** Imports a round 3 fixture, rewriting the provider and (optionally) the policy placeholder. */
+  async function importFixture(
+    file: string,
+    options: { providerId: string; policyId?: string },
+  ): Promise<{ projectId: string; workflowId: string }> {
+    const project = ProjectSchema.parse(await post('/projects', { name: 'R3 wiring' }));
+    let text = readFileSync(
+      new URL(`../../../../tests/acceptance/fixtures/round-3/${file}`, import.meta.url),
+      'utf8',
+    ).replaceAll(PLACEHOLDER_PROVIDER, options.providerId);
+    if (options.policyId !== undefined) text = text.replaceAll(PLACEHOLDER_POLICY, options.policyId);
+    const imported = WorkflowGraphResponseSchema.parse(
+      await post(`/projects/${project.id}/workflows/import`, JSON.parse(text) as WorkflowExport),
+    );
+    return { projectId: project.id, workflowId: imported.workflow.id };
+  }
+
+  /** The `ask_user`-on-output policy from the fixtures' sidecar, on the project under test. */
+  async function askPolicy(projectId: string): Promise<string> {
+    const sidecar = JSON.parse(
+      readFileSync(
+        new URL('../../../../tests/acceptance/fixtures/round-3/pii-ask.policy.json', import.meta.url),
+        'utf8',
+      ),
+    ) as Record<string, unknown>;
+    const policy = GuardrailPolicySchema.parse(
+      await post('/guardrail-policies', { ...sidecar, projectId }),
+    );
+    return policy.id;
+  }
+
+  async function waitForApproval(runId: string): Promise<ApprovalRequest> {
+    for (let i = 0; i < 200; i++) {
+      const pending = (await (await api(`/runs/${runId}/approvals`)).json()) as ApprovalRequest[];
+      if (pending.length > 0) return pending[0]!;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error('no approval request appeared');
+  }
+
+  async function waitForEnd(runId: string): Promise<ReturnType<typeof RunSchema.parse>> {
+    let run = RunSchema.parse(await (await api(`/runs/${runId}`)).json());
+    for (let i = 0; i < 300 && ['PREFLIGHT', 'RUNNING'].includes(run.status); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      run = RunSchema.parse(await (await api(`/runs/${runId}`)).json());
+    }
+    return run;
+  }
+
+  it('an ask_user verdict moves the node to WAITING; approving it resumes the run to COMPLETE', async () => {
+    const providerId = await fixtureProvider();
+    const project = ProjectSchema.parse(await post('/projects', { name: 'holder' }));
+    const policyId = await askPolicy(project.id);
+    const { workflowId } = await importFixture('pii-ask.json', { providerId, policyId });
+
+    const started = RunSchema.parse(await post(`/workflows/${workflowId}/runs`, {}));
+    const request = await waitForApproval(started.id);
+
+    // The node is parked WAITING while the person decides — the wiring's `onWaiting` did that.
+    const waiting = NodeRunSchema.parse(await (await api(`/node-runs/${request.nodeRunId}`)).json());
+    expect(waiting.status).toBe('WAITING');
+
+    const approved = NodeRunSchema.parse(
+      await post(`/node-runs/${request.nodeRunId}/approve`, { note: 'fine' }),
+    );
+    expect(approved.approvals?.[0]?.decision).toBe('approve');
+
+    const run = await waitForEnd(started.id);
+    expect(run.status, JSON.stringify(run)).toBe('COMPLETE');
+    expect((await (await api(`/runs/${run.id}/approvals`)).json()) as unknown[]).toEqual([]);
+  }, 60_000);
+
+  it('rejecting an ask_user verdict fails the node GUARDRAIL_VIOLATION and halts the run', async () => {
+    const providerId = await fixtureProvider();
+    const project = ProjectSchema.parse(await post('/projects', { name: 'holder' }));
+    const policyId = await askPolicy(project.id);
+    const { workflowId } = await importFixture('pii-ask.json', { providerId, policyId });
+
+    const started = RunSchema.parse(await post(`/workflows/${workflowId}/runs`, {}));
+    const request = await waitForApproval(started.id);
+
+    const rejected = NodeRunSchema.parse(
+      await post(`/node-runs/${request.nodeRunId}/reject`, { note: 'no' }),
+    );
+    expect(rejected.approvals?.[0]?.decision).toBe('reject');
+
+    const run = await waitForEnd(started.id);
+    expect(run.status).toBe('HALTED');
+    const node = NodeRunSchema.parse(await (await api(`/node-runs/${request.nodeRunId}`)).json());
+    expect(node.status).toBe('FAILED');
+    expect(node.failureReason).toBe('GUARDRAIL_VIOLATION');
+  }, 60_000);
+
+  it('restart replays a finished run onto the same snapshot through the controls (TC-CTL-004)', async () => {
+    const providerId = await fixtureProvider();
+    const { workflowId } = await importFixture('parallel-merge-all.json', { providerId });
+
+    const first = await waitForEnd(
+      RunSchema.parse(await post(`/workflows/${workflowId}/runs`, {})).id,
+    );
+    expect(first.status, JSON.stringify(first.preflightIssues)).toBe('COMPLETE');
+
+    // The controls own restart, and drive the scheduler through `driveRecordedRun`/`envelopesFor`.
+    const restarted = RunSchema.parse(await post(`/runs/${first.id}/restart`, {}));
+    expect(restarted.id).not.toBe(first.id);
+    expect(restarted.restartedFromRunId).toBe(first.id);
+    expect(restarted.snapshot).toEqual(first.snapshot);
+
+    const second = await waitForEnd(restarted.id);
+    expect(second.status).toBe('COMPLETE');
+    // BR-04: the first run is a recording; a restart never edits it.
+    const firstAgain = RunSchema.parse(await (await api(`/runs/${first.id}`)).json());
+    expect(firstAgain.status).toBe('COMPLETE');
+  }, 60_000);
 });
