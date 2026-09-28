@@ -13,7 +13,11 @@ jobs:
   verify:
     name: install · lint · typecheck · test · build
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Round 3 roughly doubled both the e2e suite (Mouli's, `pnpm test:e2e`) and the acceptance suite
+    # (vitest + a Playwright pass against the real engine), so this one job now boots the engine and
+    # a browser twice on top of install, coverage and build. A slow runner overran the old 20-minute
+    # cap mid-acceptance with every test still passing (D-038); 30 gives the full pipeline headroom.
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
