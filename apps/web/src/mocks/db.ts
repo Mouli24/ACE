@@ -1,8 +1,7 @@
 import {
-  DEFAULT_ALLOWED_ORIGINS,
   DEFAULT_CONCURRENCY,
   DEFAULT_GUARDRAIL_POLICY_NAME,
-  DEFAULT_THEME,
+  SettingsSchema,
   defaultGuardrailChecks,
   type ApprovalRequest,
   type Edge,
@@ -77,14 +76,13 @@ export function isUnwritablePath(path: string): boolean {
 
 const now = (): string => new Date().toISOString();
 
+/**
+ * The contract fills every default in; only `dataDir` has none. Written as a parse rather than a
+ * literal so a round that adds a setting (round 4 added three) does not have to grow this by hand
+ * (D209).
+ */
 function defaultSettings(): Settings {
-  return {
-    dataDir: '/mock/.ace',
-    concurrency: DEFAULT_CONCURRENCY,
-    theme: DEFAULT_THEME,
-    onboardingCompleted: false,
-    allowedOrigins: [...DEFAULT_ALLOWED_ORIGINS],
-  };
+  return SettingsSchema.parse({ dataDir: '/mock/.ace' });
 }
 
 function emptySnapshot(): Snapshot {
