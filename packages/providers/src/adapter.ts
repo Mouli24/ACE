@@ -23,6 +23,7 @@ export {
   type ProviderDetection,
   type ProviderStatus,
   type StreamChunk,
+  type ToolResult,
 } from '@ace/engine';
 
 /* -------------------------------------------------------------------------- */
