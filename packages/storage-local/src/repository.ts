@@ -15,14 +15,20 @@ import {
 } from '@ace/contracts';
 import type {
   ApprovalRepository,
+  ArtifactRepository,
+  ChatMessageRepository,
+  ChatThreadRepository,
   EdgeRepository,
   GuardrailPolicyRepository,
   GuardrailVerdictRepository,
+  McpServerRepository,
+  MessageRepository,
   ModelRepository,
   NodeRunRepository,
   PriceTableRepository,
   ProviderRepository,
   RunRepository,
+  ToolCallRepository,
   EngineEvent,
   EventFilter,
   EventRepository,
@@ -44,6 +50,14 @@ import {
   createGuardrailPolicyRepository,
   createGuardrailVerdictRepository,
 } from './repository-guardrails.js';
+import {
+  createArtifactRepository,
+  createChatMessageRepository,
+  createChatThreadRepository,
+  createMcpServerRepository,
+  createMessageRepository,
+  createToolCallRepository,
+} from './repository-round4.js';
 import {
   createModelRepository,
   createNodeRunRepository,
@@ -184,6 +198,14 @@ export class SqliteRepository implements Repository {
   readonly guardrailVerdicts: GuardrailVerdictRepository;
   readonly approvals: ApprovalRepository;
 
+  /* Round 4 (Arch §15.3). */
+  readonly artifacts: ArtifactRepository;
+  readonly toolCalls: ToolCallRepository;
+  readonly mcpServers: McpServerRepository;
+  readonly messages: MessageRepository;
+  readonly chatThreads: ChatThreadRepository;
+  readonly chatMessages: ChatMessageRepository;
+
   constructor(db: Db, sqlite: BetterSqlite3.Database) {
     this.#db = db;
     this.#sqlite = sqlite;
@@ -201,6 +223,15 @@ export class SqliteRepository implements Repository {
     this.guardrailPolicies = createGuardrailPolicyRepository(db, inTransaction);
     this.guardrailVerdicts = createGuardrailVerdictRepository(db, inTransaction);
     this.approvals = createApprovalRepository(db, inTransaction);
+
+    // Round 4. The tool-call log and a thread delete each write two rows at once — a call and its
+    // node run's copy, a thread and its messages — so they borrow this repository's transaction.
+    this.artifacts = createArtifactRepository(db);
+    this.toolCalls = createToolCallRepository(db, inTransaction);
+    this.mcpServers = createMcpServerRepository(db);
+    this.messages = createMessageRepository(db);
+    this.chatThreads = createChatThreadRepository(db, inTransaction);
+    this.chatMessages = createChatMessageRepository(db);
   }
 
   /**
