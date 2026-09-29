@@ -189,6 +189,27 @@ function cancelledBeforeStart(): NodeError {
   return userCancelledError('The run was stopped before this node run started.').nodeError;
 }
 
+/**
+ * What a node run records when the engine itself could not finish it (FR-EXE-011): Arch §28's
+ * `workflow` kind with the contract's `internal` code — nothing a retry of the same call would fix,
+ * and nothing about the provider. The details are in the engine log, not on the row.
+ */
+function engineFailure(): NodeError {
+  return {
+    kind: 'workflow',
+    code: 'internal',
+    message: 'The engine could not finish this node run, so it failed. The engine log has the details.',
+    retryable: false,
+  };
+}
+
+/** Run states that are an ending (Arch §19.2): nothing writes over them. */
+const ENDED_STATES: ReadonlySet<Run['status']> = new Set<Run['status']>([
+  'COMPLETE',
+  'HALTED',
+  'BLOCKED',
+]);
+
 /** Node states that mean the run still has work in flight (Arch §19.2). */
 const BUSY_STATES: ReadonlySet<NodeState> = new Set<NodeState>(['RUNNING', 'READY', 'WAITING']);
 
@@ -892,6 +913,82 @@ export function createRunService(deps: RunServiceDeps): RunService {
      * `execution.retries` is read off the **snapshot** node, never the live workflow (D82).
      */
     async function dispatch(node: Node, iteration: number): Promise<void> {
+      // Which node run this dispatch is working on, so a throw can be pinned on the right row: a
+      // row from an earlier iteration of the same node must not be the one that fails.
+      nodeRunByNode.delete(node.id);
+      try {
+        await runNode(node, iteration);
+      } catch (error) {
+        await failUnfinishable(node, nodeRunByNode.get(node.id), error);
+      }
+    }
+
+    /**
+     * FR-EXE-011, FR-ERR-006: an error the engine did not expect while dispatching or finishing a
+     * node — a write the store refused, say. Uncaught, it rejected the dispatch loop's race, and the
+     * run was left RUNNING with its other in-flight nodes orphaned and no `run.completed`. Instead the
+     * node ends FAILED with an engine error and takes its downstream with it, exactly as a node that
+     * failed on its own would, and the run carries on to its end. Best effort throughout: the store
+     * that just failed may fail again, and the run's end must not depend on it.
+     */
+    async function failUnfinishable(
+      node: Node,
+      nodeRun: NodeRun | undefined,
+      error: unknown,
+    ): Promise<void> {
+      logger.error(
+        { subsystem: 'runs', runId: run.id, nodeId: node.id, err: error },
+        'could not finish a node run',
+      );
+
+      // A stop or a shutdown already decides how this node ends (FR-CTL-003, FR-ERR-007).
+      if (signal.aborted) {
+        states.set(node.id, 'STOPPED');
+        return;
+      }
+      states.set(node.id, 'FAILED');
+
+      if (nodeRun !== undefined) {
+        try {
+          const nodeError = engineFailure();
+          await repository.nodeRuns.update(scope, nodeRun.id, {
+            status: 'FAILED',
+            failureReason: 'RUN_FAILED',
+            error: nodeError,
+            endedAt: now(),
+          });
+          await bus.emit({
+            type: 'node.error',
+            workflowId: run.workflowId,
+            runId: run.id,
+            payload: {
+              runId: run.id,
+              nodeRunId: nodeRun.id,
+              nodeId: node.id,
+              error: nodeError,
+              failureReason: 'RUN_FAILED',
+            },
+          });
+          await emitNodeState(run, nodeRun, 'FAILED', 'RUN_FAILED');
+        } catch (second) {
+          logger.error(
+            { subsystem: 'runs', runId: run.id, nodeId: node.id, err: second },
+            'could not record a node run as failed',
+          );
+        }
+      }
+
+      try {
+        await blockDownstream(node);
+      } catch (second) {
+        logger.error(
+          { subsystem: 'runs', runId: run.id, nodeId: node.id, err: second },
+          'could not block what is downstream of a failed node',
+        );
+      }
+    }
+
+    async function runNode(node: Node, iteration: number): Promise<void> {
       // `states` is the scheduler's own bookkeeping: dispatched, so never picked up twice. The node
       // run itself stays READY until it holds its provider slot (D66, FR-PRV-009).
       states.set(node.id, 'RUNNING');
@@ -910,7 +1007,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
       const planned = plannedRuns.get(node.id);
       plannedRuns.delete(node.id);
       let nodeRun = planned ?? (await beginNodeRun(node, iteration, attempt));
-      if (planned !== undefined) await emitNodeState(run, planned, 'READY');
+      if (planned !== undefined) {
+        nodeRunByNode.set(node.id, planned);
+        await emitNodeState(run, planned, 'READY');
+      }
       if (nodeRun.status === 'STOPPED') {
         states.set(node.id, 'STOPPED');
         return;
@@ -1216,6 +1316,52 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
   /* --------------------------------------------------------------- service */
 
+  /**
+   * FR-EXE-011: the drive itself threw — a store that refused a write outside any one node, say.
+   * The run still ends: HALTED (`failure`, or the shutdown that was under way) with its totals and
+   * its `run.completed`, rather than RUNNING until the next start reaps it as crashed (FR-SYS-009).
+   * Nobody is left to answer an approval on it (FR-GRD-013). A Stop has written its own ending
+   * (FR-CTL-003), and a run that already ended keeps it. Best effort throughout: the store that
+   * just failed may fail again.
+   */
+  async function haltAfterThrow(run: Run, gate: RunGate): Promise<Run> {
+    try {
+      await deps.approvals?.cancelPending(run.id, 'The run ended before this was decided.');
+    } catch (error) {
+      logger.error({ subsystem: 'runs', runId: run.id, err: error }, 'could not cancel approvals');
+    }
+
+    try {
+      const stored = (await repository.runs.get(scope, run.id)) ?? run;
+      if (gate.abortCause() === 'stopped' || ENDED_STATES.has(stored.status)) return stored;
+
+      const haltReason = gate.abortCause() ?? 'failure';
+      const totals = sumUsage(
+        (await repository.nodeRuns.listByRun(scope, run.id)).map((nodeRun) => nodeRun.usage),
+      );
+      const endedAt = now();
+      const halted = await repository.runs.update(scope, run.id, {
+        status: 'HALTED',
+        allowedActions: allowedRunActions('HALTED'),
+        haltReason,
+        totals,
+        endedAt,
+        durationMs: Math.max(0, Date.parse(endedAt) - Date.parse(run.startedAt)),
+      });
+
+      await bus.emit({
+        type: 'run.completed',
+        workflowId: run.workflowId,
+        runId: run.id,
+        payload: { runId: run.id, status: 'HALTED', haltReason, totals },
+      });
+      return halted ?? stored;
+    } catch (error) {
+      logger.error({ subsystem: 'runs', runId: run.id, err: error }, 'could not halt a failed run');
+      return run;
+    }
+  }
+
   /** Start driving a run that has been pre-flighted, and register its gate (FR-CTL-001..003). */
   function startDriving(run: Run, seed?: DriveSeed): Promise<Run> {
     const gate = createRunGate(run.id);
@@ -1223,9 +1369,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
     const done = drive(run, gate, seed)
       .catch(async (error: unknown) => {
-        // The drive threw rather than halting cleanly; the row is still the truth about the run.
         logger.error({ subsystem: 'runs', runId: run.id, err: error }, 'run failed');
-        return (await repository.runs.get(scope, run.id)) ?? run;
+        return haltAfterThrow(run, gate);
       })
       .finally(() => {
         unregister();

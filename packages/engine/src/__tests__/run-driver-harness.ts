@@ -95,6 +95,8 @@ export interface RunDriverHarness {
   calls: (name: string) => number;
   /** Whether each call was handed an already-aborted signal, by node name. */
   abortedAtCall: (name: string) => boolean[];
+  /** The runs whose pending approvals the run service rejected because the run ended (FR-GRD-013). */
+  approvalsCancelledFor: string[];
 
   inputNode(name?: string): Node;
   agentNode(name: string, execution?: Record<string, unknown>): Node;
@@ -231,11 +233,18 @@ export async function createRunDriverHarness(
   };
 
   const gates = createRunGateRegistry();
+  const approvalsCancelledFor: string[] = [];
   const service = createRunService({
     gates,
     repository,
     scope,
     bus,
+    approvals: {
+      cancelPending: async (runId) => {
+        approvalsCancelledFor.push(runId);
+        return [];
+      },
+    },
     logger: createLogger({ level: 'silent', destination: { write: () => undefined } }),
     router,
     adapterFor: (providerId) => providers.adapterFor(providerId),
@@ -287,6 +296,7 @@ export async function createRunDriverHarness(
     scripts,
     calls: (name) => callCounts.get(name) ?? 0,
     abortedAtCall: (name) => abortedAt.get(name) ?? [],
+    approvalsCancelledFor,
 
     inputNode(name = 'Brief') {
       const id = newId();
