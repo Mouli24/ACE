@@ -134,22 +134,26 @@ describe('FR-PRM-001 reads are rendered by their part type', () => {
     expect(rendered).toContain('const a = 1;');
   });
 
-  it('D6 renders a file as a reference, never as bytes', () => {
+  it('D6/FR-MM-004 renders a file as its full reference, never as bytes', () => {
     const rendered = inputOf([
       { type: 'file', artifactId: ARTIFACT, mime: 'application/pdf', name: 'brief.pdf', size: 12 },
     ]);
 
-    expect(rendered).toContain('[artifact brief.pdf]');
+    expect(rendered).toContain('[file brief.pdf (12 bytes, application/pdf)]');
     expect(rendered).not.toContain(ARTIFACT);
   });
 
-  it.each(['image', 'audio', 'video'] as const)('renders a %s the same way', (type) => {
-    const rendered = inputOf([
-      { type, artifactId: ARTIFACT, mime: 'image/png', name: 'diagram.png', size: 12 },
-    ]);
+  it.each(['image', 'audio', 'video'] as const)(
+    'renders a %s as name, size and mime for a vision model',
+    (type) => {
+      const rendered = inputOf([
+        { type, artifactId: ARTIFACT, mime: 'image/png', name: 'diagram.png', size: 34 },
+      ]);
 
-    expect(rendered).toContain('[artifact diagram.png]');
-  });
+      expect(rendered).toContain(`[${type} diagram.png (34 bytes, image/png)]`);
+      expect(rendered).not.toContain(ARTIFACT);
+    },
+  );
 });
 
 /* -------------------------------------------------------------------------- */
