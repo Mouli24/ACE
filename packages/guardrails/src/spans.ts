@@ -81,19 +81,60 @@ function spanOf(match: RegExpExecArray, rule: Rule, priority: number): Span | un
  * Keep the highest-priority span of any overlapping group. An email contains digits a phone rule
  * would happily claim, and a card number contains a run a phone rule would claim too; whichever
  * rule the pack lists first is the one that names the type.
+ *
+ * n log n in the number of spans (NFR-SAFE-01): one sort, then one merge pass per priority against
+ * the spans already kept. Comparing every span with every kept span was quadratic — 50 000 hidden
+ * markers took seconds.
  */
 function resolveOverlaps(spans: readonly Span[]): Span[] {
   const byPriorityThenPosition = [...spans].sort(
     (a, b) => a.priority - b.priority || a.start - b.start || b.end - a.end,
   );
 
-  const kept: Span[] = [];
-  for (const span of byPriorityThenPosition) {
-    const clashes = kept.some((other) => span.start < other.end && other.start < span.end);
-    if (!clashes) kept.push(span);
+  // Disjoint and sorted by start — and therefore by end as well.
+  let kept: Span[] = [];
+  let index = 0;
+  while (index < byPriorityThenPosition.length) {
+    const priority = byPriorityThenPosition[index]?.priority;
+    const accepted: Span[] = [];
+    let cursor = 0;
+    let acceptedEnd = -1;
+    for (
+      let span = byPriorityThenPosition[index];
+      span !== undefined && span.priority === priority;
+      span = byPriorityThenPosition[(index += 1)]
+    ) {
+      // The first kept span still reaching past this start is the only one that can clash with it.
+      while ((kept[cursor]?.end ?? Infinity) <= span.start) cursor += 1;
+      const clashesKept = (kept[cursor]?.start ?? Infinity) < span.end;
+      const clashesAccepted = span.start < acceptedEnd;
+      if (clashesKept || clashesAccepted) continue;
+      accepted.push(span);
+      acceptedEnd = span.end;
+    }
+    kept = mergeByStart(kept, accepted);
   }
 
-  return kept.sort((a, b) => a.start - b.start);
+  return kept;
+}
+
+/** Two start-sorted lists of spans as one start-sorted list, in linear time. */
+function mergeByStart(left: readonly Span[], right: readonly Span[]): Span[] {
+  const merged: Span[] = [];
+  let l = 0;
+  let r = 0;
+  for (;;) {
+    const a = left[l];
+    const b = right[r];
+    if (a === undefined && b === undefined) return merged;
+    if (b === undefined || (a !== undefined && a.start <= b.start)) {
+      if (a !== undefined) merged.push(a);
+      l += 1;
+    } else {
+      merged.push(b);
+      r += 1;
+    }
+  }
 }
 
 export interface Redaction {
