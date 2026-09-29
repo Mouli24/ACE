@@ -3,8 +3,8 @@
  *
  * Ordering is the whole design. An email address contains a run of characters the phone rule would
  * claim; a card number contains a run the phone rule would claim too. The pack is therefore listed
- * most-specific first and `findSpans` gives an overlap to the earlier rule, so the type name a
- * `Verdict` carries is the right one.
+ * most-specific first and `findSpans` names an overlap after the earlier rule, so the type name a
+ * `Verdict` carries is the right one. (The redaction still covers every overlapping finding whole.)
  */
 
 import type { RulePack } from '../spans.js';
