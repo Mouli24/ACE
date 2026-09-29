@@ -32,7 +32,7 @@ test.describe('Tool calls & untrusted prompt (TC-TOOL-010, TC-PRM-002)', () => {
   test('TC-TOOL-010: the inspector lists each tool call with name, args, result, duration and verdicts', async ({
     page,
   }) => {
-    const seeded = await openRound3(page, 'chain', 'tool-loop');
+    const seeded = await openRound3(page, 'chain', 'tool-loop', { text: 'echo this' });
     const [writer] = seeded.agentIds as [string];
 
     await startRun(page).click();
@@ -96,7 +96,7 @@ test.describe('Tool calls & untrusted prompt (TC-TOOL-010, TC-PRM-002)', () => {
   test('TC-PRM-002: View prompt after a tool run highlights the untrusted block with its label', async ({
     page,
   }) => {
-    const seeded = await openRound3(page, 'chain', 'tool-loop');
+    const seeded = await openRound3(page, 'chain', 'tool-loop', { text: 'echo this' });
     const [writer] = seeded.agentIds as [string];
 
     await startRun(page).click();
