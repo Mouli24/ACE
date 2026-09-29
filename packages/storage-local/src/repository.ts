@@ -446,6 +446,18 @@ export class SqliteRepository implements Repository {
       return rows.map(toNode);
     },
 
+    getById: async (scope: Scope, nodeId: Id) => {
+      // One join: the node, and the project id it reaches through its workflow (FR-CHAT-004).
+      const row = this.#db
+        .select({ node: nodes, projectId: workflows.projectId })
+        .from(nodes)
+        .innerJoin(workflows, eq(nodes.workflowId, workflows.id))
+        .where(and(eq(nodes.workspaceId, scope.workspaceId), eq(nodes.id, nodeId)))
+        .get();
+      if (row === undefined) return null;
+      return { node: toNode(row.node), workflowId: row.node.workflowId, projectId: row.projectId };
+    },
+
     insert: async (scope: Scope, node: Node) => {
       this.#db.insert(nodes).values(this.#nodeValues(scope, node)).run();
     },
