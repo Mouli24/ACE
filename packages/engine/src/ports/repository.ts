@@ -69,6 +69,12 @@ export interface EventFilter {
    * replaying one run does not mean reading the whole log and filtering in memory.
    */
   runIds?: Id[];
+  /**
+   * Persisted thread events (`chat.message`) whose `payload.threadId` is one of these — a direct
+   * chat's `resume` replays its own turns and no run traffic (round 4 §2.5, FR-CHAT-006). Thread
+   * events carry no `workflowId`, so they are matched by this and never by the engine scope.
+   */
+  threadIds?: Id[];
   /** True when the caller is subscribed to the engine scope and wants unscoped events too. */
   includeEngineScope?: boolean;
 }
