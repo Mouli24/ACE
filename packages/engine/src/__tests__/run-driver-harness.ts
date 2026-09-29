@@ -116,7 +116,11 @@ export interface RunDriverHarness {
 }
 
 export async function createRunDriverHarness(
-  options: { providerConcurrency?: number } = {},
+  options: {
+    providerConcurrency?: number;
+    /** Runs when the run service rejects a run's pending approvals — a test can make it throw. */
+    onCancelPending?: (runId: string) => void;
+  } = {},
 ): Promise<RunDriverHarness> {
   const repository = new FakeRepository();
   const pubsub = new InProcessPubSubStub<EngineEvent>();
@@ -241,6 +245,7 @@ export async function createRunDriverHarness(
     bus,
     approvals: {
       cancelPending: async (runId) => {
+        options.onCancelPending?.(runId);
         approvalsCancelledFor.push(runId);
         return [];
       },
