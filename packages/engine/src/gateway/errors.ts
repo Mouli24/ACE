@@ -8,6 +8,9 @@ import {
 } from '@ace/contracts';
 import { ZodError } from 'zod';
 
+import { maskSecrets } from '../security/secret-patterns.js';
+import { isSecretWriteRejectedError } from '../security/secret-write-rejected.js';
+
 /**
  * Every non-2xx response the engine sends is this shape (FR-SYS-006, §2.3, Arch §20.1).
  *
@@ -95,6 +98,30 @@ export const providerInUse = (nodeIds: readonly string[]): HttpError =>
     { nodeIds: [...nodeIds] },
   );
 
+/** `node(…).config.instructions` → `instructions`; `settings.allowedOrigins[1]` → `allowedOrigins`. */
+function fieldOf(path: string): string {
+  const field = path.slice(path.lastIndexOf('.') + 1).replace(/(?:\[\d+\])+$/, '');
+  return field === '' ? path : field;
+}
+
+/**
+ * BR-07 / NFR-USE-03: storage refused to write a secret. That is a value the user typed in the
+ * wrong place, so it is answered 400 with the field it was found in and where the key belongs —
+ * never with the value. The path is masked again here, whoever threw: a field name can be a key.
+ */
+export const secretRejected = (rawPath: string): HttpError => {
+  const path = maskSecrets(rawPath);
+  return new HttpError(
+    'invalid_config',
+    'validation_failed',
+    `Nothing was saved: "${fieldOf(path)}" looks like it holds an API key or another secret. ` +
+      'Remove it and try again. Keys belong in the provider settings, which keep them in the ' +
+      'OS keychain, never in a workflow, a policy or the settings.',
+    { path },
+    false,
+  );
+};
+
 /**
  * Turn anything thrown inside a handler into the §2.3 envelope.
  *
@@ -105,6 +132,11 @@ export const providerInUse = (nodeIds: readonly string[]): HttpError =>
 export function toApiError(error: unknown): { status: number; body: ApiError } {
   if (error instanceof HttpError) {
     return { status: error.status, body: error.toApiError() };
+  }
+
+  if (isSecretWriteRejectedError(error)) {
+    const refused = secretRejected(error.path);
+    return { status: refused.status, body: refused.toApiError() };
   }
 
   if (error instanceof ZodError) {

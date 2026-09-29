@@ -1,3 +1,4 @@
+import { SecretWriteRejectedError as EngineSecretWriteRejectedError } from '@ace/engine';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { assertNoSecrets, SecretWriteRejectedError } from '../secret-guard.js';
@@ -81,6 +82,18 @@ describe('BR-07 a private key or a labelled key never reaches SQLite', () => {
 
     expect(thrown).toBeInstanceOf(SecretWriteRejectedError);
     expect((thrown as Error).message).not.toContain(VALUE);
+  });
+
+  it('refuses with the error the engine defines, so the gateway can answer 400 (NFR-USE-03)', () => {
+    let thrown: unknown;
+    try {
+      assertNoSecrets({ instructions: `api_key = "${VALUE}"` }, 'node(x).config');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(EngineSecretWriteRejectedError);
+    expect((thrown as EngineSecretWriteRejectedError).path).toBe('node(x).config.instructions');
   });
 
   it('stores code that only reads a key, as written', async () => {

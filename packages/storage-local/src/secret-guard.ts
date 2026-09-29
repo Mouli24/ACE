@@ -1,4 +1,4 @@
-import { isSecretFieldName, looksLikeSecret } from '@ace/engine';
+import { SecretWriteRejectedError, isSecretFieldName, looksLikeSecret } from '@ace/engine';
 
 /**
  * BR-07 / NFR-SEC-02: secrets never reach the database.
@@ -12,17 +12,12 @@ import { isSecretFieldName, looksLikeSecret } from '@ace/engine';
  * and the logs can never disagree about it.
  */
 
-/** Thrown when a write would put a secret in a SQLite table (BR-07). */
-export class SecretWriteRejectedError extends Error {
-  override readonly name = 'SecretWriteRejectedError';
-
-  constructor(readonly path: string, reason: string) {
-    super(
-      `Refusing to write a secret to the database at "${path}": ${reason}. ` +
-        'Secrets belong in the OS keychain through SecretStore (BR-07, NFR-SEC-02).',
-    );
-  }
-}
+/**
+ * Thrown when a write would put a secret in a SQLite table (BR-07). The class is the engine's, so
+ * the gateway can answer it 400 naming the field (NFR-USE-03) without importing this package; it is
+ * re-exported here for the callers that already import it from storage.
+ */
+export { SecretWriteRejectedError };
 
 function describeValuePattern(value: string): string | undefined {
   return looksLikeSecret(value) ? 'the value looks like a credential' : undefined;
