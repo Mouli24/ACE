@@ -120,6 +120,7 @@ async function build(): Promise<void> {
         return { status: 'CONNECTED', latencyMs: 4, checkedAt: NOW };
       },
       checkAll: async () => undefined,
+      recordStatus: async () => undefined,
       startPeriodicChecks: () => () => undefined,
       refreshModels: async (id) => {
         calls.refreshed.push(id);

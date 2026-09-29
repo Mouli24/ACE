@@ -367,6 +367,9 @@ export async function startEngine(
     },
     runGated: async (providerId, fn) =>
       (await providers.semaphoreFor(providerId)).run(fn),
+    // Arch §28: a key refused mid-run marks its provider AUTH_FAILED, through the provider service.
+    recordProviderStatus: (providerId, found) =>
+      providers.recordStatus(providerId, found),
     policies: guardrailPolicies,
     guardrails,
     budgets,

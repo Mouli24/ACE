@@ -34,6 +34,7 @@ import { notFound } from '../gateway/errors.js';
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
 import type { ModelRouter, ProviderAdapter, Repository, Scope } from '../ports/index.js';
+import type { ProviderService } from '../providers/index.js';
 import {
   DEFAULT_REPEATED_OUTPUT_TIMES,
   createLoopCoordinator,
@@ -154,6 +155,12 @@ export interface RunServiceDeps {
   budgets?: BudgetService;
   /** `ask_user`: rejects whatever is still waiting when a run ends without an answer (FR-GRD-013). */
   approvals?: Pick<ApprovalService, 'cancelPending'>;
+  /**
+   * What a failed call proved about its provider — a key refused mid-run marks it AUTH_FAILED
+   * (Arch §28, FR-ERR-001). The provider service's `recordStatus`, its one writer of provider state;
+   * absent, a run changes no provider's state.
+   */
+  recordProviderStatus?: ProviderService['recordStatus'];
 
   summariser?: Summariser;
   now?: () => string;
@@ -995,6 +1002,34 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
     }
 
+    /**
+     * Arch §28: an auth failure (401/403) leaves the node FAILED *and* its provider AUTH_FAILED, so
+     * the providers screen and the next pre-flight see the refused key (FR-ERR-001, Arch §19.3). The
+     * provider is the one the call went to; the provider service stores and announces the state.
+     * Best effort: the node's own failure is what the run is about, and it is recorded either way.
+     */
+    async function markAuthFailed(node: Node, outcome: NodeExecutionOutcome): Promise<void> {
+      const error = outcome.error;
+      if (deps.recordProviderStatus === undefined || error === undefined) return;
+      const providerId =
+        error.providerId ??
+        outcome.modelUsed?.providerId ??
+        (node.kind === 'agent' || node.kind === 'model' ? node.config.providerId : undefined);
+      if (providerId === undefined) return;
+
+      try {
+        await deps.recordProviderStatus(providerId, {
+          status: 'AUTH_FAILED',
+          message: error.message,
+        });
+      } catch (failure) {
+        logger.warn(
+          { subsystem: 'runs', runId: run.id, providerId, err: failure },
+          'could not mark the provider AUTH_FAILED',
+        );
+      }
+    }
+
     async function runNode(node: Node, iteration: number): Promise<void> {
       // `states` is the scheduler's own bookkeeping: dispatched, so never picked up twice. The node
       // run itself stays READY until it holds its provider slot (D66, FR-PRV-009).
@@ -1105,6 +1140,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
         // every node run follows Arch §19.1: READY → RUNNING → a terminal state. One a stop caught
         // before it started is the exception: it never ran, so it goes READY → STOPPED (D111).
         if (outcome.status !== 'STOPPED') await markRunning();
+
+        if (outcome.error?.kind === 'auth') await markAuthFailed(node, outcome);
 
         if (outcome.status === 'FAILED' && outcome.error !== undefined && !signal.aborted) {
           const decision = autoRetryDecision({

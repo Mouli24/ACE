@@ -250,6 +250,7 @@ export async function createRunDriverHarness(
     adapterFor: (providerId) => providers.adapterFor(providerId),
     checkProvider: async () => ({ status: 'CONNECTED', checkedAt: NOW }),
     runGated: async (providerId, fn) => (await providers.semaphoreFor(providerId)).run(fn),
+    recordProviderStatus: (providerId, found) => providers.recordStatus(providerId, found),
     tokenBatchMs: 0,
   });
 
