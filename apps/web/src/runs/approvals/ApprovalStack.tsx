@@ -1,5 +1,6 @@
-import type { ApprovalRequest } from '@ace/contracts';
+import { TOOL_NAME_REGEX, type ApprovalRequest } from '@ace/contracts';
 import { ApprovalCard } from '@ace/ui';
+import { TriangleAlert } from 'lucide-react';
 import { useState } from 'react';
 
 import { useApproveNodeRun, useRejectNodeRun } from '../hooks';
@@ -56,17 +57,69 @@ function ApprovalRow({ request, keyboard }: { request: ApprovalRequest; keyboard
     mutation.mutate(variables, { onError: () => setDecided(undefined) });
   };
 
+  const tool = destructiveTool(request);
+
   return (
-    <ApprovalCard
-      className="w-full max-w-none"
-      request={request}
-      pending={approve.isPending || reject.isPending}
-      {...(decided === undefined ? {} : { decided })}
-      note={note}
-      onNoteChange={setNote}
-      keyboard={keyboard}
-      onApprove={() => decide('approve')}
-      onReject={() => decide('reject')}
-    />
+    <div className="flex w-full flex-col gap-1.5">
+      {tool !== undefined && <DestructiveToolPreview toolName={tool.toolName} args={tool.args} />}
+      <ApprovalCard
+        className="w-full max-w-none"
+        request={request}
+        pending={approve.isPending || reject.isPending}
+        {...(decided === undefined ? {} : { decided })}
+        note={note}
+        onNoteChange={setNote}
+        keyboard={keyboard}
+        onApprove={() => decide('approve')}
+        onReject={() => decide('reject')}
+      />
+    </div>
+  );
+}
+
+/**
+ * A destructive tool call the agent wants to make, named plainly above the card (round 4 §5 item 8,
+ * FR-GRD-006, BR-14). The engine's `destructive_action` check puts the call in the request `preview`
+ * as `<tool_name> <args-json>` (`APPROVAL_PREVIEW_MAX`), so what a person is being asked to allow —
+ * `sandbox_delete` on `notes.txt`, say — is the first thing they read, not something to decode from
+ * the raw preview line. Returns `undefined` for any non-destructive approval, which renders the card
+ * alone exactly as before.
+ */
+function destructiveTool(
+  request: ApprovalRequest,
+): { toolName: string; args: string } | undefined {
+  if (request.point !== 'tool' || request.checkType !== 'destructive_action') return undefined;
+  const preview = request.preview.trim();
+  const space = preview.indexOf(' ');
+  const toolName = space === -1 ? preview : preview.slice(0, space);
+  if (!TOOL_NAME_REGEX.test(toolName)) return undefined;
+  return { toolName, args: space === -1 ? '' : preview.slice(space + 1).trim() };
+}
+
+function DestructiveToolPreview({ toolName, args }: { toolName: string; args: string }) {
+  return (
+    <div
+      data-testid="approval-tool-preview"
+      className="flex flex-col gap-1 rounded-card border border-danger/60 bg-danger/10 p-2 text-xs"
+    >
+      <p className="flex items-center gap-1.5 font-machine text-danger">
+        <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        <span className="text-[10px] uppercase tracking-wide">destructive tool call</span>
+      </p>
+      <p>
+        <span className="text-fg-muted">tool </span>
+        <span data-testid="approval-tool-name" className="font-machine">
+          {toolName}
+        </span>
+      </p>
+      {args !== '' && (
+        <pre
+          data-testid="approval-tool-args"
+          className="overflow-auto rounded border border-border bg-canvas p-1.5 font-machine text-[11px] text-fg-muted"
+        >
+          {args}
+        </pre>
+      )}
+    </div>
   );
 }
