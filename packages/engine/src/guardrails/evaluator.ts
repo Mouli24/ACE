@@ -67,6 +67,11 @@ export interface EvaluationTarget {
   iteration: number;
   /** `null` when the project has no policy at all: nothing is checked, and the data guardrail still runs. */
   policy: GuardrailPolicy | null;
+  /**
+   * The run's abort signal. An `ask_user` wait listens to it, so a Stop or a shutdown ends the wait
+   * instead of leaving the node WAITING on a run that is over (FR-CTL-003, D111, D-054).
+   */
+  signal?: AbortSignal;
 }
 
 export type GuardrailOutcome =
@@ -312,6 +317,7 @@ export function createGuardrailEvaluator(deps: GuardrailEvaluatorDeps): Guardrai
         checkType: check.type,
         reason: outcome.reason,
         preview: previewOf(textOf(parts)),
+        ...(target.signal === undefined ? {} : { signal: target.signal }),
       });
 
       if (decision.decision === 'reject') {
@@ -785,6 +791,7 @@ export function createToolGuardrailEvaluator(
       reason: outcome.reason,
       // The card shows the tool and its arguments with secret-shaped values masked (BR-07).
       preview: previewOf(`${bag.definition.name} ${JSON.stringify(redactArgs(bag.args))}`),
+      ...(target.signal === undefined ? {} : { signal: target.signal }),
     });
 
     if (decision.decision === 'reject') {

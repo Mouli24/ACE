@@ -456,6 +456,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
         nodeName: node.name,
         iteration: nodeRun.iteration,
         policy: policyByNode.get(node.id) ?? null,
+        // An approval wait at any point ends when the run is stopped or shut down (D-054).
+        signal,
       };
     }
 

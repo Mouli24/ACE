@@ -525,6 +525,8 @@ export async function startEngine(
     ...controlStoresFor(repository, LOCAL_SCOPE),
     bus,
     gates,
+    // D-054: a Stop rejects a WAITING node's approval before it answers, so no card outlives the run.
+    approvals,
     logger: logger.child({ subsystem: "runs" }),
     // The controls never execute anything themselves; these three are the scheduler (FR-CTL-004/005).
     driveRecordedRun: (run) => runs.driveRecordedRun(run),

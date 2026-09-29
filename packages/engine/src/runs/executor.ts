@@ -242,6 +242,19 @@ function isToolTimeout(error: unknown): boolean {
   return /timed out|timeout/i.test(message);
 }
 
+/**
+ * What a node the run's abort caught inside a guardrail point records: a cancellation, never a
+ * failure (FR-ERR-007, D-054). An `ask_user` wait throws its own `user_cancelled` when the run is
+ * stopped or shut down; anything else thrown once the run is aborted ends the node the same way,
+ * because the Stop has already ended it STOPPED (D111).
+ */
+function stoppedError(error: unknown, message: string): NodeError {
+  const classified = error === undefined ? undefined : classifyError(error);
+  return classified?.kind === "user_cancelled"
+    ? classified
+    : userCancelledError(message).nodeError;
+}
+
 /*
  * There is no private classifier here any more: `classifyError` is the one in `../errors/` and the
  * eight kinds of Arch §28 are decided in exactly one place (FR-ERR-001). Two deliberate changes come
@@ -738,6 +751,16 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             step = { kind: "allow" };
           }
 
+          /*
+           * D-054: a Stop that landed while the checks ran — while a destructive call waited for its
+           * approval, above all — never lets the tool run, whatever the decision said: the node is
+           * STOPPED, and a destructive call after a Stop is exactly what the Stop is for. Thrown, so
+           * the loop ends the node as a cancellation with what it spent.
+           */
+          if (toolSignal.aborted) {
+            throw userCancelledError("The run was stopped before this tool call ran.");
+          }
+
           verdicts.push(...(step.verdicts ?? []));
 
           if (step.kind !== "allow") {
@@ -977,8 +1000,29 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
        */
       let flowing = output;
       if (input.guardrails?.afterOutput !== undefined) {
-        const checked = await input.guardrails.afterOutput(flowing, contract);
+        /*
+         * D-054: an `ask_user` wait here ends when the run is stopped or shut down, and a decision
+         * that lands as it is stopped does not un-stop the node — neither the output nor a guardrail
+         * failure is written over the STOPPED the Stop already recorded (D111). The node keeps what
+         * its call spent either way (FR-ERR-007, TC-OBS-002).
+         */
+        const stopped = async (error?: unknown): Promise<NodeExecutionOutcome> =>
+          fail(
+            input,
+            stoppedError(error, "The run was stopped before this node's output was accepted."),
+            usage,
+            { modelUsed, prompt: recordedPrompt(), verdicts: [...verdicts] },
+          );
+
+        let checked: GuardrailStep<{ parts: Part[] }>;
+        try {
+          checked = await input.guardrails.afterOutput(flowing, contract);
+        } catch (error) {
+          if (!input.signal.aborted) throw error;
+          return { kind: "done", result: await stopped(error) };
+        }
         verdicts.push(...(checked.verdicts ?? []));
+        if (input.signal.aborted) return { kind: "done", result: await stopped() };
         if (checked.kind === "failed") {
           return {
             kind: "done",
@@ -1107,12 +1151,22 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
   return {
     async execute(input) {
-      if (input.node.kind === "agent" || input.node.kind === "model") {
-        return executeAgent(input);
+      try {
+        if (input.node.kind === "agent" || input.node.kind === "model") {
+          return await executeAgent(input);
+        }
+        // Nothing to queue for: an input, transform or output node starts the moment it is dispatched.
+        await input.onStarted?.();
+        return await executeOther(input);
+      } catch (error) {
+        // D-054: the input point's `ask_user` wait — on an Input node's content or an agent's reads —
+        // ends when the run is stopped or shut down; the node is STOPPED, not failed (FR-ERR-007).
+        if (!input.signal.aborted) throw error;
+        return fail(
+          input,
+          stoppedError(error, "The run was stopped while this node was being checked."),
+        );
       }
-      // Nothing to queue for: an input, transform or output node starts the moment it is dispatched.
-      await input.onStarted?.();
-      return executeOther(input);
     },
   };
 }

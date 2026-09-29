@@ -124,6 +124,8 @@ export interface ToolGuardrailTarget {
   iteration: number;
   /** `null` when the project has no policy: the tool runs unchecked, as the other points do. */
   policy: GuardrailPolicy | null;
+  /** The run's abort signal: a destructive tool's approval wait ends on a Stop (D-054). */
+  signal?: AbortSignal;
 }
 
 /**
