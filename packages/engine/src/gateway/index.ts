@@ -1,21 +1,45 @@
 import {
   API_BASE_PATH,
+  ARTIFACT_ACCEPT_RANGES,
+  ARTIFACT_UPLOAD_FIELD,
+  ChatRequestSchema,
   CreateProjectRequestSchema,
   CreateProviderRequestSchema,
+  CreateMcpServerRequestSchema,
   CreateWorkflowRequestSchema,
   CursorQuerySchema,
   EventsQuerySchema,
   HealthResponseSchema,
+  MessageQuerySchema,
   ModelQuerySchema,
+  PostMessageRequestSchema,
   SettingsPatchSchema,
   StartRunRequestSchema,
   UpdateProjectRequestSchema,
   UpdateProviderRequestSchema,
   UpdateWorkflowRequestSchema,
+  artifactETag,
+  type Id,
+  type McpServer,
+  type MessageQuery,
+  type ToolDefinition,
 } from '@ace/contracts';
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
 
+import type { ArtifactService } from '../artifacts/index.js';
+import { UnsupportedTypeError, UploadTooLargeError } from '../artifacts/index.js';
+import type { ChatService } from '../chat/index.js';
+import {
+  ChatInputBlockedError,
+  ChatModelError,
+  ChatNodeNotFoundError,
+  ChatRunNotAvailableError,
+  ChatThreadNodeMismatchError,
+  ChatThreadNotFoundError,
+  ChatWorkflowNotFoundError,
+  NotAnAgentNodeError,
+} from '../chat/index.js';
 import type { EventBus } from '../events/index.js';
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
@@ -27,6 +51,7 @@ import { createApprovalRoutes } from '../approvals/routes.js';
 import { createGuardrailRoutes, type PolicyService } from '../guardrails/index.js';
 import { createRunControlRoutes, type RunControls, type RunService } from '../runs/index.js';
 import {
+  HttpError,
   forbiddenOrigin,
   notFound,
   notImplemented,
@@ -35,6 +60,28 @@ import {
   unauthorized,
 } from './errors.js';
 import { readJson } from './read-json.js';
+
+/**
+ * The tool catalog `GET /tools` reads (round 4 §2.4). It is a narrow view rather than the concrete
+ * `ToolRegistry`, because the engine may not import `@ace/tools` (CLAUDE.md §3.4 rule 3): the
+ * composition root binds it to `registry.list()`.
+ */
+export interface ToolCatalog {
+  list(): ToolDefinition[];
+}
+
+/**
+ * The MCP surface the `/mcp-servers` routes drive (round 4 §2.4, FR-TOOL-007). Register/check
+ * connect the server through the MCP manager, persist its row and emit `mcp.status`; the engine
+ * never touches `@ace/tools` directly, so the composition root supplies this.
+ */
+export interface McpService {
+  list(): Promise<McpServer[]>;
+  get(id: Id): Promise<McpServer | null>;
+  create(request: ReturnType<typeof CreateMcpServerRequestSchema.parse>): Promise<McpServer>;
+  check(id: Id): Promise<McpServer | null>;
+  remove(id: Id): Promise<boolean>;
+}
 
 export interface EngineDeps {
   repository: Repository;
@@ -64,6 +111,20 @@ export interface EngineDeps {
   guardrailPolicies?: PolicyService;
   /** `/runs/:id/approvals`, `/node-runs/:id/approve` and `/reject` (FR-GRD-013). */
   approvals?: ApprovalService;
+
+  /*
+   * Round 4 (§2.4). Optional for the same reason the earlier rounds' services are: an app built
+   * without one answers 501 `not_implemented` on the routes that need it rather than crashing.
+   */
+
+  /** `POST /artifacts`, `GET /artifacts/:id` and `/content` (FR-MM-001/002/009). */
+  artifacts?: ArtifactService;
+  /** `GET /tools` (FR-TOOL-001). */
+  tools?: ToolCatalog;
+  /** `GET/POST/DELETE /mcp-servers`, `POST /mcp-servers/:id/check` (FR-TOOL-007). */
+  mcp?: McpService;
+  /** The timeline and direct-chat routes (FR-CHAT-001..008). */
+  chat?: ChatService;
 }
 
 export interface EngineVariables {
@@ -146,6 +207,105 @@ function requestId(): MiddlewareHandler<{ Variables: EngineVariables }> {
 }
 
 /**
+ * Map a chat-service domain error to the §2.3 envelope (round 4 §2.3). Anything that is not a chat
+ * error is rethrown untouched, so a Zod parse error or an unexpected throw still reaches `onError`.
+ *
+ * Note on status: `chat/errors.ts` describes a not-an-agent node and a router refusal as "422",
+ * but the only contract code at 422 is `guardrail_blocked`, and §2.3 fixes each code's status.
+ * Keeping that code→status pairing intact, these map to `validation_failed` (400, kind
+ * `invalid_config`); only a blocked input is 422 (`guardrail_blocked`, with the verdicts).
+ */
+function toChatHttpError(error: unknown): unknown {
+  if (
+    error instanceof ChatWorkflowNotFoundError ||
+    error instanceof ChatNodeNotFoundError ||
+    error instanceof ChatThreadNotFoundError
+  ) {
+    return notFound(error.message.replace(/\.$/, ''));
+  }
+  if (error instanceof NotAnAgentNodeError || error instanceof ChatThreadNodeMismatchError) {
+    return new HttpError('invalid_config', 'validation_failed', error.message);
+  }
+  if (error instanceof ChatModelError) {
+    return error.code === 'not_supported_yet'
+      ? new HttpError('workflow', 'not_implemented', error.message)
+      : new HttpError('invalid_config', 'validation_failed', error.message);
+  }
+  if (error instanceof ChatInputBlockedError) {
+    return new HttpError('guardrail', 'guardrail_blocked', error.message, {
+      verdicts: error.verdicts,
+    });
+  }
+  if (error instanceof ChatRunNotAvailableError) {
+    return new HttpError('workflow', 'not_implemented', error.message);
+  }
+  return error;
+}
+
+/** Build a `MessageQuery` from the query string, reading `type` as a repeatable parameter (§2.4). */
+function messageQuery(c: Context): MessageQuery {
+  const types = c.req.queries('type');
+  const raw: Record<string, unknown> = {};
+  const runId = c.req.query('runId');
+  const nodeId = c.req.query('nodeId');
+  const cursor = c.req.query('cursor');
+  const limit = c.req.query('limit');
+  if (runId !== undefined) raw['runId'] = runId;
+  if (nodeId !== undefined) raw['nodeId'] = nodeId;
+  if (types !== undefined && types.length > 0) raw['type'] = types;
+  if (cursor !== undefined) raw['cursor'] = cursor;
+  if (limit !== undefined) raw['limit'] = limit;
+  return MessageQuerySchema.parse(raw);
+}
+
+/**
+ * Parse an HTTP `Range: bytes=…` header against a body of `size` bytes (§2.1, FR-MM-009). Only a
+ * single range is honoured — `start-end`, `start-` (to the end) or `-suffix` (the last N). A header
+ * that is absent, malformed or unsatisfiable returns `undefined`, and the whole body is served 200.
+ */
+function parseByteRange(
+  header: string | undefined,
+  size: number,
+): { start: number; end: number } | undefined {
+  if (header === undefined || size === 0) return undefined;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (match === null) return undefined;
+
+  const startText = match[1] ?? '';
+  const endText = match[2] ?? '';
+  if (startText === '' && endText === '') return undefined;
+
+  let start: number;
+  let end: number;
+  if (startText === '') {
+    // Suffix range: the last `endText` bytes.
+    const suffix = Number(endText);
+    if (suffix <= 0) return undefined;
+    start = Math.max(0, size - suffix);
+    end = size - 1;
+  } else {
+    start = Number(startText);
+    end = endText === '' ? size - 1 : Number(endText);
+  }
+
+  if (!Number.isInteger(start) || !Number.isInteger(end)) return undefined;
+  if (start > end || start >= size) return undefined;
+  return { start, end: Math.min(end, size - 1) };
+}
+
+/** A copy of the bytes as a standalone `ArrayBuffer`, which is what `c.body` accepts. */
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
+/** A filename safe to put inside a quoted `Content-Disposition` (no quotes, backslashes or CR/LF). */
+function safeFilename(name: string): string {
+  return name.replace(/["\\\r\n]/g, '_');
+}
+
+/**
  * The engine's HTTP surface (§2.8).
  *
  * This factory never binds a socket — `apps/server` does that. Tests get a real app and drive it
@@ -207,6 +367,21 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   const runs = (_c: Context): RunService => {
     if (deps.runs === undefined) throw notImplemented('runs');
     return deps.runs;
+  };
+
+  const artifacts = (_c: Context): ArtifactService => {
+    if (deps.artifacts === undefined) throw notImplemented('artifacts');
+    return deps.artifacts;
+  };
+
+  const mcp = (_c: Context): McpService => {
+    if (deps.mcp === undefined) throw notImplemented('mcp-servers');
+    return deps.mcp;
+  };
+
+  const chat = (_c: Context): ChatService => {
+    if (deps.chat === undefined) throw notImplemented('chat');
+    return deps.chat;
   };
 
   api.get('/projects', async (c) => c.json(await deps.graph.listProjects(page(c))));
@@ -382,6 +557,144 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   });
 
   api.get('/node-runs/:id', async (c) => c.json(await runs(c).getNodeRun(c.req.param('id'))));
+
+  /* -------------------------------------------------------------- artifacts (R4) */
+
+  api.post('/artifacts', async (c) => {
+    const body = await c.req.parseBody();
+    const file = body[ARTIFACT_UPLOAD_FIELD];
+    if (!(file instanceof File)) {
+      throw new HttpError(
+        'invalid_config',
+        'validation_failed',
+        `A multipart form field "${ARTIFACT_UPLOAD_FIELD}" carrying the file is required.`,
+      );
+    }
+
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    try {
+      const artifact = await artifacts(c).upload(bytes, { mime: file.type, name: file.name });
+      return c.json(artifact, 201);
+    } catch (error) {
+      // The service is HTTP-free: it throws a domain error carrying the §2.1 code and details, and
+      // this is the one line that turns it into the envelope (`artifacts/errors.ts`).
+      if (error instanceof UploadTooLargeError || error instanceof UnsupportedTypeError) {
+        throw new HttpError(error.kind, error.code, error.message, error.details);
+      }
+      throw error;
+    }
+  });
+
+  api.get('/artifacts/:id', async (c) => {
+    const artifact = await artifacts(c).get(c.req.param('id'));
+    if (artifact === null) throw notFound(`artifact ${c.req.param('id')}`);
+    return c.json(artifact);
+  });
+
+  api.get('/artifacts/:id/content', async (c) => {
+    const found = await artifacts(c).content(c.req.param('id'));
+    if (found === null) throw notFound(`artifact ${c.req.param('id')}`);
+    const { artifact, bytes } = found;
+
+    const headers: Record<string, string> = {
+      'Content-Type': artifact.mime,
+      'Content-Disposition': `attachment; filename="${safeFilename(artifact.name)}"`,
+      ETag: artifactETag(artifact.hash),
+      'Accept-Ranges': ARTIFACT_ACCEPT_RANGES,
+    };
+
+    // Range → 206 with the requested slice, so audio and video can be seeked (§2.1, FR-MM-009).
+    const range = parseByteRange(c.req.header('Range'), bytes.byteLength);
+    if (range !== undefined) {
+      const slice = bytes.slice(range.start, range.end + 1);
+      return c.body(toArrayBuffer(slice), 206, {
+        ...headers,
+        'Content-Range': `bytes ${range.start}-${range.end}/${bytes.byteLength}`,
+        'Content-Length': String(slice.byteLength),
+      });
+    }
+
+    return c.body(toArrayBuffer(bytes.slice()), 200, {
+      ...headers,
+      'Content-Length': String(bytes.byteLength),
+    });
+  });
+
+  /* ------------------------------------------------------------------- tools (R4) */
+
+  api.get('/tools', (c) => {
+    if (deps.tools === undefined) throw notImplemented('tools');
+    return c.json({ items: deps.tools.list() });
+  });
+
+  api.get('/mcp-servers', async (c) => c.json({ items: await mcp(c).list() }));
+
+  api.post('/mcp-servers', async (c) => {
+    const request = CreateMcpServerRequestSchema.parse(await readJson(c));
+    return c.json(await mcp(c).create(request), 201);
+  });
+
+  api.delete('/mcp-servers/:id', async (c) => {
+    const removed = await mcp(c).remove(c.req.param('id'));
+    if (!removed) throw notFound(`MCP server ${c.req.param('id')}`);
+    return c.body(null, 204);
+  });
+
+  api.post('/mcp-servers/:id/check', async (c) => {
+    const server = await mcp(c).check(c.req.param('id'));
+    if (server === null) throw notFound(`MCP server ${c.req.param('id')}`);
+    return c.json(server);
+  });
+
+  /* -------------------------------------------------------------- chat/timeline (R4) */
+
+  api.get('/workflows/:id/messages', async (c) => {
+    try {
+      return c.json(await chat(c).listMessages(c.req.param('id'), messageQuery(c)));
+    } catch (error) {
+      throw toChatHttpError(error);
+    }
+  });
+
+  api.post('/workflows/:id/messages', async (c) => {
+    const request = PostMessageRequestSchema.parse(await readJson(c));
+    try {
+      return c.json(await chat(c).postMessage(c.req.param('id'), request));
+    } catch (error) {
+      throw toChatHttpError(error);
+    }
+  });
+
+  api.post('/nodes/:id/chat', async (c) => {
+    const request = ChatRequestSchema.parse(await readJson(c));
+    try {
+      // 202: the reply streams over the socket as `chat.token` frames ending in `chat.message`;
+      // `done` is deliberately not awaited — the chat service already logs its own failure (§2.3).
+      const begun = await chat(c).chat(c.req.param('id'), request);
+      return c.json({ threadId: begun.threadId, messageId: begun.messageId }, 202);
+    } catch (error) {
+      throw toChatHttpError(error);
+    }
+  });
+
+  api.get('/nodes/:id/chat/threads', async (c) => c.json(await chat(c).listThreads(c.req.param('id'))));
+
+  api.get('/chat/threads/:id', async (c) => {
+    try {
+      return c.json(await chat(c).getThread(c.req.param('id')));
+    } catch (error) {
+      throw toChatHttpError(error);
+    }
+  });
+
+  api.delete('/chat/threads/:id', async (c) => {
+    try {
+      await chat(c).deleteThread(c.req.param('id'));
+      return c.body(null, 204);
+    } catch (error) {
+      throw toChatHttpError(error);
+    }
+  });
 
   /*
    * Round 3's routes, three sub-routers mounted with one line each (§2.5, D121). They go on before
