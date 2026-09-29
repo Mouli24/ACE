@@ -12,6 +12,7 @@ import {
   type LoopStopReason,
   type NodeError,
   type Part,
+  type ToolDefinition,
   type Verdict,
 } from '@ace/contracts';
 
@@ -19,6 +20,13 @@ import type { EventBus } from '../events/index.js';
 import { newId } from '../ids.js';
 import type { Scope } from '../ports/index.js';
 import type { ApprovalGate } from '../approvals/index.js';
+import {
+  redactArgs,
+  type ToolGuardrailEvaluator,
+  type ToolGuardrailTarget,
+  type ToolGuardStep,
+  type ToolPointInput,
+} from '../runs/tool-loop.js';
 import type { CheckInput, CheckOutcome, CheckRunner, LoopCheckInput, SecretMasker } from './checks.js';
 import type { GuardrailVerdictRepository } from './ports.js';
 
@@ -569,4 +577,226 @@ function loopStopFor(type: GuardrailCheckType): LoopStopReason {
   // `max_tool_calls` has no stop reason of its own in §2.4; a node that has spent its tool budget
   // has nothing left to do differently, so the loop stops the way a spent iteration budget does.
   return type === 'repeated_output' ? 'repeated_output' : 'max_iterations';
+}
+
+/* -------------------------------------------------------------------------- */
+/* The tool point (round 4 §2.2, FR-GRD-005/006, FR-TOOL-002)                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The order the tool point runs its checks in. `tool_allowed` first (a call to a tool the agent
+ * never switched on is judged before its arguments are looked at); then arguments (`checkToolArgs`,
+ * D217 — see the evaluator); then the confinement checks; then `destructive_action` last, because
+ * it is the one that may put the node in front of a person, and there is no point asking for
+ * approval of a call that a cheaper check would have blocked anyway.
+ */
+const TOOL_CHECK_ORDER = [
+  'tool_allowed',
+  'path_confinement',
+  'domain_allowlist',
+  'destructive_action',
+] as const satisfies readonly GuardrailCheckType[];
+
+/** Validates a tool call's arguments against its `inputSchema` (D217) — `@ace/guardrails`' checkToolArgs. */
+export type ToolArgsValidator = (
+  definition: ToolDefinition,
+  args: unknown,
+) => CheckOutcome | undefined;
+
+export interface ToolGuardrailEvaluatorDeps {
+  scope: Scope;
+  /** The pure tool-point checks, reached through the same runner the other points use (Arch §13.2). */
+  checks: CheckRunner;
+  verdicts: GuardrailVerdictRepository;
+  bus: EventBus;
+  /**
+   * Args validation, an always-on precondition rather than a policy check (D217). Absent → the tool
+   * itself re-parses its arguments and args are not pre-checked here; the gateway wires
+   * `@ace/guardrails`' `checkToolArgs`.
+   */
+  validateArgs?: ToolArgsValidator;
+  /** For a destructive tool's `ask_user`. Absent → `ask_user` is a block (safe by default, D10). */
+  approvals?: ApprovalGate;
+  now?: () => string;
+  nextId?: () => string;
+}
+
+/** Read a policy's `max_tool_calls` cap: a positive integer under `params.max` / `params.maxToolCalls`. */
+function toolCallCapOf(policy: GuardrailPolicy | null): number | undefined {
+  const check = (policy?.checks ?? []).find(
+    (candidate) =>
+      candidate.enabled && candidate.point === 'loop' && candidate.type === 'max_tool_calls',
+  );
+  if (check === undefined) return undefined;
+  const raw = check.params['max'] ?? check.params['maxToolCalls'];
+  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 1 ? raw : undefined;
+}
+
+/**
+ * The tool point of the guardrail engine (round 4 §2.2, FR-GRD-005/006, FR-TOOL-002).
+ *
+ * It runs `checkToolArgs` (D217) and the four tool-point policy checks through the same
+ * `CheckRunner` the other points use, records a verdict for every check that triggered, and turns
+ * each `action` into a consequence: a `block` (or any non-`warn` action other than a destructive
+ * `ask_user`) stops the call as a `block` step; a destructive tool's `ask_user` opens the Round 3
+ * approval card and a reject stops the call as a `reject` step. It never runs a tool and never
+ * imports `@ace/guardrails` — the checks arrive through the runner, args validation as an injected
+ * function — so the executor only ever sees the `ToolGuardStep` it returns.
+ */
+export function createToolGuardrailEvaluator(
+  deps: ToolGuardrailEvaluatorDeps,
+): ToolGuardrailEvaluator {
+  const { scope, checks: runner, verdicts: store, bus } = deps;
+  const now = deps.now ?? ((): string => new Date().toISOString());
+  const nextId = deps.nextId ?? newId;
+
+  async function record(target: ToolGuardrailTarget, verdict: Verdict): Promise<Verdict> {
+    const stored = await store.append(scope, verdict);
+    if (stored.action !== 'pass') {
+      await bus.emit({
+        type: 'guardrail.verdict',
+        workflowId: target.workflowId,
+        runId: target.runId,
+        payload: { runId: target.runId, nodeRunId: target.nodeRunId, verdict: stored },
+      });
+    }
+    return stored;
+  }
+
+  function recordCheck(
+    target: ToolGuardrailTarget,
+    check: GuardrailCheck,
+    outcome: CheckOutcome,
+  ): Promise<Verdict> {
+    return record(
+      target,
+      verdictFor(check, outcome, { id: nextId(), nodeRunId: target.nodeRunId, at: now() }),
+    );
+  }
+
+  /** The checks of the resolved policy at the tool point, enabled only, in `TOOL_CHECK_ORDER`. */
+  function toolChecks(policy: GuardrailPolicy | null): GuardrailCheck[] {
+    const applicable = (policy?.checks ?? []).filter(
+      (check) => check.enabled && check.point === 'tool',
+    );
+    const rank = (type: GuardrailCheckType): number => {
+      const index = (TOOL_CHECK_ORDER as readonly GuardrailCheckType[]).indexOf(type);
+      return index === -1 ? TOOL_CHECK_ORDER.length : index;
+    };
+    return [...applicable].sort((a, b) => rank(a.type) - rank(b.type));
+  }
+
+  return {
+    toolCallCap: toolCallCapOf,
+
+    async evaluateTool({ target, ...bag }) {
+      const verdicts: Verdict[] = [];
+      const input: CheckInput = { point: 'tool', text: '', tool: bag };
+
+      for (const check of toolChecks(target.policy)) {
+        // `destructive_action` is the approval; the other three are plain block/warn checks.
+        const step =
+          check.type === 'destructive_action'
+            ? await runDestructive(target, check, input, bag, verdicts)
+            : await runToolCheck(target, check, input, verdicts);
+        if (step !== undefined) return step;
+
+        // Arguments are validated right after `tool_allowed` (D217): a precondition, not a policy
+        // check, so it records no verdict and a failure is always a `block` (FR-GRD-012).
+        if (check.type === 'tool_allowed' && deps.validateArgs !== undefined) {
+          const argsStep = validateArgsStep(bag, verdicts);
+          if (argsStep !== undefined) return argsStep;
+        }
+      }
+
+      // No `tool_allowed` check in the policy? Still validate arguments (D217, safe by default).
+      if (
+        deps.validateArgs !== undefined &&
+        !toolChecks(target.policy).some((check) => check.type === 'tool_allowed')
+      ) {
+        const argsStep = validateArgsStep(bag, verdicts);
+        if (argsStep !== undefined) return argsStep;
+      }
+
+      return { kind: 'allow', verdicts };
+    },
+  };
+
+  function validateArgsStep(bag: ToolPointInput, verdicts: Verdict[]): ToolGuardStep | undefined {
+    const outcome = deps.validateArgs?.(bag.definition, bag.args);
+    if (outcome === undefined || outcome.passed) return undefined;
+    return { kind: 'block', reason: outcome.reason, verdicts: [...verdicts] };
+  }
+
+  /** A `tool_allowed`, `path_confinement` or `domain_allowlist` check. */
+  async function runToolCheck(
+    target: ToolGuardrailTarget,
+    check: GuardrailCheck,
+    input: CheckInput,
+    verdicts: Verdict[],
+  ): Promise<ToolGuardStep | undefined> {
+    const outcome = runner.evaluate(check, input);
+    if (outcome === undefined || outcome.passed) return undefined;
+
+    verdicts.push(await recordCheck(target, check, outcome));
+
+    // Only `warn` (and the never-used `pass`) let a failing tool call proceed; everything else
+    // stops it. A tool point has no text to sanitize, so `redact` cannot be honoured and blocks,
+    // and a non-destructive `ask_user` has no approval card of its own, so it blocks too (D10).
+    if (check.action === 'pass' || check.action === 'warn') return undefined;
+    return { kind: 'block', reason: outcome.reason, verdicts: [...verdicts] };
+  }
+
+  /** `destructive_action`: the one tool check whose `ask_user` opens an approval card (BR-14). */
+  async function runDestructive(
+    target: ToolGuardrailTarget,
+    check: GuardrailCheck,
+    input: CheckInput,
+    bag: ToolPointInput,
+    verdicts: Verdict[],
+  ): Promise<ToolGuardStep | undefined> {
+    const outcome = runner.evaluate(check, input);
+    // A passing check means the call is not destructive — nothing to approve.
+    if (outcome === undefined || outcome.passed) return undefined;
+
+    verdicts.push(await recordCheck(target, check, outcome));
+
+    if (check.action === 'pass' || check.action === 'warn') return undefined;
+    if (check.action !== 'ask_user') {
+      return { kind: 'block', reason: outcome.reason, verdicts: [...verdicts] };
+    }
+
+    if (deps.approvals === undefined) {
+      return {
+        kind: 'block',
+        reason: `${outcome.reason} No approver is available, so it was blocked.`,
+        verdicts: [...verdicts],
+      };
+    }
+
+    const decision = await deps.approvals.request({
+      runId: target.runId,
+      workflowId: target.workflowId,
+      nodeRunId: target.nodeRunId,
+      nodeId: target.nodeId,
+      nodeName: target.nodeName,
+      point: 'tool',
+      checkType: 'destructive_action',
+      reason: outcome.reason,
+      // The card shows the tool and its arguments with secret-shaped values masked (BR-07).
+      preview: previewOf(`${bag.definition.name} ${JSON.stringify(redactArgs(bag.args))}`),
+    });
+
+    if (decision.decision === 'reject') {
+      const note = decision.note === undefined ? '' : ` (${decision.note})`;
+      return {
+        kind: 'reject',
+        reason: `A reviewer rejected this tool call${note}: ${outcome.reason}`,
+        verdicts: [...verdicts],
+      };
+    }
+
+    // Approved: the call runs (FR-GRD-013).
+    return undefined;
+  }
 }

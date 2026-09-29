@@ -69,6 +69,12 @@ export interface EventFilter {
    * replaying one run does not mean reading the whole log and filtering in memory.
    */
   runIds?: Id[];
+  /**
+   * Persisted thread events (`chat.message`) whose `payload.threadId` is one of these — a direct
+   * chat's `resume` replays its own turns and no run traffic (round 4 §2.5, FR-CHAT-006). Thread
+   * events carry no `workflowId`, so they are matched by this and never by the engine scope.
+   */
+  threadIds?: Id[];
   /** True when the caller is subscribed to the engine scope and wants unscoped events too. */
   includeEngineScope?: boolean;
 }
@@ -107,8 +113,23 @@ export interface WorkflowRepository {
   delete(scope: Scope, id: Id): Promise<boolean>;
 }
 
+/** A node with the workflow and project it belongs to — what `getById` resolves (FR-CHAT-004). */
+export interface ResolvedNode {
+  node: Node;
+  workflowId: Id;
+  projectId: Id;
+}
+
 export interface NodeRepository {
   listByWorkflow(scope: Scope, workflowId: Id): Promise<Node[]>;
+  /**
+   * The node with `nodeId`, plus the workflow and the project it belongs to, or null. Every other
+   * lookup here takes a workflow id, but `POST /nodes/:id/chat` knows only the node id, and a direct
+   * chat must reach the node's model and context policy and — through the project — its default
+   * guardrail policy (FR-CHAT-004). This is the workflow → project join the chat service's
+   * `resolveNode` is built from, so the gateway no longer scans every workflow to find one node.
+   */
+  getById(scope: Scope, nodeId: Id): Promise<ResolvedNode | null>;
   /**
    * Every node, in any workflow, whose config names this provider (FR-PRV-005). Deleting a
    * provider has to name the nodes it would break before it is allowed to happen.

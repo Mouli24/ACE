@@ -101,6 +101,23 @@ describe('FR-WF-004 nodes and edges round-trip', () => {
     expect(await db.repository.nodes.listByWorkflow(scope, workflow.id)).toEqual([node]);
   });
 
+  it('resolves a node to its workflow and project by id (FR-CHAT-004)', async () => {
+    const project = makeProject();
+    const workflow = makeWorkflow(project.id);
+    const node = makeInputNode(workflow.id);
+
+    await db.repository.projects.create(scope, project);
+    await db.repository.workflows.create(scope, workflow);
+    await db.repository.nodes.insert(scope, node);
+
+    expect(await db.repository.nodes.getById(scope, node.id)).toEqual({
+      node,
+      workflowId: workflow.id,
+      projectId: project.id,
+    });
+    expect(await db.repository.nodes.getById(scope, 'no-such-node')).toBeNull();
+  });
+
   it('stores an edge and finds it by workflow', async () => {
     const project = makeProject();
     const workflow = makeWorkflow(project.id);

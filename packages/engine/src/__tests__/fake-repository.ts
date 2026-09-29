@@ -1,6 +1,7 @@
 import {
   DEFAULT_GUARDRAIL_POLICY_NAME,
   SettingsSchema,
+  THREAD_EVENT_TYPES,
   defaultGuardrailChecks,
   modelMatchesQuery,
   type ApprovalDecision,
@@ -267,6 +268,14 @@ export class FakeRepository implements Repository {
       [...this.#for(scope).nodes.values()]
         .filter((n) => n.workflowId === workflowId)
         .sort((a, b) => a.id.localeCompare(b.id)),
+    getById: async (scope: Scope, nodeId: Id) => {
+      const state = this.#for(scope);
+      const node = state.nodes.get(nodeId);
+      if (node === undefined) return null;
+      const workflow = state.workflows.get(node.workflowId);
+      if (workflow === undefined) return null;
+      return { node, workflowId: node.workflowId, projectId: workflow.projectId };
+    },
     insert: async (scope: Scope, node: Node) => {
       this.#for(scope).nodes.set(node.id, node);
     },
@@ -326,6 +335,11 @@ export class FakeRepository implements Repository {
           if (event.seq <= afterSeq) return false;
           if (filter.runIds !== undefined) {
             return event.runId !== undefined && filter.runIds.includes(event.runId);
+          }
+          // A thread frame routes by threadId and never by workflow or engine scope (§2.5).
+          if ((THREAD_EVENT_TYPES as readonly string[]).includes(event.type)) {
+            const threadId = (event.payload as { threadId?: Id }).threadId;
+            return threadId !== undefined && (filter.threadIds?.includes(threadId) ?? false);
           }
           if (event.workflowId === undefined) return filter.includeEngineScope === true;
           return filter.workflowIds?.includes(event.workflowId) ?? false;

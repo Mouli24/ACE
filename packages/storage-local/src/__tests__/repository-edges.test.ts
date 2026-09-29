@@ -228,6 +228,41 @@ describe('FR-EXE-014 event filtering', () => {
 
     expect(after.map((e) => e.seq)).toEqual([second.seq]);
   });
+
+  async function appendChat(threadId: string) {
+    return db.repository.events.append(scope, {
+      type: 'chat.message',
+      payload: { threadId, message: { id: 'm' } },
+      createdAt: '2026-09-21T10:00:00.000Z',
+    });
+  }
+
+  it('routes a chat frame to its thread and never to the engine scope (round 4 §2.5)', async () => {
+    await appendEvent('engine.something');
+    await appendChat('thread-a');
+    await appendChat('thread-b');
+
+    // A thread subscriber gets its own thread's frames only.
+    const forThreadA = await db.repository.events.listAfter(scope, 0, { threadIds: ['thread-a'] });
+    expect(forThreadA.map((e) => (e.payload as { threadId: string }).threadId)).toEqual(['thread-a']);
+
+    // An engine-scope client sees the unscoped engine event but no chat frame.
+    const engine = await db.repository.events.listAfter(scope, 0, { includeEngineScope: true });
+    expect(engine.map((e) => e.type)).toEqual(['engine.something']);
+  });
+
+  it('replays a thread’s frames alongside a workflow subscription', async () => {
+    const workflowId = makeProject().id;
+    await appendEvent('workflow.updated', workflowId);
+    await appendChat('thread-a');
+
+    const both = await db.repository.events.listAfter(scope, 0, {
+      workflowIds: [workflowId],
+      threadIds: ['thread-a'],
+    });
+
+    expect(both.map((e) => e.type)).toEqual(['workflow.updated', 'chat.message']);
+  });
 });
 
 describe('Arch §7 pub/sub edge cases', () => {
