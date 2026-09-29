@@ -98,11 +98,16 @@ export function createFakeWebSocket(db: MockDb): FakeWebSocketClass {
     }
 
     /**
-     * §2.4: a workflow subscription delivers `workflow.updated` and every run event of that
-     * workflow's runs; `provider.status` is engine scope.
+     * §2.4/round 4 §2.5: a workflow subscription delivers `workflow.updated` and every run event of
+     * that workflow's runs; a thread subscription delivers that thread's `chat.token`/`chat.message`;
+     * `provider.status` and `mcp.status` are engine scope. A thread id and a workflow id both live in
+     * `subscriptions`, so the scope is what tells them apart.
      */
     private wants(event: MockEvent): boolean {
       if (event.scope === 'engine') return this.engineScope;
+      if (event.scope === 'thread') {
+        return event.threadId !== undefined && this.subscriptions.has(event.threadId);
+      }
       return event.workflowId !== undefined && this.subscriptions.has(event.workflowId);
     }
 

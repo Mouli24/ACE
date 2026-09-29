@@ -4,9 +4,14 @@ import {
   SettingsSchema,
   defaultGuardrailChecks,
   type ApprovalRequest,
+  type Artifact,
+  type ChatMessage,
+  type ChatThread,
   type Edge,
   type GuardrailCheck,
   type GuardrailPolicy,
+  type McpServer,
+  type Message,
   type Node,
   type Project,
   type Settings,
@@ -21,6 +26,7 @@ import {
 import { newId } from '../lib/ulid';
 import { catalogFor, checkOutcome } from './catalog';
 import { publishMockEvent } from './event-bus';
+import { base64ToBytes, bytesToBase64, sha256Hex } from './sha256';
 
 /**
  * One event as the engine keeps it (§2.9, §2.4). Round 1 had only `workflow.updated`; round 2 adds
@@ -28,13 +34,18 @@ import { publishMockEvent } from './event-bus';
  * engine scope. `node.token` is transient: delivered live, never persisted, never replayed.
  */
 export interface MockEvent {
-  /** Absent on a transient frame (`node.token`), which carries no seq by contract. */
+  /** Absent on a transient frame (`node.token`, `chat.token`), which carries no seq by contract. */
   seq?: number;
   type: ServerFrame['type'];
   payload: unknown;
-  /** Which subscription delivers it; a run frame belongs to its workflow. */
-  scope: 'workflow' | 'engine';
+  /**
+   * Which subscription delivers it: a run frame belongs to its workflow, a direct-chat frame to its
+   * thread (round 4 §2.5), and `provider.status`/`mcp.status` to the engine scope.
+   */
+  scope: 'workflow' | 'engine' | 'thread';
   workflowId?: string;
+  /** The thread a `thread`-scope frame (`chat.token`, `chat.message`) rides (round 4 §2.5). */
+  threadId?: string;
 }
 
 interface Snapshot {
@@ -57,6 +68,19 @@ interface Snapshot {
   guardrailPolicies: GuardrailPolicy[];
   /** Approval requests still waiting for a decision — what `GET /runs/:id/approvals` answers. */
   approvals: ApprovalRequest[];
+  /* ---- round 4 (§2.1, §2.2, §2.3) ---- */
+  /** Uploaded and produced files, one row per unique hash (FR-MM-001/002). */
+  artifacts: Artifact[];
+  /** The content-addressed blob store: artifact hash → the bytes, base64 for JSON persistence. */
+  blobs: Record<string, string>;
+  /** Timeline rows (FR-CHAT-001); a message names its workflow, and optionally its run/node. */
+  messages: Message[];
+  /** Direct-chat threads (FR-CHAT-004); a thread belongs to one agent node. */
+  chatThreads: ChatThread[];
+  /** The turns of every direct-chat thread; never on a run (FR-CHAT-005). */
+  chatMessages: ChatMessage[];
+  /** Connected MCP servers (FR-TOOL-007); a connected one contributes tools to `GET /tools`. */
+  mcpServers: McpServer[];
   /** Artificial delay per request, for the loading-state test (TC-CAN-009). */
   latencyMs?: number;
 }
@@ -101,6 +125,12 @@ function emptySnapshot(): Snapshot {
     nodeRuns: [],
     guardrailPolicies: [],
     approvals: [],
+    artifacts: [],
+    blobs: {},
+    messages: [],
+    chatThreads: [],
+    chatMessages: [],
+    mcpServers: [],
   };
 }
 
@@ -631,6 +661,154 @@ export class MockDb {
     this.state.approvals = this.state.approvals.filter((request) => request.id !== requestId);
     this.save();
     return this.state.approvals.length < before;
+  }
+
+  /* ------------------------------------------------- artifacts (round 4 §2.1, FR-MM-001/002) */
+
+  listArtifacts(): Artifact[] {
+    return [...this.state.artifacts];
+  }
+
+  getArtifact(id: string): Artifact | undefined {
+    return this.state.artifacts.find((artifact) => artifact.id === id);
+  }
+
+  getArtifactByHash(hash: string): Artifact | undefined {
+    return this.state.artifacts.find((artifact) => artifact.hash === hash);
+  }
+
+  /** The stored bytes of an artifact, decoded from the content-addressed blob store. */
+  artifactBytes(id: string): Uint8Array | undefined {
+    const artifact = this.getArtifact(id);
+    if (artifact === undefined) return undefined;
+    const base64 = this.state.blobs[artifact.hash];
+    return base64 === undefined ? undefined : base64ToBytes(base64);
+  }
+
+  /**
+   * Store bytes as an artifact, content-addressed by their sha256 (FR-MM-002): the same bytes twice
+   * answer the same id and are kept once. `name` and `mime` come from the upload; a second upload of
+   * identical bytes under a different name keeps the first row, exactly as the engine dedupes.
+   */
+  putArtifact(input: { mime: string; name: string; bytes: Uint8Array }): Artifact {
+    const hash = sha256Hex(input.bytes);
+    const existing = this.getArtifactByHash(hash);
+    if (existing !== undefined) {
+      existing.lastReferencedAt = now();
+      this.save();
+      return existing;
+    }
+    const artifact: Artifact = {
+      id: newId(),
+      hash,
+      mime: input.mime,
+      name: input.name,
+      size: input.bytes.length,
+      createdAt: now(),
+    };
+    this.state.artifacts.push(artifact);
+    this.state.blobs[hash] = bytesToBase64(input.bytes);
+    this.save();
+    return artifact;
+  }
+
+  /**
+   * Store a pre-built artifact record and its bytes as-is — what a scenario uses so the `Part` it
+   * already emitted (with this id) resolves. Unlike `putArtifact` it does not dedupe: the part's id
+   * must be the row's id, and a run that produces the same fixture twice is harmless in the mock.
+   */
+  insertArtifact(artifact: Artifact, bytes: Uint8Array): Artifact {
+    if (this.getArtifact(artifact.id) === undefined) this.state.artifacts.push(artifact);
+    this.state.blobs[artifact.hash] = bytesToBase64(bytes);
+    this.save();
+    return artifact;
+  }
+
+  /* ------------------------------------------------- timeline messages (round 4 §2.3, FR-CHAT-001) */
+
+  messagesOf(workflowId: string): Message[] {
+    return this.state.messages.filter((message) => message.workflowId === workflowId);
+  }
+
+  addMessage(message: Message): Message {
+    this.state.messages.push(message);
+    this.save();
+    return message;
+  }
+
+  /* ------------------------------------------------- direct chat (round 4 §2.3, FR-CHAT-004/005) */
+
+  chatThreadsOf(nodeId: string): ChatThread[] {
+    return this.state.chatThreads
+      .filter((thread) => thread.nodeId === nodeId)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  getChatThread(id: string): ChatThread | undefined {
+    return this.state.chatThreads.find((thread) => thread.id === id);
+  }
+
+  addChatThread(thread: ChatThread): ChatThread {
+    this.state.chatThreads.push(thread);
+    this.save();
+    return thread;
+  }
+
+  touchChatThread(id: string): void {
+    const thread = this.getChatThread(id);
+    if (thread === undefined) return;
+    thread.updatedAt = now();
+    this.save();
+  }
+
+  deleteChatThread(id: string): boolean {
+    const before = this.state.chatThreads.length;
+    this.state.chatThreads = this.state.chatThreads.filter((thread) => thread.id !== id);
+    this.state.chatMessages = this.state.chatMessages.filter((message) => message.threadId !== id);
+    this.save();
+    return this.state.chatThreads.length < before;
+  }
+
+  chatMessagesOf(threadId: string): ChatMessage[] {
+    return this.state.chatMessages.filter((message) => message.threadId === threadId);
+  }
+
+  addChatMessage(message: ChatMessage): ChatMessage {
+    this.state.chatMessages.push(message);
+    this.touchChatThread(message.threadId);
+    this.save();
+    return message;
+  }
+
+  /* ------------------------------------------------- MCP servers (round 4 §2.2, FR-TOOL-007) */
+
+  listMcpServers(): McpServer[] {
+    return [...this.state.mcpServers];
+  }
+
+  getMcpServer(id: string): McpServer | undefined {
+    return this.state.mcpServers.find((server) => server.id === id);
+  }
+
+  addMcpServer(server: McpServer): McpServer {
+    this.state.mcpServers.push(server);
+    this.save();
+    return server;
+  }
+
+  updateMcpServer(id: string, patch: Partial<McpServer>): McpServer | undefined {
+    const server = this.getMcpServer(id);
+    if (server === undefined) return undefined;
+    Object.assign(server, patch);
+    this.save();
+    return server;
+  }
+
+  deleteMcpServer(id: string): boolean {
+    const before = this.state.mcpServers.length;
+    this.state.mcpServers = this.state.mcpServers.filter((server) => server.id !== id);
+    this.save();
+    return this.state.mcpServers.length < before;
   }
 
   /* ---------------------------------------------------------------- events */
