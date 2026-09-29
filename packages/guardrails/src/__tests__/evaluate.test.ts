@@ -14,7 +14,7 @@ import {
   isEvaluated,
   OUTPUT_CHECK_ORDER,
 } from '../evaluate.js';
-import { FAKE_OPENAI_KEY, makeCheck, SAMPLE_EMAIL } from './fixtures.js';
+import { FAKE_OPENAI_KEY, makeCheck, makeTool, SAMPLE_EMAIL } from './fixtures.js';
 
 /**
  * FR-GRD-011 / FR-GRD-015 — the one entry point the engine calls. The rule this file exists to hold
@@ -24,19 +24,15 @@ import { FAKE_OPENAI_KEY, makeCheck, SAMPLE_EMAIL } from './fixtures.js';
  */
 describe('FR-GRD-011 evaluateCheck dispatch', () => {
   it('every check type of the contract is either evaluated or knowingly deferred', () => {
-    const deferred: GuardrailCheckType[] = [
-      'untrusted_tagging',
-      'tool_allowed',
-      'path_confinement',
-      'domain_allowlist',
-      'destructive_action',
-    ];
+    // Only the context point (`untrusted_tagging`, Round 5) is still deferred; the four tool
+    // checks joined EVALUATED_CHECK_TYPES in Round 4.
+    const deferred: GuardrailCheckType[] = ['untrusted_tagging'];
     expect([...EVALUATED_CHECK_TYPES, ...deferred].sort()).toEqual(
       [...GUARDRAIL_CHECK_TYPES].sort(),
     );
   });
 
-  it('answers undefined for the round 4 and 5 points rather than pretending they passed', () => {
+  it('answers undefined for the deferred round 5 point rather than pretending it passed', () => {
     for (const type of GUARDRAIL_CHECK_TYPES) {
       if (isEvaluated(type)) continue;
       const result = evaluateCheck(makeCheck(type), {
@@ -83,6 +79,19 @@ describe('FR-GRD-011 evaluateCheck dispatch', () => {
       outputHashes: ['h', 'h', 'h'],
       parts: [{ type: 'text', text: 'x' }] as const,
       contract: { outputTypes: ['json'] } satisfies EnvelopeContract,
+      // A tool bag that makes all four tool checks fault: a destructive tool the agent never
+      // enabled, called with a path that escapes the sandbox and a URL on no allow-list.
+      tool: {
+        definition: makeTool({
+          name: 'sandbox_delete',
+          inputSchema: { type: 'object', required: ['path'] },
+          permissions: { destructive: true },
+        }),
+        args: { path: '../../x', url: 'https://evil.test/steal' },
+        enabledTools: [],
+        sandboxDir: '/project/.ace/sandbox/run1',
+        allowedDomains: [],
+      },
     };
 
     for (const type of EVALUATED_CHECK_TYPES) {
