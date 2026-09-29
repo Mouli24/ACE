@@ -4,6 +4,7 @@ export * from './db.js';
 export * from './repository.js';
 export * from './repository-runs.js';
 export * from './repository-guardrails.js';
+export * from './repository-round4.js';
 export * from './default-policy.js';
 export * from './secret-guard.js';
 export * from './queue.js';
