@@ -1,4 +1,4 @@
-import { SecretWriteRejectedError as EngineSecretWriteRejectedError } from '@ace/engine';
+import { SecretWriteRejectedError as EngineSecretWriteRejectedError, newId } from '@ace/engine';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { assertNoSecrets, SecretWriteRejectedError } from '../secret-guard.js';
@@ -103,5 +103,114 @@ describe('BR-07 a private key or a labelled key never reaches SQLite', () => {
 
     const [stored] = await db.repository.nodes.listByWorkflow(scope, saved.workflowId);
     expect(stored?.kind === 'input' && stored.config.text).toBe(code);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* A key where a name goes                                                     */
+/* -------------------------------------------------------------------------- */
+
+/** A GitHub-token shape, built at runtime. */
+const KEY = ['ghp', '_', 'a1B2'.repeat(9)].join('');
+
+function refusalOf(write: () => void): SecretWriteRejectedError {
+  try {
+    write();
+  } catch (error) {
+    if (error instanceof SecretWriteRejectedError) return error;
+    throw error;
+  }
+  throw new Error('the write was not refused');
+}
+
+describe('BR-07 a key used as a field name never reaches SQLite, nor the refusal', () => {
+  it('refuses an object key that is itself a key, and masks it in the path it reports', () => {
+    const refused = refusalOf(() => assertNoSecrets({ params: { [KEY]: true } }, 'check'));
+
+    expect(refused.path).toBe('check.params.[REDACTED]');
+    expect(refused.message).not.toContain(KEY);
+  });
+
+  it('refuses it however deep it is nested, and inside arrays', () => {
+    const refused = refusalOf(() => assertNoSecrets([{ a: { b: [{ [`x ${KEY}`]: 1 }] } }]));
+
+    expect(refused.message).not.toContain(KEY);
+    expect(refused.path).toBe('$[0].a.b[0].x [REDACTED]');
+  });
+
+  it('refuses a policy whose check params use a key as a field name', async () => {
+    const project = await db.repository.projects.create(scope, makeProject());
+    const policy = await db.repository.guardrailPolicies.getProjectDefault(scope, project.id);
+    if (policy === null) throw new Error('every project has a default policy');
+    const [first, ...rest] = policy.checks;
+    if (first === undefined) throw new Error('the default policy has checks');
+
+    await expect(
+      db.repository.guardrailPolicies.update(scope, policy.id, {
+        checks: [{ ...first, params: { [KEY]: true } }, ...rest],
+      }),
+    ).rejects.toThrow(SecretWriteRejectedError);
+    expect(JSON.stringify(dump())).not.toContain(KEY);
+  });
+});
+
+/** Every guardrail policy row, raw, so a test can prove a key is nowhere in the table. */
+function dump(): unknown[] {
+  return db.sqlite.prepare('SELECT * FROM guardrail_policies').all();
+}
+
+describe('BR-07 a policy named with a key is refused on every write path', () => {
+  it('refuses to create one, and stores nothing', async () => {
+    const project = await db.repository.projects.create(scope, makeProject());
+    const policy = await db.repository.guardrailPolicies.getProjectDefault(scope, project.id);
+    if (policy === null) throw new Error('every project has a default policy');
+
+    await expect(
+      db.repository.guardrailPolicies.create(scope, {
+        ...policy,
+        id: newId(),
+        name: KEY,
+        isProjectDefault: false,
+      }),
+    ).rejects.toThrow(SecretWriteRejectedError);
+    expect(JSON.stringify(dump())).not.toContain(KEY);
+  });
+
+  it('refuses a rename in place', async () => {
+    const project = await db.repository.projects.create(scope, makeProject());
+    const policy = await db.repository.guardrailPolicies.getProjectDefault(scope, project.id);
+    if (policy === null) throw new Error('every project has a default policy');
+
+    await expect(
+      db.repository.guardrailPolicies.update(scope, policy.id, { name: KEY }),
+    ).rejects.toThrow(SecretWriteRejectedError);
+    expect(JSON.stringify(dump())).not.toContain(KEY);
+  });
+
+  it('refuses a rename that writes a new version, and leaves no version behind', async () => {
+    const project = await db.repository.projects.create(scope, makeProject());
+    const policy = await db.repository.guardrailPolicies.getProjectDefault(scope, project.id);
+    if (policy === null) throw new Error('every project has a default policy');
+
+    await expect(
+      db.repository.guardrailPolicies.update(scope, policy.id, { name: KEY, version: 2 }),
+    ).rejects.toThrow(SecretWriteRejectedError);
+    expect(await db.repository.guardrailPolicies.getVersion(scope, policy.id, 2)).toBeNull();
+    // The refused write cleared nothing: version 1 is still the project's default (D10).
+    expect(
+      await db.repository.guardrailPolicies.getProjectDefault(scope, project.id),
+    ).toMatchObject({ id: policy.id, version: 1 });
+    expect(JSON.stringify(dump())).not.toContain(KEY);
+  });
+
+  it('still stores an ordinary name', async () => {
+    const project = await db.repository.projects.create(scope, makeProject());
+    const policy = await db.repository.guardrailPolicies.getProjectDefault(scope, project.id);
+    if (policy === null) throw new Error('every project has a default policy');
+
+    const renamed = await db.repository.guardrailPolicies.update(scope, policy.id, {
+      name: 'Strict — no tokens in outputs',
+    });
+    expect(renamed?.name).toBe('Strict — no tokens in outputs');
   });
 });

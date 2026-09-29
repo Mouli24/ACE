@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { redactSecrets } from '../logging/index.js';
+import { createLogger, redactSecrets } from '../logging/index.js';
 import {
   REDACTED,
   SECRET_PATTERNS,
@@ -145,5 +145,33 @@ describe('NFR-SAFE-01 the storage guard stays linear on text built to make it ba
     looksLikeSecret(text);
     maskSecrets(text);
     expect(performance.now() - started).toBeLessThan(BUDGET_MS);
+  });
+});
+
+describe('FR-SYS-007 BR-07 a key used as a field name is masked in logs', () => {
+  const KEY = ['ghp', '_', 'a1B2'.repeat(9)].join('');
+
+  it('masks the field name as it would a value, keeping the structure', () => {
+    const redacted = redactSecrets({ params: { [KEY]: true, maxChars: 10 } });
+
+    expect(JSON.stringify(redacted)).not.toContain(KEY);
+    expect(redacted).toEqual({ params: { [REDACTED]: true, maxChars: 10 } });
+  });
+
+  it('masks it however deep it sits, and still redacts its value by name', () => {
+    const redacted = redactSecrets({ a: [{ [`x ${KEY}`]: { password: 'hunter2' } }] });
+
+    expect(JSON.stringify(redacted)).not.toContain(KEY);
+    expect(JSON.stringify(redacted)).not.toContain('hunter2');
+    expect(redacted).toEqual({ a: [{ [`x ${REDACTED}`]: { password: REDACTED } }] });
+  });
+
+  it('masks it on the way into a log line', () => {
+    const lines: string[] = [];
+    const log = createLogger({ destination: { write: (line: string) => lines.push(line) } });
+
+    log.info({ check: { params: { [KEY]: true } } }, 'policy saved');
+
+    expect(lines.join('')).not.toContain(KEY);
   });
 });

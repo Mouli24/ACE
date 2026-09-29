@@ -24,8 +24,10 @@ function describeValuePattern(value: string): string | undefined {
 }
 
 /**
- * Walks a JSON-serialisable value and throws on the first secret it finds.
- * `path` is carried through so the error names where the secret was.
+ * Walks a JSON-serialisable value and throws on the first secret it finds — in a value, in a field
+ * a secret by name, or in a field *name*: `{ [key]: true }` stores the key as surely as
+ * `{ apiKey: key }` does. `path` is carried through so the error names where the secret was; the
+ * error masks it, so a key-shaped field name never reaches the refusal either.
  */
 export function assertNoSecrets(value: unknown, path = '$'): void {
   if (typeof value === 'string') {
@@ -42,6 +44,10 @@ export function assertNoSecrets(value: unknown, path = '$'): void {
   if (value !== null && typeof value === 'object') {
     for (const [key, child] of Object.entries(value)) {
       const childPath = `${path}.${key}`;
+
+      if (looksLikeSecret(key)) {
+        throw new SecretWriteRejectedError(childPath, 'a field name looks like a credential');
+      }
 
       if (isSecretFieldName(key) && typeof child === 'string' && child !== '') {
         throw new SecretWriteRejectedError(childPath, `"${key}" holds a secret by definition`);

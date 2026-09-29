@@ -138,3 +138,44 @@ describe('BR-07 NFR-USE-03 a key pasted into a node is refused, and the answer s
     expect(error.message).toContain('"patterns"');
   });
 });
+
+describe('BR-07 a key used as a policy name or a field name is refused over the API', () => {
+  it('answers a policy named with a key 400, and stores no such policy', async () => {
+    const projectId = await newProject();
+
+    const error = await refusal(
+      await api('/guardrail-policies', 'POST', { projectId, name: GITHUB_KEY, checks: [] }),
+      GITHUB_KEY,
+    );
+    expect(error.code).toBe('validation_failed');
+    expect(error.message).toContain('"name"');
+
+    const listed = await fetch(`${engine.url}/api/v1/guardrail-policies?projectId=${projectId}`, {
+      headers: { Authorization: `Bearer ${engine.token}` },
+    });
+    expect(await listed.text()).not.toContain(GITHUB_KEY);
+  });
+
+  it('answers a check whose params use a key as a field name 400, without echoing it', async () => {
+    const projectId = await newProject();
+
+    const error = await refusal(
+      await api('/guardrail-policies', 'POST', {
+        projectId,
+        name: 'Strict',
+        checks: [
+          {
+            id: newId(),
+            point: 'input',
+            type: 'size_limit',
+            action: 'warn',
+            enabled: true,
+            params: { [GITHUB_KEY]: true },
+          },
+        ],
+      }),
+      GITHUB_KEY,
+    );
+    expect(error.code).toBe('validation_failed');
+  });
+});
