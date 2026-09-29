@@ -57,6 +57,15 @@ describe('FR-TOOL-004 building a code run', () => {
     expect(main).toContain('print("hi")');
   });
 
+  it('detects a python interpreter when none is pinned, returning a spec or unavailable', () => {
+    const prepared = prepareCodeRun({ sandboxDir, language: 'python', code: 'print(1)', timeoutMs: 5_000 });
+    if ('unavailable' in prepared) {
+      expect(prepared.unavailable).toBe('python');
+    } else {
+      expect(prepared.spec.command.length).toBeGreaterThan(0);
+    }
+  });
+
   it('runs shell through /bin/sh on POSIX', () => {
     const prepared = prepareCodeRun({
       sandboxDir,
