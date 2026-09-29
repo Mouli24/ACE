@@ -100,7 +100,15 @@ function stableJson(value: unknown, indent = 2): string {
   return JSON.stringify(sort(value), null, indent);
 }
 
-/** D6: a file travels as a reference; the prompt never carries its bytes. */
+/**
+ * D6: a file travels as a reference; the prompt never carries its bytes (FR-MM-004, BR-02).
+ *
+ * A media/file part is rendered as its full reference — kind, name, size and mime — so a vision
+ * model (and `mock-vision`'s primary path) reads the metadata it needs to decide how to treat the
+ * artifact. The string is exactly `formatArtifactReference` from `@ace/providers`; the engine may
+ * not import that package (CLAUDE.md §3.4 rule 3), so the one-line format is mirrored here, and
+ * `mock-vision` parses it back. It carries no bytes and never the `artifactId`.
+ */
 function renderPart(part: Part): string {
   switch (part.type) {
     case 'text':
@@ -110,7 +118,7 @@ function renderPart(part: Part): string {
     case 'code':
       return ['```' + part.language, part.text, '```'].join('\n');
     default:
-      return `[artifact ${part.name}]`;
+      return `[${part.type} ${part.name} (${part.size} bytes, ${part.mime})]`;
   }
 }
 
