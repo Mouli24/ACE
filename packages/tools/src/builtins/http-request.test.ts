@@ -65,6 +65,12 @@ describe('TC-TOOL-007 http_request', () => {
     ).rejects.toMatchObject({ kind: 'invalid_args' });
   });
 
+  it('reports a failure when the host refuses the connection', async () => {
+    await expect(tool.implementation({ method: 'GET', url: 'http://127.0.0.1:1' }, context)).rejects.toMatchObject({
+      kind: 'failed',
+    });
+  });
+
   it('reports a timeout when the server is too slow', async () => {
     const server = await startHttpServer(() => {
       // Never responds.

@@ -48,9 +48,29 @@ describe('TC-TOOL-005 web_fetch', () => {
     expect(result.text.length).toBeLessThanOrEqual(WEB_FETCH_TEXT_CAP);
   });
 
+  it('decodes numeric HTML entities', () => {
+    expect(extractReadable('<body>&#65;&#66;&amp;C</body>').text).toBe('AB&C');
+  });
+
   it('refuses a non-http scheme', async () => {
     await expect(tool.implementation({ url: 'file:///etc/passwd' }, context)).rejects.toMatchObject({
       kind: 'invalid_args',
     });
+  });
+
+  it('reports a failure when the host cannot be reached', async () => {
+    // Port 1 on localhost refuses at once.
+    await expect(tool.implementation({ url: 'http://127.0.0.1:1' }, context)).rejects.toMatchObject({
+      kind: 'failed',
+    });
+  });
+
+  it('reports a timeout when the server stalls', async () => {
+    const server = await startHttpServer(() => {
+      // Never responds.
+    });
+    close = server.close;
+    const fast = createWebFetchTool({ timeoutMs: 200 });
+    await expect(fast.implementation({ url: server.url }, context)).rejects.toMatchObject({ kind: 'timeout' });
   });
 });
