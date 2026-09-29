@@ -102,12 +102,13 @@ export function sandboxEnv({
 
   if (denyShimDir !== undefined && denyShimDir.length > 0) {
     const separator = platform === 'win32' ? ';' : ':';
-    for (const name of ['PATH', 'Path'] as const) {
-      const existing = env[name];
-      env[name] = existing === undefined ? denyShimDir : `${denyShimDir}${separator}${existing}`;
-    }
-    // A machine whose environment spelled neither `PATH` nor `Path` still gets the shims.
-    if (env.PATH === undefined && env.Path === undefined) env.PATH = denyShimDir;
+    // Prepend to whichever spelling the engine's environment used, and never add a second one:
+    // Windows reads PATH case-insensitively and Node keeps the first spelling in sort order, so a
+    // `PATH` holding only the shim folder beside the real `Path` would hide every interpreter.
+    const spellings = Object.keys(env).filter((name) => name.toLowerCase() === 'path');
+    for (const name of spellings) env[name] = `${denyShimDir}${separator}${env[name]}`;
+    // A machine whose environment spelled PATH no way at all still gets the shims.
+    if (spellings.length === 0) env.PATH = denyShimDir;
   }
 
   // `~` is the sandbox, on both platforms' spellings.
@@ -159,7 +160,7 @@ export function sandboxEnv({
   env[SANDBOX_MARKER_ENV] = '1';
 
   for (const [name, value] of Object.entries(extra)) {
-    if (!SECRET_SHAPED.test(name)) env[name] = value;
+    if (!SECRET_SHAPED.test(name) && name !== 'NODE_OPTIONS') env[name] = value;
   }
 
   return env;
