@@ -1,8 +1,9 @@
 /**
  * The prompt-injection rule pack (FR-GRD-003, TC-GRD-003, Arch §13.2).
  *
- * Two kinds of rule, and they are reported as two different types because they want two different
- * fixes. An `injection_phrase` is something a human can read and judge. A `hidden_marker` is a
+ * Three kinds of rule, and they are reported as three different types because they want different
+ * fixes. An `injection_phrase` is something a human can read and judge. `hidden_markup` is an HTML
+ * comment — text that is there in the source and gone once the page renders. A `hidden_marker` is a
  * zero-width, bidi, tag or variation-selector character a human cannot see at all, which is exactly
  * why it is worth failing on: it is how an instruction is smuggled past the reader of a document
  * (BR-13). The same characters also do honest work in emoji, Persian and Indic spelling, flags and
@@ -14,7 +15,7 @@
 
 import type { RulePack } from '../spans.js';
 
-export const INJECTION_TYPES = ['injection_phrase', 'hidden_marker'] as const;
+export const INJECTION_TYPES = ['injection_phrase', 'hidden_marker', 'hidden_markup'] as const;
 export type InjectionType = (typeof INJECTION_TYPES)[number];
 
 /**
@@ -154,7 +155,21 @@ function selectorsHideText(run: string, text: string, start: number): boolean {
   return !isBeyondAscii(pointBefore(text, start));
 }
 
+/**
+ * An HTML comment: it does not render, so an instruction inside one reaches the model and not the
+ * person reviewing the page. A comment left open hides everything after it, so the match runs to
+ * the end of the text — and that alternative is also what keeps the scan linear: every `<!--` match
+ * succeeds, at its closing marker or at the end, so no opener is ever rescanned from (NFR-SAFE-01).
+ * Without the `$` alternative, each of 40 000 unclosed openers would rescan the rest of the text.
+ */
+const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g;
+
+/**
+ * Hidden markup comes first, so a comment is named for what it is even when the text it hides trips
+ * another rule too; the region redacted is the union either way (`findSpans`).
+ */
 export const INJECTION_RULES: RulePack = [
+  { type: 'hidden_markup', pattern: HTML_COMMENT },
   { type: 'hidden_marker', pattern: runOf(HIDDEN_MARKER_RANGES), verify: hidesText },
   {
     type: 'hidden_marker',
