@@ -1,4 +1,4 @@
-import type { DataType, ModelPricing } from '@ace/contracts';
+import type { DataType, ModelPricing, Part } from '@ace/contracts';
 
 import {
   ProviderCallError,
@@ -8,6 +8,7 @@ import {
   type ProviderAdapter,
   type ProviderStatus,
   type StreamChunk,
+  type ToolResult,
 } from '../adapter.js';
 
 /**
@@ -109,9 +110,57 @@ const SPECS: readonly MockModelSpec[] = [
     supportsTools: true,
   },
   {
+    modelId: 'mock-tool-loop',
+    displayName: 'Mock endless tool user',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+    supportsTools: true,
+  },
+  {
+    modelId: 'mock-destructive',
+    displayName: 'Mock destructive tool user',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+    supportsTools: true,
+  },
+  {
+    modelId: 'mock-http',
+    displayName: 'Mock HTTP tool user',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+    supportsTools: true,
+  },
+  {
+    modelId: 'mock-search',
+    displayName: 'Mock search tool user',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+    supportsTools: true,
+  },
+  {
+    modelId: 'mock-mcp',
+    displayName: 'Mock MCP tool user',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+    supportsTools: true,
+  },
+  {
     modelId: 'mock-vision',
     displayName: 'Mock vision',
     inputTypes: ['text', 'image'],
+    outputTypes: ['text'],
+  },
+  {
+    modelId: 'mock-media',
+    displayName: 'Mock multimodal output',
+    inputTypes: ['text'],
+    outputTypes: ['text', 'json', 'code', 'image', 'audio', 'video', 'file'],
+    supportsJson: true,
+  },
+  {
+    modelId: 'mock-chat',
+    displayName: 'Mock chat',
+    inputTypes: ['text'],
     outputTypes: ['text'],
   },
   {
@@ -181,6 +230,68 @@ function words(seed: string, count: number): string[] {
 export function countWords(text: string): number {
   const trimmed = text.trim();
   return trimmed === '' ? 0 : trimmed.split(/\s+/).length;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Tool-using and multimodal helpers (round 4 §2.6)                            */
+/* -------------------------------------------------------------------------- */
+
+/** Crockford base32, the ULID alphabet (IdSchema, `ULID_REGEX`). */
+const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+/**
+ * A deterministic ULID-shaped id from a seed. The mock cannot mint real ids — it has no store — so
+ * a tool call and a produced-media artifact get a stable, `IdSchema`-valid placeholder instead, and
+ * the same seed always yields the same id. The engine that stores the bytes assigns the real id.
+ */
+function deterministicId(seed: string): string {
+  const next = seeded(hash(seed));
+  // The first character is the high bits of a ULID timestamp: 0–7 only.
+  let id = CROCKFORD[Math.floor(next() * 8)]!;
+  for (let i = 1; i < 26; i += 1) id += CROCKFORD[Math.floor(next() * CROCKFORD.length)]!;
+  return id;
+}
+
+/** The first http(s) URL in a piece of text, or a harmless localhost default when there is none. */
+function firstUrl(text: string): string {
+  return /https?:\/\/[^\s"'<>)\]}]+/.exec(text)?.[0] ?? 'http://localhost/';
+}
+
+/** The result the executor fed back for a named tool, if any (round 4 §2.6). */
+function resultFor(req: GenerateRequest, name: string): ToolResult | undefined {
+  return (req.toolResults ?? []).find((entry) => entry.name === name);
+}
+
+/** Whether any tool result at all has come back, so a one-shot tool user knows to answer. */
+function hasAnyResult(req: GenerateRequest): boolean {
+  return (req.toolResults ?? []).length > 0;
+}
+
+/**
+ * How a media `Part` reference is rendered into an assembled prompt so an adapter can read its
+ * metadata — name, size, mime — without ever seeing the bytes (FR-MM-004, BR-02). The engine's
+ * prompt manager renders image/audio/video/file reads in this shape, and `mock-vision` parses it
+ * back, so the two stay in step through one exported function rather than a convention repeated in
+ * two packages.
+ */
+export function formatArtifactReference(part: {
+  type: 'image' | 'audio' | 'video' | 'file';
+  name: string;
+  size: number;
+  mime: string;
+}): string {
+  return `[${part.type} ${part.name} (${part.size} bytes, ${part.mime})]`;
+}
+
+/** A short, deterministic string describing a tool result, for the model's final answer. */
+function describeResult(result: unknown): string {
+  if (typeof result === 'string') return result;
+  if (result !== null && typeof result === 'object') {
+    const text = (result as { text?: unknown }).text;
+    if (typeof text === 'string') return text;
+    return JSON.stringify(result);
+  }
+  return JSON.stringify(result);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -322,6 +433,8 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
   const callsPerNode = new Map<string, number>();
   let inFlight = 0;
   let peak = 0;
+  /** Bumped for every `tool_call` chunk, so repeated requests get distinct (still stable) ids. */
+  let toolCallSeq = 0;
 
   /** Next attempt number for this exact call: 1 the first time, 2 on the first retry. */
   const nextAttempt = (req: GenerateRequest): number => {
@@ -360,6 +473,29 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
     const finishText = function* (text: string): Generator<StreamChunk> {
       yield { type: 'usage', tokensIn, tokensOut: countWords(text) };
       yield { type: 'finish', reason: 'stop' };
+    };
+
+    /** A whole final answer in one text chunk, then usage and a `stop` finish. */
+    const answer = function* (text: string): Generator<StreamChunk> {
+      yield { type: 'text', delta: text };
+      yield* finishText(text);
+    };
+
+    /**
+     * Ask the executor to run a tool (round 4 §2.6, Arch §12.7). The turn ends on `tool_calls`, so
+     * the executor knows to run the tool and call `generate()` again with the result in
+     * `toolResults` rather than treating the stream as a final answer.
+     */
+    const requestTool = function* (name: string, args: unknown): Generator<StreamChunk> {
+      toolCallSeq += 1;
+      yield {
+        type: 'tool_call',
+        callId: deterministicId(`${req.modelId}:${name}:${toolCallSeq}`),
+        name,
+        args,
+      };
+      yield { type: 'usage', tokensIn, tokensOut: 0 };
+      yield { type: 'finish', reason: 'tool_calls' };
     };
 
     switch (req.modelId) {
@@ -456,16 +592,166 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
       }
 
       case 'mock-tool': {
-        const text = 'I called the echo tool and it returned the input unchanged.';
-        yield { type: 'text', delta: text };
-        yield* finishText(text);
+        // §2.6: request `echo { text: <input> }` once, then answer "echo said: <result>".
+        const echoed = resultFor(req, 'echo');
+        if (echoed === undefined) {
+          yield* requestTool('echo', { text: req.prompt });
+          return;
+        }
+        yield* answer(`echo said: ${describeResult(echoed.result)}`);
+        return;
+      }
+
+      case 'mock-tool-loop': {
+        // §2.6: requests `echo` forever — even when asked to finish without tools, which is what
+        // drives the tool-call-limit path to RUN_FAILED once the loop stops it (§2.2, TC-GRD-014).
+        yield* requestTool('echo', { text: req.prompt });
+        return;
+      }
+
+      case 'mock-destructive': {
+        // §2.6: request `sandbox_delete { path: 'notes.txt' }`, then answer.
+        const deleted = resultFor(req, 'sandbox_delete');
+        if (deleted === undefined) {
+          yield* requestTool('sandbox_delete', { path: 'notes.txt' });
+          return;
+        }
+        yield* answer(`sandbox_delete returned: ${describeResult(deleted.result)}`);
+        return;
+      }
+
+      case 'mock-http': {
+        // §2.6: GET the first URL in the input, then answer with the status it returned.
+        const responded = resultFor(req, 'http_request');
+        if (responded === undefined) {
+          yield* requestTool('http_request', { method: 'GET', url: firstUrl(req.prompt) });
+          return;
+        }
+        const status =
+          responded.result !== null && typeof responded.result === 'object'
+            ? (responded.result as { status?: unknown }).status
+            : undefined;
+        yield* answer(`The request returned status ${JSON.stringify(status)}.`);
+        return;
+      }
+
+      case 'mock-search': {
+        // §2.6: web_search on the input, then web_fetch on the first result, then answer.
+        const fetched = resultFor(req, 'web_fetch');
+        if (fetched !== undefined) {
+          const title =
+            fetched.result !== null && typeof fetched.result === 'object'
+              ? (fetched.result as { title?: unknown }).title
+              : undefined;
+          yield* answer(`The top result was ${JSON.stringify(title ?? 'a page')}.`);
+          return;
+        }
+        const searched = resultFor(req, 'web_search');
+        if (searched !== undefined) {
+          const results =
+            searched.result !== null && typeof searched.result === 'object'
+              ? (searched.result as { results?: unknown }).results
+              : undefined;
+          const firstResult = Array.isArray(results) ? (results[0] as unknown) : undefined;
+          const url =
+            firstResult !== null && typeof firstResult === 'object'
+              ? (firstResult as { url?: unknown }).url
+              : undefined;
+          yield* requestTool('web_fetch', {
+            url: typeof url === 'string' ? url : firstUrl(req.prompt),
+          });
+          return;
+        }
+        yield* requestTool('web_search', { query: req.prompt });
+        return;
+      }
+
+      case 'mock-mcp': {
+        // §2.6: call the first enabled tool whose name starts with `mcp_`, then answer.
+        if (hasAnyResult(req)) {
+          yield* answer('The MCP tool answered and I have what I need.');
+          return;
+        }
+        const mcpTool = (req.tools ?? []).find((tool) => tool.name.startsWith('mcp_'));
+        if (mcpTool === undefined) {
+          yield* answer('No MCP tool is available to call.');
+          return;
+        }
+        yield* requestTool(mcpTool.name, {});
         return;
       }
 
       case 'mock-vision': {
-        const artifact = /\[artifact ([^\]]+)\]/.exec(req.prompt)?.[1] ?? 'an unnamed artifact';
-        const text = `The image ${artifact} shows a diagram with several labelled boxes.`;
-        yield { type: 'text', delta: text };
+        // §2.6: text+image → "Image <name> (<size> bytes, <mime>)", read from the reference the
+        // prompt carries (FR-MM-004: metadata, never bytes). `formatArtifactReference` is the shape.
+        const ref = /\[(?:image|audio|video|file) (.+?) \((\d+) bytes, ([^)]+)\)\]/.exec(req.prompt);
+        if (ref !== null) {
+          yield* answer(`Image ${ref[1]} (${ref[2]} bytes, ${ref[3]})`);
+          return;
+        }
+        // A bare `[artifact NAME]` reference carries only the name; keep the sentence shape.
+        const name = /\[artifact ([^\]]+)\]/.exec(req.prompt)?.[1] ?? 'unknown';
+        yield* answer(`Image ${name} (0 bytes, application/octet-stream)`);
+        return;
+      }
+
+      case 'mock-media': {
+        // §2.6: one Part of each of the seven data types. Media Parts reference artifacts the
+        // engine materialises from fixtures (FR-MM-003, FR-MM-004) — the mock cannot store bytes,
+        // so it yields deterministic, IdSchema-valid placeholder ids the engine rewrites.
+        const parts: Part[] = [
+          { type: 'text', text: 'Mock multimodal output.' },
+          { type: 'json', value: { kind: 'mock-media', ok: true } },
+          { type: 'code', language: 'javascript', text: 'export const answer = 42;' },
+          {
+            type: 'image',
+            artifactId: deterministicId('mock-media:image'),
+            mime: 'image/png',
+            name: 'mock.png',
+            size: 95,
+          },
+          {
+            type: 'audio',
+            artifactId: deterministicId('mock-media:audio'),
+            mime: 'audio/mpeg',
+            name: 'mock.mp3',
+            size: 128,
+          },
+          {
+            type: 'video',
+            artifactId: deterministicId('mock-media:video'),
+            mime: 'video/mp4',
+            name: 'mock.mp4',
+            size: 256,
+          },
+          {
+            type: 'file',
+            artifactId: deterministicId('mock-media:file'),
+            mime: 'application/zip',
+            name: 'mock.zip',
+            size: 64,
+          },
+        ];
+
+        let tokensOut = 0;
+        for (const part of parts) {
+          yield { type: 'part', part };
+          tokensOut += part.type === 'text' || part.type === 'code' ? countWords(part.text) : 1;
+        }
+        yield { type: 'usage', tokensIn, tokensOut };
+        yield { type: 'finish', reason: 'stop' };
+        return;
+      }
+
+      case 'mock-chat': {
+        // §2.6: "You said: <input>", streamed word by word (FR-CHAT-006); French when the agent's
+        // instructions ask for it. Instructions may sit in the system section or the prompt body.
+        const french = `${req.system ?? ''}\n${req.prompt}`
+          .toLowerCase()
+          .includes('answer in french');
+        const text = french ? `Vous avez dit : ${req.prompt}` : `You said: ${req.prompt}`;
+
+        yield* stream(text.split(' '), TEXT_DELAY_MS);
         yield* finishText(text);
         return;
       }
@@ -567,6 +853,7 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
       callsPerNode.clear();
       peak = 0;
       inFlight = 0;
+      toolCallSeq = 0;
     },
 
     forProvider: (row) => ({
