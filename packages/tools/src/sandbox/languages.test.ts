@@ -26,7 +26,7 @@ describe('FR-TOOL-004 building a code run', () => {
 
     const preludePath = prepared.spec.args[prepared.spec.args.indexOf('-r') + 1] ?? '';
     expect(readFileSync(preludePath, 'utf8')).toContain('deny');
-    expect(existsSync(join(sandboxDir, RUN_DIR_NAME, 'main.mjs'))).toBe(true);
+    expect(existsSync(join(sandboxDir, RUN_DIR_NAME, 'main.cjs'))).toBe(true);
     // The scrubbed environment came along.
     expect(prepared.spec.env?.ACE_SANDBOX).toBe('1');
   });
