@@ -23,6 +23,11 @@ export default defineConfig({
     exclude: ['**/node_modules/**', '**/dist/**'],
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // Several suites spawn real child-process sandboxes and time a runaway being killed. Run the
+    // files one at a time: under the default parallel workers those concurrent spawns contend for
+    // the CPU and the kill-at-timeout window drifts, which makes the timeout assertions flaky on a
+    // loaded machine (green in isolation, red in the full suite). Serial keeps them deterministic.
+    fileParallelism: false,
     coverage: {
       provider: 'v8',
       all: true,
