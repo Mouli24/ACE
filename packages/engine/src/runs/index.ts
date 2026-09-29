@@ -503,6 +503,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
      *
      * A row born after the run was aborted is born STOPPED: nothing will ever start it, and a row
      * left READY inside a HALTED run would be a node the Canvas shows as still queued (FR-CTL-003).
+     * One born while the run is paused is born PAUSED (D111): `pause` flips the gate before it lists
+     * the READY rows (D110), so a row created after the flip is one it never sees — a retry that
+     * falls due while the run is paused, say.
      */
     async function beginNodeRun(node: Node, iteration: number, attempt = 1): Promise<NodeRun> {
       const aborted = signal.aborted;
@@ -512,7 +515,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
         nodeId: node.id,
         iteration,
         attempt,
-        status: aborted ? 'STOPPED' : 'READY',
+        status: aborted ? 'STOPPED' : gate.isPaused() ? 'PAUSED' : 'READY',
         ...(aborted ? { error: cancelledBeforeStart(), endedAt: now() } : {}),
         inputEnvelopes: envelopesFor.get(node.id) ?? [],
         usage: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
@@ -567,6 +570,32 @@ export function createRunService(deps: RunServiceDeps): RunService {
         endedAt: now(),
       });
       await emitNodeState(run, nodeRun, 'STOPPED');
+    }
+
+    /**
+     * Holds a node run that has not started while the run is paused, and says whether it may start
+     * (FR-CTL-001, FR-CTL-002): `false` means the run was aborted meanwhile, and the node run has
+     * been ended STOPPED. Covers every attempt — a first one dispatched just as the pause landed, and
+     * a retry whose backoff ran out during it — because the dispatch loop's own check only covers
+     * what it has not dispatched yet.
+     *
+     * A row born PAUSED that `resume` missed — created after it listed the PAUSED rows and before it
+     * lifted the gate — goes back to READY here, so it still walks PAUSED → READY → RUNNING
+     * (Arch §19.1). `resume` finishes writing before it lifts the gate, so reading now races nothing.
+     */
+    async function holdWhilePaused(nodeRun: NodeRun): Promise<boolean> {
+      if (!(await gate.waitUntilDispatchable())) {
+        await stopUnstarted(nodeRun);
+        return false;
+      }
+      if (nodeRun.status !== 'PAUSED') return true;
+
+      const stored = await repository.nodeRuns.get(scope, nodeRun.id);
+      if (stored?.status === 'PAUSED') {
+        await repository.nodeRuns.update(scope, nodeRun.id, { status: 'READY' });
+        await emitNodeState(run, nodeRun, 'READY');
+      }
+      return true;
     }
 
     /**
@@ -884,6 +913,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
 
       for (;;) {
+        if (!(await holdWhilePaused(nodeRun))) return;
+
         /*
          * The cost point, *before* the call (§2.3, FR-GRD-008): `totals + maxTokens × price` would
          * cross a cap, so the run halts before spending the money — which is the only version of a
@@ -994,11 +1025,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
               return;
             }
 
+            // Cut short by a stop; a pause is `holdWhilePaused`'s, at the top of the next attempt.
             await backoff(decision.delayMs);
-            if (signal.aborted) {
-              await stopUnstarted(nodeRun);
-              return;
-            }
             continue;
           }
         }
