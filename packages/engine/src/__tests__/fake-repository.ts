@@ -5,10 +5,16 @@ import {
   modelMatchesQuery,
   type ApprovalDecision,
   type ApprovalRequest,
+  type Artifact,
+  type ChatMessage,
+  type ChatThread,
   type CursorQuery,
   type Edge,
   type GuardrailPolicy,
   type Id,
+  type McpServer,
+  type Message,
+  type MessageQuery,
   type Model,
   type ModelQuery,
   type Node,
@@ -20,6 +26,7 @@ import {
   type Settings,
   type SettingsPatch,
   type Timestamp,
+  type ToolCall,
   type Verdict,
   type Workflow,
 } from '@ace/contracts';
@@ -28,6 +35,7 @@ import type {
   EngineEvent,
   EventFilter,
   GuardrailPolicyPatch,
+  McpServerPatch,
   NewEngineEvent,
   NodeRunPatch,
   PriceTable,
@@ -55,6 +63,13 @@ interface State {
   guardrailPolicies: Map<string, GuardrailPolicy>;
   guardrailVerdicts: Verdict[];
   approvals: Map<string, StoredApproval>;
+  artifacts: Map<string, Artifact>;
+  /** The `ToolCall` contract carries only `nodeRunId`, so the run it belongs to is kept alongside. */
+  toolCalls: { runId: string; call: ToolCall }[];
+  mcpServers: Map<string, McpServer>;
+  messages: Map<string, Message>;
+  chatThreads: Map<string, ChatThread>;
+  chatMessages: Map<string, ChatMessage>;
 }
 
 function emptyState(): State {
@@ -74,6 +89,12 @@ function emptyState(): State {
     guardrailPolicies: new Map(),
     guardrailVerdicts: [],
     approvals: new Map(),
+    artifacts: new Map(),
+    toolCalls: [],
+    mcpServers: new Map(),
+    messages: new Map(),
+    chatThreads: new Map(),
+    chatMessages: new Map(),
   };
 }
 
@@ -94,6 +115,12 @@ function cloneState(state: State): State {
     guardrailPolicies: new Map(state.guardrailPolicies),
     guardrailVerdicts: [...state.guardrailVerdicts],
     approvals: new Map(state.approvals),
+    artifacts: new Map(state.artifacts),
+    toolCalls: [...state.toolCalls],
+    mcpServers: new Map(state.mcpServers),
+    messages: new Map(state.messages),
+    chatThreads: new Map(state.chatThreads),
+    chatMessages: new Map(state.chatMessages),
   };
 }
 
@@ -608,5 +635,198 @@ export class FakeRepository implements Repository {
       }
       return next;
     },
+  };
+
+  /* ------------------------------------------------- round 4 (Arch §15.3) */
+
+  readonly artifacts = {
+    create: async (scope: Scope, artifact: Artifact) => {
+      this.#for(scope).artifacts.set(artifact.id, artifact);
+      return artifact;
+    },
+    getById: async (scope: Scope, id: Id) => this.#for(scope).artifacts.get(id) ?? null,
+    /** The dedupe lookup (FR-MM-002): the stored row with these exact bytes, or null. */
+    getByHash: async (scope: Scope, hash: string) =>
+      [...this.#for(scope).artifacts.values()].find((artifact) => artifact.hash === hash) ?? null,
+    /** Newest first, cursor-exclusive on the id, as the SQLite adapter pages it (ULIDs are monotonic). */
+    list: async (scope: Scope, query: CursorQuery): Promise<Page<Artifact>> => {
+      const ordered = [...this.#for(scope).artifacts.values()].sort((a, b) =>
+        b.id.localeCompare(a.id),
+      );
+      const from = query.cursor === undefined ? 0 : ordered.findIndex((a) => a.id < query.cursor!);
+      const window = ordered.slice(from === -1 ? ordered.length : from);
+      const items = window.slice(0, query.limit);
+      const nextCursor = window.length > query.limit ? items.at(-1)?.id : undefined;
+      return { items, ...(nextCursor === undefined ? {} : { nextCursor }) };
+    },
+    touch: async (scope: Scope, id: Id, at: Timestamp) => {
+      const current = this.#for(scope).artifacts.get(id);
+      if (current === undefined) return null;
+      const next: Artifact = { ...current, lastReferencedAt: at };
+      this.#for(scope).artifacts.set(id, next);
+      return next;
+    },
+    /**
+     * Arch §15.4's sweep candidates: the reference time (`lastReferencedAt`, or `createdAt` when it
+     * was never referenced) is before `before` and nothing live points at the id. The SQLite adapter
+     * asks this with four `NOT EXISTS` substring clauses over `nodes.config`, a node run's `output`
+     * and `inputEnvelopes`, a timeline message's `content` and a chat message's `content`; the fake
+     * mirrors it by matching the same quoted-id substring against the JSON of those same places.
+     */
+    unreferencedBefore: async (scope: Scope, before: Timestamp) => {
+      const state = this.#for(scope);
+      const isReferenced = (id: Id): boolean => {
+        const needle = `"${id}"`;
+        for (const node of state.nodes.values()) {
+          if (JSON.stringify(node.config).includes(needle)) return true;
+        }
+        for (const nodeRun of state.nodeRuns.values()) {
+          if (JSON.stringify(nodeRun.output ?? []).includes(needle)) return true;
+          if (JSON.stringify(nodeRun.inputEnvelopes).includes(needle)) return true;
+        }
+        for (const message of state.messages.values()) {
+          if (JSON.stringify(message.content).includes(needle)) return true;
+        }
+        for (const chatMessage of state.chatMessages.values()) {
+          if (JSON.stringify(chatMessage.content).includes(needle)) return true;
+        }
+        return false;
+      };
+      return [...state.artifacts.values()]
+        .filter((artifact) => (artifact.lastReferencedAt ?? artifact.createdAt) < before)
+        .filter((artifact) => !isReferenced(artifact.id))
+        .sort((a, b) => a.id.localeCompare(b.id));
+    },
+    delete: async (scope: Scope, id: Id) => this.#for(scope).artifacts.delete(id),
+  };
+
+  readonly toolCalls = {
+    /**
+     * Appends the logged call and mirrors it onto its node run's `toolCalls` list in one
+     * transaction, the way the SQLite adapter does (FR-TOOL-009) — the denormalised copy the
+     * `NodeRun` contract carries cannot drift.
+     */
+    append: async (scope: Scope, runId: Id, call: ToolCall) =>
+      this.transaction(async () => {
+        const state = this.#for(scope);
+        state.toolCalls.push({ runId, call });
+
+        const nodeRun = state.nodeRuns.get(call.nodeRunId);
+        if (nodeRun !== undefined) {
+          state.nodeRuns.set(nodeRun.id, { ...nodeRun, toolCalls: [...nodeRun.toolCalls, call] });
+        }
+        return call;
+      }),
+    listByNodeRun: async (scope: Scope, nodeRunId: Id) =>
+      this.#for(scope)
+        .toolCalls.filter((entry) => entry.call.nodeRunId === nodeRunId)
+        .map((entry) => entry.call)
+        .sort((a, b) => a.id.localeCompare(b.id)),
+    listByRun: async (scope: Scope, runId: Id) =>
+      this.#for(scope)
+        .toolCalls.filter((entry) => entry.runId === runId)
+        .map((entry) => entry.call)
+        .sort((a, b) => a.id.localeCompare(b.id)),
+  };
+
+  readonly mcpServers = {
+    create: async (scope: Scope, server: McpServer) => {
+      this.#for(scope).mcpServers.set(server.id, server);
+      return server;
+    },
+    get: async (scope: Scope, id: Id) => this.#for(scope).mcpServers.get(id) ?? null,
+    /** Oldest first — the order they were added. */
+    list: async (scope: Scope) =>
+      [...this.#for(scope).mcpServers.values()].sort((a, b) => a.id.localeCompare(b.id)),
+    updateStatus: async (scope: Scope, id: Id, patch: McpServerPatch) => {
+      const current = this.#for(scope).mcpServers.get(id);
+      if (current === undefined) return null;
+
+      const next: McpServer = { ...current };
+      if (patch.status !== undefined) next.status = patch.status;
+      if (patch.toolCount !== undefined) next.toolCount = patch.toolCount;
+      if (patch.lastCheckedAt !== undefined) next.lastCheckedAt = patch.lastCheckedAt;
+      // `null` clears the error on a reconnect, `undefined` leaves it alone (D72's convention).
+      if (patch.error === null) delete next.error;
+      else if (patch.error !== undefined) next.error = patch.error;
+
+      this.#for(scope).mcpServers.set(id, next);
+      return next;
+    },
+    delete: async (scope: Scope, id: Id) => this.#for(scope).mcpServers.delete(id),
+  };
+
+  readonly messages = {
+    /** Append-only, like the SQLite timeline: never updates. */
+    append: async (scope: Scope, message: Message) => {
+      this.#for(scope).messages.set(message.id, message);
+      return message;
+    },
+    /**
+     * `GET /workflows/:id/messages` (FR-CHAT-002): filters combine, oldest first, cursor-paged.
+     * `messageMatchesQuery` decides runId/nodeId/type just as the engine and UI do (D52); the cursor
+     * is exclusive on the id, and the workflow scopes it.
+     */
+    query: async (scope: Scope, workflowId: Id, query: MessageQuery): Promise<Page<Message>> => {
+      const limit = query.limit ?? 100;
+      const ordered = [...this.#for(scope).messages.values()]
+        .filter((message) => message.workflowId === workflowId)
+        .filter((message) => query.runId === undefined || message.runId === query.runId)
+        .filter((message) => query.nodeId === undefined || message.nodeId === query.nodeId)
+        .filter(
+          (message) =>
+            query.type === undefined ||
+            query.type.length === 0 ||
+            query.type.includes(message.type),
+        )
+        .filter((message) => query.cursor === undefined || message.id > query.cursor)
+        .sort((a, b) => a.id.localeCompare(b.id));
+
+      const items = ordered.slice(0, limit);
+      const nextCursor = ordered.length > limit ? items.at(-1)?.id : undefined;
+      return { items, ...(nextCursor === undefined ? {} : { nextCursor }) };
+    },
+  };
+
+  readonly chatThreads = {
+    create: async (scope: Scope, thread: ChatThread) => {
+      this.#for(scope).chatThreads.set(thread.id, thread);
+      return thread;
+    },
+    get: async (scope: Scope, id: Id) => this.#for(scope).chatThreads.get(id) ?? null,
+    /** The agent's threads, oldest first. */
+    listByNode: async (scope: Scope, nodeId: Id) =>
+      [...this.#for(scope).chatThreads.values()]
+        .filter((thread) => thread.nodeId === nodeId)
+        .sort((a, b) => a.id.localeCompare(b.id)),
+    touch: async (scope: Scope, id: Id, updatedAt: Timestamp) => {
+      const current = this.#for(scope).chatThreads.get(id);
+      if (current === undefined) return null;
+      const next: ChatThread = { ...current, updatedAt };
+      this.#for(scope).chatThreads.set(id, next);
+      return next;
+    },
+    /** The thread and its messages go together, in one transaction (Arch §15.4). */
+    delete: async (scope: Scope, id: Id) =>
+      this.transaction(async () => {
+        const state = this.#for(scope);
+        if (!state.chatThreads.delete(id)) return false;
+        for (const [messageId, message] of [...state.chatMessages]) {
+          if (message.threadId === id) state.chatMessages.delete(messageId);
+        }
+        return true;
+      }),
+  };
+
+  readonly chatMessages = {
+    append: async (scope: Scope, message: ChatMessage) => {
+      this.#for(scope).chatMessages.set(message.id, message);
+      return message;
+    },
+    /** In the order they were sent — the order the conversation happened. */
+    listByThread: async (scope: Scope, threadId: Id) =>
+      [...this.#for(scope).chatMessages.values()]
+        .filter((message) => message.threadId === threadId)
+        .sort((a, b) => a.id.localeCompare(b.id)),
   };
 }

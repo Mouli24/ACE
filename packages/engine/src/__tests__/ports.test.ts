@@ -140,6 +140,42 @@ describe('Arch §7 Repository', () => {
         listPendingByRun: async () => [],
         decide: async () => null,
       },
+      artifacts: {
+        create: async (_s, artifact) => artifact,
+        getById: async () => null,
+        getByHash: async () => null,
+        list: async () => ({ items: [] }),
+        touch: async () => null,
+        unreferencedBefore: async () => [],
+        delete: async () => false,
+      },
+      toolCalls: {
+        append: async (_s, _runId, call) => call,
+        listByNodeRun: async () => [],
+        listByRun: async () => [],
+      },
+      mcpServers: {
+        create: async (_s, server) => server,
+        get: async () => null,
+        list: async () => [],
+        updateStatus: async () => null,
+        delete: async () => false,
+      },
+      messages: {
+        append: async (_s, message) => message,
+        query: async () => ({ items: [] }),
+      },
+      chatThreads: {
+        create: async (_s, thread) => thread,
+        get: async () => null,
+        listByNode: async () => [],
+        touch: async () => null,
+        delete: async () => false,
+      },
+      chatMessages: {
+        append: async (_s, message) => message,
+        listByThread: async () => [],
+      },
     };
 
     const inside = await repo.transaction(async (tx) => {

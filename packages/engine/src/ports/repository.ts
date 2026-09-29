@@ -265,17 +265,11 @@ export interface Repository {
   guardrailVerdicts: GuardrailVerdictRepository;
   approvals: ApprovalRepository;
 
-  /*
-   * Round 4 (Arch §15.3). Optional for now, the way `Run.allowedActions` was on its way in (D71):
-   * `SqliteRepository` provides all six concretely, so the engine's services get them, while the
-   * in-memory `FakeRepository` the engine tests use has not yet grown them. Promote to required —
-   * and extend `FakeRepository` — once the round 4 engine services (artifacts, tool loop, chat)
-   * are wired.
-   */
-  artifacts?: ArtifactRepository;
-  toolCalls?: ToolCallRepository;
-  mcpServers?: McpServerRepository;
-  messages?: MessageRepository;
-  chatThreads?: ChatThreadRepository;
-  chatMessages?: ChatMessageRepository;
+  /* Round 4 (Arch §15.3): artifacts, tool calls, MCP servers, timeline messages and direct chat. */
+  artifacts: ArtifactRepository;
+  toolCalls: ToolCallRepository;
+  mcpServers: McpServerRepository;
+  messages: MessageRepository;
+  chatThreads: ChatThreadRepository;
+  chatMessages: ChatMessageRepository;
 }
