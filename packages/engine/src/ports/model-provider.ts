@@ -2,9 +2,11 @@ import type {
   DataType,
   Model,
   ModelPricing,
+  Part,
   Provider,
   ProviderState,
   ProviderType,
+  ToolDefinition,
 } from '@ace/contracts';
 
 /**
@@ -41,6 +43,14 @@ export type FinishReason = (typeof FINISH_REASONS)[number];
  * What the executor hands an adapter. The prompt is already assembled (Arch §12.5) — an adapter
  * never builds one, and there is no message list here (BR-02).
  */
+/** One tool result fed back into a continuation call after the executor ran a `tool_call` (round 4 §2.6). */
+export interface ToolResult {
+  callId: string;
+  name: string;
+  /** Whatever the tool returned; the executor labels it untrusted before it reaches the model (FR-TOOL-010). */
+  result: unknown;
+}
+
 export interface GenerateRequest {
   modelId: string;
   /** The `## System` section, when the provider takes one separately from the prompt. */
@@ -51,6 +61,18 @@ export interface GenerateRequest {
   maxTokens?: number;
   temperature?: number;
   /**
+   * The tools the agent has enabled for this call (round 4 §2.6, FR-TOOL-003). When present, an
+   * adapter that supports tools may answer with `tool_call` chunks instead of a final answer; when
+   * absent or empty, the model is being asked to finish without tools.
+   */
+  tools?: ToolDefinition[];
+  /**
+   * Results of the tools the executor ran for the previous turn's `tool_call` chunks, fed back so
+   * the model can continue (Arch §12.7). An adapter reads these to decide whether to call another
+   * tool or produce a final answer.
+   */
+  toolResults?: ToolResult[];
+  /**
    * Which run and which loop iteration this call belongs to. Optional and never needed to produce
    * an answer — adapters use them for tracing, and the mock keys its per-run behaviours on them.
    */
@@ -58,9 +80,19 @@ export interface GenerateRequest {
   iteration?: number;
 }
 
+/**
+ * One piece of a streamed answer.
+ *
+ * `text` and `json` carry a final answer; `tool_call` is a request the executor must satisfy and
+ * feed back as a `ToolResult` (round 4 §2.6, Arch §12.7); `part` lets an adapter emit a produced
+ * `Part` of any of the seven data types — the media reference of a model whose output is stored as
+ * an artifact (FR-MM-003, round 4 §2.6 `mock-media`), never the bytes inline (FR-MM-004, BR-02).
+ */
 export type StreamChunk =
   | { type: 'text'; delta: string }
   | { type: 'json'; value: unknown }
+  | { type: 'tool_call'; callId: string; name: string; args: unknown }
+  | { type: 'part'; part: Part }
   | { type: 'usage'; tokensIn: number; tokensOut: number }
   | { type: 'finish'; reason: FinishReason };
 
