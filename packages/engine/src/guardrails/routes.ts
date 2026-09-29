@@ -5,9 +5,10 @@ import {
   UpdateGuardrailPolicyRequestSchema,
   type Id,
 } from '@ace/contracts';
-import { Hono, type Context } from 'hono';
+import { Hono } from 'hono';
 
 import { HttpError, notImplemented } from '../gateway/errors.js';
+import { readJson } from '../gateway/read-json.js';
 import { PolicyNotFoundError, ProjectNotFoundError, type PolicyService } from './policy-service.js';
 
 /**
@@ -45,15 +46,6 @@ export const policyInUse = (nodeIds: readonly Id[], projectDefault: boolean): Ht
       : `${nodeIds.length} agent${nodeIds.length === 1 ? '' : 's'} still use this policy. Delete it with ?confirm=true to remove it anyway.`,
     { nodeIds: [...nodeIds], projectDefault },
   );
-
-/** A malformed body is a validation failure, not a crash — the gateway's own convention. */
-async function readJson(c: Context): Promise<unknown> {
-  try {
-    return await c.req.json();
-  } catch {
-    return {};
-  }
-}
 
 /** Turn the service's errors into the §2.3 envelope, once, for every route below. */
 async function answering<T>(fn: () => Promise<T>): Promise<T> {

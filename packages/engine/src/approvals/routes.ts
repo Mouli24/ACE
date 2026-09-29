@@ -2,6 +2,7 @@ import { ApprovalDecisionRequestSchema, type ApprovalDecisionKind, type Id } fro
 import { Hono, type Context } from 'hono';
 
 import { HttpError, notImplemented } from '../gateway/errors.js';
+import { readJson } from '../gateway/read-json.js';
 import {
   ApprovalAlreadyDecidedError,
   ApprovalNotFoundError,
@@ -42,14 +43,6 @@ export const alreadyDecided = (requestId: Id): HttpError =>
 
 export const nodeRunNotFound = (nodeRunId: Id): HttpError =>
   new HttpError('workflow', 'not_found', `Node run ${nodeRunId} was not found.`);
-
-async function readJson(c: Context): Promise<unknown> {
-  try {
-    return await c.req.json();
-  } catch {
-    return {};
-  }
-}
 
 /**
  * `service` may be `undefined`: an app built without an approval service answers these routes 501
