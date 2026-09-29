@@ -58,11 +58,18 @@ import {
   type NodeGuardrails,
 } from './executor.js';
 import { preflight } from './preflight.js';
+import type {
+  ArtifactMaterialiser,
+  ToolGuardrailEvaluator,
+  ToolProvider,
+} from './tool-loop.js';
+import type { ToolCall } from '@ace/contracts';
 import { toSummary } from './summary.js';
 
 export * from './cost.js';
 export * from './executor.js';
 export * from './preflight.js';
+export * from './tool-loop.js';
 export * from './transform.js';
 export * from './machines/index.js';
 export * from './lifecycle.js';
@@ -166,6 +173,24 @@ export interface RunServiceDeps {
   now?: () => string;
   nextId?: () => string;
   tokenBatchMs?: number;
+
+  /*
+   * Round 4's tool loop and multimodal materialisation (Arch §12.7, FR-TOOL-*, FR-MM-003/004).
+   * Optional like round 3's services: without them a run has no tools and no artifact store, and a
+   * `tool_call` from a model fails the node rather than crashing. The gateway (Wave 3) binds them to
+   * `@ace/tools`, the artifact store service and the tool-call repository.
+   */
+
+  /** The tool registry — built-ins plus connected MCP servers — a requested tool is looked up in. */
+  tools?: ToolProvider;
+  /** `<projectFolder>/.ace/sandbox/<runId>/` for one run (round 4 §2.2, NFR-SEC-03). */
+  sandboxDirFor?: (runId: Id) => string;
+  /** Resolves Input `artifactIds` to parts and stores produced media parts as artifacts. */
+  artifacts?: ArtifactMaterialiser;
+  /** Persists a logged `ToolCall`, mirroring it onto its node run (FR-TOOL-009). */
+  recordToolCall?: (runId: Id, call: ToolCall) => Promise<void>;
+  /** The tool point of the guardrail engine (FR-GRD-005/006); absent, tools run unchecked. */
+  toolGuardrails?: ToolGuardrailEvaluator;
 }
 
 /** A ≤120-character description of what crossed an edge (FR-EXE-015, §2.4). */
@@ -239,6 +264,12 @@ export function createRunService(deps: RunServiceDeps): RunService {
     runGated: deps.runGated,
     router: deps.router,
     ...(deps.tokenBatchMs === undefined ? {} : { tokenBatchMs: deps.tokenBatchMs }),
+    // Round 4: the tool loop and multimodal materialisation, threaded through from the gateway.
+    ...(deps.tools === undefined ? {} : { tools: deps.tools }),
+    ...(deps.sandboxDirFor === undefined ? {} : { sandboxDirFor: deps.sandboxDirFor }),
+    ...(deps.artifacts === undefined ? {} : { artifacts: deps.artifacts }),
+    ...(deps.recordToolCall === undefined ? {} : { recordToolCall: deps.recordToolCall }),
+    ...(deps.nextId === undefined ? {} : { nextId: deps.nextId }),
   });
 
   /** Every run this process is currently driving, so shutdown can abort them (FR-SYS-008). */
@@ -439,11 +470,38 @@ export function createRunService(deps: RunServiceDeps): RunService {
      */
     function guardrailsFor(node: Node, nodeRun: NodeRun): { guardrails?: NodeGuardrails } {
       const evaluator = deps.guardrails;
-      if (evaluator === undefined) return {};
+      const toolEvaluator = deps.toolGuardrails;
+      // Nothing to wire when neither the output/input engine nor the tool point is present.
+      if (evaluator === undefined && toolEvaluator === undefined) return {};
       const target = targetFor(node, nodeRun);
+      const policy = policyByNode.get(node.id) ?? null;
+
+      /*
+       * The tool point (round 4 §2.2, FR-GRD-005/006). The executor builds the `ToolPointInput` bag
+       * from the node it is running; the scheduler adds the resolved policy and the node-run target,
+       * so the guardrail evaluator has everything to run `checkToolArgs`, the four policy checks and,
+       * for a destructive tool, the Round 3 approval flow. The cap `maxToolCalls` is the policy's
+       * `max_tool_calls`, min'd against the agent's own limit inside the executor (§2.2).
+       */
+      const toolFields: Pick<NodeGuardrails, 'maxToolCalls' | 'beforeTool'> =
+        toolEvaluator === undefined
+          ? {}
+          : {
+              ...(() => {
+                const cap = toolEvaluator.toolCallCap(policy);
+                return cap === undefined ? {} : { maxToolCalls: cap };
+              })(),
+              beforeTool: (bag) => toolEvaluator.evaluateTool({ target, ...bag }),
+            };
+
+      // The input/output points need the full evaluator; the tool point can stand alone.
+      if (evaluator === undefined) {
+        return { guardrails: toolFields };
+      }
 
       return {
         guardrails: {
+          ...toolFields,
           async beforePrompt(envelopes) {
             const outcome = await evaluator.evaluateEnvelopes({ target, envelopes });
             return outcome.kind === 'failed'
@@ -1478,6 +1536,15 @@ export function createRunService(deps: RunServiceDeps): RunService {
         providers,
         models,
         checkProvider: deps.checkProvider,
+        // The multimodal capability check reads an artifact's type through the same resolver the
+        // Input node executor uses, so pre-flight and execution classify a `.png` identically
+        // (round 4 §2.1, FR-MM-005). Absent the artifact store, the check does not run.
+        ...(deps.artifacts === undefined
+          ? {}
+          : {
+              artifactTypesFor: async (ids) =>
+                (await deps.artifacts!.inputParts(ids)).map((part) => part.type),
+            }),
       })),
     ];
 

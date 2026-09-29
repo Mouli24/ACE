@@ -1,4 +1,5 @@
 import {
+  TOOL_RESULT_SUMMARY_MAX,
   validateAgainstContract,
   type Envelope,
   type EnvelopeContract,
@@ -10,6 +11,8 @@ import {
   type NodeError,
   type NodeState,
   type Part,
+  type ToolCall,
+  type ToolDefinition,
   type Usage,
   type Verdict,
 } from "@ace/contracts";
@@ -22,15 +25,26 @@ import {
   userCancelledError,
 } from "../errors/index.js";
 import type { EventBus } from "../events/index.js";
+import { newId } from "../ids.js";
 import type { Logger } from "../logging/index.js";
 import type {
   ModelRouter,
   ProviderAdapter,
   StreamChunk,
+  ToolResult,
 } from "../ports/index.js";
 import { assemblePrompt } from "../prompts/index.js";
 import type { RunGate } from "./control/gate.js";
 import { usageFor } from "./cost.js";
+import {
+  buildToolCall,
+  summariseResult,
+  toolResultBlock,
+  type ArtifactMaterialiser,
+  type ToolGuardStep,
+  type ToolPointInput,
+  type ToolProvider,
+} from "./tool-loop.js";
 import { runTransform } from "./transform.js";
 
 /**
@@ -104,18 +118,36 @@ export type GuardrailStep<T> =
  * everywhere, including on the socket (BR-07, D86).
  */
 export interface NodeGuardrails {
-  /** The input point: every envelope's reads, before prompt assembly (FR-GRD-003). */
-  beforePrompt(
+  /**
+   * The input point: every envelope's reads, before prompt assembly (FR-GRD-003). Optional, so a
+   * build that wires only the tool point (round 4) still satisfies this interface; absent, the input
+   * is not checked.
+   */
+  beforePrompt?(
     envelopes: readonly Envelope[],
   ): Promise<GuardrailStep<{ envelopes: Envelope[] }>>;
   /**
    * The output point, before the contract decides (FR-GRD-007, §4 item 4). When this is wired it
-   * **owns** the contract check too, so an output is validated exactly once (D85).
+   * **owns** the contract check too, so an output is validated exactly once (D85). Optional: absent,
+   * the executor validates the contract itself, the round-2 behaviour.
    */
-  afterOutput(
+  afterOutput?(
     parts: Part[],
     contract?: EnvelopeContract,
   ): Promise<GuardrailStep<{ parts: Part[] }>>;
+  /**
+   * The policy's tool-call cap (round 4 §2.2). The loop's limit is `min` of this and the agent's own
+   * `tools.maxToolCalls`; absent means the policy sets no cap and the agent's own limit stands.
+   */
+  maxToolCalls?: number;
+  /**
+   * The tool point (round 4 §2.2, FR-GRD-005/006). Runs `checkToolArgs` and the four policy checks
+   * (`tool_allowed`, `path_confinement`, `domain_allowlist`, `destructive_action`), applies each
+   * action — a `block` fails the call, a destructive tool's `ask_user` waits for the Round 3 approval
+   * card and a reject fails the call — and records the verdicts. Absent means no guardrail engine is
+   * wired, so the executor runs the tool unchecked (the round-2 posture for the other points).
+   */
+  beforeTool?(input: ToolPointInput): Promise<ToolGuardStep>;
 }
 
 export interface NodeExecutionOutcome {
@@ -151,6 +183,30 @@ export interface NodeExecutorDeps {
   router: ModelRouter;
   now?: () => string;
   tokenBatchMs?: number;
+
+  /* ------------------------------------------------------------- round 4 */
+  /*
+   * The tool loop and multimodal materialisation (round 4 §2.2, §2.6, Arch §12.7, FR-TOOL-*,
+   * FR-MM-003/004). All optional, exactly as the round-3 services are: a harness that only exercises
+   * text agents builds an executor without them, and then a `tool_call` chunk from a scripted adapter
+   * fails the node rather than crashing (a model that asked for a tool the engine cannot run). The
+   * gateway (Wave 3) binds these to `@ace/tools`, the artifact store and the tool-call repository.
+   */
+
+  /** The registry a requested tool is looked up in — built-ins plus connected MCP servers. */
+  tools?: ToolProvider;
+  /** `<projectFolder>/.ace/sandbox/<runId>/` for one run — the folder a tool is confined to. */
+  sandboxDirFor?: (runId: Id) => string;
+  /** Resolves Input `artifactIds` to parts and stores produced media parts as artifacts. */
+  artifacts?: ArtifactMaterialiser;
+  /**
+   * Persists one logged `ToolCall` (FR-TOOL-009), mirroring it onto its node run's `toolCalls` list
+   * — the same one-write-path the verdict and approval stores use. The executor also emits the
+   * `tool.call` event itself, so a harness without this still sees the frame.
+   */
+  recordToolCall?: (runId: Id, call: ToolCall) => Promise<void>;
+  /** ToolCall ids. Defaults to the shared id generator. */
+  nextId?: () => string;
 }
 
 export interface NodeExecutor {
@@ -166,6 +222,26 @@ function readsOf(envelopes: readonly Envelope[]): Part[] {
     .flatMap((envelope) => envelope.reads);
 }
 
+/** How long a tool ran, from two ISO timestamps. Never negative; 0 when the clock is fixed (tests). */
+function durationSince(startedAt: string): number {
+  const started = Date.parse(startedAt);
+  if (Number.isNaN(started)) return 0;
+  return Math.max(0, Date.now() - started);
+}
+
+/**
+ * Whether a thrown tool error is a timeout rather than any other failure (round 4 §2.2, TC-TOOL-004).
+ * The engine may not import `@ace/tools`, so it duck-types: a `TimeoutError`, a `timeout` kind/code, or
+ * a message that says as much. Anything else is a plain tool `error`.
+ */
+function isToolTimeout(error: unknown): boolean {
+  if (error instanceof Error && error.name === 'TimeoutError') return true;
+  const bag = error as { kind?: unknown; code?: unknown };
+  if (bag?.kind === 'timeout' || bag?.code === 'timeout') return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /timed out|timeout/i.test(message);
+}
+
 /*
  * There is no private classifier here any more: `classifyError` is the one in `../errors/` and the
  * eight kinds of Arch §28 are decided in exactly one place (FR-ERR-001). Two deliberate changes come
@@ -176,6 +252,7 @@ function readsOf(envelopes: readonly Envelope[]): Part[] {
 
 export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
   const batchMs = deps.tokenBatchMs ?? TOKEN_BATCH_MS;
+  const nextId = deps.nextId ?? newId;
 
   /** A failure, shaped the way the node run row wants it, and announced. */
   async function fail(
@@ -282,7 +359,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
      * next line.
      */
     let envelopes = input.envelopes;
-    if (input.guardrails !== undefined) {
+    if (input.guardrails?.beforePrompt !== undefined) {
       const checked = await input.guardrails.beforePrompt(envelopes);
       verdicts.push(...(checked.verdicts ?? []));
       if (checked.kind === "failed") {
@@ -313,10 +390,29 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         ? node.config.routing
         : { policy: "fixed" as const, fallbackModelIds: [] };
 
-    // The `agent | model` narrowing above does not reach inside `attemptWith`, so the two
-    // fields it needs are captured here rather than re-narrowed there.
+    // The `agent | model` narrowing above does not reach inside `attemptWith`, so the fields it
+    // needs are captured here rather than re-narrowed there.
     const outputTypes = node.config.outputTypes;
     const { temperature } = node.config.execution;
+
+    /*
+     * The tool set (round 4 §2.2). Only an agent node has tools; a bare model node never calls one.
+     * The limit is `min(agent's own maxToolCalls, the policy's max_tool_calls)` — the policy's cap
+     * arrives on the guardrail hook (`maxToolCalls`), and absent it the agent's own stands.
+     */
+    const enabledTools = node.kind === "agent" ? node.config.tools.enabled : [];
+    const allowedDomains = node.kind === "agent" ? node.config.tools.allowedDomains : [];
+    const agentMaxToolCalls = node.kind === "agent" ? node.config.tools.maxToolCalls : 0;
+    const policyMaxToolCalls = input.guardrails?.maxToolCalls;
+    const toolCallLimit = Math.min(
+      agentMaxToolCalls,
+      policyMaxToolCalls ?? Number.POSITIVE_INFINITY,
+    );
+    /** The enabled tools' definitions, offered to the model each turn (FR-TOOL-003). */
+    const offeredTools: ToolDefinition[] = enabledTools.flatMap((name) => {
+      const registered = deps.tools?.get(name);
+      return registered === undefined ? [] : [registered.definition];
+    });
 
     const routingNode = {
       ...(node.config.providerId === undefined
@@ -419,6 +515,8 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       let text = "";
       let jsonValue: unknown;
       let sawJson = false;
+      /** Media/typed parts a model emitted directly (round 4 §2.6 `mock-media`, FR-MM-003). */
+      const partChunks: Part[] = [];
       let tokensIn = 0;
       let tokensOut = 0;
       let finishReason: string = "stop";
@@ -445,6 +543,25 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
        */
       let cancelled = false;
 
+      /* The run's sandbox folder, the only place a tool may touch (round 4 §2.2, NFR-SEC-03). */
+      const sandboxDir = deps.sandboxDirFor?.(input.runId) ?? "";
+      /** Untrusted tool-result blocks appended to the *recorded* prompt (FR-TOOL-010, FR-PRM-002). */
+      const promptSuffix: string[] = [];
+      /** A tool-point block or an approval reject that ends this node GUARDRAIL_VIOLATION (§2.2). */
+      let toolFailure: { error: NodeError; failureReason: FailureReason } | undefined;
+      /** The model still asked for a tool after the limit forced a no-tool turn (FR-TOOL-003). */
+      let toolLimitExceeded = false;
+      let toolCallCount = 0;
+
+      /** The recorded prompt for this attempt, with any untrusted tool-result blocks appended. */
+      const recordedPrompt = (): { version: string; text: string } => ({
+        version: prompt.version,
+        text:
+          promptSuffix.length === 0
+            ? prompt.redactedText
+            : `${prompt.redactedText}\n\n## Tool results\n${promptSuffix.join("\n\n")}`,
+      });
+
       try {
         for (;;) {
           let parked = false;
@@ -462,7 +579,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             }
             await started();
             try {
-              await callModel();
+              await runToolLoop();
             } finally {
               // Still inside the gate: the next node's startedAt can never precede this endedAt.
               input.onEnded?.();
@@ -476,13 +593,20 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
           }
         }
 
-        async function callModel(): Promise<void> {
+        /**
+         * The agentic tool loop (Arch §12.7): generate, and while the model asks for a tool, run it
+         * under the tool-point guardrails and feed the result back as untrusted, until a final answer
+         * or the call limit (round 4 §2.2, FR-TOOL-003). One provider slot is held for the whole loop,
+         * which is why it lives inside `runGated`.
+         */
+        async function runToolLoop(): Promise<void> {
           const adapter = await deps.adapterFor(chosen.providerId);
           /*
            * `execution.timeoutMs` is the node's own clock, and it starts here — after the provider
            * slot is held, never when the node was queued for it (D66). `AbortSignal.timeout` sets a
            * `TimeoutError` reason, which the adapter reads to raise a retryable `network` failure
-           * rather than a cancellation (D97, Arch §28).
+           * rather than a cancellation (D97, Arch §28). It bounds each provider turn; a tool enforces
+           * its own `timeoutMs` and is cancelled only by the run's own stop signal.
            */
           const timeoutMs =
             node.kind === 'agent' || node.kind === 'model' ? node.config.execution.timeoutMs : 0;
@@ -491,44 +615,209 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               ? AbortSignal.any([input.signal, AbortSignal.timeout(timeoutMs)])
               : input.signal;
 
-          const stream = adapter.generate(
-            {
-              modelId: chosen.modelId,
-              system: prompt.system,
-              prompt: prompt.text,
-              outputTypes,
-              ...(contract.jsonSchema === undefined
-                ? {}
-                : { jsonSchema: contract.jsonSchema }),
-              ...(contract.maxTokens === undefined
-                ? {}
-                : { maxTokens: contract.maxTokens }),
-              temperature,
-              runId: input.runId,
-              iteration: input.iteration,
-            },
-            callSignal,
-          );
+          const toolResults: ToolResult[] = [];
+          /** After the call limit, the model is asked once more with no tools (§2.2, FR-TOOL-003). */
+          let finalTurn = false;
 
-          for await (const chunk of stream as AsyncIterable<StreamChunk>) {
-            switch (chunk.type) {
-              case "text":
-                text += chunk.delta;
-                tokens.push(chunk.delta);
-                break;
-              case "json":
-                jsonValue = chunk.value;
-                sawJson = true;
-                break;
-              case "usage":
-                tokensIn = chunk.tokensIn;
-                tokensOut = chunk.tokensOut;
-                break;
-              case "finish":
-                finishReason = chunk.reason;
-                break;
+          for (;;) {
+            const offerTools = offeredTools.length > 0 && !finalTurn;
+            const stream = adapter.generate(
+              {
+                modelId: chosen.modelId,
+                system: prompt.system,
+                prompt: prompt.text,
+                outputTypes,
+                ...(contract.jsonSchema === undefined
+                  ? {}
+                  : { jsonSchema: contract.jsonSchema }),
+                ...(contract.maxTokens === undefined
+                  ? {}
+                  : { maxTokens: contract.maxTokens }),
+                temperature,
+                runId: input.runId,
+                iteration: input.iteration,
+                ...(offerTools ? { tools: offeredTools } : {}),
+                ...(toolResults.length > 0 ? { toolResults } : {}),
+              },
+              callSignal,
+            );
+
+            let pendingCall: { callId: string; name: string; args: unknown } | undefined;
+            for await (const chunk of stream as AsyncIterable<StreamChunk>) {
+              switch (chunk.type) {
+                case "text":
+                  text += chunk.delta;
+                  tokens.push(chunk.delta);
+                  break;
+                case "json":
+                  jsonValue = chunk.value;
+                  sawJson = true;
+                  break;
+                case "part":
+                  partChunks.push(chunk.part);
+                  break;
+                case "tool_call":
+                  // One tool per turn: the mock and the round-4 adapters request a single tool and
+                  // end the turn on `tool_calls`, so a second in one turn would be a protocol error.
+                  pendingCall ??= { callId: chunk.callId, name: chunk.name, args: chunk.args };
+                  break;
+                case "usage":
+                  // Summed across turns: every generate() turn is its own billed call (Arch §12.7).
+                  tokensIn += chunk.tokensIn;
+                  tokensOut += chunk.tokensOut;
+                  break;
+                case "finish":
+                  finishReason = chunk.reason;
+                  break;
+              }
             }
+
+            // No tool requested: the turn's text/json/parts are this node's answer (FR-TOOL-003).
+            if (pendingCall === undefined) return;
+
+            // A tool after the model was asked to finish without tools ends the node (FR-TOOL-003).
+            if (finalTurn) {
+              toolLimitExceeded = true;
+              return;
+            }
+
+            const handled = await runToolCall(pendingCall, input.signal);
+            if (handled.failed !== undefined) {
+              toolFailure = handled.failed;
+              return;
+            }
+
+            toolResults.push({
+              callId: pendingCall.callId,
+              name: pendingCall.name,
+              result: handled.result,
+            });
+            // The result reaches the *recorded* prompt inside an untrusted block (FR-PRM-002); the
+            // adapter itself reads `toolResults` above (FR-TOOL-010).
+            promptSuffix.push(toolResultBlock(pendingCall.name, handled.result));
+            toolCallCount += 1;
+
+            // Reaching the limit ends the loop; the model is asked once more with no tools (§2.2).
+            if (toolCallCount >= toolCallLimit) finalTurn = true;
           }
+        }
+
+        /**
+         * One requested tool: the tool-point guardrails, then execution, logged either way
+         * (round 4 §2.2, FR-TOOL-009). A `block` or a rejected approval fails the node
+         * `GUARDRAIL_VIOLATION`; a tool that throws is logged `error`/`timeout` and its failure is
+         * handed back to the model as an untrusted result, not treated as the node failing.
+         */
+        async function runToolCall(
+          call: { callId: string; name: string; args: unknown },
+          toolSignal: AbortSignal,
+        ): Promise<{
+          result?: unknown;
+          failed?: { error: NodeError; failureReason: FailureReason };
+        }> {
+          const registered = deps.tools?.get(call.name);
+          const at = deps.now?.() ?? new Date().toISOString();
+
+          let step: ToolGuardStep;
+          if (registered === undefined) {
+            // An enabled name that resolves to no tool — a removed MCP server, say (§2.4). There is
+            // no definition to check and nothing to run, so it is a block.
+            step = {
+              kind: "block",
+              reason: `The tool "${call.name}" is not registered.`,
+            };
+          } else if (input.guardrails?.beforeTool !== undefined) {
+            step = await input.guardrails.beforeTool({
+              definition: registered.definition,
+              args: call.args,
+              enabledTools,
+              sandboxDir,
+              allowedDomains,
+            });
+          } else {
+            step = { kind: "allow" };
+          }
+
+          verdicts.push(...(step.verdicts ?? []));
+
+          if (step.kind !== "allow") {
+            await logToolCall(call, {
+              status: step.kind === "block" ? "blocked" : "rejected",
+              resultSummary: step.reason,
+              durationMs: 0,
+              verdicts: step.verdicts ?? [],
+              at,
+            });
+            return {
+              failed: {
+                error: {
+                  kind: "guardrail",
+                  code: step.kind === "block" ? "tool_blocked" : "tool_rejected",
+                  message: step.reason,
+                  retryable: false,
+                },
+                failureReason: "GUARDRAIL_VIOLATION",
+              },
+            };
+          }
+
+          try {
+            const result = await registered!.run(call.args, {
+              runId: input.runId,
+              sandboxDir,
+              signal: toolSignal,
+            });
+            await logToolCall(call, {
+              status: "ok",
+              resultSummary: summariseResult(result),
+              durationMs: durationSince(at),
+              verdicts: step.verdicts ?? [],
+              at,
+            });
+            return { result };
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const status = isToolTimeout(error) ? "timeout" : "error";
+            await logToolCall(call, {
+              status,
+              resultSummary: message,
+              durationMs: durationSince(at),
+              verdicts: step.verdicts ?? [],
+              at,
+            });
+            return { result: { error: message, status } };
+          }
+        }
+
+        /** Persist one logged ToolCall and emit its `tool.call` event (FR-TOOL-009, §2.5). */
+        async function logToolCall(
+          call: { callId: string; name: string; args: unknown },
+          fields: {
+            status: ToolCall["status"];
+            resultSummary: string;
+            durationMs: number;
+            verdicts: Verdict[];
+            at: string;
+          },
+        ): Promise<void> {
+          const toolCall = buildToolCall({
+            id: nextId(),
+            nodeRunId: input.nodeRunId,
+            toolName: call.name,
+            args: call.args,
+            resultSummary: fields.resultSummary.slice(0, TOOL_RESULT_SUMMARY_MAX),
+            durationMs: fields.durationMs,
+            status: fields.status,
+            verdicts: fields.verdicts,
+            at: fields.at,
+          });
+          await deps.recordToolCall?.(input.runId, toolCall);
+          await deps.bus.emit({
+            type: "tool.call",
+            workflowId: input.workflowId,
+            runId: input.runId,
+            payload: { runId: input.runId, nodeRunId: input.nodeRunId, toolCall },
+          });
         }
       } catch (error) {
         tokens.stop();
@@ -544,7 +833,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
           kind: "done",
           result: await fail(input, nodeError, usage, {
             modelUsed,
-            prompt: promptRecord,
+            prompt: recordedPrompt(),
           }),
         };
       }
@@ -569,6 +858,43 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
       const usage = usageFor(tokensIn, tokensOut, pricing);
 
+      /*
+       * A tool-point block or a rejected approval ends the node GUARDRAIL_VIOLATION (§2.2). The
+       * offending ToolCall is already logged `blocked`/`rejected`; this is the node run's own end.
+       */
+      if (toolFailure !== undefined) {
+        return {
+          kind: "done",
+          result: await fail(input, toolFailure.error, usage, {
+            modelUsed,
+            prompt: recordedPrompt(),
+            failureReason: toolFailure.failureReason,
+            verdicts: [...verdicts],
+          }),
+        };
+      }
+
+      /*
+       * The call limit was reached, the model was asked to finish without tools, and it asked for
+       * one anyway: RUN_FAILED, kind `agent` (round 4 §2.2, FR-TOOL-003, TC-GRD-014).
+       */
+      if (toolLimitExceeded) {
+        return {
+          kind: "done",
+          result: await fail(
+            input,
+            {
+              kind: "agent",
+              code: "tool_call_limit",
+              message: `The model kept requesting tools past its limit of ${toolCallLimit}.`,
+              retryable: false,
+            },
+            usage,
+            { modelUsed, prompt: recordedPrompt(), verdicts: [...verdicts] },
+          ),
+        };
+      }
+
       /* A refusal is the model declining, which is an `agent` error, not a provider outage. */
       if (finishReason === "refusal") {
         return {
@@ -582,52 +908,64 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               retryable: false,
             },
             usage,
-            { modelUsed, prompt: promptRecord },
+            { modelUsed, prompt: recordedPrompt() },
           ),
         };
       }
 
-      /* Collect parts: json when the contract asks for it, text otherwise. */
-      const wantsJson = outputTypes.includes("json");
-      const output: Part[] = [];
+      /*
+       * The output parts. A model that emitted `part` chunks (round 4 §2.6 `mock-media`) produced
+       * them directly, so those *are* the output — each media part backed by a stored artifact
+       * (FR-MM-003, FR-MM-004). Otherwise the answer is assembled from the streamed text and json.
+       */
+      let output: Part[];
+      if (partChunks.length > 0) {
+        output =
+          deps.artifacts === undefined
+            ? partChunks
+            : await deps.artifacts.store(partChunks);
+      } else {
+        output = [];
+        const wantsJson = outputTypes.includes("json");
 
-      if (wantsJson) {
-        if (sawJson) {
-          output.push({ type: "json", value: jsonValue });
-        } else {
-          try {
-            output.push({ type: "json", value: JSON.parse(text.trim()) });
-          } catch {
-            // BR-03: the model answered, it just answered wrongly. That is a contract violation,
-            // never RUN_FAILED, and never a reason to retry a different provider.
-            return {
-              kind: "done",
-              result: await fail(
-                input,
-                {
-                  kind: "agent",
-                  code: "contract_violation",
-                  message: `The model did not return valid JSON: ${text.trim().slice(0, 120)}`,
-                  retryable: false,
-                },
-                usage,
-                {
-                  modelUsed,
-                  prompt: promptRecord,
-                  failureReason: "CONTRACT_VIOLATION",
-                },
-              ),
-            };
+        if (wantsJson) {
+          if (sawJson) {
+            output.push({ type: "json", value: jsonValue });
+          } else {
+            try {
+              output.push({ type: "json", value: JSON.parse(text.trim()) });
+            } catch {
+              // BR-03: the model answered, it just answered wrongly. That is a contract violation,
+              // never RUN_FAILED, and never a reason to retry a different provider.
+              return {
+                kind: "done",
+                result: await fail(
+                  input,
+                  {
+                    kind: "agent",
+                    code: "contract_violation",
+                    message: `The model did not return valid JSON: ${text.trim().slice(0, 120)}`,
+                    retryable: false,
+                  },
+                  usage,
+                  {
+                    modelUsed,
+                    prompt: recordedPrompt(),
+                    failureReason: "CONTRACT_VIOLATION",
+                  },
+                ),
+              };
+            }
           }
         }
-      }
 
-      for (const type of outputTypes) {
-        if (type === "json") continue;
-        if (type === "code")
-          output.push({ type: "code", language: "text", text: text.trim() });
-        else if (type === "text")
-          output.push({ type: "text", text: text.trim() });
+        for (const type of outputTypes) {
+          if (type === "json") continue;
+          if (type === "code")
+            output.push({ type: "code", language: "text", text: text.trim() });
+          else if (type === "text")
+            output.push({ type: "text", text: text.trim() });
+        }
       }
 
       /*
@@ -638,7 +976,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
        * (D66) and a masked secret is masked on the socket too (BR-07, D86).
        */
       let flowing = output;
-      if (input.guardrails !== undefined) {
+      if (input.guardrails?.afterOutput !== undefined) {
         const checked = await input.guardrails.afterOutput(flowing, contract);
         verdicts.push(...(checked.verdicts ?? []));
         if (checked.kind === "failed") {
@@ -646,7 +984,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             kind: "done",
             result: await fail(input, checked.error, usage, {
               modelUsed,
-              prompt: promptRecord,
+              prompt: recordedPrompt(),
               failureReason: checked.failureReason,
               verdicts: [...verdicts],
             }),
@@ -669,7 +1007,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               usage,
               {
                 modelUsed,
-                prompt: promptRecord,
+                prompt: recordedPrompt(),
                 failureReason: "CONTRACT_VIOLATION",
               },
             ),
@@ -681,7 +1019,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         kind: "done",
         result: await succeed(input, flowing, usage, {
           modelUsed,
-          prompt: promptRecord,
+          prompt: recordedPrompt(),
           verdicts: [...verdicts],
         }),
       };
@@ -700,12 +1038,22 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       case "input": {
         // FR-NODE-011: what the user typed at start wins over what the config remembers.
         const supplied = input.runInputs[node.id];
-        const parts: Part[] =
-          supplied !== undefined && supplied.length > 0
-            ? supplied
-            : node.config.text === undefined || node.config.text === ""
+        let parts: Part[];
+        if (supplied !== undefined && supplied.length > 0) {
+          // A start request that carried parts (text and/or artifact references) wins whole
+          // (FR-NODE-011): they are already the parts, media included.
+          parts = supplied;
+        } else {
+          // The config's text, plus one media `Part` per attached artifact, resolved by MIME to
+          // image/audio/video/file — references only, never bytes (FR-MM-003, FR-MM-004).
+          parts =
+            node.config.text === undefined || node.config.text === ""
               ? []
               : [{ type: "text", text: node.config.text }];
+          if (node.config.artifactIds.length > 0 && deps.artifacts !== undefined) {
+            parts = [...parts, ...(await deps.artifacts.inputParts(node.config.artifactIds))];
+          }
+        }
 
         /*
          * §4 item 4 puts "the Input node content" at the **input** point, so the content the user
@@ -713,7 +1061,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
          * scheduler's adapter routes an Input node's `afterOutput` to `evaluateInput` for exactly
          * this; the executor only knows it has a hook to call before it announces the output.
          */
-        if (input.guardrails !== undefined) {
+        if (input.guardrails?.afterOutput !== undefined) {
           const checked = await input.guardrails.afterOutput(parts);
           if (checked.kind === "failed") {
             return fail(input, checked.error, NO_USAGE, {
