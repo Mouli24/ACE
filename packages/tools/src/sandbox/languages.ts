@@ -34,21 +34,19 @@ export const DEFAULT_MAX_OLD_SPACE_MB = 128;
 const JS_PRELUDE = `'use strict';
 // ACE sandbox: deny the interpreter's own network (NFR-SEC-04). Defense in depth beside the dead
 // proxy environment and the PATH deny-shims; Docker's --network none is the hard guarantee.
+//
+// Surgical on purpose: only the connection-*initiating* calls are replaced. Overriding the Socket
+// class or dns.lookup breaks Node's own bootstrap (process.stdout is a net.Socket), so those are
+// left alone and Socket.prototype.connect is neutered instead.
 const MESSAGE = ${JSON.stringify(NETWORK_DENIED_MESSAGE)};
 const deny = () => {
   throw new Error(MESSAGE);
 };
-for (const name of ['net', 'http', 'https', 'http2', 'dns', 'tls', 'dgram']) {
-  let mod;
-  try {
-    mod = require('node:' + name);
-  } catch {
-    continue;
-  }
-  for (const fn of ['connect', 'createConnection', 'request', 'get', 'createServer', 'lookup', 'resolve', 'Socket', 'connectSync']) {
-    if (typeof mod[fn] === 'function') {
+function patch(mod, names) {
+  for (const name of names) {
+    if (mod && typeof mod[name] === 'function') {
       try {
-        mod[fn] = deny;
+        mod[name] = deny;
       } catch {
         // A read-only export; the other layers still hold.
       }
@@ -56,10 +54,15 @@ for (const name of ['net', 'http', 'https', 'http2', 'dns', 'tls', 'dgram']) {
   }
 }
 try {
+  const net = require('node:net');
+  patch(net, ['connect', 'createConnection']);
+  if (net.Socket && net.Socket.prototype) net.Socket.prototype.connect = deny;
+} catch {}
+try { patch(require('node:http'), ['request', 'get']); } catch {}
+try { patch(require('node:https'), ['request', 'get']); } catch {}
+try {
   globalThis.fetch = () => Promise.reject(new Error(MESSAGE));
-} catch {
-  // ignore
-}
+} catch {}
 `;
 
 /** The Python prelude, prepended to the user's code, denying `socket` before anything runs. */
@@ -126,8 +129,11 @@ export function prepareCodeRun(
   const env = sandboxEnv({ sandboxDir, denyShimDir, platform });
 
   if (language === 'javascript') {
+    // `.cjs`, not `.mjs`: a snippet that reaches for `require('fs')` is the common case, and `-r`
+    // preloads the prelude into the same CommonJS module cache it then patches, so the network
+    // overrides actually take on the modules the code goes on to require.
     const preludePath = join(runDir, 'prelude.cjs');
-    const mainPath = join(runDir, 'main.mjs');
+    const mainPath = join(runDir, 'main.cjs');
     writeFileSync(preludePath, JS_PRELUDE, 'utf8');
     writeFileSync(mainPath, code, 'utf8');
     return {
