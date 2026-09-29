@@ -25,8 +25,12 @@ export interface Rule {
    * context to be sure. Defaults to the whole match.
    */
   readonly group?: number;
-  /** An extra test a match must survive, e.g. the Luhn check on a card-shaped run of digits. */
-  readonly verify?: (matched: string) => boolean;
+  /**
+   * An extra test a match must survive, e.g. the Luhn check on a card-shaped run of digits. It also
+   * gets the whole text and where the match starts in it, for a rule that must look at what stands
+   * around a match — an invisible joiner is innocent between two emoji and not inside a word.
+   */
+  readonly verify?: (matched: string, text: string, start: number) => boolean;
 }
 
 /** A pack is an ordered list: earlier rules name an overlap, so put the specific ones first. */
@@ -52,7 +56,7 @@ export function findSpans(text: string, pack: RulePack): Span[] {
     pattern.lastIndex = 0;
     let match = pattern.exec(text);
     while (match !== null) {
-      const span = spanOf(match, rule, priority);
+      const span = spanOf(text, match, rule, priority);
       if (span !== undefined) found.push(span);
       // A zero-length match would spin forever; nudge past it.
       if (match.index === pattern.lastIndex) pattern.lastIndex += 1;
@@ -63,17 +67,22 @@ export function findSpans(text: string, pack: RulePack): Span[] {
   return resolveOverlaps(found);
 }
 
-function spanOf(match: RegExpExecArray, rule: Rule, priority: number): Span | undefined {
+function spanOf(
+  text: string,
+  match: RegExpExecArray,
+  rule: Rule,
+  priority: number,
+): Span | undefined {
   const whole = match[0];
   const groupIndex = rule.group ?? 0;
   const captured = match[groupIndex];
   if (captured === undefined || captured.length === 0) return undefined;
-  if (rule.verify !== undefined && !rule.verify(captured)) return undefined;
 
   const offset = groupIndex === 0 ? 0 : whole.indexOf(captured);
   if (offset < 0) return undefined;
 
   const start = match.index + offset;
+  if (rule.verify !== undefined && !rule.verify(captured, text, start)) return undefined;
   return { start, end: start + captured.length, type: rule.type, priority };
 }
 
