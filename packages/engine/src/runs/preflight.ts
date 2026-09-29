@@ -1,4 +1,5 @@
 import type {
+  DataType,
   Edge,
   Id,
   Model,
@@ -46,6 +47,12 @@ export interface PreflightInput {
   providers: readonly Provider[];
   models: readonly Model[];
   checkProvider: (providerId: Id) => Promise<ProviderCheckResult>;
+  /**
+   * The data types of the artifacts an Input node attaches (round 4 §2.1), by artifact id — a `.png`
+   * is `image`, an `.mp3` `audio`, and so on. Supplied by the gateway from the artifact store; absent
+   * (round 2/3 harnesses, a text-only run) the multimodal capability check simply does not run.
+   */
+  artifactTypesFor?: (artifactIds: readonly Id[]) => Promise<DataType[]>;
 }
 
 /** An Input node has something to start from when its config or the request carries content. */
@@ -122,6 +129,53 @@ export async function preflight(input: PreflightInput): Promise<ValidationIssue[
         message: `"${node.name}" is a ${node.kind} node, which this version cannot run yet.`,
         nodeId: node.id,
       });
+    }
+  }
+
+  /*
+   * 6. Multimodal capability (FR-MM-005, TC-MM-005). A media artifact an Input node attaches — a
+   *    PNG, an MP3 — must be a type the model it feeds can read, judged on the artifact's own type
+   *    rather than the node's configured `inputTypes` (which `validateGraph` already checks). Any
+   *    mismatch is `incompatible_model` **before** a single provider call. First hop only: the
+   *    fixtures and TC-MM-005 wire an Input node straight into the model that consumes its media.
+   */
+  if (input.artifactTypesFor !== undefined) {
+    const nodeById = new Map(input.nodes.map((node) => [node.id, node]));
+    const isMedia = (type: DataType): boolean =>
+      type === 'image' || type === 'audio' || type === 'video' || type === 'file';
+
+    for (const source of input.nodes) {
+      if (source.kind !== 'input' || source.config.artifactIds.length === 0) continue;
+
+      const mediaTypes = [
+        ...new Set((await input.artifactTypesFor(source.config.artifactIds)).filter(isMedia)),
+      ];
+      if (mediaTypes.length === 0) continue;
+
+      for (const edge of input.edges) {
+        if (edge.kind !== 'data' || edge.from.nodeId !== source.id) continue;
+        const target = nodeById.get(edge.to.nodeId);
+        if (target === undefined || (target.kind !== 'agent' && target.kind !== 'model')) continue;
+
+        const model = input.models.find(
+          (candidate) =>
+            candidate.providerId === target.config.providerId &&
+            candidate.modelId === target.config.modelId,
+        );
+        if (model === undefined) continue; // `missing_model`/`unavailable_model` already covers it.
+
+        const unsupported = mediaTypes.filter((type) => !model.inputTypes.includes(type));
+        if (unsupported.length > 0) {
+          issues.push({
+            severity: 'error',
+            code: 'incompatible_model',
+            message: `"${target.name}" uses "${model.modelId}", which cannot read the ${unsupported.join(
+              ', ',
+            )} content "${source.name}" attaches.`,
+            nodeId: target.id,
+          });
+        }
+      }
     }
   }
 
