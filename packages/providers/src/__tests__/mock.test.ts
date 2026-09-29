@@ -1,8 +1,14 @@
-import { ReviewContractSchema } from '@ace/contracts';
+import { PartSchema, ReviewContractSchema } from '@ace/contracts';
 import { describe, expect, it } from 'vitest';
 
-import type { StreamChunk } from '../adapter.js';
-import { MOCK_MODELS, MOCK_PRICE_TABLE_VERSION, createMockAdapter } from '../adapters/mock.js';
+import type { GenerateRequest, StreamChunk, ToolResult } from '../adapter.js';
+import type { Part } from '@ace/contracts';
+import {
+  MOCK_MODELS,
+  MOCK_PRICE_TABLE_VERSION,
+  createMockAdapter,
+  formatArtifactReference,
+} from '../adapters/mock.js';
 
 /** Drain a generate() call into the chunks it produced. */
 async function collect(
@@ -30,12 +36,23 @@ const usageOf = (chunks: StreamChunk[]) =>
 const finishOf = (chunks: StreamChunk[]) =>
   chunks.find((c): c is Extract<StreamChunk, { type: 'finish' }> => c.type === 'finish');
 
+const toolCallsOf = (chunks: StreamChunk[]): Extract<StreamChunk, { type: 'tool_call' }>[] =>
+  chunks.filter((c): c is Extract<StreamChunk, { type: 'tool_call' }> => c.type === 'tool_call');
+
+const partsOf = (chunks: StreamChunk[]): Part[] =>
+  chunks
+    .filter((c): c is Extract<StreamChunk, { type: 'part' }> => c.type === 'part')
+    .map((c) => c.part);
+
 /** Every test uses the instant clock; the §2.6 delays are asserted separately. */
 const adapter = (options: Parameters<typeof createMockAdapter>[0] = {}) =>
   createMockAdapter({ sleep: async () => {}, ...options });
 
-const run = (modelId: string, prompt = 'summarise the brief', extra = {}) =>
+const run = (modelId: string, prompt = 'summarise the brief', extra: Partial<GenerateRequest> = {}) =>
   adapter().generate({ modelId, prompt, outputTypes: ['text'], ...extra }, new AbortController().signal);
+
+/** A tool result to feed back into a continuation turn. */
+const toolResult = (name: string, result: unknown): ToolResult => ({ callId: 'ignored', name, result });
 
 /* -------------------------------------------------------------------------- */
 /* Provider-level behaviour                                                    */
@@ -89,7 +106,7 @@ describe('TC-PRV-003 / TC-PRV-004 the mock simulates every provider failure', ()
 /* -------------------------------------------------------------------------- */
 
 describe('TC-MOD-001 the mock lists every model of §2.6', () => {
-  it('lists exactly the sixteen models, in the order §2.6 tabulates them', async () => {
+  it('lists exactly the models §2.6 tabulates, in that order (round 4 additions included)', async () => {
     const models = await adapter().listModels();
 
     expect(models.map((m) => m.modelId)).toEqual([
@@ -107,7 +124,14 @@ describe('TC-MOD-001 the mock lists every model of §2.6', () => {
       'mock-reject-twice',
       'mock-reject-always',
       'mock-tool',
+      'mock-tool-loop',
+      'mock-destructive',
+      'mock-http',
+      'mock-search',
+      'mock-mcp',
       'mock-vision',
+      'mock-media',
+      'mock-chat',
       'mock-embed',
     ]);
   });
@@ -543,19 +567,7 @@ describe('Arch §28 a timeout abort is a retryable network failure, a stop is no
   });
 });
 
-describe('Round 4 and 5 fixtures the mock already provides', () => {
-  it('mock-vision answers from what the prompt says about the artifact', async () => {
-    const text = textOf(
-      await collect(run('mock-vision', 'Describe [artifact diagram.png]', { outputTypes: ['text'] })),
-    );
-
-    expect(text).toContain('diagram.png');
-  });
-
-  it('mock-tool answers after naming the echo tool', async () => {
-    expect(textOf(await collect(run('mock-tool')))).toContain('echo');
-  });
-
+describe('Round 5 fixtures the mock already provides', () => {
   it('mock-embed returns stable 64-dimension vectors', async () => {
     const mock = adapter();
     const first = await mock.embed?.(['alpha', 'beta']);
@@ -564,6 +576,301 @@ describe('Round 4 and 5 fixtures the mock already provides', () => {
     expect(first).toHaveLength(2);
     expect(first?.[0]).toHaveLength(64);
     expect(second?.[0]).toEqual(first?.[0]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Round 4 — the tool loop (§2.6, FR-TOOL-003, Arch §12.7)                     */
+/* -------------------------------------------------------------------------- */
+
+describe('FR-TOOL-003 mock-tool requests echo once, then answers from the result', () => {
+  it('asks for echo { text: <input> } and ends the turn on tool_calls, with no answer text', async () => {
+    const chunks = await collect(run('mock-tool', 'hello there'));
+    const calls = toolCallsOf(chunks);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.name).toBe('echo');
+    expect(calls[0]?.args).toEqual({ text: 'hello there' });
+    expect(finishOf(chunks)?.reason).toBe('tool_calls');
+    expect(textOf(chunks)).toBe('');
+  });
+
+  it('gives the tool_call an IdSchema-shaped, stable callId', async () => {
+    const first = toolCallsOf(await collect(run('mock-tool')))[0]?.callId ?? '';
+    const second = toolCallsOf(await collect(run('mock-tool')))[0]?.callId ?? '';
+
+    expect(first).toMatch(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
+    expect(first).toBe(second);
+  });
+
+  it('answers "echo said: <result>" once the echo result comes back, with no further tool call', async () => {
+    const chunks = await collect(
+      run('mock-tool', 'hello there', { toolResults: [toolResult('echo', { text: 'hello there' })] }),
+    );
+
+    expect(toolCallsOf(chunks)).toHaveLength(0);
+    expect(textOf(chunks)).toBe('echo said: hello there');
+    expect(finishOf(chunks)?.reason).toBe('stop');
+  });
+});
+
+describe('TC-GRD-014 mock-tool-loop requests echo on every turn, however many results it is given', () => {
+  it('requests echo when it has no results yet', async () => {
+    const calls = toolCallsOf(await collect(run('mock-tool-loop')));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.name).toBe('echo');
+  });
+
+  it('still requests echo after a result — so the loop only ends at the call limit', async () => {
+    const chunks = await collect(
+      run('mock-tool-loop', 'x', { toolResults: [toolResult('echo', { text: 'x' })] }),
+    );
+
+    expect(toolCallsOf(chunks)).toHaveLength(1);
+    expect(finishOf(chunks)?.reason).toBe('tool_calls');
+  });
+
+  it('still requests a tool even when asked to finish without tools (drives RUN_FAILED at the limit)', async () => {
+    const chunks = await collect(run('mock-tool-loop', 'x', { tools: [] }));
+
+    expect(toolCallsOf(chunks)).toHaveLength(1);
+    expect(textOf(chunks)).toBe('');
+  });
+});
+
+describe('FR-GRD-006 mock-destructive requests a destructive tool, then answers', () => {
+  it('asks for sandbox_delete { path: "notes.txt" }', async () => {
+    const calls = toolCallsOf(await collect(run('mock-destructive')));
+
+    expect(calls[0]?.name).toBe('sandbox_delete');
+    expect(calls[0]?.args).toEqual({ path: 'notes.txt' });
+  });
+
+  it('answers once the deletion result comes back', async () => {
+    const chunks = await collect(
+      run('mock-destructive', 'clean up', {
+        toolResults: [toolResult('sandbox_delete', { deleted: true })],
+      }),
+    );
+
+    expect(toolCallsOf(chunks)).toHaveLength(0);
+    expect(finishOf(chunks)?.reason).toBe('stop');
+    expect(textOf(chunks)).toContain('sandbox_delete');
+  });
+});
+
+describe('FR-TOOL-005 mock-http requests the first URL in the input, then answers with the status', () => {
+  it('GETs the first URL it finds in the prompt', async () => {
+    const calls = toolCallsOf(
+      await collect(run('mock-http', 'please fetch http://127.0.0.1:9000/thing and report')),
+    );
+
+    expect(calls[0]?.name).toBe('http_request');
+    expect(calls[0]?.args).toEqual({ method: 'GET', url: 'http://127.0.0.1:9000/thing' });
+  });
+
+  it('answers with the returned status once the request result comes back', async () => {
+    const chunks = await collect(
+      run('mock-http', 'x', { toolResults: [toolResult('http_request', { status: 200 })] }),
+    );
+
+    expect(textOf(chunks)).toContain('200');
+    expect(finishOf(chunks)?.reason).toBe('stop');
+  });
+});
+
+describe('TC-TOOL-003 mock-search runs web_search then web_fetch then answers (two tool calls)', () => {
+  it('starts with web_search { query: <input> }', async () => {
+    const calls = toolCallsOf(await collect(run('mock-search', 'find the news')));
+
+    expect(calls[0]?.name).toBe('web_search');
+    expect(calls[0]?.args).toEqual({ query: 'find the news' });
+  });
+
+  it('web_fetches the first result URL after the search comes back', async () => {
+    const chunks = await collect(
+      run('mock-search', 'find the news', {
+        toolResults: [
+          toolResult('web_search', {
+            results: [{ title: 'First', url: 'http://example.test/a', snippet: 's' }],
+          }),
+        ],
+      }),
+    );
+    const calls = toolCallsOf(chunks);
+
+    expect(calls[0]?.name).toBe('web_fetch');
+    expect(calls[0]?.args).toEqual({ url: 'http://example.test/a' });
+  });
+
+  it('answers once the fetch result comes back, so a full run is exactly two tool calls', async () => {
+    const chunks = await collect(
+      run('mock-search', 'find the news', {
+        toolResults: [toolResult('web_fetch', { title: 'First', text: 'the page body' })],
+      }),
+    );
+
+    expect(toolCallsOf(chunks)).toHaveLength(0);
+    expect(textOf(chunks)).toContain('First');
+    expect(finishOf(chunks)?.reason).toBe('stop');
+  });
+});
+
+describe('TC-TOOL-008 mock-mcp calls the first enabled mcp_ tool, then answers', () => {
+  const mcpTool = {
+    name: 'mcp_test_hello',
+    description: 'an mcp tool',
+    inputSchema: {},
+    outputSchema: {},
+    permissions: { network: true, fsPaths: [], destructive: false },
+    timeoutMs: 1000,
+    source: 'mcp' as const,
+  };
+
+  it('requests the first tool whose name starts with mcp_ with empty args', async () => {
+    const calls = toolCallsOf(await collect(run('mock-mcp', 'go', { tools: [mcpTool] })));
+
+    expect(calls[0]?.name).toBe('mcp_test_hello');
+    expect(calls[0]?.args).toEqual({});
+  });
+
+  it('answers once the mcp tool result comes back', async () => {
+    const chunks = await collect(
+      run('mock-mcp', 'go', { tools: [mcpTool], toolResults: [toolResult('mcp_test_hello', {})] }),
+    );
+
+    expect(toolCallsOf(chunks)).toHaveLength(0);
+    expect(finishOf(chunks)?.reason).toBe('stop');
+  });
+
+  it('answers directly when no mcp_ tool is enabled, rather than requesting one that is absent', async () => {
+    const chunks = await collect(run('mock-mcp', 'go', { tools: [] }));
+
+    expect(toolCallsOf(chunks)).toHaveLength(0);
+    expect(finishOf(chunks)?.reason).toBe('stop');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Round 4 — multimodal (§2.6, FR-MM-003, TC-MM-009)                          */
+/* -------------------------------------------------------------------------- */
+
+describe('TC-MM-009 mock-vision reads the image reference metadata from the prompt', () => {
+  it('answers "Image <name> (<size> bytes, <mime>)" from a rendered reference', async () => {
+    const text = textOf(
+      await collect(
+        run('mock-vision', 'Describe [image diagram.png (2048 bytes, image/png)]', {
+          outputTypes: ['text'],
+        }),
+      ),
+    );
+
+    expect(text).toBe('Image diagram.png (2048 bytes, image/png)');
+  });
+
+  it('falls back to a bare [artifact NAME] reference, keeping the sentence shape', async () => {
+    const text = textOf(
+      await collect(run('mock-vision', 'Describe [artifact diagram.png]', { outputTypes: ['text'] })),
+    );
+
+    expect(text).toContain('Image diagram.png');
+  });
+
+  it('matches the shape formatArtifactReference renders, so the engine and the mock agree', async () => {
+    const reference = formatArtifactReference({
+      type: 'image',
+      name: 'chart.webp',
+      size: 4096,
+      mime: 'image/webp',
+    });
+    const text = textOf(
+      await collect(run('mock-vision', `Look at ${reference}`, { outputTypes: ['text'] })),
+    );
+
+    expect(text).toBe('Image chart.webp (4096 bytes, image/webp)');
+  });
+});
+
+describe('FR-MM-003 mock-media emits one Part of each of the seven data types', () => {
+  it('yields text, json, code, image, audio, video and file parts', async () => {
+    const parts = partsOf(
+      await collect(
+        run('mock-media', 'make everything', {
+          outputTypes: ['text', 'json', 'code', 'image', 'audio', 'video', 'file'],
+        }),
+      ),
+    );
+
+    expect(parts.map((p) => p.type)).toEqual([
+      'text',
+      'json',
+      'code',
+      'image',
+      'audio',
+      'video',
+      'file',
+    ]);
+  });
+
+  it('references media as artifacts with IdSchema-shaped ids and never inlines bytes (FR-MM-004)', async () => {
+    const parts = partsOf(
+      await collect(run('mock-media', 'x', { outputTypes: ['image', 'audio', 'video', 'file'] })),
+    );
+    const media = parts.filter(
+      (p): p is Extract<Part, { artifactId: string }> =>
+        p.type === 'image' || p.type === 'audio' || p.type === 'video' || p.type === 'file',
+    );
+
+    expect(media).toHaveLength(4);
+    for (const part of media) {
+      expect(part.artifactId).toMatch(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
+      expect(part).not.toHaveProperty('bytes');
+      expect(part).not.toHaveProperty('base64');
+    }
+    // The stored JSON of a media envelope must never carry raw bytes (BR-02).
+    expect(JSON.stringify(parts)).not.toMatch(/bytes|base64/);
+  });
+
+  it('every part parses against the contract PartSchema and the ids are stable', async () => {
+    const first = partsOf(await collect(run('mock-media', 'x', { outputTypes: ['image'] })));
+    const second = partsOf(await collect(run('mock-media', 'x', { outputTypes: ['image'] })));
+
+    for (const part of first) expect(PartSchema.safeParse(part).success).toBe(true);
+    expect(first).toEqual(second);
+  });
+
+  it('finishes with reason stop after the parts', async () => {
+    const chunks = await collect(run('mock-media', 'x', { outputTypes: ['text', 'json'] }));
+
+    expect(finishOf(chunks)?.reason).toBe('stop');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Round 4 — direct chat (§2.6, FR-CHAT-004/006)                              */
+/* -------------------------------------------------------------------------- */
+
+describe('FR-CHAT-006 mock-chat echoes the input, streamed, and answers in French on request', () => {
+  it('streams "You said: <input>" word by word', async () => {
+    const chunks = await collect(run('mock-chat', 'good morning'));
+
+    expect(textOf(chunks)).toContain('You said: good morning');
+    // Streamed: more than one text chunk for a multi-word reply.
+    expect(chunks.filter((c) => c.type === 'text').length).toBeGreaterThan(1);
+    expect(finishOf(chunks)?.reason).toBe('stop');
+  });
+
+  it('replies in French when the instructions ask for it (via the system section)', async () => {
+    const text = textOf(await collect(run('mock-chat', 'bonjour', { system: 'Answer in French.' })));
+
+    expect(text).toContain('Vous avez dit');
+  });
+
+  it('replies in French when the instruction sits in the prompt body', async () => {
+    const text = textOf(await collect(run('mock-chat', 'Answer in French. bonjour')));
+
+    expect(text).toContain('Vous avez dit');
   });
 });
 
