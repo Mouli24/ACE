@@ -3,6 +3,7 @@ import { streamText, type LanguageModel } from 'ai';
 
 import {
   ProviderCallError,
+  abortedCallError,
   mapProviderError,
   providerStateForError,
   statusToNodeError,
@@ -86,17 +87,16 @@ export async function getJson(options: HttpProbeOptions): Promise<unknown> {
     response = await fetchImpl(options.url, { headers: options.headers ?? {}, signal });
   } catch (error) {
     // A timeout on a reachability probe is the provider being unreachable, not the user
-    // cancelling: the signal is one this function created, not one the caller passed in.
-    const mapped = mapProviderError(error);
+    // cancelling: the signal is one this function created, so its abort can only be the timer.
     throw new ProviderCallError(
-      mapped.kind === 'user_cancelled'
+      signal.aborted
         ? {
             kind: 'network',
             code: 'timeout',
             message: `The provider did not answer within ${options.timeoutMs ?? CHECK_TIMEOUT_MS} ms.`,
             retryable: true,
           }
-        : mapped,
+        : mapProviderError(error),
     );
   }
 
@@ -195,7 +195,15 @@ export function createAiSdkAdapter(options: AiSdkAdapterOptions): ProviderAdapte
             }
 
             if (part.type === 'error') {
-              throw new ProviderCallError(mapProviderError(part.error));
+              throw new ProviderCallError(mapProviderError(part.error, { signal }));
+            }
+
+            // An aborted call does not throw: the SDK emits `abort` and ends the stream quietly,
+            // which would read as a finished answer — whether the transport failed before the first
+            // byte or mid-stream. Why it was aborted is the signal's reason: a timeout (`network`,
+            // retried) or a stop (`user_cancelled`) (D97, D109).
+            if (part.type === 'abort') {
+              throw new ProviderCallError(abortedCallError(undefined, { signal }));
             }
 
             if (part.type === 'finish') {
@@ -208,7 +216,7 @@ export function createAiSdkAdapter(options: AiSdkAdapterOptions): ProviderAdapte
             }
           }
         } catch (error) {
-          throw new ProviderCallError(mapProviderError(error));
+          throw new ProviderCallError(mapProviderError(error, { signal }));
         }
       })();
     },

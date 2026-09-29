@@ -64,7 +64,8 @@ describe('Arch §28 transport failures are network errors', () => {
 describe('Arch §28 a cancelled call is never retried', () => {
   it.each([
     ['an AbortError by name', Object.assign(new Error('aborted'), { name: 'AbortError' })],
-    ['a DOMException-style abort', Object.assign(new Error('x'), { name: 'TimeoutError' })],
+    // A TimeoutError is not a cancellation but a network failure (D97, D109): timeout.test.ts.
+    ['a DOMException-style abort', new DOMException('x', 'AbortError')],
   ])('maps %s to user_cancelled', (_label, thrown) => {
     const error = mapProviderError(thrown);
 
