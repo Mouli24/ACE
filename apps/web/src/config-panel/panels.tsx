@@ -13,6 +13,8 @@ import {
 import { Button } from '@ace/ui';
 
 import { PolicyPicker } from '../guardrails/PolicyPicker';
+import { AgentToolsSection } from './AgentToolsSection';
+import { InputAttachments } from './InputAttachments';
 import { MergeModeField } from '../nodes/merge/MergeModeField';
 import { MergeSlots, type MergeSlot } from '../nodes/merge/MergeSlots';
 import { useRunStore } from '../runs/run-store';
@@ -167,7 +169,7 @@ export function AgentPanel({
         range={BUDGET_RANGE}
         onCommit={(budgetTokens) => patch({ contextPolicy: { budgetTokens } })}
       />
-      <LaterField label="Tools" round="Round 4" testId="tools" />
+      <AgentToolsSection tools={config.tools} onChange={(tools) => patch({ tools })} />
       <LaterField label="Skills" round="Round 6+" testId="skills" />
       <LaterField label="Memory" round="Round 5" testId="memory" />
       <PolicyPicker
@@ -223,9 +225,13 @@ export function ModelPanel({
 export function InputPanel({
   config,
   patch,
+  workflowId,
+  nodeId,
 }: {
   config: InputConfig;
   patch: PatchConfig<InputConfig>;
+  workflowId: string;
+  nodeId: Id;
 }) {
   return (
     <>
@@ -241,7 +247,7 @@ export function InputPanel({
         value={config.outputTypes}
         onChange={(outputTypes) => patch({ outputTypes })}
       />
-      <LaterField label="Files" round="Round 4" testId="files" />
+      <InputAttachments workflowId={workflowId} nodeId={nodeId} config={config} />
     </>
   );
 }
@@ -379,7 +385,14 @@ export function KindPanel({
     case 'model':
       return <ModelPanel config={node.config} patch={patch as PatchConfig<ModelConfig>} />;
     case 'input':
-      return <InputPanel config={node.config} patch={patch as PatchConfig<InputConfig>} />;
+      return (
+        <InputPanel
+          config={node.config}
+          patch={patch as PatchConfig<InputConfig>}
+          workflowId={workflowId}
+          nodeId={node.id}
+        />
+      );
     case 'merge':
       return (
         <MergePanel

@@ -31,11 +31,9 @@ describe('Bottom panel (round 1 §5 step 3, FR-WF-006)', () => {
     await user.click(within(list).getAllByRole('button', { name: 'show node' })[0]!);
     expect(useSelectionStore.getState().focusedNodeId).toBe(agent.id);
 
-    // Events and Errors are real panes from round 3; Timeline is the one still to come.
-    for (const [tab, round] of [['Timeline', 'Round 4']] as const) {
-      await user.click(screen.getByRole('tab', { name: tab }));
-      expect(await screen.findByText(`${tab} — available in ${round}.`)).toBeInTheDocument();
-    }
+    // Events, Errors and now Timeline (round 4) are all real panes — no "later" placeholders remain.
+    await user.click(screen.getByRole('tab', { name: 'Timeline' }));
+    expect(screen.queryByText('Timeline — available in Round 4.')).not.toBeInTheDocument();
     act(() => usePanelsStore.getState().setBottomTab('validation'));
   });
 });

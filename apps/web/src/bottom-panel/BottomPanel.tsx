@@ -9,14 +9,10 @@ import { useNodeRuns, useRetryNodeRun } from '../runs/hooks';
 import { useRunStore } from '../runs/run-store';
 import { useWorkflowGraph } from '../workflows/hooks';
 import { EventsTab } from './EventsTab';
+import { TimelineTab } from './TimelineTab';
 import { ValidationTab } from './ValidationTab';
 
-/** Round 4 fills this one; until then it says so rather than showing an empty pane. */
-const LATER: Array<{ tab: BottomTab; label: string; round: string }> = [
-  { tab: 'timeline', label: 'Timeline', round: 'Round 4' },
-];
-
-/** Bottom pane (Arch §33.1 step 5): Validation, Events and Errors; Timeline says when it arrives. */
+/** Bottom pane (Arch §33.1 step 5): Validation, Events, Errors and the round-4 Timeline. */
 export function BottomPanel({ workflowId }: { workflowId: string }) {
   const tab = usePanelsStore((s) => s.bottomTab);
   const setTab = usePanelsStore((s) => s.setBottomTab);
@@ -76,11 +72,7 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
         <TabsTrigger value="validation">Validation</TabsTrigger>
         <TabsTrigger value="events">Events</TabsTrigger>
         <TabsTrigger value="errors">Errors</TabsTrigger>
-        {LATER.map((t) => (
-          <TabsTrigger key={t.tab} value={t.tab}>
-            {t.label}
-          </TabsTrigger>
-        ))}
+        <TabsTrigger value="timeline">Timeline</TabsTrigger>
       </TabsList>
 
       <TabsContent value="validation" className="min-h-0 flex-1 overflow-auto">
@@ -107,11 +99,9 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
         />
       </TabsContent>
 
-      {LATER.map((t) => (
-        <TabsContent key={t.tab} value={t.tab} className="p-4 text-sm text-fg-muted">
-          {t.label} — available in {t.round}.
-        </TabsContent>
-      ))}
+      <TabsContent value="timeline" className="min-h-0 flex-1 overflow-hidden">
+        <TimelineTab workflowId={workflowId} />
+      </TabsContent>
     </Tabs>
   );
 }

@@ -8,6 +8,7 @@ import { BottomPanel } from '../bottom-panel/BottomPanel';
 import { Canvas } from '../canvas/Canvas';
 import { Palette } from '../canvas/Palette';
 import { useCanvasApi } from '../canvas/canvas-api';
+import { ChatPanel } from '../chat';
 import { ConfigPanel } from '../config-panel/ConfigPanel';
 import { Inspector } from '../inspector/Inspector';
 import { PreflightIssues } from '../runs/PreflightIssues';
@@ -81,6 +82,7 @@ export function WorkflowPage() {
                 <TabsTrigger value="configure">Configure</TabsTrigger>
                 <TabsTrigger value="inspect">Inspector</TabsTrigger>
                 <TabsTrigger value="runs">Runs</TabsTrigger>
+                <TabsTrigger value="chat">Chat</TabsTrigger>
               </TabsList>
               <TabsContent value="configure" className="min-h-0 flex-1">
                 <ConfigPanel workflowId={workflowId} />
@@ -90,6 +92,9 @@ export function WorkflowPage() {
               </TabsContent>
               <TabsContent value="runs" className="min-h-0 flex-1 overflow-y-auto">
                 <RunsList workflowId={workflowId} />
+              </TabsContent>
+              <TabsContent value="chat" className="min-h-0 flex-1">
+                <ChatPanel workflowId={workflowId} />
               </TabsContent>
             </Tabs>
           </Panel>
