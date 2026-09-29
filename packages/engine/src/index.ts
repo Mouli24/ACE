@@ -18,4 +18,5 @@ export * from './runs/index.js';
 export * from './envelopes/index.js';
 export * from './artifacts/index.js';
 export * from './prompts/index.js';
+export * from './chat/index.js';
 export * from './gateway/index.js';
