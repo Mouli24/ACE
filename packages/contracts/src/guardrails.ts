@@ -249,6 +249,15 @@ export const VerdictSchema = z.strictObject({
 });
 export type Verdict = z.infer<typeof VerdictSchema>;
 
+/**
+ * A verdict from a direct chat (round 4 §2.3, FR-CHAT-008). The same shape without `nodeRunId`,
+ * because a chat never reads or writes `runs`/`node_runs` (FR-CHAT-005) — the same reasoning as
+ * `PolicyTestVerdict`, which keeps its `id` only where there is a row to be stored with. These are
+ * stored on the `ChatMessage` and returned in the `details.verdicts` of a 422 `guardrail_blocked`.
+ */
+export const ChatVerdictSchema = VerdictSchema.omit({ nodeRunId: true });
+export type ChatVerdict = z.infer<typeof ChatVerdictSchema>;
+
 /* -------------------------------------------------------------------------- */
 /* Approvals (FR-GRD-013, Arch §21.2)                                          */
 /* -------------------------------------------------------------------------- */

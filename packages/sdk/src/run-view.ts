@@ -1,4 +1,5 @@
 import {
+  PERSISTED_RUN_EVENT_TYPES,
   allowedRunActions,
   isPersistedFrame,
   zeroUsage,
@@ -93,6 +94,17 @@ export interface RunView {
  */
 export type PersistedRunEvent = Extract<RunEvent, { seq: number }>;
 
+/**
+ * Whether a frame is a persisted event of the *run* family. `isPersistedFrame` answers only whether
+ * a frame has a `seq`, and since round 4 that is true of the thread family too, so it no longer
+ * narrows to a run event on its own.
+ */
+function isPersistedRunEvent(frame: ServerFrame): frame is PersistedRunEvent {
+  return (
+    isPersistedFrame(frame) && (PERSISTED_RUN_EVENT_TYPES as readonly string[]).includes(frame.type)
+  );
+}
+
 /** A node the run has not touched yet is IDLE (Arch §19.1), so the Canvas can render immediately. */
 const DEFAULT_STATE: NodeState = 'IDLE';
 
@@ -142,9 +154,11 @@ export class RunEventBuffer {
       if (this.seen.has(frame.seq)) return;
       this.seen.add(frame.seq);
       if (frame.seq > this.lastSeq) this.lastSeq = frame.seq;
-      // `hello` and `workflow.updated` are already gone by here; `provider.status` is engine scope
-      // and belongs to the providers screen, not to a run's event list.
-      if (frame.type !== 'provider.status') this.log.push(frame);
+      // `hello` and `workflow.updated` are already gone by here. What is left may still not belong
+      // to this run: `provider.status` and `mcp.status` are engine scope and belong to the providers
+      // screen, `chat.message` is thread scope (round 4 §2.5). The log keeps the run family only,
+      // and asks the contract which types those are rather than naming them here a second time.
+      if (isPersistedRunEvent(frame)) this.log.push(frame);
     }
 
     switch (frame.type) {

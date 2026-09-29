@@ -62,8 +62,18 @@ describe('FR-EXE-014 WebSocket client frames', () => {
     expect(WsClientFrameSchema.safeParse({ type: 'ping', payload: {} }).success).toBe(false);
   });
 
-  it('declares exactly the two scopes of §2.9', () => {
-    expect([...WS_SCOPES]).toEqual(['workflow', 'engine']);
+  it('declares §2.9’s two scopes plus round 4 §2.5’s thread', () => {
+    expect([...WS_SCOPES]).toEqual(['workflow', 'engine', 'thread']);
+  });
+
+  it('subscribes to a thread by id (round 4 §2.5, FR-CHAT-006)', () => {
+    const frame = { type: 'subscribe', payload: { scope: 'thread', id: WORKFLOW_ID } };
+
+    expect(WsClientFrameSchema.parse(frame)).toEqual(frame);
+    expect(
+      WsClientFrameSchema.safeParse({ type: 'subscribe', payload: { scope: 'thread' } }).success,
+      'a thread subscription names its thread',
+    ).toBe(false);
   });
 });
 

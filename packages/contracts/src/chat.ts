@@ -1,5 +1,173 @@
+import { z } from 'zod';
+
+import { PartSchema } from './envelope.js';
+import { IdSchema, TimestampSchema } from './graph.js';
+import { ChatVerdictSchema } from './guardrails.js';
+import { RunSchema, UsageSchema } from './runs.js';
+
 /**
- * Placeholder for the chat contract (round 4). Declared now so `src/index.ts` never has to
- * change again - round 1 §3 item 3.
+ * The timeline and direct chat (round 4 §2.3, FR-CHAT-001..008, Arch §12.2, §20.2).
+ *
+ * Two separate things live here. A `Message` is one row of the workflow's timeline — what the user
+ * sent, what an agent answered, what an Output node produced, and the run's own events and errors.
+ * A `ChatThread` is a conversation with one agent that uses its model, instructions, context policy
+ * and tools but **never reads or writes `runs`/`node_runs`** (FR-CHAT-005), which is why its
+ * messages are a different type with a different id space.
+ *
+ * Every body is strict, as round 3's are: content is `Part[]`, so a file in a message is an
+ * artifact reference and never bytes (FR-MM-004, BR-02), and a stray key cannot turn a chat into
+ * the raw conversation history BR-02 rules out of a handoff.
  */
-export {};
+
+/* -------------------------------------------------------------------------- */
+/* Timeline messages (§2.3, FR-CHAT-001..003)                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The six styles the timeline distinguishes (FR-CHAT-001), in §2.3's order: what the user sent,
+ * what an agent or model node answered, an Output node's final result, run lifecycle events, node
+ * errors, and the engine's own notices (shutdown, crash recovery, provider status changes).
+ */
+export const MESSAGE_TYPES = ['user', 'agent', 'output', 'event', 'error', 'system'] as const;
+export const MessageTypeSchema = z.enum(MESSAGE_TYPES);
+export type MessageType = z.infer<typeof MessageTypeSchema>;
+
+export const MessageSchema = z.strictObject({
+  id: IdSchema,
+  workflowId: IdSchema,
+  /** Absent on a message that belongs to no run — a user message posted before a run starts. */
+  runId: IdSchema.optional(),
+  nodeId: IdSchema.optional(),
+  nodeRunId: IdSchema.optional(),
+  type: MessageTypeSchema,
+  content: z.array(PartSchema),
+  at: TimestampSchema,
+});
+export type Message = z.infer<typeof MessageSchema>;
+
+/**
+ * `GET /workflows/:id/messages?runId&nodeId&type&cursor&limit` (§2.4, FR-CHAT-002). Filters
+ * combine. `type` arrives as a repeated query parameter, and a single value reads as a list of one,
+ * the way `ModelQuery.available` reads a query string as readily as a body (D52's reasoning).
+ */
+export const MessageQuerySchema = z.object({
+  runId: IdSchema.optional(),
+  nodeId: IdSchema.optional(),
+  type: z
+    .union([z.array(MessageTypeSchema), MessageTypeSchema.transform((type) => [type])])
+    .optional(),
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().positive().optional(),
+});
+export type MessageQuery = z.infer<typeof MessageQuerySchema>;
+
+/** Does one timeline row satisfy a filter? Pure, so the engine and the Timeline tab agree (D52). */
+export function messageMatchesQuery(message: Message, query: MessageQuery): boolean {
+  if (query.runId !== undefined && message.runId !== query.runId) return false;
+  if (query.nodeId !== undefined && message.nodeId !== query.nodeId) return false;
+  if (query.type !== undefined && !query.type.includes(message.type)) return false;
+  return true;
+}
+
+/**
+ * `POST /workflows/:id/messages` (FR-CHAT-003): the content is stored as a `user` message and set
+ * as the Input node's pending text; with `run: true` a run starts with it.
+ */
+export const PostMessageRequestSchema = z.strictObject({
+  content: z.array(PartSchema).min(1),
+  run: z.boolean(),
+});
+export type PostMessageRequest = z.infer<typeof PostMessageRequestSchema>;
+
+/** `GET /workflows/:id/messages` → `{ items: Message[] }` (§2.4, D64). */
+export const MessageListResponseSchema = z.strictObject({
+  items: z.array(MessageSchema),
+  nextCursor: z.string().optional(),
+});
+export type MessageListResponse = z.infer<typeof MessageListResponseSchema>;
+
+/**
+ * `POST /workflows/:id/messages` → `{ message, run? }` (§2.4). `run` is the whole `Run`, exactly
+ * what `POST /workflows/:id/runs` answers with, so a message that starts a run leaves the client
+ * with the same thing the Start button does — pre-flight issues, `allowedActions` and all (D65).
+ */
+export const PostMessageResponseSchema = z.strictObject({
+  message: MessageSchema,
+  run: RunSchema.optional(),
+});
+export type PostMessageResponse = z.infer<typeof PostMessageResponseSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* Direct chat (§2.3, FR-CHAT-004..008)                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A conversation with one agent. `GET /nodes/:id/chat/threads` answers a bare `ChatThread[]`, as
+ * §2.4 writes it and as `GET /runs/:id/approvals` does (D78).
+ */
+export const ChatThreadSchema = z.strictObject({
+  id: IdSchema,
+  /** The agent this thread talks to; its model, instructions and tools are the ones used. */
+  nodeId: IdSchema,
+  title: z.string(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+export type ChatThread = z.infer<typeof ChatThreadSchema>;
+
+export const CHAT_ROLES = ['user', 'agent'] as const;
+export const ChatRoleSchema = z.enum(CHAT_ROLES);
+export type ChatRole = z.infer<typeof ChatRoleSchema>;
+
+/**
+ * One turn of a direct chat. `verdicts` are `ChatVerdict`s — the same verdicts, without a
+ * `nodeRunId`, because the thread touches no node run (FR-CHAT-005). A reply the output point
+ * blocked arrives as content `[blocked by guardrail: <reason>]` with the verdicts that say why
+ * (FR-CHAT-008).
+ */
+export const ChatMessageSchema = z.strictObject({
+  id: IdSchema,
+  threadId: IdSchema,
+  role: ChatRoleSchema,
+  content: z.array(PartSchema),
+  verdicts: z.array(ChatVerdictSchema),
+  /** What the reply cost; a user turn has none. */
+  usage: UsageSchema.optional(),
+  at: TimestampSchema,
+});
+export type ChatMessage = z.infer<typeof ChatMessageSchema>;
+
+/**
+ * `POST /nodes/:id/chat` (FR-CHAT-004, FR-CHAT-007). Without a `threadId` the engine opens a new
+ * thread. Files attach as `Part` references, as everywhere else.
+ */
+export const ChatRequestSchema = z.strictObject({
+  threadId: IdSchema.optional(),
+  content: z.array(PartSchema).min(1),
+});
+export type ChatRequest = z.infer<typeof ChatRequestSchema>;
+
+/**
+ * `POST /nodes/:id/chat` → 202 `{ threadId, messageId }` (§2.3). The answer comes back over the
+ * socket: `chat.token` deltas on the thread's subscription, ending with `chat.message`
+ * (FR-CHAT-006). `messageId` is the stored **user** turn, which is what the client echoes while it
+ * waits.
+ */
+export const ChatResponseSchema = z.strictObject({
+  threadId: IdSchema,
+  messageId: IdSchema,
+});
+export type ChatResponse = z.infer<typeof ChatResponseSchema>;
+
+/** `GET /chat/threads/:id` → `{ thread, messages: ChatMessage[] }` (§2.4). */
+export const ChatThreadDetailSchema = z.strictObject({
+  thread: ChatThreadSchema,
+  messages: z.array(ChatMessageSchema),
+});
+export type ChatThreadDetail = z.infer<typeof ChatThreadDetailSchema>;
+
+/**
+ * The content of a reply the output point blocked (§2.3, FR-CHAT-008). One text part, so the chat
+ * panel needs no special case, and the verdicts on the message carry the detail.
+ */
+export const blockedChatReply = (reason: string): string => `[blocked by guardrail: ${reason}]`;

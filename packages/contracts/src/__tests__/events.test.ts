@@ -7,22 +7,30 @@ import {
   EventSchema,
   EventsQuerySchema,
   PERSISTED_RUN_EVENT_TYPES,
+  PERSISTED_THREAD_EVENT_TYPES,
   RUN_EVENT_TYPES,
   RunEventSchema,
+  THREAD_EVENT_TYPES,
   TRANSIENT_EVENT_TYPES,
+  ThreadEventSchema,
 } from '../events.js';
 import { LOOP_STOP_REASONS } from '../graph.js';
 import { ServerFrameSchema, WsServerFrameSchema, isPersistedFrame } from '../ws.js';
 import {
   APPROVAL_ID,
+  CHAT_MESSAGE_ID,
   EDGE_ID,
   LOOP_EDGE_ID,
+  MCP_SERVER_ID,
+  MESSAGE_ID,
   NODE_A,
   NODE_B,
   NODE_RUN_ID,
   NOW,
   PROVIDER_ID,
   RUN_ID,
+  THREAD_ID,
+  TOOL_CALL_ID,
   VERDICT_ID,
   WORKFLOW_ID,
 } from './fixtures.js';
@@ -66,6 +74,39 @@ const verdict = {
   passed: false,
   reason: 'An email address was found in the output.',
   redactedTypes: ['email'],
+  at: NOW,
+};
+
+/* Round 4 §2.5. */
+
+const toolCall = {
+  id: TOOL_CALL_ID,
+  nodeRunId: NODE_RUN_ID,
+  toolName: 'echo',
+  args: { text: 'hello' },
+  resultSummary: 'hello',
+  durationMs: 2,
+  status: 'ok',
+  verdicts: [],
+  at: NOW,
+};
+
+const timelineMessage = {
+  id: MESSAGE_ID,
+  workflowId: WORKFLOW_ID,
+  runId: RUN_ID,
+  nodeId: NODE_A,
+  type: 'agent',
+  content: [{ type: 'text', text: 'echo said: hello' }],
+  at: NOW,
+};
+
+const chatMessage = {
+  id: CHAT_MESSAGE_ID,
+  threadId: THREAD_ID,
+  role: 'agent',
+  content: [{ type: 'text', text: 'You said: hello' }],
+  verdicts: [],
   at: NOW,
 };
 
@@ -152,6 +193,28 @@ const frames: Record<string, { type: string; payload: unknown; seq?: number }> =
     payload: { runId: RUN_ID, edgeId: LOOP_EDGE_ID, targetNodeId: NODE_A, iteration: 2 },
     seq: 13,
   },
+
+  /* Round 4 §2.5 */
+  'tool.call': {
+    type: 'tool.call',
+    payload: { runId: RUN_ID, nodeRunId: NODE_RUN_ID, toolCall },
+    seq: 14,
+  },
+  'message.created': {
+    type: 'message.created',
+    payload: { workflowId: WORKFLOW_ID, message: timelineMessage },
+    seq: 15,
+  },
+};
+
+/** One valid frame per thread event type (round 4 §2.5). */
+const threadFrames: Record<string, { type: string; payload: unknown; seq?: number }> = {
+  'chat.message': {
+    type: 'chat.message',
+    payload: { threadId: THREAD_ID, message: chatMessage },
+    seq: 16,
+  },
+  'chat.token': { type: 'chat.token', payload: { threadId: THREAD_ID, delta: 'You ' } },
 };
 
 /** Indexed access is checked in this workspace, so fixture lookup fails loudly instead. */
@@ -162,7 +225,7 @@ const payloadOf = (type: string): Record<string, unknown> => {
 };
 
 describe('FR-EXE-014 RunEvent covers every type of round 2 §2.4 and round 3 §2.6', () => {
-  it('declares exactly the fourteen run event types', () => {
+  it('declares exactly the sixteen run event types', () => {
     expect([...RUN_EVENT_TYPES]).toEqual([
       'run.started',
       'run.completed',
@@ -178,6 +241,8 @@ describe('FR-EXE-014 RunEvent covers every type of round 2 §2.4 and round 3 §2
       'node.approval_decided',
       'guardrail.verdict',
       'loop.iteration',
+      'tool.call',
+      'message.created',
     ]);
   });
 
@@ -199,11 +264,12 @@ describe('FR-EXE-014 RunEvent covers every type of round 2 §2.4 and round 3 §2
   });
 });
 
-describe('§2.4 node.token is transient', () => {
-  it('is the only type that carries no seq', () => {
-    expect([...TRANSIENT_EVENT_TYPES]).toEqual(['node.token']);
+describe('§2.4 node.token is transient, and round 4 §2.5 chat.token with it', () => {
+  it('names the two types that carry no seq', () => {
+    expect([...TRANSIENT_EVENT_TYPES]).toEqual(['node.token', 'chat.token']);
     expect([...PERSISTED_RUN_EVENT_TYPES]).not.toContain('node.token');
     expect(PERSISTED_RUN_EVENT_TYPES).toHaveLength(RUN_EVENT_TYPES.length - 1);
+    expect([...PERSISTED_THREAD_EVENT_TYPES]).toEqual(['chat.message']);
   });
 
   it('refuses a seq on node.token, because it is never persisted or resumed', () => {
@@ -417,8 +483,30 @@ describe('FR-PRV-004 EngineEvent', () => {
     seq: 11,
   };
 
-  it('declares provider.status as its only type this round', () => {
-    expect([...ENGINE_EVENT_TYPES]).toEqual(['provider.status']);
+  it('declares provider.status and, from round 4 §2.5, mcp.status', () => {
+    expect([...ENGINE_EVENT_TYPES]).toEqual(['provider.status', 'mcp.status']);
+  });
+
+  it('parses an MCP server coming up with its tool count (FR-TOOL-007, D16)', () => {
+    const mcp = {
+      type: 'mcp.status',
+      payload: { serverId: MCP_SERVER_ID, status: 'connected', toolCount: 3 },
+      seq: 17,
+    };
+
+    expect(EngineEventSchema.parse(mcp)).toEqual(mcp);
+    expect(
+      EngineEventSchema.safeParse({
+        ...mcp,
+        payload: { serverId: MCP_SERVER_ID, status: 'CONNECTED', toolCount: 3 },
+      }).success,
+      'an MCP status is lowercase, not a ProviderState',
+    ).toBe(false);
+    expect(
+      EngineEventSchema.safeParse({ ...mcp, payload: { serverId: MCP_SERVER_ID, status: 'connected' } })
+        .success,
+      'the tool count says how many tools the registry gained',
+    ).toBe(false);
   });
 
   it('parses a provider status change', () => {
@@ -504,5 +592,76 @@ describe('FR-EXE-014 run events travel on the round 1 socket', () => {
   it('tells a resuming client which frames carry a seq', () => {
     expect(isPersistedFrame(ServerFrameSchema.parse(frames['node.state']))).toBe(true);
     expect(isPersistedFrame(ServerFrameSchema.parse(frames['node.token']))).toBe(false);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Round 4 §2.5                                                              */
+/* -------------------------------------------------------------------------- */
+
+describe('round 4 §2.5 the five events this round adds', () => {
+  it('parses every new type (round 4 §3)', () => {
+    for (const type of ['tool.call', 'message.created']) {
+      expect(RunEventSchema.safeParse(frames[type]).success, type).toBe(true);
+    }
+    for (const type of THREAD_EVENT_TYPES) {
+      expect(ThreadEventSchema.safeParse(threadFrames[type]).success, type).toBe(true);
+    }
+    expect([...THREAD_EVENT_TYPES]).toEqual(['chat.message', 'chat.token']);
+  });
+
+  it('FR-TOOL-009 logs the whole tool call, verdicts and all', () => {
+    const parsed = RunEventSchema.parse(frames['tool.call']);
+
+    expect(parsed.type).toBe('tool.call');
+    expect(
+      RunEventSchema.safeParse({
+        type: 'tool.call',
+        payload: { runId: RUN_ID, nodeRunId: NODE_RUN_ID, toolCall: { ...toolCall, toolName: 'Echo' } },
+        seq: 14,
+      }).success,
+      'a tool name is snake_case',
+    ).toBe(false);
+  });
+
+  it('FR-CHAT-001 puts a new timeline row on the workflow, not on a run', () => {
+    expect(
+      RunEventSchema.safeParse({
+        type: 'message.created',
+        payload: { message: timelineMessage },
+        seq: 15,
+      }).success,
+      'the payload names its workflow',
+    ).toBe(false);
+  });
+
+  it('FR-CHAT-005 keeps a chat turn on its thread, with no run to name', () => {
+    expect(
+      ThreadEventSchema.safeParse({
+        type: 'chat.message',
+        payload: { threadId: THREAD_ID, runId: RUN_ID, message: chatMessage },
+        seq: 16,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('FR-CHAT-006 streams chat.token with no seq, and refuses one (round 4 §3)', () => {
+    expect(ThreadEventSchema.parse(threadFrames['chat.token'])).toEqual(threadFrames['chat.token']);
+    expect(
+      ThreadEventSchema.safeParse({ ...threadFrames['chat.token'], seq: 17 }).success,
+      'a transient frame is never persisted or resumed',
+    ).toBe(false);
+    expect(
+      ThreadEventSchema.safeParse({ type: 'chat.message', payload: { threadId: THREAD_ID, message: chatMessage } })
+        .success,
+      'chat.message is persisted, so it carries a seq',
+    ).toBe(false);
+  });
+
+  it('rides the one whole-socket union, and isPersistedFrame tells them apart', () => {
+    for (const frame of [frames['tool.call'], frames['message.created'], threadFrames['chat.message']]) {
+      expect(isPersistedFrame(ServerFrameSchema.parse(frame)), JSON.stringify(frame)).toBe(true);
+    }
+    expect(isPersistedFrame(ServerFrameSchema.parse(threadFrames['chat.token']))).toBe(false);
   });
 });

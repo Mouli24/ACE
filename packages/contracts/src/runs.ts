@@ -19,6 +19,7 @@ import {
   TimestampSchema,
 } from './graph.js';
 import { ApprovalDecisionSchema, GuardrailPolicyRefSchema, VerdictSchema } from './guardrails.js';
+import { ToolCallSchema } from './tools.js';
 import { ValidationIssueSchema } from './validation.js';
 
 /**
@@ -204,8 +205,8 @@ export const NodeRunSchema = z.object({
   usage: UsageSchema,
   /** Every guardrail verdict on this node run, stored and emitted (FR-GRD-015). */
   verdicts: z.array(VerdictSchema),
-  /** `ToolCall` arrives in round 4; the list exists from now. */
-  toolCalls: z.array(z.unknown()),
+  /** Every tool this node run called, in order, with its verdicts (round 4 §2.2, FR-TOOL-009). */
+  toolCalls: z.array(ToolCallSchema),
   /**
    * Each approval decision with its time (FR-GRD-013). Optional until round 3's engine and UI
    * have both merged; a later contracts PR requires it (D71).

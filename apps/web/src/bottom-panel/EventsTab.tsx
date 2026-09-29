@@ -71,6 +71,14 @@ export function eventNodeIds(
       return [event.payload.fromNodeId, event.payload.toNodeId];
     case 'loop.iteration':
       return [event.payload.targetNodeId];
+    case 'tool.call': {
+      // A tool call names the node run it ran under, like a verdict does (round 4 §2.4).
+      const nodeId = nodeIdByNodeRunId.get(event.payload.nodeRunId);
+      return nodeId === undefined ? [] : [nodeId];
+    }
+    case 'message.created':
+      // A timeline row may name no node at all — a user message posted before a run started.
+      return event.payload.message.nodeId === undefined ? [] : [event.payload.message.nodeId];
     case 'run.started':
     case 'run.completed':
     case 'run.paused':
@@ -135,6 +143,16 @@ export function describeEvent(event: PersistedRunEvent, nameOf: (nodeId: Id) => 
       return event.payload.stop === undefined
         ? `loop iteration ${event.payload.iteration} of ${target}`
         : `loop stopped after iteration ${event.payload.iteration} of ${target} — ${LOOP_STOP_LABEL[event.payload.stop]}`;
+    }
+    case 'tool.call': {
+      const { toolCall } = event.payload;
+      return `${toolCall.toolName} ${toolCall.status} in ${toolCall.durationMs} ms — ${toolCall.resultSummary}`;
+    }
+    case 'message.created': {
+      const { message } = event.payload;
+      // The node is named when there is one; a message with no node is the timeline's own row.
+      const from = message.nodeId === undefined ? message.type : nameOf(message.nodeId);
+      return `${from} added a ${message.type} message to the timeline`;
     }
   }
 }

@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { ErrorKindSchema, type ErrorKind } from './enums.js';
 import { IdSchema } from './graph.js';
+import { ChatVerdictSchema } from './guardrails.js';
 
 /**
  * The single error envelope every `/api/v1` response uses (round 1 §2.3, FR-SYS-006, Arch §20.1).
@@ -39,10 +40,22 @@ export const ROUND_2_ERROR_CODES = ['provider_in_use'] as const;
  */
 export const ROUND_3_ERROR_CODES = ['invalid_run_state', 'policy_in_use'] as const;
 
+/**
+ * Codes round 4 §2.1 and §2.3 add: an upload over `Settings.maxUploadMb` (413, with the limit in
+ * `details`), an upload whose type §2.1's allow-list does not name (415), and a direct-chat input
+ * the agent's policy blocked (422, with the verdicts in `details`, FR-CHAT-008).
+ */
+export const ROUND_4_ERROR_CODES = [
+  'upload_too_large',
+  'unsupported_type',
+  'guardrail_blocked',
+] as const;
+
 export const ERROR_CODES = [
   ...ROUND_1_ERROR_CODES,
   ...ROUND_2_ERROR_CODES,
   ...ROUND_3_ERROR_CODES,
+  ...ROUND_4_ERROR_CODES,
 ] as const;
 export const ErrorCodeSchema = z.enum(ERROR_CODES);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
@@ -61,6 +74,9 @@ export const ERROR_CODE_HTTP_STATUS: Readonly<Record<ErrorCode, number>> = {
   provider_in_use: 409,
   invalid_run_state: 409,
   policy_in_use: 409,
+  upload_too_large: 413,
+  unsupported_type: 415,
+  guardrail_blocked: 422,
 };
 
 /** `details` shapes §2.3 names explicitly. */
@@ -77,6 +93,23 @@ export type ProviderInUseDetails = z.infer<typeof ProviderInUseDetailsSchema>;
 /** `DELETE /guardrail-policies/:id` without `confirm=true` while agents use it (round 3 §2.5). */
 export const PolicyInUseDetailsSchema = z.object({ nodeIds: z.array(IdSchema) });
 export type PolicyInUseDetails = z.infer<typeof PolicyInUseDetailsSchema>;
+
+/**
+ * `POST /artifacts` over the limit answers 413 with the limit itself, in bytes, so the message the
+ * user sees names the real cap rather than a hard-coded 100 MB (round 4 §2.1, FR-MM-001).
+ */
+export const UploadTooLargeDetailsSchema = z.object({ maxBytes: z.number().int().positive() });
+export type UploadTooLargeDetails = z.infer<typeof UploadTooLargeDetailsSchema>;
+
+/**
+ * `POST /nodes/:id/chat` whose input the agent's policy blocked answers 422 with the verdicts that
+ * say why, so the chat panel can show the guardrail reason (round 4 §2.3, FR-CHAT-008). Chat
+ * verdicts carry no `nodeRunId`: a direct chat touches no node run (FR-CHAT-005).
+ */
+export const GuardrailBlockedDetailsSchema = z.object({
+  verdicts: z.array(ChatVerdictSchema),
+});
+export type GuardrailBlockedDetails = z.infer<typeof GuardrailBlockedDetailsSchema>;
 
 /**
  * Error kinds Arch §28 (repeated in CLAUDE.md §10) says are retried with backoff. Used only as the

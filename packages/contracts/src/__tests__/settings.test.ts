@@ -20,6 +20,10 @@ describe('FR-SYS-010 Settings defaults', () => {
       theme: 'dark',
       onboardingCompleted: false,
       allowedOrigins: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+      // Round 4 §2.1 adds three defaults to §2.7's list.
+      maxUploadMb: 100,
+      dockerSandbox: 'auto',
+      mcpEnabled: true,
     });
   });
 

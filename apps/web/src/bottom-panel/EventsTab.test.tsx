@@ -13,6 +13,8 @@ const REVIEWER_RUN = '01FRZ3NDEKTSV4RRFFQ69G5FAV';
 const EDGE = '01GRZ3NDEKTSV4RRFFQ69G5FAV';
 const REQUEST = '01HRZ3NDEKTSV4RRFFQ69G5FAV';
 const VERDICT = '01JRZ3NDEKTSV4RRFFQ69G5FAV';
+const TOOL_CALL = '01KRZ3NDEKTSV4RRFFQ69G5FAV';
+const MESSAGE = '01MRZ3NDEKTSV4RRFFQ69G5FAV';
 
 const NODES = [
   { id: WRITER, name: 'Writer' },
@@ -190,6 +192,46 @@ const ENTRIES: RunEventEntry[] = [
     },
     at: AT,
   },
+  // Round 4's two run events (§2.4). They are listed after the halt only because this list is one
+  // entry per type, not a story; the M4 renderers get their own tests.
+  {
+    event: {
+      type: 'tool.call',
+      seq: 15,
+      payload: {
+        runId: RUN,
+        nodeRunId: WRITER_RUN,
+        toolCall: {
+          id: TOOL_CALL,
+          nodeRunId: WRITER_RUN,
+          toolName: 'web_search',
+          args: { query: 'draft sources' },
+          resultSummary: '3 results',
+          durationMs: 412,
+          status: 'ok',
+          verdicts: [],
+          at: AT,
+        },
+      },
+    },
+  },
+  {
+    event: {
+      type: 'message.created',
+      seq: 16,
+      payload: {
+        workflowId: WF,
+        // A user message posted to the timeline names no node and no run.
+        message: {
+          id: MESSAGE,
+          workflowId: WF,
+          type: 'user',
+          content: [{ type: 'text', text: 'looks good' }],
+          at: AT,
+        },
+      },
+    },
+  },
 ];
 
 describe('Events tab — the run, in order (round 3 §5 item 7, NFR-OBS-01)', () => {
@@ -223,6 +265,8 @@ describe('Events tab — the run, in order (round 3 §5 item 7, NFR-OBS-01)', ()
     );
     expect(screen.getByTestId('event-12')).toHaveTextContent('Reviewer failed — provider');
     expect(screen.getByTestId('event-13')).toHaveTextContent('run cost so far $0.0123');
+    expect(screen.getByTestId('event-15')).toHaveTextContent('web_search ok in 412 ms — 3 results');
+    expect(screen.getByTestId('event-16')).toHaveTextContent('user added a user message');
     // The halt reads in the same words as the run bar's (FR-GRD-008, NFR-USE-03).
     expect(screen.getByTestId('event-14')).toHaveTextContent(
       'run halted — budget exceeded: $0.012 > $0.01 cap',
@@ -285,9 +329,12 @@ describe('Events tab — the run, in order (round 3 §5 item 7, NFR-OBS-01)', ()
       'node.approval_decided',
       'node.error',
     ]);
-    // The Writer's state change is not the Reviewer's business, and neither is the run's own halt.
+    // The Writer's state change is not the Reviewer's business, and neither is the run's own halt,
+    // the Writer's tool call, or a timeline message that names no node.
     expect(screen.queryByTestId('event-2')).not.toBeInTheDocument();
     expect(screen.queryByTestId('event-14')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('event-15')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('event-16')).not.toBeInTheDocument();
     expect(screen.getByTestId('events-count')).toHaveTextContent('4 events');
   });
 
