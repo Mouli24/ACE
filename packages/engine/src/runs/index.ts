@@ -203,6 +203,11 @@ function engineFailure(): NodeError {
   };
 }
 
+/** Two totals that count the same tokens and the same money. */
+function sameUsage(a: Usage, b: Usage): boolean {
+  return a.tokensIn === b.tokensIn && a.tokensOut === b.tokensOut && a.costUsd === b.costUsd;
+}
+
 /** Run states that are an ending (Arch §19.2): nothing writes over them. */
 const ENDED_STATES: ReadonlySet<Run['status']> = new Set<Run['status']>([
   'COMPLETE',
@@ -883,7 +888,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
         await emitNodeState(run, nodeRun, status, failureReason);
       }
 
-      if (status !== 'COMPLETED' && !requeued) await blockDownstream(node);
+      // BLOCKED means "an upstream failed" (FR-ERR-006), and a stop is not a failure (FR-ERR-007):
+      // once the run is aborted nothing more is blocked — nor written after its `run.completed`.
+      if (status !== 'COMPLETED' && !requeued && !signal.aborted) await blockDownstream(node);
     }
 
     /** A wait the abort can cut short — a stop must not sit out a retry backoff (FR-CTL-003). */
@@ -1272,7 +1279,26 @@ export function createRunService(deps: RunServiceDeps): RunService {
      * the drive leaves it alone and simply returns what the control wrote.
      */
     if (gate.abortCause() === 'stopped') {
-      return (await repository.runs.get(scope, run.id)) ?? run;
+      /*
+       * The totals are the control's too — the sum of the node runs as they stood at the stop — but
+       * a call the stop cut short records what it had already spent only as it unwinds, which can be
+       * after that sum was taken. So the sum is taken again now that everything has unwound, and
+       * the row (and the client, through `usage.updated`) is corrected if it moved (TC-OBS-002).
+       */
+      const stopped = (await repository.runs.get(scope, run.id)) ?? run;
+      const spent = sumUsage(
+        (await repository.nodeRuns.listByRun(scope, run.id)).map((nodeRun) => nodeRun.usage),
+      );
+      if (sameUsage(stopped.totals, spent)) return stopped;
+
+      const corrected = await repository.runs.update(scope, run.id, { totals: spent });
+      await bus.emit({
+        type: 'usage.updated',
+        workflowId: run.workflowId,
+        runId: run.id,
+        payload: { runId: run.id, totals: spent },
+      });
+      return corrected ?? stopped;
     }
 
     const haltReason =
