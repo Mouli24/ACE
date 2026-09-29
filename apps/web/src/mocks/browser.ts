@@ -7,6 +7,12 @@ import { createFakeWebSocket, dropMockSockets } from './fake-socket';
 import { createHandlers } from './handlers';
 import { createRound2Handlers, setScenario, setStreamPace } from './handlers-round2';
 import { createRound3Handlers, decideApproval, requireApproval } from './handlers-round3';
+import {
+  createRound4Handlers,
+  requireChatBlock,
+  setChatScenario,
+  type ChatScenario,
+} from './handlers-round4';
 import { createNode, type Round1NodeKind } from '../nodes/factory';
 import { applyOpsWithRules } from './graph-rules';
 
@@ -20,8 +26,12 @@ declare global {
       reset(): void;
       /** Delay every mock response by `ms` (persists across reloads) — TC-CAN-009. */
       setLatency(ms: number): void;
-      /** Which scripted run scenario the next run plays (§5 item 11). */
+      /** Which scripted run scenario the next run plays (§5 item 11; round 4 adds its own). */
       setScenario(name: Parameters<typeof setScenario>[0]): void;
+      /** Which story the next direct chat tells (round 4 §5.5): stream, input-blocked, reply-blocked. */
+      setChatScenario(name: ChatScenario): void;
+      /** Make the next chat input refuse regardless of its text (round 4 FR-CHAT-008/FR-GRD-022). */
+      requireChatBlock(on?: boolean): void;
       /**
        * How fast the next run streams (persists across reloads, like the scenario). `slow` is
        * `mock-slow`'s pace against the real engine — what a test needs when it has to click a run
@@ -107,6 +117,7 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
   const db = new MockDb({ persist: true });
   restoreScenario();
   const worker = setupWorker(
+    ...createRound4Handlers(db),
     ...createRound3Handlers(db),
     ...createRound2Handlers(db),
     ...createHandlers(db),
@@ -132,6 +143,7 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
       }
       setScenario('linear-complete');
       setStreamPace('normal');
+      setChatScenario('chat-stream');
     },
     setLatency(ms) {
       db.setLatency(ms);
@@ -143,6 +155,12 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
       } catch {
         // nothing to do: the scenario still applies to this page
       }
+    },
+    setChatScenario(name) {
+      setChatScenario(name);
+    },
+    requireChatBlock(on) {
+      requireChatBlock(on);
     },
     setStreamPace(pace) {
       setStreamPace(pace);
