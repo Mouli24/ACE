@@ -856,7 +856,11 @@ export function createRunService(deps: RunServiceDeps): RunService {
       // scheduler's own bookkeeping is conditional; the frame names this node run, which really did
       // finish, so the inspector still sees the iteration close.
       if (!requeued) states.set(node.id, status);
-      await emitNodeState(run, nodeRun, status, failureReason);
+      // A node run the Stop cut short was announced STOPPED by the control that stopped it; a second
+      // STOPPED frame for it would be one node run ending twice (FR-CTL-003).
+      if (!(status === 'STOPPED' && stoppedByControl())) {
+        await emitNodeState(run, nodeRun, status, failureReason);
+      }
 
       if (status !== 'COMPLETED' && !requeued) await blockDownstream(node);
     }
@@ -981,6 +985,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
                 attempt,
                 runInputs: run.inputs,
                 signal,
+                gate,
                 onStarted: markRunning,
                 onEnded: () => {
                   endedAt = now();
@@ -990,8 +995,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
               });
 
         // A node that failed before it got a slot (no route, say) still passes through RUNNING, so
-        // every node run follows Arch §19.1: READY → RUNNING → a terminal state.
-        await markRunning();
+        // every node run follows Arch §19.1: READY → RUNNING → a terminal state. One a stop caught
+        // before it started is the exception: it never ran, so it goes READY → STOPPED (D111).
+        if (outcome.status !== 'STOPPED') await markRunning();
 
         if (outcome.status === 'FAILED' && outcome.error !== undefined && !signal.aborted) {
           const decision = autoRetryDecision({
