@@ -57,8 +57,10 @@ export interface AutoRetryInput {
   /** `AgentConfig.execution.retries` — how many automatic retries this node is allowed. */
   maxRetries: number;
   /**
-   * Contract repairs already spent on this node run's lineage. Separate from `maxRetries`: §2.1
-   * gives a contract failure exactly one repair whatever the retry budget says.
+   * Contract repairs already spent on this node run's lineage — how many of the attempts before
+   * `attempt` were repairs. Separate from `maxRetries`: §2.1 gives a contract failure exactly one
+   * repair whatever the retry budget says, and a repair is not counted as one of the backoff
+   * retries `maxRetries` allows (those are `attempt - 1 - contractRepairs`).
    */
   contractRepairs?: number;
 }
@@ -81,8 +83,9 @@ export type AutoRetryDecision =
  *
  * `auth`, `invalid_config`, `workflow`, `guardrail` and `user_cancelled` are never retried, so
  * `mock-401` makes exactly one attempt. `provider` (429 included) and `network` retry with the
- * backoff above up to `execution.retries`. `agent` gets one contract repair and no more, after
- * which `CONTRACT_VIOLATION` stands (D85).
+ * backoff above up to `execution.retries`, and only when the error is `retryable`: an adapter's
+ * unrecognised failure is not re-sent. `agent` gets one contract repair and no more, after which
+ * `CONTRACT_VIOLATION` stands (D85); that repair does not spend one of the backoff retries.
  */
 export function autoRetryDecision(input: AutoRetryInput): AutoRetryDecision {
   const mode = autoRetryMode(input.error.kind);
@@ -111,11 +114,25 @@ export function autoRetryDecision(input: AutoRetryInput): AutoRetryDecision {
     };
   }
 
-  if (attempt > Math.max(0, Math.floor(input.maxRetries))) {
+  // The adapter knows its own failure best: one it marked not retryable (an unrecognised failure
+  // is `provider` / `unknown`, retryable: false) would only be re-sent to fail the same way.
+  if (!input.error.retryable) {
     return {
       retry: false,
       mode,
-      reason: `All ${Math.max(0, Math.floor(input.maxRetries))} automatic retries have been used.`,
+      reason: `This ${input.error.kind} error is not retryable, so it is not sent again.`,
+    };
+  }
+
+  // Backoff retries spent so far: every earlier attempt of this lineage but the contract repairs,
+  // which §2.1 gives on top of `execution.retries` rather than out of it.
+  const maxRetries = Math.max(0, Math.floor(input.maxRetries));
+  const backoffRetriesUsed = Math.max(0, attempt - 1 - Math.floor(input.contractRepairs ?? 0));
+  if (backoffRetriesUsed >= maxRetries) {
+    return {
+      retry: false,
+      mode,
+      reason: `All ${maxRetries} automatic retries have been used.`,
     };
   }
 
