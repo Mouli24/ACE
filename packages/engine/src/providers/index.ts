@@ -6,6 +6,7 @@ import {
   type Provider,
   type ProviderCheckResult,
   type ProviderDetectResponse,
+  type ProviderState,
   type UpdateProviderRequest,
 } from '@ace/contracts';
 
@@ -54,6 +55,13 @@ export interface ProviderService {
 
   /** FR-PRV-003: ask the provider, store the verdict, tell everyone (FR-PRV-004). */
   check(id: Id): Promise<ProviderCheckResult>;
+  /**
+   * Store what the engine has learnt about a provider without asking it, and tell everyone — what a
+   * failed call proved: a key refused mid-run marks the provider AUTH_FAILED (Arch §28, §19.3).
+   * `check` stores its verdict the same way, so there is one writer of provider state. A provider
+   * removed meanwhile is left alone.
+   */
+  recordStatus(id: Id, found: { status: ProviderState; message?: string }): Promise<void>;
   checkAll(): Promise<void>;
   /** Starts the 60 s timer; the returned function stops it. */
   startPeriodicChecks(): () => void;
@@ -111,14 +119,30 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     return withKeySet(provider);
   }
 
-  async function announce(provider: Provider, result: ProviderCheckResult): Promise<void> {
+  /**
+   * The one place a provider's state is written: stored, then announced (FR-PRV-003, FR-PRV-004).
+   * A provider that is gone has nothing to store and nothing to tell anyone.
+   */
+  async function storeStatus(
+    id: Id,
+    found: { status: ProviderState; message?: string },
+    at: string,
+  ): Promise<void> {
+    const updated = await repository.providers.update(scope, id, {
+      status: found.status,
+      statusMessage: found.message ?? null,
+      lastCheckedAt: at,
+      updatedAt: at,
+    });
+    if (updated === null) return;
+
     // Engine scope: no workflowId, so every client watching the engine sees it (§2.4).
     await bus.emit({
       type: 'provider.status',
       payload: {
-        providerId: provider.id,
-        status: result.status,
-        ...(result.message === undefined ? {} : { message: result.message }),
+        providerId: id,
+        status: found.status,
+        ...(found.message === undefined ? {} : { message: found.message }),
       },
     });
   }
@@ -202,28 +226,29 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     },
 
     async check(id) {
-      const provider = await load(id);
+      await load(id);
       const adapter = await service.adapterFor(id);
       const status = await adapter.check();
       const checkedAt = now();
 
-      await repository.providers.update(scope, id, {
-        status: status.status,
-        statusMessage: status.message ?? null,
-        lastCheckedAt: checkedAt,
-        updatedAt: checkedAt,
-      });
+      await storeStatus(
+        id,
+        {
+          status: status.status,
+          ...(status.message === undefined ? {} : { message: status.message }),
+        },
+        checkedAt,
+      );
 
-      const result: ProviderCheckResult = {
+      return {
         status: status.status,
         ...(status.message === undefined ? {} : { message: status.message }),
         ...(status.latencyMs === undefined ? {} : { latencyMs: status.latencyMs }),
         checkedAt,
       };
-
-      await announce(provider, result);
-      return result;
     },
+
+    recordStatus: (id, found) => storeStatus(id, found, now()),
 
     async checkAll() {
       for (const provider of await repository.providers.list(scope)) {

@@ -20,7 +20,8 @@ const MAX_REDACT_DEPTH = 8;
 
 /**
  * Replace every secret in a log payload: values that look like credentials wherever they appear,
- * and any field whose name makes it a secret by definition.
+ * any field whose name makes it a secret by definition, and a field *name* that is itself
+ * credential-shaped — `{ [key]: true }` prints the key as surely as `{ apiKey: key }` does.
  */
 export function redactSecrets(value: unknown, depth = 0): unknown {
   if (depth > MAX_REDACT_DEPTH) return value;
@@ -36,7 +37,8 @@ export function redactSecrets(value: unknown, depth = 0): unknown {
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(value)) {
-      out[key] = isSecretFieldName(key) ? REDACTED : redactSecrets(child, depth + 1);
+      const name = looksLikeSecret(key) ? maskSecrets(key) : key;
+      out[name] = isSecretFieldName(key) ? REDACTED : redactSecrets(child, depth + 1);
     }
     return out;
   }

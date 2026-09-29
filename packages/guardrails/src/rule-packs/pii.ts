@@ -3,8 +3,8 @@
  *
  * Ordering is the whole design. An email address contains a run of characters the phone rule would
  * claim; a card number contains a run the phone rule would claim too. The pack is therefore listed
- * most-specific first and `findSpans` gives an overlap to the earlier rule, so the type name a
- * `Verdict` carries is the right one.
+ * most-specific first and `findSpans` names an overlap after the earlier rule, so the type name a
+ * `Verdict` carries is the right one. (The redaction still covers every overlapping finding whole.)
  */
 
 import type { RulePack } from '../spans.js';
@@ -37,9 +37,15 @@ export function passesLuhn(candidate: string): boolean {
 }
 
 export const PII_RULES: RulePack = [
+  // The lookbehind anchors a match to the first character of a run of local-part characters
+  // (NFR-SAFE-01). Unanchored, the scan retried the local part from every position of a long run —
+  // `a.a.a.…`, a hex blob, a page of letters — and rescanned the rest of the run each time: 40 KB of
+  // dotted words took seconds. Anchored, each run is scanned once. It finds what the unanchored
+  // pattern found, because a leftmost match always started at the run's first character anyway.
   {
     type: 'email',
-    pattern: /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g,
+    pattern:
+      /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g,
   },
 
   // IBAN: two letters, two check digits, then 11–30 alphanumerics in optional groups of four.
@@ -55,9 +61,13 @@ export const PII_RULES: RulePack = [
     verify: passesLuhn,
   },
 
-  // National-id-like: a US SSN and an Indian PAN are two distinctly shaped, widely used examples.
+  // National-id-like (round 3 §4 item 3): a US SSN, an Indian PAN and a UK National Insurance
+  // number are three distinctly shaped, widely used examples. The NI number is two letters, six
+  // digits and a suffix A–D, written whole or in pairs; any two letters, because HMRC's own
+  // specimens use the unallocated prefix `QQ`.
   { type: 'national_id', pattern: /\b\d{3}-\d{2}-\d{4}\b/g },
   { type: 'national_id', pattern: /\b[A-Z]{5}\d{4}[A-Z]\b/g },
+  { type: 'national_id', pattern: /\b[A-Z]{2} ?\d{2} ?\d{2} ?\d{2} ?[A-D]\b/g },
 
   // Phone: either an international `+` number, or a separated local number. Never a bare run of
   // digits — that is what the card rule is for, and a bare run is too often not a phone number.

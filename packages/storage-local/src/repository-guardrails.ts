@@ -113,11 +113,17 @@ export function createGuardrailPolicyRepository(
   db: Db,
   inTransaction: InTransaction,
 ): GuardrailPolicyRepository {
+  /** A plain column, not JSON, so the name gets the guard `toJsonColumn` gives the rest (BR-07). */
+  const guardedName = (id: Id, name: string): string => {
+    assertNoSecrets(name, `guardrailPolicy(${id}).name`);
+    return name;
+  };
+
   const rowFor = (scope: Scope, policy: GuardrailPolicy): typeof guardrailPolicies.$inferInsert => ({
     id: policy.id,
     workspaceId: scope.workspaceId,
     projectId: policy.projectId,
-    name: policy.name,
+    name: guardedName(policy.id, policy.name),
     version: policy.version,
     isProjectDefault: policy.isProjectDefault,
     checks: toJsonColumn(policy.checks, `guardrailPolicy(${policy.id}).checks`),
@@ -246,7 +252,7 @@ export function createGuardrailPolicyRepository(
         }
 
         const values = {
-          ...(patch.name === undefined ? {} : { name: patch.name }),
+          ...(patch.name === undefined ? {} : { name: guardedName(id, patch.name) }),
           ...(patch.checks === undefined
             ? {}
             : { checks: toJsonColumn(patch.checks, `guardrailPolicy(${id}).checks`) }),

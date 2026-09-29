@@ -1,7 +1,8 @@
 import { RetryRequestSchema, RerunRequestSchema } from '@ace/contracts';
-import { Hono, type Context, type Env } from 'hono';
+import { Hono, type Env } from 'hono';
 
 import { notImplemented } from '../../gateway/errors.js';
+import { readJson as readBody } from '../../gateway/read-json.js';
 import type { RunControls } from './service.js';
 
 /**
@@ -17,15 +18,6 @@ import type { RunControls } from './service.js';
  *   POST /node-runs/:id/retry                          → NodeRun (attempt + 1)
  *   POST /runs/:id/nodes/:nodeId/rerun                 → NodeRun
  */
-
-/** A malformed body is an empty one, exactly as the gateway's own `readJson` treats it. */
-async function readBody(c: Context): Promise<unknown> {
-  try {
-    return await c.req.json();
-  } catch {
-    return {};
-  }
-}
 
 /**
  * `resolve` is a getter rather than the service itself so that a harness can build an app before

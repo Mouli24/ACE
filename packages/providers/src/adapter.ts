@@ -57,10 +57,54 @@ const ABORT_NAMES: ReadonlySet<string> = new Set(['AbortError', 'TimeoutError'])
 
 export interface ErrorContext {
   providerId?: Id;
+  /**
+   * The signal the call was given. When the call ends in an abort, its reason says why: a
+   * `TimeoutError` — what `AbortSignal.timeout()` sets, alone or inside `AbortSignal.any` — is the
+   * caller giving up on a provider that went quiet, and anything else is a stop (D97).
+   */
+  signal?: AbortSignal;
 }
 
 export function isAbortError(error: unknown): boolean {
   return error instanceof Error && ABORT_NAMES.has(error.name);
+}
+
+/** A `TimeoutError`, whether thrown or left as an abort reason, and whatever built it. */
+function isTimeoutError(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { name?: unknown }).name === 'TimeoutError'
+  );
+}
+
+/**
+ * A call that ended because it was aborted, as the `NodeError` its reason deserves (Arch §28).
+ *
+ * A timeout is a `network` failure and retryable (D97, D109): the provider went quiet, and the next
+ * attempt may well answer. Anything else is the user's stop — `user_cancelled`, never retried. The
+ * reason is read off `error` itself or, because an SDK may surface a bare `AbortError` while the
+ * real reason sits on the signal, off `context.signal`.
+ */
+export function abortedCallError(error: unknown, context: ErrorContext = {}): NodeError {
+  const nodeError: NodeError =
+    isTimeoutError(error) || isTimeoutError(context.signal?.reason)
+      ? {
+          kind: 'network',
+          code: 'timeout',
+          message: 'The provider did not answer before the call timed out.',
+          retryable: true,
+        }
+      : {
+          kind: 'user_cancelled',
+          code: 'aborted',
+          message: 'The call was cancelled before it finished.',
+          retryable: false,
+        };
+
+  return context.providerId === undefined
+    ? nodeError
+    : { ...nodeError, providerId: context.providerId };
 }
 
 function kindForStatus(status: number): { kind: ErrorKind; retryable: boolean } {
@@ -106,6 +150,9 @@ function errorStatus(error: object): number | undefined {
 /**
  * Turn anything an SDK or `fetch` threw into a `NodeError` (Arch §28).
  *
+ * An abort is a timeout or a stop, as `abortedCallError` reads it: pass the call's `signal`, so a
+ * bare `AbortError` whose real reason is a `TimeoutError` is still a timeout (D97, D109).
+ *
  * An unrecognised failure becomes a `provider` error that is **not** retried: a bug in an adapter
  * would otherwise be re-sent with backoff until the attempt budget runs out, which turns one
  * wrong call into several and hides the cause.
@@ -116,14 +163,7 @@ export function mapProviderError(error: unknown, context: ErrorContext = {}): No
   const withProvider = (nodeError: NodeError): NodeError =>
     context.providerId === undefined ? nodeError : { ...nodeError, providerId: context.providerId };
 
-  if (isAbortError(error)) {
-    return withProvider({
-      kind: 'user_cancelled',
-      code: 'aborted',
-      message: 'The call was cancelled before it finished.',
-      retryable: false,
-    });
-  }
+  if (isAbortError(error)) return abortedCallError(error, context);
 
   if (typeof error === 'object' && error !== null) {
     const status = errorStatus(error);

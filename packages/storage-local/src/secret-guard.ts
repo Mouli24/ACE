@@ -1,4 +1,4 @@
-import { isSecretFieldName, looksLikeSecret } from '@ace/engine';
+import { SecretWriteRejectedError, isSecretFieldName, looksLikeSecret } from '@ace/engine';
 
 /**
  * BR-07 / NFR-SEC-02: secrets never reach the database.
@@ -12,25 +12,22 @@ import { isSecretFieldName, looksLikeSecret } from '@ace/engine';
  * and the logs can never disagree about it.
  */
 
-/** Thrown when a write would put a secret in a SQLite table (BR-07). */
-export class SecretWriteRejectedError extends Error {
-  override readonly name = 'SecretWriteRejectedError';
-
-  constructor(readonly path: string, reason: string) {
-    super(
-      `Refusing to write a secret to the database at "${path}": ${reason}. ` +
-        'Secrets belong in the OS keychain through SecretStore (BR-07, NFR-SEC-02).',
-    );
-  }
-}
+/**
+ * Thrown when a write would put a secret in a SQLite table (BR-07). The class is the engine's, so
+ * the gateway can answer it 400 naming the field (NFR-USE-03) without importing this package; it is
+ * re-exported here for the callers that already import it from storage.
+ */
+export { SecretWriteRejectedError };
 
 function describeValuePattern(value: string): string | undefined {
   return looksLikeSecret(value) ? 'the value looks like a credential' : undefined;
 }
 
 /**
- * Walks a JSON-serialisable value and throws on the first secret it finds.
- * `path` is carried through so the error names where the secret was.
+ * Walks a JSON-serialisable value and throws on the first secret it finds — in a value, in a field
+ * a secret by name, or in a field *name*: `{ [key]: true }` stores the key as surely as
+ * `{ apiKey: key }` does. `path` is carried through so the error names where the secret was; the
+ * error masks it, so a key-shaped field name never reaches the refusal either.
  */
 export function assertNoSecrets(value: unknown, path = '$'): void {
   if (typeof value === 'string') {
@@ -47,6 +44,10 @@ export function assertNoSecrets(value: unknown, path = '$'): void {
   if (value !== null && typeof value === 'object') {
     for (const [key, child] of Object.entries(value)) {
       const childPath = `${path}.${key}`;
+
+      if (looksLikeSecret(key)) {
+        throw new SecretWriteRejectedError(childPath, 'a field name looks like a credential');
+      }
 
       if (isSecretFieldName(key) && typeof child === 'string' && child !== '') {
         throw new SecretWriteRejectedError(childPath, `"${key}" holds a secret by definition`);

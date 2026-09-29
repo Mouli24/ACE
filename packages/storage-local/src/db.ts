@@ -66,7 +66,14 @@ export function openDatabase({ path, migrations }: OpenDatabaseOptions): OpenDat
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
 
-  const backupPath = needsBackup(sqlite, migrations) ? backupDatabase(path) : undefined;
+  let backupPath: string | undefined;
+  if (needsBackup(sqlite, migrations)) {
+    // In WAL mode a commit can still sit in the -wal file, above all after a process died without
+    // closing, and a copy of the main file alone would miss it (NFR-REL-03). Fold the WAL into the
+    // main file first, through this handle, so the copy holds every committed row.
+    sqlite.pragma('wal_checkpoint(TRUNCATE)');
+    backupPath = backupDatabase(path);
+  }
   const applied = applyMigrations(sqlite, migrations);
 
   return {

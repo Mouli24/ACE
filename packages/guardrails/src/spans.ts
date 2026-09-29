@@ -25,24 +25,28 @@ export interface Rule {
    * context to be sure. Defaults to the whole match.
    */
   readonly group?: number;
-  /** An extra test a match must survive, e.g. the Luhn check on a card-shaped run of digits. */
-  readonly verify?: (matched: string) => boolean;
+  /**
+   * An extra test a match must survive, e.g. the Luhn check on a card-shaped run of digits. It also
+   * gets the whole text and where the match starts in it, for a rule that must look at what stands
+   * around a match — an invisible joiner is innocent between two emoji and not inside a word.
+   */
+  readonly verify?: (matched: string, text: string, start: number) => boolean;
 }
 
-/** A pack is an ordered list: earlier rules win an overlap, so put the specific ones first. */
+/** A pack is an ordered list: earlier rules name an overlap, so put the specific ones first. */
 export type RulePack = readonly Rule[];
 
 export interface Span {
   readonly start: number;
   readonly end: number;
   readonly type: string;
-  /** The rule's index in its pack — the tie-break when two spans overlap. */
+  /** The rule's index in its pack — which rule names a region where spans overlap. */
   readonly priority: number;
 }
 
 /**
- * Every span a pack matches, overlaps already resolved in favour of the earlier rule, sorted by
- * position. The matched text is deliberately not part of a `Span`.
+ * Every span a pack matches, sorted by position, with overlapping spans merged into their union and
+ * named by the earliest rule among them. The matched text is deliberately not part of a `Span`.
  */
 export function findSpans(text: string, pack: RulePack): Span[] {
   const found: Span[] = [];
@@ -52,7 +56,7 @@ export function findSpans(text: string, pack: RulePack): Span[] {
     pattern.lastIndex = 0;
     let match = pattern.exec(text);
     while (match !== null) {
-      const span = spanOf(match, rule, priority);
+      const span = spanOf(text, match, rule, priority);
       if (span !== undefined) found.push(span);
       // A zero-length match would spin forever; nudge past it.
       if (match.index === pattern.lastIndex) pattern.lastIndex += 1;
@@ -63,37 +67,57 @@ export function findSpans(text: string, pack: RulePack): Span[] {
   return resolveOverlaps(found);
 }
 
-function spanOf(match: RegExpExecArray, rule: Rule, priority: number): Span | undefined {
+function spanOf(
+  text: string,
+  match: RegExpExecArray,
+  rule: Rule,
+  priority: number,
+): Span | undefined {
   const whole = match[0];
   const groupIndex = rule.group ?? 0;
   const captured = match[groupIndex];
   if (captured === undefined || captured.length === 0) return undefined;
-  if (rule.verify !== undefined && !rule.verify(captured)) return undefined;
 
   const offset = groupIndex === 0 ? 0 : whole.indexOf(captured);
   if (offset < 0) return undefined;
 
   const start = match.index + offset;
+  if (rule.verify !== undefined && !rule.verify(captured, text, start)) return undefined;
   return { start, end: start + captured.length, type: rule.type, priority };
 }
 
 /**
- * Keep the highest-priority span of any overlapping group. An email contains digits a phone rule
- * would happily claim, and a card number contains a run a phone rule would claim too; whichever
- * rule the pack lists first is the one that names the type.
+ * Merge every group of overlapping spans into one span covering their **union**, named by the
+ * highest-priority span in the group. An email contains digits a phone rule would happily claim,
+ * and a card number contains a run a phone rule would claim too; whichever rule the pack lists first
+ * is the one that names the type.
+ *
+ * The union is FR-GRD-014's half: keeping only the winner and dropping the rest left the part of a
+ * partly-overlapping finding outside the winner in the text — `+1 555 123 4567.ada@example.com`
+ * came out as `+1 555 123 [email redacted]`. Spans that merely touch stay two spans.
+ *
+ * One sort and one sweep, so n log n in the number of spans (NFR-SAFE-01).
  */
 function resolveOverlaps(spans: readonly Span[]): Span[] {
-  const byPriorityThenPosition = [...spans].sort(
-    (a, b) => a.priority - b.priority || a.start - b.start || b.end - a.end,
-  );
+  const byPosition = [...spans].sort((a, b) => a.start - b.start || a.priority - b.priority);
 
-  const kept: Span[] = [];
-  for (const span of byPriorityThenPosition) {
-    const clashes = kept.some((other) => span.start < other.end && other.start < span.end);
-    if (!clashes) kept.push(span);
+  const merged: Span[] = [];
+  for (const span of byPosition) {
+    const last = merged.at(-1);
+    if (last === undefined || span.start >= last.end) {
+      merged.push(span);
+      continue;
+    }
+    const namer = span.priority < last.priority ? span : last;
+    merged[merged.length - 1] = {
+      start: last.start,
+      end: Math.max(last.end, span.end),
+      type: namer.type,
+      priority: namer.priority,
+    };
   }
 
-  return kept.sort((a, b) => a.start - b.start);
+  return merged;
 }
 
 export interface Redaction {

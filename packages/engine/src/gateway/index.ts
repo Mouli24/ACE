@@ -34,6 +34,7 @@ import {
   toApiError,
   unauthorized,
 } from './errors.js';
+import { readJson } from './read-json.js';
 
 export interface EngineDeps {
   repository: Repository;
@@ -402,13 +403,6 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   return app;
 }
 
-/** Parse a JSON body, turning a malformed one into the §2.3 validation error. */
-export async function readJson(c: Context): Promise<unknown> {
-  try {
-    return await c.req.json();
-  } catch {
-    return {};
-  }
-}
+export { readJson } from './read-json.js';
 
 export * from './errors.js';

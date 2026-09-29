@@ -13,6 +13,7 @@ import type { EmittedEvent } from '../../events/index.js';
 import { notFound } from '../../gateway/errors.js';
 import { newId } from '../../ids.js';
 import type { Logger } from '../../logging/index.js';
+import { sumUsage } from '../cost.js';
 import { assertRunAction, withAllowedActions } from './actions.js';
 import type { RunGateRegistry } from './gate.js';
 import { downstreamOf } from './graph.js';
@@ -256,10 +257,16 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
 
       await moveNodeRuns(run, STOPPABLE, 'STOPPED', { endedAt: true });
 
+      // A stopped run still spent what it spent (FR-ERR-007, TC-OBS-002): its totals are the sum of
+      // its node runs, every attempt included, not the zeros it was created with. The scheduler's
+      // own end-of-run write — the one that totals a run — is skipped on a stop, so it is taken here.
+      const totals = sumUsage((await deps.nodeRuns.listByRun(run.id)).map((row) => row.usage));
+
       const endedAt = now();
       const halted = await patchRun(run, {
         status: 'HALTED',
         haltReason: 'stopped',
+        totals,
         endedAt,
         durationMs: Math.max(0, Date.parse(endedAt) - Date.parse(run.startedAt)),
       });

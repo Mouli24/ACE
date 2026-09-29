@@ -145,7 +145,12 @@ export function checkBlockedTopics(check: GuardrailCheck, text: string): CheckRe
   let sanitized = '';
   let cursor = 0;
   for (const span of ordered) {
-    if (span.start < cursor) continue;
+    // An occurrence overlapping the redaction just written extends it, so the redacted region is
+    // the union of the two and no part of either survives (FR-GRD-014).
+    if (span.start < cursor) {
+      cursor = Math.max(cursor, span.end);
+      continue;
+    }
     sanitized += text.slice(cursor, span.start) + redactionMarker('blocked_topic');
     cursor = span.end;
   }

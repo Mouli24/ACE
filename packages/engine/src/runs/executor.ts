@@ -15,7 +15,12 @@ import {
 } from "@ace/contracts";
 
 import { createBatcher } from "../events/batcher.js";
-import { classifyError, failureReasonFor, nodeStateFor } from "../errors/index.js";
+import {
+  classifyError,
+  failureReasonFor,
+  nodeStateFor,
+  userCancelledError,
+} from "../errors/index.js";
 import type { EventBus } from "../events/index.js";
 import type { Logger } from "../logging/index.js";
 import type {
@@ -24,6 +29,7 @@ import type {
   StreamChunk,
 } from "../ports/index.js";
 import { assemblePrompt } from "../prompts/index.js";
+import type { RunGate } from "./control/gate.js";
 import { usageFor } from "./cost.js";
 import { runTransform } from "./transform.js";
 
@@ -70,6 +76,12 @@ export interface ExecuteNodeInput {
    * instructions. Set only on the single contract-repair retry (§2.1).
    */
   repairReason?: string;
+  /**
+   * The run's gate (FR-CTL-001, FR-CTL-002, D66, D111). An agent handed its provider slot while the
+   * run is paused has not started — it is READY, which a pause turns PAUSED — so it hands the slot
+   * straight back and waits for the resume. Absent, nothing holds it.
+   */
+  gate?: Pick<RunGate, 'isPaused' | 'waitUntilDispatchable'>;
 }
 
 /**
@@ -427,16 +439,42 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         },
       });
 
+      /**
+       * Stopped while it waited for its slot (FR-CTL-003, D111): the stop has already ended this
+       * node run STOPPED, so nothing is called — the model would only be handed a dead signal.
+       */
+      let cancelled = false;
+
       try {
-        await deps.runGated(chosen.providerId, async () => {
-          await started();
-          try {
-            await callModel();
-          } finally {
-            // Still inside the gate: the next node's startedAt can never precede this endedAt.
-            input.onEnded?.();
+        for (;;) {
+          let parked = false;
+          await deps.runGated(chosen.providerId, async () => {
+            if (input.signal.aborted) {
+              cancelled = true;
+              return;
+            }
+            // The slot came free while the run is paused, and this node has not started: give the
+            // slot back rather than start a node the pause holds (FR-CTL-001, D66). One that already
+            // started — moving to a fallback model — is RUNNING, and a pause lets it finish.
+            if (starting === undefined && input.gate?.isPaused() === true) {
+              parked = true;
+              return;
+            }
+            await started();
+            try {
+              await callModel();
+            } finally {
+              // Still inside the gate: the next node's startedAt can never precede this endedAt.
+              input.onEnded?.();
+            }
+          });
+          if (!parked) break;
+          // Queue again once the run is resumed; a stop while it waits ends it here (FR-CTL-002).
+          if (input.gate === undefined || !(await input.gate.waitUntilDispatchable())) {
+            cancelled = true;
+            break;
           }
-        });
+        }
 
         async function callModel(): Promise<void> {
           const adapter = await deps.adapterFor(chosen.providerId);
@@ -512,6 +550,23 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       }
 
       tokens.stop();
+
+      if (cancelled) {
+        return {
+          kind: "done",
+          result: await fail(
+            input,
+            userCancelledError(
+              starting === undefined
+                ? "The run was stopped before this node run started."
+                : "The run was stopped before this call was made.",
+            ).nodeError,
+            NO_USAGE,
+            { verdicts: [...verdicts] },
+          ),
+        };
+      }
+
       const usage = usageFor(tokensIn, tokensOut, pricing);
 
       /* A refusal is the model declining, which is an `agent` error, not a provider outage. */

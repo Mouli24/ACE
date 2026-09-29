@@ -9,6 +9,7 @@ import {
   type Id,
   type Model,
   type Node,
+  type NodeError,
   type NodeRun,
   type NodeState,
   type Page,
@@ -27,12 +28,13 @@ import type { EvaluationTarget, GuardrailEvaluator } from '../guardrails/evaluat
 import { policyRef, type PolicyService } from '../guardrails/policy-service.js';
 import { contractFor, createTruncatingSummariser, estimatePartsTokens, trustForSource, type Summariser } from '../envelopes/index.js';
 import { buildEnvelope } from '../envelopes/index.js';
-import { autoRetryDecision, upstreamFailedError } from '../errors/index.js';
+import { autoRetryDecision, upstreamFailedError, userCancelledError } from '../errors/index.js';
 import type { EventBus } from '../events/index.js';
 import { notFound } from '../gateway/errors.js';
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
 import type { ModelRouter, ProviderAdapter, Repository, Scope } from '../ports/index.js';
+import type { ProviderService } from '../providers/index.js';
 import {
   DEFAULT_REPEATED_OUTPUT_TIMES,
   createLoopCoordinator,
@@ -153,6 +155,12 @@ export interface RunServiceDeps {
   budgets?: BudgetService;
   /** `ask_user`: rejects whatever is still waiting when a run ends without an answer (FR-GRD-013). */
   approvals?: Pick<ApprovalService, 'cancelPending'>;
+  /**
+   * What a failed call proved about its provider — a key refused mid-run marks it AUTH_FAILED
+   * (Arch §28, FR-ERR-001). The provider service's `recordStatus`, its one writer of provider state;
+   * absent, a run changes no provider's state.
+   */
+  recordProviderStatus?: ProviderService['recordStatus'];
 
   summariser?: Summariser;
   now?: () => string;
@@ -179,6 +187,40 @@ export interface DriveSeed {
   nodeRuns: readonly NodeRun[];
   withDownstream: boolean;
 }
+
+/**
+ * What a node run the abort caught before it started records: a cancellation, never a failure
+ * (FR-ERR-007, Arch §28's `user_cancelled`).
+ */
+function cancelledBeforeStart(): NodeError {
+  return userCancelledError('The run was stopped before this node run started.').nodeError;
+}
+
+/**
+ * What a node run records when the engine itself could not finish it (FR-EXE-011): Arch §28's
+ * `workflow` kind with the contract's `internal` code — nothing a retry of the same call would fix,
+ * and nothing about the provider. The details are in the engine log, not on the row.
+ */
+function engineFailure(): NodeError {
+  return {
+    kind: 'workflow',
+    code: 'internal',
+    message: 'The engine could not finish this node run, so it failed. The engine log has the details.',
+    retryable: false,
+  };
+}
+
+/** Two totals that count the same tokens and the same money. */
+function sameUsage(a: Usage, b: Usage): boolean {
+  return a.tokensIn === b.tokensIn && a.tokensOut === b.tokensOut && a.costUsd === b.costUsd;
+}
+
+/** Run states that are an ending (Arch §19.2): nothing writes over them. */
+const ENDED_STATES: ReadonlySet<Run['status']> = new Set<Run['status']>([
+  'COMPLETE',
+  'HALTED',
+  'BLOCKED',
+]);
 
 /** Node states that mean the run still has work in flight (Arch §19.2). */
 const BUSY_STATES: ReadonlySet<NodeState> = new Set<NodeState>(['RUNNING', 'READY', 'WAITING']);
@@ -488,15 +530,26 @@ export function createRunService(deps: RunServiceDeps): RunService {
       };
     }
 
-    /** One node run row per node per iteration, created when that iteration is dispatched. */
+    /**
+     * One node run row per node per iteration, created when that iteration is dispatched — and one
+     * more per automatic retry, created before its backoff starts (FR-ERR-005).
+     *
+     * A row born after the run was aborted is born STOPPED: nothing will ever start it, and a row
+     * left READY inside a HALTED run would be a node the Canvas shows as still queued (FR-CTL-003).
+     * One born while the run is paused is born PAUSED (D111): `pause` flips the gate before it lists
+     * the READY rows (D110), so a row created after the flip is one it never sees — a retry that
+     * falls due while the run is paused, say.
+     */
     async function beginNodeRun(node: Node, iteration: number, attempt = 1): Promise<NodeRun> {
+      const aborted = signal.aborted;
       const nodeRun: NodeRun = {
         id: nextId(),
         runId: run.id,
         nodeId: node.id,
         iteration,
         attempt,
-        status: 'READY',
+        status: aborted ? 'STOPPED' : gate.isPaused() ? 'PAUSED' : 'READY',
+        ...(aborted ? { error: cancelledBeforeStart(), endedAt: now() } : {}),
         inputEnvelopes: envelopesFor.get(node.id) ?? [],
         usage: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
         verdicts: [],
@@ -514,8 +567,68 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
       await repository.nodeRuns.create(scope, nodeRun);
       nodeRunByNode.set(node.id, nodeRun);
-      await emitNodeState(run, nodeRun, 'READY');
+      await emitNodeState(run, nodeRun, nodeRun.status);
       return nodeRun;
+    }
+
+    /**
+     * Whether the Stop control owns the ending of the node runs that already exist (FR-CTL-003).
+     *
+     * `controls.stop()` aborts first and lists the rows after (D110), and a row is in the store the
+     * moment `nodeRuns.create` is called — so every row this drive created before the abort is one
+     * the control moves to STOPPED and announces itself (D111). Announcing it here as well would put
+     * a second STOPPED frame on the socket for one node run. A shutdown has no control writing
+     * anything, so there the drive announces its own rows.
+     */
+    function stoppedByControl(): boolean {
+      return gate.abortCause() === 'stopped';
+    }
+
+    /**
+     * A node run the abort caught before it started ends STOPPED, with the cancellation on its row,
+     * and never FAILED (FR-ERR-007, TC-ERR-008).
+     */
+    async function stopUnstarted(nodeRun: NodeRun): Promise<void> {
+      states.set(nodeRun.nodeId, 'STOPPED');
+      if (stoppedByControl()) {
+        await repository.nodeRuns.update(scope, nodeRun.id, {
+          status: 'STOPPED',
+          error: cancelledBeforeStart(),
+        });
+        return;
+      }
+      await repository.nodeRuns.update(scope, nodeRun.id, {
+        status: 'STOPPED',
+        error: cancelledBeforeStart(),
+        endedAt: now(),
+      });
+      await emitNodeState(run, nodeRun, 'STOPPED');
+    }
+
+    /**
+     * Holds a node run that has not started while the run is paused, and says whether it may start
+     * (FR-CTL-001, FR-CTL-002): `false` means the run was aborted meanwhile, and the node run has
+     * been ended STOPPED. Covers every attempt — a first one dispatched just as the pause landed, and
+     * a retry whose backoff ran out during it — because the dispatch loop's own check only covers
+     * what it has not dispatched yet.
+     *
+     * A row born PAUSED that `resume` missed — created after it listed the PAUSED rows and before it
+     * lifted the gate — goes back to READY here, so it still walks PAUSED → READY → RUNNING
+     * (Arch §19.1). `resume` finishes writing before it lifts the gate, so reading now races nothing.
+     */
+    async function holdWhilePaused(nodeRun: NodeRun): Promise<boolean> {
+      if (!(await gate.waitUntilDispatchable())) {
+        await stopUnstarted(nodeRun);
+        return false;
+      }
+      if (nodeRun.status !== 'PAUSED') return true;
+
+      const stored = await repository.nodeRuns.get(scope, nodeRun.id);
+      if (stored?.status === 'PAUSED') {
+        await repository.nodeRuns.update(scope, nodeRun.id, { status: 'READY' });
+        await emitNodeState(run, nodeRun, 'READY');
+      }
+      return true;
     }
 
     /**
@@ -776,9 +889,15 @@ export function createRunService(deps: RunServiceDeps): RunService {
       // scheduler's own bookkeeping is conditional; the frame names this node run, which really did
       // finish, so the inspector still sees the iteration close.
       if (!requeued) states.set(node.id, status);
-      await emitNodeState(run, nodeRun, status, failureReason);
+      // A node run the Stop cut short was announced STOPPED by the control that stopped it; a second
+      // STOPPED frame for it would be one node run ending twice (FR-CTL-003).
+      if (!(status === 'STOPPED' && stoppedByControl())) {
+        await emitNodeState(run, nodeRun, status, failureReason);
+      }
 
-      if (status !== 'COMPLETED' && !requeued) await blockDownstream(node);
+      // BLOCKED means "an upstream failed" (FR-ERR-006), and a stop is not a failure (FR-ERR-007):
+      // once the run is aborted nothing more is blocked — nor written after its `run.completed`.
+      if (status !== 'COMPLETED' && !requeued && !signal.aborted) await blockDownstream(node);
     }
 
     /** A wait the abort can cut short — a stop must not sit out a retry backoff (FR-CTL-003). */
@@ -808,6 +927,110 @@ export function createRunService(deps: RunServiceDeps): RunService {
      * `execution.retries` is read off the **snapshot** node, never the live workflow (D82).
      */
     async function dispatch(node: Node, iteration: number): Promise<void> {
+      // Which node run this dispatch is working on, so a throw can be pinned on the right row: a
+      // row from an earlier iteration of the same node must not be the one that fails.
+      nodeRunByNode.delete(node.id);
+      try {
+        await runNode(node, iteration);
+      } catch (error) {
+        await failUnfinishable(node, nodeRunByNode.get(node.id), error);
+      }
+    }
+
+    /**
+     * FR-EXE-011, FR-ERR-006: an error the engine did not expect while dispatching or finishing a
+     * node — a write the store refused, say. Uncaught, it rejected the dispatch loop's race, and the
+     * run was left RUNNING with its other in-flight nodes orphaned and no `run.completed`. Instead the
+     * node ends FAILED with an engine error and takes its downstream with it, exactly as a node that
+     * failed on its own would, and the run carries on to its end. Best effort throughout: the store
+     * that just failed may fail again, and the run's end must not depend on it.
+     */
+    async function failUnfinishable(
+      node: Node,
+      nodeRun: NodeRun | undefined,
+      error: unknown,
+    ): Promise<void> {
+      logger.error(
+        { subsystem: 'runs', runId: run.id, nodeId: node.id, err: error },
+        'could not finish a node run',
+      );
+
+      // A stop or a shutdown already decides how this node ends (FR-CTL-003, FR-ERR-007).
+      if (signal.aborted) {
+        states.set(node.id, 'STOPPED');
+        return;
+      }
+      states.set(node.id, 'FAILED');
+
+      if (nodeRun !== undefined) {
+        try {
+          const nodeError = engineFailure();
+          await repository.nodeRuns.update(scope, nodeRun.id, {
+            status: 'FAILED',
+            failureReason: 'RUN_FAILED',
+            error: nodeError,
+            endedAt: now(),
+          });
+          await bus.emit({
+            type: 'node.error',
+            workflowId: run.workflowId,
+            runId: run.id,
+            payload: {
+              runId: run.id,
+              nodeRunId: nodeRun.id,
+              nodeId: node.id,
+              error: nodeError,
+              failureReason: 'RUN_FAILED',
+            },
+          });
+          await emitNodeState(run, nodeRun, 'FAILED', 'RUN_FAILED');
+        } catch (second) {
+          logger.error(
+            { subsystem: 'runs', runId: run.id, nodeId: node.id, err: second },
+            'could not record a node run as failed',
+          );
+        }
+      }
+
+      try {
+        await blockDownstream(node);
+      } catch (second) {
+        logger.error(
+          { subsystem: 'runs', runId: run.id, nodeId: node.id, err: second },
+          'could not block what is downstream of a failed node',
+        );
+      }
+    }
+
+    /**
+     * Arch §28: an auth failure (401/403) leaves the node FAILED *and* its provider AUTH_FAILED, so
+     * the providers screen and the next pre-flight see the refused key (FR-ERR-001, Arch §19.3). The
+     * provider is the one the call went to; the provider service stores and announces the state.
+     * Best effort: the node's own failure is what the run is about, and it is recorded either way.
+     */
+    async function markAuthFailed(node: Node, outcome: NodeExecutionOutcome): Promise<void> {
+      const error = outcome.error;
+      if (deps.recordProviderStatus === undefined || error === undefined) return;
+      const providerId =
+        error.providerId ??
+        outcome.modelUsed?.providerId ??
+        (node.kind === 'agent' || node.kind === 'model' ? node.config.providerId : undefined);
+      if (providerId === undefined) return;
+
+      try {
+        await deps.recordProviderStatus(providerId, {
+          status: 'AUTH_FAILED',
+          message: error.message,
+        });
+      } catch (failure) {
+        logger.warn(
+          { subsystem: 'runs', runId: run.id, providerId, err: failure },
+          'could not mark the provider AUTH_FAILED',
+        );
+      }
+    }
+
+    async function runNode(node: Node, iteration: number): Promise<void> {
       // `states` is the scheduler's own bookkeeping: dispatched, so never picked up twice. The node
       // run itself stays READY until it holds its provider slot (D66, FR-PRV-009).
       states.set(node.id, 'RUNNING');
@@ -821,13 +1044,22 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
       await resolvePolicy(node);
 
+      // The row a control already created and already answered the client with, used once. A second
+      // row here would leave the client holding the id of a node run that never ran.
+      const planned = plannedRuns.get(node.id);
+      plannedRuns.delete(node.id);
+      let nodeRun = planned ?? (await beginNodeRun(node, iteration, attempt));
+      if (planned !== undefined) {
+        nodeRunByNode.set(node.id, planned);
+        await emitNodeState(run, planned, 'READY');
+      }
+      if (nodeRun.status === 'STOPPED') {
+        states.set(node.id, 'STOPPED');
+        return;
+      }
+
       for (;;) {
-        // The row a control already created and already answered the client with, used once. A second
-        // row here would leave the client holding the id of a node run that never ran.
-        const planned = plannedRuns.get(node.id);
-        plannedRuns.delete(node.id);
-        const nodeRun = planned ?? (await beginNodeRun(node, iteration, attempt));
-        if (planned !== undefined) await emitNodeState(run, planned, 'READY');
+        if (!(await holdWhilePaused(nodeRun))) return;
 
         /*
          * The cost point, *before* the call (§2.3, FR-GRD-008): `totals + maxTokens × price` would
@@ -895,6 +1127,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
                 attempt,
                 runInputs: run.inputs,
                 signal,
+                gate,
                 onStarted: markRunning,
                 onEnded: () => {
                   endedAt = now();
@@ -904,8 +1137,11 @@ export function createRunService(deps: RunServiceDeps): RunService {
               });
 
         // A node that failed before it got a slot (no route, say) still passes through RUNNING, so
-        // every node run follows Arch §19.1: READY → RUNNING → a terminal state.
-        await markRunning();
+        // every node run follows Arch §19.1: READY → RUNNING → a terminal state. One a stop caught
+        // before it started is the exception: it never ran, so it goes READY → STOPPED (D111).
+        if (outcome.status !== 'STOPPED') await markRunning();
+
+        if (outcome.error?.kind === 'auth') await markAuthFailed(node, outcome);
 
         if (outcome.status === 'FAILED' && outcome.error !== undefined && !signal.aborted) {
           const decision = autoRetryDecision({
@@ -921,14 +1157,26 @@ export function createRunService(deps: RunServiceDeps): RunService {
             await recordAttempt(nodeRun, outcome, endedAt ?? now());
             await emitNodeState(run, nodeRun, 'FAILED', outcome.failureReason);
 
-            await backoff(decision.delayMs);
-            if (signal.aborted) return;
-
             attempt = decision.nextAttempt;
             if (decision.repairPrompt) {
               contractRepairs += 1;
               repairReason = outcome.error.message;
             }
+
+            /*
+             * The next attempt exists, READY, *before* the wait (FR-ERR-005). The engine has already
+             * decided to try again, so the node is not finished — and a Stop during the backoff then
+             * finds a READY row to end STOPPED (D111), leaving the FAILED attempt as history rather
+             * than as the node's last word. A stopped run counts no failure (FR-ERR-007, TC-ERR-008).
+             */
+            nodeRun = await beginNodeRun(node, iteration, attempt);
+            if (nodeRun.status === 'STOPPED') {
+              states.set(node.id, 'STOPPED');
+              return;
+            }
+
+            // Cut short by a stop; a pause is `holdWhilePaused`'s, at the top of the next attempt.
+            await backoff(decision.delayMs);
             continue;
           }
         }
@@ -1068,7 +1316,26 @@ export function createRunService(deps: RunServiceDeps): RunService {
      * the drive leaves it alone and simply returns what the control wrote.
      */
     if (gate.abortCause() === 'stopped') {
-      return (await repository.runs.get(scope, run.id)) ?? run;
+      /*
+       * The totals are the control's too — the sum of the node runs as they stood at the stop — but
+       * a call the stop cut short records what it had already spent only as it unwinds, which can be
+       * after that sum was taken. So the sum is taken again now that everything has unwound, and
+       * the row (and the client, through `usage.updated`) is corrected if it moved (TC-OBS-002).
+       */
+      const stopped = (await repository.runs.get(scope, run.id)) ?? run;
+      const spent = sumUsage(
+        (await repository.nodeRuns.listByRun(scope, run.id)).map((nodeRun) => nodeRun.usage),
+      );
+      if (sameUsage(stopped.totals, spent)) return stopped;
+
+      const corrected = await repository.runs.update(scope, run.id, { totals: spent });
+      await bus.emit({
+        type: 'usage.updated',
+        workflowId: run.workflowId,
+        runId: run.id,
+        payload: { runId: run.id, totals: spent },
+      });
+      return corrected ?? stopped;
     }
 
     const haltReason =
@@ -1112,6 +1379,52 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
   /* --------------------------------------------------------------- service */
 
+  /**
+   * FR-EXE-011: the drive itself threw — a store that refused a write outside any one node, say.
+   * The run still ends: HALTED (`failure`, or the shutdown that was under way) with its totals and
+   * its `run.completed`, rather than RUNNING until the next start reaps it as crashed (FR-SYS-009).
+   * Nobody is left to answer an approval on it (FR-GRD-013). A Stop has written its own ending
+   * (FR-CTL-003), and a run that already ended keeps it. Best effort throughout: the store that
+   * just failed may fail again.
+   */
+  async function haltAfterThrow(run: Run, gate: RunGate): Promise<Run> {
+    try {
+      await deps.approvals?.cancelPending(run.id, 'The run ended before this was decided.');
+    } catch (error) {
+      logger.error({ subsystem: 'runs', runId: run.id, err: error }, 'could not cancel approvals');
+    }
+
+    try {
+      const stored = (await repository.runs.get(scope, run.id)) ?? run;
+      if (gate.abortCause() === 'stopped' || ENDED_STATES.has(stored.status)) return stored;
+
+      const haltReason = gate.abortCause() ?? 'failure';
+      const totals = sumUsage(
+        (await repository.nodeRuns.listByRun(scope, run.id)).map((nodeRun) => nodeRun.usage),
+      );
+      const endedAt = now();
+      const halted = await repository.runs.update(scope, run.id, {
+        status: 'HALTED',
+        allowedActions: allowedRunActions('HALTED'),
+        haltReason,
+        totals,
+        endedAt,
+        durationMs: Math.max(0, Date.parse(endedAt) - Date.parse(run.startedAt)),
+      });
+
+      await bus.emit({
+        type: 'run.completed',
+        workflowId: run.workflowId,
+        runId: run.id,
+        payload: { runId: run.id, status: 'HALTED', haltReason, totals },
+      });
+      return halted ?? stored;
+    } catch (error) {
+      logger.error({ subsystem: 'runs', runId: run.id, err: error }, 'could not halt a failed run');
+      return run;
+    }
+  }
+
   /** Start driving a run that has been pre-flighted, and register its gate (FR-CTL-001..003). */
   function startDriving(run: Run, seed?: DriveSeed): Promise<Run> {
     const gate = createRunGate(run.id);
@@ -1119,9 +1432,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
     const done = drive(run, gate, seed)
       .catch(async (error: unknown) => {
-        // The drive threw rather than halting cleanly; the row is still the truth about the run.
         logger.error({ subsystem: 'runs', runId: run.id, err: error }, 'run failed');
-        return (await repository.runs.get(scope, run.id)) ?? run;
+        return haltAfterThrow(run, gate);
       })
       .finally(() => {
         unregister();
