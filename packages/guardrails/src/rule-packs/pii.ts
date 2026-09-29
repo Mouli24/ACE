@@ -61,9 +61,13 @@ export const PII_RULES: RulePack = [
     verify: passesLuhn,
   },
 
-  // National-id-like: a US SSN and an Indian PAN are two distinctly shaped, widely used examples.
+  // National-id-like (round 3 §4 item 3): a US SSN, an Indian PAN and a UK National Insurance
+  // number are three distinctly shaped, widely used examples. The NI number is two letters, six
+  // digits and a suffix A–D, written whole or in pairs; any two letters, because HMRC's own
+  // specimens use the unallocated prefix `QQ`.
   { type: 'national_id', pattern: /\b\d{3}-\d{2}-\d{4}\b/g },
   { type: 'national_id', pattern: /\b[A-Z]{5}\d{4}[A-Z]\b/g },
+  { type: 'national_id', pattern: /\b[A-Z]{2} ?\d{2} ?\d{2} ?\d{2} ?[A-D]\b/g },
 
   // Phone: either an international `+` number, or a separated local number. Never a bare run of
   // digits — that is what the card rule is for, and a bare run is too often not a phone number.
