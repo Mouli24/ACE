@@ -17,7 +17,7 @@ export { evaluateCheck, evaluateChecks, isEvaluated } from './evaluate.js';
 export { EVALUATED_CHECK_TYPES, OUTPUT_CHECK_ORDER, inOutputOrder } from './evaluate.js';
 export type { EvaluatedCheckType } from './evaluate.js';
 
-export type { CheckFn, CheckResult, GuardrailInput } from './types.js';
+export type { CheckFn, CheckResult, GuardrailInput, ToolGuardrailInput } from './types.js';
 export { redactionMarker } from './types.js';
 
 export {
@@ -40,6 +40,13 @@ export {
   checkMaxToolCalls,
   checkThreshold,
 } from './checks/thresholds.js';
+export {
+  checkDestructiveAction,
+  checkDomainAllowlist,
+  checkPathConfinement,
+  checkToolAllowed,
+  checkToolArgs,
+} from './checks/tools.js';
 
 export { describeSpans, findSpans, redactSpans } from './spans.js';
 export type { Redaction, Rule, RulePack, Span } from './spans.js';
