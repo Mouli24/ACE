@@ -11,7 +11,7 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'ace-collect-'));
 });
 afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
 describe('FR-TOOL-004 collecting produced files', () => {

@@ -15,7 +15,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(sandboxDir, { recursive: true, force: true });
+  rmSync(sandboxDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
 describe('NFR-SEC-04 deny shims', () => {
