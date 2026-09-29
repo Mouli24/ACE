@@ -1,5 +1,7 @@
 import type { EnvelopeContract, GuardrailCheck, GuardrailPoint, Part } from '@ace/contracts';
 
+import type { ToolPointInput } from '../runs/tool-loop.js';
+
 /**
  * The seam between the guardrail *engine* and the guardrail *checks* (Arch §13.2).
  *
@@ -35,6 +37,13 @@ export interface CheckInput {
   loop?: LoopCheckInput;
   /** The cost figures, for `max_cost_per_run`, `daily_budget` and `max_tokens_per_node` (§2.3). */
   cost?: CostCheckInput;
+  /**
+   * The tool call in flight, for the four tool-point checks — `tool_allowed`, `path_confinement`,
+   * `domain_allowlist`, `destructive_action` (round 4 §2.2, FR-GRD-005/006). It is the
+   * `ToolGuardrailInput` shape of `@ace/guardrails`; the server's CheckRunner adapter maps it onto
+   * `GuardrailInput.tool` so the pure checks read it, exactly as the loop and cost fields are mapped.
+   */
+  tool?: ToolPointInput;
 }
 
 export interface LoopCheckInput {
