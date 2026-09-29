@@ -163,6 +163,74 @@ describe('FR-EXE-014 live delivery', () => {
   });
 });
 
+describe('FR-CHAT-006 thread subscription (round 4 §2.5)', () => {
+  it('delivers a chat frame only to the thread it belongs to', async () => {
+    const thread = newId();
+    const otherThread = newId();
+
+    const watcher = await connect();
+    await watcher.receive({ type: 'subscribe', payload: { scope: 'thread', id: thread } });
+
+    const otherWatcher = await connect();
+    await otherWatcher.receive({ type: 'subscribe', payload: { scope: 'thread', id: otherThread } });
+
+    // An engine-scope client must not see chat traffic, even though a chat frame carries no workflow.
+    const engineWatcher = await connect();
+    await engineWatcher.receive({ type: 'subscribe', payload: { scope: 'engine' } });
+
+    await bus.emit({
+      type: 'chat.message',
+      payload: { threadId: thread, message: { id: newId() } },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(watcher.frames().map((f) => f.type)).toEqual(['hello', 'chat.message']);
+    expect(otherWatcher.frames().map((f) => f.type)).toEqual(['hello']);
+    expect(engineWatcher.frames().map((f) => f.type)).toEqual(['hello']);
+  });
+
+  it('delivers a transient chat.token to the thread with no seq', async () => {
+    const thread = newId();
+    const socket = await connect();
+    await socket.receive({ type: 'subscribe', payload: { scope: 'thread', id: thread } });
+
+    await bus.emitTransient({ type: 'chat.token', payload: { threadId: thread, delta: 'hi' } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const token = socket.frames().find((f) => f.type === 'chat.token');
+    expect(token).toBeDefined();
+    expect(token?.seq).toBeUndefined();
+  });
+
+  it('stops delivering after a thread unsubscribe', async () => {
+    const thread = newId();
+    const socket = await connect();
+    await socket.receive({ type: 'subscribe', payload: { scope: 'thread', id: thread } });
+    await socket.receive({ type: 'unsubscribe', payload: { scope: 'thread', id: thread } });
+
+    await bus.emit({ type: 'chat.message', payload: { threadId: thread, message: { id: newId() } } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(socket.frames().map((f) => f.type)).toEqual(['hello']);
+  });
+
+  it('resume replays a thread’s persisted chat.message and no other thread’s', async () => {
+    const mine = newId();
+    const theirs = newId();
+    await bus.emit({ type: 'chat.message', payload: { threadId: theirs, message: { id: newId() } } });
+    await bus.emit({ type: 'chat.message', payload: { threadId: mine, message: { id: newId() } } });
+
+    const socket = await connect();
+    await socket.receive({ type: 'subscribe', payload: { scope: 'thread', id: mine } });
+    await socket.receive({ type: 'resume', payload: { afterSeq: 0 } });
+
+    const replayed = socket.frames().filter((f) => f.type === 'chat.message');
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0]?.seq).toBe(2);
+    expect((replayed[0]?.payload as { threadId: string }).threadId).toBe(mine);
+  });
+});
+
 describe('FR-EXE-014 resume replays workflow.updated', () => {
   it('replays every missed event in order, then goes live', async () => {
     const workflowId = newId();

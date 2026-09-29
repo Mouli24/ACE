@@ -1,4 +1,9 @@
-import { WS_CLOSE_UNAUTHORIZED, WsClientFrameSchema, type Id } from '@ace/contracts';
+import {
+  THREAD_EVENT_TYPES,
+  WS_CLOSE_UNAUTHORIZED,
+  WsClientFrameSchema,
+  type Id,
+} from '@ace/contracts';
 
 import type { Logger } from '../logging/index.js';
 import type { Auth, EngineEvent, Repository, Scope, Unsubscribe } from '../ports/index.js';
@@ -32,8 +37,13 @@ export interface WsHub {
 /** What one connected client is watching. */
 interface Subscription {
   workflows: Set<Id>;
+  /** The direct-chat threads this client is watching (round 4 §2.5, FR-CHAT-006). */
+  threads: Set<Id>;
   engineScope: boolean;
 }
+
+/** The event types that ride a `thread` subscription, matched by `payload.threadId`. */
+const THREAD_TYPES = new Set<string>(THREAD_EVENT_TYPES);
 
 /**
  * The WebSocket hub at `/ws` (§2.9, FR-SYS-002, FR-EXE-014).
@@ -45,6 +55,13 @@ export function createWsHub({ bus, repository, scope, auth, logger }: WsHubDeps)
   const open = new Set<{ socket: HubSocket; unsubscribe: Unsubscribe }>();
 
   function wants(subscription: Subscription, event: EngineEvent): boolean {
+    // A chat frame belongs to its thread and nowhere else (round 4 §2.5): it routes by
+    // `payload.threadId` to that thread's subscribers, never to the engine or a workflow scope, so
+    // an open chat panel gets `chat.token`/`chat.message` without any of the run's traffic.
+    if (THREAD_TYPES.has(event.type)) {
+      const threadId = (event.payload as { threadId?: Id }).threadId;
+      return threadId !== undefined && subscription.threads.has(threadId);
+    }
     if (event.workflowId === undefined) return subscription.engineScope;
     return subscription.workflows.has(event.workflowId);
   }
@@ -71,7 +88,11 @@ export function createWsHub({ bus, repository, scope, auth, logger }: WsHubDeps)
         return;
       }
 
-      const subscription: Subscription = { workflows: new Set(), engineScope: false };
+      const subscription: Subscription = {
+        workflows: new Set(),
+        threads: new Set(),
+        engineScope: false,
+      };
 
       const unsubscribe = await bus.subscribe((event) => {
         if (wants(subscription, event)) send(socket, event);
@@ -107,23 +128,33 @@ export function createWsHub({ bus, repository, scope, auth, logger }: WsHubDeps)
         switch (frame.type) {
           case 'subscribe': {
             if (frame.payload.scope === 'workflow') subscription.workflows.add(frame.payload.id);
+            else if (frame.payload.scope === 'thread') subscription.threads.add(frame.payload.id);
             else subscription.engineScope = true;
             return;
           }
 
           case 'unsubscribe': {
-            if (frame.payload.scope === 'engine') subscription.engineScope = false;
-            else if (frame.payload.id === undefined) subscription.workflows.clear();
-            else subscription.workflows.delete(frame.payload.id);
+            if (frame.payload.scope === 'engine') {
+              subscription.engineScope = false;
+            } else if (frame.payload.scope === 'thread') {
+              if (frame.payload.id === undefined) subscription.threads.clear();
+              else subscription.threads.delete(frame.payload.id);
+            } else if (frame.payload.id === undefined) {
+              subscription.workflows.clear();
+            } else {
+              subscription.workflows.delete(frame.payload.id);
+            }
             return;
           }
 
           case 'resume': {
             // Replay from the table, in seq order, for what this client is subscribed to — then
-            // the live subscription above carries on from there (Arch §21.4).
+            // the live subscription above carries on from there (Arch §21.4). Persisted thread
+            // frames (`chat.message`) replay by threadId, exactly as they route live (§2.5).
             const missed = await repository.events.listAfter(scope, frame.payload.afterSeq, {
               workflowIds: [...subscription.workflows],
               includeEngineScope: subscription.engineScope,
+              threadIds: [...subscription.threads],
             });
             for (const event of missed) send(socket, event);
             return;

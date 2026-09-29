@@ -2,6 +2,7 @@ import {
   EdgeSchema,
   NodeSchema,
   SettingsSchema,
+  THREAD_EVENT_TYPES,
   type CursorQuery,
   type Edge,
   type Id,
@@ -41,7 +42,7 @@ import type {
   WorkflowRepository,
 } from '@ace/engine';
 import type BetterSqlite3 from 'better-sqlite3';
-import { and, asc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, notInArray, or, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 
 import { buildDefaultPolicy } from './default-policy.js';
@@ -570,20 +571,47 @@ export class SqliteRepository implements Repository {
     },
 
     listAfter: async (scope: Scope, afterSeq: number, filter: EventFilter) => {
-      // A run filter is exclusive: `GET /runs/:id/events` wants that run's events and nothing
-      // else, not that run's events plus everything unscoped.
-      const scoped =
-        filter.runIds !== undefined
-          ? filter.runIds.length === 0
-            ? sql`1 = 0`
-            : inArray(events.runId, filter.runIds)
-          : filter.workflowIds === undefined || filter.workflowIds.length === 0
-            ? filter.includeEngineScope === true
-              ? undefined
-              : sql`1 = 0`
-            : filter.includeEngineScope === true
-              ? or(inArray(events.workflowId, filter.workflowIds), isNull(events.workflowId))
-              : inArray(events.workflowId, filter.workflowIds);
+      const threadTypes = [...THREAD_EVENT_TYPES] as string[];
+      // A thread frame (`chat.message`) has no `workflowId`, so it routes only by its
+      // `payload.threadId` and must never be swept up by the engine scope (round 4 §2.5). Every
+      // engine-scope clause therefore excludes the thread types, and a `thread` subscription adds
+      // its own clause matching them on threadId.
+      const threadClause = (threadIds: readonly Id[]) =>
+        and(
+          inArray(events.type, threadTypes),
+          or(
+            ...threadIds.map(
+              (id) => sql`json_extract(${events.payload}, '$.threadId') = ${id}`,
+            ),
+          ),
+        );
+
+      const scoped = (() => {
+        // A run filter is exclusive: `GET /runs/:id/events` wants that run's events and nothing
+        // else, not that run's events plus everything unscoped.
+        if (filter.runIds !== undefined) {
+          return filter.runIds.length === 0 ? sql`1 = 0` : inArray(events.runId, filter.runIds);
+        }
+
+        const workflowIds = filter.workflowIds ?? [];
+        const threadIds = filter.threadIds ?? [];
+        const clauses = [];
+
+        if (workflowIds.length > 0) clauses.push(inArray(events.workflowId, workflowIds));
+        if (filter.includeEngineScope === true) {
+          // Engine scope is the unscoped catch-all — with a workflow list it is the null-workflow
+          // events, with none it is everything — but a thread frame is never part of it.
+          clauses.push(
+            workflowIds.length > 0
+              ? and(isNull(events.workflowId), notInArray(events.type, threadTypes))
+              : notInArray(events.type, threadTypes),
+          );
+        }
+        if (threadIds.length > 0) clauses.push(threadClause(threadIds));
+
+        if (clauses.length === 0) return sql`1 = 0`;
+        return clauses.length === 1 ? clauses[0] : or(...clauses);
+      })();
 
       const rows = this.#db
         .select()
