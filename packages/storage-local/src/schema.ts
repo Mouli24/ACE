@@ -361,3 +361,156 @@ export const approvals = sqliteTable(
     index('approvals_node_run_idx').on(table.workspaceId, table.nodeRunId, table.decision),
   ],
 );
+
+/* -------------------------------------------------------------------------- */
+/* Round 4 (Arch §15.3): artifacts, tool calls, MCP servers, messages, chat    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Every uploaded or produced file (round 4 §2.1, FR-MM-001..004, Arch §15.1, §15.4).
+ *
+ * The bytes never live here — they are in the content-addressed blob store, keyed by `hash`. This
+ * row is the metadata plus the address, so identical bytes uploaded twice share one row (FR-MM-002)
+ * and `GET /artifacts/:id/content` streams from the blob store. `hash` is unique per workspace, the
+ * database constraint that makes the dedupe correct rather than a convention the repository
+ * remembers. `last_referenced_at` is the field Arch §15.4's "unreferenced + 7 days" is counted
+ * from; the retention sweep is the engine's, this table gives it the query and the delete.
+ */
+export const artifacts = sqliteTable(
+  'artifacts',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    hash: text('hash').notNull(),
+    mime: text('mime').notNull(),
+    name: text('name').notNull(),
+    size: integer('size').notNull(),
+    createdAt: text('created_at').notNull(),
+    lastReferencedAt: text('last_referenced_at'),
+  },
+  (table) => [
+    index('artifacts_workspace_idx').on(table.workspaceId, table.id),
+    // Dedupe by content hash is a constraint (FR-MM-002): the same bytes never make a second row.
+    uniqueIndex('artifacts_hash_idx').on(table.workspaceId, table.hash),
+  ],
+);
+
+/**
+ * One logged tool call (round 4 §2.2, FR-TOOL-009). `args` is JSON, redacted by the data guardrail
+ * before it gets here (BR-07); the full result is never stored, only its ≤ 500-char summary. `runId`
+ * is a column of its own — the `ToolCall` contract carries only `nodeRunId`, but the `tool.call`
+ * event and the inspector both filter by run, so it is kept alongside rather than parsed out of the
+ * node run each time.
+ */
+export const toolCalls = sqliteTable(
+  'tool_calls',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    runId: text('run_id').notNull(),
+    nodeRunId: text('node_run_id').notNull(),
+    toolName: text('tool_name').notNull(),
+    /** JSON, already redacted (FR-TOOL-009, BR-07). */
+    args: text('args').notNull(),
+    resultSummary: text('result_summary').notNull(),
+    durationMs: integer('duration_ms').notNull(),
+    status: text('status').notNull(),
+    /** JSON `Verdict[]` — the tool-point verdicts this call recorded. */
+    verdicts: text('verdicts').notNull(),
+    at: text('at').notNull(),
+  },
+  (table) => [
+    index('tool_calls_node_run_idx').on(table.workspaceId, table.nodeRunId, table.id),
+    index('tool_calls_run_idx').on(table.workspaceId, table.runId, table.id),
+  ],
+);
+
+/**
+ * A connected MCP server (round 4 §2.2, FR-TOOL-007, D16). There is no key column: an MCP server
+ * is addressed by a command or a URL, and its liveness is `status` + `tool_count` + `error`.
+ */
+export const mcpServers = sqliteTable(
+  'mcp_servers',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    name: text('name').notNull(),
+    transport: text('transport').notNull(),
+    command: text('command'),
+    /** JSON `string[]`, null on an http server. */
+    args: text('args'),
+    url: text('url'),
+    status: text('status').notNull(),
+    toolCount: integer('tool_count').notNull(),
+    lastCheckedAt: text('last_checked_at'),
+    error: text('error'),
+  },
+  (table) => [index('mcp_servers_workspace_idx').on(table.workspaceId, table.id)],
+);
+
+/**
+ * One row of a workflow's timeline (round 4 §2.3, FR-CHAT-001..003). `content` is `Part[]`, so a
+ * file in a message is an artifact reference and never bytes (FR-MM-004, BR-02). The timeline is
+ * derived from persisted events, so it replays identically after a reconnect.
+ */
+export const messages = sqliteTable(
+  'messages',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    workflowId: text('workflow_id').notNull(),
+    runId: text('run_id'),
+    nodeId: text('node_id'),
+    nodeRunId: text('node_run_id'),
+    type: text('type').notNull(),
+    /** JSON `Part[]`. */
+    content: text('content').notNull(),
+    at: text('at').notNull(),
+  },
+  (table) => [
+    index('messages_workflow_idx').on(table.workspaceId, table.workflowId, table.id),
+    index('messages_run_idx').on(table.workspaceId, table.runId, table.id),
+    index('messages_node_idx').on(table.workspaceId, table.nodeId, table.id),
+  ],
+);
+
+/**
+ * A direct-chat conversation with one agent (round 4 §2.3, FR-CHAT-004). A thread uses the agent's
+ * model, instructions, context policy and tools but never reads or writes `runs`/`node_runs`
+ * (FR-CHAT-005), which is why its turns are `chat_messages`, a different id space from `node_runs`.
+ */
+export const chatThreads = sqliteTable(
+  'chat_threads',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    nodeId: text('node_id').notNull(),
+    title: text('title').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [index('chat_threads_node_idx').on(table.workspaceId, table.nodeId, table.id)],
+);
+
+/**
+ * One turn of a direct chat (round 4 §2.3, FR-CHAT-006/008). `verdicts` are `ChatVerdict[]` (no
+ * `nodeRunId`, because the thread touches no node run), `usage` is present only on an agent reply,
+ * and `content` is `Part[]` as everywhere else.
+ */
+export const chatMessages = sqliteTable(
+  'chat_messages',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    threadId: text('thread_id').notNull(),
+    role: text('role').notNull(),
+    /** JSON `Part[]`. */
+    content: text('content').notNull(),
+    /** JSON `ChatVerdict[]`. */
+    verdicts: text('verdicts').notNull(),
+    /** JSON `Usage`, null on a user turn. */
+    usage: text('usage'),
+    at: text('at').notNull(),
+  },
+  (table) => [index('chat_messages_thread_idx').on(table.workspaceId, table.threadId, table.id)],
+);
