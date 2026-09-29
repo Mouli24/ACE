@@ -22,9 +22,10 @@ export function makeContext(overrides: Partial<ToolContext> = {}): ToolContext &
   return {
     scope,
     runId: 'run-test',
+    ...overrides,
+    // After the spread, so `logger` keeps its concrete type and `sandboxDir` is the one we clean up.
     sandboxDir,
     logger,
-    ...overrides,
     cleanup: () => rmSync(sandboxDir, { recursive: true, force: true }),
   };
 }
