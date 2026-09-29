@@ -8,7 +8,14 @@
  * matches on — without the repository ever containing the thing.
  */
 
-import type { GuardrailAction, GuardrailCheck, GuardrailCheckType } from '@ace/contracts';
+import type {
+  GuardrailAction,
+  GuardrailCheck,
+  GuardrailCheckType,
+  JsonSchema,
+  ToolDefinition,
+  ToolPermissions,
+} from '@ace/contracts';
 import { GUARDRAIL_CHECK_TYPES_BY_POINT, POLICY_GUARDRAIL_POINTS } from '@ace/contracts';
 import type { PolicyGuardrailPoint } from '@ace/contracts';
 
@@ -38,6 +45,28 @@ export function makeCheck(
     action: overrides.action ?? ('warn' satisfies GuardrailAction),
     enabled: overrides.enabled ?? true,
     params,
+  };
+}
+
+/** A built-in tool definition for the tool-point checks, with sane defaults the test can override. */
+export function makeTool(
+  overrides: Partial<Pick<ToolDefinition, 'name' | 'inputSchema' | 'outputSchema' | 'timeoutMs'>> & {
+    permissions?: Partial<ToolPermissions>;
+  } = {},
+): ToolDefinition {
+  const permissions: ToolPermissions = {
+    network: overrides.permissions?.network ?? false,
+    fsPaths: overrides.permissions?.fsPaths ?? [],
+    destructive: overrides.permissions?.destructive ?? false,
+  };
+  return {
+    name: overrides.name ?? 'echo',
+    description: 'a test tool',
+    inputSchema: (overrides.inputSchema ?? {}) as JsonSchema,
+    outputSchema: (overrides.outputSchema ?? {}) as JsonSchema,
+    permissions,
+    timeoutMs: overrides.timeoutMs ?? 5_000,
+    source: 'builtin',
   };
 }
 

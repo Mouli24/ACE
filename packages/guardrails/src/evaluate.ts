@@ -20,6 +20,12 @@ import type { GuardrailCheck, GuardrailCheckType } from '@ace/contracts';
 import { checkContract } from './checks/contract.js';
 import { checkRepeatedOutput } from './checks/loop.js';
 import {
+  checkDestructiveAction,
+  checkDomainAllowlist,
+  checkPathConfinement,
+  checkToolAllowed,
+} from './checks/tools.js';
+import {
   checkBlockedTopics,
   checkModeration,
   checkPii,
@@ -39,8 +45,8 @@ import type { CheckResult, GuardrailInput } from './types.js';
 
 /**
  * The check types this package evaluates. The rest are declared in the contract for the rounds that
- * implement them — `untrusted_tagging` is the context point (Round 5) and the four `tool` checks are
- * the tool point (Round 4) — and `evaluateCheck` answers `undefined` for them rather than pretending.
+ * implement them — `untrusted_tagging` is the context point (Round 5) — and `evaluateCheck` answers
+ * `undefined` for them rather than pretending. The four `tool` checks joined this list in Round 4.
  */
 export const EVALUATED_CHECK_TYPES = [
   'size_limit',
@@ -57,6 +63,10 @@ export const EVALUATED_CHECK_TYPES = [
   'max_iterations',
   'max_tool_calls',
   'repeated_output',
+  'tool_allowed',
+  'path_confinement',
+  'domain_allowlist',
+  'destructive_action',
 ] as const satisfies readonly GuardrailCheckType[];
 
 export type EvaluatedCheckType = (typeof EVALUATED_CHECK_TYPES)[number];
@@ -140,12 +150,18 @@ export function evaluateCheck(
     case 'repeated_output':
       return checkRepeatedOutput(check, input);
 
-    /* ---- declared now, evaluated in Rounds 4 and 5 ---------------------- */
-    case 'untrusted_tagging':
+    /* ---- tool ----------------------------------------------------------- */
     case 'tool_allowed':
+      return checkToolAllowed(input);
     case 'path_confinement':
+      return checkPathConfinement(input);
     case 'domain_allowlist':
+      return checkDomainAllowlist(input);
     case 'destructive_action':
+      return checkDestructiveAction(input);
+
+    /* ---- declared now, evaluated in Round 5 ----------------------------- */
+    case 'untrusted_tagging':
       return undefined;
 
     default: {

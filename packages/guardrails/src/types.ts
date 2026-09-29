@@ -7,7 +7,7 @@
  * from `check.action`, never from the check itself (FR-GRD-011).
  */
 
-import type { EnvelopeContract, GuardrailCheck, Part } from '@ace/contracts';
+import type { EnvelopeContract, GuardrailCheck, Part, ToolDefinition } from '@ace/contracts';
 
 /**
  * One check's answer.
@@ -48,6 +48,41 @@ export interface GuardrailInput {
   limit?: number;
   /** A node's recent output hashes in arrival order, oldest first — for `repeated_output`. */
   outputHashes?: readonly string[];
+  /**
+   * Everything the tool point needs about the call in flight, present only when the engine is at
+   * the `tool` point (round 4 §2.2, FR-GRD-005/006). The four tool checks read it and every other
+   * check ignores it; a check that needs it and is handed none answers `undefined` — silence, the
+   * same rule the cost and contract checks follow.
+   */
+  tool?: ToolGuardrailInput;
+}
+
+/**
+ * The tool call a tool-point check judges (round 4 §2.2, FR-GRD-005/006, Arch §13.1).
+ *
+ * The engine builds one of these when a `tool_call` chunk arrives and hands it, inside a
+ * `GuardrailInput`, to every enabled tool-point check of the resolved policy — then applies each
+ * `check.action` (`block` → `blocked` ToolCall + node `GUARDRAIL_VIOLATION`, FR-GRD-012;
+ * `ask_user` → the Round 3 approval flow, FR-GRD-006). Nothing here is text the value rule
+ * (FR-GRD-014) would quote: `args` never reaches a `reason`.
+ */
+export interface ToolGuardrailInput {
+  /** The tool being called — its `inputSchema` and `permissions` decide most of the verdicts. */
+  definition: ToolDefinition;
+  /** The arguments the model asked to call it with (`ToolCall.args`, still open/unredacted). */
+  args: unknown;
+  /** The tool names the agent has switched on (`AgentConfig.tools.enabled`) — for `tool_allowed`. */
+  enabledTools: readonly string[];
+  /**
+   * The run's sandbox folder, `<projectFolder>/.ace/sandbox/<runId>/` (round 4 §2.2). Every path
+   * argument must resolve inside it, and `path_confinement` is what enforces that (FR-GRD-006).
+   */
+  sandboxDir: string;
+  /**
+   * The hosts the agent permits (`AgentConfig.tools.allowedDomains`). An **empty list allows
+   * nothing** (round 4 §2.2), so `domain_allowlist` blocks every URL until a host is added.
+   */
+  allowedDomains: readonly string[];
 }
 
 /** A check implementation: pure, and free to say nothing about an input it cannot judge. */
