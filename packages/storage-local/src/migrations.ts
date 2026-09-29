@@ -17,6 +17,12 @@ export const ROUND_3_RUN_COLUMNS_MIGRATION_ID =
   '20260926T140000_round_3_run_controls_and_budget_halt';
 
 /**
+ * Round 4's tables (Arch §15.3): artifacts, tool calls, MCP servers, messages, chat threads and
+ * chat messages. Named so a test can apply the chain up to, but not including, round 4.
+ */
+export const ROUND_4_MIGRATION_ID = '20260929T120000_round_4_artifacts_tools_messages_chat';
+
+/**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
  * written.
@@ -291,6 +297,106 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE runs ADD COLUMN allowed_actions TEXT;
       ALTER TABLE runs ADD COLUMN budget_halt TEXT;
       ALTER TABLE runs ADD COLUMN restarted_from_run_id TEXT;
+    `,
+  },
+  {
+    id: ROUND_4_MIGRATION_ID,
+    up: `
+      -- Every uploaded or produced file (round 4 §2.1, FR-MM-001..004, Arch §15.1, §15.4). The
+      -- bytes are in the content-addressed blob store; this row is the metadata plus the address.
+      -- The unique index on (workspace, hash) is what makes the dedupe a constraint rather than a
+      -- convention: the same bytes uploaded twice cannot make a second row (FR-MM-002).
+      CREATE TABLE artifacts (
+        id                 TEXT PRIMARY KEY,
+        workspace_id       TEXT NOT NULL,
+        hash               TEXT NOT NULL,
+        mime               TEXT NOT NULL,
+        name               TEXT NOT NULL,
+        size               INTEGER NOT NULL,
+        created_at         TEXT NOT NULL,
+        last_referenced_at TEXT
+      );
+      CREATE INDEX artifacts_workspace_idx ON artifacts (workspace_id, id);
+      CREATE UNIQUE INDEX artifacts_hash_idx ON artifacts (workspace_id, hash);
+
+      -- One logged tool call (round 4 §2.2, FR-TOOL-009). 'args' is redacted before it gets here
+      -- (BR-07); the full result never lands, only its summary. 'run_id' is a column of its own so
+      -- the inspector and the 'tool.call' event can filter by run without parsing the node run.
+      CREATE TABLE tool_calls (
+        id             TEXT PRIMARY KEY,
+        workspace_id   TEXT NOT NULL,
+        run_id         TEXT NOT NULL,
+        node_run_id    TEXT NOT NULL,
+        tool_name      TEXT NOT NULL,
+        args           TEXT NOT NULL,
+        result_summary TEXT NOT NULL,
+        duration_ms    INTEGER NOT NULL,
+        status         TEXT NOT NULL,
+        verdicts       TEXT NOT NULL,
+        at             TEXT NOT NULL
+      );
+      CREATE INDEX tool_calls_node_run_idx ON tool_calls (workspace_id, node_run_id, id);
+      CREATE INDEX tool_calls_run_idx ON tool_calls (workspace_id, run_id, id);
+
+      -- A connected MCP server (round 4 §2.2, FR-TOOL-007, D16). No key column: it is addressed by
+      -- a command or a URL, and its liveness is status + tool_count + error.
+      CREATE TABLE mcp_servers (
+        id              TEXT PRIMARY KEY,
+        workspace_id    TEXT NOT NULL,
+        name            TEXT NOT NULL,
+        transport       TEXT NOT NULL,
+        command         TEXT,
+        args            TEXT,
+        url             TEXT,
+        status          TEXT NOT NULL,
+        tool_count      INTEGER NOT NULL,
+        last_checked_at TEXT,
+        error           TEXT
+      );
+      CREATE INDEX mcp_servers_workspace_idx ON mcp_servers (workspace_id, id);
+
+      -- One row of a workflow's timeline (round 4 §2.3, FR-CHAT-001..003). 'content' is Part[], so
+      -- a file in a message is an artifact reference and never bytes (FR-MM-004, BR-02).
+      CREATE TABLE messages (
+        id           TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        workflow_id  TEXT NOT NULL,
+        run_id       TEXT,
+        node_id      TEXT,
+        node_run_id  TEXT,
+        type         TEXT NOT NULL,
+        content      TEXT NOT NULL,
+        at           TEXT NOT NULL
+      );
+      CREATE INDEX messages_workflow_idx ON messages (workspace_id, workflow_id, id);
+      CREATE INDEX messages_run_idx ON messages (workspace_id, run_id, id);
+      CREATE INDEX messages_node_idx ON messages (workspace_id, node_id, id);
+
+      -- A direct-chat conversation with one agent (round 4 §2.3, FR-CHAT-004). It never reads or
+      -- writes runs/node_runs (FR-CHAT-005), which is why its turns are a separate id space.
+      CREATE TABLE chat_threads (
+        id           TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        node_id      TEXT NOT NULL,
+        title        TEXT NOT NULL,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL
+      );
+      CREATE INDEX chat_threads_node_idx ON chat_threads (workspace_id, node_id, id);
+
+      -- One turn of a direct chat (round 4 §2.3, FR-CHAT-006/008). 'verdicts' are ChatVerdict[]
+      -- (no node_run_id), 'usage' is present only on an agent reply.
+      CREATE TABLE chat_messages (
+        id           TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        thread_id    TEXT NOT NULL,
+        role         TEXT NOT NULL,
+        content      TEXT NOT NULL,
+        verdicts     TEXT NOT NULL,
+        usage        TEXT,
+        at           TEXT NOT NULL
+      );
+      CREATE INDEX chat_messages_thread_idx ON chat_messages (workspace_id, thread_id, id);
     `,
   },
 ];

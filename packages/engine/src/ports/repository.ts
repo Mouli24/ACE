@@ -1,13 +1,21 @@
 import type {
+  Artifact,
+  ChatMessage,
+  ChatThread,
   CursorQuery,
   Edge,
   Id,
+  McpServer,
+  McpServerStatus,
+  Message,
+  MessageQuery,
   Node,
   Page,
   Project,
   Settings,
   SettingsPatch,
   Timestamp,
+  ToolCall,
   Workflow,
 } from '@ace/contracts';
 
@@ -134,6 +142,97 @@ export interface SettingsRepository {
   update(scope: Scope, patch: SettingsPatch): Promise<Settings>;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Round 4 (Arch §15.3): artifacts, tool calls, MCP servers, messages, chat    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The artifact metadata store (round 4 §2.1, FR-MM-001..004, Arch §15.4).
+ *
+ * The bytes live in the `BlobStore`, keyed by `hash`; this keeps the row. Dedupe is a database
+ * constraint — `getByHash` is how the upload path answers "these exact bytes are already stored"
+ * before it writes a second row (FR-MM-002). `touch` moves the `lastReferencedAt` clock the
+ * retention sweep of Arch §15.4 counts from, and `unreferencedBefore` is the query that sweep runs;
+ * the policy (when to run it, and deleting the blob) stays the engine's.
+ */
+export interface ArtifactRepository {
+  create(scope: Scope, artifact: Artifact): Promise<Artifact>;
+  getById(scope: Scope, id: Id): Promise<Artifact | null>;
+  /** The stored row with these bytes, or null — the dedupe lookup (FR-MM-002). */
+  getByHash(scope: Scope, hash: string): Promise<Artifact | null>;
+  /** Newest first, so the uploads panel shows the most recent at the top. */
+  list(scope: Scope, page: CursorQuery): Promise<Page<Artifact>>;
+  /** Sets `lastReferencedAt`; null when there is no such artifact. */
+  touch(scope: Scope, id: Id, at: Timestamp): Promise<Artifact | null>;
+  /**
+   * The sweep candidates of Arch §15.4: artifacts whose reference time (`lastReferencedAt`, or
+   * `createdAt` when it was never referenced) is before `before` **and** which no live reference
+   * points at — an Input node's `artifactIds`, a node run's output or input envelopes, a timeline
+   * message, or a chat message. The engine decides `before` (now − 7 days) and does the deleting.
+   */
+  unreferencedBefore(scope: Scope, before: Timestamp): Promise<Artifact[]>;
+  delete(scope: Scope, id: Id): Promise<boolean>;
+}
+
+export interface ToolCallRepository {
+  /**
+   * Appends a logged call (FR-TOOL-009) and mirrors it onto its node run's `toolCalls` list in the
+   * same transaction, so the denormalised copy the `NodeRun` contract carries cannot drift — the
+   * same one-write-path rule as verdicts and approvals. `runId` is passed alongside because the
+   * `ToolCall` contract carries only `nodeRunId`, and the inspector filters by run.
+   */
+  append(scope: Scope, runId: Id, call: ToolCall): Promise<ToolCall>;
+  /** In the order they were made, which is the order the agent's tool loop made them. */
+  listByNodeRun(scope: Scope, nodeRunId: Id): Promise<ToolCall[]>;
+  listByRun(scope: Scope, runId: Id): Promise<ToolCall[]>;
+}
+
+/** What a health check may change on an MCP server (FR-TOOL-007, D16). */
+export interface McpServerPatch {
+  status?: McpServerStatus;
+  toolCount?: number;
+  lastCheckedAt?: Timestamp;
+  /** `null` clears a previous error once the server reconnects. */
+  error?: string | null;
+}
+
+export interface McpServerRepository {
+  create(scope: Scope, server: McpServer): Promise<McpServer>;
+  get(scope: Scope, id: Id): Promise<McpServer | null>;
+  /** Oldest first — the order the user added them. */
+  list(scope: Scope): Promise<McpServer[]>;
+  updateStatus(scope: Scope, id: Id, patch: McpServerPatch): Promise<McpServer | null>;
+  delete(scope: Scope, id: Id): Promise<boolean>;
+}
+
+export interface MessageRepository {
+  /** Appends one timeline row (FR-CHAT-001). Never updates: the timeline is append-only. */
+  append(scope: Scope, message: Message): Promise<Message>;
+  /**
+   * `GET /workflows/:id/messages` (FR-CHAT-002): the workflow's timeline, filtered by any
+   * combination of run, node and type, paged by cursor. Oldest first, so a reconnect that replays
+   * from a cursor sees the identical order.
+   */
+  query(scope: Scope, workflowId: Id, query: MessageQuery): Promise<Page<Message>>;
+}
+
+export interface ChatThreadRepository {
+  create(scope: Scope, thread: ChatThread): Promise<ChatThread>;
+  get(scope: Scope, id: Id): Promise<ChatThread | null>;
+  /** `GET /nodes/:id/chat/threads` — the agent's threads, oldest first. */
+  listByNode(scope: Scope, nodeId: Id): Promise<ChatThread[]>;
+  /** Moves `updatedAt` when a turn is added, so the thread list can sort by recency. */
+  touch(scope: Scope, id: Id, updatedAt: Timestamp): Promise<ChatThread | null>;
+  /** Removes the thread and every one of its messages in one transaction. */
+  delete(scope: Scope, id: Id): Promise<boolean>;
+}
+
+export interface ChatMessageRepository {
+  append(scope: Scope, message: ChatMessage): Promise<ChatMessage>;
+  /** In the order they were sent, which is the order the conversation happened. */
+  listByThread(scope: Scope, threadId: Id): Promise<ChatMessage[]>;
+}
+
 /**
  * The relational store (Arch §7: SQLite locally, Postgres hosted).
  *
@@ -165,4 +264,18 @@ export interface Repository {
   guardrailPolicies: GuardrailPolicyRepository;
   guardrailVerdicts: GuardrailVerdictRepository;
   approvals: ApprovalRepository;
+
+  /*
+   * Round 4 (Arch §15.3). Optional for now, the way `Run.allowedActions` was on its way in (D71):
+   * `SqliteRepository` provides all six concretely, so the engine's services get them, while the
+   * in-memory `FakeRepository` the engine tests use has not yet grown them. Promote to required —
+   * and extend `FakeRepository` — once the round 4 engine services (artifacts, tool loop, chat)
+   * are wired.
+   */
+  artifacts?: ArtifactRepository;
+  toolCalls?: ToolCallRepository;
+  mcpServers?: McpServerRepository;
+  messages?: MessageRepository;
+  chatThreads?: ChatThreadRepository;
+  chatMessages?: ChatMessageRepository;
 }
