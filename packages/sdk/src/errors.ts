@@ -80,4 +80,31 @@ export class AceApiError extends Error {
       retryable: false,
     });
   }
+
+  /**
+   * The failure of a `POST /artifacts` upload (round 4 §2.1). The engine's own envelope is used
+   * when it sent one; without it, 413 and 415 are still surfaced as `upload_too_large` /
+   * `unsupported_type` so the UI can show the same inline message either way (M4 §2, FR-MM-001).
+   */
+  static fromUploadResponse(status: number, body: unknown): AceApiError {
+    const parsed = ApiErrorSchema.safeParse(body);
+    if (parsed.success) return new AceApiError(status, parsed.data.error);
+    if (status === 413) {
+      return new AceApiError(413, {
+        kind: 'invalid_config',
+        code: 'upload_too_large',
+        message: 'The file is larger than the upload limit.',
+        retryable: false,
+      });
+    }
+    if (status === 415) {
+      return new AceApiError(415, {
+        kind: 'invalid_config',
+        code: 'unsupported_type',
+        message: 'That file type cannot be uploaded.',
+        retryable: false,
+      });
+    }
+    return AceApiError.fromResponse(status, body);
+  }
 }
