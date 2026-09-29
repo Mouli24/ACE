@@ -121,6 +121,22 @@ describe('FR-SYS-007 masking one credential never uncovers another', () => {
 
     expect(JSON.stringify(redactSecrets({ header: line }))).not.toContain(VALUE);
   });
+
+  it('masks a key two patterns both claim once, not twice and not in pieces', () => {
+    const openAiKey = ['sk', '-proj-', 'Zm9v'.repeat(10)].join('');
+    const githubKey = ['ghp', '_', 'a1B2'.repeat(9)].join('');
+
+    // The label rule and the `sk-` rule claim the same run.
+    expect(maskSecrets(`OPENAI_API_KEY=${openAiKey} next`)).toBe(`OPENAI_API_KEY=${REDACTED} next`);
+    // The Bearer run contains the whole `ghp_` token.
+    expect(maskSecrets(`Authorization: Bearer ${githubKey} next`)).toBe(
+      `Authorization: ${REDACTED} next`,
+    );
+    // Two separate keys stay two separate masks, with the text between them kept.
+    expect(maskSecrets(`a ${githubKey} b DB_PASSWORD=${VALUE} c`)).toBe(
+      `a ${REDACTED} b DB_PASSWORD=${REDACTED} c`,
+    );
+  });
 });
 
 describe('NFR-SAFE-01 the storage guard stays linear on text built to make it backtrack', () => {

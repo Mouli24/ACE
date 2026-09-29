@@ -179,25 +179,14 @@ export function looksLikeSecret(value: string): boolean {
  */
 export function maskSecrets(value: string): string {
   const spans = secretSpans(value, false).sort((a, b) => a[0] - b[0] || b[1] - a[1]);
-  if (spans.length === 0) return value;
 
   let masked = '';
-  let cursor = 0;
-  let open: [number, number] | undefined;
+  // Everything before `maskedTo` is already behind a mask; a span that starts inside it (or right
+  // at its end) only widens that mask.
+  let maskedTo = -1;
   for (const [start, end] of spans) {
-    if (open !== undefined && start <= open[1]) {
-      open[1] = Math.max(open[1], end);
-      continue;
-    }
-    if (open !== undefined) {
-      masked += value.slice(cursor, open[0]) + REDACTED;
-      cursor = open[1];
-    }
-    open = [start, end];
+    if (start > maskedTo) masked += value.slice(Math.max(maskedTo, 0), start) + REDACTED;
+    maskedTo = Math.max(maskedTo, end);
   }
-  if (open !== undefined) {
-    masked += value.slice(cursor, open[0]) + REDACTED;
-    cursor = open[1];
-  }
-  return masked + value.slice(cursor);
+  return masked + value.slice(Math.max(maskedTo, 0));
 }
