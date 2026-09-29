@@ -36,6 +36,7 @@
     "@ace/guardrails": "workspace:*",
     "@ace/providers": "workspace:^",
     "@ace/storage-local": "workspace:*",
+    "@ace/tools": "workspace:*",
     "@hono/node-server": "^2.1.1",
     "hono": "^4.13.8",
     "ws": "^8.21.3",

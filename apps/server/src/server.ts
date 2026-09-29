@@ -8,13 +8,21 @@ import {
 import type { Server } from "node:http";
 import { join } from "node:path";
 
-import { WS_PATH, type GuardrailCheck } from "@ace/contracts";
+import {
+  WS_PATH,
+  type GuardrailCheck,
+  type Id,
+  type Part,
+  type ToolCall,
+} from "@ace/contracts";
 import { serve } from "@hono/node-server";
 import {
   LOCAL_SCOPE,
   controlStoresFor,
   createApprovalService,
+  createArtifactService,
   createBudgetService,
+  createChatService,
   createEngineApp,
   createEventBus,
   createGraphService,
@@ -25,25 +33,35 @@ import {
   createRunControls,
   createRunGateRegistry,
   createRunService,
+  createToolGuardrailEvaluator,
   createWsHub,
   guardrailStoreFor,
   haltActiveRuns,
   loadEngineConfig,
   logDirectory,
   logFileName,
+  mediaTypeForMime,
+  newId,
   pruneOldLogs,
   recoverAfterCrash,
+  startTimelinePopulation,
   workflowUpdatedEvent,
+  type ArtifactMaterialiser,
+  type ArtifactService,
+  type ChatService,
   type CheckInput,
   type CheckRunner,
   type EngineEvent,
   type Logger,
+  type McpService,
   type ProviderService,
   type RunService,
   type SecretMasker,
+  type ToolProvider,
 } from "@ace/engine";
 import {
   SECRET_RULES,
+  checkToolArgs,
   evaluateCheck,
   findSpans,
   redactSpans,
@@ -58,6 +76,7 @@ import {
   SqliteRepository,
   openDatabase,
 } from "@ace/storage-local";
+import { McpManager, ToolRegistry, registerBuiltinTools } from "@ace/tools";
 import { WebSocketServer } from "ws";
 
 export const ENGINE_VERSION = "0.1.0";
@@ -98,7 +117,10 @@ export function guardrailInputFor(
         ? base
         : { ...base, value: input.cost.costUsd, limit: input.cost.capUsd };
     default:
-      return base;
+      // The tool-point checks (round 4 §2.2, FR-GRD-005/006) read `GuardrailInput.tool`, the same
+      // `ToolPointInput` shape the engine's `CheckInput.tool` already carries — the last field this
+      // seam maps, exactly as the loop and cost figures above.
+      return input.tool === undefined ? base : { ...base, tool: input.tool };
   }
 }
 
@@ -342,6 +364,124 @@ export async function startEngine(
     approvals,
   });
 
+  /* --------------------------------------------------------- round 4: files, tools, chat */
+
+  /*
+   * The artifact store (FR-MM-001/002/009): rows in the repository, bytes in the content-addressed
+   * blob store, the size limit and type allow-list its own. `POST /artifacts` and the two GETs are
+   * the gateway's, this is the service behind them.
+   */
+  const artifactService = createArtifactService({
+    scope: LOCAL_SCOPE,
+    artifacts: repository.artifacts,
+    blobs,
+    settings: repository.settings,
+  });
+
+  /*
+   * The tool registry: the six built-ins in §2.2's order, plus whatever MCP servers connect. The
+   * built-ins default to the child-process sandbox (D13) and the canned search backend (D14), so
+   * this needs no Docker and no network. The MCP manager registers a connected server's tools into
+   * the same registry, and `DELETE /mcp-servers/:id` drops them again (FR-TOOL-007).
+   */
+  const toolRegistry = new ToolRegistry();
+  registerBuiltinTools(toolRegistry);
+  const mcpManager = new McpManager({ registry: toolRegistry });
+  const toolLogger = logger.child({ subsystem: "tools" });
+
+  /*
+   * The executor's `ToolProvider` view (Arch §12.7): the registry keeps a `{definition, run}` pair
+   * whose `run` takes `@ace/tools`' `ToolContext`; the executor hands a narrower `ToolRunContext`, so
+   * this fills in the workspace scope and the tool logger the context needs.
+   */
+  const toolProvider: ToolProvider = {
+    get: (name) => {
+      const registered = toolRegistry.get(name);
+      if (registered === undefined) return undefined;
+      return {
+        definition: registered.definition,
+        run: (args, ctx) =>
+          registered.implementation(args, {
+            scope: LOCAL_SCOPE,
+            runId: ctx.runId,
+            sandboxDir: ctx.sandboxDir,
+            logger: toolLogger,
+            signal: ctx.signal,
+          }),
+      };
+    },
+  };
+
+  /* `<dataDir>/sandbox/<runId>/` — the only folder a run's tools may touch (§2.2, NFR-SEC-03). */
+  const sandboxDirFor = (runId: Id): string => join(config.dataDir, "sandbox", runId);
+
+  /*
+   * The multimodal materialiser (FR-MM-003/004): an Input node's `artifactIds` become media `Part`
+   * references by MIME, and a model's produced media parts come back backed by a stored artifact.
+   * Bytes never travel through an envelope — every part is a reference (BR-02).
+   */
+  const materialiser: ArtifactMaterialiser = {
+    async inputParts(artifactIds) {
+      const parts: Part[] = [];
+      for (const id of artifactIds) {
+        const artifact = await artifactService.get(id);
+        if (artifact === null) continue;
+        await artifactService.markReferenced(id);
+        parts.push({
+          type: mediaTypeForMime(artifact.mime),
+          artifactId: artifact.id,
+          mime: artifact.mime,
+          name: artifact.name,
+          size: artifact.size,
+        });
+      }
+      return parts;
+    },
+    async store(parts) {
+      const out: Part[] = [];
+      for (const part of parts) {
+        if (part.type === "text" || part.type === "json" || part.type === "code") {
+          out.push(part);
+          continue;
+        }
+        // A produced media part already backed by a stored artifact keeps its reference.
+        const existing = await artifactService.get(part.artifactId);
+        if (existing !== null) {
+          await artifactService.markReferenced(existing.id);
+          out.push(part);
+          continue;
+        }
+        // The provider emitted a placeholder id (the mock cannot store bytes, §2.6): materialise a
+        // stand-in artifact of the declared type so the produced part references a real row.
+        const stored = await artifactService.upload(new Uint8Array(part.size), {
+          mime: part.mime,
+          name: part.name,
+        });
+        out.push({ ...part, artifactId: stored.id, size: stored.size });
+      }
+      return out;
+    },
+  };
+
+  /* Persist one logged tool call, mirrored onto its node run in the same write (FR-TOOL-009). */
+  const recordToolCall = async (runId: Id, call: ToolCall): Promise<void> => {
+    await repository.toolCalls.append(LOCAL_SCOPE, runId, call);
+  };
+
+  /*
+   * The tool point of the guardrail engine (FR-GRD-005/006, FR-TOOL-002). `checkToolArgs` is the
+   * always-on arguments precondition (D217), and the same approval gate the output point uses opens
+   * the card a destructive tool asks for (BR-14).
+   */
+  const toolGuardrails = createToolGuardrailEvaluator({
+    scope: LOCAL_SCOPE,
+    checks,
+    verdicts: guardrailStore.verdicts,
+    bus,
+    validateArgs: checkToolArgs,
+    approvals,
+  });
+
   const budgets = createBudgetService({
     scope: LOCAL_SCOPE,
     projects: guardrailStore.projects,
@@ -374,6 +514,12 @@ export async function startEngine(
     guardrails,
     budgets,
     approvals,
+    /* Round 4's tool loop and multimodal materialisation (Arch §12.7, FR-TOOL-*, FR-MM-003/004). */
+    tools: toolProvider,
+    sandboxDirFor,
+    artifacts: materialiser,
+    recordToolCall,
+    toolGuardrails,
   });
 
   const controls = createRunControls({
@@ -386,6 +532,87 @@ export async function startEngine(
     drivePartialRun: (plan) => runs.drivePartialRun(plan),
     envelopesFor: (run, nodeId) => runs.envelopesFor(run, nodeId),
   });
+
+  /*
+   * The chat service (FR-CHAT-001..008): the workflow timeline and direct agent threads. It reaches
+   * a node by id through the repository's `getById` join, prices with the same catalog the run
+   * executor uses, and starts a run for `postMessage({ run: true })` through the run service. A
+   * direct chat is text-only and touches no run (FR-CHAT-005), so it needs no tool wiring.
+   */
+  const chatService: ChatService = createChatService({
+    scope: LOCAL_SCOPE,
+    repository,
+    bus,
+    logger: logger.child({ subsystem: "chat" }),
+    router,
+    adapterFor: (providerId) => providers.adapterFor(providerId),
+    modelsFor: () => repository.models.list(LOCAL_SCOPE, {}),
+    runGated: async (providerId, fn) =>
+      (await providers.semaphoreFor(providerId)).run(fn),
+    resolveNode: async (nodeId) => {
+      const resolved = await repository.nodes.getById(LOCAL_SCOPE, nodeId);
+      return resolved === null ? null : { node: resolved.node, projectId: resolved.projectId };
+    },
+    policies: guardrailPolicies,
+    checks,
+    masker,
+    startRun: async (workflowId, request) => (await runs.beginRun(workflowId, request)).run,
+  });
+
+  /*
+   * The timeline populator (FR-CHAT-001): derives every non-user timeline row from the persisted
+   * run events, so the timeline replays identically after a reconnect (§2.3). Started once; its
+   * unsubscribe is kept for shutdown.
+   */
+  const timeline = await startTimelinePopulation({
+    scope: LOCAL_SCOPE,
+    repository,
+    bus,
+    logger: logger.child({ subsystem: "chat" }),
+  });
+
+  /*
+   * The MCP surface (FR-TOOL-007): register connects the server through the manager (registering its
+   * tools into the shared registry), persists the row and emits `mcp.status`; check re-probes it; and
+   * remove drops its tools and its row. The manager holds the live connections, the repository the
+   * rows the servers screen reads.
+   */
+  const mcpService: McpService = {
+    list: () => repository.mcpServers.list(LOCAL_SCOPE),
+    get: (id) => repository.mcpServers.get(LOCAL_SCOPE, id),
+    async create(request) {
+      const id = newId();
+      const server = await mcpManager.register(id, request);
+      const created = await repository.mcpServers.create(LOCAL_SCOPE, server);
+      await bus.emit({
+        type: "mcp.status",
+        payload: { serverId: id, status: created.status, toolCount: created.toolCount },
+      });
+      return created;
+    },
+    async check(id) {
+      const checked = await mcpManager.check(id);
+      // No live connection (e.g. after a restart, before a reconnect): the stored row is the truth.
+      if (checked === undefined) return repository.mcpServers.get(LOCAL_SCOPE, id);
+      const updated = await repository.mcpServers.updateStatus(LOCAL_SCOPE, id, {
+        status: checked.status,
+        toolCount: checked.toolCount,
+        ...(checked.lastCheckedAt === undefined
+          ? {}
+          : { lastCheckedAt: checked.lastCheckedAt }),
+        error: checked.error ?? null,
+      });
+      await bus.emit({
+        type: "mcp.status",
+        payload: { serverId: id, status: checked.status, toolCount: checked.toolCount },
+      });
+      return updated;
+    },
+    async remove(id) {
+      await mcpManager.deregister(id);
+      return repository.mcpServers.delete(LOCAL_SCOPE, id);
+    },
+  };
 
   /* FR-SYS-009: anything the store still believes is running died with the last process. */
   await recoverAfterCrash({
@@ -427,6 +654,11 @@ export async function startEngine(
     controls,
     guardrailPolicies,
     approvals,
+    /* Round 4's routes (§2.4): artifacts, tools, MCP servers, timeline and direct chat. */
+    artifacts: artifactService,
+    tools: { list: () => toolRegistry.list() },
+    mcp: mcpService,
+    chat: chatService,
   });
 
   /* -------------------------------------------------------------------- http */
@@ -509,6 +741,10 @@ export async function startEngine(
       bus,
       logger: logger.child({ subsystem: "runs" }),
     });
+
+    // Round 4: stop deriving timeline rows and close every MCP connection before the DB closes.
+    timeline.unsubscribe();
+    await mcpManager.closeAll();
 
     hub.closeAll();
     wss.close();
