@@ -47,7 +47,6 @@ import {
   startTimelinePopulation,
   workflowUpdatedEvent,
   type ArtifactMaterialiser,
-  type ArtifactService,
   type ChatService,
   type CheckInput,
   type CheckRunner,
@@ -550,6 +549,11 @@ export async function startEngine(
     runGated: async (providerId, fn) =>
       (await providers.semaphoreFor(providerId)).run(fn),
     resolveNode: async (nodeId) => {
+      // The chat reply resolves its model through the same router the run engine uses, which reads
+      // `catalogCache`. A run refreshes that cache at pre-flight (`checkProvider`); a direct chat has
+      // no pre-flight, so refresh it here — `resolveNode` runs at the start of `chat()`, before the
+      // model is resolved — so a model added a moment ago is chattable (FR-RTR-002).
+      await refreshCatalogCache();
       const resolved = await repository.nodes.getById(LOCAL_SCOPE, nodeId);
       return resolved === null ? null : { node: resolved.node, projectId: resolved.projectId };
     },

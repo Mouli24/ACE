@@ -2,20 +2,28 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync
 import { networkInterfaces } from 'node:os';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   ApiErrorSchema,
+  ArtifactSchema,
+  ChatThreadDetailSchema,
   GuardrailPolicySchema,
   HealthResponseSchema,
+  McpServerSchema,
+  MessageListResponseSchema,
   NodeRunSchema,
+  PostMessageResponseSchema,
   ProjectSchema,
   ProviderSchema,
   RunSchema,
+  ToolListResponseSchema,
   WorkflowGraphResponseSchema,
   WsServerFrameSchema,
   type ApprovalRequest,
   type GuardrailCheck,
   type WorkflowExport,
+  type WorkflowGraphResponse,
 } from '@ace/contracts';
 import { openDatabase } from '@ace/storage-local';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -740,4 +748,302 @@ describe('Round 3 wiring: guardrail approvals and run controls over the real ser
     const firstAgain = RunSchema.parse(await (await api(`/runs/${first.id}`)).json());
     expect(firstAgain.status).toBe('COMPLETE');
   }, 60_000);
+});
+
+/*
+ * Round 4 wiring: the artifact store, the tool registry + MCP manager, the tool loop and multimodal
+ * materialisation threaded through the executor, the chat service and the timeline populator — all
+ * exercised through the real HTTP + WS server (temp DB, mock provider, no Docker, no network). The
+ * engine's own units cover each service; what this covers is the *wiring in server.ts*: the artifact
+ * service behind the routes, the `ToolProvider`/`sandboxDirFor`/`recordToolCall`/`toolGuardrails`
+ * given to the run service, the `ArtifactMaterialiser`, `resolveNode`/`startRun` on the chat service,
+ * the MCP register->persist->emit path, and `startTimelinePopulation`.
+ */
+describe('Round 4 wiring: artifacts, tools, MCP, chat and the tool loop over the real server', () => {
+  const PLACEHOLDER_PROVIDER = '01M4R4PV0000000000000000PV';
+  const PLACEHOLDER_ARTIFACT = '01M4R4AR0000000000000000AR';
+  const fixturesDir = new URL('../../../../tests/acceptance/fixtures/round-4/', import.meta.url);
+
+  const api = (path: string, init: RequestInit = {}) =>
+    fetch(`${engine.url}/api/v1${path}`, { ...init, headers: { ...authHeaders(), ...init.headers } });
+  const json = (path: string, init: RequestInit = {}) =>
+    api(path, { ...init, headers: { 'Content-Type': 'application/json', ...init.headers } });
+  const post = async (path: string, body: unknown): Promise<unknown> => {
+    const response = await json(path, { method: 'POST', body: JSON.stringify(body) });
+    expect(response.status, `${path}: ${await response.clone().text()}`).toBeLessThan(300);
+    return response.json();
+  };
+
+  async function uploadFile(bytes: Uint8Array, name: string, mime: string): Promise<Response> {
+    const form = new FormData();
+    form.append('file', new File([bytes], name, { type: mime }));
+    return fetch(`${engine.url}/api/v1/artifacts`, { method: 'POST', headers: authHeaders(), body: form });
+  }
+
+  async function mockProvider(): Promise<string> {
+    const provider = ProviderSchema.parse(await post('/providers', { type: 'mock', name: 'Mock' }));
+    await post(`/providers/${provider.id}/refresh-models`, {});
+    return provider.id;
+  }
+
+  async function importFixture(
+    file: string,
+    providerId: string,
+    rewrites: Record<string, string> = {},
+  ): Promise<WorkflowGraphResponse> {
+    const project = ProjectSchema.parse(await post('/projects', { name: 'R4 wiring' }));
+    let text = readFileSync(new URL(file, fixturesDir), 'utf8').replaceAll(
+      PLACEHOLDER_PROVIDER,
+      providerId,
+    );
+    for (const [from, to] of Object.entries(rewrites)) text = text.replaceAll(from, to);
+    return WorkflowGraphResponseSchema.parse(
+      await post(`/projects/${project.id}/workflows/import`, JSON.parse(text) as WorkflowExport),
+    );
+  }
+
+  async function waitForEnd(runId: string): Promise<ReturnType<typeof RunSchema.parse>> {
+    let run = RunSchema.parse(await (await api(`/runs/${runId}`)).json());
+    for (let i = 0; i < 300 && ['PREFLIGHT', 'RUNNING'].includes(run.status); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      run = RunSchema.parse(await (await api(`/runs/${runId}`)).json());
+    }
+    return run;
+  }
+
+  function nodeId(graph: WorkflowGraphResponse, kind: string, index = 0): string {
+    const node = graph.nodes.filter((candidate) => candidate.kind === kind)[index];
+    if (node === undefined) throw new Error(`no ${kind} node in fixture`);
+    return node.id;
+  }
+
+  const png = (): Buffer => readFileSync(new URL('media/sample.png', fixturesDir));
+
+  it('POST /artifacts stores a file; GET returns the row and bytes with the §2.1 headers (FR-MM-001/009)', async () => {
+    const bytes = png();
+    const created = await uploadFile(bytes, 'sample.png', 'image/png');
+    expect(created.status).toBe(201);
+    const artifact = ArtifactSchema.parse(await created.json());
+    expect(artifact.mime).toBe('image/png');
+    expect(artifact.name).toBe('sample.png');
+    expect(artifact.size).toBe(bytes.byteLength);
+
+    const row = ArtifactSchema.parse(await (await api(`/artifacts/${artifact.id}`)).json());
+    expect(row.id).toBe(artifact.id);
+
+    const content = await api(`/artifacts/${artifact.id}/content`);
+    expect(content.status).toBe(200);
+    expect(content.headers.get('Content-Type')).toBe('image/png');
+    expect(content.headers.get('ETag')).toBe(`"${artifact.hash}"`);
+    expect(content.headers.get('Accept-Ranges')).toBe('bytes');
+    expect(content.headers.get('Content-Disposition')).toContain('sample.png');
+    expect(new Uint8Array(await content.arrayBuffer()).byteLength).toBe(bytes.byteLength);
+  });
+
+  it('dedupes identical bytes to one artifact id (FR-MM-002)', async () => {
+    const bytes = png();
+    const first = ArtifactSchema.parse(await (await uploadFile(bytes, 'a.png', 'image/png')).json());
+    const second = ArtifactSchema.parse(await (await uploadFile(bytes, 'b.png', 'image/png')).json());
+    expect(second.id).toBe(first.id);
+  });
+
+  it('serves a byte range as 206 with Content-Range (FR-MM-009)', async () => {
+    const bytes = png();
+    const artifact = ArtifactSchema.parse(await (await uploadFile(bytes, 'r.png', 'image/png')).json());
+
+    const ranged = await api(`/artifacts/${artifact.id}/content`, { headers: { Range: 'bytes=0-3' } });
+    expect(ranged.status).toBe(206);
+    expect(ranged.headers.get('Content-Range')).toBe(`bytes 0-3/${bytes.byteLength}`);
+    expect(new Uint8Array(await ranged.arrayBuffer()).byteLength).toBe(4);
+  });
+
+  it('refuses an over-limit upload 413 upload_too_large, naming the limit (TC-MM-001)', async () => {
+    await json('/settings', { method: 'PATCH', body: JSON.stringify({ maxUploadMb: 1 }) });
+    const tooBig = new Uint8Array(2 * 1024 * 1024); // 2 MB, over the 1 MB cap just set
+    const response = await uploadFile(tooBig, 'big.zip', 'application/zip');
+
+    expect(response.status).toBe(413);
+    const error = ApiErrorSchema.parse(await response.json());
+    expect(error.error.code).toBe('upload_too_large');
+    expect((error.error.details as { maxBytes: number }).maxBytes).toBe(1024 * 1024);
+  });
+
+  it('refuses a type §2.1 does not allow 415 unsupported_type (TC-MM-002)', async () => {
+    const response = await uploadFile(new Uint8Array([1, 2, 3]), 'evil.exe', 'application/x-msdownload');
+    expect(response.status).toBe(415);
+    expect(ApiErrorSchema.parse(await response.json()).error.code).toBe('unsupported_type');
+  });
+
+  it('GET /tools lists the six built-ins in §2.2 order (FR-TOOL-001)', async () => {
+    const body = ToolListResponseSchema.parse(await (await api('/tools')).json());
+    expect(body.items.map((tool) => tool.name)).toEqual([
+      'echo',
+      'code_sandbox',
+      'sandbox_delete',
+      'http_request',
+      'web_search',
+      'web_fetch',
+    ]);
+  });
+
+  it('connects a stdio MCP server, registers its tools, checks and removes it (FR-TOOL-007)', async () => {
+    const mcpStatus: unknown[] = [];
+    const socket = new WebSocket(`${engine.wsUrl}?token=${engine.token}`);
+    socket.on('message', (data) => {
+      const frame = JSON.parse(String(data)) as { type: string };
+      if (frame.type === 'mcp.status') mcpStatus.push(frame);
+    });
+    await new Promise((resolve) => socket.on('open', resolve));
+    socket.send(JSON.stringify({ type: 'subscribe', payload: { scope: 'engine' } }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const serverPath = fileURLToPath(new URL('servers/mcp-server.mjs', fixturesDir));
+    const server = McpServerSchema.parse(
+      await post('/mcp-servers', {
+        name: 'fixtures',
+        transport: 'stdio',
+        command: process.execPath,
+        args: [serverPath],
+      }),
+    );
+    expect(server.status).toBe('connected');
+    expect(server.toolCount).toBe(2);
+
+    const listed = (await (await api('/mcp-servers')).json()) as { items: unknown[] };
+    expect(listed.items).toHaveLength(1);
+
+    const withMcp = ToolListResponseSchema.parse(await (await api('/tools')).json());
+    expect(withMcp.items.map((tool) => tool.name)).toContain('mcp_fixtures_ping');
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(mcpStatus.length).toBeGreaterThanOrEqual(1);
+
+    const checked = McpServerSchema.parse(await post(`/mcp-servers/${server.id}/check`, {}));
+    expect(checked.status).toBe('connected');
+
+    const removed = await api(`/mcp-servers/${server.id}`, { method: 'DELETE' });
+    expect(removed.status).toBe(204);
+    const afterRemove = ToolListResponseSchema.parse(await (await api('/tools')).json());
+    expect(afterRemove.items.map((tool) => tool.name)).not.toContain('mcp_fixtures_ping');
+
+    socket.close();
+  }, 30_000);
+
+  it('runs a tool workflow to COMPLETE and records the tool call on the node run (FR-TOOL-002/009)', async () => {
+    const providerId = await mockProvider();
+    const graph = await importFixture('tools-echo.json', providerId);
+    const agentId = nodeId(graph, 'agent');
+
+    const started = RunSchema.parse(await post(`/workflows/${graph.workflow.id}/runs`, {}));
+    const run = await waitForEnd(started.id);
+    expect(run.status, JSON.stringify(run.preflightIssues)).toBe('COMPLETE');
+
+    const nodeRuns = (await (await api(`/runs/${run.id}/node-runs`)).json()) as unknown[];
+    const agentRun = nodeRuns.map((n) => NodeRunSchema.parse(n)).find((n) => n.nodeId === agentId);
+    expect(agentRun?.toolCalls.map((call) => call.toolName)).toContain('echo');
+    expect(agentRun?.toolCalls[0]?.status).toBe('ok');
+  }, 30_000);
+
+  it('materialises an uploaded image onto the Input node so a vision run completes (FR-MM-003/005)', async () => {
+    const providerId = await mockProvider();
+    const artifact = ArtifactSchema.parse(await (await uploadFile(png(), 'sample.png', 'image/png')).json());
+    const graph = await importFixture('vision.json', providerId, { [PLACEHOLDER_ARTIFACT]: artifact.id });
+
+    const started = RunSchema.parse(await post(`/workflows/${graph.workflow.id}/runs`, {}));
+    const run = await waitForEnd(started.id);
+    expect(run.status, JSON.stringify(run.preflightIssues)).toBe('COMPLETE');
+  }, 30_000);
+
+  it('backs a produced media part with a real stored artifact (FR-MM-004)', async () => {
+    const providerId = await mockProvider();
+    const graph = await importFixture('media.json', providerId);
+
+    const started = RunSchema.parse(await post(`/workflows/${graph.workflow.id}/runs`, {}));
+    const run = await waitForEnd(started.id);
+    expect(run.status, JSON.stringify(run.preflightIssues)).toBe('COMPLETE');
+
+    const events = (await (await api(`/runs/${run.id}/events`)).json()) as {
+      type: string;
+      payload: { output?: { type: string; artifactId?: string }[] };
+    }[];
+    const mediaRefs = events
+      .filter((event) => event.type === 'node.output')
+      .flatMap((event) => event.payload.output ?? [])
+      .filter((part) => 'artifactId' in part && part.artifactId !== undefined);
+    expect(mediaRefs.length).toBeGreaterThan(0);
+
+    // Every produced media reference resolves to a real, stored artifact (store() materialised it).
+    for (const ref of mediaRefs) {
+      const resolved = await api(`/artifacts/${ref.artifactId}`);
+      expect(resolved.status, `artifact ${ref.artifactId}`).toBe(200);
+    }
+  }, 30_000);
+
+  it('starts a direct chat, persists the reply, lists and deletes the thread (FR-CHAT-004/006)', async () => {
+    const providerId = await mockProvider();
+    const graph = await importFixture('chat-french.json', providerId);
+    const agentId = nodeId(graph, 'agent');
+
+    const begun = (await (
+      await json(`/nodes/${agentId}/chat`, {
+        method: 'POST',
+        body: JSON.stringify({ content: [{ type: 'text', text: 'Bonjour' }] }),
+      })
+    ).json()) as { threadId: string; messageId: string };
+    expect(begun.threadId).toBeDefined();
+    expect(begun.messageId).toBeDefined();
+
+    // The reply streams in the background; poll the thread until the agent turn is persisted.
+    let detail = ChatThreadDetailSchema.parse(await (await api(`/chat/threads/${begun.threadId}`)).json());
+    for (let i = 0; i < 200 && detail.messages.length < 2; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      detail = ChatThreadDetailSchema.parse(await (await api(`/chat/threads/${begun.threadId}`)).json());
+    }
+    expect(detail.messages.map((message) => message.role)).toEqual(['user', 'agent']);
+
+    const threads = (await (await api(`/nodes/${agentId}/chat/threads`)).json()) as { id: string }[];
+    expect(threads.map((thread) => thread.id)).toContain(begun.threadId);
+
+    const deleted = await api(`/chat/threads/${begun.threadId}`, { method: 'DELETE' });
+    expect(deleted.status).toBe(204);
+    expect((await api(`/chat/threads/${begun.threadId}`)).status).toBe(404);
+  }, 30_000);
+
+  it('refuses a direct chat on a non-agent node without a 500', async () => {
+    const providerId = await mockProvider();
+    const graph = await importFixture('chat-french.json', providerId);
+    const outputId = nodeId(graph, 'output');
+
+    const response = await json(`/nodes/${outputId}/chat`, {
+      method: 'POST',
+      body: JSON.stringify({ content: [{ type: 'text', text: 'hi' }] }),
+    });
+    expect(response.status).toBe(400);
+    expect(ApiErrorSchema.parse(await response.json()).error.kind).toBe('invalid_config');
+  }, 30_000);
+
+  it('derives a timeline from run events and starts a run from a posted message (FR-CHAT-001/003)', async () => {
+    const providerId = await mockProvider();
+    const graph = await importFixture('chat-french.json', providerId);
+
+    // FR-CHAT-003: the message becomes the Input node's text and, with run:true, starts a run.
+    const posted = PostMessageResponseSchema.parse(
+      await post(`/workflows/${graph.workflow.id}/messages`, {
+        content: [{ type: 'text', text: 'Start please' }],
+        run: true,
+      }),
+    );
+    expect(posted.run).toBeDefined();
+    const run = await waitForEnd(posted.run!.id);
+    expect(run.status, JSON.stringify(run.preflightIssues)).toBe('COMPLETE');
+
+    // FR-CHAT-001: the timeline populator turned the run events into rows.
+    const timeline = MessageListResponseSchema.parse(
+      await (await api(`/workflows/${graph.workflow.id}/messages`)).json(),
+    );
+    const types = new Set(timeline.items.map((message) => message.type));
+    expect(types.has('user')).toBe(true);
+    expect(types.has('event')).toBe(true);
+    expect(types.has('output') || types.has('agent')).toBe(true);
+  }, 30_000);
 });
