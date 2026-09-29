@@ -3,24 +3,30 @@ import {
   allowedRunActions,
   loopBody,
   type ApprovalRequest,
+  type Artifact,
   type BudgetHalt,
   type Edge,
   type GuardrailPolicyRef,
   type HaltReason,
+  type Message,
+  type MessageType,
   type Node,
   type NodeError,
   type NodeRun,
   type NodeState,
   type Part,
   type Run,
+  type ToolCall,
   type Usage,
   type Verdict,
 } from '@ace/contracts';
 
 import { newId } from '../lib/ulid';
+import { MEDIA_FIXTURES } from './artifacts-fixtures';
 import { MOCK_PRICING } from './catalog';
-import type { MockEvent } from './db';
+import type { MockDb, MockEvent } from './db';
 import { assemblePrompt, buildEnvelope, promptVersion } from './prompt';
+import { sha256Hex } from './sha256';
 
 /**
  * Scripted run scenarios (round 2 §5 item 11, round 3 §2.6). Each one turns a workflow graph into
@@ -49,7 +55,13 @@ export type ScenarioName =
   | 'loop-3-iterations'
   | 'merge-any'
   | 'retry-429'
-  | 'blocked-downstream';
+  | 'blocked-downstream'
+  /* round 4 (§2.4, §2.6): tools, multimodal, timeline */
+  | 'tool-loop'
+  | 'destructive-approval'
+  | 'vision-flow'
+  | 'media-outputs'
+  | 'timeline-six-types';
 
 export interface ScriptedFrame {
   /** Milliseconds after the previous frame. */
@@ -76,6 +88,13 @@ export interface ScriptedFrame {
   hold?: boolean;
   /** `socket-drop` uses this to cut the connection part-way through. */
   dropSocket?: boolean;
+  /**
+   * A side effect to run as this frame plays, given the db. Round 4 uses it to store the artifacts a
+   * media output references (§2.6 `mock-media`) and the timeline rows a `message.created` announces,
+   * so `GET /artifacts/:id/content` and `GET /messages` answer after a reload. Frames without one
+   * (every round 2/3 frame) behave exactly as before.
+   */
+  effect?: (db: MockDb) => void;
 }
 
 const usage = (tokensIn: number, tokensOut: number): Usage => ({
@@ -168,6 +187,11 @@ interface Context {
    * own override, or the project default (FR-GRD-002). Resolved by the caller, which holds the db.
    */
   policyFor?: (node: Node) => GuardrailPolicyRef | undefined;
+  /**
+   * Round 4: an Input node's `artifactId` resolved to the `Part` the vision flow reads (§2.6
+   * `mock-vision`). Resolved by the caller, which holds the db and so the artifact's mime/name/size.
+   */
+  artifactPartFor?: (artifactId: string) => Part | undefined;
 }
 
 /** Which iteration and attempt a frame belongs to — both 1 unless a loop or a retry says otherwise. */
@@ -619,6 +643,9 @@ export function buildScenario(name: ScenarioName, given: Context): ScriptedFrame
 
   const round3 = buildRound3Scenario(name, ctx, order, outputNode);
   if (round3 !== undefined) return [...frames, ...round3];
+
+  const round4 = buildRound4Scenario(name, ctx, order, outputNode);
+  if (round4 !== undefined) return [...frames, ...round4];
 
   const { tokenDelay, words } = stream(ctx);
   const spent: Usage[] = [];
@@ -1296,6 +1323,515 @@ function blockedDownstreamScript(ctx: Context, order: Node[]): ScriptedFrame[] |
   }
 
   frames.push(...completed(ctx, 'HALTED', usage(12, 4), { haltReason: 'failure' }));
+  return frames;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Round 4 scenarios (§2.4, §2.6): tools, multimodal outputs, the timeline      */
+/* -------------------------------------------------------------------------- */
+
+/** The `tool.call` frame, as `mock-tool`/`mock-destructive` would log one (FR-TOOL-009). */
+const toolCallFrame = (ctx: Context, nodeRunId: string, toolCall: ToolCall): ScriptedFrame => ({
+  after: 30,
+  event: {
+    type: 'tool.call',
+    scope: 'workflow',
+    workflowId: ctx.workflowId,
+    payload: { runId: ctx.run.id, nodeRunId, toolCall },
+  },
+});
+
+/** One logged call. Args are as delivered; the engine redacts key-shaped values (BR-07). */
+function toolCallOf(
+  nodeRunId: string,
+  toolName: string,
+  args: unknown,
+  resultSummary: string,
+  status: ToolCall['status'],
+  at: string,
+  verdicts: Verdict[] = [],
+): ToolCall {
+  return {
+    id: newId(),
+    nodeRunId,
+    toolName,
+    args,
+    resultSummary,
+    durationMs: 12,
+    status,
+    verdicts,
+    at,
+  };
+}
+
+/** A passing tool-point verdict — the tool was enabled for the agent (FR-TOOL-002, FR-GRD-005). */
+const toolAllowed = (nodeRunId: string, toolName: string, at: string): Verdict =>
+  verdictOf(
+    nodeRunId,
+    {
+      point: 'tool',
+      checkType: 'tool_allowed',
+      action: 'pass',
+      passed: true,
+      reason: `${toolName} is enabled for this agent.`,
+    },
+    at,
+  );
+
+/** A `message.created` frame that also stores the row, so `GET /messages` answers after a reload. */
+function messageFrame(ctx: Context, message: Message, after = 30): ScriptedFrame {
+  return {
+    after,
+    effect: (db) => {
+      db.addMessage(message);
+    },
+    event: {
+      type: 'message.created',
+      scope: 'workflow',
+      workflowId: ctx.workflowId,
+      payload: { workflowId: ctx.workflowId, message },
+    },
+  };
+}
+
+const messageOf = (
+  ctx: Context,
+  type: MessageType,
+  content: Part[],
+  extra: Partial<Message> = {},
+): Message => ({
+  id: newId(),
+  workflowId: ctx.workflowId,
+  runId: ctx.run.id,
+  type,
+  content,
+  at: at(ctx, 100),
+  ...extra,
+});
+
+const textPreview = (parts: readonly Part[]): string => {
+  const text = parts.find((part) => part.type === 'text');
+  return text !== undefined && text.type === 'text' ? text.text : JSON.stringify(parts[0] ?? {});
+};
+
+/**
+ * One node with an output of our choosing — the round 4 counterpart of `runNode`, which only ever
+ * streams text. It carries the tool calls the loop logged, the media parts `mock-media` produced,
+ * or the vision agent's description, and it can store artifacts as the output frame plays.
+ */
+function runCustomNode(
+  ctx: Context,
+  node: Node,
+  options: {
+    reads: Part[];
+    output: Part[];
+    nodeRunId?: string;
+    round?: Round;
+    toolCalls?: ToolCall[];
+    verdicts?: Verdict[];
+    /** Frames between RUNNING and the output — the loop's `tool.call`s, the approval hold. */
+    beforeOutput?: ScriptedFrame[];
+    outputEffect?: (db: MockDb) => void;
+  },
+): { frames: ScriptedFrame[]; nodeRunId: string; output: Part[]; usage: Usage } {
+  const nodeRunId = options.nodeRunId ?? newId();
+  const round = options.round ?? {};
+  const spent = usage(12, options.output.length * 3);
+  const modelUsed = {
+    providerId: (node.config as { providerId?: string }).providerId ?? newId(),
+    modelId: (node.config as { modelId?: string }).modelId ?? 'mock-text',
+    viaFallback: false,
+  };
+  const carry: Partial<NodeRun> = {
+    ...(options.toolCalls === undefined ? {} : { toolCalls: options.toolCalls }),
+    ...(options.verdicts === undefined ? {} : { verdicts: options.verdicts }),
+  };
+  const record = (patch: Partial<NodeRun>): NodeRun =>
+    nodeRunRecord(ctx, node, nodeRunId, options.reads, { ...carry, ...patch }, round);
+
+  const frames: ScriptedFrame[] = [
+    stateFrame(ctx, nodeRunId, node.id, 'READY', 20, undefined, round),
+    {
+      ...stateFrame(ctx, nodeRunId, node.id, 'RUNNING', 30, undefined, round),
+      nodeRun: record({}),
+    },
+    ...(options.beforeOutput ?? []),
+    {
+      after: 30,
+      nodeRun: record({ output: options.output, usage: spent, modelUsed }),
+      ...(options.outputEffect === undefined ? {} : { effect: options.outputEffect }),
+      event: {
+        type: 'node.output',
+        scope: 'workflow',
+        workflowId: ctx.workflowId,
+        payload: {
+          runId: ctx.run.id,
+          nodeRunId,
+          nodeId: node.id,
+          output: options.output,
+          usage: spent,
+          modelUsed,
+        },
+      },
+    },
+    {
+      ...stateFrame(ctx, nodeRunId, node.id, 'COMPLETED', 20, undefined, round),
+      nodeRun: record({
+        status: 'COMPLETED',
+        output: options.output,
+        usage: spent,
+        modelUsed,
+        endedAt: at(ctx, 400),
+        durationMs: 400,
+      }),
+    },
+  ];
+  for (const edge of ctx.edges.filter((e) => e.from.nodeId === node.id && e.kind === 'data')) {
+    frames.push(transferFrame(ctx, edge, textPreview(options.output), round.iteration ?? 1));
+  }
+  return { frames, nodeRunId, output: options.output, usage: spent };
+}
+
+function buildRound4Scenario(
+  name: ScenarioName,
+  ctx: Context,
+  order: Node[],
+  outputNode: Node | undefined,
+): ScriptedFrame[] | undefined {
+  switch (name) {
+    case 'tool-loop':
+      return toolLoopScript(ctx, order, outputNode);
+    case 'destructive-approval':
+      return destructiveApprovalScript(ctx, order, outputNode);
+    case 'vision-flow':
+      return visionFlowScript(ctx, order, outputNode);
+    case 'media-outputs':
+      return mediaOutputsScript(ctx, order, outputNode);
+    case 'timeline-six-types':
+      return timelineScript(ctx, order, outputNode);
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * TC-TOOL-010 / TC-GRD-014: the agent calls `echo` up to its tool-call limit, each call logged, then
+ * answers without tools. The inspector reads the calls off the node run and the `tool.call` frames.
+ */
+function toolLoopScript(
+  ctx: Context,
+  order: Node[],
+  outputNode: Node | undefined,
+): ScriptedFrame[] | undefined {
+  const agent = order[0];
+  if (agent === undefined) return undefined;
+
+  const inputText = textOf(inputReads(ctx)) || 'echo this';
+  const limit = Math.min(
+    (agent.config as { tools?: { maxToolCalls?: number } }).tools?.maxToolCalls ?? 3,
+    5,
+  );
+  const nodeRunId = newId();
+  const calls: ToolCall[] = [];
+  const toolFrames: ScriptedFrame[] = [];
+  for (let i = 0; i < limit; i += 1) {
+    const call = toolCallOf(
+      nodeRunId,
+      'echo',
+      { text: inputText },
+      `echo → ${inputText}`,
+      'ok',
+      at(ctx, 200 + i * 40),
+      [toolAllowed(nodeRunId, 'echo', at(ctx, 190 + i * 40))],
+    );
+    calls.push(call);
+    toolFrames.push(toolCallFrame(ctx, nodeRunId, call));
+  }
+
+  const agentFrames = runCustomNode(ctx, agent, {
+    reads: inputReads(ctx),
+    nodeRunId,
+    output: [{ type: 'text', text: `echo said: ${inputText}` }],
+    toolCalls: calls,
+    verdicts: calls.map((call) => call.verdicts[0]!).filter(Boolean),
+    beforeOutput: toolFrames,
+  });
+
+  const rest = runChain(ctx, order.slice(1), [{ type: 'text', text: `echo said: ${inputText}` }]);
+  const lastText = order.length > 1 ? rest.lastText : `echo said: ${inputText}`;
+  return [
+    ...agentFrames.frames,
+    ...rest.frames,
+    ...completed(
+      ctx,
+      'COMPLETE',
+      sumUsage([agentFrames.usage, ...rest.spent]),
+      finalOutput(outputNode, lastText),
+    ),
+  ];
+}
+
+/**
+ * TC-GRD-008 destructive variant: a `sandbox_delete` call trips the destructive-action check, the
+ * node WAITs with an approval card naming the tool and its args, and nothing plays until a decision.
+ * Approve continues (the delete happens, the node completes); reject fails it GUARDRAIL_VIOLATION —
+ * both handled by `decideApproval` in handlers-round3, exactly as `waiting-approval` is.
+ */
+function destructiveApprovalScript(
+  ctx: Context,
+  order: Node[],
+  outputNode: Node | undefined,
+): ScriptedFrame[] | undefined {
+  const agent = order[0];
+  if (agent === undefined) return undefined;
+
+  const nodeRunId = newId();
+  const reads = inputReads(ctx);
+  const args = { path: 'notes.txt' };
+  const askVerdict = verdictOf(
+    nodeRunId,
+    {
+      point: 'tool',
+      checkType: 'destructive_action',
+      action: 'ask_user',
+      passed: false,
+      reason: 'sandbox_delete is destructive and needs approval.',
+    },
+    at(ctx, 300),
+  );
+  const record = (patch: Partial<NodeRun>): NodeRun =>
+    nodeRunRecord(ctx, agent, nodeRunId, reads, { verdicts: [askVerdict], ...patch });
+
+  const request: ApprovalRequest = {
+    id: newId(),
+    runId: ctx.run.id,
+    nodeRunId,
+    nodeId: agent.id,
+    nodeName: agent.name,
+    point: 'tool',
+    checkType: 'destructive_action',
+    reason: askVerdict.reason,
+    preview: `sandbox_delete ${JSON.stringify(args)}`.slice(0, APPROVAL_PREVIEW_MAX),
+    requestedAt: at(ctx, 320),
+  };
+
+  const frames: ScriptedFrame[] = [
+    stateFrame(ctx, nodeRunId, agent.id, 'READY', 20),
+    { ...stateFrame(ctx, nodeRunId, agent.id, 'RUNNING', 30), nodeRun: record({}) },
+    { ...verdictFrame(ctx, askVerdict), nodeRun: record({}) },
+    {
+      ...stateFrame(ctx, nodeRunId, agent.id, 'WAITING', 30),
+      nodeRun: record({ status: 'WAITING' }),
+    },
+    {
+      after: 20,
+      hold: true,
+      approval: request,
+      event: {
+        type: 'node.approval_required',
+        scope: 'workflow',
+        workflowId: ctx.workflowId,
+        payload: { runId: ctx.run.id, request },
+      },
+    },
+  ];
+
+  // approved: the delete happens, is logged, and the node completes with its verdicts kept
+  const okCall = toolCallOf(
+    nodeRunId,
+    'sandbox_delete',
+    args,
+    'deleted notes.txt',
+    'ok',
+    at(ctx, 500),
+    [askVerdict],
+  );
+  const continuation = runCustomNode(ctx, agent, {
+    reads,
+    nodeRunId,
+    output: [{ type: 'text', text: 'Deleted notes.txt as requested.' }],
+    toolCalls: [okCall],
+    verdicts: [askVerdict],
+    beforeOutput: [toolCallFrame(ctx, nodeRunId, okCall)],
+  });
+  // `runCustomNode` re-announces READY/RUNNING; drop them — the node is already RUNNING post-approve
+  frames.push(...continuation.frames.slice(2));
+
+  const rest = runChain(ctx, order.slice(1), [
+    { type: 'text', text: 'Deleted notes.txt as requested.' },
+  ]);
+  const lastText = order.length > 1 ? rest.lastText : 'Deleted notes.txt as requested.';
+  frames.push(
+    ...rest.frames,
+    ...completed(
+      ctx,
+      'COMPLETE',
+      sumUsage([continuation.usage, ...rest.spent]),
+      finalOutput(outputNode, lastText),
+    ),
+  );
+  return frames;
+}
+
+/**
+ * TC-MM-009: the vision agent reads the Input node's text and image and describes it —
+ * "Image <name> (<size> bytes, <mime>)", the shape §2.6 gives `mock-vision` — then the rest runs.
+ */
+function visionFlowScript(
+  ctx: Context,
+  order: Node[],
+  outputNode: Node | undefined,
+): ScriptedFrame[] | undefined {
+  const agent = order[0];
+  if (agent === undefined) return undefined;
+
+  const artifactIds = ctx.nodes
+    .filter((node) => node.kind === 'input')
+    .flatMap((node) => (node.config as { artifactIds?: string[] }).artifactIds ?? [])[0];
+  const imagePart = artifactIds === undefined ? undefined : ctx.artifactPartFor?.(artifactIds);
+  const reads: Part[] = [...inputReads(ctx), ...(imagePart === undefined ? [] : [imagePart])];
+
+  const description =
+    imagePart !== undefined && imagePart.type === 'image'
+      ? `Image ${imagePart.name} (${imagePart.size} bytes, ${imagePart.mime})`
+      : 'Image (no attachment found)';
+
+  const vision = runCustomNode(ctx, agent, {
+    reads,
+    output: [{ type: 'text', text: description }],
+  });
+  const rest = runChain(ctx, order.slice(1), [{ type: 'text', text: description }]);
+  const lastText = order.length > 1 ? rest.lastText : description;
+  return [
+    ...vision.frames,
+    ...rest.frames,
+    ...completed(
+      ctx,
+      'COMPLETE',
+      sumUsage([vision.usage, ...rest.spent]),
+      finalOutput(outputNode, lastText),
+    ),
+  ];
+}
+
+/** A media Part plus the artifact + bytes that back it, for `mock-media` (§2.6). */
+function mediaPartFixture(
+  kind: 'image' | 'audio' | 'video' | 'file',
+  createdAt: string,
+): { part: Part; artifact: Artifact; bytes: Uint8Array } {
+  const fixture = MEDIA_FIXTURES[kind];
+  const artifact: Artifact = {
+    id: newId(),
+    hash: sha256Hex(fixture.bytes),
+    mime: fixture.mime,
+    name: fixture.name,
+    size: fixture.bytes.length,
+    createdAt,
+  };
+  const part: Part = {
+    type: kind,
+    artifactId: artifact.id,
+    mime: fixture.mime,
+    name: fixture.name,
+    size: fixture.bytes.length,
+  };
+  return { part, artifact, bytes: fixture.bytes };
+}
+
+/**
+ * TC-MM-006: `mock-media` emits one Part of each of the seven data types, the four binary ones
+ * stored as artifacts so the renderers can load their bytes. Every typed renderer has something.
+ */
+function mediaOutputsScript(
+  ctx: Context,
+  order: Node[],
+  outputNode: Node | undefined,
+): ScriptedFrame[] | undefined {
+  const agent = order[0];
+  if (agent === undefined) return undefined;
+
+  const media = (['image', 'audio', 'video', 'file'] as const).map((kind) =>
+    mediaPartFixture(kind, at(ctx, 200)),
+  );
+  const output: Part[] = [
+    { type: 'text', text: 'Here is one output of every type.' },
+    { type: 'json', value: { ok: true, items: [1, 2, 3] } },
+    { type: 'code', language: 'python', text: 'print("hello from mock-media")' },
+    ...media.map((entry) => entry.part),
+  ];
+
+  const node = runCustomNode(ctx, agent, {
+    reads: inputReads(ctx),
+    output,
+    outputEffect: (db) => {
+      for (const entry of media) db.insertArtifact(entry.artifact, entry.bytes);
+    },
+  });
+
+  const finalOut = outputNode === undefined ? {} : { finalOutput: { [outputNode.id]: output } };
+  return [...node.frames, ...completed(ctx, 'COMPLETE', node.usage, finalOut)];
+}
+
+/**
+ * TC-CHAT-001: a run that produces one message of every timeline style — an `event` at start, the
+ * agent's `agent` output, the Output node's `output`, an `error`, a `system` notice and a `user`
+ * turn — so the six visually distinct types (FR-CHAT-001) can all be seen and filtered.
+ */
+function timelineScript(
+  ctx: Context,
+  order: Node[],
+  outputNode: Node | undefined,
+): ScriptedFrame[] | undefined {
+  const agent = order[0];
+  if (agent === undefined) return undefined;
+
+  const agentText = 'The agent considered the request and replied.';
+  const frames: ScriptedFrame[] = [
+    messageFrame(ctx, messageOf(ctx, 'user', [{ type: 'text', text: 'Please run the workflow.' }])),
+    messageFrame(ctx, messageOf(ctx, 'event', [{ type: 'text', text: 'Run started.' }])),
+  ];
+
+  const node = runCustomNode(ctx, agent, {
+    reads: inputReads(ctx),
+    output: [{ type: 'text', text: agentText }],
+  });
+  frames.push(...node.frames);
+  frames.push(
+    messageFrame(
+      ctx,
+      messageOf(ctx, 'agent', [{ type: 'text', text: agentText }], { nodeId: agent.id }),
+    ),
+  );
+
+  if (outputNode !== undefined) {
+    frames.push(
+      messageFrame(
+        ctx,
+        messageOf(ctx, 'output', [{ type: 'text', text: agentText }], { nodeId: outputNode.id }),
+      ),
+    );
+  }
+  frames.push(
+    messageFrame(
+      ctx,
+      messageOf(
+        ctx,
+        'error',
+        [{ type: 'text', text: 'A downstream node failed to reach its provider.' }],
+        {
+          nodeId: agent.id,
+        },
+      ),
+    ),
+  );
+  frames.push(
+    messageFrame(
+      ctx,
+      messageOf(ctx, 'system', [{ type: 'text', text: 'Provider status changed to CONNECTED.' }]),
+    ),
+  );
+
+  frames.push(...completed(ctx, 'COMPLETE', node.usage, finalOutput(outputNode, agentText)));
   return frames;
 }
 

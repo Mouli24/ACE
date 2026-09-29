@@ -101,6 +101,82 @@ export const MOCK_CATALOG: CatalogEntry[] = [
     supportsJson: false,
     available: false,
   },
+  /* Round 4 §2.6 additions — the tool-, multimodal- and chat-behaving mock models. */
+  {
+    modelId: 'mock-tool',
+    displayName: 'Mock tool',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+    contextWindow: 8192,
+    supportsTools: true,
+    supportsJson: false,
+  },
+  {
+    modelId: 'mock-tool-loop',
+    displayName: 'Mock tool loop',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+    contextWindow: 8192,
+    supportsTools: true,
+    supportsJson: false,
+  },
+  {
+    modelId: 'mock-destructive',
+    displayName: 'Mock destructive tool',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+    contextWindow: 8192,
+    supportsTools: true,
+    supportsJson: false,
+  },
+  {
+    modelId: 'mock-http',
+    displayName: 'Mock HTTP tool',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+    contextWindow: 8192,
+    supportsTools: true,
+    supportsJson: false,
+  },
+  {
+    modelId: 'mock-search',
+    displayName: 'Mock search tool',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+    contextWindow: 8192,
+    supportsTools: true,
+    supportsJson: false,
+  },
+  {
+    modelId: 'mock-mcp',
+    displayName: 'Mock MCP tool',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+    contextWindow: 8192,
+    supportsTools: true,
+    supportsJson: false,
+  },
+  {
+    // Emits one Part of every type in the media-outputs scenario; `json` is left off the *declared*
+    // catalogue capability so the round-2 model-filter tests keep their exact json set (the scenario
+    // produces the json Part regardless — the mock never contract-checks a node's output).
+    modelId: 'mock-media',
+    displayName: 'Mock media',
+    inputTypes: ['text'],
+    outputTypes: ['text', 'code', 'image', 'audio', 'video', 'file'],
+    contextWindow: 8192,
+    supportsTools: false,
+    supportsJson: true,
+  },
+  {
+    modelId: 'mock-chat',
+    displayName: 'Mock chat',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+    contextWindow: 8192,
+    supportsTools: true,
+    supportsJson: false,
+  },
 ];
 
 /** A small catalogue per cloud provider type, enough for the model picker and its filters. */

@@ -14,6 +14,7 @@ import {
   type GuardrailPolicyRef,
   type Model,
   type Node,
+  type Part,
   type Run,
   type ValidationIssue,
 } from '@ace/contracts';
@@ -88,6 +89,9 @@ function applyFrame(db: MockDb, run: Run, frame: ScriptedFrame): void {
     dropMockSockets();
     return;
   }
+  // Round 4: a frame may store artifacts or timeline rows before its event is emitted, so the
+  // content and message endpoints answer for what the frame announces.
+  frame.effect?.(db);
   if (frame.nodeRun !== undefined) {
     const existing = db.getNodeRun(frame.nodeRun.id);
     db.upsertNodeRun(existing === undefined ? frame.nodeRun : { ...existing, ...frame.nodeRun });
@@ -146,8 +150,33 @@ export function playScenario(db: MockDb, run: Run): void {
       pace,
       ...(cap === undefined || cap === null ? {} : { maxCostPerRunUsd: cap }),
       policyFor: (node) => policyRefFor(db, run.projectId, node),
+      artifactPartFor: (artifactId) => artifactPartFor(db, artifactId),
     }),
   );
+}
+
+/**
+ * Round 4: resolve an Input node's `artifactId` to the `Part` a run reads (§2.6 `mock-vision`). The
+ * part kind follows the artifact's mime, and its name/size/mime come from the stored row — a
+ * reference, never bytes (BR-02).
+ */
+export function artifactPartFor(db: MockDb, artifactId: string): Part | undefined {
+  const artifact = db.getArtifact(artifactId);
+  if (artifact === undefined) return undefined;
+  const type: Extract<Part, { artifactId: string }>['type'] = artifact.mime.startsWith('image/')
+    ? 'image'
+    : artifact.mime.startsWith('audio/')
+      ? 'audio'
+      : artifact.mime.startsWith('video/')
+        ? 'video'
+        : 'file';
+  return {
+    type,
+    artifactId: artifact.id,
+    mime: artifact.mime,
+    name: artifact.name,
+    size: artifact.size,
+  };
 }
 
 /**
