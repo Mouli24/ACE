@@ -37,9 +37,15 @@ export function passesLuhn(candidate: string): boolean {
 }
 
 export const PII_RULES: RulePack = [
+  // The lookbehind anchors a match to the first character of a run of local-part characters
+  // (NFR-SAFE-01). Unanchored, the scan retried the local part from every position of a long run —
+  // `a.a.a.…`, a hex blob, a page of letters — and rescanned the rest of the run each time: 40 KB of
+  // dotted words took seconds. Anchored, each run is scanned once. It finds what the unanchored
+  // pattern found, because a leftmost match always started at the run's first character anyway.
   {
     type: 'email',
-    pattern: /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g,
+    pattern:
+      /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g,
   },
 
   // IBAN: two letters, two check digits, then 11–30 alphanumerics in optional groups of four.
