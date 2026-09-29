@@ -7,6 +7,8 @@ import { ProvidersPage } from '../providers/ProvidersPage';
 import { ProjectRunsPage } from '../runs/ProjectRunsPage';
 import { RunDetailPage } from '../runs/RunDetailPage';
 import { SettingsPage } from '../settings/SettingsPage';
+import { ToolsLibraryPage } from '../library/ToolsLibraryPage';
+import { TimelinePage } from '../timeline/TimelinePage';
 import { WorkflowPage } from '../workflows/WorkflowPage';
 import { HomeRedirect } from './HomeRedirect';
 import { AppShell } from './layout/AppShell';
@@ -21,10 +23,15 @@ export const routes: RouteObject[] = [
       { path: 'projects', element: <ProjectsPage /> },
       { path: 'projects/:projectId', element: <ProjectPage /> },
       { path: 'projects/:projectId/workflows/:workflowId', element: <WorkflowPage /> },
+      {
+        path: 'projects/:projectId/workflows/:workflowId/timeline',
+        element: <TimelinePage />,
+      },
       { path: 'projects/:projectId/runs', element: <ProjectRunsPage /> },
       { path: 'runs/:runId', element: <RunDetailPage /> },
       { path: 'providers', element: <ProvidersPage /> },
       { path: 'guardrails', element: <GuardrailsPage /> },
+      { path: 'library/tools', element: <ToolsLibraryPage /> },
       { path: 'settings', element: <SettingsPage /> },
     ],
   },

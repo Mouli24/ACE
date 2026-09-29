@@ -11,6 +11,9 @@ import {
 } from '@ace/ui';
 import { useEffect, useState } from 'react';
 
+import { PartRenderer } from '@ace/ui';
+
+import { api } from '../app/api';
 import { useSelectionStore } from '../app/stores/selection';
 import { IterationSelector } from '../edges/loop/IterationSelector';
 import { VerdictList } from '../guardrails/VerdictList';
@@ -18,6 +21,8 @@ import { NodeRunMenu } from '../runs/controls/NodeRunMenu';
 import { useRerunNode, useRetryNodeRun, useStartRun, useNodeRuns } from '../runs/hooks';
 import { useRunStore } from '../runs/run-store';
 import { useWorkflowGraph } from '../workflows/hooks';
+import { PromptText } from './PromptText';
+import { ToolCallsTab } from './ToolCallsTab';
 
 const money = (value: number) => `$${value.toFixed(6)}`;
 
@@ -143,6 +148,10 @@ export function Inspector({ workflowId }: { workflowId: string }) {
             <VerdictList verdicts={nodeRun.verdicts} />
           </Section>
 
+          {nodeRun.toolCalls.length > 0 && (
+            <ToolCallsTab toolCalls={nodeRun.toolCalls} approvals={nodeRun.approvals} />
+          )}
+
           {nodeRun.approvals !== undefined && nodeRun.approvals.length > 0 && (
             <Section title="Approvals">
               <ul className="flex flex-col gap-1" data-testid="inspector-approvals">
@@ -198,12 +207,7 @@ export function Inspector({ workflowId }: { workflowId: string }) {
                     Exactly what went to the provider, with secrets redacted (FR-PRM-005).
                   </DialogDescription>
                 </DialogHeader>
-                <pre
-                  data-testid="prompt-text"
-                  className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-card border border-border bg-canvas p-3 font-machine text-xs"
-                >
-                  {nodeRun.prompt.text}
-                </pre>
+                <PromptText text={nodeRun.prompt.text} />
               </DialogContent>
             </Dialog>
           )}
@@ -263,29 +267,9 @@ function EnvelopeView({ envelope }: { envelope: Envelope }) {
   );
 }
 
-/** Text, JSON tree or code — the three shapes round 2 can produce (FR-MM-006 arrives in round 4). */
+/** All seven Part types, through the shared renderers (FR-MM-006): media resolve via the content URL. */
 function PartView({ part }: { part: Part }) {
-  if (part.type === 'text') {
-    return <p className="whitespace-pre-wrap font-human text-xs">{part.text}</p>;
-  }
-  if (part.type === 'json') {
-    return (
-      <pre className="overflow-auto rounded border border-border bg-canvas p-2 font-machine text-[11px]">
-        {JSON.stringify(part.value, null, 2)}
-      </pre>
-    );
-  }
-  if (part.type === 'code') {
-    return (
-      <pre
-        data-language={part.language}
-        className="overflow-auto rounded border border-border bg-canvas p-2 font-machine text-[11px]"
-      >
-        {part.text}
-      </pre>
-    );
-  }
-  return <p className="font-machine text-xs text-fg-muted">[{part.type}]</p>;
+  return <PartRenderer part={part} contentUrl={(artifactId) => api().artifactContentUrl(artifactId)} />;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
