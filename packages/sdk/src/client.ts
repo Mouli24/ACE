@@ -74,10 +74,37 @@ import {
   type Workflow,
   type WorkflowExport,
   type WorkflowGraphResponse,
+  // Round 4 §2.4 (artifacts, tools, MCP servers, timeline messages, direct chat)
+  ArtifactSchema,
+  ToolListResponseSchema,
+  McpServerSchema,
+  McpServerListResponseSchema,
+  CreateMcpServerRequestSchema,
+  MessageListResponseSchema,
+  PostMessageRequestSchema,
+  PostMessageResponseSchema,
+  ChatRequestSchema,
+  ChatResponseSchema,
+  ChatThreadSchema,
+  ChatThreadDetailSchema,
+  type Artifact,
+  type ChatRequest,
+  type ChatResponse,
+  type ChatThread,
+  type ChatThreadDetail,
+  type CreateMcpServerRequest,
+  type McpServer,
+  type McpServerListResponse,
+  type MessageListResponse,
+  type MessageQuery,
+  type PostMessageRequest,
+  type PostMessageResponse,
+  type ToolListResponse,
 } from '@ace/contracts';
 import { z } from 'zod';
 
 import { AceApiError } from './errors.js';
+import { uploadArtifact, type UploadArtifactOptions } from './upload.js';
 
 export interface AceClientOptions {
   /** Engine origin, e.g. `http://127.0.0.1:4747`. `/api/v1` is appended here. */
@@ -86,12 +113,20 @@ export interface AceClientOptions {
   token: string;
   /** Injectable for tests and non-browser hosts; defaults to the global `fetch`. */
   fetch?: typeof fetch;
+  /**
+   * Injectable for tests and non-browser hosts; defaults to the global `XMLHttpRequest`. Used only
+   * by `uploadArtifact`, which needs XHR because `fetch` cannot report upload progress (round 4 §2.1).
+   */
+  XMLHttpRequest?: typeof XMLHttpRequest;
 }
 
 type ListQuery = Partial<Pick<CursorQuery, 'cursor' | 'limit'>>;
 
-/** Anything that goes into a query string; `undefined` members are left out. */
-type Query = Record<string, string | number | boolean | undefined>;
+/**
+ * Anything that goes into a query string; `undefined` members are left out. An array is sent as a
+ * repeated parameter (`?type=user&type=error`), which is how `MessageQuery.type` travels (§2.4).
+ */
+type Query = Record<string, string | number | boolean | string[] | undefined>;
 
 const ProjectPageSchema = pageSchema(ProjectSchema);
 const ProviderPageSchema = pageSchema(ProviderSchema);
@@ -109,12 +144,19 @@ const GuardrailPolicyPageSchema = pageSchema(GuardrailPolicySchema);
 export type CreateProviderBody = z.input<typeof CreateProviderRequestSchema>;
 const WorkflowPageSchema = pageSchema(WorkflowSchema);
 const NoContentSchema = { parse: (): undefined => undefined };
+/** `GET /nodes/:id/chat/threads` answers a bare array, the way §2.4 writes it (D78). */
+const ChatThreadListSchema = z.array(ChatThreadSchema);
 
 function joinUrl(baseUrl: string, path: string, query?: Query): string {
   const origin = baseUrl.replace(/\/+$/, '');
   const url = new URL(`${origin}${API_BASE_PATH}${path}`);
   for (const [key, value] of Object.entries(query ?? {})) {
-    if (value !== undefined) url.searchParams.set(key, String(value));
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      for (const member of value) url.searchParams.append(key, String(member));
+    } else {
+      url.searchParams.set(key, String(value));
+    }
   }
   return url.toString();
 }
@@ -368,6 +410,81 @@ export function createAceClient(options: AceClientOptions) {
       }),
     setDefaultGuardrailPolicy: (id: Id): Promise<GuardrailPolicy> =>
       request('POST', `/guardrail-policies/${id}/set-default`, GuardrailPolicySchema),
+
+    /* Artifacts (round 4 §2.1/§2.4, FR-MM-001/002/009) */
+
+    /**
+     * Multipart `POST /artifacts` with upload progress. It goes through `XMLHttpRequest`, not the
+     * shared `request`, because `fetch` cannot report how far the bytes have gone (M4 §2). A file
+     * over the limit answers 413 `upload_too_large`, a disallowed type 415 `unsupported_type`.
+     */
+    uploadArtifact: (file: Blob, uploadOptions: UploadArtifactOptions = {}): Promise<Artifact> =>
+      uploadArtifact({
+        url: joinUrl(options.baseUrl, '/artifacts'),
+        token: options.token,
+        XHR: options.XMLHttpRequest ?? globalThis.XMLHttpRequest,
+        file,
+        ...uploadOptions,
+      }),
+    getArtifact: (id: Id): Promise<Artifact> => request('GET', `/artifacts/${id}`, ArtifactSchema),
+    /**
+     * The `GET /artifacts/:id/content` URL with the session token as a `?token=` parameter, so an
+     * `<img>`/`<audio>`/`<video>` element can load it — those cannot send an `Authorization`
+     * header, and the engine accepts the token on the query string for exactly this (M4 §2).
+     */
+    artifactContentUrl: (id: Id): string =>
+      joinUrl(options.baseUrl, `/artifacts/${id}/content`, { token: options.token }),
+
+    /* Tools and MCP servers (round 4 §2.2/§2.4, FR-TOOL-001/007) */
+
+    listTools: (): Promise<ToolListResponse> => request('GET', '/tools', ToolListResponseSchema),
+    listMcpServers: (): Promise<McpServerListResponse> =>
+      request('GET', '/mcp-servers', McpServerListResponseSchema),
+    createMcpServer: (body: CreateMcpServerRequest): Promise<McpServer> =>
+      request('POST', '/mcp-servers', McpServerSchema, {
+        schema: CreateMcpServerRequestSchema,
+        value: body,
+      }),
+    deleteMcpServer: (id: Id): Promise<void> =>
+      request('DELETE', `/mcp-servers/${id}`, NoContentSchema),
+    /** Re-checks liveness and tool count; answers the refreshed `McpServer` (FR-TOOL-007). */
+    checkMcpServer: (id: Id): Promise<McpServer> =>
+      request('POST', `/mcp-servers/${id}/check`, McpServerSchema),
+
+    /* Timeline messages (round 4 §2.3/§2.4, FR-CHAT-001/002/003) */
+
+    listMessages: (workflowId: Id, query: MessageQuery = {}): Promise<MessageListResponse> =>
+      request('GET', `/workflows/${workflowId}/messages`, MessageListResponseSchema, undefined, {
+        runId: query.runId,
+        nodeId: query.nodeId,
+        type: query.type,
+        cursor: query.cursor,
+        limit: query.limit,
+      }),
+    /** Stores a `user` message and, with `run: true`, starts a run with it (FR-CHAT-003). */
+    postMessage: (workflowId: Id, body: PostMessageRequest): Promise<PostMessageResponse> =>
+      request('POST', `/workflows/${workflowId}/messages`, PostMessageResponseSchema, {
+        schema: PostMessageRequestSchema,
+        value: body,
+      }),
+
+    /* Direct agent chat (round 4 §2.3/§2.4, FR-CHAT-004..008) */
+
+    /**
+     * `POST /nodes/:id/chat` answers 202 `{ threadId, messageId }`; the reply streams over the
+     * socket as `chat.token` on the thread's subscription and settles with `chat.message` (§2.3).
+     */
+    postNodeChat: (nodeId: Id, body: ChatRequest): Promise<ChatResponse> =>
+      request('POST', `/nodes/${nodeId}/chat`, ChatResponseSchema, {
+        schema: ChatRequestSchema,
+        value: body,
+      }),
+    listNodeChatThreads: (nodeId: Id): Promise<ChatThread[]> =>
+      request('GET', `/nodes/${nodeId}/chat/threads`, ChatThreadListSchema),
+    getChatThread: (id: Id): Promise<ChatThreadDetail> =>
+      request('GET', `/chat/threads/${id}`, ChatThreadDetailSchema),
+    deleteChatThread: (id: Id): Promise<void> =>
+      request('DELETE', `/chat/threads/${id}`, NoContentSchema),
   };
 }
 
