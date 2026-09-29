@@ -9,6 +9,7 @@ import {
   type Id,
   type Model,
   type Node,
+  type NodeError,
   type NodeRun,
   type NodeState,
   type Page,
@@ -27,7 +28,7 @@ import type { EvaluationTarget, GuardrailEvaluator } from '../guardrails/evaluat
 import { policyRef, type PolicyService } from '../guardrails/policy-service.js';
 import { contractFor, createTruncatingSummariser, estimatePartsTokens, trustForSource, type Summariser } from '../envelopes/index.js';
 import { buildEnvelope } from '../envelopes/index.js';
-import { autoRetryDecision, upstreamFailedError } from '../errors/index.js';
+import { autoRetryDecision, upstreamFailedError, userCancelledError } from '../errors/index.js';
 import type { EventBus } from '../events/index.js';
 import { notFound } from '../gateway/errors.js';
 import { newId } from '../ids.js';
@@ -178,6 +179,14 @@ export function transferSummary(parts: readonly Part[]): string {
 export interface DriveSeed {
   nodeRuns: readonly NodeRun[];
   withDownstream: boolean;
+}
+
+/**
+ * What a node run the abort caught before it started records: a cancellation, never a failure
+ * (FR-ERR-007, Arch §28's `user_cancelled`).
+ */
+function cancelledBeforeStart(): NodeError {
+  return userCancelledError('The run was stopped before this node run started.').nodeError;
 }
 
 /** Node states that mean the run still has work in flight (Arch §19.2). */
@@ -488,15 +497,23 @@ export function createRunService(deps: RunServiceDeps): RunService {
       };
     }
 
-    /** One node run row per node per iteration, created when that iteration is dispatched. */
+    /**
+     * One node run row per node per iteration, created when that iteration is dispatched — and one
+     * more per automatic retry, created before its backoff starts (FR-ERR-005).
+     *
+     * A row born after the run was aborted is born STOPPED: nothing will ever start it, and a row
+     * left READY inside a HALTED run would be a node the Canvas shows as still queued (FR-CTL-003).
+     */
     async function beginNodeRun(node: Node, iteration: number, attempt = 1): Promise<NodeRun> {
+      const aborted = signal.aborted;
       const nodeRun: NodeRun = {
         id: nextId(),
         runId: run.id,
         nodeId: node.id,
         iteration,
         attempt,
-        status: 'READY',
+        status: aborted ? 'STOPPED' : 'READY',
+        ...(aborted ? { error: cancelledBeforeStart(), endedAt: now() } : {}),
         inputEnvelopes: envelopesFor.get(node.id) ?? [],
         usage: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
         verdicts: [],
@@ -514,8 +531,42 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
       await repository.nodeRuns.create(scope, nodeRun);
       nodeRunByNode.set(node.id, nodeRun);
-      await emitNodeState(run, nodeRun, 'READY');
+      await emitNodeState(run, nodeRun, nodeRun.status);
       return nodeRun;
+    }
+
+    /**
+     * Whether the Stop control owns the ending of the node runs that already exist (FR-CTL-003).
+     *
+     * `controls.stop()` aborts first and lists the rows after (D110), and a row is in the store the
+     * moment `nodeRuns.create` is called — so every row this drive created before the abort is one
+     * the control moves to STOPPED and announces itself (D111). Announcing it here as well would put
+     * a second STOPPED frame on the socket for one node run. A shutdown has no control writing
+     * anything, so there the drive announces its own rows.
+     */
+    function stoppedByControl(): boolean {
+      return gate.abortCause() === 'stopped';
+    }
+
+    /**
+     * A node run the abort caught before it started ends STOPPED, with the cancellation on its row,
+     * and never FAILED (FR-ERR-007, TC-ERR-008).
+     */
+    async function stopUnstarted(nodeRun: NodeRun): Promise<void> {
+      states.set(nodeRun.nodeId, 'STOPPED');
+      if (stoppedByControl()) {
+        await repository.nodeRuns.update(scope, nodeRun.id, {
+          status: 'STOPPED',
+          error: cancelledBeforeStart(),
+        });
+        return;
+      }
+      await repository.nodeRuns.update(scope, nodeRun.id, {
+        status: 'STOPPED',
+        error: cancelledBeforeStart(),
+        endedAt: now(),
+      });
+      await emitNodeState(run, nodeRun, 'STOPPED');
     }
 
     /**
@@ -821,14 +872,18 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
       await resolvePolicy(node);
 
-      for (;;) {
-        // The row a control already created and already answered the client with, used once. A second
-        // row here would leave the client holding the id of a node run that never ran.
-        const planned = plannedRuns.get(node.id);
-        plannedRuns.delete(node.id);
-        const nodeRun = planned ?? (await beginNodeRun(node, iteration, attempt));
-        if (planned !== undefined) await emitNodeState(run, planned, 'READY');
+      // The row a control already created and already answered the client with, used once. A second
+      // row here would leave the client holding the id of a node run that never ran.
+      const planned = plannedRuns.get(node.id);
+      plannedRuns.delete(node.id);
+      let nodeRun = planned ?? (await beginNodeRun(node, iteration, attempt));
+      if (planned !== undefined) await emitNodeState(run, planned, 'READY');
+      if (nodeRun.status === 'STOPPED') {
+        states.set(node.id, 'STOPPED');
+        return;
+      }
 
+      for (;;) {
         /*
          * The cost point, *before* the call (§2.3, FR-GRD-008): `totals + maxTokens × price` would
          * cross a cap, so the run halts before spending the money — which is the only version of a
@@ -921,13 +976,28 @@ export function createRunService(deps: RunServiceDeps): RunService {
             await recordAttempt(nodeRun, outcome, endedAt ?? now());
             await emitNodeState(run, nodeRun, 'FAILED', outcome.failureReason);
 
-            await backoff(decision.delayMs);
-            if (signal.aborted) return;
-
             attempt = decision.nextAttempt;
             if (decision.repairPrompt) {
               contractRepairs += 1;
               repairReason = outcome.error.message;
+            }
+
+            /*
+             * The next attempt exists, READY, *before* the wait (FR-ERR-005). The engine has already
+             * decided to try again, so the node is not finished — and a Stop during the backoff then
+             * finds a READY row to end STOPPED (D111), leaving the FAILED attempt as history rather
+             * than as the node's last word. A stopped run counts no failure (FR-ERR-007, TC-ERR-008).
+             */
+            nodeRun = await beginNodeRun(node, iteration, attempt);
+            if (nodeRun.status === 'STOPPED') {
+              states.set(node.id, 'STOPPED');
+              return;
+            }
+
+            await backoff(decision.delayMs);
+            if (signal.aborted) {
+              await stopUnstarted(nodeRun);
+              return;
             }
             continue;
           }
