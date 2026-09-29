@@ -14,6 +14,7 @@ import {
   MIGRATIONS,
   ROUND_3_MIGRATION_ID,
   ROUND_3_RUN_COLUMNS_MIGRATION_ID,
+  ROUND_4_MIGRATION_ID,
 } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
 
@@ -96,6 +97,7 @@ describe('FR-GRD-018 The migration backfills a project that existed before it ra
     expect(after.appliedMigrations).toEqual([
       ROUND_3_MIGRATION_ID,
       ROUND_3_RUN_COLUMNS_MIGRATION_ID,
+      ROUND_4_MIGRATION_ID,
     ]);
 
     const rows = after.sqlite.prepare(SELECT_POLICIES).all() as PolicyRow[];
@@ -258,7 +260,10 @@ describe('FR-CTL-006 The run-controls migration adds four columns to an existing
     before.sqlite.close();
 
     const after = openDatabase({ path });
-    expect(after.appliedMigrations).toEqual([ROUND_3_RUN_COLUMNS_MIGRATION_ID]);
+    expect(after.appliedMigrations).toEqual([
+      ROUND_3_RUN_COLUMNS_MIGRATION_ID,
+      ROUND_4_MIGRATION_ID,
+    ]);
 
     const columnsAfter = (
       after.sqlite.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]
