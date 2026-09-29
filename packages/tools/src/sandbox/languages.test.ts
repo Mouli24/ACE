@@ -11,7 +11,7 @@ beforeEach(() => {
   sandboxDir = mkdtempSync(join(tmpdir(), 'ace-lang-'));
 });
 afterEach(() => {
-  rmSync(sandboxDir, { recursive: true, force: true });
+  rmSync(sandboxDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
 describe('FR-TOOL-004 building a code run', () => {

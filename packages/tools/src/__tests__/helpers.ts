@@ -26,7 +26,7 @@ export function makeContext(overrides: Partial<ToolContext> = {}): ToolContext &
     // After the spread, so `logger` keeps its concrete type and `sandboxDir` is the one we clean up.
     sandboxDir,
     logger,
-    cleanup: () => rmSync(sandboxDir, { recursive: true, force: true }),
+    cleanup: () => rmSync(sandboxDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }),
   };
 }
 
@@ -54,7 +54,7 @@ export function writeStdioMcpFixture(): { path: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), 'ace-mcp-'));
   const path = join(dir, 'server.mjs');
   writeFileSync(path, STDIO_MCP_SERVER, 'utf8');
-  return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { path, cleanup: () => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) };
 }
 
 const STDIO_MCP_SERVER = `
