@@ -279,18 +279,30 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
   const batchMs = deps.tokenBatchMs ?? TOKEN_BATCH_MS;
   const nextId = deps.nextId ?? newId;
 
-  /** A failure, shaped the way the node run row wants it, and announced. */
+  /**
+   * A failure, shaped the way the node run row wants it, and announced.
+   *
+   * D-063: once the run is aborted, whatever went wrong is not this node's failure to announce. The
+   * Stop (or the shutdown) decides how it ends — STOPPED, with a cancellation and what it spent —
+   * so no `node.error` goes out, where it could follow the run's `run.completed` (D111, FR-ERR-007).
+   */
   async function fail(
     input: ExecuteNodeInput,
-    error: NodeError,
+    failure: NodeError,
     usage: Usage = NO_USAGE,
     extra: Partial<NodeExecutionOutcome> = {},
   ): Promise<NodeExecutionOutcome> {
-    const status = extra.status ?? nodeStateFor(error);
+    const aborted = input.signal.aborted;
+    const error =
+      aborted && failure.kind !== "user_cancelled"
+        ? userCancelledError("The run was stopped before this node run could finish.").nodeError
+        : failure;
+    const { status: extraStatus, failureReason: extraReason, ...rest } = extra;
+    const status = aborted ? "STOPPED" : (extraStatus ?? nodeStateFor(error));
     // FR-ERR-007: a node the user stopped has not failed, so it records no failure reason. Writing
     // `RUN_FAILED` beside `STOPPED` is exactly the conflation BR-03 forbids.
     const failureReason =
-      extra.failureReason ?? (status === "STOPPED" ? undefined : failureReasonFor(error));
+      status === "STOPPED" ? undefined : (extraReason ?? failureReasonFor(error));
 
     // A cancellation is not an error frame. `node.error` carries a required `failureReason` and the
     // UI paints one red; a node the user stopped has neither (FR-ERR-007). Its `node.state` frame
@@ -315,7 +327,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       usage,
       error,
       ...(failureReason === undefined ? {} : { failureReason }),
-      ...extra,
+      ...rest,
       status,
     };
   }
@@ -326,6 +338,18 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
     usage: Usage,
     extra: Partial<NodeExecutionOutcome> = {},
   ): Promise<NodeExecutionOutcome> {
+    // D-063: a result that arrives once the run is aborted is not announced — no `node.output` for
+    // a node the Stop has ended, and none after `run.completed`. It ends STOPPED, keeping what it
+    // spent (D111, FR-ERR-007).
+    if (input.signal.aborted) {
+      return fail(
+        input,
+        userCancelledError("The run was stopped before this node's result was recorded.").nodeError,
+        usage,
+        extra,
+      );
+    }
+
     await deps.bus.emit({
       type: "node.output",
       workflowId: input.workflowId,

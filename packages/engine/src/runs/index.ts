@@ -651,10 +651,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
     async function stopUnstarted(nodeRun: NodeRun): Promise<void> {
       states.set(nodeRun.nodeId, 'STOPPED');
       if (stoppedByControl()) {
-        await repository.nodeRuns.update(scope, nodeRun.id, {
-          status: 'STOPPED',
-          error: cancelledBeforeStart(),
-        });
+        // The Stop moves this row to STOPPED and announces it (D111). Writing the status here could
+        // land before it lists the rows, and then nobody would announce it at all (D-063).
+        await repository.nodeRuns.update(scope, nodeRun.id, { error: cancelledBeforeStart() });
         return;
       }
       await repository.nodeRuns.update(scope, nodeRun.id, {
@@ -837,6 +836,11 @@ export function createRunService(deps: RunServiceDeps): RunService {
         endedAt,
       });
 
+      // A Stop that landed meanwhile owns the run's totals: it wrote them, and the drive corrects
+      // them once everything has unwound (D-052). A running sum announced now would follow its
+      // `run.completed` (D-063).
+      if (stoppedByControl()) return;
+
       // Totals are the running sum of the node runs, so the number a client sees mid-run is the
       // same arithmetic as the number stored at the end (TC-OBS-002).
       await bus.emit({
@@ -847,14 +851,56 @@ export function createRunService(deps: RunServiceDeps): RunService {
       });
     }
 
+    /**
+     * D-063: a node run the Stop caught — its call returned, or its result was on its way, as the
+     * Stop landed. The Stop owns its ending (D111): it moves the row to STOPPED, stamps it and
+     * announces it, then emits `run.completed`. So only what the node spent, and the cancellation
+     * behind it, are written here — never a status, which could put COMPLETED over the Stop's STOPPED
+     * or land before the Stop lists the rows and leave the node unannounced — and nothing is
+     * announced, which would follow `run.completed`. Nothing flows on from it either (D-052).
+     */
+    async function recordStopped(
+      node: Node,
+      nodeRun: NodeRun,
+      outcome: NodeExecutionOutcome,
+    ): Promise<void> {
+      usages.push(outcome.usage);
+      states.set(node.id, 'STOPPED');
+      await repository.nodeRuns.update(scope, nodeRun.id, {
+        error:
+          outcome.status === 'STOPPED' && outcome.error !== undefined
+            ? outcome.error
+            : userCancelledError('The run was stopped before this node run was recorded.').nodeError,
+        usage: outcome.usage,
+        ...(outcome.modelUsed === undefined ? {} : { modelUsed: outcome.modelUsed }),
+        ...(outcome.prompt === undefined ? {} : { prompt: outcome.prompt }),
+      });
+    }
+
     async function finish(
       node: Node,
       nodeRun: NodeRun,
       outcome: NodeExecutionOutcome,
       endedAt: string = now(),
     ): Promise<void> {
+      if (stoppedByControl()) {
+        await recordStopped(node, nodeRun, outcome);
+        return;
+      }
+
       const iteration = nodeRun.iteration;
       await recordAttempt(nodeRun, outcome, endedAt);
+
+      /*
+       * D-063: recorded a moment before a Stop landed. The node did finish first, so the Stop left
+       * its row alone and its ending stands — announced now, ahead of the Stop's `run.completed` —
+       * but nothing flows on from it: no delivery, no loop decision, no budget check (D-052).
+       */
+      if (stoppedByControl()) {
+        states.set(node.id, outcome.status);
+        await emitNodeState(run, nodeRun, outcome.status, outcome.failureReason);
+        return;
+      }
 
       // The cost point, *after* the call: a model that answered longer than its projection, or a cap
       // lowered mid-run (§2.3). The node keeps its result; the run stops dispatching.
@@ -1150,7 +1196,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
         /** When an agent's provider call ended, if it made one; else the node ends at finish. */
         let endedAt: string | undefined;
         const markRunning = async (): Promise<void> => {
-          if (running) return;
+          // Aborted: the node is not starting, and RUNNING written now could land over the STOPPED
+          // the Stop already wrote (D111, D-063).
+          if (running || signal.aborted) return;
           running = true;
           await repository.nodeRuns.update(scope, nodeRun.id, {
             status: 'RUNNING',
@@ -1165,6 +1213,15 @@ export function createRunService(deps: RunServiceDeps): RunService {
                 // A merge calls no provider and costs nothing, so it starts the instant it is
                 // dispatched; its output is a function of what arrived (FR-PAR-002).
                 await markRunning();
+                // Aborted meanwhile: nothing is merged or announced (D-063).
+                if (signal.aborted) {
+                  return {
+                    status: 'STOPPED',
+                    output: [],
+                    usage: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
+                    error: cancelledBeforeStart(),
+                  };
+                }
                 return executeMergeNode(
                   {
                     runId: run.id,
