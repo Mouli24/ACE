@@ -43,14 +43,14 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
  * assertion: a test error was fixed in place with the reason beside it; an implementation defect
  * keeps its assertion under `test.fail()` with a `// D-0nn` line and a bounded wait (D202's pattern),
  * and a row whose scenarios split into a working half and a broken half was split so the working
- * half stays a green regression. Defects recorded here (provisional numbers after D-060):
- *   D-061 High   engine  GET /artifacts/:id/content?token= is 401 — no media loads, no download
- *   D-062 Medium web     the Timeline tab's "open full timeline" link never renders
- *   D-063 Medium engine  no `system` timeline message except on shutdown/crash (so not six types)
- *   D-064 Medium web     after a reload a WAITING node loses its anchored approval card
- *   D-065 Medium contract a `.zip` from Chromium on Windows is `application/x-zip-compressed` → refused
- *   D-066 Low    web     the inspector's download card shows no hash
- *   D-067 High   web     the timeline loads only the first 100 messages and never pages
+ * half stays a green regression. Defects recorded here (as logged in docs/defect-log.md):
+ *   D-066 High   engine  GET /artifacts/:id/content?token= is 401 — no media loads, no download
+ *   D-072 Medium web     the Timeline tab's "open full timeline" link never renders
+ *   D-073 Medium engine  no `system` timeline message except on shutdown/crash (so not six types)
+ *   D-074 Medium web     after a reload a WAITING node loses its anchored approval card
+ *   D-075 Medium contract a `.zip` from Chromium on Windows is `application/x-zip-compressed` → refused
+ *   D-076 Low    web     the inspector's download card shows no hash
+ *   D-071 High   web     the timeline loads only the first 100 messages and never pages
  *
  * Facts about the round 4 fixtures worth stating once (fixtures README):
  *  - placeholders are `01M4R4PV…PV` (provider), `01M4R4AR…AR` (vision.json's artifact),
@@ -613,7 +613,7 @@ test.describe('Uploads (FR-MM-001/002/007)', () => {
      * The fixture README's oversized file is a `.zip` so that it "clears the type allow-list and is
      * refused on size alone". In Chromium on Windows it does not: the browser types every `.zip` as
      * `application/x-zip-compressed`, which §2.1's list does not name, so the first run of this test
-     * was refused as `unsupported_type` before size was ever considered. That is D-065, recorded by
+     * was refused as `unsupported_type` before size was ever considered. That is D-075, recorded by
      * its own test below. This row is about the size limit, so the same 150 MB is named `.txt` —
      * allowed by name whatever type the browser guesses (§2.1, D205) — and only its size can refuse it.
      */
@@ -653,10 +653,10 @@ test.describe('Uploads (FR-MM-001/002/007)', () => {
   test('TC-MM-003 via UI (found by TC-MM-001): a ZIP chosen in the browser is accepted and attached', async ({
     page,
   }) => {
-    // D-065: Chromium on Windows types .zip as application/x-zip-compressed; isAllowedUpload refuses it.
+    // D-075: Chromium on Windows types .zip as application/x-zip-compressed; isAllowedUpload refuses it.
     test.fail(
       process.platform === 'win32',
-      'D-065 — a .zip is refused as unsupported_type on Windows',
+      'D-075 — a .zip is refused as unsupported_type on Windows',
     );
     const flow = await importFixture('tools-echo.json');
     const input = flow.byName('Input');
@@ -783,14 +783,14 @@ test.describe('Renderers and multimodal runs (FR-MM-003/005/006/009)', () => {
       expect(await player.evaluate((el) => (el as HTMLMediaElement).controls)).toBe(true);
     }
 
-    // The download card, named (its hash is the next test, D-066).
+    // The download card, named (its hash is the next test, D-076).
     const fileCard = output.getByTestId('file-card').first();
     await expect(fileCard).toBeVisible();
     await expect(fileCard).toContainText(file.name);
   });
 
   /*
-   * D-066. §5 item 3: "any other file as a download card showing name, size, hash (FR-MM-006,
+   * D-076. §5 item 3: "any other file as a download card showing name, size, hash (FR-MM-006,
    * FR-MM-009)". A file `Part` carries no hash, so D214 made the card take it as a prop "the caller
    * supplies from the fetched Artifact". The inspector is a caller that never does:
    * `apps/web/src/inspector/Inspector.tsx` renders `<PartRenderer part={part} contentUrl={…} />`
@@ -799,7 +799,7 @@ test.describe('Renderers and multimodal runs (FR-MM-003/005/006/009)', () => {
   test('TC-MM-006 (§5 item 3): the inspector’s download card shows the file’s name, size and hash', async ({
     page,
   }) => {
-    // D-066: the inspector renders PartRenderer without the `hash` prop, so no hash is shown.
+    // D-076: the inspector renders PartRenderer without the `hash` prop, so no hash is shown.
     test.fail();
     const { parts, output } = await mediaRunOnScreen(page);
     const { file } = parts;
@@ -814,7 +814,7 @@ test.describe('Renderers and multimodal runs (FR-MM-003/005/006/009)', () => {
   });
 
   /*
-   * D-061 (High). Every media element and every download points at the SDK's `artifactContentUrl`,
+   * D-066 (High). Every media element and every download points at the SDK's `artifactContentUrl`,
    * `GET /api/v1/artifacts/:id/content?token=<session token>` — §5 item 1 has the SDK put the token
    * on the query string "for media elements", because `<img>`/`<audio>`/`<video>`/`<a download>`
    * cannot send an `Authorization` header. The engine's `authGuard`
@@ -822,11 +822,17 @@ test.describe('Renderers and multimodal runs (FR-MM-003/005/006/009)', () => {
    * answered 401 `unauthorized` (measured with curl against the running acceptance engine): no image
    * decodes, no player can load or seek, and a download saves a 112-byte JSON error. The MSW mocks M4
    * was built against accepted the query token, which is why its own suite never saw it.
+   * Fixed on round-4/fix-arhant-1: the content route now also accepts `?token=` (and only it).
+   *
+   * D-082, found once D-066 was fixed: the image now arrives (200 `image/png`) but still does not
+   * decode, because the engine materialises `mock-media`'s placeholder parts as zero-filled bytes
+   * (`apps/server/src/server.ts` materialiser, `new Uint8Array(part.size)`) instead of the PNG / MP3 /
+   * MP4 / ZIP fixtures §2.6 says the mock stores.
    */
   test('TC-MM-006 + TC-MM-008: the rendered media load from the engine — the image decodes, audio and video answer Range requests, and the download is byte-identical', async ({
     page,
   }) => {
-    // D-061: GET /artifacts/:id/content?token= is 401 — the engine accepts the token only as a header.
+    // D-082: mock-media's media parts are materialised as zero-filled stand-ins, so the PNG cannot decode.
     test.fail();
     const { parts, output } = await mediaRunOnScreen(page);
     const { audio, video, file } = parts;
@@ -1067,7 +1073,7 @@ test.describe('Timeline (FR-CHAT-001/002/003)', () => {
   });
 
   /*
-   * D-063. §2.3's timeline population lists `system` for "engine notices (shutdown, crash recovery,
+   * D-073. §2.3's timeline population lists `system` for "engine notices (shutdown, crash recovery,
    * provider status changes)". The engine writes a `system` row only when a run halts `shutdown` or
    * `crash` (`packages/engine/src/chat/timeline.ts`, the `run.completed` case); provider status
    * changes never reach the timeline — and a run failing on a 401 does not even move the mock
@@ -1078,7 +1084,7 @@ test.describe('Timeline (FR-CHAT-001/002/003)', () => {
   test('TC-CHAT-001: after a run with an error the timeline shows all six message types, each styled apart', async ({
     page,
   }) => {
-    // D-063: no `system` message is ever derived from a provider status change (only shutdown/crash).
+    // D-073: no `system` message is ever derived from a provider status change (only shutdown/crash).
     test.fail();
     const setup = await timelineWithAnError(page);
     const expectedTypes = [...new Set((await messagesOf(setup.workflowId)).map((m) => m.type))];
@@ -1140,7 +1146,7 @@ test.describe('Timeline (FR-CHAT-001/002/003)', () => {
       type: 'error',
     });
 
-    // Reached by its route (§5 item 4) — the Timeline tab's link to it is D-062, tested below.
+    // Reached by its route (§5 item 4) — the Timeline tab's link to it is D-072, tested below.
     await page.goto(
       `/projects/${setup.projectId}/workflows/${setup.workflowId}/timeline?token=${engine().token}`,
     );
@@ -1163,7 +1169,7 @@ test.describe('Timeline (FR-CHAT-001/002/003)', () => {
   });
 
   /*
-   * D-062. `TimelineTab` renders its "open full timeline" link only when it is given a `projectId`,
+   * D-072. `TimelineTab` renders its "open full timeline" link only when it is given a `projectId`,
    * and the one place that mounts it, `BottomPanel`, passes only `workflowId`
    * (`apps/web/src/bottom-panel/BottomPanel.tsx`, `<TimelineTab workflowId={workflowId} />`). So the
    * full page — the one that keeps a filter in the URL (§5 item 4, FR-CHAT-002) — is unreachable from
@@ -1172,7 +1178,7 @@ test.describe('Timeline (FR-CHAT-001/002/003)', () => {
   test('TC-CHAT-002 (§5 item 4): the Timeline tab links to the full timeline page', async ({
     page,
   }) => {
-    // D-062: BottomPanel mounts TimelineTab without projectId, so the full-page link never renders.
+    // D-072: BottomPanel mounts TimelineTab without projectId, so the full-page link never renders.
     test.fail();
     const flow = await importFixture('chat-french.json');
     await openCanvas(page, flow.projectId, flow.workflowId);
@@ -1186,7 +1192,7 @@ test.describe('Timeline (FR-CHAT-001/002/003)', () => {
   });
 
   /*
-   * D-067, found by the §7.1 manual pass ("5,000-message timeline scroll"), automated there with
+   * D-071, found by the §7.1 manual pass ("5,000-message timeline scroll"), automated there with
    * 5,000 posted messages: the Timeline tab read "100 messages" and the 5,000th was nowhere.
    * `GET /workflows/:id/messages` pages (`{ items, nextCursor? }`, §2.4, D210; the engine's default
    * page is 100), and `useTimelineMessages` (`apps/web/src/timeline/timeline-messages.ts`) fetches
@@ -1197,7 +1203,7 @@ test.describe('Timeline (FR-CHAT-001/002/003)', () => {
   test('TC-CHAT-001 (§5 item 4, manual pass): after a reload, a timeline longer than one page still ends with its newest message', async ({
     page,
   }) => {
-    // D-067: the timeline loads only the first page of GET /messages and never follows nextCursor.
+    // D-071: the timeline loads only the first page of GET /messages and never follows nextCursor.
     test.fail();
     const flow = await importFixture('chat-french.json');
     const total = 150;
@@ -1808,7 +1814,7 @@ test.describe('Tools (FR-TOOL-001/002/007/009/010)', () => {
   });
 
   /*
-   * D-064, found walking the §1 demo. After a reload the Canvas adopts the live run from its records
+   * D-074, found walking the §1 demo. After a reload the Canvas adopts the live run from its records
    * (`useAdoptActiveRun` → `run-store.ts` `adopt`), rebuilding node states and outputs as synthetic
    * frames — but not the pending approvals, and the socket's `resume` replays nothing from before the
    * load. The node-anchored card (`NodeApproval`) reads only that fold, so a WAITING node loses its
@@ -1819,7 +1825,7 @@ test.describe('Tools (FR-TOOL-001/002/007/009/010)', () => {
   test('TC-GRD-008 (found by the §1 demo): after a reload, a WAITING node still carries its approval card', async ({
     page,
   }) => {
-    // D-064: adopt() rebuilds node states and outputs after a reload, never the pending approvals.
+    // D-074: adopt() rebuilds node states and outputs after a reload, never the pending approvals.
     test.fail();
     const flow = await importFixture('destructive.json');
     const cleaner = flow.byName('Cleaner');
@@ -1891,7 +1897,7 @@ test.describe('§1 demo script (round 4 gate)', () => {
   test('Round 4 §1 demo: upload → vision → renderers → tool calls → destructive approval → blocked HTTP → MCP → timeline → chat → refusal', async ({
     page,
   }) => {
-    // D-063: the script's "six message styles" needs a `system` message the engine never derives.
+    // D-073: the script's "six message styles" needs a `system` message the engine never derives.
     test.fail();
     test.setTimeout(600_000);
     const projectId = await newProject('demo');
@@ -2021,7 +2027,7 @@ test.describe('§1 demo script (round 4 gate)', () => {
         );
         /*
          * A run started from the composer lights the Canvas only after a reload (D-058, known), and
-         * after a reload the card is no longer anchored to the WAITING node (D-064, tested on its
+         * after a reload the card is no longer anchored to the WAITING node (D-074, tested on its
          * own below). The top bar's badge lists it, so that is the way a person gets to it here.
          */
         await openCanvas(page, projectId, destructive.workflowId);
@@ -2141,7 +2147,7 @@ test.describe('§1 demo script (round 4 gate)', () => {
       /*
        * ---- Timeline: six styles, filter by node ----
        * Walked last, and the filter before the six types: the sixth type, `system`, is never
-       * produced (D-063), and a failing assertion ends the test, so everything else in the script
+       * produced (D-073), and a failing assertion ends the test, so everything else in the script
        * is exercised first.
        */
       await test.step('Timeline tab: filter by node; six message styles', async () => {
