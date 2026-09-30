@@ -626,6 +626,8 @@ export async function startEngine(
     scope: LOCAL_SCOPE,
     bus,
     logger: logger.child({ subsystem: "runs" }),
+    // D-061: the approvals that process was waiting on can no longer be answered, so they go too.
+    approvals,
   });
 
   /* FR-PRV-004: re-check every provider on a timer, so the UI's chips stay honest. */
@@ -746,6 +748,7 @@ export async function startEngine(
       scope: LOCAL_SCOPE,
       bus,
       logger: logger.child({ subsystem: "runs" }),
+      approvals,
     });
 
     // Round 4: stop deriving timeline rows and close every MCP connection before the DB closes.

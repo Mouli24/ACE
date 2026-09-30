@@ -117,8 +117,9 @@ export interface ApprovalServiceDeps {
   onWaiting?: (request: ApprovalRequest) => Promise<void>;
   /**
    * Called once a decision is stored, before the paused evaluation resumes. Not called for a request
-   * whose wait the run's abort already ended: there is no paused evaluation left to resume, and the
-   * node it would move is STOPPED (D111, D-054).
+   * nobody in this process is waiting on — one whose wait the run's abort ended (D-054), or one a
+   * dead process left pending (D-061): there is no paused evaluation to resume, and the node it
+   * would move is STOPPED (D111).
    */
   onDecided?: (request: ApprovalRequest, decision: ApprovalDecision) => Promise<void>;
   now?: () => string;
@@ -135,14 +136,12 @@ export function createApprovalService(deps: ApprovalServiceDeps): ApprovalServic
   const now = deps.now ?? ((): string => new Date().toISOString());
   const nextId = deps.nextId ?? newId;
 
-  /** requestId → the resolver of the promise a suspended node is sitting on. */
-  const waiting = new Map<Id, (decision: ApprovalDecision) => void>();
   /**
-   * Requests whose wait the run's abort ended (D-054). Still pending in the store until the run's
-   * ending rejects them, but nobody is suspended on them any more — so a decision that reaches one
-   * in the meantime wakes nothing and moves no row.
+   * requestId → the resolver of the promise a suspended node is sitting on. A request with no entry
+   * is one nobody in this process waits on: its wait was ended by the run's abort (D-054), or the
+   * process that asked is gone (D-061).
    */
-  const abandoned = new Set<Id>();
+  const waiting = new Map<Id, (decision: ApprovalDecision) => void>();
   /**
    * runId → workflowId, learnt when the request was made. `ApprovalRequest` does not carry the
    * workflow, and a run-scoped frame is routed by `runId` anyway, so a decision that arrives with
@@ -176,14 +175,22 @@ export function createApprovalService(deps: ApprovalServiceDeps): ApprovalServic
       payload: { runId: request.runId, nodeRunId: request.nodeRunId, decision },
     });
 
-    // A node whose wait the abort already ended is STOPPED: "approved" must not move it back to
-    // RUNNING inside a HALTED run (D111, D-054).
-    if (!abandoned.delete(request.id)) await deps.onDecided?.(request, decision);
-
-    // Release the node that was waiting. Absent when the decision arrived in another process or
-    // after a restart — the row is still correct, there is simply nobody left to wake.
-    waiting.get(request.id)?.(decision);
+    /*
+     * Only a node that is still suspended here resumes, so only then may its row move. A request
+     * nobody waits on — its wait ended by a Stop (D-054), or left by a process that died (D-061) —
+     * belongs to a node that is STOPPED, and "approved" moving that back to RUNNING would leave a
+     * row nothing will ever finish inside a HALTED run (D111). The decision is still recorded.
+     */
+    const waiter = waiting.get(request.id);
     waiting.delete(request.id);
+    if (waiter === undefined) return decision;
+
+    try {
+      await deps.onDecided?.(request, decision);
+    } finally {
+      // Woken even if the hook failed: a node left suspended for ever is the worse outcome.
+      waiter(decision);
+    }
 
     return decision;
   }
@@ -225,7 +232,6 @@ export function createApprovalService(deps: ApprovalServiceDeps): ApprovalServic
       const decision = new Promise<ApprovalDecision>((resolve, reject) => {
         abandon = () => {
           waiting.delete(stored.id);
-          abandoned.add(stored.id);
           reject(cancelledWait());
         };
         waiting.set(stored.id, (decided) => {
