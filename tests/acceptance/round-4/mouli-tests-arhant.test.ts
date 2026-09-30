@@ -618,16 +618,22 @@ function scriptedToolCall(
  * Advance the engine's injected clock by `days` and run the artifact retention sweep (Arch §15.4,
  * round 4 §4 item 1: "retention sweep for unreferenced > 7 days with an injectable clock").
  *
- * §2.4 has no sweep endpoint and the harness's `startEngine({ dataDir, port, env })` takes no
- * clock, so there is no public way to do either — a finding, recorded in the report.
+ * §2.4 has no sweep endpoint, and rightly: the lever is the composition root's —
+ * `startEngine({ clock })` and `RunningEngine.sweepArtifacts()` (D-070). The harness holds that
+ * clock in global-setup and serves `ACE_TEST_CONTROL_URL` (`helpers/test-control.ts`) so a spec
+ * running in a worker can move it and sweep once; the engine's own API is untouched.
  */
-function advanceClockAndSweep(days: number): Promise<void> {
-  return Promise.reject(
-    new Error(
-      `no public hook advances the engine clock by ${days} days or runs the retention sweep: ` +
-        '§2.4 has no endpoint for it and startEngine({ dataDir, port, env }) takes no clock',
-    ),
-  );
+async function advanceClockAndSweep(days: number): Promise<void> {
+  const controlUrl = process.env['ACE_TEST_CONTROL_URL'];
+  if (controlUrl === undefined) throw new Error('ACE_TEST_CONTROL_URL is not set (global-setup)');
+  const response = await fetch(`${controlUrl}/advance-clock-and-sweep`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ days }),
+  });
+  if (response.status !== 200) {
+    throw new Error(`advance-clock-and-sweep answered ${response.status}: ${await response.text()}`);
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -2105,8 +2111,8 @@ describe('TC-CHAT-008 / TC-GRD-022 the agent’s policy applies to a direct chat
 /* ========================================================================== */
 
 describe('TC-MM retention: an unreferenced artifact goes after 7 days, a referenced one stays', () => {
-  // D-0?? the engine never runs the artifact retention sweep (no schedule, no endpoint) and `startEngine` takes no clock — Arch §15.4 is not enforced
-  it.fails(
+  // D-070 (fixed): the engine sweeps at start, on a timer and on `sweepArtifacts()`, by the clock `startEngine({ clock })` injects — Arch §15.4
+  it(
     'upload, never reference, advance the clock 8 days, sweep → gone; the referenced one survives',
     async () => {
       const orphan = await upload(

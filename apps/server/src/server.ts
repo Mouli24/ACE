@@ -10,9 +10,11 @@ import { join } from "node:path";
 
 import {
   WS_PATH,
+  type Artifact,
   type GuardrailCheck,
   type Id,
   type Part,
+  type Timestamp,
   type ToolCall,
 } from "@ace/contracts";
 import { serve } from "@hono/node-server";
@@ -126,11 +128,25 @@ export function guardrailInputFor(
 /** FR-SYS-001 / NFR-SEC-01: the engine binds the loopback interface and nothing else. */
 export const BIND_HOST = "127.0.0.1";
 
+/**
+ * How often the artifact retention sweep runs after the one at start (Arch §15.4). The window is
+ * seven days, so an hour late is nothing; what matters is that a long-running engine sweeps at all.
+ */
+export const ARTIFACT_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+
 export interface StartEngineOptions {
   dataDir: string;
   /** Overrides the configured port. 0 asks the OS for a free one, which the tests rely on. */
   port?: number;
   env?: Record<string, string | undefined>;
+  /**
+   * The clock the artifact store stamps uploads and references with, and sweeps by (Arch §15.4,
+   * round 4 §4 item 1: "retention sweep ... with an injectable clock"). Default: the wall clock. A
+   * test injects one it can move, so "unreferenced for more than 7 days" takes no week to check.
+   */
+  clock?: () => Timestamp;
+  /** Overrides {@link ARTIFACT_SWEEP_INTERVAL_MS}, for a test that watches the timer fire. */
+  artifactSweepIntervalMs?: number;
 }
 
 export interface RunningEngine {
@@ -149,6 +165,14 @@ export interface RunningEngine {
   };
   /** The round 2 services, exposed for the acceptance harness and the CLI. */
   services: { providers: ProviderService; runs: RunService };
+  /**
+   * Runs the artifact retention sweep once, now — by the injected clock — and answers the rows it
+   * deleted (Arch §15.4). The engine already sweeps at start and every
+   * {@link ARTIFACT_SWEEP_INTERVAL_MS}; this is for a test that must not wait for the timer. There is
+   * deliberately no REST endpoint for it (§2.4 has none). After `stop()` it does nothing and
+   * answers `[]`.
+   */
+  sweepArtifacts(): Promise<Artifact[]>;
   stop(): Promise<void>;
 }
 
@@ -375,7 +399,41 @@ export async function startEngine(
     artifacts: repository.artifacts,
     blobs,
     settings: repository.settings,
+    ...(options.clock === undefined ? {} : { clock: options.clock }),
   });
+
+  /*
+   * Arch §15.4: an artifact lives until it has been unreferenced for 7 days. The sweep asks the
+   * repository for rows past the window that nothing points at — an Input node's `artifactIds`, a
+   * node run's output or input envelopes, a timeline message, a chat message — and deletes each row,
+   * then its blob. One sweep at a time: a timer tick that lands while one is running joins it rather
+   * than starting a second pass over the same rows. A failure is logged, never thrown into the timer.
+   */
+  const retentionLogger = logger.child({ subsystem: "artifacts" });
+  let sweeping: Promise<Artifact[]> | undefined;
+  let sweepsStopped = false;
+  const sweepArtifacts = (): Promise<Artifact[]> => {
+    if (sweepsStopped) return Promise.resolve([]);
+    sweeping ??= artifactService
+      .sweepUnreferenced()
+      .then((deleted) => {
+        if (deleted.length > 0) {
+          retentionLogger.info(
+            { deleted: deleted.length, ids: deleted.map((artifact) => artifact.id) },
+            "swept unreferenced artifacts",
+          );
+        }
+        return deleted;
+      })
+      .catch((error: unknown): Artifact[] => {
+        retentionLogger.error({ err: error }, "artifact retention sweep failed");
+        return [];
+      })
+      .finally(() => {
+        sweeping = undefined;
+      });
+    return sweeping;
+  };
 
   /*
    * The tool registry: the six built-ins in §2.2's order, plus whatever MCP servers connect. The
@@ -633,6 +691,15 @@ export async function startEngine(
   /* FR-PRV-004: re-check every provider on a timer, so the UI's chips stay honest. */
   const stopPeriodicChecks = providers.startPeriodicChecks();
 
+  /* Arch §15.4: sweep what expired while the engine was off, then keep sweeping on a timer. */
+  await sweepArtifacts();
+  const sweepTimer = setInterval(
+    () => void sweepArtifacts(),
+    options.artifactSweepIntervalMs ?? ARTIFACT_SWEEP_INTERVAL_MS,
+  );
+  // Never the reason the process stays alive: shutdown clears it, and a CLI exit must not wait on it.
+  sweepTimer.unref();
+
   const graph = createGraphService({
     repository,
     scope: LOCAL_SCOPE,
@@ -726,6 +793,7 @@ export async function startEngine(
     logger,
     ports: { repository, blobs, secrets },
     services: { providers, runs },
+    sweepArtifacts,
 
     /**
      * FR-SYS-008: stop dispatching, abort what is in flight, record the halt, then close.
@@ -742,6 +810,10 @@ export async function startEngine(
 
   async function shutdown(): Promise<void> {
     stopPeriodicChecks();
+    // No sweep starts once shutdown has, and one in flight finishes before the database closes.
+    sweepsStopped = true;
+    clearInterval(sweepTimer);
+    await sweeping;
     await runs.shutdown();
     await haltActiveRuns({
       repository,

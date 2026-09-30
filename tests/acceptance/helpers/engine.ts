@@ -9,6 +9,8 @@ export interface TestEngine {
   wsUrl: string;
   token: string;
   dataDir: string;
+  /** One artifact retention sweep, now, by the engine's clock (Arch §15.4) — see `test-control.ts`. */
+  sweepArtifacts: RunningEngine['sweepArtifacts'];
   stop(): Promise<void>;
 }
 
@@ -32,6 +34,8 @@ export interface StartTestEngineOptions {
    * `Access-Control-Allow-Origin` and the browser reports "Failed to fetch".
    */
   allowedOrigins?: string[];
+  /** The artifact store's clock (Arch §15.4), so a retention check can move time. Default: real time. */
+  clock?: () => string;
 }
 
 export async function startTestEngine(options: StartTestEngineOptions = {}): Promise<TestEngine> {
@@ -40,7 +44,12 @@ export async function startTestEngine(options: StartTestEngineOptions = {}): Pro
   let engine: RunningEngine;
   try {
     // `env: {}` so an ACE_PORT or ACE_DATA_DIR in the developer's shell cannot reach the suite.
-    engine = await startEngine({ dataDir, port: options.port ?? 0, env: {} });
+    engine = await startEngine({
+      dataDir,
+      port: options.port ?? 0,
+      env: {},
+      ...(options.clock === undefined ? {} : { clock: options.clock }),
+    });
   } catch (error) {
     rmSync(dataDir, { recursive: true, force: true });
     throw error;
@@ -55,6 +64,7 @@ export async function startTestEngine(options: StartTestEngineOptions = {}): Pro
     wsUrl: engine.wsUrl,
     token: engine.token,
     dataDir,
+    sweepArtifacts: () => engine.sweepArtifacts(),
 
     async stop() {
       await engine.stop();
