@@ -39,6 +39,19 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
  * aria labels and visible copy only. Every "is it really so?" is asked of the **engine** over REST
  * and compared with what the page shows, never with a copy typed here.
  *
+ * Phase 2 (after the first run: 11 of 21 red). Each failure was classified, never by weakening an
+ * assertion: a test error was fixed in place with the reason beside it; an implementation defect
+ * keeps its assertion under `test.fail()` with a `// D-0nn` line and a bounded wait (D202's pattern),
+ * and a row whose scenarios split into a working half and a broken half was split so the working
+ * half stays a green regression. Defects recorded here (provisional numbers after D-060):
+ *   D-061 High   engine  GET /artifacts/:id/content?token= is 401 — no media loads, no download
+ *   D-062 Medium web     the Timeline tab's "open full timeline" link never renders
+ *   D-063 Medium engine  no `system` timeline message except on shutdown/crash (so not six types)
+ *   D-064 Medium web     after a reload a WAITING node loses its anchored approval card
+ *   D-065 Medium contract a `.zip` from Chromium on Windows is `application/x-zip-compressed` → refused
+ *   D-066 Low    web     the inspector's download card shows no hash
+ *   D-067 High   web     the timeline loads only the first 100 messages and never pages
+ *
  * Facts about the round 4 fixtures worth stating once (fixtures README):
  *  - placeholders are `01M4R4PV…PV` (provider), `01M4R4AR…AR` (vision.json's artifact),
  *    `__ACE_HTTP_URL__` (http-*.json Input text) and `__ACE_MCP_TOOL__` (mcp.json enabled tool);
@@ -278,12 +291,15 @@ async function startHttpServer(): Promise<HttpFixtureServer> {
 }
 
 /** The 150 MB file TC-MM-001 needs, made on demand and never committed (fixtures README). */
-async function makeOversizedFile(): Promise<string> {
+async function makeOversizedFile(name?: string): Promise<string> {
   const modulePath = pathToFileURL(`${FIXTURES}media/oversized.mjs`).href;
   const mod = (await import(modulePath)) as {
-    makeOversizedFile: (options?: { dir?: string }) => string;
+    makeOversizedFile: (options?: { dir?: string; name?: string }) => string;
   };
-  return mod.makeOversizedFile({ dir: mkdtempSync(join(tmpdir(), 'ace-r4-oversized-')) });
+  return mod.makeOversizedFile({
+    dir: mkdtempSync(join(tmpdir(), 'ace-r4-oversized-')),
+    ...(name === undefined ? {} : { name }),
+  });
 }
 
 /**
@@ -388,6 +404,10 @@ const messagesOf = async (
   const params = new URLSearchParams({ limit: '500', ...query });
   return (await api<{ items: Message[] }>(`/workflows/${workflowId}/messages?${params}`)).items;
 };
+
+/** The first non-empty line of a reply — what a rendered Markdown paragraph reliably contains. */
+const firstLine = (text: string): string =>
+  (text.split('\n').find((line) => line.trim() !== '') ?? text).trim();
 
 const textOf = (parts: Part[] | undefined): string =>
   (parts ?? [])
@@ -589,7 +609,15 @@ test.describe('Uploads (FR-MM-001/002/007)', () => {
 
   test('TC-MM-001: an oversized upload is refused inline, naming the limit', async ({ page }) => {
     test.setTimeout(300_000);
-    const oversized = await makeOversizedFile();
+    /*
+     * The fixture README's oversized file is a `.zip` so that it "clears the type allow-list and is
+     * refused on size alone". In Chromium on Windows it does not: the browser types every `.zip` as
+     * `application/x-zip-compressed`, which §2.1's list does not name, so the first run of this test
+     * was refused as `unsupported_type` before size was ever considered. That is D-065, recorded by
+     * its own test below. This row is about the size limit, so the same 150 MB is named `.txt` —
+     * allowed by name whatever type the browser guesses (§2.1, D205) — and only its size can refuse it.
+     */
+    const oversized = await makeOversizedFile('oversized-150mb.txt');
     try {
       const flow = await importFixture('tools-echo.json');
       const input = flow.byName('Input');
@@ -611,43 +639,115 @@ test.describe('Uploads (FR-MM-001/002/007)', () => {
       rmSync(oversized, { force: true });
     }
   });
+
+  /*
+   * Found by TC-MM-001's first run. FR-MM-003 / TC-MM-003: "Upload text, PNG, MP3, MP4, code, JSON,
+   * ZIP → All accepted and stored". Through the browser on Windows a ZIP never is: Chromium types a
+   * `.zip` from disk as `application/x-zip-compressed` (the Windows registry's type — measured here
+   * for both the 22-byte `sample.zip` and a 60 MB one), and the one allow-list predicate both sides
+   * share, `isAllowedUpload` in `packages/contracts/src/artifacts.ts` (D205), names only
+   * `application/zip` and does not list `.zip` among the by-name extensions. So the web app refuses
+   * it client-side as `unsupported_type`, and the engine would answer 415 for the same reason. On
+   * Linux, Chromium types it `application/zip` and this passes — hence Windows-only.
+   */
+  test('TC-MM-003 via UI (found by TC-MM-001): a ZIP chosen in the browser is accepted and attached', async ({
+    page,
+  }) => {
+    // D-065: Chromium on Windows types .zip as application/x-zip-compressed; isAllowedUpload refuses it.
+    test.fail(
+      process.platform === 'win32',
+      'D-065 — a .zip is refused as unsupported_type on Windows',
+    );
+    const flow = await importFixture('tools-echo.json');
+    const input = flow.byName('Input');
+
+    await openCanvas(page, flow.projectId, flow.workflowId);
+    await selectNode(page, input.id);
+    const panel = configPanel(page);
+    await panel
+      .getByTestId('input-attachment-picker-input')
+      .setInputFiles(`${FIXTURES}media/sample.zip`);
+
+    // Bounded: on Windows the refusal renders at once and the list never fills.
+    await expect(panel.getByTestId('input-attachment-list').locator('li')).toHaveCount(1, {
+      timeout: 10_000,
+    });
+    await expect(panel.getByTestId('input-attachment-picker-error')).toHaveCount(0);
+    const attached = await nodeConfig(flow.workflowId, input.id);
+    expect(attached.artifactIds).toHaveLength(1);
+    const artifact = await api<Artifact>(`/artifacts/${(attached.artifactIds ?? [])[0] as string}`);
+    expect(artifact.hash).toBe(sha256(readFileSync(`${FIXTURES}media/sample.zip`)));
+  });
 });
 
 /* -------------------------------------------------------------------------- */
 /* Output renderers (FR-MM-006, 009) and the vision flow (FR-MM-003, 005)       */
 /* -------------------------------------------------------------------------- */
 
+type PartOf<T extends Part['type']> = Extract<Part, { type: T }>;
+
+interface MediaRunOnScreen {
+  parts: {
+    text: PartOf<'text'>;
+    json: PartOf<'json'>;
+    code: PartOf<'code'>;
+    image: PartOf<'image'>;
+    audio: PartOf<'audio'>;
+    video: PartOf<'video'>;
+    file: PartOf<'file'>;
+  };
+  /** The Media node's Output section in the inspector. */
+  output: Locator;
+}
+
+/** Run `media.json` from the Canvas and open the Media node's inspector on its output. */
+async function mediaRunOnScreen(page: Page): Promise<MediaRunOnScreen> {
+  const flow = await importFixture('media.json');
+  const media = flow.byName('Media');
+
+  await openCanvas(page, flow.projectId, flow.workflowId);
+  await selectNode(page, media.id);
+  await startButton(page).click();
+
+  const run = await settledRun(flow.workflowId);
+  expect(run.status).toBe('COMPLETE');
+  const produced = (await nodeRunFor(run.id, media.id)).output ?? [];
+  const partOf = <T extends Part['type']>(type: T): PartOf<T> => {
+    const found = produced.find((part) => part.type === type);
+    if (found === undefined) throw new Error(`mock-media produced no ${type} part`);
+    return found as PartOf<T>;
+  };
+
+  await openRightTab(page, 'Inspector');
+  const output = page.getByTestId('inspector').getByTestId('inspector-output');
+  await expect(output).toBeVisible();
+  return {
+    parts: {
+      text: partOf('text'),
+      json: partOf('json'),
+      code: partOf('code'),
+      image: partOf('image'),
+      audio: partOf('audio'),
+      video: partOf('video'),
+      file: partOf('file'),
+    },
+    output,
+  };
+}
+
+/** The URL a native player loads, from `src` or its first `<source>`. */
+const mediaSrc = (player: Locator): Promise<string> =>
+  player.evaluate((el) => {
+    const media = el as HTMLMediaElement;
+    return media.currentSrc || media.src || el.querySelector('source')?.src || '';
+  });
+
 test.describe('Renderers and multimodal runs (FR-MM-003/005/006/009)', () => {
-  test('TC-MM-006 + TC-MM-008: a media.json run renders text, a JSON tree, code, an image, audio and video players and a download card, and the download is byte-identical', async ({
+  test('TC-MM-006: a media.json run renders text as Markdown, a JSON tree, code, an image, audio and video players and a download card', async ({
     page,
   }) => {
-    const flow = await importFixture('media.json');
-    const media = flow.byName('Media');
-
-    await openCanvas(page, flow.projectId, flow.workflowId);
-    await selectNode(page, media.id);
-    await startButton(page).click();
-
-    const run = await settledRun(flow.workflowId);
-    expect(run.status).toBe('COMPLETE');
-    const mediaRun = await nodeRunFor(run.id, media.id);
-    const parts = mediaRun.output ?? [];
-    const partOf = <T extends Part['type']>(type: T): Extract<Part, { type: T }> => {
-      const found = parts.find((part) => part.type === type);
-      if (found === undefined) throw new Error(`mock-media produced no ${type} part`);
-      return found as Extract<Part, { type: T }>;
-    };
-    const text = partOf('text');
-    const json = partOf('json');
-    const code = partOf('code');
-    const image = partOf('image');
-    const audio = partOf('audio');
-    const video = partOf('video');
-    const file = partOf('file');
-
-    await openRightTab(page, 'Inspector');
-    const output = page.getByTestId('inspector').getByTestId('inspector-output');
-    await expect(output).toBeVisible();
+    const { parts, output } = await mediaRunOnScreen(page);
+    const { text, json, code, image, audio, video, file } = parts;
 
     // Text as Markdown.
     const word = (text.text.match(/[A-Za-z]{4,}/g) ?? [])[0] ?? text.text.trim();
@@ -663,49 +763,102 @@ test.describe('Renderers and multimodal runs (FR-MM-003/005/006/009)', () => {
     const firstLine = code.text.split('\n').find((line) => line.trim() !== '') ?? code.text;
     await expect(output.getByTestId('code-block').first()).toContainText(firstLine.trim());
 
-    // The image actually loaded from the engine (token on the URL, §5 item 1).
+    // An image element pointed at the artifact's content.
     const img = output
       .locator('[data-testid="image-part"] img, img[data-testid="image-part"]')
       .first();
     await expect(img).toBeVisible();
-    await expect
-      .poll(() => img.evaluate((el) => (el as HTMLImageElement).naturalWidth), {
-        message: 'the PNG decoded in the browser',
-      })
-      .toBeGreaterThan(0);
     expect(await img.getAttribute('src')).toContain(`/artifacts/${image.artifactId}/content`);
 
-    // Audio and video: native players pointed at the artifact's content, which serves ranges.
+    // Audio and video: native players with controls, streaming from the artifact's content.
     for (const [testId, part] of [
       ['audio-el', audio],
       ['video-el', video],
     ] as const) {
       const player = output.getByTestId(testId).first();
       await expect(player).toBeAttached();
-      const src = await player.evaluate((el) => {
-        const media = el as HTMLMediaElement;
-        return media.currentSrc || media.src || el.querySelector('source')?.src || '';
-      });
-      expect(src, `${testId} streams from GET /artifacts/:id/content`).toContain(
+      expect(await mediaSrc(player), `${testId} streams from GET /artifacts/:id/content`).toContain(
         `/artifacts/${part.artifactId}/content`,
       );
       expect(await player.evaluate((el) => (el as HTMLMediaElement).controls)).toBe(true);
-      const ranged = await page.request.get(src, { headers: { Range: 'bytes=0-3' } });
-      expect(ranged.status(), `${testId}: a Range request is answered 206 (seeking)`).toBe(206);
     }
 
-    // The download card: name, and the hash of the stored artifact (§5 item 3, D214).
+    // The download card, named (its hash is the next test, D-066).
+    const fileCard = output.getByTestId('file-card').first();
+    await expect(fileCard).toBeVisible();
+    await expect(fileCard).toContainText(file.name);
+  });
+
+  /*
+   * D-066. §5 item 3: "any other file as a download card showing name, size, hash (FR-MM-006,
+   * FR-MM-009)". A file `Part` carries no hash, so D214 made the card take it as a prop "the caller
+   * supplies from the fetched Artifact". The inspector is a caller that never does:
+   * `apps/web/src/inspector/Inspector.tsx` renders `<PartRenderer part={part} contentUrl={…} />`
+   * with no `hash`, so the card has no `file-hash` and shows no hash at all.
+   */
+  test('TC-MM-006 (§5 item 3): the inspector’s download card shows the file’s name, size and hash', async ({
+    page,
+  }) => {
+    // D-066: the inspector renders PartRenderer without the `hash` prop, so no hash is shown.
+    test.fail();
+    const { parts, output } = await mediaRunOnScreen(page);
+    const { file } = parts;
     const stored = await api<Artifact>(`/artifacts/${file.artifactId}`);
     const fileCard = output.getByTestId('file-card').first();
     await expect(fileCard).toBeVisible();
     await expect(fileCard).toContainText(file.name);
-    await expect(fileCard.getByTestId('file-hash')).toHaveAttribute('title', stored.hash);
+    await expect(fileCard).toContainText(String(file.size));
+    await expect(fileCard.getByTestId('file-hash')).toHaveAttribute('title', stored.hash, {
+      timeout: 10_000,
+    });
+  });
+
+  /*
+   * D-061 (High). Every media element and every download points at the SDK's `artifactContentUrl`,
+   * `GET /api/v1/artifacts/:id/content?token=<session token>` — §5 item 1 has the SDK put the token
+   * on the query string "for media elements", because `<img>`/`<audio>`/`<video>`/`<a download>`
+   * cannot send an `Authorization` header. The engine's `authGuard`
+   * (`packages/engine/src/gateway/index.ts`) reads only the `Authorization` header, so that URL is
+   * answered 401 `unauthorized` (measured with curl against the running acceptance engine): no image
+   * decodes, no player can load or seek, and a download saves a 112-byte JSON error. The MSW mocks M4
+   * was built against accepted the query token, which is why its own suite never saw it.
+   */
+  test('TC-MM-006 + TC-MM-008: the rendered media load from the engine — the image decodes, audio and video answer Range requests, and the download is byte-identical', async ({
+    page,
+  }) => {
+    // D-061: GET /artifacts/:id/content?token= is 401 — the engine accepts the token only as a header.
+    test.fail();
+    const { parts, output } = await mediaRunOnScreen(page);
+    const { audio, video, file } = parts;
+
+    // The image actually loaded from the engine (token on the URL, §5 item 1).
+    const img = output
+      .locator('[data-testid="image-part"] img, img[data-testid="image-part"]')
+      .first();
+    await expect
+      .poll(() => img.evaluate((el) => (el as HTMLImageElement).naturalWidth), {
+        message: 'the PNG decoded in the browser',
+        timeout: 10_000,
+      })
+      .toBeGreaterThan(0);
+
+    // Seeking: the very URL each player uses answers a byte range (§2.1 Accept-Ranges, FR-MM-006).
+    for (const [testId, part] of [
+      ['audio-el', audio],
+      ['video-el', video],
+    ] as const) {
+      const src = await mediaSrc(output.getByTestId(testId).first());
+      expect(src).toContain(`/artifacts/${part.artifactId}/content`);
+      const ranged = await page.request.get(src, { headers: { Range: 'bytes=0-3' } });
+      expect(ranged.status(), `${testId}: a Range request is answered 206 (seeking)`).toBe(206);
+    }
 
     // TC-MM-008 via the UI: the downloaded bytes hash to what the engine stored.
+    const stored = await api<Artifact>(`/artifacts/${file.artifactId}`);
     const link = output
       .locator('[data-testid="file-card"][download], [data-testid="file-card"] a[download]')
       .first();
-    const downloading = page.waitForEvent('download');
+    const downloading = page.waitForEvent('download', { timeout: 15_000 });
     await link.click();
     const download = await downloading;
     const saved = await download.path();
@@ -774,15 +927,24 @@ test.describe('Renderers and multimodal runs (FR-MM-003/005/006/009)', () => {
     const blocked = await settledRun(flow.workflowId);
     expect(blocked.status).toBe('BLOCKED');
     const record = await runRecord(blocked.id);
-    const issue = record.preflightIssues.find(
+    const issues = record.preflightIssues.filter(
       (each) => each.code === 'incompatible_model' && each.nodeId === vision.id,
     );
-    expect(issue, 'FR-MM-005: pre-flight flags the image into a text-only model').toBeDefined();
+    expect(
+      issues.length,
+      'FR-MM-005: pre-flight flags the image into a text-only model',
+    ).toBeGreaterThan(0);
     expect(await nodeRunsOf(blocked.id), 'BR-08: nothing was called').toHaveLength(0);
 
+    /*
+     * One card per issue the engine raised for this node — the engine answers two here (the agent's
+     * declared image input type, and the image the Input attaches), so the count is the engine's,
+     * not a number written here (the first run asserted exactly one, which was this file's error).
+     */
     const flagged = page.getByTestId(`node-preflight-${vision.id}`);
     await expect(flagged).toBeVisible({ timeout: 30_000 });
-    await expect(flagged.locator('[data-code="incompatible_model"]')).toHaveCount(1);
+    await expect(flagged.locator('[data-code="incompatible_model"]')).toHaveCount(issues.length);
+    for (const issue of issues) await expect(flagged).toContainText(issue.message);
     await expect(flagged).toContainText('mock-text');
   });
 });
@@ -824,10 +986,100 @@ async function timelineWithAnError(page: Page): Promise<TimelineSetup> {
   return { ...flow, assistantId: assistant.id, okRunId: ok.id, failedRunId: failed.id };
 }
 
+/**
+ * One style signature per message type, read off the first rendered row of that type: the
+ * bubble's computed colours, border, font style and family, plus which side of the list it sits on.
+ */
+async function styleSignatures(
+  list: Locator,
+  types: readonly MessageType[],
+): Promise<Map<MessageType, string>> {
+  const listBox = await list.boundingBox();
+  const signatures = new Map<MessageType, string>();
+  for (const type of types) {
+    const row = list.locator(`[data-testid^="timeline-message-"][data-type="${type}"]`).first();
+    const bubble = row.locator('[data-testid="message-bubble"], [role="alert"]').first();
+    const target = (await bubble.count()) > 0 ? bubble : row;
+    const box = await target.boundingBox();
+    const style = await target.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return [
+        s.backgroundColor,
+        s.borderLeftColor,
+        s.borderLeftWidth,
+        s.borderTopColor,
+        s.color,
+        s.fontStyle,
+        s.fontFamily,
+      ].join('|');
+    });
+    const side =
+      box !== null && listBox !== null
+        ? box.x + box.width / 2 > listBox.x + listBox.width / 2
+          ? 'right'
+          : 'left'
+        : '?';
+    signatures.set(type, `${style}|${side}`);
+  }
+  return signatures;
+}
+
 test.describe('Timeline (FR-CHAT-001/002/003)', () => {
+  test('TC-CHAT-001: after a run with an error the five message types the run produced are each on the timeline, styled apart', async ({
+    page,
+  }) => {
+    const setup = await timelineWithAnError(page);
+    const engineTypes = new Set((await messagesOf(setup.workflowId)).map((m) => m.type));
+    const produced = MESSAGE_TYPES.filter((type) => type !== 'system');
+    for (const type of produced) {
+      expect(engineTypes.has(type), `the engine recorded a ${type} message`).toBe(true);
+    }
+
+    const timeline = await openTimelineTab(page);
+    const list = timeline.getByTestId('timeline-list');
+    await expect(list).toBeVisible();
+    for (const type of produced) {
+      await expect(
+        list.locator(`[data-testid^="timeline-message-"][data-type="${type}"]`).first(),
+        `a ${type} message is on the timeline`,
+      ).toBeVisible({ timeout: 15_000 });
+    }
+
+    // Visually distinct: five different looks, read from the rendered styles (FR-CHAT-001).
+    const signatures = await styleSignatures(list, produced);
+    expect(
+      new Set(signatures.values()).size,
+      `distinct styles: ${JSON.stringify(Object.fromEntries(signatures), null, 1)}`,
+    ).toBe(produced.length);
+
+    // §5 item 4's specifics: user right-aligned, agent left and named, error a red card.
+    expect(signatures.get('user')).toMatch(/\|right$/);
+    expect(signatures.get('agent')).toMatch(/\|left$/);
+    await expect(
+      list.locator('[data-testid^="timeline-message-"][data-type="agent"]').first(),
+    ).toContainText('Assistant');
+    await expect(
+      list
+        .locator('[data-testid^="timeline-message-"][data-type="error"]')
+        .first()
+        .getByRole('alert'),
+    ).toBeVisible();
+  });
+
+  /*
+   * D-063. §2.3's timeline population lists `system` for "engine notices (shutdown, crash recovery,
+   * provider status changes)". The engine writes a `system` row only when a run halts `shutdown` or
+   * `crash` (`packages/engine/src/chat/timeline.ts`, the `run.completed` case); provider status
+   * changes never reach the timeline — and a run failing on a 401 does not even move the mock
+   * provider off CONNECTED. The acceptance engine is shared by the whole suite and cannot be shut
+   * down mid-run, so no scenario a user can drive here produces the sixth type, and §7.1's "six
+   * styles visible" after a run with an error cannot be met. The five it can are checked above.
+   */
   test('TC-CHAT-001: after a run with an error the timeline shows all six message types, each styled apart', async ({
     page,
   }) => {
+    // D-063: no `system` message is ever derived from a provider status change (only shutdown/crash).
+    test.fail();
     const setup = await timelineWithAnError(page);
     const expectedTypes = [...new Set((await messagesOf(setup.workflowId)).map((m) => m.type))];
 
@@ -846,55 +1098,16 @@ test.describe('Timeline (FR-CHAT-001/002/003)', () => {
       ).toBeVisible({ timeout: 15_000 });
     }
 
-    // Visually distinct: six different looks, read from the rendered styles (FR-CHAT-001).
-    const listBox = await list.boundingBox();
-    const signatures = new Map<MessageType, string>();
-    for (const type of MESSAGE_TYPES) {
-      const row = list.locator(`[data-testid^="timeline-message-"][data-type="${type}"]`).first();
-      const bubble = row.locator('[data-testid="message-bubble"], [role="alert"]').first();
-      const target = (await bubble.count()) > 0 ? bubble : row;
-      const box = await target.boundingBox();
-      const style = await target.evaluate((el) => {
-        const s = getComputedStyle(el);
-        return [
-          s.backgroundColor,
-          s.borderLeftColor,
-          s.borderLeftWidth,
-          s.borderTopColor,
-          s.color,
-          s.fontStyle,
-          s.fontFamily,
-        ].join('|');
-      });
-      const side =
-        box !== null && listBox !== null
-          ? box.x + box.width / 2 > listBox.x + listBox.width / 2
-            ? 'right'
-            : 'left'
-          : '?';
-      signatures.set(type, `${style}|${side}`);
-    }
+    const signatures = await styleSignatures(list, MESSAGE_TYPES);
     expect(
       new Set(signatures.values()).size,
       `six styles: ${JSON.stringify(Object.fromEntries(signatures), null, 1)}`,
     ).toBe(MESSAGE_TYPES.length);
-
-    // §5 item 4's specifics: user right-aligned, agent named, error a red card, system italic.
-    expect(signatures.get('user')).toMatch(/\|right$/);
-    expect(signatures.get('agent')).toMatch(/\|left$/);
-    await expect(
-      list.locator('[data-testid^="timeline-message-"][data-type="agent"]').first(),
-    ).toContainText('Assistant');
-    await expect(
-      list
-        .locator('[data-testid^="timeline-message-"][data-type="error"]')
-        .first()
-        .getByRole('alert'),
-    ).toBeVisible();
+    // §5 item 4: system is grey italic.
     expect(signatures.get('system')).toContain('|italic|');
   });
 
-  test('TC-CHAT-002: filtering by node + error shows only the matching messages, and the filter is kept in the URL', async ({
+  test('TC-CHAT-002: filtering the Timeline tab by node + error shows only the matching messages', async ({
     page,
   }) => {
     const setup = await timelineWithAnError(page);
@@ -916,22 +1129,102 @@ test.describe('Timeline (FR-CHAT-001/002/003)', () => {
     const shown = await timelineRows(list);
     expect(shown.every((row) => row.type === 'error')).toBe(true);
     expect(shown.map((row) => row.id).sort()).toEqual(expected.map((m) => m.id).sort());
+  });
 
-    // Combinable and linkable: the full page reads the same filter back out of its URL.
-    await timeline.getByTestId('timeline-open-full').click();
-    const page_ = page.getByTestId('timeline-page');
-    await expect(page_).toBeVisible();
-    const fullFilters = page_.getByTestId('timeline-filters');
-    await pickOption(page, fullFilters.getByLabel('Filter by node'), 'Assistant');
-    await pickOption(page, fullFilters.getByLabel('Filter by type'), /^error/i);
+  test('TC-CHAT-002 (§5 item 4): the full timeline page keeps the node + type filter in its URL across a reload', async ({
+    page,
+  }) => {
+    const setup = await timelineWithAnError(page);
+    const expected = await messagesOf(setup.workflowId, {
+      nodeId: setup.assistantId,
+      type: 'error',
+    });
+
+    // Reached by its route (§5 item 4) — the Timeline tab's link to it is D-062, tested below.
+    await page.goto(
+      `/projects/${setup.projectId}/workflows/${setup.workflowId}/timeline?token=${engine().token}`,
+    );
+    const full = page.getByTestId('timeline-page');
+    await expect(full).toBeVisible();
+    const filters = full.getByTestId('timeline-filters');
+    await pickOption(page, filters.getByLabel('Filter by node'), 'Assistant');
+    await pickOption(page, filters.getByLabel('Filter by type'), /^error/i);
+    await expect(full.locator('[data-testid^="timeline-message-"]')).toHaveCount(expected.length);
     await expect(page).toHaveURL(new RegExp(setup.assistantId));
     await expect(page).toHaveURL(/error/);
+
     await page.reload();
-    await expect(
-      page.getByTestId('timeline-page').locator('[data-testid^="timeline-message-"]'),
-    ).toHaveCount(expected.length);
-    const reloaded = await timelineRows(page.getByTestId('timeline-page'));
-    expect(reloaded.map((row) => row.id).sort()).toEqual(expected.map((m) => m.id).sort());
+    const reloaded = page.getByTestId('timeline-page');
+    await expect(reloaded.locator('[data-testid^="timeline-message-"]')).toHaveCount(
+      expected.length,
+    );
+    const rows = await timelineRows(reloaded);
+    expect(rows.map((row) => row.id).sort()).toEqual(expected.map((m) => m.id).sort());
+  });
+
+  /*
+   * D-062. `TimelineTab` renders its "open full timeline" link only when it is given a `projectId`,
+   * and the one place that mounts it, `BottomPanel`, passes only `workflowId`
+   * (`apps/web/src/bottom-panel/BottomPanel.tsx`, `<TimelineTab workflowId={workflowId} />`). So the
+   * full page — the one that keeps a filter in the URL (§5 item 4, FR-CHAT-002) — is unreachable from
+   * the app; only a typed URL gets there. The round-3 lesson again: every component test passes.
+   */
+  test('TC-CHAT-002 (§5 item 4): the Timeline tab links to the full timeline page', async ({
+    page,
+  }) => {
+    // D-062: BottomPanel mounts TimelineTab without projectId, so the full-page link never renders.
+    test.fail();
+    const flow = await importFixture('chat-french.json');
+    await openCanvas(page, flow.projectId, flow.workflowId);
+    const timeline = await openTimelineTab(page);
+    // Bounded: the link is either there at once or not at all.
+    await timeline.getByTestId('timeline-open-full').click({ timeout: 10_000 });
+    await expect(page).toHaveURL(
+      new RegExp(`/projects/${flow.projectId}/workflows/${flow.workflowId}/timeline`),
+    );
+    await expect(page.getByTestId('timeline-page')).toBeVisible();
+  });
+
+  /*
+   * D-067, found by the §7.1 manual pass ("5,000-message timeline scroll"), automated there with
+   * 5,000 posted messages: the Timeline tab read "100 messages" and the 5,000th was nowhere.
+   * `GET /workflows/:id/messages` pages (`{ items, nextCursor? }`, §2.4, D210; the engine's default
+   * page is 100), and `useTimelineMessages` (`apps/web/src/timeline/timeline-messages.ts`) fetches
+   * one page and ignores `nextCursor`. So after a reload a workflow with more than 100 timeline rows
+   * shows its oldest 100 and nothing newer — not "the identical list" §5 item 4 requires a reconnect
+   * to show. 150 messages is enough to cross the first page.
+   */
+  test('TC-CHAT-001 (§5 item 4, manual pass): after a reload, a timeline longer than one page still ends with its newest message', async ({
+    page,
+  }) => {
+    // D-067: the timeline loads only the first page of GET /messages and never follows nextCursor.
+    test.fail();
+    const flow = await importFixture('chat-french.json');
+    const total = 150;
+    for (let start = 0; start < total; start += 50) {
+      await Promise.all(
+        Array.from({ length: Math.min(50, total - start) }, (_, index) =>
+          api(`/workflows/${flow.workflowId}/messages`, {
+            method: 'POST',
+            body: JSON.stringify({
+              content: [{ type: 'text', text: `timeline row ${start + index + 1}` }],
+              run: false,
+            }),
+          }),
+        ),
+      );
+    }
+    const stored = await messagesOf(flow.workflowId);
+    expect(stored).toHaveLength(total);
+
+    await openCanvas(page, flow.projectId, flow.workflowId);
+    const timeline = await openTimelineTab(page);
+    await expect(timeline.getByTestId('timeline-count')).toContainText(String(total), {
+      timeout: 10_000,
+    });
+    const newest = timeline.getByText(`timeline row ${total}`, { exact: true });
+    await newest.scrollIntoViewIfNeeded({ timeout: 10_000 });
+    await expect(newest).toBeVisible();
   });
 
   test('TC-CHAT-003: "hello" sent from the timeline composer with run reaches the Input node and starts a run', async ({
@@ -976,7 +1269,8 @@ test.describe('Timeline (FR-CHAT-001/002/003)', () => {
     ).toBeVisible();
     await selectNode(page, input.id);
     await openRightTab(page, 'Configure');
-    await expect(configPanel(page).getByLabel('Text')).toHaveValue('hello');
+    // `getByLabel('Text')` also matched the Output types checkbox labelled "text" (first run).
+    await expect(configPanel(page).getByRole('textbox', { name: 'Text' })).toHaveValue('hello');
   });
 });
 
@@ -1073,7 +1367,7 @@ test.describe('Direct chat (FR-CHAT-004..008)', () => {
     expect(replyText).toMatch(FRENCH);
 
     const conversation = panel.getByTestId('chat-conversation');
-    await expect(conversation).toContainText(replyText.slice(0, 40));
+    await expect(conversation).toContainText(firstLine(replyText));
     await expect(conversation).toContainText('Tell me about the weather today.');
   });
 
@@ -1092,7 +1386,7 @@ test.describe('Direct chat (FR-CHAT-004..008)', () => {
     const detail = await repliedThread(assistant.id);
     const reply = detail.messages.find((m) => m.role === 'agent');
     const replyText = textOf(reply?.content);
-    await expect(panel.getByTestId('chat-conversation')).toContainText(replyText.slice(0, 40));
+    await expect(panel.getByTestId('chat-conversation')).toContainText(firstLine(replyText));
 
     // The wire: chat.token deltas for this thread, all before its chat.message (§2.5).
     const mine = frames
@@ -1107,12 +1401,14 @@ test.describe('Direct chat (FR-CHAT-004..008)', () => {
     );
 
     // The screen: the streaming reply was seen part-written before it was whole (FR-CHAT-006).
+    // Sample against sample, not against the raw reply: the rendered text drops the reply's newlines
+    // and Markdown marks, so its length is not the stored text's (a full render can be "shorter").
     const samples = await streamedSamples(page);
-    const partial = samples.filter((sample) => sample.length < replyText.length);
     expect(
-      partial.length,
+      samples.length,
       `text appeared progressively: ${JSON.stringify(samples)}`,
-    ).toBeGreaterThan(0);
+    ).toBeGreaterThan(1);
+    expect((samples[0] ?? '').length).toBeLessThan((samples[samples.length - 1] ?? '').length);
   });
 
   test('TC-CHAT-005: chatting after a run leaves the run record unchanged', async ({ page }) => {
@@ -1135,7 +1431,7 @@ test.describe('Direct chat (FR-CHAT-004..008)', () => {
     await sendChat(panel, 'Does this change the run?');
     const detail = await repliedThread(assistant.id);
     await expect(panel.getByTestId('chat-conversation')).toContainText(
-      textOf(detail.messages.find((m) => m.role === 'agent')?.content).slice(0, 30),
+      firstLine(textOf(detail.messages.find((m) => m.role === 'agent')?.content)),
     );
 
     // FR-CHAT-005: the chat touched no run record.
@@ -1441,10 +1737,11 @@ test.describe('Tools (FR-TOOL-001/002/007/009/010)', () => {
         'data-status',
         call.status,
       );
+      // Shown "as delivered, already redacted" (§5 item 7): the args as JSON, equal to the record's.
+      // (The first run compared a raw string with newlines against the JSON-escaped text.)
       const args = row.getByTestId(`tool-call-args-${call.id}`);
-      for (const value of Object.values((call.args ?? {}) as Record<string, unknown>)) {
-        if (typeof value === 'string') await expect(args).toContainText(value.slice(0, 30));
-      }
+      await expect(args).toBeVisible();
+      expect(JSON.parse((await args.textContent()) ?? 'null')).toEqual(call.args);
       await expect(row.getByTestId(`tool-call-result-${call.id}`)).toContainText(
         call.resultSummary.slice(0, 30),
       );
@@ -1510,6 +1807,36 @@ test.describe('Tools (FR-TOOL-001/002/007/009/010)', () => {
     );
   });
 
+  /*
+   * D-064, found walking the §1 demo. After a reload the Canvas adopts the live run from its records
+   * (`useAdoptActiveRun` → `run-store.ts` `adopt`), rebuilding node states and outputs as synthetic
+   * frames — but not the pending approvals, and the socket's `resume` replays nothing from before the
+   * load. The node-anchored card (`NodeApproval`) reads only that fold, so a WAITING node loses its
+   * card; the top bar's badge still counts it, because it reads `GET /runs/:id/approvals`. The
+   * workaround is the badge's list. This is round 3's approval card (M3), reached by round 4's
+   * destructive-tool approval.
+   */
+  test('TC-GRD-008 (found by the §1 demo): after a reload, a WAITING node still carries its approval card', async ({
+    page,
+  }) => {
+    // D-064: adopt() rebuilds node states and outputs after a reload, never the pending approvals.
+    test.fail();
+    const flow = await importFixture('destructive.json');
+    const cleaner = flow.byName('Cleaner');
+
+    await openCanvas(page, flow.projectId, flow.workflowId);
+    await startButton(page).click();
+    await expect(page.getByTestId(`node-approval-${cleaner.id}`)).toBeVisible({ timeout: 40_000 });
+
+    await openCanvas(page, flow.projectId, flow.workflowId);
+    await expect(card(page, cleaner.id)).toHaveAttribute('data-state', 'WAITING', {
+      timeout: 30_000,
+    });
+    await expect(page.getByTestId('approvals-badge')).toHaveAttribute('data-count', '1');
+    // Bounded: the card is rebuilt with the node's state, or not at all.
+    await expect(page.getByTestId(`node-approval-${cleaner.id}`)).toBeVisible({ timeout: 10_000 });
+  });
+
   test('TC-PRM-002: View prompt after a tool run highlights the untrusted tool-result block with its label', async ({
     page,
   }) => {
@@ -1564,7 +1891,9 @@ test.describe('§1 demo script (round 4 gate)', () => {
   test('Round 4 §1 demo: upload → vision → renderers → tool calls → destructive approval → blocked HTTP → MCP → timeline → chat → refusal', async ({
     page,
   }) => {
-    test.setTimeout(900_000);
+    // D-063: the script's "six message styles" needs a `system` message the engine never derives.
+    test.fail();
+    test.setTimeout(600_000);
     const projectId = await newProject('demo');
     const http = await startHttpServer();
     let mcpId: string | undefined;
@@ -1690,8 +2019,17 @@ test.describe('§1 demo script (round 4 gate)', () => {
           'the second run waits for approval',
           40_000,
         );
+        /*
+         * A run started from the composer lights the Canvas only after a reload (D-058, known), and
+         * after a reload the card is no longer anchored to the WAITING node (D-064, tested on its
+         * own below). The top bar's badge lists it, so that is the way a person gets to it here.
+         */
         await openCanvas(page, projectId, destructive.workflowId);
-        const approveCard = page.getByTestId(`approval-card-${again?.nodeRunId as string}`).first();
+        await page.getByTestId('approvals-badge').click();
+        const approveCard = page
+          .getByTestId('approvals-list')
+          .getByTestId(`approval-card-${again?.nodeRunId as string}`);
+        await expect(approveCard.getByTestId('approval-preview')).toContainText('notes.txt');
         await approveCard.getByRole('button', { name: /^Approve/ }).click();
         const done = await engineSays(
           () => runRecord(second.id),
@@ -1768,29 +2106,6 @@ test.describe('§1 demo script (round 4 gate)', () => {
         await expect(list).toContainText(ping?.name as string);
       });
 
-      /* ---- Timeline: six styles, filter by node ---- */
-      await test.step('Timeline tab shows the six message styles; filter by node', async () => {
-        await openCanvas(page, projectId, destructive.workflowId);
-        const timeline = await openTimelineTab(page);
-        const list = timeline.getByTestId('timeline-list');
-        const engineTypes = new Set((await messagesOf(destructive.workflowId)).map((m) => m.type));
-        for (const type of MESSAGE_TYPES) {
-          expect(engineTypes.has(type), `the engine has a ${type} message`).toBe(true);
-          await expect(
-            list.locator(`[data-testid^="timeline-message-"][data-type="${type}"]`).first(),
-          ).toBeVisible();
-        }
-        const cleanerOnly = await messagesOf(destructive.workflowId, { nodeId: cleaner.id });
-        await pickOption(
-          page,
-          timeline.getByTestId('timeline-filters').getByLabel('Filter by node'),
-          cleaner.name,
-        );
-        await expect(list.locator('[data-testid^="timeline-message-"]')).toHaveCount(
-          cleanerOnly.length,
-        );
-      });
-
       /* ---- an agent's Chat tab → streamed reply → run record unchanged ---- */
       await test.step('Chat tab: a streamed reply, and the run record is unchanged', async () => {
         const runsBefore = await runsOf(vision.workflowId);
@@ -1800,7 +2115,7 @@ test.describe('§1 demo script (round 4 gate)', () => {
         await sendChat(panel, 'Write a second caption, please.');
         const detail = await repliedThread(writer.id);
         const reply = textOf(detail.messages.find((m) => m.role === 'agent')?.content);
-        await expect(panel.getByTestId('chat-conversation')).toContainText(reply.slice(0, 30));
+        await expect(panel.getByTestId('chat-conversation')).toContainText(firstLine(reply));
         expect(await runsOf(vision.workflowId)).toEqual(runsBefore);
         expect(await runRecord(runBefore.id)).toEqual(runBefore);
       });
@@ -1822,6 +2137,37 @@ test.describe('§1 demo script (round 4 gate)', () => {
         const refusal = panel.getByTestId('chat-refusal');
         await expect(refusal).toBeVisible();
         await expect(refusal).toContainText(/prompt.injection|injection|instructions/i);
+      });
+      /*
+       * ---- Timeline: six styles, filter by node ----
+       * Walked last, and the filter before the six types: the sixth type, `system`, is never
+       * produced (D-063), and a failing assertion ends the test, so everything else in the script
+       * is exercised first.
+       */
+      await test.step('Timeline tab: filter by node; six message styles', async () => {
+        await openCanvas(page, projectId, destructive.workflowId);
+        const timeline = await openTimelineTab(page);
+        const list = timeline.getByTestId('timeline-list');
+        await expect(list.locator('[data-testid^="timeline-message-"]').first()).toBeVisible();
+
+        const cleanerOnly = await messagesOf(destructive.workflowId, { nodeId: cleaner.id });
+        await pickOption(
+          page,
+          timeline.getByTestId('timeline-filters').getByLabel('Filter by node'),
+          cleaner.name,
+        );
+        await expect(list.locator('[data-testid^="timeline-message-"]')).toHaveCount(
+          cleanerOnly.length,
+        );
+        await timeline.getByTestId('timeline-clear-filters').click();
+
+        const engineTypes = new Set((await messagesOf(destructive.workflowId)).map((m) => m.type));
+        for (const type of MESSAGE_TYPES) {
+          expect(engineTypes.has(type), `the engine has a ${type} message`).toBe(true);
+          await expect(
+            list.locator(`[data-testid^="timeline-message-"][data-type="${type}"]`).first(),
+          ).toBeVisible();
+        }
       });
     } finally {
       await http.close();
