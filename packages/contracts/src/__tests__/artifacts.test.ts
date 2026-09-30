@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ALLOWED_UPLOAD_EXTENSIONS,
+  ALLOWED_UPLOAD_MIME_ALIASES,
   ALLOWED_UPLOAD_MIME_PREFIXES,
   ALLOWED_UPLOAD_MIME_TYPES,
   ARTIFACT_ACCEPT_RANGES,
@@ -274,5 +275,44 @@ describe('TC-MM-002 FR-MM-003 the allow-list of §2.1', () => {
     expect(uploadExtensionOf('Makefile')).toBe('');
     expect(uploadExtensionOf('.gitignore')).toBe('');
     expect(uploadExtensionOf('trailing.')).toBe('');
+  });
+});
+
+/*
+ * D-075: Chromium on Windows types a `.zip` read from disk as `application/x-zip-compressed` (the
+ * Windows registry's type), so FR-MM-003's ZIP could never be uploaded from a browser there. The
+ * fix is an alias of an allowed type, not a new type and not `.zip` by name (§2.1 names nine).
+ */
+describe('FR-MM-003 NFR-SEC-05 TC-MM-003 a ZIP is allowed under the other names it travels by', () => {
+  it.each([
+    'application/x-zip-compressed',
+    'application/x-zip',
+    'APPLICATION/X-ZIP-COMPRESSED',
+    'application/x-zip-compressed; charset=binary',
+  ])('allows a ZIP typed %s, whatever it is named', (mime) => {
+    expect(isAllowedUpload({ mime, name: 'sample.zip' })).toBe(true);
+    expect(isAllowedUpload({ mime, name: 'bundle.bin' })).toBe(true);
+  });
+
+  it('names only aliases of a type §2.1 already allows, and leaves §2.1’s own list as it was', () => {
+    expect({ ...ALLOWED_UPLOAD_MIME_ALIASES }).toEqual({
+      'application/x-zip-compressed': 'application/zip',
+      'application/x-zip': 'application/zip',
+    });
+    for (const canonical of Object.values(ALLOWED_UPLOAD_MIME_ALIASES)) {
+      expect(ALLOWED_UPLOAD_MIME_TYPES as readonly string[]).toContain(canonical);
+    }
+    expect(ALLOWED_UPLOAD_MIME_TYPES as readonly string[]).not.toContain(
+      'application/x-zip-compressed',
+    );
+    expect(ALLOWED_UPLOAD_EXTENSIONS as readonly string[]).not.toContain('.zip');
+  });
+
+  it('still refuses a .zip whose type names no ZIP — the extension is not on the by-name list', () => {
+    expect(isAllowedUpload({ mime: 'application/octet-stream', name: 'sample.zip' })).toBe(false);
+    expect(isAllowedUpload({ mime: 'application/x-zip-compressed-evil', name: 'x.bin' })).toBe(
+      false,
+    );
+    expect(isAllowedUpload({ mime: 'application/x-7z-compressed', name: 'x.7z' })).toBe(false);
   });
 });
