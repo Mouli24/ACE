@@ -3,10 +3,12 @@ import {
   isConnectionAllowed,
   type DataType,
   type Edge,
+  type McpServer,
   type Model,
   type Node,
   type Port,
   type Provider,
+  type ToolDefinition,
   type ValidationIssue,
 } from '@ace/contracts';
 
@@ -21,6 +23,60 @@ import { findCycle } from './cycles.js';
 export interface ValidationContext {
   providers?: readonly Provider[];
   models?: readonly Model[];
+  /**
+   * The tool registry — built-ins plus connected MCP servers' tools (round 4 §2.4). When supplied,
+   * every agent's `tools.enabled` is checked against it (`tool_not_registered`). The engine may not
+   * import `@ace/tools`, so this is the narrow view the gateway binds the real registry to; the run
+   * executor's `ToolProvider` satisfies it as it is.
+   */
+  tools?: ToolLookup;
+  /** The known MCP servers, for `mcp_server_unreachable` (§2.4). Read only when `tools` is given. */
+  mcpServers?: readonly McpServer[];
+}
+
+/** The part of the tool registry validation reads: a name → the registered tool's definition. */
+export interface ToolLookup {
+  get(name: string): { readonly definition: ToolDefinition } | undefined;
+}
+
+/**
+ * Round 4 §2.4 (D-069): the tool issues of one agent. An enabled name the registry does not hold is
+ * `tool_not_registered` — an error, because the model would be offered a tool that cannot run (the
+ * usual cause: its MCP server was removed). A registered tool whose MCP server is known and
+ * `unreachable` is `mcp_server_unreachable` — a warning, because the run can go ahead and only that
+ * tool's calls would fail.
+ */
+function toolIssues(
+  node: Extract<Node, { kind: 'agent' }>,
+  tools: ToolLookup,
+  mcpServers: readonly McpServer[],
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  for (const name of node.config.tools.enabled) {
+    const registered = tools.get(name);
+    if (registered === undefined) {
+      issues.push({
+        severity: 'error',
+        code: 'tool_not_registered',
+        message: `"${node.name}" enables the tool "${name}", which is no longer registered — was its MCP server removed?`,
+        nodeId: node.id,
+      });
+      continue;
+    }
+
+    const serverId = registered.definition.mcpServerId;
+    const server =
+      serverId === undefined ? undefined : mcpServers.find((candidate) => candidate.id === serverId);
+    if (server?.status === 'unreachable') {
+      issues.push({
+        severity: 'warning',
+        code: 'mcp_server_unreachable',
+        message: `"${node.name}" enables "${name}", but its MCP server "${server.name}" is unreachable, so calls to it will fail.`,
+        nodeId: node.id,
+      });
+    }
+  }
+  return issues;
 }
 
 /** Does this model cover everything the node needs to read and produce? */
@@ -128,6 +184,10 @@ export function validateGraph(
           nodeId: node.id,
         });
       }
+    }
+
+    if (node.kind === 'agent' && context.tools !== undefined) {
+      issues.push(...toolIssues(node, context.tools, context.mcpServers ?? []));
     }
   }
 

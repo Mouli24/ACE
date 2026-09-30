@@ -732,6 +732,8 @@ export async function startEngine(
     onWorkflowUpdated: async (workflowId, version) => {
       await bus.emit(workflowUpdatedEvent(workflowId, version));
     },
+    // Round 4 §2.4 (D-069): validation checks every agent's enabled tools against the live registry.
+    tools: toolProvider,
   });
 
   const selfOrigins = [

@@ -38,7 +38,7 @@ import type { Logger } from '../logging/index.js';
 import type { Repository, Scope } from '../ports/index.js';
 import { findCycle } from './cycles.js';
 import { remapGraph } from './ids.js';
-import { validateGraph } from './validate.js';
+import { validateGraph, type ToolLookup } from './validate.js';
 
 export * from './cycles.js';
 export * from './validate.js';
@@ -52,6 +52,12 @@ export interface GraphServiceDeps {
   now?: () => string;
   /** Called after a graph-ops batch commits — the event log and WS hub hook in here. */
   onWorkflowUpdated?: (workflowId: Id, version: number) => Promise<void>;
+  /**
+   * The tool registry `POST /workflows/:id/validate` checks every agent's enabled tools against
+   * (round 4 §2.4, D-069: `tool_not_registered`, and `mcp_server_unreachable` from the stored MCP
+   * servers). Absent, validation raises neither — a round 1–3 harness builds the service without it.
+   */
+  tools?: ToolLookup;
 }
 
 export interface GraphService {
@@ -314,7 +320,9 @@ export function createGraphService(deps: GraphServiceDeps): GraphService {
     async validateWorkflow(id) {
       await requireWorkflow(id);
       const { nodes, edges } = await loadGraph(id);
-      return validateGraph(nodes, edges);
+      if (deps.tools === undefined) return validateGraph(nodes, edges);
+      const mcpServers = (await repository.mcpServers?.list(scope)) ?? [];
+      return validateGraph(nodes, edges, { tools: deps.tools, mcpServers });
     },
 
     /* ---------------------------------------------------------- export/import */
