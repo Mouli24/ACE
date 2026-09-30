@@ -70,7 +70,7 @@ const EXPECTATIONS = {
   'destructive.json': { models: ['mock-destructive'], enabled: ['sandbox_delete'] },
   'http-allowed.json': { models: ['mock-http'], enabled: ['http_request'], allowedDomainsNonEmpty: true },
   'http-denied.json': { models: ['mock-http'], enabled: ['http_request'], allowedDomainsEmpty: true },
-  'search.json': { models: ['mock-search'], enabled: ['web_search', 'web_fetch'] },
+  'search.json': { models: ['mock-search'], enabled: ['web_search', 'web_fetch'], allowedDomainsNonEmpty: true },
   'mcp.json': { models: ['mock-mcp'], enabledPrefix: '__ACE_MCP' },
   'chat-french.json': { models: ['mock-chat'] },
   'injection-delete.json': { models: ['mock-destructive'], enabled: ['sandbox_delete'] },

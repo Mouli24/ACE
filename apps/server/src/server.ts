@@ -77,7 +77,13 @@ import {
   SqliteRepository,
   openDatabase,
 } from "@ace/storage-local";
-import { McpManager, ToolRegistry, registerBuiltinTools } from "@ace/tools";
+import {
+  CannedSearchBackend,
+  McpManager,
+  ToolRegistry,
+  cannedResultsAt,
+  registerBuiltinTools,
+} from "@ace/tools";
 import { WebSocketServer } from "ws";
 
 export const ENGINE_VERSION = "0.1.0";
@@ -147,6 +153,14 @@ export interface StartEngineOptions {
   clock?: () => Timestamp;
   /** Overrides {@link ARTIFACT_SWEEP_INTERVAL_MS}, for a test that watches the timer fire. */
   artifactSweepIntervalMs?: number;
+  /**
+   * Where the canned search index's result URLs point (D14, D-067). With no SearXNG the engine's
+   * `web_search` answers from a canned index whose URLs sit under the reserved, unresolvable
+   * `https://example.test`; the acceptance harness passes its local HTTP test server here so a
+   * `web_search` → `web_fetch` chain completes offline (TC-TOOL-003). The host must still be on the
+   * agent's `allowedDomains` — this moves where the pages are, never what is allowed.
+   */
+  cannedSearchBaseUrl?: string;
 }
 
 export interface RunningEngine {
@@ -442,7 +456,17 @@ export async function startEngine(
    * the same registry, and `DELETE /mcp-servers/:id` drops them again (FR-TOOL-007).
    */
   const toolRegistry = new ToolRegistry();
-  registerBuiltinTools(toolRegistry);
+  registerBuiltinTools(
+    toolRegistry,
+    options.cannedSearchBaseUrl === undefined
+      ? {}
+      : {
+          searchBackend: new CannedSearchBackend(
+            {},
+            cannedResultsAt(options.cannedSearchBaseUrl),
+          ),
+        },
+  );
   const mcpManager = new McpManager({ registry: toolRegistry });
   const toolLogger = logger.child({ subsystem: "tools" });
 

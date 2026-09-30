@@ -1114,8 +1114,8 @@ describe('TC-TOOL-002 an agent can only call the tools enabled for it', () => {
 });
 
 describe('TC-TOOL-003 search → fetch → answer is exactly two tool calls', () => {
-  // D-0?? `search.json` cannot finish: the canned results point at https://example.test/…, which `domain_allowlist` blocks (the fixture allows nothing) and no offline fetch could reach anyway
-  it.fails(
+  // D-067 (fixed): the harness points the canned index at the local HTTP test server (`startEngine({ cannedSearchBaseUrl })`) and `search.json` allows that host, 127.0.0.1
+  it(
     '`search.json`: web_search, then web_fetch on a result URL, then a final answer',
     async () => {
       const graph = await importFixture('search.json');

@@ -36,6 +36,8 @@ export interface StartTestEngineOptions {
   allowedOrigins?: string[];
   /** The artifact store's clock (Arch §15.4), so a retention check can move time. Default: real time. */
   clock?: () => string;
+  /** Where the canned search index's result URLs point (D-067) — the suite's local HTTP test server. */
+  cannedSearchBaseUrl?: string;
 }
 
 export async function startTestEngine(options: StartTestEngineOptions = {}): Promise<TestEngine> {
@@ -49,6 +51,9 @@ export async function startTestEngine(options: StartTestEngineOptions = {}): Pro
       port: options.port ?? 0,
       env: {},
       ...(options.clock === undefined ? {} : { clock: options.clock }),
+      ...(options.cannedSearchBaseUrl === undefined
+        ? {}
+        : { cannedSearchBaseUrl: options.cannedSearchBaseUrl }),
     });
   } catch (error) {
     rmSync(dataDir, { recursive: true, force: true });
