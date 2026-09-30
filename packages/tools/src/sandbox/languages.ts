@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { type SandboxSpec } from '@ace/engine';
@@ -91,6 +91,42 @@ export interface PrepareCodeRunOptions {
   readonly pythonPath?: string | null;
 }
 
+/**
+ * Node's own permission model, confining a `javascript` run's filesystem to its sandbox folder
+ * (TC-TOOL-005, NFR-SEC-04, D-068).
+ *
+ * Without it the child could read — and write — anything the engine's user can: `cwd` and a remapped
+ * `HOME` only move where *relative* paths and `~` land, and an absolute path walked straight past
+ * them. Under `--permission` the runtime refuses every fs call outside the granted folders with
+ * `ERR_ACCESS_DENIED`, and — with no `--allow-child-process`, `--allow-worker` or `--allow-addons` —
+ * refuses spawning a process, a worker or a native addon too, which are the ways round any
+ * in-process rule. A granted directory covers its whole subtree.
+ *
+ * The flag's name depends on the Node that runs the sandbox (it is `process.execPath`, the engine's
+ * own): `--permission` from 22.13 / 23.5 on, `--experimental-permission` before (engines: >= 20.11),
+ * with that release's ExperimentalWarning silenced so it does not land in every run's stderr. The
+ * folder's real path is granted beside the given one, because the child resolves relative paths
+ * against its real `cwd` (a symlinked temp folder, an 8.3 short name on Windows).
+ */
+export function nodePermissionFlags(sandboxDir: string, version: string = process.versions.node): string[] {
+  const [major = 0, minor = 0] = version.split('.').map(Number);
+  const stable = major > 23 || (major === 23 && minor >= 5) || (major === 22 && minor >= 13);
+
+  let real = sandboxDir;
+  try {
+    real = realpathSync.native(sandboxDir);
+  } catch {
+    // Not there yet: nothing to resolve, and the given path is all there is to grant.
+  }
+  const folders = real === sandboxDir ? [sandboxDir] : [sandboxDir, real];
+
+  return [
+    stable ? '--permission' : '--experimental-permission',
+    ...(stable ? [] : ['--disable-warning=ExperimentalWarning']),
+    ...folders.flatMap((folder) => [`--allow-fs-read=${folder}`, `--allow-fs-write=${folder}`]),
+  ];
+}
+
 /** Whether a `python3`/`python` interpreter answers `--version` quickly. Cached per resolved name. */
 function detectPython(platform: NodeJS.Platform): string | null {
   const candidates = platform === 'win32' ? ['python', 'py'] : ['python3', 'python'];
@@ -139,7 +175,13 @@ export function prepareCodeRun(
     return {
       spec: {
         command: nodePath,
-        args: [`--max-old-space-size=${maxOldSpaceMb}`, '-r', preludePath, mainPath],
+        args: [
+          `--max-old-space-size=${maxOldSpaceMb}`,
+          ...nodePermissionFlags(sandboxDir),
+          '-r',
+          preludePath,
+          mainPath,
+        ],
         workingDirectory: sandboxDir,
         timeoutMs,
         env,

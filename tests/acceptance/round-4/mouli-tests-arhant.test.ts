@@ -491,6 +491,29 @@ function dataDirFiles(): string[] {
 /** `<dataDir>/sandbox/<runId>` — where D220 puts a run's sandbox (round 4 §2.2's `<sandbox>`). */
 const sandboxOf = (runId: Id): string => join(dataDir, 'sandbox', runId);
 
+/**
+ * How many "sandbox escape attempt denied" lines the engine log holds for `runId` — the message every
+ * refusal in the tool layer logs (`SANDBOX_DENIED_MESSAGE`, `packages/tools/src/logging.ts`), read
+ * from the JSON lines under `<dataDir>/logs` (FR-SYS-007).
+ */
+function sandboxDenialsLogged(runId: Id): number {
+  const logs = join(dataDir, 'logs');
+  if (!existsSync(logs)) return 0;
+  let count = 0;
+  for (const file of readdirSync(logs).filter((name) => name.endsWith('.log'))) {
+    for (const line of readFileSync(join(logs, file), 'utf8').split('\n')) {
+      if (!line.includes(runId)) continue;
+      try {
+        const entry = JSON.parse(line) as { msg?: unknown; runId?: unknown };
+        if (entry.msg === 'sandbox escape attempt denied' && entry.runId === runId) count += 1;
+      } catch {
+        // A line still being written; the caller polls.
+      }
+    }
+  }
+  return count;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Harness — the socket                                                        */
 /* -------------------------------------------------------------------------- */
@@ -599,19 +622,61 @@ const MCP_SERVER_SCRIPT = join(FIXTURES, 'servers', 'mcp-server.mjs');
 /**
  * A model and input that make an agent request `tool` with exactly `args`.
  *
- * Round 4 §2.6 is the only lever this suite has on what a model asks for, and it has no such model:
- * none requests `code_sandbox` at all, `mock-destructive` always requests `notes.txt`, and §2.4 has
- * no endpoint that invokes a tool directly. Until one exists, the rows that need it (TC-TOOL-004,
- * TC-TOOL-005, TC-GRD-006) have no path through the engine — a finding, not a pass.
+ * Round 4 §2.6 is the only lever this suite has on what a model asks for, and as first written it
+ * had no such model: none requested `code_sandbox`, `mock-destructive` always requested
+ * `notes.txt`, and §2.4 has no endpoint that invokes a tool directly. D-068 added the lever, the
+ * §2.6 way — mock models whose tool arguments come from their input:
+ *
+ * - `mock-sandbox` → `code_sandbox`: a `language:` line, an optional `timeoutMs:` line, then one
+ *   fenced code block (`parseSandboxRequest` in `packages/providers/src/adapters/mock.ts`);
+ * - `mock-destructive` → `sandbox_delete`: a `path:` line (`notes.txt` without one, as §2.6 writes).
+ *
+ * Anything else — another tool, an argument those formats cannot carry — still throws.
  */
 function scriptedToolCall(
   tool: string,
   args: Record<string, unknown>,
 ): { modelId: string; inputText: string } {
-  throw new Error(
-    `no public path makes an agent call ${tool} ${JSON.stringify(args)}: round 4 §2.6 names no mock ` +
-      'model that requests it with arguments the caller chooses, and §2.4 has no tool-invoke endpoint',
-  );
+  const refuse = (why: string): never => {
+    throw new Error(`no mock model requests ${tool} ${JSON.stringify(args)}: ${why}`);
+  };
+  const keys = Object.keys(args).sort();
+
+  if (tool === 'code_sandbox') {
+    const { language, code, timeoutMs } = args;
+    if (keys.some((key) => !['code', 'language', 'timeoutMs'].includes(key))) {
+      refuse('mock-sandbox carries only language, code and timeoutMs');
+    }
+    if (typeof language !== 'string' || typeof code !== 'string') {
+      refuse('language and code must be strings');
+    }
+    if (String(code).split('\n').includes('```')) refuse('the code may not contain a closing fence');
+    const lines = [`language: ${String(language)}`];
+    if (timeoutMs !== undefined) {
+      if (typeof timeoutMs !== 'number' || !Number.isInteger(timeoutMs) || timeoutMs <= 0) {
+        refuse('timeoutMs must be a positive integer');
+      }
+      lines.push(`timeoutMs: ${String(timeoutMs)}`);
+    }
+    lines.push('```', String(code), '```');
+    return { modelId: 'mock-sandbox', inputText: lines.join('\n') };
+  }
+
+  if (tool === 'sandbox_delete') {
+    const { path } = args;
+    if (
+      keys.join() !== 'path' ||
+      typeof path !== 'string' ||
+      path.trim() === '' ||
+      path.trim() !== path ||
+      /[\r\n]/.test(path)
+    ) {
+      refuse('mock-destructive carries exactly one single-line path with no surrounding spaces');
+    }
+    return { modelId: 'mock-destructive', inputText: `path: ${String(path)}` };
+  }
+
+  return refuse('only code_sandbox (mock-sandbox) and sandbox_delete (mock-destructive) can be scripted');
 }
 
 /**
@@ -1138,8 +1203,8 @@ describe('TC-TOOL-003 search → fetch → answer is exactly two tool calls', ()
 });
 
 describe('TC-TOOL-004 the code sandbox kills an infinite loop at its timeout', () => {
-  // D-0?? no public path drives `code_sandbox`: round 4 §2.6 has no mock model that requests it and §2.4 no tool-invoke endpoint (see `scriptedToolCall`)
-  it.fails(
+  // D-068 (fixed): `mock-sandbox` requests code_sandbox with the code its input names (see `scriptedToolCall`)
+  it(
     '`while(true){}` ends as a `timeout` ToolCall within timeoutMs + 500 ms',
     async () => {
       const timeoutMs = 1000;
@@ -1173,8 +1238,8 @@ describe('TC-TOOL-004 the code sandbox kills an infinite loop at its timeout', (
 });
 
 describe('TC-TOOL-005 sandboxed code cannot read outside its folder, and the attempt is logged', () => {
-  // D-0?? no public path drives `code_sandbox`: round 4 §2.6 has no mock model that requests it and §2.4 no tool-invoke endpoint (see `scriptedToolCall`)
-  it.fails(
+  // D-068 (fixed): `mock-sandbox` requests code_sandbox with the code its input names (see `scriptedToolCall`)
+  it(
     'reading a file outside the sandbox, the home folder or /etc/passwd is denied and logged',
     async () => {
       const secret = `outside-${randomBytes(12).toString('hex')}`;
@@ -1182,17 +1247,34 @@ describe('TC-TOOL-005 sandboxed code cannot read outside its folder, and the att
       writeFileSync(outside, secret);
       const homeEntries = readdirSync(homedir()).filter((entry) => entry.length >= 8);
 
+      // `escapes`: the code names a real path outside the sandbox, so the runtime must refuse it —
+      // visibly on the ToolCall and in the engine log. `os.homedir()` is remapped to the sandbox
+      // itself (the sandbox env), so that attempt lands inside and there is nothing to refuse; the
+      // real home folder, spelled out, is the escape.
       const attempts = [
-        `import('node:fs').then((fs) => console.log(fs.readFileSync(${JSON.stringify(outside)}, 'utf8')))`,
-        `import('node:fs').then((fs) => import('node:os').then((os) => console.log(fs.readdirSync(os.homedir()).join('\\n'))))`,
+        {
+          escapes: true,
+          code: `import('node:fs').then((fs) => console.log(fs.readFileSync(${JSON.stringify(outside)}, 'utf8')))`,
+        },
+        {
+          escapes: false,
+          code: `import('node:fs').then((fs) => import('node:os').then((os) => console.log(fs.readdirSync(os.homedir()).join('\\n'))))`,
+        },
+        {
+          escapes: true,
+          code: `import('node:fs').then((fs) => console.log(fs.readdirSync(${JSON.stringify(homedir())}).join('\\n')))`,
+        },
         ...(platform() === 'win32'
           ? []
           : [
-              `import('node:fs').then((fs) => console.log(fs.readFileSync('/etc/passwd', 'utf8')))`,
+              {
+                escapes: true,
+                code: `import('node:fs').then((fs) => console.log(fs.readFileSync('/etc/passwd', 'utf8')))`,
+              },
             ]),
       ];
 
-      for (const code of attempts) {
+      for (const { code, escapes } of attempts) {
         const scripted = scriptedToolCall('code_sandbox', { language: 'javascript', code });
         const graph = await importExport(
           buildChain('Sandbox escape', scripted.inputText, [
@@ -1205,7 +1287,7 @@ describe('TC-TOOL-005 sandboxed code cannot read outside its folder, and the att
         );
         const coder = graph.byName('Coder');
         const watcher = await watchWorkflow(graph.workflowId);
-        const { nodeRuns } = await runToEnd(graph.workflowId);
+        const { run, nodeRuns } = await runToEnd(graph.workflowId);
         watcher.close();
 
         const nodes = forNode(nodeRuns, coder.id);
@@ -1221,6 +1303,19 @@ describe('TC-TOOL-005 sandboxed code cannot read outside its folder, and the att
         expect(seen, code).not.toContain('root:');
         for (const entry of homeEntries) expect(seen, `home entry ${entry}`).not.toContain(entry);
         expectNoFrameDrift(watcher);
+
+        if (escapes) {
+          // The refusal is visible on the ToolCall itself — not an `ok` that merely came back empty…
+          const call = calls[0] as ToolCall;
+          expect(call.status, code).not.toBe('ok');
+          expect(call.resultSummary, code).toMatch(/denied/i);
+          // …and the engine log recorded it against this run (NFR-SEC-04, Arch §22.2).
+          await until(
+            () => sandboxDenialsLogged(run.id) > 0,
+            10_000,
+            `a "sandbox escape attempt denied" log line for run ${run.id}`,
+          );
+        }
       }
     },
     120_000,
@@ -1536,8 +1631,8 @@ describe('TC-TOOL-011 / TC-PRM-002 a tool result reaches the model inside the un
 /* ========================================================================== */
 
 describe('TC-GRD-006 a path that escapes the sandbox is blocked, and nothing outside is deleted', () => {
-  // D-0?? no public path makes an agent call `sandbox_delete` with a chosen path: `mock-destructive` always asks for notes.txt (§2.6) and §2.4 has no tool-invoke endpoint
-  it.fails(
+  // D-068 (fixed): `mock-destructive` takes `path` from a `path:` line in its input (see `scriptedToolCall`)
+  it(
     '`sandbox_delete { path: "../../x" }` → `blocked`, `path_confinement`, file outside untouched',
     async () => {
       const scripted = scriptedToolCall('sandbox_delete', { path: '../../x' });

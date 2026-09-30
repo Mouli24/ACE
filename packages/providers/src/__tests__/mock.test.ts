@@ -129,6 +129,7 @@ describe('TC-MOD-001 the mock lists every model of §2.6', () => {
       'mock-http',
       'mock-search',
       'mock-mcp',
+      'mock-sandbox',
       'mock-vision',
       'mock-media',
       'mock-chat',

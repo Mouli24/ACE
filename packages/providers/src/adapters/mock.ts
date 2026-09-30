@@ -145,6 +145,14 @@ const SPECS: readonly MockModelSpec[] = [
     supportsTools: true,
   },
   {
+    // D-068: the lever TC-TOOL-004/005 need — code_sandbox with the code the input names.
+    modelId: 'mock-sandbox',
+    displayName: 'Mock code sandbox user',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+    supportsTools: true,
+  },
+  {
     modelId: 'mock-vision',
     displayName: 'Mock vision',
     inputTypes: ['text', 'image'],
@@ -255,6 +263,70 @@ function deterministicId(seed: string): string {
 /** The first http(s) URL in a piece of text, or a harmless localhost default when there is none. */
 function firstUrl(text: string): string {
   return /https?:\/\/[^\s"'<>)\]}]+/.exec(text)?.[0] ?? 'http://localhost/';
+}
+
+/**
+ * The `path:` line of `mock-destructive`'s input (D-068): a line that starts with `path:`, its value
+ * trimmed. `undefined` when no line names a non-empty path — then §2.6's `notes.txt` stands.
+ */
+function namedPath(text: string): string | undefined {
+  const value = /^path:(.*)$/m.exec(text.replace(/\r\n/g, '\n'))?.[1]?.trim();
+  return value === undefined || value === '' ? undefined : value;
+}
+
+const SANDBOX_LANGUAGE_NAMES = ['javascript', 'python', 'shell'] as const;
+
+/** What `mock-sandbox` answers when its input does not follow the format — it never guesses. */
+const SANDBOX_FORMAT_HELP =
+  'mock-sandbox needs a `language:` line (javascript, python or shell), an optional `timeoutMs:` ' +
+  'line (a positive integer), then one fenced code block.';
+
+/**
+ * `mock-sandbox`'s input format (D-068), read from the prompt it is given — the Input node's text
+ * sits in the prompt's `## Input` section verbatim:
+ *
+ * ```text
+ * language: javascript            ← required: javascript | python | shell, at the start of a line
+ * timeoutMs: 1000                 ← optional: a positive integer, at the start of a line
+ * ```js                           ← the first fence that opens after the language line
+ * while (true) {}                 ← the code, verbatim, every line up to …
+ * ```                             ← … the next line that is exactly three backticks
+ * ```
+ *
+ * Strict on purpose: no `language:` line, a language the sandbox has not got, a malformed
+ * `timeoutMs:`, or no complete fenced block after the language line → `undefined`, and the mock
+ * answers {@link SANDBOX_FORMAT_HELP} instead of requesting anything.
+ */
+export function parseSandboxRequest(
+  text: string,
+): { language: (typeof SANDBOX_LANGUAGE_NAMES)[number]; code: string; timeoutMs?: number } | undefined {
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+
+  const languageAt = lines.findIndex((line) => /^language:/.test(line));
+  if (languageAt === -1) return undefined;
+  const language = SANDBOX_LANGUAGE_NAMES.find(
+    (name) => name === lines[languageAt]?.slice('language:'.length).trim(),
+  );
+  if (language === undefined) return undefined;
+
+  const open = lines.findIndex((line, index) => index > languageAt && line.startsWith('```'));
+  if (open === -1) return undefined;
+  const close = lines.findIndex((line, index) => index > open && line === '```');
+  if (close === -1) return undefined;
+
+  // Only a `timeoutMs:` line between the language line and the fence counts — never one in the code.
+  let timeoutMs: number | undefined;
+  const timeoutLine = lines
+    .slice(languageAt + 1, open)
+    .find((line) => /^timeoutMs:/.test(line));
+  if (timeoutLine !== undefined) {
+    const raw = timeoutLine.slice('timeoutMs:'.length).trim();
+    if (!/^\d+$/.test(raw) || Number(raw) <= 0) return undefined;
+    timeoutMs = Number(raw);
+  }
+
+  const code = lines.slice(open + 1, close).join('\n');
+  return timeoutMs === undefined ? { language, code } : { language, code, timeoutMs };
 }
 
 /** The result the executor fed back for a named tool, if any (round 4 §2.6). */
@@ -610,13 +682,37 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
       }
 
       case 'mock-destructive': {
-        // §2.6: request `sandbox_delete { path: 'notes.txt' }`, then answer.
+        // §2.6: request `sandbox_delete { path: 'notes.txt' }`, then answer. D-068: a `path:` line in
+        // the input names another path (TC-GRD-006's `../../x`); without one, `notes.txt` as ever.
         const deleted = resultFor(req, 'sandbox_delete');
         if (deleted === undefined) {
-          yield* requestTool('sandbox_delete', { path: 'notes.txt' });
+          yield* requestTool('sandbox_delete', { path: namedPath(req.prompt) ?? 'notes.txt' });
           return;
         }
         yield* answer(`sandbox_delete returned: ${describeResult(deleted.result)}`);
+        return;
+      }
+
+      case 'mock-sandbox': {
+        // D-068: request `code_sandbox { language, code, timeoutMs? }` from the input (the format is
+        // `parseSandboxRequest`'s), then answer with the result's status and exit code.
+        const ran = resultFor(req, 'code_sandbox');
+        if (ran !== undefined) {
+          const result =
+            ran.result !== null && typeof ran.result === 'object'
+              ? (ran.result as { status?: unknown; exitCode?: unknown })
+              : {};
+          const status = typeof result.status === 'string' ? result.status : 'ok';
+          const exitCode = typeof result.exitCode === 'number' ? String(result.exitCode) : 'none';
+          yield* answer(`code_sandbox returned status ${status}, exitCode ${exitCode}.`);
+          return;
+        }
+        const request = parseSandboxRequest(req.prompt);
+        if (request === undefined) {
+          yield* answer(SANDBOX_FORMAT_HELP);
+          return;
+        }
+        yield* requestTool('code_sandbox', request);
         return;
       }
 

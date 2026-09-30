@@ -16,8 +16,10 @@ import { sandboxEnv } from './env.js';
  *
  * - **Folder.** `cwd` is the run's own folder and the env's `HOME`/`TMPDIR` point there too, so a
  *   program that reaches for `~` or a temp file lands inside the sandbox, not the real home (the
- *   remap is in `env.ts`, exercised by TC-TOOL-005). Hard filesystem isolation from the rest of the
- *   disk is Docker's job (D13); this runner does not chroot.
+ *   remap is in `env.ts`, exercised by TC-TOOL-005). A `javascript` run is also confined by Node's
+ *   own permission model to that folder — no fs access outside it, no child process, no worker
+ *   (`nodePermissionFlags` in `languages.ts`, D-068). `python` and `shell` get no such runtime
+ *   rule: hard filesystem isolation for them is Docker's job (D13); this runner does not chroot.
  * - **Time.** `timeoutMs` is enforced by killing the whole process *group*, so a `while(true)` and
  *   anything it spawned die together (TC-TOOL-004), and `timedOut` is set.
  * - **Environment and network.** The child's environment is built by {@link sandboxEnv} — nothing
