@@ -653,11 +653,7 @@ test.describe('Uploads (FR-MM-001/002/007)', () => {
   test('TC-MM-003 via UI (found by TC-MM-001): a ZIP chosen in the browser is accepted and attached', async ({
     page,
   }) => {
-    // D-075: Chromium on Windows types .zip as application/x-zip-compressed; isAllowedUpload refuses it.
-    test.fail(
-      process.platform === 'win32',
-      'D-075 — a .zip is refused as unsupported_type on Windows',
-    );
+    // D-075 (fixed): `application/x-zip-compressed` is an alias of `application/zip` in isAllowedUpload.
     const flow = await importFixture('tools-echo.json');
     const input = flow.byName('Input');
 
@@ -673,8 +669,12 @@ test.describe('Uploads (FR-MM-001/002/007)', () => {
       timeout: 10_000,
     });
     await expect(panel.getByTestId('input-attachment-picker-error')).toHaveCount(0);
-    const attached = await nodeConfig(flow.workflowId, input.id);
-    expect(attached.artifactIds).toHaveLength(1);
+    // The list renders before the graph-ops that persists the attachment lands, as in TC-MM-007.
+    const attached = await engineSays(
+      () => nodeConfig(flow.workflowId, input.id),
+      (config) => (config.artifactIds ?? []).length === 1,
+      'FR-MM-007: the chosen ZIP is attached to that Input node',
+    );
     const artifact = await api<Artifact>(`/artifacts/${(attached.artifactIds ?? [])[0] as string}`);
     expect(artifact.hash).toBe(sha256(readFileSync(`${FIXTURES}media/sample.zip`)));
   });
@@ -1084,8 +1084,7 @@ test.describe('Timeline (FR-CHAT-001/002/003)', () => {
   test('TC-CHAT-001: after a run with an error the timeline shows all six message types, each styled apart', async ({
     page,
   }) => {
-    // D-073: no `system` message is ever derived from a provider status change (only shutdown/crash).
-    test.fail();
+    // D-073 (fixed): a provider status change is a `system` notice on every workflow that uses it.
     const setup = await timelineWithAnError(page);
     const expectedTypes = [...new Set((await messagesOf(setup.workflowId)).map((m) => m.type))];
 
@@ -1897,8 +1896,7 @@ test.describe('§1 demo script (round 4 gate)', () => {
   test('Round 4 §1 demo: upload → vision → renderers → tool calls → destructive approval → blocked HTTP → MCP → timeline → chat → refusal', async ({
     page,
   }) => {
-    // D-073: the script's "six message styles" needs a `system` message the engine never derives.
-    test.fail();
+    // D-073 (fixed): the script's "six message styles" includes the provider's `system` notice.
     test.setTimeout(600_000);
     const projectId = await newProject('demo');
     const http = await startHttpServer();
@@ -1977,8 +1975,16 @@ test.describe('§1 demo script (round 4 gate)', () => {
         }
       });
 
-      /* ---- mock-destructive → approval card → Reject; Approve on a new run ---- */
-      const destructive = await importFixture('destructive.json', { projectId });
+      /*
+       * ---- mock-destructive → approval card → Reject; Approve on a new run ----
+       * On its own newly added provider, as a person walking the script connects one and then runs:
+       * that first pre-flight's UNKNOWN → CONNECTED is the `system` notice the Timeline step below
+       * needs (§2.3, D-073). The shared provider was connected long before this workflow existed.
+       */
+      const destructive = await importFixture('destructive.json', {
+        projectId,
+        provider: 'Mock (demo)',
+      });
       const cleaner = destructive.byName('Cleaner');
       await test.step('destructive call: Reject → GUARDRAIL_VIOLATION; Approve on a new run → continues', async () => {
         await openCanvas(page, projectId, destructive.workflowId);
@@ -2146,9 +2152,8 @@ test.describe('§1 demo script (round 4 gate)', () => {
       });
       /*
        * ---- Timeline: six styles, filter by node ----
-       * Walked last, and the filter before the six types: the sixth type, `system`, is never
-       * produced (D-073), and a failing assertion ends the test, so everything else in the script
-       * is exercised first.
+       * Walked last, over everything the script produced; the sixth type, `system`, is the demo
+       * provider's first status change (D-073, fixed).
        */
       await test.step('Timeline tab: filter by node; six message styles', async () => {
         await openCanvas(page, projectId, destructive.workflowId);
