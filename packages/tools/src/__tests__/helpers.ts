@@ -28,7 +28,7 @@ export function makeContext(overrides: Partial<ToolContext> = {}): ToolContext &
     logger,
     // A timed-out child is settled after KILL_GRACE_MS even if Windows taskkill is still running,
     // and until it exits it holds the folder open: allow ~2 s of retries, not 0.5 s.
-    cleanup: () => rmSync(sandboxDir, { recursive: true, force: true, maxRetries: 40, retryDelay: 50 }),
+    cleanup: () => rmSync(sandboxDir, { recursive: true, force: true, maxRetries: 100, retryDelay: 50 }),
   };
 }
 
@@ -56,7 +56,7 @@ export function writeStdioMcpFixture(): { path: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), 'ace-mcp-'));
   const path = join(dir, 'server.mjs');
   writeFileSync(path, STDIO_MCP_SERVER, 'utf8');
-  return { path, cleanup: () => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) };
+  return { path, cleanup: () => rmSync(dir, { recursive: true, force: true, maxRetries: 100, retryDelay: 50 }) };
 }
 
 const STDIO_MCP_SERVER = `

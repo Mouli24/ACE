@@ -37,7 +37,7 @@ function ctx(): ReturnType<typeof makeContext> {
 /** A folder outside any sandbox, holding a file whose content must never come back. */
 function outsideFile(): { dir: string; path: string; secret: string } {
   const dir = mkdtempSync(join(tmpdir(), 'ace-outside-'));
-  cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 100, retryDelay: 50 }));
   const secret = `outside-${Math.random().toString(36).slice(2)}-${Date.now()}`;
   const path = join(dir, 'secret.txt');
   writeFileSync(path, secret);
@@ -165,7 +165,7 @@ describe('the permission flags follow the Node version the sandbox runs (engines
     ['24.19.0', '--permission', false],
   ])('node %s → %s', (version, flag, quietsWarning) => {
     const dir = mkdtempSync(join(tmpdir(), 'ace-flags-'));
-    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 100, retryDelay: 50 }));
 
     const flags = nodePermissionFlags(dir, version);
 
