@@ -7,6 +7,7 @@ import {
   McpServerSchema,
   ProjectSchema,
   ProviderSchema,
+  RunSchema,
   ToolListResponseSchema,
   ValidationIssueSchema,
   WorkflowGraphResponseSchema,
@@ -72,6 +73,7 @@ describe('§2.4 tool_not_registered from POST /workflows/:id/validate (D-069)', 
     expect(server.status).toBe('connected');
 
     const provider = ProviderSchema.parse(await post('/providers', { type: 'mock', name: 'Mock' }));
+    await post(`/providers/${provider.id}/refresh-models`, {});
     const project = ProjectSchema.parse(await post('/projects', { name: 'MCP' }));
     const text = readFileSync(new URL('mcp.json', fixturesDir), 'utf8')
       .replaceAll('01M4R4PV0000000000000000PV', provider.id)
@@ -98,5 +100,14 @@ describe('§2.4 tool_not_registered from POST /workflows/:id/validate (D-069)', 
     const issue = issues.find((candidate) => candidate.code === 'tool_not_registered');
     expect(issue).toMatchObject({ severity: 'error', nodeId: connector?.id });
     expect(issue?.message).toContain('mcp_goners_ping');
+
+    // BR-08: pre-flight refuses the run itself, before a single node runs.
+    const run = RunSchema.parse(await post(`/workflows/${graph.workflow.id}/runs`, {}));
+    expect(run.status).toBe('BLOCKED');
+    expect(run.preflightIssues).toContainEqual(
+      expect.objectContaining({ code: 'tool_not_registered', nodeId: connector?.id }),
+    );
+    const nodeRuns = (await (await api(`/runs/${run.id}/node-runs`)).json()) as unknown[];
+    expect(nodeRuns).toEqual([]);
   }, 30_000);
 });

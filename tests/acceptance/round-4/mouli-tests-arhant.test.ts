@@ -1441,8 +1441,7 @@ describe('TC-TOOL-008 a connected MCP server’s tools are listed and callable',
     expect(run.status).toBe('COMPLETE');
   }, 90_000);
 
-  // D-069 (open): validation now raises `tool_not_registered` and `preflight()` checks it when handed the registry, but the run service does not hand it over yet (`runs/index.ts` `begin()`), so the run still COMPLETEs instead of BLOCKED
-  it.fails(
+  it(
     'removing the server drops its tools, and an agent that still enables one is `tool_not_registered`',
     async () => {
       const server = await client.createMcpServer({

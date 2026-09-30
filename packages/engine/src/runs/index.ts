@@ -1581,9 +1581,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
   ): Promise<BegunRun> {
     const workflowId = run.workflowId;
 
-    const [providers, models] = await Promise.all([
+    const [providers, models, mcpServers] = await Promise.all([
       repository.providers.list(scope),
       repository.models.list(scope, {}),
+      repository.mcpServers?.list(scope),
     ]);
 
     const issues = [
@@ -1595,6 +1596,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
         providers,
         models,
         checkProvider: deps.checkProvider,
+        // An agent that still enables a tool the registry no longer has — its MCP server was
+        // removed — is refused here, before any node runs (round 4 §2.4, BR-08, D-069).
+        ...(deps.tools === undefined ? {} : { tools: deps.tools }),
+        ...(mcpServers === undefined ? {} : { mcpServers }),
         // The multimodal capability check reads an artifact's type through the same resolver the
         // Input node executor uses, so pre-flight and execution classify a `.png` identically
         // (round 4 §2.1, FR-MM-005). Absent the artifact store, the check does not run.
