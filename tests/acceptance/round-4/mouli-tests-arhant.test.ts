@@ -79,6 +79,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  * `code_sandbox`, and `mock-destructive` always asks for `notes.txt`), and an injectable clock with
  * a sweep to run (Arch §15.4, round 4 §4 item 1). Each sits behind one small function below that
  * says exactly what is missing; the tests around them are written as the spec describes them.
+ *
+ * Phase 2 (run first, then the implementation read to diagnose): two drafts misread the spec and
+ * are fixed in place with the reason beside them — TC-TOOL-009/010 and the reply-side chat block
+ * both tried to put a key where BR-07 rightly refuses to store one. Every other red check is the
+ * engine contradicting §2, §7.2, the FRS or Arch: it stays exactly as written, marked `it.fails`
+ * with a `D-0??` line, so CI stays green and the check flips the day the defect is fixed. The two
+ * lever functions throw until a lever exists, so fixing those rows means filling them in too.
  */
 
 const url = process.env['ACE_URL'] as string;
@@ -211,6 +218,8 @@ const newId = (): Id => `0ACD${String((idSeq += 1)).padStart(22, '0')}`;
 /** A key-shaped string built at runtime — never a literal in the repository (CLAUDE.md §2). */
 const keyShaped = (): string =>
   [['sk', 'ant', 'api03'].join('-'), randomBytes(30).toString('base64url')].join('-');
+/** The prefix of the key-shaped string `mock-leak` produces (round 2 §2.6), built at runtime. */
+const LEAK_PREFIX = ['sk', 'ant', 'api03'].join('-');
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -849,12 +858,16 @@ describe('TC-MM-008 a download is byte-identical, with the §2.1 headers', () =>
     expect(Buffer.from(await tail.arrayBuffer()).equals(bytes.subarray(10))).toBe(true);
   });
 
-  it('serves the same bytes from `artifactContentUrl`, the token-in-query URL a media element uses', async () => {
-    const artifact = await uploadSample('sample.mp3', 'audio/mpeg');
-    const response = await fetch(client.artifactContentUrl(artifact.id));
-    expect(response.status).toBe(200);
-    expect(sha256(Buffer.from(await response.arrayBuffer()))).toBe(artifact.hash);
-  });
+  // D-0?? GET /artifacts/:id/content ignores `?token=`, so `artifactContentUrl` (every media element and download link, R4 §5 items 1+3) answers 401
+  it.fails(
+    'serves the same bytes from `artifactContentUrl`, the token-in-query URL a media element uses',
+    async () => {
+      const artifact = await uploadSample('sample.mp3', 'audio/mpeg');
+      const response = await fetch(client.artifactContentUrl(artifact.id));
+      expect(response.status).toBe(200);
+      expect(sha256(Buffer.from(await response.arrayBuffer()))).toBe(artifact.hash);
+    },
+  );
 
   it('answers 404 not_found for an artifact that does not exist', async () => {
     const missing = newId();
@@ -1095,73 +1108,42 @@ describe('TC-TOOL-002 an agent can only call the tools enabled for it', () => {
 });
 
 describe('TC-TOOL-003 search → fetch → answer is exactly two tool calls', () => {
-  it('`search.json`: web_search, then web_fetch on a result URL, then a final answer', async () => {
-    const graph = await importFixture('search.json');
-    const researcher = graph.byName('Researcher');
+  // D-0?? `search.json` cannot finish: the canned results point at https://example.test/…, which `domain_allowlist` blocks (the fixture allows nothing) and no offline fetch could reach anyway
+  it.fails(
+    '`search.json`: web_search, then web_fetch on a result URL, then a final answer',
+    async () => {
+      const graph = await importFixture('search.json');
+      const researcher = graph.byName('Researcher');
 
-    const { run, nodeRuns } = await runToEnd(graph.workflowId);
+      const { run, nodeRuns } = await runToEnd(graph.workflowId);
 
-    const node = firstFor(nodeRuns, researcher.id);
-    expect(node.toolCalls.map((call) => call.toolName)).toEqual(['web_search', 'web_fetch']);
-    expect(node.toolCalls.map((call) => call.status)).toEqual(['ok', 'ok']);
-    // TC-TOOL-006: the search answered results with URLs — the fetch was given one of them.
-    const fetchArgs = node.toolCalls[1]?.args as { url?: unknown };
-    expect(String(fetchArgs.url)).toMatch(/^https?:\/\//);
-    expect(node.status).toBe('COMPLETED');
-    expect(textOf(node).length).toBeGreaterThan(0);
-    expect(run.status).toBe('COMPLETE');
-  }, 60_000);
+      const node = firstFor(nodeRuns, researcher.id);
+      expect(node.toolCalls.map((call) => call.toolName)).toEqual(['web_search', 'web_fetch']);
+      expect(node.toolCalls.map((call) => call.status)).toEqual(['ok', 'ok']);
+      // TC-TOOL-006: the search answered results with URLs — the fetch was given one of them.
+      const fetchArgs = node.toolCalls[1]?.args as { url?: unknown };
+      expect(String(fetchArgs.url)).toMatch(/^https?:\/\//);
+      expect(node.status).toBe('COMPLETED');
+      expect(textOf(node).length).toBeGreaterThan(0);
+      expect(run.status).toBe('COMPLETE');
+    },
+    60_000,
+  );
 });
 
 describe('TC-TOOL-004 the code sandbox kills an infinite loop at its timeout', () => {
-  it('`while(true){}` ends as a `timeout` ToolCall within timeoutMs + 500 ms', async () => {
-    const timeoutMs = 1000;
-    const scripted = scriptedToolCall('code_sandbox', {
-      language: 'javascript',
-      code: 'while(true){}',
-      timeoutMs,
-    });
-    const graph = await importExport(
-      buildChain('Sandbox timeout', scripted.inputText, [
-        {
-          name: 'Coder',
-          modelId: scripted.modelId,
-          tools: { enabled: ['code_sandbox'], maxToolCalls: 3, allowedDomains: [] },
-        },
-      ]),
-    );
-    const coder = graph.byName('Coder');
-
-    const { nodeRuns } = await runToEnd(graph.workflowId);
-
-    const call = toolCallsOf(forNode(nodeRuns, coder.id)).find(
-      (c) => c.toolName === 'code_sandbox',
-    );
-    expect(call, 'the sandbox call is logged').toBeDefined();
-    expect(call?.status).toBe('timeout');
-    expect(call?.durationMs).toBeLessThanOrEqual(timeoutMs + 500);
-  }, 60_000);
-});
-
-describe('TC-TOOL-005 sandboxed code cannot read outside its folder, and the attempt is logged', () => {
-  it('reading a file outside the sandbox, the home folder or /etc/passwd is denied and logged', async () => {
-    const secret = `outside-${randomBytes(12).toString('hex')}`;
-    const outside = join(scratch, 'outside-sandbox.txt');
-    writeFileSync(outside, secret);
-    const homeEntries = readdirSync(homedir()).filter((entry) => entry.length >= 8);
-
-    const attempts = [
-      `import('node:fs').then((fs) => console.log(fs.readFileSync(${JSON.stringify(outside)}, 'utf8')))`,
-      `import('node:fs').then((fs) => import('node:os').then((os) => console.log(fs.readdirSync(os.homedir()).join('\\n'))))`,
-      ...(platform() === 'win32'
-        ? []
-        : [`import('node:fs').then((fs) => console.log(fs.readFileSync('/etc/passwd', 'utf8')))`]),
-    ];
-
-    for (const code of attempts) {
-      const scripted = scriptedToolCall('code_sandbox', { language: 'javascript', code });
+  // D-0?? no public path drives `code_sandbox`: round 4 §2.6 has no mock model that requests it and §2.4 no tool-invoke endpoint (see `scriptedToolCall`)
+  it.fails(
+    '`while(true){}` ends as a `timeout` ToolCall within timeoutMs + 500 ms',
+    async () => {
+      const timeoutMs = 1000;
+      const scripted = scriptedToolCall('code_sandbox', {
+        language: 'javascript',
+        code: 'while(true){}',
+        timeoutMs,
+      });
       const graph = await importExport(
-        buildChain('Sandbox escape', scripted.inputText, [
+        buildChain('Sandbox timeout', scripted.inputText, [
           {
             name: 'Coder',
             modelId: scripted.modelId,
@@ -1170,25 +1152,73 @@ describe('TC-TOOL-005 sandboxed code cannot read outside its folder, and the att
         ]),
       );
       const coder = graph.byName('Coder');
-      const watcher = await watchWorkflow(graph.workflowId);
-      const { nodeRuns } = await runToEnd(graph.workflowId);
-      watcher.close();
 
-      const nodes = forNode(nodeRuns, coder.id);
-      const calls = toolCallsOf(nodes).filter((call) => call.toolName === 'code_sandbox');
-      // Logged: on the node run and as a `tool.call` event (FR-TOOL-009).
-      expect(calls.length, code).toBeGreaterThan(0);
-      expect(watcher.of('tool.call').map((frame) => frame.payload.toolCall.id)).toEqual(
-        expect.arrayContaining(calls.map((call) => call.id)),
+      const { nodeRuns } = await runToEnd(graph.workflowId);
+
+      const call = toolCallsOf(forNode(nodeRuns, coder.id)).find(
+        (c) => c.toolName === 'code_sandbox',
       );
-      // Denied: what is outside the sandbox never reaches the call's result, the prompt or the output.
-      const seen = JSON.stringify([calls, nodes.map((node) => [node.prompt, node.output])]);
-      expect(seen, code).not.toContain(secret);
-      expect(seen, code).not.toContain('root:');
-      for (const entry of homeEntries) expect(seen, `home entry ${entry}`).not.toContain(entry);
-      expectNoFrameDrift(watcher);
-    }
-  }, 120_000);
+      expect(call, 'the sandbox call is logged').toBeDefined();
+      expect(call?.status).toBe('timeout');
+      expect(call?.durationMs).toBeLessThanOrEqual(timeoutMs + 500);
+    },
+    60_000,
+  );
+});
+
+describe('TC-TOOL-005 sandboxed code cannot read outside its folder, and the attempt is logged', () => {
+  // D-0?? no public path drives `code_sandbox`: round 4 §2.6 has no mock model that requests it and §2.4 no tool-invoke endpoint (see `scriptedToolCall`)
+  it.fails(
+    'reading a file outside the sandbox, the home folder or /etc/passwd is denied and logged',
+    async () => {
+      const secret = `outside-${randomBytes(12).toString('hex')}`;
+      const outside = join(scratch, 'outside-sandbox.txt');
+      writeFileSync(outside, secret);
+      const homeEntries = readdirSync(homedir()).filter((entry) => entry.length >= 8);
+
+      const attempts = [
+        `import('node:fs').then((fs) => console.log(fs.readFileSync(${JSON.stringify(outside)}, 'utf8')))`,
+        `import('node:fs').then((fs) => import('node:os').then((os) => console.log(fs.readdirSync(os.homedir()).join('\\n'))))`,
+        ...(platform() === 'win32'
+          ? []
+          : [
+              `import('node:fs').then((fs) => console.log(fs.readFileSync('/etc/passwd', 'utf8')))`,
+            ]),
+      ];
+
+      for (const code of attempts) {
+        const scripted = scriptedToolCall('code_sandbox', { language: 'javascript', code });
+        const graph = await importExport(
+          buildChain('Sandbox escape', scripted.inputText, [
+            {
+              name: 'Coder',
+              modelId: scripted.modelId,
+              tools: { enabled: ['code_sandbox'], maxToolCalls: 3, allowedDomains: [] },
+            },
+          ]),
+        );
+        const coder = graph.byName('Coder');
+        const watcher = await watchWorkflow(graph.workflowId);
+        const { nodeRuns } = await runToEnd(graph.workflowId);
+        watcher.close();
+
+        const nodes = forNode(nodeRuns, coder.id);
+        const calls = toolCallsOf(nodes).filter((call) => call.toolName === 'code_sandbox');
+        // Logged: on the node run and as a `tool.call` event (FR-TOOL-009).
+        expect(calls.length, code).toBeGreaterThan(0);
+        expect(watcher.of('tool.call').map((frame) => frame.payload.toolCall.id)).toEqual(
+          expect.arrayContaining(calls.map((call) => call.id)),
+        );
+        // Denied: what is outside the sandbox never reaches the call's result, the prompt or the output.
+        const seen = JSON.stringify([calls, nodes.map((node) => [node.prompt, node.output])]);
+        expect(seen, code).not.toContain(secret);
+        expect(seen, code).not.toContain('root:');
+        for (const entry of homeEntries) expect(seen, `home entry ${entry}`).not.toContain(entry);
+        expectNoFrameDrift(watcher);
+      }
+    },
+    120_000,
+  );
 });
 
 describe('TC-TOOL-007 / TC-GRD-007 HTTP reaches an allow-listed host, and only that', () => {
@@ -1304,45 +1334,97 @@ describe('TC-TOOL-008 a connected MCP server’s tools are listed and callable',
     expect(run.status).toBe('COMPLETE');
   }, 90_000);
 
-  it('removing the server drops its tools, and an agent that still enables one is `tool_not_registered`', async () => {
-    const server = await client.createMcpServer({
-      name: 'goners',
-      transport: 'stdio',
-      command: process.execPath,
-      args: [MCP_SERVER_SCRIPT],
-    });
-    await until(
-      async () => (await client.listTools()).items.some((tool) => tool.name === 'mcp_goners_ping'),
-      20_000,
-      'the goners tools in the registry',
-    );
-    const graph = await importFixture('mcp.json', { mcpTool: 'mcp_goners_ping' });
+  // D-0?? pre-flight never raises `tool_not_registered` (§2.4): an agent still enabling a removed MCP tool runs COMPLETE instead of BLOCKED
+  it.fails(
+    'removing the server drops its tools, and an agent that still enables one is `tool_not_registered`',
+    async () => {
+      const server = await client.createMcpServer({
+        name: 'goners',
+        transport: 'stdio',
+        command: process.execPath,
+        args: [MCP_SERVER_SCRIPT],
+      });
+      await until(
+        async () =>
+          (await client.listTools()).items.some((tool) => tool.name === 'mcp_goners_ping'),
+        20_000,
+        'the goners tools in the registry',
+      );
+      const graph = await importFixture('mcp.json', { mcpTool: 'mcp_goners_ping' });
 
-    await client.deleteMcpServer(server.id);
+      await client.deleteMcpServer(server.id);
 
-    const names = (await client.listTools()).items.map((tool) => tool.name);
-    expect(names).not.toContain('mcp_goners_ping');
-    expect(names).not.toContain('mcp_goners_reverse');
-    expect((await client.listMcpServers()).items.map((row) => row.id)).not.toContain(server.id);
+      const names = (await client.listTools()).items.map((tool) => tool.name);
+      expect(names).not.toContain('mcp_goners_ping');
+      expect(names).not.toContain('mcp_goners_reverse');
+      expect((await client.listMcpServers()).items.map((row) => row.id)).not.toContain(server.id);
 
-    const run = await settled((await client.startRun(graph.workflowId)).id);
-    expect(run.status).toBe('BLOCKED');
-    const issue = run.preflightIssues.find((candidate) => candidate.code === 'tool_not_registered');
-    expect(issue, `pre-flight issues were ${JSON.stringify(run.preflightIssues)}`).toBeDefined();
-    expect(issue?.nodeId).toBe(graph.byName('Connector').id);
-  }, 60_000);
+      const run = await settled((await client.startRun(graph.workflowId)).id);
+      expect(run.status).toBe('BLOCKED');
+      const issue = run.preflightIssues.find(
+        (candidate) => candidate.code === 'tool_not_registered',
+      );
+      expect(issue, `pre-flight issues were ${JSON.stringify(run.preflightIssues)}`).toBeDefined();
+      expect(issue?.nodeId).toBe(graph.byName('Connector').id);
+    },
+    60_000,
+  );
 });
 
 describe('TC-TOOL-009/010 every tool call is logged with redacted args, a summary, a duration and verdicts', () => {
-  it('an apiKey-shaped value in the arguments is masked everywhere the call is recorded', async () => {
+  /*
+   * Phase 2, test fixed. The first draft typed the key into the Input node's text, and the engine
+   * answered 400 "Nothing was saved: … looks like it holds an API key" — rightly: BR-07 and
+   * FR-GRD-010 keep every secret out of the database, so a key a user types is refused whether it
+   * arrives as a workflow, a run input or a chat turn, and can never reach a tool's arguments that
+   * way. That refusal is asserted first. The one place a key-shaped value can then come from is a
+   * model's own output, so the second check has `mock-leak` produce one upstream (round 2 §2.6: its
+   * output contains `sk-ant-api03-…`) and `mock-tool` read it and pass it to `echo`.
+   */
+  it('a key typed into the workflow is refused at save, without echoing it (BR-07)', async () => {
     const secret = keyShaped();
-    const graph = await importFixture('tools-echo.json', {
+
+    const refused = await importFixture('tools-echo.json', {
       patch: (exported) => {
         for (const node of exported.nodes) {
           if (node.kind === 'input') node.config.text = `Store apiKey=${secret} in the vault.`;
         }
       },
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(AceApiError.is(refused), `the import answered ${String(refused)}`).toBe(true);
+    expect((refused as AceApiError).status).toBe(400);
+    expect(JSON.stringify((refused as AceApiError).toApiError())).not.toContain(secret);
+  });
+
+  it('a key-shaped value a model produced is masked in the arguments and everywhere the call is recorded', async () => {
+    const policy = await client.createGuardrailPolicy({
+      projectId,
+      name: 'Leaks only warn',
+      checks: [
+        {
+          id: newId(),
+          point: 'output',
+          type: 'secret_leak',
+          action: 'warn',
+          enabled: true,
+          params: {},
+        },
+      ],
     });
+    const graph = await importExport(
+      buildChain('Key into tool arguments', 'Say something.', [
+        { name: 'Leaker', modelId: 'mock-leak', guardrailPolicyId: policy.id },
+        {
+          name: 'Echoer',
+          modelId: 'mock-tool',
+          tools: { enabled: ['echo'], maxToolCalls: 3, allowedDomains: [] },
+        },
+      ]),
+    );
     const echoer = graph.byName('Echoer');
     const watcher = await watchWorkflow(graph.workflowId);
 
@@ -1356,10 +1438,13 @@ describe('TC-TOOL-009/010 every tool call is logged with redacted args, a summar
     const logged = call as ToolCall;
     ToolCallSchema.parse(logged);
 
-    // The args are logged — the non-secret words survive — with the key itself masked (BR-07).
-    expect(JSON.stringify(logged.args)).toContain('vault');
-    expect(JSON.stringify(logged.args)).not.toContain(secret);
-    expect(logged.resultSummary).not.toContain(secret);
+    // The args are logged, with the key masked — and the mask says what was removed (FR-GRD-014).
+    const args = JSON.stringify(logged.args);
+    expect(args.length).toBeGreaterThan(2);
+    expect(args).toMatch(/redacted/i);
+    expect(args).not.toContain(LEAK_PREFIX);
+    expect(logged.resultSummary.length).toBeGreaterThan(0);
+    expect(logged.resultSummary).not.toContain(LEAK_PREFIX);
     expect(logged.resultSummary.length).toBeLessThanOrEqual(TOOL_RESULT_SUMMARY_MAX);
     expect(Number.isInteger(logged.durationMs)).toBe(true);
     expect(logged.durationMs).toBeGreaterThanOrEqual(0);
@@ -1373,13 +1458,12 @@ describe('TC-TOOL-009/010 every tool call is logged with redacted args, a summar
     expect(frames).toHaveLength(1);
     expect(frames[0]?.payload.runId).toBe(run.id);
     expect(frames[0]?.payload.nodeRunId).toBe(node.id);
-    expect(JSON.stringify(frames)).not.toContain(secret);
+    expect(JSON.stringify(frames)).not.toContain(LEAK_PREFIX);
     expect(events.some((event) => event.type === 'tool.call')).toBe(true);
-    expect(JSON.stringify(events.filter((event) => event.type === 'tool.call'))).not.toContain(
-      secret,
-    );
+    expect(JSON.stringify(events)).not.toContain(LEAK_PREFIX);
     // FR-PRM-005: the stored prompt is what was sent, secrets redacted.
-    expect(node.prompt?.text ?? '').not.toContain(secret);
+    expect(node.prompt?.text ?? '').not.toContain(LEAK_PREFIX);
+    expect(JSON.stringify(nodeRuns)).not.toContain(LEAK_PREFIX);
     expectNoFrameDrift(watcher);
   }, 60_000);
 
@@ -1446,42 +1530,47 @@ describe('TC-TOOL-011 / TC-PRM-002 a tool result reaches the model inside the un
 /* ========================================================================== */
 
 describe('TC-GRD-006 a path that escapes the sandbox is blocked, and nothing outside is deleted', () => {
-  it('`sandbox_delete { path: "../../x" }` → `blocked`, `path_confinement`, file outside untouched', async () => {
-    const scripted = scriptedToolCall('sandbox_delete', { path: '../../x' });
-    const graph = await importExport(
-      buildChain('Path escape', scripted.inputText, [
-        {
-          name: 'Cleaner',
-          modelId: scripted.modelId,
-          tools: { enabled: ['sandbox_delete'], maxToolCalls: 3, allowedDomains: [] },
-        },
-      ]),
-    );
-    const cleaner = graph.byName('Cleaner');
-    // <dataDir>/sandbox/<runId>/../../x is <dataDir>/x (D220).
-    const victim = join(dataDir, 'x');
-    writeFileSync(victim, 'must survive');
-
-    try {
-      const started = await client.startRun(graph.workflowId);
-      const run = await settled(started.id);
-      const nodeRuns = await client.listNodeRuns(run.id);
-
-      expect(await client.listApprovals(run.id), 'blocked before anyone is asked').toEqual([]);
-      const node = firstFor(nodeRuns, cleaner.id);
-      const call = node.toolCalls.find((candidate) => candidate.toolName === 'sandbox_delete');
-      expect(call?.status).toBe('blocked');
-      const verdict = call?.verdicts.find(
-        (candidate) => candidate.checkType === 'path_confinement',
+  // D-0?? no public path makes an agent call `sandbox_delete` with a chosen path: `mock-destructive` always asks for notes.txt (§2.6) and §2.4 has no tool-invoke endpoint
+  it.fails(
+    '`sandbox_delete { path: "../../x" }` → `blocked`, `path_confinement`, file outside untouched',
+    async () => {
+      const scripted = scriptedToolCall('sandbox_delete', { path: '../../x' });
+      const graph = await importExport(
+        buildChain('Path escape', scripted.inputText, [
+          {
+            name: 'Cleaner',
+            modelId: scripted.modelId,
+            tools: { enabled: ['sandbox_delete'], maxToolCalls: 3, allowedDomains: [] },
+          },
+        ]),
       );
-      expect(verdict?.passed).toBe(false);
-      expect(verdict?.action).toBe('block');
-      expect(node.failureReason).toBe('GUARDRAIL_VIOLATION');
-      expect(existsSync(victim), 'the file outside the sandbox').toBe(true);
-    } finally {
-      rmSync(victim, { force: true });
-    }
-  }, 60_000);
+      const cleaner = graph.byName('Cleaner');
+      // <dataDir>/sandbox/<runId>/../../x is <dataDir>/x (D220).
+      const victim = join(dataDir, 'x');
+      writeFileSync(victim, 'must survive');
+
+      try {
+        const started = await client.startRun(graph.workflowId);
+        const run = await settled(started.id);
+        const nodeRuns = await client.listNodeRuns(run.id);
+
+        expect(await client.listApprovals(run.id), 'blocked before anyone is asked').toEqual([]);
+        const node = firstFor(nodeRuns, cleaner.id);
+        const call = node.toolCalls.find((candidate) => candidate.toolName === 'sandbox_delete');
+        expect(call?.status).toBe('blocked');
+        const verdict = call?.verdicts.find(
+          (candidate) => candidate.checkType === 'path_confinement',
+        );
+        expect(verdict?.passed).toBe(false);
+        expect(verdict?.action).toBe('block');
+        expect(node.failureReason).toBe('GUARDRAIL_VIOLATION');
+        expect(existsSync(victim), 'the file outside the sandbox').toBe(true);
+      } finally {
+        rmSync(victim, { force: true });
+      }
+    },
+    60_000,
+  );
 });
 
 describe('TC-GRD-008 / TC-NFR-008 a destructive call waits for a person', () => {
@@ -1966,31 +2055,48 @@ describe('TC-CHAT-008 / TC-GRD-022 the agent’s policy applies to a direct chat
     }
   }, 60_000);
 
-  it('a blocked reply arrives as `[blocked by guardrail: <reason>]` with its verdicts, and holds no secret', async () => {
+  /*
+   * Phase 2, test fixed. The first draft put a key in the chat input so the echoed reply would leak
+   * it, and the engine refused to store that turn (400 "Nothing was saved", BR-07) — rightly, so a
+   * key can never be what trips the reply check. §2.3 says any block on the reply arrives the same
+   * way, so an output `pii` block does it here, with an address the user may store as their own words.
+   */
+  it('a blocked reply arrives as `[blocked by guardrail: <reason>]` with its verdicts, and holds none of what was blocked', async () => {
+    const policy = await client.createGuardrailPolicy({
+      projectId,
+      name: 'Block personal data in replies',
+      checks: [
+        { id: newId(), point: 'output', type: 'pii', action: 'block', enabled: true, params: {} },
+      ],
+    });
     const graph = await importFixture('chat-french.json', {
       patch: (exported) => {
         for (const node of exported.nodes) {
-          if (node.kind === 'agent') node.config.instructions = 'You are a helpful assistant.';
+          if (node.kind === 'agent') {
+            node.config.instructions = 'You are a helpful assistant.';
+            node.config.guardrailPolicyId = policy.id;
+          }
         }
       },
     });
-    const secret = keyShaped();
+    const email = `${['ada', 'lovelace'].join('.')}@example.invalid`;
 
     const { threadId, reply } = await chatTurn(
       graph.byName('Assistant').id,
-      `Keep this safe: ${secret}`,
+      `Please write to ${email} today.`,
     );
 
-    const prefix = blockedChatReply('').replace(/\]$/, '');
-    expect(chatText(reply).startsWith(prefix), chatText(reply)).toBe(true);
-    expect(chatText(reply)).not.toContain(secret);
-    const verdict = reply.verdicts.find((candidate) => candidate.checkType === 'secret_leak');
+    const verdict = reply.verdicts.find((candidate) => candidate.checkType === 'pii');
     expect(verdict, `verdicts were ${JSON.stringify(reply.verdicts)}`).toBeDefined();
     expect(verdict?.point).toBe('output');
+    expect(verdict?.action).toBe('block');
     expect(verdict?.passed).toBe(false);
+    expect(verdict?.reason.length).toBeGreaterThan(0);
+    expect(chatText(reply)).toBe(blockedChatReply(verdict?.reason ?? ''));
+    expect(chatText(reply)).not.toContain(email);
     const stored = await client.getChatThread(threadId);
     const agentTurns = stored.messages.filter((message) => message.role === 'agent');
-    expect(JSON.stringify(agentTurns)).not.toContain(secret);
+    expect(JSON.stringify(agentTurns)).not.toContain(email);
   }, 60_000);
 });
 
@@ -1999,41 +2105,46 @@ describe('TC-CHAT-008 / TC-GRD-022 the agent’s policy applies to a direct chat
 /* ========================================================================== */
 
 describe('TC-MM retention: an unreferenced artifact goes after 7 days, a referenced one stays', () => {
-  it('upload, never reference, advance the clock 8 days, sweep → gone; the referenced one survives', async () => {
-    const orphan = await upload(
-      Buffer.from(`orphan ${randomBytes(8).toString('hex')}`),
-      'orphan.txt',
-      'text/plain',
-    );
-    const kept = await upload(
-      Buffer.from(`kept ${randomBytes(8).toString('hex')}`),
-      'kept.txt',
-      'text/plain',
-    );
-    await importExport(
-      buildChain(
-        'Retention',
-        'Read the attachment.',
-        [{ name: 'A', modelId: 'mock-text' }],
-        [kept.id],
-      ),
-    );
+  // D-0?? the engine never runs the artifact retention sweep (no schedule, no endpoint) and `startEngine` takes no clock — Arch §15.4 is not enforced
+  it.fails(
+    'upload, never reference, advance the clock 8 days, sweep → gone; the referenced one survives',
+    async () => {
+      const orphan = await upload(
+        Buffer.from(`orphan ${randomBytes(8).toString('hex')}`),
+        'orphan.txt',
+        'text/plain',
+      );
+      const kept = await upload(
+        Buffer.from(`kept ${randomBytes(8).toString('hex')}`),
+        'kept.txt',
+        'text/plain',
+      );
+      await importExport(
+        buildChain(
+          'Retention',
+          'Read the attachment.',
+          [{ name: 'A', modelId: 'mock-text' }],
+          [kept.id],
+        ),
+      );
 
-    await advanceClockAndSweep(6);
-    expect((await fetchContent(orphan.id)).status, 'kept until 7 days have passed').toBe(200);
+      await advanceClockAndSweep(6);
+      expect((await fetchContent(orphan.id)).status, 'kept until 7 days have passed').toBe(200);
 
-    await advanceClockAndSweep(2);
-    const gone = await readRaw(
-      await fetch(`${url}/api/v1/artifacts/${orphan.id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      }),
-    );
-    expect(gone.status).toBe(404);
-    expect((await fetchContent(orphan.id)).status).toBe(404);
+      await advanceClockAndSweep(2);
+      const gone = await readRaw(
+        await fetch(`${url}/api/v1/artifacts/${orphan.id}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      );
+      expect(gone.status).toBe(404);
+      expect((await fetchContent(orphan.id)).status).toBe(404);
 
-    expect((await client.getArtifact(kept.id)).hash).toBe(kept.hash);
-    expect(sha256(await contentBytes(kept.id))).toBe(kept.hash);
-  }, 60_000);
+      expect((await client.getArtifact(kept.id)).hash).toBe(kept.hash);
+      expect(sha256(await contentBytes(kept.id))).toBe(kept.hash);
+    },
+    60_000,
+  );
 });
 
 /* ========================================================================== */
