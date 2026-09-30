@@ -2,6 +2,7 @@ import type { Envelope, Part } from '@ace/contracts';
 import { describe, expect, it } from 'vitest';
 
 import {
+  CONVERSATION_SECTION,
   PROMPT_SECTIONS,
   SYSTEM_BASE_TEXT,
   SYSTEM_BASE_VERSION,
@@ -350,5 +351,71 @@ describe('TC-SYS-008 / FR-PRM-005 a stored prompt carries no credential', () => 
     const { text, redactedText } = assemble();
 
     expect(text).toBe(redactedText);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* A direct chat's conversation (round 4 §4 item 5)                            */
+/* -------------------------------------------------------------------------- */
+
+describe('FR-CHAT-004 D-079 the prompt manager carries a direct chat thread as ## Conversation', () => {
+  const conversation = {
+    transcript: 'User: Bonjour\nAssistant: Salut\nUser: What is next?',
+    latestText: 'What is next?',
+  };
+  const headersOf = (text: string): string[] =>
+    text.split('\n').filter((line) => line.startsWith('## '));
+
+  it('a run prompt has no Conversation section — a handoff carries no history (BR-02)', () => {
+    expect(assemble().text).not.toContain(CONVERSATION_SECTION);
+    expect(headersOf(assemble().text)).toEqual([...PROMPT_SECTIONS]);
+  });
+
+  it('puts the thread between Context and Input, as the node’s own bounded context', () => {
+    const { text } = assemble({ envelopes: [envelope([])], conversation });
+
+    expect(headersOf(text)).toEqual([
+      '## System',
+      '## Instructions',
+      '## Skills',
+      '## Guardrails',
+      '## Context',
+      CONVERSATION_SECTION,
+      '## Input',
+      '## Output contract',
+    ]);
+    expect(text).toContain(`${CONVERSATION_SECTION}\n${conversation.transcript}\n\n## Input\n`);
+    // The turns are the conversation itself, not untrusted input.
+    expect(text).not.toContain(UNTRUSTED_LABEL);
+  });
+
+  it('{{input.text}} is the newest turn, and the version is still the configuration’s', () => {
+    const instructions = 'Reply to: {{input.text}}';
+    const { text, version } = assemble({ instructions, envelopes: [envelope([])], conversation });
+
+    expect(text).toContain('Reply to: What is next?');
+    expect(version).toBe(
+      promptVersion(SYSTEM_BASE_VERSION, instructions, { outputTypes: ['text'] }),
+    );
+  });
+
+  it('labels an untrusted input block with the label it is given', () => {
+    const image: Part = {
+      type: 'image',
+      artifactId: ARTIFACT,
+      mime: 'image/png',
+      name: 'shot.png',
+      size: 3,
+    };
+    const { text } = assemble({
+      envelopes: [envelope([image])],
+      conversation,
+      inputLabel: 'Attachments to the latest message',
+    });
+
+    expect(text).toContain(
+      `## Input\nAttachments to the latest message:\n${UNTRUSTED_LABEL}\n[image shot.png (3 bytes, image/png)]\n`,
+    );
+    expect(text).not.toContain('Input from upstream nodes');
   });
 });

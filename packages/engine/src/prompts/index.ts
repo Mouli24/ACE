@@ -22,6 +22,13 @@ export const PROMPT_SECTIONS = [
   '## Output contract',
 ] as const;
 
+/**
+ * A direct chat's thread (round 4 §4 item 5, FR-CHAT-004). Not one of §2.8's run sections: a
+ * workflow handoff carries no history (BR-02), so a run's prompt never has it, and a chat's prompt
+ * has it between `## Context` and `## Input` — the thread is the node's own bounded context.
+ */
+export const CONVERSATION_SECTION = '## Conversation';
+
 /** Bumped whenever the base text below changes; it is part of every prompt version. */
 export const SYSTEM_BASE_VERSION = 'ace-system-1';
 
@@ -130,12 +137,31 @@ function block(label: string, body: string): string {
 /* Assembly                                                                    */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * A direct chat's thread, as the chat service fitted it (round 4 §4 item 5, FR-CHAT-004).
+ *
+ * The turns are the conversation itself — the user's own words and the agent's own replies — so
+ * they are labelled by role under `## Conversation` rather than fenced as untrusted input; what came
+ * from outside the conversation (an attachment's content) still arrives as a read, in the untrusted
+ * `## Input` block (BR-13, FR-PRM-002).
+ */
+export interface PromptConversation {
+  /** The turns, oldest first, each labelled with its role and already within the node's budget. */
+  transcript: string;
+  /** The newest user turn's text: what `{{input.text}}` means in a chat, where it is not a read. */
+  latestText: string;
+}
+
 export interface AssemblePromptInput {
   instructions: string;
   envelopes: readonly Envelope[];
   contract: EnvelopeContract;
   iteration: number;
   memory?: Record<string, string>;
+  /** A direct chat's thread; absent for a run, whose prompt is unchanged by it. */
+  conversation?: PromptConversation;
+  /** What an untrusted `## Input` block is called; a run's reads come from upstream nodes. */
+  inputLabel?: string;
 }
 
 export interface AssembledPrompt {
@@ -176,10 +202,12 @@ export function assemblePrompt(input: AssemblePromptInput): AssembledPrompt {
   const memory = input.memory ?? {};
 
   const reads = envelopes.flatMap((envelope) => envelope.reads);
-  const inputText = reads
-    .filter((part): part is Extract<Part, { type: 'text' }> => part.type === 'text')
-    .map((part) => part.text)
-    .join('\n');
+  const inputText =
+    input.conversation?.latestText ??
+    reads
+      .filter((part): part is Extract<Part, { type: 'text' }> => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n');
 
   const placeholders: PlaceholderContext = { inputText, iteration: input.iteration, memory };
 
@@ -210,7 +238,7 @@ export function assemblePrompt(input: AssemblePromptInput): AssembledPrompt {
     renderedReads === ''
       ? ''
       : anyUntrusted
-        ? block('Input from upstream nodes', renderedReads)
+        ? block(input.inputLabel ?? 'Input from upstream nodes', renderedReads)
         : renderedReads;
 
   /* Output contract. */
@@ -237,10 +265,15 @@ export function assemblePrompt(input: AssemblePromptInput): AssembledPrompt {
     '## Output contract': contractLines.join('\n'),
   };
 
-  const text = PROMPT_SECTIONS.map((header) => {
-    const body = bodies[header];
-    return body === '' ? `${header}\n` : `${header}\n${body}\n`;
-  }).join('\n');
+  const sections: [string, string][] = PROMPT_SECTIONS.map((header) => [header, bodies[header]]);
+  if (input.conversation !== undefined) {
+    const afterContext = PROMPT_SECTIONS.indexOf('## Context') + 1;
+    sections.splice(afterContext, 0, [CONVERSATION_SECTION, input.conversation.transcript]);
+  }
+
+  const text = sections
+    .map(([header, body]) => (body === '' ? `${header}\n` : `${header}\n${body}\n`))
+    .join('\n');
 
   return {
     text,
