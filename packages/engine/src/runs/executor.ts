@@ -242,6 +242,18 @@ function isToolTimeout(error: unknown): boolean {
   return /timed out|timeout/i.test(message);
 }
 
+/** A tool the model asked for in one turn (one per turn, Arch §12.7). */
+interface PendingToolCall {
+  callId: string;
+  name: string;
+  args: unknown;
+}
+
+/** One model turn: the tool it asked for, or a stop that caught it while it queued for its slot. */
+type TurnOutcome =
+  | { kind: "cancelled" }
+  | { kind: "called"; pendingCall: PendingToolCall | undefined };
+
 /**
  * What a node the run's abort caught inside a guardrail point records: a cancellation, never a
  * failure (FR-ERR-007, D-054). An `ask_user` wait throws its own `user_cancelled` when the run is
@@ -575,144 +587,180 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             : `${prompt.redactedText}\n\n## Tool results\n${promptSuffix.join("\n\n")}`,
       });
 
+      /** Whether this attempt made a provider call, so a stop records what it spent (FR-ERR-007). */
+      let called = false;
+      /** Resolved by the first turn, once the slot is held. */
+      let adapter: ProviderAdapter | undefined;
+
       try {
+        /*
+         * The agentic tool loop (Arch §12.7): generate, and while the model asks for a tool, run it
+         * under the tool-point guardrails and feed the result back as untrusted, until a final answer
+         * or the call limit (round 4 §2.2, FR-TOOL-003).
+         *
+         * Each model turn holds this provider's concurrency slot, and only the turn (D-062): the
+         * tool-point guardrails — a destructive call's approval above all, which waits on a person —
+         * and the tool itself run with the slot given back. FR-PRV-009 limits provider *calls*, and a
+         * node WAITING on a card must not keep every other node on its provider READY behind it
+         * (R3 §4 item 4, D66).
+         */
+        const toolResults: ToolResult[] = [];
+        /** After the call limit, the model is asked once more with no tools (§2.2, FR-TOOL-003). */
+        let finalTurn = false;
+
         for (;;) {
-          let parked = false;
-          await deps.runGated(chosen.providerId, async () => {
-            if (input.signal.aborted) {
-              cancelled = true;
-              return;
-            }
-            // The slot came free while the run is paused, and this node has not started: give the
-            // slot back rather than start a node the pause holds (FR-CTL-001, D66). One that already
-            // started — moving to a fallback model — is RUNNING, and a pause lets it finish.
-            if (starting === undefined && input.gate?.isPaused() === true) {
-              parked = true;
-              return;
-            }
-            await started();
-            try {
-              await runToolLoop();
-            } finally {
-              // Still inside the gate: the next node's startedAt can never precede this endedAt.
-              input.onEnded?.();
-            }
-          });
-          if (!parked) break;
-          // Queue again once the run is resumed; a stop while it waits ends it here (FR-CTL-002).
-          if (input.gate === undefined || !(await input.gate.waitUntilDispatchable())) {
+          const turn = await takeTurn(toolResults.length > 0, finalTurn);
+          if (turn.kind === "cancelled") {
             cancelled = true;
             break;
           }
+
+          const pendingCall = turn.pendingCall;
+          // No tool requested: the turn's text/json/parts are this node's answer (FR-TOOL-003).
+          if (pendingCall === undefined) break;
+
+          // A tool after the model was asked to finish without tools ends the node (FR-TOOL-003).
+          if (finalTurn) {
+            toolLimitExceeded = true;
+            break;
+          }
+
+          const handled = await runToolCall(pendingCall, input.signal);
+          if (handled.failed !== undefined) {
+            toolFailure = handled.failed;
+            break;
+          }
+
+          toolResults.push({
+            callId: pendingCall.callId,
+            name: pendingCall.name,
+            result: handled.result,
+          });
+          // The result reaches the *recorded* prompt inside an untrusted block (FR-PRM-002); the
+          // adapter itself reads `toolResults` (FR-TOOL-010).
+          promptSuffix.push(toolResultBlock(pendingCall.name, handled.result));
+          toolCallCount += 1;
+
+          // Reaching the limit ends the loop; the model is asked once more with no tools (§2.2).
+          if (toolCallCount >= toolCallLimit) finalTurn = true;
         }
 
         /**
-         * The agentic tool loop (Arch §12.7): generate, and while the model asks for a tool, run it
-         * under the tool-point guardrails and feed the result back as untrusted, until a final answer
-         * or the call limit (round 4 §2.2, FR-TOOL-003). One provider slot is held for the whole loop,
-         * which is why it lives inside `runGated`.
+         * Queue for this provider's slot and make one model turn inside it (D66, FR-PRV-009).
+         *
+         * A stop while queued ends the node without a call (FR-CTL-003, D111). A pause holds a turn
+         * that has to queue — the node's first, or one after a tool call, above all after an approval
+         * (D-062) — exactly as it holds a READY node: the slot is handed straight back and the turn
+         * queues again once the run is resumed (FR-CTL-001/002, D110). The one exception is a node
+         * that already started and is moving to a fallback model: it is RUNNING, and a pause lets it
+         * finish.
          */
-        async function runToolLoop(): Promise<void> {
-          const adapter = await deps.adapterFor(chosen.providerId);
+        async function takeTurn(
+          continuing: boolean,
+          withoutTools: boolean,
+        ): Promise<TurnOutcome> {
+          for (;;) {
+            const outcome = await deps.runGated(
+              chosen.providerId,
+              async (): Promise<TurnOutcome | { kind: "parked" }> => {
+                if (input.signal.aborted) return { kind: "cancelled" };
+                if ((starting === undefined || continuing) && input.gate?.isPaused() === true) {
+                  return { kind: "parked" };
+                }
+                await started();
+                try {
+                  called = true;
+                  return {
+                    kind: "called",
+                    pendingCall: await generateTurn(continuing, withoutTools),
+                  };
+                } finally {
+                  // Still inside the gate: the next node's startedAt can never precede this endedAt.
+                  input.onEnded?.();
+                }
+              },
+            );
+            if (outcome.kind !== "parked") return outcome;
+            // Queue again once the run is resumed; a stop while it waits ends it here (FR-CTL-002).
+            if (input.gate === undefined || !(await input.gate.waitUntilDispatchable())) {
+              return { kind: "cancelled" };
+            }
+          }
+        }
+
+        /** One generate() call, streamed to the end; the tool it asked for, if any. */
+        async function generateTurn(
+          withResults: boolean,
+          withoutTools: boolean,
+        ): Promise<PendingToolCall | undefined> {
+          adapter ??= await deps.adapterFor(chosen.providerId);
           /*
-           * `execution.timeoutMs` is the node's own clock, and it starts here — after the provider
-           * slot is held, never when the node was queued for it (D66). `AbortSignal.timeout` sets a
+           * `execution.timeoutMs` is the node's own clock for one provider turn, and it starts here —
+           * once the slot is held, never while the node queued for it (D66), and never across a tool
+           * call or an approval a person takes their time over (D-062). `AbortSignal.timeout` sets a
            * `TimeoutError` reason, which the adapter reads to raise a retryable `network` failure
-           * rather than a cancellation (D97, Arch §28). It bounds each provider turn; a tool enforces
-           * its own `timeoutMs` and is cancelled only by the run's own stop signal.
+           * rather than a cancellation (D97, Arch §28). A tool enforces its own `timeoutMs` and is
+           * cancelled only by the run's own stop signal.
            */
           const timeoutMs =
-            node.kind === 'agent' || node.kind === 'model' ? node.config.execution.timeoutMs : 0;
+            node.kind === "agent" || node.kind === "model" ? node.config.execution.timeoutMs : 0;
           const callSignal =
             timeoutMs > 0
               ? AbortSignal.any([input.signal, AbortSignal.timeout(timeoutMs)])
               : input.signal;
 
-          const toolResults: ToolResult[] = [];
-          /** After the call limit, the model is asked once more with no tools (§2.2, FR-TOOL-003). */
-          let finalTurn = false;
+          const offerTools = offeredTools.length > 0 && !withoutTools;
+          const stream = adapter.generate(
+            {
+              modelId: chosen.modelId,
+              system: prompt.system,
+              prompt: prompt.text,
+              outputTypes,
+              ...(contract.jsonSchema === undefined
+                ? {}
+                : { jsonSchema: contract.jsonSchema }),
+              ...(contract.maxTokens === undefined
+                ? {}
+                : { maxTokens: contract.maxTokens }),
+              temperature,
+              runId: input.runId,
+              iteration: input.iteration,
+              ...(offerTools ? { tools: offeredTools } : {}),
+              ...(withResults ? { toolResults } : {}),
+            },
+            callSignal,
+          );
 
-          for (;;) {
-            const offerTools = offeredTools.length > 0 && !finalTurn;
-            const stream = adapter.generate(
-              {
-                modelId: chosen.modelId,
-                system: prompt.system,
-                prompt: prompt.text,
-                outputTypes,
-                ...(contract.jsonSchema === undefined
-                  ? {}
-                  : { jsonSchema: contract.jsonSchema }),
-                ...(contract.maxTokens === undefined
-                  ? {}
-                  : { maxTokens: contract.maxTokens }),
-                temperature,
-                runId: input.runId,
-                iteration: input.iteration,
-                ...(offerTools ? { tools: offeredTools } : {}),
-                ...(toolResults.length > 0 ? { toolResults } : {}),
-              },
-              callSignal,
-            );
-
-            let pendingCall: { callId: string; name: string; args: unknown } | undefined;
-            for await (const chunk of stream as AsyncIterable<StreamChunk>) {
-              switch (chunk.type) {
-                case "text":
-                  text += chunk.delta;
-                  tokens.push(chunk.delta);
-                  break;
-                case "json":
-                  jsonValue = chunk.value;
-                  sawJson = true;
-                  break;
-                case "part":
-                  partChunks.push(chunk.part);
-                  break;
-                case "tool_call":
-                  // One tool per turn: the mock and the round-4 adapters request a single tool and
-                  // end the turn on `tool_calls`, so a second in one turn would be a protocol error.
-                  pendingCall ??= { callId: chunk.callId, name: chunk.name, args: chunk.args };
-                  break;
-                case "usage":
-                  // Summed across turns: every generate() turn is its own billed call (Arch §12.7).
-                  tokensIn += chunk.tokensIn;
-                  tokensOut += chunk.tokensOut;
-                  break;
-                case "finish":
-                  finishReason = chunk.reason;
-                  break;
-              }
+          let pendingCall: PendingToolCall | undefined;
+          for await (const chunk of stream as AsyncIterable<StreamChunk>) {
+            switch (chunk.type) {
+              case "text":
+                text += chunk.delta;
+                tokens.push(chunk.delta);
+                break;
+              case "json":
+                jsonValue = chunk.value;
+                sawJson = true;
+                break;
+              case "part":
+                partChunks.push(chunk.part);
+                break;
+              case "tool_call":
+                // One tool per turn: the mock and the round-4 adapters request a single tool and
+                // end the turn on `tool_calls`, so a second in one turn would be a protocol error.
+                pendingCall ??= { callId: chunk.callId, name: chunk.name, args: chunk.args };
+                break;
+              case "usage":
+                // Summed across turns: every generate() turn is its own billed call (Arch §12.7).
+                tokensIn += chunk.tokensIn;
+                tokensOut += chunk.tokensOut;
+                break;
+              case "finish":
+                finishReason = chunk.reason;
+                break;
             }
-
-            // No tool requested: the turn's text/json/parts are this node's answer (FR-TOOL-003).
-            if (pendingCall === undefined) return;
-
-            // A tool after the model was asked to finish without tools ends the node (FR-TOOL-003).
-            if (finalTurn) {
-              toolLimitExceeded = true;
-              return;
-            }
-
-            const handled = await runToolCall(pendingCall, input.signal);
-            if (handled.failed !== undefined) {
-              toolFailure = handled.failed;
-              return;
-            }
-
-            toolResults.push({
-              callId: pendingCall.callId,
-              name: pendingCall.name,
-              result: handled.result,
-            });
-            // The result reaches the *recorded* prompt inside an untrusted block (FR-PRM-002); the
-            // adapter itself reads `toolResults` above (FR-TOOL-010).
-            promptSuffix.push(toolResultBlock(pendingCall.name, handled.result));
-            toolCallCount += 1;
-
-            // Reaching the limit ends the loop; the model is asked once more with no tools (§2.2).
-            if (toolCallCount >= toolCallLimit) finalTurn = true;
           }
+          return pendingCall;
         }
 
         /**
@@ -722,7 +770,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
          * handed back to the model as an untrusted result, not treated as the node failing.
          */
         async function runToolCall(
-          call: { callId: string; name: string; args: unknown },
+          call: PendingToolCall,
           toolSignal: AbortSignal,
         ): Promise<{
           result?: unknown;
@@ -873,8 +921,12 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
                 ? "The run was stopped before this node run started."
                 : "The run was stopped before this call was made.",
             ).nodeError,
-            NO_USAGE,
-            { verdicts: [...verdicts] },
+            // A stop between two turns (D-062) keeps what the turns before it spent (FR-ERR-007).
+            called ? usageFor(tokensIn, tokensOut, pricing) : NO_USAGE,
+            {
+              verdicts: [...verdicts],
+              ...(called ? { modelUsed, prompt: recordedPrompt() } : {}),
+            },
           ),
         };
       }
