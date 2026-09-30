@@ -187,10 +187,41 @@ function originGuard(deps: EngineDeps): MiddlewareHandler<{ Variables: EngineVar
   };
 }
 
-/** FR-SYS-002 / TC-SYS-002: every route, health included, needs the session token. */
+/** `GET /api/v1/artifacts/:id/content` — one id segment, nothing before or after (§2.1). */
+const ARTIFACT_CONTENT_PATH = new RegExp(`^${API_BASE_PATH}/artifacts/[^/]+/content$`);
+
+/**
+ * Whether a request may carry the session token as `?token=` instead of the `Authorization` header
+ * (round 4 §5 items 1 + 3, FR-MM-009, D-066).
+ *
+ * Exactly one route: `GET /artifacts/:id/content`. An `<img>`, `<audio>` or `<video>` element and a
+ * download link fetch their URL themselves and cannot add a header, so `artifactContentUrl(id)`
+ * (`@ace/sdk`) puts the token in the query — the same thing the WebSocket upgrade already does
+ * (§2.10). Everything else, including the artifact's JSON row, still needs the header (FR-SYS-002).
+ */
+export function queryTokenAllowed(method: string, path: string): boolean {
+  return method === 'GET' && ARTIFACT_CONTENT_PATH.test(path);
+}
+
+/**
+ * FR-SYS-002 / TC-SYS-002: every route, health included, needs the session token.
+ *
+ * The token comes from the `Authorization` header; only when there is no header at all, and only on
+ * the route {@link queryTokenAllowed} names, from `?token=`. Either way the same `Auth.verifyToken`
+ * decides — the constant-time compare of `SessionTokenAuth` — so a query token is exactly as strong
+ * as a header one. A header that is present decides on its own, right or wrong. The query string is
+ * never logged: `onError` records `c.req.path`, which has none, and the logger masks a `token=` value
+ * anywhere in a line besides (BR-07).
+ */
 function authGuard(deps: EngineDeps): MiddlewareHandler<{ Variables: EngineVariables }> {
   return async (c, next) => {
-    const token = bearerToken(c.req.header('Authorization'));
+    const header = c.req.header('Authorization');
+    const token =
+      header === undefined
+        ? queryTokenAllowed(c.req.method, c.req.path)
+          ? c.req.query('token')
+          : undefined
+        : bearerToken(header);
     if (!(await deps.auth.verifyToken(deps.scope, token))) throw unauthorized();
     return next();
   };

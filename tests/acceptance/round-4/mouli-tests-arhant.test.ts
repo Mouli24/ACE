@@ -858,8 +858,8 @@ describe('TC-MM-008 a download is byte-identical, with the §2.1 headers', () =>
     expect(Buffer.from(await tail.arrayBuffer()).equals(bytes.subarray(10))).toBe(true);
   });
 
-  // D-0?? GET /artifacts/:id/content ignores `?token=`, so `artifactContentUrl` (every media element and download link, R4 §5 items 1+3) answers 401
-  it.fails(
+  // D-066 (fixed): GET /artifacts/:id/content accepts `?token=`, so `artifactContentUrl` (every media element and download link, R4 §5 items 1+3) is served
+  it(
     'serves the same bytes from `artifactContentUrl`, the token-in-query URL a media element uses',
     async () => {
       const artifact = await uploadSample('sample.mp3', 'audio/mpeg');
