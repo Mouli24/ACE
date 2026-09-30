@@ -52,7 +52,9 @@ afterEach(async () => {
   }
 });
 
-async function boot(options: Omit<Parameters<typeof startEngine>[0], 'dataDir'>): Promise<RunningEngine> {
+async function boot(
+  options: Omit<Parameters<typeof startEngine>[0], 'dataDir'>,
+): Promise<RunningEngine> {
   const engine = await startEngine({ dataDir: dir, port: 0, env: {}, ...options });
   started.push(engine);
   return engine;
@@ -76,7 +78,8 @@ const rowStatus = async (engine: RunningEngine, id: string): Promise<number> =>
   (await fetch(`${engine.url}/api/v1/artifacts/${id}`, { headers: headers(engine) })).status;
 
 const contentStatus = async (engine: RunningEngine, id: string): Promise<number> =>
-  (await fetch(`${engine.url}/api/v1/artifacts/${id}/content`, { headers: headers(engine) })).status;
+  (await fetch(`${engine.url}/api/v1/artifacts/${id}/content`, { headers: headers(engine) }))
+    .status;
 
 async function post(engine: RunningEngine, path: string, body: unknown): Promise<unknown> {
   const response = await fetch(`${engine.url}/api/v1${path}`, {
@@ -90,12 +93,18 @@ async function post(engine: RunningEngine, path: string, body: unknown): Promise
 
 /** `vision.json` imported with its Input node attaching `artifactId` — a live reference. */
 async function referenceFromInputNode(engine: RunningEngine, artifactId: string): Promise<void> {
-  const provider = ProviderSchema.parse(await post(engine, '/providers', { type: 'mock', name: 'Mock' }));
+  const provider = ProviderSchema.parse(
+    await post(engine, '/providers', { type: 'mock', name: 'Mock' }),
+  );
   const project = ProjectSchema.parse(await post(engine, '/projects', { name: 'Retention' }));
   const text = readFileSync(new URL('vision.json', fixturesDir), 'utf8')
     .replaceAll('01M4R4PV0000000000000000PV', provider.id)
     .replaceAll('01M4R4AR0000000000000000AR', artifactId);
-  await post(engine, `/projects/${project.id}/workflows/import`, JSON.parse(text) as WorkflowExport);
+  await post(
+    engine,
+    `/projects/${project.id}/workflows/import`,
+    JSON.parse(text) as WorkflowExport,
+  );
 }
 
 describe('Arch §15.4 artifact retention: unreferenced + 7 days, on the injected clock (D-070)', () => {

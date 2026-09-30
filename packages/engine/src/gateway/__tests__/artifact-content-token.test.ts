@@ -7,7 +7,13 @@ import { FakeRepository } from '../../__tests__/fake-repository.js';
 import { createArtifactService, type ArtifactService } from '../../artifacts/index.js';
 import { createGraphService } from '../../graph/index.js';
 import { createLogger } from '../../logging/index.js';
-import { LOCAL_SCOPE, type Auth, type BlobRef, type BlobStore, type Scope } from '../../ports/index.js';
+import {
+  LOCAL_SCOPE,
+  type Auth,
+  type BlobRef,
+  type BlobStore,
+  type Scope,
+} from '../../ports/index.js';
 import { createEngineApp, queryTokenAllowed, type EngineApp } from '../index.js';
 
 /**
@@ -59,7 +65,10 @@ let artifacts: ArtifactService;
 beforeEach(() => {
   lines = [];
   const repository = new FakeRepository();
-  const logger = createLogger({ level: 'info', destination: { write: (line) => lines.push(line) } });
+  const logger = createLogger({
+    level: 'info',
+    destination: { write: (line) => lines.push(line) },
+  });
   artifacts = createArtifactService({
     scope: LOCAL_SCOPE,
     artifacts: repository.artifacts,
@@ -158,7 +167,9 @@ describe('FR-MM-009 the content route accepts the session token as ?token= (D-06
   });
 
   it('answers 404 for a missing artifact once the query token is accepted', async () => {
-    const response = await app.request(contentPath('01JBXQ8Z9KQ4R7N2VWXYZ0MISS', `?token=${TOKEN}`));
+    const response = await app.request(
+      contentPath('01JBXQ8Z9KQ4R7N2VWXYZ0MISS', `?token=${TOKEN}`),
+    );
 
     expect(response.status).toBe(404);
   });
@@ -202,10 +213,15 @@ describe('BR-07 the query token never reaches the log', () => {
   });
 
   it('masks the token even where a whole URL with its query is logged (defence in depth)', () => {
-    const logger = createLogger({ level: 'info', destination: { write: (line) => lines.push(line) } });
+    const logger = createLogger({
+      level: 'info',
+      destination: { write: (line) => lines.push(line) },
+    });
 
     logger.info(
-      { url: `http://127.0.0.1:4747${contentPath('01JBXQ8Z9KQ4R7N2VWXYZ0ARTF', `?token=${TOKEN}`)}` },
+      {
+        url: `http://127.0.0.1:4747${contentPath('01JBXQ8Z9KQ4R7N2VWXYZ0ARTF', `?token=${TOKEN}`)}`,
+      },
       'request',
     );
 

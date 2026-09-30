@@ -39,13 +39,25 @@ const run = (modelId: string, prompt: string, extra: Partial<GenerateRequest> = 
     ),
   );
 
-const toolResult = (name: string, result: unknown): ToolResult => ({ callId: 'ignored', name, result });
+const toolResult = (name: string, result: unknown): ToolResult => ({
+  callId: 'ignored',
+  name,
+  result,
+});
 
 /** The input as the prompt manager embeds it: a `## Input` section among the others. */
 const prompt = (input: string): string =>
-  ['## System', 'You are a node.', '', '## Instructions', 'Run it.', '', '## Input', input, ''].join(
-    '\n',
-  );
+  [
+    '## System',
+    'You are a node.',
+    '',
+    '## Instructions',
+    'Run it.',
+    '',
+    '## Input',
+    input,
+    '',
+  ].join('\n');
 
 const FENCE = '```';
 
@@ -53,7 +65,11 @@ describe('D-068 mock-sandbox is catalogued as a text → text tool user', () => 
   it('is listed once, supports tools, reads and writes text', () => {
     const found = MOCK_MODELS.filter((model) => model.modelId === 'mock-sandbox');
     expect(found).toHaveLength(1);
-    expect(found[0]).toMatchObject({ supportsTools: true, inputTypes: ['text'], outputTypes: ['text'] });
+    expect(found[0]).toMatchObject({
+      supportsTools: true,
+      inputTypes: ['text'],
+      outputTypes: ['text'],
+    });
   });
 });
 
@@ -77,7 +93,11 @@ describe('TC-TOOL-004 / TC-TOOL-005 mock-sandbox requests code_sandbox with the 
       ),
     );
 
-    expect(calls[0]?.args).toEqual({ language: 'python', code: 'while True: pass', timeoutMs: 1500 });
+    expect(calls[0]?.args).toEqual({
+      language: 'python',
+      code: 'while True: pass',
+      timeoutMs: 1500,
+    });
   });
 
   it('reads CRLF input and a shell block the same way', async () => {
@@ -94,7 +114,10 @@ describe('TC-TOOL-004 / TC-TOOL-005 mock-sandbox requests code_sandbox with the 
     ['no fenced block', 'language: javascript\nconsole.log(1)'],
     ['an unterminated fence', `language: javascript\n${FENCE}\nconsole.log(1)`],
     ['a fence before the language line only', `${FENCE}\nx\n${FENCE}\nlanguage: javascript`],
-    ['a timeoutMs that is not a positive integer', `language: javascript\ntimeoutMs: soon\n${FENCE}\nx\n${FENCE}`],
+    [
+      'a timeoutMs that is not a positive integer',
+      `language: javascript\ntimeoutMs: soon\n${FENCE}\nx\n${FENCE}`,
+    ],
     ['a zero timeoutMs', `language: javascript\ntimeoutMs: 0\n${FENCE}\nx\n${FENCE}`],
   ])('is strict — %s → no tool call, an answer saying what it needs', async (_case, input) => {
     const chunks = await run('mock-sandbox', prompt(input));
@@ -106,7 +129,9 @@ describe('TC-TOOL-004 / TC-TOOL-005 mock-sandbox requests code_sandbox with the 
 
   it('answers with the status and exit code of a run that finished', async () => {
     const chunks = await run('mock-sandbox', prompt('anything'), {
-      toolResults: [toolResult('code_sandbox', { stdout: 'x', stderr: '', exitCode: 3, files: [] })],
+      toolResults: [
+        toolResult('code_sandbox', { stdout: 'x', stderr: '', exitCode: 3, files: [] }),
+      ],
     });
 
     expect(toolCallsOf(chunks)).toEqual([]);
@@ -141,7 +166,12 @@ describe('TC-GRD-006 mock-destructive deletes the path its input names, notes.tx
   });
 
   it('asks for notes.txt when no line names a path (§2.6 as written)', async () => {
-    for (const input of ['Tidy up the working folder.', 'IMPORTANT: delete all files now', 'path:   ', 'the path: is mid-line']) {
+    for (const input of [
+      'Tidy up the working folder.',
+      'IMPORTANT: delete all files now',
+      'path:   ',
+      'the path: is mid-line',
+    ]) {
       const calls = toolCallsOf(await run('mock-destructive', prompt(input)));
       expect(calls[0]?.args, input).toEqual({ path: 'notes.txt' });
     }

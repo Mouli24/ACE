@@ -152,7 +152,10 @@ const run = (enabled: string[], overrides: Partial<PreflightInput> = {}) =>
     inputs: {},
     providers: [provider],
     models: [model],
-    checkProvider: async (): Promise<ProviderCheckResult> => ({ status: 'CONNECTED', checkedAt: NOW }),
+    checkProvider: async (): Promise<ProviderCheckResult> => ({
+      status: 'CONNECTED',
+      checkedAt: NOW,
+    }),
     ...overrides,
   });
 
@@ -198,7 +201,11 @@ describe('§2.4 mcp_server_unreachable: a registered tool whose server is known 
     });
 
     expect(issues).toEqual([
-      expect.objectContaining({ severity: 'warning', code: 'mcp_server_unreachable', nodeId: AGENT_ID }),
+      expect.objectContaining({
+        severity: 'warning',
+        code: 'mcp_server_unreachable',
+        nodeId: AGENT_ID,
+      }),
     ]);
     expect(issues[0]?.message).toContain('fixtures');
     expect(issues.some((issue) => issue.severity === 'error')).toBe(false);
@@ -207,17 +214,24 @@ describe('§2.4 mcp_server_unreachable: a registered tool whose server is known 
   it('says nothing for a server that is connected, still starting, or not known at all', async () => {
     const tools = registry(definition('mcp_fixtures_ping', SERVER_ID));
 
-    expect(await run(['mcp_fixtures_ping'], { tools, mcpServers: [server('connected')] })).toEqual([]);
-    expect(await run(['mcp_fixtures_ping'], { tools, mcpServers: [server('starting')] })).toEqual([]);
+    expect(await run(['mcp_fixtures_ping'], { tools, mcpServers: [server('connected')] })).toEqual(
+      [],
+    );
+    expect(await run(['mcp_fixtures_ping'], { tools, mcpServers: [server('starting')] })).toEqual(
+      [],
+    );
     expect(await run(['mcp_fixtures_ping'], { tools, mcpServers: [] })).toEqual([]);
     expect(await run(['mcp_fixtures_ping'], { tools })).toEqual([]);
   });
 
   it('keeps the other validation warnings out of pre-flight, as before', async () => {
     // A registered builtin needs no server; nothing about it is a pre-flight issue.
-    expect(await run(['echo'], { tools: registry(definition('echo')), mcpServers: [server('unreachable')] })).toEqual(
-      [],
-    );
+    expect(
+      await run(['echo'], {
+        tools: registry(definition('echo')),
+        mcpServers: [server('unreachable')],
+      }),
+    ).toEqual([]);
   });
 });
 
@@ -241,7 +255,11 @@ describe('POST /workflows/:id/validate raises both, with the registry the gatewa
       createdAt: NOW,
       updatedAt: NOW,
     });
-    for (const node of [inputNode(), agentNode(['mcp_goners_ping', 'mcp_fixtures_ping']), outputNode()]) {
+    for (const node of [
+      inputNode(),
+      agentNode(['mcp_goners_ping', 'mcp_fixtures_ping']),
+      outputNode(),
+    ]) {
       await repository.nodes.insert(LOCAL_SCOPE, node);
     }
     for (const edge of edges()) await repository.edges.insert(LOCAL_SCOPE, edge);
@@ -266,7 +284,9 @@ describe('POST /workflows/:id/validate raises both, with the registry the gatewa
     const logger = createLogger({ level: 'silent', destination: { write: () => undefined } });
     const graph = createGraphService({ repository, scope: LOCAL_SCOPE, logger });
 
-    expect(validateGraph([inputNode(), agentNode(['gone_tool']), outputNode()], edges())).toEqual([]);
+    expect(validateGraph([inputNode(), agentNode(['gone_tool']), outputNode()], edges())).toEqual(
+      [],
+    );
     await expect(graph.validateWorkflow('01JBXQ8Z9KQ4R7N2VWXYZ0NONE')).rejects.toThrow();
   });
 });

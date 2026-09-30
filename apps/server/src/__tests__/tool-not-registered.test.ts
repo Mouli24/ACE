@@ -83,7 +83,8 @@ describe('§2.4 tool_not_registered from POST /workflows/:id/validate (D-069)', 
 
     const validate = async () =>
       ValidationIssueSchema.array().parse(
-        ((await post(`/workflows/${graph.workflow.id}/validate`, {})) as { issues: unknown }).issues,
+        ((await post(`/workflows/${graph.workflow.id}/validate`, {})) as { issues: unknown })
+          .issues,
       );
 
     // While the server is there, its tool is registered: no tool issue.

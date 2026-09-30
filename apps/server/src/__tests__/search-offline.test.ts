@@ -39,7 +39,9 @@ beforeEach(async () => {
   pages = createServer((request, response) => {
     pageHits.push(request.url ?? '');
     response.writeHead(200, { 'content-type': 'text/html' });
-    response.end('<html><head><title>Quarterly page</title></head><body><p>Numbers.</p></body></html>');
+    response.end(
+      '<html><head><title>Quarterly page</title></head><body><p>Numbers.</p></body></html>',
+    );
   });
   await new Promise<void>((resolve) => pages.listen(0, '127.0.0.1', resolve));
   pagesUrl = `http://127.0.0.1:${(pages.address() as { port: number }).port}`;
@@ -73,7 +75,10 @@ async function api(path: string, init: RequestInit = {}): Promise<unknown> {
 const post = (path: string, body: unknown): Promise<unknown> =>
   api(path, { method: 'POST', body: JSON.stringify(body) });
 
-async function runSearchFixture(): Promise<{ run: Run; calls: { toolName: string; status: string; args: unknown }[] }> {
+async function runSearchFixture(): Promise<{
+  run: Run;
+  calls: { toolName: string; status: string; args: unknown }[];
+}> {
   const provider = ProviderSchema.parse(await post('/providers', { type: 'mock', name: 'Mock' }));
   await post(`/providers/${provider.id}/refresh-models`, {});
   const project = ProjectSchema.parse(await post('/projects', { name: 'Search offline' }));

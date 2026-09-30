@@ -44,7 +44,9 @@ function outsideFile(): { dir: string; path: string; secret: string } {
   return { dir, path, secret };
 }
 
-async function expectDenied(code: string): Promise<{ message: string; logged: ReturnType<typeof ctx>['logger'] }> {
+async function expectDenied(
+  code: string,
+): Promise<{ message: string; logged: ReturnType<typeof ctx>['logger'] }> {
   const context = ctx();
   const outcome = await tool.implementation({ language: 'javascript', code }, context).then(
     (result) => ({ result }),
@@ -68,7 +70,11 @@ describe('TC-TOOL-005 JavaScript in the sandbox cannot reach outside its folder'
     const lines = logged.matching(SANDBOX_DENIED_MESSAGE);
     expect(lines).toHaveLength(1);
     expect(lines[0]?.level).toBe('warn');
-    expect(lines[0]?.payload).toMatchObject({ tool: 'code_sandbox', runId: 'run-test', permission: 'FileSystemRead' });
+    expect(lines[0]?.payload).toMatchObject({
+      tool: 'code_sandbox',
+      runId: 'run-test',
+      permission: 'FileSystemRead',
+    });
     expect(String(lines[0]?.payload['resource'])).toContain('secret.txt');
   });
 
@@ -82,7 +88,9 @@ describe('TC-TOOL-005 JavaScript in the sandbox cannot reach outside its folder'
   });
 
   it('a listing of the real home folder is denied (the env remap alone only moved `~`)', async () => {
-    await expectDenied(`console.log(require('node:fs').readdirSync(${JSON.stringify(homedir())}).join('\\n'))`);
+    await expectDenied(
+      `console.log(require('node:fs').readdirSync(${JSON.stringify(homedir())}).join('\\n'))`,
+    );
   });
 
   it('a write outside is denied and creates nothing', async () => {
@@ -128,13 +136,16 @@ describe('TC-TOOL-005 JavaScript in the sandbox cannot reach outside its folder'
 describe('accessDenial reads the refusal Node printed', () => {
   it('takes the permission and the resource, unescaping a Windows path', () => {
     const stderr = [
-      "Error: Access to this API has been restricted. Use --allow-fs-read to manage permissions.",
+      'Error: Access to this API has been restricted. Use --allow-fs-read to manage permissions.',
       "  code: 'ERR_ACCESS_DENIED',",
       "  permission: 'FileSystemRead',",
       "  resource: 'C:\\\\Users\\\\me\\\\secret.txt'",
     ].join('\n');
 
-    expect(accessDenial(stderr)).toEqual({ permission: 'FileSystemRead', resource: 'C:\\Users\\me\\secret.txt' });
+    expect(accessDenial(stderr)).toEqual({
+      permission: 'FileSystemRead',
+      resource: 'C:\\Users\\me\\secret.txt',
+    });
   });
 
   it('answers a denial with no details as `unknown`, and nothing at all for other failures', () => {

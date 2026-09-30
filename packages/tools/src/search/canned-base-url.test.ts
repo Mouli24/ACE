@@ -56,7 +56,9 @@ describe('TC-TOOL-003 search → fetch works offline when the index points at a 
   it('web_fetch reads the page the first canned result names', async () => {
     const server = await startHttpServer((_req, res) => {
       res.writeHead(200, { 'content-type': 'text/html' });
-      res.end('<html><head><title>Local page</title></head><body><p>Offline words.</p></body></html>');
+      res.end(
+        '<html><head><title>Local page</title></head><body><p>Offline words.</p></body></html>',
+      );
     });
     close = server.close;
 
@@ -66,7 +68,12 @@ describe('TC-TOOL-003 search → fetch works offline when the index points at a 
 
     const fetched = await createWebFetchTool().implementation(
       { url: first?.url },
-      { scope: LOCAL_SCOPE, runId: 'run', sandboxDir: '/nowhere', logger: new RecordingToolLogger() },
+      {
+        scope: LOCAL_SCOPE,
+        runId: 'run',
+        sandboxDir: '/nowhere',
+        logger: new RecordingToolLogger(),
+      },
     );
     expect(fetched).toEqual({ title: 'Local page', text: 'Offline words.' });
   });
