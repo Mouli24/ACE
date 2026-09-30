@@ -9,6 +9,7 @@
 export * from './adapter.js';
 export * from './adapters/ai-sdk.js';
 export * from './adapters/mock.js';
+export * from './adapters/mock-media.js';
 export * from './adapters/anthropic.js';
 export * from './adapters/google.js';
 export * from './adapters/openai.js';

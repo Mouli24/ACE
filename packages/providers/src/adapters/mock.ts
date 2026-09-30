@@ -1,15 +1,17 @@
-import type { DataType, ModelPricing, Part } from '@ace/contracts';
+import type { DataType, ModelPricing } from '@ace/contracts';
 
 import {
   ProviderCallError,
   statusToNodeError,
   type GenerateRequest,
   type ModelInfo,
+  type ProducedPart,
   type ProviderAdapter,
   type ProviderStatus,
   type StreamChunk,
   type ToolResult,
 } from '../adapter.js';
+import { MOCK_MEDIA_TYPES, mockMediaFixture } from './mock-media.js';
 
 /**
  * The mock provider (FR-PRV-010, round 2 §2.6) — the fixture both sides of the build rely on.
@@ -792,46 +794,25 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
       }
 
       case 'mock-media': {
-        // §2.6: one Part of each of the seven data types. Media Parts reference artifacts the
-        // engine materialises from fixtures (FR-MM-003, FR-MM-004) — the mock cannot store bytes,
-        // so it yields deterministic, IdSchema-valid placeholder ids the engine rewrites.
-        const parts: Part[] = [
-          { type: 'text', text: 'Mock multimodal output.' },
-          { type: 'json', value: { kind: 'mock-media', ok: true } },
-          { type: 'code', language: 'javascript', text: 'export const answer = 42;' },
-          {
-            type: 'image',
-            artifactId: deterministicId('mock-media:image'),
-            mime: 'image/png',
-            name: 'mock.png',
-            size: 95,
-          },
-          {
-            type: 'audio',
-            artifactId: deterministicId('mock-media:audio'),
-            mime: 'audio/mpeg',
-            name: 'mock.mp3',
-            size: 128,
-          },
-          {
-            type: 'video',
-            artifactId: deterministicId('mock-media:video'),
-            mime: 'video/mp4',
-            name: 'mock.mp4',
-            size: 256,
-          },
-          {
-            type: 'file',
-            artifactId: deterministicId('mock-media:file'),
-            mime: 'application/zip',
-            name: 'mock.zip',
-            size: 64,
-          },
+        // §2.6: one Part of each of the seven data types. The four media Parts are real files —
+        // a PNG, an MP3, an MP4 and a ZIP (`mock-media.ts`) — whose bytes ride *beside* each Part
+        // for the engine to store as an artifact (FR-MM-003, D-082). The Part stays a reference
+        // (FR-MM-004): the mock cannot store bytes itself, so it carries a deterministic,
+        // IdSchema-valid placeholder id the engine replaces with the stored artifact's.
+        const produced: ProducedPart[] = [
+          { part: { type: 'text', text: 'Mock multimodal output.' } },
+          { part: { type: 'json', value: { kind: 'mock-media', ok: true } } },
+          { part: { type: 'code', language: 'javascript', text: 'export const answer = 42;' } },
+          ...MOCK_MEDIA_TYPES.map((type): ProducedPart => {
+            const { mime, name, bytes } = mockMediaFixture(type);
+            const artifactId = deterministicId(`mock-media:${type}`);
+            return { part: { type, artifactId, mime, name, size: bytes.byteLength }, bytes };
+          }),
         ];
 
         let tokensOut = 0;
-        for (const part of parts) {
-          yield { type: 'part', part };
+        for (const { part, bytes } of produced) {
+          yield bytes === undefined ? { type: 'part', part } : { type: 'part', part, bytes };
           tokensOut += part.type === 'text' || part.type === 'code' ? countWords(part.text) : 1;
         }
         yield { type: 'usage', tokensIn, tokensOut };

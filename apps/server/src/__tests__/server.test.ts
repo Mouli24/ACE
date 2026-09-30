@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import { tmpdir } from 'node:os';
@@ -22,9 +23,11 @@ import {
   WsServerFrameSchema,
   type ApprovalRequest,
   type GuardrailCheck,
+  type Part,
   type WorkflowExport,
   type WorkflowGraphResponse,
 } from '@ace/contracts';
+import { MOCK_MEDIA_TYPES, mockMediaFixture } from '@ace/providers';
 import { openDatabase } from '@ace/storage-local';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
@@ -976,6 +979,55 @@ describe('Round 4 wiring: artifacts, tools, MCP, chat and the tool loop over the
     for (const ref of mediaRefs) {
       const resolved = await api(`/artifacts/${ref.artifactId}`);
       expect(resolved.status, `artifact ${ref.artifactId}`).toBe(200);
+    }
+  }, 30_000);
+
+  it('D-082 stores the real PNG/MP3/MP4/ZIP mock-media produced — bytes, sha256 and size — and no stored envelope carries them (FR-MM-003/004)', async () => {
+    const providerId = await mockProvider();
+    const graph = await importFixture('media.json', providerId);
+    const mediaNodeId = nodeId(graph, 'agent');
+
+    const started = RunSchema.parse(await post(`/workflows/${graph.workflow.id}/runs`, {}));
+    const run = await waitForEnd(started.id);
+    expect(run.status, JSON.stringify(run.preflightIssues)).toBe('COMPLETE');
+
+    const nodeRuns = ((await (await api(`/runs/${run.id}/node-runs`)).json()) as unknown[]).map(
+      (row) => NodeRunSchema.parse(row),
+    );
+    const produced = nodeRuns.find((row) => row.nodeId === mediaNodeId)?.output ?? [];
+    const media = produced.filter(
+      (part): part is Extract<Part, { artifactId: string }> => 'artifactId' in part,
+    );
+    expect(media.map((part) => part.type)).toEqual([...MOCK_MEDIA_TYPES]);
+
+    for (const part of media) {
+      const fixture = mockMediaFixture(part.type);
+      const row = ArtifactSchema.parse(await (await api(`/artifacts/${part.artifactId}`)).json());
+      const content = await api(`/artifacts/${part.artifactId}/content`);
+      const stored = new Uint8Array(await content.arrayBuffer());
+
+      // The real file, byte for byte — not `size` zero bytes (D-082).
+      expect(Buffer.from(stored).equals(Buffer.from(fixture.bytes)), part.type).toBe(true);
+      expect(row.hash, part.type).toBe(createHash('sha256').update(stored).digest('hex'));
+      expect(row.size, part.type).toBe(fixture.bytes.byteLength);
+      expect(part.size, part.type).toBe(row.size);
+      expect(row.mime, part.type).toBe(fixture.mime);
+      expect(content.headers.get('Content-Type'), part.type).toBe(fixture.mime);
+    }
+
+    // FR-MM-004: the node runs, their envelopes and the event log hold references, never the bytes.
+    const events = await (await api(`/runs/${run.id}/events`)).json();
+    for (const [what, value] of [
+      ['node runs', nodeRuns],
+      ['envelopes', nodeRuns.flatMap((row) => row.inputEnvelopes)],
+      ['event log', events],
+    ] as const) {
+      const serialised = JSON.stringify(value);
+      expect(serialised, what).not.toMatch(/"(bytes|base64|data|dataUrl|buffer|blob)"\s*:/);
+      for (const type of MOCK_MEDIA_TYPES) {
+        const base64 = Buffer.from(mockMediaFixture(type).bytes).toString('base64');
+        expect(serialised, `${what}: ${type} as base64`).not.toContain(base64);
+      }
     }
   }, 30_000);
 

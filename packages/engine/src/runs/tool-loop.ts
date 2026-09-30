@@ -10,6 +10,7 @@ import type {
 } from '@ace/contracts';
 import { TOOL_RESULT_SUMMARY_MAX } from '@ace/contracts';
 
+import type { ProducedPart } from '../ports/index.js';
 import {
   isSecretFieldName,
   looksLikeSecret,
@@ -76,10 +77,13 @@ export interface ArtifactMaterialiser {
   inputParts(artifactIds: readonly Id[]): Promise<Part[]>;
   /**
    * A model's produced parts, with every media `Part` backed by a stored artifact (FR-MM-003). Text,
-   * JSON and code parts pass through unchanged; image/audio/video/file parts come back as references
-   * to real artifacts (the placeholder id a provider emitted is replaced with the stored one).
+   * JSON and code parts pass through unchanged. A media part that came with `bytes` has them stored
+   * (identical bytes dedupe to one artifact, FR-MM-002) and comes back referencing that artifact,
+   * the placeholder id the provider emitted replaced and `size` the stored size. A media part without
+   * `bytes` must already reference a stored artifact; one that does not is refused with an error —
+   * there is nothing real to back it with (D-082). What comes back is references only (FR-MM-004).
    */
-  store(parts: readonly Part[]): Promise<Part[]>;
+  store(parts: readonly ProducedPart[]): Promise<Part[]>;
 }
 
 /* -------------------------------------------------------------------------- */

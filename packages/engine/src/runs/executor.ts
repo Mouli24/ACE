@@ -29,6 +29,7 @@ import { newId } from "../ids.js";
 import type { Logger } from "../logging/index.js";
 import type {
   ModelRouter,
+  ProducedPart,
   ProviderAdapter,
   StreamChunk,
   ToolResult,
@@ -564,8 +565,12 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       let text = "";
       let jsonValue: unknown;
       let sawJson = false;
-      /** Media/typed parts a model emitted directly (round 4 §2.6 `mock-media`, FR-MM-003). */
-      const partChunks: Part[] = [];
+      /**
+       * Media/typed parts a model emitted directly (round 4 §2.6 `mock-media`, FR-MM-003), each with
+       * the bytes behind it when the provider generated them — held only until the materialiser
+       * stores them; they never reach an envelope or an event (FR-MM-004).
+       */
+      const partChunks: ProducedPart[] = [];
       let tokensIn = 0;
       let tokensOut = 0;
       let finishReason: string = "stop";
@@ -767,7 +772,11 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
                 sawJson = true;
                 break;
               case "part":
-                partChunks.push(chunk.part);
+                partChunks.push(
+                  chunk.bytes === undefined
+                    ? { part: chunk.part }
+                    : { part: chunk.part, bytes: chunk.bytes },
+                );
                 break;
               case "tool_call":
                 // One tool per turn: the mock and the round-4 adapters request a single tool and
@@ -1019,10 +1028,41 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
        */
       let output: Part[];
       if (partChunks.length > 0) {
-        output =
-          deps.artifacts === undefined
-            ? partChunks
-            : await deps.artifacts.store(partChunks);
+        if (deps.artifacts === undefined) {
+          // Nowhere to store bytes: the parts pass through as the references they are.
+          output = partChunks.map(({ part }) => part);
+        } else {
+          try {
+            output = await deps.artifacts.store(partChunks);
+          } catch (error) {
+            /*
+             * D-082: a media part the engine cannot back with a stored artifact — no bytes and no
+             * artifact behind its id, or bytes the store refused. The model's output cannot be kept,
+             * so the node fails with the reason rather than passing on a reference to nothing. Not
+             * retryable: the same provider would hand back the same output.
+             */
+            return {
+              kind: "done",
+              result: await fail(
+                input,
+                {
+                  kind: "provider",
+                  code: "media_not_stored",
+                  message: `The model's media output could not be stored: ${
+                    error instanceof Error ? error.message : String(error)
+                  }`,
+                  retryable: false,
+                },
+                usage,
+                {
+                  modelUsed,
+                  prompt: recordedPrompt(),
+                  verdicts: [...verdicts],
+                },
+              ),
+            };
+          }
+        }
       } else {
         output = [];
         const wantsJson = outputTypes.includes("json");

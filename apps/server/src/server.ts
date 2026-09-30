@@ -49,6 +49,7 @@ import {
   startTimelinePopulation,
   workflowUpdatedEvent,
   type ArtifactMaterialiser,
+  type ArtifactService,
   type ChatService,
   type CheckInput,
   type CheckRunner,
@@ -129,6 +130,68 @@ export function guardrailInputFor(
       // seam maps, exactly as the loop and cost figures above.
       return input.tool === undefined ? base : { ...base, tool: input.tool };
   }
+}
+
+/**
+ * The multimodal materialiser (FR-MM-003/004): an Input node's `artifactIds` become media `Part`
+ * references by MIME, and a model's produced media parts come back backed by a stored artifact.
+ * Bytes never travel through an envelope — every part that leaves here is a reference (BR-02).
+ *
+ * A produced media part is backed by exactly one of two things. Bytes the provider generated ride
+ * beside it (`ProducedPart.bytes`, D216) and are stored here — `mock-media`'s PNG/MP3/MP4/ZIP, or a
+ * real image model's output. Otherwise its `artifactId` must already name a stored artifact. There
+ * is no third way: a reference to nothing is refused, and nothing is ever invented to back it — the
+ * zero-filled stand-in that once did is D-082.
+ */
+export function createArtifactMaterialiser(
+  artifacts: Pick<ArtifactService, "get" | "upload" | "markReferenced">,
+): ArtifactMaterialiser {
+  return {
+    async inputParts(artifactIds) {
+      const parts: Part[] = [];
+      for (const id of artifactIds) {
+        const artifact = await artifacts.get(id);
+        if (artifact === null) continue;
+        await artifacts.markReferenced(id);
+        parts.push({
+          type: mediaTypeForMime(artifact.mime),
+          artifactId: artifact.id,
+          mime: artifact.mime,
+          name: artifact.name,
+          size: artifact.size,
+        });
+      }
+      return parts;
+    },
+    async store(produced) {
+      const out: Part[] = [];
+      for (const { part, bytes } of produced) {
+        if (part.type === "text" || part.type === "json" || part.type === "code") {
+          out.push(part);
+          continue;
+        }
+        if (bytes !== undefined) {
+          // Store what the model produced — identical bytes dedupe to one artifact (FR-MM-002) —
+          // and hand on a reference to it: the stored id in place of the placeholder, the stored
+          // size. Marked referenced, so retention counts from this output (Arch §15.4).
+          const stored = await artifacts.upload(bytes, { mime: part.mime, name: part.name });
+          await artifacts.markReferenced(stored.id);
+          out.push({ ...part, artifactId: stored.id, size: stored.size });
+          continue;
+        }
+        // No bytes: the part must already reference a stored artifact, and it keeps that reference.
+        const existing = await artifacts.get(part.artifactId);
+        if (existing === null) {
+          throw new Error(
+            `The ${part.type} part "${part.name}" references artifact ${part.artifactId}, which is not stored, and came with no bytes to store.`,
+          );
+        }
+        await artifacts.markReferenced(existing.id);
+        out.push({ ...part, size: existing.size });
+      }
+      return out;
+    },
+  };
 }
 
 /** FR-SYS-001 / NFR-SEC-01: the engine binds the loopback interface and nothing else. */
@@ -496,53 +559,7 @@ export async function startEngine(
   /* `<dataDir>/sandbox/<runId>/` — the only folder a run's tools may touch (§2.2, NFR-SEC-03). */
   const sandboxDirFor = (runId: Id): string => join(config.dataDir, "sandbox", runId);
 
-  /*
-   * The multimodal materialiser (FR-MM-003/004): an Input node's `artifactIds` become media `Part`
-   * references by MIME, and a model's produced media parts come back backed by a stored artifact.
-   * Bytes never travel through an envelope — every part is a reference (BR-02).
-   */
-  const materialiser: ArtifactMaterialiser = {
-    async inputParts(artifactIds) {
-      const parts: Part[] = [];
-      for (const id of artifactIds) {
-        const artifact = await artifactService.get(id);
-        if (artifact === null) continue;
-        await artifactService.markReferenced(id);
-        parts.push({
-          type: mediaTypeForMime(artifact.mime),
-          artifactId: artifact.id,
-          mime: artifact.mime,
-          name: artifact.name,
-          size: artifact.size,
-        });
-      }
-      return parts;
-    },
-    async store(parts) {
-      const out: Part[] = [];
-      for (const part of parts) {
-        if (part.type === "text" || part.type === "json" || part.type === "code") {
-          out.push(part);
-          continue;
-        }
-        // A produced media part already backed by a stored artifact keeps its reference.
-        const existing = await artifactService.get(part.artifactId);
-        if (existing !== null) {
-          await artifactService.markReferenced(existing.id);
-          out.push(part);
-          continue;
-        }
-        // The provider emitted a placeholder id (the mock cannot store bytes, §2.6): materialise a
-        // stand-in artifact of the declared type so the produced part references a real row.
-        const stored = await artifactService.upload(new Uint8Array(part.size), {
-          mime: part.mime,
-          name: part.name,
-        });
-        out.push({ ...part, artifactId: stored.id, size: stored.size });
-      }
-      return out;
-    },
-  };
+  const materialiser = createArtifactMaterialiser(artifactService);
 
   /* Persist one logged tool call, mirrored onto its node run in the same write (FR-TOOL-009). */
   const recordToolCall = async (runId: Id, call: ToolCall): Promise<void> => {

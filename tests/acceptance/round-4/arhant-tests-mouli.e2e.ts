@@ -828,12 +828,13 @@ test.describe('Renderers and multimodal runs (FR-MM-003/005/006/009)', () => {
    * decode, because the engine materialises `mock-media`'s placeholder parts as zero-filled bytes
    * (`apps/server/src/server.ts` materialiser, `new Uint8Array(part.size)`) instead of the PNG / MP3 /
    * MP4 / ZIP fixtures §2.6 says the mock stores.
+   * Fixed on round-4/fix-arhant-1: `mock-media` yields real PNG / MP3 / MP4 / ZIP bytes beside each
+   * media Part (`packages/providers/src/adapters/mock-media.ts`) and the materialiser stores those;
+   * a media Part with neither bytes nor a stored artifact behind it is refused, never zero-filled.
    */
   test('TC-MM-006 + TC-MM-008: the rendered media load from the engine — the image decodes, audio and video answer Range requests, and the download is byte-identical', async ({
     page,
   }) => {
-    // D-082: mock-media's media parts are materialised as zero-filled stand-ins, so the PNG cannot decode.
-    test.fail();
     const { parts, output } = await mediaRunOnScreen(page);
     const { audio, video, file } = parts;
 
