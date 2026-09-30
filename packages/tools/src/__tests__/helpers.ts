@@ -26,7 +26,9 @@ export function makeContext(overrides: Partial<ToolContext> = {}): ToolContext &
     // After the spread, so `logger` keeps its concrete type and `sandboxDir` is the one we clean up.
     sandboxDir,
     logger,
-    cleanup: () => rmSync(sandboxDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }),
+    // A timed-out child is settled after KILL_GRACE_MS even if Windows taskkill is still running,
+    // and until it exits it holds the folder open: allow ~2 s of retries, not 0.5 s.
+    cleanup: () => rmSync(sandboxDir, { recursive: true, force: true, maxRetries: 40, retryDelay: 50 }),
   };
 }
 
