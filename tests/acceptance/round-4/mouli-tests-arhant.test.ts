@@ -86,6 +86,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  * engine contradicting §2, §7.2, the FRS or Arch: it stays exactly as written, marked `it.fails`
  * with a `D-0??` line, so CI stays green and the check flips the day the defect is fixed. The two
  * lever functions throw until a lever exists, so fixing those rows means filling them in too.
+ *
+ * Fix pass (D-066..D-070): the fixed rows are `it` again with a `D-0nn (fixed)` line; both levers
+ * are filled in (`scriptedToolCall` → `mock-sandbox` / `mock-destructive`'s `path:` line, D-068;
+ * `advanceClockAndSweep` → the harness's `ACE_TEST_CONTROL_URL`, D-070); TC-TOOL-005 was
+ * strengthened to require the refusal on the ToolCall and in the engine log. A row still marked
+ * `D-0nn (open)` says what it is waiting for.
  */
 
 const url = process.env['ACE_URL'] as string;
