@@ -25,6 +25,7 @@ import { DETECTED_OLLAMA } from './catalog';
 import { validateGraph } from './graph-rules';
 import { type MockDb } from './db';
 import { dropMockSockets } from './fake-socket';
+import { retrieveForAgent, searchChunks, stopAllIngestion } from './knowledge';
 import { pausePlayback, startPlayback, stopAllPlayback } from './playback';
 import { buildScenario, type ScenarioName, type ScriptedFrame, type StreamPace } from './scenarios';
 
@@ -76,6 +77,8 @@ export function currentStreamPace(): StreamPace {
 /** Cancels every scenario still playing, so tests never leak into one another. */
 export function stopScenario(): void {
   stopAllPlayback();
+  // round 5: a knowledge-base ingestion is a queue of its own
+  stopAllIngestion();
 }
 
 /**
@@ -151,6 +154,13 @@ export function playScenario(db: MockDb, run: Run): void {
       ...(cap === undefined || cap === null ? {} : { maxCostPerRunUsd: cap }),
       policyFor: (node) => policyRefFor(db, run.projectId, node),
       artifactPartFor: (artifactId) => artifactPartFor(db, artifactId),
+      round5: {
+        retrieve: (knowledgeBaseIds, query, k, mode) =>
+          knowledgeBaseIds.length === 1
+            ? searchChunks(db.kbChunksOf(knowledgeBaseIds[0]!), query, k, mode)
+            : retrieveForAgent(db, knowledgeBaseIds, query, k),
+        memoryFor: (nodeId) => db.memoryOf(nodeId).map(({ key, value }) => ({ key, value })),
+      },
     }),
   );
 }
@@ -223,8 +233,21 @@ export function preflight(
       }
     }
 
-    // merge runs from round 3 (§2.4, FR-PAR-002); the rest still arrive later
-    if (node.kind === 'retrieval' || node.kind === 'guardrail' || node.kind === 'custom') {
+    // round 5 §2.4: a Retrieval node runs, once it names the base it searches
+    if (
+      node.kind === 'retrieval' &&
+      (node.config as { knowledgeBaseId?: string }).knowledgeBaseId === undefined
+    ) {
+      issues.push({
+        severity: 'error',
+        code: 'missing_knowledge_base',
+        message: `"${node.name}" has no knowledge base chosen.`,
+        nodeId: node.id,
+      });
+    }
+
+    // merge runs from round 3 (§2.4, FR-PAR-002), retrieval from round 5; the rest arrive later
+    if (node.kind === 'guardrail' || node.kind === 'custom') {
       issues.push({
         severity: 'error',
         code: 'not_supported_yet',

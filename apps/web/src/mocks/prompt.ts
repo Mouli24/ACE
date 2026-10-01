@@ -1,4 +1,11 @@
-import type { Envelope, Part } from '@ace/contracts';
+import {
+  MEMORY_OUTPUT_FIELD,
+  MEMORY_PROMPT_HEADING,
+  type Envelope,
+  type EnvelopeMemoryEntry,
+  type Part,
+  type RetrievedChunk,
+} from '@ace/contracts';
 
 /**
  * The mock engine's prompt assembly (§2.8, FR-PRM-001/002/004/005). The real engine lives in
@@ -38,8 +45,24 @@ export interface AssemblePromptInput {
   instructions: string;
   reads: Part[];
   contract: { outputTypes: string[]; jsonSchema?: Record<string, unknown> };
-  context?: { summary?: string };
+  /**
+   * Round 5: what the context builder put in — retrieved chunks and remembered facts, each inside
+   * its untrusted block (§2.2, §2.4, BR-13). `memoryEnabled` appends the `## Memory operations`
+   * block (§2.2). Absent, the prompt is byte-identical to round 4's.
+   */
+  context?: { summary?: string; retrieved?: RetrievedChunk[]; memory?: EnvelopeMemoryEntry[] };
+  memoryEnabled?: boolean;
 }
+
+const renderRetrieved = (chunks: readonly RetrievedChunk[] | undefined): string =>
+  chunks === undefined || chunks.length === 0
+    ? '(none)'
+    : chunks.map((chunk) => `[${chunk.source}] ${chunk.text}`).join('\n\n');
+
+const renderMemory = (entries: readonly EnvelopeMemoryEntry[] | undefined): string =>
+  entries === undefined || entries.length === 0
+    ? '(none)'
+    : entries.map((entry) => `${entry.key}: ${entry.value}`).join('\n');
 
 /** §2.8, in order, with every header present even when the section is empty this round. */
 export function assemblePrompt(input: AssemblePromptInput): string {
@@ -62,10 +85,10 @@ export function assemblePrompt(input: AssemblePromptInput): string {
     input.context?.summary ?? '(none)',
     '### Retrieved',
     `${UNTRUSTED_MARKER}`,
-    '(none)',
+    renderRetrieved(input.context?.retrieved),
     '### Memory',
     `${UNTRUSTED_MARKER}`,
-    '(none)',
+    renderMemory(input.context?.memory),
     '',
     '## Input',
     input.reads.length === 0 ? '(none)' : input.reads.map(renderPart).join('\n\n'),
@@ -75,6 +98,15 @@ export function assemblePrompt(input: AssemblePromptInput): string {
   ];
   if (input.contract.jsonSchema) {
     lines.push(`schema: ${JSON.stringify(input.contract.jsonSchema)}`);
+  }
+  if (input.memoryEnabled === true) {
+    lines.push(
+      '',
+      MEMORY_PROMPT_HEADING,
+      `You may add a "${MEMORY_OUTPUT_FIELD}" field to your JSON output: a list of ` +
+        '{ "op": "save", "key", "value" } or { "op": "delete", "key" } operations. ' +
+        'It is removed before your output is checked.',
+    );
   }
   return lines.join('\n');
 }
@@ -107,6 +139,9 @@ export interface BuildEnvelopeInput {
   createdAt: string;
   /** Which loop iteration handed this over; 1 unless a loop edge re-queued the target (§2.4). */
   iteration?: number;
+  /** Round 5: retrieved chunks and remembered facts, already through the context point. */
+  retrieved?: RetrievedChunk[];
+  memory?: EnvelopeMemoryEntry[];
 }
 
 /**
@@ -122,6 +157,10 @@ export function buildEnvelope(input: BuildEnvelopeInput): Envelope {
     iteration: input.iteration ?? 1,
     reads: input.reads,
     context: {
+      ...(input.retrieved === undefined || input.retrieved.length === 0
+        ? {}
+        : { retrieved: input.retrieved }),
+      ...(input.memory === undefined || input.memory.length === 0 ? {} : { memory: input.memory }),
       budgetTokens: input.budgetTokens,
       // upstream output is data the agent must not obey (BR-13)
       trust: 'untrusted',

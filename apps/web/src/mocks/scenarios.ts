@@ -26,6 +26,12 @@ import { MEDIA_FIXTURES } from './artifacts-fixtures';
 import { MOCK_PRICING } from './catalog';
 import type { MockDb, MockEvent } from './db';
 import { assemblePrompt, buildEnvelope, promptVersion } from './prompt';
+import {
+  applyMemoryOps,
+  round5Behaviour,
+  type Round5Behaviour,
+  type Round5RunDeps,
+} from './round5-run';
 import { sha256Hex } from './sha256';
 
 /**
@@ -61,7 +67,9 @@ export type ScenarioName =
   | 'destructive-approval'
   | 'vision-flow'
   | 'media-outputs'
-  | 'timeline-six-types';
+  | 'timeline-six-types'
+  /* round 5 (§2.6): a run whose trace holds every kind of entry */
+  | 'trace-full';
 
 export interface ScriptedFrame {
   /** Milliseconds after the previous frame. */
@@ -109,7 +117,8 @@ const usage = (tokensIn: number, tokensOut: number): Usage => ({
   priceTableVersion: MOCK_PRICING.priceTableVersion,
 });
 
-const EXECUTABLE: ReadonlySet<Node['kind']> = new Set(['agent', 'model', 'transform']);
+// round 5: a Retrieval node runs too — it searches, it calls no model (§2.4)
+const EXECUTABLE: ReadonlySet<Node['kind']> = new Set(['agent', 'model', 'transform', 'retrieval']);
 
 /** The nodes a run actually executes, left to right, following the data edges. */
 function executionOrder(nodes: Node[], edges: Edge[]): Node[] {
@@ -192,6 +201,11 @@ interface Context {
    * `mock-vision`). Resolved by the caller, which holds the db and so the artifact's mime/name/size.
    */
   artifactPartFor?: (artifactId: string) => Part | undefined;
+  /**
+   * Round 5: knowledge-base search and agent memory, resolved by the caller against the db (§2.2,
+   * §2.4). Without it no node run retrieves or remembers, which is every round 1–4 test.
+   */
+  round5?: Round5RunDeps;
 }
 
 /** Which iteration and attempt a frame belongs to — both 1 unless a loop or a retry says otherwise. */
@@ -253,6 +267,8 @@ function nodeRunRecord(
   reads: Part[],
   patch: Partial<NodeRun>,
   round: Round = {},
+  /** Round 5: what the context builder retrieved and remembered for this node run (§2.2, §2.4). */
+  context: Pick<Round5Behaviour, 'retrieved' | 'memory'> = {},
 ): NodeRun {
   const config = node.config as {
     instructions?: string;
@@ -260,6 +276,7 @@ function nodeRunRecord(
     outputTypes?: string[];
     outputContract?: { jsonSchema?: Record<string, unknown> };
     contextPolicy?: { budgetTokens: number };
+    memory?: { enabled: boolean };
   };
   const instructions = config.instructions ?? config.systemPrompt ?? '';
   const contract = {
@@ -280,7 +297,19 @@ function nodeRunRecord(
     ...(contract.jsonSchema === undefined ? {} : { jsonSchema: contract.jsonSchema }),
     createdAt: ctx.run.startedAt,
     ...(round.iteration === undefined ? {} : { iteration: round.iteration }),
+    ...(context.retrieved === undefined ? {} : { retrieved: context.retrieved }),
+    ...(context.memory === undefined ? {} : { memory: context.memory }),
   });
+  const promptContext =
+    context.retrieved === undefined && context.memory === undefined
+      ? {}
+      : {
+          context: {
+            ...(context.retrieved === undefined ? {} : { retrieved: context.retrieved }),
+            ...(context.memory === undefined ? {} : { memory: context.memory }),
+          },
+        };
+  const memoryEnabled = node.kind === 'agent' && config.memory?.enabled === true;
   return {
     id: nodeRunId,
     runId: ctx.run.id,
@@ -291,7 +320,13 @@ function nodeRunRecord(
     inputEnvelopes: [envelope],
     prompt: {
       version: promptVersion(instructions, contract),
-      text: assemblePrompt({ instructions, reads, contract }),
+      text: assemblePrompt({
+        instructions,
+        reads,
+        contract,
+        ...promptContext,
+        ...(memoryEnabled ? { memoryEnabled } : {}),
+      }),
     },
     usage: usage(0, 0),
     verdicts: [],
@@ -326,20 +361,64 @@ function runNode(
     /** Round 3: fields every record of this node run keeps — its verdicts, for instance. */
     carry?: Partial<NodeRun>;
   },
-): { frames: ScriptedFrame[]; nodeRunId: string; text: string; usage: Usage } {
+): { frames: ScriptedFrame[]; nodeRunId: string; text: string; output: Part[]; usage: Usage } {
   const nodeRunId = options.nodeRunId ?? newId();
   const round = options.round ?? {};
-  const deltas = streamText(node, options.words, options.seedOffset ?? 0);
-  const text = deltas.join('').trim();
-  const spent = usage(12, deltas.length * 2);
   const reads = options.reads ?? [];
+  // Round 5: retrieval, memory and the §2.10 models; undefined for every round 1–4 graph
+  const r5 =
+    ctx.round5 === undefined
+      ? undefined
+      : round5Behaviour(node, reads, textOf(inputReads(ctx)), ctx.round5);
+  const deltas =
+    r5 !== undefined && (r5.streamed.length > 0 || !r5.calledModel)
+      ? r5.streamed
+      : streamText(node, options.words, options.seedOffset ?? 0);
+  const text = r5 !== undefined && r5.output.length > 0 ? r5.text : deltas.join('').trim();
+  const output: Part[] =
+    r5 !== undefined && r5.output.length > 0 ? r5.output : [{ type: 'text', text }];
+  // a Retrieval node calls no model, so it spends nothing and names no model (D234)
+  const calledModel = r5?.calledModel ?? true;
+  const spent = calledModel ? usage(12, deltas.length * 2) : usage(0, 0);
   const modelUsed = {
     providerId: (node.config as { providerId?: string }).providerId ?? newId(),
     modelId: options.modelId ?? (node.config as { modelId?: string }).modelId ?? 'mock-text',
     viaFallback: options.viaFallback ?? false,
   };
+  const used = calledModel ? { modelUsed } : {};
+
+  // the context point's verdict when it stripped hidden instructions from retrieved text (§2.3)
+  const contextVerdict =
+    r5?.stripped === undefined
+      ? undefined
+      : verdictOf(
+          nodeRunId,
+          {
+            point: 'context',
+            checkType: 'prompt_injection',
+            action: 'warn',
+            passed: false,
+            reason: 'Hidden instructions were removed from retrieved text before the prompt.',
+            strippedTypes: r5.stripped,
+          },
+          at(ctx, 40),
+        );
+  const r5Carry: Partial<NodeRun> =
+    r5 === undefined
+      ? {}
+      : {
+          ...(r5.sources === undefined ? {} : { sources: r5.sources }),
+          ...(r5.memoryOps === undefined ? {} : { memoryOps: r5.memoryOps }),
+          ...(contextVerdict === undefined
+            ? {}
+            : { verdicts: [...(options.carry?.verdicts ?? []), contextVerdict] }),
+        };
   const record = (patch: Partial<NodeRun>): NodeRun =>
-    nodeRunRecord(ctx, node, nodeRunId, reads, { ...options.carry, ...patch }, round);
+    nodeRunRecord(ctx, node, nodeRunId, reads, { ...options.carry, ...r5Carry, ...patch }, round, {
+      ...(r5?.retrieved === undefined ? {} : { retrieved: r5.retrieved }),
+      ...(r5?.memory === undefined ? {} : { memory: r5.memory }),
+    });
+  const memoryOps = r5?.memoryOps;
 
   const frames: ScriptedFrame[] = [
     ...(options.skipReady === true
@@ -348,11 +427,14 @@ function runNode(
     {
       ...stateFrame(ctx, nodeRunId, node.id, 'RUNNING', 30, undefined, round),
       nodeRun: record({}),
+      // the remembered facts just went into an envelope (FR-MEM-003)
+      ...(r5?.memory === undefined ? {} : { effect: (db: MockDb) => db.touchMemory(node.id) }),
     },
+    ...(contextVerdict === undefined ? [] : [verdictFrame(ctx, contextVerdict, 10)]),
     ...deltas.map((delta) => tokenFrame(ctx, nodeRunId, delta, options.tokenDelay)),
     {
       after: 30,
-      nodeRun: record({ output: [{ type: 'text', text }], usage: spent, modelUsed }),
+      nodeRun: record({ output, usage: spent, ...used }),
       event: {
         type: 'node.output',
         scope: 'workflow',
@@ -361,9 +443,9 @@ function runNode(
           runId: ctx.run.id,
           nodeRunId,
           nodeId: node.id,
-          output: [{ type: 'text', text }],
+          output,
           usage: spent,
-          modelUsed,
+          ...used,
         },
       },
     },
@@ -371,12 +453,16 @@ function runNode(
       ...stateFrame(ctx, nodeRunId, node.id, 'COMPLETED', 20, undefined, round),
       nodeRun: record({
         status: 'COMPLETED',
-        output: [{ type: 'text', text }],
+        output,
         usage: spent,
-        modelUsed,
+        ...used,
         endedAt: new Date(Date.parse(ctx.run.startedAt) + 400).toISOString(),
         durationMs: 400,
       }),
+      // `__memory` ops are applied once the node run has succeeded (§2.2, FR-MEM-002)
+      ...(memoryOps === undefined
+        ? {}
+        : { effect: (db: MockDb) => applyMemoryOps(db, node.id, memoryOps) }),
     },
   ];
 
@@ -386,7 +472,7 @@ function runNode(
     }
   }
 
-  return { frames, nodeRunId, text, usage: spent };
+  return { frames, nodeRunId, text, output, usage: spent };
 }
 
 /** One handoff along a data edge, summarised for the edge label (FR-EXE-015). */
@@ -647,9 +733,15 @@ export function buildScenario(name: ScenarioName, given: Context): ScriptedFrame
   const round4 = buildRound4Scenario(name, ctx, order, outputNode);
   if (round4 !== undefined) return [...frames, ...round4];
 
+  const traced = name === 'trace-full' ? traceFullScript(ctx, order, outputNode) : undefined;
+  if (traced !== undefined) return [...frames, ...traced];
+
   const { tokenDelay, words } = stream(ctx);
   const spent: Usage[] = [];
   let lastText = '';
+  // what the previous node produced — its text for every round 1–4 node, `{ hits }` json after a
+  // Retrieval node (round 5 §2.4)
+  let lastOutput: Part[] = [];
 
   const inputText = ctx.nodes
     .filter((node) => node.kind === 'input')
@@ -662,7 +754,7 @@ export function buildScenario(name: ScenarioName, given: Context): ScriptedFrame
         ? inputText === undefined
           ? []
           : [{ type: 'text', text: inputText }]
-        : [{ type: 'text', text: lastText }];
+        : lastOutput;
     const result = runNode(ctx, node, {
       tokenDelay,
       words,
@@ -673,6 +765,7 @@ export function buildScenario(name: ScenarioName, given: Context): ScriptedFrame
     frames.push(...result.frames);
     spent.push(result.usage);
     lastText = result.text;
+    lastOutput = result.output;
     if (name === 'socket-drop' && index === 0) {
       frames.push({
         after: 10,
@@ -1832,6 +1925,150 @@ function timelineScript(
   );
 
   frames.push(...completed(ctx, 'COMPLETE', node.usage, finalOutput(outputNode, agentText)));
+  return frames;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Round 5 (§2.6): a run whose trace holds every kind of entry                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * TC-OBS-001: "run with tools and guardrails → trace shows all in order". The first agent calls a
+ * tool, trips an `ask_user` verdict, waits, is approved and finishes; the rest of the chain runs;
+ * and when the graph has a loop edge (the `review-fix` template has one) its body runs a second
+ * iteration and the loop stops — so the trace holds a `node_run`, `tool_call`, `verdict`,
+ * `approval`, `loop` and `run_event` entry, each from its own event. Nothing holds: the approval is
+ * decided in the script, so the run reaches COMPLETE on its own.
+ */
+function traceFullScript(
+  ctx: Context,
+  order: Node[],
+  outputNode: Node | undefined,
+): ScriptedFrame[] | undefined {
+  const first = order.find((node) => node.kind === 'agent' || node.kind === 'model');
+  if (first === undefined) return undefined;
+
+  const reads = inputReads(ctx);
+  const said = textOf(reads) || 'trace this';
+  const nodeRunId = newId();
+  const call = toolCallOf(
+    nodeRunId,
+    'echo',
+    { text: said },
+    `echo → ${said}`.slice(0, 200),
+    'ok',
+    at(ctx, 120),
+    [toolAllowed(nodeRunId, 'echo', at(ctx, 110))],
+  );
+  const ask = verdictOf(
+    nodeRunId,
+    {
+      point: 'output',
+      checkType: 'pii',
+      action: 'ask_user',
+      passed: false,
+      reason: 'The output contains an email address.',
+    },
+    at(ctx, 160),
+  );
+  const request: ApprovalRequest = {
+    id: newId(),
+    runId: ctx.run.id,
+    nodeRunId,
+    nodeId: first.id,
+    nodeName: first.name,
+    point: 'output',
+    checkType: 'pii',
+    reason: ask.reason,
+    preview: `${first.name} wrote: contact [email redacted] for details.`.slice(
+      0,
+      APPROVAL_PREVIEW_MAX,
+    ),
+    requestedAt: at(ctx, 180),
+  };
+  const decision = {
+    requestId: request.id,
+    decision: 'approve' as const,
+    note: 'Fine to share.',
+    decidedAt: at(ctx, 220),
+  };
+
+  const text = `echo said: ${said}`;
+  const head = runCustomNode(ctx, first, {
+    reads,
+    nodeRunId,
+    output: [{ type: 'text', text }],
+    toolCalls: [call],
+    verdicts: [...call.verdicts, ask],
+    beforeOutput: [
+      toolCallFrame(ctx, nodeRunId, call),
+      verdictFrame(ctx, ask),
+      stateFrame(ctx, nodeRunId, first.id, 'WAITING', 20),
+      {
+        after: 20,
+        event: {
+          type: 'node.approval_required',
+          scope: 'workflow',
+          workflowId: ctx.workflowId,
+          payload: { runId: ctx.run.id, request },
+        },
+      },
+      {
+        after: 30,
+        event: {
+          type: 'node.approval_decided',
+          scope: 'workflow',
+          workflowId: ctx.workflowId,
+          payload: { runId: ctx.run.id, nodeRunId, decision },
+        },
+      },
+      stateFrame(ctx, nodeRunId, first.id, 'RUNNING', 20),
+    ],
+  });
+  // the decision is on the node run's record from the moment it is made (FR-GRD-013)
+  const headFrames = head.frames.map((frame) =>
+    frame.nodeRun?.id === nodeRunId
+      ? { ...frame, nodeRun: { ...frame.nodeRun, approvals: [decision] } }
+      : frame,
+  );
+
+  const frames: ScriptedFrame[] = [...headFrames];
+  const spent: Usage[] = [head.usage];
+  const rest = runChain(ctx, order.slice(order.indexOf(first) + 1), [{ type: 'text', text }]);
+  frames.push(...rest.frames);
+  spent.push(...rest.spent);
+  let lastText = order.length > 1 ? rest.lastText : text;
+
+  const loopEdge = ctx.edges.find((edge) => edge.kind === 'loop');
+  if (loopEdge !== undefined) {
+    const body = loopBody(loopEdge, ctx.edges);
+    const bodyNodes = order.filter((node) => body.has(node.id));
+    const loopFrame = (iteration: number, stop?: 'exit_condition'): ScriptedFrame => ({
+      after: 30,
+      event: {
+        type: 'loop.iteration',
+        scope: 'workflow',
+        workflowId: ctx.workflowId,
+        payload: {
+          runId: ctx.run.id,
+          edgeId: loopEdge.id,
+          targetNodeId: loopEdge.to.nodeId,
+          iteration,
+          ...(stop === undefined ? {} : { stop }),
+        },
+      },
+    });
+    frames.push(loopFrame(2));
+    const again = runChain(ctx, bodyNodes, [{ type: 'text', text: lastText }], {
+      round: { iteration: 2 },
+      seedOffset: 6,
+    });
+    frames.push(...again.frames, loopFrame(2, 'exit_condition'));
+    spent.push(...again.spent);
+    lastText = again.lastText;
+  }
+
+  frames.push(...completed(ctx, 'COMPLETE', sumUsage(spent), finalOutput(outputNode, lastText)));
   return frames;
 }
 
