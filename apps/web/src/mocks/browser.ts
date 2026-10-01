@@ -13,6 +13,17 @@ import {
   setChatScenario,
   type ChatScenario,
 } from './handlers-round4';
+import { createRound5Handlers } from './handlers-round5';
+import { failNextIngest, setIngestPace } from './knowledge';
+import {
+  playRound5Scenario,
+  seedKnowledgeBase,
+  seedMemory,
+  seedUsage,
+  type Round5Scenario,
+  type Round5ScenarioResult,
+  type SeedDocument,
+} from './seeds-round5';
 import { createNode, type Round1NodeKind } from '../nodes/factory';
 import { applyOpsWithRules } from './graph-rules';
 
@@ -73,6 +84,40 @@ declare global {
       reject(nodeRunId: string, note?: string): boolean;
       /** Round 3: the approval requests of a run that are still waiting for a decision. */
       pendingApprovals(runId: string): { id: string; nodeRunId: string; nodeName: string }[];
+      /**
+       * Round 5: how long each ingestion stage takes, in ms (persists across reloads). Lower it for a
+       * fast test; raise it to watch the progress bar climb (FR-RAG-003).
+       */
+      setIngestPace(ms: number): void;
+      /** Round 5: fail the next added document at `parsing`, whatever its bytes (FR-RAG-003). */
+      failNextIngest(on?: boolean): void;
+      /**
+       * Round 5: a knowledge base on the mock embedder in this project (or a new one), holding these
+       * documents — fixture names from `knowledge-fixtures.ts`, or `{ name, mime?, text }` — already
+       * ingested unless `staged`. Every good fixture when `docs` is left out.
+       */
+      seedKnowledgeBase(
+        projectId?: string,
+        docs?: SeedDocument[],
+        options?: { name?: string; staged?: boolean },
+      ): { projectId: string; knowledgeBaseId: string; documentIds: string[] };
+      /** Round 5: remember these facts for a node, announced as `memory.updated` (FR-MEM-001). */
+      seedMemory(nodeId: string, entries: { key: string; value: string }[]): void;
+      /** Round 5: `days` days of finished runs across two providers, for the usage screen. */
+      seedUsage(days?: number): {
+        projectId: string;
+        workflowId: string;
+        runIds: string[];
+        providerIds: string[];
+      };
+      /**
+       * Round 5's named stories: `ingest-progress`, `ingest-failed`, `memory-updated`,
+       * `trace-full`. Answers the ids it created.
+       */
+      playRound5Scenario(
+        name: Round5Scenario,
+        options?: { projectId?: string; nodeId?: string },
+      ): Round5ScenarioResult;
       /** Connect two seeded nodes by port name through the same rules the handlers use. */
       connect(
         workflowId: string,
@@ -98,6 +143,8 @@ declare global {
 const SCENARIO_KEY = 'ace.mock.scenario';
 /** The pace, kept the same way and for the same reason (D200). */
 const PACE_KEY = 'ace.mock.pace';
+/** The ingest pace, kept the same way (round 5). */
+const INGEST_PACE_KEY = 'ace.mock.ingestPace';
 
 type ScenarioName = Parameters<typeof setScenario>[0];
 type StreamPace = Parameters<typeof setStreamPace>[0];
@@ -108,6 +155,8 @@ function restoreScenario(): void {
     if (stored) setScenario(stored as ScenarioName);
     const storedPace = localStorage.getItem(PACE_KEY);
     if (storedPace) setStreamPace(storedPace as StreamPace);
+    const storedIngestPace = localStorage.getItem(INGEST_PACE_KEY);
+    if (storedIngestPace) setIngestPace(Number(storedIngestPace));
   } catch {
     // private mode or blocked storage: the default scenario is fine
   }
@@ -117,6 +166,7 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
   const db = new MockDb({ persist: true });
   restoreScenario();
   const worker = setupWorker(
+    ...createRound5Handlers(db),
     ...createRound4Handlers(db),
     ...createRound3Handlers(db),
     ...createRound2Handlers(db),
@@ -138,12 +188,15 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
       try {
         localStorage.removeItem(SCENARIO_KEY);
         localStorage.removeItem(PACE_KEY);
+        localStorage.removeItem(INGEST_PACE_KEY);
       } catch {
         // ignored, as above
       }
       setScenario('linear-complete');
       setStreamPace('normal');
       setChatScenario('chat-stream');
+      setIngestPace(150);
+      failNextIngest(false);
     },
     setLatency(ms) {
       db.setLatency(ms);
@@ -253,6 +306,33 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
         nodeRunId: request.nodeRunId,
         nodeName: request.nodeName,
       }));
+    },
+    setIngestPace(ms) {
+      setIngestPace(ms);
+      try {
+        localStorage.setItem(INGEST_PACE_KEY, String(ms));
+      } catch {
+        // nothing to do: the pace still applies to this page
+      }
+    },
+    failNextIngest(on) {
+      failNextIngest(on);
+    },
+    seedKnowledgeBase(projectId, docs, options) {
+      db.load();
+      return seedKnowledgeBase(db, projectId, docs, options);
+    },
+    seedMemory(nodeId, entries) {
+      db.load();
+      seedMemory(db, nodeId, entries);
+    },
+    seedUsage(days) {
+      db.load();
+      return seedUsage(db, days);
+    },
+    playRound5Scenario(name, options) {
+      db.load();
+      return playRound5Scenario(db, name, options);
     },
     connect(workflowId, fromNodeId, fromPort, toNodeId, toPort) {
       db.load();

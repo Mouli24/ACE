@@ -101,7 +101,7 @@ const now = (): string => new Date().toISOString();
 /* -------------------------------------------------------------------------- */
 
 /** The boundary from a `multipart/form-data; boundary=…` header, quoted or bare. */
-function boundaryOf(contentType: string | null): string | undefined {
+export function boundaryOf(contentType: string | null): string | undefined {
   if (contentType === null || !/multipart\/form-data/i.test(contentType)) return undefined;
   const match = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType);
   const value = match?.[1] ?? match?.[2];
@@ -129,7 +129,7 @@ interface MultipartFile {
  * The `file` part of a multipart body, bytes intact. A deliberately small reader — one file field,
  * the shape a browser `FormData` upload and the SDK's XHR both produce.
  */
-function parseMultipartFile(bytes: Uint8Array, boundary: string): MultipartFile | undefined {
+export function parseMultipartFile(bytes: Uint8Array, boundary: string): MultipartFile | undefined {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const delimiter = encoder.encode(`--${boundary}`);
