@@ -1,5 +1,15 @@
-import type { Edge, LoopConfig, Node, Port } from '@ace/contracts';
-import { Button, toast, tokens } from '@ace/ui';
+import type { Edge, GraphOp, LoopConfig, Node, Port } from '@ace/contracts';
+import {
+  Button,
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+  ContextMenuTrigger,
+  toast,
+  tokens,
+} from '@ace/ui';
 import {
   Background,
   BackgroundVariant,
@@ -18,8 +28,16 @@ import {
   type OnSelectionChangeParams,
   type Viewport,
 } from '@xyflow/react';
-import { Copy, Maximize2 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { Copy, LayoutGrid, Maximize2, Redo2, Undo2 } from 'lucide-react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 
 import { useSelectionStore } from '../app/stores/selection';
 import { useViewportStore } from '../app/stores/viewport';
@@ -30,13 +48,28 @@ import { newId } from '../lib/ulid';
 import { useProviders } from '../providers/hooks';
 import { nodeTypes, type AceFlowNode } from '../nodes/NodeCard';
 import { edgeTypes } from '../nodes/TypedEdge';
-import { createNode, type Round1NodeKind } from '../nodes/factory';
+import {
+  NODE_KIND_LABEL,
+  ROUND_1_NODE_KINDS,
+  createNode,
+  type Round1NodeKind,
+} from '../nodes/factory';
 import { useRunStore } from '../runs/run-store';
 import { useGraphSync, useWorkflowGraph } from '../workflows/hooks';
 import { PALETTE_DRAG_TYPE } from './Palette';
 import { useCanvasApi } from './canvas-api';
 import { checkConnection, type ConnectionAttempt } from './connect';
-import { duplicateNodes } from './duplicate';
+import { DUPLICATE_OFFSET, duplicateNodes } from './duplicate';
+import {
+  copyNodes,
+  parseClipboard,
+  pasteNodes,
+  readClipboard,
+  writeClipboard,
+  type ClipboardPayload,
+} from './interactions/clipboard';
+import { useGraphEditor, useHistoryDepth } from './interactions/use-graph-editor';
+import { autoLayout } from './layout/auto-layout';
 import { freeSlotNear } from './placement';
 import { toFlowEdges, toFlowNodes } from './to-flow';
 
@@ -45,10 +78,21 @@ const aceEdgeTypes = { ...edgeTypes, ...loopEdgeType };
 
 export interface CanvasProps {
   workflowId: string;
+  /**
+   * FR-MOB-003: look, do not touch. Pan, zoom, select and inspect still work; adding, dragging,
+   * connecting, deleting, pasting, undo/redo, auto-arrange and every editing menu item are off.
+   */
+  readOnly?: boolean;
 }
 
-/** The Canvas (FR-CAN-001..007, 010): loading gate outside, React Flow inside. */
-export function Canvas({ workflowId }: CanvasProps) {
+/** Right-click target (FR-CAN-011): a node, or the empty Canvas at a flow position. */
+type MenuTarget =
+  { kind: 'node'; nodeId: string } | { kind: 'pane'; position: { x: number; y: number } };
+
+const MOD = typeof navigator !== 'undefined' && /Mac|iP/.test(navigator.platform) ? '⌘' : 'Ctrl+';
+
+/** The Canvas (FR-CAN-001..013): loading gate outside, React Flow inside. */
+export function Canvas({ workflowId, readOnly = false }: CanvasProps) {
   const graph = useWorkflowGraph(workflowId);
 
   // FR-CAN-010: nodes and edges arrive in one response; nothing is drawn before both are here.
@@ -69,7 +113,12 @@ export function Canvas({ workflowId }: CanvasProps) {
 
   return (
     <ReactFlowProvider>
-      <CanvasInner workflowId={workflowId} nodes={graph.data.nodes} edges={graph.data.edges} />
+      <CanvasInner
+        workflowId={workflowId}
+        nodes={graph.data.nodes}
+        edges={graph.data.edges}
+        readOnly={readOnly}
+      />
     </ReactFlowProvider>
   );
 }
@@ -83,12 +132,18 @@ function CanvasInner({
   workflowId,
   nodes,
   edges,
+  readOnly,
 }: {
   workflowId: string;
   nodes: Node[];
   edges: Edge[];
+  readOnly: boolean;
 }) {
   const sync = useGraphSync(workflowId);
+  /** Every user edit goes through here: one undo step, then autosave (FR-CAN-009, BR-01). */
+  const editor = useGraphEditor(workflowId, sync);
+  const { canUndo, canRedo } = useHistoryDepth(workflowId);
+  const [menuTarget, setMenuTarget] = useState<MenuTarget>();
   const flow = useReactFlow<AceFlowNode>();
   const setSelection = useSelectionStore((s) => s.setSelection);
   const selectedNodeIds = useSelectionStore((s) => s.nodeIds);
@@ -139,6 +194,7 @@ function CanvasInner({
 
   const tryConnect = useCallback(
     (attempt: Connection) => {
+      if (readOnly) return false;
       const verdict = checkConnection(nodes, edges, attempt);
       if (!verdict.ok) {
         if (verdict.code === 'cycle') {
@@ -156,21 +212,24 @@ function CanvasInner({
         toast.error('Connection refused', { description: verdict.reason });
         return false;
       }
-      sync.enqueue([
-        {
-          op: 'add_edge',
-          edge: {
-            id: newId(),
-            workflowId,
-            kind: 'data',
-            from: { nodeId: verdict.fromNodeId, portId: verdict.source.id },
-            to: { nodeId: verdict.toNodeId, portId: verdict.target.id },
+      editor.edit(
+        [
+          {
+            op: 'add_edge',
+            edge: {
+              id: newId(),
+              workflowId,
+              kind: 'data',
+              from: { nodeId: verdict.fromNodeId, portId: verdict.source.id },
+              to: { nodeId: verdict.toNodeId, portId: verdict.target.id },
+            },
           },
-        },
-      ]);
+        ],
+        'Connect',
+      );
       return true;
     },
-    [nodes, edges, sync, workflowId, loopOffer],
+    [nodes, edges, editor, workflowId, loopOffer, readOnly],
   );
 
   const isValidConnection = useCallback(
@@ -235,6 +294,7 @@ function CanvasInner({
   /** Keyboard connect (NFR-USE-02): Enter on an output arms it, Enter on an input completes. */
   const onPortKey = useCallback(
     (port: Port, direction: 'in' | 'out', nodeId: string) => {
+      if (readOnly) return;
       if (direction === 'out') {
         setArmedPortId((current) => (current === port.id ? undefined : port.id));
         toast.message(`Output “${port.name}” armed`, {
@@ -254,7 +314,7 @@ function CanvasInner({
       }
       setArmedPortId(undefined);
     },
-    [armedPortId, nodes, tryConnect],
+    [armedPortId, nodes, tryConnect, readOnly],
   );
 
   /* ---------------------------------------------------------------- nodes */
@@ -295,16 +355,17 @@ function CanvasInner({
           : [],
       );
       if (moves.length > 0) {
-        sync.enqueue(
+        editor.edit(
           moves.map((m) => ({
             op: 'move_node' as const,
             nodeId: m.id,
             position: { x: Math.round(m.position.x), y: Math.round(m.position.y) },
           })),
+          moves.length === 1 ? 'Move node' : `Move ${moves.length} nodes`,
         );
       }
     },
-    [sync],
+    [editor],
   );
 
   /**
@@ -379,35 +440,65 @@ function CanvasInner({
     [setSelection],
   );
 
-  const onNodesDelete = useCallback(
-    (deleted: AceFlowNode[]) => {
-      sync.enqueue(deleted.map((n) => ({ op: 'delete_node' as const, nodeId: n.id })));
+  /**
+   * One deletion = one batch = one undo step (FR-CAN-009). Edges attached to a deleted node go with
+   * it (the engine drops them), so only the other selected edges need their own `delete_edge`.
+   */
+  const deleteElements = useCallback(
+    (nodeIds: readonly string[], edgeIds: readonly string[]) => {
+      if (readOnly) return;
+      const gone = new Set(nodeIds);
+      const ops: GraphOp[] = [
+        ...edgeIds
+          .filter((id) => {
+            const edge = edges.find((e) => e.id === id);
+            return edge !== undefined && !gone.has(edge.from.nodeId) && !gone.has(edge.to.nodeId);
+          })
+          .map((edgeId) => ({ op: 'delete_edge' as const, edgeId })),
+        ...nodeIds
+          .filter((id) => nodes.some((n) => n.id === id))
+          .map((nodeId) => ({ op: 'delete_node' as const, nodeId })),
+      ];
+      if (ops.length === 0) return;
+      const label =
+        nodeIds.length === 0
+          ? edgeIds.length === 1
+            ? 'Delete connection'
+            : 'Delete connections'
+          : nodeIds.length === 1
+            ? 'Delete node'
+            : `Delete ${nodeIds.length} nodes`;
+      editor.edit(ops, label);
     },
-    [sync],
+    [editor, nodes, edges, readOnly],
   );
 
-  const onEdgesDelete = useCallback(
-    (deleted: Array<{ id: string }>) => {
-      sync.enqueue(deleted.map((e) => ({ op: 'delete_edge' as const, edgeId: e.id })));
-    },
-    [sync],
+  const onDelete = useCallback(
+    ({ nodes: gone, edges: cut }: { nodes: AceFlowNode[]; edges: Array<{ id: string }> }) =>
+      deleteElements(
+        gone.map((n) => n.id),
+        cut.map((e) => e.id),
+      ),
+    [deleteElements],
   );
 
   const addNodeAt = useCallback(
     (kind: Round1NodeKind, position: { x: number; y: number }) => {
+      if (readOnly) return undefined;
       const node = createNode(kind, workflowId, {
         x: Math.round(position.x),
         y: Math.round(position.y),
       });
-      sync.enqueue([{ op: 'add_node', node }]);
+      editor.edit([{ op: 'add_node', node }], 'Add node');
       setSelection([node.id], []);
       return node;
     },
-    [sync, workflowId, setSelection],
+    [editor, workflowId, setSelection, readOnly],
   );
 
   const addNodeAtCenter = useCallback(
     (kind: Round1NodeKind) => {
+      if (readOnly) return undefined;
       const bounds = wrapper.current?.getBoundingClientRect();
       const left = bounds?.left ?? 0;
       const top = bounds?.top ?? 0;
@@ -438,103 +529,342 @@ function CanvasInner({
       }
       return node;
     },
-    [addNodeAt, flow, nodes],
+    [addNodeAt, flow, nodes, readOnly],
   );
 
-  const duplicateSelection = useCallback(() => {
-    const selected = nodes.filter((n) => selectedNodeIds.includes(n.id));
-    if (selected.length === 0) return;
-    const copies = duplicateNodes(selected, nodes);
-    sync.enqueue(copies.map((node) => ({ op: 'add_node' as const, node })));
-    setSelection(
-      copies.map((n) => n.id),
-      [],
-    );
-  }, [nodes, selectedNodeIds, sync, setSelection]);
+  /** The nodes an action applies to: the selection, or the right-clicked node when outside it. */
+  const targetIds = useCallback(
+    (nodeId?: string) =>
+      nodeId === undefined || selectedNodeIds.includes(nodeId) ? selectedNodeIds : [nodeId],
+    [selectedNodeIds],
+  );
+
+  const duplicateNodesById = useCallback(
+    (ids: readonly string[]) => {
+      if (readOnly) return;
+      const selected = nodes.filter((n) => ids.includes(n.id));
+      if (selected.length === 0) return;
+      const copies = duplicateNodes(selected, nodes);
+      editor.edit(
+        copies.map((node) => ({ op: 'add_node' as const, node })),
+        copies.length === 1 ? 'Duplicate node' : `Duplicate ${copies.length} nodes`,
+      );
+      setSelection(
+        copies.map((n) => n.id),
+        [],
+      );
+    },
+    [nodes, editor, setSelection, readOnly],
+  );
+
+  const duplicateSelection = useCallback(
+    () => duplicateNodesById(selectedNodeIds),
+    [duplicateNodesById, selectedNodeIds],
+  );
 
   const fitView = useCallback(() => void flow.fitView({ padding: 0.2, duration: 200 }), [flow]);
 
-  // Expose to the palette and the config panel (they live in other panes).
+  /** FR-CAN-012 Ctrl+A: every node selected (edges stay as they are: deleting all nodes takes them). */
+  const selectAll = useCallback(
+    () =>
+      setSelection(
+        nodes.map((n) => n.id),
+        [],
+      ),
+    [nodes, setSelection],
+  );
+
+  /** FR-CAN-013: the nodes and the edges between them, kept for a paste here or in another workflow. */
+  const copySelection = useCallback(
+    (ids: readonly string[] = selectedNodeIds) => {
+      const payload = copyNodes(workflowId, nodes, edges, ids);
+      if (!payload) return false;
+      writeClipboard(payload);
+      toast.message(
+        payload.nodes.length === 1 ? 'Copied 1 node' : `Copied ${payload.nodes.length} nodes`,
+      );
+      return true;
+    },
+    [workflowId, nodes, edges, selectedNodeIds],
+  );
+
+  /**
+   * Paste with new ids, the same config, and the copied edges rewired (FR-CAN-013), as one undo
+   * step. `at` (from the empty-Canvas menu) moves the group so it starts where the user clicked.
+   */
+  const pastePayload = useCallback(
+    (payload: ClipboardPayload, at?: { x: number; y: number }) => {
+      if (readOnly || payload.nodes.length === 0) return;
+      let source = payload;
+      if (at) {
+        const minX = Math.min(...payload.nodes.map((n) => n.position.x));
+        const minY = Math.min(...payload.nodes.map((n) => n.position.y));
+        const dx = at.x - minX - DUPLICATE_OFFSET;
+        const dy = at.y - minY - DUPLICATE_OFFSET;
+        source = {
+          ...payload,
+          nodes: payload.nodes.map((n) => ({
+            ...n,
+            position: { x: n.position.x + dx, y: n.position.y + dy },
+          })),
+        };
+      }
+      const pasted = pasteNodes(source, workflowId, nodes);
+      editor.edit(
+        [
+          ...pasted.nodes.map((node) => ({ op: 'add_node' as const, node })),
+          ...pasted.edges.map((edge) => ({ op: 'add_edge' as const, edge })),
+        ],
+        pasted.nodes.length === 1 ? 'Paste node' : `Paste ${pasted.nodes.length} nodes`,
+      );
+      setSelection(
+        pasted.nodes.map((n) => n.id),
+        [],
+      );
+    },
+    [readOnly, workflowId, nodes, editor, setSelection],
+  );
+
+  const paste = useCallback(
+    (at?: { x: number; y: number }) => {
+      if (readOnly) return;
+      const held = readClipboard();
+      if (held) {
+        pastePayload(held, at);
+        return;
+      }
+      // another tab of ACE may have put nodes on the system clipboard (best effort, may be denied)
+      void navigator.clipboard
+        ?.readText()
+        .then((text) => {
+          const parsed = parseClipboard(text);
+          if (parsed) pastePayload(parsed, at);
+        })
+        .catch(() => undefined);
+    },
+    [readOnly, pastePayload],
+  );
+
+  /**
+   * FR-CAN-008 / ADR-010: lay the graph out left to right in one batch of `move_node` ops — one
+   * undo step — using the sizes React Flow measured. Free dragging is untouched.
+   */
+  const autoArrange = useCallback(() => {
+    if (readOnly || nodes.length === 0) return;
+    const measured = new Map(flow.getNodes().map((n) => [n.id, n.measured]));
+    const laid = autoLayout(
+      nodes.map((n) => {
+        const size = measured.get(n.id);
+        return {
+          id: n.id,
+          position: n.position,
+          ...(size?.width ? { width: size.width } : {}),
+          ...(size?.height ? { height: size.height } : {}),
+        };
+      }),
+      edges,
+    );
+    const ops: GraphOp[] = nodes.flatMap((n) => {
+      const next = laid.get(n.id);
+      return next && (next.x !== n.position.x || next.y !== n.position.y)
+        ? [{ op: 'move_node' as const, nodeId: n.id, position: next }]
+        : [];
+    });
+    if (ops.length > 0) editor.edit(ops, 'Auto-arrange');
+    requestAnimationFrame(() => void flow.fitView({ padding: 0.2, duration: 200 }));
+  }, [readOnly, nodes, edges, flow, editor]);
+
+  const undo = useCallback(() => {
+    if (!readOnly) editor.undo();
+  }, [editor, readOnly]);
+  const redo = useCallback(() => {
+    if (!readOnly) editor.redo();
+  }, [editor, readOnly]);
+
+  // Expose to the palette, the config panel and the top bar (they live in other panes).
   const register = useCanvasApi((s) => s.register);
   useEffect(
-    () => register({ addNode: addNodeAtCenter, fitView, duplicateSelection }),
-    [register, addNodeAtCenter, fitView, duplicateSelection],
+    () =>
+      register({
+        addNode: addNodeAtCenter,
+        fitView,
+        duplicateSelection,
+        autoArrange,
+        undo,
+        redo,
+        readOnly,
+      }),
+    [register, addNodeAtCenter, fitView, duplicateSelection, autoArrange, undo, redo, readOnly],
   );
 
   /* ---------------------------------------------------------------- drop from palette */
 
-  const onDragOver = useCallback((event: DragEvent) => {
-    if (event.dataTransfer.types.includes(PALETTE_DRAG_TYPE)) {
-      event.preventDefault();
-      event.dataTransfer.dropEffect = 'move';
-    }
-  }, []);
+  const onDragOver = useCallback(
+    (event: DragEvent) => {
+      if (readOnly) return;
+      if (event.dataTransfer.types.includes(PALETTE_DRAG_TYPE)) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+      }
+    },
+    [readOnly],
+  );
 
   const onDrop = useCallback(
     (event: DragEvent) => {
+      if (readOnly) return;
       const kind = event.dataTransfer.getData(PALETTE_DRAG_TYPE) as Round1NodeKind | '';
       if (!kind) return;
       event.preventDefault();
       const position = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
       addNodeAt(kind, position);
     },
-    [flow, addNodeAt],
+    [flow, addNodeAt, readOnly],
   );
 
-  /* ---------------------------------------------------------------- keyboard: F fits (FR-CAN-007) */
+  /* ------------------------------------------------- keyboard (FR-CAN-007, FR-CAN-012, FR-CAN-013) */
 
   useEffect(() => {
+    /** Copy, paste and select-all keep their browser meaning outside the Canvas (e.g. a log line). */
+    const onCanvas = (target: EventTarget | null) =>
+      target === null ||
+      target === document.body ||
+      target === document.documentElement ||
+      (target instanceof globalThis.Node && wrapper.current?.contains(target) === true);
+
     const onKey = (event: globalThis.KeyboardEvent) => {
       if (isEditable(event.target)) return;
-      if (event.key === 'f' || event.key === 'F') {
-        if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const key = event.key.toLowerCase();
+      const mod = event.ctrlKey || event.metaKey;
+
+      if (key === 'f' && !mod && !event.altKey) {
         event.preventDefault();
         fitView();
+        return;
       }
       if (event.key === 'Escape') {
         setArmedPortId(undefined);
         setEdgeMenu(undefined);
+        return;
+      }
+      if (!mod || event.altKey) return;
+
+      if (key === 'a' && onCanvas(event.target)) {
+        event.preventDefault();
+        selectAll();
+        return;
+      }
+      if (key === 'c' && onCanvas(event.target)) {
+        // text the user highlighted on purpose copies as text
+        if ((window.getSelection()?.toString() ?? '') !== '') return;
+        if (copySelection()) event.preventDefault();
+        return;
+      }
+      if (readOnly) return;
+      if (key === 'v' && onCanvas(event.target)) {
+        event.preventDefault();
+        paste();
+        return;
+      }
+      if (key === 'd') {
+        event.preventDefault(); // never the browser's bookmark dialog
+        duplicateSelection();
+        return;
+      }
+      if (key === 'z' && !event.shiftKey) {
+        event.preventDefault();
+        editor.undo();
+        return;
+      }
+      if (key === 'y' || (key === 'z' && event.shiftKey)) {
+        event.preventDefault();
+        editor.redo();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [fitView]);
+  }, [fitView, selectAll, copySelection, paste, duplicateSelection, editor, readOnly]);
 
   /* ---------------------------------------------------------------- edge context menu (FR-CON-004) */
 
-  const onEdgeContextMenu: EdgeMouseHandler = useCallback((event, edge) => {
-    event.preventDefault();
-    const bounds = wrapper.current?.getBoundingClientRect();
-    setEdgeMenu({
-      edgeId: edge.id,
-      x: event.clientX - (bounds?.left ?? 0),
-      y: event.clientY - (bounds?.top ?? 0),
-    });
-  }, []);
+  const onEdgeContextMenu: EdgeMouseHandler = useCallback(
+    (event, edge) => {
+      event.preventDefault();
+      setMenuTarget(undefined);
+      // read-only: a data edge has nothing to offer but editing, so no menu at all
+      if (readOnly && edges.find((e) => e.id === edge.id)?.kind !== 'loop') return;
+      const bounds = wrapper.current?.getBoundingClientRect();
+      setEdgeMenu({
+        edgeId: edge.id,
+        x: event.clientX - (bounds?.left ?? 0),
+        y: event.clientY - (bounds?.top ?? 0),
+      });
+    },
+    [readOnly, edges],
+  );
+
+  /* ------------------------------------------------- node and empty-Canvas menus (FR-CAN-011) */
+
+  /**
+   * Decide what was right-clicked before the menu opens. An edge already called `preventDefault`
+   * (its own inline menu), and the toolbar, minimap and zoom controls get no menu at all.
+   */
+  const onCanvasContextMenu = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (event.defaultPrevented) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const nodeEl = target?.closest('.react-flow__node');
+      const nodeId = nodeEl?.getAttribute('data-id') ?? undefined;
+      if (nodeId !== undefined) {
+        setEdgeMenu(undefined);
+        setMenuTarget({ kind: 'node', nodeId });
+        if (!selectedNodeIds.includes(nodeId)) setSelection([nodeId], []);
+        return;
+      }
+      if (target?.closest('.react-flow__nodesselection') && selectedNodeIds[0] !== undefined) {
+        setEdgeMenu(undefined);
+        setMenuTarget({ kind: 'node', nodeId: selectedNodeIds[0] });
+        return;
+      }
+      if (target?.closest('.react-flow__pane')) {
+        setEdgeMenu(undefined);
+        setMenuTarget({
+          kind: 'pane',
+          position: flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }),
+        });
+        return;
+      }
+      event.preventDefault();
+    },
+    [flow, selectedNodeIds, setSelection],
+  );
 
   /** The one graph-op a confirmed loop edge needs: `add_edge` with `kind: 'loop'` (§2.6). */
   const createLoopEdge = useCallback(
     (candidate: LoopEdgeCandidate, loop: LoopConfig) => {
-      sync.enqueue([
-        // One batch is one transaction (§2.6): a conversion never leaves both edges on the graph.
-        ...(candidate.replacesEdgeId === undefined
-          ? []
-          : [{ op: 'delete_edge' as const, edgeId: candidate.replacesEdgeId }]),
-        {
-          op: 'add_edge',
-          edge: {
-            id: newId(),
-            workflowId,
-            kind: 'loop',
-            from: candidate.from,
-            to: candidate.to,
-            loop,
+      editor.edit(
+        [
+          // One batch is one transaction (§2.6): a conversion never leaves both edges on the graph.
+          ...(candidate.replacesEdgeId === undefined
+            ? []
+            : [{ op: 'delete_edge' as const, edgeId: candidate.replacesEdgeId }]),
+          {
+            op: 'add_edge',
+            edge: {
+              id: newId(),
+              workflowId,
+              kind: 'loop',
+              from: candidate.from,
+              to: candidate.to,
+              loop,
+            },
           },
-        },
-      ]);
+        ],
+        'Make loop edge',
+      );
       setLoopCandidate(undefined);
     },
-    [sync, workflowId],
+    [editor, workflowId],
   );
 
   const onMoveEnd = useCallback(
@@ -542,119 +872,235 @@ function CanvasInner({
     [setViewport, workflowId],
   );
 
+  const menuNodeIds = menuTarget?.kind === 'node' ? targetIds(menuTarget.nodeId) : [];
+
   return (
-    <div
-      ref={wrapper}
-      className="absolute inset-0"
-      data-testid="canvas"
-      onDragOver={onDragOver}
-      onDrop={onDrop}
+    <ContextMenu
+      modal={false}
+      onOpenChange={(open) => {
+        if (!open) setMenuTarget(undefined);
+      }}
     >
-      <ReactFlow<AceFlowNode>
-        nodes={flowNodes}
-        edges={flowEdges}
-        nodeTypes={nodeTypes}
-        edgeTypes={aceEdgeTypes}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onSelectionChange={onSelectionChange}
-        onNodesDelete={onNodesDelete}
-        onEdgesDelete={onEdgesDelete}
-        onConnect={tryConnect}
-        onConnectEnd={onConnectEnd}
-        isValidConnection={isValidConnection}
-        onEdgeContextMenu={onEdgeContextMenu}
-        onPaneClick={() => setEdgeMenu(undefined)}
-        onMoveEnd={onMoveEnd}
-        defaultViewport={savedViewport ?? { x: 0, y: 0, zoom: 1 }}
-        fitView={!savedViewport && nodes.length > 0}
-        fitViewOptions={{ padding: 0.2 }}
-        deleteKeyCode={['Delete', 'Backspace']}
-        multiSelectionKeyCode={['Shift', 'Control', 'Meta']}
-        selectionKeyCode="Shift"
-        panOnScroll
-        zoomOnPinch
-        zoomOnDoubleClick={false}
-        // Culling leaves off-screen nodes unmeasured, so `fitView` cannot bring them back and a
-        // node added outside the view becomes unreachable. Rendering all 200 fixture nodes costs
-        // less than the noise in TC-NFR-001, so the trade is not worth it.
-        onlyRenderVisibleElements={false}
-        minZoom={0.1}
-        maxZoom={2.5}
-        className="ace-dotted-canvas"
-        style={{ background: tokens.color.canvas }}
-      >
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={tokens.canvas.dotGap}
-          size={tokens.canvas.dotSize}
-          color={tokens.color.canvasDot}
-        />
-        <MiniMap
-          pannable
-          zoomable
-          nodeColor={tokens.color.card}
-          nodeStrokeColor={tokens.color.border}
-          maskColor="rgba(13, 17, 23, 0.7)"
-          style={{ background: tokens.color.panel }}
-        />
-        <Controls showInteractive={false} />
-        <Panel position="top-right" className="flex gap-1">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={fitView}
-            title="Fit to view (F)"
-            aria-label="Fit to view"
+      <ContextMenuTrigger asChild>
+        <div
+          ref={wrapper}
+          className="absolute inset-0"
+          data-testid="canvas"
+          data-readonly={readOnly ? 'true' : undefined}
+          onDragOver={onDragOver}
+          onDrop={onDrop}
+          onContextMenu={onCanvasContextMenu}
+        >
+          <ReactFlow<AceFlowNode>
+            nodes={flowNodes}
+            edges={flowEdges}
+            nodeTypes={nodeTypes}
+            edgeTypes={aceEdgeTypes}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onSelectionChange={onSelectionChange}
+            onDelete={onDelete}
+            onConnect={tryConnect}
+            onConnectEnd={onConnectEnd}
+            isValidConnection={isValidConnection}
+            onEdgeContextMenu={onEdgeContextMenu}
+            onPaneClick={() => setEdgeMenu(undefined)}
+            onMoveEnd={onMoveEnd}
+            defaultViewport={savedViewport ?? { x: 0, y: 0, zoom: 1 }}
+            fitView={!savedViewport && nodes.length > 0}
+            fitViewOptions={{ padding: 0.2 }}
+            deleteKeyCode={readOnly ? null : ['Delete', 'Backspace']}
+            nodesDraggable={!readOnly}
+            nodesConnectable={!readOnly}
+            multiSelectionKeyCode={['Shift', 'Control', 'Meta']}
+            selectionKeyCode="Shift"
+            panOnScroll
+            zoomOnPinch
+            zoomOnDoubleClick={false}
+            // Culling leaves off-screen nodes unmeasured, so `fitView` cannot bring them back and a
+            // node added outside the view becomes unreachable. Rendering all 200 fixture nodes costs
+            // less than the noise in TC-NFR-001, so the trade is not worth it.
+            onlyRenderVisibleElements={false}
+            minZoom={0.1}
+            maxZoom={2.5}
+            className="ace-dotted-canvas"
+            style={{ background: tokens.color.canvas }}
           >
-            <Maximize2 className="h-3.5 w-3.5" /> Fit
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={duplicateSelection}
-            disabled={selectedNodeIds.length === 0}
-            title="Duplicate selected nodes"
-            aria-label="Duplicate selected nodes"
-          >
-            <Copy className="h-3.5 w-3.5" /> Duplicate
-          </Button>
-        </Panel>
-      </ReactFlow>
-      {loopCandidate && (
-        <MakeLoopEdgeDialog
-          candidate={loopCandidate}
-          onCancel={() => setLoopCandidate(undefined)}
-          onCreate={(loop) => createLoopEdge(loopCandidate, loop)}
-        />
+            <Background
+              variant={BackgroundVariant.Dots}
+              gap={tokens.canvas.dotGap}
+              size={tokens.canvas.dotSize}
+              color={tokens.color.canvasDot}
+            />
+            <MiniMap
+              pannable
+              zoomable
+              nodeColor={tokens.color.card}
+              nodeStrokeColor={tokens.color.border}
+              maskColor="rgba(13, 17, 23, 0.7)"
+              style={{ background: tokens.color.panel }}
+            />
+            <Controls showInteractive={false} />
+            <Panel position="top-right" className="flex gap-1">
+              {!readOnly && (
+                <>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={undo}
+                    disabled={!canUndo}
+                    title={`Undo (${MOD}Z)`}
+                    aria-label="Undo"
+                  >
+                    <Undo2 className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={redo}
+                    disabled={!canRedo}
+                    title={`Redo (${MOD}Y)`}
+                    aria-label="Redo"
+                  >
+                    <Redo2 className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={autoArrange}
+                    disabled={nodes.length === 0}
+                    title="Auto-arrange left to right"
+                    aria-label="Auto-arrange"
+                  >
+                    <LayoutGrid className="h-3.5 w-3.5" /> Auto-arrange
+                  </Button>
+                </>
+              )}
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={fitView}
+                title="Fit to view (F)"
+                aria-label="Fit to view"
+              >
+                <Maximize2 className="h-3.5 w-3.5" /> Fit
+              </Button>
+              {!readOnly && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={duplicateSelection}
+                  disabled={selectedNodeIds.length === 0}
+                  title={`Duplicate selected nodes (${MOD}D)`}
+                  aria-label="Duplicate selected nodes"
+                >
+                  <Copy className="h-3.5 w-3.5" /> Duplicate
+                </Button>
+              )}
+            </Panel>
+          </ReactFlow>
+          {loopCandidate && (
+            <MakeLoopEdgeDialog
+              candidate={loopCandidate}
+              onCancel={() => setLoopCandidate(undefined)}
+              onCreate={(loop) => createLoopEdge(loopCandidate, loop)}
+            />
+          )}
+
+          {edgeMenu && (
+            <div
+              role="menu"
+              aria-label="Connection actions"
+              className="absolute z-20 rounded-md border border-border bg-panel p-1 shadow-md"
+              style={{ left: edgeMenu.x, top: edgeMenu.y }}
+            >
+              <EdgeMenuItems
+                edge={edges.find((edge) => edge.id === edgeMenu.edgeId)}
+                nodes={nodes}
+                edges={edges}
+                readOnly={readOnly}
+                onMakeLoop={(candidate) => {
+                  setEdgeMenu(undefined);
+                  setLoopCandidate(candidate);
+                }}
+                onEditLoop={(edgeId) => {
+                  setEdgeMenu(undefined);
+                  setSelection([], [edgeId]);
+                }}
+                onDelete={() => {
+                  deleteElements([], [edgeMenu.edgeId]);
+                  setEdgeMenu(undefined);
+                }}
+              />
+            </div>
+          )}
+        </div>
+      </ContextMenuTrigger>
+
+      {menuTarget?.kind === 'node' && (
+        <ContextMenuContent aria-label="Node actions" data-testid="node-context-menu">
+          {!readOnly && (
+            <ContextMenuItem onSelect={() => duplicateNodesById(menuNodeIds)}>
+              Duplicate <ContextMenuShortcut>{MOD}D</ContextMenuShortcut>
+            </ContextMenuItem>
+          )}
+          <ContextMenuItem onSelect={() => copySelection(menuNodeIds)}>
+            Copy <ContextMenuShortcut>{MOD}C</ContextMenuShortcut>
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => setSelection([menuTarget.nodeId], [])}>
+            {readOnly ? 'Inspect' : 'Configure'}
+          </ContextMenuItem>
+          {!readOnly && (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuItem destructive onSelect={() => deleteElements(menuNodeIds, [])}>
+                Delete <ContextMenuShortcut>Del</ContextMenuShortcut>
+              </ContextMenuItem>
+            </>
+          )}
+        </ContextMenuContent>
       )}
 
-      {edgeMenu && (
-        <div
-          role="menu"
-          className="absolute z-20 rounded-md border border-border bg-panel p-1 shadow-md"
-          style={{ left: edgeMenu.x, top: edgeMenu.y }}
-        >
-          <EdgeMenuItems
-            edge={edges.find((edge) => edge.id === edgeMenu.edgeId)}
-            nodes={nodes}
-            edges={edges}
-            onMakeLoop={(candidate) => {
-              setEdgeMenu(undefined);
-              setLoopCandidate(candidate);
-            }}
-            onEditLoop={(edgeId) => {
-              setEdgeMenu(undefined);
-              setSelection([], [edgeId]);
-            }}
-            onDelete={() => {
-              sync.enqueue([{ op: 'delete_edge', edgeId: edgeMenu.edgeId }]);
-              setEdgeMenu(undefined);
-            }}
-          />
-        </div>
+      {menuTarget?.kind === 'pane' && (
+        <ContextMenuContent aria-label="Canvas actions" data-testid="pane-context-menu">
+          {!readOnly && (
+            <>
+              <ContextMenuItem
+                disabled={readClipboard() === undefined}
+                onSelect={() => paste(menuTarget.position)}
+              >
+                Paste <ContextMenuShortcut>{MOD}V</ContextMenuShortcut>
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <div className="px-2 py-1 text-[11px] uppercase tracking-wide text-fg-muted">
+                Add node ▸
+              </div>
+              {ROUND_1_NODE_KINDS.map((kind) => (
+                <ContextMenuItem
+                  key={kind}
+                  className="pl-4"
+                  onSelect={() => addNodeAt(kind, freeSlotNear(nodes, menuTarget.position))}
+                >
+                  Add {NODE_KIND_LABEL[kind]}
+                </ContextMenuItem>
+              ))}
+              <ContextMenuSeparator />
+            </>
+          )}
+          <ContextMenuItem disabled={nodes.length === 0} onSelect={selectAll}>
+            Select all <ContextMenuShortcut>{MOD}A</ContextMenuShortcut>
+          </ContextMenuItem>
+          {!readOnly && (
+            <ContextMenuItem disabled={nodes.length === 0} onSelect={autoArrange}>
+              Auto-arrange
+            </ContextMenuItem>
+          )}
+          <ContextMenuItem onSelect={fitView}>
+            Fit view <ContextMenuShortcut>F</ContextMenuShortcut>
+          </ContextMenuItem>
+        </ContextMenuContent>
       )}
-    </div>
+    </ContextMenu>
   );
 }
 
@@ -670,6 +1116,7 @@ function EdgeMenuItems({
   edge,
   nodes,
   edges,
+  readOnly = false,
   onMakeLoop,
   onEditLoop,
   onDelete,
@@ -677,6 +1124,8 @@ function EdgeMenuItems({
   edge: Edge | undefined;
   nodes: Node[];
   edges: Edge[];
+  /** FR-MOB-003: only the loop settings (a look, not an edit) are offered. */
+  readOnly?: boolean;
   onMakeLoop: (candidate: LoopEdgeCandidate) => void;
   onEditLoop: (edgeId: string) => void;
   onDelete: () => void;
@@ -706,7 +1155,7 @@ function EdgeMenuItems({
         >
           Loop settings
         </button>
-      ) : (
+      ) : readOnly ? null : (
         <button
           type="button"
           role="menuitem"
@@ -727,14 +1176,16 @@ function EdgeMenuItems({
           Make loop edge
         </button>
       )}
-      <button
-        type="button"
-        role="menuitem"
-        className={`${itemClass} text-danger`}
-        onClick={onDelete}
-      >
-        Delete connection
-      </button>
+      {!readOnly && (
+        <button
+          type="button"
+          role="menuitem"
+          className={`${itemClass} text-danger`}
+          onClick={onDelete}
+        >
+          Delete connection
+        </button>
+      )}
     </>
   );
 }

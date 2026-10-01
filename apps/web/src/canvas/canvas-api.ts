@@ -6,6 +6,13 @@ export interface CanvasApi {
   addNode: (kind: Round1NodeKind) => unknown;
   fitView: () => void;
   duplicateSelection: () => void;
+  /** FR-CAN-008: left-to-right layout, one undo step. */
+  autoArrange?: () => void;
+  /** FR-CAN-009: one step back / forward through this workflow's history. */
+  undo?: () => void;
+  redo?: () => void;
+  /** FR-MOB-003: the Canvas is mounted read-only; editing actions above are no-ops. */
+  readOnly?: boolean;
 }
 
 interface CanvasApiState {
