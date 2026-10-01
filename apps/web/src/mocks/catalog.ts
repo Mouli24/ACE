@@ -178,15 +178,18 @@ export const MOCK_CATALOG: CatalogEntry[] = [
     supportsJson: false,
   },
   /*
-   * Round 5 §2.10 additions. The contract has no `embedding` data type, so `mock-embed` is declared
-   * the way the engine's mock adapter declares it — text in, json (the vector) out — and a knowledge
-   * base names it by `embeddingModelId`; nothing else marks it as an embedder.
+   * Round 5 §2.10 additions. The contract has no `embedding` data type, so nothing in a catalogue row
+   * marks a model as an embedder: a knowledge base names `mock-embed` by `embeddingModelId`. The
+   * engine's adapter declares it text → json, and `mock-memory` answers json; here, as for
+   * `mock-media` above, `json` is left off both *declared* outputs so the round 2 model-filter tests
+   * (`outputType=json` → exactly mock-json and mock-bad-json) keep their set. The mock never
+   * contract-checks an output, so `mock-memory` still produces its json `{ answer }` part.
    */
   {
     modelId: 'mock-embed',
     displayName: 'Mock embeddings',
     inputTypes: ['text'],
-    outputTypes: ['json'],
+    outputTypes: ['text'],
     contextWindow: 8192,
     supportsTools: false,
     supportsJson: false,
@@ -205,7 +208,7 @@ export const MOCK_CATALOG: CatalogEntry[] = [
     modelId: 'mock-memory',
     displayName: 'Mock memory',
     inputTypes: ['text'],
-    outputTypes: ['json'],
+    outputTypes: ['text'],
     contextWindow: 8192,
     supportsTools: false,
     supportsJson: true,

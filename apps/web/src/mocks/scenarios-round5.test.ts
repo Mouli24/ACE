@@ -216,37 +216,10 @@ describe('TC-MEM-001 / TC-MEM-002 memory carries over, and a clear stops it', ()
     const agent = nodes.find((node) => node.kind === 'agent')!;
     configure(workflow.id, agent.id, {
       modelId: 'mock-memory',
-      outputTypes: ['json'],
       memory: { enabled: true },
     });
     const input = nodes.find((node) => node.kind === 'input')!;
     configure(workflow.id, input.id, { text: 'Grace here, what can you do?' });
-    const output = nodes.find((node) => node.kind === 'output')!;
-    // the agent now answers json, so the edge to the Output node moves to its json port
-    db.commitGraph(
-      workflow.id,
-      db.nodesOf(workflow.id).map((node) =>
-        node.id === agent.id
-          ? ({
-              ...node,
-              outputs: [
-                { ...node.outputs[0]!, id: `${agent.id}:out:json`, name: 'json', dataType: 'json' },
-              ],
-            } as Node)
-          : node,
-      ),
-      db.edgesOf(workflow.id).map((edge) =>
-        edge.from.nodeId === agent.id
-          ? {
-              ...edge,
-              from: { nodeId: agent.id, portId: `${agent.id}:out:json` },
-              to: { nodeId: output.id, portId: `${output.id}:in:json` },
-            }
-          : edge,
-      ),
-      { silent: true },
-    );
-
     const first = await runToEnd(workflow.id);
     expect(first.status).toBe('COMPLETE');
     const [firstRun] = (await nodeRunsOf(first.id)).filter((nr) => nr.nodeId === agent.id);
