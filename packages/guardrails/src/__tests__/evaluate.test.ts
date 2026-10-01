@@ -125,8 +125,18 @@ describe('FR-GRD-015 evaluateChecks over a whole policy', () => {
     });
     const types = evaluated.map(({ check }) => check.type);
 
-    // Text-only input: the input and output text checks answer, the cost, loop and tool ones do not.
-    expect(types).toEqual(['pii', 'prompt_injection', 'size_limit', 'secret_leak', 'moderation']);
+    // Text-only input: the input, output and context text checks answer; the cost, loop and tool
+    // ones do not, nor does untrusted_tagging, which the context point (round 5) has yet to wire.
+    // evaluateChecks ignores the point — the engine picks a point's checks before it calls this.
+    expect(types).toEqual([
+      'pii',
+      'prompt_injection',
+      'size_limit',
+      'secret_leak',
+      'moderation',
+      'prompt_injection',
+      'pii',
+    ]);
     expect(evaluated.find(({ check }) => check.type === 'secret_leak')?.result.passed).toBe(false);
   });
 
