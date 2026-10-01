@@ -21,7 +21,7 @@ afterEach(async () => {
 function writeQuirkyServer(): string {
   const dir = mkdtempSync(join(tmpdir(), 'ace-mcp-q-'));
   const path = join(dir, 'q.mjs');
-  cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 100, retryDelay: 50 }));
   writeFileSync(
     path,
     `

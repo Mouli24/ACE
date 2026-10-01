@@ -18,6 +18,7 @@ export {
   type FinishReason,
   type GenerateRequest,
   type ModelInfo,
+  type ProducedPart,
   type ProviderAdapter,
   type ProviderAdapterFactory,
   type ProviderDetection,

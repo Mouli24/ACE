@@ -1,10 +1,19 @@
-import type { MessageType } from '@ace/contracts';
+import type { Message, MessageType, Provider, ProviderState } from '@ace/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import type { EventBus } from '../../events/index.js';
 import { newId } from '../../ids.js';
+import type {
+  EngineEvent,
+  ProviderAdapter,
+  ProviderStatus,
+  SecretStore,
+} from '../../ports/index.js';
+import { createProviderService, type ProviderService } from '../../providers/index.js';
 import { FakeRepository } from '../../__tests__/fake-repository.js';
 import { startTimelinePopulation, type TimelinePopulator } from '../timeline.js';
 import {
+  PROVIDER_ID,
   makeAgentNode,
   makeBus,
   makeClock,
@@ -175,5 +184,248 @@ describe('timeline population — lifecycle and skip cases', () => {
         { type: 'tool.call', workflowId: workflow.id, runId, payload: {} },
       ]),
     ).toEqual([]);
+  });
+});
+
+/*
+ * D-073. §2.3: "engine notices (shutdown, crash recovery, provider status changes) → `system`". A
+ * provider is engine-wide while a Message belongs to one workflow, so the notice is filed on every
+ * workflow with a node configured on that provider — the workflows whose runs the change affects —
+ * and only when the status actually changes, so a provider re-checked every 60 s (or flapping)
+ * cannot flood a timeline with the same news.
+ */
+describe('TC-CHAT-001 FR-CHAT-001 a provider status change is a system notice (D-073)', () => {
+  const now = makeClock();
+  const projectId = newId();
+  /** Two workflows on the provider (one of them twice over), one that never names it. */
+  const first = makeWorkflow(projectId);
+  const second = makeWorkflow(projectId);
+  const unrelated = makeWorkflow(projectId);
+  const firstWriter = makeAgentNode(first.id);
+  const firstReviewer = makeAgentNode(first.id, { name: 'Reviewer' });
+  const secondWriter = makeAgentNode(second.id);
+  const unrelatedInput = makeSimpleNode(unrelated.id, 'input');
+
+  let repository: FakeRepository;
+  let bus: EventBus;
+  let providers: ProviderService;
+  let populator: TimelinePopulator;
+  /** What the provider answers when it is asked (FR-PRV-003); a test moves it. */
+  let answer: ProviderStatus;
+
+  function makeProvider(status: ProviderState): Provider {
+    const at = '2026-09-30T09:00:00.000Z';
+    return {
+      id: PROVIDER_ID,
+      type: 'openai_compatible',
+      name: 'Mock (timeline)',
+      keySet: false,
+      status,
+      concurrency: 2,
+      createdAt: at,
+      updatedAt: at,
+    };
+  }
+
+  /** The real provider service, so the event is the persisted one it emits after storing the row. */
+  function makeProviders(): ProviderService {
+    const adapter: ProviderAdapter = {
+      type: 'openai_compatible',
+      check: async () => answer,
+      listModels: async () => [],
+      generate: () => ({
+        [Symbol.asyncIterator]: () => ({ next: async () => ({ done: true, value: undefined }) }),
+      }),
+    };
+    const secrets: SecretStore = {
+      isAvailable: async () => true,
+      get: async () => null,
+      set: async () => undefined,
+      delete: async () => false,
+    };
+    return createProviderService({
+      repository,
+      scope,
+      secrets,
+      factory: {
+        create: () => adapter,
+        manifestFor: () => [],
+        mergeCatalog: () => [],
+        detect: async () => ({}),
+      },
+      bus,
+      logger: silentLogger,
+      now,
+    });
+  }
+
+  async function setup(seeded: ProviderState): Promise<void> {
+    repository = new FakeRepository();
+    await repository.projects.create(scope, makeProject());
+    for (const workflow of [first, second, unrelated]) {
+      await repository.workflows.create(scope, workflow);
+    }
+    for (const node of [firstWriter, firstReviewer, secondWriter, unrelatedInput]) {
+      await repository.nodes.insert(scope, node);
+    }
+    await repository.providers.create(scope, makeProvider(seeded));
+    bus = makeBus(repository, now).bus;
+    providers = makeProviders();
+    answer = { status: 'CONNECTED' };
+    populator = await startTimelinePopulation({
+      repository,
+      bus,
+      logger: silentLogger,
+      scope,
+      now,
+      nextId: newId,
+    });
+  }
+
+  async function settle(): Promise<void> {
+    await populator.idle();
+    await populator.idle();
+  }
+
+  async function notices(workflowId: string): Promise<Message[]> {
+    const page = await repository.messages.query(scope, workflowId, { limit: 100 });
+    return page.items;
+  }
+
+  const textOf = (message: Message | undefined): string =>
+    (message?.content ?? []).map((part) => (part.type === 'text' ? part.text : '')).join('');
+
+  beforeEach(() => setup('UNKNOWN'));
+
+  it('files one system row on each workflow that uses the provider, and none elsewhere', async () => {
+    await providers.check(PROVIDER_ID);
+    await settle();
+
+    for (const workflow of [first, second]) {
+      const rows = await notices(workflow.id);
+      // One per workflow, although `first` has two nodes on the provider.
+      expect(rows.map((row) => row.type)).toEqual(['system']);
+      expect(rows[0]).toMatchObject({ workflowId: workflow.id });
+      // An engine notice belongs to no run and no single node.
+      expect(rows[0]?.runId).toBeUndefined();
+      expect(rows[0]?.nodeId).toBeUndefined();
+      expect(textOf(rows[0])).toBe('Provider Mock (timeline) changed from UNKNOWN to CONNECTED.');
+    }
+    expect(await notices(unrelated.id)).toEqual([]);
+  });
+
+  it('announces each row as message.created, like every other timeline row', async () => {
+    const created: EngineEvent[] = [];
+    await bus.subscribe((event) => {
+      if (event.type === 'message.created') created.push(event);
+    });
+
+    await providers.check(PROVIDER_ID);
+    await settle();
+
+    expect(created.map((event) => event.workflowId).sort()).toEqual([first.id, second.id].sort());
+  });
+
+  it('writes a row only on a transition: the same status re-checked writes nothing', async () => {
+    // Every 60 s the engine re-checks and re-announces the provider (FR-PRV-004).
+    for (let i = 0; i < 20; i += 1) await providers.check(PROVIDER_ID);
+    answer = { status: 'UNREACHABLE', message: 'connect ECONNREFUSED 127.0.0.1:9' };
+    for (let i = 0; i < 20; i += 1) await providers.check(PROVIDER_ID);
+    // A key refused mid-run is recorded the same way (Arch §28), and is a change of its own.
+    await providers.recordStatus(PROVIDER_ID, { status: 'AUTH_FAILED', message: 'HTTP 401' });
+    await providers.recordStatus(PROVIDER_ID, { status: 'AUTH_FAILED', message: 'HTTP 401' });
+    await settle();
+
+    const rows = await notices(first.id);
+    expect(rows.map(textOf)).toEqual([
+      'Provider Mock (timeline) changed from UNKNOWN to CONNECTED.',
+      'Provider Mock (timeline) changed from CONNECTED to UNREACHABLE: connect ECONNREFUSED 127.0.0.1:9',
+      'Provider Mock (timeline) changed from UNREACHABLE to AUTH_FAILED: HTTP 401',
+    ]);
+    expect(rows.every((row) => row.type === 'system')).toBe(true);
+  });
+
+  it('a status the provider already had when the engine started is not a change', async () => {
+    // The row says CONNECTED, as it would after a restart; the first check agrees.
+    await setup('CONNECTED');
+    await providers.check(PROVIDER_ID);
+    await settle();
+    expect(await notices(first.id)).toEqual([]);
+
+    answer = { status: 'RATE_LIMITED' };
+    await providers.check(PROVIDER_ID);
+    await settle();
+    expect((await notices(first.id)).map(textOf)).toEqual([
+      'Provider Mock (timeline) changed from CONNECTED to RATE_LIMITED.',
+    ]);
+  });
+
+  it('CHECKING is a probe in flight, not a status: it neither writes nor resets the last status', async () => {
+    await setup('CONNECTED');
+    await bus.emit({
+      type: 'provider.status',
+      payload: { providerId: PROVIDER_ID, status: 'CHECKING' },
+    });
+    await bus.emit({
+      type: 'provider.status',
+      payload: { providerId: PROVIDER_ID, status: 'CONNECTED' },
+    });
+    await settle();
+    expect(await notices(first.id)).toEqual([]);
+  });
+
+  it('masks anything in the provider’s message that looks like a key (BR-07)', async () => {
+    const key = `sk-proj-${'api03'}-AAAABBBBCCCCDDDDEEEE0000`;
+    answer = { status: 'AUTH_FAILED', message: `Incorrect API key provided: ${key}` };
+    await providers.check(PROVIDER_ID);
+    await settle();
+
+    const text = textOf((await notices(first.id))[0]);
+    expect(text).toContain('changed from UNKNOWN to AUTH_FAILED: Incorrect API key provided:');
+    expect(text).not.toContain(key);
+  });
+
+  it('names a provider that is gone by its id rather than dropping the notice', async () => {
+    await bus.emit({
+      type: 'provider.status',
+      payload: { providerId: PROVIDER_ID, status: 'UNREACHABLE' },
+    });
+    await repository.providers.delete(scope, PROVIDER_ID);
+    await bus.emit({
+      type: 'provider.status',
+      payload: { providerId: PROVIDER_ID, status: 'CONNECTED' },
+    });
+    await settle();
+
+    const texts = (await notices(first.id)).map(textOf);
+    expect(texts).toHaveLength(2);
+    expect(texts[1]).toBe(`Provider ${PROVIDER_ID} changed from UNREACHABLE to CONNECTED.`);
+  });
+
+  it('replays identically: the rows are stored, and a restarted populator does not re-announce', async () => {
+    await providers.check(PROVIDER_ID);
+    answer = { status: 'UNREACHABLE' };
+    await providers.check(PROVIDER_ID);
+    await settle();
+    const before = await notices(first.id);
+    expect(before).toHaveLength(2);
+
+    // A reconnecting client reads the same rows in the same order.
+    expect(await notices(first.id)).toEqual(before);
+
+    // An engine restart: a fresh populator seeds from the stored provider rows, so the next
+    // periodic check that finds the provider as it was adds nothing.
+    populator.unsubscribe();
+    populator = await startTimelinePopulation({
+      repository,
+      bus,
+      logger: silentLogger,
+      scope,
+      now,
+      nextId: newId,
+    });
+    await providers.check(PROVIDER_ID);
+    await settle();
+    expect(await notices(first.id)).toEqual(before);
   });
 });

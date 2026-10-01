@@ -9,6 +9,7 @@ import {
   type Run,
 } from '@ace/contracts';
 
+import type { ApprovalService } from '../../approvals/index.js';
 import type { EmittedEvent } from '../../events/index.js';
 import { notFound } from '../../gateway/errors.js';
 import { newId } from '../../ids.js';
@@ -80,6 +81,14 @@ export interface RunControlsDeps {
    * for an Input node and wrong for anything else, so the scheduler supplies it.
    */
   envelopesFor?: (run: Run, nodeId: Id) => Promise<Envelope[]>;
+
+  /**
+   * Rejects what is still waiting on a stopped run (FR-GRD-013, D111, D-054). A Stop cancels a
+   * WAITING node's approval itself, before it answers, so the card is gone by the time the client
+   * reads the halted run and a late Approve finds nothing to decide (D120's 404). Absent, the
+   * scheduler still rejects them once the drive has unwound.
+   */
+  approvals?: Pick<ApprovalService, 'cancelPending'>;
 
   logger?: Logger;
   now?: () => string;
@@ -254,6 +263,22 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
       // closing, and every millisecond spent writing rows before this is on that clock.
       const gate = deps.gates.get(runId);
       gate?.stop();
+
+      /*
+       * D-054: nobody is going to answer an approval on a stopped run. The abort above has already
+       * ended the WAITING node's wait; rejecting the request now — before the rows, and before the
+       * run is written HALTED — takes the card away and leaves nothing for a late Approve to
+       * decide, so it cannot move a STOPPED row back to RUNNING. Best effort: the scheduler rejects
+       * anything left once the drive unwinds, and the stop itself must still land (FR-CTL-003).
+       */
+      try {
+        await deps.approvals?.cancelPending(runId, 'The run was stopped before this was decided.');
+      } catch (error) {
+        deps.logger?.warn(
+          { subsystem: 'runs', runId, err: error },
+          'could not cancel the approvals of a stopped run',
+        );
+      }
 
       await moveNodeRuns(run, STOPPABLE, 'STOPPED', { endedAt: true });
 

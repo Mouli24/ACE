@@ -361,8 +361,10 @@ lineFixture({
 
 /**
  * `mock-search` runs `web_search` on the input then `web_fetch` on the first result, then answers —
- * exactly two tool calls (TC-TOOL-003). Both are served by the canned `SearchBackend`, so no real
- * SearXNG and no network are needed (D14).
+ * exactly two tool calls (TC-TOOL-003). The search is the canned `SearchBackend`, so no SearXNG
+ * (D14); the harness points the canned index's result URLs at the local HTTP test server
+ * (`startEngine({ cannedSearchBaseUrl })`, D-067), which binds 127.0.0.1 — so, exactly as in
+ * `http-allowed.json`, that host is the agent's one allowed domain, and the fetch needs no network.
  */
 lineFixture({
   file: 'search.json',
@@ -373,7 +375,7 @@ lineFixture({
   agent: {
     modelId: 'mock-search',
     instructions: 'Search for the topic, fetch the top result, then summarise it.',
-    tools: tools(['web_search', 'web_fetch']),
+    tools: tools(['web_search', 'web_fetch'], { allowedDomains: [HTTP_HOST] }),
   },
 });
 

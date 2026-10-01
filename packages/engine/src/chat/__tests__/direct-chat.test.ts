@@ -1,8 +1,10 @@
 import type { Part } from '@ace/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { estimateTokens } from '../../envelopes/index.js';
 import { newId } from '../../ids.js';
 import type { EngineEvent } from '../../ports/index.js';
+import { CONVERSATION_SECTION, UNTRUSTED_LABEL } from '../../prompts/index.js';
 import { FakeRepository } from '../../__tests__/fake-repository.js';
 import {
   ChatModelError,
@@ -195,5 +197,106 @@ describe('direct chat with an agent (FR-CHAT-004..007)', () => {
 
     expect(await service.listThreads(agent.id)).toHaveLength(0);
     await expect(service.getThread(begun.threadId)).rejects.toBeInstanceOf(ChatThreadNotFoundError);
+  });
+});
+
+/*
+ * D-079. Round 4 §4 item 5: a direct thread is assembled "with thread messages as `## Conversation`
+ * inside the node's own bounded context … capped to contextPolicy.budgetTokens". The user's turn had
+ * been sent as `## Input — UNTRUSTED CONTENT`, the prior turns as an untrusted context summary.
+ */
+describe('FR-CHAT-004 FR-CHAT-005 TC-CHAT-005 D-079 the prompt a direct chat sends', () => {
+  const now = makeClock();
+  const projectId = newId();
+  const workflow = makeWorkflow(projectId);
+  // The smallest budget a context policy allows (256 tokens, about a thousand characters).
+  const budgetTokens = 256;
+  const agent = makeAgentNode(workflow.id, { budgetTokens });
+
+  /** The Conversation section of the prompt the model was sent, without its header. */
+  function conversationOf(prompt: string): string {
+    const start = prompt.indexOf(`${CONVERSATION_SECTION}\n`);
+    const end = prompt.indexOf('\n## Input\n');
+    return start === -1 || end === -1
+      ? ''
+      : prompt.slice(start + CONVERSATION_SECTION.length + 1, end).trim();
+  }
+
+  it('sends the thread under ## Conversation within the budget, and never touches runs or node runs', async () => {
+    const repository = new FakeRepository();
+    await repository.projects.create(scope, makeProject());
+    await repository.workflows.create(scope, workflow);
+    await repository.nodes.insert(scope, agent);
+    const { bus } = makeBus(repository, now);
+
+    const prompts: string[] = [];
+    const service = makeChatService(repository, bus, {
+      workflowId: workflow.id,
+      now,
+      adapterFor: async () =>
+        makeAdapter({
+          reply: (prompt) => {
+            prompts.push(prompt);
+            return `Reply ${prompts.length}: ${'the answer goes on '.repeat(10).trim()}`;
+          },
+        }),
+    });
+
+    // A run and a node run exist before the chat; both must be byte-identical afterwards (FR-CHAT-005).
+    const run = makeRun(newId(), workflow.id, projectId, [agent]);
+    await repository.runs.create(scope, run);
+    await repository.nodeRuns.create(scope, {
+      id: newId(),
+      runId: run.id,
+      nodeId: agent.id,
+      iteration: 1,
+      attempt: 1,
+      status: 'COMPLETED',
+      inputEnvelopes: [],
+      usage: { tokensIn: 9, tokensOut: 9, costUsd: 0.02 },
+      verdicts: [],
+      toolCalls: [],
+    });
+    const runsBefore = JSON.stringify(
+      await repository.runs.listByWorkflow(scope, workflow.id, { limit: 100 }),
+    );
+    const nodeRunsBefore = JSON.stringify(await repository.nodeRuns.listByRun(scope, run.id));
+
+    // Six turns of about fifty tokens each, with replies as long: the thread outgrows the budget.
+    const first = await service.chat(agent.id, {
+      content: [{ type: 'text', text: 'The opening question.' }],
+    });
+    await first.done;
+    for (let i = 2; i <= 5; i += 1) {
+      const next = await service.chat(agent.id, {
+        threadId: first.threadId,
+        content: [
+          { type: 'text', text: `Follow-up number ${i}: ${'more detail '.repeat(12).trim()}` },
+        ],
+      });
+      await next.done;
+    }
+    const last = await service.chat(agent.id, {
+      threadId: first.threadId,
+      content: [{ type: 'text', text: 'And the newest question?' }],
+    });
+    await last.done;
+
+    // The first turn's prompt: the user's words are the conversation, not untrusted input.
+    expect(conversationOf(prompts[0]!)).toBe('User: The opening question.');
+    expect(prompts[0]).not.toContain(UNTRUSTED_LABEL);
+
+    // The last turn's prompt: roles labelled, the newest turn last, within the budget, oldest gone.
+    const conversation = conversationOf(prompts.at(-1)!);
+    expect(conversation.split('\n').at(-1)).toBe('User: And the newest question?');
+    expect(conversation).toContain('Assistant: Reply 5: the answer goes on');
+    expect(conversation).not.toContain('The opening question.');
+    expect(estimateTokens(conversation)).toBeLessThanOrEqual(budgetTokens);
+    expect(prompts.at(-1)).not.toContain(UNTRUSTED_LABEL);
+
+    expect(
+      JSON.stringify(await repository.runs.listByWorkflow(scope, workflow.id, { limit: 100 })),
+    ).toBe(runsBefore);
+    expect(JSON.stringify(await repository.nodeRuns.listByRun(scope, run.id))).toBe(nodeRunsBefore);
   });
 });

@@ -15,6 +15,7 @@ import type {
   EngineEvent,
   GenerateRequest,
   ModelRouter,
+  ProducedPart,
   ProviderAdapter,
   StreamChunk,
 } from '../../ports/index.js';
@@ -446,38 +447,78 @@ describe('TC-TOOL-004 a tool error and a timeout are logged, and the model may s
 });
 
 describe('FR-MM-003 a model that emits media part chunks has them stored as artifacts', () => {
+  const placeholder: Part = {
+    type: 'image',
+    artifactId: '01JBXQ8Z9KQ4R7N2VWXYZ0PLAC',
+    mime: 'image/png',
+    name: 'x.png',
+    size: 4,
+  };
+  /* The PNG signature's first four bytes — what a provider that generated an image hands over. */
+  const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+  const mediaTurn = (): StreamChunk[] => [
+    { type: 'part', part: { type: 'text', text: 'a caption' } },
+    { type: 'part', part: placeholder, bytes: pngBytes },
+    usage(1, 1),
+    finish(),
+  ];
+
   it('materialises produced media parts and returns them as the output (mock-media)', async () => {
-    const placeholder: Part = {
-      type: 'image',
-      artifactId: '01JBXQ8Z9KQ4R7N2VWXYZ0PLAC',
-      mime: 'image/png',
-      name: 'x.png',
-      size: 10,
-    };
     const stored: Part = { ...placeholder, artifactId: ART_ID };
-    const store = vi.fn(async (parts: readonly Part[]) =>
-      parts.map((part) => (part.type === 'image' ? stored : part)),
+    const store = vi.fn(async (parts: readonly ProducedPart[]) =>
+      parts.map(({ part }) => (part.type === 'image' ? stored : part)),
     );
     const artifacts: ArtifactMaterialiser = { inputParts: async () => [], store };
 
-    const harness = await buildHarness({
-      turns: () => [
-        { type: 'part', part: { type: 'text', text: 'a caption' } },
-        { type: 'part', part: placeholder },
-        usage(1, 1),
-        finish(),
-      ],
-      artifacts,
-    });
+    const harness = await buildHarness({ turns: mediaTurn, artifacts });
 
     const outcome = await runInput(harness, agentNode({ outputTypes: ['text', 'image'] }));
 
     expect(store).toHaveBeenCalledOnce();
+    // D-082: the bytes the provider produced reach the materialiser beside their Part, to be stored.
+    expect(store.mock.calls[0]?.[0]).toEqual([
+      { part: { type: 'text', text: 'a caption' } },
+      { part: placeholder, bytes: pngBytes },
+    ]);
     expect(outcome.status).toBe('COMPLETED');
     // The placeholder id the provider emitted is replaced by the stored artifact's id (FR-MM-003).
     expect(outcome.output).toEqual([{ type: 'text', text: 'a caption' }, stored]);
     // FR-MM-004: the stored parts are references — no inline bytes.
-    expect(JSON.stringify(outcome.output)).not.toContain('base64');
+    expect(JSON.stringify(outcome.output)).not.toMatch(/bytes|base64/);
+  });
+
+  it('FR-MM-004 without a materialiser the parts pass through as references, and the bytes are dropped', async () => {
+    const harness = await buildHarness({ turns: mediaTurn });
+
+    const outcome = await runInput(harness, agentNode({ outputTypes: ['text', 'image'] }));
+
+    expect(outcome.status).toBe('COMPLETED');
+    expect(outcome.output).toEqual([{ type: 'text', text: 'a caption' }, placeholder]);
+    const emitted = harness.events.filter((event) => event.type === 'node.output');
+    expect(JSON.stringify([outcome, emitted])).not.toMatch(/bytes|base64/);
+  });
+
+  it('D-082 a media part the materialiser cannot store fails the node RUN_FAILED, saying why', async () => {
+    const artifacts: ArtifactMaterialiser = {
+      inputParts: async () => [],
+      store: async () => {
+        throw new Error('The image part references artifact 01JBXQ8Z9KQ4R7N2VWXYZ0PLAC, which is not stored.');
+      },
+    };
+    const harness = await buildHarness({ turns: mediaTurn, artifacts });
+
+    const outcome = await runInput(harness, agentNode({ outputTypes: ['text', 'image'] }));
+
+    expect(outcome.status).toBe('FAILED');
+    expect(outcome.failureReason).toBe('RUN_FAILED');
+    expect(outcome.error).toMatchObject({
+      kind: 'provider',
+      code: 'media_not_stored',
+      retryable: false,
+    });
+    expect(outcome.error?.message).toContain('which is not stored');
+    // The call happened and is paid for, even though its output could not be kept (FR-ERR-007).
+    expect(outcome.usage.tokensIn + outcome.usage.tokensOut).toBeGreaterThan(0);
   });
 });
 
@@ -486,7 +527,7 @@ describe('FR-MM-003 an Input node turns its artifactIds into media part referenc
     const mediaPart: Part = { type: 'image', artifactId: ART_ID, mime: 'image/png', name: 'x.png', size: 10 };
     const artifacts: ArtifactMaterialiser = {
       inputParts: async () => [mediaPart],
-      store: async (parts) => [...parts],
+      store: async (parts) => parts.map(({ part }) => part),
     };
     const harness = await buildHarness({ turns: () => say('unused'), artifacts });
 

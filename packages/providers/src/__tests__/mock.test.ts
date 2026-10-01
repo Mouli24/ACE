@@ -9,6 +9,7 @@ import {
   createMockAdapter,
   formatArtifactReference,
 } from '../adapters/mock.js';
+import { MOCK_MEDIA_TYPES, mockMediaFixture } from '../adapters/mock-media.js';
 
 /** Drain a generate() call into the chunks it produced. */
 async function collect(
@@ -129,6 +130,7 @@ describe('TC-MOD-001 the mock lists every model of §2.6', () => {
       'mock-http',
       'mock-search',
       'mock-mcp',
+      'mock-sandbox',
       'mock-vision',
       'mock-media',
       'mock-chat',
@@ -830,6 +832,31 @@ describe('FR-MM-003 mock-media emits one Part of each of the seven data types', 
     }
     // The stored JSON of a media envelope must never carry raw bytes (BR-02).
     expect(JSON.stringify(parts)).not.toMatch(/bytes|base64/);
+  });
+
+  it('D-082: each media part carries its fixture bytes beside it, never inside it, and its size is theirs', async () => {
+    const chunks = (
+      await collect(run('mock-media', 'x', { outputTypes: ['image', 'audio', 'video', 'file'] }))
+    ).filter((c): c is Extract<StreamChunk, { type: 'part' }> => c.type === 'part');
+
+    const media = chunks.filter((chunk) => MOCK_MEDIA_TYPES.some((type) => type === chunk.part.type));
+    expect(media.map((chunk) => chunk.part.type)).toEqual([...MOCK_MEDIA_TYPES]);
+    for (const { part, bytes } of media) {
+      if (part.type === 'text' || part.type === 'json' || part.type === 'code') continue;
+      const fixture = mockMediaFixture(part.type);
+      // The bytes the engine stores (FR-MM-003) — the real file, not a zero-filled stand-in.
+      expect(bytes, part.type).toEqual(fixture.bytes);
+      expect(part.size, part.type).toBe(fixture.bytes.byteLength);
+      expect(part.mime, part.type).toBe(fixture.mime);
+      expect(part.name, part.type).toBe(fixture.name);
+      // FR-MM-004: the Part itself stays a reference; the bytes ride on the chunk only.
+      expect(PartSchema.safeParse(part).success, part.type).toBe(true);
+      expect(Object.keys(part), part.type).not.toContain('bytes');
+    }
+    // Text, JSON and code have no bytes to store.
+    for (const { part, bytes } of chunks.filter((chunk) => !media.includes(chunk))) {
+      expect(bytes, part.type).toBeUndefined();
+    }
   });
 
   it('every part parses against the contract PartSchema and the ids are stable', async () => {

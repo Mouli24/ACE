@@ -4,6 +4,7 @@ import { SANDBOX_LANGUAGES, type ToolDefinition } from '@ace/contracts';
 import { type Sandbox } from '@ace/engine';
 
 import { ToolError } from '../errors.js';
+import { SANDBOX_DENIED_MESSAGE } from '../logging.js';
 import { type RegisteredTool } from '../registry.js';
 import { collectProducedFiles } from '../sandbox/collect-files.js';
 import { prepareCodeRun } from '../sandbox/languages.js';
@@ -72,6 +73,19 @@ export const CODE_SANDBOX_DEFINITION: ToolDefinition = {
   source: 'builtin',
 };
 
+/**
+ * The refusal Node's permission model prints when a `javascript` run dies reaching outside its
+ * folder (`nodePermissionFlags` in `sandbox/languages.ts`): an uncaught error whose `code` is
+ * `ERR_ACCESS_DENIED`, with the `permission` it lacked and the `resource` it asked for. A program
+ * that catches the error itself finishes normally — the access was refused all the same.
+ */
+export function accessDenial(stderr: string): { permission: string; resource?: string } | undefined {
+  if (!stderr.includes('ERR_ACCESS_DENIED')) return undefined;
+  const permission = /permission: '([A-Za-z]+)'/.exec(stderr)?.[1] ?? 'unknown';
+  const resource = /resource: '((?:[^'\\]|\\.)*)'/.exec(stderr)?.[1]?.replace(/\\\\/g, '\\');
+  return resource === undefined ? { permission } : { permission, resource };
+}
+
 export interface CodeSandboxToolOptions {
   readonly sandbox: Sandbox;
   readonly platform?: NodeJS.Platform;
@@ -125,6 +139,31 @@ export function createCodeSandboxTool(options: CodeSandboxToolOptions): Register
           'code_sandbox',
           `code_sandbox did not finish within ${timeoutMs} ms and was stopped.`,
           { timeoutMs, stdout: result.stdout, stderr: result.stderr },
+        );
+      }
+
+      // TC-TOOL-005: the runtime refused a reach outside the sandbox and the program died of it.
+      const denial = parsed.data.language === 'javascript' ? accessDenial(result.stderr) : undefined;
+      if (denial !== undefined) {
+        context.logger.warn(
+          {
+            tool: 'code_sandbox',
+            operation: 'run',
+            language: parsed.data.language,
+            permission: denial.permission,
+            resource: denial.resource,
+            exitCode: result.exitCode,
+            sandboxDir: context.sandboxDir,
+            runId: context.runId,
+          },
+          SANDBOX_DENIED_MESSAGE,
+        );
+        throw new ToolError(
+          'denied',
+          'code_sandbox',
+          `code_sandbox: the program reached outside its sandbox folder and was denied ` +
+            `(ERR_ACCESS_DENIED, ${denial.permission}); nothing outside was read or changed.`,
+          { permission: denial.permission, resource: denial.resource, exitCode: result.exitCode },
         );
       }
 

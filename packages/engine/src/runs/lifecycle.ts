@@ -1,5 +1,6 @@
 import type { Id, Run } from '@ace/contracts';
 
+import type { ApprovalService } from '../approvals/index.js';
 import type { EventBus } from '../events/index.js';
 import type { Logger } from '../logging/index.js';
 import type { Repository, Scope } from '../ports/index.js';
@@ -20,6 +21,12 @@ export interface LifecycleDeps {
   bus: EventBus;
   logger: Logger;
   now?: () => string;
+  /**
+   * Rejects the approvals still pending on a run this halts (FR-GRD-013, D-061). The process that
+   * was suspended on them is gone, so nobody can answer them; left pending, the card stays on a
+   * HALTED run and an Approve moves the STOPPED node back to RUNNING. Absent, nothing is rejected.
+   */
+  approvals?: Pick<ApprovalService, 'cancelPending'>;
 }
 
 export interface RecoveryResult {
@@ -47,6 +54,22 @@ async function halt(
     runId: run.id,
     payload: { runId: run.id, status: 'HALTED', haltReason, totals: run.totals },
   });
+
+  // Nobody is left to answer an approval on a halted run (D111, D-061). Best effort: a card that
+  // could not be rejected is worth a warning, not an engine that refuses to start or stop.
+  try {
+    await deps.approvals?.cancelPending(
+      run.id,
+      haltReason === 'crash'
+        ? 'The engine stopped unexpectedly before this was decided.'
+        : 'The engine was shut down before this was decided.',
+    );
+  } catch (error) {
+    deps.logger.warn(
+      { subsystem: 'runs', runId: run.id, err: error },
+      'could not reject the approvals of a halted run',
+    );
+  }
 }
 
 /**

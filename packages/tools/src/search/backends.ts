@@ -13,14 +13,41 @@ import { ToolError } from '../errors.js';
  * the fallback.
  */
 
+/**
+ * Where the canned index's result URLs live by default: `example.test`, a name reserved never to
+ * resolve (RFC 2606). A zero-configuration engine therefore answers a search, but a `web_fetch` of a
+ * result fails honestly instead of pretending there is a page behind it.
+ */
+export const CANNED_SEARCH_BASE_URL = 'https://example.test';
+
 /** How the canned index answers a query it was not given ahead of time. */
-export function defaultCannedResults(query: string, k: number): SearchResult[] {
+export function defaultCannedResults(
+  query: string,
+  k: number,
+  baseUrl: string = CANNED_SEARCH_BASE_URL,
+): SearchResult[] {
+  const base = baseUrl.replace(/\/+$/, '');
   const slug = query.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'result';
   return Array.from({ length: Math.max(1, k) }, (_unused, index) => ({
     title: `${query} — result ${index + 1}`,
-    url: `https://example.test/${slug}/${index + 1}`,
+    url: `${base}/${slug}/${index + 1}`,
     snippet: `A canned snippet about ${query} (result ${index + 1}).`,
   }));
+}
+
+/**
+ * The canned answers, with every result URL under `baseUrl` — the fallback to hand
+ * {@link CannedSearchBackend} when the pages should be fetchable (TC-TOOL-003, D-067). The acceptance
+ * harness points it at the round-4 local HTTP test server, which answers any path with a small HTML
+ * page, so `web_search` → `web_fetch` completes with no network and no SearXNG (D14). The host still
+ * has to be on the agent's `allowedDomains`: this moves where the pages are, not what is allowed.
+ */
+export function cannedResultsAt(baseUrl: string): (query: string, k: number) => SearchResult[] {
+  const protocol = new URL(baseUrl).protocol;
+  if (protocol !== 'http:' && protocol !== 'https:') {
+    throw new Error(`The canned search base must be an http(s) URL, not ${protocol}`);
+  }
+  return (query, k) => defaultCannedResults(query, k, baseUrl);
 }
 
 /**

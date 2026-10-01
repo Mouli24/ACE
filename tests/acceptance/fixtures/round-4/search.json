@@ -83,7 +83,9 @@
             "web_fetch"
           ],
           "maxToolCalls": 10,
-          "allowedDomains": []
+          "allowedDomains": [
+            "127.0.0.1"
+          ]
         },
         "knowledgeBaseIds": [],
         "memory": {

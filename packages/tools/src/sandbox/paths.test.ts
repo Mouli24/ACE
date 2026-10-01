@@ -18,7 +18,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(projectFolder, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  rmSync(projectFolder, { recursive: true, force: true, maxRetries: 100, retryDelay: 50 });
 });
 
 describe('FR-TOOL-004 sandbox folder', () => {

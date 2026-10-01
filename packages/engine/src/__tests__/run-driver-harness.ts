@@ -58,6 +58,11 @@ export interface Step {
   usageFirst?: { tokensIn: number; tokensOut: number };
   /** Hold the stream open until this settles, or until the call's signal aborts. */
   hold?: Promise<void>;
+  /**
+   * Runs once the caller has taken the stream's last chunk, as the call returns — so a stop made
+   * here lands after `generate()` finished and before its result is recorded (D-063).
+   */
+  afterFinish?: () => void;
 }
 
 export interface Deferred {
@@ -202,6 +207,7 @@ export async function createRunDriverHarness(
         yield { type: 'text', delta: step.text ?? 'ok' };
         yield { type: 'usage', tokensIn: 2, tokensOut: 3 };
         yield { type: 'finish', reason: 'stop' };
+        step.afterFinish?.();
       })();
     },
   };

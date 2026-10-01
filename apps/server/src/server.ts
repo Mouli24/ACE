@@ -10,9 +10,11 @@ import { join } from "node:path";
 
 import {
   WS_PATH,
+  type Artifact,
   type GuardrailCheck,
   type Id,
   type Part,
+  type Timestamp,
   type ToolCall,
 } from "@ace/contracts";
 import { serve } from "@hono/node-server";
@@ -47,6 +49,7 @@ import {
   startTimelinePopulation,
   workflowUpdatedEvent,
   type ArtifactMaterialiser,
+  type ArtifactService,
   type ChatService,
   type CheckInput,
   type CheckRunner,
@@ -75,7 +78,13 @@ import {
   SqliteRepository,
   openDatabase,
 } from "@ace/storage-local";
-import { McpManager, ToolRegistry, registerBuiltinTools } from "@ace/tools";
+import {
+  CannedSearchBackend,
+  McpManager,
+  ToolRegistry,
+  cannedResultsAt,
+  registerBuiltinTools,
+} from "@ace/tools";
 import { WebSocketServer } from "ws";
 
 export const ENGINE_VERSION = "0.1.0";
@@ -123,14 +132,98 @@ export function guardrailInputFor(
   }
 }
 
+/**
+ * The multimodal materialiser (FR-MM-003/004): an Input node's `artifactIds` become media `Part`
+ * references by MIME, and a model's produced media parts come back backed by a stored artifact.
+ * Bytes never travel through an envelope — every part that leaves here is a reference (BR-02).
+ *
+ * A produced media part is backed by exactly one of two things. Bytes the provider generated ride
+ * beside it (`ProducedPart.bytes`, D216) and are stored here — `mock-media`'s PNG/MP3/MP4/ZIP, or a
+ * real image model's output. Otherwise its `artifactId` must already name a stored artifact. There
+ * is no third way: a reference to nothing is refused, and nothing is ever invented to back it — the
+ * zero-filled stand-in that once did is D-082.
+ */
+export function createArtifactMaterialiser(
+  artifacts: Pick<ArtifactService, "get" | "upload" | "markReferenced">,
+): ArtifactMaterialiser {
+  return {
+    async inputParts(artifactIds) {
+      const parts: Part[] = [];
+      for (const id of artifactIds) {
+        const artifact = await artifacts.get(id);
+        if (artifact === null) continue;
+        await artifacts.markReferenced(id);
+        parts.push({
+          type: mediaTypeForMime(artifact.mime),
+          artifactId: artifact.id,
+          mime: artifact.mime,
+          name: artifact.name,
+          size: artifact.size,
+        });
+      }
+      return parts;
+    },
+    async store(produced) {
+      const out: Part[] = [];
+      for (const { part, bytes } of produced) {
+        if (part.type === "text" || part.type === "json" || part.type === "code") {
+          out.push(part);
+          continue;
+        }
+        if (bytes !== undefined) {
+          // Store what the model produced — identical bytes dedupe to one artifact (FR-MM-002) —
+          // and hand on a reference to it: the stored id in place of the placeholder, the stored
+          // size. Marked referenced, so retention counts from this output (Arch §15.4).
+          const stored = await artifacts.upload(bytes, { mime: part.mime, name: part.name });
+          await artifacts.markReferenced(stored.id);
+          out.push({ ...part, artifactId: stored.id, size: stored.size });
+          continue;
+        }
+        // No bytes: the part must already reference a stored artifact, and it keeps that reference.
+        const existing = await artifacts.get(part.artifactId);
+        if (existing === null) {
+          throw new Error(
+            `The ${part.type} part "${part.name}" references artifact ${part.artifactId}, which is not stored, and came with no bytes to store.`,
+          );
+        }
+        await artifacts.markReferenced(existing.id);
+        out.push({ ...part, size: existing.size });
+      }
+      return out;
+    },
+  };
+}
+
 /** FR-SYS-001 / NFR-SEC-01: the engine binds the loopback interface and nothing else. */
 export const BIND_HOST = "127.0.0.1";
+
+/**
+ * How often the artifact retention sweep runs after the one at start (Arch §15.4). The window is
+ * seven days, so an hour late is nothing; what matters is that a long-running engine sweeps at all.
+ */
+export const ARTIFACT_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
 export interface StartEngineOptions {
   dataDir: string;
   /** Overrides the configured port. 0 asks the OS for a free one, which the tests rely on. */
   port?: number;
   env?: Record<string, string | undefined>;
+  /**
+   * The clock the artifact store stamps uploads and references with, and sweeps by (Arch §15.4,
+   * round 4 §4 item 1: "retention sweep ... with an injectable clock"). Default: the wall clock. A
+   * test injects one it can move, so "unreferenced for more than 7 days" takes no week to check.
+   */
+  clock?: () => Timestamp;
+  /** Overrides {@link ARTIFACT_SWEEP_INTERVAL_MS}, for a test that watches the timer fire. */
+  artifactSweepIntervalMs?: number;
+  /**
+   * Where the canned search index's result URLs point (D14, D-067). With no SearXNG the engine's
+   * `web_search` answers from a canned index whose URLs sit under the reserved, unresolvable
+   * `https://example.test`; the acceptance harness passes its local HTTP test server here so a
+   * `web_search` → `web_fetch` chain completes offline (TC-TOOL-003). The host must still be on the
+   * agent's `allowedDomains` — this moves where the pages are, never what is allowed.
+   */
+  cannedSearchBaseUrl?: string;
 }
 
 export interface RunningEngine {
@@ -149,6 +242,14 @@ export interface RunningEngine {
   };
   /** The round 2 services, exposed for the acceptance harness and the CLI. */
   services: { providers: ProviderService; runs: RunService };
+  /**
+   * Runs the artifact retention sweep once, now — by the injected clock — and answers the rows it
+   * deleted (Arch §15.4). The engine already sweeps at start and every
+   * {@link ARTIFACT_SWEEP_INTERVAL_MS}; this is for a test that must not wait for the timer. There is
+   * deliberately no REST endpoint for it (§2.4 has none). After `stop()` it does nothing and
+   * answers `[]`.
+   */
+  sweepArtifacts(): Promise<Artifact[]>;
   stop(): Promise<void>;
 }
 
@@ -375,7 +476,41 @@ export async function startEngine(
     artifacts: repository.artifacts,
     blobs,
     settings: repository.settings,
+    ...(options.clock === undefined ? {} : { clock: options.clock }),
   });
+
+  /*
+   * Arch §15.4: an artifact lives until it has been unreferenced for 7 days. The sweep asks the
+   * repository for rows past the window that nothing points at — an Input node's `artifactIds`, a
+   * node run's output or input envelopes, a timeline message, a chat message — and deletes each row,
+   * then its blob. One sweep at a time: a timer tick that lands while one is running joins it rather
+   * than starting a second pass over the same rows. A failure is logged, never thrown into the timer.
+   */
+  const retentionLogger = logger.child({ subsystem: "artifacts" });
+  let sweeping: Promise<Artifact[]> | undefined;
+  let sweepsStopped = false;
+  const sweepArtifacts = (): Promise<Artifact[]> => {
+    if (sweepsStopped) return Promise.resolve([]);
+    sweeping ??= artifactService
+      .sweepUnreferenced()
+      .then((deleted) => {
+        if (deleted.length > 0) {
+          retentionLogger.info(
+            { deleted: deleted.length, ids: deleted.map((artifact) => artifact.id) },
+            "swept unreferenced artifacts",
+          );
+        }
+        return deleted;
+      })
+      .catch((error: unknown): Artifact[] => {
+        retentionLogger.error({ err: error }, "artifact retention sweep failed");
+        return [];
+      })
+      .finally(() => {
+        sweeping = undefined;
+      });
+    return sweeping;
+  };
 
   /*
    * The tool registry: the six built-ins in §2.2's order, plus whatever MCP servers connect. The
@@ -384,7 +519,17 @@ export async function startEngine(
    * the same registry, and `DELETE /mcp-servers/:id` drops them again (FR-TOOL-007).
    */
   const toolRegistry = new ToolRegistry();
-  registerBuiltinTools(toolRegistry);
+  registerBuiltinTools(
+    toolRegistry,
+    options.cannedSearchBaseUrl === undefined
+      ? {}
+      : {
+          searchBackend: new CannedSearchBackend(
+            {},
+            cannedResultsAt(options.cannedSearchBaseUrl),
+          ),
+        },
+  );
   const mcpManager = new McpManager({ registry: toolRegistry });
   const toolLogger = logger.child({ subsystem: "tools" });
 
@@ -414,53 +559,7 @@ export async function startEngine(
   /* `<dataDir>/sandbox/<runId>/` — the only folder a run's tools may touch (§2.2, NFR-SEC-03). */
   const sandboxDirFor = (runId: Id): string => join(config.dataDir, "sandbox", runId);
 
-  /*
-   * The multimodal materialiser (FR-MM-003/004): an Input node's `artifactIds` become media `Part`
-   * references by MIME, and a model's produced media parts come back backed by a stored artifact.
-   * Bytes never travel through an envelope — every part is a reference (BR-02).
-   */
-  const materialiser: ArtifactMaterialiser = {
-    async inputParts(artifactIds) {
-      const parts: Part[] = [];
-      for (const id of artifactIds) {
-        const artifact = await artifactService.get(id);
-        if (artifact === null) continue;
-        await artifactService.markReferenced(id);
-        parts.push({
-          type: mediaTypeForMime(artifact.mime),
-          artifactId: artifact.id,
-          mime: artifact.mime,
-          name: artifact.name,
-          size: artifact.size,
-        });
-      }
-      return parts;
-    },
-    async store(parts) {
-      const out: Part[] = [];
-      for (const part of parts) {
-        if (part.type === "text" || part.type === "json" || part.type === "code") {
-          out.push(part);
-          continue;
-        }
-        // A produced media part already backed by a stored artifact keeps its reference.
-        const existing = await artifactService.get(part.artifactId);
-        if (existing !== null) {
-          await artifactService.markReferenced(existing.id);
-          out.push(part);
-          continue;
-        }
-        // The provider emitted a placeholder id (the mock cannot store bytes, §2.6): materialise a
-        // stand-in artifact of the declared type so the produced part references a real row.
-        const stored = await artifactService.upload(new Uint8Array(part.size), {
-          mime: part.mime,
-          name: part.name,
-        });
-        out.push({ ...part, artifactId: stored.id, size: stored.size });
-      }
-      return out;
-    },
-  };
+  const materialiser = createArtifactMaterialiser(artifactService);
 
   /* Persist one logged tool call, mirrored onto its node run in the same write (FR-TOOL-009). */
   const recordToolCall = async (runId: Id, call: ToolCall): Promise<void> => {
@@ -525,6 +624,8 @@ export async function startEngine(
     ...controlStoresFor(repository, LOCAL_SCOPE),
     bus,
     gates,
+    // D-054: a Stop rejects a WAITING node's approval before it answers, so no card outlives the run.
+    approvals,
     logger: logger.child({ subsystem: "runs" }),
     // The controls never execute anything themselves; these three are the scheduler (FR-CTL-004/005).
     driveRecordedRun: (run) => runs.driveRecordedRun(run),
@@ -624,10 +725,21 @@ export async function startEngine(
     scope: LOCAL_SCOPE,
     bus,
     logger: logger.child({ subsystem: "runs" }),
+    // D-061: the approvals that process was waiting on can no longer be answered, so they go too.
+    approvals,
   });
 
   /* FR-PRV-004: re-check every provider on a timer, so the UI's chips stay honest. */
   const stopPeriodicChecks = providers.startPeriodicChecks();
+
+  /* Arch §15.4: sweep what expired while the engine was off, then keep sweeping on a timer. */
+  await sweepArtifacts();
+  const sweepTimer = setInterval(
+    () => void sweepArtifacts(),
+    options.artifactSweepIntervalMs ?? ARTIFACT_SWEEP_INTERVAL_MS,
+  );
+  // Never the reason the process stays alive: shutdown clears it, and a CLI exit must not wait on it.
+  sweepTimer.unref();
 
   const graph = createGraphService({
     repository,
@@ -637,6 +749,8 @@ export async function startEngine(
     onWorkflowUpdated: async (workflowId, version) => {
       await bus.emit(workflowUpdatedEvent(workflowId, version));
     },
+    // Round 4 §2.4 (D-069): validation checks every agent's enabled tools against the live registry.
+    tools: toolProvider,
   });
 
   const selfOrigins = [
@@ -722,6 +836,7 @@ export async function startEngine(
     logger,
     ports: { repository, blobs, secrets },
     services: { providers, runs },
+    sweepArtifacts,
 
     /**
      * FR-SYS-008: stop dispatching, abort what is in flight, record the halt, then close.
@@ -738,12 +853,17 @@ export async function startEngine(
 
   async function shutdown(): Promise<void> {
     stopPeriodicChecks();
+    // No sweep starts once shutdown has, and one in flight finishes before the database closes.
+    sweepsStopped = true;
+    clearInterval(sweepTimer);
+    await sweeping;
     await runs.shutdown();
     await haltActiveRuns({
       repository,
       scope: LOCAL_SCOPE,
       bus,
       logger: logger.child({ subsystem: "runs" }),
+      approvals,
     });
 
     // Round 4: stop deriving timeline rows and close every MCP connection before the DB closes.

@@ -112,6 +112,23 @@ export const ALLOWED_UPLOAD_MIME_TYPES = [
 ] as const;
 
 /**
+ * Other names an allowed type travels by, each mapped to the §2.1 type it means (D-075).
+ *
+ * A browser takes a file's type from the operating system, not from the file: Chromium on Windows
+ * reads the registry, which types `.zip` as `application/x-zip-compressed`, and some systems still
+ * send the older `application/x-zip`. Both are the same bytes §2.1 allows as `application/zip`, so
+ * refusing them made FR-MM-003's ZIP unuploadable from a Windows browser. An alias only ever points
+ * at a type already in `ALLOWED_UPLOAD_MIME_TYPES`, so it widens nothing §2.1 did not already allow
+ * (NFR-SEC-05) — and `.zip` stays off the by-name list, which §2.1 limits to nine extensions.
+ */
+export const ALLOWED_UPLOAD_MIME_ALIASES: Readonly<
+  Record<string, (typeof ALLOWED_UPLOAD_MIME_TYPES)[number]>
+> = Object.freeze({
+  'application/x-zip-compressed': 'application/zip',
+  'application/x-zip': 'application/zip',
+});
+
+/**
  * Code and text extensions §2.1 allows **by name**, whatever the browser guessed the type to be —
  * a `.ts` file commonly arrives as `video/mp2t` or `application/octet-stream`, and refusing it
  * would make FR-MM-003's "code" data type unuploadable.
@@ -139,11 +156,16 @@ export function uploadExtensionOf(name: string): string {
  * May these bytes be stored? Pure, so the engine's 415 `unsupported_type` and the web app's
  * client-side refusal cannot disagree about one file (D52's reasoning).
  *
- * A file is allowed when its media type is in §2.1's list — exactly, or by an allowed prefix,
- * ignoring any `; charset=` parameter — or when its **name** ends in an allowed extension.
+ * A file is allowed when its media type is in §2.1's list — exactly, under one of its aliases, or
+ * by an allowed prefix, ignoring any `; charset=` parameter and the case — or when its **name**
+ * ends in an allowed extension.
  */
 export function isAllowedUpload(file: { mime: string; name: string }): boolean {
-  const mime = file.mime.split(';')[0]?.trim().toLowerCase() ?? '';
+  const given = file.mime.split(';')[0]?.trim().toLowerCase() ?? '';
+  // An own-property lookup, so a type named like an Object.prototype member is not an alias.
+  const mime = Object.hasOwn(ALLOWED_UPLOAD_MIME_ALIASES, given)
+    ? ALLOWED_UPLOAD_MIME_ALIASES[given]!
+    : given;
 
   if ((ALLOWED_UPLOAD_MIME_TYPES as readonly string[]).includes(mime)) return true;
   if (ALLOWED_UPLOAD_MIME_PREFIXES.some((prefix) => mime.startsWith(prefix))) return true;

@@ -2,6 +2,7 @@ import type {
   DataType,
   Edge,
   Id,
+  McpServer,
   Model,
   Node,
   NodeKind,
@@ -11,7 +12,7 @@ import type {
   ValidationIssue,
 } from '@ace/contracts';
 
-import { validateGraph } from '../graph/validate.js';
+import { validateGraph, type ToolLookup } from '../graph/validate.js';
 import { findUnknownPlaceholders } from '../prompts/index.js';
 
 /**
@@ -53,6 +54,14 @@ export interface PreflightInput {
    * (round 2/3 harnesses, a text-only run) the multimodal capability check simply does not run.
    */
   artifactTypesFor?: (artifactIds: readonly Id[]) => Promise<DataType[]>;
+  /**
+   * The tool registry every agent's `tools.enabled` is checked against (round 4 §2.4, D-069): a name
+   * it does not hold is `tool_not_registered` and blocks the run. The run service's `ToolProvider`
+   * (`deps.tools`) is exactly this. Absent (round 2/3 harnesses), the check does not run.
+   */
+  tools?: ToolLookup;
+  /** The known MCP servers: a registered tool on an `unreachable` one is `mcp_server_unreachable`. */
+  mcpServers?: readonly McpServer[];
 }
 
 /** An Input node has something to start from when its config or the request carries content. */
@@ -65,12 +74,18 @@ function hasInput(node: Extract<Node, { kind: 'input' }>, supplied: Part[] | und
 export async function preflight(input: PreflightInput): Promise<ValidationIssue[]> {
   const issues: ValidationIssue[] = [];
 
-  /* 1. Everything `validate` already knows, including the provider and catalog checks. */
+  /*
+   * 1. Everything `validate` already knows, including the provider and catalog checks and — given
+   *    the registry — the tool checks of round 4 §2.4. Its errors block the run; of its warnings only
+   *    `mcp_server_unreachable` is a pre-flight matter (the run starts, and says why a tool may fail).
+   */
   issues.push(
     ...validateGraph(input.nodes, input.edges, {
       providers: input.providers,
       models: input.models,
-    }).filter((issue) => issue.severity === 'error'),
+      ...(input.tools === undefined ? {} : { tools: input.tools }),
+      ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
+    }).filter((issue) => issue.severity === 'error' || issue.code === 'mcp_server_unreachable'),
   );
 
   const providersById = new Map(input.providers.map((provider) => [provider.id, provider]));

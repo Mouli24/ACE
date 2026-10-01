@@ -15,7 +15,7 @@ beforeEach(() => {
   sandboxDir = mkdtempSync(join(tmpdir(), 'ace-runner-'));
 });
 afterEach(() => {
-  rmSync(sandboxDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  rmSync(sandboxDir, { recursive: true, force: true, maxRetries: 100, retryDelay: 50 });
 });
 
 function nodeSpec(code: string, timeoutMs = 10_000): SandboxSpec {

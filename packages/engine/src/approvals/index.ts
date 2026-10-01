@@ -8,6 +8,7 @@ import type {
   NodeRun,
 } from '@ace/contracts';
 
+import { userCancelledError } from '../errors/index.js';
 import type { EventBus } from '../events/index.js';
 import { newId } from '../ids.js';
 import type { Scope } from '../ports/index.js';
@@ -30,6 +31,13 @@ import type { ApprovalRepository, NodeRunLookup } from '../guardrails/ports.js';
  * - **The wait lives in this process.** A pending approval's promise does not survive a restart, so
  *   crash recovery (FR-SYS-009) has to reject what it finds pending, which is what `cancelPending`
  *   is for.
+ *
+ * And one the round file does not, which D-054 found: **the wait listens to the run's abort.** A
+ * Stop or a shutdown while a node is WAITING must end the run within FR-CTL-003's two seconds, and
+ * nobody is going to answer an approval on a run that is ending — so the wait throws the
+ * cancellation the moment the run is aborted, rather than holding the drive for ever. The request
+ * itself is rejected by whoever ends the run (`cancelPending`), and a decision that still reaches it
+ * does not wake, or move, a node that has stopped waiting.
  */
 
 /** What the evaluator hands over: everything but the id and the time. */
@@ -44,6 +52,12 @@ export interface ApprovalRequestInput {
   reason: string;
   /** Already truncated to `APPROVAL_PREVIEW_MAX` by the caller (§2.2). */
   preview: string;
+  /**
+   * The run's abort signal (FR-CTL-003, D110). Aborted — by a Stop or a shutdown — the wait throws a
+   * `user_cancelled` error at once instead of waiting for a decision nobody will make (D-054).
+   * Never stored: it is how the wait ends, not part of the request.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -101,10 +115,20 @@ export interface ApprovalServiceDeps {
    * interleaving on one row.
    */
   onWaiting?: (request: ApprovalRequest) => Promise<void>;
-  /** Called once a decision is stored, before the paused evaluation resumes. */
+  /**
+   * Called once a decision is stored, before the paused evaluation resumes. Not called for a request
+   * nobody in this process is waiting on — one whose wait the run's abort ended (D-054), or one a
+   * dead process left pending (D-061): there is no paused evaluation to resume, and the node it
+   * would move is STOPPED (D111).
+   */
   onDecided?: (request: ApprovalRequest, decision: ApprovalDecision) => Promise<void>;
   now?: () => string;
   nextId?: () => string;
+}
+
+/** What a wait the run's abort ended throws: a cancellation, so the node ends STOPPED (FR-ERR-007). */
+function cancelledWait(): Error {
+  return userCancelledError('The run was stopped while this node waited for an approval.');
 }
 
 export function createApprovalService(deps: ApprovalServiceDeps): ApprovalService {
@@ -112,7 +136,11 @@ export function createApprovalService(deps: ApprovalServiceDeps): ApprovalServic
   const now = deps.now ?? ((): string => new Date().toISOString());
   const nextId = deps.nextId ?? newId;
 
-  /** requestId → the resolver of the promise a suspended node is sitting on. */
+  /**
+   * requestId → the resolver of the promise a suspended node is sitting on. A request with no entry
+   * is one nobody in this process waits on: its wait was ended by the run's abort (D-054), or the
+   * process that asked is gone (D-061).
+   */
   const waiting = new Map<Id, (decision: ApprovalDecision) => void>();
   /**
    * runId → workflowId, learnt when the request was made. `ApprovalRequest` does not carry the
@@ -147,18 +175,34 @@ export function createApprovalService(deps: ApprovalServiceDeps): ApprovalServic
       payload: { runId: request.runId, nodeRunId: request.nodeRunId, decision },
     });
 
-    await deps.onDecided?.(request, decision);
-
-    // Release the node that was waiting. Absent when the decision arrived in another process or
-    // after a restart — the row is still correct, there is simply nobody left to wake.
-    waiting.get(request.id)?.(decision);
+    /*
+     * Only a node that is still suspended here resumes, so only then may its row move. A request
+     * nobody waits on — its wait ended by a Stop (D-054), or left by a process that died (D-061) —
+     * belongs to a node that is STOPPED, and "approved" moving that back to RUNNING would leave a
+     * row nothing will ever finish inside a HALTED run (D111). The decision is still recorded.
+     */
+    const waiter = waiting.get(request.id);
     waiting.delete(request.id);
+    if (waiter === undefined) return decision;
+
+    try {
+      await deps.onDecided?.(request, decision);
+    } finally {
+      // Woken even if the hook failed: a node left suspended for ever is the worse outcome.
+      waiter(decision);
+    }
 
     return decision;
   }
 
   return {
     async request(input) {
+      const { signal } = input;
+      // Read afresh each time: the run can be aborted during any of the awaits below.
+      const aborted = (): boolean => signal?.aborted === true;
+      // A run already stopped asks nobody anything: no card for a run that is ending (D-054).
+      if (aborted()) throw cancelledWait();
+
       const request: ApprovalRequest = {
         id: nextId(),
         runId: input.runId,
@@ -184,9 +228,29 @@ export function createApprovalService(deps: ApprovalServiceDeps): ApprovalServic
         payload: { runId: input.runId, request: stored },
       });
 
-      const decision = new Promise<ApprovalDecision>((resolve) => {
-        waiting.set(stored.id, resolve);
+      let abandon = (): void => undefined;
+      const decision = new Promise<ApprovalDecision>((resolve, reject) => {
+        abandon = () => {
+          waiting.delete(stored.id);
+          reject(cancelledWait());
+        };
+        waiting.set(stored.id, (decided) => {
+          signal?.removeEventListener('abort', abandon);
+          resolve(decided);
+        });
       });
+
+      /*
+       * D-054: a Stop or a shutdown ends the wait. Checked again here because the run may have been
+       * aborted while the request was being stored — and then the node is not put in WAITING at
+       * all: the stop has already ended it STOPPED, and a WAITING row written after that would be
+       * a live approval card on a dead run (D111).
+       */
+      if (aborted()) {
+        abandon();
+        return decision;
+      }
+      signal?.addEventListener('abort', abandon, { once: true });
 
       await deps.onWaiting?.(stored);
 
@@ -209,7 +273,13 @@ export function createApprovalService(deps: ApprovalServiceDeps): ApprovalServic
 
       for (const request of pending) {
         // A reject, not an approve: nobody looked at this content, so nothing about it is approved.
-        decisions.push(await store(request, 'reject', note));
+        try {
+          decisions.push(await store(request, 'reject', note));
+        } catch (error) {
+          // Someone decided it between the listing and this write (D120). It is not pending any
+          // more, which is all a cancellation wants — and a Stop must not fail over it (D-054).
+          if (!(error instanceof ApprovalAlreadyDecidedError)) throw error;
+        }
       }
 
       return decisions;
