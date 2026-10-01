@@ -2,7 +2,7 @@ import { HttpResponse, http } from 'msw';
 import { setupServer } from 'msw/node';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import type { StreamChunk } from '../adapter.js';
+import type { ProviderAdapter, StreamChunk } from '../adapter.js';
 import { createAnthropicAdapter } from '../adapters/anthropic.js';
 import { createGoogleAdapter } from '../adapters/google.js';
 import { createOllamaAdapter, detectOllama } from '../adapters/ollama.js';
@@ -75,11 +75,11 @@ describe('TC-PRV-003 a wrong key is reported as AUTH_FAILED', () => {
 
 describe('TC-PRV-004 a dead endpoint is reported as UNREACHABLE', () => {
   it('openai_compatible against a base URL that refuses the connection', async () => {
-    server.use(
-      http.get('http://unreachable.local/v1/models', () => HttpResponse.error()),
-    );
+    server.use(http.get('http://unreachable.local/v1/models', () => HttpResponse.error()));
 
-    const status = await createOpenAiCompatibleAdapter({ baseUrl: 'http://unreachable.local' }).check();
+    const status = await createOpenAiCompatibleAdapter({
+      baseUrl: 'http://unreachable.local',
+    }).check();
 
     expect(status.status).toBe('UNREACHABLE');
   });
@@ -359,5 +359,172 @@ describe('FR-EXE-008 the adapter streams text, then usage, then finish', () => {
         ),
       ),
     ).rejects.toMatchObject({ nodeError: { kind: 'auth', retryable: false } });
+  });
+});
+
+/** The engine port's `embed` takes the model in an options bag; this keeps the call typed. */
+type Embed = (texts: string[], options?: { modelId?: string }) => Promise<number[][]>;
+const embedOf = (adapter: ProviderAdapter): Embed => {
+  if (adapter.embed === undefined) throw new Error('adapter has no embed');
+  return adapter.embed.bind(adapter) as Embed;
+};
+
+/* -------------------------------------------------------------------------- */
+/* embed() (FR-RAG-004)                                                        */
+/* -------------------------------------------------------------------------- */
+
+describe('FR-RAG-004 embed() posts the batch and parses the vectors', () => {
+  const texts = ['alpha', 'beta'];
+  const unit = [
+    [1, 0],
+    [0, 1],
+  ];
+
+  it('ollama: POST /api/embed with { model, input }', async () => {
+    let seen: unknown;
+    server.use(
+      http.post(`${LOCAL}/api/embed`, async ({ request }) => {
+        seen = await request.json();
+        return HttpResponse.json({ embeddings: unit });
+      }),
+    );
+
+    const vectors = await embedOf(createOllamaAdapter())(texts, { modelId: 'nomic-embed-text' });
+
+    expect(seen).toEqual({ model: 'nomic-embed-text', input: texts });
+    expect(vectors).toEqual(unit);
+  });
+
+  it('openai: POST /v1/embeddings with the key, ordered by index', async () => {
+    let seen: unknown;
+    let auth: string | null = null;
+    server.use(
+      http.post('https://api.openai.com/v1/embeddings', async ({ request }) => {
+        seen = await request.json();
+        auth = request.headers.get('authorization');
+        return HttpResponse.json({
+          data: [
+            { index: 1, embedding: [0, 1] },
+            { index: 0, embedding: [1, 0] },
+          ],
+        });
+      }),
+    );
+
+    const vectors = await embedOf(createOpenAiAdapter({ apiKey: 'sk-test' }))(texts, {
+      modelId: 'text-embedding-3-small',
+    });
+
+    expect(seen).toEqual({ model: 'text-embedding-3-small', input: texts });
+    expect(auth).toBe('Bearer sk-test');
+    expect(vectors).toEqual(unit);
+  });
+
+  it('openai_compatible: POST {baseUrl}/v1/embeddings, no key header when none is set', async () => {
+    let auth: string | null = 'unset';
+    server.use(
+      http.post('http://gateway.local/v1/embeddings', async ({ request }) => {
+        auth = request.headers.get('authorization');
+        return HttpResponse.json({
+          data: [
+            { index: 0, embedding: [1, 0] },
+            { index: 1, embedding: [0, 1] },
+          ],
+        });
+      }),
+    );
+
+    const vectors = await embedOf(
+      createOpenAiCompatibleAdapter({
+        baseUrl: 'http://gateway.local/',
+      }),
+    )(texts, { modelId: 'bge' });
+
+    expect(auth).toBeNull();
+    expect(vectors).toEqual(unit);
+  });
+
+  it('google: POST :batchEmbedContents with one request per text', async () => {
+    let seen: unknown;
+    let key: string | null = null;
+    server.use(
+      http.post(
+        'https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004\\:batchEmbedContents',
+        async ({ request }) => {
+          seen = await request.json();
+          key = request.headers.get('x-goog-api-key');
+          return HttpResponse.json({ embeddings: [{ values: [1, 0] }, { values: [0, 1] }] });
+        },
+      ),
+    );
+
+    const vectors = await embedOf(createGoogleAdapter({ apiKey: 'g-key' }))(texts, {
+      modelId: 'text-embedding-004',
+    });
+
+    expect(seen).toEqual({
+      requests: [
+        { model: 'models/text-embedding-004', content: { parts: [{ text: 'alpha' }] } },
+        { model: 'models/text-embedding-004', content: { parts: [{ text: 'beta' }] } },
+      ],
+    });
+    expect(key).toBe('g-key');
+    expect(vectors).toEqual(unit);
+  });
+
+  it('anthropic has no embed', () => {
+    expect(createAnthropicAdapter({ apiKey: 'k' }).embed).toBeUndefined();
+  });
+
+  it('a call without a model id is a programming error', async () => {
+    await expect(embedOf(createOllamaAdapter())(texts)).rejects.toThrow(/modelId/);
+    await expect(embedOf(createOpenAiAdapter({ apiKey: 'k' }))(texts, {})).rejects.toThrow(
+      /modelId/,
+    );
+    await expect(embedOf(createGoogleAdapter({ apiKey: 'k' }))(texts)).rejects.toThrow(/modelId/);
+  });
+
+  it('an empty batch makes no request', async () => {
+    expect(await embedOf(createOllamaAdapter())([], { modelId: 'm' })).toEqual([]);
+  });
+});
+
+describe('FR-RAG-004 embed() failures are classified like generate()', () => {
+  const failing = (url: string, status: number): void => {
+    server.use(http.post(url, () => HttpResponse.json({ error: { message: 'no' } }, { status })));
+  };
+
+  it('401 is auth on openai', async () => {
+    failing('https://api.openai.com/v1/embeddings', 401);
+    await expect(
+      embedOf(createOpenAiAdapter({ apiKey: 'bad' }))(['a'], { modelId: 'm' }),
+    ).rejects.toMatchObject({ nodeError: { kind: 'auth' } });
+  });
+
+  it('429 and 503 are retryable provider errors', async () => {
+    failing(`${LOCAL}/api/embed`, 429);
+    await expect(embedOf(createOllamaAdapter())(['a'], { modelId: 'm' })).rejects.toMatchObject({
+      nodeError: { kind: 'provider', code: 'http_429', retryable: true },
+    });
+    failing('https://generativelanguage.googleapis.com/v1beta/models/m\\:batchEmbedContents', 503);
+    await expect(
+      embedOf(createGoogleAdapter({ apiKey: 'k' }))(['a'], { modelId: 'm' }),
+    ).rejects.toMatchObject({ nodeError: { kind: 'provider', retryable: true } });
+  });
+
+  it('a refused connection is a network error', async () => {
+    server.use(http.post('http://down.local/v1/embeddings', () => HttpResponse.error()));
+    await expect(
+      embedOf(createOpenAiCompatibleAdapter({ baseUrl: 'http://down.local' }))(['a'], {
+        modelId: 'm',
+      }),
+    ).rejects.toMatchObject({ nodeError: { kind: 'network' } });
+  });
+
+  it('a malformed answer is a non-retryable provider error', async () => {
+    server.use(http.post(`${LOCAL}/api/embed`, () => HttpResponse.json({ embeddings: [[1]] })));
+    await expect(
+      embedOf(createOllamaAdapter())(['a', 'b'], { modelId: 'm' }),
+    ).rejects.toMatchObject({ nodeError: { code: 'bad_embedding_response', retryable: false } });
   });
 });

@@ -5,6 +5,7 @@ import type { ModelInfo, ProviderAdapter } from '../adapter.js';
 import {
   createAiSdkAdapter,
   discoveredModel,
+  embedOpenAiStyle,
   getJson,
   statusFromProbe,
   type FetchLike,
@@ -70,5 +71,7 @@ export function createOpenAiCompatibleAdapter(options: OpenAiCompatibleOptions):
     model: (modelId) => provider.chat(modelId),
     check: () => statusFromProbe(probe),
     listModels: async () => parseOpenAiModelList(await probe()),
+    embed: (texts, embedOptions) =>
+      embedOpenAiStyle(baseUrl, headers, options.fetchImpl, texts, embedOptions),
   });
 }
