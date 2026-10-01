@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  BACKUP_CONTENT_TYPE,
+  BACKUP_UPLOAD_FIELD,
+  BackupImportResponseSchema,
   DEFAULT_ALLOWED_ORIGINS,
   DEFAULT_CONCURRENCY,
   SettingsPatchSchema,
@@ -24,6 +27,8 @@ describe('FR-SYS-010 Settings defaults', () => {
       maxUploadMb: 100,
       dockerSandbox: 'auto',
       mcpEnabled: true,
+      // Round 5 §2.7: telemetry is off, and v1 ships no telemetry code.
+      telemetryEnabled: false,
     });
   });
 
@@ -115,5 +120,41 @@ describe('FR-GRD-008 the daily budget (round 3 §2.3)', () => {
     const patch: Partial<Settings> = SettingsPatchSchema.parse({ dailyBudgetUsd: null });
     const merged: Settings = { ...SettingsSchema.parse(minimal), ...patch };
     expect(SettingsSchema.parse(merged).dailyBudgetUsd).toBeNull();
+  });
+});
+
+describe('NFR-PRIV-01 telemetry is off and stays off (round 5 §2.7)', () => {
+  it('reads telemetryEnabled as false, and refuses true in a file or a patch', () => {
+    expect(SettingsSchema.parse(minimal).telemetryEnabled).toBe(false);
+    expect(SettingsSchema.safeParse({ ...minimal, telemetryEnabled: true }).success).toBe(false);
+    expect(SettingsPatchSchema.safeParse({ telemetryEnabled: true }).success).toBe(false);
+    expect(SettingsPatchSchema.parse({ telemetryEnabled: false })).toEqual({
+      telemetryEnabled: false,
+    });
+  });
+
+  it('patches onboardingCompleted, which the wizard sets', () => {
+    expect(SettingsPatchSchema.parse({ onboardingCompleted: true })).toEqual({
+      onboardingCompleted: true,
+    });
+  });
+});
+
+describe('FR-SYS-012 backup and restore', () => {
+  it('exports a zip and imports one from the upload field', () => {
+    expect(BACKUP_CONTENT_TYPE).toBe('application/zip');
+    expect(BACKUP_UPLOAD_FIELD).toBe('file');
+  });
+
+  it('TC-SYS-014 answers what the restore brought back', () => {
+    const restored = { restored: { projects: 2, runs: 14, artifacts: 9 } };
+    expect(BackupImportResponseSchema.parse(restored)).toEqual(restored);
+    expect(
+      BackupImportResponseSchema.safeParse({ restored: { projects: 2, runs: 14 } }).success,
+    ).toBe(false);
+    expect(
+      BackupImportResponseSchema.safeParse({ restored: { ...restored.restored, secrets: 1 } })
+        .success,
+    ).toBe(false);
   });
 });

@@ -19,6 +19,8 @@ import {
   TimestampSchema,
 } from './graph.js';
 import { ApprovalDecisionSchema, GuardrailPolicyRefSchema, VerdictSchema } from './guardrails.js';
+import { NodeRunSourceSchema } from './knowledge.js';
+import { MemoryOpSchema } from './memory.js';
 import { ToolCallSchema } from './tools.js';
 import { ValidationIssueSchema } from './validation.js';
 
@@ -216,6 +218,16 @@ export const NodeRunSchema = z.object({
   guardrailPolicy: GuardrailPolicyRefSchema.optional(),
   /** On a loop's last iteration: why the loop stopped (§2.4). */
   loopStop: LoopStopReasonSchema.optional(),
+  /**
+   * Round 5 §2.4: the knowledge-base chunks this node run's context used, best first
+   * (FR-RAG-007). `droppedSources` are chunks the search found that did not fit the context budget
+   * (§4 item 7). `memoryOps` are the `__memory` ops this node run applied, in order (§2.2,
+   * FR-MEM-002). All three are optional until A5 and M5 have both merged (D71); absent reads as
+   * none.
+   */
+  sources: z.array(NodeRunSourceSchema).optional(),
+  droppedSources: z.array(NodeRunSourceSchema).optional(),
+  memoryOps: z.array(MemoryOpSchema).optional(),
   /**
    * Set when Start from node copied this node run from an earlier run instead of executing it:
    * the node run whose output it carries. Usage is zero, and nothing was called (FR-EXE-013, D83).

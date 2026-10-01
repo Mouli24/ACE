@@ -6,6 +6,7 @@ import {
   ROUND_1_VALIDATION_ISSUE_CODES,
   ROUND_3_VALIDATION_ISSUE_CODES,
   ROUND_4_VALIDATION_ISSUE_CODES,
+  ROUND_5_VALIDATION_ISSUE_CODES,
   VALIDATION_ISSUE_CODES,
   ValidationIssueCodeSchema,
   ValidationIssueSchema,
@@ -117,7 +118,7 @@ describe('FR-WF-006 ValidationIssue', () => {
     ]);
   });
 
-  it('adds the seven codes round 2 §2.5 names, then round 3', () => {
+  it('adds the seven codes round 2 §2.5 names, then rounds 3, 4 and 5', () => {
     expect([...VALIDATION_ISSUE_CODES]).toEqual([
       ...ROUND_1_VALIDATION_ISSUE_CODES,
       'provider_missing',
@@ -129,7 +130,14 @@ describe('FR-WF-006 ValidationIssue', () => {
       'unknown_placeholder',
       ...ROUND_3_VALIDATION_ISSUE_CODES,
       ...ROUND_4_VALIDATION_ISSUE_CODES,
+      ...ROUND_5_VALIDATION_ISSUE_CODES,
     ]);
+  });
+
+  it('adds the one code round 5 §2.4 names, and keeps not_supported_yet for later kinds', () => {
+    expect([...ROUND_5_VALIDATION_ISSUE_CODES]).toEqual(['missing_knowledge_base']);
+    expect(ValidationIssueCodeSchema.safeParse('missing_knowledge_base').success).toBe(true);
+    expect(VALIDATION_ISSUE_CODES).toContain('not_supported_yet');
   });
 
   it('adds the two codes round 4 §2.4 names, and repurposes none', () => {

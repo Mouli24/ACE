@@ -20,6 +20,8 @@ import {
   APPROVAL_ID,
   CHAT_MESSAGE_ID,
   EDGE_ID,
+  KB_DOCUMENT_ID,
+  KB_ID,
   LOOP_EDGE_ID,
   MCP_SERVER_ID,
   MESSAGE_ID,
@@ -225,7 +227,7 @@ const payloadOf = (type: string): Record<string, unknown> => {
 };
 
 describe('FR-EXE-014 RunEvent covers every type of round 2 §2.4 and round 3 §2.6', () => {
-  it('declares exactly the sixteen run event types', () => {
+  it('declares exactly the sixteen run event types; round 5 §2.8 adds none (D230)', () => {
     expect([...RUN_EVENT_TYPES]).toEqual([
       'run.started',
       'run.completed',
@@ -483,8 +485,13 @@ describe('FR-PRV-004 EngineEvent', () => {
     seq: 11,
   };
 
-  it('declares provider.status and, from round 4 §2.5, mcp.status', () => {
-    expect([...ENGINE_EVENT_TYPES]).toEqual(['provider.status', 'mcp.status']);
+  it('declares provider.status, round 4 §2.5 mcp.status, round 5 §2.8 kb.ingest and memory.updated', () => {
+    expect([...ENGINE_EVENT_TYPES]).toEqual([
+      'provider.status',
+      'mcp.status',
+      'kb.ingest',
+      'memory.updated',
+    ]);
   });
 
   it('parses an MCP server coming up with its tool count (FR-TOOL-007, D16)', () => {
@@ -663,5 +670,106 @@ describe('round 4 §2.5 the five events this round adds', () => {
       expect(isPersistedFrame(ServerFrameSchema.parse(frame)), JSON.stringify(frame)).toBe(true);
     }
     expect(isPersistedFrame(ServerFrameSchema.parse(threadFrames['chat.token']))).toBe(false);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Round 5 §2.8                                                                */
+/* -------------------------------------------------------------------------- */
+
+describe('FR-RAG-003 kb.ingest', () => {
+  const ingest = {
+    type: 'kb.ingest',
+    payload: {
+      knowledgeBaseId: KB_ID,
+      documentId: KB_DOCUMENT_ID,
+      status: 'embedding',
+      progress: 0.6,
+    },
+    seq: 19,
+  };
+
+  it('rides the engine subscription, persisted with a seq', () => {
+    expect(EngineEventSchema.parse(ingest)).toEqual(ingest);
+    const { seq: _seq, ...withoutSeq } = ingest;
+    expect(EngineEventSchema.safeParse(withoutSeq).success).toBe(false);
+    expect(ServerFrameSchema.safeParse(ingest).success).toBe(true);
+  });
+
+  it('TC-RAG-003 carries the reason on a failed document', () => {
+    const failed = {
+      ...ingest,
+      payload: {
+        knowledgeBaseId: KB_ID,
+        documentId: KB_DOCUMENT_ID,
+        status: 'failed',
+        error: 'The PDF is damaged.',
+      },
+    };
+    expect(EngineEventSchema.parse(failed)).toEqual(failed);
+  });
+
+  it('bounds progress to 0..1 and the status to the pipeline', () => {
+    const at = (payload: Record<string, unknown>) =>
+      EngineEventSchema.safeParse({ ...ingest, payload: { ...ingest.payload, ...payload } })
+        .success;
+
+    expect(at({ progress: 0 })).toBe(true);
+    expect(at({ progress: 1 })).toBe(true);
+    expect(at({ progress: 60 })).toBe(false);
+    expect(at({ status: 'done' })).toBe(false);
+  });
+
+  it('is not a run event', () => {
+    expect(RunEventSchema.safeParse(ingest).success).toBe(false);
+  });
+});
+
+describe('FR-MEM-002 FR-MEM-004 memory.updated', () => {
+  const frame = {
+    type: 'memory.updated',
+    payload: { nodeId: NODE_A, ops: [{ op: 'save', key: 'user_name', value: 'Ada' }] },
+    seq: 18,
+  };
+
+  it('rides the engine subscription, persisted with a seq — a delete belongs to no run (D230)', () => {
+    expect(EngineEventSchema.parse(frame)).toEqual(frame);
+    expect(isPersistedFrame(ServerFrameSchema.parse(frame))).toBe(true);
+    expect(RunEventSchema.safeParse(frame).success).toBe(false);
+  });
+
+  it('carries the ops, deletes included, and at least one', () => {
+    const clear = {
+      ...frame,
+      payload: {
+        nodeId: NODE_A,
+        ops: [
+          { op: 'delete', key: 'user_name' },
+          { op: 'delete', key: 'city' },
+        ],
+      },
+    };
+    expect(EngineEventSchema.safeParse(clear).success).toBe(true);
+    expect(
+      EngineEventSchema.safeParse({ ...frame, payload: { nodeId: NODE_A, ops: [] } }).success,
+    ).toBe(false);
+  });
+});
+
+describe('FR-OBS-002 usage.updated with the day totals', () => {
+  it('carries the day across every run on the completing frame, and stays valid without it', () => {
+    const withDay = {
+      type: 'usage.updated',
+      payload: { runId: RUN_ID, totals: usage, dayTotals: { day: '2026-10-01', totals: usage } },
+      seq: 20,
+    };
+    expect(RunEventSchema.parse(withDay)).toEqual(withDay);
+    expect(RunEventSchema.safeParse(frames['usage.updated']).success).toBe(true);
+    expect(
+      RunEventSchema.safeParse({
+        ...withDay,
+        payload: { ...withDay.payload, dayTotals: { day: 'today', totals: usage } },
+      }).success,
+    ).toBe(false);
   });
 });

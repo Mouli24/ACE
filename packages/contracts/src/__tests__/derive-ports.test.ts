@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { derivePorts } from '../graph.js';
-import { NODE_A } from './fixtures.js';
+import { KB_ID, NODE_A } from './fixtures.js';
 
 describe('FR-NODE-006 derivePorts', () => {
   it('gives an input node one output port per outputTypes entry, and no inputs', () => {
@@ -120,8 +120,29 @@ describe('FR-NODE-006 derivePorts', () => {
     },
   );
 
+  it('TC-RAG-007 gives a retrieval node one text query in and a json out (round 5 §2.4)', () => {
+    const { inputs, outputs } = derivePorts({ id: NODE_A, kind: 'retrieval', config: { k: 5 } });
+
+    expect(inputs).toEqual([
+      { id: NODE_A + ':in:query', name: 'query', dataType: 'text', multi: false },
+    ]);
+    expect(outputs).toEqual([
+      { id: NODE_A + ':out:out', name: 'out', dataType: 'json', multi: true },
+    ]);
+  });
+
+  it('gives a retrieval node the same ports whatever its base, k or mode', () => {
+    const bare = derivePorts({ id: NODE_A, kind: 'retrieval', config: { k: 5 } });
+    const full = derivePorts({
+      id: NODE_A,
+      kind: 'retrieval',
+      config: { knowledgeBaseId: KB_ID, k: 20, mode: 'keyword' },
+    });
+
+    expect(full).toEqual(bare);
+  });
+
   it.each([
-    ['retrieval', { k: 5 }],
     ['guardrail', {}],
     ['custom', {}],
   ] as const)('gives a %s node no ports until its own round (D19)', (kind, config) => {

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { DataTypeSchema, type DataType } from './enums.js';
 import { IdSchema, PortIdSchema, TimestampSchema } from './graph.js';
 import { VerdictSchema } from './guardrails.js';
+import { SearchScoreSchema } from './knowledge.js';
 
 /**
  * Parts and the envelope (round 2 §2.2, Arch §12.4, BR-02, BR-13, ADR-008).
@@ -51,21 +52,42 @@ export const TRUST_LEVELS = ['trusted', 'untrusted'] as const;
 export const TrustLevelSchema = z.enum(TRUST_LEVELS);
 export type TrustLevel = z.infer<typeof TrustLevelSchema>;
 
+/**
+ * A knowledge-base chunk in an envelope's context, filled from a search hit (round 5 §2.4,
+ * FR-RAG-005..007) — which is why its score is a search score, 0..1. Never trusted (BR-13).
+ */
 export const RetrievedChunkSchema = z.strictObject({
   chunkId: IdSchema,
   text: z.string(),
-  score: z.number(),
+  score: SearchScoreSchema,
   source: z.string(),
 });
 export type RetrievedChunk = z.infer<typeof RetrievedChunkSchema>;
 
-export const MemoryEntrySchema = z.strictObject({ key: z.string(), value: z.string() });
-export type MemoryEntry = z.infer<typeof MemoryEntrySchema>;
+/**
+ * A remembered fact as the envelope carries it: just the key and the value (round 2 §2.2). The
+ * stored row, with its id and times, is `MemoryEntry` in `memory.ts` (round 5 §2.2), which is why
+ * this one has its own name (D229).
+ */
+export const EnvelopeMemoryEntrySchema = z.strictObject({ key: z.string(), value: z.string() });
+export type EnvelopeMemoryEntry = z.infer<typeof EnvelopeMemoryEntrySchema>;
 
+/**
+ * The most of `budgetTokens` the retrieved chunks and the memory may each take (round 5 §2.2,
+ * §4 item 7); the summary has the rest. Chunks that do not fit are dropped lowest score first, and
+ * recorded on the node run as `droppedSources`; memory goes in oldest first, truncated to fit.
+ */
+export const CONTEXT_BUDGET_SHARES = Object.freeze({ retrieved: 0.5, memory: 0.25 } as const);
+
+/**
+ * From round 5 the engine fills all three parts (§2.4, §2.5, §2.2) — summary, then retrieved,
+ * then memory, the Arch §12.6 order — and every one of them has been through the context
+ * guardrails first (FR-GRD-004). Anything retrieved or remembered makes the envelope `untrusted`.
+ */
 export const EnvelopeContextSchema = z.strictObject({
   summary: z.string().optional(),
   retrieved: z.array(RetrievedChunkSchema).optional(),
-  memory: z.array(MemoryEntrySchema).optional(),
+  memory: z.array(EnvelopeMemoryEntrySchema).optional(),
   /** The hard cap of FR-EXE-007 — context is built to fit it, never trimmed afterwards. */
   budgetTokens: z.number().int().positive(),
   /** BR-13: anything a model or a tool produced is `untrusted`. */

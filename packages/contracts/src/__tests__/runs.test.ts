@@ -24,6 +24,8 @@ import {
   APPROVAL_ID,
   EDGE_ID,
   ENVELOPE_ID,
+  KB_CHUNK_ID,
+  KB_DOCUMENT_ID,
   NODE_A,
   NODE_B,
   NODE_RUN_ID,
@@ -644,6 +646,42 @@ describe('FR-EXE-013 a node run Start from node reuses says where it came from (
   it('refuses a reference that is not a ULID', () => {
     expect(
       NodeRunSchema.safeParse({ ...nodeRun, reusedFromNodeRunId: 'nr-1' }).success,
+    ).toBe(false);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Round 5 §2.2, §2.4                                                          */
+/* -------------------------------------------------------------------------- */
+
+describe('FR-RAG-007 FR-MEM-002 what a node run records in round 5', () => {
+  const source = {
+    chunkId: KB_CHUNK_ID,
+    documentId: KB_DOCUMENT_ID,
+    score: 0.82,
+    source: 'a.md#Intro',
+  };
+
+  it('reads a round 4 node run, with none of the three, as it was', () => {
+    expect(NodeRunSchema.parse(nodeRun)).toEqual(nodeRun);
+  });
+
+  it('TC-RAG-006 records the sources the context used, and the ones dropped to fit', () => {
+    const recorded = { ...nodeRun, sources: [source], droppedSources: [{ ...source, score: 0.1 }] };
+    expect(NodeRunSchema.parse(recorded)).toEqual(recorded);
+    expect(
+      NodeRunSchema.safeParse({ ...nodeRun, sources: [{ ...source, score: 3 }] }).success,
+    ).toBe(false);
+  });
+
+  it('TC-MEM-001 records the memory ops the node run applied', () => {
+    const memoryOps = [
+      { op: 'save', key: 'user_name', value: 'Ada' },
+      { op: 'delete', key: 'city' },
+    ];
+    expect(NodeRunSchema.parse({ ...nodeRun, memoryOps }).memoryOps).toEqual(memoryOps);
+    expect(
+      NodeRunSchema.safeParse({ ...nodeRun, memoryOps: [{ op: 'forget', key: 'city' }] }).success,
     ).toBe(false);
   });
 });

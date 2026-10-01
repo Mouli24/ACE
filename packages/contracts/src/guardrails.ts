@@ -4,8 +4,8 @@ import { GuardrailActionSchema, GuardrailPointSchema, type GuardrailPoint } from
 import { IdSchema, NodeNameSchema, TimestampSchema, type Id } from './graph.js';
 
 /**
- * Guardrail policies, checks, verdicts and approvals (round 3 §2.2, FR-GRD-001..015 and 018,
- * Arch §13).
+ * Guardrail policies, checks, verdicts and approvals (round 3 §2.2, round 5 §2.3,
+ * FR-GRD-001..015 and 018, Arch §13).
  *
  * Every body in this module is strict. A key the contract does not name is exactly how an off
  * switch for a data guardrail would slip into a policy (BR-15, FR-GRD-010), or how a redacted
@@ -37,7 +37,7 @@ export const PolicyGuardrailPointSchema = z.enum(POLICY_GUARDRAIL_POINTS, {
 });
 export type PolicyGuardrailPoint = z.infer<typeof PolicyGuardrailPointSchema>;
 
-/** The check types of §2.2, in its order. */
+/** The check types of §2.2, in its order. Round 5 §2.3 adds none; it files two at `context`. */
 export const GUARDRAIL_CHECK_TYPES = [
   // input
   'size_limit',
@@ -57,7 +57,7 @@ export const GUARDRAIL_CHECK_TYPES = [
   'max_iterations',
   'max_tool_calls',
   'repeated_output',
-  // context — evaluated from round 5
+  // context — evaluated from round 5 (pii and prompt_injection are valid here too)
   'untrusted_tagging',
   // tool — evaluated from round 4
   'tool_allowed',
@@ -68,10 +68,15 @@ export const GUARDRAIL_CHECK_TYPES = [
 export const GuardrailCheckTypeSchema = z.enum(GUARDRAIL_CHECK_TYPES);
 export type GuardrailCheckType = z.infer<typeof GuardrailCheckTypeSchema>;
 
-/** Which check types a policy may configure at each point (§2.2). `pii` is filed under two. */
+/**
+ * Which check types a policy may configure at each point (§2.2). From round 5 §2.3 `pii` is filed
+ * under three points and `prompt_injection` under two: at `context` they run over retrieved chunks,
+ * upstream outputs, tool results and memory — and `pii` over a document's text before it is
+ * chunked (Arch §21.3).
+ */
 export const GUARDRAIL_CHECK_TYPES_BY_POINT = {
   input: ['size_limit', 'pii', 'prompt_injection', 'blocked_topics'],
-  context: ['untrusted_tagging'],
+  context: ['untrusted_tagging', 'prompt_injection', 'pii'],
   tool: ['tool_allowed', 'path_confinement', 'domain_allowlist', 'destructive_action'],
   output: ['contract', 'moderation', 'secret_leak', 'required_citations', 'pii'],
   cost: ['max_tokens_per_node', 'max_cost_per_run', 'daily_budget'],
@@ -91,6 +96,11 @@ function pointsFor(type: GuardrailCheckType): PolicyGuardrailPoint[] {
 /**
  * One check of a policy. The point/type rule is a refinement, so Zod refuses `.pick`, `.omit` and
  * `.partial` on this schema — validate a whole check with it rather than deriving a smaller one.
+ *
+ * `untrusted_tagging` is always on and only tags (round 5 §2.3, BR-13). The schema still accepts it
+ * disabled or with another action, because the round 3 policy editor offers every type a point
+ * files with its default action; the engine tags unconditionally whatever the check says, and the
+ * check exists so its verdicts have one to name (D232).
  */
 export const GuardrailCheckSchema = z
   .strictObject({
@@ -181,12 +191,15 @@ export const DEFAULT_GUARDRAIL_POLICY_NAME = 'Default';
 type DefaultCheck = Pick<GuardrailCheck, 'point' | 'type' | 'action' | 'params'>;
 
 /**
- * §2.2's default policy, in its order: warn on content issues, block secret leaks and tool abuse
- * (D10). At the cost point a check's action decides (D79): `block` halts the run
- * `budget_exceeded`, so `max_cost_per_run` is `block` here where §2.2 wrote `warn` — the §1 demo,
- * TC-GRD-012 and FR-GRD-008 all halt on the default policy. The two cost checks carry no params:
- * their caps are the project's `maxCostPerRunUsd` and the settings' `dailyBudgetUsd` (§2.3) unless
- * a policy sets `params.usd`. Tool checks are declared now and evaluated from round 4.
+ * §2.2's default policy, in its order, then round 5 §2.3's three context checks: warn on content
+ * issues, block secret leaks and tool abuse (D10), tag every untrusted piece of context, neutralise
+ * the hidden instructions in it with a warning, and redact the personal data in it (D232).
+ *
+ * At the cost point a check's action decides (D79): `block` halts the run `budget_exceeded`, so
+ * `max_cost_per_run` is `block` here where §2.2 wrote `warn` — the §1 demo, TC-GRD-012 and
+ * FR-GRD-008 all halt on the default policy. The two cost checks carry no params: their caps are
+ * the project's `maxCostPerRunUsd` and the settings' `dailyBudgetUsd` (§2.3) unless a policy sets
+ * `params.usd`. Tool checks are declared now and evaluated from round 4.
  */
 const DEFAULT_CHECKS: readonly DefaultCheck[] = [
   { point: 'input', type: 'pii', action: 'warn', params: {} },
@@ -204,6 +217,9 @@ const DEFAULT_CHECKS: readonly DefaultCheck[] = [
   { point: 'tool', type: 'tool_allowed', action: 'block', params: {} },
   { point: 'tool', type: 'path_confinement', action: 'block', params: {} },
   { point: 'tool', type: 'domain_allowlist', action: 'block', params: {} },
+  { point: 'context', type: 'untrusted_tagging', action: 'pass', params: {} },
+  { point: 'context', type: 'prompt_injection', action: 'warn', params: {} },
+  { point: 'context', type: 'pii', action: 'redact', params: {} },
 ];
 
 /**
@@ -235,7 +251,26 @@ export const RedactedTypeSchema = z
   .string()
   .regex(REDACTED_TYPE_REGEX, 'must be a type name such as email — never the value');
 
-/** One check's outcome on one node run. Stored on the node run and emitted (FR-GRD-015). */
+/**
+ * The kinds of hidden instruction `prompt_injection` strips at the context point (round 5 §2.3):
+ * `<!-- -->` comments, `[//]: #` Markdown comments, zero-width characters, "ignore previous
+ * instructions"-class sentences, and base64-looking instruction payloads over 200 characters.
+ */
+export const HIDDEN_INSTRUCTION_TYPES = [
+  'html_comment',
+  'markdown_comment',
+  'zero_width',
+  'instruction_override',
+  'base64_payload',
+] as const;
+export const HiddenInstructionTypeSchema = z.enum(HIDDEN_INSTRUCTION_TYPES);
+export type HiddenInstructionType = z.infer<typeof HiddenInstructionTypeSchema>;
+
+/**
+ * One check's outcome on one node run. Stored on the node run and emitted (FR-GRD-015). Like
+ * `redactedTypes`, `strippedTypes` names what was taken out and never the text itself (§2.3,
+ * FR-GRD-014) — a poisoned chunk's payload must not survive in its own verdict (TC-GRD-005).
+ */
 export const VerdictSchema = z.strictObject({
   id: IdSchema,
   nodeRunId: IdSchema,
@@ -245,6 +280,7 @@ export const VerdictSchema = z.strictObject({
   passed: z.boolean(),
   reason: z.string(),
   redactedTypes: z.array(RedactedTypeSchema).optional(),
+  strippedTypes: z.array(HiddenInstructionTypeSchema).optional(),
   at: TimestampSchema,
 });
 export type Verdict = z.infer<typeof VerdictSchema>;

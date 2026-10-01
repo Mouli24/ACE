@@ -192,9 +192,31 @@ export const TransformConfigSchema = z.object({
 });
 export type TransformConfig = z.infer<typeof TransformConfigSchema>;
 
+/**
+ * How a knowledge base is searched (round 5 §2.1), shared by `SearchRequest` and the Retrieval
+ * node's config (§2.4). Declared here rather than in `knowledge.ts` because that module imports
+ * this one, and one definition is what keeps the node and the search from drifting.
+ */
+export const SEARCH_MODES = ['hybrid', 'vector', 'keyword'] as const;
+export const SearchModeSchema = z.enum(SEARCH_MODES);
+export type SearchMode = z.infer<typeof SearchModeSchema>;
+export const DEFAULT_SEARCH_MODE: SearchMode = 'hybrid';
+
+/** How many hits a search returns (§2.1, §2.4). */
+export const SEARCH_K_MIN = 1;
+export const SEARCH_K_MAX = 20;
+export const DEFAULT_SEARCH_K = 5;
+export const SearchKSchema = z.number().int().min(SEARCH_K_MIN).max(SEARCH_K_MAX);
+
+/**
+ * Round 5 §2.4. A missing `knowledgeBaseId` is pre-flight's `missing_knowledge_base`, not a parse
+ * error, so a Retrieval node can be dropped on the Canvas before its base is chosen. Without a
+ * `mode` the node searches the way a search does by default, `hybrid`.
+ */
 export const RetrievalConfigSchema = z.object({
   knowledgeBaseId: IdSchema.optional(),
-  k: z.number().int().min(1).max(20),
+  k: SearchKSchema.default(DEFAULT_SEARCH_K),
+  mode: SearchModeSchema.optional(),
 });
 export type RetrievalConfig = z.infer<typeof RetrievalConfigSchema>;
 
@@ -573,7 +595,8 @@ const TRANSFORM_PORTS = {
  * out, byte for byte. Port names are the data type for type-derived ports (D18), which keeps a
  * port id stable when `outputTypes` is reordered or an earlier entry is removed.
  *
- * `retrieval`, `guardrail` and `custom` get no ports until the round that defines them (D19).
+ * `guardrail` and `custom` get no ports until the round that defines them (D19); `retrieval` got
+ * its two in round 5 (§2.4).
  */
 export function derivePorts(node: NodePortSource): DerivedPorts {
   const { id } = node;
@@ -612,7 +635,13 @@ export function derivePorts(node: NodePortSource): DerivedPorts {
       };
     }
 
+    /* Round 5 §2.4: one text query in, `{ hits: SearchHit[] }` out as json (FR-RAG-006). */
     case 'retrieval':
+      return {
+        inputs: [inPort(id, 'query', 'text', false)],
+        outputs: [outPort(id, 'out', 'json')],
+      };
+
     case 'guardrail':
     case 'custom':
       return { inputs: [], outputs: [] };

@@ -125,11 +125,20 @@ export const ROUND_4_VALIDATION_ISSUE_CODES = [
   'mcp_server_unreachable',
 ] as const;
 
+/**
+ * The code round 5 §2.4 adds, an error raised by pre-flight: a Retrieval node with no knowledge base
+ * chosen, or a Retrieval node or an agent naming a base that no longer exists (FR-RAG-005,
+ * FR-RAG-006). From round 5 pre-flight stops raising `not_supported_yet` for `retrieval`; the code
+ * stays, for `guardrail` and `custom` (NFR-VER-01).
+ */
+export const ROUND_5_VALIDATION_ISSUE_CODES = ['missing_knowledge_base'] as const;
+
 export const VALIDATION_ISSUE_CODES = [
   ...ROUND_1_VALIDATION_ISSUE_CODES,
   ...ROUND_2_VALIDATION_ISSUE_CODES,
   ...ROUND_3_VALIDATION_ISSUE_CODES,
   ...ROUND_4_VALIDATION_ISSUE_CODES,
+  ...ROUND_5_VALIDATION_ISSUE_CODES,
 ] as const;
 export const ValidationIssueCodeSchema = z.enum(VALIDATION_ISSUE_CODES);
 export type ValidationIssueCode = z.infer<typeof ValidationIssueCodeSchema>;
