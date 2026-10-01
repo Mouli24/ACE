@@ -100,6 +100,39 @@ import {
   type PostMessageRequest,
   type PostMessageResponse,
   type ToolListResponse,
+  // Round 5 §2.9 (knowledge, memory, usage and trace, templates, backup)
+  AddKbDocumentRequestSchema,
+  BACKUP_CONTENT_TYPE,
+  BACKUP_UPLOAD_FIELD,
+  BackupImportResponseSchema,
+  CreateKnowledgeBaseRequestSchema,
+  HealthMetricsSchema,
+  InstantiateTemplateRequestSchema,
+  InstantiateTemplateResponseSchema,
+  KbDocumentSchema,
+  KnowledgeBaseSchema,
+  MemoryEntrySchema,
+  SearchRequestSchema,
+  SearchResponseSchema,
+  TemplateSchema,
+  TraceResponseSchema,
+  UpdateKnowledgeBaseRequestSchema,
+  UsageQuerySchema,
+  UsageResponseSchema,
+  type AddKbDocumentRequest,
+  type BackupImportResponse,
+  type HealthMetrics,
+  type InstantiateTemplateRequest,
+  type InstantiateTemplateResponse,
+  type KbDocument,
+  type KnowledgeBase,
+  type MemoryEntry,
+  type SearchResponse,
+  type Template,
+  type TemplateId,
+  type TraceEntry,
+  type UpdateKnowledgeBaseRequest,
+  type UsageResponse,
 } from '@ace/contracts';
 import { z } from 'zod';
 
@@ -147,6 +180,31 @@ const NoContentSchema = { parse: (): undefined => undefined };
 /** `GET /nodes/:id/chat/threads` answers a bare array, the way §2.4 writes it (D78). */
 const ChatThreadListSchema = z.array(ChatThreadSchema);
 
+/*
+ * Round 5 §2.9. Bases and documents answer `{ items }` (D64); memory, trace and templates answer a
+ * bare array, the way §2.9/§2.6/§2.7 write them (D235).
+ */
+const KnowledgeBaseListSchema = z.object({ items: z.array(KnowledgeBaseSchema) });
+const KbDocumentListSchema = z.object({ items: z.array(KbDocumentSchema) });
+const MemoryEntryListSchema = z.array(MemoryEntrySchema);
+const TemplateListSchema = z.array(TemplateSchema);
+/** `POST /knowledge-bases/:id/reindex` answers 202; whatever body comes with it is not read. */
+const AcceptedSchema = { parse: (): undefined => undefined };
+
+/** `chunkSize`/`chunkOverlap` default in the contract, so a caller may leave them out (§2.1). */
+export type CreateKnowledgeBaseBody = z.input<typeof CreateKnowledgeBaseRequestSchema>;
+/** `k` and `mode` default to 5 and `hybrid` (D235). */
+export type SearchRequestBody = z.input<typeof SearchRequestSchema>;
+/** `groupBy` may be one grouping or several; it travels as a repeated query parameter (D234). */
+export type UsageQueryInput = z.input<typeof UsageQuerySchema>;
+
+export interface ImportBackupOptions {
+  /** The filename sent with the zip; taken from a `File` when omitted. */
+  filename?: string;
+  /** Aborts the upload; the promise rejects with a `network` `AceApiError`. */
+  signal?: AbortSignal;
+}
+
 function joinUrl(baseUrl: string, path: string, query?: Query): string {
   const origin = baseUrl.replace(/\/+$/, '');
   const url = new URL(`${origin}${API_BASE_PATH}${path}`);
@@ -168,6 +226,53 @@ function joinUrl(baseUrl: string, path: string, query?: Query): string {
 export function createAceClient(options: AceClientOptions) {
   const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
 
+  /** One authenticated round trip; a fetch that throws becomes a `network` `AceApiError`. */
+  async function send(
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    path: string,
+    init: { accept: string; contentType?: string; body?: BodyInit; signal?: AbortSignal },
+    query?: Query,
+  ): Promise<Response> {
+    try {
+      return await fetchImpl(joinUrl(options.baseUrl, path, query), {
+        method,
+        headers: {
+          authorization: `Bearer ${options.token}`,
+          accept: init.accept,
+          ...(init.contentType === undefined ? {} : { 'content-type': init.contentType }),
+        },
+        ...(init.body === undefined ? {} : { body: init.body }),
+        ...(init.signal === undefined ? {} : { signal: init.signal }),
+      });
+    } catch (cause) {
+      throw AceApiError.network(cause);
+    }
+  }
+
+  async function readJson(response: Response): Promise<unknown> {
+    try {
+      return await response.json();
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Validate a JSON reply against the contract; a mismatch is an `invalid_response`. */
+  async function parseJson<T>(
+    response: Response,
+    path: string,
+    responseSchema: { parse(value: unknown): T },
+  ): Promise<T> {
+    if (response.status === 204) return responseSchema.parse(undefined);
+    const json = await readJson(response);
+    if (!response.ok) throw AceApiError.fromResponse(response.status, json);
+    try {
+      return responseSchema.parse(json);
+    } catch (error) {
+      throw AceApiError.invalidResponse(path, error instanceof Error ? error.message : error);
+    }
+  }
+
   async function request<T>(
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     path: string,
@@ -182,37 +287,15 @@ export function createAceClient(options: AceClientOptions) {
       payload = JSON.stringify(parsed.data);
     }
 
-    let response: Response;
-    try {
-      response = await fetchImpl(joinUrl(options.baseUrl, path, query), {
-        method,
-        headers: {
-          authorization: `Bearer ${options.token}`,
-          accept: 'application/json',
-          ...(payload === undefined ? {} : { 'content-type': 'application/json' }),
-        },
-        ...(payload === undefined ? {} : { body: payload }),
-      });
-    } catch (cause) {
-      throw AceApiError.network(cause);
-    }
-
-    if (response.status === 204) return responseSchema.parse(undefined);
-
-    let json: unknown;
-    try {
-      json = await response.json();
-    } catch {
-      json = undefined;
-    }
-
-    if (!response.ok) throw AceApiError.fromResponse(response.status, json);
-
-    try {
-      return responseSchema.parse(json);
-    } catch (error) {
-      throw AceApiError.invalidResponse(path, error instanceof Error ? error.message : error);
-    }
+    const response = await send(
+      method,
+      path,
+      payload === undefined
+        ? { accept: 'application/json' }
+        : { accept: 'application/json', contentType: 'application/json', body: payload },
+      query,
+    );
+    return parseJson(response, path, responseSchema);
   }
 
   return {
@@ -485,6 +568,134 @@ export function createAceClient(options: AceClientOptions) {
       request('GET', `/chat/threads/${id}`, ChatThreadDetailSchema),
     deleteChatThread: (id: Id): Promise<void> =>
       request('DELETE', `/chat/threads/${id}`, NoContentSchema),
+
+    /* Knowledge bases (round 5 §2.1/§2.9, FR-RAG-001/002/003/004/008/009) */
+
+    listKnowledgeBases: (projectId: Id): Promise<{ items: KnowledgeBase[] }> =>
+      request('GET', `/projects/${projectId}/knowledge-bases`, KnowledgeBaseListSchema),
+    createKnowledgeBase: (projectId: Id, body: CreateKnowledgeBaseBody): Promise<KnowledgeBase> =>
+      request('POST', `/projects/${projectId}/knowledge-bases`, KnowledgeBaseSchema, {
+        schema: CreateKnowledgeBaseRequestSchema,
+        value: body,
+      }),
+    getKnowledgeBase: (id: Id): Promise<KnowledgeBase> =>
+      request('GET', `/knowledge-bases/${id}`, KnowledgeBaseSchema),
+    /** Name and chunk settings only: the embedder is fixed at creation (D235). */
+    updateKnowledgeBase: (id: Id, body: UpdateKnowledgeBaseRequest): Promise<KnowledgeBase> =>
+      request('PATCH', `/knowledge-bases/${id}`, KnowledgeBaseSchema, {
+        schema: UpdateKnowledgeBaseRequestSchema,
+        value: body,
+      }),
+    /** Removes the base with its chunks and vectors. */
+    deleteKnowledgeBase: (id: Id): Promise<void> =>
+      request('DELETE', `/knowledge-bases/${id}`, NoContentSchema),
+    /**
+     * Answers 202 with the document `pending`; ingestion runs in the background and reports each
+     * stage as a `kb.ingest` frame on the engine subscription (FR-RAG-003, D230).
+     */
+    addKbDocument: (knowledgeBaseId: Id, body: AddKbDocumentRequest): Promise<KbDocument> =>
+      request('POST', `/knowledge-bases/${knowledgeBaseId}/documents`, KbDocumentSchema, {
+        schema: AddKbDocumentRequestSchema,
+        value: body,
+      }),
+    listKbDocuments: (knowledgeBaseId: Id): Promise<{ items: KbDocument[] }> =>
+      request('GET', `/knowledge-bases/${knowledgeBaseId}/documents`, KbDocumentListSchema),
+    /** Removes the document's chunks too (FR-RAG-009). */
+    deleteKbDocument: (documentId: Id): Promise<void> =>
+      request('DELETE', `/kb-documents/${documentId}`, NoContentSchema),
+    /** 202: every document goes through the pipeline again, reported by `kb.ingest` (FR-RAG-009). */
+    reindexKnowledgeBase: (knowledgeBaseId: Id): Promise<void> =>
+      request('POST', `/knowledge-bases/${knowledgeBaseId}/reindex`, AcceptedSchema),
+    /** The test-search panel: hybrid by default, best hit first, scores 0..1 (FR-RAG-004/008). */
+    queryKnowledgeBase: (knowledgeBaseId: Id, body: SearchRequestBody): Promise<SearchResponse> =>
+      request('POST', `/knowledge-bases/${knowledgeBaseId}/query`, SearchResponseSchema, {
+        schema: SearchRequestSchema,
+        value: body,
+      }),
+
+    /* Agent memory (round 5 §2.2/§2.9, FR-MEM-004) */
+
+    /** Oldest first — the order entries are injected in. */
+    listNodeMemory: (nodeId: Id): Promise<MemoryEntry[]> =>
+      request('GET', `/nodes/${nodeId}/memory`, MemoryEntryListSchema),
+    deleteNodeMemoryEntry: (nodeId: Id, entryId: Id): Promise<void> =>
+      request('DELETE', `/nodes/${nodeId}/memory/${entryId}`, NoContentSchema),
+    clearNodeMemory: (nodeId: Id): Promise<void> =>
+      request('DELETE', `/nodes/${nodeId}/memory`, NoContentSchema),
+
+    /* Trace, usage and health (round 5 §2.6, FR-OBS-001/002/004/007) */
+
+    /** Ascending `seq`, the event log's own order (FR-OBS-001). */
+    getRunTrace: (runId: Id): Promise<TraceEntry[]> =>
+      request('GET', `/runs/${runId}/trace`, TraceResponseSchema),
+    /**
+     * `from` inclusive, `to` exclusive; `groupBy` as a repeated query parameter (D234). The query is
+     * checked against the contract before it leaves, as a body would be.
+     */
+    getUsage: async (query: UsageQueryInput): Promise<UsageResponse> => {
+      const parsed = UsageQuerySchema.safeParse(query);
+      if (!parsed.success) throw AceApiError.invalidRequest('/usage', parsed.error.issues);
+      return request('GET', '/usage', UsageResponseSchema, undefined, {
+        from: parsed.data.from,
+        to: parsed.data.to,
+        groupBy: parsed.data.groupBy,
+      });
+    },
+    getHealthMetrics: (): Promise<HealthMetrics> =>
+      request('GET', '/metrics/health', HealthMetricsSchema),
+
+    /* Templates (round 5 §2.7, FR-ONB-002) */
+
+    listTemplates: (): Promise<Template[]> => request('GET', '/templates', TemplateListSchema),
+    /** `projectName` makes a new project, `projectId` uses one; never both (D235). */
+    instantiateTemplate: (
+      id: TemplateId,
+      body: InstantiateTemplateRequest = {},
+    ): Promise<InstantiateTemplateResponse> =>
+      request('POST', `/templates/${id}/instantiate`, InstantiateTemplateResponseSchema, {
+        schema: InstantiateTemplateRequestSchema,
+        value: body,
+      }),
+
+    /* Backup and restore (round 5 §2.7, FR-SYS-012) */
+
+    /**
+     * `POST /backup/export` answers an `application/zip` stream, read whole as a `Blob` for the
+     * browser to save. A failure still arrives as the JSON error envelope and is raised as an
+     * `AceApiError`.
+     */
+    exportBackup: async (): Promise<Blob> => {
+      const response = await send('POST', '/backup/export', {
+        accept: `${BACKUP_CONTENT_TYPE}, application/json`,
+      });
+      if (!response.ok) {
+        throw AceApiError.fromResponse(response.status, await readJson(response));
+      }
+      return response.blob();
+    },
+    /**
+     * `POST /backup/import` with the zip as multipart field `file` (D235). The engine backs up the
+     * current data first, then answers what it restored. No upload progress is needed, so it goes
+     * through `fetch`; the multipart boundary is fetch's to set, so no `content-type` is named.
+     */
+    importBackup: async (
+      file: Blob,
+      importOptions: ImportBackupOptions = {},
+    ): Promise<BackupImportResponse> => {
+      const form = new FormData();
+      const filename =
+        importOptions.filename ??
+        (typeof File !== 'undefined' && file instanceof File ? file.name : undefined);
+      if (filename === undefined) form.append(BACKUP_UPLOAD_FIELD, file);
+      else form.append(BACKUP_UPLOAD_FIELD, file, filename);
+
+      const response = await send('POST', '/backup/import', {
+        accept: 'application/json',
+        body: form,
+        ...(importOptions.signal === undefined ? {} : { signal: importOptions.signal }),
+      });
+      return parseJson(response, '/backup/import', BackupImportResponseSchema);
+    },
   };
 }
 
