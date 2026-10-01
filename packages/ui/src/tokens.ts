@@ -42,6 +42,97 @@ export const PROVIDER_STATUS: Readonly<Record<ProviderState, string>> = {
   RATE_LIMITED: '#f2c94c',
 };
 
+/*
+ * The light theme (D241, FR-SYS-005). The same semantic slots as the dark set below, stepped for a
+ * light surface: text ≥ 4.5:1 and every ring, accent and status colour ≥ 4.5:1 on the card too, so
+ * one that doubles as text (JsonTree's string/number colours) still reads. `theme.css` applies these
+ * under `:root[data-theme="light"]`.
+ */
+export const LIGHT_PROVIDER_ACCENT: Readonly<Record<ProviderType, string>> = {
+  anthropic: '#b4541a',
+  google: '#1a66d9',
+  openai: '#0f7d55',
+  openai_compatible: '#7a4fd6',
+  ollama: '#6b5f4a',
+  mock: '#6e7781',
+};
+
+export const LIGHT_STATUS_RING: Readonly<Record<NodeState, string>> = {
+  IDLE: '#6e7781',
+  READY: '#3b6fd8',
+  RUNNING: '#0a73a8',
+  WAITING: '#8a6100',
+  COMPLETED: '#1a7f37',
+  PAUSED: '#7d6a1f',
+  STOPPED: '#57606a',
+  BLOCKED: '#b54708',
+  FAILED: '#c9252d',
+};
+
+export const LIGHT_PROVIDER_STATUS: Readonly<Record<ProviderState, string>> = {
+  UNKNOWN: '#6e7781',
+  CHECKING: '#3b6fd8',
+  CONNECTED: '#1a7f37',
+  AUTH_FAILED: '#c9252d',
+  UNREACHABLE: '#b54708',
+  RATE_LIMITED: '#8a6100',
+};
+
+/**
+ * Categorical series colours for charts (FR-OBS-004), in fixed order — a series keeps its slot,
+ * never its rank. Each theme has its own step of the same eight hues, every one ≥ 3:1 against that
+ * theme's panel (WCAG 1.4.11). `theme.css` exposes them as `--color-chart-1..8`; components use
+ * {@link chartSeriesColor} so the swap happens in CSS.
+ */
+export const CHART_SERIES_COLORS = {
+  dark: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#2f9e2f', '#9085e9', '#e66767'],
+  light: ['#2a78d6', '#d4531f', '#0f8a5f', '#b07800', '#c2457a', '#008300', '#4a3aa7', '#d63b3a'],
+} as const satisfies Record<'dark' | 'light', readonly string[]>;
+
+/** The CSS colour for series slot `index` (0-based), following the active theme. */
+export function chartSeriesColor(index: number): string {
+  const slot =
+    (((index % CHART_SERIES_COLORS.dark.length) + CHART_SERIES_COLORS.dark.length) %
+      CHART_SERIES_COLORS.dark.length) +
+    1;
+  return `var(--color-chart-${slot})`;
+}
+
+/** The semantic colour slots one theme defines. */
+export interface ThemeColors {
+  canvas: string;
+  canvasDot: string;
+  panel: string;
+  card: string;
+  border: string;
+  fg: string;
+  fgMuted: string;
+  accent: string;
+  accentFg: string;
+  danger: string;
+  selection: string;
+  provider: Readonly<Record<ProviderType, string>>;
+  status: Readonly<Record<NodeState, string>>;
+  providerStatus: Readonly<Record<ProviderState, string>>;
+}
+
+const lightColor: Readonly<ThemeColors> = {
+  canvas: '#eef1f5',
+  canvasDot: '#b6bfca',
+  panel: '#f8f9fb',
+  card: '#ffffff',
+  border: '#d0d7de',
+  fg: '#1f2328',
+  fgMuted: '#57606a',
+  accent: '#7c3aed',
+  accentFg: '#ffffff',
+  danger: '#c9252d',
+  selection: '#7c3aed',
+  provider: LIGHT_PROVIDER_ACCENT,
+  status: LIGHT_STATUS_RING,
+  providerStatus: LIGHT_PROVIDER_STATUS,
+};
+
 export const tokens = {
   color: {
     canvas: '#0d1117',
@@ -58,6 +149,8 @@ export const tokens = {
     provider: PROVIDER_ACCENT,
     status: STATUS_RING,
     providerStatus: PROVIDER_STATUS,
+    /** The light theme's values for the same slots (D241). */
+    light: lightColor,
   },
   font: {
     human: '"Source Serif 4", "Iowan Old Style", Georgia, serif',
@@ -68,6 +161,27 @@ export const tokens = {
 } as const;
 
 export type Tokens = typeof tokens;
+
+/** Both themes' colour sets, keyed by the theme `data-theme` names. */
+export const THEME_COLORS: Readonly<Record<'dark' | 'light', ThemeColors>> = {
+  dark: {
+    canvas: tokens.color.canvas,
+    canvasDot: tokens.color.canvasDot,
+    panel: tokens.color.panel,
+    card: tokens.color.card,
+    border: tokens.color.border,
+    fg: tokens.color.fg,
+    fgMuted: tokens.color.fgMuted,
+    accent: tokens.color.accent,
+    accentFg: tokens.color.accentFg,
+    danger: tokens.color.danger,
+    selection: tokens.color.selection,
+    provider: PROVIDER_ACCENT,
+    status: STATUS_RING,
+    providerStatus: PROVIDER_STATUS,
+  },
+  light: lightColor,
+};
 
 /* ---------------------------------------------------------------------------- */
 /* WCAG contrast (used by the tokens test and available to consumers)            */

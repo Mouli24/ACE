@@ -46,8 +46,96 @@
   --radius-chip: 999px;
 }
 
-:root {
+/*
+ * FR-SYS-005, D241: dark is the default (`:root`, or `data-theme="dark"`); `applyTheme()` from
+ * @ace/ui sets `data-theme` on <html>. The light set below overrides every semantic colour token —
+ * it sits outside `@theme`, so Tailwind's utilities (which read `var(--color-*)`) follow it.
+ * Values mirror `tokens.color.light` / `CHART_SERIES_COLORS` in src/tokens.ts.
+ */
+:root,
+:root[data-theme='dark'] {
   color-scheme: dark;
+  --color-minimap-mask: rgba(13, 17, 23, 0.7);
+  --color-chart-1: #3987e5;
+  --color-chart-2: #d95926;
+  --color-chart-3: #199e70;
+  --color-chart-4: #c98500;
+  --color-chart-5: #d55181;
+  --color-chart-6: #2f9e2f;
+  --color-chart-7: #9085e9;
+  --color-chart-8: #e66767;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --color-minimap-mask: rgba(238, 241, 245, 0.7);
+
+  --color-canvas: #eef1f5;
+  --color-canvas-dot: #b6bfca;
+  --color-panel: #f8f9fb;
+  --color-card: #ffffff;
+  --color-border: #d0d7de;
+  --color-fg: #1f2328;
+  --color-fg-muted: #57606a;
+  --color-accent: #7c3aed;
+  --color-accent-fg: #ffffff;
+  --color-danger: #c9252d;
+  --color-selection: #7c3aed;
+
+  --color-provider-anthropic: #b4541a;
+  --color-provider-google: #1a66d9;
+  --color-provider-openai: #0f7d55;
+  --color-provider-openai_compatible: #7a4fd6;
+  --color-provider-ollama: #6b5f4a;
+  --color-provider-mock: #6e7781;
+
+  --color-status-IDLE: #6e7781;
+  --color-status-READY: #3b6fd8;
+  --color-status-RUNNING: #0a73a8;
+  --color-status-WAITING: #8a6100;
+  --color-status-COMPLETED: #1a7f37;
+  --color-status-PAUSED: #7d6a1f;
+  --color-status-STOPPED: #57606a;
+  --color-status-BLOCKED: #b54708;
+  --color-status-FAILED: #c9252d;
+
+  --color-provider-status-UNKNOWN: #6e7781;
+  --color-provider-status-CHECKING: #3b6fd8;
+  --color-provider-status-CONNECTED: #1a7f37;
+  --color-provider-status-AUTH_FAILED: #c9252d;
+  --color-provider-status-UNREACHABLE: #b54708;
+  --color-provider-status-RATE_LIMITED: #8a6100;
+
+  --color-chart-1: #2a78d6;
+  --color-chart-2: #d4531f;
+  --color-chart-3: #0f8a5f;
+  --color-chart-4: #b07800;
+  --color-chart-5: #c2457a;
+  --color-chart-6: #008300;
+  --color-chart-7: #4a3aa7;
+  --color-chart-8: #d63b3a;
+}
+
+/*
+ * React Flow is handed hex values from `tokens` (the dark set) as inline props, so the Canvas
+ * surface, its dots and the minimap are pinned to the variables here; in dark they resolve to the
+ * same values, in light they follow the light set and the dotted grid stays visible.
+ */
+.react-flow.ace-dotted-canvas {
+  background: var(--color-canvas) !important;
+}
+.ace-dotted-canvas .react-flow__background-pattern.dots {
+  fill: var(--color-canvas-dot) !important;
+}
+.ace-dotted-canvas .react-flow__minimap {
+  background: var(--color-panel) !important;
+}
+.ace-dotted-canvas .react-flow__minimap-node {
+  fill: var(--color-card) !important;
+  stroke: var(--color-border) !important;
+}
+.ace-dotted-canvas .react-flow__minimap-mask {
+  fill: var(--color-minimap-mask) !important;
 }
 
 html,

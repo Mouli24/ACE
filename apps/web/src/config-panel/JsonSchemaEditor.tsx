@@ -1,6 +1,8 @@
 import { Label } from '@ace/ui';
 import { Suspense, lazy, useEffect, useId, useState } from 'react';
 
+import { useResolvedTheme } from '../app/theme';
+
 /** Monaco is several MB; it loads (from the bundle, not a CDN) only when an agent panel is open. */
 const MonacoEditor = lazy(() =>
   import('./monaco-loader').then((m) => ({ default: m.MonacoEditor })),
@@ -23,6 +25,8 @@ export function JsonSchemaEditor({
   onCommit: (schema: Record<string, unknown> | undefined) => void;
 }) {
   const id = useId();
+  /* FR-SYS-005: Monaco has its own palette, so it is told which theme is on screen. */
+  const editorTheme = useResolvedTheme() === 'light' ? 'vs' : 'vs-dark';
   const [text, setText] = useState(() => stringify(value));
   const [error, setError] = useState<string>();
   useEffect(() => {
@@ -70,7 +74,7 @@ export function JsonSchemaEditor({
           <MonacoEditor
             height="10rem"
             language="json"
-            theme="vs-dark"
+            theme={editorTheme}
             value={text}
             onChange={onChange}
             aria-label="JSON schema"

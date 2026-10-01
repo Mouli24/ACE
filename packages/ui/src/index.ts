@@ -24,3 +24,4 @@ export * from './components/json-tree.js';
 export * from './components/part-renderer.js';
 export * from './components/message-bubble.js';
 export * from './components/tool-badges.js';
+export * from './lib/theme.js';
