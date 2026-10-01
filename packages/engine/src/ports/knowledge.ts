@@ -112,7 +112,11 @@ export interface KbDocumentRepository {
   update(
     scope: Scope,
     id: Id,
-    patch: Partial<Pick<KbDocument, 'status' | 'chunkCount' | 'error' | 'ingestedAt' | 'verdicts'>>,
+    patch: Partial<Pick<KbDocument, 'status' | 'chunkCount' | 'ingestedAt' | 'verdicts'> & {
+        /** `null` clears a previous error once the document is ready again (D72). */
+        error: string | null;
+      }
+    >,
   ): Promise<KbDocument | null>;
   /** Chunks, vectors and fts rows too. */
   delete(scope: Scope, id: Id): Promise<void>;

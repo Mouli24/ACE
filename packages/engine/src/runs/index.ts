@@ -51,6 +51,7 @@ import { createRunGate, type RunGate, type RunGateRegistry } from './control/gat
 import type { PartialRunPlan } from './control/service.js';
 import { planStartFrom } from './control/start-from.js';
 import { sumUsage } from './cost.js';
+import { createSummaryUsageLedger } from './summary-usage.js';
 import {
   createNodeExecutor,
   type NodeExecutionOutcome,
@@ -125,12 +126,6 @@ export interface RunService {
    * what a re-run executes on (FR-CTL-005). Without it a re-run runs with no reads at all.
    */
   envelopesFor(run: Run, nodeId: Id): Promise<Envelope[]>;
-  /**
-   * The summarisation usage accumulated for a node of a run while its input envelopes were built
-   * (F5), taken and cleared. The scheduler adds it to the receiving node run's usage; Task 13 of
-   * round 5 wires that call.
-   */
-  pendingSummaryUsage?(runId: Id, nodeId: Id): Usage | undefined;
 
   /** Aborts every in-flight call and waits for the dispatch loops to unwind (FR-SYS-008). */
   shutdown(): Promise<void>;
@@ -261,8 +256,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
   const now = deps.now ?? (() => new Date().toISOString());
   const nextId = deps.nextId ?? newId;
   const summariser = deps.summariser ?? createTruncatingSummariser();
-  /** Summariser usage per `runId:targetNodeId`, until the target's node run takes it (F5). */
-  const summaryUsage = new Map<string, Usage>();
+  /** Summariser usage per run and target node, until the target's node run takes it (F5; Task 13 calls `take`). */
+  const summaryUsage = createSummaryUsageLedger();
 
   const executor: NodeExecutor = createNodeExecutor({
     bus,
@@ -318,11 +313,21 @@ export function createRunService(deps: RunServiceDeps): RunService {
     to: Node,
     parts: Part[],
     iteration: number,
+    record = true,
   ): Promise<Envelope> {
     const budgetTokens =
       to.kind === 'agent' ? to.config.contextPolicy.budgetTokens : Number.MAX_SAFE_INTEGER;
     const outputTypes =
       to.kind === 'agent' || to.kind === 'model' ? to.config.outputTypes : ['text' as const];
+
+    // The receiving node's own model summarises for it (round 5 §2.5, F3). The run's abort signal
+    // is not in scope here, so forwarding it is left to Task 13.
+    const target =
+      (to.kind === 'agent' || to.kind === 'model') &&
+      to.config.providerId !== undefined &&
+      to.config.modelId !== undefined
+        ? { providerId: to.config.providerId, modelId: to.config.modelId }
+        : undefined;
 
     const { envelope, usage } = await buildEnvelope(
       {
@@ -340,16 +345,13 @@ export function createRunService(deps: RunServiceDeps): RunService {
           to.kind === 'agent' ? to.config.outputContract?.jsonSchema : undefined,
         ),
         createdAt: now(),
+        ...(target === undefined ? {} : { target }),
       },
       summariser,
     );
 
     // F5: a summarisation call is the receiving node's spend, carried until its run is recorded.
-    if (usage !== undefined) {
-      const key = `${run.id}:${to.id}`;
-      const carried = summaryUsage.get(key);
-      summaryUsage.set(key, carried === undefined ? usage : sumUsage([carried, usage]));
-    }
+    if (usage !== undefined && record) summaryUsage.add(run.id, to.id, usage);
 
     return envelope;
   }
@@ -1431,6 +1433,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
     const complete =
       allOutputsDone && !stillBusy && !signal.aborted && budgetHalt === undefined;
+    summaryUsage.dropRun(run.id);
     const endedAt = now();
     const totals = sumUsage(usages);
 
@@ -1777,13 +1780,6 @@ export function createRunService(deps: RunServiceDeps): RunService {
       return plan.run;
     },
 
-    pendingSummaryUsage(runId, nodeId) {
-      const key = `${runId}:${nodeId}`;
-      const carried = summaryUsage.get(key);
-      summaryUsage.delete(key);
-      return carried;
-    },
-
     async envelopesFor(run, nodeId) {
       const node = run.snapshot.nodes.find((candidate) => candidate.id === nodeId);
       if (node === undefined) throw notFound(`node ${nodeId} in run ${run.id}`);
@@ -1803,7 +1799,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
         if (from === undefined || row === undefined) continue;
 
         seen.add(edge.from.nodeId);
-        envelopes.push(await envelopeBetween(run, from, node, row.output ?? [], row.iteration));
+        envelopes.push(await envelopeBetween(run, from, node, row.output ?? [], row.iteration, false));
       }
 
       return envelopes;

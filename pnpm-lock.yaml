@@ -215,6 +215,9 @@ importers:
       '@ace/config':
         specifier: workspace:*
         version: link:../config
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.20.4
       '@vitest/coverage-v8':
         specifier: ^5.0.1
         version: 5.0.1(vitest@5.0.1)

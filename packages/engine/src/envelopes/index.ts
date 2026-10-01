@@ -59,6 +59,8 @@ export function trustForSource(kind: NodeKind): TrustLevel {
 export interface SummariseInput {
   parts: readonly Part[];
   budgetTokens: number;
+  /** Cancels a model summarisation call when the run is stopped. */
+  signal?: AbortSignal;
 }
 
 export interface SummariseResult {
@@ -146,6 +148,9 @@ export interface BuildEnvelopeInput {
   createdAt: Timestamp;
   /** Carried through from an upstream summary, when there was one. */
   inheritedSummary?: string;
+  /** The receiving node's model, for a summariser that calls one (F3). */
+  target?: { providerId: Id; modelId: string };
+  signal?: AbortSignal;
 }
 
 /** One envelope for one edge group, built to fit (FR-EXE-005, FR-EXE-007). */
@@ -156,6 +161,8 @@ export async function buildEnvelope(
   const { parts, summary, usage } = await summariser.summarise({
     parts: input.parts,
     budgetTokens: input.budgetTokens,
+    ...(input.target === undefined ? {} : { target: input.target }),
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
   });
 
   const combinedSummary = summary ?? input.inheritedSummary;

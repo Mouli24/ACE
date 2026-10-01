@@ -204,6 +204,35 @@ describe('FR-EXE-007 the summariser is a port', () => {
     expect(await pending).toEqual({ parts: [{ type: 'text', text: 'short' }] });
   });
 
+  it('hands the summariser the receiving node model and the signal', async () => {
+    const seen: unknown[] = [];
+    const controller = new AbortController();
+    await buildEnvelope(
+      {
+        id: ENVELOPE_ID,
+        runId: RUN_ID,
+        fromNodeId: NODE_A,
+        toNodeId: NODE_B,
+        iteration: 1,
+        parts: [{ type: 'text', text: 'x' }],
+        budgetTokens: 1,
+        trust: 'untrusted',
+        contract: { outputTypes: ['text'] },
+        createdAt: NOW,
+        target: { providerId: 'p1', modelId: 'm1' },
+        signal: controller.signal,
+      },
+      {
+        summarise: async (input) => {
+          seen.push(input.target, input.signal);
+          return { parts: [...input.parts] };
+        },
+      },
+    );
+
+    expect(seen).toEqual([{ providerId: 'p1', modelId: 'm1' }, controller.signal]);
+  });
+
   it('can be replaced without touching the envelope builder', async () => {
     const { envelope } = await buildEnvelope(
       {
