@@ -177,7 +177,52 @@ export const MOCK_CATALOG: CatalogEntry[] = [
     supportsTools: true,
     supportsJson: false,
   },
+  /*
+   * Round 5 §2.10 additions. The contract has no `embedding` data type, so `mock-embed` is declared
+   * the way the engine's mock adapter declares it — text in, json (the vector) out — and a knowledge
+   * base names it by `embeddingModelId`; nothing else marks it as an embedder.
+   */
+  {
+    modelId: 'mock-embed',
+    displayName: 'Mock embeddings',
+    inputTypes: ['text'],
+    outputTypes: ['json'],
+    contextWindow: 8192,
+    supportsTools: false,
+    supportsJson: false,
+  },
+  {
+    // reads the retrieval node's `{ hits }` json as well as text, so a RAG answerer can take both
+    modelId: 'mock-cite',
+    displayName: 'Mock citations',
+    inputTypes: ['text', 'json'],
+    outputTypes: ['text'],
+    contextWindow: 8192,
+    supportsTools: false,
+    supportsJson: false,
+  },
+  {
+    modelId: 'mock-memory',
+    displayName: 'Mock memory',
+    inputTypes: ['text'],
+    outputTypes: ['json'],
+    contextWindow: 8192,
+    supportsTools: false,
+    supportsJson: true,
+  },
+  {
+    modelId: 'mock-summary',
+    displayName: 'Mock summary',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+    contextWindow: 8192,
+    supportsTools: false,
+    supportsJson: false,
+  },
 ];
+
+/** The mock embedder a knowledge base names (round 5 §2.10). */
+export const MOCK_EMBED_MODEL_ID = 'mock-embed';
 
 /** A small catalogue per cloud provider type, enough for the model picker and its filters. */
 const CLOUD_CATALOG: Partial<Record<ProviderType, CatalogEntry[]>> = {

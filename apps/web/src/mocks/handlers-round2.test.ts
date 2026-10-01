@@ -176,7 +176,12 @@ describe('models (§2.5, FR-MOD-004/006)', () => {
     await client.createProvider({ type: 'anthropic', name: 'Anthropic', apiKey: 'k' });
 
     const jsonOut = await client.listModels({ providerId: mock.id, outputType: 'json' });
-    expect(jsonOut.items.map((m) => m.modelId).sort()).toEqual(['mock-bad-json', 'mock-json']);
+    expect(jsonOut.items.map((m) => m.modelId).sort()).toEqual([
+      'mock-bad-json',
+      'mock-embed',
+      'mock-json',
+      'mock-memory',
+    ]);
 
     const images = await client.listModels({ inputType: 'image' });
     expect(images.items.every((m) => m.inputTypes.includes('image'))).toBe(true);
