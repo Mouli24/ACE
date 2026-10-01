@@ -270,6 +270,12 @@ describe('FR-NODE-006 Node entity is discriminated by kind', () => {
     expect(RetrievalConfigSchema.safeParse({ k: 21 }).success).toBe(false);
     expect(RetrievalConfigSchema.safeParse({ k: 20 }).success).toBe(true);
   });
+
+  it('defaults retrieval k to 5 and leaves the base and the mode unset (round 5 §2.4)', () => {
+    expect(RetrievalConfigSchema.parse({})).toEqual({ k: 5 });
+    expect(RetrievalConfigSchema.safeParse({ k: 0 }).success).toBe(false);
+    expect(RetrievalConfigSchema.safeParse({ mode: 'fuzzy' }).success).toBe(false);
+  });
 });
 
 describe('FR-CON-001 Edge entity', () => {

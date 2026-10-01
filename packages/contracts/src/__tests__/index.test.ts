@@ -119,6 +119,34 @@ describe('FR-SYS-006 contracts barrel', () => {
     ['events', 'McpStatusPayloadSchema'],
     ['events', 'ThreadEventSchema'],
     ['events', 'THREAD_EVENT_TYPES'],
+    ['knowledge', 'KnowledgeBaseSchema'],
+    ['knowledge', 'KbDocumentSchema'],
+    ['knowledge', 'KbChunkSchema'],
+    ['knowledge', 'SearchRequestSchema'],
+    ['knowledge', 'SearchHitSchema'],
+    ['knowledge', 'SearchResponseSchema'],
+    ['knowledge', 'fuseRankings'],
+    ['knowledge', 'NodeRunSourceSchema'],
+    ['memory', 'MemoryEntrySchema'],
+    ['memory', 'MemoryOpSchema'],
+    ['memory', 'MEMORY_OUTPUT_FIELD'],
+    ['usage', 'UsageQuerySchema'],
+    ['usage', 'UsageResponseSchema'],
+    ['usage', 'TraceEntrySchema'],
+    ['usage', 'TRACE_ENTRY_KIND_BY_EVENT_TYPE'],
+    ['usage', 'HealthMetricsSchema'],
+    ['templates', 'TemplateSchema'],
+    ['templates', 'TEMPLATE_IDS'],
+    ['templates', 'InstantiateTemplateRequestSchema'],
+    ['templates', 'InstantiateTemplateResponseSchema'],
+    ['settings', 'BackupImportResponseSchema'],
+    ['graph', 'SEARCH_MODES'],
+    ['envelope', 'EnvelopeMemoryEntrySchema'],
+    ['envelope', 'CONTEXT_BUDGET_SHARES'],
+    ['guardrails', 'HIDDEN_INSTRUCTION_TYPES'],
+    ['validation', 'ROUND_5_VALIDATION_ISSUE_CODES'],
+    ['events', 'KbIngestPayloadSchema'],
+    ['events', 'MemoryUpdatedPayloadSchema'],
   ])('re-exports %s -> %s', (_module, symbol) => {
     expect(contracts).toHaveProperty(symbol);
   });
@@ -172,13 +200,20 @@ describe('FR-SYS-006 contracts barrel', () => {
     }
   });
 
-  it('keeps an importable, still-empty placeholder for the four later-round modules', () => {
-    const placeholders = { knowledge, memory, usage, templates };
+  it('fills the four placeholder modules round 5 §2 defines', () => {
+    const filled = { knowledge, memory, usage, templates };
 
-    expect(Object.keys(placeholders)).toHaveLength(4);
-    for (const [name, module] of Object.entries(placeholders)) {
-      expect(Object.keys(module), `${name}.ts should still be empty`).toEqual([]);
+    expect(Object.keys(filled)).toHaveLength(4);
+    for (const [name, module] of Object.entries(filled)) {
+      expect(Object.keys(module).length, `${name}.ts should export its contract`).toBeGreaterThan(
+        0,
+      );
     }
+  });
+
+  it('exports MemoryEntrySchema once — the stored row — and the envelope its own entry (D229)', () => {
+    expect(contracts.MemoryEntrySchema).toBe(memory.MemoryEntrySchema);
+    expect(contracts.EnvelopeMemoryEntrySchema).toBe(envelope.EnvelopeMemoryEntrySchema);
   });
 
   it('exports SeqSchema exactly once, so the star exports never make it ambiguous', () => {

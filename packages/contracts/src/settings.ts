@@ -1,9 +1,9 @@
 import { z } from 'zod';
 
-import { DEFAULT_MAX_UPLOAD_MB } from './artifacts.js';
+import { ARTIFACT_UPLOAD_FIELD, DEFAULT_MAX_UPLOAD_MB } from './artifacts.js';
 import { BudgetUsdSchema, IdSchema } from './graph.js';
 
-/** Engine settings (round 1 §2.7, round 4 §2.1, FR-SYS-005/010). */
+/** Engine settings (round 1 §2.7, round 4 §2.1, round 5 §2.7, FR-SYS-005/010/012). */
 
 export const THEMES = ['dark', 'light', 'system'] as const;
 export const ThemeSchema = z.enum(THEMES);
@@ -25,6 +25,14 @@ export type DockerSandboxMode = z.infer<typeof DockerSandboxModeSchema>;
 
 export const DEFAULT_DOCKER_SANDBOX: DockerSandboxMode = 'auto';
 export const DEFAULT_MCP_ENABLED = true;
+
+/**
+ * Round 5 §2.7: telemetry is off and stays off in v1 — no telemetry code ships (NFR-PRIV-01). The
+ * field exists so the settings screen can say so, and it accepts no other value: a settings file or
+ * a PATCH that turns it on is a validation error, not a silent no-op.
+ */
+export const TelemetryEnabledSchema = z.literal(false);
+export const DEFAULT_TELEMETRY_ENABLED = false;
 
 /** The dev origins the web app is served from (§2.7); a fresh array per parse. */
 export const DEFAULT_ALLOWED_ORIGINS = [
@@ -51,6 +59,7 @@ export const SettingsSchema = z.object({
   dockerSandbox: DockerSandboxModeSchema.default(DEFAULT_DOCKER_SANDBOX),
   /** Whether MCP servers may be connected at all (D16, FR-TOOL-007). */
   mcpEnabled: z.boolean().default(DEFAULT_MCP_ENABLED),
+  telemetryEnabled: TelemetryEnabledSchema.default(DEFAULT_TELEMETRY_ENABLED),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 
@@ -72,5 +81,37 @@ export const SettingsPatchSchema = z.object({
   searxngUrl: z.url().optional(),
   dockerSandbox: DockerSandboxModeSchema.optional(),
   mcpEnabled: z.boolean().optional(),
+  telemetryEnabled: TelemetryEnabledSchema.optional(),
 });
 export type SettingsPatch = z.infer<typeof SettingsPatchSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* Backup and restore (round 5 §2.7, FR-SYS-012, TC-SYS-014)                   */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Here rather than in a module of its own: the barrel's module list is fixed (round 1 §3 item 3),
+ * and a backup is the settings screen's System section, as FR-SYS-012 is a System requirement.
+ */
+
+/**
+ * `POST /backup/export` answers a `.zip` stream: a SQLite copy, the artifacts folder and the
+ * settings — and never a key, because keys live in the keychain and are not in any of the three.
+ */
+export const BACKUP_CONTENT_TYPE = 'application/zip';
+
+/** The multipart field `POST /backup/import` reads the zip from — the one uploads use. */
+export const BACKUP_UPLOAD_FIELD = ARTIFACT_UPLOAD_FIELD;
+
+/**
+ * `POST /backup/import` → what the restore brought back. The engine takes a backup of the current
+ * data first, so an import can itself be undone.
+ */
+export const BackupImportResponseSchema = z.strictObject({
+  restored: z.strictObject({
+    projects: z.number().int().min(0),
+    runs: z.number().int().min(0),
+    artifacts: z.number().int().min(0),
+  }),
+});
+export type BackupImportResponse = z.infer<typeof BackupImportResponseSchema>;

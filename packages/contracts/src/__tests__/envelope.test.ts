@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CONTEXT_BUDGET_SHARES,
   SUPPORTED_JSON_SCHEMA_KEYWORDS,
   EnvelopeContractSchema,
   EnvelopeSchema,
@@ -12,6 +13,7 @@ import {
 import {
   ARTIFACT_ID,
   ENVELOPE_ID,
+  KB_CHUNK_ID,
   NODE_A,
   NODE_B,
   NODE_C,
@@ -514,5 +516,53 @@ describe('FR-EXE-006 the contract shape itself', () => {
 
   it('refuses an empty output type list — a node must produce something', () => {
     expect(EnvelopeContractSchema.safeParse({ outputTypes: [] }).success).toBe(false);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Context, now filled (round 5 §2.2, §2.4)                                    */
+/* -------------------------------------------------------------------------- */
+
+describe('FR-RAG-005 FR-MEM-003 envelope context', () => {
+  const chunk = { chunkId: KB_CHUNK_ID, text: 'The handshake.', score: 0.5, source: 'a.md#Intro' };
+
+  it('carries retrieved chunks and remembered facts beside the summary', () => {
+    const context = {
+      summary: 'Earlier work, in brief.',
+      retrieved: [chunk],
+      memory: [{ key: 'user_name', value: 'Ada' }],
+      budgetTokens: 4000,
+      trust: 'untrusted',
+    };
+    expect(EnvelopeSchema.parse({ ...envelope, context }).context).toEqual(context);
+  });
+
+  it('bounds a retrieved score to 0..1, as the search hit it came from', () => {
+    const withScore = (score: number) =>
+      EnvelopeSchema.safeParse({
+        ...envelope,
+        context: { ...envelope.context, retrieved: [{ ...chunk, score }] },
+      }).success;
+
+    expect(withScore(0)).toBe(true);
+    expect(withScore(1)).toBe(true);
+    expect(withScore(1.2)).toBe(false);
+  });
+
+  it('refuses a stored memory row in place of a key and value (D229)', () => {
+    expect(
+      EnvelopeSchema.safeParse({
+        ...envelope,
+        context: {
+          ...envelope.context,
+          memory: [{ id: NODE_C, nodeId: NODE_A, key: 'k', value: 'v', createdAt: NOW }],
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('gives retrieved chunks at most half the budget and memory a quarter (§2.2, §4 item 7)', () => {
+    expect(CONTEXT_BUDGET_SHARES).toEqual({ retrieved: 0.5, memory: 0.25 });
+    expect(Object.isFrozen(CONTEXT_BUDGET_SHARES)).toBe(true);
   });
 });

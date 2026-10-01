@@ -17,17 +17,20 @@ import {
   RunSummarySchema,
   UsageSchema,
 } from './runs.js';
+import { KbDocumentStatusSchema } from './knowledge.js';
+import { MemoryOpSchema } from './memory.js';
 import { McpServerStatusSchema, ToolCallSchema } from './tools.js';
+import { DayTotalsSchema } from './usage.js';
 
 /**
  * The event log and the events that ride the WebSocket (round 2 §2.4, round 3 §2.6,
- * round 4 §2.5, FR-EXE-014, Arch §20.3).
+ * round 4 §2.5, round 5 §2.8, FR-EXE-014, Arch §20.3).
  *
  * Almost every event is persisted with a global monotonic `seq`, which is what `resume
  * { afterSeq }` replays from. Two are not: `node.token` and round 4's `chat.token` are transient
  * stream frames, so they carry no `seq` and are never written down — a reconnecting client
  * rebuilds the text from the `node.output` or `chat.message` that follows. Round 3's six events
- * are all persisted; of round 4's five, four are.
+ * are all persisted; of round 4's five, four are; round 5's two are both persisted.
  *
  * Events come in three families, by the subscription they ride: run events on a `workflow`
  * subscription, thread events on a `thread` one (round 4 §2.5), engine events on `engine`.
@@ -129,9 +132,14 @@ export const EdgeTransferPayloadSchema = z.strictObject({
 });
 export type EdgeTransferPayload = z.infer<typeof EdgeTransferPayloadSchema>;
 
+/**
+ * A run's running totals. From round 5 the one emitted when a run completes also carries the day's
+ * totals across every run, for the top bar (§2.8, FR-OBS-002); the ones emitted mid-run do not.
+ */
 export const UsageUpdatedPayloadSchema = z.strictObject({
   runId: IdSchema,
   totals: UsageSchema,
+  dayTotals: DayTotalsSchema.optional(),
 });
 export type UsageUpdatedPayload = z.infer<typeof UsageUpdatedPayloadSchema>;
 
@@ -230,6 +238,35 @@ export const McpStatusPayloadSchema = z.strictObject({
 });
 export type McpStatusPayload = z.infer<typeof McpStatusPayloadSchema>;
 
+/* Round 5 §2.8 — both persisted. */
+
+/**
+ * A knowledge-base document moved through ingestion (FR-RAG-003, Arch §21.3): one at every stage,
+ * and a last one at `ready` or `failed`. `progress` is the share of the whole pipeline done, 0..1;
+ * `error` is the reason, set only on `failed`. A base belongs to a project, not a workflow, so this
+ * rides the engine subscription, as `provider.status` does (D230).
+ */
+export const KbIngestPayloadSchema = z.strictObject({
+  knowledgeBaseId: IdSchema,
+  documentId: IdSchema,
+  status: KbDocumentStatusSchema,
+  progress: z.number().min(0).max(1).optional(),
+  error: z.string().min(1).optional(),
+});
+export type KbIngestPayload = z.infer<typeof KbIngestPayloadSchema>;
+
+/**
+ * An agent's memory changed (FR-MEM-002, FR-MEM-004): its own `__memory` ops after a node run,
+ * or the user's deletes — a clear is one `delete` per key. A delete belongs to no run, and every
+ * member of the run family is part of a run's event log, so this rides the engine subscription
+ * beside `kb.ingest`; an open Memory tab keeps the frames whose `nodeId` it shows (D230).
+ */
+export const MemoryUpdatedPayloadSchema = z.strictObject({
+  nodeId: IdSchema,
+  ops: z.array(MemoryOpSchema).min(1),
+});
+export type MemoryUpdatedPayload = z.infer<typeof MemoryUpdatedPayloadSchema>;
+
 /* -------------------------------------------------------------------------- */
 /* Frames                                                                      */
 /* -------------------------------------------------------------------------- */
@@ -276,9 +313,11 @@ export const THREAD_EVENT_FRAME_SCHEMAS = [
 export const ENGINE_EVENT_FRAME_SCHEMAS = [
   persistedFrame('provider.status', ProviderStatusPayloadSchema),
   persistedFrame('mcp.status', McpStatusPayloadSchema),
+  persistedFrame('kb.ingest', KbIngestPayloadSchema),
+  persistedFrame('memory.updated', MemoryUpdatedPayloadSchema),
 ] as const;
 
-/** Server → client, run scope (round 2 §2.4, round 3 §2.6). */
+/** Server → client, run scope (round 2 §2.4, round 3 §2.6, round 4 §2.5). */
 export const RunEventSchema = z.discriminatedUnion('type', RUN_EVENT_FRAME_SCHEMAS);
 export type RunEvent = z.infer<typeof RunEventSchema>;
 
@@ -286,7 +325,7 @@ export type RunEvent = z.infer<typeof RunEventSchema>;
 export const ThreadEventSchema = z.discriminatedUnion('type', THREAD_EVENT_FRAME_SCHEMAS);
 export type ThreadEvent = z.infer<typeof ThreadEventSchema>;
 
-/** Server → client, engine scope (§2.4, round 4 §2.5). */
+/** Server → client, engine scope (§2.4, round 4 §2.5, round 5 §2.8). */
 export const EngineEventSchema = z.discriminatedUnion('type', ENGINE_EVENT_FRAME_SCHEMAS);
 export type EngineEvent = z.infer<typeof EngineEventSchema>;
 
@@ -317,7 +356,12 @@ export type RunEventType = (typeof RUN_EVENT_TYPES)[number];
 export const THREAD_EVENT_TYPES = ['chat.message', 'chat.token'] as const;
 export type ThreadEventType = (typeof THREAD_EVENT_TYPES)[number];
 
-export const ENGINE_EVENT_TYPES = ['provider.status', 'mcp.status'] as const;
+export const ENGINE_EVENT_TYPES = [
+  'provider.status',
+  'mcp.status',
+  'kb.ingest',
+  'memory.updated',
+] as const;
 export type EngineEventType = (typeof ENGINE_EVENT_TYPES)[number];
 
 /** Not persisted, no `seq`, never replayed by `resume` (§2.4, round 4 §2.5). */
