@@ -1,5 +1,5 @@
 import { Button } from '@ace/ui';
-import { Settings, ShieldCheck } from 'lucide-react';
+import { BarChart3, CircleHelp, Settings, ShieldCheck } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 
 import { useProject } from '../../projects/hooks';
@@ -7,6 +7,7 @@ import { ProviderStatusBar } from '../../providers/ProviderStatusBar';
 import { RunBar } from '../../runs/RunBar';
 import { ApprovalsBadge } from '../../runs/approvals/ApprovalsBadge';
 import { useRunStore } from '../../runs/run-store';
+import { DayTotalsChip } from '../../usage/DayTotalsChip';
 import { WorkflowTabs } from '../../workflows/WorkflowTabs';
 
 /**
@@ -45,6 +46,12 @@ export function TopBar() {
       <ProviderStatusBar />
       {workflowId && <RunBar workflowId={workflowId} />}
       <ApprovalsBadge runId={runId} />
+      <DayTotalsChip />
+      <Button asChild variant="ghost" size="icon" aria-label="Usage">
+        <Link to="/usage">
+          <BarChart3 className="h-4 w-4" />
+        </Link>
+      </Button>
       <Button asChild variant="ghost" size="icon" aria-label="Guardrail policies">
         <Link to="/guardrails">
           <ShieldCheck className="h-4 w-4" />
@@ -53,6 +60,11 @@ export function TopBar() {
       <Button asChild variant="ghost" size="icon" aria-label="Settings">
         <Link to="/settings">
           <Settings className="h-4 w-4" />
+        </Link>
+      </Button>
+      <Button asChild variant="ghost" size="icon" aria-label="Help">
+        <Link to="/help/getting-started">
+          <CircleHelp className="h-4 w-4" />
         </Link>
       </Button>
     </header>

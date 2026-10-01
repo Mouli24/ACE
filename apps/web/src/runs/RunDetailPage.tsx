@@ -3,6 +3,7 @@ import { StatusRing } from '@ace/ui';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { ErrorsTab } from '../errors/ErrorsTab';
+import { TraceTab } from '../inspector/TraceTab';
 import { useProviders } from '../providers/hooks';
 import { ApprovalStack } from './approvals/ApprovalStack';
 import { RunControls } from './controls/RunControls';
@@ -150,6 +151,8 @@ export function RunDetailPage() {
           ? { retryingNodeRunId: retry.variables.nodeRunId }
           : {})}
       />
+
+      <TraceTab runId={run.data.id} />
 
       <section className="flex flex-col gap-2">
         <h2 className="font-human text-sm font-semibold uppercase tracking-wide text-fg-muted">

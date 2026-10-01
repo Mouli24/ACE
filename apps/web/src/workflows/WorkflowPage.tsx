@@ -11,6 +11,7 @@ import { useCanvasApi } from '../canvas/canvas-api';
 import { ChatPanel } from '../chat';
 import { ConfigPanel } from '../config-panel/ConfigPanel';
 import { Inspector } from '../inspector/Inspector';
+import { MemoryTab } from '../memory/MemoryTab';
 import { PreflightIssues } from '../runs/PreflightIssues';
 import { RunsList } from '../runs/RunsList';
 import { useAdoptActiveRun, useRunEvents } from '../runs/hooks';
@@ -83,6 +84,7 @@ export function WorkflowPage() {
                 <TabsTrigger value="inspect">Inspector</TabsTrigger>
                 <TabsTrigger value="runs">Runs</TabsTrigger>
                 <TabsTrigger value="chat">Chat</TabsTrigger>
+                <TabsTrigger value="memory">Memory</TabsTrigger>
               </TabsList>
               <TabsContent value="configure" className="min-h-0 flex-1">
                 <ConfigPanel workflowId={workflowId} />
@@ -95,6 +97,9 @@ export function WorkflowPage() {
               </TabsContent>
               <TabsContent value="chat" className="min-h-0 flex-1">
                 <ChatPanel workflowId={workflowId} />
+              </TabsContent>
+              <TabsContent value="memory" className="min-h-0 flex-1 overflow-y-auto">
+                <MemoryTab workflowId={workflowId} />
               </TabsContent>
             </Tabs>
           </Panel>

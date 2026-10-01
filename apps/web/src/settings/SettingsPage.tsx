@@ -11,6 +11,7 @@ import {
 import { Link } from 'react-router-dom';
 
 import { useProviders } from '../providers/hooks';
+import { HealthMetricsPanel } from '../usage/HealthMetricsPanel';
 import { BudgetFields } from './BudgetFields';
 import { usePatchSettings, useSettings } from './hooks';
 
@@ -94,6 +95,7 @@ export function SettingsPage() {
           manage providers and models
         </Link>
       </section>
+      <HealthMetricsPanel />
     </main>
   );
 }
