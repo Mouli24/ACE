@@ -224,19 +224,29 @@ describe('TC-MM-001/002 uploadArtifact (round 4 §2.1, M4 §2, FR-MM-001)', () =
       },
     });
     const error = await promise.catch((e: unknown) => e);
-    expect(error).toMatchObject({ status: 413, code: 'upload_too_large', details: { maxBytes: 100 } });
+    expect(error).toMatchObject({
+      status: 413,
+      code: 'upload_too_large',
+      details: { maxBytes: 100 },
+    });
   });
 
   it('maps 413/415 even when the engine sent no error envelope', async () => {
     const tooLarge = uploadClient();
     const p1 = tooLarge.client.uploadArtifact(new Blob(['x']));
     tooLarge.latest().respond(413);
-    expect(await p1.catch((e: unknown) => e)).toMatchObject({ code: 'upload_too_large', status: 413 });
+    expect(await p1.catch((e: unknown) => e)).toMatchObject({
+      code: 'upload_too_large',
+      status: 413,
+    });
 
     const badType = uploadClient();
     const p2 = badType.client.uploadArtifact(new Blob(['x']));
     badType.latest().respond(415);
-    expect(await p2.catch((e: unknown) => e)).toMatchObject({ code: 'unsupported_type', status: 415 });
+    expect(await p2.catch((e: unknown) => e)).toMatchObject({
+      code: 'unsupported_type',
+      status: 415,
+    });
   });
 
   it('a transport failure becomes a network AceApiError', async () => {
