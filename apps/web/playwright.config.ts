@@ -4,7 +4,8 @@ import { defineConfig, devices } from '@playwright/test';
  * The web suite runs against the MSW mocks (VITE_ACE_MOCK=1): no engine, no env vars, no keys.
  * Cross-tests against the real engine live in tests/acceptance (CLAUDE.md §6.2).
  */
-const PORT = 5174;
+/** `ACE_E2E_PORT` lets parallel worktrees each serve their own build instead of reusing another's. */
+const PORT = Number(process.env['ACE_E2E_PORT'] ?? 5174);
 
 export default defineConfig({
   testDir: './e2e',
