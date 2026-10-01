@@ -107,6 +107,113 @@ export async function getJson(options: HttpProbeOptions): Promise<unknown> {
   return response.json();
 }
 
+export interface EmbedOptions {
+  modelId?: string;
+}
+
+/** How long one embedding batch may take. Longer than a probe: a batch is real work. */
+export const EMBED_TIMEOUT_MS = 60_000;
+
+/** An embedding call without a model is a programming error, not a provider failure. */
+export function requireEmbedModel(options: EmbedOptions | undefined): string {
+  const modelId = options?.modelId;
+  if (modelId === undefined || modelId === '') {
+    throw new Error('embed() needs options.modelId: an embedding call must name its model.');
+  }
+  return modelId;
+}
+
+export interface HttpPostOptions {
+  url: string;
+  body: unknown;
+  headers?: Record<string, string>;
+  fetchImpl?: FetchLike;
+  timeoutMs?: number;
+}
+
+/** One POST of JSON, with the same failure classification as `getJson` (D57/D58). */
+export async function postJson(options: HttpPostOptions): Promise<unknown> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const timeoutMs = options.timeoutMs ?? EMBED_TIMEOUT_MS;
+  const signal = AbortSignal.timeout(timeoutMs);
+
+  let response: Response;
+  try {
+    response = await fetchImpl(options.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(options.headers ?? {}) },
+      body: JSON.stringify(options.body),
+      signal,
+    });
+  } catch (error) {
+    throw new ProviderCallError(
+      signal.aborted
+        ? {
+            kind: 'network',
+            code: 'timeout',
+            message: `The provider did not answer within ${timeoutMs} ms.`,
+            retryable: true,
+          }
+        : mapProviderError(error),
+    );
+  }
+
+  if (!response.ok) {
+    throw new ProviderCallError(statusToNodeError(response.status, await errorText(response)));
+  }
+
+  return response.json();
+}
+
+/** A malformed embedding answer is a provider fault that retrying will not fix. */
+export function badEmbedResponse(what: string): ProviderCallError {
+  return new ProviderCallError({
+    kind: 'provider',
+    code: 'bad_embedding_response',
+    message: `The provider's embedding response was malformed: ${what}.`,
+    retryable: false,
+  });
+}
+
+/** Check a parsed vector list against the number of texts sent. */
+export function checkVectors(vectors: unknown[], expected: number): number[][] {
+  if (vectors.length !== expected) {
+    throw badEmbedResponse(`expected ${expected} vectors, got ${vectors.length}`);
+  }
+  return vectors.map((vector) => {
+    if (!Array.isArray(vector) || !vector.every((n) => typeof n === 'number')) {
+      throw badEmbedResponse('a vector is not a list of numbers');
+    }
+    return vector as number[];
+  });
+}
+
+/** `POST {baseUrl}/v1/embeddings` — OpenAI and every compatible server. */
+export async function embedOpenAiStyle(
+  baseUrl: string,
+  headers: Record<string, string>,
+  fetchImpl: FetchLike | undefined,
+  texts: string[],
+  options: EmbedOptions | undefined,
+): Promise<number[][]> {
+  const model = requireEmbedModel(options);
+  if (texts.length === 0) return [];
+  const body = (await postJson({
+    url: `${baseUrl}/v1/embeddings`,
+    headers,
+    body: { model, input: texts },
+    ...(fetchImpl === undefined ? {} : { fetchImpl }),
+  })) as { data?: unknown };
+  if (!Array.isArray(body.data)) throw badEmbedResponse('no "data" list');
+  const rows = [...(body.data as { index?: number; embedding?: unknown }[])].sort(
+    (a, b) => (a.index ?? 0) - (b.index ?? 0),
+  );
+  return checkVectors(
+    rows.map((row) => row.embedding),
+    texts.length,
+  );
+}
+
 async function errorText(response: Response): Promise<string> {
   try {
     const body: unknown = await response.json();
@@ -152,7 +259,7 @@ export interface AiSdkAdapterOptions {
   model: (modelId: string) => LanguageModel;
   check: () => Promise<ProviderStatus>;
   listModels: () => Promise<ModelInfo[]>;
-  embed?: (texts: string[]) => Promise<number[][]>;
+  embed?: (texts: string[], options?: EmbedOptions) => Promise<number[][]>;
 }
 
 /**

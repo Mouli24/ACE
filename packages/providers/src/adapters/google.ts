@@ -1,7 +1,17 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 
 import type { ModelInfo, ProviderAdapter } from '../adapter.js';
-import { createAiSdkAdapter, discoveredModel, getJson, statusFromProbe, type FetchLike } from './ai-sdk.js';
+import {
+  badEmbedResponse,
+  checkVectors,
+  createAiSdkAdapter,
+  discoveredModel,
+  getJson,
+  postJson,
+  requireEmbedModel,
+  statusFromProbe,
+  type FetchLike,
+} from './ai-sdk.js';
 
 /**
  * Google Generative AI (FR-PRV-001). Its listing carries the key as a query parameter and names
@@ -53,5 +63,25 @@ export function createGoogleAdapter(options: GoogleOptions): ProviderAdapter {
     model: (modelId) => provider(modelId),
     check: () => statusFromProbe(probe),
     listModels: async (): Promise<ModelInfo[]> => parseGoogleModelList(await probe()),
+    embed: async (texts, embedOptions) => {
+      const model = requireEmbedModel(embedOptions);
+      if (texts.length === 0) return [];
+      const body = (await postJson({
+        url: `${baseUrl}/v1beta/models/${model}:batchEmbedContents`,
+        headers: { 'x-goog-api-key': options.apiKey },
+        body: {
+          requests: texts.map((text) => ({
+            model: `models/${model}`,
+            content: { parts: [{ text }] },
+          })),
+        },
+        ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
+      })) as { embeddings?: unknown };
+      if (!Array.isArray(body.embeddings)) throw badEmbedResponse('no "embeddings" list');
+      return checkVectors(
+        (body.embeddings as { values?: unknown }[]).map((entry) => entry.values),
+        texts.length,
+      );
+    },
   });
 }

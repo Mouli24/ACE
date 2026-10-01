@@ -1,5 +1,13 @@
 import type { ProviderAdapter } from '../adapter.js';
-import { getJson, type FetchLike } from './ai-sdk.js';
+import {
+  badEmbedResponse,
+  checkVectors,
+  type EmbedOptions,
+  getJson,
+  postJson,
+  requireEmbedModel,
+  type FetchLike,
+} from './ai-sdk.js';
 import { createOpenAiCompatibleAdapter, normaliseBaseUrl } from './openai-compatible.js';
 
 /**
@@ -15,11 +23,28 @@ export interface OllamaOptions {
 }
 
 export function createOllamaAdapter(options: OllamaOptions = {}): ProviderAdapter {
-  return createOpenAiCompatibleAdapter({
+  const baseUrl = normaliseBaseUrl(options.baseUrl ?? DEFAULT_OLLAMA_BASE_URL);
+  const adapter = createOpenAiCompatibleAdapter({
     type: 'ollama',
-    baseUrl: normaliseBaseUrl(options.baseUrl ?? DEFAULT_OLLAMA_BASE_URL),
+    baseUrl,
     ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
   });
+
+  return {
+    ...adapter,
+    // Ollama's native batch endpoint, not the OpenAI-style one this adapter otherwise speaks.
+    embed: async (texts: string[], embedOptions?: EmbedOptions) => {
+      const model = requireEmbedModel(embedOptions);
+      if (texts.length === 0) return [];
+      const body = (await postJson({
+        url: `${baseUrl}/api/embed`,
+        body: { model, input: texts },
+        ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
+      })) as { embeddings?: unknown };
+      if (!Array.isArray(body.embeddings)) throw badEmbedResponse('no "embeddings" list');
+      return checkVectors(body.embeddings, texts.length);
+    },
+  };
 }
 
 /** How long detection waits. Short: this runs on first load and must never hold the UI up. */

@@ -1,7 +1,13 @@
 import { createOpenAI } from '@ai-sdk/openai';
 
 import type { ModelInfo, ProviderAdapter } from '../adapter.js';
-import { createAiSdkAdapter, getJson, statusFromProbe, type FetchLike } from './ai-sdk.js';
+import {
+  createAiSdkAdapter,
+  embedOpenAiStyle,
+  getJson,
+  statusFromProbe,
+  type FetchLike,
+} from './ai-sdk.js';
 import { parseOpenAiModelList } from './openai-compatible.js';
 
 /** OpenAI (FR-PRV-001). Same listing shape as any compatible server, different default host. */
@@ -35,5 +41,13 @@ export function createOpenAiAdapter(options: OpenAiOptions): ProviderAdapter {
     model: (modelId) => provider.chat(modelId),
     check: () => statusFromProbe(probe),
     listModels: async (): Promise<ModelInfo[]> => parseOpenAiModelList(await probe()),
+    embed: (texts, embedOptions) =>
+      embedOpenAiStyle(
+        baseUrl,
+        { Authorization: `Bearer ${options.apiKey}` },
+        options.fetchImpl,
+        texts,
+        embedOptions,
+      ),
   });
 }
