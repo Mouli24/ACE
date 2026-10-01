@@ -17,6 +17,7 @@
 
 import type { GuardrailCheck, GuardrailCheckType } from '@ace/contracts';
 
+import { checkContextInjection, checkContextPii, checkUntrustedTagging } from './checks/context.js';
 import { checkContract } from './checks/contract.js';
 import { checkRepeatedOutput } from './checks/loop.js';
 import {
@@ -45,8 +46,8 @@ import type { CheckResult, GuardrailInput } from './types.js';
 
 /**
  * The check types this package evaluates. The rest are declared in the contract for the rounds that
- * implement them — `untrusted_tagging` is the context point (Round 5) — and `evaluateCheck` answers
- * `undefined` for them rather than pretending. The four `tool` checks joined this list in Round 4.
+ * implement them. The four `tool` checks joined this list in Round 4; `untrusted_tagging` joined it
+ * in Round 5, which also gave `pii` and `prompt_injection` their context-point behaviour.
  */
 export const EVALUATED_CHECK_TYPES = [
   'size_limit',
@@ -67,6 +68,7 @@ export const EVALUATED_CHECK_TYPES = [
   'path_confinement',
   'domain_allowlist',
   'destructive_action',
+  'untrusted_tagging',
 ] as const satisfies readonly GuardrailCheckType[];
 
 export type EvaluatedCheckType = (typeof EVALUATED_CHECK_TYPES)[number];
@@ -117,10 +119,16 @@ export function evaluateCheck(
     /* ---- input / output text checks ------------------------------------- */
     case 'size_limit':
       return text === undefined ? undefined : checkSizeLimit(check, text);
+    // At the context point `pii` and `prompt_injection` run their context forms — redaction and
+    // hidden-instruction stripping (round 5 §2.3); at input and output they are unchanged.
     case 'pii':
-      return text === undefined ? undefined : checkPii(check, text);
+      if (text === undefined) return undefined;
+      return check.point === 'context' ? checkContextPii(check, text) : checkPii(check, text);
     case 'prompt_injection':
-      return text === undefined ? undefined : checkPromptInjection(check, text);
+      if (text === undefined) return undefined;
+      return check.point === 'context'
+        ? checkContextInjection(check, text)
+        : checkPromptInjection(check, text);
     case 'blocked_topics':
       return text === undefined ? undefined : checkBlockedTopics(check, text);
     case 'moderation':
@@ -160,9 +168,9 @@ export function evaluateCheck(
     case 'destructive_action':
       return checkDestructiveAction(input);
 
-    /* ---- declared now, evaluated in Round 5 ----------------------------- */
+    /* ---- context (Round 5) ---------------------------------------------- */
     case 'untrusted_tagging':
-      return undefined;
+      return checkUntrustedTagging();
 
     default: {
       // Adding a GuardrailCheckType without handling it above fails to compile here.

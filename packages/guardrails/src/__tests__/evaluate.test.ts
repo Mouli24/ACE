@@ -23,27 +23,18 @@ import { FAKE_OPENAI_KEY, makeCheck, makeTool, SAMPLE_EMAIL } from './fixtures.j
  * made.
  */
 describe('FR-GRD-011 evaluateCheck dispatch', () => {
-  it('every check type of the contract is either evaluated or knowingly deferred', () => {
-    // Only the context point (`untrusted_tagging`, Round 5) is still deferred; the four tool
-    // checks joined EVALUATED_CHECK_TYPES in Round 4.
-    const deferred: GuardrailCheckType[] = ['untrusted_tagging'];
-    expect([...EVALUATED_CHECK_TYPES, ...deferred].sort()).toEqual(
-      [...GUARDRAIL_CHECK_TYPES].sort(),
-    );
+  it('every check type of the contract is evaluated', () => {
+    // Round 5 wired the last deferred type, `untrusted_tagging`; the four tool checks joined in
+    // Round 4. Nothing is deferred any more.
+    expect([...EVALUATED_CHECK_TYPES].sort()).toEqual([...GUARDRAIL_CHECK_TYPES].sort());
+    for (const type of GUARDRAIL_CHECK_TYPES) expect(isEvaluated(type), type).toBe(true);
   });
 
-  it('answers undefined for the deferred round 5 point rather than pretending it passed', () => {
-    for (const type of GUARDRAIL_CHECK_TYPES) {
-      if (isEvaluated(type)) continue;
-      const result = evaluateCheck(makeCheck(type), {
-        text: 'anything',
-        value: 1,
-        outputHashes: [],
-        parts: [{ type: 'text', text: 'x' }],
-        contract: { outputTypes: ['text'] },
-      });
-      expect(result, type).toBeUndefined();
-    }
+  it('answers untrusted_tagging even when handed nothing, and it always passes', () => {
+    expect(evaluateCheck(makeCheck('untrusted_tagging'), {})).toEqual({
+      passed: true,
+      reason: 'Tagged untrusted.',
+    });
   });
 
   it('answers undefined for a check the policy has switched off', () => {
@@ -105,8 +96,11 @@ describe('FR-GRD-011 evaluateCheck dispatch', () => {
       judged[type] = result?.passed;
     }
 
-    // Every one of them found its own fault in that input.
-    for (const type of EVALUATED_CHECK_TYPES) expect(judged[type], type).toBe(false);
+    // Every one of them found its own fault in that input — except untrusted_tagging, which is
+    // not a fault finder: it always passes.
+    for (const type of EVALUATED_CHECK_TYPES) {
+      expect(judged[type], type).toBe(type === 'untrusted_tagging');
+    }
   });
 });
 
@@ -125,8 +119,8 @@ describe('FR-GRD-015 evaluateChecks over a whole policy', () => {
     });
     const types = evaluated.map(({ check }) => check.type);
 
-    // Text-only input: the input, output and context text checks answer; the cost, loop and tool
-    // ones do not, nor does untrusted_tagging, which the context point (round 5) has yet to wire.
+    // Text-only input: the input, output and context checks answer (untrusted_tagging always
+    // passes); the cost, loop and tool ones do not.
     // evaluateChecks ignores the point — the engine picks a point's checks before it calls this.
     expect(types).toEqual([
       'pii',
@@ -134,6 +128,7 @@ describe('FR-GRD-015 evaluateChecks over a whole policy', () => {
       'size_limit',
       'secret_leak',
       'moderation',
+      'untrusted_tagging',
       'prompt_injection',
       'pii',
     ]);
