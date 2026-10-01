@@ -15,12 +15,22 @@
     "build": "tsc --build",
     "typecheck": "tsc --build",
     "lint": "eslint .",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@ace/config": "workspace:*",
+    "@vitest/coverage-v8": "^5.0.1",
     "eslint": "^10.11.0",
     "typescript": "^5.9.3",
     "vitest": "^5.0.1"
+  },
+  "dependencies": {
+    "@ace/contracts": "workspace:*",
+    "@ace/engine": "workspace:*",
+    "@mozilla/readability": "^0.6.0",
+    "linkedom": "^0.18.13",
+    "mammoth": "^1.13.0",
+    "unpdf": "^1.8.1"
   }
 }
