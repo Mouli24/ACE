@@ -20,6 +20,7 @@ export * from './queue.js';
 export * from './pubsub.js';
 export * from './vector-index.js';
 export * from './keyword-index.js';
+export * from './knowledge.js';
 export * from './sandbox.js';
 export * from './search-backend.js';
 export * from './auth.js';

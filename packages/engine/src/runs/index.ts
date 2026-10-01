@@ -125,6 +125,12 @@ export interface RunService {
    * what a re-run executes on (FR-CTL-005). Without it a re-run runs with no reads at all.
    */
   envelopesFor(run: Run, nodeId: Id): Promise<Envelope[]>;
+  /**
+   * The summarisation usage accumulated for a node of a run while its input envelopes were built
+   * (F5), taken and cleared. The scheduler adds it to the receiving node run's usage; Task 13 of
+   * round 5 wires that call.
+   */
+  pendingSummaryUsage?(runId: Id, nodeId: Id): Usage | undefined;
 
   /** Aborts every in-flight call and waits for the dispatch loops to unwind (FR-SYS-008). */
   shutdown(): Promise<void>;
@@ -255,6 +261,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
   const now = deps.now ?? (() => new Date().toISOString());
   const nextId = deps.nextId ?? newId;
   const summariser = deps.summariser ?? createTruncatingSummariser();
+  /** Summariser usage per `runId:targetNodeId`, until the target's node run takes it (F5). */
+  const summaryUsage = new Map<string, Usage>();
 
   const executor: NodeExecutor = createNodeExecutor({
     bus,
@@ -304,19 +312,19 @@ export function createRunService(deps: RunServiceDeps): RunService {
    * `envelopesFor` when a control rebuilds what a node would read from the latest upstream outputs
    * (FR-CTL-005). Two copies of this arithmetic would be two answers to "what did that node read?".
    */
-  function envelopeBetween(
+  async function envelopeBetween(
     run: Run,
     from: Node,
     to: Node,
     parts: Part[],
     iteration: number,
-  ): Envelope {
+  ): Promise<Envelope> {
     const budgetTokens =
       to.kind === 'agent' ? to.config.contextPolicy.budgetTokens : Number.MAX_SAFE_INTEGER;
     const outputTypes =
       to.kind === 'agent' || to.kind === 'model' ? to.config.outputTypes : ['text' as const];
 
-    return buildEnvelope(
+    const { envelope, usage } = await buildEnvelope(
       {
         id: nextId(),
         runId: run.id,
@@ -335,6 +343,15 @@ export function createRunService(deps: RunServiceDeps): RunService {
       },
       summariser,
     );
+
+    // F5: a summarisation call is the receiving node's spend, carried until its run is recorded.
+    if (usage !== undefined) {
+      const key = `${run.id}:${to.id}`;
+      const carried = summaryUsage.get(key);
+      summaryUsage.set(key, carried === undefined ? usage : sumUsage([carried, usage]));
+    }
+
+    return envelope;
   }
 
   /** The latest attempt of the latest iteration of each node, from a run's whole node-run list. */
@@ -714,10 +731,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
         // A node the controls handed a fixed set of inputs runs on exactly those (FR-ERR-003).
         if (plannedRuns.has(targetId)) continue;
 
-        envelopesFor.set(targetId, [
-          ...(envelopesFor.get(targetId) ?? []),
-          envelopeBetween(run, node, target, parts, iteration),
-        ]);
+        // Built before the list is read: another delivery may land while this one awaits.
+        const envelope = await envelopeBetween(run, node, target, parts, iteration);
+        envelopesFor.set(targetId, [...(envelopesFor.get(targetId) ?? []), envelope]);
       }
 
       for (const edge of outgoing) {
@@ -1367,10 +1383,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
           }
           deliveredEdges.add(edge.id);
           if (plannedRuns.has(target.id)) continue;
-          envelopesFor.set(target.id, [
-            ...(envelopesFor.get(target.id) ?? []),
-            envelopeBetween(run, node, target, row.output ?? [], row.iteration),
-          ]);
+          const envelope = await envelopeBetween(run, node, target, row.output ?? [], row.iteration);
+          envelopesFor.set(target.id, [...(envelopesFor.get(target.id) ?? []), envelope]);
         }
       }
     }
@@ -1763,6 +1777,13 @@ export function createRunService(deps: RunServiceDeps): RunService {
       return plan.run;
     },
 
+    pendingSummaryUsage(runId, nodeId) {
+      const key = `${runId}:${nodeId}`;
+      const carried = summaryUsage.get(key);
+      summaryUsage.delete(key);
+      return carried;
+    },
+
     async envelopesFor(run, nodeId) {
       const node = run.snapshot.nodes.find((candidate) => candidate.id === nodeId);
       if (node === undefined) throw notFound(`node ${nodeId} in run ${run.id}`);
@@ -1782,7 +1803,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
         if (from === undefined || row === undefined) continue;
 
         seen.add(edge.from.nodeId);
-        envelopes.push(envelopeBetween(run, from, node, row.output ?? [], row.iteration));
+        envelopes.push(await envelopeBetween(run, from, node, row.output ?? [], row.iteration));
       }
 
       return envelopes;

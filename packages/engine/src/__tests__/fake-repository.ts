@@ -10,10 +10,16 @@ import {
   type ChatMessage,
   type ChatThread,
   type CursorQuery,
+  type ErrorKind,
   type Edge,
   type GuardrailPolicy,
+  type HealthMetrics,
   type Id,
+  type KbChunk,
+  type KbDocument,
+  type KnowledgeBase,
   type McpServer,
+  type MemoryEntry,
   type Message,
   type MessageQuery,
   type Model,
@@ -28,15 +34,24 @@ import {
   type SettingsPatch,
   type Timestamp,
   type ToolCall,
+  type Usage,
+  type UsageBucket,
+  type UsageQuery,
+  type UsageResponse,
   type Verdict,
   type Workflow,
+  ERROR_KINDS,
 } from '@ace/contracts';
 
 import type {
   EngineEvent,
   EventFilter,
   GuardrailPolicyPatch,
+  KbChunkRepository,
+  KbDocumentRepository,
+  KnowledgeBaseRepository,
   McpServerPatch,
+  MemoryRepository,
   NewEngineEvent,
   NodeRunPatch,
   PriceTable,
@@ -45,6 +60,8 @@ import type {
   RunPatch,
   Scope,
   StoredApproval,
+  SummaryCacheRepository,
+  UsageRepository,
 } from '../ports/index.js';
 import { newId } from '../ids.js';
 
@@ -71,6 +88,12 @@ interface State {
   messages: Map<string, Message>;
   chatThreads: Map<string, ChatThread>;
   chatMessages: Map<string, ChatMessage>;
+  knowledgeBases: Map<string, KnowledgeBase>;
+  kbDocuments: Map<string, KbDocument>;
+  /** A chunk and the embedding stored with it, as `kb_chunks` and `kb_vectors` are written together. */
+  kbChunks: Map<string, { chunk: KbChunk; embedding: number[] }>;
+  memory: Map<string, MemoryEntry>;
+  summaryCache: Map<string, { summary: string; lastUsedAt: Timestamp }>;
 }
 
 function emptyState(): State {
@@ -96,6 +119,11 @@ function emptyState(): State {
     messages: new Map(),
     chatThreads: new Map(),
     chatMessages: new Map(),
+    knowledgeBases: new Map(),
+    kbDocuments: new Map(),
+    kbChunks: new Map(),
+    memory: new Map(),
+    summaryCache: new Map(),
   };
 }
 
@@ -122,7 +150,29 @@ function cloneState(state: State): State {
     messages: new Map(state.messages),
     chatThreads: new Map(state.chatThreads),
     chatMessages: new Map(state.chatMessages),
+    knowledgeBases: new Map(state.knowledgeBases),
+    kbDocuments: new Map(state.kbDocuments),
+    kbChunks: new Map(state.kbChunks),
+    memory: new Map(state.memory),
+    summaryCache: new Map(state.summaryCache),
   };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** `summary_cache` entries unused for this long read as absent (Arch §12.8). */
+const SUMMARY_CACHE_TTL_MS = 30 * DAY_MS;
+/** `summary_cache` is pruned to this many rows, least recently used first. */
+const SUMMARY_CACHE_MAX_ROWS = 5000;
+
+/** Nearest-rank percentile of an ascending list. */
+function percentile(sorted: readonly number[], fraction: number): number {
+  if (sorted.length === 0) return 0;
+  const rank = Math.max(1, Math.ceil(fraction * sorted.length));
+  return sorted[rank - 1]!;
+}
+
+function emptyUsage(): Usage {
+  return { tokensIn: 0, tokensOut: 0, costUsd: 0 };
 }
 
 function page<T>(rows: T[], query: CursorQuery, idOf: (row: T) => string): Page<T> {
@@ -439,7 +489,11 @@ export class FakeRepository implements Repository {
       return run;
     },
     get: async (scope: Scope, id: Id) => this.#for(scope).runs.get(id) ?? null,
-    listByWorkflow: async (scope: Scope, workflowId: Id, query: CursorQuery): Promise<Page<Run>> => {
+    listByWorkflow: async (
+      scope: Scope,
+      workflowId: Id,
+      query: CursorQuery,
+    ): Promise<Page<Run>> => {
       const ordered = [...this.#for(scope).runs.values()]
         .filter((run) => run.workflowId === workflowId)
         .sort((a, b) => b.id.localeCompare(a.id));
@@ -452,7 +506,10 @@ export class FakeRepository implements Repository {
     },
     listActive: async (scope: Scope) =>
       [...this.#for(scope).runs.values()]
-        .filter((run) => run.status === 'PREFLIGHT' || run.status === 'RUNNING' || run.status === 'PAUSED')
+        .filter(
+          (run) =>
+            run.status === 'PREFLIGHT' || run.status === 'RUNNING' || run.status === 'PAUSED',
+        )
         .sort((a, b) => a.id.localeCompare(b.id)),
     update: async (scope: Scope, id: Id, patch: RunPatch) => {
       const current = this.#for(scope).runs.get(id);
@@ -842,5 +899,304 @@ export class FakeRepository implements Repository {
       [...this.#for(scope).chatMessages.values()]
         .filter((message) => message.threadId === threadId)
         .sort((a, b) => a.id.localeCompare(b.id)),
+  };
+
+  /* Round 5 (Arch §15.3, §21.3). */
+
+  readonly knowledgeBases: KnowledgeBaseRepository = {
+    insert: async (scope, kb) => {
+      this.#for(scope).knowledgeBases.set(kb.id, kb);
+      return kb;
+    },
+    get: async (scope, id) => this.#for(scope).knowledgeBases.get(id) ?? null,
+    listByProject: async (scope, projectId) =>
+      [...this.#for(scope).knowledgeBases.values()]
+        .filter((kb) => kb.projectId === projectId)
+        .sort((a, b) => a.id.localeCompare(b.id)),
+    update: async (scope, id, patch) => {
+      const state = this.#for(scope);
+      const current = state.knowledgeBases.get(id);
+      if (current === undefined) return null;
+      const next: KnowledgeBase = { ...current, ...patch };
+      state.knowledgeBases.set(id, next);
+      return next;
+    },
+    /** Cascades documents and their chunks, vectors and index rows, as the real adapter does. */
+    delete: async (scope, id) => {
+      const state = this.#for(scope);
+      state.knowledgeBases.delete(id);
+      for (const [docId, doc] of [...state.kbDocuments]) {
+        if (doc.knowledgeBaseId === id) state.kbDocuments.delete(docId);
+      }
+      for (const [chunkId, row] of [...state.kbChunks]) {
+        if (row.chunk.knowledgeBaseId === id) state.kbChunks.delete(chunkId);
+      }
+    },
+  };
+
+  readonly kbDocuments: KbDocumentRepository = {
+    insert: async (scope, doc) => {
+      this.#for(scope).kbDocuments.set(doc.id, doc);
+      return doc;
+    },
+    get: async (scope, id) => this.#for(scope).kbDocuments.get(id) ?? null,
+    listByKnowledgeBase: async (scope, knowledgeBaseId) =>
+      [...this.#for(scope).kbDocuments.values()]
+        .filter((doc) => doc.knowledgeBaseId === knowledgeBaseId)
+        .sort((a, b) => a.id.localeCompare(b.id)),
+    listUnsettled: async (scope) =>
+      [...this.#for(scope).kbDocuments.values()]
+        .filter((doc) => doc.status !== 'ready' && doc.status !== 'failed')
+        .sort((a, b) => a.id.localeCompare(b.id)),
+    update: async (scope, id, patch) => {
+      const state = this.#for(scope);
+      const current = state.kbDocuments.get(id);
+      if (current === undefined) return null;
+      const next: KbDocument = { ...current };
+      if (patch.status !== undefined) next.status = patch.status;
+      if (patch.chunkCount !== undefined) next.chunkCount = patch.chunkCount;
+      if (patch.error !== undefined) next.error = patch.error;
+      if (patch.ingestedAt !== undefined) next.ingestedAt = patch.ingestedAt;
+      if (patch.verdicts !== undefined) next.verdicts = patch.verdicts;
+      state.kbDocuments.set(id, next);
+      return next;
+    },
+    delete: async (scope, id) => {
+      const state = this.#for(scope);
+      state.kbDocuments.delete(id);
+      for (const [chunkId, row] of [...state.kbChunks]) {
+        if (row.chunk.documentId === id) state.kbChunks.delete(chunkId);
+      }
+    },
+  };
+
+  readonly kbChunks: KbChunkRepository = {
+    replaceForDocument: async (scope, documentId, chunks, embeddings) => {
+      if (chunks.length !== embeddings.length) {
+        throw new Error('replaceForDocument needs one embedding per chunk');
+      }
+      const state = this.#for(scope);
+      for (const [chunkId, row] of [...state.kbChunks]) {
+        if (row.chunk.documentId === documentId) state.kbChunks.delete(chunkId);
+      }
+      chunks.forEach((chunk, index) => {
+        state.kbChunks.set(chunk.id, { chunk, embedding: embeddings[index]! });
+      });
+    },
+    getMany: async (scope, ids) => {
+      const state = this.#for(scope);
+      return ids.flatMap((id) => {
+        const row = state.kbChunks.get(id);
+        return row === undefined ? [] : [row.chunk];
+      });
+    },
+    countByKnowledgeBase: async (scope, knowledgeBaseId) =>
+      [...this.#for(scope).kbChunks.values()].filter(
+        (row) => row.chunk.knowledgeBaseId === knowledgeBaseId,
+      ).length,
+  };
+
+  readonly memory: MemoryRepository = {
+    list: async (scope, nodeId) =>
+      [...this.#for(scope).memory.values()]
+        .filter((entry) => entry.nodeId === nodeId)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)),
+    upsert: async (scope, nodeId, key, value, at, newId) => {
+      const state = this.#for(scope);
+      const existing = [...state.memory.values()].find(
+        (entry) => entry.nodeId === nodeId && entry.key === key,
+      );
+      const next: MemoryEntry =
+        existing === undefined
+          ? { id: newId(), nodeId, key, value, createdAt: at, updatedAt: at }
+          : { ...existing, value, updatedAt: at };
+      state.memory.set(next.id, next);
+      return next;
+    },
+    deleteKey: async (scope, nodeId, key) => {
+      const state = this.#for(scope);
+      const existing = [...state.memory.values()].find(
+        (entry) => entry.nodeId === nodeId && entry.key === key,
+      );
+      if (existing === undefined) return false;
+      state.memory.delete(existing.id);
+      return true;
+    },
+    deleteEntry: async (scope, nodeId, entryId) => {
+      const state = this.#for(scope);
+      const existing = state.memory.get(entryId);
+      if (existing === undefined || existing.nodeId !== nodeId) return null;
+      state.memory.delete(entryId);
+      return existing;
+    },
+    clear: async (scope, nodeId) => {
+      const state = this.#for(scope);
+      const removed = [...state.memory.values()]
+        .filter((entry) => entry.nodeId === nodeId)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+      for (const entry of removed) state.memory.delete(entry.id);
+      return removed;
+    },
+    markUsed: async (scope, ids, at) => {
+      const state = this.#for(scope);
+      for (const id of ids) {
+        const entry = state.memory.get(id);
+        if (entry !== undefined) state.memory.set(id, { ...entry, lastUsedAt: at });
+      }
+    },
+  };
+
+  readonly summaryCache: SummaryCacheRepository = {
+    get: async (scope, key, at) => {
+      const state = this.#for(scope);
+      const row = state.summaryCache.get(key);
+      if (row === undefined) return null;
+      if (Date.parse(at) - Date.parse(row.lastUsedAt) > SUMMARY_CACHE_TTL_MS) {
+        state.summaryCache.delete(key);
+        return null;
+      }
+      state.summaryCache.set(key, { ...row, lastUsedAt: at });
+      return row.summary;
+    },
+    put: async (scope, key, summary, at) => {
+      const state = this.#for(scope);
+      state.summaryCache.delete(key);
+      state.summaryCache.set(key, { summary, lastUsedAt: at });
+      if (state.summaryCache.size <= SUMMARY_CACHE_MAX_ROWS) return;
+      const oldestFirst = [...state.summaryCache].sort((a, b) =>
+        a[1].lastUsedAt.localeCompare(b[1].lastUsedAt),
+      );
+      for (const [staleKey] of oldestFirst.slice(
+        0,
+        state.summaryCache.size - SUMMARY_CACHE_MAX_ROWS,
+      )) {
+        state.summaryCache.delete(staleKey);
+      }
+    },
+  };
+
+  /** Folds this fake's node runs with D234's semantics, so a route test reads the same numbers SQLite gives. */
+  readonly usage: UsageRepository = {
+    aggregate: async (scope, query: UsageQuery): Promise<UsageResponse> => {
+      const state = this.#for(scope);
+      const groupBy = query.groupBy;
+      const from = query.from === undefined ? undefined : Date.parse(query.from);
+      const to = query.to === undefined ? undefined : Date.parse(query.to);
+
+      const groups = new Map<
+        string,
+        { key: Record<string, string>; usage: Usage; runs: Set<string> }
+      >();
+      for (const nodeRun of state.nodeRuns.values()) {
+        // Only node runs that called a model, with a recorded start, are counted (D234).
+        if (nodeRun.modelUsed === undefined || nodeRun.startedAt === undefined) continue;
+        const startedAt = Date.parse(nodeRun.startedAt);
+        if (from !== undefined && startedAt < from) continue;
+        if (to !== undefined && startedAt >= to) continue;
+
+        const values: Record<string, string> = {
+          provider: nodeRun.modelUsed.providerId,
+          model: nodeRun.modelUsed.modelId,
+          day: nodeRun.startedAt.slice(0, 10),
+          workflow: state.runs.get(nodeRun.runId)?.workflowId ?? '',
+        };
+        const key: Record<string, string> = {};
+        for (const by of groupBy) key[by] = values[by]!;
+
+        const id = JSON.stringify(groupBy.map((by) => key[by]));
+        const group = groups.get(id) ?? { key, usage: emptyUsage(), runs: new Set<string>() };
+        group.usage = {
+          tokensIn: group.usage.tokensIn + nodeRun.usage.tokensIn,
+          tokensOut: group.usage.tokensOut + nodeRun.usage.tokensOut,
+          costUsd: group.usage.costUsd + nodeRun.usage.costUsd,
+        };
+        group.runs.add(nodeRun.runId);
+        groups.set(id, group);
+      }
+
+      const buckets: UsageBucket[] = [...groups.values()]
+        .sort((a, b) => {
+          for (const by of groupBy) {
+            const order = a.key[by]!.localeCompare(b.key[by]!);
+            if (order !== 0) return order;
+          }
+          return 0;
+        })
+        .map((group) => ({ key: group.key, ...group.usage, runs: group.runs.size }));
+
+      const totals = buckets.reduce<Usage>(
+        (sum, bucket) => ({
+          tokensIn: sum.tokensIn + bucket.tokensIn,
+          tokensOut: sum.tokensOut + bucket.tokensOut,
+          costUsd: sum.costUsd + bucket.costUsd,
+        }),
+        emptyUsage(),
+      );
+      return { buckets, totals };
+    },
+    dayTotals: async (scope, day) =>
+      [...this.#for(scope).nodeRuns.values()]
+        .filter((nodeRun) => nodeRun.startedAt?.startsWith(day) === true)
+        .reduce<Usage>(
+          (sum, nodeRun) => ({
+            tokensIn: sum.tokensIn + nodeRun.usage.tokensIn,
+            tokensOut: sum.tokensOut + nodeRun.usage.tokensOut,
+            costUsd: sum.costUsd + nodeRun.usage.costUsd,
+          }),
+          emptyUsage(),
+        ),
+    healthCounts: async (scope): Promise<HealthMetrics> => {
+      const state = this.#for(scope);
+      const runs = [...state.runs.values()];
+      const nodeRuns = [...state.nodeRuns.values()];
+
+      const nodeFailuresByKind = Object.fromEntries(ERROR_KINDS.map((kind) => [kind, 0])) as Record<
+        ErrorKind,
+        number
+      >;
+      for (const nodeRun of nodeRuns) {
+        if (nodeRun.error !== undefined) nodeFailuresByKind[nodeRun.error.kind] += 1;
+      }
+
+      const durations = new Map<string, number[]>();
+      for (const nodeRun of nodeRuns) {
+        if (nodeRun.status !== 'COMPLETED') continue;
+        if (nodeRun.modelUsed === undefined || nodeRun.durationMs === undefined) continue;
+        const list = durations.get(nodeRun.modelUsed.providerId) ?? [];
+        list.push(nodeRun.durationMs);
+        durations.set(nodeRun.modelUsed.providerId, list);
+      }
+      const providerLatencyMs: HealthMetrics['providerLatencyMs'] = {};
+      for (const [providerId, list] of durations) {
+        const sorted = [...list].sort((a, b) => a - b);
+        providerLatencyMs[providerId] = {
+          p50: percentile(sorted, 0.5),
+          p95: percentile(sorted, 0.95),
+        };
+      }
+
+      const guardrailVerdictsByType: Record<string, number> = {};
+      for (const verdict of state.guardrailVerdicts) {
+        guardrailVerdictsByType[verdict.checkType] =
+          (guardrailVerdictsByType[verdict.checkType] ?? 0) + 1;
+      }
+
+      const since =
+        runs.map((run) => run.startedAt).sort((a, b) => a.localeCompare(b))[0] ??
+        new Date().toISOString();
+
+      return {
+        runs: {
+          started: runs.length,
+          completed: runs.filter((run) => run.status === 'COMPLETE').length,
+          halted: runs.filter((run) => run.status === 'HALTED').length,
+          blocked: runs.filter((run) => run.status === 'BLOCKED').length,
+        },
+        nodeFailuresByKind,
+        providerLatencyMs,
+        guardrailVerdictsByType,
+        since,
+      };
+    },
   };
 }

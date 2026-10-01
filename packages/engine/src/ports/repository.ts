@@ -31,6 +31,14 @@ import type {
   ProviderRepository,
   RunRepository,
 } from './run-repository.js';
+import type {
+  KbChunkRepository,
+  KbDocumentRepository,
+  KnowledgeBaseRepository,
+  MemoryRepository,
+  SummaryCacheRepository,
+  UsageRepository,
+} from './knowledge.js';
 import type { Scope } from './scope.js';
 
 /**
@@ -293,4 +301,16 @@ export interface Repository {
   messages: MessageRepository;
   chatThreads: ChatThreadRepository;
   chatMessages: ChatMessageRepository;
+
+  /**
+   * Round 5 (Arch §15.3, §21.3): knowledge bases, memory, the summary cache and usage read models.
+   * Optional until the storage adapter implements them, D218's pattern; the engine services that
+   * need one fail clearly when it is absent.
+   */
+  knowledgeBases?: KnowledgeBaseRepository;
+  kbDocuments?: KbDocumentRepository;
+  kbChunks?: KbChunkRepository;
+  memory?: MemoryRepository;
+  summaryCache?: SummaryCacheRepository;
+  usage?: UsageRepository;
 }
