@@ -77,47 +77,78 @@ function base64Payloads(text: string): Found[] {
   });
 }
 
-/** Every hidden-instruction finding, ordered by position (longest first at the same position). */
-function findHidden(text: string): Found[] {
-  return [
-    ...htmlComments(text),
-    ...regexFound(text, MARKDOWN_COMMENT, 'markdown_comment'),
-    ...regexFound(text, ZERO_WIDTH, 'zero_width'),
-    ...regexFound(text, INSTRUCTION_OVERRIDE, 'instruction_override'),
-    ...base64Payloads(text),
-  ].sort((a, b) => a.start - b.start || b.end - a.end);
+function isAsciiAt(text: string, index: number): boolean {
+  return index >= 0 && index < text.length && text.charCodeAt(index) < 128;
 }
 
-function strip(
-  text: string,
-  found: readonly Found[],
-): { text: string; strippedTypes: HiddenInstructionType[] } {
-  const strippedTypes: HiddenInstructionType[] = [];
-  for (const item of found) {
-    if (!strippedTypes.includes(item.type)) strippedTypes.push(item.type);
-  }
+/**
+ * Zero-width characters. U+200B, U+2060 and U+FEFF are always hidden. U+200C and U+200D are only
+ * hidden beside an ASCII character, where they obfuscate a Latin-script instruction; between two
+ * non-ASCII characters they are real text (Persian and Indic ZWNJ, emoji ZWJ sequences) and are
+ * kept, and keeping them is not a finding.
+ */
+function zeroWidth(text: string): Found[] {
+  return regexFound(text, ZERO_WIDTH, 'zero_width').filter((item) => {
+    const code = text.charCodeAt(item.start);
+    if (code !== 0x200c && code !== 0x200d) return true;
+    return isAsciiAt(text, item.start - 1) || isAsciiAt(text, item.end);
+  });
+}
 
-  // Remove the union of the spans: a zero-width character inside a comment goes with the comment.
+/** Position order, longest first at the same position. */
+function inOrder(found: Found[]): Found[] {
+  return found.sort((a, b) => a.start - b.start || b.end - a.end);
+}
+
+/** Remove the union of the spans: a zero-width character inside a comment goes with the comment. */
+function removeSpans(text: string, found: readonly Found[]): string {
   let stripped = '';
   let cursor = 0;
   for (const item of found) {
     if (item.start > cursor) stripped += text.slice(cursor, item.start);
     cursor = Math.max(cursor, item.end);
   }
-  stripped += text.slice(cursor);
+  return stripped + text.slice(cursor);
+}
 
-  return { text: stripped, strippedTypes };
+/**
+ * Two passes, so an instruction cannot hide by being split. Pass 1 removes what is invisible
+ * (zero-width characters, HTML and Markdown comments). Pass 2 looks for instruction overrides and
+ * base64 payloads in pass 1's output, where `ig<!--x-->nore previous instructions` has become what
+ * it says. `found` holds both passes' findings, pass 1 first, each in text order.
+ */
+function stripPasses(text: string): { text: string; found: Found[] } {
+  const first = inOrder([
+    ...htmlComments(text),
+    ...regexFound(text, MARKDOWN_COMMENT, 'markdown_comment'),
+    ...zeroWidth(text),
+  ]);
+  const visible = removeSpans(text, first);
+  const second = inOrder([
+    ...regexFound(visible, INSTRUCTION_OVERRIDE, 'instruction_override'),
+    ...base64Payloads(visible),
+  ]);
+  return { text: removeSpans(visible, second), found: [...first, ...second] };
+}
+
+function typesOf(found: readonly Found[]): HiddenInstructionType[] {
+  const types: HiddenInstructionType[] = [];
+  for (const item of found) {
+    if (!types.includes(item.type)) types.push(item.type);
+  }
+  return types;
 }
 
 /**
  * Remove every hidden instruction from `text`. `strippedTypes` lists each kind found once, in the
- * order its first occurrence appears; text with nothing hidden comes back untouched.
+ * order it was found (pass 1's kinds, then pass 2's); text with nothing hidden comes back untouched.
  */
 export function stripHiddenInstructions(text: string): {
   text: string;
   strippedTypes: HiddenInstructionType[];
 } {
-  return strip(text, findHidden(text));
+  const { text: stripped, found } = stripPasses(text);
+  return { text: stripped, strippedTypes: typesOf(found) };
 }
 
 /**
@@ -129,11 +160,11 @@ export function checkContextInjection(
   _check: GuardrailCheck,
   text: string,
 ): ContextInjectionResult {
-  const found = findHidden(text);
+  const { text: sanitized, found } = stripPasses(text);
   if (found.length === 0) {
     return { passed: true, reason: 'No hidden instruction found in context.' };
   }
-  const { text: sanitized, strippedTypes } = strip(text, found);
+  const strippedTypes = typesOf(found);
 
   // Counts per type, in first-found order — numbers and type names only, never the payload.
   const counts = new Map<HiddenInstructionType, number>();
