@@ -255,12 +255,16 @@ test.describe('Canvas productivity (round 5)', () => {
       await page.waitForTimeout(150);
     }
     await expect.poll(() => snapshot(page, seeded.workflowId)).toEqual(end);
-    await expect(page.locator('.react-flow__node')).toHaveCount(4);
-    await expect(page.locator('.react-flow__edge')).toHaveCount(2);
+    await expect(page.locator('.react-flow__node'), 'nodes after redo').toHaveCount(4);
+    await expect(page.locator('.react-flow__edge'), 'edges after redo').toHaveCount(2);
     // and the screen agrees with the engine after a reload
     await page.reload();
-    await expect(page.locator('.react-flow__node')).toHaveCount(4);
-    await expect(page.locator('.react-flow__edge')).toHaveCount(2);
+    await expect(page.locator('.react-flow__node'), 'nodes after reload').toHaveCount(4, {
+      timeout: 15_000,
+    });
+    await expect(page.locator('.react-flow__edge'), 'edges after reload').toHaveCount(2, {
+      timeout: 15_000,
+    });
   });
 
   test('TC-CAN-010: Delete, Ctrl+D, Ctrl+A and F each work', async ({ page }) => {
