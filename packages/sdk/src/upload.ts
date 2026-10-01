@@ -40,7 +40,9 @@ export function uploadArtifact(config: UploadArtifactConfig): Promise<Artifact> 
     if (typeof config.XHR !== 'function') {
       reject(
         AceApiError.network(
-          new Error('uploadArtifact needs an XMLHttpRequest; pass one via createAceClient options.'),
+          new Error(
+            'uploadArtifact needs an XMLHttpRequest; pass one via createAceClient options.',
+          ),
         ),
       );
       return;
