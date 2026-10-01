@@ -240,12 +240,14 @@ describe('Arch §7 remaining ports', () => {
       upsert: async () => undefined,
       query: async () => [],
       deleteByDocument: async () => undefined,
+      deleteByKnowledgeBase: async () => undefined,
     };
 
     const keyword: KeywordIndex = {
       index: async () => undefined,
       search: async () => [],
       deleteByDocument: async () => undefined,
+      deleteByKnowledgeBase: async () => undefined,
     };
 
     const sandbox: Sandbox = {

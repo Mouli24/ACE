@@ -7,6 +7,7 @@ import type {
   Part,
   Timestamp,
   TrustLevel,
+  Usage,
 } from '@ace/contracts';
 
 /**
@@ -71,7 +72,9 @@ export interface SummariseResult {
  * port exists now so the scheduler and executor never have to know which one is in use.
  */
 export interface Summariser {
-  summarise(input: SummariseInput): SummariseResult;
+  summarise(
+    input: SummariseInput & { target?: { providerId: Id; modelId: string } },
+  ): Promise<SummariseResult & { usage?: Usage }>;
 }
 
 export const TRUNCATED_SUMMARY = 'truncated to budget';
@@ -91,7 +94,7 @@ export const HEAD_SHARE = 0.7;
  */
 export function createTruncatingSummariser(): Summariser {
   return {
-    summarise({ parts, budgetTokens }) {
+    async summarise({ parts, budgetTokens }) {
       if (estimatePartsTokens(parts) <= budgetTokens) return { parts: [...parts] };
 
       const references = parts.filter(
@@ -116,7 +119,10 @@ export function createTruncatingSummariser(): Summariser {
           : joined.slice(0, headChars) + joined.slice(joined.length - tailChars);
 
       return {
-        parts: [...(truncated === '' ? [] : [{ type: 'text' as const, text: truncated }]), ...references],
+        parts: [
+          ...(truncated === '' ? [] : [{ type: 'text' as const, text: truncated }]),
+          ...references,
+        ],
         summary: TRUNCATED_SUMMARY,
       };
     },
@@ -143,15 +149,18 @@ export interface BuildEnvelopeInput {
 }
 
 /** One envelope for one edge group, built to fit (FR-EXE-005, FR-EXE-007). */
-export function buildEnvelope(input: BuildEnvelopeInput, summariser: Summariser): Envelope {
-  const { parts, summary } = summariser.summarise({
+export async function buildEnvelope(
+  input: BuildEnvelopeInput,
+  summariser: Summariser,
+): Promise<{ envelope: Envelope; usage?: Usage }> {
+  const { parts, summary, usage } = await summariser.summarise({
     parts: input.parts,
     budgetTokens: input.budgetTokens,
   });
 
   const combinedSummary = summary ?? input.inheritedSummary;
 
-  return {
+  const envelope: Envelope = {
     id: input.id,
     runId: input.runId,
     fromNodeId: input.fromNodeId,
@@ -166,10 +175,16 @@ export function buildEnvelope(input: BuildEnvelopeInput, summariser: Summariser)
     contract: input.contract,
     createdAt: input.createdAt,
   };
+
+  return usage === undefined ? { envelope } : { envelope, usage };
 }
 
 /** A node's required output types, as the contract its upstream envelope carries. */
-export function contractFor(outputTypes: DataType[], jsonSchema?: Record<string, unknown>, maxTokens?: number): EnvelopeContract {
+export function contractFor(
+  outputTypes: DataType[],
+  jsonSchema?: Record<string, unknown>,
+  maxTokens?: number,
+): EnvelopeContract {
   return {
     outputTypes,
     ...(jsonSchema === undefined ? {} : { jsonSchema }),

@@ -17,22 +17,28 @@ const NODE_B = '01JBXQ8Z9KQ4R7N2VWXYZ0EFGH';
 const ENVELOPE_ID = '01JBXQ8Z9KQ4R7N2VWXYZ0ENVP';
 const ARTIFACT = '01JBXQ8Z9KQ4R7N2VWXYZ0ARTF';
 
-const build = (parts: Part[], budgetTokens = 4000, trust: 'trusted' | 'untrusted' = 'untrusted') =>
-  buildEnvelope(
-    {
-      id: ENVELOPE_ID,
-      runId: RUN_ID,
-      fromNodeId: NODE_A,
-      toNodeId: NODE_B,
-      iteration: 1,
-      parts,
-      budgetTokens,
-      trust,
-      contract: { outputTypes: ['text'] },
-      createdAt: NOW,
-    },
-    createTruncatingSummariser(),
-  );
+const build = async (
+  parts: Part[],
+  budgetTokens = 4000,
+  trust: 'trusted' | 'untrusted' = 'untrusted',
+) =>
+  (
+    await buildEnvelope(
+      {
+        id: ENVELOPE_ID,
+        runId: RUN_ID,
+        fromNodeId: NODE_A,
+        toNodeId: NODE_B,
+        iteration: 1,
+        parts,
+        budgetTokens,
+        trust,
+        contract: { outputTypes: ['text'] },
+        createdAt: NOW,
+      },
+      createTruncatingSummariser(),
+    )
+  ).envelope;
 
 describe('FR-EXE-007 the token estimate is characters over four', () => {
   it('estimates a short string', () => {
@@ -55,7 +61,13 @@ describe('FR-EXE-007 the token estimate is characters over four', () => {
 
   it('measures an artifact reference by its name, not its bytes', () => {
     const tokens = estimatePartsTokens([
-      { type: 'file', artifactId: ARTIFACT, mime: 'application/pdf', name: 'b.pdf', size: 5_000_000 },
+      {
+        type: 'file',
+        artifactId: ARTIFACT,
+        mime: 'application/pdf',
+        name: 'b.pdf',
+        size: 5_000_000,
+      },
     ]);
 
     expect(tokens).toBeLessThan(10);
@@ -76,8 +88,8 @@ describe('BR-13 trust follows where the content came from', () => {
 });
 
 describe('FR-EXE-005 an envelope carries the upstream output', () => {
-  it('is addressed from one node to another, in this iteration', () => {
-    const envelope = build([{ type: 'text', text: 'hello' }]);
+  it('is addressed from one node to another, in this iteration', async () => {
+    const envelope = await build([{ type: 'text', text: 'hello' }]);
 
     expect(envelope.fromNodeId).toBe(NODE_A);
     expect(envelope.toNodeId).toBe(NODE_B);
@@ -85,30 +97,32 @@ describe('FR-EXE-005 an envelope carries the upstream output', () => {
     expect(envelope.runId).toBe(RUN_ID);
   });
 
-  it('carries the parts unchanged while they fit', () => {
+  it('carries the parts unchanged while they fit', async () => {
     const parts: Part[] = [
       { type: 'text', text: 'hello' },
       { type: 'json', value: { a: 1 } },
     ];
 
-    expect(build(parts).reads).toEqual(parts);
+    expect((await build(parts)).reads).toEqual(parts);
   });
 
-  it('carries no summary when nothing had to be dropped', () => {
-    expect(build([{ type: 'text', text: 'short' }]).context.summary).toBeUndefined();
+  it('carries no summary when nothing had to be dropped', async () => {
+    expect((await build([{ type: 'text', text: 'short' }])).context.summary).toBeUndefined();
   });
 
-  it('records the budget it was built against', () => {
-    expect(build([{ type: 'text', text: 'x' }], 512).context.budgetTokens).toBe(512);
+  it('records the budget it was built against', async () => {
+    expect((await build([{ type: 'text', text: 'x' }], 512)).context.budgetTokens).toBe(512);
   });
 
-  it('records the trust of what it carries', () => {
-    expect(build([{ type: 'text', text: 'x' }], 4000, 'trusted').context.trust).toBe('trusted');
-    expect(build([{ type: 'text', text: 'x' }]).context.trust).toBe('untrusted');
+  it('records the trust of what it carries', async () => {
+    expect((await build([{ type: 'text', text: 'x' }], 4000, 'trusted')).context.trust).toBe(
+      'trusted',
+    );
+    expect((await build([{ type: 'text', text: 'x' }])).context.trust).toBe('untrusted');
   });
 
-  it('has no field that could hold a message list (BR-02)', () => {
-    expect(Object.keys(build([{ type: 'text', text: 'x' }]))).not.toContain('messages');
+  it('has no field that could hold a message list (BR-02)', async () => {
+    expect(Object.keys(await build([{ type: 'text', text: 'x' }]))).not.toContain('messages');
   });
 });
 
@@ -116,19 +130,19 @@ describe('TC-EXE-006 an envelope never exceeds its budget', () => {
   /** 50k tokens of text, the fixture §4 item 13 calls `budget.json`. */
   const huge: Part[] = [{ type: 'text', text: 'word '.repeat(40_000) }];
 
-  it('fits a 50k-token read into a 4000-token budget', () => {
-    const envelope = build(huge, 4000);
+  it('fits a 50k-token read into a 4000-token budget', async () => {
+    const envelope = await build(huge, 4000);
 
     expect(estimatePartsTokens(envelope.reads)).toBeLessThanOrEqual(4000);
   });
 
-  it('marks the envelope as truncated, so the agent knows it is not seeing everything', () => {
-    expect(build(huge, 4000).context.summary).toBe(TRUNCATED_SUMMARY);
+  it('marks the envelope as truncated, so the agent knows it is not seeing everything', async () => {
+    expect((await build(huge, 4000)).context.summary).toBe(TRUNCATED_SUMMARY);
   });
 
-  it('keeps the head and the tail, because both ends carry the instruction and the conclusion', () => {
+  it('keeps the head and the tail, because both ends carry the instruction and the conclusion', async () => {
     const text = `${'A'.repeat(20_000)}${'B'.repeat(20_000)}${'C'.repeat(20_000)}`;
-    const envelope = build([{ type: 'text', text }], 1000);
+    const envelope = await build([{ type: 'text', text }], 1000);
     const carried = envelope.reads
       .filter((part): part is Extract<Part, { type: 'text' }> => part.type === 'text')
       .map((part) => part.text)
@@ -138,9 +152,9 @@ describe('TC-EXE-006 an envelope never exceeds its budget', () => {
     expect(carried.endsWith('C')).toBe(true);
   });
 
-  it('splits the budget roughly seventy-thirty between head and tail', () => {
+  it('splits the budget roughly seventy-thirty between head and tail', async () => {
     const text = `${'A'.repeat(50_000)}${'C'.repeat(50_000)}`;
-    const envelope = build([{ type: 'text', text }], 1000);
+    const envelope = await build([{ type: 'text', text }], 1000);
     const carried = envelope.reads
       .filter((part): part is Extract<Part, { type: 'text' }> => part.type === 'text')
       .map((part) => part.text)
@@ -154,8 +168,8 @@ describe('TC-EXE-006 an envelope never exceeds its budget', () => {
     expect(heads / (heads + tails)).toBeLessThan(0.8);
   });
 
-  it('keeps artifact references rather than truncating them away', () => {
-    const envelope = build(
+  it('keeps artifact references rather than truncating them away', async () => {
+    const envelope = await build(
       [
         { type: 'text', text: 'word '.repeat(40_000) },
         { type: 'file', artifactId: ARTIFACT, mime: 'application/pdf', name: 'b.pdf', size: 12 },
@@ -167,12 +181,12 @@ describe('TC-EXE-006 an envelope never exceeds its budget', () => {
     expect(estimatePartsTokens(envelope.reads)).toBeLessThanOrEqual(1000);
   });
 
-  it('is deterministic: the same oversized input truncates the same way twice', () => {
-    expect(build(huge, 1000).reads).toEqual(build(huge, 1000).reads);
+  it('is deterministic: the same oversized input truncates the same way twice', async () => {
+    expect((await build(huge, 1000)).reads).toEqual((await build(huge, 1000)).reads);
   });
 
-  it('leaves a tiny budget with something rather than nothing', () => {
-    const envelope = build(huge, 8);
+  it('leaves a tiny budget with something rather than nothing', async () => {
+    const envelope = await build(huge, 8);
 
     expect(estimatePartsTokens(envelope.reads)).toBeLessThanOrEqual(8);
     expect(envelope.reads.length).toBeGreaterThan(0);
@@ -180,8 +194,18 @@ describe('TC-EXE-006 an envelope never exceeds its budget', () => {
 });
 
 describe('FR-EXE-007 the summariser is a port', () => {
-  it('can be replaced without touching the envelope builder', () => {
-    const envelope = buildEnvelope(
+  it('returns a promise from the truncating summariser, with the same result', async () => {
+    const pending = createTruncatingSummariser().summarise({
+      parts: [{ type: 'text', text: 'short' }],
+      budgetTokens: 100,
+    });
+
+    expect(pending).toBeInstanceOf(Promise);
+    expect(await pending).toEqual({ parts: [{ type: 'text', text: 'short' }] });
+  });
+
+  it('can be replaced without touching the envelope builder', async () => {
+    const { envelope } = await buildEnvelope(
       {
         id: ENVELOPE_ID,
         runId: RUN_ID,
@@ -194,7 +218,12 @@ describe('FR-EXE-007 the summariser is a port', () => {
         contract: { outputTypes: ['text'] },
         createdAt: NOW,
       },
-      { summarise: () => ({ parts: [{ type: 'text', text: 'tl;dr' }], summary: 'summarised' }) },
+      {
+        summarise: async () => ({
+          parts: [{ type: 'text', text: 'tl;dr' }],
+          summary: 'summarised',
+        }),
+      },
     );
 
     expect(envelope.reads).toEqual([{ type: 'text', text: 'tl;dr' }]);

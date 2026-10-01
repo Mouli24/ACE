@@ -6,7 +6,9 @@ import {
   type FailureReason,
   type Id,
   type Model,
+  type MemoryOp,
   type ModelUsed,
+  type NodeRunSource,
   type Node,
   type NodeError,
   type NodeState,
@@ -166,6 +168,12 @@ export interface NodeExecutionOutcome {
   prompt?: { version: string; text: string };
   /** Every verdict the points above recorded, in the order they were recorded (FR-GRD-015). */
   verdicts?: Verdict[];
+  /** Round 5: the chunks the node's context used, best first (FR-RAG-007). */
+  sources?: NodeRunSource[];
+  /** Round 5: chunks the search found that did not fit the context budget. */
+  droppedSources?: NodeRunSource[];
+  /** Round 5: the `__memory` ops this node run applied, in order (FR-MEM-002). */
+  memoryOps?: MemoryOp[];
 }
 
 export interface NodeExecutorDeps {

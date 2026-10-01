@@ -117,7 +117,7 @@ export interface ProviderAdapter {
   check(): Promise<ProviderStatus>;
   listModels(): Promise<ModelInfo[]>;
   generate(req: GenerateRequest, signal: AbortSignal): AsyncIterable<StreamChunk>;
-  embed?(texts: string[]): Promise<number[][]>;
+  embed?(texts: string[], options?: { modelId?: string }): Promise<number[][]>;
 }
 
 /** What a local runtime probe found (FR-PRV-007). */
