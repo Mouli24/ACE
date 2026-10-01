@@ -281,7 +281,6 @@ export function playRound5Scenario(
             ...agentNode.config,
             providerId: mockProviderOf(db).id,
             modelId: 'mock-memory',
-            outputTypes: ['json'],
             memory: { enabled: true },
           },
         } as Node;
