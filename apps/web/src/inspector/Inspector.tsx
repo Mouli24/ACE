@@ -23,6 +23,8 @@ import { useRerunNode, useRetryNodeRun, useStartRun, useNodeRuns } from '../runs
 import { useRunStore } from '../runs/run-store';
 import { useWorkflowGraph } from '../workflows/hooks';
 import { PromptText } from './PromptText';
+import { SourcesSection } from './SourcesSection';
+import { TraceTab } from './TraceTab';
 import { ToolCallsTab } from './ToolCallsTab';
 
 const money = (value: number) => `$${value.toFixed(6)}`;
@@ -176,6 +178,8 @@ export function Inspector({ workflowId }: { workflowId: string }) {
             </Section>
           )}
 
+          <SourcesSection nodeRun={nodeRun} />
+
           <Section title="Output">
             {nodeRun.output === undefined ? (
               <p className="text-xs text-fg-muted">Nothing recorded.</p>
@@ -198,6 +202,8 @@ export function Inspector({ workflowId }: { workflowId: string }) {
               </Button>
             </Section>
           )}
+
+          <TraceTab runId={nodeRun.runId} nodeId={focusedNodeId} />
 
           {nodeRun.prompt && promptOpen && (
             <Dialog open onOpenChange={setPromptOpen}>
