@@ -69,6 +69,22 @@ jobs:
             echo "SKIPPED: tests/acceptance/vitest.config.ts does not exist yet (Arhant creates it in round 1, feature A1)."
           fi
 
+      # Both Playwright configs keep a trace and the page's aria snapshot (error-context.md) for a
+      # failed test, but they live on the runner and die with it. A test that fails only here, never on
+      # a Windows box, cannot be diagnosed without them (PR #30, TC-CHAT-003).
+      - name: Upload Playwright results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: |
+            apps/web/test-results
+            apps/web/playwright-report
+            tests/acceptance/test-results
+            tests/acceptance/playwright-report
+          if-no-files-found: ignore
+          retention-days: 7
+
   ownership:
     name: ownership map
     runs-on: ubuntu-latest
