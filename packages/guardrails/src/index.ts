@@ -30,6 +30,13 @@ export {
   checkSizeLimit,
   DEFAULT_MAX_CHARS,
 } from './checks/text.js';
+export {
+  checkContextInjection,
+  checkContextPii,
+  checkUntrustedTagging,
+  stripHiddenInstructions,
+} from './checks/context.js';
+export type { ContextInjectionResult } from './checks/context.js';
 export { checkContract } from './checks/contract.js';
 export { checkRepeatedOutput, DEFAULT_REPEAT_TIMES } from './checks/loop.js';
 export {

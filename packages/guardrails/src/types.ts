@@ -7,7 +7,13 @@
  * from `check.action`, never from the check itself (FR-GRD-011).
  */
 
-import type { EnvelopeContract, GuardrailCheck, Part, ToolDefinition } from '@ace/contracts';
+import type {
+  EnvelopeContract,
+  GuardrailCheck,
+  HiddenInstructionType,
+  Part,
+  ToolDefinition,
+} from '@ace/contracts';
 
 /**
  * One check's answer.
@@ -21,6 +27,11 @@ export interface CheckResult {
   passed: boolean;
   reason: string;
   redactedTypes?: string[];
+  /**
+   * Context point only (round 5 §2.3): the kinds of hidden instruction `prompt_injection` stripped,
+   * each once, in first-found order. Names the kind, never the stripped text.
+   */
+  strippedTypes?: HiddenInstructionType[];
   sanitized?: string;
 }
 
