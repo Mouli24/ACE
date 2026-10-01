@@ -55,6 +55,15 @@ const MIME_KINDS: Readonly<Record<string, DocumentKind>> = {
   'application/json': 'text',
 };
 
+const KIND_LABELS: Readonly<Record<DocumentKind, string>> = {
+  pdf: 'PDF',
+  docx: 'Word',
+  html: 'HTML',
+  markdown: 'Markdown',
+  text: 'text',
+  code: 'code',
+};
+
 function extensionOf(name: string): string {
   const dot = name.lastIndexOf('.');
   return dot < 0 ? '' : name.slice(dot + 1).toLowerCase();
@@ -105,7 +114,14 @@ export function createDocumentParser(): DocumentParser {
       if (kind === null) {
         throw new ParseError(`The file type ${describeType(mime, name)} is not supported.`);
       }
-      const parsed = await parseKind(kind, bytes);
+      let parsed: ParsedDocument;
+      try {
+        parsed = await parseKind(kind, bytes);
+      } catch (error) {
+        if (error instanceof ParseError) throw error;
+        // A library's own text is never shown to the user (FR-RAG-003).
+        throw new ParseError(`The ${KIND_LABELS[kind]} document could not be read.`);
+      }
       if (parsed.text.trim() === '') throw new ParseError(EMPTY_DOCUMENT_MESSAGE);
       return parsed;
     },

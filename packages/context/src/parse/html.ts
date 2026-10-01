@@ -73,6 +73,8 @@ export function domToText(root: DomNode, dropped: ReadonlySet<string> = DROPPED)
 
   const breakTo = (newlines: number): void => {
     if (out === '') return;
+    // Never leave a space before a newline: offsets are recorded against this exact text.
+    out = out.replace(/[ \t]+$/, '');
     const trailing = /\n*$/.exec(out)?.[0].length ?? 0;
     if (trailing < newlines) out += '\n'.repeat(newlines - trailing);
   };
@@ -111,7 +113,7 @@ export function domToText(root: DomNode, dropped: ReadonlySet<string> = DROPPED)
   };
 
   walk(root);
-  const text = out.replace(/[ \t]+\n/g, '\n').trimEnd();
+  const text = out.trimEnd();
   return { text, headings: headings.filter((h) => h.offset < text.length) };
 }
 
