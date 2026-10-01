@@ -1,4 +1,4 @@
-import type { KbChunk, NodeRun, Run } from '@ace/contracts';
+import { ERROR_KINDS, type KbChunk, type KbDocument, type NodeRun, type Run } from '@ace/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { LOCAL_WORKSPACE_ID } from '../ports/index.js';
@@ -93,13 +93,28 @@ describe('FR-OBS-002 the fake usage folds node runs with D234 semantics', () => 
     expect((await repo.usage.dayTotals(scope, '2026-10-01')).costUsd).toBe(3);
   });
 
+  it('orders keys by binary comparison and ignores node runs that called no model', async () => {
+    const repo = new FakeRepository();
+    await repo.runs.create(scope, run('r1', 'w1', '2026-10-01T10:00:00.000Z'));
+    await repo.nodeRuns.create(scope, nodeRun('n1', 'r1', '2026-10-01T10:00:00.000Z', 'a', 1));
+    await repo.nodeRuns.create(scope, nodeRun('n2', 'r1', '2026-10-01T10:00:00.000Z', 'B', 1));
+    const noModel = nodeRun('n3', 'r1', '2026-10-01T10:00:00.000Z', 'a', 100);
+    delete (noModel as { modelUsed?: unknown }).modelUsed;
+    await repo.nodeRuns.create(scope, noModel);
+
+    const result = await repo.usage.aggregate(scope, { groupBy: ['provider'] });
+    expect(result.buckets.map((b) => b.key.provider)).toEqual(['B', 'a']);
+    expect(result.totals.costUsd).toBe(2);
+    expect((await repo.usage.dayTotals(scope, '2026-10-01')).costUsd).toBe(2);
+  });
+
   it('fills every error kind and latency percentiles in the health counts', async () => {
     const repo = new FakeRepository();
     await repo.runs.create(scope, run('r1', 'w1', '2026-10-01T10:00:00.000Z'));
     await repo.nodeRuns.create(scope, nodeRun('n1', 'r1', '2026-10-01T10:00:00.000Z', 'pa', 1));
 
     const health = await repo.usage.healthCounts(scope);
-    expect(Object.keys(health.nodeFailuresByKind)).toHaveLength(8);
+    expect(Object.keys(health.nodeFailuresByKind)).toHaveLength(ERROR_KINDS.length);
     expect(health.providerLatencyMs).toEqual({ pa: { p50: 100, p95: 100 } });
     expect(health.runs).toEqual({ started: 1, completed: 1, halted: 0, blocked: 0 });
     expect(health.since).toBe('2026-10-01T10:00:00.000Z');
@@ -107,11 +122,61 @@ describe('FR-OBS-002 the fake usage folds node runs with D234 semantics', () => 
 });
 
 describe('FR-RAG-010 the fake summary cache expires and prunes', () => {
-  it('serves a hit and drops an entry unused for thirty days', async () => {
+  it('serves a hit', async () => {
     const repo = new FakeRepository();
     await repo.summaryCache.put(scope, 'k', 's', '2026-10-01T00:00:00.000Z');
 
     expect(await repo.summaryCache.get(scope, 'k', '2026-10-02T00:00:00.000Z')).toBe('s');
-    expect(await repo.summaryCache.get(scope, 'k', '2026-12-01T00:00:00.000Z')).toBeNull();
+  });
+
+  it('expires 30 days after creation however often it is read', async () => {
+    const repo = new FakeRepository();
+    const start = Date.parse('2026-10-01T00:00:00.000Z');
+    const day = (n: number) => new Date(start + n * 86_400_000).toISOString();
+    await repo.summaryCache.put(scope, 'k', 's', day(0));
+
+    for (let n = 1; n <= 30; n += 1) {
+      expect(await repo.summaryCache.get(scope, 'k', day(n))).toBe('s');
+    }
+    expect(await repo.summaryCache.get(scope, 'k', day(31))).toBeNull();
+  });
+
+  it('prunes to 5,000 rows, least recently used first', async () => {
+    const repo = new FakeRepository();
+    const base = Date.parse('2026-10-01T00:00:00.000Z');
+    const at = (n: number) => new Date(base + n * 1000).toISOString();
+    for (let n = 0; n < 5000; n += 1) await repo.summaryCache.put(scope, `k${n}`, 's', at(n));
+    // Reading k0 makes it recent, so k1 is now the least recently used.
+    await repo.summaryCache.get(scope, 'k0', at(6000));
+    await repo.summaryCache.put(scope, 'new', 's', at(6001));
+
+    expect(await repo.summaryCache.get(scope, 'k1', at(6002))).toBeNull();
+    expect(await repo.summaryCache.get(scope, 'k0', at(6002))).toBe('s');
+    expect(await repo.summaryCache.get(scope, 'new', at(6002))).toBe('s');
+  });
+});
+
+describe('FR-RAG-003 a re-ingested document loses its error', () => {
+  it('clears the error when the patch says null', async () => {
+    const repo = new FakeRepository();
+    const doc = {
+      id: 'd1',
+      knowledgeBaseId: 'kb1',
+      artifactId: 'a1',
+      name: 'a.md',
+      mime: 'text/markdown',
+      size: 1,
+      status: 'failed',
+      chunkCount: 0,
+      error: 'could not parse',
+      createdAt: '2026-10-01T00:00:00.000Z',
+    } satisfies KbDocument;
+    await repo.kbDocuments.insert(scope, doc);
+
+    const kept = await repo.kbDocuments.update(scope, 'd1', { status: 'pending' });
+    expect(kept?.error).toBe('could not parse');
+    const cleared = await repo.kbDocuments.update(scope, 'd1', { status: 'ready', error: null });
+    expect(cleared?.error).toBeUndefined();
+    expect(cleared?.status).toBe('ready');
   });
 });

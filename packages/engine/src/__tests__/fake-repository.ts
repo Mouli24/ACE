@@ -93,7 +93,7 @@ interface State {
   /** A chunk and the embedding stored with it, as `kb_chunks` and `kb_vectors` are written together. */
   kbChunks: Map<string, { chunk: KbChunk; embedding: number[] }>;
   memory: Map<string, MemoryEntry>;
-  summaryCache: Map<string, { summary: string; lastUsedAt: Timestamp }>;
+  summaryCache: Map<string, { summary: string; createdAt: Timestamp; lastUsedAt: Timestamp }>;
 }
 
 function emptyState(): State {
@@ -955,7 +955,8 @@ export class FakeRepository implements Repository {
       const next: KbDocument = { ...current };
       if (patch.status !== undefined) next.status = patch.status;
       if (patch.chunkCount !== undefined) next.chunkCount = patch.chunkCount;
-      if (patch.error !== undefined) next.error = patch.error;
+      if (patch.error === null) delete next.error;
+      else if (patch.error !== undefined) next.error = patch.error;
       if (patch.ingestedAt !== undefined) next.ingestedAt = patch.ingestedAt;
       if (patch.verdicts !== undefined) next.verdicts = patch.verdicts;
       state.kbDocuments.set(id, next);
@@ -1051,7 +1052,8 @@ export class FakeRepository implements Repository {
       const state = this.#for(scope);
       const row = state.summaryCache.get(key);
       if (row === undefined) return null;
-      if (Date.parse(at) - Date.parse(row.lastUsedAt) > SUMMARY_CACHE_TTL_MS) {
+      // The 30 days count from creation; last use only orders the LRU prune.
+      if (Date.parse(at) - Date.parse(row.createdAt) > SUMMARY_CACHE_TTL_MS) {
         state.summaryCache.delete(key);
         return null;
       }
@@ -1061,7 +1063,7 @@ export class FakeRepository implements Repository {
     put: async (scope, key, summary, at) => {
       const state = this.#for(scope);
       state.summaryCache.delete(key);
-      state.summaryCache.set(key, { summary, lastUsedAt: at });
+      state.summaryCache.set(key, { summary, createdAt: at, lastUsedAt: at });
       if (state.summaryCache.size <= SUMMARY_CACHE_MAX_ROWS) return;
       const oldestFirst = [...state.summaryCache].sort((a, b) =>
         a[1].lastUsedAt.localeCompare(b[1].lastUsedAt),
@@ -1117,8 +1119,10 @@ export class FakeRepository implements Repository {
       const buckets: UsageBucket[] = [...groups.values()]
         .sort((a, b) => {
           for (const by of groupBy) {
-            const order = a.key[by]!.localeCompare(b.key[by]!);
-            if (order !== 0) return order;
+            const left = a.key[by]!;
+            const right = b.key[by]!;
+            // Binary comparison, as SQLite's default collation orders text.
+            if (left !== right) return left < right ? -1 : 1;
           }
           return 0;
         })
@@ -1136,7 +1140,10 @@ export class FakeRepository implements Repository {
     },
     dayTotals: async (scope, day) =>
       [...this.#for(scope).nodeRuns.values()]
-        .filter((nodeRun) => nodeRun.startedAt?.startsWith(day) === true)
+        .filter(
+          (nodeRun) =>
+            nodeRun.modelUsed !== undefined && nodeRun.startedAt?.startsWith(day) === true,
+        )
         .reduce<Usage>(
           (sum, nodeRun) => ({
             tokensIn: sum.tokensIn + nodeRun.usage.tokensIn,
