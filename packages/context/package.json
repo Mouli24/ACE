@@ -15,7 +15,7 @@
     "build": "tsc --build",
     "typecheck": "tsc --build",
     "lint": "eslint .",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
