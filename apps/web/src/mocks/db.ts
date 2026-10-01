@@ -10,7 +10,11 @@ import {
   type Edge,
   type GuardrailCheck,
   type GuardrailPolicy,
+  type KbChunk,
+  type KbDocument,
+  type KnowledgeBase,
   type McpServer,
+  type MemoryEntry,
   type Message,
   type Node,
   type Project,
@@ -38,6 +42,11 @@ export interface MockEvent {
   seq?: number;
   type: ServerFrame['type'];
   payload: unknown;
+  /**
+   * When it was emitted (round 5): the trace's `at` (FR-OBS-001). Absent on events persisted before
+   * round 5, which the trace dates from their run's start instead.
+   */
+  at?: string;
   /**
    * Which subscription delivers it: a run frame belongs to its workflow, a direct-chat frame to its
    * thread (round 4 §2.5), and `provider.status`/`mcp.status` to the engine scope.
@@ -81,9 +90,21 @@ interface Snapshot {
   chatMessages: ChatMessage[];
   /** Connected MCP servers (FR-TOOL-007); a connected one contributes tools to `GET /tools`. */
   mcpServers: McpServer[];
+  /* ---- round 5 (§2.1, §2.2) ---- */
+  /** Knowledge bases (FR-RAG-001); a base belongs to one project. */
+  knowledgeBases: KnowledgeBase[];
+  /** Documents going through, or done with, ingestion (FR-RAG-002/003). */
+  kbDocuments: KbDocument[];
+  /** The indexed pieces of every ready document (FR-RAG-004). */
+  kbChunks: KbChunk[];
+  /** Agent long-term memory, one row per (node, key) (FR-MEM-001..004). */
+  memory: MemoryEntry[];
   /** Artificial delay per request, for the loading-state test (TC-CAN-009). */
   latencyMs?: number;
 }
+
+/** What a backup carries (round 5 §2.7): every table, never a key (FR-SYS-012, BR-07). */
+export type MockBackup = Omit<Snapshot, 'providerKeys' | 'latencyMs'>;
 
 export interface MockDbOptions {
   /** Persist to localStorage so every tab of the same origin shares one engine. */
@@ -131,6 +152,10 @@ function emptySnapshot(): Snapshot {
     chatThreads: [],
     chatMessages: [],
     mcpServers: [],
+    knowledgeBases: [],
+    kbDocuments: [],
+    kbChunks: [],
+    memory: [],
   };
 }
 
@@ -811,6 +836,175 @@ export class MockDb {
     return this.state.mcpServers.length < before;
   }
 
+  /* ------------------------------------------------- knowledge (round 5 §2.1, FR-RAG-001..009) */
+
+  listKnowledgeBases(projectId: string): KnowledgeBase[] {
+    return this.state.knowledgeBases.filter((kb) => kb.projectId === projectId);
+  }
+
+  getKnowledgeBase(id: string): KnowledgeBase | undefined {
+    return this.state.knowledgeBases.find((kb) => kb.id === id);
+  }
+
+  addKnowledgeBase(kb: KnowledgeBase): KnowledgeBase {
+    this.state.knowledgeBases.push(kb);
+    this.save();
+    return kb;
+  }
+
+  updateKnowledgeBase(id: string, patch: Partial<KnowledgeBase>): KnowledgeBase | undefined {
+    const kb = this.getKnowledgeBase(id);
+    if (kb === undefined) return undefined;
+    Object.assign(kb, patch, { updatedAt: now() });
+    this.save();
+    return kb;
+  }
+
+  /** Removes the base with its documents and chunks (§2.9: delete removes chunks + vectors). */
+  deleteKnowledgeBase(id: string): boolean {
+    const before = this.state.knowledgeBases.length;
+    this.state.knowledgeBases = this.state.knowledgeBases.filter((kb) => kb.id !== id);
+    this.state.kbDocuments = this.state.kbDocuments.filter((doc) => doc.knowledgeBaseId !== id);
+    this.state.kbChunks = this.state.kbChunks.filter((chunk) => chunk.knowledgeBaseId !== id);
+    this.save();
+    return this.state.knowledgeBases.length < before;
+  }
+
+  kbDocumentsOf(knowledgeBaseId: string): KbDocument[] {
+    return this.state.kbDocuments.filter((doc) => doc.knowledgeBaseId === knowledgeBaseId);
+  }
+
+  getKbDocument(id: string): KbDocument | undefined {
+    return this.state.kbDocuments.find((doc) => doc.id === id);
+  }
+
+  addKbDocument(doc: KbDocument): KbDocument {
+    this.state.kbDocuments.push(doc);
+    this.save();
+    return doc;
+  }
+
+  updateKbDocument(id: string, patch: Partial<KbDocument>): KbDocument | undefined {
+    const doc = this.getKbDocument(id);
+    if (doc === undefined) return undefined;
+    Object.assign(doc, patch);
+    this.save();
+    return doc;
+  }
+
+  /** Removes the document and its chunks (FR-RAG-009). */
+  deleteKbDocument(id: string): boolean {
+    const before = this.state.kbDocuments.length;
+    this.state.kbDocuments = this.state.kbDocuments.filter((doc) => doc.id !== id);
+    this.state.kbChunks = this.state.kbChunks.filter((chunk) => chunk.documentId !== id);
+    this.save();
+    return this.state.kbDocuments.length < before;
+  }
+
+  kbChunksOf(knowledgeBaseId: string): KbChunk[] {
+    return this.state.kbChunks.filter((chunk) => chunk.knowledgeBaseId === knowledgeBaseId);
+  }
+
+  /** Replace one document's chunks — what an ingest or a reindex writes. */
+  setKbChunks(documentId: string, chunks: KbChunk[]): void {
+    this.state.kbChunks = [
+      ...this.state.kbChunks.filter((chunk) => chunk.documentId !== documentId),
+      ...chunks,
+    ];
+    this.save();
+  }
+
+  /* ------------------------------------------------- memory (round 5 §2.2, FR-MEM-001..004) */
+
+  /** Oldest first — the order entries are injected in (§2.2). */
+  memoryOf(nodeId: string): MemoryEntry[] {
+    return this.state.memory
+      .filter((entry) => entry.nodeId === nodeId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  /** A save of a key the node already has replaces the value (FR-MEM-002). */
+  saveMemory(nodeId: string, key: string, value: string, at?: string): MemoryEntry {
+    const ts = at ?? now();
+    const existing = this.state.memory.find(
+      (entry) => entry.nodeId === nodeId && entry.key === key,
+    );
+    if (existing !== undefined) {
+      existing.value = value;
+      existing.updatedAt = ts;
+      this.save();
+      return existing;
+    }
+    const entry: MemoryEntry = { id: newId(), nodeId, key, value, createdAt: ts, updatedAt: ts };
+    this.state.memory.push(entry);
+    this.save();
+    return entry;
+  }
+
+  /** Removes one entry, matched by id or by key; answers what it removed. */
+  deleteMemory(nodeId: string, match: { id?: string; key?: string }): MemoryEntry | undefined {
+    const entry = this.state.memory.find(
+      (candidate) =>
+        candidate.nodeId === nodeId &&
+        (match.id === undefined || candidate.id === match.id) &&
+        (match.key === undefined || candidate.key === match.key),
+    );
+    if (entry === undefined) return undefined;
+    this.state.memory = this.state.memory.filter((candidate) => candidate.id !== entry.id);
+    this.save();
+    return entry;
+  }
+
+  /** Stamp `lastUsedAt` on a node's entries — they just went into an envelope. */
+  touchMemory(nodeId: string): void {
+    const ts = now();
+    for (const entry of this.state.memory) if (entry.nodeId === nodeId) entry.lastUsedAt = ts;
+    this.save();
+  }
+
+  /** A node of any workflow — `GET /nodes/:id/memory` asks whether the node exists. */
+  findNode(id: string): Node | undefined {
+    for (const nodes of Object.values(this.state.nodes)) {
+      const found = nodes.find((node) => node.id === id);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+
+  /** Every run of every workflow — what usage and health metrics fold (round 5 §2.6). */
+  allRuns(): Run[] {
+    return [...this.state.runs];
+  }
+
+  allNodeRuns(): NodeRun[] {
+    return [...this.state.nodeRuns];
+  }
+
+  /* ------------------------------------------------- backup (round 5 §2.7, FR-SYS-012) */
+
+  /** Every table but the keychain: a backup never carries a key (BR-07). */
+  exportBackup(): MockBackup {
+    const backup: Partial<Snapshot> = structuredClone(this.state);
+    delete backup.providerKeys;
+    delete backup.latencyMs;
+    return backup as MockBackup;
+  }
+
+  /**
+   * Replace every table with the backup's. The keychain is not part of a data dir, so the keys this
+   * engine already holds stay where they are.
+   */
+  importBackup(backup: MockBackup): void {
+    const latencyMs = this.state.latencyMs;
+    this.state = {
+      ...emptySnapshot(),
+      ...structuredClone(backup),
+      providerKeys: this.state.providerKeys,
+      ...(latencyMs === undefined ? {} : { latencyMs }),
+    };
+    this.save();
+  }
+
   /* ---------------------------------------------------------------- events */
 
   /**
@@ -819,7 +1013,9 @@ export class MockDb {
    */
   emit(event: Omit<MockEvent, 'seq'> & { transient?: boolean }): MockEvent {
     const { transient, ...rest } = event;
-    const full: MockEvent = transient ? { ...rest } : { ...rest, seq: (this.state.seq += 1) };
+    const full: MockEvent = transient
+      ? { ...rest }
+      : { ...rest, seq: (this.state.seq += 1), at: rest.at ?? now() };
     if (!transient) this.state.events.push(full);
     this.save();
     publishMockEvent(full);
