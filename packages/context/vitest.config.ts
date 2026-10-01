@@ -22,7 +22,7 @@ export default defineConfig({
       all: true,
       reporter: ['text', 'json-summary'],
       include: ['src/**/*.ts'],
-      exclude: ['src/**/*.test.ts', 'src/**/__tests__/**'],
+      exclude: ['src/**/*.test.ts', 'src/**/__tests__/**', 'src/**/__fixtures__/**'],
       thresholds: { lines: 80, functions: 80, branches: 80, statements: 80 },
     },
   },
