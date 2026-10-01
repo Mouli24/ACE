@@ -4,3 +4,4 @@ export * from './socket.js';
 export * from './run-view.js';
 export * from './upload.js';
 export * from './thread-view.js';
+export * from './ingest-progress.js';
