@@ -25,3 +25,8 @@ export * from './components/part-renderer.js';
 export * from './components/message-bubble.js';
 export * from './components/tool-badges.js';
 export * from './lib/theme.js';
+export * from './components/bar-chart.js';
+export * from './components/trace-timeline.js';
+export * from './components/source-chip.js';
+export * from './components/context-menu.js';
+export * from './components/progress-bar.js';
