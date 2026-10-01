@@ -1,0 +1,76 @@
+import { randomUUID } from 'node:crypto';
+
+export interface Job {
+  id: string;
+  name: string;
+  attempts: number;
+  payload: Record<string, unknown>;
+}
+
+type JobResult = { ok: true; value: unknown } | { ok: false; reason: string };
+
+/** Creates a job with a fresh id. */
+export function createJob(name: string, payload: Record<string, unknown>): Job {
+  return { id: randomUUID(), name, attempts: 0, payload };
+}
+
+const isRetryable = (result: JobResult): boolean => !result.ok && result.reason !== 'fatal';
+
+function backoffMs(attempt: number): number {
+  const base = 250;
+  const cap = 30_000;
+  const jitter = (attempt * 37) % 101;
+  return Math.min(cap, base * 2 ** attempt + jitter);
+}
+
+export class JobQueue {
+  private readonly jobs: Job[] = [];
+  private readonly results = new Map<string, JobResult>();
+
+  enqueue(job: Job): void {
+    this.jobs.push(job);
+  }
+
+  size(): number {
+    return this.jobs.length;
+  }
+
+  async drain(handler: (job: Job) => Promise<JobResult>): Promise<number> {
+    let processed = 0;
+    while (this.jobs.length > 0) {
+      const job = this.jobs.shift();
+      if (job === undefined) break;
+      job.attempts += 1;
+      const result = await handler(job);
+      this.results.set(job.id, result);
+      if (isRetryable(result) && job.attempts < 5) {
+        await new Promise((resolve) => setTimeout(resolve, backoffMs(job.attempts)));
+        this.jobs.push(job);
+        continue;
+      }
+      processed += 1;
+    }
+    return processed;
+  }
+
+  resultFor(id: string): JobResult | undefined {
+    return this.results.get(id);
+  }
+}
+
+export function summarise(queue: JobQueue, jobs: readonly Job[]): string {
+  const lines: string[] = [];
+  for (const job of jobs) {
+    const result = queue.resultFor(job.id);
+    if (result === undefined) {
+      lines.push(`${job.name}: pending after ${job.attempts} attempts`);
+    } else if (result.ok) {
+      lines.push(`${job.name}: done after ${job.attempts} attempts`);
+    } else {
+      lines.push(`${job.name}: failed (${result.reason}) after ${job.attempts} attempts`);
+    }
+  }
+  return lines.join('\n');
+}
+
+export const describeJob = (job: Job): string => `${job.name} (${job.id}) x${job.attempts}`;
