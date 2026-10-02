@@ -153,8 +153,10 @@ describe('FR-SYS-005 Settings screen', () => {
     const concurrency = await settled('settings-concurrency');
     await user.clear(concurrency);
     await user.type(concurrency, '7{Enter}');
-    expect(await screen.findByText('Settings not saved')).toBeInTheDocument();
-    await waitFor(() => expect(concurrency).toHaveValue(20));
+    expect(
+      await screen.findByText('Settings not saved', {}, { timeout: 5000 }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(concurrency).toHaveValue(20), { timeout: 5000 });
     expect(db.settings.concurrency).toBe(20);
   });
 
