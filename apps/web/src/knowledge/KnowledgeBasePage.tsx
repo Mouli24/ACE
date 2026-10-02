@@ -1,7 +1,7 @@
 import { Button } from '@ace/ui';
 import { Settings, Trash2 } from 'lucide-react';
 import { useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import { ConfirmDialog } from './ConfirmDialog';
 import { DocumentsPanel } from './DocumentsPanel';
@@ -15,6 +15,9 @@ import { useDeleteKnowledgeBase, useIngestProgress, useKnowledgeBase } from './h
  */
 export function KnowledgeBasePage() {
   const { kbId = '' } = useParams();
+  const [search] = useSearchParams();
+  const focusDocumentId = search.get('doc') ?? undefined;
+  const focusChunkId = search.get('chunk') ?? undefined;
   const navigate = useNavigate();
   const kb = useKnowledgeBase(kbId);
   const progress = useIngestProgress(kbId);
@@ -74,7 +77,14 @@ export function KnowledgeBasePage() {
       </header>
 
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-        <DocumentsPanel kbId={kbId} progress={progress} />
+        <div className="flex min-w-0 flex-col gap-2">
+          {focusChunkId !== undefined && (
+            <p className="font-machine text-xs text-fg-muted" data-testid="kb-opened-chunk">
+              Opened from source chunk {focusChunkId}
+            </p>
+          )}
+          <DocumentsPanel kbId={kbId} progress={progress} focusDocumentId={focusDocumentId} />
+        </div>
         <TestSearchPanel kbId={kbId} />
       </div>
 

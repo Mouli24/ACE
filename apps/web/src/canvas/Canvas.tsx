@@ -50,9 +50,9 @@ import { nodeTypes, type AceFlowNode } from '../nodes/NodeCard';
 import { edgeTypes } from '../nodes/TypedEdge';
 import {
   NODE_KIND_LABEL,
-  ROUND_1_NODE_KINDS,
+  CANVAS_NODE_KINDS,
   createNode,
-  type Round1NodeKind,
+  type CanvasNodeKind,
 } from '../nodes/factory';
 import { useRunStore } from '../runs/run-store';
 import { useGraphSync, useWorkflowGraph } from '../workflows/hooks';
@@ -483,7 +483,7 @@ function CanvasInner({
   );
 
   const addNodeAt = useCallback(
-    (kind: Round1NodeKind, position: { x: number; y: number }) => {
+    (kind: CanvasNodeKind, position: { x: number; y: number }) => {
       if (readOnly) return undefined;
       const node = createNode(kind, workflowId, {
         x: Math.round(position.x),
@@ -497,7 +497,7 @@ function CanvasInner({
   );
 
   const addNodeAtCenter = useCallback(
-    (kind: Round1NodeKind) => {
+    (kind: CanvasNodeKind) => {
       if (readOnly) return undefined;
       const bounds = wrapper.current?.getBoundingClientRect();
       const left = bounds?.left ?? 0;
@@ -713,7 +713,7 @@ function CanvasInner({
   const onDrop = useCallback(
     (event: DragEvent) => {
       if (readOnly) return;
-      const kind = event.dataTransfer.getData(PALETTE_DRAG_TYPE) as Round1NodeKind | '';
+      const kind = event.dataTransfer.getData(PALETTE_DRAG_TYPE) as CanvasNodeKind | '';
       if (!kind) return;
       event.preventDefault();
       const position = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
@@ -1075,7 +1075,7 @@ function CanvasInner({
               <div className="px-2 py-1 text-[11px] uppercase tracking-wide text-fg-muted">
                 Add node ▸
               </div>
-              {ROUND_1_NODE_KINDS.map((kind) => (
+              {CANVAS_NODE_KINDS.map((kind) => (
                 <ContextMenuItem
                   key={kind}
                   className="pl-4"

@@ -19,6 +19,7 @@ import { FolderOpen, MoreHorizontal, Plus } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
+import { HelpLink } from '../help/HelpLink';
 import {
   useCreateProject,
   useDeleteProject,
@@ -54,9 +55,10 @@ export function ProjectsPage() {
         </p>
       )}
       {projects.data?.length === 0 && (
-        <p className="rounded-card border border-dashed border-border p-8 text-center text-fg-muted">
-          No projects yet. Create one to open the Canvas.
-        </p>
+        <div className="flex flex-col items-center gap-2 rounded-card border border-dashed border-border p-8 text-center">
+          <p className="text-fg-muted">No projects yet. Create one to open the Canvas.</p>
+          <HelpLink page="getting-started">Getting started</HelpLink>
+        </div>
       )}
 
       <ul className="flex flex-col gap-2">

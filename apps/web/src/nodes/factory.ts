@@ -35,12 +35,6 @@ export const CANVAS_NODE_KINDS = [
 
 export type CanvasNodeKind = (typeof CANVAS_NODE_KINDS)[number];
 
-/**
- * The name the Canvas, the palette and the mock hooks still import. It now covers every placeable
- * kind, Retrieval included, so a dropped Retrieval node goes through the same `createNode`.
- */
-export type Round1NodeKind = CanvasNodeKind;
-
 export const NODE_KIND_LABEL: Record<CanvasNodeKind, string> = {
   input: 'Input',
   agent: 'Agent',

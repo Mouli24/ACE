@@ -2,7 +2,7 @@ import { isKbDocumentSettled, type Id, type KbDocument } from '@ace/contracts';
 import type { IngestProgressView } from '@ace/sdk';
 import { Badge, Button, ProgressBar, formatBytes } from '@ace/ui';
 import { RefreshCw, Trash2 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { AttachmentPicker } from '../artifacts';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -24,8 +24,22 @@ const STATUS_VARIANT = {
  * row per document with its type, size, a status chip and a progress bar driven live by `kb.ingest`,
  * a failure's reason inline, its chunk count, delete (confirmed) and a reindex of the whole base.
  */
-export function DocumentsPanel({ kbId, progress }: { kbId: Id; progress: IngestProgressView }) {
+export function DocumentsPanel({
+  kbId,
+  progress,
+  focusDocumentId,
+}: {
+  kbId: Id;
+  progress: IngestProgressView;
+  /** A document opened from an inspector source link (`?doc=`, FR-RAG-007): scrolled to and marked. */
+  focusDocumentId?: Id | undefined;
+}) {
   const documents = useKbDocuments(kbId);
+  const focusedRow = useRef<HTMLLIElement | null>(null);
+  const focusedLoaded = documents.data?.some((doc) => doc.id === focusDocumentId) ?? false;
+  useEffect(() => {
+    if (focusedLoaded) focusedRow.current?.scrollIntoView?.({ block: 'center' });
+  }, [focusedLoaded]);
   const add = useAddKbDocument(kbId);
   const remove = useDeleteKbDocument(kbId);
   const reindex = useReindexKnowledgeBase(kbId);
@@ -87,8 +101,13 @@ export function DocumentsPanel({ kbId, progress }: { kbId: Id; progress: IngestP
             return (
               <li
                 key={doc.id}
+                ref={doc.id === focusDocumentId ? focusedRow : undefined}
                 data-testid={`kb-doc-${doc.id}`}
-                className="flex min-w-0 flex-col gap-2 rounded-card border border-border bg-panel px-3 py-2"
+                data-focused={doc.id === focusDocumentId ? 'true' : undefined}
+                aria-current={doc.id === focusDocumentId ? 'true' : undefined}
+                className={`flex min-w-0 flex-col gap-2 rounded-card border bg-panel px-3 py-2 ${
+                  doc.id === focusDocumentId ? 'border-accent ring-1 ring-accent' : 'border-border'
+                }`}
               >
                 <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
                   <span className="min-w-0 flex-1 truncate font-human text-sm" title={doc.name}>

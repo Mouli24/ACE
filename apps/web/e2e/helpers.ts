@@ -4,7 +4,7 @@ import { expect, type Locator, type Page } from '@playwright/test';
 import type {} from '../src/mocks/browser';
 
 /** The six round-1 kinds, typed loosely so the helpers stay free of app imports. */
-export type Kind = 'input' | 'agent' | 'model' | 'output' | 'merge' | 'transform';
+export type Kind = 'input' | 'agent' | 'model' | 'output' | 'merge' | 'transform' | 'retrieval';
 
 export interface Seeded {
   projectId: string;

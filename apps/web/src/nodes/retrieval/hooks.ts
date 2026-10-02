@@ -2,16 +2,17 @@ import type { Id, KnowledgeBase } from '@ace/contracts';
 import { useQueries, useQuery } from '@tanstack/react-query';
 
 import { api } from '../../app/api';
+import { kbQueryKeys } from '../../knowledge/hooks';
 import { useWorkflowGraph } from '../../workflows/hooks';
 
 /**
  * Knowledge-base reads the Retrieval node, the Agent's "Knowledge bases" field and the inspector's
- * Sources section share (round 5 §5 item 3). The keys are local to these readers; the knowledge
- * screens may keep their own, and either refetches on mount, so the two never disagree for long.
+ * Sources section share (round 5 §5 item 3). They are the knowledge screens' own keys, so a base
+ * created or a document added there shows here at once.
  */
 export const retrievalQueryKeys = {
-  knowledgeBases: (projectId: Id) => ['knowledge-bases', projectId] as const,
-  kbDocuments: (knowledgeBaseId: Id) => ['kb-documents', knowledgeBaseId] as const,
+  knowledgeBases: kbQueryKeys.list,
+  kbDocuments: kbQueryKeys.documents,
 };
 
 /** `GET /projects/:id/knowledge-bases` → `{ items }`; idle until a project is known. */

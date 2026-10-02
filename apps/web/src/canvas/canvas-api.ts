@@ -1,9 +1,9 @@
 import { create } from 'zustand';
 
-import type { Round1NodeKind } from '../nodes/factory';
+import type { CanvasNodeKind } from '../nodes/factory';
 
 export interface CanvasApi {
-  addNode: (kind: Round1NodeKind) => unknown;
+  addNode: (kind: CanvasNodeKind) => unknown;
   fitView: () => void;
   duplicateSelection: () => void;
   /** FR-CAN-008: left-to-right layout, one undo step. */

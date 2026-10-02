@@ -10,7 +10,7 @@ import { LoopConfigFields } from '../edges/loop/LoopConfigFields';
 import { useRunStore } from '../runs/run-store';
 import { useCanvasApi } from '../canvas/canvas-api';
 import { KIND_ICON } from '../nodes/NodeCard';
-import { NODE_KIND_LABEL, type Round1NodeKind } from '../nodes/factory';
+import { NODE_KIND_LABEL, type CanvasNodeKind } from '../nodes/factory';
 import { useGraphSync, useWorkflowGraph } from '../workflows/hooks';
 import { queryKeys } from '../workflows/query-keys';
 import { TextField } from './fields';
@@ -124,7 +124,7 @@ function NodeEditor({ node, workflowId }: { node: Node; workflowId: string }) {
   const runActive = useRunStore((store) => store.active && store.workflowId === workflowId);
   const clearSelection = useSelectionStore((s) => s.clear);
   const canvas = useCanvasApi((s) => s.api);
-  const Icon = KIND_ICON[node.kind as Round1NodeKind];
+  const Icon = KIND_ICON[node.kind as CanvasNodeKind];
 
   const queryClient = useQueryClient();
 
@@ -150,7 +150,7 @@ function NodeEditor({ node, workflowId }: { node: Node; workflowId: string }) {
       <header className="flex items-center gap-2">
         {Icon && <Icon className="h-4 w-4 text-fg-muted" aria-hidden />}
         <h2 className="font-human text-sm font-semibold">
-          {NODE_KIND_LABEL[node.kind as Round1NodeKind] ?? node.kind} node
+          {NODE_KIND_LABEL[node.kind as CanvasNodeKind] ?? node.kind} node
         </h2>
         <span className="ml-auto font-machine text-[10px] text-fg-muted" title={node.id}>
           {node.id.slice(-6)}
