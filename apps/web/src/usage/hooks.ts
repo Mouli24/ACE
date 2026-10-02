@@ -15,10 +15,13 @@ export interface UsageRange {
   to?: string;
 }
 
+export const usageQueryKey = (range: UsageRange | undefined, groupBy: readonly UsageGroupBy[]) =>
+  [...usageRootKey, range?.from, range?.to, ...groupBy] as const;
+
 /** `GET /usage` (FR-OBS-004, D234). */
 export function useUsage(range: UsageRange | undefined, groupBy: readonly UsageGroupBy[]) {
   return useQuery({
-    queryKey: [...usageRootKey, range?.from, range?.to, ...groupBy],
+    queryKey: usageQueryKey(range, groupBy),
     queryFn: () =>
       api().getUsage({
         ...(range === undefined ? {} : { from: range.from }),
