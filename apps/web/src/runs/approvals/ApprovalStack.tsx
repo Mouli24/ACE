@@ -3,6 +3,8 @@ import { ApprovalCard } from '@ace/ui';
 import { TriangleAlert } from 'lucide-react';
 import { useState } from 'react';
 
+import { TOUCH_TARGETS } from '../../responsive/touch';
+import { useIsCompact } from '../../responsive/useIsCompact';
 import { useApproveNodeRun, useRejectNodeRun } from '../hooks';
 
 /**
@@ -28,8 +30,12 @@ export function ApprovalStack({
   /** False where another card on screen owns `A` and `R` — only one may. */
   keyboard?: boolean;
 }) {
+  // At phone width Approve and Reject are finger-sized (FR-MOB-002, TC-MOB-002).
+  const compact = useIsCompact();
   return (
-    <div className={`flex w-full flex-col gap-2 ${className ?? ''}`}>
+    <div
+      className={`flex w-full min-w-0 flex-col gap-2 ${compact ? TOUCH_TARGETS : ''} ${className ?? ''}`}
+    >
       {requests.map((request, index) => (
         <ApprovalRow key={request.id} request={request} keyboard={keyboard && index === 0} />
       ))}

@@ -11,6 +11,7 @@ import {
 import { ShieldAlert } from 'lucide-react';
 import { useState } from 'react';
 
+import { useIsCompact } from '../../responsive/useIsCompact';
 import { useApprovals } from '../hooks';
 import { ApprovalStack } from './ApprovalStack';
 
@@ -24,6 +25,7 @@ import { ApprovalStack } from './ApprovalStack';
 export function ApprovalsBadge({ runId }: { runId: Id | undefined }) {
   const approvals = useApprovals(runId);
   const [open, setOpen] = useState(false);
+  const compact = useIsCompact();
   const pending = approvals.data ?? [];
   if (pending.length === 0) return null;
 
@@ -34,6 +36,7 @@ export function ApprovalsBadge({ runId }: { runId: Id | undefined }) {
         size="sm"
         data-testid="approvals-badge"
         data-count={pending.length}
+        className={compact ? 'min-h-11 min-w-11 shrink-0' : undefined}
         aria-label={`${pending.length} ${pending.length === 1 ? 'approval' : 'approvals'} waiting`}
         onClick={() => setOpen(true)}
       >
@@ -43,7 +46,11 @@ export function ApprovalsBadge({ runId }: { runId: Id | undefined }) {
 
       {open && (
         <Dialog open onOpenChange={setOpen}>
-          <DialogContent className="max-w-md">
+          <DialogContent
+            className={
+              compact ? 'max-h-[90vh] w-[calc(100vw-1rem)] max-w-md overflow-y-auto p-4' : 'max-w-md'
+            }
+          >
             <div className="flex flex-col gap-3" data-testid="approvals-list">
               <DialogHeader>
                 <DialogTitle>

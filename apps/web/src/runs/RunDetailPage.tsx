@@ -1,10 +1,13 @@
 import type { Id, NodeRun } from '@ace/contracts';
-import { StatusRing } from '@ace/ui';
+import { PartRenderer, StatusRing } from '@ace/ui';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
+import { api } from '../app/api';
 import { ErrorsTab } from '../errors/ErrorsTab';
 import { TraceTab } from '../inspector/TraceTab';
 import { useProviders } from '../providers/hooks';
+import { TOUCH_TARGETS } from '../responsive/touch';
+import { useIsCompact } from '../responsive/useIsCompact';
 import { ApprovalStack } from './approvals/ApprovalStack';
 import { RunControls } from './controls/RunControls';
 import {
@@ -38,6 +41,7 @@ export function RunDetailPage() {
   const stop = useStopRun();
   const restart = useRestartRun();
   const retry = useRetryNodeRun();
+  const compact = useIsCompact();
   const busy = pause.isPending || resume.isPending || stop.isPending || restart.isPending;
 
   if (run.isPending) return <p className="p-6 text-fg-muted">Loading run…</p>;
@@ -71,8 +75,16 @@ export function RunDetailPage() {
     ...(nodeRun.error === undefined ? {} : { error: nodeRun.error }),
   }));
 
+  /* What each node produced, in snapshot order — the run's results, readable on a phone (FR-MOB-001). */
+  const outputs = record.snapshot.nodes.flatMap((node) => {
+    const output = stateByNodeId.get(node.id)?.output;
+    return output === undefined || output.length === 0 ? [] : [{ node, output }];
+  });
+
   return (
-    <main className="mx-auto flex h-full w-full max-w-4xl flex-col gap-6 overflow-y-auto px-4 py-8">
+    <main
+      className={`mx-auto flex h-full w-full min-w-0 max-w-4xl flex-col gap-6 overflow-y-auto px-4 ${compact ? `py-4 ${TOUCH_TARGETS}` : 'py-8'}`}
+    >
       <header className="flex flex-wrap items-center gap-3">
         <h1 className="font-human text-2xl font-semibold">Run</h1>
         <span
@@ -152,7 +164,37 @@ export function RunDetailPage() {
           : {})}
       />
 
-      <TraceTab runId={run.data.id} />
+      {outputs.length > 0 && (
+        <section className="flex min-w-0 flex-col gap-2" data-testid="run-detail-outputs">
+          <h2 className="font-human text-sm font-semibold uppercase tracking-wide text-fg-muted">
+            Outputs
+          </h2>
+          <ul className="flex flex-col gap-2">
+            {outputs.map(({ node, output }) => (
+              <li
+                key={node.id}
+                data-testid={`run-detail-output-${node.id}`}
+                className="flex min-w-0 flex-col gap-1.5 rounded-card border border-border bg-panel p-3"
+              >
+                <span className="font-human text-sm font-semibold">{node.name}</span>
+                <div className="min-w-0 overflow-x-auto break-words">
+                  {output.map((part, index) => (
+                    <PartRenderer
+                      key={index}
+                      part={part}
+                      contentUrl={(artifactId) => api().artifactContentUrl(artifactId)}
+                    />
+                  ))}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <section className="min-w-0" data-testid="run-detail-trace">
+        <TraceTab runId={run.data.id} />
+      </section>
 
       <section className="flex flex-col gap-2">
         <h2 className="font-human text-sm font-semibold uppercase tracking-wide text-fg-muted">
@@ -166,10 +208,10 @@ export function RunDetailPage() {
                 key={node.id}
                 data-testid={`run-detail-node-${node.id}`}
                 data-state={nodeRun?.status ?? 'IDLE'}
-                className="flex items-center gap-3 rounded-card border border-border bg-panel px-3 py-2"
+                className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-card border border-border bg-panel px-3 py-2"
               >
                 <StatusRing state={nodeRun?.status ?? 'IDLE'} showLabel />
-                <span className="font-human text-sm">{node.name}</span>
+                <span className="min-w-0 truncate font-human text-sm">{node.name}</span>
                 <span className="font-machine text-[10px] uppercase text-fg-muted">
                   {node.kind}
                 </span>
