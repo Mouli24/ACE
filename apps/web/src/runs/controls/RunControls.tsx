@@ -142,7 +142,7 @@ export function RunControls({
       {allowedActions === undefined && (
         <span
           data-testid="run-controls-unknown"
-          className="font-machine text-[10px] text-fg-muted"
+          className="max-w-[11rem] font-machine text-[10px] leading-tight text-fg-muted"
           title="FR-CTL-006: the controls follow run.allowedActions, and this run carries none."
         >
           the engine did not say which controls this run allows

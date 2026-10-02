@@ -33,7 +33,10 @@ export function TopBar() {
         data-testid="topbar-compact"
       >
         <div className="flex h-12 min-w-0 items-center gap-2 px-3">
-          <Link to="/projects" className="shrink-0 font-human text-base font-semibold tracking-tight">
+          <Link
+            to="/projects"
+            className="shrink-0 font-human text-base font-semibold tracking-tight"
+          >
             ACE
           </Link>
           {project.data && (
@@ -86,8 +89,10 @@ export function TopBar() {
           </Link>
         </>
       )}
+      {/* A floor for the tabs: without it every other item keeps its width and the tabs (with
+          "Add workflow" and each tab's actions menu) are squeezed to nothing under them. */}
       {projectId && (
-        <div className="min-w-0 flex-1">
+        <div className="min-w-48 flex-1">
           <WorkflowTabs projectId={projectId} activeWorkflowId={workflowId} />
         </div>
       )}
@@ -95,7 +100,10 @@ export function TopBar() {
       <ProviderStatusBar />
       {workflowId && <RunBar workflowId={workflowId} />}
       <ApprovalsBadge runId={runId} />
-      <DayTotalsChip />
+      {/* On a Canvas the run bar already shows this run's totals; the day's wait for a wide screen. */}
+      <div className={workflowId ? 'hidden shrink-0 2xl:flex' : 'flex shrink-0'}>
+        <DayTotalsChip />
+      </div>
       <Button asChild variant="ghost" size="icon" aria-label="Usage">
         <Link to="/usage">
           <BarChart3 className="h-4 w-4" />

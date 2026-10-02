@@ -222,7 +222,6 @@ test('NFR-USE-03: the usage screen itself fits 380 px — cards, chart, filters'
 test('NFR-USE-03: /usage at 380 px has no horizontal page scroll (top bar overflows)', async ({
   page,
 }) => {
-  test.fail(true, 'the top bar overflows at 380 px — FR-MOB-001, outside the usage area');
   await openUsageAt380(page);
   const overflow = await page.evaluate(() => ({
     scroll: document.documentElement.scrollWidth,
