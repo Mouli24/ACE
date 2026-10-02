@@ -38,6 +38,15 @@ export function buildDefaultPolicy(
   });
 }
 
+/** A stored JSON column, or `undefined` when it no longer parses — the schema then refuses it. */
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The columns of `guardrail_policies`, in the order the raw inserts below bind them. */
 const INSERT_POLICY = `
   INSERT INTO guardrail_policies
@@ -88,4 +97,94 @@ export function backfillDefaultPolicies(sqlite: BetterSqlite3.Database): number 
   }
 
   return rows.length;
+}
+
+/**
+ * DN-2 (round 5 §2.3, FR-GRD-004): every policy whose latest version has no `context`-point check
+ * gets one more version, its checks followed by the three context checks of
+ * `defaultGuardrailChecks` with fresh ids. Answers how many policies it versioned.
+ *
+ * A policy is versioned, never edited, for the reason a PATCH is (FR-GRD-001, BR-04): a node run
+ * that recorded `{ id, version }` must still resolve to the checks it ran against. The new row
+ * keeps the policy's `created_at` and name, takes the default flag when the old row had it — the
+ * flag is cleared first so the partial unique index has room — and is stamped with the migration's
+ * clock, as a PATCH is stamped with its own. A policy with even one context check was edited by
+ * someone after C5 and is theirs: it is left alone. A stored policy that no longer parses is left
+ * alone too, rather than failing the migration and with it every start of the engine; it was
+ * already unreadable through `toPolicy`.
+ *
+ * Idempotent like the backfill above: once a policy carries the context checks it is skipped.
+ */
+export function appendContextChecks(
+  sqlite: BetterSqlite3.Database,
+  at: Timestamp = new Date().toISOString(),
+  ids: () => Id = newId,
+): number {
+  const latest = sqlite
+    .prepare(
+      `SELECT g.id AS id, g.workspace_id AS workspaceId, g.project_id AS projectId, g.name AS name,
+              g.version AS version, g.is_project_default AS isProjectDefault, g.checks AS checks,
+              g.created_at AS createdAt, g.updated_at AS updatedAt
+         FROM guardrail_policies g
+        WHERE g.version = (SELECT MAX(v.version) FROM guardrail_policies v WHERE v.id = g.id)
+        ORDER BY g.id`,
+    )
+    .all() as {
+    id: string;
+    workspaceId: string;
+    projectId: string;
+    name: string;
+    version: number;
+    isProjectDefault: number;
+    checks: string;
+    createdAt: string;
+    updatedAt: string;
+  }[];
+
+  const clearDefault = sqlite.prepare(
+    `UPDATE guardrail_policies SET is_project_default = 0 WHERE id = ? AND version = ?`,
+  );
+  const insert = sqlite.prepare(INSERT_POLICY);
+  let versioned = 0;
+
+  for (const row of latest) {
+    const current = GuardrailPolicySchema.safeParse({
+      id: row.id,
+      projectId: row.projectId,
+      name: row.name,
+      version: row.version,
+      isProjectDefault: row.isProjectDefault === 1,
+      checks: parseJson(row.checks),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    });
+    if (!current.success) continue;
+    if (current.data.checks.some((check) => check.point === 'context')) continue;
+
+    const next = GuardrailPolicySchema.parse({
+      ...current.data,
+      version: current.data.version + 1,
+      checks: [
+        ...current.data.checks,
+        ...defaultGuardrailChecks(ids).filter((check) => check.point === 'context'),
+      ],
+      updatedAt: at,
+    });
+
+    if (next.isProjectDefault) clearDefault.run(row.id, row.version);
+    insert.run(
+      next.id,
+      row.workspaceId,
+      next.projectId,
+      next.name,
+      next.version,
+      next.isProjectDefault ? 1 : 0,
+      JSON.stringify(next.checks),
+      next.createdAt,
+      next.updatedAt,
+    );
+    versioned += 1;
+  }
+
+  return versioned;
 }

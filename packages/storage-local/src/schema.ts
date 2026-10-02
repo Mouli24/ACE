@@ -1,11 +1,13 @@
 import { sql } from 'drizzle-orm';
 import {
+  blob,
   index,
   integer,
   primaryKey,
   real,
   sqliteTable,
   text,
+  unique,
   uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
 
@@ -257,6 +259,12 @@ export const nodeRuns = sqliteTable(
     loopStop: text('loop_stop'),
     /** Set when Start from node reused an earlier node run instead of executing (FR-EXE-013). */
     reusedFromNodeRunId: text('reused_from_node_run_id'),
+    /** JSON `NodeRunSource[]`: the chunks this node run's context used (round 5 §2.4, FR-RAG-007). */
+    sources: text('sources'),
+    /** JSON `NodeRunSource[]`: chunks found but dropped to fit the context budget (D233). */
+    droppedSources: text('dropped_sources'),
+    /** JSON `MemoryOp[]`: the `__memory` ops this node run applied, in order (§2.2, D230). */
+    memoryOps: text('memory_ops'),
     startedAt: text('started_at'),
     endedAt: text('ended_at'),
     durationMs: integer('duration_ms'),
@@ -323,6 +331,8 @@ export const guardrailVerdicts = sqliteTable(
     reason: text('reason').notNull(),
     /** JSON `string[]` of type names such as `["email"]`, null when nothing was redacted. */
     redactedTypes: text('redacted_types'),
+    /** JSON `HiddenInstructionType[]` the context point stripped, null when none (round 5, D232). */
+    strippedTypes: text('stripped_types'),
     at: text('at').notNull(),
   },
   (table) => [
@@ -513,4 +523,143 @@ export const chatMessages = sqliteTable(
     at: text('at').notNull(),
   },
   (table) => [index('chat_messages_thread_idx').on(table.workspaceId, table.threadId, table.id)],
+);
+
+/* -------------------------------------------------------------------------- */
+/* Round 5 (Arch §15.3, §21.3): knowledge, memory, summary cache               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A knowledge base (round 5 §2.1, FR-RAG-001). There is deliberately no `document_count` or
+ * `chunk_count` column: both are counted from the rows on every read, so they cannot drift. The
+ * embedder is fixed for the base's life — vectors from two models do not compare (D235).
+ */
+export const knowledgeBases = sqliteTable(
+  'knowledge_bases',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    projectId: text('project_id').notNull(),
+    name: text('name').notNull(),
+    embeddingProviderId: text('embedding_provider_id').notNull(),
+    embeddingModelId: text('embedding_model_id').notNull(),
+    chunkSize: integer('chunk_size').notNull(),
+    chunkOverlap: integer('chunk_overlap').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    index('knowledge_bases_project_idx').on(table.workspaceId, table.projectId, table.id),
+  ],
+);
+
+/** A document in the ingestion pipeline (§2.1, FR-RAG-002, 003, Arch §21.3). */
+export const kbDocuments = sqliteTable(
+  'kb_documents',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    knowledgeBaseId: text('knowledge_base_id').notNull(),
+    artifactId: text('artifact_id').notNull(),
+    name: text('name').notNull(),
+    mime: text('mime').notNull(),
+    size: integer('size').notNull(),
+    status: text('status').notNull(),
+    chunkCount: integer('chunk_count').notNull(),
+    /** Why ingestion failed, in words a user can act on; null once it is ready again (D72). */
+    error: text('error'),
+    ingestedAt: text('ingested_at'),
+    /** JSON `KbDocumentVerdict[]`, null until the ingestion-time checks have run. */
+    verdicts: text('verdicts'),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [
+    index('kb_documents_kb_idx').on(table.workspaceId, table.knowledgeBaseId, table.id),
+    index('kb_documents_status_idx').on(table.workspaceId, table.status, table.id),
+  ],
+);
+
+/**
+ * One indexed piece of a document (§2.1). `seq` is an INTEGER PRIMARY KEY — the table's rowid —
+ * so it survives VACUUM, which the FTS5 external-content index keyed by that rowid depends on.
+ * `id` is the chunk's ULID, the one the envelope and the node run's `sources` carry.
+ */
+export const kbChunks = sqliteTable(
+  'kb_chunks',
+  {
+    seq: integer('seq').primaryKey(),
+    id: text('id').notNull().unique(),
+    workspaceId: text('workspace_id').notNull(),
+    knowledgeBaseId: text('knowledge_base_id').notNull(),
+    documentId: text('document_id').notNull(),
+    ordinal: integer('ordinal').notNull(),
+    text: text('text').notNull(),
+    tokens: integer('tokens').notNull(),
+    source: text('source').notNull(),
+    /** JSON `string[]`, outermost heading first. */
+    headings: text('headings').notNull(),
+  },
+  (table) => [
+    index('kb_chunks_document_idx').on(table.workspaceId, table.documentId, table.ordinal),
+    index('kb_chunks_kb_idx').on(table.workspaceId, table.knowledgeBaseId),
+  ],
+);
+
+/**
+ * Every embedding, as little-endian Float32 bytes (F8). The table of record for vectors: the
+ * sqlite-vec index (`indexes.ts`) is rebuilt from it, and the scan fallback reads it directly.
+ */
+export const kbVectors = sqliteTable(
+  'kb_vectors',
+  {
+    chunkId: text('chunk_id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    knowledgeBaseId: text('knowledge_base_id').notNull(),
+    documentId: text('document_id').notNull(),
+    dims: integer('dims').notNull(),
+    embedding: blob('embedding', { mode: 'buffer' }).notNull(),
+  },
+  (table) => [
+    index('kb_vectors_kb_idx').on(table.workspaceId, table.knowledgeBaseId),
+    index('kb_vectors_document_idx').on(table.workspaceId, table.documentId),
+  ],
+);
+
+/** Long-term agent memory (round 5 §2.2, FR-MEM-001..004, Arch §12.8): one value per key per node. */
+export const agentMemory = sqliteTable(
+  'agent_memory',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    nodeId: text('node_id').notNull(),
+    key: text('key').notNull(),
+    value: text('value').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+    /** When the entry last went into an envelope. */
+    lastUsedAt: text('last_used_at'),
+  },
+  (table) => [
+    unique().on(table.workspaceId, table.nodeId, table.key),
+    index('agent_memory_node_idx').on(table.workspaceId, table.nodeId, table.createdAt, table.id),
+  ],
+);
+
+/**
+ * Model summaries by content hash (§2.5, FR-RAG-010): 30 days from creation, pruned to 5,000 rows
+ * per workspace, least recently used first.
+ */
+export const summaryCache = sqliteTable(
+  'summary_cache',
+  {
+    workspaceId: text('workspace_id').notNull(),
+    key: text('key').notNull(),
+    summary: text('summary').notNull(),
+    createdAt: text('created_at').notNull(),
+    lastUsedAt: text('last_used_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workspaceId, table.key] }),
+    index('summary_cache_lru_idx').on(table.workspaceId, table.lastUsedAt),
+  ],
 );

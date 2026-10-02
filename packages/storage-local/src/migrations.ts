@@ -1,6 +1,6 @@
 import type BetterSqlite3 from 'better-sqlite3';
 
-import { backfillDefaultPolicies } from './default-policy.js';
+import { appendContextChecks, backfillDefaultPolicies } from './default-policy.js';
 
 /** Named so a test can apply the chain up to, but not including, round 3 (FR-GRD-018). */
 export const ROUND_3_MIGRATION_ID = '20260926T120000_round_3_guardrails_approvals_and_budgets';
@@ -21,6 +21,13 @@ export const ROUND_3_RUN_COLUMNS_MIGRATION_ID =
  * chat messages. Named so a test can apply the chain up to, but not including, round 4.
  */
 export const ROUND_4_MIGRATION_ID = '20260929T120000_round_4_artifacts_tools_messages_chat';
+
+/**
+ * Round 5's tables (Arch §15.3, §21.3): knowledge bases, documents, chunks, vectors, the FTS5
+ * index, agent memory, the summary cache, the round 5 `node_runs` columns and DN-2's data step.
+ * Named so a test can apply the chain up to, but not including, round 5.
+ */
+export const ROUND_5_MIGRATION_ID = '20261001T120000_round_5_knowledge_memory_usage';
 
 /**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
@@ -398,6 +405,140 @@ export const MIGRATIONS: readonly Migration[] = [
       );
       CREATE INDEX chat_messages_thread_idx ON chat_messages (workspace_id, thread_id, id);
     `,
+  },
+  {
+    id: ROUND_5_MIGRATION_ID,
+    up: `
+      -- A knowledge base (round 5 §2.1, FR-RAG-001). No document or chunk count column: both are
+      -- counted from the rows on every read, so they cannot drift from what is stored.
+      CREATE TABLE knowledge_bases (
+        id                    TEXT PRIMARY KEY,
+        workspace_id          TEXT NOT NULL,
+        project_id            TEXT NOT NULL,
+        name                  TEXT NOT NULL,
+        embedding_provider_id TEXT NOT NULL,
+        embedding_model_id    TEXT NOT NULL,
+        chunk_size            INTEGER NOT NULL,
+        chunk_overlap         INTEGER NOT NULL,
+        created_at            TEXT NOT NULL,
+        updated_at            TEXT NOT NULL
+      );
+      CREATE INDEX knowledge_bases_project_idx ON knowledge_bases (workspace_id, project_id, id);
+
+      -- An uploaded artifact going through ingestion (§2.1, FR-RAG-002, 003, Arch §21.3). The
+      -- bytes stay in the blob store; 'verdicts' are the ingestion-time context checks, types only.
+      CREATE TABLE kb_documents (
+        id                TEXT PRIMARY KEY,
+        workspace_id      TEXT NOT NULL,
+        knowledge_base_id TEXT NOT NULL,
+        artifact_id       TEXT NOT NULL,
+        name              TEXT NOT NULL,
+        mime              TEXT NOT NULL,
+        size              INTEGER NOT NULL,
+        status            TEXT NOT NULL,
+        chunk_count       INTEGER NOT NULL,
+        error             TEXT,
+        ingested_at       TEXT,
+        verdicts          TEXT,
+        created_at        TEXT NOT NULL
+      );
+      CREATE INDEX kb_documents_kb_idx ON kb_documents (workspace_id, knowledge_base_id, id);
+      CREATE INDEX kb_documents_status_idx ON kb_documents (workspace_id, status, id);
+
+      -- One indexed piece of a document (§2.1). 'seq' is an INTEGER PRIMARY KEY, so it is the
+      -- table's rowid and stays put through VACUUM: the FTS index below is keyed by that rowid, and
+      -- a rowid that VACUUM renumbered would point every keyword hit at the wrong chunk.
+      CREATE TABLE kb_chunks (
+        seq               INTEGER PRIMARY KEY,
+        id                TEXT NOT NULL UNIQUE,
+        workspace_id      TEXT NOT NULL,
+        knowledge_base_id TEXT NOT NULL,
+        document_id       TEXT NOT NULL,
+        ordinal           INTEGER NOT NULL,
+        text              TEXT NOT NULL,
+        tokens            INTEGER NOT NULL,
+        source            TEXT NOT NULL,
+        headings          TEXT NOT NULL
+      );
+      CREATE INDEX kb_chunks_document_idx ON kb_chunks (workspace_id, document_id, ordinal);
+      CREATE INDEX kb_chunks_kb_idx ON kb_chunks (workspace_id, knowledge_base_id);
+
+      -- Every embedding, as Float32 bytes (F8). The table of record for vectors: the sqlite-vec
+      -- index is built from it at open and is never in a migration, because the extension may be
+      -- absent — and when it is, the vector search scans this table instead.
+      CREATE TABLE kb_vectors (
+        chunk_id          TEXT PRIMARY KEY,
+        workspace_id      TEXT NOT NULL,
+        knowledge_base_id TEXT NOT NULL,
+        document_id       TEXT NOT NULL,
+        dims              INTEGER NOT NULL,
+        embedding         BLOB NOT NULL
+      );
+      CREATE INDEX kb_vectors_kb_idx ON kb_vectors (workspace_id, knowledge_base_id);
+      CREATE INDEX kb_vectors_document_idx ON kb_vectors (workspace_id, document_id);
+
+      -- The keyword index (F8, FR-RAG-004): external content over kb_chunks, so the text is stored
+      -- once. 'tokenchars' keeps '-' and '_' inside a token, so zephyrine-protocol-7 is one term
+      -- and an exact identifier is found whole (TC-RAG-004). The triggers keep it in step.
+      CREATE VIRTUAL TABLE kb_chunks_fts USING fts5(
+        text,
+        content = 'kb_chunks',
+        content_rowid = 'rowid',
+        tokenize = "unicode61 tokenchars '-_'"
+      );
+      CREATE TRIGGER kb_chunks_fts_insert AFTER INSERT ON kb_chunks BEGIN
+        INSERT INTO kb_chunks_fts (rowid, text) VALUES (new.rowid, new.text);
+      END;
+      CREATE TRIGGER kb_chunks_fts_delete AFTER DELETE ON kb_chunks BEGIN
+        INSERT INTO kb_chunks_fts (kb_chunks_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+      END;
+      CREATE TRIGGER kb_chunks_fts_update AFTER UPDATE OF text ON kb_chunks BEGIN
+        INSERT INTO kb_chunks_fts (kb_chunks_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+        INSERT INTO kb_chunks_fts (rowid, text) VALUES (new.rowid, new.text);
+      END;
+
+      -- Long-term agent memory (round 5 §2.2, FR-MEM-001..004, Arch §12.8): one value per key per
+      -- node, so a save of a key the node already has replaces it.
+      CREATE TABLE agent_memory (
+        id           TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        node_id      TEXT NOT NULL,
+        key          TEXT NOT NULL,
+        value        TEXT NOT NULL,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL,
+        last_used_at TEXT,
+        UNIQUE (workspace_id, node_id, key)
+      );
+      CREATE INDEX agent_memory_node_idx ON agent_memory (workspace_id, node_id, created_at, id);
+
+      -- Model summaries by content hash (§2.5, FR-RAG-010): 30 days from creation, pruned to 5,000
+      -- rows per workspace, least recently used first.
+      CREATE TABLE summary_cache (
+        workspace_id TEXT NOT NULL,
+        key          TEXT NOT NULL,
+        summary      TEXT NOT NULL,
+        created_at   TEXT NOT NULL,
+        last_used_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, key)
+      );
+      CREATE INDEX summary_cache_lru_idx ON summary_cache (workspace_id, last_used_at);
+
+      -- Round 5 additions to NodeRun (§2.2, §2.4, D233): the chunks its context used, the chunks
+      -- that did not fit the budget, and the memory ops it applied. NULL reads as none.
+      ALTER TABLE node_runs ADD COLUMN sources TEXT;
+      ALTER TABLE node_runs ADD COLUMN dropped_sources TEXT;
+      ALTER TABLE node_runs ADD COLUMN memory_ops TEXT;
+
+      -- C5's Verdict.strippedTypes (D232): what the context point stripped, by kind and never by
+      -- text. Without the column the table of record would drop it while the node run's copy kept
+      -- it, and the two would disagree (TC-GRD-005).
+      ALTER TABLE guardrail_verdicts ADD COLUMN stripped_types TEXT;
+    `,
+    /** DN-2: policies written before the context point get its three checks as a new version. */
+    seed: (sqlite) => {
+      appendContextChecks(sqlite);
+    },
   },
 ];
 

@@ -71,6 +71,7 @@ function toVerdict(row: VerdictRow): Verdict {
     passed: row.passed,
     reason: row.reason,
     ...(row.redactedTypes === null ? {} : { redactedTypes: JSON.parse(row.redactedTypes) }),
+    ...(row.strippedTypes === null ? {} : { strippedTypes: JSON.parse(row.strippedTypes) }),
     at: row.at,
   });
 }
@@ -385,6 +386,10 @@ export function createGuardrailVerdictRepository(
               verdict.redactedTypes === undefined
                 ? null
                 : toJsonColumn(verdict.redactedTypes, `verdict(${verdict.id}).redactedTypes`),
+            strippedTypes:
+              verdict.strippedTypes === undefined
+                ? null
+                : toJsonColumn(verdict.strippedTypes, `verdict(${verdict.id}).strippedTypes`),
             at: verdict.at,
           })
           .run();

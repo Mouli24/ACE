@@ -141,6 +141,10 @@ function toNodeRun(row: NodeRunRow): NodeRun {
     ...(row.reusedFromNodeRunId === null
       ? {}
       : { reusedFromNodeRunId: row.reusedFromNodeRunId }),
+    // Round 5 (§2.2, §2.4, D233). A node run written before round 5 reads NULL, which stays absent.
+    ...(row.sources === null ? {} : { sources: JSON.parse(row.sources) }),
+    ...(row.droppedSources === null ? {} : { droppedSources: JSON.parse(row.droppedSources) }),
+    ...(row.memoryOps === null ? {} : { memoryOps: JSON.parse(row.memoryOps) }),
     ...(row.startedAt === null ? {} : { startedAt: row.startedAt }),
     ...(row.endedAt === null ? {} : { endedAt: row.endedAt }),
     ...(row.durationMs === null ? {} : { durationMs: row.durationMs }),
@@ -466,6 +470,15 @@ export function createRunRepository(db: Db): RunRepository {
   };
 }
 
+/**
+ * `NodeRunPatch` plus the round 5 fields (§2.2, §2.4, D233). The port's patch does not name them
+ * yet — C5 made them optional on `NodeRun` — but the columns exist, so this adapter already
+ * accepts them: once the engine records a node run's sources and memory ops, the port gains the
+ * three lines and nothing here changes. `create` writes them today.
+ */
+export type SqliteNodeRunPatch = NodeRunPatch &
+  Partial<Pick<NodeRun, 'sources' | 'droppedSources' | 'memoryOps'>>;
+
 export function createNodeRunRepository(db: Db): NodeRunRepository {
   return {
     create: async (scope: Scope, nodeRun: NodeRun) => {
@@ -501,6 +514,16 @@ export function createNodeRunRepository(db: Db): NodeRunRepository {
               : toJsonColumn(nodeRun.guardrailPolicy, `${at}.guardrailPolicy`),
           loopStop: nodeRun.loopStop ?? null,
           reusedFromNodeRunId: nodeRun.reusedFromNodeRunId ?? null,
+          sources:
+            nodeRun.sources === undefined ? null : toJsonColumn(nodeRun.sources, `${at}.sources`),
+          droppedSources:
+            nodeRun.droppedSources === undefined
+              ? null
+              : toJsonColumn(nodeRun.droppedSources, `${at}.droppedSources`),
+          memoryOps:
+            nodeRun.memoryOps === undefined
+              ? null
+              : toJsonColumn(nodeRun.memoryOps, `${at}.memoryOps`),
           startedAt: nodeRun.startedAt ?? null,
           endedAt: nodeRun.endedAt ?? null,
           durationMs: nodeRun.durationMs ?? null,
@@ -527,7 +550,7 @@ export function createNodeRunRepository(db: Db): NodeRunRepository {
         .all()
         .map(toNodeRun),
 
-    update: async (scope: Scope, id: Id, patch: NodeRunPatch) => {
+    update: async (scope: Scope, id: Id, patch: SqliteNodeRunPatch) => {
       const at = `nodeRun(${id})`;
       const values = definedOnly({
         status: patch.status,
@@ -544,6 +567,16 @@ export function createNodeRunRepository(db: Db): NodeRunRepository {
             : toJsonColumn(patch.guardrailPolicy, `${at}.guardrailPolicy`),
         loopStop: patch.loopStop,
         reusedFromNodeRunId: patch.reusedFromNodeRunId,
+        sources:
+          patch.sources === undefined ? undefined : toJsonColumn(patch.sources, `${at}.sources`),
+        droppedSources:
+          patch.droppedSources === undefined
+            ? undefined
+            : toJsonColumn(patch.droppedSources, `${at}.droppedSources`),
+        memoryOps:
+          patch.memoryOps === undefined
+            ? undefined
+            : toJsonColumn(patch.memoryOps, `${at}.memoryOps`),
         startedAt: patch.startedAt,
         endedAt: patch.endedAt,
         durationMs: patch.durationMs,
