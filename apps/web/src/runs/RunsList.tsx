@@ -1,6 +1,7 @@
 import type { RunState, RunSummary } from '@ace/contracts';
 import { Link } from 'react-router-dom';
 
+import { useIsCompact } from '../responsive/useIsCompact';
 import { useRuns } from './hooks';
 
 const RUN_STATE_TONE: Readonly<Record<RunState, string>> = {
@@ -23,6 +24,7 @@ const duration = (run: RunSummary): string => {
  */
 export function RunsList({ workflowId }: { workflowId: string }) {
   const runs = useRuns(workflowId);
+  const compact = useIsCompact();
 
   if (runs.isPending) return <p className="p-4 text-sm text-fg-muted">Loading runs…</p>;
   if (runs.isError) {
@@ -34,6 +36,45 @@ export function RunsList({ workflowId }: { workflowId: string }) {
   }
   if ((runs.data?.length ?? 0) === 0) {
     return <p className="p-4 text-sm text-fg-muted">No runs yet. Press Start to make one.</p>;
+  }
+
+  /*
+   * At phone width (FR-MOB-001, TC-MOB-001) five columns do not fit 380 px, so each run is a stacked
+   * row: the whole row is the link, at least 44 px tall, with the same test ids as the table.
+   */
+  if (compact) {
+    return (
+      <ul className="flex flex-col" data-testid="runs-table">
+        {runs.data?.map((run) => (
+          <li
+            key={run.id}
+            className="border-b border-border/60"
+            data-testid={`run-row-${run.id}`}
+            data-status={run.status}
+          >
+            <Link
+              to={`/runs/${run.id}`}
+              className="flex min-h-11 flex-col gap-0.5 px-3 py-2 font-machine text-xs"
+            >
+              <span className="flex flex-wrap items-baseline justify-between gap-x-3">
+                <span>{new Date(run.startedAt).toLocaleString()}</span>
+                <span className={RUN_STATE_TONE[run.status]}>
+                  {run.status}
+                  {run.haltReason ? ` · ${run.haltReason}` : ''}
+                </span>
+              </span>
+              <span className="flex flex-wrap gap-x-3 text-fg-muted">
+                <span>{duration(run)}</span>
+                <span>
+                  {run.totals.tokensIn}↓ {run.totals.tokensOut}↑
+                </span>
+                <span>${run.totals.costUsd.toFixed(4)}</span>
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    );
   }
 
   return (
