@@ -14,7 +14,7 @@ function parseMarkdown(text: string): ParsedDocument {
   const headings: ParsedHeading[] = [];
   let offset = 0;
   for (const line of text.split('\n')) {
-    const match = /^(#{1,6})\s+(.+)$/.exec(line);
+    const match = /^(#{1,6})\s+(.+)$/.exec(line.replace(/\r$/, ''));
     if (match)
       headings.push({ level: (match[1] as string).length, title: match[2] as string, offset });
     offset += line.length + 1;
@@ -317,5 +317,47 @@ describe('FR-RAG-002 code chunks', () => {
       'def two():\n    return 2',
       'const f = (a) =>\n  a;',
     ]);
+  });
+});
+
+describe('FR-RAG-002 CRLF text', () => {
+  const lf =
+    '# Title\n\nFirst paragraph of the notes\n\nSecond paragraph of the notes\n\n## Part\n\nThird paragraph is here\n\nFourth paragraph is here\n';
+  const crlf = lf.replace(/\n/g, '\r\n');
+  const split = (text: string): ChunkDraft[] =>
+    chunker.chunk({
+      document: parseMarkdown(text),
+      documentName: 'n.md',
+      kind: 'prose',
+      chunkSize: 14,
+      chunkOverlap: 0,
+    });
+
+  it('splits paragraphs on CRLF blank lines exactly as on LF', () => {
+    const a = split(lf);
+    const b = split(crlf);
+    expect(a.length).toBeGreaterThan(3);
+    expect(b.length).toBe(a.length);
+    expect(b.map((c) => c.text.replace(/\r\n/g, '\n'))).toEqual(a.map((c) => c.text));
+    expect(b.map((c) => c.headings)).toEqual(a.map((c) => c.headings));
+  });
+
+  it('keeps code line ranges correct in a CRLF file', () => {
+    const text = fixture('service.ts.txt').replace(/\n/g, '\r\n');
+    const lines = text.split('\n');
+    const chunks = chunker.chunk({
+      document: { text, headings: [] },
+      documentName: 's.ts',
+      kind: 'code',
+      chunkSize: 400,
+      chunkOverlap: 0,
+    });
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      const m = /#L(\d+)-L(\d+)$/.exec(chunk.source);
+      const range = lines.slice(Number(m?.[1]) - 1, Number(m?.[2])).join('\n');
+      expect(range.trimEnd()).toBe(chunk.text);
+      expect(chunk.text).toMatch(/^(?:export|import|\/\*\*|const|function)/);
+    }
   });
 });

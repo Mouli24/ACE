@@ -31,15 +31,15 @@ function toLines(text: string): Line[] {
 
 /** Offsets where a new declaration begins, pulled up over any comment lines directly above it. */
 function boundaries(lines: Line[]): number[] {
-  const starts: number[] = [];
+  const starts = new Set<number>();
   lines.forEach((line, index) => {
     if (!DECLARATION.test(line.text)) return;
     let at = index;
     while (at > 0 && LEADING_TRIVIA.test((lines[at - 1] as Line).text)) at -= 1;
     const offset = (lines[at] as Line).start;
-    if (offset > 0 && !starts.includes(offset)) starts.push(offset);
+    if (offset > 0) starts.add(offset);
   });
-  return starts;
+  return [...starts].sort((a, b) => a - b);
 }
 
 /** Splits an oversized declaration at line boundaries, and inside a line only when the line alone is too long. */
