@@ -1,0 +1,122 @@
+[
+  {
+    "kind": "exact",
+    "question": "zephyrine-protocol-7",
+    "expectedSource": "handbook.md"
+  },
+  {
+    "kind": "exact",
+    "question": "rollback-hotline",
+    "expectedSource": "handbook.md"
+  },
+  {
+    "kind": "exact",
+    "question": "orion-lockers",
+    "expectedSource": "onboarding.pdf"
+  },
+  {
+    "kind": "exact",
+    "question": "welcome-kit-b12",
+    "expectedSource": "onboarding.pdf"
+  },
+  {
+    "kind": "exact",
+    "question": "gamma-ledger-17",
+    "expectedSource": "policies.docx"
+  },
+  {
+    "kind": "exact",
+    "question": "stipend-ceiling-88",
+    "expectedSource": "policies.docx"
+  },
+  {
+    "kind": "exact",
+    "question": "nimbus-portal",
+    "expectedSource": "faq.html"
+  },
+  {
+    "kind": "exact",
+    "question": "kestrel-helpdesk",
+    "expectedSource": "faq.html"
+  },
+  {
+    "kind": "exact",
+    "question": "retryWithBackoff",
+    "expectedSource": "retry.ts"
+  },
+  {
+    "kind": "exact",
+    "question": "jitterFactor",
+    "expectedSource": "retry.ts"
+  },
+  {
+    "kind": "exact",
+    "question": "marigold-vendor-checklist",
+    "expectedSource": "poisoned.md"
+  },
+  {
+    "kind": "exact",
+    "question": "tangerine-contact-sheet",
+    "expectedSource": "pii.txt"
+  },
+  {
+    "kind": "paraphrase",
+    "question": "Endorsements prior integration",
+    "expectedSource": "handbook.md"
+  },
+  {
+    "kind": "paraphrase",
+    "question": "Renew credentials quarterly",
+    "expectedSource": "handbook.md"
+  },
+  {
+    "kind": "paraphrase",
+    "question": "Reverting deployment notified standby chatroom",
+    "expectedSource": "handbook.md"
+  },
+  {
+    "kind": "paraphrase",
+    "question": "Buddy introduction huddle",
+    "expectedSource": "onboarding.pdf"
+  },
+  {
+    "kind": "paraphrase",
+    "question": "Vacation entitlement yearly",
+    "expectedSource": "policies.docx"
+  },
+  {
+    "kind": "paraphrase",
+    "question": "Telecommuting permitted personnel",
+    "expectedSource": "policies.docx"
+  },
+  {
+    "kind": "paraphrase",
+    "question": "Amend postal location statement",
+    "expectedSource": "faq.html"
+  },
+  {
+    "kind": "paraphrase",
+    "question": "Lengthening pauses unsuccessful tries entropy",
+    "expectedSource": "retry.ts"
+  },
+  {
+    "kind": "paraphrase",
+    "question": "Defer strategy retreat fall",
+    "expectedSource": "notes.txt"
+  },
+  {
+    "kind": "paraphrase",
+    "question": "Procure notebooks trainees",
+    "expectedSource": "notes.txt"
+  },
+  {
+    "kind": "paraphrase",
+    "question": "Shoppers grievances sluggish payment screen",
+    "expectedSource": "notes.txt"
+  },
+  {
+    "kind": "paraphrase",
+    "question": "Reduce expenditure unused machines",
+    "expectedSource": "notes.txt"
+  }
+]
