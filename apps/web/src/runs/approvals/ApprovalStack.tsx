@@ -91,9 +91,7 @@ function ApprovalRow({ request, keyboard }: { request: ApprovalRequest; keyboard
  * the raw preview line. Returns `undefined` for any non-destructive approval, which renders the card
  * alone exactly as before.
  */
-function destructiveTool(
-  request: ApprovalRequest,
-): { toolName: string; args: string } | undefined {
+function destructiveTool(request: ApprovalRequest): { toolName: string; args: string } | undefined {
   if (request.point !== 'tool' || request.checkType !== 'destructive_action') return undefined;
   const preview = request.preview.trim();
   const space = preview.indexOf(' ');

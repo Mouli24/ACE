@@ -48,7 +48,9 @@ export function ApprovalsBadge({ runId }: { runId: Id | undefined }) {
         <Dialog open onOpenChange={setOpen}>
           <DialogContent
             className={
-              compact ? 'max-h-[90vh] w-[calc(100vw-1rem)] max-w-md overflow-y-auto p-4' : 'max-w-md'
+              compact
+                ? 'max-h-[90vh] w-[calc(100vw-1rem)] max-w-md overflow-y-auto p-4'
+                : 'max-w-md'
             }
           >
             <div className="flex flex-col gap-3" data-testid="approvals-list">
