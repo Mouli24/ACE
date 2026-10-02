@@ -1,0 +1,8 @@
+Contact sheet (sample data, not real people)
+
+Name: Jordan Example
+Email: jordan.example@example.com
+Phone: +44 20 7946 0958
+IBAN: DE89 3704 0044 0532 0130 00
+
+The tangerine-contact-sheet is kept on the shared drive.

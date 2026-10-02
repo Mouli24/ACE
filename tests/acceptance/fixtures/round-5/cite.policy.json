@@ -1,0 +1,14 @@
+{
+  "projectId": "01M5R5PJ0000000000000000PJ",
+  "name": "Answers must cite a source",
+  "checks": [
+    {
+      "id": "01M5R5PK0000000000000000CA",
+      "point": "output",
+      "type": "required_citations",
+      "action": "block",
+      "enabled": true,
+      "params": {}
+    }
+  ]
+}

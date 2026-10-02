@@ -12,6 +12,13 @@ import {
   type ToolResult,
 } from '../adapter.js';
 import { MOCK_MEDIA_TYPES, mockMediaFixture } from './mock-media.js';
+import {
+  isSummaryCall,
+  mockCiteAnswer,
+  mockEmbed,
+  mockMemoryValue,
+  mockSummaryText,
+} from './mock-rag.js';
 
 /**
  * The mock provider (FR-PRV-010, round 2 §2.6) — the fixture both sides of the build rely on.
@@ -178,6 +185,21 @@ const SPECS: readonly MockModelSpec[] = [
     displayName: 'Mock embeddings',
     inputTypes: ['text'],
     outputTypes: ['json'],
+  },
+  // Round 5 §2.10.
+  { modelId: 'mock-cite', displayName: 'Mock cite', inputTypes: ['text'], outputTypes: ['text'] },
+  {
+    modelId: 'mock-memory',
+    displayName: 'Mock memory',
+    inputTypes: ['text'],
+    outputTypes: ['json'],
+    supportsJson: true,
+  },
+  {
+    modelId: 'mock-summary',
+    displayName: 'Mock summary',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
   },
 ];
 
@@ -378,6 +400,8 @@ export interface MockCall {
   prompt: string;
   runId?: string;
   iteration?: number;
+  /** The call's system text, when it had one — how a test tells the summariser's call apart. */
+  system?: string;
   startedAt: number;
   endedAt?: number;
   failed?: boolean;
@@ -840,6 +864,32 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
         return;
       }
 
+      case 'mock-cite': {
+        yield* answer(mockCiteAnswer(req.prompt));
+        return;
+      }
+
+      case 'mock-memory': {
+        const value = mockMemoryValue(req.prompt);
+        yield { type: 'json', value };
+        yield { type: 'usage', tokensIn, tokensOut: countWords(JSON.stringify(value)) };
+        yield { type: 'finish', reason: 'stop' };
+        return;
+      }
+
+      case 'mock-summary': {
+        // The summariser's call (its system text carries the prompt-version marker): the first 30
+        // words of the input. Any other call answers like `mock-text`.
+        if (isSummaryCall(req.system)) {
+          yield* answer(mockSummaryText(req.prompt));
+          return;
+        }
+        const text = words(req.prompt, TEXT_WORDS);
+        yield* stream(text, TEXT_DELAY_MS);
+        yield* finishText(text.join(' '));
+        return;
+      }
+
       default:
         throw new ProviderCallError({
           kind: 'invalid_config',
@@ -896,6 +946,7 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
           prompt: req.prompt,
           ...(req.runId === undefined ? {} : { runId: req.runId }),
           ...(req.iteration === undefined ? {} : { iteration: req.iteration }),
+          ...(req.system === undefined ? {} : { system: req.system }),
           startedAt: now(),
         };
         log.push(call);
@@ -914,11 +965,9 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
       })();
     },
 
+    /** Round 5 §2.10: token hashing with a synonym table; the model id is ignored. */
     async embed(texts: string[]): Promise<number[][]> {
-      return texts.map((text) => {
-        const next = seeded(hash(text));
-        return Array.from({ length: 64 }, () => Number((next() * 2 - 1).toFixed(6)));
-      });
+      return texts.map((text) => mockEmbed(text));
     },
 
     calls: () => log.map((call) => ({ ...call })),
