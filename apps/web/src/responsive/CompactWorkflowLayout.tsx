@@ -7,6 +7,7 @@ import { Inspector } from '../inspector/Inspector';
 import { MemoryTab } from '../memory/MemoryTab';
 import { RunsList } from '../runs/RunsList';
 import { ReadOnlyCanvasFrame } from './ReadOnlyCanvasFrame';
+import { TOUCH_TARGETS } from './touch';
 
 const TABS = ['Canvas', 'Runs', 'Inspector', 'Chat', 'Memory'] as const;
 
@@ -25,7 +26,11 @@ export function CompactWorkflowLayout({
   canvas: ReactNode;
 }) {
   return (
-    <Tabs defaultValue="Canvas" className="flex h-full min-w-0 flex-col" data-testid="compact-workflow">
+    <Tabs
+      defaultValue="Canvas"
+      className="flex h-full min-w-0 flex-col"
+      data-testid="compact-workflow"
+    >
       <TabsList className="m-2 flex shrink-0 overflow-x-auto">
         {TABS.map((tab) => (
           <TabsTrigger key={tab} value={tab} className="min-h-11 flex-1 px-2">
@@ -42,7 +47,7 @@ export function CompactWorkflowLayout({
       <TabsContent value="Inspector" className="min-h-0 min-w-0 flex-1 overflow-y-auto">
         <Inspector workflowId={workflowId} />
       </TabsContent>
-      <TabsContent value="Chat" className="min-h-0 min-w-0 flex-1">
+      <TabsContent value="Chat" className={`min-h-0 min-w-0 flex-1 ${TOUCH_TARGETS}`}>
         <ChatPanel workflowId={workflowId} />
       </TabsContent>
       <TabsContent value="Memory" className="min-h-0 flex-1 overflow-y-auto">

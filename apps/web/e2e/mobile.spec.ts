@@ -60,7 +60,7 @@ test.describe('Phone layout — monitoring (FR-MOB-001, TC-MOB-001)', () => {
     }
     // The top bar's links collapse into one menu; the run bar stays reachable.
     await expect(page.getByTestId('topbar-menu')).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Usage' })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'Usage', exact: true })).toHaveCount(0);
     await expect(startRun(page)).toBeVisible();
     await expectNoHorizontalScroll(page);
 
@@ -157,7 +157,10 @@ test.describe('Phone layout — approvals (FR-MOB-002, TC-MOB-002)', () => {
     });
     const run = (await engineRun(page, seeded.workflowId))!;
 
-    await page.goto(`/runs/${run.id}`);
+    // In-app navigation, not `goto`: a reload would end the mock engine's scripted run with the page.
+    await page.getByRole('tab', { name: 'Runs' }).click();
+    await page.getByTestId(`run-row-${run.id}`).getByRole('link').click();
+    await expect(page).toHaveURL(new RegExp(`/runs/${run.id}$`));
     const section = page.getByTestId('run-detail-approvals');
     await expect(section).toBeVisible();
     await expectNoHorizontalScroll(page);
@@ -230,19 +233,18 @@ test.describe('Phone layout — read-only Canvas (FR-MOB-003)', () => {
   });
 
   test('FR-MOB-003: a node cannot be dragged on the phone Canvas', async ({ page }) => {
-    // Needs Canvas's `readOnly` prop (R5 Canvas area) passed from the compact WorkflowPage — the
-    // integration step marked `R5 wiring` in WorkflowPage.tsx. Until then a drag still moves a node.
-    test.fixme(true, 'R5 wiring: Canvas readOnly prop not yet passed from the compact layout');
     await freshApp(page);
     const seeded = await seedGraph(page, ['input', 'agent']);
     await openWorkflow(page, seeded);
+    await expect(page.getByTestId('canvas')).toHaveAttribute('data-readonly', 'true');
     const before = (await serverGraph(page, seeded.workflowId)).nodes;
 
     const node = flowNode(page, seeded.nodeIds[1]!);
     const box = (await node.boundingBox())!;
     await page.mouse.move(box.x + box.width / 2, box.y + 10);
     await page.mouse.down();
-    for (let i = 1; i <= 10; i += 1) await page.mouse.move(box.x + box.width / 2 + i * 6, box.y + 10);
+    for (let i = 1; i <= 10; i += 1)
+      await page.mouse.move(box.x + box.width / 2 + i * 6, box.y + 10);
     await page.mouse.up();
     await page.waitForTimeout(800);
 
@@ -263,7 +265,7 @@ test.describe('Desktop is unchanged above 640 px (FR-MOB-001)', () => {
     await expect(page.getByTestId('readonly-banner')).toHaveCount(0);
     await expect(page.getByTestId('palette-agent')).toBeVisible();
     await expect(page.getByRole('tab', { name: 'Configure' })).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Usage' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Usage', exact: true })).toBeVisible();
     await expect(page.getByTestId('topbar-menu')).toHaveCount(0);
   });
 });

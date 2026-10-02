@@ -56,8 +56,7 @@ export function WorkflowPage() {
         workflowId={workflowId}
         canvas={
           <>
-            {/* R5 wiring: pass readOnly to Canvas once FR-CAN readOnly prop lands */}
-            <Canvas workflowId={workflowId} />
+            <Canvas workflowId={workflowId} readOnly />
             <PreflightIssues workflowId={workflowId} />
           </>
         }
