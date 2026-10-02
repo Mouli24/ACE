@@ -154,7 +154,7 @@ export function TestSearchPanel({ kbId }: { kbId: Id }) {
                 <span className="font-machine text-[11px] text-fg-muted">#{index + 1}</span>
                 <span
                   className="font-machine text-xs"
-                  data-testid="kb-search-hit-score"
+                  data-testid="kb-hit-score"
                   aria-label={`Score ${formatScore(hit.score)}`}
                 >
                   {formatScore(hit.score)}
