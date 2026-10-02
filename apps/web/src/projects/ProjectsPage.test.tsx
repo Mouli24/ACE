@@ -70,6 +70,8 @@ describe('Projects screen (FR-PRJ-001..004)', () => {
   });
 
   it('/ goes to the project list when nothing was opened before', async () => {
+    // A fresh user with no projects lands on /onboarding (FR-ONB-001, HomeRedirect.test.tsx).
+    db.patchSettings({ onboardingCompleted: true });
     const { router } = renderApp('/');
     await waitFor(() => expect(router.state.location.pathname).toBe('/projects'));
   });
