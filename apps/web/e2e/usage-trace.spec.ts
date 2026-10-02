@@ -213,15 +213,8 @@ test('NFR-USE-03: the usage screen itself fits 380 px — cards, chart, filters'
   expect(fit.widest).toBeLessThanOrEqual(fit.viewport);
 });
 
-/*
- * Kept red on purpose: at 380 px the shared top bar's trailing icon links (settings, help) end at
- * ~427 px, so the document scrolls sideways although the usage screen fits. The top bar is outside
- * this area's paths; the responsive work (FR-MOB-001) owns it. When it lands, this starts passing
- * and Playwright flags the `test.fail` — remove it then.
- */
-test('NFR-USE-03: /usage at 380 px has no horizontal page scroll (top bar overflows)', async ({
-  page,
-}) => {
+/* The whole page fits at 380 px, top bar included (FR-MOB-001's compact top bar). */
+test('NFR-USE-03: /usage at 380 px has no horizontal page scroll', async ({ page }) => {
   await openUsageAt380(page);
   const overflow = await page.evaluate(() => ({
     scroll: document.documentElement.scrollWidth,
