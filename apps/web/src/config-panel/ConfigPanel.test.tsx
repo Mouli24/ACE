@@ -81,12 +81,11 @@ describe('Config panel (FR-NODE-002/003/007/008)', () => {
     // Round 3 made the guardrail policy a real picker (FR-GRD-002); the rest still announce
     // their round.
     expect(q.getByLabelText(/guardrail policy/i)).toBeInTheDocument();
-    // Tools became a real section in round 4 (FR-TOOL-002); the rest still announce their round.
-    for (const [label, round] of [
-      ['skills', 'Round 6+'],
-      ['memory', 'Round 5'],
-      ['knowledge bases', 'Round 5'],
-    ] as const) {
+    // Tools became a real section in round 4 (FR-TOOL-002), memory and knowledge bases in round 5
+    // (FR-MEM-001, FR-RAG-005); skills still announce their round.
+    expect(q.getByTestId('agent-memory')).toBeInTheDocument();
+    expect(q.getByTestId('agent-knowledge-bases')).toBeInTheDocument();
+    for (const [label, round] of [['skills', 'Round 6+']] as const) {
       const field = q.getByTestId(`later-${label.replace(/\s+/g, '-')}`);
       expect(field).toHaveTextContent(new RegExp(`available in ${round}`, 'i'));
       expect(field.querySelector('[disabled], [aria-disabled="true"]')).not.toBeNull();
