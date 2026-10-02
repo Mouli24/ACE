@@ -18,6 +18,7 @@ import {
 } from '@ace/ui';
 import { Handle, Position, type NodeProps, type Node as FlowNode } from '@xyflow/react';
 import {
+  BookOpen,
   Bot,
   Cpu,
   Flag,
@@ -35,16 +36,20 @@ import { findBlockingNodeId } from '../errors/blocked';
 import { NodeApproval, NodeErrorCard, NodeRunActions } from '../runs/NodeRunAttachments';
 import { useNodeOverlay, useRunStore } from '../runs/run-store';
 import { useWorkflowGraph } from '../workflows/hooks';
-import type { Round1NodeKind } from './factory';
-import { NodePreflightIssues } from './NodePreflightIssues';
+import { DEFAULT_SEARCH_MODE } from '@ace/contracts';
 
-export const KIND_ICON: Record<Round1NodeKind, LucideIcon> = {
+import type { CanvasNodeKind } from './factory';
+import { NodePreflightIssues } from './NodePreflightIssues';
+import { useKnowledgeBaseName, useWorkflowProjectId } from './retrieval/hooks';
+
+export const KIND_ICON: Record<CanvasNodeKind, LucideIcon> = {
   input: TextCursorInput,
   agent: Bot,
   model: Cpu,
   output: Flag,
   merge: GitMerge,
   transform: Wand2,
+  retrieval: BookOpen,
 };
 
 /** React Flow node payload: the contract node plus what the Canvas knows about it. */
@@ -85,6 +90,8 @@ export interface NodeCardViewProps {
   failureReason?: FailureReason;
   /** The upstream node that stopped the run, on a BLOCKED card (FR-ERR-006). */
   blockedByName?: string;
+  /** A Retrieval node's base, by name, once the project's bases have loaded (FR-RAG-006). */
+  knowledgeBaseName?: string;
 }
 
 /** Each failure reason in the words a person reads; the enum value stays the contract's (BR-03). */
@@ -183,9 +190,10 @@ export function NodeCardView({
   providerMissing,
   failureReason,
   blockedByName,
+  knowledgeBaseName,
   actions,
 }: NodeCardViewProps) {
-  const Icon = KIND_ICON[node.kind as Round1NodeKind] ?? Bot;
+  const Icon = KIND_ICON[node.kind as CanvasNodeKind] ?? Bot;
   const chip = modelLabel(node);
   const style = {
     '--accent-color': provider ? PROVIDER_ACCENT[provider] : tokens.color.border,
@@ -297,6 +305,15 @@ export function NodeCardView({
             {finalOutput.map((part) => partText(part)).join('\n')}
           </p>
         ))}
+      {node.kind === 'retrieval' && (
+        <RetrievalSummary
+          nodeId={node.id}
+          knowledgeBaseId={node.config.knowledgeBaseId}
+          knowledgeBaseName={knowledgeBaseName}
+          k={node.config.k}
+          mode={node.config.mode ?? DEFAULT_SEARCH_MODE}
+        />
+      )}
       {node.kind === 'input' && node.config.text && (
         <p className="line-clamp-2 px-3 pt-1 font-human text-xs text-fg-muted">
           {node.config.text}
@@ -341,6 +358,11 @@ export const FlowNodeCard = memo(function FlowNodeCard({ data, selected }: NodeP
   const node = data.node;
   const overlay = useNodeOverlay(node.id);
   const blockedByName = useBlockedByName(node, overlay.state === 'BLOCKED');
+  const projectId = useWorkflowProjectId(node.workflowId);
+  const knowledgeBaseName = useKnowledgeBaseName(
+    projectId,
+    node.kind === 'retrieval' ? node.config.knowledgeBaseId : undefined,
+  );
   const card = (
     <NodeCardView
       node={node}
@@ -355,6 +377,7 @@ export const FlowNodeCard = memo(function FlowNodeCard({ data, selected }: NodeP
       {...(overlay.finalOutput === undefined ? {} : { finalOutput: overlay.finalOutput })}
       {...(overlay.failureReason === undefined ? {} : { failureReason: overlay.failureReason })}
       {...(blockedByName === undefined ? {} : { blockedByName })}
+      {...(knowledgeBaseName === undefined ? {} : { knowledgeBaseName })}
       {...(data.providerMissing ? { providerMissing: true } : {})}
       {...(data.provider === undefined ? {} : { provider: data.provider })}
     />
@@ -378,6 +401,53 @@ export const FlowNodeCard = memo(function FlowNodeCard({ data, selected }: NodeP
 });
 
 export const nodeTypes = { ace: FlowNodeCard };
+
+/**
+ * What a Retrieval node searches, on its card (FR-RAG-006): the base, how many hits and how. With no
+ * base chosen the card says so — the same gap pre-flight reports as `missing_knowledge_base`.
+ */
+function RetrievalSummary({
+  nodeId,
+  knowledgeBaseId,
+  knowledgeBaseName,
+  k,
+  mode,
+}: {
+  nodeId: string;
+  knowledgeBaseId: string | undefined;
+  knowledgeBaseName: string | undefined;
+  k: number;
+  mode: string;
+}) {
+  return (
+    <div
+      className="flex flex-wrap items-center gap-1 px-3 pt-1"
+      data-testid={`retrieval-summary-${nodeId}`}
+    >
+      {knowledgeBaseId === undefined ? (
+        <Badge className="border-dashed text-fg-muted" data-testid={`retrieval-kb-${nodeId}`}>
+          no knowledge base
+        </Badge>
+      ) : (
+        <Badge data-testid={`retrieval-kb-${nodeId}`} title={knowledgeBaseId}>
+          {knowledgeBaseName ?? 'knowledge base'}
+        </Badge>
+      )}
+      <span
+        className="font-machine text-[10px] text-fg-muted"
+        data-testid={`retrieval-k-${nodeId}`}
+      >
+        k {k}
+      </span>
+      <span
+        className="font-machine text-[10px] text-fg-muted"
+        data-testid={`retrieval-mode-${nodeId}`}
+      >
+        {mode}
+      </span>
+    </div>
+  );
+}
 
 /**
  * The name of the node whose failure blocked this one (FR-ERR-006, TC-ERR-007).
