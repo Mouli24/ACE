@@ -17,7 +17,6 @@ export function HomeRedirect() {
   }
   const last = settings.data?.lastProjectId;
   if (last) return <Navigate to={`/projects/${last}`} replace />;
-  const fresh =
-    settings.data?.onboardingCompleted === false && (projects.data?.length ?? 0) === 0;
+  const fresh = settings.data?.onboardingCompleted === false && (projects.data?.length ?? 0) === 0;
   return <Navigate to={fresh ? '/onboarding' : '/projects'} replace />;
 }

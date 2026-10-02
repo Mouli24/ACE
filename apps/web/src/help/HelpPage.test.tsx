@@ -48,9 +48,7 @@ describe('FR-ONB-003 the bundled user guide', () => {
   it('renders a page with the index beside it', async () => {
     renderApp('/help/getting-started');
     const article = await screen.findByTestId('help-article');
-    expect(within(article).getByRole('heading', { level: 1 })).toHaveTextContent(
-      'Getting started',
-    );
+    expect(within(article).getByRole('heading', { level: 1 })).toHaveTextContent('Getting started');
     const index = screen.getByRole('navigation', { name: 'User guide' });
     expect(within(index).getAllByRole('link')).toHaveLength(GUIDE_PAGES.length);
     expect(within(index).getByRole('link', { name: 'Getting started' })).toHaveAttribute(

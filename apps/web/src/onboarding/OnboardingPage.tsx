@@ -104,7 +104,11 @@ export function OnboardingPage() {
         </div>
       </header>
 
-      <ol aria-label="Setup progress" className="flex flex-wrap gap-2" data-testid="onboarding-steps">
+      <ol
+        aria-label="Setup progress"
+        className="flex flex-wrap gap-2"
+        data-testid="onboarding-steps"
+      >
         {STEPS.map(({ step, label }) => {
           const done = step < state.step;
           const active = step === state.step;
@@ -303,7 +307,9 @@ function TemplateStep({
           {message(templates.error)}
         </p>
       )}
-      {templates.isPending && <p className="font-human text-sm text-fg-muted">Loading templates…</p>}
+      {templates.isPending && (
+        <p className="font-human text-sm text-fg-muted">Loading templates…</p>
+      )}
 
       <div
         role="radiogroup"
