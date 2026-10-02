@@ -105,9 +105,7 @@ test.describe('FR-ONB-001 skip and resume', () => {
 /** Tab forward until the element with this test id has focus — Tab and nothing else. */
 async function tabTo(page: Page, testId: string) {
   for (let i = 0; i < 60; i += 1) {
-    const focused = await page.evaluate(() =>
-      document.activeElement?.getAttribute('data-testid'),
-    );
+    const focused = await page.evaluate(() => document.activeElement?.getAttribute('data-testid'));
     if (focused === testId) return;
     await page.keyboard.press('Tab');
   }
@@ -126,7 +124,11 @@ test('keyboard only: Tab, Enter, Space and arrows reach a completed run', async 
   // Into the radio group, then the arrows choose: the fourth card is RAG Q&A.
   const first = page.getByRole('radio').first();
   await expect(first).toBeAttached();
-  for (let i = 0; i < 60 && !(await first.evaluate((el) => el === document.activeElement)); i += 1) {
+  for (
+    let i = 0;
+    i < 60 && !(await first.evaluate((el) => el === document.activeElement));
+    i += 1
+  ) {
     await page.keyboard.press('Tab');
   }
   await page.keyboard.press('Space');
