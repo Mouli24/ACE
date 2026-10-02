@@ -8,12 +8,16 @@ import {
   type MergeConfig,
   type ModelConfig,
   type Node,
+  type RetrievalConfig,
   type TransformConfig,
 } from '@ace/contracts';
 import { Button } from '@ace/ui';
 
 import { PolicyPicker } from '../guardrails/PolicyPicker';
+import { useWorkflowProjectId } from '../nodes/retrieval/hooks';
+import { AgentKnowledgeBasesField, AgentMemoryField } from './AgentKnowledgeFields';
 import { AgentToolsSection } from './AgentToolsSection';
+import { RetrievalPanel } from './RetrievalPanel';
 import { InputAttachments } from './InputAttachments';
 import { MergeModeField } from '../nodes/merge/MergeModeField';
 import { MergeSlots, type MergeSlot } from '../nodes/merge/MergeSlots';
@@ -171,13 +175,17 @@ export function AgentPanel({
       />
       <AgentToolsSection tools={config.tools} onChange={(tools) => patch({ tools })} />
       <LaterField label="Skills" round="Round 6+" testId="skills" />
-      <LaterField label="Memory" round="Round 5" testId="memory" />
+      <AgentMemoryField memory={config.memory} onChange={(memory) => patch({ memory })} />
       <PolicyPicker
         projectId={projectId}
         value={config.guardrailPolicyId}
         onChange={(guardrailPolicyId) => patch({ guardrailPolicyId })}
       />
-      <LaterField label="Knowledge bases" round="Round 5" testId="knowledge-bases" />
+      <AgentKnowledgeBasesField
+        value={config.knowledgeBaseIds}
+        projectId={projectId}
+        onChange={(knowledgeBaseIds) => patch({ knowledgeBaseIds })}
+      />
     </>
   );
 }
@@ -373,13 +381,16 @@ export function KindPanel({
   /** The node's project, for the guardrail policy picker (FR-GRD-002). */
   projectId?: Id;
 }) {
+  // the route names the project on the Canvas; the workflow itself names it everywhere else
+  const workflowProjectId = useWorkflowProjectId(workflowId);
+  const project = projectId ?? workflowProjectId;
   switch (node.kind) {
     case 'agent':
       return (
         <AgentPanel
           config={node.config}
           patch={patch as PatchConfig<AgentConfig>}
-          {...(projectId === undefined ? {} : { projectId })}
+          {...(project === undefined ? {} : { projectId: project })}
         />
       );
     case 'model':
@@ -406,6 +417,14 @@ export function KindPanel({
       return <TransformPanel config={node.config} patch={patch as PatchConfig<TransformConfig>} />;
     case 'output':
       return <OutputPanel />;
+    case 'retrieval':
+      return (
+        <RetrievalPanel
+          config={node.config}
+          patch={patch as PatchConfig<RetrievalConfig>}
+          projectId={project}
+        />
+      );
     default:
       return <p className="text-sm text-fg-muted">This node kind arrives in a later round.</p>;
   }
