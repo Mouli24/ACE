@@ -3,6 +3,7 @@ import { PartRenderer, StatusRing } from '@ace/ui';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { api } from '../app/api';
+import { useWorkflowSubscription } from '../app/socket';
 import { ErrorsTab } from '../errors/ErrorsTab';
 import { TraceTab } from '../inspector/TraceTab';
 import { useProviders } from '../providers/hooks';
@@ -42,6 +43,9 @@ export function RunDetailPage() {
   const restart = useRestartRun();
   const retry = useRetryNodeRun();
   const compact = useIsCompact();
+  // The trace and the node states arrive as the workflow's run frames (FR-OBS-001); counted, so an
+  // open Canvas on the same workflow keeps its own feed when this page unmounts.
+  useWorkflowSubscription(run.data?.workflowId);
   const busy = pause.isPending || resume.isPending || stop.isPending || restart.isPending;
 
   if (run.isPending) return <p className="p-6 text-fg-muted">Loading run…</p>;
