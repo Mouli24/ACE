@@ -290,7 +290,7 @@ describe('FR-RAG-008 Test search panel', () => {
     expect(first.querySelector('mark')).toHaveTextContent(RARE_TERM);
     expect(within(first).getByTestId('source-chip')).toHaveTextContent('security-handbook.pdf');
     expect(within(first).getByTestId('source-via')).toHaveTextContent('keyword');
-    expect(within(first).getByTestId('kb-search-hit-score').textContent).toMatch(/^[01]\.\d\d$/);
+    expect(within(first).getByTestId('kb-hit-score').textContent).toMatch(/^[01]\.\d\d$/);
     expect(first.dataset['testid']).toMatch(/^kb-search-hit-/);
   });
 
@@ -308,7 +308,7 @@ describe('FR-RAG-008 Test search panel', () => {
     expect(hits[0]).toHaveTextContent(/twenty-five days of paid annual leave/i);
     expect(within(hits[0]!).getByTestId('source-via')).toHaveTextContent('vector');
     for (const hit of hits) {
-      expect(within(hit).getByTestId('kb-search-hit-score')).toBeInTheDocument();
+      expect(within(hit).getByTestId('kb-hit-score')).toBeInTheDocument();
     }
   });
 
