@@ -4,11 +4,9 @@ ACE is a multimodal AI agent orchestration platform: you build workflows by plac
 Canvas and drawing typed connections between them, and a run executes across cloud, local and
 custom models with guardrails, budgets and approvals on by default.
 
-This repository is **Round 1**: the engine skeleton and the web shell with the Canvas. **No model is
-called yet** — providers, the model catalog and the run engine arrive in Round 2. What works today:
-projects, workflows (tabs, rename, duplicate, delete, export/import), the dark dotted Canvas with six
-node kinds, typed ports, typed connections that refuse incompatible types and plain cycles, the
-config panel, autosave with conflict handling, and a validation tab.
+**Nothing paid is required.** The built-in Mock provider answers every request on your machine, with
+no API key and no network, and every starting template runs to completion on it. Ollama is the free
+local route to real models; cloud providers (Anthropic, Google, OpenAI) are optional.
 
 ## From clone to first run
 
@@ -32,10 +30,23 @@ Open **that URL** — the token is the session key; the web app stores it and st
 address bar. Opening `http://localhost:5173` without a token shows a page telling you to use the
 printed link.
 
-Then: **New project** → **New workflow** → drag _Input_, _Agent_ and _Output_ from the palette →
-connect _Input → Agent → Output_ by dragging from an output port to an input port → click the agent
-to fill in name, instructions and data types. Every edit is saved as you go; reload and the graph
-is exactly where you left it.
+A fresh install opens the **first-run wizard** (`/onboarding`):
+
+1. **Add a provider** — click **Use the built-in Mock provider (no key, works offline)**. If Ollama
+   is running locally, **Add Ollama** is offered too.
+2. **Pick a template** — Linear chain, Review and fix, Parallel research or RAG Q&A.
+3. **Create and run** — name the project, type the first question and press **Create project and
+   run**. Nothing is created before you do. The Canvas opens and the run streams until the top bar
+   reads **run complete**.
+
+**Skip setup** goes straight to the project list. From there: **New project** → **New workflow** →
+drag _Input_, _Agent_ and _Output_ from the palette → connect them by dragging from an output port
+to an input port → pick the Mock provider and a model on the agent → press **Start**. Every edit is
+saved as you go; reload and the graph is exactly where you left it.
+
+The user guide is built in: the **?** icon in the top bar opens `/help/getting-started`, and the
+pages live in [`docs/user-guide/`](docs/user-guide/). They are bundled into the app and work
+offline.
 
 ## Scripts
 
@@ -51,7 +62,7 @@ is exactly where you left it.
 
 ### Web app without the engine
 
-The web app can run against an in-memory mock engine (MSW) that implements the Round 1 API:
+The web app can run against an in-memory mock engine (MSW) that implements the engine's API:
 
 ```sh
 VITE_ACE_MOCK=1 pnpm dev:web
@@ -64,21 +75,22 @@ Mock state lives in `localStorage`, so two tabs act as two clients of the same e
 
 ```
 apps/server        local engine entry point (ace-engine)
-apps/web           React/Vite SPA — Canvas, config panel, projects, workflows
+apps/web           React/Vite SPA — Canvas, runs, chat, knowledge, onboarding, settings
 packages/contracts the shared contract: every Zod schema, enum and API/WS type
 packages/engine    orchestration core
 packages/sdk       @ace/sdk — typed REST client and resuming WebSocket client
 packages/ui        design tokens (dark dotted Canvas, provider accents, status rings) and components
 docs/              PRD, FRS, architecture, decision log, defect log, team prompts
+docs/user-guide/   the user guide the app renders at /help/:page
 ```
 
 See `CLAUDE.md` for the team process, `docs/ACE-FRS.md` for requirements and `docs/DECISIONS.md`
 for every decision made along the way.
 
-## Round 2 — providers, models and runs (web)
+## Providers, models and runs (web)
 
 The mock engine is enough to drive everything below with no keys and no network: `VITE_ACE_MOCK=1
-pnpm dev:web`, or `pnpm dev` for the real engine once A2 has landed.
+pnpm dev:web`, or `pnpm dev` for the real engine.
 
 - **`/providers`** — add a provider per type (the `mock` one needs nothing), Test it, rotate or
   remove its key, set its concurrency. A key is written, never read back: the API returns
@@ -95,8 +107,9 @@ pnpm dev:web`, or `pnpm dev` for the real engine once A2 has landed.
 - **Runs** — a Runs tab per workflow, `/projects/:projectId/runs` for the project, and
   `/runs/:runId` for one run with its snapshot read-only.
 
-Pause, stop, retry, approvals and guardrail screens are Round 3; the run-control slot in the top bar
-says so.
+- **Controls and guardrails** — Pause, Resume, Stop and Restart sit beside Start; a failed node is
+  retried from its error card; guardrail policies live at `/guardrails`, and an "ask user" verdict
+  shows an approval card on the run.
 
 ### Driving a scenario by hand
 
