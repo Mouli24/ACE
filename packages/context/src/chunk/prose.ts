@@ -37,7 +37,8 @@ function sections(document: ParsedDocument): Section[] {
 
 function paragraphs(text: string, section: Span): Span[] {
   const spans: Span[] = [];
-  const blank = /\n[ \t]*\n/g;
+  // A blank line, with LF or CRLF newlines; the text itself is never rewritten, so heading offsets stay valid.
+  const blank = /\r?\n[ \t\r]*\r?\n/g;
   const slice = text.slice(section.start, section.end);
   let from = 0;
   for (const match of slice.matchAll(blank)) {
@@ -117,6 +118,8 @@ export function chunkProse(input: {
   for (const section of sections(document)) {
     const parts = pieces(text, section.span, maxPiece);
     const heading = section.headings[section.headings.length - 1];
+    // By design the overlap never crosses a section: a chunk never spans a heading, so `previous`
+    // starts empty for every section.
     let previous = '';
     let index = 0;
     while (index < parts.length) {
