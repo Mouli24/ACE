@@ -12,7 +12,8 @@ be changed afterwards, because vectors from two models cannot be searched togeth
 
 Upload PDF, DOCX, Markdown, text, code or HTML files. Each document shows its status and progress
 while it is read, split into chunks and indexed. A file that cannot be read is marked failed with
-the reason, and the others are not affected. You can delete or reindex a document.
+the reason, and the others are not affected. You can delete a document, or reindex the
+whole base after changing its chunk settings.
 
 ## Test search
 
