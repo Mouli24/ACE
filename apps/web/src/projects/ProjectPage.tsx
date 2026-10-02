@@ -39,6 +39,9 @@ export function ProjectPage() {
           <Button asChild variant="secondary">
             <Link to={`/projects/${projectId}/runs`}>Runs</Link>
           </Button>
+          <Button asChild variant="secondary">
+            <Link to={`/projects/${projectId}/knowledge`}>Knowledge</Link>
+          </Button>
           <ImportWorkflowButton projectId={projectId} />
           <Button onClick={() => setCreating(true)}>
             <Plus className="h-4 w-4" /> New workflow
