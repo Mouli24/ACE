@@ -12,6 +12,8 @@ import { ChatPanel } from '../chat';
 import { ConfigPanel } from '../config-panel/ConfigPanel';
 import { Inspector } from '../inspector/Inspector';
 import { MemoryTab } from '../memory/MemoryTab';
+import { CompactWorkflowLayout } from '../responsive/CompactWorkflowLayout';
+import { useIsCompact } from '../responsive/useIsCompact';
 import { PreflightIssues } from '../runs/PreflightIssues';
 import { RunsList } from '../runs/RunsList';
 import { useAdoptActiveRun, useRunEvents } from '../runs/hooks';
@@ -21,7 +23,9 @@ const handle = 'bg-border transition-colors data-[resize-handle-state=drag]:bg-a
 
 /**
  * The Canvas screen (Arch §33.1 step 5): left palette · centre Canvas over the bottom panel ·
- * right config panel, all resizable (round 1 §5 step 3).
+ * right config panel, all resizable (round 1 §5 step 3). At phone width (≤ 640 px) it is a
+ * monitoring screen instead: a read-only Canvas and tabs for runs, inspector, chat and memory
+ * (FR-MOB-001/003).
  */
 export function WorkflowPage() {
   const { projectId = '', workflowId = '' } = useParams();
@@ -33,6 +37,7 @@ export function WorkflowPage() {
   useAdoptActiveRun(workflowId);
   const { paletteOpen, configOpen, bottomOpen } = usePanelsStore();
   const canvasApi = useCanvasApi((s) => s.api);
+  const compact = useIsCompact();
 
   if (graph.isError) {
     return (
@@ -42,6 +47,21 @@ export function WorkflowPage() {
           Back to the project
         </Link>
       </p>
+    );
+  }
+
+  if (compact) {
+    return (
+      <CompactWorkflowLayout
+        workflowId={workflowId}
+        canvas={
+          <>
+            {/* R5 wiring: pass readOnly to Canvas once FR-CAN readOnly prop lands */}
+            <Canvas workflowId={workflowId} />
+            <PreflightIssues workflowId={workflowId} />
+          </>
+        }
+      />
     );
   }
 
