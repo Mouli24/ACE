@@ -274,8 +274,8 @@ function EnvelopeView({ envelope }: { envelope: Envelope }) {
   );
 }
 
-/** All seven Part types, through the shared renderers (FR-MM-006): media resolve via the content URL. */
 /**
+ * All seven Part types, through the shared renderers (FR-MM-006): media resolve via the content URL.
  * A Part names its artifact but carries no hash; the row does (D214), so the card is given the
  * artifact's sha256 once it is fetched — "name, size, hash" (R4 §5 item 3, D-076).
  */
