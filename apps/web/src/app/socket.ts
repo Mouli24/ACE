@@ -53,8 +53,29 @@ export function stopSocket(): void {
 export function useWorkflowSubscription(workflowId: string | undefined): void {
   useEffect(() => {
     if (!workflowId || !socket) return;
+    const current = socket;
     const payload = { scope: 'workflow' as const, id: workflowId };
-    socket.subscribe(payload);
-    return () => socket?.unsubscribe(payload);
+    /*
+     * Counted, because more than one screen can watch one workflow at a time — the Canvas and a run
+     * page's trace (FR-OBS-001) — and the SDK keeps one subscription per scope: the first to mount
+     * subscribes, the last to unmount unsubscribes, and nobody cuts another screen's feed.
+     */
+    const count = watchers.get(current)?.get(workflowId) ?? 0;
+    const byWorkflow = watchers.get(current) ?? new Map<string, number>();
+    watchers.set(current, byWorkflow);
+    byWorkflow.set(workflowId, count + 1);
+    if (count === 0) current.subscribe(payload);
+    return () => {
+      const left = (byWorkflow.get(workflowId) ?? 1) - 1;
+      if (left > 0) {
+        byWorkflow.set(workflowId, left);
+        return;
+      }
+      byWorkflow.delete(workflowId);
+      current.unsubscribe(payload);
+    };
   }, [workflowId]);
 }
+
+/** Per socket, so a restarted socket (tests) starts from zero. */
+const watchers = new WeakMap<AceSocket, Map<string, number>>();

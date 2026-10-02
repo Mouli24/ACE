@@ -1,5 +1,6 @@
 import type { WorkflowGraphResponse } from '@ace/contracts';
 import { QueryClient } from '@tanstack/react-query';
+import { renderHook } from '@testing-library/react';
 import { setupServer } from 'msw/node';
 
 import { MockDb } from '../mocks/db';
@@ -8,7 +9,7 @@ import { createHandlers } from '../mocks/handlers';
 import { getGraphSync, resetGraphSyncRegistry } from '../workflows/sync-registry';
 import { queryKeys } from '../workflows/query-keys';
 import { configureApi } from './api';
-import { getSocket, startSocket, stopSocket } from './socket';
+import { getSocket, startSocket, stopSocket, useWorkflowSubscription } from './socket';
 
 const db = new MockDb({ persist: false });
 const server = setupServer(...createHandlers(db));
@@ -69,5 +70,28 @@ describe('startSocket — one socket patching the query cache (Arch §10.1, §2.
     db.commitGraph(wf.id, [], []);
     await tick(20);
     expect(queryClient.getQueryState(queryKeys.workflow(wf.id))?.isInvalidated).toBe(true);
+  });
+});
+
+describe('useWorkflowSubscription — shared by every screen watching a workflow (FR-OBS-001, FR-MOB-001)', () => {
+  it('keeps the subscription until the last screen watching that workflow unmounts', () => {
+    const socket = startSocket({
+      token: 'mock',
+      queryClient: new QueryClient(),
+      url: 'ws://mock.local/ws',
+      WebSocket: createFakeWebSocket(db) as unknown as typeof WebSocket,
+    });
+    const subscribe = vi.spyOn(socket, 'subscribe');
+    const unsubscribe = vi.spyOn(socket, 'unsubscribe');
+
+    const canvas = renderHook(() => useWorkflowSubscription('wf-1'));
+    const runPage = renderHook(() => useWorkflowSubscription('wf-1'));
+    expect(subscribe).toHaveBeenCalledTimes(1);
+
+    runPage.unmount();
+    expect(unsubscribe).not.toHaveBeenCalled();
+    canvas.unmount();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).toHaveBeenCalledWith({ scope: 'workflow', id: 'wf-1' });
   });
 });
