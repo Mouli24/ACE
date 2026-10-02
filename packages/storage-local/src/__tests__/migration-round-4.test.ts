@@ -6,7 +6,7 @@ import { newId } from '@ace/engine';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openDatabase } from '../db.js';
-import { MIGRATIONS, ROUND_4_MIGRATION_ID } from '../migrations.js';
+import { MIGRATIONS, ROUND_4_MIGRATION_ID, ROUND_5_MIGRATION_ID } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
 
 /**
@@ -55,7 +55,7 @@ describe('Arch §15.3 the round 4 migration adds the six new tables', () => {
     before.sqlite.close();
 
     const after = openDatabase({ path });
-    expect(after.appliedMigrations).toEqual([ROUND_4_MIGRATION_ID]);
+    expect(after.appliedMigrations).toEqual([ROUND_4_MIGRATION_ID, ROUND_5_MIGRATION_ID]);
     const tablesAfter = (
       after.sqlite.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as {
         name: string;

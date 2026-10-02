@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 
+import { ensureVectorTables, loadVectorExtension, type VectorExtension } from './indexes.js';
 import {
   appliedMigrations,
   applyMigrations,
@@ -18,6 +19,12 @@ export interface OpenDatabaseOptions {
   path: string;
   /** Overridable so a migration chain can be exercised; defaults to the shipped list. */
   migrations?: readonly Migration[];
+  /**
+   * Whether to load sqlite-vec (F8). On by default; `false` opens with the exact-scan fallback —
+   * what a platform without the extension gets, and what the backup import uses for the copy it
+   * only reads from.
+   */
+  loadVectorExtension?: boolean;
 }
 
 export interface OpenDatabase {
@@ -26,6 +33,11 @@ export interface OpenDatabase {
   /** The backup written before migrations ran, when there was an existing schema to protect. */
   backupPath?: string;
   appliedMigrations: string[];
+  /**
+   * How vector search runs on this connection (F8): `'sqlite-vec'` when the extension loaded,
+   * `'scan'` when it did not. The composition root logs a warning for `'scan'`.
+   */
+  vectorExtension: VectorExtension;
 }
 
 /** Copies the database file, returning where it went (NFR-REL-03, TC-NFR-007). */
@@ -57,9 +69,14 @@ export function needsBackup(
  * Opens the local database and brings it up to date.
  *
  * WAL keeps a reader from blocking the writer, and `foreign_keys` is on so a stray reference fails
- * loudly. The backup happens before the first migration statement, never after.
+ * loudly. The backup happens before the first migration statement, never after. sqlite-vec loads
+ * after the migrations, and its `vec0` tables are then brought into step with `kb_vectors` (F8).
  */
-export function openDatabase({ path, migrations }: OpenDatabaseOptions): OpenDatabase {
+export function openDatabase({
+  path,
+  migrations,
+  loadVectorExtension: loadExtension = true,
+}: OpenDatabaseOptions): OpenDatabase {
   mkdirSync(dirname(path), { recursive: true });
 
   const sqlite = new BetterSqlite3(path);
@@ -76,10 +93,14 @@ export function openDatabase({ path, migrations }: OpenDatabaseOptions): OpenDat
   }
   const applied = applyMigrations(sqlite, migrations);
 
+  const vectorExtension: VectorExtension = loadExtension ? loadVectorExtension(sqlite) : 'scan';
+  if (vectorExtension === 'sqlite-vec') ensureVectorTables(sqlite);
+
   return {
     db: drizzle(sqlite, { schema }),
     sqlite,
     ...(backupPath === undefined ? {} : { backupPath }),
     appliedMigrations: applied,
+    vectorExtension,
   };
 }

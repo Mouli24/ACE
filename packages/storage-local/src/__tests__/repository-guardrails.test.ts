@@ -444,6 +444,8 @@ describe('FR-GRD-014 A verdict cannot hold the value it redacted', () => {
       'reason',
       'redacted_types',
       'at',
+      // Round 5 (D232): what the context point stripped, by kind — never the text.
+      'stripped_types',
     ]);
     expect(columns).not.toContain('value');
   });

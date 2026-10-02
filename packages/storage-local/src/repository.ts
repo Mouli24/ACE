@@ -22,6 +22,11 @@ import type {
   EdgeRepository,
   GuardrailPolicyRepository,
   GuardrailVerdictRepository,
+  KbChunkRepository,
+  KbDocumentRepository,
+  KnowledgeBaseRepository,
+  MemoryRepository,
+  SummaryCacheRepository,
   McpServerRepository,
   MessageRepository,
   ModelRepository,
@@ -46,6 +51,7 @@ import { and, asc, eq, gt, inArray, isNull, notInArray, or, sql } from 'drizzle-
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 
 import { buildDefaultPolicy } from './default-policy.js';
+import { detectVectorExtension, VectorStore, type VectorExtension } from './indexes.js';
 import {
   createApprovalRepository,
   createGuardrailPolicyRepository,
@@ -59,6 +65,13 @@ import {
   createMessageRepository,
   createToolCallRepository,
 } from './repository-round4.js';
+import {
+  createKbChunkRepository,
+  createKbDocumentRepository,
+  createKnowledgeBaseRepository,
+  createMemoryRepository,
+  createSummaryCacheRepository,
+} from './repository-round5.js';
 import {
   createModelRepository,
   createNodeRunRepository,
@@ -181,6 +194,14 @@ function paginate<T>(rows: T[], limit: number, cursorOf: (row: T) => string): Pa
 /* The adapter                                                                 */
 /* -------------------------------------------------------------------------- */
 
+export interface SqliteRepositoryOptions {
+  /**
+   * How chunk vectors are written (F8). Defaults to what the connection has loaded — `openDatabase`
+   * loads sqlite-vec — so `kbChunks` and `SqliteVectorIndex` on one handle always agree.
+   */
+  vectorExtension?: VectorExtension;
+}
+
 export class SqliteRepository implements Repository {
   readonly #db: Db;
   readonly #sqlite: BetterSqlite3.Database;
@@ -207,7 +228,14 @@ export class SqliteRepository implements Repository {
   readonly chatThreads: ChatThreadRepository;
   readonly chatMessages: ChatMessageRepository;
 
-  constructor(db: Db, sqlite: BetterSqlite3.Database) {
+  /* Round 5 (Arch §15.3, §21.3). Optional on the port (D218's pattern); all implemented here. */
+  readonly knowledgeBases: KnowledgeBaseRepository;
+  readonly kbDocuments: KbDocumentRepository;
+  readonly kbChunks: KbChunkRepository;
+  readonly memory: MemoryRepository;
+  readonly summaryCache: SummaryCacheRepository;
+
+  constructor(db: Db, sqlite: BetterSqlite3.Database, options: SqliteRepositoryOptions = {}) {
     this.#db = db;
     this.#sqlite = sqlite;
 
@@ -233,6 +261,18 @@ export class SqliteRepository implements Repository {
     this.messages = createMessageRepository(db);
     this.chatThreads = createChatThreadRepository(db, inTransaction);
     this.chatMessages = createChatMessageRepository(db);
+
+    // Round 5. A chunk write, a document delete and a base delete each touch the chunk rows, both
+    // vector stores and (through the trigger) the FTS index, so they borrow this transaction too.
+    const vectors = new VectorStore(
+      sqlite,
+      options.vectorExtension ?? detectVectorExtension(sqlite),
+    );
+    this.knowledgeBases = createKnowledgeBaseRepository(db, inTransaction, vectors);
+    this.kbDocuments = createKbDocumentRepository(db, inTransaction, vectors);
+    this.kbChunks = createKbChunkRepository(db, inTransaction, vectors);
+    this.memory = createMemoryRepository(db);
+    this.summaryCache = createSummaryCacheRepository(db, sqlite);
   }
 
   /**
