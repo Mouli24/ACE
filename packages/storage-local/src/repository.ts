@@ -27,6 +27,7 @@ import type {
   KnowledgeBaseRepository,
   MemoryRepository,
   SummaryCacheRepository,
+  UsageRepository,
   McpServerRepository,
   MessageRepository,
   ModelRepository,
@@ -72,6 +73,7 @@ import {
   createMemoryRepository,
   createSummaryCacheRepository,
 } from './repository-round5.js';
+import { createUsageRepository } from './repository-usage.js';
 import {
   createModelRepository,
   createNodeRunRepository,
@@ -234,6 +236,7 @@ export class SqliteRepository implements Repository {
   readonly kbChunks: KbChunkRepository;
   readonly memory: MemoryRepository;
   readonly summaryCache: SummaryCacheRepository;
+  readonly usage: UsageRepository;
 
   constructor(db: Db, sqlite: BetterSqlite3.Database, options: SqliteRepositoryOptions = {}) {
     this.#db = db;
@@ -273,6 +276,7 @@ export class SqliteRepository implements Repository {
     this.kbChunks = createKbChunkRepository(db, inTransaction, vectors);
     this.memory = createMemoryRepository(db);
     this.summaryCache = createSummaryCacheRepository(db, sqlite);
+    this.usage = createUsageRepository(sqlite);
   }
 
   /**
