@@ -410,3 +410,17 @@ describe('FR-RAG-009 Base settings, reindex and delete', () => {
     expect(await screen.findByTestId('kb-empty')).toBeInTheDocument();
   });
 });
+
+describe('FR-RAG-007 A source link opens the document it came from', () => {
+  it('marks the `?doc=` document and names the `?chunk=` it was opened from', async () => {
+    const { knowledgeBaseId, documentIds } = seedKnowledgeBase(db);
+    const target = documentIds[2]!;
+    renderApp(`/knowledge/${knowledgeBaseId}?doc=${target}&chunk=chunk-42`);
+
+    const row = await screen.findByTestId(`kb-doc-${target}`);
+    expect(row).toHaveAttribute('data-focused', 'true');
+    expect(row).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByTestId(`kb-doc-${documentIds[0]!}`)).not.toHaveAttribute('data-focused');
+    expect(screen.getByTestId('kb-opened-chunk')).toHaveTextContent('chunk-42');
+  });
+});

@@ -3,6 +3,7 @@ import { BookOpen, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
+import { HelpLink } from '../help/HelpLink';
 import { useProject } from '../projects/hooks';
 import { CreateKnowledgeBaseDialog } from './CreateKnowledgeBaseDialog';
 import { useKnowledgeBases } from './hooks';
@@ -59,6 +60,7 @@ export function KnowledgeListPage() {
           <Button variant="secondary" onClick={() => setCreating(true)}>
             Create your first knowledge base
           </Button>
+          <HelpLink page="knowledge-bases">How knowledge bases work</HelpLink>
         </div>
       )}
 

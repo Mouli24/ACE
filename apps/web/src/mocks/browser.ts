@@ -24,7 +24,7 @@ import {
   type Round5ScenarioResult,
   type SeedDocument,
 } from './seeds-round5';
-import { createNode, type Round1NodeKind } from '../nodes/factory';
+import { createNode, type CanvasNodeKind } from '../nodes/factory';
 import { applyOpsWithRules } from './graph-rules';
 
 declare global {
@@ -55,7 +55,7 @@ declare global {
       setProviderStatus(id: string, status: string, message?: string): void;
       /** Create a project + workflow with one node per kind, laid out left to right. */
       seedGraph(
-        kinds: Round1NodeKind[],
+        kinds: CanvasNodeKind[],
         options?: { projectName?: string; workflowName?: string },
       ): { projectId: string; workflowId: string; nodeIds: string[] };
       /**
