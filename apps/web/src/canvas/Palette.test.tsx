@@ -18,6 +18,15 @@ describe('Palette (FR-NODE-001, FR-CAN-002)', () => {
     expect(onAdd).toHaveBeenLastCalledWith('merge');
   });
 
+  it('FR-RAG-006: offers the Retrieval node beside the six round-1 kinds', async () => {
+    const user = userEvent.setup();
+    const onAdd = vi.fn();
+    render(<Palette workflowId="wf" onAdd={onAdd} />);
+    await user.click(screen.getByTestId('palette-retrieval'));
+    expect(onAdd).toHaveBeenLastCalledWith('retrieval');
+    expect(screen.getByTestId('palette-retrieval')).toHaveTextContent('Retrieval');
+  });
+
   it('puts the kind on the drag payload', () => {
     render(<Palette workflowId="wf" />);
     const data: Record<string, string> = {};

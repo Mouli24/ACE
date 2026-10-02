@@ -1,5 +1,7 @@
 import {
   DEFAULT_CONTEXT_POLICY,
+  DEFAULT_SEARCH_K,
+  DEFAULT_SEARCH_MODE,
   defaultAgentTools,
   defaultExecutionSettings,
   defaultRouting,
@@ -22,19 +24,35 @@ export const ROUND_1_NODE_KINDS = [
   'transform',
 ] as const satisfies readonly NodeKind[];
 
-export type Round1NodeKind = (typeof ROUND_1_NODE_KINDS)[number];
+/**
+ * Every kind the Canvas can place: round 1's six plus round 5's Retrieval node (FR-RAG-006).
+ * Guardrail and custom arrive in Rounds 6+.
+ */
+export const CANVAS_NODE_KINDS = [
+  ...ROUND_1_NODE_KINDS,
+  'retrieval',
+] as const satisfies readonly NodeKind[];
 
-export const NODE_KIND_LABEL: Record<Round1NodeKind, string> = {
+export type CanvasNodeKind = (typeof CANVAS_NODE_KINDS)[number];
+
+/**
+ * The name the Canvas, the palette and the mock hooks still import. It now covers every placeable
+ * kind, Retrieval included, so a dropped Retrieval node goes through the same `createNode`.
+ */
+export type Round1NodeKind = CanvasNodeKind;
+
+export const NODE_KIND_LABEL: Record<CanvasNodeKind, string> = {
   input: 'Input',
   agent: 'Agent',
   model: 'Model',
   output: 'Output',
   merge: 'Merge',
   transform: 'Transform',
+  retrieval: 'Retrieval',
 };
 
-/** Default config per kind, straight from the §2.4 defaults. */
-function defaultConfig(kind: Round1NodeKind): NodePortSource['config'] {
+/** Default config per kind, straight from the §2.4 defaults (round 5 §2.4 for Retrieval). */
+function defaultConfig(kind: CanvasNodeKind): NodePortSource['config'] {
   switch (kind) {
     case 'input':
       return { artifactIds: [], outputTypes: ['text'] };
@@ -59,11 +77,14 @@ function defaultConfig(kind: Round1NodeKind): NodePortSource['config'] {
       return { mode: 'all' };
     case 'transform':
       return { op: 'template', template: '' };
+    case 'retrieval':
+      // no base yet: pre-flight says `missing_knowledge_base` until one is chosen (§2.4)
+      return { k: DEFAULT_SEARCH_K, mode: DEFAULT_SEARCH_MODE };
   }
 }
 
 /** A new node with a fresh ULID, the kind's default config and its derived ports (FR-NODE-006). */
-export function createNode(kind: Round1NodeKind, workflowId: string, position: Position): Node {
+export function createNode(kind: CanvasNodeKind, workflowId: string, position: Position): Node {
   const base = { id: newId(), kind, config: defaultConfig(kind) } as NodePortSource;
   const node = {
     ...base,

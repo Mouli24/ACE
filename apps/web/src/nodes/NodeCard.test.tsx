@@ -4,7 +4,7 @@ import { ReactFlowProvider } from '@xyflow/react';
 import { render, screen } from '@testing-library/react';
 
 import { NodeCardView } from './NodeCard';
-import { ROUND_1_NODE_KINDS, createNode } from './factory';
+import { CANVAS_NODE_KINDS, ROUND_1_NODE_KINDS, createNode } from './factory';
 
 const WF = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
 
@@ -36,6 +36,40 @@ describe('createNode (FR-NODE-001 six round-1 kinds)', () => {
 
   it('lists exactly input, agent, model, output, merge, transform', () => {
     expect(ROUND_1_NODE_KINDS).toEqual(['input', 'agent', 'model', 'output', 'merge', 'transform']);
+  });
+});
+
+describe('FR-RAG-006 Retrieval node', () => {
+  it('is placeable, satisfies the contract and derives a text `query` in and a json `out`', () => {
+    expect(CANVAS_NODE_KINDS).toContain('retrieval');
+    const node = createNode('retrieval', WF, { x: 0, y: 0 });
+    expect(NodeSchema.safeParse(node).success).toBe(true);
+    expect(NODE_CONFIG_SCHEMA_BY_KIND.retrieval.safeParse(node.config).success).toBe(true);
+    expect(node.config).toEqual({ k: 5, mode: 'hybrid' });
+    expect(node.inputs.map((p) => [p.name, p.dataType, p.multi])).toEqual([
+      ['query', 'text', false],
+    ]);
+    expect(node.outputs.map((p) => [p.name, p.dataType])).toEqual([['out', 'json']]);
+  });
+
+  it('the card shows the base, k and mode, and says when no base is chosen', () => {
+    const node = createNode('retrieval', WF, { x: 0, y: 0 });
+    const { unmount } = renderCard(node);
+    expect(screen.getByTestId(`retrieval-kb-${node.id}`)).toHaveTextContent('no knowledge base');
+    expect(screen.getByTestId(`retrieval-k-${node.id}`)).toHaveTextContent('k 5');
+    expect(screen.getByTestId(`retrieval-mode-${node.id}`)).toHaveTextContent('hybrid');
+    expect(screen.getByTestId(`port-${node.id}:in:query`)).toBeInTheDocument();
+    expect(screen.getByTestId(`port-${node.id}:out:out`)).toHaveAttribute('data-datatype', 'json');
+    unmount();
+
+    const configured = {
+      ...node,
+      config: { knowledgeBaseId: '01ARZ3NDEKTSV4RRFFQ69G5FAW', k: 8, mode: 'keyword' },
+    } as Node;
+    renderCard(configured, { knowledgeBaseName: 'Team handbook' });
+    expect(screen.getByTestId(`retrieval-kb-${node.id}`)).toHaveTextContent('Team handbook');
+    expect(screen.getByTestId(`retrieval-k-${node.id}`)).toHaveTextContent('k 8');
+    expect(screen.getByTestId(`retrieval-mode-${node.id}`)).toHaveTextContent('keyword');
   });
 });
 
