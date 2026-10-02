@@ -26,7 +26,7 @@ interface Found {
 }
 
 /** U+200B–U+200D, U+2060 and U+FEFF: characters that render as nothing. */
-const ZERO_WIDTH = new RegExp('[\u200B-\u200D\u2060\uFEFF]', 'g');
+const ZERO_WIDTH_RUN = new RegExp('[\u200B-\u200D\u2060\uFEFF]+', 'g');
 
 /** `[//]: # (…)` and `[//]: <> (…)`: a Markdown comment, which no renderer shows. One whole line. */
 const MARKDOWN_COMMENT = /^[ \t]*\[\/\/\]:[ \t]*(?:#|<>)[ \t]*\([^)\n]*\)[ \t]*$/gm;
@@ -82,17 +82,27 @@ function isAsciiAt(text: string, index: number): boolean {
 }
 
 /**
- * Zero-width characters. U+200B, U+2060 and U+FEFF are always hidden. U+200C and U+200D are only
- * hidden beside an ASCII character, where they obfuscate a Latin-script instruction; between two
- * non-ASCII characters they are real text (Persian and Indic ZWNJ, emoji ZWJ sequences) and are
- * kept, and keeping them is not a finding.
+ * Zero-width characters, judged a maximal run at a time. If either end of a run touches an ASCII
+ * character the whole run is hidden — it is obfuscating a Latin-script instruction. If both ends
+ * touch non-ASCII characters, U+200C and U+200D in the run are real text (Persian and Indic ZWNJ,
+ * emoji ZWJ sequences) and are kept, which is not a finding; U+200B, U+2060 and U+FEFF are always
+ * hidden.
  */
 function zeroWidth(text: string): Found[] {
-  return regexFound(text, ZERO_WIDTH, 'zero_width').filter((item) => {
-    const code = text.charCodeAt(item.start);
-    if (code !== 0x200c && code !== 0x200d) return true;
-    return isAsciiAt(text, item.start - 1) || isAsciiAt(text, item.end);
-  });
+  const out: Found[] = [];
+  for (const run of regexFound(text, ZERO_WIDTH_RUN, 'zero_width')) {
+    if (isAsciiAt(text, run.start - 1) || isAsciiAt(text, run.end)) {
+      out.push(run);
+      continue;
+    }
+    for (let index = run.start; index < run.end; index += 1) {
+      const code = text.charCodeAt(index);
+      if (code !== 0x200c && code !== 0x200d) {
+        out.push({ start: index, end: index + 1, type: 'zero_width' });
+      }
+    }
+  }
+  return out;
 }
 
 /** Position order, longest first at the same position. */
@@ -131,6 +141,26 @@ function stripPasses(text: string): { text: string; found: Found[] } {
   return { text: removeSpans(visible, second), found: [...first, ...second] };
 }
 
+/** Passes are repeated until the text stops changing, so removal cannot assemble a new marker. */
+const MAX_ITERATIONS = 4;
+
+/**
+ * `stripPasses` to a fixed point, bounded at `MAX_ITERATIONS`: removing a comment or a zero-width
+ * character can join the halves of a Markdown marker or an ignore-phrase, which the next iteration
+ * then sees. `found` accumulates across iterations, in the order things were found.
+ */
+function stripToFixedPoint(text: string): { text: string; found: Found[] } {
+  let current = text;
+  const found: Found[] = [];
+  for (let iteration = 0; iteration < MAX_ITERATIONS; iteration += 1) {
+    const pass = stripPasses(current);
+    if (pass.found.length === 0) break;
+    found.push(...pass.found);
+    current = pass.text;
+  }
+  return { text: current, found };
+}
+
 function typesOf(found: readonly Found[]): HiddenInstructionType[] {
   const types: HiddenInstructionType[] = [];
   for (const item of found) {
@@ -147,7 +177,7 @@ export function stripHiddenInstructions(text: string): {
   text: string;
   strippedTypes: HiddenInstructionType[];
 } {
-  const { text: stripped, found } = stripPasses(text);
+  const { text: stripped, found } = stripToFixedPoint(text);
   return { text: stripped, strippedTypes: typesOf(found) };
 }
 
@@ -160,7 +190,7 @@ export function checkContextInjection(
   _check: GuardrailCheck,
   text: string,
 ): ContextInjectionResult {
-  const { text: sanitized, found } = stripPasses(text);
+  const { text: sanitized, found } = stripToFixedPoint(text);
   if (found.length === 0) {
     return { passed: true, reason: 'No hidden instruction found in context.' };
   }
