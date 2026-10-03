@@ -507,7 +507,9 @@ export function createRound4Handlers(db: MockDb): HttpHandler[] {
         const all = db
           .messagesOf(workflowId)
           .filter((message) => messageMatchesQuery(message, filter));
-        const limit = filter.limit ?? 200;
+        // the engine's default page (storage-local DEFAULT_MESSAGE_LIMIT), so a client that reads
+        // one page and stops fails here as it does against the engine (D-071)
+        const limit = filter.limit ?? 100;
         const offset = filter.cursor ? Number(filter.cursor) || 0 : 0;
         const slice = all.slice(offset, offset + limit);
         const nextOffset = offset + limit;

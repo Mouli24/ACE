@@ -156,6 +156,29 @@ export function paramsFromFilter(filter: TimelineFilter): URLSearchParams {
 /* The data hook                                                               */
 /* -------------------------------------------------------------------------- */
 
+/** Messages per request while loading the whole timeline (the engine's default page is 100). */
+export const MESSAGE_PAGE_SIZE = 500;
+
+/**
+ * The whole persisted timeline: `GET /messages` pages oldest-first with a forward cursor, so follow
+ * `nextCursor` until there is none (D-071 — one page left everything after the first 100 missing on
+ * reload). A cursor seen twice ends the walk rather than looping on a misbehaving server.
+ */
+export async function loadAllMessages(
+  fetchPage: (cursor?: string) => Promise<{ items: Message[]; nextCursor?: string }>,
+): Promise<Message[]> {
+  const all: Message[] = [];
+  const followed = new Set<string>();
+  let cursor: string | undefined;
+  for (;;) {
+    const page = await fetchPage(cursor);
+    all.push(...page.items);
+    if (page.nextCursor === undefined || followed.has(page.nextCursor)) return all;
+    followed.add(page.nextCursor);
+    cursor = page.nextCursor;
+  }
+}
+
 export interface TimelineMessagesResult {
   messages: Message[];
   isLoading: boolean;
@@ -171,7 +194,13 @@ export interface TimelineMessagesResult {
 export function useTimelineMessages(workflowId: Id | undefined): TimelineMessagesResult {
   const initial = useQuery({
     queryKey: timelineMessagesKey(workflowId),
-    queryFn: async () => (await api().listMessages(workflowId ?? '')).items,
+    queryFn: () =>
+      loadAllMessages((cursor) =>
+        api().listMessages(workflowId ?? '', {
+          limit: MESSAGE_PAGE_SIZE,
+          ...(cursor === undefined ? {} : { cursor }),
+        }),
+      ),
     enabled: Boolean(workflowId),
   });
 
