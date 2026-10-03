@@ -804,8 +804,7 @@ test.describe('Renderers and multimodal runs (FR-MM-003/005/006/009)', () => {
   test('TC-MM-006 (§5 item 3): the inspector’s download card shows the file’s name, size and hash', async ({
     page,
   }) => {
-    // D-076: the inspector renders PartRenderer without the `hash` prop, so no hash is shown.
-    test.fail();
+    // D-076 fixed on round-4/fix-mouli-2: the inspector passes the artifact's hash to the card.
     const { parts, output } = await mediaRunOnScreen(page);
     const { file } = parts;
     const stored = await api<Artifact>(`/artifacts/${file.artifactId}`);
@@ -1183,8 +1182,7 @@ test.describe('Timeline (FR-CHAT-001/002/003)', () => {
   test('TC-CHAT-002 (§5 item 4): the Timeline tab links to the full timeline page', async ({
     page,
   }) => {
-    // D-072: BottomPanel mounts TimelineTab without projectId, so the full-page link never renders.
-    test.fail();
+    // D-072 fixed on round-4/fix-mouli-2: BottomPanel passes the workflow's projectId.
     const flow = await importFixture('chat-french.json');
     await openCanvas(page, flow.projectId, flow.workflowId);
     const timeline = await openTimelineTab(page);
@@ -1208,8 +1206,7 @@ test.describe('Timeline (FR-CHAT-001/002/003)', () => {
   test('TC-CHAT-001 (§5 item 4, manual pass): after a reload, a timeline longer than one page still ends with its newest message', async ({
     page,
   }) => {
-    // D-071: the timeline loads only the first page of GET /messages and never follows nextCursor.
-    test.fail();
+    // D-071 fixed on round-4/fix-mouli-2: the timeline follows nextCursor to the end.
     const flow = await importFixture('chat-french.json');
     const total = 150;
     for (let start = 0; start < total; start += 50) {
@@ -1830,8 +1827,7 @@ test.describe('Tools (FR-TOOL-001/002/007/009/010)', () => {
   test('TC-GRD-008 (found by the §1 demo): after a reload, a WAITING node still carries its approval card', async ({
     page,
   }) => {
-    // D-074: adopt() rebuilds node states and outputs after a reload, never the pending approvals.
-    test.fail();
+    // D-074 fixed on round-4/fix-mouli-2: adopt() also rebuilds the pending approvals.
     const flow = await importFixture('destructive.json');
     const cleaner = flow.byName('Cleaner');
 
