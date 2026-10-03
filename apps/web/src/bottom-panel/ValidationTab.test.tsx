@@ -34,6 +34,11 @@ describe('Bottom panel (round 1 §5 step 3, FR-WF-006)', () => {
     // Events, Errors and now Timeline (round 4) are all real panes — no "later" placeholders remain.
     await user.click(screen.getByRole('tab', { name: 'Timeline' }));
     expect(screen.queryByText('Timeline — available in Round 4.')).not.toBeInTheDocument();
+    // D-072: the tab links to the full page, filters in the URL (FR-CHAT-002)
+    expect(await screen.findByTestId('timeline-open-full')).toHaveAttribute(
+      'href',
+      `/projects/${project.id}/workflows/${workflow.id}/timeline`,
+    );
     act(() => usePanelsStore.getState().setBottomTab('validation'));
   });
 });
