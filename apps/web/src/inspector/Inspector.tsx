@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react';
 import { PartRenderer } from '@ace/ui';
 
 import { api } from '../app/api';
+import { useArtifact } from '../artifacts';
 import { useSelectionStore } from '../app/stores/selection';
 import { IterationSelector } from '../edges/loop/IterationSelector';
 import { VerdictList } from '../guardrails/VerdictList';
@@ -268,8 +269,20 @@ function EnvelopeView({ envelope }: { envelope: Envelope }) {
 }
 
 /** All seven Part types, through the shared renderers (FR-MM-006): media resolve via the content URL. */
+/**
+ * A Part names its artifact but carries no hash; the row does (D214), so the card is given the
+ * artifact's sha256 once it is fetched — "name, size, hash" (R4 §5 item 3, D-076).
+ */
 function PartView({ part }: { part: Part }) {
-  return <PartRenderer part={part} contentUrl={(artifactId) => api().artifactContentUrl(artifactId)} />;
+  const artifact = useArtifact('artifactId' in part ? part.artifactId : undefined);
+  const hash = artifact.data?.hash;
+  return (
+    <PartRenderer
+      part={part}
+      contentUrl={(artifactId) => api().artifactContentUrl(artifactId)}
+      {...(hash === undefined ? {} : { hash })}
+    />
+  );
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {

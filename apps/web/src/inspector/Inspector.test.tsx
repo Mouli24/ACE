@@ -124,3 +124,20 @@ describe('TC-PRM-004/005 the prompt is recorded and can be read back', () => {
     expect(text.textContent).not.toMatch(/sk-[a-z0-9-]{6,}/i);
   });
 });
+
+describe('D-076 the inspector download card shows the file hash (FR-MM-006)', () => {
+  it('fetches the artifact row and passes its sha256 to the card', async () => {
+    const { inspector, agent } = await runAndInspect('media-outputs', 'mock-media', ['text']);
+    await waitFor(() => expect(useRunStore.getState().nodeState(agent.id)).toBe('COMPLETED'), {
+      timeout: 5_000,
+    });
+    const file = useRunStore
+      .getState()
+      .nodeRun(agent.id)
+      ?.output?.find((part) => part.type === 'file');
+    expect(file?.type).toBe('file');
+    const hash = db.getArtifact((file as { artifactId: string }).artifactId)!.hash;
+    const shown = await within(inspector).findByTestId('file-hash');
+    expect(shown).toHaveAttribute('title', hash);
+  });
+});
