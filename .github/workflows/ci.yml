@@ -120,6 +120,12 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # The acceptance Playwright pass needs a browser. In the single job it borrowed the one the e2e
+      # step installed (`apps/web` `test:e2e` runs `playwright install chromium`); on its own it must
+      # install it, or every browser test fails at launch (first run of D243).
+      - name: Install Playwright browser
+        run: pnpm --filter @ace/web exec playwright install chromium
+
       - name: Acceptance (real engine)
         run: |
           if [ -f tests/acceptance/vitest.config.ts ]; then
