@@ -53,7 +53,7 @@ export interface Round5Behaviour {
   memory?: EnvelopeMemoryEntry[];
   /** The `__memory` ops this node run applied (only with `memory.enabled`). */
   memoryOps?: MemoryOp[];
-  /** Hidden-instruction kinds the context point stripped from retrieved text (§2.3). */
+  /** Hidden-instruction kinds the context point stripped from retrieved or handed-over hits (§2.3). */
   stripped?: HiddenInstructionType[];
 }
 
@@ -170,6 +170,10 @@ export function round5Behaviour(
     clean.stripped.forEach((type) => stripped.add(type));
     return { chunkId: hit.chunkId, text: clean.text, score: hit.score, source: hit.source };
   });
+  // hits a Retrieval node handed over pass the same context point on their way into the prompt
+  for (const hit of handedHits) {
+    stripHiddenInstructions(hit.text).stripped.forEach((type) => stripped.add(type));
+  }
   const memory = memoryEnabled ? deps.memoryFor(node.id) : [];
   // one source per chunk, however many paths found it
   const cited = [...found, ...handedHits].filter(
