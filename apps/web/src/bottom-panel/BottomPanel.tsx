@@ -100,7 +100,11 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
       </TabsContent>
 
       <TabsContent value="timeline" className="min-h-0 flex-1 overflow-hidden">
-        <TimelineTab workflowId={workflowId} />
+        {/* the project comes from the graph, so the "open full timeline" link renders (D-072) */}
+        <TimelineTab
+          workflowId={workflowId}
+          {...(graph.data === undefined ? {} : { projectId: graph.data.workflow.projectId })}
+        />
       </TabsContent>
     </Tabs>
   );
