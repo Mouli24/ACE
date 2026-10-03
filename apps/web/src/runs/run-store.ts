@@ -62,7 +62,13 @@ interface RunOverlayState {
    * Rebuild the overlay from what the engine has recorded, for a run this client did not start —
    * after a reload, or when a Canvas is opened while a run is already going (FR-EXE-014).
    */
-  adopt(workflowId: Id, run: AdoptableRun, nodeRuns: readonly AdoptableNodeRun[]): void;
+  adopt(
+    workflowId: Id,
+    run: AdoptableRun,
+    nodeRuns: readonly AdoptableNodeRun[],
+    /** The run's approvals still waiting on a person, from `GET /runs/:id/approvals` (D-074). */
+    approvals?: readonly ApprovalRequest[],
+  ): void;
   begin(workflowId: Id, runId: Id, status: RunState): void;
   apply(frame: ServerFrame): void;
   reset(): void;
@@ -186,7 +192,7 @@ export const useRunStore = create<RunOverlayState>((set) => ({
    * there. What cannot come back is the text streamed before the reload: `node.token` is transient
    * and never persisted (§2.4), so a reloaded card shows its state and output but not the typing.
    */
-  adopt: (workflowId, run, nodeRuns) => {
+  adopt: (workflowId, run, nodeRuns, approvals = []) => {
     buffer.reset();
     /*
      * Each synthetic frame needs its own seq: the buffer drops a persisted frame whose seq it has
@@ -223,6 +229,14 @@ export const useRunStore = create<RunOverlayState>((set) => ({
           },
         } as unknown as ServerFrame);
       }
+    }
+    // a WAITING node's card is anchored to its pending approval, which no node-run record carries
+    for (const request of approvals) {
+      buffer.apply({
+        seq: syntheticSeq--,
+        type: 'node.approval_required',
+        payload: { runId: run.id, request },
+      } as unknown as ServerFrame);
     }
     const view = buffer.view;
     set({

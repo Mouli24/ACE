@@ -163,3 +163,39 @@ describe('FR-EXE-014 frames that arrive before the 201 are kept', () => {
     expect(useRunStore.getState().settledCount).toBe(1);
   });
 });
+
+describe('D-074 a reload keeps the approval a WAITING node is anchored to (FR-GRD-013, TC-GRD-008)', () => {
+  beforeEach(() => useRunStore.getState().reset());
+
+  it('adopt() rebuilds the pending approvals beside the node states', () => {
+    const request = {
+      id: '01APPROVAL00000000000000000',
+      runId: RUN,
+      nodeRunId: NODE_RUN,
+      nodeId: NODE,
+      nodeName: 'Writer',
+      point: 'output' as const,
+      checkType: 'pii' as const,
+      reason: 'An email address in the output.',
+      preview: 'Contact me at …',
+      requestedAt: '2026-10-03T10:00:00.000Z',
+    };
+    useRunStore
+      .getState()
+      .adopt(
+        WF,
+        { id: RUN, status: 'RUNNING', totals: usage },
+        [{ id: NODE_RUN, nodeId: NODE, iteration: 1, attempt: 1, status: 'WAITING', usage }],
+        [request],
+      );
+
+    const store = useRunStore.getState();
+    expect(store.nodeState(NODE)).toBe('WAITING');
+    expect(store.approvals()).toEqual([request]);
+  });
+
+  it('adopts no approval when none is pending', () => {
+    useRunStore.getState().adopt(WF, { id: RUN, status: 'RUNNING', totals: usage }, []);
+    expect(useRunStore.getState().approvals()).toEqual([]);
+  });
+});

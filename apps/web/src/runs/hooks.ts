@@ -172,11 +172,12 @@ export function useAdoptActiveRun(workflowId: Id | undefined): void {
             newest.status === 'PAUSED' ||
             newest.status === 'PREFLIGHT');
         if (!live || cancelled) return;
-        const [run, nodeRuns] = await Promise.all([
+        const [run, nodeRuns, approvals] = await Promise.all([
           api().getRun(newest.id),
           api().listNodeRuns(newest.id),
+          api().listApprovals(newest.id),
         ]);
-        if (!cancelled) adopt(workflowId, run, nodeRuns);
+        if (!cancelled) adopt(workflowId, run, nodeRuns, approvals);
       } catch {
         // A workflow with no run history is the normal case; nothing to adopt is not an error.
       }
