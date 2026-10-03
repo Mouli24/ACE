@@ -140,3 +140,26 @@ describe('FR-GRD-001 the test panel calls the endpoint with what was typed', () 
     expect(within(list).getByTestId('verdict-passed-test-0')).toHaveTextContent('did not pass');
   });
 });
+
+describe('FR-GRD-004 a context verdict lists what it stripped, never the text', () => {
+  it('names the hidden-instruction kinds and leaves the payload out', () => {
+    const verdict: Verdict = {
+      id: newId(),
+      nodeRunId: newId(),
+      point: 'context',
+      checkType: 'prompt_injection',
+      action: 'warn',
+      passed: true,
+      reason: 'Hidden instructions were removed from retrieved text before the prompt.',
+      strippedTypes: ['instruction_override', 'html_comment'],
+      at: new Date().toISOString(),
+    };
+
+    const { container } = renderWithQuery(<VerdictList verdicts={[verdict]} />);
+
+    expect(container).toHaveTextContent(
+      'hidden instructions stripped: instruction_override, html_comment',
+    );
+    expect(container.textContent).not.toMatch(/ignore previous instructions/i);
+  });
+});

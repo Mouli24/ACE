@@ -8,6 +8,8 @@ import { VerdictBadge } from '@ace/ui';
  *
  * A redaction shows the *types* removed and never the value (FR-GRD-014, TC-GRD-018): the contract
  * gives a `Verdict` no field to carry one, and nothing here renders anything but `redactedTypes`.
+ * The context point's hidden-instruction sanitiser is the same: `strippedTypes` names the kinds it
+ * took out, never the text (round 5 §2.3, FR-GRD-004).
  */
 export function VerdictList({ verdicts }: { verdicts: readonly Verdict[] }) {
   if (verdicts.length === 0) {
@@ -40,6 +42,15 @@ export function VerdictList({ verdicts }: { verdicts: readonly Verdict[] }) {
             <p className="font-machine text-xs text-fg-muted">
               types removed: {verdict.redactedTypes.join(', ')} — the values are not recorded
               (FR-GRD-014).
+            </p>
+          )}
+          {verdict.strippedTypes !== undefined && verdict.strippedTypes.length > 0 && (
+            <p
+              data-testid={`verdict-stripped-${verdict.id}`}
+              className="font-machine text-xs text-fg-muted"
+            >
+              hidden instructions stripped: {verdict.strippedTypes.join(', ')} — the text is not
+              recorded (FR-GRD-004).
             </p>
           )}
         </li>
