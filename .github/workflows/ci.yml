@@ -13,10 +13,10 @@ jobs:
   verify:
     name: install · lint · typecheck · test · build
     runs-on: ubuntu-latest
-    # Round 3 roughly doubled both the e2e suite (Mouli's, `pnpm test:e2e`) and the acceptance suite
-    # (vitest + a Playwright pass against the real engine), so this one job now boots the engine and
-    # a browser twice on top of install, coverage and build. A slow runner overran the old 20-minute
-    # cap mid-acceptance with every test still passing (D-038); 30 gives the full pipeline headroom.
+    # The two browser suites run in their own jobs below, in parallel with this one. One job running
+    # everything outgrew its cap twice — 20 minutes in round 3 (D-038), then 30 once rounds 4 and 5
+    # grew both Playwright suites (PRs #32 and #33 were cut off mid-e2e with every test passing) —
+    # so the work is split rather than the line moved again (D243). Each job has its own cap.
     timeout-minutes: 30
 
     steps:
@@ -51,8 +51,30 @@ jobs:
       - name: Build
         run: pnpm build
 
-      # The last two suites are required, never `continue-on-error`. Until the packages that
-      # own them exist they are skipped with a message saying exactly why.
+  # Required, never `continue-on-error`; skipped with a message only while the owning package is absent.
+  e2e:
+    name: end-to-end (apps/web)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # Both suites run against built packages, as they did when they followed `verify`'s Build.
+      - name: Build
+        run: pnpm build
+
       - name: End-to-end (apps/web)
         run: |
           if [ -d apps/web/e2e ]; then
@@ -60,6 +82,43 @@ jobs:
           else
             echo "SKIPPED: apps/web/e2e does not exist yet (Mouli creates it in round 1, feature M1)."
           fi
+
+      # The Playwright config keeps a trace and the page's aria snapshot (error-context.md) for a
+      # failed test, but they live on the runner and die with it. A test that fails only here, never on
+      # a Windows box, cannot be diagnosed without them (PR #30, TC-CHAT-003).
+      - name: Upload Playwright results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results-e2e
+          path: |
+            apps/web/test-results
+            apps/web/playwright-report
+          if-no-files-found: ignore
+          retention-days: 7
+
+  acceptance:
+    name: acceptance (real engine)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # Both suites run against built packages, as they did when they followed `verify`'s Build.
+      - name: Build
+        run: pnpm build
 
       - name: Acceptance (real engine)
         run: |
@@ -69,17 +128,12 @@ jobs:
             echo "SKIPPED: tests/acceptance/vitest.config.ts does not exist yet (Arhant creates it in round 1, feature A1)."
           fi
 
-      # Both Playwright configs keep a trace and the page's aria snapshot (error-context.md) for a
-      # failed test, but they live on the runner and die with it. A test that fails only here, never on
-      # a Windows box, cannot be diagnosed without them (PR #30, TC-CHAT-003).
       - name: Upload Playwright results
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-results
+          name: playwright-results-acceptance
           path: |
-            apps/web/test-results
-            apps/web/playwright-report
             tests/acceptance/test-results
             tests/acceptance/playwright-report
           if-no-files-found: ignore
