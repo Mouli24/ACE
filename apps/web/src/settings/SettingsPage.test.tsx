@@ -8,8 +8,15 @@ import { db, installMockServer, renderApp, server } from '../test/app';
 
 installMockServer();
 
-/** jsdom's Blob has no `arrayBuffer()`; its FileReader does read one. */
+/**
+ * The download's bytes. Which `Blob` arrives depends on where `fetch` comes from: Node's (CI, Linux)
+ * has `arrayBuffer()` and is refused by jsdom's FileReader; jsdom's has no `arrayBuffer()` but its
+ * FileReader reads it. Use whichever the blob supports.
+ */
 function readBytes(blob: Blob): Promise<Uint8Array> {
+  if (typeof blob.arrayBuffer === 'function') {
+    return blob.arrayBuffer().then((buffer) => new Uint8Array(buffer));
+  }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
