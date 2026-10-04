@@ -568,6 +568,9 @@ export class FakeRepository implements Repository {
       if (patch.startedAt !== undefined) next.startedAt = patch.startedAt;
       if (patch.endedAt !== undefined) next.endedAt = patch.endedAt;
       if (patch.durationMs !== undefined) next.durationMs = patch.durationMs;
+      if (patch.sources !== undefined) next.sources = patch.sources;
+      if (patch.droppedSources !== undefined) next.droppedSources = patch.droppedSources;
+      if (patch.memoryOps !== undefined) next.memoryOps = patch.memoryOps;
 
       this.#for(scope).nodeRuns.set(id, next);
       return next;
