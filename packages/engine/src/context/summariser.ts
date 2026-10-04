@@ -41,7 +41,19 @@ export interface ModelSummariserDeps {
   scope: Scope;
   now: () => string;
   fallback: Summariser;
+  /** Told why the model summary was abandoned for truncation (never the prompt or a secret); a stop is not reported. */
+  onFallback?: (reason: string) => void;
   pricingFor: (providerId: Id, modelId: string) => Promise<ModelPricing | undefined>;
+}
+
+/** The error kind and code when the adapter classified it, else the error's name — never its message. */
+function describeFailure(error: unknown): string {
+  const classified = (error as { nodeError?: { kind?: unknown; code?: unknown } } | null)
+    ?.nodeError;
+  if (classified !== undefined && classified !== null) {
+    return [classified.kind, classified.code].filter((p) => typeof p === 'string').join('/');
+  }
+  return error instanceof Error ? error.name : 'unknown error';
 }
 
 const isReference = (part: Part): boolean =>
@@ -78,7 +90,8 @@ export function createModelSummariser(deps: ModelSummariserDeps): Summariser {
       const cached = await deps.cache.get(deps.scope, key, deps.now());
       if (cached !== null) return finish(fit(cached));
 
-      if (signal?.aborted === true) return deps.fallback.summarise(input);
+      const stopped = (): boolean => signal?.aborted === true;
+      if (stopped()) return deps.fallback.summarise(input);
 
       let generated: { text: string; tokensIn: number; tokensOut: number };
       try {
@@ -114,13 +127,22 @@ export function createModelSummariser(deps: ModelSummariserDeps): Summariser {
             tokensOut: tokensOut ?? estimateTokens(out),
           };
         });
-      } catch {
+      } catch (error) {
+        if (!stopped()) {
+          deps.onFallback?.(
+            `model summary failed (${describeFailure(error)}) for ${target.modelId}`,
+          );
+        }
         return deps.fallback.summarise(input);
       }
 
       // D86: a summary of untrusted content may carry a key-shaped string; store and use it masked.
       const summary = fit(maskSecrets(generated.text.trim()));
-      await deps.cache.put(deps.scope, key, summary, deps.now());
+      try {
+        await deps.cache.put(deps.scope, key, summary, deps.now());
+      } catch {
+        // The summary is already paid for; losing the cache entry only costs a repeat call later.
+      }
       const pricing = await deps.pricingFor(target.providerId, target.modelId);
       return finish(summary, usageFor(generated.tokensIn, generated.tokensOut, pricing));
     },
