@@ -1,7 +1,7 @@
 import {
   MEMORY_OUTPUT_FIELD,
   MEMORY_VALUE_MAX,
-  MemoryOpsSchema,
+  MemoryOpSchema,
   type MemoryOp,
 } from '@ace/contracts';
 
@@ -25,16 +25,39 @@ export function extractMemoryOps(value: unknown): {
   if (!(MEMORY_OUTPUT_FIELD in value)) return { value, ops: [] };
 
   const { [MEMORY_OUTPUT_FIELD]: raw, ...rest } = value as Record<string, unknown>;
-  const parsed = MemoryOpsSchema.safeParse(raw);
-  if (parsed.success) return { value: rest, ops: parsed.data };
+  if (!Array.isArray(raw)) {
+    return {
+      value: rest,
+      ops: [],
+      invalid: `${MEMORY_OUTPUT_FIELD} ignored: not a list of memory ops`,
+    };
+  }
 
-  const issue = parsed.error.issues[0];
-  const where = issue === undefined || issue.path.length === 0 ? '' : ` at ${issue.path.join('.')}`;
-  return {
-    value: rest,
-    ops: [],
-    invalid: `${MEMORY_OUTPUT_FIELD} ignored: ${issue?.message ?? 'not a list of memory ops'}${where}`,
-  };
+  // Op by op: a bad op is dropped with a reason and the good ones still apply. An op whose key
+  // masking would change is a key-shaped key; it is dropped rather than stored as "[REDACTED]".
+  const ops: MemoryOp[] = [];
+  const problems: string[] = [];
+  raw.forEach((candidate: unknown, index) => {
+    const parsed = MemoryOpSchema.safeParse(candidate);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      const path = issue === undefined ? '' : issue.path.join('.');
+      problems.push(
+        `op ${index}: ${issue?.message ?? 'invalid'}${path === '' ? '' : ` at ${path}`}`,
+      );
+    } else if (maskSecrets(parsed.data.key) !== parsed.data.key) {
+      problems.push(`op ${index}: key looks like a credential`);
+    } else {
+      ops.push(parsed.data);
+    }
+  });
+  return problems.length === 0
+    ? { value: rest, ops }
+    : {
+        value: rest,
+        ops,
+        invalid: `${MEMORY_OUTPUT_FIELD} ignored in part: ${problems.join('; ')}`,
+      };
 }
 
 /**

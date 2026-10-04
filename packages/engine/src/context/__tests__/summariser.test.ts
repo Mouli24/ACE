@@ -26,6 +26,7 @@ interface Setup {
   signals: AbortSignal[];
   cache: FakeRepository['summaryCache'];
   summariser: ReturnType<typeof createModelSummariser>;
+  reasons: string[];
 }
 
 function setup(
@@ -33,6 +34,8 @@ function setup(
     reply?: (req: GenerateRequest) => StreamChunk[];
     adapterError?: boolean;
     pricing?: ModelPricing;
+    putFails?: boolean;
+    stream?: ProviderAdapter['generate'];
   } = {},
 ): Setup {
   const requests: GenerateRequest[] = [];
@@ -45,15 +48,18 @@ function setup(
       { type: 'usage', tokensIn: 1000, tokensOut: 40 },
       { type: 'finish', reason: 'stop' },
     ]);
+  const reasons: string[] = [];
   const adapter: ProviderAdapter = {
     type: 'mock',
     check: async () => ({ status: 'CONNECTED' }),
     listModels: async () => [],
-    async *generate(req, signal) {
-      requests.push(req);
-      signals.push(signal);
-      yield* reply(req);
-    },
+    generate:
+      options.stream ??
+      async function* (req, signal) {
+        requests.push(req);
+        signals.push(signal);
+        yield* reply(req);
+      },
   };
   const summariser = createModelSummariser({
     adapterFor: async () => {
@@ -61,13 +67,22 @@ function setup(
       return adapter;
     },
     runGated: (_providerId, fn) => fn(),
-    cache: repository.summaryCache,
+    cache:
+      options.putFails === true
+        ? {
+            get: repository.summaryCache.get,
+            put: async () => {
+              throw new Error('cache down');
+            },
+          }
+        : repository.summaryCache,
+    onFallback: (reason) => reasons.push(reason),
     scope: LOCAL_SCOPE,
     now: () => '2026-10-01T00:00:00.000Z',
     fallback: createTruncatingSummariser(),
     pricingFor: async () => options.pricing,
   });
-  return { requests, signals, cache: repository.summaryCache, summariser };
+  return { requests, signals, cache: repository.summaryCache, summariser, reasons };
 }
 
 const summaryCalls = (s: Setup): GenerateRequest[] =>
@@ -274,5 +289,60 @@ describe('model summariser', () => {
     await s.summariser.summarise({ parts: [text(words(2000))], budgetTokens: 200, target: TARGET });
     expect(s.requests[0]!.system).toContain(SUMMARY_PROMPT_VERSION);
     expect(s.requests[0]!.system).toContain('at most 200 tokens');
+  });
+
+  it('reports a provider failure through onFallback, without the prompt or a secret', async () => {
+    const s = setup({
+      reply: () => {
+        throw Object.assign(new Error(`bad key ${KEY_SHAPED}`), {
+          nodeError: { kind: 'auth', code: 'unauthorized' },
+        });
+      },
+    });
+    const out = await s.summariser.summarise({
+      parts: [text(words(2000))],
+      budgetTokens: 200,
+      target: TARGET,
+    });
+    expect(out.summary).toBe('truncated to budget');
+    expect(s.reasons).toHaveLength(1);
+    expect(s.reasons[0]).toContain('mock-summary');
+    expect(s.reasons[0]).toContain('unauthorized');
+    expect(s.reasons[0]).not.toContain(KEY_SHAPED);
+    expect(s.reasons[0]).not.toContain('word1');
+  });
+
+  it('a mid-call abort falls back without calling onFallback', async () => {
+    const controller = new AbortController();
+    const s = setup({
+      stream: async function* (_req, signal) {
+        controller.abort();
+        await new Promise<void>((_, reject) => {
+          if (signal.aborted) reject(new Error('aborted'));
+          signal.addEventListener('abort', () => reject(new Error('aborted')));
+        });
+        yield { type: 'finish', reason: 'stop' };
+      },
+    });
+    const out = await s.summariser.summarise({
+      parts: [text(words(2000))],
+      budgetTokens: 200,
+      target: TARGET,
+      signal: controller.signal,
+    });
+    expect(out.summary).toBe('truncated to budget');
+    expect(s.reasons).toEqual([]);
+  });
+
+  it('a cache.put failure still returns the summary and usage, without onFallback', async () => {
+    const s = setup({ putFails: true });
+    const out = await s.summariser.summarise({
+      parts: [text(words(2000))],
+      budgetTokens: 200,
+      target: TARGET,
+    });
+    expect(out.summary).toBe('summarised by mock-summary');
+    expect(out.usage).toMatchObject({ tokensIn: 1000 });
+    expect(s.reasons).toEqual([]);
   });
 });

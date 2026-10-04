@@ -46,6 +46,9 @@ export const MEMORY_PROMPT_TEXT = [
   'Saving a key that already exists replaces its value. Save only durable facts worth keeping, never credentials.',
 ].join('\n');
 
+/** Bumped whenever `MEMORY_PROMPT_TEXT` changes; folded into the prompt version only when memory is on. */
+export const MEMORY_PROMPT_VERSION = 'ace-memory-1';
+
 /** Bumped whenever the base text below changes; it is part of every prompt version. */
 export const SYSTEM_BASE_VERSION = 'ace-system-1';
 
@@ -204,15 +207,17 @@ export function promptVersion(
   systemBaseVersion: string,
   instructions: string,
   contract: EnvelopeContract,
+  memoryVersion?: string,
 ): string {
-  return createHash('sha256')
+  const hash = createHash('sha256')
     .update(systemBaseVersion)
     .update('\u0000')
     .update(instructions)
     .update('\u0000')
-    .update(stableJson(contract, 0))
-    .digest('hex')
-    .slice(0, 12);
+    .update(stableJson(contract, 0));
+  // Only a memory-enabled prompt carries this, so every other prompt keeps its existing version.
+  if (memoryVersion !== undefined) hash.update('\u0000').update(memoryVersion);
+  return hash.digest('hex').slice(0, 12);
 }
 
 export function assemblePrompt(input: AssemblePromptInput): AssembledPrompt {
@@ -302,7 +307,12 @@ export function assemblePrompt(input: AssemblePromptInput): AssembledPrompt {
   return {
     text,
     redactedText: maskSecrets(text),
-    version: promptVersion(SYSTEM_BASE_VERSION, input.instructions, input.contract),
+    version: promptVersion(
+      SYSTEM_BASE_VERSION,
+      input.instructions,
+      input.contract,
+      input.memoryInstructions === true ? MEMORY_PROMPT_VERSION : undefined,
+    ),
     system: SYSTEM_BASE_TEXT,
   };
 }

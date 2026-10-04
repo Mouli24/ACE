@@ -32,6 +32,8 @@ export interface MemoryServiceDeps {
   nextId?: () => Id;
 }
 
+const NO_STORE = 'Agent memory needs a repository with a memory store, and this one has none.';
+
 export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
   const { scope, bus } = deps;
   const now = deps.now ?? ((): string => new Date().toISOString());
@@ -56,19 +58,24 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     list: async (nodeId) => repo().list(scope, nodeId),
 
     async apply(nodeId, ops) {
-      const memory = repo();
-      const applied: MemoryOp[] = [];
-      for (const op of ops) {
-        if (op.op === 'save') {
-          const value = maskMemoryValue(op.value);
-          await memory.upsert(scope, nodeId, op.key, value, now(), nextId);
-          applied.push({ op: 'save', key: op.key, value });
-        } else {
-          await memory.deleteKey(scope, nodeId, op.key);
-          applied.push(op);
+      repo();
+      // One transaction: every op lands or none does, and only what changed is announced.
+      const changed = await deps.repository.transaction(async (tx) => {
+        const memory = tx.memory;
+        if (memory === undefined) throw new Error(NO_STORE);
+        const applied: MemoryOp[] = [];
+        for (const op of ops) {
+          if (op.op === 'save') {
+            const value = maskMemoryValue(op.value);
+            await memory.upsert(scope, nodeId, op.key, value, now(), nextId);
+            applied.push({ op: 'save', key: op.key, value });
+          } else if (await memory.deleteKey(scope, nodeId, op.key)) {
+            applied.push(op);
+          }
         }
-      }
-      await announce(nodeId, applied);
+        return applied;
+      });
+      await announce(nodeId, changed);
     },
 
     async deleteEntry(nodeId, entryId) {

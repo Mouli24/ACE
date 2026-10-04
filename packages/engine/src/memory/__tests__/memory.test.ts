@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { FakeRepository } from '../../__tests__/fake-repository.js';
 import { InProcessPubSubStub } from '../../__tests__/pubsub-stub.js';
 import { createEventBus } from '../../events/index.js';
-import { assemblePrompt } from '../../prompts/index.js';
+import { MEMORY_PROMPT_VERSION, assemblePrompt, promptVersion } from '../../prompts/index.js';
 import { LOCAL_SCOPE, type EngineEvent, type Repository } from '../../ports/index.js';
 import { extractMemoryOps } from '../ops.js';
 import { createMemoryService } from '../service.js';
@@ -63,6 +63,26 @@ describe('extractMemoryOps', () => {
     expect(out.invalid).toContain(MEMORY_OUTPUT_FIELD);
   });
 
+  it('drops an op whose key is changed by masking or is out of range, with a reason', () => {
+    const out = extractMemoryOps({
+      answer: 'ok',
+      [MEMORY_OUTPUT_FIELD]: [
+        { op: 'save', key: 'good', value: 'v' },
+        { op: 'save', key: KEY_SHAPED, value: 'v' },
+        { op: 'delete', key: `${KEY_SHAPED}` },
+      ],
+    });
+    expect(out.value).toEqual({ answer: 'ok' });
+    expect(out.ops).toEqual([{ op: 'save', key: 'good', value: 'v' }]);
+    expect(out.invalid).toContain('key');
+    expect(out.invalid).not.toContain(KEY_SHAPED);
+    const long = extractMemoryOps({
+      [MEMORY_OUTPUT_FIELD]: [{ op: 'save', key: 'k'.repeat(81), value: 'v' }],
+    });
+    expect(long.ops).toEqual([]);
+    expect(long.invalid).toBeDefined();
+  });
+
   it('a non-array __memory is invalid too, and values without the field pass through', () => {
     expect(extractMemoryOps({ [MEMORY_OUTPUT_FIELD]: 'nope' }).invalid).toBeDefined();
     const plain = { answer: 1 };
@@ -95,6 +115,39 @@ describe('MemoryService', () => {
     expect(event!.workflowId).toBeUndefined();
     expect(event!.runId).toBeUndefined();
     expect(MemoryUpdatedPayloadSchema.parse(event!.payload)).toEqual({ nodeId: NODE, ops });
+  });
+
+  it('announces only the ops that changed something; a delete of a missing key is silent', async () => {
+    const { service, updates } = setup();
+    await service.apply(NODE, [
+      { op: 'delete', key: 'missing' },
+      { op: 'save', key: 'a', value: '1' },
+    ]);
+    expect(updates()[0]!.payload).toEqual({
+      nodeId: NODE,
+      ops: [{ op: 'save', key: 'a', value: '1' }],
+    });
+    await service.apply(NODE, [{ op: 'delete', key: 'missing' }]);
+    expect(updates()).toHaveLength(1);
+  });
+
+  it('a mid-apply failure leaves memory unchanged and emits nothing', async () => {
+    const { service, repository, updates } = setup();
+    await service.apply(NODE, [{ op: 'save', key: 'keep', value: '1' }]);
+    const before = updates().length;
+    const original = repository.memory!.deleteKey;
+    repository.memory!.deleteKey = async () => {
+      throw new Error('disk full');
+    };
+    await expect(
+      service.apply(NODE, [
+        { op: 'save', key: 'new', value: '2' },
+        { op: 'delete', key: 'keep' },
+      ]),
+    ).rejects.toThrow('disk full');
+    repository.memory!.deleteKey = original;
+    expect((await service.list(NODE)).map((e) => e.key)).toEqual(['keep']);
+    expect(updates()).toHaveLength(before);
   });
 
   it('applying no ops emits nothing', async () => {
@@ -217,5 +270,22 @@ describe('the memory prompt block', () => {
     const heading = on.text.indexOf(MEMORY_PROMPT_HEADING);
     expect(heading).toBeGreaterThan(instructions);
     expect(heading).toBeLessThan(on.text.indexOf('## Skills'));
+  });
+
+  it('memory on changes the prompt version; off keeps it byte-identical to before', () => {
+    const off = assemblePrompt(base).version;
+    expect(off).toBe('b9ccc2059eea');
+    expect(promptVersion('ace-system-1', 'Do the thing.', { outputTypes: ['text'] })).toBe(off);
+    const on = assemblePrompt({ ...base, memoryInstructions: true }).version;
+    expect(on).not.toBe(off);
+    expect(
+      promptVersion(
+        'ace-system-1',
+        'Do the thing.',
+        { outputTypes: ['text'] },
+        MEMORY_PROMPT_VERSION,
+      ),
+    ).toBe(on);
+    expect(MEMORY_PROMPT_VERSION).toBe('ace-memory-1');
   });
 });
