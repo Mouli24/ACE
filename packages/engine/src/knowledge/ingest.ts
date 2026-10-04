@@ -9,6 +9,7 @@ import type {
 
 import type { EventBus } from '../events/index.js';
 import { newId } from '../ids.js';
+import type { Logger } from '../logging/index.js';
 import type { Queue, Repository, Scope } from '../ports/index.js';
 import type {
   ChunkKind,
@@ -16,6 +17,7 @@ import type {
   ContextTextCheck,
   DocumentParser,
   EmbedderFor,
+  ParsedHeading,
   KbChunkRepository,
   KbDocumentRepository,
   KnowledgeBaseRepository,
@@ -79,6 +81,7 @@ export interface IngestionWorkerDeps {
   chunkKindFor: (doc: { mime: string; name: string }) => ChunkKind;
   /** The uploaded file's bytes, or null when the artifact is gone. */
   readArtifact: (artifactId: Id) => Promise<{ bytes: Uint8Array } | null>;
+  logger: Logger;
   now?: () => Timestamp;
   nextId?: () => Id;
   /** How often `start()` looks for queued work when nothing woke it. Default 500 ms. */
@@ -102,6 +105,22 @@ class DocumentGoneError extends Error {
 }
 
 const DEFAULT_POLL_MS = 500;
+
+/**
+ * Re-finds each heading in the sanitised text. Redaction changes lengths, so the parser's offsets
+ * no longer point at their titles; a heading whose own title was redacted is dropped.
+ */
+function rebuildHeadings(headings: ParsedHeading[], text: string): ParsedHeading[] {
+  const rebuilt: ParsedHeading[] = [];
+  let cursor = 0;
+  for (const heading of headings) {
+    const offset = text.indexOf(heading.title, cursor);
+    if (offset === -1) continue;
+    rebuilt.push({ ...heading, offset });
+    cursor = offset + heading.title.length;
+  }
+  return rebuilt;
+}
 
 export function createIngestionWorker(deps: IngestionWorkerDeps): IngestionWorker {
   const { scope, queue, bus } = deps;
@@ -142,7 +161,13 @@ export function createIngestionWorker(deps: IngestionWorkerDeps): IngestionWorke
 
     await enter(job, 'chunking', INGEST_PROGRESS.chunking);
     const drafts = deps.chunker.chunk({
-      document: { text: checked.text, headings: parsed.headings },
+      document: {
+        text: checked.text,
+        headings:
+          checked.text === parsed.text
+            ? parsed.headings
+            : rebuildHeadings(parsed.headings, checked.text),
+      },
       documentName: doc.name,
       kind: deps.chunkKindFor({ mime: doc.mime, name: doc.name }),
       chunkSize: kb.chunkSize,
@@ -189,12 +214,24 @@ export function createIngestionWorker(deps: IngestionWorkerDeps): IngestionWorke
       await repos.kbDocuments.delete(scope, job.documentId);
       throw new DocumentGoneError(job.documentId);
     }
-    await emitIngest(bus, {
-      knowledgeBaseId: job.knowledgeBaseId,
-      documentId: job.documentId,
-      status: 'ready',
-      progress: INGEST_PROGRESS.ready,
-    });
+    // The document is ready now; a failed announcement must not undo that.
+    try {
+      await emitIngest(bus, {
+        knowledgeBaseId: job.knowledgeBaseId,
+        documentId: job.documentId,
+        status: 'ready',
+        progress: INGEST_PROGRESS.ready,
+      });
+    } catch (error) {
+      deps.logger.warn(
+        {
+          subsystem: 'knowledge',
+          documentId: job.documentId,
+          reason: error instanceof Error ? error.message : String(error),
+        },
+        'could not announce a ready document',
+      );
+    }
   }
 
   async function fail(
@@ -209,6 +246,8 @@ export function createIngestionWorker(deps: IngestionWorkerDeps): IngestionWorke
       ...(verdicts === undefined || verdicts.length === 0 ? {} : { verdicts }),
     });
     if (updated === null) return;
+    // A failed document must never keep serving the content of an earlier ingestion.
+    await repos.kbChunks.replaceForDocument(scope, job.documentId, [], []);
     await emitIngest(bus, {
       knowledgeBaseId: job.knowledgeBaseId,
       documentId: job.documentId,
@@ -244,7 +283,19 @@ export function createIngestionWorker(deps: IngestionWorkerDeps): IngestionWorke
       for (;;) {
         const job = await queue.dequeue(scope);
         if (job === null) return;
-        await process(job);
+        try {
+          await process(job);
+        } catch (error) {
+          // Nothing one job throws may stop the documents queued behind it.
+          deps.logger.error(
+            {
+              subsystem: 'knowledge',
+              documentId: job.documentId,
+              reason: error instanceof Error ? error.message : String(error),
+            },
+            'ingestion job failed unexpectedly',
+          );
+        }
       }
     })().finally(() => {
       inFlight = null;
