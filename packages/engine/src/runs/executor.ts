@@ -36,6 +36,9 @@ import type {
   StreamChunk,
   ToolResult,
 } from "../ports/index.js";
+import { runRetrievalNode } from "../knowledge/retrieval-node.js";
+import type { SearchService } from "../knowledge/search.js";
+import { extractMemoryOps, maskMemoryValue } from "../memory/ops.js";
 import { assemblePrompt } from "../prompts/index.js";
 import type { RunGate } from "./control/gate.js";
 import { usageFor } from "./cost.js";
@@ -99,6 +102,44 @@ export interface ExecuteNodeInput {
    * straight back and waits for the resume. Absent, nothing holds it.
    */
   gate?: Pick<RunGate, 'isPaused' | 'waitUntilDispatchable'>;
+  /**
+   * Round 5: what an agent or Model node reads beyond its envelopes' own reads — retrieved chunks
+   * and long-term memory — with the context guardrails over all of it (§2.2–§2.4, FR-GRD-004). The
+   * scheduler builds it per node run; absent, the envelopes are read as delivered (round 4).
+   */
+  context?: NodeContextHook;
+  /** Round 5: an agent's long-term memory (§2.2, FR-MEM-002); absent, no `__memory` is read. */
+  memory?: NodeMemoryHook;
+}
+
+/**
+ * The context hook (round 5 §2.2–§2.4, F4). Called once per node run, for agent and Model nodes,
+ * before the input point and prompt assembly, so what it places is what the input point checks and
+ * the prompt shows. A `failed` step fails the node with its own reason — `GUARDRAIL_VIOLATION` for a
+ * block, `BLOCKED` for a base deleted mid-run.
+ */
+export interface NodeContextHook {
+  build(envelopes: readonly Envelope[]): Promise<
+    GuardrailStep<{
+      envelopes: Envelope[];
+      /** The chunks placed, best first (FR-RAG-007). */
+      sources: NodeRunSource[];
+      /** The chunks the search found that did not fit, lowest score first. */
+      droppedSources: NodeRunSource[];
+      /** The memory entries placed. */
+      usedMemoryIds: Id[];
+    }>
+  >;
+}
+
+/**
+ * An agent's memory (round 5 §2.2). With `enabled`, the prompt carries the memory-operations block,
+ * and the `__memory` field is taken out of the JSON answer before the output point; the valid ops are
+ * applied once the answer has been accepted.
+ */
+export interface NodeMemoryHook {
+  enabled: boolean;
+  apply(ops: MemoryOp[]): Promise<void>;
 }
 
 /**
@@ -216,6 +257,14 @@ export interface NodeExecutorDeps {
   recordToolCall?: (runId: Id, call: ToolCall) => Promise<void>;
   /** ToolCall ids. Defaults to the shared id generator. */
   nextId?: () => string;
+
+  /* ------------------------------------------------------------- round 5 */
+
+  /**
+   * The knowledge-base search a Retrieval node runs (§2.4, FR-RAG-006). Optional like the round 4
+   * services: without it a Retrieval node is BLOCKED (`knowledge_unavailable`) rather than crashing.
+   */
+  search?: SearchService;
 }
 
 export interface NodeExecutor {
@@ -380,8 +429,22 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
   /* ---------------------------------------------------------------- agents */
 
+  /**
+   * An agent or Model node run. The chunks its context hook placed and dropped go on whatever the
+   * run ends as — a contract violation still read those chunks (FR-RAG-007) — and only when there
+   * were any, so a node with no knowledge base records exactly the round 4 shape.
+   */
   async function executeAgent(
     input: ExecuteNodeInput,
+  ): Promise<NodeExecutionOutcome> {
+    const used: Pick<NodeExecutionOutcome, "sources" | "droppedSources"> = {};
+    const outcome = await callAgent(input, used);
+    return { ...outcome, ...used };
+  }
+
+  async function callAgent(
+    input: ExecuteNodeInput,
+    used: Pick<NodeExecutionOutcome, "sources" | "droppedSources">,
   ): Promise<NodeExecutionOutcome> {
     const node = input.node;
     if (node.kind !== "agent" && node.kind !== "model") {
@@ -410,13 +473,35 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
     /* The collected verdicts of both points, carried on the outcome for the report (FR-GRD-015). */
     const verdicts: Verdict[] = [];
+    /* Round 5 (§2.2): the memory-operations block, and `__memory` read out of the answer. */
+    const memoryOn = input.memory?.enabled === true;
+
+    let envelopes = input.envelopes;
+
+    /*
+     * The context, before the input point (round 5 §2.2–§2.4, FR-GRD-004): retrieved chunks and
+     * memory placed on the first envelope, and every untrusted piece through the context guardrails.
+     * It runs first so the input point and the prompt both see exactly what was placed.
+     */
+    if (input.context !== undefined) {
+      const built = await input.context.build(envelopes);
+      verdicts.push(...(built.verdicts ?? []));
+      if (built.kind === "failed") {
+        return fail(input, built.error, NO_USAGE, {
+          failureReason: built.failureReason,
+          verdicts,
+        });
+      }
+      envelopes = built.envelopes;
+      if (built.sources.length > 0) used.sources = built.sources;
+      if (built.droppedSources.length > 0) used.droppedSources = built.droppedSources;
+    }
 
     /*
      * The input point, before assembly (FR-GRD-003, §4 item 4). It runs here rather than in the
      * scheduler for one reason: a `redact` has to reach the prompt, and the prompt is built on the
      * next line.
      */
-    let envelopes = input.envelopes;
     if (input.guardrails?.beforePrompt !== undefined) {
       const checked = await input.guardrails.beforePrompt(envelopes);
       verdicts.push(...(checked.verdicts ?? []));
@@ -439,6 +524,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       envelopes,
       contract,
       iteration: input.iteration,
+      ...(memoryOn ? { memoryInstructions: true } : {}),
     });
 
     /* Route. The router is pure over the catalog and never calls a provider (FR-RTR-006). */
@@ -582,6 +668,8 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       let tokensIn = 0;
       let tokensOut = 0;
       let finishReason: string = "stop";
+      /** The valid `__memory` ops this attempt's answer carried (round 5 §2.2). */
+      let memoryOps: MemoryOp[] = [];
 
       const tokens = createBatcher<string>({
         intervalMs: batchMs,
@@ -1076,11 +1164,12 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         const wantsJson = outputTypes.includes("json");
 
         if (wantsJson) {
+          let value: unknown;
           if (sawJson) {
-            output.push({ type: "json", value: jsonValue });
+            value = jsonValue;
           } else {
             try {
-              output.push({ type: "json", value: JSON.parse(text.trim()) });
+              value = JSON.parse(text.trim());
             } catch {
               // BR-03: the model answered, it just answered wrongly. That is a contract violation,
               // never RUN_FAILED, and never a reason to retry a different provider.
@@ -1104,6 +1193,30 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               };
             }
           }
+
+          /*
+           * Round 5 (§2.2, FR-MEM-002): `__memory` comes out here, after the parse and before the
+           * output point and the contract, so neither ever sees it and it never reaches the next
+           * node. A bad op is logged by its reason — never its value — and the answer still stands.
+           */
+          if (memoryOn) {
+            const extracted = extractMemoryOps(value);
+            value = extracted.value;
+            memoryOps = extracted.ops;
+            if (extracted.invalid !== undefined) {
+              deps.logger.warn(
+                {
+                  subsystem: "memory",
+                  runId: input.runId,
+                  nodeId: input.node.id,
+                  nodeRunId: input.nodeRunId,
+                  reason: extracted.invalid,
+                },
+                "memory ops ignored",
+              );
+            }
+          }
+          output.push({ type: "json", value });
         }
 
         for (const type of outputTypes) {
@@ -1183,9 +1296,25 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         }
       }
 
+      /*
+       * The memory ops apply only now, once the answer has been accepted: a rejected or failed
+       * answer leaves memory as it was, and a retry never applies them twice. They are recorded as
+       * stored — a key-shaped value masked (D86) — and only when there were any (FR-MEM-002).
+       */
+      let applied: Pick<NodeExecutionOutcome, "memoryOps"> = {};
+      if (memoryOps.length > 0 && input.memory !== undefined && !input.signal.aborted) {
+        await input.memory.apply(memoryOps);
+        applied = {
+          memoryOps: memoryOps.map((op): MemoryOp =>
+            op.op === "save" ? { ...op, value: maskMemoryValue(op.value) } : op,
+          ),
+        };
+      }
+
       return {
         kind: "done",
         result: await succeed(input, flowing, usage, {
+          ...applied,
           modelUsed,
           prompt: recordedPrompt(),
           verdicts: [...verdicts],
@@ -1260,6 +1389,22 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
           });
         }
         return succeed(input, result.parts, NO_USAGE);
+      }
+
+      case "retrieval": {
+        // Round 5 §2.4 (FR-RAG-006): one search of the chosen base; every hit is a source (FR-RAG-007).
+        if (deps.search === undefined) {
+          return fail(input, {
+            kind: "invalid_config",
+            code: "knowledge_unavailable",
+            message: "This engine has no knowledge store, so a Retrieval node cannot search.",
+            retryable: false,
+          });
+        }
+        const result = await runRetrievalNode(node.config, reads, deps.search);
+        // A base deleted mid-run is BLOCKED `missing_knowledge_base`, as pre-flight would have said.
+        if (!result.ok) return fail(input, result.error);
+        return succeed(input, result.parts, NO_USAGE, { sources: result.sources });
       }
 
       default:
