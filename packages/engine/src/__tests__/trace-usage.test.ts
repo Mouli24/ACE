@@ -290,6 +290,30 @@ describe('FR-OBS-001 the trace service', () => {
       status: 404,
     });
   });
+
+  it('labels a node state by the node name from the run snapshot: Writer → RUNNING', async () => {
+    const repo = new FakeRepository();
+    await repo.runs.create(scope, {
+      id: RUN,
+      workflowId: WF,
+      snapshot: { version: 1, nodes: [{ id: NODE, name: 'Writer' }], edges: [] },
+    } as unknown as Run);
+    for (const event of events()) {
+      const { seq: _seq, ...rest } = event;
+      await repo.events.append(scope, rest);
+    }
+
+    const trace = await createTraceService({ repository: repo, scope }).trace(RUN);
+    const labels = trace.filter((entry) => entry.kind === 'node_run').map((entry) => entry.label);
+    expect(labels).toContain('Writer → RUNNING');
+    expect(labels).toContain('Writer → COMPLETED');
+  });
+
+  it('falls back to the node id for a node the snapshot does not name', () => {
+    const names = new Map([['01JBXQ8Z9KQ4R7N2VWXYZ00N99', 'Other']]);
+    const labels = foldTrace(events(), names).map((entry) => entry.label);
+    expect(labels).toContain(`${NODE} → RUNNING`);
+  });
 });
 
 const finishedNodeRun = (id: string, runId: string, tokensIn: number, costUsd: number): NodeRun =>

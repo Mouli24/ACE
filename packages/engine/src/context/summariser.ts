@@ -46,14 +46,22 @@ export interface ModelSummariserDeps {
   pricingFor: (providerId: Id, modelId: string) => Promise<ModelPricing | undefined>;
 }
 
-/** The error kind and code when the adapter classified it, else the error's name — never its message. */
+/**
+ * The error kind and code when the adapter classified it, else the error's name — never its message,
+ * and never empty: whatever names nothing reads `unknown`.
+ */
 function describeFailure(error: unknown): string {
   const classified = (error as { nodeError?: { kind?: unknown; code?: unknown } } | null)
     ?.nodeError;
-  if (classified !== undefined && classified !== null) {
-    return [classified.kind, classified.code].filter((p) => typeof p === 'string').join('/');
-  }
-  return error instanceof Error ? error.name : 'unknown error';
+  const described =
+    classified !== undefined && classified !== null
+      ? [classified.kind, classified.code]
+          .filter((p) => typeof p === 'string' && p !== '')
+          .join('/')
+      : error instanceof Error
+        ? error.name
+        : '';
+  return described === '' ? 'unknown' : described;
 }
 
 const isReference = (part: Part): boolean =>

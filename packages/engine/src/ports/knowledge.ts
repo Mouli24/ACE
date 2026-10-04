@@ -112,7 +112,8 @@ export interface KbDocumentRepository {
   update(
     scope: Scope,
     id: Id,
-    patch: Partial<Pick<KbDocument, 'status' | 'chunkCount' | 'ingestedAt' | 'verdicts'> & {
+    patch: Partial<
+      Pick<KbDocument, 'status' | 'chunkCount' | 'ingestedAt' | 'verdicts'> & {
         /** `null` clears a previous error once the document is ready again (D72). */
         error: string | null;
       }

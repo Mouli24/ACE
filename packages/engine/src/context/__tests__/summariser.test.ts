@@ -312,6 +312,24 @@ describe('model summariser', () => {
     expect(s.reasons[0]).not.toContain('word1');
   });
 
+  it.each([
+    [
+      'a classified error with no kind or code',
+      () => Object.assign(new Error('x'), { nodeError: {} }),
+    ],
+    ['an Error with an empty name', () => Object.assign(new Error('x'), { name: '' })],
+    ['a thrown string', () => 'nope'],
+  ])('FR-RAG-010 never reports an empty reason: %s reads as unknown', async (_label, thrown) => {
+    const s = setup({
+      reply: () => {
+        throw thrown();
+      },
+    });
+    await s.summariser.summarise({ parts: [text(words(2000))], budgetTokens: 200, target: TARGET });
+    expect(s.reasons).toHaveLength(1);
+    expect(s.reasons[0]).toContain('model summary failed (unknown) for mock-summary');
+  });
+
   it('a mid-call abort falls back without calling onFallback', async () => {
     const controller = new AbortController();
     const s = setup({

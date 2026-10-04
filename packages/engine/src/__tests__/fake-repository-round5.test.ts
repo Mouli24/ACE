@@ -52,6 +52,60 @@ describe('FR-RAG-010 the fake repository holds the round 5 ports', () => {
   });
 });
 
+describe('FR-RAG-001 the fake derives a base counts from its documents and chunks, as SQLite does', () => {
+  const document = (id: string, status: KbDocument['status']): KbDocument => ({
+    id,
+    knowledgeBaseId: 'kb1',
+    artifactId: '01JBXQ8Z9KQ4R7N2VWXYZ0ARTF',
+    name: `${id}.md`,
+    mime: 'text/markdown',
+    size: 10,
+    status,
+    chunkCount: 0,
+    createdAt: '2026-10-01T00:00:00.000Z',
+  });
+
+  it('counts every document, pending and failed included, and every chunk; a patched count is ignored', async () => {
+    const repo = new FakeRepository();
+    await repo.knowledgeBases.insert(scope, {
+      id: 'kb1',
+      projectId: '01JBXQ8Z9KQ4R7N2VWXYZ0PROJ',
+      name: 'Handbook',
+      embeddingProviderId: '01JBXQ8Z9KQ4R7N2VWXYZ0PRVD',
+      embeddingModelId: 'mock-embed',
+      chunkSize: 700,
+      chunkOverlap: 90,
+      documentCount: 7,
+      chunkCount: 7,
+      createdAt: '2026-10-01T00:00:00.000Z',
+      updatedAt: '2026-10-01T00:00:00.000Z',
+    });
+    await repo.kbDocuments.insert(scope, document('d1', 'ready'));
+    await repo.kbDocuments.insert(scope, document('d2', 'pending'));
+    await repo.kbDocuments.insert(scope, document('d3', 'failed'));
+    await repo.kbChunks.replaceForDocument(
+      scope,
+      'd1',
+      [chunk('c1', 'd1'), chunk('c2', 'd1')],
+      [[1], [1]],
+    );
+    await repo.knowledgeBases.update(scope, 'kb1', { documentCount: 99, chunkCount: 99 });
+
+    expect(await repo.knowledgeBases.get(scope, 'kb1')).toMatchObject({
+      documentCount: 3,
+      chunkCount: 2,
+    });
+    const [listed] = await repo.knowledgeBases.listByProject(scope, '01JBXQ8Z9KQ4R7N2VWXYZ0PROJ');
+    expect(listed).toMatchObject({ documentCount: 3, chunkCount: 2 });
+
+    await repo.kbDocuments.delete(scope, 'd1');
+    expect(await repo.knowledgeBases.get(scope, 'kb1')).toMatchObject({
+      documentCount: 2,
+      chunkCount: 0,
+    });
+  });
+});
+
 describe('FR-MEM-001 the fake memory keeps one value per key', () => {
   it('upserts, lists oldest first and clears', async () => {
     const repo = new FakeRepository();
