@@ -15,7 +15,7 @@ import {
   type Verdict,
 } from '@ace/contracts';
 
-import { estimateTokens } from '../envelopes/index.js';
+import { estimatePartsTokens, estimateTokens } from '../envelopes/index.js';
 import { classifyError, failureReasonFor } from '../errors/index.js';
 import type { EvaluationTarget } from '../guardrails/evaluator.js';
 import { queryOf, sourceOf } from '../knowledge/retrieval-node.js';
@@ -27,30 +27,38 @@ import type { ContextGuard, ContextLabel } from './guard.js';
  * The context builder (round 5 §2.2–§2.4, §4 item 7, Arch §12.6, F4, D232, FR-RAG-005..007,
  * FR-MEM-003, FR-GRD-004).
  *
- * It assembles what an agent reads beyond its upstream outputs — the chunks its attached knowledge
- * bases return and its own long-term memory — inside the agent's `budgetTokens`, and puts every
- * untrusted piece through the context guardrails before it is placed:
+ * For an **agent** it assembles what the agent reads beyond its upstream outputs — the chunks its
+ * attached knowledge bases return and its own long-term memory — inside the agent's `budgetTokens`;
+ * for agents and **model** nodes alike it puts every untrusted piece through the context guardrails
+ * before it reaches the prompt. A model node has no knowledge bases and no memory, so for it only the
+ * upstream-read pass runs.
  *
  * - **Retrieval.** The query is the text of every incoming read, in `fromNodeId` order (the order
  *   the prompt manager reads them in). Each attached base is searched once, `k = 5`, the default
  *   mode; the hits are merged and sorted best first. They take at most
  *   `floor(budgetTokens × CONTEXT_BUDGET_SHARES.retrieved)` tokens: the best are placed while they
- *   fit, and from the first that does not, the rest are dropped — the lowest scores first — and
- *   recorded as `droppedSources`, lowest score first.
+ *   fit, and from the first that does not, the rest are dropped — the lowest scores first.
  * - **Memory.** Oldest first, inside `floor(budgetTokens × CONTEXT_BUDGET_SHARES.memory)`; entries
  *   that do not fit are left out from the newest end (§2.2). The ids placed come back as
  *   `usedMemoryIds`, for `lastUsedAt`.
- * - **Guardrails.** Each untrusted upstream read (and an untrusted summary), each chunk and each
- *   memory value goes through `guard.sanitise` before it is placed; a `failed` answer fails the node
- *   `GUARDRAIL_VIOLATION`. Only what is placed is judged: a chunk dropped for the budget never reaches
- *   a prompt, so it gets no verdict. What a person typed into an Input node is trusted (BR-13).
+ * - **The whole budget.** The reads were fitted to the full `budgetTokens` when the envelopes were
+ *   built, so after guarding, the reads, the retrieved chunks and the memory are measured together;
+ *   while that total exceeds `budgetTokens`, retrieved chunks are dropped lowest score first, then
+ *   memory entries newest first. Every chunk dropped, for its share or for the whole, is in
+ *   `droppedSources`, lowest score first. (Building an agent's envelopes at a reduced budget, so the
+ *   reads and their summary get only what retrieval and memory leave, is the run service's half.)
+ * - **Guardrails.** Each untrusted upstream read — text, code, and every key and string of its JSON —
+ *   and an untrusted summary, each chunk, and each memory key and value goes through the guard; a
+ *   `failed` answer fails the node `GUARDRAIL_VIOLATION`. Only what is finally placed leaves a
+ *   verdict: a chunk or entry dropped for the budget — even one that grew past it when a redaction
+ *   lengthened it — never reaches a prompt, so its verdicts are never recorded. What a person typed
+ *   into an Input node is trusted (BR-13).
  * - **Placement (F4).** Retrieved chunks and memory ride the node's **first** envelope sorted by
  *   `fromNodeId`, which becomes `untrusted`; the other envelopes keep only their own reads and
  *   summary, so nothing is duplicated in the prompt. Envelopes come back in the order given.
  *
- * Token costs are the engine's estimate (`CHARS_PER_TOKEN`, Arch §24): a chunk costs its text, a
- * memory entry its key plus its value, both measured after sanitising. The summary keeps the rest of
- * the budget; it is built with the envelope, not here.
+ * Token costs are the engine's estimate (`CHARS_PER_TOKEN`, Arch §24): a read as the envelope
+ * measures it, a chunk its text, a memory entry its key plus its value — all after guarding.
  */
 
 export interface NodeContext {
@@ -64,7 +72,8 @@ export interface NodeContext {
 }
 
 export interface BuildNodeContextInput {
-  node: Extract<Node, { kind: 'agent' }>;
+  /** An agent gets retrieval, memory and the guard; a model node gets the guard over its reads. */
+  node: Extract<Node, { kind: 'agent' | 'model' }>;
   envelopes: readonly Envelope[];
   /** The agent's long-term memory, as stored; empty when memory is off or cleared. */
   memory: readonly MemoryEntry[];
@@ -75,13 +84,40 @@ export interface BuildNodeContextInput {
   target: EvaluationTarget;
 }
 
-/** A `failed` answer from the guard, carried out of a nested walk to the one place that reports it. */
+/**
+ * A `failed` answer from the guard, carried out of a nested walk to the one place that reports it,
+ * with the verdicts of the content that failed (they are recorded: that content is why the node
+ * failed).
+ */
 class ContextRefused extends Error {
   override readonly name = 'ContextRefused';
 
-  constructor(readonly nodeError: NodeError) {
+  constructor(
+    readonly nodeError: NodeError,
+    readonly pending: readonly Verdict[],
+  ) {
     super(nodeError.message);
   }
+}
+
+/** Something judged and kept for now; its verdicts are recorded only if it is finally placed. */
+interface Judged {
+  text: string;
+  pending: Verdict[];
+}
+
+interface PlacedChunk {
+  chunk: RetrievedChunk;
+  source: NodeRunSource;
+  cost: number;
+  pending: Verdict[];
+}
+
+interface PlacedMemory {
+  entry: EnvelopeMemoryEntry;
+  id: Id;
+  cost: number;
+  pending: Verdict[];
 }
 
 /** Arrival order is a race; source node id is not (the prompt manager's order, TC-PRM-001). */
@@ -94,28 +130,48 @@ const oldestFirst = (a: MemoryEntry, b: MemoryEntry): number =>
 const memoryCost = (key: string, value: string): number =>
   estimateTokens(key) + estimateTokens(value);
 
+const sum = (costs: readonly { cost: number }[]): number =>
+  costs.reduce((total, each) => total + each.cost, 0);
+
 export async function buildNodeContext(
   input: BuildNodeContextInput,
 ): Promise<GuardrailStep<NodeContext>> {
   const { node, guard, target } = input;
+  /** Recorded verdicts, in the order their content was placed. */
   const verdicts: Verdict[] = [];
-  const budgetTokens = node.config.contextPolicy.budgetTokens;
 
-  const failed = (error: NodeError): GuardrailStep<NodeContext> => ({
-    kind: 'failed',
-    failureReason: failureReasonFor(error),
-    error,
-    verdicts,
-  });
-
-  async function sanitise(label: ContextLabel, text: string): Promise<string> {
-    if (guard === undefined) return text;
-    const result = await guard.sanitise({ target, label, text });
-    verdicts.push(...result.verdicts);
-    if (result.kind === 'failed') throw new ContextRefused(result.error);
-    return result.text;
+  async function record(pending: readonly Verdict[]): Promise<void> {
+    if (guard === undefined || pending.length === 0) return;
+    verdicts.push(...(await guard.record(target, pending)));
   }
 
+  async function failed(error: NodeError, pending: readonly Verdict[] = []) {
+    await record(pending);
+    const step: GuardrailStep<NodeContext> = {
+      kind: 'failed',
+      failureReason: failureReasonFor(error),
+      error,
+      verdicts,
+    };
+    return step;
+  }
+
+  /** Judge without recording; a refusal leaves through `ContextRefused`. */
+  async function judge(label: ContextLabel, text: string): Promise<Judged> {
+    if (guard === undefined) return { text, pending: [] };
+    const result = await guard.inspect({ target, label, text });
+    if (result.kind === 'failed') throw new ContextRefused(result.error, result.verdicts);
+    return { text: result.text, pending: result.verdicts };
+  }
+
+  /** Judge something that is placed whatever its size — an upstream read — and record at once. */
+  async function sanitise(label: ContextLabel, text: string): Promise<string> {
+    const judged = await judge(label, text);
+    await record(judged.pending);
+    return judged.text;
+  }
+
+  /** Keys too: a JSON key reaches the prompt as surely as its value does (BR-13). */
   async function sanitiseJson(value: unknown): Promise<unknown> {
     if (typeof value === 'string') return sanitise('upstream', value);
     if (Array.isArray(value)) {
@@ -125,8 +181,9 @@ export async function buildNodeContext(
     }
     if (value !== null && typeof value === 'object') {
       const entries: [string, unknown][] = [];
-      for (const [key, item] of Object.entries(value))
-        entries.push([key, await sanitiseJson(item)]);
+      for (const [key, item] of Object.entries(value)) {
+        entries.push([await sanitise('upstream', key), await sanitiseJson(item)]);
+      }
       return Object.fromEntries(entries);
     }
     return value;
@@ -164,13 +221,12 @@ export async function buildNodeContext(
     };
   }
 
-  async function search(query: string): Promise<SearchHit[]> {
+  async function search(knowledgeBaseIds: readonly Id[], query: string): Promise<SearchHit[]> {
     if (input.search === undefined || query.trim() === '') return [];
     const service = input.search;
-    const knowledgeBaseIds = [...new Set(node.config.knowledgeBaseIds)];
 
     const responses = await Promise.all(
-      knowledgeBaseIds.map((kbId) =>
+      [...new Set(knowledgeBaseIds)].map((kbId) =>
         service.search(kbId, { query, k: DEFAULT_SEARCH_K, mode: DEFAULT_SEARCH_MODE }),
       ),
     );
@@ -178,15 +234,12 @@ export async function buildNodeContext(
     return responses.flatMap((response) => response.hits).sort((a, b) => b.score - a.score);
   }
 
-  /** The best chunks that fit the retrieved share, guarded; the rest dropped lowest score first. */
-  async function fitRetrieved(hits: readonly SearchHit[]): Promise<{
-    retrieved: RetrievedChunk[];
-    sources: NodeRunSource[];
-    droppedSources: NodeRunSource[];
-  }> {
-    const share = Math.floor(budgetTokens * CONTEXT_BUDGET_SHARES.retrieved);
-    const retrieved: RetrievedChunk[] = [];
-    const sources: NodeRunSource[] = [];
+  /** The best chunks that fit the retrieved share, judged; the rest dropped, best first. */
+  async function fitRetrieved(
+    hits: readonly SearchHit[],
+    share: number,
+  ): Promise<{ placed: PlacedChunk[]; dropped: NodeRunSource[] }> {
+    const placed: PlacedChunk[] = [];
     const dropped: NodeRunSource[] = [];
     const seen = new Set<Id>();
     let used = 0;
@@ -197,13 +250,22 @@ export async function buildNodeContext(
       seen.add(hit.chunkId);
 
       // Measured before the guard sees it, so a chunk that cannot fit is never judged; measured
-      // again after, because a redaction can lengthen the text.
+      // again after, because a redaction can lengthen it — and then it is dropped unrecorded.
       if (!full && used + estimateTokens(hit.text) <= share) {
-        const text = await sanitise('retrieved', hit.text);
-        const cost = estimateTokens(text);
+        const judged = await judge('retrieved', hit.text);
+        const cost = estimateTokens(judged.text);
         if (used + cost <= share) {
-          retrieved.push({ chunkId: hit.chunkId, text, score: hit.score, source: hit.source });
-          sources.push(sourceOf(hit));
+          placed.push({
+            chunk: {
+              chunkId: hit.chunkId,
+              text: judged.text,
+              score: hit.score,
+              source: hit.source,
+            },
+            source: sourceOf(hit),
+            cost,
+            pending: judged.pending,
+          });
           used += cost;
           continue;
         }
@@ -213,28 +275,31 @@ export async function buildNodeContext(
       dropped.push(sourceOf(hit));
     }
 
-    return { retrieved, sources, droppedSources: dropped.reverse() };
+    return { placed, dropped };
   }
 
-  /** The oldest entries that fit the memory share, guarded; the newest left out. */
-  async function fitMemory(): Promise<{ memory: EnvelopeMemoryEntry[]; usedMemoryIds: Id[] }> {
-    const share = Math.floor(budgetTokens * CONTEXT_BUDGET_SHARES.memory);
-    const memory: EnvelopeMemoryEntry[] = [];
-    const usedMemoryIds: Id[] = [];
+  /** The oldest entries that fit the memory share, key and value judged; the newest left out. */
+  async function fitMemory(share: number): Promise<PlacedMemory[]> {
+    const placed: PlacedMemory[] = [];
     let used = 0;
 
     for (const entry of [...input.memory].sort(oldestFirst)) {
       if (used + memoryCost(entry.key, entry.value) > share) break;
-      const value = await sanitise('memory', entry.value);
-      const cost = memoryCost(entry.key, value);
+      const key = await judge('memory', entry.key);
+      const value = await judge('memory', entry.value);
+      const cost = memoryCost(key.text, value.text);
       if (used + cost > share) break;
 
-      memory.push({ key: entry.key, value });
-      usedMemoryIds.push(entry.id);
+      placed.push({
+        entry: { key: key.text, value: value.text },
+        id: entry.id,
+        cost,
+        pending: [...key.pending, ...value.pending],
+      });
       used += cost;
     }
 
-    return { memory, usedMemoryIds };
+    return placed;
   }
 
   try {
@@ -243,8 +308,9 @@ export async function buildNodeContext(
 
     const ordered = [...envelopes].sort(byFromNodeId);
     const first = ordered[0];
-    if (first === undefined) {
-      // Nothing to carry the context: an agent with no incoming envelope reads nothing extra.
+    if (node.kind === 'model' || first === undefined) {
+      // A model node has no bases and no memory; an agent with no incoming envelope has nothing to
+      // carry them. Either way the reads are all there is.
       return {
         kind: 'continue',
         envelopes,
@@ -255,34 +321,70 @@ export async function buildNodeContext(
       };
     }
 
+    const budgetTokens = node.config.contextPolicy.budgetTokens;
+
     let hits: SearchHit[];
     try {
-      hits = await search(queryOf(ordered.flatMap((each) => each.reads)));
+      hits = await search(
+        node.config.knowledgeBaseIds,
+        queryOf(ordered.flatMap((each) => each.reads)),
+      );
     } catch (error) {
       // A base deleted mid-run is BLOCKED (`missing_knowledge_base`), as pre-flight would have said;
       // anything else — an embedder that cannot be reached — is classified like any node failure.
       return failed(classifyError(error));
     }
 
-    const { retrieved, sources, droppedSources } = await fitRetrieved(hits);
-    const { memory, usedMemoryIds } = await fitMemory();
+    const retrieved = await fitRetrieved(
+      hits,
+      Math.floor(budgetTokens * CONTEXT_BUDGET_SHARES.retrieved),
+    );
+    const memory = await fitMemory(Math.floor(budgetTokens * CONTEXT_BUDGET_SHARES.memory));
 
-    if (retrieved.length > 0 || memory.length > 0) {
+    /* The whole budget: reads, chunks and memory together (FR-EXE-007). */
+    const readsCost = envelopes.reduce((total, each) => total + estimatePartsTokens(each.reads), 0);
+    let total = readsCost + sum(retrieved.placed) + sum(memory);
+    const overBudget: NodeRunSource[] = [];
+    while (total > budgetTokens && retrieved.placed.length > 0) {
+      const lowest = retrieved.placed.pop()!;
+      total -= lowest.cost;
+      overBudget.push(lowest.source);
+    }
+    while (total > budgetTokens && memory.length > 0) total -= memory.pop()!.cost;
+
+    // Only now is it known what is placed, so only now are its verdicts recorded.
+    await record([
+      ...retrieved.placed.flatMap((each) => each.pending),
+      ...memory.flatMap((each) => each.pending),
+    ]);
+
+    const chunks = retrieved.placed.map((each) => each.chunk);
+    const entries = memory.map((each) => each.entry);
+    if (chunks.length > 0 || entries.length > 0) {
       envelopes[envelopes.indexOf(first)] = {
         ...first,
         context: {
           ...first.context,
-          ...(retrieved.length === 0 ? {} : { retrieved }),
-          ...(memory.length === 0 ? {} : { memory }),
+          ...(chunks.length === 0 ? {} : { retrieved: chunks }),
+          ...(entries.length === 0 ? {} : { memory: entries }),
           // Anything retrieved or remembered is untrusted, whoever sent the envelope (BR-13).
           trust: 'untrusted',
         },
       };
     }
 
-    return { kind: 'continue', envelopes, sources, droppedSources, usedMemoryIds, verdicts };
+    return {
+      kind: 'continue',
+      envelopes,
+      sources: retrieved.placed.map((each) => each.source),
+      // Dropped for the share (all below every placed chunk), lowest first; then dropped for the
+      // whole budget, which went lowest first too.
+      droppedSources: [...retrieved.dropped.reverse(), ...overBudget],
+      usedMemoryIds: memory.map((each) => each.id),
+      verdicts,
+    };
   } catch (error) {
-    if (error instanceof ContextRefused) return failed(error.nodeError);
+    if (error instanceof ContextRefused) return failed(error.nodeError, error.pending);
     throw error;
   }
 }

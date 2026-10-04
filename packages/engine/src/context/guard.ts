@@ -33,15 +33,24 @@ import type { ContextTextCheck } from '../ports/index.js';
  * - `untrusted_tagging` never decides anything. Tagging is unconditional (BR-13, D232) — the
  *   envelope's `trust` and the prompt manager's untrusted label do it — whatever a stored check says.
  *
- * A check that triggered records one verdict (D114: nothing for a clean pass), stored and emitted
- * through the evaluator's `record`, naming what was stripped or redacted and never the text
- * (FR-GRD-014). A finding the runner cannot act on — a strip or a redaction with no `sanitized`
- * text — fails closed rather than letting the raw text through.
+ * A check that triggered makes one verdict (D114: nothing for a clean pass), naming what was
+ * stripped or redacted and never the text (FR-GRD-014). `strippedTypes` is set only when something
+ * was taken out — never at `pass`, which strips nothing; the reason names the kinds found by count.
+ *
+ * **Fail closed.** A finding the runner cannot act on — a strip or a redaction with no `sanitized`
+ * text — refuses the content rather than letting the raw text through, and so does an enabled check
+ * the runner does not answer at all (`context_check_unavailable`): unlike the other points, silence
+ * here would let unjudged text into a prompt.
  *
  * **Residue.** The rule pack strips to a fixed point bounded at a few iterations, so text built to
  * need more can come back still hiding something. Once anything has been rewritten, the context
  * `prompt_injection` check runs once more over the result; if it still finds anything the node fails
- * `GUARDRAIL_VIOLATION` (`context_injection_residue`) whatever the configured action — fail closed.
+ * `GUARDRAIL_VIOLATION` (`context_injection_residue`) whatever the configured action. That verdict
+ * names no stripped kinds — nothing more was stripped — and its reason says what remained, by count.
+ *
+ * **Judging and recording are separate.** `inspect` judges and returns verdicts not yet stored;
+ * `record` stores and emits them through the evaluator's `record` (FR-GRD-015). The context builder
+ * uses the two so that only content it finally places leaves a verdict; `sanitise` is both at once.
  */
 
 export type ContextLabel = 'retrieved' | 'memory' | 'upstream' | 'tool';
@@ -50,12 +59,19 @@ export type SanitiseResult =
   | { kind: 'continue'; text: string; verdicts: Verdict[] }
   | { kind: 'failed'; error: NodeError; verdicts: Verdict[] };
 
+export interface SanitiseInput {
+  target: EvaluationTarget;
+  label: ContextLabel;
+  text: string;
+}
+
 export interface ContextGuard {
-  sanitise(input: {
-    target: EvaluationTarget;
-    label: ContextLabel;
-    text: string;
-  }): Promise<SanitiseResult>;
+  /** Judge, act and record: `inspect` followed by `record`. */
+  sanitise(input: SanitiseInput): Promise<SanitiseResult>;
+  /** Judge and act, recording nothing: the verdicts come back unstored. */
+  inspect(input: SanitiseInput): Promise<SanitiseResult>;
+  /** Store and emit verdicts `inspect` returned, in order; answers them as stored. */
+  record(target: EvaluationTarget, verdicts: readonly Verdict[]): Promise<Verdict[]>;
   /**
    * The ingestion-time check (F6, Arch §21.3): the project's **default** policy's context `pii` check
    * over a document's full text before it is chunked. Hidden instructions are deliberately left for
@@ -165,12 +181,24 @@ function consequenceOf(check: GuardrailCheck, outcome: CheckOutcome, reason: str
   }
 }
 
+/** An enabled check the runner did not answer: refused, because silence would let unjudged text in. */
+const unavailable = (check: GuardrailCheck, where: string): NodeError => ({
+  kind: 'guardrail',
+  code: 'context_check_unavailable',
+  message: `The ${check.type} check at the context point could not be evaluated, so ${where} was refused.`,
+  retryable: false,
+  details: { point: check.point, checkType: check.type, action: check.action },
+});
+
 export function createContextGuard(deps: ContextGuardDeps): ContextGuard {
   const { evaluator: runner } = deps;
   const now = deps.now ?? ((): string => new Date().toISOString());
   const nextId = deps.nextId ?? newId;
 
-  /** A verdict for a finding: types only, with `strippedTypes` when something hidden was found. */
+  /**
+   * A verdict for a finding: types only. `strippedTypes` only when the action took something out —
+   * at `pass` nothing was, and the reason already names what was found by kind and count.
+   */
   function verdictOf(
     check: GuardrailCheck,
     outcome: CheckOutcome,
@@ -182,18 +210,18 @@ export function createContextGuard(deps: ContextGuardDeps): ContextGuard {
       { ...outcome, reason },
       { id: nextId(), nodeRunId, at: now() },
     );
-    const stripped = strippedTypesOf(outcome);
+    const stripped = check.action === 'pass' ? [] : strippedTypesOf(outcome);
     return stripped.length === 0 ? verdict : { ...verdict, strippedTypes: stripped };
   }
 
-  /** The once-only re-check after a rewrite; a failure names the residue, never the text. */
-  async function residueOf(
+  /** The once-only re-check after a rewrite; a failure names the residue's kinds, never its text. */
+  function residueOf(
     target: EvaluationTarget,
     checks: readonly GuardrailCheck[],
     text: string,
     where: string,
     verdicts: Verdict[],
-  ): Promise<NodeError | undefined> {
+  ): NodeError | undefined {
     // With `prompt_injection` at `pass` (or off) hidden content is allowed through, so there is no
     // residue to judge; at `block`/`ask_user` a finding has already failed the node.
     const injection = checks.find(
@@ -202,15 +230,19 @@ export function createContextGuard(deps: ContextGuardDeps): ContextGuard {
     if (injection === undefined) return undefined;
 
     const again = runner.evaluate(injection, inputFor(text));
-    if (again === undefined || again.passed) return undefined;
+    if (again === undefined) return unavailable(injection, where);
+    if (again.passed) return undefined;
 
+    // Nothing more was stripped, so the verdict carries no `strippedTypes`: the runner's reason
+    // names what remained by kind and count (the rule pack never quotes, FR-GRD-014).
     const reason = `Hidden instructions remained after stripping (${again.reason}), so ${where} was refused.`;
-    verdicts.push(
-      await deps.record(target, {
-        ...verdictOf(injection, again, reason, target.nodeRunId),
-        action: 'block',
-      }),
+    const { strippedTypes: _notStripped, ...verdict } = verdictOf(
+      injection,
+      again,
+      reason,
+      target.nodeRunId,
     );
+    verdicts.push({ ...verdict, action: 'block' });
     return {
       kind: 'guardrail',
       code: 'context_injection_residue',
@@ -220,43 +252,63 @@ export function createContextGuard(deps: ContextGuardDeps): ContextGuard {
     };
   }
 
+  /** Judge `text` against the target's context checks and act on each finding; record nothing. */
+  async function inspect({ target, label, text }: SanitiseInput): Promise<SanitiseResult> {
+    const where = WHERE[label];
+    const checks = contextChecksOf(target.policy);
+    const verdicts: Verdict[] = [];
+    let current = text;
+    let rewritten = false;
+
+    for (const check of checks) {
+      const outcome = runner.evaluate(check, inputFor(current));
+      if (outcome === undefined) {
+        return { kind: 'failed', error: unavailable(check, where), verdicts };
+      }
+      // A clean pass records nothing (D114).
+      if (outcome.passed) continue;
+
+      const reason = `${outcome.reason} (in ${where})`;
+      verdicts.push(verdictOf(check, outcome, reason, target.nodeRunId));
+
+      // D232: tagging is unconditional and only tags; its stored action decides nothing.
+      if (check.type === 'untrusted_tagging') continue;
+
+      const consequence = consequenceOf(check, outcome, reason);
+      if (consequence.kind === 'failed') {
+        return { kind: 'failed', error: consequence.error, verdicts };
+      }
+      if (consequence.text !== undefined) {
+        current = consequence.text;
+        rewritten = true;
+      }
+    }
+
+    if (rewritten) {
+      const residue = residueOf(target, checks, current, where, verdicts);
+      if (residue !== undefined) return { kind: 'failed', error: residue, verdicts };
+    }
+
+    return { kind: 'continue', text: current, verdicts };
+  }
+
+  async function record(
+    target: EvaluationTarget,
+    verdicts: readonly Verdict[],
+  ): Promise<Verdict[]> {
+    const stored: Verdict[] = [];
+    for (const verdict of verdicts) stored.push(await deps.record(target, verdict));
+    return stored;
+  }
+
   return {
-    async sanitise({ target, label, text }) {
-      const where = WHERE[label];
-      const checks = contextChecksOf(target.policy);
-      const verdicts: Verdict[] = [];
-      let current = text;
-      let rewritten = false;
+    inspect,
+    record,
 
-      for (const check of checks) {
-        const outcome = runner.evaluate(check, inputFor(current));
-        // Silence is not a pass, and a clean pass records nothing (D114).
-        if (outcome === undefined || outcome.passed) continue;
-
-        const reason = `${outcome.reason} (in ${where})`;
-        verdicts.push(
-          await deps.record(target, verdictOf(check, outcome, reason, target.nodeRunId)),
-        );
-
-        // D232: tagging is unconditional and only tags; its stored action decides nothing.
-        if (check.type === 'untrusted_tagging') continue;
-
-        const consequence = consequenceOf(check, outcome, reason);
-        if (consequence.kind === 'failed') {
-          return { kind: 'failed', error: consequence.error, verdicts };
-        }
-        if (consequence.text !== undefined) {
-          current = consequence.text;
-          rewritten = true;
-        }
-      }
-
-      if (rewritten) {
-        const residue = await residueOf(target, checks, current, where, verdicts);
-        if (residue !== undefined) return { kind: 'failed', error: residue, verdicts };
-      }
-
-      return { kind: 'continue', text: current, verdicts };
+    async sanitise(input) {
+      const result = await inspect(input);
+      const verdicts = await record(input.target, result.verdicts);
+      return { ...result, verdicts };
     },
 
     async checkIngestText({ projectId, text }) {
@@ -266,7 +318,10 @@ export function createContextGuard(deps: ContextGuardDeps): ContextGuard {
       if (pii === undefined) return { text, verdicts: [] };
 
       const outcome = runner.evaluate(pii, inputFor(text));
-      if (outcome === undefined || outcome.passed) return { text, verdicts: [] };
+      if (outcome === undefined) {
+        return { text, verdicts: [], blocked: unavailable(pii, INGESTED).message };
+      }
+      if (outcome.passed) return { text, verdicts: [] };
 
       const reason = `${outcome.reason} (in ${INGESTED})`;
       const { nodeRunId: _nodeRunId, ...verdict } = verdictOf(pii, outcome, reason, '');
