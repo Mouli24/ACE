@@ -126,6 +126,12 @@ export interface NodeRunPatch {
   startedAt?: Timestamp;
   endedAt?: Timestamp;
   durationMs?: number;
+  /** Round 5: the chunks the node's context used, best first (§2.4, FR-RAG-007). */
+  sources?: NodeRun['sources'];
+  /** Round 5: chunks the search found that did not fit the context budget (§4 item 7, D233). */
+  droppedSources?: NodeRun['droppedSources'];
+  /** Round 5: the `__memory` ops the node run applied, in order (§2.2, FR-MEM-002). */
+  memoryOps?: NodeRun['memoryOps'];
 }
 /**
  * `verdicts` and `approvals` are deliberately absent: they are written through

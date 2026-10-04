@@ -1,8 +1,10 @@
 import {
   allowedRunActions,
+  CONTEXT_BUDGET_SHARES,
   DEFAULT_CONCURRENCY,
   type BudgetHalt,
   type CursorQuery,
+  type DayTotals,
   type Edge,
   type Envelope,
   type GuardrailPolicy,
@@ -24,6 +26,11 @@ import {
 
 import type { ApprovalService } from '../approvals/index.js';
 import type { BudgetService } from '../budgets/index.js';
+import { buildNodeContext } from '../context/builder.js';
+import type { ContextGuard } from '../context/guard.js';
+import type { SearchService } from '../knowledge/search.js';
+import type { MemoryService } from '../memory/service.js';
+import type { UsageService } from '../usage/index.js';
 import type { EvaluationTarget, GuardrailEvaluator } from '../guardrails/evaluator.js';
 import { policyRef, type PolicyService } from '../guardrails/policy-service.js';
 import { contractFor, createTruncatingSummariser, estimatePartsTokens, trustForSource, type Summariser } from '../envelopes/index.js';
@@ -54,6 +61,7 @@ import { sumUsage } from './cost.js';
 import { createSummaryUsageLedger } from './summary-usage.js';
 import {
   createNodeExecutor,
+  type ExecuteNodeInput,
   type NodeExecutionOutcome,
   type NodeExecutor,
   type NodeGuardrails,
@@ -192,6 +200,21 @@ export interface RunServiceDeps {
   recordToolCall?: (runId: Id, call: ToolCall) => Promise<void>;
   /** The tool point of the guardrail engine (FR-GRD-005/006); absent, tools run unchecked. */
   toolGuardrails?: ToolGuardrailEvaluator;
+
+  /*
+   * Round 5's knowledge, memory, context guardrails and usage (§2.2–§2.6). Optional like the rounds
+   * before: without them an attached base is not searched, memory is neither read nor written, the
+   * context is placed unchecked, and a run's end carries no day totals — never a crash.
+   */
+
+  /** Hybrid search: an agent's implicit retrieval and the Retrieval node (FR-RAG-004..007). */
+  search?: SearchService;
+  /** The context point of the guardrail engine (FR-GRD-004); absent, context is placed unchecked. */
+  contextGuard?: ContextGuard;
+  /** An agent's long-term memory: read into its context, written from `__memory` (FR-MEM-002/003). */
+  memory?: Pick<MemoryService, 'list' | 'apply' | 'markUsed'>;
+  /** The day's totals a finished run announces with `usage.updated` (round 5 §2.8, FR-OBS-002). */
+  usage?: Pick<UsageService, 'dayTotals'>;
 }
 
 /** A ≤120-character description of what crossed an edge (FR-EXE-015, §2.4). */
@@ -236,6 +259,21 @@ function engineFailure(): NodeError {
   };
 }
 
+/**
+ * The budget an agent's envelopes are built to (Task 9 review ruling, round 5 §2.2, §2.4): its
+ * `budgetTokens` less the share its retrieved chunks may take when it has a knowledge base and the
+ * share its memory may take when memory is on — so the reads and their summary leave room for both,
+ * and the context builder, given the whole budget, fits them in what is left. An agent with neither
+ * keeps the whole budget, exactly as before round 5.
+ */
+function readsBudgetFor(agent: Extract<Node, { kind: 'agent' }>): number {
+  const { budgetTokens } = agent.config.contextPolicy;
+  const retrieved =
+    (agent.config.knowledgeBaseIds?.length ?? 0) > 0 ? CONTEXT_BUDGET_SHARES.retrieved : 0;
+  const memory = agent.config.memory?.enabled === true ? CONTEXT_BUDGET_SHARES.memory : 0;
+  return Math.floor(budgetTokens * (1 - retrieved - memory));
+}
+
 /** Two totals that count the same tokens and the same money. */
 function sameUsage(a: Usage, b: Usage): boolean {
   return a.tokensIn === b.tokensIn && a.tokensOut === b.tokensOut && a.costUsd === b.costUsd;
@@ -256,7 +294,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
   const now = deps.now ?? (() => new Date().toISOString());
   const nextId = deps.nextId ?? newId;
   const summariser = deps.summariser ?? createTruncatingSummariser();
-  /** Summariser usage per run and target node, until the target's node run takes it (F5; Task 13 calls `take`). */
+  /** Summariser usage per run and target node, until the target's node run is recorded and takes it (F5). */
   const summaryUsage = createSummaryUsageLedger();
 
   const executor: NodeExecutor = createNodeExecutor({
@@ -273,6 +311,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
     ...(deps.artifacts === undefined ? {} : { artifacts: deps.artifacts }),
     ...(deps.recordToolCall === undefined ? {} : { recordToolCall: deps.recordToolCall }),
     ...(deps.nextId === undefined ? {} : { nextId: deps.nextId }),
+    // Round 5: the Retrieval node's search (§2.4, FR-RAG-006).
+    ...(deps.search === undefined ? {} : { search: deps.search }),
   });
 
   /** Every run this process is currently driving, so shutdown can abort them (FR-SYS-008). */
@@ -313,15 +353,21 @@ export function createRunService(deps: RunServiceDeps): RunService {
     to: Node,
     parts: Part[],
     iteration: number,
-    record = true,
+    options: {
+      /** False when a control only rebuilds what a node would read: nothing is spent on its behalf. */
+      record?: boolean;
+      /** The run's abort signal, so a Stop cancels a model summary under way (round 5 §2.5). */
+      signal?: AbortSignal;
+    } = {},
   ): Promise<Envelope> {
-    const budgetTokens =
-      to.kind === 'agent' ? to.config.contextPolicy.budgetTokens : Number.MAX_SAFE_INTEGER;
+    const { record = true, signal } = options;
+    // An agent's reads leave room for its retrieved chunks and memory (round 5 §2.2, §2.4).
+    const budgetTokens = to.kind === 'agent' ? readsBudgetFor(to) : Number.MAX_SAFE_INTEGER;
     const outputTypes =
       to.kind === 'agent' || to.kind === 'model' ? to.config.outputTypes : ['text' as const];
 
-    // The receiving node's own model summarises for it (round 5 §2.5, F3). The run's abort signal
-    // is not in scope here, so forwarding it is left to Task 13.
+    // The receiving node's own model summarises for it (round 5 §2.5, F3), cancelled with the run
+    // when the caller has the run's signal to hand.
     const target =
       (to.kind === 'agent' || to.kind === 'model') &&
       to.config.providerId !== undefined &&
@@ -346,6 +392,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
         ),
         createdAt: now(),
         ...(target === undefined ? {} : { target }),
+        ...(signal === undefined ? {} : { signal }),
       },
       summariser,
     );
@@ -563,6 +610,59 @@ export function createRunService(deps: RunServiceDeps): RunService {
       };
     }
 
+    /**
+     * The round 5 hooks for one node run (§2.2–§2.4, FR-GRD-004, FR-MEM-002).
+     *
+     * `context` is built for an agent or Model node whenever there is something for it to do — a
+     * context guard to judge upstream reads with, or an agent with a knowledge base or memory on —
+     * and never otherwise, so a plain agent in a build without the round 5 services reads exactly
+     * what round 4 delivered. It hands `buildNodeContext` the agent's stored memory (only when memory
+     * is on), the search, the guard and this node run as the target, and stamps `lastUsedAt` on the
+     * memory entries it placed. `memory` is the agent's memory switch and `MemoryService.apply`.
+     */
+    function contextFor(node: Node, nodeRun: NodeRun): Pick<ExecuteNodeInput, 'context' | 'memory'> {
+      if (node.kind !== 'agent' && node.kind !== 'model') return {};
+      const memoryService = deps.memory;
+      const memoryOn = node.kind === 'agent' && node.config.memory?.enabled === true;
+      const hasBases = node.kind === 'agent' && (node.config.knowledgeBaseIds?.length ?? 0) > 0;
+      /** Where this node's memory is read from: nowhere when memory is off or not wired. */
+      const reader = memoryOn ? memoryService : undefined;
+
+      const context: Pick<ExecuteNodeInput, 'context'> =
+        deps.contextGuard === undefined && !hasBases && reader === undefined
+          ? {}
+          : {
+              context: {
+                async build(envelopes) {
+                  const step = await buildNodeContext({
+                    node,
+                    envelopes,
+                    memory: reader === undefined ? [] : await reader.list(node.id),
+                    search: deps.search,
+                    guard: deps.contextGuard,
+                    target: targetFor(node, nodeRun),
+                  });
+                  if (step.kind === 'continue' && step.usedMemoryIds.length > 0) {
+                    await reader?.markUsed(step.usedMemoryIds);
+                  }
+                  return step;
+                },
+              },
+            };
+
+      return {
+        ...context,
+        ...(node.kind === 'agent' && memoryService !== undefined
+          ? {
+              memory: {
+                enabled: memoryOn,
+                apply: (ops) => memoryService.apply(node.id, ops),
+              },
+            }
+          : {}),
+      };
+    }
+
     /** The price row of the model this node would call, for the projected cost (§2.3). */
     function pricingFor(node: Node): { pricing?: (typeof catalog)[number]['pricing'] } {
       if (node.kind !== 'agent' && node.kind !== 'model') return {};
@@ -734,7 +834,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
         if (plannedRuns.has(targetId)) continue;
 
         // Built before the list is read: another delivery may land while this one awaits.
-        const envelope = await envelopeBetween(run, node, target, parts, iteration);
+        const envelope = await envelopeBetween(run, node, target, parts, iteration, { signal });
         envelopesFor.set(targetId, [...(envelopesFor.get(targetId) ?? []), envelope]);
       }
 
@@ -830,6 +930,29 @@ export function createRunService(deps: RunServiceDeps): RunService {
     }
 
     /**
+     * What a node run spent: its own calls, plus — once, on the first of its runs recorded — what
+     * summarising its inputs cost (F5). The summary was made for this node by its own model, so
+     * FR-OBS-002's "totals are the sum of the node runs" has to count it here.
+     */
+    function spentBy(nodeRun: NodeRun, usage: Usage): Usage {
+      const summarised = summaryUsage.take(run.id, nodeRun.nodeId);
+      return summarised === undefined ? usage : sumUsage([usage, summarised]);
+    }
+
+    /** What the node run's context used and its memory ops (round 5, FR-RAG-007, FR-MEM-002). */
+    function roundFiveFields(
+      outcome: NodeExecutionOutcome,
+    ): Pick<NodeRun, 'sources' | 'droppedSources' | 'memoryOps'> {
+      return {
+        ...(outcome.sources === undefined ? {} : { sources: outcome.sources }),
+        ...(outcome.droppedSources === undefined
+          ? {}
+          : { droppedSources: outcome.droppedSources }),
+        ...(outcome.memoryOps === undefined ? {} : { memoryOps: outcome.memoryOps }),
+      };
+    }
+
+    /**
      * Write what one attempt produced onto its own row and account for what it spent.
      *
      * Separate from `finish` because an attempt the engine is about to retry is a complete, recorded
@@ -841,7 +964,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
       outcome: NodeExecutionOutcome,
       endedAt: string,
     ): Promise<void> {
-      usages.push(outcome.usage);
+      const usage = spentBy(nodeRun, outcome.usage);
+      usages.push(usage);
 
       await repository.nodeRuns.update(scope, nodeRun.id, {
         status: outcome.status,
@@ -849,8 +973,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
         ...(outcome.error === undefined ? {} : { error: outcome.error }),
         ...(outcome.modelUsed === undefined ? {} : { modelUsed: outcome.modelUsed }),
         ...(outcome.prompt === undefined ? {} : { prompt: outcome.prompt }),
+        ...roundFiveFields(outcome),
         output: outcome.output,
-        usage: outcome.usage,
+        usage,
         endedAt,
       });
 
@@ -882,16 +1007,18 @@ export function createRunService(deps: RunServiceDeps): RunService {
       nodeRun: NodeRun,
       outcome: NodeExecutionOutcome,
     ): Promise<void> {
-      usages.push(outcome.usage);
+      const usage = spentBy(nodeRun, outcome.usage);
+      usages.push(usage);
       states.set(node.id, 'STOPPED');
       await repository.nodeRuns.update(scope, nodeRun.id, {
         error:
           outcome.status === 'STOPPED' && outcome.error !== undefined
             ? outcome.error
             : userCancelledError('The run was stopped before this node run was recorded.').nodeError,
-        usage: outcome.usage,
+        usage,
         ...(outcome.modelUsed === undefined ? {} : { modelUsed: outcome.modelUsed }),
         ...(outcome.prompt === undefined ? {} : { prompt: outcome.prompt }),
+        ...roundFiveFields(outcome),
       });
     }
 
@@ -1268,6 +1395,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
                   endedAt = now();
                 },
                 ...guardrailsFor(node, nodeRun),
+                ...contextFor(node, nodeRun),
                 ...(repairReason === undefined ? {} : { repairReason }),
               });
 
@@ -1385,7 +1513,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
           }
           deliveredEdges.add(edge.id);
           if (plannedRuns.has(target.id)) continue;
-          const envelope = await envelopeBetween(run, node, target, row.output ?? [], row.iteration);
+          const envelope = await envelopeBetween(run, node, target, row.output ?? [], row.iteration, {
+            signal,
+          });
           envelopesFor.set(target.id, [...(envelopesFor.get(target.id) ?? []), envelope]);
         }
       }
@@ -1494,6 +1624,18 @@ export function createRunService(deps: RunServiceDeps): RunService {
       finalOutput,
     });
 
+    // Round 5 §2.8 (FR-OBS-002): the run's end also carries the day's totals across every run, for
+    // the top bar — announced before `run.completed`, so nothing about this run follows its end.
+    const dayTotals = await dayTotalsOf(run, endedAt);
+    if (dayTotals !== undefined) {
+      await bus.emit({
+        type: 'usage.updated',
+        workflowId: run.workflowId,
+        runId: run.id,
+        payload: { runId: run.id, totals, dayTotals },
+      });
+    }
+
     await bus.emit({
       type: 'run.completed',
       workflowId: run.workflowId,
@@ -1509,6 +1651,21 @@ export function createRunService(deps: RunServiceDeps): RunService {
     });
 
     return updated ?? run;
+  }
+
+  /**
+   * The UTC day's totals across every run (round 5 §2.8, FR-OBS-002), when a usage service is
+   * wired. Best effort: a run's ending must not depend on a read model, so a failure is logged and
+   * the run ends without them.
+   */
+  async function dayTotalsOf(run: Run, at: string): Promise<DayTotals | undefined> {
+    if (deps.usage === undefined) return undefined;
+    try {
+      return await deps.usage.dayTotals(at.slice(0, 10));
+    } catch (error) {
+      logger.warn({ subsystem: 'runs', runId: run.id, err: error }, 'could not read the day totals');
+      return undefined;
+    }
   }
 
   /* --------------------------------------------------------------- service */
@@ -1617,6 +1774,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
         // removed — is refused here, before any node runs (round 4 §2.4, BR-08, D-069).
         ...(deps.tools === undefined ? {} : { tools: deps.tools }),
         ...(mcpServers === undefined ? {} : { mcpServers }),
+        // A Retrieval node or an agent naming a base that no longer exists is refused before any
+        // node runs (round 5 §2.4). A store without knowledge bases holds none, so none exists.
+        knowledgeBaseExists: async (id) =>
+          ((await repository.knowledgeBases?.get(scope, id)) ?? null) !== null,
         // The multimodal capability check reads an artifact's type through the same resolver the
         // Input node executor uses, so pre-flight and execution classify a `.png` identically
         // (round 4 §2.1, FR-MM-005). Absent the artifact store, the check does not run.
@@ -1799,7 +1960,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
         if (from === undefined || row === undefined) continue;
 
         seen.add(edge.from.nodeId);
-        envelopes.push(await envelopeBetween(run, from, node, row.output ?? [], row.iteration, false));
+        envelopes.push(
+          await envelopeBetween(run, from, node, row.output ?? [], row.iteration, { record: false }),
+        );
       }
 
       return envelopes;
