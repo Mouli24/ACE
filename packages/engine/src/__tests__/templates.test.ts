@@ -16,6 +16,8 @@ import {
 } from '@ace/contracts';
 import { describe, expect, it } from 'vitest';
 
+import { runTransform } from '../runs/transform.js';
+
 import { createBackupService } from '../backup/index.js';
 import { HttpError } from '../gateway/errors.js';
 import { createGraphService, validateGraph, type GraphService } from '../graph/index.js';
@@ -123,6 +125,48 @@ describe('TC-ONB-002 every template validates with no error issues', () => {
     expect(models).toEqual([TEMPLATE_MODELS.text, TEMPLATE_MODELS.reviewer]);
   });
 
+  it('parallel-research: a Transform renders both merge branches as text for a mock-text Synthesiser', () => {
+    const { nodes, edges } = templateGraph(
+      'parallel-research',
+      { workflowId: newId(), newId },
+      newId(),
+    );
+    const transform = nodes.find((n) => n.kind === 'transform');
+    const synth = nodes.find((n) => n.name === 'Synthesiser');
+    const merge = nodes.find((n) => n.kind === 'merge');
+    if (transform?.kind !== 'transform' || synth?.kind !== 'agent' || merge === undefined) {
+      throw new Error('graph shape');
+    }
+    expect(transform.config.op).toBe('template');
+    expect(synth.config.modelId).toBe('mock-text');
+    expect(edges.some((e) => e.from.nodeId === merge.id && e.to.nodeId === transform.id)).toBe(
+      true,
+    );
+    expect(edges.some((e) => e.from.nodeId === transform.id && e.to.nodeId === synth.id)).toBe(
+      true,
+    );
+
+    const mergeOutput = {
+      inputs: [
+        {
+          port: `${merge.id}:in:in`,
+          nodeId: newId(),
+          parts: [{ type: 'text', text: 'alpha findings' }],
+        },
+        {
+          port: `${merge.id}:in:in`,
+          nodeId: newId(),
+          parts: [{ type: 'text', text: 'beta findings' }],
+        },
+      ],
+    };
+    const result = runTransform(transform.config, [{ type: 'json', value: mergeOutput }]);
+    expect(result.ok).toBe(true);
+    const text = result.ok && result.parts[0]?.type === 'text' ? result.parts[0].text : '';
+    expect(text).toContain('alpha findings');
+    expect(text).toContain('beta findings');
+  });
+
   it('rag-qa: the answerer names the knowledge base and runs on mock-cite', () => {
     const kb = newId();
     const { nodes } = templateGraph('rag-qa', { workflowId: newId(), newId }, newId(), kb);
@@ -142,6 +186,9 @@ interface Harness {
   kbs: { projectId: string; name: string; embeddingModelId: string; embeddingProviderId: string }[];
   documents: { kbId: string; artifactId: string }[];
   stored: { mime: string; name: string; text: string }[];
+  removedKbs: string[];
+  /** Flip to make the next call of that step throw. */
+  fail: { importWorkflow: boolean; addDocument: boolean };
   service: ReturnType<typeof createTemplateService>;
 }
 
@@ -155,7 +202,11 @@ function harness(initialProviders: Provider[] = []): Harness {
     ...real,
     createProject: (input) => real.createProject({ ...input, folderPath: join(folder, newId()) }),
     getProject: (id) => real.getProject(id),
-    importWorkflow: (projectId, raw) => real.importWorkflow(projectId, raw),
+    importWorkflow: async (projectId, raw) => {
+      if (state.fail.importWorkflow) throw new Error('import failed');
+      return real.importWorkflow(projectId, raw);
+    },
+    deleteProject: (id) => real.deleteProject(id),
   };
 
   const state = {
@@ -164,6 +215,8 @@ function harness(initialProviders: Provider[] = []): Harness {
     kbs: [] as Harness['kbs'],
     documents: [] as Harness['documents'],
     stored: [] as Harness['stored'],
+    removedKbs: [] as string[],
+    fail: { importWorkflow: false, addDocument: false },
   };
 
   const service = createTemplateService({
@@ -208,7 +261,11 @@ function harness(initialProviders: Provider[] = []): Harness {
       };
       return kb;
     },
+    removeKnowledgeBase: async (kbId) => {
+      state.removedKbs.push(kbId);
+    },
     addDocument: async (kbId, body) => {
+      if (state.fail.addDocument) throw new Error('add failed');
       state.documents.push({ kbId, artifactId: body.artifactId });
       const doc: KbDocument = {
         id: newId(),
@@ -248,6 +305,8 @@ function harness(initialProviders: Provider[] = []): Harness {
     kbs: state.kbs,
     documents: state.documents,
     stored: state.stored,
+    removedKbs: state.removedKbs,
+    fail: state.fail,
     service,
   };
 }
@@ -326,6 +385,45 @@ describe('FR-ONB-002 instantiate', () => {
       result.knowledgeBaseId,
     ]);
     expect(answerer?.kind === 'agent' && answerer.config.providerId).toBe(mock?.id);
+  });
+
+  it('a failing import removes the project it created and leaves nothing behind', async () => {
+    const h = harness();
+    h.fail.importWorkflow = true;
+    await expect(h.service.instantiate('linear-chain', { projectName: 'Doomed' })).rejects.toThrow(
+      'import failed',
+    );
+    const page = await h.graph.listProjects({ limit: 50 } as never);
+    expect(page.items).toEqual([]);
+  });
+
+  it('a failing rag-qa removes the base and the project it created', async () => {
+    const h = harness();
+    h.fail.addDocument = true;
+    await expect(h.service.instantiate('rag-qa', { projectName: 'Doomed' })).rejects.toThrow(
+      'add failed',
+    );
+    expect(h.removedKbs).toHaveLength(1);
+    expect((await h.graph.listProjects({ limit: 50 } as never)).items).toEqual([]);
+  });
+
+  it('a failing import never deletes a project the caller passed in', async () => {
+    const h = harness();
+    const existing = await h.graph.createProject({ name: 'Keep me' });
+    h.fail.importWorkflow = true;
+    await expect(h.service.instantiate('rag-qa', { projectId: existing.id })).rejects.toThrow();
+    expect(await h.graph.getProject(existing.id)).toMatchObject({ id: existing.id });
+    expect(h.removedKbs).toHaveLength(1);
+  });
+
+  it('an unknown projectId is a 404 with no side effect: no Mock provider is created', async () => {
+    const h = harness();
+    await expect(
+      h.service.instantiate('linear-chain', { projectId: newId() }),
+    ).rejects.toMatchObject({
+      status: 404,
+    });
+    expect(h.created).toEqual([]);
   });
 
   it('the other templates create no knowledge base', async () => {
