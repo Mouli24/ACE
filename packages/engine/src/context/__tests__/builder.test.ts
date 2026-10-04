@@ -747,7 +747,8 @@ describe('BR-13 untrusted keys go through the context guard too', () => {
     expect(step.verdicts).toEqual([
       expect.objectContaining({ checkType: 'prompt_injection', strippedTypes: ['html_comment'] }),
     ]);
-    expect(step.verdicts?.[0]?.reason).toContain('memory value');
+    expect(step.verdicts?.[0]?.reason).toContain('in a memory key');
+    expect(step.verdicts?.[0]?.reason).not.toContain('memory value');
   });
 
   it('a blocked JSON key fails the node, as a blocked value does', async () => {
@@ -932,6 +933,86 @@ describe('FR-EXE-007 reads, retrieved chunks and memory together never exceed bu
     if (step.kind !== 'continue') throw new Error('expected continue');
     expect(step.verdicts).toEqual([expect.objectContaining({ checkType: 'pii' })]);
     expect(store.allVerdicts()).toEqual(step.verdicts);
+  });
+});
+
+describe('FR-EXE-007 content the whole budget would drop is never judged', () => {
+  it('a memory entry that fits its share but not what the reads leave is never judged, and cannot fail the node', async () => {
+    const node = agent({ budgetTokens: 1000 });
+    const { guard, target, store } = guarded(node, contextPolicy({ pii: { action: 'block' } }));
+    // 995 tokens of reads leave 5; the entry costs 10, well inside its 250-token share.
+    const reads = [text('word '.repeat(796))];
+
+    const step = await buildNodeContext({
+      node,
+      envelopes: [envelope(FROM_A, node.id, reads, 'trusted')],
+      memory: [memoryEntry(node.id, 'contact', 'Mail jordan.example@example.com.', 1)],
+      search: undefined,
+      guard,
+      target,
+    });
+
+    if (step.kind !== 'continue') throw new Error('expected continue');
+    expect(step.envelopes[0]?.context.memory).toBeUndefined();
+    expect(step.usedMemoryIds).toEqual([]);
+    expect(step.verdicts).toEqual([]);
+    expect(store.allVerdicts()).toEqual([]);
+  });
+
+  it('a chunk that fits its share but not what the reads and memory leave is never judged, and cannot fail the node', async () => {
+    const kb = newId();
+    const node = agent({ knowledgeBaseIds: [kb], budgetTokens: 1000 });
+    const { guard, target, store } = guarded(
+      node,
+      contextPolicy({ prompt_injection: { action: 'block' } }),
+    );
+    // 900 tokens of reads and a 52-token memory entry leave 48; the poisoned chunk costs ~75.
+    const reads = [text('word '.repeat(720))];
+    const memory = [memoryEntry(node.id, 'fact-a', 'a '.repeat(100), 1)];
+    const poisoned = hit(0.9, POISONED);
+
+    const step = await buildNodeContext({
+      node,
+      envelopes: [envelope(FROM_A, node.id, reads, 'trusted')],
+      memory,
+      search: fakeSearch({ [kb]: [poisoned] }),
+      guard,
+      target,
+    });
+
+    if (step.kind !== 'continue') throw new Error('expected continue');
+    expect(step.envelopes[0]?.context.retrieved).toBeUndefined();
+    expect(step.droppedSources.map((source) => source.chunkId)).toEqual([poisoned.chunkId]);
+    expect(step.envelopes[0]?.context.memory).toEqual([{ key: 'fact-a', value: 'a '.repeat(100) }]);
+    expect(step.verdicts).toEqual([]);
+    expect(store.allVerdicts()).toEqual([]);
+  });
+
+  it('counts an envelope summary in the whole budget', async () => {
+    const kb = newId();
+    const node = agent({ knowledgeBaseIds: [kb], budgetTokens: 1000 });
+    // Three 150-token chunks fit the 500-token share, but a 600-token summary leaves room for two.
+    const hits = [0.9, 0.8, 0.7].map((score) => hit(score, passage(String(score))));
+    const withSummary = envelope(FROM_A, node.id, [text('Who wrote in?')], 'trusted', {
+      summary: 's'.repeat(2400),
+    });
+
+    const step = await buildNodeContext({
+      node,
+      envelopes: [withSummary],
+      memory: [],
+      search: fakeSearch({ [kb]: hits }),
+      guard: undefined,
+      target: guarded(node).target,
+    });
+
+    if (step.kind !== 'continue') throw new Error('expected continue');
+    expect(step.sources.map((source) => source.score)).toEqual([0.9, 0.8]);
+    expect(step.droppedSources.map((source) => source.score)).toEqual([0.7]);
+    const placed = step.envelopes[0]!;
+    expect(
+      totalTokens(step.envelopes) + estimateTokens(placed.context.summary ?? ''),
+    ).toBeLessThanOrEqual(1000);
   });
 });
 

@@ -1,4 +1,10 @@
-import type { EnvelopeContract, GuardrailCheck, GuardrailPoint, Part } from '@ace/contracts';
+import type {
+  EnvelopeContract,
+  GuardrailCheck,
+  GuardrailPoint,
+  HiddenInstructionType,
+  Part,
+} from '@ace/contracts';
 
 import type { ToolPointInput } from '../runs/tool-loop.js';
 
@@ -81,6 +87,11 @@ export interface CheckOutcome {
   redactedTypes?: string[];
   /** The text with every finding replaced by `[<type> redacted]`, for a `redact` action. */
   sanitized?: string;
+  /**
+   * The context point's `prompt_injection` (round 5 §2.3): the kinds of hidden instruction found and
+   * taken out of `sanitized`, each once — names from the closed contract list, never the text.
+   */
+  strippedTypes?: HiddenInstructionType[];
 }
 
 export interface CheckRunner {
