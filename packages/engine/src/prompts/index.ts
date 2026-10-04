@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 
-import type { Envelope, EnvelopeContract, Part } from '@ace/contracts';
+import {
+  MEMORY_OUTPUT_FIELD,
+  MEMORY_PROMPT_HEADING,
+  type Envelope,
+  type EnvelopeContract,
+  type Part,
+} from '@ace/contracts';
 
 import { maskSecrets } from '../security/secret-patterns.js';
 
@@ -28,6 +34,17 @@ export const PROMPT_SECTIONS = [
  * has it between `## Context` and `## Input` — the thread is the node's own bounded context.
  */
 export const CONVERSATION_SECTION = '## Conversation';
+
+/**
+ * The block appended under `## Instructions` when the agent's memory is enabled (round 5 §2.2,
+ * FR-MEM-002): how the agent asks to remember or forget a fact. The heading is the contract's.
+ */
+export const MEMORY_PROMPT_TEXT = [
+  MEMORY_PROMPT_HEADING,
+  `You may keep facts between runs. To remember or forget one, add a "${MEMORY_OUTPUT_FIELD}" field to your JSON output:`,
+  `{ "${MEMORY_OUTPUT_FIELD}": [{ "op": "save", "key": "<short name>", "value": "<fact>" }, { "op": "delete", "key": "<short name>" }] }`,
+  'Saving a key that already exists replaces its value. Save only durable facts worth keeping, never credentials.',
+].join('\n');
 
 /** Bumped whenever the base text below changes; it is part of every prompt version. */
 export const SYSTEM_BASE_VERSION = 'ace-system-1';
@@ -162,6 +179,8 @@ export interface AssemblePromptInput {
   conversation?: PromptConversation;
   /** What an untrusted `## Input` block is called; a run's reads come from upstream nodes. */
   inputLabel?: string;
+  /** Append the memory-operations block under `## Instructions` (the agent's `memory.enabled`). */
+  memoryInstructions?: boolean;
 }
 
 export interface AssembledPrompt {
@@ -213,7 +232,9 @@ export function assemblePrompt(input: AssemblePromptInput): AssembledPrompt {
 
   /* Context — one labelled block per subsection §2.8 names. */
   const contextParts: string[] = [];
-  const summaries = envelopes.flatMap((e) => (e.context.summary === undefined ? [] : [e.context.summary]));
+  const summaries = envelopes.flatMap((e) =>
+    e.context.summary === undefined ? [] : [e.context.summary],
+  );
   const retrieved = envelopes.flatMap((e) => e.context.retrieved ?? []);
   const memories = envelopes.flatMap((e) => e.context.memory ?? []);
 
@@ -255,7 +276,10 @@ export function assemblePrompt(input: AssemblePromptInput): AssembledPrompt {
 
   const bodies: Record<(typeof PROMPT_SECTIONS)[number], string> = {
     '## System': SYSTEM_BASE_TEXT,
-    '## Instructions': resolvePlaceholders(input.instructions, placeholders),
+    '## Instructions':
+      input.memoryInstructions === true
+        ? `${resolvePlaceholders(input.instructions, placeholders)}\n\n${MEMORY_PROMPT_TEXT}`
+        : resolvePlaceholders(input.instructions, placeholders),
     // Skills arrive in round 6 and guardrail instructions in round 3; §2.8 keeps the headers so
     // adding them later does not change the shape of every existing prompt.
     '## Skills': '',
