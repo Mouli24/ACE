@@ -330,6 +330,41 @@ describe('F8 scan fallback answers like vec0', () => {
     expect(() => vectorTableName(1.5)).toThrow(RangeError);
     expect(() => vectorTableName(MAX_VECTOR_DIMS + 1)).toThrow(RangeError);
   });
+
+  it('touches only tables whose name round-trips through vectorTableName at open', async () => {
+    const first = open();
+    await new SqliteVectorIndex(first.sqlite).upsert(scope, [vector('a1', DOC_A, KB_A, [1, 0])]);
+    // Virtual tables the vec0 GLOB matches but this module never made: a padded width, and a name
+    // that is not a bare identifier at all. Neither may be counted, dropped or spliced into SQL.
+    // Both are vec0 tables, so only the name check keeps them out. An fts5 table of a matching name
+    // is excluded by its `USING` clause too.
+    first.sqlite.exec(`CREATE VIRTUAL TABLE kb_vectors_vec_002 USING vec0(embedding float[2])`);
+    first.sqlite.exec(`CREATE VIRTUAL TABLE "kb_vectors_vec_3 x" USING vec0(embedding float[3])`);
+    first.sqlite.exec(`CREATE VIRTUAL TABLE kb_vectors_vec_4 USING fts5(text)`);
+    first.sqlite.close();
+
+    const second = open();
+    const names = (
+      second.sqlite
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%' ORDER BY name`,
+        )
+        .all() as { name: string }[]
+    ).map((row) => row.name);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'kb_vectors_vec_002',
+        'kb_vectors_vec_2',
+        'kb_vectors_vec_3 x',
+        'kb_vectors_vec_4',
+      ]),
+    );
+    expect(
+      (await new SqliteVectorIndex(second.sqlite).query(scope, KB_A, [1, 0], 5)).map(
+        (m) => m.chunkId,
+      ),
+    ).toEqual(['a1']);
+  });
 });
 
 describe('TC-RAG-004 groundwork: FTS5 finds zephyrine-protocol-7 as one token', () => {

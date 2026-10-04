@@ -77,10 +77,11 @@ export interface BackupStoreDeps {
   scope?: Scope;
   /**
    * Runs a body while no repository transaction is open on the connection, and keeps one from
-   * opening meanwhile: `VACUUM INTO` and `ATTACH` both fail inside a transaction. Wire it to
-   * `SqliteRepository.exclusive`; the default runs the body directly.
+   * opening meanwhile: `VACUUM INTO` and `ATTACH` both fail inside a transaction, so an export or
+   * an import racing an awaiting batch would fail — an import after its blobs were already copied.
+   * Required, so the type checker enforces the wiring: pass `(fn) => repository.exclusive(fn)`.
    */
-  exclusive?: <T>(fn: () => Promise<T>) => Promise<T>;
+  exclusive: <T>(fn: () => Promise<T>) => Promise<T>;
   now?: () => Date;
 }
 
@@ -331,9 +332,8 @@ function listFiles(root: string): [string, string][] {
 }
 
 export function createBackupStore(deps: BackupStoreDeps): BackupStore {
-  const { sqlite, dataDir, blobsDir } = deps;
+  const { sqlite, dataDir, blobsDir, exclusive } = deps;
   const scope = deps.scope ?? LOCAL_SCOPE;
-  const exclusive = deps.exclusive ?? (<T>(fn: () => Promise<T>) => fn());
   const now = deps.now ?? (() => new Date());
 
   const exportZip = async (): Promise<Uint8Array> =>
