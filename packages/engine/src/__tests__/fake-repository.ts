@@ -903,23 +903,48 @@ export class FakeRepository implements Repository {
 
   /* Round 5 (Arch §15.3, §21.3). */
 
+  /**
+   * A base as read: `documentCount` and `chunkCount` derived from this fake's own rows — every
+   * document whatever its status, every chunk — as the SQLite adapter derives them, rather than
+   * whatever count was last patched in.
+   */
+  #counted(state: State, kb: KnowledgeBase): KnowledgeBase {
+    let documentCount = 0;
+    for (const doc of state.kbDocuments.values()) {
+      if (doc.knowledgeBaseId === kb.id) documentCount += 1;
+    }
+    let chunkCount = 0;
+    for (const row of state.kbChunks.values()) {
+      if (row.chunk.knowledgeBaseId === kb.id) chunkCount += 1;
+    }
+    return { ...kb, documentCount, chunkCount };
+  }
+
   readonly knowledgeBases: KnowledgeBaseRepository = {
     insert: async (scope, kb) => {
-      this.#for(scope).knowledgeBases.set(kb.id, kb);
-      return kb;
+      const state = this.#for(scope);
+      state.knowledgeBases.set(kb.id, kb);
+      return this.#counted(state, kb);
     },
-    get: async (scope, id) => this.#for(scope).knowledgeBases.get(id) ?? null,
-    listByProject: async (scope, projectId) =>
-      [...this.#for(scope).knowledgeBases.values()]
+    get: async (scope, id) => {
+      const state = this.#for(scope);
+      const kb = state.knowledgeBases.get(id);
+      return kb === undefined ? null : this.#counted(state, kb);
+    },
+    listByProject: async (scope, projectId) => {
+      const state = this.#for(scope);
+      return [...state.knowledgeBases.values()]
         .filter((kb) => kb.projectId === projectId)
-        .sort((a, b) => a.id.localeCompare(b.id)),
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map((kb) => this.#counted(state, kb));
+    },
     update: async (scope, id, patch) => {
       const state = this.#for(scope);
       const current = state.knowledgeBases.get(id);
       if (current === undefined) return null;
       const next: KnowledgeBase = { ...current, ...patch };
       state.knowledgeBases.set(id, next);
-      return next;
+      return this.#counted(state, next);
     },
     /** Cascades documents and their chunks, vectors and index rows, as the real adapter does. */
     delete: async (scope, id) => {

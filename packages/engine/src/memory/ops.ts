@@ -11,8 +11,9 @@ import { maskSecrets } from '../security/secret-patterns.js';
  * Reading an agent's memory ops out of its output (FR-MEM-002, round 5 §2.2).
  *
  * The `__memory` field is taken out of the output whatever it holds, so it can never reach the
- * contract check or the next node. A list that does not parse is ignored as a whole — half-applying
- * a malformed list would be worse than applying none — and the reason travels back to the caller.
+ * contract check or the next node. A field that is not a list is ignored whole; inside a list each op
+ * is judged on its own — a malformed op, or one whose key looks like a credential, is dropped while
+ * the valid ops still apply — and every reason travels back to the caller in `invalid`.
  */
 export function extractMemoryOps(value: unknown): {
   value: unknown;

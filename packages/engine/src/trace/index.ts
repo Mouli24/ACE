@@ -46,6 +46,7 @@ function describeEvent(
   payload: unknown,
   at: string,
   startedAt: ReadonlyMap<string, number>,
+  nodeNames: ReadonlyMap<Id, string>,
 ): Fields {
   switch (type) {
     case 'node.state': {
@@ -60,7 +61,7 @@ function describeEvent(
       return {
         nodeId: state.nodeId,
         nodeRunId: state.nodeRunId,
-        label: `${state.nodeId} → ${state.status}`,
+        label: `${nodeNames.get(state.nodeId) ?? state.nodeId} → ${state.status}`,
         ...(duration === undefined ? {} : { durationMs: duration }),
       };
     }
@@ -127,9 +128,14 @@ function describeEvent(
 
 /**
  * Folds a run's events into its trace. Events that are not persisted run events are skipped, so
- * handing it a mixed log is safe; the result is in ascending `seq`.
+ * handing it a mixed log is safe; the result is in ascending `seq`. `nodeNames` (the run snapshot's
+ * names, by node id) labels a node's state change by name — `Writer → RUNNING` — and a node it does
+ * not name falls back to its id.
  */
-export function foldTrace(events: readonly EngineEvent[]): TraceEntry[] {
+export function foldTrace(
+  events: readonly EngineEvent[],
+  nodeNames: ReadonlyMap<Id, string> = new Map(),
+): TraceEntry[] {
   const ordered = [...events].sort((a, b) => a.seq - b.seq);
   const startedAt = new Map<string, number>();
   const trace: TraceEntry[] = [];
@@ -138,7 +144,13 @@ export function foldTrace(events: readonly EngineEvent[]): TraceEntry[] {
     const type = event.type;
     if (!isPersistedRunEvent(type)) continue;
 
-    const { label, ...rest } = describeEvent(type, event.payload, event.createdAt, startedAt);
+    const { label, ...rest } = describeEvent(
+      type,
+      event.payload,
+      event.createdAt,
+      startedAt,
+      nodeNames,
+    );
 
     // A node run's span starts at its latest RUNNING, so a retry measures its own attempt.
     if (type === 'node.state') {
@@ -177,7 +189,11 @@ export function createTraceService(deps: {
 
       // Scoped to this run in the query, as `GET /runs/:id/events` is (FR-EXE-014).
       const events = await deps.repository.events.listAfter(deps.scope, 0, { runIds: [runId] });
-      return foldTrace(events);
+      // The names the run executed with (BR-04): a node renamed or deleted since keeps its old one.
+      const nodeNames = new Map(
+        (run.snapshot?.nodes ?? []).map((node): [Id, string] => [node.id, node.name]),
+      );
+      return foldTrace(events, nodeNames);
     },
   };
 }
