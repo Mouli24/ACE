@@ -1,5 +1,7 @@
 import {
   AgentConfigSchema,
+  RetrievalConfigSchema,
+  derivePorts,
   type Edge,
   type Model,
   type Node,
@@ -159,7 +161,9 @@ describe('§2.7 item 1 — a structural error blocks the run', () => {
 
 describe('§2.7 item 2 — the provider and the model', () => {
   it('TC-NODE-007 names the node when no model is chosen', async () => {
-    const issues = await run({ nodes: [inputNode(), agentNode({ modelId: undefined }), outputNode()] });
+    const issues = await run({
+      nodes: [inputNode(), agentNode({ modelId: undefined }), outputNode()],
+    });
 
     expect(codes(issues)).toContain('missing_model');
     expect(issues.find((i) => i.code === 'missing_model')?.nodeId).toBe(AGENT_ID);
@@ -280,8 +284,9 @@ describe('§2.7 item 4 — TC-PRM-003 placeholders must resolve', () => {
 });
 
 describe('§2.7 item 5 — node kinds that arrive in a later round', () => {
-  // `merge` left this list in round 3 (FR-PAR-002); the rest still wait for their round.
-  it.each(['retrieval', 'guardrail', 'custom'] as const)(
+  // `merge` left this list in round 3 (FR-PAR-002) and `retrieval` in round 5 (§2.4); the rest
+  // still wait for their round.
+  it.each(['guardrail', 'custom'] as const)(
     'refuses a %s node with not_supported_yet',
     async (kind) => {
       const unsupported = { ...outputNode(), id: '01JBXQ8Z9KQ4R7N2VWXYZ0LATR', kind, name: kind };
@@ -332,5 +337,165 @@ describe('FR-EXE-003 every issue is reported at once', () => {
     const issues = await run({ providers: [] });
 
     expect(issues.every((issue) => issue.severity === 'error')).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Round 5 §2.4 — knowledge bases                                              */
+/* -------------------------------------------------------------------------- */
+
+const RETRIEVAL_ID = '01JBXQ8Z9KQ4R7N2VWXYZ0RTRV';
+const JSON_OUTPUT_ID = '01JBXQ8Z9KQ4R7N2VWXYZ0JSNT';
+const KB_ID = '01JBXQ8Z9KQ4R7N2VWXYZ0KBAS';
+
+const retrievalNode = (config: Record<string, unknown>): Node => {
+  const parsed = RetrievalConfigSchema.parse(config);
+  const { inputs, outputs } = derivePorts({ id: RETRIEVAL_ID, kind: 'retrieval', config: parsed });
+  return {
+    id: RETRIEVAL_ID,
+    workflowId: WORKFLOW,
+    kind: 'retrieval',
+    name: 'Search handbook',
+    position: { x: 200, y: 200 },
+    inputs,
+    outputs,
+    config: parsed,
+  };
+};
+
+const jsonOutputNode = (): Node => {
+  const { inputs, outputs } = derivePorts({ id: JSON_OUTPUT_ID, kind: 'output', config: {} });
+  return {
+    id: JSON_OUTPUT_ID,
+    workflowId: WORKFLOW,
+    kind: 'output',
+    name: 'Hits',
+    position: { x: 400, y: 200 },
+    inputs,
+    outputs,
+    config: {},
+  };
+};
+
+/** Input → Retrieval → Output: the `retrieval-node.json` shape, with no agent at all. */
+const retrievalGraph = (
+  config: Record<string, unknown>,
+): Pick<PreflightInput, 'nodes' | 'edges'> => {
+  const retrieval = retrievalNode(config);
+  const output = jsonOutputNode();
+  return {
+    nodes: [inputNode(), retrieval, output],
+    edges: [
+      {
+        id: '01JBXQ8Z9KQ4R7N2VWXYZ0EDG3',
+        workflowId: WORKFLOW,
+        kind: 'data',
+        from: { nodeId: INPUT_ID, portId: `${INPUT_ID}:out:text` },
+        to: { nodeId: RETRIEVAL_ID, portId: retrieval.inputs[0]!.id },
+      },
+      {
+        id: '01JBXQ8Z9KQ4R7N2VWXYZ0EDG4',
+        workflowId: WORKFLOW,
+        kind: 'data',
+        from: { nodeId: RETRIEVAL_ID, portId: retrieval.outputs[0]!.id },
+        to: {
+          nodeId: JSON_OUTPUT_ID,
+          portId: output.inputs.find((port) => port.dataType === 'json')!.id,
+        },
+      },
+    ],
+  };
+};
+
+describe('FR-RAG-006 pre-flight runs a Retrieval node (round 5 §2.4)', () => {
+  it('retrieval is no longer not_supported_yet', async () => {
+    const issues = await run({
+      ...retrievalGraph({ knowledgeBaseId: KB_ID }),
+      knowledgeBaseExists: async () => true,
+    });
+
+    expect(issues).toEqual([]);
+  });
+
+  it('missing_knowledge_base when a Retrieval node has no base', async () => {
+    const asked: string[] = [];
+    const issues = await run({
+      ...retrievalGraph({}),
+      knowledgeBaseExists: async (id) => {
+        asked.push(id);
+        return true;
+      },
+    });
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        severity: 'error',
+        code: 'missing_knowledge_base',
+        nodeId: RETRIEVAL_ID,
+        message: expect.stringContaining('Search handbook'),
+      }),
+    ]);
+    expect(asked).toEqual([]);
+  });
+
+  it('flags a Retrieval node with no base even when no lookup is wired', async () => {
+    const issues = await run(retrievalGraph({}));
+
+    expect(codes(issues)).toEqual(['missing_knowledge_base']);
+  });
+
+  it('missing_knowledge_base when an attached base was deleted', async () => {
+    const issues = await run({
+      ...retrievalGraph({ knowledgeBaseId: KB_ID }),
+      knowledgeBaseExists: async () => false,
+    });
+
+    expect(issues).toEqual([
+      expect.objectContaining({ code: 'missing_knowledge_base', nodeId: RETRIEVAL_ID }),
+    ]);
+  });
+});
+
+describe('FR-RAG-005 pre-flight checks an agent’s attached bases (round 5 §2.4)', () => {
+  it('missing_knowledge_base when an agent names a base that no longer exists', async () => {
+    const issues = await run({
+      nodes: [inputNode(), agentNode({ knowledgeBaseIds: [KB_ID] }), outputNode()],
+      knowledgeBaseExists: async (id) => id !== KB_ID,
+    });
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        code: 'missing_knowledge_base',
+        nodeId: AGENT_ID,
+        message: expect.stringContaining('Writer'),
+      }),
+    ]);
+  });
+
+  it('passes an agent whose bases all exist, and asks about each base once', async () => {
+    const asked: string[] = [];
+    const issues = await run({
+      nodes: [
+        inputNode(),
+        agentNode({ knowledgeBaseIds: [KB_ID, KB_ID] }),
+        outputNode(),
+        retrievalNode({ knowledgeBaseId: KB_ID }),
+      ],
+      knowledgeBaseExists: async (id) => {
+        asked.push(id);
+        return true;
+      },
+    });
+
+    expect(codes(issues)).not.toContain('missing_knowledge_base');
+    expect(asked).toEqual([KB_ID]);
+  });
+
+  it('does not judge a named base when no lookup is wired', async () => {
+    const issues = await run({
+      nodes: [inputNode(), agentNode({ knowledgeBaseIds: [KB_ID] }), outputNode()],
+    });
+
+    expect(codes(issues)).not.toContain('missing_knowledge_base');
   });
 });
