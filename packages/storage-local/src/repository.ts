@@ -54,7 +54,13 @@ import { and, asc, eq, gt, inArray, isNull, notInArray, or, sql } from 'drizzle-
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 
 import { buildDefaultPolicy } from './default-policy.js';
-import { detectVectorExtension, VectorStore, type VectorExtension } from './indexes.js';
+import {
+  detectVectorExtension,
+  Fts5KeywordIndex,
+  SqliteVectorIndex,
+  VectorStore,
+  type VectorExtension,
+} from './indexes.js';
 import {
   createApprovalRepository,
   createGuardrailPolicyRepository,
@@ -90,11 +96,11 @@ import { toJsonColumn } from './secret-guard.js';
 type Db = BetterSQLite3Database<typeof schema>;
 
 /**
- * Serialises transactions on the one local connection.
+ * Serialises use of the one local connection.
  *
  * `Repository` is async so the same interface can front Postgres later, but that means a
  * transaction body can await between statements. With a single SQLite connection an interleaved
- * writer would silently join the open transaction, so transactions queue instead.
+ * call would silently join the open transaction, so every call queues instead.
  */
 class Mutex {
   #tail: Promise<unknown> = Promise.resolve();
@@ -206,18 +212,33 @@ export interface SqliteRepositoryOptions {
   vectorExtension?: VectorExtension;
 }
 
+/** Whoever holds the connection right now: a plain call, a transaction, or an `exclusive` body. */
+interface Holder {
+  token: symbol;
+  /** True while a transaction is open for this holder. */
+  transaction: boolean;
+}
+
 export class SqliteRepository implements Repository {
   readonly #db: Db;
   readonly #sqlite: BetterSqlite3.Database;
   readonly #mutex = new Mutex();
   /**
-   * Which transaction the running code belongs to. `transaction` runs its body inside this store
-   * with a fresh token, and every await of that body carries it along, so a `transaction` call can
-   * tell "my own body is nesting" from "someone else arrived while a transaction is open".
+   * Which holder the running code belongs to. A holder runs inside this store with a fresh token,
+   * and every await of its body carries the token along, so a call can tell "I am part of the work
+   * holding the connection" from "someone else arrived while the connection is held".
    */
   readonly #context = new AsyncLocalStorage<symbol>();
-  /** The token of the transaction open on the connection, if one is. */
-  #open: symbol | undefined;
+  #holder: Holder | undefined;
+  /**
+   * The repository a transaction hands its body: the same repositories, not gated, because the
+   * body *is* the holder. Valid for the body's duration, as any transaction handle is.
+   */
+  readonly #owner: Repository;
+
+  /** Indexes on the same connection, behind the same gate (F8): wire these, not fresh ones. */
+  readonly vectorIndex: SqliteVectorIndex;
+  readonly keywordIndex: Fts5KeywordIndex;
 
   /* Round 2 (Arch §15.3). Built in the constructor because they close over `#db`. */
   readonly providers: ProviderRepository;
@@ -276,36 +297,135 @@ export class SqliteRepository implements Repository {
 
     // Round 5. A chunk write, a document delete and a base delete each touch the chunk rows, both
     // vector stores and (through the trigger) the FTS index, so they borrow this transaction too.
-    const vectors = new VectorStore(
-      sqlite,
-      options.vectorExtension ?? detectVectorExtension(sqlite),
-    );
+    const vectorExtension = options.vectorExtension ?? detectVectorExtension(sqlite);
+    const vectors = new VectorStore(sqlite, vectorExtension);
     this.knowledgeBases = createKnowledgeBaseRepository(db, inTransaction, vectors);
     this.kbDocuments = createKbDocumentRepository(db, inTransaction, vectors);
     this.kbChunks = createKbChunkRepository(db, inTransaction, vectors);
     this.memory = createMemoryRepository(db);
     this.summaryCache = createSummaryCacheRepository(db, sqlite);
     this.usage = createUsageRepository(sqlite);
+
+    // The gate (NFR-REL-02). Every repository is composed twice: as built, for a transaction body,
+    // which holds the connection; and gated, for everyone else, so a call that is not part of the
+    // work holding the connection waits for it to finish instead of landing inside it.
+    const owner: Repository = {
+      transaction: (fn) => fn(owner),
+      projects: this.projects,
+      workflows: this.workflows,
+      nodes: this.nodes,
+      edges: this.edges,
+      events: this.events,
+      settings: this.settings,
+      providers: this.providers,
+      models: this.models,
+      priceTables: this.priceTables,
+      runs: this.runs,
+      nodeRuns: this.nodeRuns,
+      guardrailPolicies: this.guardrailPolicies,
+      guardrailVerdicts: this.guardrailVerdicts,
+      approvals: this.approvals,
+      artifacts: this.artifacts,
+      toolCalls: this.toolCalls,
+      mcpServers: this.mcpServers,
+      messages: this.messages,
+      chatThreads: this.chatThreads,
+      chatMessages: this.chatMessages,
+      knowledgeBases: this.knowledgeBases,
+      kbDocuments: this.kbDocuments,
+      kbChunks: this.kbChunks,
+      memory: this.memory,
+      summaryCache: this.summaryCache,
+      usage: this.usage,
+    };
+    this.#owner = owner;
+
+    this.projects = this.#gate(this.projects);
+    this.workflows = this.#gate(this.workflows);
+    this.nodes = this.#gate(this.nodes);
+    this.edges = this.#gate(this.edges);
+    this.events = this.#gate(this.events);
+    this.settings = this.#gate(this.settings);
+    this.providers = this.#gate(this.providers);
+    this.models = this.#gate(this.models);
+    this.priceTables = this.#gate(this.priceTables);
+    this.runs = this.#gate(this.runs);
+    this.nodeRuns = this.#gate(this.nodeRuns);
+    this.guardrailPolicies = this.#gate(this.guardrailPolicies);
+    this.guardrailVerdicts = this.#gate(this.guardrailVerdicts);
+    this.approvals = this.#gate(this.approvals);
+    this.artifacts = this.#gate(this.artifacts);
+    this.toolCalls = this.#gate(this.toolCalls);
+    this.mcpServers = this.#gate(this.mcpServers);
+    this.messages = this.#gate(this.messages);
+    this.chatThreads = this.#gate(this.chatThreads);
+    this.chatMessages = this.#gate(this.chatMessages);
+    this.knowledgeBases = this.#gate(this.knowledgeBases);
+    this.kbDocuments = this.#gate(this.kbDocuments);
+    this.kbChunks = this.#gate(this.kbChunks);
+    this.memory = this.#gate(this.memory);
+    this.summaryCache = this.#gate(this.summaryCache);
+    this.usage = this.#gate(this.usage);
+
+    const hold = <T>(fn: () => Promise<T>): Promise<T> => this.#hold(() => fn());
+    this.vectorIndex = new SqliteVectorIndex(sqlite, { vectorExtension, hold });
+    this.keywordIndex = new Fts5KeywordIndex(sqlite, { hold });
   }
 
-  /** True when the running code is the body of the transaction open on the connection. */
-  #insideOpenTransaction(): boolean {
-    return this.#open !== undefined && this.#context.getStore() === this.#open;
+  /** The holder the running code belongs to, if it holds the connection. */
+  #ownHolder(): Holder | undefined {
+    const holder = this.#holder;
+    return holder !== undefined && this.#context.getStore() === holder.token ? holder : undefined;
   }
 
   /**
-   * Runs `fn` while no transaction of this repository is open, and keeps one from opening until it
-   * is done — for the statements SQLite refuses inside a transaction, `VACUUM INTO` and `ATTACH`,
-   * which the backup store runs on this same connection (F12). Called from inside a transaction's
-   * own body it would wait for itself forever, so it refuses instead.
+   * Runs `fn` holding the connection. Code that already holds it — a transaction body, or a plain
+   * call that calls another method — runs at once, as part of that work. Anyone else queues
+   * behind whoever holds it and runs after they finish, whatever they committed or rolled back. A
+   * plain call keeps the connection for its whole duration, so a transaction cannot open half way
+   * through a call that reads, awaits, then writes.
+   */
+  #hold<T>(fn: (holder: Holder) => Promise<T>): Promise<T> {
+    const own = this.#ownHolder();
+    if (own !== undefined) return fn(own);
+
+    return this.#mutex.runExclusive(async () => {
+      const holder: Holder = { token: Symbol('holder'), transaction: false };
+      this.#holder = holder;
+      try {
+        return await this.#context.run(holder.token, () => fn(holder));
+      } finally {
+        this.#holder = undefined;
+      }
+    });
+  }
+
+  /** The same repository, every method behind `#hold`. Repositories are plain objects of methods. */
+  #gate<R extends object>(repository: R): R {
+    const gated: Record<string, unknown> = {};
+    for (const [name, member] of Object.entries(repository)) {
+      gated[name] =
+        typeof member === 'function'
+          ? (...args: unknown[]) =>
+              this.#hold(async () => (member as (...params: unknown[]) => unknown)(...args))
+          : member;
+    }
+    return gated as R;
+  }
+
+  /**
+   * Runs `fn` holding the connection with no transaction open — for the statements SQLite refuses
+   * inside a transaction, `VACUUM INTO` and `ATTACH`, which the backup store runs on this same
+   * connection (F12). Called from inside a transaction's own body it would wait for itself
+   * forever, so it refuses instead.
    */
   exclusive<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.#insideOpenTransaction()) {
+    if (this.#ownHolder()?.transaction === true) {
       return Promise.reject(
         new Error('exclusive() cannot run inside a transaction of this repository'),
       );
     }
-    return this.#mutex.runExclusive(fn);
+    return this.#hold(() => fn());
   }
 
   /**
@@ -315,26 +435,25 @@ export class SqliteRepository implements Repository {
    * A call made from the open transaction's own body — `tx.projects.create` inside a batch, or a
    * nested `tx.transaction` — joins it rather than starting a second one, and a throw there rolls
    * back the whole outer batch. Any other caller — a background ingestion write arriving while an
-   * unrelated batch is awaiting — waits for that batch to commit or roll back and then runs its own
-   * transaction, so one caller's rollback can never take another's writes with it. A body's
+   * unrelated batch is awaiting, transactional or not — waits for that batch to commit or roll back
+   * and then runs, so one caller's rollback can never take another's writes with it. A body's
    * detached work that outlives its commit queues like any other caller.
    */
   async transaction<T>(fn: (tx: Repository) => Promise<T>): Promise<T> {
-    if (this.#insideOpenTransaction()) return fn(this);
+    return this.#hold(async (holder) => {
+      if (holder.transaction) return fn(this.#owner);
 
-    return this.#mutex.runExclusive(async () => {
-      const token = Symbol('transaction');
       this.#sqlite.exec('BEGIN IMMEDIATE');
-      this.#open = token;
+      holder.transaction = true;
       try {
-        const result = await this.#context.run(token, () => fn(this));
+        const result = await fn(this.#owner);
         this.#sqlite.exec('COMMIT');
         return result;
       } catch (error) {
         this.#sqlite.exec('ROLLBACK');
         throw error;
       } finally {
-        this.#open = undefined;
+        holder.transaction = false;
       }
     });
   }

@@ -403,19 +403,33 @@ export class VectorStore {
   }
 }
 
+/** Runs a body holding the shared connection (`SqliteRepository`'s gate, NFR-REL-02). */
+export type Hold = <T>(fn: () => Promise<T>) => Promise<T>;
+
+const runNow: Hold = (fn) => fn();
+
 export interface SqliteVectorIndexOptions {
   /** Defaults to whatever this connection has loaded; a test forces `'scan'` to compare the two. */
   vectorExtension?: VectorExtension;
+  /**
+   * The connection gate. An index on the repository's connection must run behind it, or its reads
+   * see — and its writes join — an unrelated open transaction: use `SqliteRepository.vectorIndex`
+   * and `keywordIndex`, which are built with it. Defaults to running at once, for a connection no
+   * repository shares.
+   */
+  hold?: Hold;
 }
 
 /** `VectorIndex` over `kb_vectors` and sqlite-vec, or the exact scan without it (F8). */
 export class SqliteVectorIndex implements VectorIndex {
   readonly #sqlite: BetterSqlite3.Database;
   readonly #store: VectorStore;
+  readonly #hold: Hold;
 
   constructor(sqlite: BetterSqlite3.Database, options: SqliteVectorIndexOptions = {}) {
     this.#sqlite = sqlite;
     this.#store = new VectorStore(sqlite, options.vectorExtension ?? detectVectorExtension(sqlite));
+    this.#hold = options.hold ?? runNow;
   }
 
   get vectorExtension(): VectorExtension {
@@ -423,7 +437,9 @@ export class SqliteVectorIndex implements VectorIndex {
   }
 
   async upsert(scope: Scope, records: VectorRecord[]): Promise<void> {
-    this.#sqlite.transaction(() => this.#store.write(scope, records))();
+    await this.#hold(async () => {
+      this.#sqlite.transaction(() => this.#store.write(scope, records))();
+    });
   }
 
   async query(
@@ -432,17 +448,21 @@ export class SqliteVectorIndex implements VectorIndex {
     embedding: number[],
     k: number,
   ): Promise<VectorMatch[]> {
-    return this.#store.query(scope, knowledgeBaseId, embedding, k);
+    return this.#hold(async () => this.#store.query(scope, knowledgeBaseId, embedding, k));
   }
 
   async deleteByDocument(scope: Scope, documentId: string): Promise<void> {
-    this.#sqlite.transaction(() => this.#store.deleteWhere(scope, 'document_id', documentId))();
+    await this.#hold(async () => {
+      this.#sqlite.transaction(() => this.#store.deleteWhere(scope, 'document_id', documentId))();
+    });
   }
 
   async deleteByKnowledgeBase(scope: Scope, knowledgeBaseId: string): Promise<void> {
-    this.#sqlite.transaction(() =>
-      this.#store.deleteWhere(scope, 'knowledge_base_id', knowledgeBaseId),
-    )();
+    await this.#hold(async () => {
+      this.#sqlite.transaction(() =>
+        this.#store.deleteWhere(scope, 'knowledge_base_id', knowledgeBaseId),
+      )();
+    });
   }
 }
 
@@ -465,12 +485,19 @@ export function toMatchExpression(query: string): string | undefined {
   return [...words].map((word) => `"${word}"`).join(' OR ');
 }
 
+export interface Fts5KeywordIndexOptions {
+  /** The connection gate to run under; see `SqliteVectorIndexOptions.hold`. */
+  hold?: Hold;
+}
+
 /** `KeywordIndex` over the FTS5 external-content table `kb_chunks_fts` (F8, FR-RAG-004). */
 export class Fts5KeywordIndex implements KeywordIndex {
   readonly #sqlite: BetterSqlite3.Database;
+  readonly #hold: Hold;
 
-  constructor(sqlite: BetterSqlite3.Database) {
+  constructor(sqlite: BetterSqlite3.Database, options: Fts5KeywordIndexOptions = {}) {
     this.#sqlite = sqlite;
+    this.#hold = options.hold ?? runNow;
   }
 
   /**
@@ -480,28 +507,30 @@ export class Fts5KeywordIndex implements KeywordIndex {
    * transaction.
    */
   async index(scope: Scope, records: KeywordRecord[]): Promise<void> {
-    const find = this.#sqlite.prepare(
-      `SELECT seq, text FROM kb_chunks
-        WHERE workspace_id = ? AND id = ? AND knowledge_base_id = ? AND document_id = ?`,
-    );
-    const update = this.#sqlite.prepare('UPDATE kb_chunks SET text = ? WHERE seq = ?');
+    await this.#hold(async () => {
+      const find = this.#sqlite.prepare(
+        `SELECT seq, text FROM kb_chunks
+          WHERE workspace_id = ? AND id = ? AND knowledge_base_id = ? AND document_id = ?`,
+      );
+      const update = this.#sqlite.prepare('UPDATE kb_chunks SET text = ? WHERE seq = ?');
 
-    this.#sqlite.transaction(() => {
-      for (const record of records) {
-        const row = find.get(
-          scope.workspaceId,
-          record.chunkId,
-          record.knowledgeBaseId,
-          record.documentId,
-        ) as { seq: number; text: string } | undefined;
-        if (row === undefined) {
-          throw new Error(
-            `keyword record ${record.chunkId} has no stored chunk; kbChunks.replaceForDocument writes and indexes chunks`,
-          );
+      this.#sqlite.transaction(() => {
+        for (const record of records) {
+          const row = find.get(
+            scope.workspaceId,
+            record.chunkId,
+            record.knowledgeBaseId,
+            record.documentId,
+          ) as { seq: number; text: string } | undefined;
+          if (row === undefined) {
+            throw new Error(
+              `keyword record ${record.chunkId} has no stored chunk; kbChunks.replaceForDocument writes and indexes chunks`,
+            );
+          }
+          if (row.text !== record.text) update.run(record.text, row.seq);
         }
-        if (row.text !== record.text) update.run(record.text, row.seq);
-      }
-    })();
+      })();
+    });
   }
 
   async search(
@@ -514,20 +543,23 @@ export class Fts5KeywordIndex implements KeywordIndex {
     const limit = Math.floor(k);
     if (match === undefined || limit < 1) return [];
 
-    const rows = this.#sqlite
-      .prepare(
-        `SELECT c.id AS chunkId, bm25(kb_chunks_fts) AS bm25Rank
-           FROM kb_chunks_fts
-           JOIN kb_chunks c ON c.seq = kb_chunks_fts.rowid
-          WHERE kb_chunks_fts MATCH ?
-            AND c.workspace_id = ? AND c.knowledge_base_id = ?
-          ORDER BY bm25Rank ASC, c.id ASC
-          LIMIT ?`,
-      )
-      .all(match, scope.workspaceId, knowledgeBaseId, limit) as {
-      chunkId: string;
-      bm25Rank: number;
-    }[];
+    const rows = await this.#hold(
+      async () =>
+        this.#sqlite
+          .prepare(
+            `SELECT c.id AS chunkId, bm25(kb_chunks_fts) AS bm25Rank
+               FROM kb_chunks_fts
+               JOIN kb_chunks c ON c.seq = kb_chunks_fts.rowid
+              WHERE kb_chunks_fts MATCH ?
+                AND c.workspace_id = ? AND c.knowledge_base_id = ?
+              ORDER BY bm25Rank ASC, c.id ASC
+              LIMIT ?`,
+          )
+          .all(match, scope.workspaceId, knowledgeBaseId, limit) as {
+          chunkId: string;
+          bm25Rank: number;
+        }[],
+    );
 
     // bm25 is lower-is-better and negative for a match; the port wants higher-is-better.
     return rows.map((row) => ({ chunkId: row.chunkId, score: -row.bm25Rank }));
@@ -535,14 +567,18 @@ export class Fts5KeywordIndex implements KeywordIndex {
 
   /** Deletes the document's chunk rows; the delete trigger takes their FTS rows with them. */
   async deleteByDocument(scope: Scope, documentId: string): Promise<void> {
-    this.#sqlite
-      .prepare('DELETE FROM kb_chunks WHERE workspace_id = ? AND document_id = ?')
-      .run(scope.workspaceId, documentId);
+    await this.#hold(async () => {
+      this.#sqlite
+        .prepare('DELETE FROM kb_chunks WHERE workspace_id = ? AND document_id = ?')
+        .run(scope.workspaceId, documentId);
+    });
   }
 
   async deleteByKnowledgeBase(scope: Scope, knowledgeBaseId: string): Promise<void> {
-    this.#sqlite
-      .prepare('DELETE FROM kb_chunks WHERE workspace_id = ? AND knowledge_base_id = ?')
-      .run(scope.workspaceId, knowledgeBaseId);
+    await this.#hold(async () => {
+      this.#sqlite
+        .prepare('DELETE FROM kb_chunks WHERE workspace_id = ? AND knowledge_base_id = ?')
+        .run(scope.workspaceId, knowledgeBaseId);
+    });
   }
 }
