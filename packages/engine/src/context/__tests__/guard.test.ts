@@ -140,7 +140,12 @@ describe('TC-GRD-005 hidden instructions are stripped at the context point', () 
     if (result.kind !== 'continue') throw new Error('expected continue');
     expect(result.text).toBe(POISONED);
     expect(result.verdicts).toHaveLength(1);
-    expect(result.verdicts[0]).toMatchObject({ action: 'pass', strippedTypes: expect.any(Array) });
+    expect(result.verdicts[0]).toMatchObject({ action: 'pass', passed: false });
+    // Nothing was stripped at pass, so the verdict names no stripped kinds; its reason says what
+    // was found, by kind and count only.
+    expect(result.verdicts[0]).not.toHaveProperty('strippedTypes');
+    expect(result.verdicts[0]?.reason).toMatch(/1 html_comment, 1 instruction_override/);
+    noPayloadIn(result.verdicts);
     expect(h.bus.ofType('guardrail.verdict')).toEqual([]);
   });
 
@@ -170,12 +175,65 @@ describe('TC-GRD-005 hidden instructions are stripped at the context point', () 
     expect(result).toEqual({ kind: 'continue', text: POISONED, verdicts: [] });
   });
 
-  it('records nothing for a check the runner cannot judge', async () => {
+  it('fails closed when an enabled check gets no answer from the runner', async () => {
     const h = harness(contextPolicy(), { checks: { evaluate: () => undefined } });
 
     const result = await h.guard.sanitise({ target: h.target, label: 'retrieved', text: POISONED });
 
-    expect(result).toEqual({ kind: 'continue', text: POISONED, verdicts: [] });
+    expect(result.kind).toBe('failed');
+    if (result.kind !== 'failed') throw new Error('unreachable');
+    expect(result.error).toMatchObject({
+      kind: 'guardrail',
+      code: 'context_check_unavailable',
+      retryable: false,
+      details: { point: 'context' },
+    });
+    // No answer, so no verdict: there is nothing the engine could justify recording.
+    expect(result.verdicts).toEqual([]);
+    noPayloadIn(result.error);
+  });
+
+  it('fails closed when the residue re-check gets no answer', async () => {
+    let calls = 0;
+    const onceOnly: CheckRunner = {
+      evaluate: (check, input) => {
+        if (check.type !== 'prompt_injection') return contextChecks.evaluate(check, input);
+        calls += 1;
+        return calls === 1 ? contextChecks.evaluate(check, input) : undefined;
+      },
+    };
+    const h = harness(contextPolicy(), { checks: onceOnly });
+
+    const result = await h.guard.sanitise({ target: h.target, label: 'retrieved', text: POISONED });
+
+    expect(result).toMatchObject({
+      kind: 'failed',
+      error: { code: 'context_check_unavailable' },
+    });
+  });
+});
+
+describe('FR-GRD-015 inspect judges without recording; record stores and emits', () => {
+  it('leaves the store and the bus alone until the verdicts are recorded', async () => {
+    const h = harness(contextPolicy());
+
+    const inspected = await h.guard.inspect({
+      target: h.target,
+      label: 'retrieved',
+      text: POISONED,
+    });
+
+    if (inspected.kind !== 'continue') throw new Error('expected continue');
+    noPayloadIn(inspected.text);
+    expect(inspected.verdicts).toHaveLength(1);
+    expect(h.store.allVerdicts()).toEqual([]);
+    expect(h.bus.events).toEqual([]);
+
+    const recorded = await h.guard.record(h.target, inspected.verdicts);
+
+    expect(recorded).toEqual(inspected.verdicts);
+    expect(h.store.allVerdicts()).toEqual(inspected.verdicts);
+    expect(h.bus.ofType('guardrail.verdict')).toHaveLength(1);
   });
 });
 
@@ -214,28 +272,33 @@ describe('FR-GRD-004 a block at the context point fails the node GUARDRAIL_VIOLA
 
   it('fails a redact the check cannot carry out (no sanitized text)', async () => {
     const noSanitized: CheckRunner = {
-      evaluate: (check) =>
-        check.type === 'pii' ? { passed: false, reason: 'Personal data found: email.' } : undefined,
+      evaluate: (check, input) =>
+        check.type === 'pii'
+          ? { passed: false, reason: 'Personal data found: email.' }
+          : contextChecks.evaluate(check, input),
     };
     const h = harness(contextPolicy(), { checks: noSanitized });
 
     const result = await h.guard.sanitise({ target: h.target, label: 'retrieved', text: 'x@y.io' });
 
-    expect(result.kind).toBe('failed');
+    expect(result).toMatchObject({ kind: 'failed', error: { code: 'guardrail_pii' } });
   });
 
   it('fails a warn-level strip the check cannot carry out (fail closed)', async () => {
     const noSanitized: CheckRunner = {
-      evaluate: (check) =>
+      evaluate: (check, input) =>
         check.type === 'prompt_injection'
           ? { passed: false, reason: 'Hidden instructions found in context: 1 html_comment.' }
-          : undefined,
+          : contextChecks.evaluate(check, input),
     };
     const h = harness(contextPolicy(), { checks: noSanitized });
 
     const result = await h.guard.sanitise({ target: h.target, label: 'retrieved', text: POISONED });
 
-    expect(result.kind).toBe('failed');
+    expect(result).toMatchObject({
+      kind: 'failed',
+      error: { code: 'guardrail_prompt_injection' },
+    });
   });
 });
 
@@ -263,6 +326,10 @@ describe('FR-GRD-004 strip residue fails closed', () => {
       'prompt_injection',
     ]);
     expect(result.verdicts[1]).toMatchObject({ action: 'block', passed: false });
+    // The residue was not stripped, so the re-check's verdict names no stripped kinds; its reason
+    // says what remained, by kind and count only.
+    expect(result.verdicts[1]).not.toHaveProperty('strippedTypes');
+    expect(result.verdicts[1]?.reason).toMatch(/\d+ (?:html_comment|markdown_comment)/);
     expect(JSON.stringify(result)).not.toContain(payload);
   });
 
@@ -327,9 +394,12 @@ describe('FR-GRD-004 PII at the context point', () => {
 
 describe('BR-13 untrusted_tagging only tags', () => {
   it('never applies an action, even one a stored check carries', async () => {
+    // The other two context checks answer as usual: a silent runner now fails closed.
     const tagging: CheckRunner = {
-      evaluate: (check) =>
-        check.type === 'untrusted_tagging' ? { passed: false, reason: 'Tagged.' } : undefined,
+      evaluate: (check, input) =>
+        check.type === 'untrusted_tagging'
+          ? { passed: false, reason: 'Tagged.' }
+          : contextChecks.evaluate(check, input),
     };
     const h = harness(contextPolicy({ untrusted_tagging: { action: 'block' } }), {
       checks: tagging,
@@ -416,6 +486,16 @@ describe('F6 the ingestion PII check uses the project default policy', () => {
     const checked = await h.guard.checkIngestText({ projectId: policy.projectId, text: PII });
 
     expect(checked.blocked).toBeDefined();
+  });
+
+  it('refuses the document when the runner does not answer the enabled PII check', async () => {
+    const policy = contextPolicy();
+    const h = harness(null, { projectDefault: policy, checks: { evaluate: () => undefined } });
+
+    const checked = await h.guard.checkIngestText({ projectId: policy.projectId, text: PII });
+
+    expect(checked.blocked).toMatch(/could not be evaluated/);
+    expect(checked.verdicts).toEqual([]);
   });
 
   it('passes the text through when the project has no policy, or its PII check is off', async () => {
