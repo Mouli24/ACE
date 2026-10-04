@@ -280,6 +280,16 @@ export class SqliteRepository implements Repository {
   }
 
   /**
+   * Runs `fn` while no transaction of this repository is open, and keeps one from opening until it
+   * is done — for the statements SQLite refuses inside a transaction, `VACUUM INTO` and `ATTACH`,
+   * which the backup store runs on this same connection (F12). Not re-entrant: never call it from
+   * inside `transaction`.
+   */
+  exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    return this.#mutex.runExclusive(fn);
+  }
+
+  /**
    * One transaction per call (NFR-REL-02, TC-NFR-006). A throw anywhere in the body rolls the whole
    * batch back, so a graph-ops batch is fully applied or not applied at all — never half written.
    * A nested call joins the transaction already open rather than starting a second one.

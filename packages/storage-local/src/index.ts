@@ -8,6 +8,7 @@ export * from './repository-round4.js';
 export * from './repository-round5.js';
 export * from './repository-usage.js';
 export * from './indexes.js';
+export * from './backup.js';
 export * from './default-policy.js';
 export * from './secret-guard.js';
 export * from './queue.js';
