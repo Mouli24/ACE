@@ -29,7 +29,8 @@ import { findUnknownPlaceholders } from '../prompts/index.js';
 
 /**
  * Node kinds the executor can run. The rest are refused until their round lands — `merge` joined in
- * round 3, when the scheduler learned to wait for its inputs (FR-PAR-002).
+ * round 3, when the scheduler learned to wait for its inputs (FR-PAR-002), and `retrieval` in round
+ * 5, when knowledge bases did (§2.4, FR-RAG-006).
  */
 export const SUPPORTED_NODE_KINDS: readonly NodeKind[] = [
   'input',
@@ -37,6 +38,7 @@ export const SUPPORTED_NODE_KINDS: readonly NodeKind[] = [
   'model',
   'merge',
   'transform',
+  'retrieval',
   'output',
 ];
 
@@ -62,6 +64,12 @@ export interface PreflightInput {
   tools?: ToolLookup;
   /** The known MCP servers: a registered tool on an `unreachable` one is `mcp_server_unreachable`. */
   mcpServers?: readonly McpServer[];
+  /**
+   * Whether a knowledge base still exists (round 5 §2.4): a Retrieval node or an agent naming one
+   * that does not is `missing_knowledge_base`. Absent (round 2–4 harnesses), a *named* base is not
+   * looked up — a Retrieval node with no base at all is refused either way.
+   */
+  knowledgeBaseExists?: (id: Id) => Promise<boolean>;
 }
 
 /** An Input node has something to start from when its config or the request carries content. */
@@ -190,6 +198,62 @@ export async function preflight(input: PreflightInput): Promise<ValidationIssue[
             nodeId: target.id,
           });
         }
+      }
+    }
+  }
+
+  /* 7. Knowledge bases (round 5 §2.4, FR-RAG-005/006). */
+  issues.push(...(await knowledgeBaseIssues(input)));
+
+  return issues;
+}
+
+/**
+ * `missing_knowledge_base`: a Retrieval node with no base chosen, or a Retrieval node or an agent
+ * naming a base that no longer exists. Each base is looked up once however many nodes name it.
+ */
+async function knowledgeBaseIssues(input: PreflightInput): Promise<ValidationIssue[]> {
+  const issues: ValidationIssue[] = [];
+  const lookups = new Map<Id, Promise<boolean>>();
+  const exists = (id: Id): Promise<boolean> | undefined => {
+    if (input.knowledgeBaseExists === undefined) return undefined;
+    let lookup = lookups.get(id);
+    if (lookup === undefined) {
+      lookup = input.knowledgeBaseExists(id);
+      lookups.set(id, lookup);
+    }
+    return lookup;
+  };
+
+  for (const node of input.nodes) {
+    if (node.kind === 'retrieval') {
+      const { knowledgeBaseId } = node.config;
+      if (knowledgeBaseId === undefined) {
+        issues.push({
+          severity: 'error',
+          code: 'missing_knowledge_base',
+          message: `"${node.name}" has no knowledge base chosen.`,
+          nodeId: node.id,
+        });
+      } else if ((await exists(knowledgeBaseId)) === false) {
+        issues.push({
+          severity: 'error',
+          code: 'missing_knowledge_base',
+          message: `"${node.name}" searches a knowledge base that no longer exists.`,
+          nodeId: node.id,
+        });
+      }
+    }
+
+    if (node.kind === 'agent') {
+      for (const knowledgeBaseId of new Set(node.config.knowledgeBaseIds)) {
+        if ((await exists(knowledgeBaseId)) !== false) continue;
+        issues.push({
+          severity: 'error',
+          code: 'missing_knowledge_base',
+          message: `"${node.name}" is attached to a knowledge base that no longer exists.`,
+          nodeId: node.id,
+        });
       }
     }
   }
