@@ -20,3 +20,18 @@ export * from './artifacts/index.js';
 export * from './prompts/index.js';
 export * from './chat/index.js';
 export * from './gateway/index.js';
+
+/* Round 5: knowledge, context, memory, trace, usage, templates and backup (§2.1–§2.7). */
+export * from './knowledge/service.js';
+export * from './knowledge/ingest.js';
+export * from './knowledge/search.js';
+export * from './knowledge/retrieval-node.js';
+export * from './context/builder.js';
+export * from './context/guard.js';
+export * from './context/summariser.js';
+export * from './memory/service.js';
+export * from './memory/ops.js';
+export * from './trace/index.js';
+export * from './usage/index.js';
+export * from './templates/service.js';
+export * from './backup/index.js';
