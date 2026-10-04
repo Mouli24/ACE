@@ -41,12 +41,13 @@ import type { ContextGuard, ContextLabel } from './guard.js';
  * - **Memory.** Oldest first, inside `floor(budgetTokens × CONTEXT_BUDGET_SHARES.memory)`; entries
  *   that do not fit are left out from the newest end (§2.2). The ids placed come back as
  *   `usedMemoryIds`, for `lastUsedAt`.
- * - **The whole budget.** The reads were fitted to the full `budgetTokens` when the envelopes were
- *   built, so after guarding, the reads, the retrieved chunks and the memory are measured together;
- *   while that total exceeds `budgetTokens`, retrieved chunks are dropped lowest score first, then
- *   memory entries newest first. Every chunk dropped, for its share or for the whole, is in
- *   `droppedSources`, lowest score first. (Building an agent's envelopes at a reduced budget, so the
- *   reads and their summary get only what retrieval and memory leave, is the run service's half.)
+ * - **The whole budget.** The reads and every envelope summary are measured first, after guarding;
+ *   memory then fits inside `min(its share, budgetTokens − reads)` and the chunks inside
+ *   `min(their share, budgetTokens − reads − memory placed)` — memory first, because it has priority
+ *   over chunks. So reads, summaries, chunks and memory together never exceed `budgetTokens`, and
+ *   what the whole budget could not hold is never judged at all. Every chunk left out is in
+ *   `droppedSources`, lowest score first. (The run service builds an agent's envelopes at a reduced
+ *   budget, so the reads and their summary leave room for retrieval and memory.)
  * - **Guardrails.** Each untrusted upstream read — text, code, and every key and string of its JSON —
  *   and an untrusted summary, each chunk, and each memory key and value goes through the guard; a
  *   `failed` answer fails the node `GUARDRAIL_VIOLATION`. Only what is finally placed leaves a
@@ -234,7 +235,7 @@ export async function buildNodeContext(
     return responses.flatMap((response) => response.hits).sort((a, b) => b.score - a.score);
   }
 
-  /** The best chunks that fit the retrieved share, judged; the rest dropped, best first. */
+  /** The best chunks that fit `share` (the room left for them), judged; the rest dropped, best first. */
   async function fitRetrieved(
     hits: readonly SearchHit[],
     share: number,
@@ -278,14 +279,14 @@ export async function buildNodeContext(
     return { placed, dropped };
   }
 
-  /** The oldest entries that fit the memory share, key and value judged; the newest left out. */
+  /** The oldest entries that fit `share` (the room left for memory), key and value judged; the newest left out. */
   async function fitMemory(share: number): Promise<PlacedMemory[]> {
     const placed: PlacedMemory[] = [];
     let used = 0;
 
     for (const entry of [...input.memory].sort(oldestFirst)) {
       if (used + memoryCost(entry.key, entry.value) > share) break;
-      const key = await judge('memory', entry.key);
+      const key = await judge('memory_key', entry.key);
       const value = await judge('memory', entry.value);
       const cost = memoryCost(key.text, value.text);
       if (used + cost > share) break;
@@ -322,6 +323,12 @@ export async function buildNodeContext(
     }
 
     const budgetTokens = node.config.contextPolicy.budgetTokens;
+    /* What the reads already take: every envelope's reads and its summary (FR-EXE-007). */
+    const readsCost = envelopes.reduce(
+      (total, each) =>
+        total + estimatePartsTokens(each.reads) + estimateTokens(each.context.summary ?? ''),
+      0,
+    );
 
     let hits: SearchHit[];
     try {
@@ -335,22 +342,22 @@ export async function buildNodeContext(
       return failed(classifyError(error));
     }
 
+    /*
+     * The whole budget (FR-EXE-007): each kind fits inside its share *and* inside what is left of
+     * `budgetTokens` once the reads are paid for — memory first, because memory has priority over
+     * chunks — so whatever the whole budget could not hold is never judged, never recorded and
+     * never able to fail the node.
+     */
+    const memory = await fitMemory(
+      Math.min(Math.floor(budgetTokens * CONTEXT_BUDGET_SHARES.memory), budgetTokens - readsCost),
+    );
     const retrieved = await fitRetrieved(
       hits,
-      Math.floor(budgetTokens * CONTEXT_BUDGET_SHARES.retrieved),
+      Math.min(
+        Math.floor(budgetTokens * CONTEXT_BUDGET_SHARES.retrieved),
+        budgetTokens - readsCost - sum(memory),
+      ),
     );
-    const memory = await fitMemory(Math.floor(budgetTokens * CONTEXT_BUDGET_SHARES.memory));
-
-    /* The whole budget: reads, chunks and memory together (FR-EXE-007). */
-    const readsCost = envelopes.reduce((total, each) => total + estimatePartsTokens(each.reads), 0);
-    let total = readsCost + sum(retrieved.placed) + sum(memory);
-    const overBudget: NodeRunSource[] = [];
-    while (total > budgetTokens && retrieved.placed.length > 0) {
-      const lowest = retrieved.placed.pop()!;
-      total -= lowest.cost;
-      overBudget.push(lowest.source);
-    }
-    while (total > budgetTokens && memory.length > 0) total -= memory.pop()!.cost;
 
     // Only now is it known what is placed, so only now are its verdicts recorded.
     await record([
@@ -377,9 +384,8 @@ export async function buildNodeContext(
       kind: 'continue',
       envelopes,
       sources: retrieved.placed.map((each) => each.source),
-      // Dropped for the share (all below every placed chunk), lowest first; then dropped for the
-      // whole budget, which went lowest first too.
-      droppedSources: [...retrieved.dropped.reverse(), ...overBudget],
+      // Every dropped chunk scored below every placed one; lowest first.
+      droppedSources: [...retrieved.dropped].reverse(),
       usedMemoryIds: memory.map((each) => each.id),
       verdicts,
     };

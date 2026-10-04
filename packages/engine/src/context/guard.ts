@@ -53,7 +53,8 @@ import type { ContextTextCheck } from '../ports/index.js';
  * uses the two so that only content it finally places leaves a verdict; `sanitise` is both at once.
  */
 
-export type ContextLabel = 'retrieved' | 'memory' | 'upstream' | 'tool';
+/** Where judged text came from; a memory entry's key and value are labelled apart. */
+export type ContextLabel = 'retrieved' | 'memory' | 'memory_key' | 'upstream' | 'tool';
 
 export type SanitiseResult =
   | { kind: 'continue'; text: string; verdicts: Verdict[] }
@@ -96,6 +97,7 @@ export interface ContextGuardDeps {
 const WHERE: Record<ContextLabel, string> = {
   retrieved: 'a retrieved chunk',
   memory: 'a memory value',
+  memory_key: 'a memory key',
   upstream: 'an upstream output',
   tool: 'a tool result',
 };
@@ -122,13 +124,12 @@ const isHiddenInstructionType = (value: unknown): value is HiddenInstructionType
   typeof value === 'string' && (HIDDEN_INSTRUCTION_TYPES as readonly string[]).includes(value);
 
 /**
- * The kinds a context `prompt_injection` check stripped. The rule pack answers them beside the
- * outcome the runner interface declares; only names from the closed contract list survive, so a
- * verdict can never carry anything but a type (FR-GRD-014, D232).
+ * The kinds a context `prompt_injection` check stripped. The runner is injected, so only names from
+ * the closed contract list survive, each once, and a verdict can never carry anything but a type
+ * (FR-GRD-014, D232).
  */
 function strippedTypesOf(outcome: CheckOutcome): HiddenInstructionType[] {
-  if (!('strippedTypes' in outcome) || !Array.isArray(outcome.strippedTypes)) return [];
-  return [...new Set(outcome.strippedTypes.filter(isHiddenInstructionType))];
+  return [...new Set((outcome.strippedTypes ?? []).filter(isHiddenInstructionType))];
 }
 
 const inputFor = (text: string): CheckInput => ({

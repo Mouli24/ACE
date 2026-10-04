@@ -72,13 +72,12 @@ function injection(input: CheckInput): CheckOutcome {
   const counts = strippedTypes.map(
     (type) => `${found.filter((each) => each === type).length} ${type}`,
   );
-  const outcome: CheckOutcome & { strippedTypes: HiddenInstructionType[] } = {
+  return {
     passed: false,
     reason: `Hidden instructions found in context: ${counts.join(', ')}.`,
     strippedTypes,
     sanitized,
   };
-  return outcome;
 }
 
 function pii(input: CheckInput): CheckOutcome {
