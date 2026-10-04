@@ -20,8 +20,6 @@ import {
 /** The mock models the templates use — all of them exist in the mock provider's catalogue. */
 export const TEMPLATE_MODELS = {
   text: 'mock-text',
-  /** Takes text and json in, so it can read the Merge node's json output. */
-  json: 'mock-json',
   reviewer: 'mock-reject-twice',
   cite: 'mock-cite',
   embed: 'mock-embed',
@@ -93,6 +91,7 @@ type NodeSpec =
   | { kind: 'input'; name: string; text: string }
   | { kind: 'output'; name: string }
   | { kind: 'merge'; name: string }
+  | { kind: 'transform'; name: string; template: string }
   | {
       kind: 'agent';
       name: string;
@@ -105,6 +104,13 @@ type NodeSpec =
     };
 
 const COLUMN = 320;
+
+/**
+ * Renders the Merge node's `{ inputs: [{ port, nodeId, parts }] }` (MergeOutput, ordered by input
+ * port order) as text, so the Synthesiser reads both branches on a text-only model.
+ */
+export const MERGE_RENDER_TEMPLATE =
+  'Research A:\n{{inputs.0.parts.0.text}}\n\nResearch B:\n{{inputs.1.parts.0.text}}';
 
 export function templateGraph(
   id: TemplateId,
@@ -138,6 +144,13 @@ export function templateGraph(
         break;
       case 'merge':
         draft = { ...base, kind: 'merge', config: { mode: 'all' } };
+        break;
+      case 'transform':
+        draft = {
+          ...base,
+          kind: 'transform',
+          config: { op: 'template', template: spec.template },
+        };
         break;
       case 'agent':
         draft = {
@@ -289,25 +302,30 @@ export function templateGraph(
         2,
       );
       const merge = add({ kind: 'merge', name: 'Merge' }, 2, 1);
+      const render = add(
+        { kind: 'transform', name: 'Render findings', template: MERGE_RENDER_TEMPLATE },
+        3,
+        1,
+      );
       const synthesiser = add(
         {
           kind: 'agent',
           name: 'Synthesiser',
-          modelId: TEMPLATE_MODELS.json,
+          modelId: TEMPLATE_MODELS.text,
           instructions: 'Combine both sets of findings into one summary.',
-          inputTypes: ['json'],
-          outputTypes: ['json'],
+          outputTypes: ['text'],
         },
-        3,
+        4,
         1,
       );
-      const output = add({ kind: 'output', name: 'Output' }, 4, 1);
+      const output = add({ kind: 'output', name: 'Output' }, 5, 1);
       connect(input, 'text', a, 'text');
       connect(input, 'text', b, 'text');
       connect(a, 'text', merge, 'in');
       connect(b, 'text', merge, 'in');
-      connect(merge, 'out', synthesiser, 'json');
-      connect(synthesiser, 'json', output, 'json');
+      connect(merge, 'out', render, 'in');
+      connect(render, 'out', synthesiser, 'text');
+      connect(synthesiser, 'text', output, 'text');
       break;
     }
 
