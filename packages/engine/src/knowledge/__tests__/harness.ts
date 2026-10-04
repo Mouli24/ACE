@@ -10,6 +10,7 @@ import type {
   Embedder,
   EmbedderFor,
 } from '../../ports/knowledge.js';
+import { createLogger } from '../../logging/index.js';
 import { createIngestionWorker, type IngestJob, type IngestionWorkerDeps } from '../ingest.js';
 import {
   createKnowledgeService,
@@ -99,12 +100,15 @@ export interface Harness {
   workerDeps: IngestionWorkerDeps;
   /** Every chunk handed to `replaceForDocument`, in call order. */
   written: KbChunk[];
+  /** Log records the worker wrote at warn or above. */
+  logLines: string[];
   addFile(name: string, text: string): string;
   createKb(): Promise<KnowledgeBase>;
 }
 
 export interface HarnessOptions {
   embedder?: EmbedderFor;
+  parser?: DocumentParser;
   check?: ContextTextCheck;
   /** `null` means the provider does not exist; an object without `embed` has no embeddings. */
   adapter?: Partial<ProviderAdapter> | null;
@@ -145,18 +149,24 @@ export async function makeHarness(options: HarnessOptions = {}): Promise<Harness
     bus,
     nextId,
   };
+  const logLines: string[] = [];
+  const logger = createLogger({
+    level: 'warn',
+    destination: { write: (line: string) => void logLines.push(line) },
+  });
   const workerDeps: IngestionWorkerDeps = {
     repository: repo,
     scope: LOCAL_SCOPE,
     queue,
     bus,
-    parser: fakeParser,
+    parser: options.parser ?? fakeParser,
     chunker: fakeChunker,
     embedderFor: options.embedder ?? (async () => fakeEmbedder),
     checkContextText: options.check ?? passThrough,
     chunkKindFor: ({ name }) => (name.endsWith('.ts') ? 'code' : 'prose'),
     readArtifact: async (id) => artifacts.get(id) ?? null,
     nextId,
+    logger,
   };
   const service = createKnowledgeService(serviceDeps);
   const written: KbChunk[] = [];
@@ -175,6 +185,7 @@ export async function makeHarness(options: HarnessOptions = {}): Promise<Harness
     worker: createIngestionWorker(workerDeps),
     workerDeps,
     written,
+    logLines,
     addFile(name, text) {
       const id = `01ART${String(artifacts.size + 1).padStart(23, '0')}`;
       const bytes = new TextEncoder().encode(text);
