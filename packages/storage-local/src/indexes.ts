@@ -102,11 +102,19 @@ function createVectorTable(sqlite: BetterSqlite3.Database, dims: number): void {
   );
 }
 
+/**
+ * The `kb_vectors` rows a `vec0` table indexes: every one with a direction. An all-zero embedding
+ * (stored as all-zero bytes, `-0` having been written as `0`) has no cosine to anything, so it is
+ * kept in the table of record but never indexed, and neither search mode returns it.
+ */
+const INDEXED_VECTORS = `embedding <> zeroblob(dims * 4)`;
+
 function fillVectorTable(sqlite: BetterSqlite3.Database, dims: number): void {
   sqlite
     .prepare(
       `INSERT INTO ${vectorTableName(dims)} (chunk_id, knowledge_base_id, embedding)
-       SELECT chunk_id, knowledge_base_id, embedding FROM kb_vectors WHERE dims = ?`,
+       SELECT chunk_id, knowledge_base_id, embedding FROM kb_vectors
+        WHERE dims = ? AND ${INDEXED_VECTORS}`,
     )
     .run(dims);
 }
@@ -127,7 +135,11 @@ export function ensureVectorTables(sqlite: BetterSqlite3.Database): void {
 
   sqlite.transaction(() => {
     const widths = (
-      sqlite.prepare('SELECT dims, count(*) AS n FROM kb_vectors GROUP BY dims').all() as {
+      sqlite
+        .prepare(
+          `SELECT dims, count(*) AS n FROM kb_vectors WHERE ${INDEXED_VECTORS} GROUP BY dims`,
+        )
+        .all() as {
         dims: number;
         n: number;
       }[]
@@ -165,9 +177,12 @@ export function rebuildKeywordIndex(sqlite: BetterSqlite3.Database): void {
 /* Vectors                                                                     */
 /* -------------------------------------------------------------------------- */
 
-/** Little-endian Float32 bytes — the layout `vec0` reads and `kb_vectors` stores. */
+/**
+ * Little-endian Float32 bytes — the layout `vec0` reads and `kb_vectors` stores. `-0` is written
+ * as `0`, so an all-zero embedding is all-zero bytes (`INDEXED_VECTORS`).
+ */
 function toFloat32Blob(chunkId: string, embedding: readonly number[]): Buffer {
-  const floats = Float32Array.from(embedding);
+  const floats = Float32Array.from(embedding, (value) => (value === 0 ? 0 : value));
   if (
     floats.length < 1 ||
     floats.length > MAX_VECTOR_DIMS ||
@@ -180,6 +195,10 @@ function toFloat32Blob(chunkId: string, embedding: readonly number[]): Buffer {
   return Buffer.from(floats.buffer);
 }
 
+function hasDirection(embedding: readonly number[]): boolean {
+  return embedding.some((value) => value !== 0);
+}
+
 /** Copied out, because a blob's offset in its buffer need not be a multiple of four. */
 function fromFloat32Blob(blob: Uint8Array): Float32Array {
   const copy = new Uint8Array(blob.byteLength);
@@ -187,7 +206,7 @@ function fromFloat32Blob(blob: Uint8Array): Float32Array {
   return new Float32Array(copy.buffer);
 }
 
-/** Cosine similarity, or null when either side has no direction (sqlite-vec answers NULL too). */
+/** Cosine similarity, or null when either side has no direction (sqlite-vec answers NULL). */
 function cosine(a: ArrayLike<number>, b: ArrayLike<number>): number | null {
   let dot = 0;
   let aa = 0;
@@ -242,7 +261,7 @@ export class VectorStore {
         dims,
         blob,
       );
-      if (this.mode === 'sqlite-vec') {
+      if (this.mode === 'sqlite-vec' && hasDirection(record.embedding)) {
         if (!ready.has(dims)) {
           createVectorTable(this.sqlite, dims);
           ready.add(dims);
@@ -270,7 +289,10 @@ export class VectorStore {
       .run(scope.workspaceId, value);
   }
 
-  /** The `k` nearest vectors of one base by cosine similarity, best first. */
+  /**
+   * The `k` nearest vectors of one base by cosine similarity, best first. A vector with no
+   * direction — the query's or a stored one — has no cosine, so it is never a match.
+   */
   query(
     scope: Scope,
     knowledgeBaseId: string,
@@ -280,6 +302,7 @@ export class VectorStore {
     const limit = Math.min(Math.floor(k), MAX_VECTOR_K);
     if (limit < 1) return [];
     const blob = toFloat32Blob('<query>', embedding);
+    if (!hasDirection(embedding)) return [];
     const dims = embedding.length;
 
     return this.mode === 'sqlite-vec'
@@ -321,12 +344,11 @@ export class VectorStore {
       ).map((row) => row.chunk_id),
     );
 
-    return rows
-      .filter((row) => held.has(row.chunk_id))
-      .map((row) => ({
-        chunkId: row.chunk_id,
-        score: row.distance === null ? 0 : 1 - row.distance,
-      }));
+    return rows.flatMap((row) =>
+      held.has(row.chunk_id) && row.distance !== null
+        ? [{ chunkId: row.chunk_id, score: 1 - row.distance }]
+        : [],
+    );
   }
 
   /** The exact fallback (F8): every vector of the base, scored and sorted here. */
@@ -346,21 +368,14 @@ export class VectorStore {
       .all(scope.workspaceId, knowledgeBaseId, dims) as { chunk_id: string; embedding: Buffer }[];
 
     return rows
-      .map((row) => ({
-        chunkId: row.chunk_id,
-        similarity: cosine(query, fromFloat32Blob(row.embedding)),
-      }))
-      .sort((a, b) => {
-        // Directionless vectors last, as sqlite-vec orders its NULL distances; then by id.
-        if (a.similarity === null || b.similarity === null) {
-          if (a.similarity !== b.similarity) return a.similarity === null ? 1 : -1;
-        } else if (a.similarity !== b.similarity) {
-          return b.similarity - a.similarity;
-        }
-        return a.chunkId < b.chunkId ? -1 : a.chunkId > b.chunkId ? 1 : 0;
+      .flatMap((row) => {
+        const score = cosine(query, fromFloat32Blob(row.embedding));
+        return score === null ? [] : [{ chunkId: row.chunk_id, score }];
       })
-      .slice(0, limit)
-      .map((row) => ({ chunkId: row.chunkId, score: row.similarity ?? 0 }));
+      .sort(
+        (a, b) => b.score - a.score || (a.chunkId < b.chunkId ? -1 : a.chunkId > b.chunkId ? 1 : 0),
+      )
+      .slice(0, limit);
   }
 
   #deleteFromVectorTable(dims: number, chunkId: string): void {

@@ -7,7 +7,12 @@ import { newId, type VectorRecord } from '@ace/engine';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openDatabase, type OpenDatabase } from '../db.js';
-import { Fts5KeywordIndex, SqliteVectorIndex, vectorTableName } from '../indexes.js';
+import {
+  Fts5KeywordIndex,
+  MAX_VECTOR_DIMS,
+  SqliteVectorIndex,
+  vectorTableName,
+} from '../indexes.js';
 import { SqliteRepository } from '../repository.js';
 import { scope } from './fixtures.js';
 
@@ -243,6 +248,87 @@ describe('F8 scan fallback answers like vec0', () => {
         (m) => m.chunkId,
       ),
     ).toEqual(['a1']);
+  });
+
+  it('keeps a vec0 table in step at open, rebuilds one out of step, drops one of a width now gone', async () => {
+    const countIn = (opened: OpenDatabase, dims: number) =>
+      (
+        opened.sqlite.prepare(`SELECT count(*) AS n FROM ${vectorTableName(dims)}`).get() as {
+          n: number;
+        }
+      ).n;
+    const exists = (opened: OpenDatabase, dims: number) =>
+      opened.sqlite
+        .prepare('SELECT 1 FROM sqlite_master WHERE name = ?')
+        .get(vectorTableName(dims)) !== undefined;
+
+    const first = open();
+    await new SqliteVectorIndex(first.sqlite).upsert(scope, [
+      vector('a1', DOC_A, KB_A, [1, 0]),
+      vector('b1', DOC_B, KB_B, [1, 0, 0]),
+    ]);
+    first.sqlite.close();
+
+    // In step: reopened as it was.
+    const second = open();
+    expect(countIn(second, 2)).toBe(1);
+    second.sqlite.close();
+
+    // Written while the extension was absent: one width gains a row, the other loses its only one.
+    const scanOnly = open({ loadVectorExtension: false });
+    const scan = new SqliteVectorIndex(scanOnly.sqlite);
+    await scan.upsert(scope, [vector('a2', DOC_A, KB_A, [0, 1])]);
+    await scan.deleteByKnowledgeBase(scope, KB_B);
+    scanOnly.sqlite.close();
+
+    const third = open();
+    expect(countIn(third, 2)).toBe(2);
+    expect(exists(third, 3)).toBe(false);
+    const vec0 = new SqliteVectorIndex(third.sqlite);
+    expect((await vec0.query(scope, KB_A, [0, 1], 5)).map((m) => m.chunkId)).toEqual(['a2', 'a1']);
+    expect(await vec0.query(scope, KB_B, [1, 0, 0], 5)).toEqual([]);
+  });
+
+  it('never matches a directionless vector, and breaks a tie by chunk id, in both modes', async () => {
+    const { sqlite } = open();
+    const vec0 = new SqliteVectorIndex(sqlite, { vectorExtension: 'sqlite-vec' });
+    const scan = new SqliteVectorIndex(sqlite, { vectorExtension: 'scan' });
+    await vec0.upsert(scope, [
+      vector('zero', DOC_A, KB_A, [0, -0]),
+      vector('near', DOC_A, KB_A, [1, 0.1]),
+      vector('far', DOC_A, KB_A, [-1, 0]),
+    ]);
+
+    for (const index of [vec0, scan]) {
+      const matches = await index.query(scope, KB_A, [1, 0], 5);
+      expect(matches.map((m) => m.chunkId)).toEqual(['near', 'far']);
+      expect(matches[1]!.score).toBeCloseTo(-1, 5);
+      // A directionless query has no nearest anything.
+      expect(await index.query(scope, KB_A, [0, 0], 5)).toEqual([]);
+    }
+    // Stored, but never in the vec0 index: the count check at open sees no drift.
+    expect(
+      (sqlite.prepare(`SELECT count(*) AS n FROM ${vectorTableName(2)}`).get() as { n: number }).n,
+    ).toBe(2);
+    expect((sqlite.prepare('SELECT count(*) AS n FROM kb_vectors').get() as { n: number }).n).toBe(
+      3,
+    );
+
+    await scan.upsert(scope, [
+      vector('twin-b', DOC_B, KB_B, [0, 1]),
+      vector('twin-a', DOC_B, KB_B, [0, 1]),
+    ]);
+    expect((await scan.query(scope, KB_B, [0, 1], 5)).map((m) => m.chunkId)).toEqual([
+      'twin-a',
+      'twin-b',
+    ]);
+  });
+
+  it('names a vec0 table only for a width sqlite-vec takes', () => {
+    expect(vectorTableName(768)).toBe('kb_vectors_vec_768');
+    expect(() => vectorTableName(0)).toThrow(RangeError);
+    expect(() => vectorTableName(1.5)).toThrow(RangeError);
+    expect(() => vectorTableName(MAX_VECTOR_DIMS + 1)).toThrow(RangeError);
   });
 });
 
