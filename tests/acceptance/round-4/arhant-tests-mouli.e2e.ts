@@ -438,7 +438,12 @@ async function selectNode(page: Page, nodeId: string): Promise<void> {
   await page.waitForTimeout(300);
   const target = card(page, nodeId);
   await target.scrollIntoViewIfNeeded();
-  await target.click({ position: { x: 60, y: 6 } });
+  // Fit to view can zoom a card narrower than 60 px; a fixed offset then lands on the header's
+  // run-actions button and opens its menu instead of selecting the node (D-089, CI only). Click
+  // the header a quarter of the way in, whatever the zoom.
+  const box = await target.boundingBox();
+  const x = box === null ? 20 : Math.max(4, Math.min(60, box.width * 0.25));
+  await target.click({ position: { x, y: 6 } });
   await expect(target).toHaveAttribute('data-selected', 'true');
 }
 
