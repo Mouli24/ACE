@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 import {
   EdgeSchema,
   NodeSchema,
@@ -208,7 +210,14 @@ export class SqliteRepository implements Repository {
   readonly #db: Db;
   readonly #sqlite: BetterSqlite3.Database;
   readonly #mutex = new Mutex();
-  #depth = 0;
+  /**
+   * Which transaction the running code belongs to. `transaction` runs its body inside this store
+   * with a fresh token, and every await of that body carries it along, so a `transaction` call can
+   * tell "my own body is nesting" from "someone else arrived while a transaction is open".
+   */
+  readonly #context = new AsyncLocalStorage<symbol>();
+  /** The token of the transaction open on the connection, if one is. */
+  #open: symbol | undefined;
 
   /* Round 2 (Arch §15.3). Built in the constructor because they close over `#db`. */
   readonly providers: ProviderRepository;
@@ -279,36 +288,53 @@ export class SqliteRepository implements Repository {
     this.usage = createUsageRepository(sqlite);
   }
 
+  /** True when the running code is the body of the transaction open on the connection. */
+  #insideOpenTransaction(): boolean {
+    return this.#open !== undefined && this.#context.getStore() === this.#open;
+  }
+
   /**
    * Runs `fn` while no transaction of this repository is open, and keeps one from opening until it
    * is done — for the statements SQLite refuses inside a transaction, `VACUUM INTO` and `ATTACH`,
-   * which the backup store runs on this same connection (F12). Not re-entrant: never call it from
-   * inside `transaction`.
+   * which the backup store runs on this same connection (F12). Called from inside a transaction's
+   * own body it would wait for itself forever, so it refuses instead.
    */
   exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.#insideOpenTransaction()) {
+      return Promise.reject(
+        new Error('exclusive() cannot run inside a transaction of this repository'),
+      );
+    }
     return this.#mutex.runExclusive(fn);
   }
 
   /**
    * One transaction per call (NFR-REL-02, TC-NFR-006). A throw anywhere in the body rolls the whole
    * batch back, so a graph-ops batch is fully applied or not applied at all — never half written.
-   * A nested call joins the transaction already open rather than starting a second one.
+   *
+   * A call made from the open transaction's own body — `tx.projects.create` inside a batch, or a
+   * nested `tx.transaction` — joins it rather than starting a second one, and a throw there rolls
+   * back the whole outer batch. Any other caller — a background ingestion write arriving while an
+   * unrelated batch is awaiting — waits for that batch to commit or roll back and then runs its own
+   * transaction, so one caller's rollback can never take another's writes with it. A body's
+   * detached work that outlives its commit queues like any other caller.
    */
   async transaction<T>(fn: (tx: Repository) => Promise<T>): Promise<T> {
-    if (this.#depth > 0) return fn(this);
+    if (this.#insideOpenTransaction()) return fn(this);
 
     return this.#mutex.runExclusive(async () => {
+      const token = Symbol('transaction');
       this.#sqlite.exec('BEGIN IMMEDIATE');
-      this.#depth += 1;
+      this.#open = token;
       try {
-        const result = await fn(this);
+        const result = await this.#context.run(token, () => fn(this));
         this.#sqlite.exec('COMMIT');
         return result;
       } catch (error) {
         this.#sqlite.exec('ROLLBACK');
         throw error;
       } finally {
-        this.#depth -= 1;
+        this.#open = undefined;
       }
     });
   }

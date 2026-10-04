@@ -257,6 +257,33 @@ describe('FR-RAG-002 replaceForDocument writes chunks, vectors and fts rows in o
     ).toEqual([second[0]!.id]);
   });
 
+  it('joins an outer transaction, so the outer throw leaves no chunks, vectors or fts rows', async () => {
+    const document = doc(newId());
+
+    await expect(
+      db.repository.transaction(async (tx) => {
+        await tx.kbChunks!.replaceForDocument(
+          scope,
+          document.id,
+          [chunkOf(document, 0, 'orchid lattice'), chunkOf(document, 1, 'basalt ridge')],
+          [
+            [1, 0],
+            [0, 1],
+          ],
+        );
+        throw new Error('the outer batch failed after the chunks were written');
+      }),
+    ).rejects.toThrow('the outer batch failed');
+
+    expect(count('SELECT count(*) AS n FROM kb_chunks')).toBe(0);
+    expect(count('SELECT count(*) AS n FROM kb_vectors')).toBe(0);
+    expect(ftsCount('orchid')).toBe(0);
+    expect(ftsCount('basalt')).toBe(0);
+    expect(
+      await new SqliteVectorIndex(db.sqlite).query(scope, document.knowledgeBaseId, [1, 0], 5),
+    ).toEqual([]);
+  });
+
   it('rolls everything back when a write fails part way, leaving the old chunks', async () => {
     const document = doc(newId());
     const old = [chunkOf(document, 0, 'orchid lattice')];

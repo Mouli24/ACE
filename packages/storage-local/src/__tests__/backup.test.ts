@@ -27,6 +27,7 @@ import {
   BACKUP_KIND,
   createBackupStore,
   type BackupManifest,
+  type BackupStoreDeps,
 } from '../backup.js';
 import { FsBlobStore } from '../blob-store.js';
 import { openDatabase, type OpenDatabase } from '../db.js';
@@ -271,6 +272,13 @@ describe('TC-SYS-014 backup: the zip holds ace.sqlite, blobs, settings.json, bac
     expect(Object.keys(entries).sort()).toEqual(['ace.sqlite', 'backup.json', 'settings.json']);
   });
 
+  it('requires the exclusive runner, so the wiring cannot be forgotten', () => {
+    // A compile-time check: `tsc` refuses this assignment while `exclusive` is optional.
+    type IsRequired<T, K extends keyof T> = Record<never, never> extends Pick<T, K> ? false : true;
+    const exclusiveIsRequired: IsRequired<BackupStoreDeps, 'exclusive'> = true;
+    expect(exclusiveIsRequired).toBe(true);
+  });
+
   it('waits for an open repository transaction instead of failing VACUUM INTO', async () => {
     const engine = await startEngine('busy');
     let release: () => void = () => undefined;
@@ -284,13 +292,14 @@ describe('TC-SYS-014 backup: the zip holds ace.sqlite, blobs, settings.json, bac
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
     // SQLite refuses VACUUM INTO while this transaction is open on the connection — which is what
-    // a store without the repository's `exclusive` runs into.
+    // a store wired with a runner that does not wait runs into, and why `exclusive` is required.
     expect(engine.opened.sqlite.inTransaction).toBe(true);
     const unguarded = createBackupStore({
       sqlite: engine.opened.sqlite,
       dataDir: engine.dataDir,
       blobsDir: join(engine.dataDir, 'blobs'),
       settings: engine.repository.settings,
+      exclusive: (fn) => fn(),
     });
     await expect(unguarded.exportZip()).rejects.toThrow(/VACUUM/i);
 
@@ -378,6 +387,68 @@ describe('TC-SYS-014 import restores rows into a live handle via ATTACH; dataDir
     expect(JSON.parse(strFromU8(unzipSync(undo)['backup.json']!)).kind).toBe('ace-backup');
     await target.backup.importZip(undo);
     expect(await target.repository.projects.get(scope, before.id)).toEqual(before);
+  });
+
+  it('leaves the live database exactly as before when the copy fails part way', async () => {
+    const source = await startEngine('source3');
+    const seeded = await seedData(source);
+    await source.repository.memory.upsert(scope, newId(), 'tone', 'from the backup', NOW, newId);
+    // Tampered so the copy fails late: `agent_memory` and `approvals` are replaced before
+    // `artifacts` breaks the live unique index on (workspace, hash).
+    source.opened.sqlite.exec('DROP INDEX artifacts_hash_idx');
+    source.opened.sqlite
+      .prepare(
+        `INSERT INTO artifacts (id, workspace_id, hash, mime, name, size, created_at)
+         VALUES (?, ?, ?, 'text/plain', 'twin.txt', 1, ?)`,
+      )
+      .run(newId(), scope.workspaceId, seeded.blob.hash, NOW);
+    const zip = await source.backup.exportZip();
+
+    const target = await startEngine('target3');
+    const live = await seedData(target);
+    await target.repository.memory.upsert(scope, newId(), 'tone', 'live memory', NOW, newId);
+    const dump = () => {
+      const tables = (
+        target.opened.sqlite
+          .prepare(
+            `SELECT name FROM sqlite_master WHERE type = 'table'
+               AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'kb_chunks_fts%'
+               AND name NOT LIKE 'kb_vectors_vec_%' ORDER BY name`,
+          )
+          .all() as { name: string }[]
+      ).map((row) => row.name);
+      return Object.fromEntries(
+        tables.map((table) => [
+          table,
+          target.opened.sqlite.prepare(`SELECT * FROM "${table}" ORDER BY rowid`).all(),
+        ]),
+      );
+    };
+    const before = dump();
+
+    await expect(target.backup.importZip(zip)).rejects.toThrow(/UNIQUE/);
+
+    expect(dump()).toEqual(before);
+    expect(target.opened.sqlite.inTransaction).toBe(false);
+    expect(
+      (target.opened.sqlite.pragma('database_list') as { name: string }[]).map((db) => db.name),
+    ).not.toContain('ace_import');
+    // Both indexes still answer for the live chunks.
+    expect(
+      (
+        await new Fts5KeywordIndex(target.opened.sqlite).search(
+          scope,
+          live.kb.id,
+          'zephyrine-protocol-7',
+          5,
+        )
+      ).map((m) => m.chunkId),
+    ).toEqual([live.chunk.id]);
+    expect(
+      (
+        await new SqliteVectorIndex(target.opened.sqlite).query(scope, live.kb.id, [1, 0, 0], 5)
+      ).map((m) => m.chunkId),
+    ).toEqual([live.chunk.id]);
   });
 
   it('answers the path writePreImportBackup wrote', async () => {

@@ -78,17 +78,35 @@ function tableExists(sqlite: BetterSqlite3.Database, name: string): boolean {
   );
 }
 
-/** The `vec0` virtual tables present, by width. Their shadow tables are not `CREATE VIRTUAL`. */
+const VECTOR_TABLE_PREFIX = 'kb_vectors_vec_';
+
+/** The width a name read from `sqlite_master` is ours for, or undefined when it is not ours. */
+function widthOfVectorTable(name: string): number | undefined {
+  const dims = Number(name.slice(VECTOR_TABLE_PREFIX.length));
+  if (!Number.isInteger(dims) || dims < 1 || dims > MAX_VECTOR_DIMS) return undefined;
+  return vectorTableName(dims) === name ? dims : undefined;
+}
+
+/**
+ * The `vec0` virtual tables this module made, by width. Their shadow tables are not
+ * `CREATE VIRTUAL`. The GLOB matches any suffix, so a name is kept only if `vectorTableName`
+ * makes exactly that name again from its width: `kb_vectors_vec_002`, or a quoted name that is no
+ * bare identifier, is someone else's table and is never counted, dropped or spliced into SQL —
+ * every statement uses the re-derived name, not the stored one.
+ */
 function existingVectorTables(sqlite: BetterSqlite3.Database): Map<number, string> {
   const rows = sqlite
     .prepare(
       `SELECT name FROM sqlite_master
         WHERE type = 'table' AND name GLOB 'kb_vectors_vec_[0-9]*'
-          AND sql LIKE 'CREATE VIRTUAL TABLE%'`,
+          AND sql LIKE 'CREATE VIRTUAL TABLE%' AND sql LIKE '%USING vec0%'`,
     )
     .all() as { name: string }[];
   const tables = new Map<number, string>();
-  for (const { name } of rows) tables.set(Number(name.slice('kb_vectors_vec_'.length)), name);
+  for (const { name } of rows) {
+    const dims = widthOfVectorTable(name);
+    if (dims !== undefined) tables.set(dims, vectorTableName(dims));
+  }
   return tables;
 }
 
