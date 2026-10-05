@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { LOCAL_SCOPE } from '../../ports/index.js';
 import type { ContextTextCheck } from '../../ports/knowledge.js';
@@ -274,6 +274,28 @@ describe('FR-RAG-003 the worker', () => {
     expect((await h.service.listDocuments(kb.id)).every((doc) => doc.status === 'ready')).toBe(
       true,
     );
+  });
+
+  it('FR-SYS-008 its poll timer never keeps the process alive', async () => {
+    const h = await makeHarness();
+    const timers: ReturnType<typeof setInterval>[] = [];
+    const real = globalThis.setInterval;
+    const spy = vi.spyOn(globalThis, 'setInterval').mockImplementation(((
+      ...args: Parameters<typeof setInterval>
+    ) => {
+      const timer = real(...args);
+      timers.push(timer);
+      return timer;
+    }) as typeof setInterval);
+    try {
+      h.worker.start();
+    } finally {
+      spy.mockRestore();
+    }
+    await h.worker.stop();
+
+    expect(timers).toHaveLength(1);
+    expect(timers[0]?.hasRef()).toBe(false);
   });
 
   it('skips a job whose document is already gone', async () => {
