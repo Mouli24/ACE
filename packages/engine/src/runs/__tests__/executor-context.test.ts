@@ -695,6 +695,24 @@ describe('FR-RAG-006 the Retrieval node', () => {
         source: 'handbook.md#intro',
       },
     ]);
+    // TC-RAG-007: what it read rides its own envelope, for its node run to store (R5 §2.4).
+    expect(outcome.inputEnvelopes).toEqual([
+      {
+        ...envelope(),
+        context: {
+          budgetTokens: 4000,
+          trust: 'untrusted',
+          retrieved: [
+            {
+              chunkId: searchHit.chunkId,
+              text: 'ACE is an agent canvas.',
+              score: 0.9,
+              source: 'handbook.md#intro',
+            },
+          ],
+        },
+      },
+    ]);
   });
 
   it('is BLOCKED missing_knowledge_base when its base was deleted mid-run', async () => {
@@ -705,6 +723,8 @@ describe('FR-RAG-006 the Retrieval node', () => {
     expect(outcome.status).toBe('BLOCKED');
     expect(outcome.failureReason).toBe('BLOCKED');
     expect(outcome.error?.code).toBe('missing_knowledge_base');
+    // Nothing was read, so the row keeps the envelope it was delivered.
+    expect(outcome).not.toHaveProperty('inputEnvelopes');
   });
 
   it('is BLOCKED when no base is chosen', async () => {

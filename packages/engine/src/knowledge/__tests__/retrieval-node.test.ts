@@ -2,6 +2,7 @@ import {
   NodeRunSourceSchema,
   RetrievalConfigSchema,
   SearchHitSchema,
+  type Envelope,
   type Id,
   type Part,
   type SearchHit,
@@ -12,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 
 import { failureReasonFor } from '../../errors/index.js';
 import { newId } from '../../ids.js';
-import { runRetrievalNode } from '../retrieval-node.js';
+import { runRetrievalNode, withRetrieved } from '../retrieval-node.js';
 import { KnowledgeBaseMissingError, type SearchService } from '../search.js';
 
 /** A search double that answers fixed hits and remembers what it was asked. */
@@ -75,6 +76,8 @@ describe('TC-RAG-007 the Retrieval node outputs { hits } and records sources', (
         score,
         source,
       })),
+      // What it read, as `context.retrieved` carries it (R5 §2.4).
+      retrieved: hits.map(({ chunkId, text, score, source }) => ({ chunkId, text, score, source })),
     });
     if (!outcome.ok) throw new Error('unreachable');
     for (const source of outcome.sources) NodeRunSourceSchema.parse(source);
@@ -98,6 +101,7 @@ describe('TC-RAG-007 the Retrieval node outputs { hits } and records sources', (
       ok: true,
       parts: [{ type: 'json', value: { hits: [] } }],
       sources: [],
+      retrieved: [],
     });
   });
 });
@@ -191,5 +195,43 @@ describe('FR-RAG-006 a Retrieval node that cannot search says why, with a typed 
 
     if (outcome.ok) throw new Error('expected a failure');
     expect(outcome).toMatchObject({ reason: 'boom', error: { kind: 'provider', message: 'boom' } });
+  });
+});
+
+describe('TC-RAG-007 withRetrieved places what a Retrieval node read on its envelope', () => {
+  const envelope = (fromNodeId: Id): Envelope => ({
+    id: newId(),
+    runId: newId(),
+    fromNodeId,
+    toNodeId: newId(),
+    iteration: 1,
+    reads: [{ type: 'text', text: 'What is ACE?' }],
+    context: { budgetTokens: 4000, trust: 'trusted' },
+    contract: { outputTypes: ['text'] },
+    createdAt: '2026-10-04T10:00:00.000Z',
+  });
+  const chunks = [
+    { chunkId: newId(), text: 'ACE is an agent canvas.', score: 0.9, source: 'handbook.md#intro' },
+  ];
+
+  it('puts the chunks on the first envelope by source node id (F4), untrusted, in delivered order', () => {
+    const later = envelope('01JBXQ8Z9KQ4R7N2VWXYZ0NPT2');
+    const first = envelope('01JBXQ8Z9KQ4R7N2VWXYZ0NPT1');
+
+    const read = withRetrieved([later, first], chunks);
+
+    expect(read).toEqual([
+      later,
+      { ...first, context: { budgetTokens: 4000, trust: 'untrusted', retrieved: chunks } },
+    ]);
+    // The delivered envelopes are not changed in place.
+    expect(first.context).toEqual({ budgetTokens: 4000, trust: 'trusted' });
+  });
+
+  it('places nothing when there are no chunks: `retrieved` stays absent', () => {
+    const only = envelope(newId());
+
+    expect(withRetrieved([only], [])).toEqual([only]);
+    expect(withRetrieved([], chunks)).toEqual([]);
   });
 });

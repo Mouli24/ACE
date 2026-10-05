@@ -36,7 +36,7 @@ import type {
   StreamChunk,
   ToolResult,
 } from '../ports/index.js';
-import { runRetrievalNode } from '../knowledge/retrieval-node.js';
+import { runRetrievalNode, withRetrieved } from '../knowledge/retrieval-node.js';
 import type { SearchService } from '../knowledge/search.js';
 import { extractMemoryOps, maskMemoryValue, withMemoryField } from '../memory/ops.js';
 import { assemblePrompt } from '../prompts/index.js';
@@ -217,6 +217,12 @@ export interface NodeExecutionOutcome {
   droppedSources?: NodeRunSource[];
   /** Round 5: the `__memory` ops this node run applied, in order (FR-MEM-002). */
   memoryOps?: MemoryOp[];
+  /**
+   * Round 5: the envelopes this node run read, with what it read placed on them — a Retrieval
+   * node's hits as `context.retrieved` (R5 §2.4, FR-RAG-007) — stored on its row in place of the
+   * delivered ones. Absent, the row keeps the envelopes it was delivered.
+   */
+  inputEnvelopes?: Envelope[];
 }
 
 export interface NodeExecutorDeps {
@@ -1443,7 +1449,11 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         const result = await runRetrievalNode(node.config, reads, deps.search);
         // A base deleted mid-run is BLOCKED `missing_knowledge_base`, as pre-flight would have said.
         if (!result.ok) return fail(input, result.error);
-        return succeed(input, result.parts, NO_USAGE, { sources: result.sources });
+        // The node run records what it read: the hits on its own envelope, beside its sources.
+        return succeed(input, result.parts, NO_USAGE, {
+          sources: result.sources,
+          inputEnvelopes: withRetrieved(input.envelopes, result.retrieved),
+        });
       }
 
       default:

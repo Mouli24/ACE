@@ -983,14 +983,21 @@ export function createRunService(deps: RunServiceDeps): RunService {
       return summarised === undefined ? usage : sumUsage([usage, summarised]);
     }
 
-    /** What the node run's context used and its memory ops (round 5, FR-RAG-007, FR-MEM-002). */
+    /**
+     * What the node run's context used and its memory ops (round 5, FR-RAG-007, FR-MEM-002), and
+     * the envelopes it read when the executor placed what it read on them — a Retrieval node's hits
+     * (R5 §2.4) — masked as the stored prompt is (BR-07), as the agent's context step stores them.
+     */
     function roundFiveFields(
       outcome: NodeExecutionOutcome,
-    ): Pick<NodeRun, 'sources' | 'droppedSources' | 'memoryOps'> {
+    ): Partial<Pick<NodeRun, 'sources' | 'droppedSources' | 'memoryOps' | 'inputEnvelopes'>> {
       return {
         ...(outcome.sources === undefined ? {} : { sources: outcome.sources }),
         ...(outcome.droppedSources === undefined ? {} : { droppedSources: outcome.droppedSources }),
         ...(outcome.memoryOps === undefined ? {} : { memoryOps: outcome.memoryOps }),
+        ...(outcome.inputEnvelopes === undefined
+          ? {}
+          : { inputEnvelopes: maskedForStorage(outcome.inputEnvelopes) }),
       };
     }
 

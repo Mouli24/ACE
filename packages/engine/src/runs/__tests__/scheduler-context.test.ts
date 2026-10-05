@@ -1049,6 +1049,152 @@ describe('FR-RAG-006 a Retrieval node run', () => {
   });
 });
 
+describe('TC-RAG-007 a Retrieval node run records what it read as envelope.context.retrieved', () => {
+  /** Fixed chunk ids, so what the Agent reads is the same bytes from one run to the next. */
+  const twoHits = (): SearchHit[] => [
+    { ...hit(0.9, 'first', 120), chunkId: '01JBXQ8Z9KQ4R7N2VWXYZ0CHK1' },
+    { ...hit(0.4, 'second', 120), chunkId: '01JBXQ8Z9KQ4R7N2VWXYZ0CHK2' },
+  ];
+  const asChunks = (hits: readonly SearchHit[]) =>
+    hits.map(({ chunkId, text, score, source }) => ({ chunkId, text, score, source }));
+
+  it('Input → Retrieval → Agent: the Retrieval row stores both hits beside its sources; the Agent is unchanged', async () => {
+    const hits = twoHits();
+    const h = await build({ search: fakeSearch(hits) });
+    // The Reader reads the hits as json, so its model must accept json (pre-flight).
+    await h.repository.models.replaceForProvider(scope, PROVIDER_ID, [
+      { ...model, inputTypes: ['text', 'json'] },
+    ]);
+    const input = inputNode('What is ACE?');
+    const retrieval = retrievalNode();
+    const agent = agentNode('Reader', { inputTypes: ['json'] });
+    const output = outputNode();
+    await h.seed(
+      [input, retrieval, agent, output],
+      [edge(input, retrieval), edge(retrieval, agent), edge(agent, output)],
+    );
+
+    const run = await h.run();
+
+    expect(run.status).toBe('COMPLETE');
+    const row = await h.nodeRunOf(run, retrieval);
+    expect(row.sources?.map((source) => source.chunkId)).toEqual([
+      '01JBXQ8Z9KQ4R7N2VWXYZ0CHK1',
+      '01JBXQ8Z9KQ4R7N2VWXYZ0CHK2',
+    ]);
+    expect(row.inputEnvelopes).toHaveLength(1);
+    expect(row.inputEnvelopes[0]?.context.retrieved).toEqual(asChunks(hits));
+    expect(row.inputEnvelopes[0]?.context.retrieved?.map((chunk) => chunk.chunkId)).toEqual(
+      row.sources?.map((source) => source.chunkId),
+    );
+    // What it read is untrusted, whoever sent the envelope (BR-13); the reads are as delivered.
+    expect(row.inputEnvelopes[0]?.context.trust).toBe('untrusted');
+    expect(row.inputEnvelopes[0]?.reads).toEqual([{ type: 'text', text: 'What is ACE?' }]);
+
+    // The Agent downstream reads the hits as its json read, as before: no context placed on its
+    // envelope and no Retrieved section in its prompt.
+    const reader = await h.nodeRunOf(run, agent);
+    expect(reader.inputEnvelopes).toEqual([
+      {
+        id: expect.any(String),
+        runId: run.id,
+        fromNodeId: retrieval.id,
+        toNodeId: agent.id,
+        iteration: 1,
+        reads: [{ type: 'json', value: { hits } }],
+        // The Reader has no base and no memory, so its envelope keeps its whole budget.
+        context: { budgetTokens: 4000, trust: 'untrusted' },
+        contract: { outputTypes: ['text'] },
+        createdAt: NOW,
+      },
+    ]);
+    expect(reader.prompt?.text).not.toContain('### Retrieved');
+    expect(reader.prompt?.text).toContain('01JBXQ8Z9KQ4R7N2VWXYZ0CHK1');
+    expect(h.requests.map((request) => request.prompt)).toEqual([reader.prompt?.text]);
+  });
+
+  it('with no hits, the stored envelope is the delivered one, with no `retrieved`', async () => {
+    const h = await build({ search: fakeSearch([]) });
+    const input = inputNode('What is ACE?');
+    const retrieval = retrievalNode();
+    const output = outputNode();
+    await h.seed([input, retrieval, output], [edge(input, retrieval), edge(retrieval, output)]);
+
+    const run = await h.run();
+
+    expect(run.status).toBe('COMPLETE');
+    const row = await h.nodeRunOf(run, retrieval);
+    expect(row.sources).toEqual([]);
+    expect(row.inputEnvelopes).toHaveLength(1);
+    expect(row.inputEnvelopes[0]?.context).toEqual({
+      budgetTokens: expect.any(Number),
+      trust: 'trusted',
+    });
+  });
+
+  it('stores a key-shaped string in a hit masked, as the implicit path does (BR-07)', async () => {
+    // Assembled at runtime: a key-shaped literal in a repository file is what CLAUDE.md §2 forbids.
+    const key = ['sk', 'ant', 'a'.repeat(32)].join('-');
+    const leaky = { ...hit(0.9, 'leaky', 100), text: `The deploy key is ${key} for now.` };
+    const h = await build({ search: fakeSearch([leaky]) });
+    const input = inputNode('What is the deploy key?');
+    const retrieval = retrievalNode();
+    const output = outputNode();
+    await h.seed([input, retrieval, output], [edge(input, retrieval), edge(retrieval, output)]);
+
+    const run = await h.run();
+
+    const row = await h.nodeRunOf(run, retrieval);
+    expect(JSON.stringify(row.inputEnvelopes)).not.toContain(key);
+    expect(row.inputEnvelopes[0]?.context.retrieved?.[0]?.text).toBe(
+      'The deploy key is [REDACTED] for now.',
+    );
+  });
+
+  it('a drive seeded from its row starts from the delivered envelope: no stale chunk, trusted again', async () => {
+    const hits = twoHits();
+    const h = await build({ search: fakeSearch(hits) });
+    const input = inputNode('What is ACE?');
+    const retrieval = retrievalNode();
+    const output = outputNode();
+    await h.seed([input, retrieval, output], [edge(input, retrieval), edge(retrieval, output)]);
+    const first = await h.run();
+    const row = await h.nodeRunOf(first, retrieval);
+    expect(row.inputEnvelopes[0]?.context.retrieved).toHaveLength(2);
+    const planned = await h.repository.nodeRuns.create(scope, {
+      ...row,
+      id: newId(),
+      attempt: row.attempt + 1,
+      status: 'READY',
+      verdicts: [],
+      toolCalls: [],
+    });
+    // This time the search finds nothing, so a `retrieved` left on the row would be stale.
+    hits.length = 0;
+
+    // Re-opened as the controls re-open a run before they drive it (FR-ERR-003).
+    const reopened = await h.repository.runs.update(scope, first.id, { status: 'RUNNING' });
+    await h.service.drivePartialRun({
+      run: reopened ?? first,
+      nodeRuns: [planned],
+      withDownstream: false,
+    });
+    for (let i = 0; i < 200; i++) {
+      const current = await h.repository.nodeRuns.get(scope, planned.id);
+      if (current?.status === 'COMPLETED' || current?.status === 'FAILED') break;
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+
+    const done = await h.repository.nodeRuns.get(scope, planned.id);
+    expect(done?.status).toBe('COMPLETED');
+    expect(done?.sources).toEqual([]);
+    expect(done?.inputEnvelopes[0]?.context).toEqual({
+      budgetTokens: expect.any(Number),
+      trust: 'trusted',
+    });
+  });
+});
+
 describe('§2.4 pre-flight looks up an attached knowledge base', () => {
   it('blocks a run whose agent names a base that no longer exists, with no provider call', async () => {
     const h = await build({ search: fakeSearch([]) });
