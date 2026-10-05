@@ -2,6 +2,7 @@ import type { DayTotals, Id, NodeRun, Run } from '@ace/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { HttpError } from '../../../gateway/errors.js';
+import { newId } from '../../../ids.js';
 import { createLogger } from '../../../logging/index.js';
 import { createRunGate, createRunGateRegistry, type RunGateRegistry } from '../gate.js';
 import { createRunControls, type PartialRunPlan, type RunControls } from '../service.js';
@@ -454,7 +455,11 @@ describe('TC-CTL-005 Re-run one node (FR-CTL-005, D81, D82)', () => {
 describe('TC-ERR-003 Manual retry (FR-ERR-003)', () => {
   it('is a new node run at attempt + 1 with identical inputs', async () => {
     const run = makeRun({ snapshot, status: 'HALTED', haltReason: 'failure' });
-    const envelopes = [makeEnvelope(run, brief.id, writer.id, 'the brief')];
+    // As delivered: what a person typed into the Input node is trusted (BR-13).
+    const delivered = makeEnvelope(run, brief.id, writer.id, 'the brief');
+    const envelopes = [
+      { ...delivered, context: { ...delivered.context, trust: 'trusted' as const } },
+    ];
     const failed = makeNodeRun(run, writer.id, {
       status: 'FAILED',
       failureReason: 'RUN_FAILED',
@@ -473,6 +478,29 @@ describe('TC-ERR-003 Manual retry (FR-ERR-003)', () => {
     expect(retry.inputEnvelopes).toEqual(envelopes);
     expect(retry.error).toBeUndefined();
     expect(retry.failureReason).toBeUndefined();
+  });
+
+  it('13b fix I1: copies what the failed attempt was delivered, not the context it read', async () => {
+    const run = makeRun({ snapshot, status: 'HALTED', haltReason: 'failure' });
+    const delivered = makeEnvelope(run, brief.id, writer.id, 'the brief');
+    const read = {
+      ...delivered,
+      context: {
+        ...delivered.context,
+        trust: 'untrusted' as const,
+        retrieved: [{ chunkId: newId(), text: 'a chunk', score: 0.5, source: 'a.md#1' }],
+        memory: [{ key: 'tone', value: 'brief' }],
+      },
+    };
+    const failed = makeNodeRun(run, writer.id, { status: 'FAILED', inputEnvelopes: [read] });
+    const h = harness({ runs: [run], nodeRuns: [failed] });
+
+    const retry = await h.controls.retryNodeRun(failed.id, { withDownstream: false });
+
+    expect(retry.inputEnvelopes).toEqual([
+      { ...delivered, context: { budgetTokens: delivered.context.budgetTokens, trust: 'trusted' } },
+    ]);
+    expect(h.stores.nodeRunRows.get(retry.id)?.inputEnvelopes).toEqual(retry.inputEnvelopes);
   });
 
   it('never rebuilds the envelopes — "identical inputs" means the ones that failed', async () => {

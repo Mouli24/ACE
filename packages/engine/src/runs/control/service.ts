@@ -13,6 +13,7 @@ import {
 import type { ApprovalService } from '../../approvals/index.js';
 import type { EmittedEvent } from '../../events/index.js';
 import { notFound } from '../../gateway/errors.js';
+import { asDelivered } from '../../envelopes/index.js';
 import { newId } from '../../ids.js';
 import type { Logger } from '../../logging/index.js';
 import type { UsageService } from '../../usage/index.js';
@@ -415,8 +416,11 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
       const run = await load(failed.runId);
       const rows = await deps.nodeRuns.listByRun(run.id);
 
-      // FR-ERR-003: identical inputs. The envelopes the failed attempt was handed are copied
-      // across verbatim — a retry that rebuilt them would not be the same attempt again.
+      // FR-ERR-003: identical inputs. The envelopes the failed attempt was *delivered* are copied
+      // across — never rebuilt, which would not be the same attempt again. Its row stores what it
+      // read, context placed; that comes off and the trust is the source's again (13b fix I1,
+      // BR-13), so the retry's own context step builds it afresh and a failed step leaves no stale
+      // chunk on this row.
       const retry = await deps.nodeRuns.create({
         id: nextId(),
         runId: run.id,
@@ -424,7 +428,7 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
         iteration: failed.iteration,
         attempt: failed.attempt + 1,
         status: 'READY',
-        inputEnvelopes: failed.inputEnvelopes,
+        inputEnvelopes: asDelivered(failed.inputEnvelopes, run.snapshot.nodes),
         usage: zeroUsage(),
         verdicts: [],
         toolCalls: [],
