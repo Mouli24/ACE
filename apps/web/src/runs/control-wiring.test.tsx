@@ -115,7 +115,7 @@ function openCanvas(projectId: string, workflowId: string) {
 }
 
 const runBar = () => within(screen.getByTestId('run-bar'));
-const startButton = () => runBar().getByRole('button', { name: 'Start' });
+const startButton = () => runBar().getByRole('button', { name: 'Start run' });
 const action = (name: string) => screen.getByTestId(`run-action-${name}`);
 
 /** Start a run of the given scenario and wait until the run bar has a status. */

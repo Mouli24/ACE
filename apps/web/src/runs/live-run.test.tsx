@@ -57,7 +57,7 @@ function seedRunnableWorkflow(options: { inputText?: string } = {}) {
  * Restart beside it.
  */
 const startButton = () =>
-  within(screen.getByTestId('run-bar')).getByRole('button', { name: 'Start' });
+  within(screen.getByTestId('run-bar')).getByRole('button', { name: 'Start run' });
 
 function openCanvas(projectId: string, workflowId: string) {
   startSocket({
@@ -124,7 +124,7 @@ describe('FR-EXE-001 Start runs the workflow and the top bar follows it', () => 
     const start = startButton();
     await user.click(start);
     await waitFor(() => expect(start).not.toBeInTheDocument());
-    expect(screen.queryByRole('button', { name: 'Start' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Start run' })).toBeNull();
   });
 });
 

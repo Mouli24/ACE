@@ -166,7 +166,7 @@ export function RunBar({
         <Button
           size="sm"
           className="h-[30px] uppercase tracking-[0.08em]"
-          aria-label="Start"
+          aria-label="Start run"
           onClick={onStart}
           disabled={start.isPending}
         >

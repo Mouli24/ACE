@@ -97,7 +97,7 @@ async function runAndInspect(shape: 'attached' | 'retrieval-node') {
   });
   renderApp(`/projects/${project.id}/workflows/${workflow.id}`);
   await screen.findByTestId('canvas');
-  await user.click(within(screen.getByTestId('run-bar')).getByRole('button', { name: 'Start' }));
+  await user.click(within(screen.getByTestId('run-bar')).getByRole('button', { name: 'Start run' }));
   await waitFor(
     () => expect(useRunStore.getState().nodeRun(agentFinal.id)?.status).toBe('COMPLETED'),
     {
