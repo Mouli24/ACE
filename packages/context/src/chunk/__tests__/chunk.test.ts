@@ -1,7 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import type { ChunkDraft, ChunkKind, ParsedDocument, ParsedHeading } from '@ace/engine';
+import {
+  CHARS_PER_TOKEN,
+  type ChunkDraft,
+  type ChunkKind,
+  type ParsedDocument,
+  type ParsedHeading,
+} from '@ace/engine';
 import { describe, expect, it } from 'vitest';
 
 import { createChunker, estimateTokens } from '../index.js';
@@ -359,5 +365,33 @@ describe('FR-RAG-002 CRLF text', () => {
       expect(range.trimEnd()).toBe(chunk.text);
       expect(chunk.text).toMatch(/^(?:export|import|\/\*\*|const|function)/);
     }
+  });
+});
+
+describe('FR-RAG-002 the chunker counts tokens by the engine rule, CHARS_PER_TOKEN (final-review M8)', () => {
+  it('estimates and budgets in CHARS_PER_TOKEN characters to a token', () => {
+    expect(estimateTokens('a'.repeat(CHARS_PER_TOKEN * 3))).toBe(3);
+    expect(estimateTokens('a'.repeat(CHARS_PER_TOKEN * 3 + 1))).toBe(4);
+  });
+
+  it('a prose overlap of n tokens carries n × CHARS_PER_TOKEN characters of the previous chunk', () => {
+    const paragraph = (n: number) => `Paragraph ${n} ${'word '.repeat(60)}`.trim();
+    const text = [1, 2, 3, 4, 5, 6].map(paragraph).join('\n\n');
+    const drafts = createChunker().chunk({
+      document: { text, headings: [] },
+      documentName: 'a.md',
+      kind: 'prose',
+      chunkSize: 100,
+      chunkOverlap: 10,
+    });
+
+    expect(drafts.length).toBeGreaterThan(1);
+    const [first, second] = drafts;
+    // The overlap is the previous chunk's tail, snapped to a word: at most n × CHARS_PER_TOKEN
+    // characters, and short of it by less than one word.
+    const overlap = second!.text.split('\n\n')[0]!;
+    expect(first!.text.endsWith(overlap)).toBe(true);
+    expect(overlap.length).toBeLessThanOrEqual(10 * CHARS_PER_TOKEN);
+    expect(overlap.length).toBeGreaterThan(10 * CHARS_PER_TOKEN - 'word '.length - 1);
   });
 });

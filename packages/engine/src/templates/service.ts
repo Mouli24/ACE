@@ -1,4 +1,6 @@
 import {
+  DEFAULT_CHUNK_OVERLAP,
+  DEFAULT_CHUNK_SIZE,
   FORMAT_VERSION,
   type AddKbDocumentRequest,
   type Artifact,
@@ -49,8 +51,6 @@ export interface TemplateServiceDeps {
 }
 
 const MOCK_PROVIDER_NAME = 'Mock';
-const KB_CHUNK_SIZE = 700;
-const KB_CHUNK_OVERLAP = 90;
 
 export function createTemplateService(deps: TemplateServiceDeps): TemplateService {
   const now = deps.now ?? (() => new Date().toISOString());
@@ -102,8 +102,9 @@ export function createTemplateService(deps: TemplateServiceDeps): TemplateServic
             name: `${template.name} sample`,
             embeddingProviderId: providerId,
             embeddingModelId: TEMPLATE_MODELS.embed,
-            chunkSize: KB_CHUNK_SIZE,
-            chunkOverlap: KB_CHUNK_OVERLAP,
+            // The contract's defaults, never retyped (final-review M8).
+            chunkSize: DEFAULT_CHUNK_SIZE,
+            chunkOverlap: DEFAULT_CHUNK_OVERLAP,
           });
           knowledgeBaseId = kb.id;
           const artifact = await deps.storeArtifact(

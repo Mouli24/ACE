@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  DEFAULT_CHUNK_OVERLAP,
+  DEFAULT_CHUNK_SIZE,
   TEMPLATE_IDS,
   derivePorts,
   validateLoopConfig,
@@ -187,7 +189,14 @@ interface Harness {
   refreshed: string[];
   /** Providers that have catalogued models (a refresh adds one). */
   catalogued: Set<string>;
-  kbs: { projectId: string; name: string; embeddingModelId: string; embeddingProviderId: string }[];
+  kbs: {
+    projectId: string;
+    name: string;
+    embeddingModelId: string;
+    embeddingProviderId: string;
+    chunkSize: number;
+    chunkOverlap: number;
+  }[];
   documents: { kbId: string; artifactId: string }[];
   stored: { mime: string; name: string; text: string }[];
   removedKbs: string[];
@@ -260,6 +269,8 @@ function harness(initialProviders: Provider[] = []): Harness {
         name: body.name,
         embeddingModelId: body.embeddingModelId,
         embeddingProviderId: body.embeddingProviderId,
+        chunkSize: body.chunkSize,
+        chunkOverlap: body.chunkOverlap,
       });
       const kb: KnowledgeBase = {
         id: newId(),
@@ -388,6 +399,9 @@ describe('FR-ONB-002 instantiate', () => {
         name: expect.any(String),
         embeddingModelId: 'mock-embed',
         embeddingProviderId: mock?.id,
+        // The contract's defaults, never retyped (final-review M8).
+        chunkSize: DEFAULT_CHUNK_SIZE,
+        chunkOverlap: DEFAULT_CHUNK_OVERLAP,
       },
     ]);
     expect(h.stored).toHaveLength(1);
