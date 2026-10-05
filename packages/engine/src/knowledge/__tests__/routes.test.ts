@@ -317,6 +317,23 @@ describe('FR-RAG-004 / FR-RAG-008 POST /knowledge-bases/:id/query', () => {
 });
 
 describe('D121 a knowledge route whose service is absent answers 501', () => {
+  it('answers 501 before reading a body: a malformed body without the service is still 501', async () => {
+    const app = routeApp(createKnowledgeRoutes(undefined, undefined));
+    const id = '01JBXQ8Z9KQ4R7N2VWXYZ0KBAS';
+    for (const [method, path] of [
+      ['POST', `/projects/${PROJECT_ID}/knowledge-bases`],
+      ['PATCH', `/knowledge-bases/${id}`],
+      ['POST', `/knowledge-bases/${id}/documents`],
+      ['POST', `/knowledge-bases/${id}/query`],
+    ] as const) {
+      for (const body of ['{"broken":', { surprise: true }]) {
+        const response = await send(app, method, path, body);
+        expect(response.status, `${method} ${path} ${JSON.stringify(body)}`).toBe(501);
+        expect(await errorCode(response)).toBe('not_implemented');
+      }
+    }
+  });
+
   it('every knowledge-base route without the knowledge service, and the query without search', async () => {
     const app = routeApp(createKnowledgeRoutes(undefined, undefined));
     const id = '01JBXQ8Z9KQ4R7N2VWXYZ0KBAS';

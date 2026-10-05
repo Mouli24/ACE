@@ -132,6 +132,15 @@ describe('FR-OBS-007 GET /metrics/health', () => {
 });
 
 describe('D121 an observability route whose service is absent answers 501', () => {
+  it('answers 501 before reading the query: a malformed query without the service is still 501', async () => {
+    const app = routeApp(createUsageRoutes(undefined, undefined));
+    for (const query of ['', '?groupBy=colour', '?groupBy=day&from=yesterday']) {
+      const response = await send(app, 'GET', `/usage${query}`);
+      expect(response.status, query).toBe(501);
+      expect(await errorCode(response)).toBe('not_implemented');
+    }
+  });
+
   it('the trace without the trace service, usage and health without the usage service', async () => {
     const app = routeApp(createUsageRoutes(undefined, undefined));
     for (const path of [`/runs/${RUN}/trace`, '/usage?groupBy=day', '/metrics/health']) {

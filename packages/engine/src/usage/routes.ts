@@ -50,8 +50,10 @@ export function createUsageRoutes(
   router.get('/runs/:id/trace', async (c) => c.json(await trace().trace(c.req.param('id'))));
 
   router.get('/usage', async (c) => {
+    // The service first: no service is 501 whatever the query says.
+    const service = usage();
     const query = UsageQuerySchema.parse(usageQuery(c));
-    return c.json(await usage().usage(query));
+    return c.json(await service.usage(query));
   });
 
   router.get('/metrics/health', async (c) => c.json(await usage().health()));
