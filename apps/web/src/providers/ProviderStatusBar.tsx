@@ -18,7 +18,7 @@ export function ProviderStatusBar() {
     return (
       <Link
         to="/providers"
-        className="rounded-chip border border-dashed border-border px-2 py-0.5 text-xs text-fg-muted hover:text-fg"
+        className="shrink-0 rounded-chip border border-dashed border-border-strong px-2.5 py-1 font-machine text-[10.5px] text-fg-muted hover:text-fg"
       >
         no providers
       </Link>
@@ -31,7 +31,7 @@ export function ProviderStatusBar() {
   return (
     <Link
       to="/providers"
-      className="flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      className="flex shrink-0 items-center gap-1.5 rounded-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       aria-label="Providers"
       data-testid="provider-status-bar"
     >
@@ -47,7 +47,7 @@ export function ProviderStatusBar() {
             : { lastCheckedAt: provider.lastCheckedAt })}
         />
       ))}
-      {hidden > 0 && <span className="font-machine text-xs text-fg-muted">+{hidden}</span>}
+      {hidden > 0 && <span className="font-machine text-[10.5px] text-fg-muted">+{hidden}</span>}
     </Link>
   );
 }

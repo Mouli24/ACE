@@ -28,9 +28,19 @@ import { useRunStore } from './run-store';
 
 installMockServer();
 
-vi.mock('../canvas/Canvas', () => ({
-  Canvas: ({ workflowId }: { workflowId: string }) => <div data-testid="canvas">{workflowId}</div>,
-}));
+// The desktop top bar no longer carries the halt note; the Canvas does (CanvasHaltNote, mounted by
+// WorkflowPage). The stand-in Canvas mounts it so these tests still see the note where it now lives.
+vi.mock('../canvas/Canvas', async () => {
+  const { CanvasHaltNote } = await import('./controls/CanvasHaltNote');
+  return {
+    Canvas: ({ workflowId }: { workflowId: string }) => (
+      <div data-testid="canvas">
+        {workflowId}
+        <CanvasHaltNote workflowId={workflowId} />
+      </div>
+    ),
+  };
+});
 
 afterEach(() => {
   stopSocket();

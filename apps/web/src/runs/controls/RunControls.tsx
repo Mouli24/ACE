@@ -14,6 +14,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  cn,
 } from '@ace/ui';
 import { CirclePause, CircleStop, Play, RotateCcw, type LucideIcon } from 'lucide-react';
 import { useState } from 'react';
@@ -70,6 +71,8 @@ export interface RunControlsProps {
   onOpenRun?: (runId: Id) => void;
   /** Something is already in flight elsewhere (a mutation's `isPending`). */
   busy?: boolean;
+  /** Render the halt note under the buttons. The desktop top bar turns it off (Canvas carries it). */
+  showHalt?: boolean;
 }
 
 export function RunControls({
@@ -81,6 +84,7 @@ export function RunControls({
   onAction,
   onOpenRun,
   busy,
+  showHalt = true,
 }: RunControlsProps) {
   const [pending, setPending] = useState<RunAction>();
   const [confirmStop, setConfirmStop] = useState(false);
@@ -116,28 +120,39 @@ export function RunControls({
       data-testid="run-controls"
       data-status={status}
     >
-      {RUN_ACTIONS.map((action) => {
-        const meta = ACTION_META[action];
-        const enabled = allowed.has(action) && pending === undefined && !busy;
-        return (
-          <Button
-            key={action}
-            size="sm"
-            variant="secondary"
-            data-testid={`run-action-${action}`}
-            data-allowed={allowed.has(action) ? 'true' : 'false'}
-            disabled={!enabled}
-            onClick={() => click(action)}
-            title={
-              allowed.has(action)
-                ? meta.label
-                : `${meta.label} is not available while the run is ${status ?? 'not started'}`
-            }
-          >
-            <meta.Icon className="h-3.5 w-3.5" aria-hidden /> {meta.label}
-          </Button>
-        );
-      })}
+      <div className="flex items-center gap-0.5 rounded-chip border border-border bg-card p-[3px]">
+        {RUN_ACTIONS.map((action) => {
+          const meta = ACTION_META[action];
+          const enabled = allowed.has(action) && pending === undefined && !busy;
+          return (
+            <Button
+              key={action}
+              size="icon"
+              variant="ghost"
+              aria-label={meta.label}
+              className={cn(
+                'h-7 w-7 rounded-chip',
+                enabled
+                  ? action === 'stop'
+                    ? 'text-danger'
+                    : 'text-fg-soft'
+                  : 'text-fg-faint opacity-45',
+              )}
+              data-testid={`run-action-${action}`}
+              data-allowed={allowed.has(action) ? 'true' : 'false'}
+              disabled={!enabled}
+              onClick={() => click(action)}
+              title={
+                allowed.has(action)
+                  ? meta.label
+                  : `${meta.label} is not available while the run is ${status ?? 'not started'}`
+              }
+            >
+              <meta.Icon className="h-3.5 w-3.5" aria-hidden />
+            </Button>
+          );
+        })}
+      </div>
 
       {allowedActions === undefined && (
         <span
@@ -149,7 +164,7 @@ export function RunControls({
         </span>
       )}
 
-      {haltReason && (
+      {showHalt && haltReason && (
         <HaltReasonNote
           reason={haltReason}
           {...(budgetHalt === undefined ? {} : { budgetHalt })}

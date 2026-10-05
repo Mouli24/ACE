@@ -165,3 +165,38 @@ describe('FR-ERR-003/004, FR-CTL-005, FR-EXE-013 the node-level controls', () =>
     );
   });
 });
+
+describe('V2 control pill: icon-only buttons keep their names', () => {
+  it('reaches every action by its accessible name, and Stop is danger-coloured only when allowed', () => {
+    const { rerender } = render(
+      <RunControls
+        runId={RUN}
+        status="RUNNING"
+        allowedActions={['pause', 'stop']}
+        onAction={vi.fn()}
+      />,
+    );
+    for (const name of ['Pause', 'Resume', 'Stop', 'Restart']) {
+      expect(screen.getByRole('button', { name })).toBeInTheDocument();
+    }
+    expect(screen.getByRole('button', { name: 'Stop' })).toHaveClass('text-danger');
+    rerender(
+      <RunControls runId={RUN} status="PAUSED" allowedActions={['resume']} onAction={vi.fn()} />,
+    );
+    expect(screen.getByRole('button', { name: 'Stop' })).not.toHaveClass('text-danger');
+  });
+
+  it('shows no halt note when showHalt is false', () => {
+    render(
+      <RunControls
+        runId={RUN}
+        status="HALTED"
+        allowedActions={['restart']}
+        haltReason="stopped"
+        showHalt={false}
+        onAction={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('halt-reason')).toBeNull();
+  });
+});
