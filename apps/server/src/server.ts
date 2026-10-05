@@ -1,12 +1,7 @@
-import { randomBytes } from "node:crypto";
-import {
-  createWriteStream,
-  mkdirSync,
-  writeFileSync,
-  type WriteStream,
-} from "node:fs";
-import type { Server } from "node:http";
-import { join } from "node:path";
+import { randomBytes } from 'node:crypto';
+import { createWriteStream, mkdirSync, writeFileSync, type WriteStream } from 'node:fs';
+import type { Server } from 'node:http';
+import { join } from 'node:path';
 
 import {
   WS_PATH,
@@ -16,8 +11,8 @@ import {
   type Part,
   type Timestamp,
   type ToolCall,
-} from "@ace/contracts";
-import { serve } from "@hono/node-server";
+} from '@ace/contracts';
+import { serve } from '@hono/node-server';
 import {
   LOCAL_SCOPE,
   controlStoresFor,
@@ -60,7 +55,7 @@ import {
   type RunService,
   type SecretMasker,
   type ToolProvider,
-} from "@ace/engine";
+} from '@ace/engine';
 import {
   SECRET_RULES,
   checkToolArgs,
@@ -68,8 +63,8 @@ import {
   findSpans,
   redactSpans,
   type GuardrailInput,
-} from "@ace/guardrails";
-import { createProviderAdapterFactory, createRouter } from "@ace/providers";
+} from '@ace/guardrails';
+import { createProviderAdapterFactory, createRouter } from '@ace/providers';
 import {
   FsBlobStore,
   InProcessPubSub,
@@ -77,17 +72,17 @@ import {
   SessionTokenAuth,
   SqliteRepository,
   openDatabase,
-} from "@ace/storage-local";
+} from '@ace/storage-local';
 import {
   CannedSearchBackend,
   McpManager,
   ToolRegistry,
   cannedResultsAt,
   registerBuiltinTools,
-} from "@ace/tools";
-import { WebSocketServer } from "ws";
+} from '@ace/tools';
+import { WebSocketServer } from 'ws';
 
-export const ENGINE_VERSION = "0.1.0";
+export const ENGINE_VERSION = '0.1.0';
 
 /**
  * `CheckInput` (the engine's port) → `GuardrailInput` (what the rule packs read).
@@ -99,10 +94,7 @@ export const ENGINE_VERSION = "0.1.0";
  * `undefined` is silence, never a pass: a check handed nothing it can judge must not produce a
  * verdict, which is why each branch only sets a field it actually has (`evaluateCheck`'s rule 1).
  */
-export function guardrailInputFor(
-  check: GuardrailCheck,
-  input: CheckInput,
-): GuardrailInput {
+export function guardrailInputFor(check: GuardrailCheck, input: CheckInput): GuardrailInput {
   const base: GuardrailInput = {
     ...(input.text === undefined ? {} : { text: input.text }),
     ...(input.parts === undefined ? {} : { parts: input.parts }),
@@ -110,17 +102,15 @@ export function guardrailInputFor(
   };
 
   switch (check.type) {
-    case "max_iterations":
+    case 'max_iterations':
       return input.loop === undefined ? base : { ...base, value: input.loop.iteration };
-    case "max_tool_calls":
+    case 'max_tool_calls':
       return input.loop === undefined ? base : { ...base, value: input.loop.toolCalls };
-    case "repeated_output":
-      return input.loop === undefined
-        ? base
-        : { ...base, outputHashes: input.loop.outputHashes };
-    case "max_tokens_per_node":
-    case "max_cost_per_run":
-    case "daily_budget":
+    case 'repeated_output':
+      return input.loop === undefined ? base : { ...base, outputHashes: input.loop.outputHashes };
+    case 'max_tokens_per_node':
+    case 'max_cost_per_run':
+    case 'daily_budget':
       return input.cost === undefined
         ? base
         : { ...base, value: input.cost.costUsd, limit: input.cost.capUsd };
@@ -144,7 +134,7 @@ export function guardrailInputFor(
  * zero-filled stand-in that once did is D-082.
  */
 export function createArtifactMaterialiser(
-  artifacts: Pick<ArtifactService, "get" | "upload" | "markReferenced">,
+  artifacts: Pick<ArtifactService, 'get' | 'upload' | 'markReferenced'>,
 ): ArtifactMaterialiser {
   return {
     async inputParts(artifactIds) {
@@ -166,7 +156,7 @@ export function createArtifactMaterialiser(
     async store(produced) {
       const out: Part[] = [];
       for (const { part, bytes } of produced) {
-        if (part.type === "text" || part.type === "json" || part.type === "code") {
+        if (part.type === 'text' || part.type === 'json' || part.type === 'code') {
           out.push(part);
           continue;
         }
@@ -195,7 +185,7 @@ export function createArtifactMaterialiser(
 }
 
 /** FR-SYS-001 / NFR-SEC-01: the engine binds the loopback interface and nothing else. */
-export const BIND_HOST = "127.0.0.1";
+export const BIND_HOST = '127.0.0.1';
 
 /**
  * How often the artifact retention sweep runs after the one at start (Arch §15.4). The window is
@@ -255,7 +245,7 @@ export interface RunningEngine {
 
 /** §2.10: 32 random bytes, hex, new on every start. */
 export function generateSessionToken(): string {
-  return randomBytes(32).toString("hex");
+  return randomBytes(32).toString('hex');
 }
 
 /**
@@ -263,17 +253,13 @@ export function generateSessionToken(): string {
  * The mode is set at creation, so there is no window in which it exists world-readable.
  */
 export function writeSessionTokenFile(dataDir: string, token: string): string {
-  const path = join(dataDir, "session-token");
+  const path = join(dataDir, 'session-token');
   writeFileSync(path, token, { mode: 0o600 });
   return path;
 }
 
 /** The §2.10 line the user copies to open the app. */
-export function readyLine(
-  url: string,
-  webOrigin: string,
-  token: string,
-): string {
+export function readyLine(url: string, webOrigin: string, token: string): string {
   return `ACE engine ready · ${url} · open ${webOrigin}/?token=${token}`;
 }
 
@@ -284,9 +270,7 @@ export function readyLine(
  * on a random port with a temp data directory, and it has to be *this* engine, not a re-wiring of
  * it that could drift.
  */
-export async function startEngine(
-  options: StartEngineOptions,
-): Promise<RunningEngine> {
+export async function startEngine(options: StartEngineOptions): Promise<RunningEngine> {
   const env = options.env ?? process.env;
   mkdirSync(options.dataDir, { recursive: true });
 
@@ -298,7 +282,7 @@ export async function startEngine(
   const logs = logDirectory(config.dataDir);
   pruneOldLogs(logs, config.logRetentionDays);
   const logStream: WriteStream = createWriteStream(join(logs, logFileName()), {
-    flags: "a",
+    flags: 'a',
   });
   const logger = createLogger({
     level: config.logLevel,
@@ -308,20 +292,17 @@ export async function startEngine(
   /* ---------------------------------------------------------------- adapters */
 
   const { db, sqlite, backupPath } = openDatabase({
-    path: join(config.dataDir, "ace.sqlite"),
+    path: join(config.dataDir, 'ace.sqlite'),
   });
   if (backupPath !== undefined) {
-    logger.info(
-      { subsystem: "storage", backupPath },
-      "backed up the database before migrating",
-    );
+    logger.info({ subsystem: 'storage', backupPath }, 'backed up the database before migrating');
   }
 
   const repository = new SqliteRepository(db, sqlite);
   const pubsub = new InProcessPubSub<EngineEvent>();
   // Wired and returned rather than used here: artifacts arrive in round 4 and provider keys in
   // round 2, and both belong to the one composition root even before anything calls them.
-  const blobs = new FsBlobStore(join(config.dataDir, "blobs"));
+  const blobs = new FsBlobStore(join(config.dataDir, 'blobs'));
   const secrets = new KeychainSecretStore();
 
   const token = generateSessionToken();
@@ -355,7 +336,7 @@ export async function startEngine(
     secrets,
     factory,
     bus,
-    logger: logger.child({ subsystem: "providers" }),
+    logger: logger.child({ subsystem: 'providers' }),
   });
 
   // The router reads the catalog lazily, so a refresh takes effect without rewiring anything.
@@ -409,12 +390,12 @@ export async function startEngine(
   const emitNodeState = async (
     runId: string,
     nodeRun: Awaited<ReturnType<typeof repository.nodeRuns.get>>,
-    status: "WAITING" | "RUNNING",
+    status: 'WAITING' | 'RUNNING',
   ): Promise<void> => {
     if (nodeRun === null) return;
     const run = await repository.runs.get(LOCAL_SCOPE, runId);
     await bus.emit({
-      type: "node.state",
+      type: 'node.state',
       ...(run === null ? {} : { workflowId: run.workflowId }),
       runId,
       payload: {
@@ -440,18 +421,18 @@ export async function startEngine(
      */
     onWaiting: async (request) => {
       const row = await repository.nodeRuns.update(LOCAL_SCOPE, request.nodeRunId, {
-        status: "WAITING",
+        status: 'WAITING',
       });
-      await emitNodeState(request.runId, row, "WAITING");
+      await emitNodeState(request.runId, row, 'WAITING');
     },
     onDecided: async (request, decision) => {
       // Approved: the node picks up exactly where it paused. Rejected: it stays WAITING until the
       // evaluator fails it, so the row never claims to be running something nobody allowed.
-      if (decision.decision !== "approve") return;
+      if (decision.decision !== 'approve') return;
       const row = await repository.nodeRuns.update(LOCAL_SCOPE, request.nodeRunId, {
-        status: "RUNNING",
+        status: 'RUNNING',
       });
-      await emitNodeState(request.runId, row, "RUNNING");
+      await emitNodeState(request.runId, row, 'RUNNING');
     },
   });
 
@@ -486,7 +467,7 @@ export async function startEngine(
    * then its blob. One sweep at a time: a timer tick that lands while one is running joins it rather
    * than starting a second pass over the same rows. A failure is logged, never thrown into the timer.
    */
-  const retentionLogger = logger.child({ subsystem: "artifacts" });
+  const retentionLogger = logger.child({ subsystem: 'artifacts' });
   let sweeping: Promise<Artifact[]> | undefined;
   let sweepsStopped = false;
   const sweepArtifacts = (): Promise<Artifact[]> => {
@@ -497,13 +478,13 @@ export async function startEngine(
         if (deleted.length > 0) {
           retentionLogger.info(
             { deleted: deleted.length, ids: deleted.map((artifact) => artifact.id) },
-            "swept unreferenced artifacts",
+            'swept unreferenced artifacts',
           );
         }
         return deleted;
       })
       .catch((error: unknown): Artifact[] => {
-        retentionLogger.error({ err: error }, "artifact retention sweep failed");
+        retentionLogger.error({ err: error }, 'artifact retention sweep failed');
         return [];
       })
       .finally(() => {
@@ -524,14 +505,11 @@ export async function startEngine(
     options.cannedSearchBaseUrl === undefined
       ? {}
       : {
-          searchBackend: new CannedSearchBackend(
-            {},
-            cannedResultsAt(options.cannedSearchBaseUrl),
-          ),
+          searchBackend: new CannedSearchBackend({}, cannedResultsAt(options.cannedSearchBaseUrl)),
         },
   );
   const mcpManager = new McpManager({ registry: toolRegistry });
-  const toolLogger = logger.child({ subsystem: "tools" });
+  const toolLogger = logger.child({ subsystem: 'tools' });
 
   /*
    * The executor's `ToolProvider` view (Arch §12.7): the registry keeps a `{definition, run}` pair
@@ -557,7 +535,7 @@ export async function startEngine(
   };
 
   /* `<dataDir>/sandbox/<runId>/` — the only folder a run's tools may touch (§2.2, NFR-SEC-03). */
-  const sandboxDirFor = (runId: Id): string => join(config.dataDir, "sandbox", runId);
+  const sandboxDirFor = (runId: Id): string => join(config.dataDir, 'sandbox', runId);
 
   const materialiser = createArtifactMaterialiser(artifactService);
 
@@ -593,7 +571,7 @@ export async function startEngine(
     repository,
     scope: LOCAL_SCOPE,
     bus,
-    logger: logger.child({ subsystem: "runs" }),
+    logger: logger.child({ subsystem: 'runs' }),
     router,
     adapterFor: (providerId) => providers.adapterFor(providerId),
     checkProvider: async (providerId) => {
@@ -603,11 +581,9 @@ export async function startEngine(
       await refreshCatalogCache();
       return result;
     },
-    runGated: async (providerId, fn) =>
-      (await providers.semaphoreFor(providerId)).run(fn),
+    runGated: async (providerId, fn) => (await providers.semaphoreFor(providerId)).run(fn),
     // Arch §28: a key refused mid-run marks its provider AUTH_FAILED, through the provider service.
-    recordProviderStatus: (providerId, found) =>
-      providers.recordStatus(providerId, found),
+    recordProviderStatus: (providerId, found) => providers.recordStatus(providerId, found),
     policies: guardrailPolicies,
     guardrails,
     budgets,
@@ -626,7 +602,7 @@ export async function startEngine(
     gates,
     // D-054: a Stop rejects a WAITING node's approval before it answers, so no card outlives the run.
     approvals,
-    logger: logger.child({ subsystem: "runs" }),
+    logger: logger.child({ subsystem: 'runs' }),
     // The controls never execute anything themselves; these three are the scheduler (FR-CTL-004/005).
     driveRecordedRun: (run) => runs.driveRecordedRun(run),
     drivePartialRun: (plan) => runs.drivePartialRun(plan),
@@ -643,12 +619,11 @@ export async function startEngine(
     scope: LOCAL_SCOPE,
     repository,
     bus,
-    logger: logger.child({ subsystem: "chat" }),
+    logger: logger.child({ subsystem: 'chat' }),
     router,
     adapterFor: (providerId) => providers.adapterFor(providerId),
     modelsFor: () => repository.models.list(LOCAL_SCOPE, {}),
-    runGated: async (providerId, fn) =>
-      (await providers.semaphoreFor(providerId)).run(fn),
+    runGated: async (providerId, fn) => (await providers.semaphoreFor(providerId)).run(fn),
     resolveNode: async (nodeId) => {
       // The chat reply resolves its model through the same router the run engine uses, which reads
       // `catalogCache`. A run refreshes that cache at pre-flight (`checkProvider`); a direct chat has
@@ -673,7 +648,7 @@ export async function startEngine(
     scope: LOCAL_SCOPE,
     repository,
     bus,
-    logger: logger.child({ subsystem: "chat" }),
+    logger: logger.child({ subsystem: 'chat' }),
   });
 
   /*
@@ -690,7 +665,7 @@ export async function startEngine(
       const server = await mcpManager.register(id, request);
       const created = await repository.mcpServers.create(LOCAL_SCOPE, server);
       await bus.emit({
-        type: "mcp.status",
+        type: 'mcp.status',
         payload: { serverId: id, status: created.status, toolCount: created.toolCount },
       });
       return created;
@@ -702,13 +677,11 @@ export async function startEngine(
       const updated = await repository.mcpServers.updateStatus(LOCAL_SCOPE, id, {
         status: checked.status,
         toolCount: checked.toolCount,
-        ...(checked.lastCheckedAt === undefined
-          ? {}
-          : { lastCheckedAt: checked.lastCheckedAt }),
+        ...(checked.lastCheckedAt === undefined ? {} : { lastCheckedAt: checked.lastCheckedAt }),
         error: checked.error ?? null,
       });
       await bus.emit({
-        type: "mcp.status",
+        type: 'mcp.status',
         payload: { serverId: id, status: checked.status, toolCount: checked.toolCount },
       });
       return updated;
@@ -724,7 +697,7 @@ export async function startEngine(
     repository,
     scope: LOCAL_SCOPE,
     bus,
-    logger: logger.child({ subsystem: "runs" }),
+    logger: logger.child({ subsystem: 'runs' }),
     // D-061: the approvals that process was waiting on can no longer be answered, so they go too.
     approvals,
   });
@@ -744,7 +717,7 @@ export async function startEngine(
   const graph = createGraphService({
     repository,
     scope: LOCAL_SCOPE,
-    logger: logger.child({ subsystem: "graph" }),
+    logger: logger.child({ subsystem: 'graph' }),
     // §2.9: every successful graph-ops batch becomes one persisted workflow.updated event.
     onWorkflowUpdated: async (workflowId, version) => {
       await bus.emit(workflowUpdatedEvent(workflowId, version));
@@ -753,14 +726,11 @@ export async function startEngine(
     tools: toolProvider,
   });
 
-  const selfOrigins = [
-    `http://${BIND_HOST}:${port}`,
-    `http://localhost:${port}`,
-  ];
+  const selfOrigins = [`http://${BIND_HOST}:${port}`, `http://localhost:${port}`];
   const app = createEngineApp({
     repository,
     auth,
-    logger: logger.child({ subsystem: "gateway" }),
+    logger: logger.child({ subsystem: 'gateway' }),
     scope: LOCAL_SCOPE,
     version: ENGINE_VERSION,
     graph,
@@ -795,8 +765,8 @@ export async function startEngine(
 
   const wss = new WebSocketServer({ noServer: true });
 
-  server.on("upgrade", (request, socket, head) => {
-    const requestUrl = new URL(request.url ?? "/", url);
+  server.on('upgrade', (request, socket, head) => {
+    const requestUrl = new URL(request.url ?? '/', url);
     if (requestUrl.pathname !== WS_PATH) {
       socket.destroy();
       return;
@@ -808,12 +778,11 @@ export async function startEngine(
           send: (data) => ws.send(data),
           close: (code, reason) => ws.close(code, reason),
           on: (event, handler) => {
-            if (event === "message")
-              ws.on("message", (data) => handler(String(data)));
-            else ws.on("close", () => handler(""));
+            if (event === 'message') ws.on('message', (data) => handler(String(data)));
+            else ws.on('close', () => handler(''));
           },
         },
-        requestUrl.searchParams.get("token") ?? undefined,
+        requestUrl.searchParams.get('token') ?? undefined,
       );
     });
   });
@@ -821,7 +790,7 @@ export async function startEngine(
   // Deliberately no banner here. Announcing readiness belongs to the caller, because the caller is
   // what installs the signal handlers — and nothing should be told the engine is ready before it
   // can shut down cleanly. See `runEngine` in cli.ts.
-  logger.info({ subsystem: "server", url }, "engine ready");
+  logger.info({ subsystem: 'server', url }, 'engine ready');
 
   // A second Ctrl-C, or a stop() from a test that already stopped, must not run the shutdown
   // twice: the second pass would read a closed database.
@@ -862,7 +831,7 @@ export async function startEngine(
       repository,
       scope: LOCAL_SCOPE,
       bus,
-      logger: logger.child({ subsystem: "runs" }),
+      logger: logger.child({ subsystem: 'runs' }),
       approvals,
     });
 
