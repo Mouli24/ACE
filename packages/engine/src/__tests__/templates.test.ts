@@ -183,6 +183,8 @@ interface Harness {
   graph: GraphService;
   providers: Provider[];
   created: CreateProviderRequest[];
+  /** Providers whose catalogue was refreshed, in order. */
+  refreshed: string[];
   kbs: { projectId: string; name: string; embeddingModelId: string; embeddingProviderId: string }[];
   documents: { kbId: string; artifactId: string }[];
   stored: { mime: string; name: string; text: string }[];
@@ -212,6 +214,7 @@ function harness(initialProviders: Provider[] = []): Harness {
   const state = {
     providers: [...initialProviders],
     created: [] as CreateProviderRequest[],
+    refreshed: [] as string[],
     kbs: [] as Harness['kbs'],
     documents: [] as Harness['documents'],
     stored: [] as Harness['stored'],
@@ -237,6 +240,10 @@ function harness(initialProviders: Provider[] = []): Harness {
         };
         state.providers.push(provider);
         return provider;
+      },
+      refreshModels: async (id) => {
+        state.refreshed.push(id);
+        return { models: [], refreshedAt: NOW };
       },
     },
     createKnowledgeBase: async (projectId, body) => {
@@ -302,6 +309,7 @@ function harness(initialProviders: Provider[] = []): Harness {
       return state.providers;
     },
     created: state.created,
+    refreshed: state.refreshed,
     kbs: state.kbs,
     documents: state.documents,
     stored: state.stored,
@@ -463,6 +471,16 @@ describe('FR-ONB-002 instantiate', () => {
     expect(existing.created).toEqual([]);
     const agents = result.nodes.flatMap((n) => (n.kind === 'agent' ? [n.config.providerId] : []));
     expect(agents).toEqual([mockA.id, mockA.id]);
+  });
+
+  it('F11 the Mock provider it creates has its catalogue refreshed, so the template models route', async () => {
+    const empty = harness();
+
+    await empty.service.instantiate('linear-chain', { projectName: 'a' });
+    await empty.service.instantiate('rag-qa', { projectName: 'b' });
+
+    const mock = empty.providers.find((p) => p.type === 'mock');
+    expect(empty.refreshed).toEqual([mock?.id]);
   });
 
   it('list returns the definitions', () => {
