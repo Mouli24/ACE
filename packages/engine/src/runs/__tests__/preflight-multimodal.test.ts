@@ -113,7 +113,11 @@ const run = (overrides: Partial<PreflightInput>) =>
     inputs: {},
     providers: [provider()],
     models: [model('vision', ['text', 'image']), model('text-only', ['text'])],
-    checkProvider: async (): Promise<ProviderCheckResult> => ({ status: 'CONNECTED', checkedAt: NOW }),
+    checkProvider: async (): Promise<ProviderCheckResult> => ({
+      status: 'CONNECTED',
+      checkedAt: NOW,
+    }),
+    knowledgeBaseExists: async () => true,
     ...overrides,
   });
 

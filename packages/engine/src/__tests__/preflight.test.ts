@@ -120,6 +120,8 @@ const run = (overrides: Partial<PreflightInput> = {}) => {
       checked.push(id);
       return { status: 'CONNECTED', checkedAt: NOW };
     },
+    // Required since round 5: every base these graphs could name exists.
+    knowledgeBaseExists: async () => true,
     ...overrides,
   });
 };
@@ -438,12 +440,6 @@ describe('FR-RAG-006 pre-flight runs a Retrieval node (round 5 §2.4)', () => {
     expect(asked).toEqual([]);
   });
 
-  it('flags a Retrieval node with no base even when no lookup is wired', async () => {
-    const issues = await run(retrievalGraph({}));
-
-    expect(codes(issues)).toEqual(['missing_knowledge_base']);
-  });
-
   it('missing_knowledge_base when an attached base was deleted', async () => {
     const issues = await run({
       ...retrievalGraph({ knowledgeBaseId: KB_ID }),
@@ -490,12 +486,15 @@ describe('FR-RAG-005 pre-flight checks an agent’s attached bases (round 5 §2.
     expect(codes(issues)).not.toContain('missing_knowledge_base');
     expect(asked).toEqual([KB_ID]);
   });
+});
 
-  it('does not judge a named base when no lookup is wired', async () => {
-    const issues = await run({
-      nodes: [inputNode(), agentNode({ knowledgeBaseIds: [KB_ID] }), outputNode()],
-    });
+describe('FR-RAG-005 every pre-flight looks the knowledge bases up (13a review I1)', () => {
+  it('knowledgeBaseExists is required on PreflightInput, so no caller can skip the lookup', () => {
+    // Compile-time: an empty object satisfies the pick only while the member is optional.
+    const optional: Record<never, never> extends Pick<PreflightInput, 'knowledgeBaseExists'>
+      ? true
+      : false = false;
 
-    expect(codes(issues)).not.toContain('missing_knowledge_base');
+    expect(optional).toBe(false);
   });
 });
