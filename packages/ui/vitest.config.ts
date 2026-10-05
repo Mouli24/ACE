@@ -4,6 +4,8 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
+    // theme-css.test.ts reads theme.css as text (?raw); by default Vitest blanks every .css import.
+    css: { include: [/theme\.css/] },
     setupFiles: ['./src/__tests__/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
     coverage: {
