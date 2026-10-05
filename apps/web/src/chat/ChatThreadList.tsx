@@ -6,7 +6,8 @@ import { useDeleteThread } from './useChat';
 
 /**
  * The thread switcher for one agent (FR-CHAT-004): start a new thread, pick an existing one, or
- * delete one. Kept to a compact strip so the conversation has the room at 380 px (NFR-USE-03).
+ * delete one. A row of pills plus "New chat" so the conversation has the room in the 340 px column
+ * (NFR-USE-03).
  */
 export function ChatThreadList({
   nodeId,
@@ -26,7 +27,10 @@ export function ChatThreadList({
   const del = useDeleteThread(nodeId);
 
   return (
-    <div className="flex flex-col gap-1 border-b border-border p-2" data-testid="chat-thread-list">
+    <div
+      className="flex flex-wrap items-center gap-1.5 border-b border-border px-3.5 py-2"
+      data-testid="chat-thread-list"
+    >
       <Button
         type="button"
         variant="secondary"
@@ -38,20 +42,23 @@ export function ChatThreadList({
       </Button>
 
       {threads.length > 0 && (
-        <ul className="flex max-h-32 flex-col gap-0.5 overflow-y-auto">
+        <ul className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto">
           {threads.map((thread) => {
             const active = thread.id === activeThreadId;
             return (
-              <li key={thread.id} className="flex items-center gap-1">
+              <li
+                key={thread.id}
+                className={`flex shrink-0 items-center gap-1 rounded-full border pl-2.5 pr-1.5 ${
+                  active ? 'border-border-strong text-fg' : 'border-border text-fg-soft'
+                }`}
+              >
                 <button
                   type="button"
                   data-testid={`chat-thread-${thread.id}`}
                   data-active={active ? 'true' : 'false'}
                   aria-current={active}
                   onClick={() => onSelect(thread.id)}
-                  className={`flex-1 truncate rounded-md px-2 py-1 text-left text-xs ${
-                    active ? 'bg-accent/15 text-fg' : 'text-fg-muted hover:bg-border/40'
-                  }`}
+                  className="max-w-[9rem] truncate py-0.5 text-left font-machine text-[10.5px]"
                   title={thread.title}
                 >
                   {thread.title || 'New chat'}
@@ -65,7 +72,7 @@ export function ChatThreadList({
                   }
                   className="text-fg-muted hover:text-danger"
                 >
-                  <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                  <Trash2 className="h-3 w-3" aria-hidden />
                 </button>
               </li>
             );

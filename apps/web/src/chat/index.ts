@@ -1,3 +1,4 @@
+export { ChatAside } from './ChatAside';
 export { ChatPanel } from './ChatPanel';
 export { ChatConversation } from './ChatConversation';
 export { ChatThreadList } from './ChatThreadList';

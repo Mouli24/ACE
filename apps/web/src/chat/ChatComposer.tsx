@@ -2,7 +2,7 @@ import type { Artifact, Part } from '@ace/contracts';
 import { Button } from '@ace/ui';
 import { formatBytes } from '@ace/ui';
 import { Paperclip, SendHorizontal, X } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 
 import { api } from '../app/api';
 import { partForArtifact } from './parts';
@@ -19,9 +19,15 @@ import { partForArtifact } from './parts';
 export function ChatComposer({
   onSend,
   disabled,
+  placeholder = 'Message this agent…',
+  above,
 }: {
   onSend: (content: Part[]) => void;
   disabled: boolean;
+  /** Defaults to the legacy tab's wording; the Chat column passes `Message @<Name>`. */
+  placeholder?: string;
+  /** Rendered inside the footer, above the input box (the column's mention chips). */
+  above?: ReactNode;
 }) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Artifact[]>([]);
@@ -60,9 +66,13 @@ export function ChatComposer({
   };
 
   return (
-    <div className="border-t border-border p-2" data-testid="chat-composer">
+    <div
+      className="flex flex-col gap-2 border-t border-border px-3.5 pb-3.5 pt-3"
+      data-testid="chat-composer"
+    >
+      {above}
       {attachments.length > 0 && (
-        <ul className="mb-2 flex flex-wrap gap-1" data-testid="chat-attachments">
+        <ul className="flex flex-wrap gap-1" data-testid="chat-attachments">
           {attachments.map((artifact) => (
             <li
               key={artifact.id}
@@ -88,12 +98,12 @@ export function ChatComposer({
       )}
 
       {uploadError !== undefined && (
-        <p role="alert" data-testid="chat-upload-error" className="mb-1 text-[11px] text-danger">
+        <p role="alert" data-testid="chat-upload-error" className="text-[11px] text-danger">
           {uploadError}
         </p>
       )}
 
-      <div className="flex items-end gap-1.5">
+      <div className="flex items-end gap-2 rounded-[14px] border border-border bg-card py-1.5 pl-3 pr-1.5 focus-within:ring-2 focus-within:ring-accent">
         <input
           ref={fileInput}
           type="file"
@@ -124,21 +134,21 @@ export function ChatComposer({
           }}
           rows={1}
           disabled={disabled}
-          placeholder="Message this agent…"
+          placeholder={placeholder}
           aria-label="Message this agent"
           data-testid="chat-input"
-          className="max-h-32 min-h-9 flex-1 resize-none rounded-md border border-border bg-canvas px-2 py-1.5 font-human text-sm text-fg placeholder:text-fg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="max-h-32 min-h-9 flex-1 resize-none border-0 bg-transparent px-0 py-1 font-human text-[14.5px] leading-[1.45] text-fg placeholder:text-fg-faint focus-visible:outline-none"
         />
-        <Button
+        <button
           type="button"
-          size="icon"
           aria-label="Send message"
           data-testid="chat-send"
           disabled={!canSend}
           onClick={submit}
+          className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full bg-accent text-accent-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg disabled:opacity-40"
         >
-          <SendHorizontal className="h-4 w-4" aria-hidden />
-        </Button>
+          <SendHorizontal className="h-3.5 w-3.5" aria-hidden />
+        </button>
       </div>
     </div>
   );

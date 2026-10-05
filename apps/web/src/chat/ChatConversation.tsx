@@ -1,8 +1,9 @@
 import type { ChatMessage, Node } from '@ace/contracts';
 import { MessageBubble } from '@ace/ui';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 
 import { api } from '../app/api';
+import { useProviders } from '../providers/hooks';
 import { ChatComposer } from './ChatComposer';
 import { ChatRefusalCard, ChatVerdicts } from './ChatVerdicts';
 import type { ChatConversation as Conversation } from './useChat';
@@ -25,7 +26,19 @@ function usageMeta(message: ChatMessage) {
  * rendered by the same `MessageBubble`/`PartRenderer` the timeline and inspector use, so an image or
  * JSON reply looks the same everywhere; media resolves through the SDK's `artifactContentUrl`.
  */
-export function ChatConversation({ node, convo }: { node: Node; convo: Conversation }) {
+export function ChatConversation({
+  node,
+  convo,
+  aboveComposer,
+}: {
+  node: Node;
+  convo: Conversation;
+  /** Extra footer content above the input box (the Chat column's mention chips). */
+  aboveComposer?: ReactNode;
+}) {
+  const providers = useProviders();
+  const providerId = 'providerId' in node.config ? node.config.providerId : undefined;
+  const provider = providers.data?.find((each) => each.id === providerId)?.type;
   const contentUrl = (artifactId: string) => api().artifactContentUrl(artifactId);
   const scroller = useRef<HTMLDivElement>(null);
 
@@ -37,7 +50,7 @@ export function ChatConversation({ node, convo }: { node: Node; convo: Conversat
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="chat-conversation">
-      <div ref={scroller} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+      <div ref={scroller} className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-[18px] py-4">
         {convo.messages.length === 0 && !convo.streaming && convo.refusal === undefined && (
           <p className="text-sm text-fg-muted">
             Chat directly with {node.name}. This uses its model and instructions and never touches a
@@ -52,6 +65,7 @@ export function ChatConversation({ node, convo }: { node: Node; convo: Conversat
               content={message.content}
               contentUrl={contentUrl}
               {...(message.role === 'agent' ? { nodeName: node.name } : {})}
+              {...(provider !== undefined ? { provider } : {})}
               meta={message.role === 'agent' ? usageMeta(message) : undefined}
             />
             {message.verdicts.length > 0 && (
@@ -67,6 +81,7 @@ export function ChatConversation({ node, convo }: { node: Node; convo: Conversat
             <MessageBubble
               type="agent"
               nodeName={node.name}
+              {...(provider !== undefined ? { provider } : {})}
               content={[{ type: 'text', text: convo.streamingText }]}
               meta={<span className="animate-pulse">…</span>}
             />
@@ -78,7 +93,12 @@ export function ChatConversation({ node, convo }: { node: Node; convo: Conversat
         )}
       </div>
 
-      <ChatComposer onSend={convo.send} disabled={convo.sending} />
+      <ChatComposer
+        onSend={convo.send}
+        disabled={convo.sending}
+        placeholder={`Message @${node.name}`}
+        above={aboveComposer}
+      />
     </div>
   );
 }
