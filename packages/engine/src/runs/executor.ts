@@ -310,6 +310,22 @@ type TurnOutcome =
   { kind: 'cancelled' } | { kind: 'called'; pendingCall: PendingToolCall | undefined };
 
 /**
+ * An accepted, paid-for answer whose memory ops the store refused (13a review m1): Arch §28's
+ * `workflow` kind, like any failure of the engine's own store, and not retryable — a retry would pay
+ * for the call again. The store's error is in the engine log, never on the row, because it may
+ * describe the values it was handed.
+ */
+function memoryNotSavedError(): NodeError {
+  return {
+    kind: 'workflow',
+    code: 'memory_not_saved',
+    message:
+      'The answer was accepted, but its memory operations could not be saved, so this node run failed. The engine log has the details.',
+    retryable: false,
+  };
+}
+
+/**
  * What a node the run's abort caught inside a guardrail point records: a cancellation, never a
  * failure (FR-ERR-007, D-054). An `ask_user` wait throws its own `user_cancelled` when the run is
  * stopped or shut down; anything else thrown once the run is aborted ends the node the same way,
@@ -1270,10 +1286,39 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
        * The memory ops apply only now, once the answer has been accepted: a rejected or failed
        * answer leaves memory as it was, and a retry never applies them twice. They are recorded as
        * stored — a key-shaped value masked (D86) — and only when there were any (FR-MEM-002).
+       *
+       * A store that refuses them fails the node (13a review m1): the answer was meant to leave
+       * memory behind, and a node that silently did not would break the next run unseen. It fails
+       * as an engine error — RUN_FAILED, never retried, since a retry would pay for the call again —
+       * and it keeps what the call spent, its model and its prompt, so the node run and the run
+       * totals still count the money (FR-OBS-002). `apply` is one transaction, so nothing was saved.
        */
       let applied: Pick<NodeExecutionOutcome, 'memoryOps'> = {};
       if (memoryOps.length > 0 && input.memory !== undefined && !input.signal.aborted) {
-        await input.memory.apply(memoryOps);
+        try {
+          await input.memory.apply(memoryOps);
+        } catch (error) {
+          deps.logger.error(
+            {
+              subsystem: 'memory',
+              runId: input.runId,
+              nodeId: input.node.id,
+              nodeRunId: input.nodeRunId,
+              err: error,
+            },
+            'memory ops could not be saved',
+          );
+          return {
+            kind: 'done',
+            result: await fail(input, memoryNotSavedError(), usage, {
+              status: 'FAILED',
+              failureReason: 'RUN_FAILED',
+              modelUsed,
+              prompt: recordedPrompt(),
+              verdicts: [...verdicts],
+            }),
+          };
+        }
         applied = {
           memoryOps: memoryOps.map((op): MemoryOp =>
             op.op === 'save' ? { ...op, value: maskMemoryValue(op.value) } : op,

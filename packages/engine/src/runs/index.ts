@@ -658,6 +658,27 @@ export function createRunService(deps: RunServiceDeps): RunService {
       const hasBases = node.kind === 'agent' && (node.config.knowledgeBaseIds?.length ?? 0) > 0;
       /** Where this node's memory is read from: nowhere when memory is off or not wired. */
       const reader = memoryOn ? memoryService : undefined;
+      /**
+       * Stamps `lastUsedAt` on the entries placed. Best effort (13a review m1): the stamp is
+       * bookkeeping, so a store that refuses it is logged and never fails a node about to make its
+       * call — or one that already has.
+       */
+      const markUsed = async (ids: readonly Id[]): Promise<void> => {
+        try {
+          await reader?.markUsed(ids);
+        } catch (error) {
+          logger.warn(
+            {
+              subsystem: 'memory',
+              runId: run.id,
+              nodeId: node.id,
+              nodeRunId: nodeRun.id,
+              err: error,
+            },
+            'could not mark memory entries used',
+          );
+        }
+      };
 
       const context: Pick<ExecuteNodeInput, 'context'> =
         deps.contextGuard === undefined && !hasBases && reader === undefined
@@ -674,7 +695,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
                     target: targetFor(node, nodeRun),
                   });
                   if (step.kind === 'continue' && step.usedMemoryIds.length > 0) {
-                    await reader?.markUsed(step.usedMemoryIds);
+                    await markUsed(step.usedMemoryIds);
                   }
                   if (step.kind === 'continue' && (hasBases || reader !== undefined)) {
                     await repository.nodeRuns.update(scope, nodeRun.id, {
