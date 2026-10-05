@@ -10,7 +10,7 @@ import { InProcessPubSubStub } from '../../__tests__/pubsub-stub.js';
 import { createEventBus } from '../../events/index.js';
 import { MEMORY_PROMPT_VERSION, assemblePrompt, promptVersion } from '../../prompts/index.js';
 import { LOCAL_SCOPE, type EngineEvent, type Repository } from '../../ports/index.js';
-import { extractMemoryOps } from '../ops.js';
+import { extractMemoryOps, withMemoryField } from '../ops.js';
 import { createMemoryService } from '../service.js';
 
 const NODE = '01JBXQ8Z9KQ4R7N2VWXYZ0N0DE';
@@ -90,6 +90,56 @@ describe('extractMemoryOps', () => {
     expect(extractMemoryOps('text')).toEqual({ value: 'text', ops: [] });
     expect(extractMemoryOps(null)).toEqual({ value: null, ops: [] });
     expect(extractMemoryOps([1])).toEqual({ value: [1], ops: [] });
+  });
+});
+
+describe('FR-MEM-002 withMemoryField: the schema a memory agent holds its provider to (13a review m2)', () => {
+  const strict = {
+    type: 'object',
+    properties: { answer: { type: 'string' } },
+    required: ['answer'],
+    additionalProperties: false,
+  };
+
+  it('adds an optional __memory list of the contract ops, and leaves the agent schema alone', () => {
+    const widened = withMemoryField(strict) as typeof strict & {
+      properties: Record<string, { type: string; items: { oneOf: unknown[] } }>;
+    };
+
+    expect(widened.required).toEqual(['answer']);
+    expect(widened.additionalProperties).toBe(false);
+    expect(widened.properties['answer']).toEqual({ type: 'string' });
+    const memory = widened.properties[MEMORY_OUTPUT_FIELD]!;
+    expect(memory.type).toBe('array');
+    expect(memory.items.oneOf).toEqual([
+      expect.objectContaining({
+        properties: expect.objectContaining({ op: expect.objectContaining({ const: 'save' }) }),
+      }),
+      expect.objectContaining({
+        properties: expect.objectContaining({ op: expect.objectContaining({ const: 'delete' }) }),
+      }),
+    ]);
+    expect(memory).not.toHaveProperty('$schema');
+    expect(strict.properties).not.toHaveProperty(MEMORY_OUTPUT_FIELD);
+  });
+
+  it('widens an object schema that names no type, by its properties', () => {
+    const widened = withMemoryField({ properties: { answer: { type: 'string' } } });
+
+    expect(widened['properties']).toHaveProperty(MEMORY_OUTPUT_FIELD);
+  });
+
+  it('adds the field to an object schema with no properties yet', () => {
+    expect(withMemoryField({ type: 'object' })['properties']).toHaveProperty(MEMORY_OUTPUT_FIELD);
+  });
+
+  it('leaves a non-object schema, and one that already names the field, as they were', () => {
+    const list = { type: 'array', items: { type: 'string' } };
+    const named = { type: 'object', properties: { [MEMORY_OUTPUT_FIELD]: { type: 'string' } } };
+
+    expect(withMemoryField(list)).toBe(list);
+    expect(withMemoryField(named)).toBe(named);
+    expect(withMemoryField({})).toEqual({});
   });
 });
 
