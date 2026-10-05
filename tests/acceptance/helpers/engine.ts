@@ -56,10 +56,17 @@ export interface StartTestEngineOptions {
   clock?: () => string;
   /** Where the canned search index's result URLs point (D-067) — the suite's local HTTP test server. */
   cannedSearchBaseUrl?: string;
+  /**
+   * An existing data directory to start on, for a restart on the same data (TC-SYS-006). The caller
+   * owns it: `stop()` leaves it on disk, so the next engine finds what this one wrote. Default: a
+   * fresh temp folder that `stop()` removes.
+   */
+  dataDir?: string;
 }
 
 export async function startTestEngine(options: StartTestEngineOptions = {}): Promise<TestEngine> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'ace-acceptance-'));
+  const ownsDataDir = options.dataDir === undefined;
+  const dataDir = options.dataDir ?? mkdtempSync(join(tmpdir(), 'ace-acceptance-'));
 
   let engine: RunningEngine;
   try {
@@ -74,12 +81,19 @@ export async function startTestEngine(options: StartTestEngineOptions = {}): Pro
         : { cannedSearchBaseUrl: options.cannedSearchBaseUrl }),
     });
   } catch (error) {
-    rmSync(dataDir, { recursive: true, force: true });
+    if (ownsDataDir) rmSync(dataDir, { recursive: true, force: true });
     throw error;
   }
 
   if (options.allowedOrigins && options.allowedOrigins.length > 0) {
-    await allowOrigins(engine, options.allowedOrigins);
+    try {
+      await allowOrigins(engine, options.allowedOrigins);
+    } catch (error) {
+      // Never leave a half-configured engine holding the port.
+      await engine.stop();
+      if (ownsDataDir) rmSync(dataDir, { recursive: true, force: true });
+      throw error;
+    }
   }
 
   return {
@@ -95,6 +109,7 @@ export async function startTestEngine(options: StartTestEngineOptions = {}): Pro
 
     async stop() {
       await engine.stop();
+      if (!ownsDataDir) return;
       try {
         rmSync(dataDir, { recursive: true, force: true });
       } catch {
@@ -110,16 +125,32 @@ export async function startTestEngine(options: StartTestEngineOptions = {}): Pro
  */
 async function allowOrigins(engine: RunningEngine, origins: string[]): Promise<void> {
   const headers = authHeaders(engine.token);
-  const current = await fetch(`${engine.url}/api/v1/settings`, { headers });
+  const current = await fetchWithReconnect(`${engine.url}/api/v1/settings`, { headers });
   if (!current.ok) throw new Error(`could not read settings: ${current.status}`);
   const settings = (await current.json()) as { allowedOrigins: string[] };
   const merged = [...new Set([...settings.allowedOrigins, ...origins])];
-  const patched = await fetch(`${engine.url}/api/v1/settings`, {
+  const patched = await fetchWithReconnect(`${engine.url}/api/v1/settings`, {
     method: 'PATCH',
     headers,
     body: JSON.stringify({ allowedOrigins: merged }),
   });
   if (!patched.ok) throw new Error(`could not allow origins: ${patched.status}`);
+}
+
+/**
+ * `fetch`, tried again when the request never reached a server. When an engine is restarted on the
+ * same port in one process (the round 5 control endpoint), Node's connection pool can still hold a
+ * keep-alive socket to the engine that just stopped, and the first request on it fails with "fetch
+ * failed" before the new engine sees it. A fresh connection on the retry reaches the new engine.
+ */
+async function fetchWithReconnect(url: string, init: RequestInit): Promise<Response> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await fetch(url, init);
+    } catch (error) {
+      if (attempt >= 3) throw error;
+    }
+  }
 }
 
 /** Headers every REST call in the suite needs (§2.8). */
