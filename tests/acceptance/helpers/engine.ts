@@ -11,7 +11,25 @@ export interface TestEngine {
   dataDir: string;
   /** One artifact retention sweep, now, by the engine's clock (Arch §15.4) — see `test-control.ts`. */
   sweepArtifacts: RunningEngine['sweepArtifacts'];
+  /**
+   * The mock provider's call log — round 5 §4 item 8's `mockProvider.calls()`, which TC-RAG-009
+   * counts summarisation calls with — or `undefined` while the engine exposes none. Read from
+   * `RunningEngine.mockProvider.calls()`, the name the round file gives; see `test-control.ts`.
+   */
+  mockProviderCalls(): unknown[] | undefined;
   stop(): Promise<void>;
+}
+
+/**
+ * `RunningEngine.mockProvider`, when the engine exposes one. Round 5 §4 item 8 says TC-RAG-009
+ * asserts "via `mockProvider.calls()`", but `RunningEngine` does not declare it yet, so it is read
+ * structurally: a harness that cannot see the log reports that, instead of guessing another way in.
+ */
+function mockProviderOf(engine: RunningEngine): { calls(): unknown } | undefined {
+  const exposed = (engine as RunningEngine & { mockProvider?: unknown }).mockProvider;
+  if (typeof exposed !== 'object' || exposed === null) return undefined;
+  if (typeof (exposed as { calls?: unknown }).calls !== 'function') return undefined;
+  return exposed as { calls(): unknown };
 }
 
 /**
@@ -70,6 +88,10 @@ export async function startTestEngine(options: StartTestEngineOptions = {}): Pro
     token: engine.token,
     dataDir,
     sweepArtifacts: () => engine.sweepArtifacts(),
+    mockProviderCalls: () => {
+      const calls = mockProviderOf(engine)?.calls();
+      return Array.isArray(calls) ? (calls as unknown[]) : undefined;
+    },
 
     async stop() {
       await engine.stop();

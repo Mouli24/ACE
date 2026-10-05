@@ -16,6 +16,12 @@ import type { TestEngine } from './engine.js';
  * `POST /advance-clock-and-sweep { days }` moves the clock forward and runs one sweep, answering the
  * ids it deleted. The clock only ever moves forward, and only the artifact store reads it, so every
  * spec after the one that moved it still sees a consistent (if later) artifact timeline.
+ *
+ * `GET /mock-provider-calls` answers `{ calls }`, the mock provider's call log since the engine
+ * started — round 5 §4 item 8: TC-RAG-009 asserts "two identical runs → exactly one summarisation
+ * call ... via `mockProvider.calls()`". The log lives in the global-setup process with the engine,
+ * so a spec reads it here. While `RunningEngine` exposes no `mockProvider.calls()` it answers 501
+ * and says so (`TestEngine.mockProviderCalls`).
  */
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -62,6 +68,16 @@ export async function startTestControl(options: {
 
     const bearer = /^Bearer\s+(.+)$/i.exec(request.headers.authorization ?? '')?.[1];
     if (!sameToken(bearer, engine.token)) return answer(401, { error: 'unauthorized' });
+    if (request.method === 'GET' && request.url === '/mock-provider-calls') {
+      const calls = engine.mockProviderCalls();
+      if (calls === undefined) {
+        return answer(501, {
+          error:
+            'RunningEngine exposes no mockProvider.calls() — round 5 §4 item 8 names it as the way TC-RAG-009 counts summarisation calls',
+        });
+      }
+      return answer(200, { calls });
+    }
     if (request.method !== 'POST' || request.url !== '/advance-clock-and-sweep') {
       return answer(404, { error: 'not found' });
     }
