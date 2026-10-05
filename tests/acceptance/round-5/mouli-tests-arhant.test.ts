@@ -171,7 +171,8 @@ async function until(
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!(await predicate())) {
-    if (Date.now() > deadline) throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}`);
+    if (Date.now() > deadline)
+      throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}`);
     await sleep(50);
   }
 }
@@ -179,7 +180,11 @@ async function until(
 /** Multipart `POST /artifacts` (round 4 §2.1) — the SDK's uploader needs `XMLHttpRequest`. */
 async function upload(baseUrl: string, token: string, doc: CorpusDoc): Promise<Artifact> {
   const form = new FormData();
-  form.append(ARTIFACT_UPLOAD_FIELD, new Blob([doc.bytes()], { type: doc.mime }), doc.name);
+  form.append(
+    ARTIFACT_UPLOAD_FIELD,
+    new Blob([new Uint8Array(doc.bytes())], { type: doc.mime }),
+    doc.name,
+  );
   const response = await fetch(`${baseUrl}/api/v1/artifacts`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
@@ -301,7 +306,11 @@ function buildChain(name: string, inputText: string, middle: MiddleDraft[]): Wor
     workflowId,
     'Input',
     { x: 80, y: 120 },
-    { id: newId(), kind: 'input', config: { text: inputText, artifactIds: [], outputTypes: ['text'] } },
+    {
+      id: newId(),
+      kind: 'input',
+      config: { text: inputText, artifactIds: [], outputTypes: ['text'] },
+    },
   );
   const built = middle.map((draft, index) => {
     const position = { x: 320 + index * 240, y: 120 };
@@ -310,7 +319,11 @@ function buildChain(name: string, inputText: string, middle: MiddleDraft[]): Wor
         draft.knowledgeBaseId === undefined
           ? { k: draft.k ?? 5, mode: 'hybrid' as const }
           : { knowledgeBaseId: draft.knowledgeBaseId, k: draft.k ?? 5, mode: 'hybrid' as const };
-      return buildNode(workflowId, draft.name, position, { id: newId(), kind: 'retrieval', config });
+      return buildNode(workflowId, draft.name, position, {
+        id: newId(),
+        kind: 'retrieval',
+        config,
+      });
     }
     const { name: agentName, kind: _kind, ...over } = draft;
     return buildNode(workflowId, agentName, position, {
@@ -355,7 +368,9 @@ type FixtureFile = 'rag-qa.json' | 'retrieval-node.json' | 'memory.json' | 'summ
 function readFixture(file: FixtureFile): WorkflowExport {
   const path = join(FIXTURES, file);
   if (!existsSync(path)) {
-    throw new Error(`fixture ${file} is missing from tests/acceptance/fixtures/round-5 (A5's, §4 item 14)`);
+    throw new Error(
+      `fixture ${file} is missing from tests/acceptance/fixtures/round-5 (A5's, §4 item 14)`,
+    );
   }
   return WorkflowExportSchema.parse(JSON.parse(readFileSync(path, 'utf8')));
 }
@@ -377,7 +392,8 @@ async function importExport(
       }
     }
     if (node.kind === 'retrieval' && options.kbId !== undefined) {
-      if (node.config.knowledgeBaseId === PLACEHOLDER_KB) node.config.knowledgeBaseId = options.kbId;
+      if (node.config.knowledgeBaseId === PLACEHOLDER_KB)
+        node.config.knowledgeBaseId = options.kbId;
     }
   }
   const imported = await client.importWorkflow(projectId, exported);
@@ -404,7 +420,8 @@ async function settled(runId: Id, timeoutMs = 90_000): Promise<Run> {
   for (;;) {
     const run = await client.getRun(runId);
     if (run.status !== 'RUNNING' && run.status !== 'PREFLIGHT') return run;
-    if (Date.now() > deadline) throw new Error(`run ${runId} still ${run.status} after ${timeoutMs}ms`);
+    if (Date.now() > deadline)
+      throw new Error(`run ${runId} still ${run.status} after ${timeoutMs}ms`);
     await sleep(50);
   }
 }
@@ -589,7 +606,9 @@ describe('TC-RAG-002 / TC-RAG-003 ingest the six types and a corrupt PDF', () =>
 
   it('FR-RAG-003: `kb.ingest` reports each document stage by stage and ends on its final status', () => {
     expect(watcher.malformed, 'every frame parses as a round 5 ServerFrame').toEqual([]);
-    const frames = watcher.of('kb.ingest').filter((frame) => frame.payload.knowledgeBaseId === corpus.kb.id);
+    const frames = watcher
+      .of('kb.ingest')
+      .filter((frame) => frame.payload.knowledgeBaseId === corpus.kb.id);
     for (const doc of corpus.docs.values()) {
       const own = frames.filter((frame) => frame.payload.documentId === doc.id);
       expect(own.length, `kb.ingest frames for ${doc.name}`).toBeGreaterThan(1);
@@ -598,7 +617,9 @@ describe('TC-RAG-002 / TC-RAG-003 ingest the six types and a corrupt PDF', () =>
       const progress = own.flatMap((frame) =>
         frame.payload.progress === undefined ? [] : [frame.payload.progress],
       );
-      expect(progress, `${doc.name} progress never goes back`).toEqual([...progress].sort((a, b) => a - b));
+      expect(progress, `${doc.name} progress never goes back`).toEqual(
+        [...progress].sort((a, b) => a - b),
+      );
       if (doc.status === 'failed') expect(last?.payload.error ?? '').not.toBe('');
     }
   });
@@ -614,7 +635,9 @@ describe('TC-RAG-002 / TC-RAG-003 ingest the six types and a corrupt PDF', () =>
     const after = await client.queryKnowledgeBase(kb.id, { query: RARE_TERM, k: 20 });
     expect(after.hits.filter((hit) => hit.documentId === handbook.id)).toEqual([]);
     expect(after.hits.filter((hit) => hit.text.includes(RARE_TERM))).toEqual([]);
-    expect((await client.listKbDocuments(kb.id)).items.map((doc) => doc.id)).not.toContain(handbook.id);
+    expect((await client.listKbDocuments(kb.id)).items.map((doc) => doc.id)).not.toContain(
+      handbook.id,
+    );
   });
 });
 
@@ -627,10 +650,16 @@ describe('TC-RAG-004 / TC-RAG-005 hybrid search', () => {
     expect(tookMs).toBeGreaterThanOrEqual(0);
     const top3 = hits.slice(0, 3);
     const hit = top3.find((h) => h.documentId === handbook.id && h.text.includes(RARE_TERM));
-    expect(hit, `"${RARE_TERM}" in the top 3: ${JSON.stringify(top3.map((h) => h.source))}`).toBeDefined();
+    expect(
+      hit,
+      `"${RARE_TERM}" in the top 3: ${JSON.stringify(top3.map((h) => h.source))}`,
+    ).toBeDefined();
     expect(['keyword', 'both']).toContain(hit?.via);
 
-    const keywordOnly = await client.queryKnowledgeBase(corpus.kb.id, { query: RARE_TERM, mode: 'keyword' });
+    const keywordOnly = await client.queryKnowledgeBase(corpus.kb.id, {
+      query: RARE_TERM,
+      mode: 'keyword',
+    });
     expect(keywordOnly.hits.slice(0, 3).some((h) => h.documentId === handbook.id)).toBe(true);
     expect(keywordOnly.hits.every((h) => h.via === 'keyword')).toBe(true);
   });
@@ -640,10 +669,16 @@ describe('TC-RAG-004 / TC-RAG-005 hybrid search', () => {
     const { hits } = await client.queryKnowledgeBase(corpus.kb.id, { query: PARAPHRASE });
     const top3 = hits.slice(0, 3);
     const hit = top3.find((h) => h.documentId === notes.id);
-    expect(hit, `"${PARAPHRASE}" in the top 3: ${JSON.stringify(top3.map((h) => h.source))}`).toBeDefined();
+    expect(
+      hit,
+      `"${PARAPHRASE}" in the top 3: ${JSON.stringify(top3.map((h) => h.source))}`,
+    ).toBeDefined();
     expect(['vector', 'both']).toContain(hit?.via);
 
-    const vectorOnly = await client.queryKnowledgeBase(corpus.kb.id, { query: PARAPHRASE, mode: 'vector' });
+    const vectorOnly = await client.queryKnowledgeBase(corpus.kb.id, {
+      query: PARAPHRASE,
+      mode: 'vector',
+    });
     expect(vectorOnly.hits.slice(0, 3).some((h) => h.documentId === notes.id)).toBe(true);
     expect(vectorOnly.hits.every((h) => h.via === 'vector')).toBe(true);
   });
@@ -704,13 +739,19 @@ describe('TC-RAG-006 / TC-RAG-007 sources on implicit and Retrieval-node runs', 
     const sources = retrieval.sources ?? [];
     expect(sources.map((s) => s.chunkId)).toEqual(hits.map((h) => h.chunkId));
     // D255: the Retrieval node's own stored envelope carries what it read.
-    expect(retrievedOf(retrieval).map((c) => c.chunkId).sort()).toEqual(hits.map((h) => h.chunkId).sort());
+    expect(
+      retrievedOf(retrieval)
+        .map((c) => c.chunkId)
+        .sort(),
+    ).toEqual(hits.map((h) => h.chunkId).sort());
   });
 
   it('§2.4: a Retrieval node with no knowledge base is BLOCKED at pre-flight with `missing_knowledge_base`', async () => {
-    const graph = await importExport(buildChain('Retrieval without a base', 'anything', [
-      { name: 'Retrieval', kind: 'retrieval' },
-    ]));
+    const graph = await importExport(
+      buildChain('Retrieval without a base', 'anything', [
+        { name: 'Retrieval', kind: 'retrieval' },
+      ]),
+    );
     const { run, nodeRuns } = await runToEnd(graph.workflowId);
     expect(run.status).toBe('BLOCKED');
     expect(run.preflightIssues.map((issue) => issue.code)).toContain('missing_knowledge_base');
@@ -725,7 +766,9 @@ const SUMMARY_PROMPT_VERSION = 'ace-summary-1'; // D251
 
 /** `better-sqlite3`, through the storage package that depends on it — read-only, for a row count. */
 function countRows(table: string): number {
-  const storagePkg = fileURLToPath(new URL('../../../packages/storage-local/package.json', import.meta.url));
+  const storagePkg = fileURLToPath(
+    new URL('../../../packages/storage-local/package.json', import.meta.url),
+  );
   const Database = createRequire(storagePkg)('better-sqlite3') as new (
     file: string,
     options: { readonly: boolean; fileMustExist: boolean },
@@ -751,16 +794,24 @@ describe('TC-RAG-009 summary cache', () => {
     expect(second.run.status).toBe('COMPLETE');
 
     const runIds = new Set([first.run.id, second.run.id]);
-    const calls = engine.mockProvider.calls().filter((call) => call.runId !== undefined && runIds.has(call.runId));
-    const summarising = calls.filter((call) => (call.system ?? '').includes(SUMMARY_PROMPT_VERSION));
+    const calls = engine.mockProvider
+      .calls()
+      .filter((call) => call.runId !== undefined && runIds.has(call.runId));
+    const summarising = calls.filter((call) =>
+      (call.system ?? '').includes(SUMMARY_PROMPT_VERSION),
+    );
     expect(summarising.length, 'summarisation calls across the two runs').toBe(1);
     // Independent of D251's marker: every call is one node run's generation, plus that one summary.
-    const modelNodeRuns = [...first.nodeRuns, ...second.nodeRuns].filter((nr) => nr.modelUsed !== undefined);
+    const modelNodeRuns = [...first.nodeRuns, ...second.nodeRuns].filter(
+      (nr) => nr.modelUsed !== undefined,
+    );
     expect(calls.length).toBe(modelNodeRuns.length + 1);
 
     const reader = graph.byName('Reader').id;
     for (const { nodeRuns } of [first, second]) {
-      const summary = nodeRunOf(nodeRuns, reader).inputEnvelopes.map((e) => e.context.summary ?? '').join('');
+      const summary = nodeRunOf(nodeRuns, reader)
+        .inputEnvelopes.map((e) => e.context.summary ?? '')
+        .join('');
       expect(summary, 'the upstream reached the Reader summarised').not.toBe('');
     }
     expect(countRows('summary_cache')).toBeGreaterThan(0);
@@ -773,7 +824,9 @@ interface LabelledFixtureQuestion extends LabelledQuestion {
   kind: string;
 }
 
-async function hitRateAt5(questions: readonly LabelledQuestion[]): Promise<{ rate: number; misses: string[] }> {
+async function hitRateAt5(
+  questions: readonly LabelledQuestion[],
+): Promise<{ rate: number; misses: string[] }> {
   let hits = 0;
   const misses: string[] = [];
   for (const { question, expectedSource } of questions) {
@@ -786,22 +839,20 @@ async function hitRateAt5(questions: readonly LabelledQuestion[]): Promise<{ rat
 }
 
 describe('TC-RAG-010 retrieval quality (hit-rate@5)', () => {
-  it('A5\'s labelled fixture set meets the OI-02 floor recorded in D253 (1.000)', async () => {
+  it("A5's labelled fixture set meets the OI-02 floor recorded in D253 (1.000)", async () => {
     const questions = JSON.parse(
       readFileSync(join(FIXTURES, 'questions.json'), 'utf8'),
     ) as LabelledFixtureQuestion[];
     expect(questions.length).toBeGreaterThanOrEqual(20);
     const { rate, misses } = await hitRateAt5(questions);
-    // eslint-disable-next-line no-console -- the figure §7.2 asks to be printed
     console.log(`TC-RAG-010 hit-rate@5, fixture set (${questions.length} q): ${rate.toFixed(3)}`);
     expect(misses).toEqual([]);
     expect(rate).toBeGreaterThanOrEqual(1);
   });
 
-  it('this suite\'s own labelled set: hit-rate@5 printed (no agreed target for it)', async () => {
+  it("this suite's own labelled set: hit-rate@5 printed (no agreed target for it)", async () => {
     expect(INDEPENDENT_QUESTIONS.length).toBeGreaterThanOrEqual(20);
     const { rate, misses } = await hitRateAt5(INDEPENDENT_QUESTIONS);
-    // eslint-disable-next-line no-console -- the figure §7.2 asks to be printed
     console.log(
       `TC-RAG-010 hit-rate@5, independent set (${INDEPENDENT_QUESTIONS.length} q): ${rate.toFixed(3)}` +
         (misses.length > 0 ? `\n  misses:\n  ${misses.join('\n  ')}` : ''),
@@ -853,7 +904,9 @@ describe('TC-GRD-005 poisoned document', () => {
     const block = prompt.slice(context, input);
     expect(block).toContain(UNTRUSTED_LABEL);
     const where = block.indexOf(`${POISON_TERM} lists the paperwork`);
-    expect(where, 'the poisoned chunk sits in the context block').toBeGreaterThan(block.indexOf(UNTRUSTED_LABEL));
+    expect(where, 'the poisoned chunk sits in the context block').toBeGreaterThan(
+      block.indexOf(UNTRUSTED_LABEL),
+    );
 
     expect(prompt.toLowerCase()).not.toContain(POISON_HIDDEN.toLowerCase());
     expect(prompt.toLowerCase()).not.toContain(POISON_VISIBLE.toLowerCase());
@@ -863,7 +916,8 @@ describe('TC-GRD-005 poisoned document', () => {
       expect(chunk.text.toLowerCase()).not.toContain(POISON_VISIBLE.toLowerCase());
     }
     for (const envelope of nodeRun.inputEnvelopes) {
-      if ((envelope.context.retrieved ?? []).length > 0) expect(envelope.context.trust).toBe('untrusted');
+      if ((envelope.context.retrieved ?? []).length > 0)
+        expect(envelope.context.trust).toBe('untrusted');
     }
   });
 
@@ -911,7 +965,12 @@ describe('Context budget (§4 item 7, D245): 20 retrieved chunks into a 4000-tok
     }
     const graph = await importExport(
       buildChain('Budget', `${subjects.join(' ')} harbour lantern survey records site`, [
-        { name: 'Reader', modelId: 'mock-text', knowledgeBaseIds: kbIds, contextPolicy: { budgetTokens: 4000 } },
+        {
+          name: 'Reader',
+          modelId: 'mock-text',
+          knowledgeBaseIds: kbIds,
+          contextPolicy: { budgetTokens: 4000 },
+        },
       ]),
     );
     const { run, nodeRuns } = await runToEnd(graph.workflowId);
@@ -931,7 +990,11 @@ describe('Context budget (§4 item 7, D245): 20 retrieved chunks into a 4000-tok
       expect(measured.total, 'envelope tokens').toBeLessThanOrEqual(4000);
       expect(measured.retrieved, 'retrieved share').toBeLessThanOrEqual(2000);
     }
-    expect(retrievedOf(reader).map((c) => c.chunkId).sort()).toEqual(kept.map((s) => s.chunkId).sort());
+    expect(
+      retrievedOf(reader)
+        .map((c) => c.chunkId)
+        .sort(),
+    ).toEqual(kept.map((s) => s.chunkId).sort());
   });
 });
 
@@ -950,7 +1013,7 @@ describe('TC-MEM-001 / TC-MEM-002 agent memory', () => {
 
   afterAll(() => watcher.close());
 
-  it('TC-MEM-001: run 1 saves a fact, run 2\'s envelope carries it, and `memory.updated` reports it', async () => {
+  it("TC-MEM-001: run 1 saves a fact, run 2's envelope carries it, and `memory.updated` reports it", async () => {
     const first = await runToEnd(graph.workflowId);
     expect(first.run.status).toBe('COMPLETE');
     const run1 = nodeRunOf(first.nodeRuns, rememberer);
@@ -960,19 +1023,25 @@ describe('TC-MEM-001 / TC-MEM-002 agent memory', () => {
     expect(JSON.stringify(run1.output ?? [])).not.toContain(MEMORY_OUTPUT_FIELD);
 
     const entries = await client.listNodeMemory(rememberer);
-    expect(entries.map((e) => ({ key: e.key, value: e.value }))).toEqual([{ key: 'user_name', value: 'Arhant' }]);
+    expect(entries.map((e) => ({ key: e.key, value: e.value }))).toEqual([
+      { key: 'user_name', value: 'Arhant' },
+    ]);
     await until(
       () => watcher.of('memory.updated').some((f) => f.payload.nodeId === rememberer),
       5_000,
       'a memory.updated frame',
     );
 
-    const second = await runToEnd(graph.workflowId, textInput(graph.input(), 'Mouli likes coffee.'));
+    const second = await runToEnd(
+      graph.workflowId,
+      textInput(graph.input(), 'Mouli likes coffee.'),
+    );
     const run2 = nodeRunOf(second.nodeRuns, rememberer);
     expect(memoryOf(run2)).toEqual([{ key: 'user_name', value: 'Arhant' }]);
     expect(run2.prompt?.text ?? '').toContain('## Memory operations');
     for (const envelope of run2.inputEnvelopes) {
-      if ((envelope.context.memory ?? []).length > 0) expect(envelope.context.trust).toBe('untrusted');
+      if ((envelope.context.memory ?? []).length > 0)
+        expect(envelope.context.trust).toBe('untrusted');
     }
     const after = await client.listNodeMemory(rememberer);
     expect(after.map((e) => e.value)).toEqual(['Mouli']);
@@ -1008,14 +1077,21 @@ describe('PII on ingest (§2.3, Arch §21.3)', () => {
   const VALUES = [PII_EMAIL, PII_PHONE, 'jordan.example@example.com', '+44 20 7946 0958'];
 
   it('stored chunks are redacted: no search returns the email or phone', async () => {
-    for (const query of [PII_TERM, 'tangerine-contact-sheet', 'Primary contact email phone', 'Email Phone']) {
+    for (const query of [
+      PII_TERM,
+      'tangerine-contact-sheet',
+      'Primary contact email phone',
+      'Email Phone',
+    ]) {
       const { hits } = await client.queryKnowledgeBase(corpus.kb.id, { query, k: 20 });
       for (const hit of hits) {
         for (const value of VALUES) expect(hit.text, `hit for "${query}"`).not.toContain(value);
       }
     }
     const own = await client.queryKnowledgeBase(corpus.kb.id, { query: PII_TERM, mode: 'keyword' });
-    expect(own.hits.some((h) => h.documentId === docNamed(corpus, PII_DOCUMENT.name).id)).toBe(true);
+    expect(own.hits.some((h) => h.documentId === docNamed(corpus, PII_DOCUMENT.name).id)).toBe(
+      true,
+    );
   });
 
   it('a document-level verdict lists the PII types, never the values', () => {
@@ -1023,7 +1099,9 @@ describe('PII on ingest (§2.3, Arch §21.3)', () => {
       const doc = docNamed(corpus, name);
       expect(doc.status).toBe('ready');
       const verdicts = doc.verdicts ?? [];
-      const pii = verdicts.filter((v) => v.checkType === 'pii' && (v.redactedTypes ?? []).length > 0);
+      const pii = verdicts.filter(
+        (v) => v.checkType === 'pii' && (v.redactedTypes ?? []).length > 0,
+      );
       expect(pii.length, `${name} has a pii verdict with redactedTypes`).toBeGreaterThan(0);
       const stored = JSON.stringify(verdicts);
       for (const value of VALUES) expect(stored).not.toContain(value);
@@ -1038,7 +1116,11 @@ describe('TC-OBS-001 trace = event log', () => {
   it('a run with a tool and guardrails: one trace entry per event, same seq order, kinds per the contract', async () => {
     const graph = await importExport(
       buildChain('Trace', 'Echo this back please.', [
-        { name: 'Tooler', modelId: 'mock-tool', tools: { enabled: ['echo'], maxToolCalls: 10, allowedDomains: [] } },
+        {
+          name: 'Tooler',
+          modelId: 'mock-tool',
+          tools: { enabled: ['echo'], maxToolCalls: 10, allowedDomains: [] },
+        },
       ]),
     );
     const { run } = await runToEnd(graph.workflowId);
@@ -1058,7 +1140,7 @@ describe('TC-OBS-001 trace = event log', () => {
 });
 
 describe('TC-OBS-002 run totals', () => {
-  it('a 3-agent run\'s totals equal the sum of its node runs', async () => {
+  it("a 3-agent run's totals equal the sum of its node runs", async () => {
     const graph = await importExport(
       buildChain('Totals', 'Three steps of work.', [
         { name: 'One', modelId: 'mock-text' },
@@ -1133,11 +1215,17 @@ describe('FR-OBS-007 health metrics (§7.2 "TC-OBS-007" — no such TC in FRS §
   it('counts move by exactly the runs this test makes: one complete, one blocked, one halted on an auth failure', async () => {
     const before = HealthMetricsSchema.parse(await client.getHealthMetrics());
 
-    const ok = await importExport(buildChain('Health ok', 'fine', [{ name: 'Ok', modelId: 'mock-text' }]));
+    const ok = await importExport(
+      buildChain('Health ok', 'fine', [{ name: 'Ok', modelId: 'mock-text' }]),
+    );
     expect((await runToEnd(ok.workflowId)).run.status).toBe('COMPLETE');
-    const blocked = await importExport(buildChain('Health blocked', 'x', [{ name: 'Retrieval', kind: 'retrieval' }]));
+    const blocked = await importExport(
+      buildChain('Health blocked', 'x', [{ name: 'Retrieval', kind: 'retrieval' }]),
+    );
     expect((await runToEnd(blocked.workflowId)).run.status).toBe('BLOCKED');
-    const failing = await importExport(buildChain('Health 401', 'x', [{ name: 'Auth', modelId: 'mock-401' }]));
+    const failing = await importExport(
+      buildChain('Health 401', 'x', [{ name: 'Auth', modelId: 'mock-401' }]),
+    );
     expect((await runToEnd(failing.workflowId)).run.status).toBe('HALTED');
 
     const after = HealthMetricsSchema.parse(await client.getHealthMetrics());
@@ -1152,7 +1240,9 @@ describe('FR-OBS-007 health metrics (§7.2 "TC-OBS-007" — no such TC in FRS §
 
   it('matches every run in this engine, counted by hand', async () => {
     const health = await client.getHealthMetrics();
-    const statuses = await Promise.all(startedRuns.map(async (id) => (await client.getRun(id)).status));
+    const statuses = await Promise.all(
+      startedRuns.map(async (id) => (await client.getRun(id)).status),
+    );
     const count = (status: Run['status']) => statuses.filter((s) => s === status).length;
     expect(health.runs.completed).toBe(count('COMPLETE'));
     expect(health.runs.halted).toBe(count('HALTED'));
@@ -1212,12 +1302,18 @@ describe('NFR-PRIV-01 / TC-NFR-012 no outbound connection during a full KB run',
       await new Promise<void>((resolve) => control.close(() => resolve()));
     }
 
-    expect(connects.some((c) => c.port === controlPort), 'the probe recorded the control connect').toBe(true);
+    expect(
+      connects.some((c) => c.port === controlPort),
+      'the probe recorded the control connect',
+    ).toBe(true);
     const enginePort = new URL(engine.url).port;
     const unexpected = connects.filter(
       (c) => c.port !== controlPort && !(LOOPBACK.has(c.host) && String(c.port) === enginePort),
     );
-    expect(unexpected, 'connects to anything but the engine (the mock provider is in-process)').toEqual([]);
+    expect(
+      unexpected,
+      'connects to anything but the engine (the mock provider is in-process)',
+    ).toEqual([]);
   });
 
   it('`settings.telemetryEnabled` is false', async () => {
@@ -1237,9 +1333,11 @@ describe('TC-SYS-014 backup: export → clean data dir → import', () => {
 
   it('restores the same projects, workflows, runs, artifacts and settings; the zip holds no secret', async () => {
     // A secret to look for: a key-shaped string built at runtime, never a literal (CLAUDE.md §2).
-    const secret = [['sk', 'ant', 'api03'].join('-'), randomBytes(30).toString('base64url')].join('-');
+    const secret = [['sk', 'ant', 'api03'].join('-'), randomBytes(30).toString('base64url')].join(
+      '-',
+    );
     await client.createProvider({ type: 'mock', name: 'Keyed', apiKey: secret } as never);
-    await client.updateSettings({ concurrency: 7, theme: 'light' });
+    await client.patchSettings({ concurrency: 7, theme: 'light' });
     const artifact = await upload(engine.url, engine.token, SIX_TYPES[3] as CorpusDoc);
 
     const response = await fetch(`${engine.url}/api/v1/backup/export`, {
@@ -1251,7 +1349,11 @@ describe('TC-SYS-014 backup: export → clean data dir → import', () => {
     const zip = Buffer.from(await response.arrayBuffer());
 
     // Deep scan: the raw zip and every entry, inflated, for the key in any common encoding.
-    const needles = [secret, Buffer.from(secret).toString('base64'), Buffer.from(secret).toString('hex')];
+    const needles = [
+      secret,
+      Buffer.from(secret).toString('base64'),
+      Buffer.from(secret).toString('hex'),
+    ];
     const entries = readZip(zip);
     expect(entries.length).toBeGreaterThan(0);
     for (const needle of needles) {
@@ -1277,7 +1379,9 @@ describe('TC-SYS-014 backup: export → clean data dir → import', () => {
     const { dataDir: _b, ...settingsB } = await targetClient.getSettings();
     expect(settingsB).toEqual(settingsA);
 
-    expect(await targetClient.getArtifact(artifact.id)).toEqual(await client.getArtifact(artifact.id));
+    expect(await targetClient.getArtifact(artifact.id)).toEqual(
+      await client.getArtifact(artifact.id),
+    );
     const bytes = async (base: string, token: string) =>
       Buffer.from(
         await (
@@ -1286,7 +1390,9 @@ describe('TC-SYS-014 backup: export → clean data dir → import', () => {
           })
         ).arrayBuffer(),
       );
-    expect((await bytes(target.url, target.token)).equals(await bytes(engine.url, engine.token))).toBe(true);
+    expect(
+      (await bytes(target.url, target.token)).equals(await bytes(engine.url, engine.token)),
+    ).toBe(true);
   }, 120_000);
 });
 
