@@ -27,7 +27,7 @@ import {
   type OnSelectionChangeParams,
   type Viewport,
 } from '@xyflow/react';
-import { Copy, LayoutGrid, Maximize2, Redo2, Undo2 } from 'lucide-react';
+import { Copy, LayoutGrid, Redo2, Undo2 } from 'lucide-react';
 import {
   useCallback,
   useEffect,
@@ -1005,60 +1005,47 @@ function CanvasInner({
             <Panel position="bottom-left">
               <CanvasZoomPill />
             </Panel>
-            <Panel position="top-right">
-              <div
-                data-testid="canvas-tools-pill"
-                className="flex items-center gap-0.5 rounded-chip border border-border bg-panel p-[3px]"
-              >
-                {!readOnly && (
-                  <>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={undo}
-                      disabled={!canUndo}
-                      title={`Undo (${MOD}Z)`}
-                      aria-label="Undo"
-                    >
-                      <Undo2 className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={redo}
-                      disabled={!canRedo}
-                      title={`Redo (${MOD}Y)`}
-                      aria-label="Redo"
-                    >
-                      <Redo2 className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={autoArrange}
-                      disabled={nodes.length === 0}
-                      title="Auto-arrange left to right"
-                      aria-label="Auto-arrange"
-                    >
-                      <LayoutGrid className="h-3.5 w-3.5" />
-                    </Button>
-                    <span aria-hidden className="mx-0.5 h-3.5 w-px bg-border" />
-                  </>
-                )}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  onClick={fitView}
-                  title="Fit to view (F)"
-                  aria-label="Fit to view"
+            {/* Fit lives in the zoom pill (one Fit control); a read-only Canvas has nothing here. */}
+            {!readOnly && (
+              <Panel position="top-right">
+                <div
+                  data-testid="canvas-tools-pill"
+                  className="flex items-center gap-0.5 rounded-chip border border-border bg-panel p-[3px]"
                 >
-                  <Maximize2 className="h-3.5 w-3.5" />
-                </Button>
-                {!readOnly && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={undo}
+                    disabled={!canUndo}
+                    title={`Undo (${MOD}Z)`}
+                    aria-label="Undo"
+                  >
+                    <Undo2 className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={redo}
+                    disabled={!canRedo}
+                    title={`Redo (${MOD}Y)`}
+                    aria-label="Redo"
+                  >
+                    <Redo2 className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={autoArrange}
+                    disabled={nodes.length === 0}
+                    title="Auto-arrange left to right"
+                    aria-label="Auto-arrange"
+                  >
+                    <LayoutGrid className="h-3.5 w-3.5" />
+                  </Button>
+                  <span aria-hidden className="mx-0.5 h-3.5 w-px bg-border" />
                   <Button
                     variant="ghost"
                     size="icon"
@@ -1070,9 +1057,9 @@ function CanvasInner({
                   >
                     <Copy className="h-3.5 w-3.5" />
                   </Button>
-                )}
-              </div>
-            </Panel>
+                </div>
+              </Panel>
+            )}
           </ReactFlow>
           {loopCandidate && (
             <MakeLoopEdgeDialog

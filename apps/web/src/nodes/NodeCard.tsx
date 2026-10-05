@@ -517,6 +517,8 @@ function NodeToolbar({ node }: { node: Node }) {
       // `nodrag nopan`: a press here is a click, never the start of a node drag or a pan.
       className="nodrag nopan absolute -top-11 left-1/2 flex -translate-x-1/2 items-center gap-0.5 whitespace-nowrap rounded-chip border border-border-strong bg-panel p-[3px] shadow-[var(--ace-ground)]"
       onPointerDown={(event) => event.stopPropagation()}
+      // a double-click on Inspect or @ Chat must not reach the node's double-click (→ Configure)
+      onDoubleClick={(event) => event.stopPropagation()}
     >
       <button
         type="button"
