@@ -106,4 +106,35 @@ describe('FR-RAG-003 a failed document keeps no chunks', () => {
     expect((await h.repo.kbDocuments.get(LOCAL_SCOPE, doc.id))?.status).toBe('failed');
     expect(await h.repo.kbChunks.countByKnowledgeBase(LOCAL_SCOPE, kb.id)).toBe(0);
   });
+
+  it('FR-RAG-009 a reindex whose source file is missing keeps the chunks of the last good ingest', async () => {
+    const h = await makeHarness();
+    const kb = await h.createKb();
+    const artifactId = h.addFile('a.txt', 'a\n\nb');
+    const doc = await h.service.addDocument(kb.id, { artifactId });
+    await h.worker.drain();
+    const before = await h.repo.kbChunks.getMany(
+      LOCAL_SCOPE,
+      h.written.map((chunk) => chunk.id),
+    );
+    expect(before).toHaveLength(2);
+
+    // The source was never read, so nothing about the content is known to be wrong: losing the
+    // base's only copy of it would be worse than serving it (final-review C1 ruling).
+    h.artifacts.delete(artifactId);
+    await h.service.reindex(kb.id);
+    await h.worker.drain();
+
+    const failed = await h.repo.kbDocuments.get(LOCAL_SCOPE, doc.id);
+    expect(failed?.status).toBe('failed');
+    expect(failed?.error).toMatch(/source file missing/i);
+    expect(
+      await h.repo.kbChunks.getMany(
+        LOCAL_SCOPE,
+        before.map((chunk) => chunk.id),
+      ),
+    ).toEqual(before);
+    expect(await h.repo.kbChunks.countByKnowledgeBase(LOCAL_SCOPE, kb.id)).toBe(2);
+    expect(h.bus.ingest().at(-1)).toMatchObject({ status: 'failed', error: failed?.error });
+  });
 });

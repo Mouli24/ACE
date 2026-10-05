@@ -106,6 +106,10 @@ class DocumentGoneError extends Error {
 
 const DEFAULT_POLL_MS = 500;
 
+/** The reason a document whose uploaded file is gone fails with (final-review C1). */
+export const SOURCE_MISSING =
+  'Source file missing: the uploaded file is no longer available, so it could not be read.';
+
 /**
  * Re-finds each heading in the sanitised text. Redaction changes lengths, so the parser's offsets
  * no longer point at their titles; a heading whose own title was redacted is dropped.
@@ -146,7 +150,12 @@ export function createIngestionWorker(deps: IngestionWorkerDeps): IngestionWorke
 
     await enter(job, 'parsing', INGEST_PROGRESS.parsing);
     const artifact = await deps.readArtifact(doc.artifactId);
-    if (artifact === null) throw new Error('The uploaded file is no longer available.');
+    if (artifact === null) {
+      // Nothing was read, so nothing says the chunks of the last good ingest are wrong: they stay
+      // (final-review C1 ruling). Losing a base's only copy of its content is worse than serving it.
+      await fail(job, SOURCE_MISSING, undefined, { keepChunks: true });
+      return;
+    }
     const parsed = await deps.parser.parse({
       bytes: artifact.bytes,
       mime: doc.mime,
@@ -234,10 +243,17 @@ export function createIngestionWorker(deps: IngestionWorkerDeps): IngestionWorke
     }
   }
 
+  /**
+   * Marks the document `failed` with its reason. A failure after the source was read clears the
+   * document's chunks: a failed document must never keep serving the content of an earlier
+   * ingestion when the new content is known to be bad. `keepChunks` is for the one failure that
+   * read nothing — the source file is missing — where the earlier chunks are still the best copy.
+   */
   async function fail(
     job: IngestJob,
     error: string,
     verdicts?: KbDocument['verdicts'],
+    options: { keepChunks?: boolean } = {},
   ): Promise<void> {
     const reason = error === '' ? 'Indexing failed.' : error;
     const updated = await repos.kbDocuments.update(scope, job.documentId, {
@@ -246,8 +262,9 @@ export function createIngestionWorker(deps: IngestionWorkerDeps): IngestionWorke
       ...(verdicts === undefined || verdicts.length === 0 ? {} : { verdicts }),
     });
     if (updated === null) return;
-    // A failed document must never keep serving the content of an earlier ingestion.
-    await repos.kbChunks.replaceForDocument(scope, job.documentId, [], []);
+    if (options.keepChunks !== true) {
+      await repos.kbChunks.replaceForDocument(scope, job.documentId, [], []);
+    }
     await emitIngest(bus, {
       knowledgeBaseId: job.knowledgeBaseId,
       documentId: job.documentId,

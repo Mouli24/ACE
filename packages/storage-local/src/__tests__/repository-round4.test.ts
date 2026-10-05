@@ -2,6 +2,7 @@ import type {
   Artifact,
   ChatMessage,
   ChatThread,
+  KbDocument,
   McpServer,
   Message,
   NodeRun,
@@ -150,9 +151,9 @@ describe('FR-MM-002 artifacts repository', () => {
 
   it('refuses a second row for the same bytes (the unique hash constraint)', async () => {
     await db.repository.artifacts.create(scope, artifact({ hash: HASH_A }));
-    await expect(
-      db.repository.artifacts.create(scope, artifact({ hash: HASH_A })),
-    ).rejects.toThrow(/UNIQUE/i);
+    await expect(db.repository.artifacts.create(scope, artifact({ hash: HASH_A }))).rejects.toThrow(
+      /UNIQUE/i,
+    );
   });
 
   it('keeps the same bytes distinct across workspaces (BR-18)', async () => {
@@ -208,7 +209,8 @@ describe('Arch §15.4 artifact retention query', () => {
     const touchedRecently = artifact({ id: newId(), hash: HASH_B, createdAt: OLD });
     // Created after the cutoff → survives.
     const fresh = artifact({ id: newId(), hash: 'c'.repeat(64), createdAt: RECENT });
-    for (const a of [orphan, touchedRecently, fresh]) await db.repository.artifacts.create(scope, a);
+    for (const a of [orphan, touchedRecently, fresh])
+      await db.repository.artifacts.create(scope, a);
     await db.repository.artifacts.touch(scope, touchedRecently.id, RECENT);
 
     const swept = await db.repository.artifacts.unreferencedBefore(scope, CUTOFF);
@@ -235,7 +237,10 @@ describe('Arch §15.4 artifact retention query', () => {
       config: { artifactIds: [byNode.id], outputTypes: ['text'] },
     });
     // A node run whose output is a file Part referencing the artifact.
-    await db.repository.nodeRuns.create(scope, nodeRun(runId, { output: [filePart(byNodeRun.id)] }));
+    await db.repository.nodeRuns.create(
+      scope,
+      nodeRun(runId, { output: [filePart(byNodeRun.id)] }),
+    );
     // A timeline message and a chat message with a file Part each.
     await db.repository.messages.append(
       scope,
@@ -249,6 +254,29 @@ describe('Arch §15.4 artifact retention query', () => {
 
     const swept = await db.repository.artifacts.unreferencedBefore(scope, CUTOFF);
     expect(swept).toEqual([]);
+  });
+
+  it('FR-RAG-009 spares an artifact only a knowledge-base document references, in its own workspace', async () => {
+    const source = artifact({ id: newId(), hash: '2'.repeat(64), createdAt: OLD });
+    const elsewhere = artifact({ id: newId(), hash: '3'.repeat(64), createdAt: OLD });
+    for (const a of [source, elsewhere]) await db.repository.artifacts.create(scope, a);
+    const document = (artifactId: string): KbDocument => ({
+      id: newId(),
+      knowledgeBaseId: newId(),
+      artifactId,
+      name: 'handbook.md',
+      mime: 'text/markdown',
+      size: 10,
+      status: 'ready',
+      chunkCount: 1,
+      createdAt: OLD,
+    });
+    await db.repository.kbDocuments.insert(scope, document(source.id));
+    // A document in another workspace keeps nothing alive here (BR-18).
+    await db.repository.kbDocuments.insert(OTHER, document(elsewhere.id));
+
+    const swept = await db.repository.artifacts.unreferencedBefore(scope, CUTOFF);
+    expect(swept.map((a) => a.id)).toEqual([elsewhere.id]);
   });
 });
 
@@ -277,9 +305,12 @@ describe('FR-TOOL-009 tool_calls repository', () => {
     await db.repository.nodeRuns.create(scope, nr);
 
     const ids = [newId(), newId()].sort();
-    for (const id of ids) await db.repository.toolCalls.append(scope, runId, toolCall(nr.id, { id }));
+    for (const id of ids)
+      await db.repository.toolCalls.append(scope, runId, toolCall(nr.id, { id }));
 
-    expect((await db.repository.toolCalls.listByNodeRun(scope, nr.id)).map((c) => c.id)).toEqual(ids);
+    expect((await db.repository.toolCalls.listByNodeRun(scope, nr.id)).map((c) => c.id)).toEqual(
+      ids,
+    );
     expect((await db.repository.toolCalls.listByRun(scope, runId)).map((c) => c.id)).toEqual(ids);
     expect(await db.repository.toolCalls.listByRun(scope, newId())).toEqual([]);
   });
@@ -380,7 +411,10 @@ describe('FR-CHAT-001 messages repository', () => {
 
     const target = message(workflowId, { id: newId(), runId, nodeId, type: 'error' });
     await db.repository.messages.append(scope, message(workflowId, { id: newId(), type: 'user' }));
-    await db.repository.messages.append(scope, message(workflowId, { id: newId(), runId, type: 'event' }));
+    await db.repository.messages.append(
+      scope,
+      message(workflowId, { id: newId(), runId, type: 'event' }),
+    );
     await db.repository.messages.append(scope, target);
 
     const filtered = await db.repository.messages.query(scope, workflowId, {
@@ -447,7 +481,11 @@ describe('FR-CHAT-004 chat threads and messages repository', () => {
     expect(await db.repository.chatThreads.listByNode(scope, nodeId)).toEqual([thread]);
     expect(await db.repository.chatThreads.listByNode(scope, newId())).toEqual([]);
 
-    const touched = await db.repository.chatThreads.touch(scope, thread.id, '2026-09-30T00:00:00.000Z');
+    const touched = await db.repository.chatThreads.touch(
+      scope,
+      thread.id,
+      '2026-09-30T00:00:00.000Z',
+    );
     expect(touched?.updatedAt).toBe('2026-09-30T00:00:00.000Z');
   });
 

@@ -748,6 +748,7 @@ export class FakeRepository implements Repository {
      * asks this with four `NOT EXISTS` substring clauses over `nodes.config`, a node run's `output`
      * and `inputEnvelopes`, a timeline message's `content` and a chat message's `content`; the fake
      * mirrors it by matching the same quoted-id substring against the JSON of those same places.
+     * Both also keep a knowledge-base document's `artifactId`, an exact match (round 5).
      */
     unreferencedBefore: async (scope: Scope, before: Timestamp) => {
       const state = this.#for(scope);
@@ -765,6 +766,10 @@ export class FakeRepository implements Repository {
         }
         for (const chatMessage of state.chatMessages.values()) {
           if (JSON.stringify(chatMessage.content).includes(needle)) return true;
+        }
+        // A knowledge-base document's source file, an exact match as SQLite's (final-review C1).
+        for (const doc of state.kbDocuments.values()) {
+          if (doc.artifactId === id) return true;
         }
         return false;
       };

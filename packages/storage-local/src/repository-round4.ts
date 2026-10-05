@@ -38,6 +38,7 @@ import {
   artifacts,
   chatMessages,
   chatThreads,
+  kbDocuments,
   mcpServers,
   messages,
   nodeRuns,
@@ -228,7 +229,9 @@ export function createArtifactRepository(db: Db): ArtifactRepository {
      * as `nodes.listByProvider` — across every place a `Part` reference or an Input `artifactIds`
      * entry is stored. A ULID is high-entropy enough that a false match is not a real risk, and a
      * kept-alive artifact costs nothing; the danger the query guards against is deleting bytes that
-     * are still referenced, which the four `NOT EXISTS` clauses prevent.
+     * are still referenced, which the `NOT EXISTS` clauses prevent. A knowledge-base document names
+     * its source artifact in a column of its own, so that clause is an exact match: a reindex
+     * reads the file again, however old it is (round 5, FR-RAG-009, final-review C1).
      */
     unreferencedBefore: async (scope: Scope, before) =>
       db
@@ -242,6 +245,7 @@ export function createArtifactRepository(db: Db): ArtifactRepository {
             sql`NOT EXISTS (SELECT 1 FROM ${nodeRuns} WHERE ${nodeRuns.workspaceId} = ${artifacts.workspaceId} AND (COALESCE(${nodeRuns.output}, '') LIKE '%"' || ${artifacts.id} || '"%' OR ${nodeRuns.inputEnvelopes} LIKE '%"' || ${artifacts.id} || '"%'))`,
             sql`NOT EXISTS (SELECT 1 FROM ${messages} WHERE ${messages.workspaceId} = ${artifacts.workspaceId} AND ${messages.content} LIKE '%"' || ${artifacts.id} || '"%')`,
             sql`NOT EXISTS (SELECT 1 FROM ${chatMessages} WHERE ${chatMessages.workspaceId} = ${artifacts.workspaceId} AND ${chatMessages.content} LIKE '%"' || ${artifacts.id} || '"%')`,
+            sql`NOT EXISTS (SELECT 1 FROM ${kbDocuments} WHERE ${kbDocuments.workspaceId} = ${artifacts.workspaceId} AND ${kbDocuments.artifactId} = ${artifacts.id})`,
           ),
         )
         .orderBy(asc(artifacts.id))
@@ -347,7 +351,10 @@ export function createMcpServerRepository(db: Db): McpServerRepository {
           name: server.name,
           transport: server.transport,
           command: server.command ?? null,
-          args: server.args === undefined ? null : toJsonColumn(server.args, `mcpServer(${server.id}).args`),
+          args:
+            server.args === undefined
+              ? null
+              : toJsonColumn(server.args, `mcpServer(${server.id}).args`),
           url: server.url ?? null,
           status: server.status,
           toolCount: server.toolCount,
