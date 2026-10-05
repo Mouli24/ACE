@@ -310,7 +310,10 @@ export class SqliteRepository implements Repository {
     // which holds the connection; and gated, for everyone else, so a call that is not part of the
     // work holding the connection waits for it to finish instead of landing inside it.
     const owner: Repository = {
-      transaction: (fn) => fn(owner),
+      // Through the gate, not straight into the body: from inside the open transaction this joins
+      // it, as before; from a handle kept past its commit it queues and opens a transaction of its
+      // own, rather than running ungated inside whatever batch holds the connection by then.
+      transaction: (fn) => this.transaction(() => fn(owner)),
       projects: this.projects,
       workflows: this.workflows,
       nodes: this.nodes,
