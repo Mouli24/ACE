@@ -22,8 +22,8 @@ interface CanvasApiState {
 }
 
 /**
- * The Canvas publishes a few actions here so the palette (left pane) and the config panel (right
- * pane) can call them without a shared React parent holding React Flow state.
+ * The Canvas publishes a few actions here so the New node dialog, the node toolbar and the sheet's
+ * config panel can call them without a shared React parent holding React Flow state.
  */
 export const useCanvasApi = create<CanvasApiState>((set) => ({
   api: undefined,

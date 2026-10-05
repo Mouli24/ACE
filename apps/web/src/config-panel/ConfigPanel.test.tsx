@@ -44,6 +44,8 @@ async function openPanel(kind: Parameters<typeof createNode>[0] = 'agent') {
   const seeded = seed(kind);
   renderApp(`/projects/${seeded.project.id}/workflows/${seeded.workflow.id}`);
   await screen.findByTestId('canvas');
+  // the config panel lives in the sheet over the Canvas, closed until the top bar opens it
+  await userEvent.click(screen.getByTestId('sheet-toggle'));
   await screen.findByText(/select a node/i);
   act(() => useSelectionStore.getState().setSelection([seeded.node.id], []));
   const panel = await screen.findByRole('complementary', { name: /node configuration/i });
@@ -96,6 +98,7 @@ describe('Config panel (FR-NODE-002/003/007/008)', () => {
     seed('agent');
     const { project, workflow } = seed('agent');
     renderApp(`/projects/${project.id}/workflows/${workflow.id}`);
+    await userEvent.click(await screen.findByTestId('sheet-toggle'));
     expect(await screen.findByText(/select a node/i)).toBeInTheDocument();
   });
 

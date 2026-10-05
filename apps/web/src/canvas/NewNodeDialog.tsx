@@ -1,6 +1,5 @@
 import type { Model, Provider } from '@ace/contracts';
 import { Button, Input, PROVIDER_STATE_LABEL, cn } from '@ace/ui';
-import { ReactFlowProvider } from '@xyflow/react';
 import { Braces, Plus, Search, Shield, X, type LucideIcon } from 'lucide-react';
 import {
   useEffect,
@@ -489,15 +488,15 @@ function NewNodeWindow({
                 <p className="m-0 font-machine text-[11px] text-fg-faint">Nothing to preview</p>
               ) : (
                 <div ref={makeInert} aria-hidden className="pointer-events-none">
-                  <ReactFlowProvider>
-                    <NodeCardView
-                      node={preview}
-                      state="IDLE"
-                      selected={false}
-                      connectedPortIds={NO_PORTS}
-                      provider={showsProvider ? provider?.type : undefined}
-                    />
-                  </ReactFlowProvider>
+                  {/* `preview`: static port dots, so no React Flow handles and no flow store */}
+                  <NodeCardView
+                    node={preview}
+                    state="IDLE"
+                    selected={false}
+                    connectedPortIds={NO_PORTS}
+                    provider={showsProvider ? provider?.type : undefined}
+                    preview
+                  />
                 </div>
               )}
             </div>

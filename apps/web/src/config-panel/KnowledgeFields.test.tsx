@@ -39,6 +39,8 @@ async function openPanel(kind: CanvasNodeKind) {
   const seeded = seed(kind);
   renderApp(`/projects/${seeded.project.id}/workflows/${seeded.workflow.id}`);
   await screen.findByTestId('canvas');
+  // the config panel lives in the sheet, closed until the top bar opens it
+  await userEvent.click(screen.getByTestId('sheet-toggle'));
   await screen.findByText(/select a node/i);
   act(() => useSelectionStore.getState().setSelection([seeded.node.id], []));
   const panel = await screen.findByRole('complementary', { name: /node configuration/i });
@@ -101,6 +103,8 @@ describe('FR-RAG-006 / TC-RAG-007 Retrieval node config', () => {
     db.commitGraph(workflow.id, [node], []);
     renderApp(`/projects/${project.id}/workflows/${workflow.id}`);
     await screen.findByTestId('canvas');
+    // the config panel lives in the sheet, closed until the top bar opens it
+    await userEvent.click(screen.getByTestId('sheet-toggle'));
     act(() => useSelectionStore.getState().setSelection([node.id], []));
     expect(await screen.findByTestId('retrieval-no-bases')).toHaveTextContent(
       /no knowledge bases in this project/i,
@@ -142,6 +146,8 @@ describe('FR-RAG-005 Agent "Knowledge bases" multi-select', () => {
     db.commitGraph(workflow.id, [node], []);
     renderApp(`/projects/${project.id}/workflows/${workflow.id}`);
     await screen.findByTestId('canvas');
+    // the config panel lives in the sheet, closed until the top bar opens it
+    await userEvent.click(screen.getByTestId('sheet-toggle'));
     act(() => useSelectionStore.getState().setSelection([node.id], []));
     const missing = await screen.findByTestId(`agent-kb-missing-${ghost}`);
     await userEvent.setup().click(within(missing).getByRole('button', { name: 'Remove' }));

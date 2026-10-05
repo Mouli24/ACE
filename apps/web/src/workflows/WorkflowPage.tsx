@@ -1,31 +1,27 @@
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@ace/ui';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { Link, useParams } from 'react-router-dom';
 
 import { useWorkflowSubscription } from '../app/socket';
 import { usePanelsStore } from '../app/stores/panels';
 import { BottomPanel } from '../bottom-panel/BottomPanel';
 import { Canvas } from '../canvas/Canvas';
-import { Palette } from '../canvas/Palette';
+import { NewNodeDialog } from '../canvas/NewNodeDialog';
 import { useCanvasApi } from '../canvas/canvas-api';
-import { ChatPanel } from '../chat';
-import { ConfigPanel } from '../config-panel/ConfigPanel';
-import { Inspector } from '../inspector/Inspector';
-import { MemoryTab } from '../memory/MemoryTab';
+import { ChatAside } from '../chat';
 import { CompactWorkflowLayout } from '../responsive/CompactWorkflowLayout';
 import { useIsCompact } from '../responsive/useIsCompact';
 import { PreflightIssues } from '../runs/PreflightIssues';
-import { RunsList } from '../runs/RunsList';
+import { CanvasHaltNote } from '../runs/controls/CanvasHaltNote';
 import { useAdoptActiveRun, useRunEvents } from '../runs/hooks';
+import { WorkflowSheet } from './WorkflowSheet';
 import { useWorkflowGraph } from './hooks';
 
-const handle = 'bg-border transition-colors data-[resize-handle-state=drag]:bg-accent';
-
 /**
- * The Canvas screen (Arch §33.1 step 5): left palette · centre Canvas over the bottom panel ·
- * right config panel, all resizable (round 1 §5 step 3). At phone width (≤ 640 px) it is a
- * monitoring screen instead: a read-only Canvas and tabs for runs, inspector, chat and memory
- * (FR-MOB-001/003).
+ * The Canvas screen (Arch §33.1 step 5) in the POC Theme V2 layout: the Canvas over the bottom
+ * panel, with the Configure · Inspector · Runs · Memory sheet floating over the Canvas when opened,
+ * and Chat as a permanent column on the right (FR-CHAT-004). Nodes are added from the New node
+ * dialog (FR-CAN-002), opened from the top bar. At phone width (≤ 640 px) it is a monitoring screen
+ * instead: a read-only Canvas and tabs for runs, inspector, chat and memory (FR-MOB-001/003) — no
+ * sheet, Chat column or dialog is mounted there.
  */
 export function WorkflowPage() {
   const { projectId = '', workflowId = '' } = useParams();
@@ -36,6 +32,8 @@ export function WorkflowPage() {
   // A reload mid-run rebuilds the overlay from the engine's records (FR-EXE-014, D-028).
   useAdoptActiveRun(workflowId);
   const bottomOpen = usePanelsStore((s) => s.bottomOpen);
+  const newNodeOpen = usePanelsStore((s) => s.newNodeOpen);
+  const closeNewNode = usePanelsStore((s) => s.closeNewNode);
   const canvasApi = useCanvasApi((s) => s.api);
   const compact = useIsCompact();
 
@@ -65,58 +63,38 @@ export function WorkflowPage() {
   }
 
   return (
-    <PanelGroup direction="horizontal" className="h-full">
-      {/* Temporary: palette and right pane are unconditional until Wave 2 rewrites this page. */}
-      <Panel defaultSize={14} minSize={8} maxSize={30} className="bg-panel">
-        <Palette workflowId={workflowId} onAdd={(kind) => canvasApi?.addNode(kind)} />
-      </Panel>
-      <PanelResizeHandle className={`w-px ${handle}`} />
-      <Panel minSize={30}>
-        <PanelGroup direction="vertical" className="h-full">
-          {/* `relative` + an absolutely filled Canvas: a percentage height inside a flex-sized
-              panel collapses to 0, which left the Canvas unmeasurable (no fit, no minimap). */}
-          <Panel minSize={30} className="relative min-h-0">
-            <Canvas workflowId={workflowId} />
-            <PreflightIssues workflowId={workflowId} />
-          </Panel>
-          {bottomOpen && (
-            <>
-              <PanelResizeHandle className={`h-px ${handle}`} />
-              <Panel defaultSize={22} minSize={8} maxSize={60}>
-                <BottomPanel workflowId={workflowId} />
-              </Panel>
-            </>
-          )}
-        </PanelGroup>
-      </Panel>
-      <PanelResizeHandle className={`w-px ${handle}`} />
-      <Panel defaultSize={24} minSize={12} maxSize={45} className="bg-panel">
-        {/* Configure what a node will do, or inspect what its run did (FR-EXE-010). */}
-        <Tabs defaultValue="configure" className="flex h-full flex-col">
-          <TabsList className="m-2">
-            <TabsTrigger value="configure">Configure</TabsTrigger>
-            <TabsTrigger value="inspect">Inspector</TabsTrigger>
-            <TabsTrigger value="runs">Runs</TabsTrigger>
-            <TabsTrigger value="chat">Chat</TabsTrigger>
-            <TabsTrigger value="memory">Memory</TabsTrigger>
-          </TabsList>
-          <TabsContent value="configure" className="min-h-0 flex-1">
-            <ConfigPanel workflowId={workflowId} />
-          </TabsContent>
-          <TabsContent value="inspect" className="min-h-0 flex-1">
-            <Inspector workflowId={workflowId} />
-          </TabsContent>
-          <TabsContent value="runs" className="min-h-0 flex-1 overflow-y-auto">
-            <RunsList workflowId={workflowId} />
-          </TabsContent>
-          <TabsContent value="chat" className="min-h-0 flex-1">
-            <ChatPanel workflowId={workflowId} />
-          </TabsContent>
-          <TabsContent value="memory" className="min-h-0 flex-1 overflow-y-auto">
-            <MemoryTab workflowId={workflowId} />
-          </TabsContent>
-        </Tabs>
-      </Panel>
-    </PanelGroup>
+    <div data-testid="workflow-page" className="grid h-full grid-cols-[minmax(0,1fr)_340px]">
+      <div className="relative grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
+        {/* `relative` + an absolutely filled Canvas: a percentage height inside a grid row would
+            collapse to 0 and leave the Canvas unmeasurable (no fit, no minimap). */}
+        <div className="relative min-h-0">
+          <Canvas workflowId={workflowId} />
+          <PreflightIssues workflowId={workflowId} />
+          <CanvasHaltNote workflowId={workflowId} />
+        </div>
+        <WorkflowSheet workflowId={workflowId} />
+        <section
+          data-testid="bottom-section"
+          className="border-t border-border bg-panel transition-[height] duration-200"
+          style={{ height: bottomOpen ? 232 : 40 }}
+        >
+          <BottomPanel workflowId={workflowId} />
+        </section>
+      </div>
+      <aside
+        data-testid="chat-column"
+        className="flex min-h-0 min-w-0 flex-col border-l border-border bg-panel"
+      >
+        <ChatAside workflowId={workflowId} />
+      </aside>
+      <NewNodeDialog
+        workflowId={workflowId}
+        workflowName={graph.data?.workflow.name ?? 'Workflow'}
+        open={newNodeOpen}
+        onClose={closeNewNode}
+        // the dialog closes itself after an add
+        onAdd={(kind, init) => canvasApi?.addNode(kind, init)}
+      />
+    </div>
   );
 }

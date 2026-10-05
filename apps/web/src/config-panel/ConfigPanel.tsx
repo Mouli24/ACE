@@ -18,7 +18,7 @@ import { TextField } from './fields';
 import { KindPanel } from './panels';
 
 /**
- * Right pane (FR-NODE-002): the selected node's configuration, every edit an `update_node` op.
+ * The sheet's Configure tab (FR-NODE-002): the selected node's configuration, every edit an `update_node` op.
  *
  * From round 3 a selected loop edge has settings of its own (FR-CON-007), so the pane shows whichever
  * one thing is selected — a node, or the loop edge.

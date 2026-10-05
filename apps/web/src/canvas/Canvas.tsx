@@ -720,7 +720,7 @@ function CanvasInner({
     if (!readOnly) editor.redo();
   }, [editor, readOnly]);
 
-  // Expose to the palette, the config panel and the top bar (they live in other panes).
+  // Expose to the New node dialog, the sheet's config panel and the node toolbar (outside the flow).
   const register = useCanvasApi((s) => s.register);
   useEffect(
     () =>

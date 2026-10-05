@@ -29,6 +29,8 @@ async function openAgent(configure: (node: Node) => void = () => undefined) {
   db.commitGraph(workflow.id, [node], []);
   renderApp(`/projects/${project.id}/workflows/${workflow.id}`);
   await screen.findByTestId('canvas');
+  // the config panel lives in the sheet, closed until the top bar opens it
+  await userEvent.click(screen.getByTestId('sheet-toggle'));
   act(() => useSelectionStore.getState().setSelection([node.id], []));
   const panel = await screen.findByRole('complementary', { name: /node configuration/i });
   return { project, workflow, provider, node, panel, user: userEvent.setup() };
