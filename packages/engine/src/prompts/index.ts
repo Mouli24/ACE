@@ -153,6 +153,14 @@ function block(label: string, body: string): string {
   return [`${label}:`, UNTRUSTED_LABEL, body].join('\n');
 }
 
+/**
+ * The labelled untrusted block the prompt uses, for another prompt that carries untrusted content:
+ * the model summariser's (BR-13, round 5 §2.5).
+ */
+export function untrustedBlock(label: string, body: string): string {
+  return block(label, body);
+}
+
 /* -------------------------------------------------------------------------- */
 /* Assembly                                                                    */
 /* -------------------------------------------------------------------------- */
