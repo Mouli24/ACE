@@ -1035,7 +1035,15 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
 
     hub.closeAll();
     wss.close();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    // `server.close()` stops accepting, then waits for every open connection to end. Node closes
+    // one idle between requests itself, but not a socket a browser preconnected and sent nothing
+    // on, or one with a request half sent — so with a browser open, shutdown waited minutes
+    // (FR-SYS-008, found by the §7.1 cross-test). Idle connections are closed and the rest cut:
+    // every run is already halted and recorded above.
+    const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+    server.closeIdleConnections();
+    server.closeAllConnections();
+    await closed;
     sqlite.close();
     await new Promise<void>((resolve) => logStream.end(resolve));
   }
