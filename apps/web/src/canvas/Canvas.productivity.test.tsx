@@ -230,6 +230,33 @@ describe('FR-CAN-011 right-click menus', () => {
     await mount(workflow.id);
     fireEvent.contextMenu(screen.getByRole('button', { name: 'Fit to view' }));
     expect(screen.queryByRole('menu')).toBeNull();
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+});
+
+describe('FR-CAN-001 Canvas chrome (POC Theme V2)', () => {
+  it('swaps React Flow controls for the zoom pill and groups the history buttons in one pill', async () => {
+    const { workflow } = seed(['input']);
+    await mount(workflow.id);
+    expect(document.querySelector('.react-flow__controls')).toBeNull();
+    const pill = screen.getByTestId('canvas-zoom-pill');
+    expect(pill.closest('.react-flow__panel')).toHaveClass('bottom', 'left');
+    expect(screen.getByTestId('canvas-zoom-level')).toHaveTextContent('%');
+
+    const history = screen.getByTestId('canvas-tools-pill');
+    expect(history.closest('.react-flow__panel')).toHaveClass('top', 'right');
+    for (const name of ['Undo', 'Redo', 'Auto-arrange']) {
+      expect(history).toContainElement(screen.getByRole('button', { name }));
+    }
+    expect(screen.getByRole('button', { name: 'Undo' })).toHaveAttribute(
+      'title',
+      expect.stringMatching(/^Undo \(/),
+    );
+    expect(document.querySelector('.react-flow__minimap')).toHaveClass(
+      'rounded-card',
+      'border-border',
+    );
   });
 });
 

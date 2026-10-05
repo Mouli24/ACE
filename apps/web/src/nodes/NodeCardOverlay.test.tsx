@@ -28,27 +28,29 @@ const view = (props: Partial<Parameters<typeof NodeCardView>[0]> = {}) => {
 };
 
 describe('TC-EXE-008 every node state is visually distinct', () => {
-  it('renders one label, one icon and one ring colour per state', () => {
-    const seen = new Map<NodeState, { label: string; ring: string; icon: string }>();
+  it('renders one label, one printed word and one chip colour per state', () => {
+    const seen = new Map<NodeState, { label: string; colour: string; word: string }>();
 
     for (const state of NODE_STATES) {
       const { unmount } = view({ state });
       const card = screen.getByTestId(/^node-card-/);
-      const ring = screen.getByTestId('status-ring');
-      const icon = ring.querySelector('svg');
+      const chip = screen.getByTestId('status-chip');
       expect(card).toHaveAttribute('data-state', state);
+      expect(chip).toHaveAttribute('data-state', state);
       seen.set(state, {
-        label: ring.getAttribute('aria-label') ?? '',
-        ring: (card.getAttribute('style') ?? '').match(/--ring-color: ([^;]+)/)?.[1] ?? '',
-        icon: icon?.getAttribute('class') ?? '',
+        label: chip.getAttribute('aria-label') ?? '',
+        colour: chip.style.color,
+        word: chip.textContent ?? '',
       });
       unmount();
     }
 
     expect(new Set([...seen.values()].map((v) => v.label)).size).toBe(NODE_STATES.length);
-    expect(new Set([...seen.values()].map((v) => v.ring)).size).toBe(NODE_STATES.length);
-    // Colour alone would fail a colour-blind reader, so the icon must differ too (NFR-USE-02).
-    expect(new Set([...seen.values()].map((v) => v.icon)).size).toBe(NODE_STATES.length);
+    expect(new Set([...seen.values()].map((v) => v.colour)).size).toBe(NODE_STATES.length);
+    // Colour alone would fail a colour-blind reader, so the state is printed as a word too
+    // (NFR-USE-02) — the chip's visible text differs for every state.
+    expect(new Set([...seen.values()].map((v) => v.word)).size).toBe(NODE_STATES.length);
+    expect([...seen.values()].every((v) => v.word.trim() !== '')).toBe(true);
   });
 });
 

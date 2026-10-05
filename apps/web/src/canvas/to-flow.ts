@@ -15,6 +15,12 @@ export interface LoopLiveState {
 
 export type PortKeyHandler = (port: Port, direction: 'in' | 'out', nodeId: string) => void;
 
+const providerIdOf = (node: Node): string | undefined =>
+  (node.config as { providerId?: string }).providerId;
+
+const providerTypes = (providers: readonly Provider[]): Map<string, ProviderType> =>
+  new Map(providers.map((p) => [p.id, p.type]));
+
 /** Contract nodes → React Flow nodes. Positions are the contract positions; the engine owns them. */
 export function toFlowNodes(
   nodes: readonly Node[],
@@ -30,9 +36,9 @@ export function toFlowNodes(
     connected.add(edge.from.portId);
     connected.add(edge.to.portId);
   }
-  const typeById = new Map<string, ProviderType>(providers.map((p) => [p.id, p.type]));
+  const typeById = providerTypes(providers);
   return nodes.map((node) => {
-    const providerId = (node.config as { providerId?: string }).providerId;
+    const providerId = providerIdOf(node);
     const provider = providerId === undefined ? undefined : typeById.get(providerId);
     // FR-PRV-005: the node still names a provider, but the engine no longer has it. Only claimed
     // once the list has actually arrived, or every node would flash the badge on first paint.
@@ -54,7 +60,9 @@ export function toFlowNodes(
 }
 
 /**
- * Contract edges → React Flow edges; the label data type comes from the source port.
+ * Contract edges → React Flow edges; the label data type comes from the source port, and the
+ * accent — the colour the edge takes once data crosses it (FR-EXE-015) — from the source node's
+ * provider type, or the target's when the source has none (an Input feeding an Agent).
  *
  * A `kind: 'loop'` edge becomes the dashed loop edge instead (FR-CON-007). Its `loop` config is what
  * the engine stored, and `live` — the iteration the run is on — is looked up per edge rather than
@@ -64,9 +72,17 @@ export function toFlowEdges(
   edges: readonly Edge[],
   nodes: readonly Node[],
   live: (edge: Edge) => LoopLiveState = () => ({}),
+  providers: readonly Provider[] = [],
 ): AceAnyFlowEdge[] {
   const portType = new Map<string, Port['dataType']>();
   for (const node of nodes) for (const port of node.outputs) portType.set(port.id, port.dataType);
+  const typeById = providerTypes(providers);
+  const accentOf = new Map<string, ProviderType>();
+  for (const node of nodes) {
+    const providerId = providerIdOf(node);
+    const type = providerId === undefined ? undefined : typeById.get(providerId);
+    if (type !== undefined) accentOf.set(node.id, type);
+  }
   return edges.map((edge): AceAnyFlowEdge => {
     const ends = {
       id: edge.id,
@@ -90,10 +106,15 @@ export function toFlowEdges(
         },
       };
     }
+    const accent = accentOf.get(edge.from.nodeId) ?? accentOf.get(edge.to.nodeId);
     return {
       ...ends,
       type: 'typed',
-      data: { dataType: portType.get(edge.from.portId) ?? 'text', kind: edge.kind },
+      data: {
+        dataType: portType.get(edge.from.portId) ?? 'text',
+        kind: edge.kind,
+        ...(accent === undefined ? {} : { accent }),
+      },
     };
   });
 }

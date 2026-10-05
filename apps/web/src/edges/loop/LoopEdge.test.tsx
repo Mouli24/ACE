@@ -44,6 +44,16 @@ describe('LoopEdge (FR-CON-007)', () => {
     expect(edge).toHaveAttribute('data-iteration', 'none');
   });
 
+  it('labels itself "loop · max N" in the edge label style', () => {
+    renderEdge({ kind: 'loop', loop });
+    const label = screen.getByTestId('loop-edge-label-l1');
+    expect(label).toHaveTextContent('loop · max 5');
+    expect(label.tagName.toLowerCase()).toBe('text');
+    expect(label.style.paintOrder).toBe('stroke');
+    expect(label.style.stroke).toBe('var(--color-canvas)');
+    expect(screen.getByTestId('loop-edge-l1').querySelector('rect')).toBeNull();
+  });
+
   it('says on hover how far the loop goes and how it ends', () => {
     renderEdge({ kind: 'loop', loop });
     expect(

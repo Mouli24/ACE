@@ -2,6 +2,8 @@ import type { LoopConfig } from '@ace/contracts';
 import { BaseEdge, getBezierPath, type Edge as FlowEdge, type EdgeProps } from '@xyflow/react';
 import { memo } from 'react';
 
+import { EDGE_LABEL_STYLE } from '../../nodes/TypedEdge';
+
 /**
  * What a loop edge carries on the Canvas. The iteration arrives as edge data — a prop, not a read
  * of the run store — so the badge is drawn from whatever the caller knows and can be tested on its
@@ -37,7 +39,8 @@ function describe(loop: LoopConfig | undefined): string {
 /**
  * A loop edge (FR-CON-007). Dashed and in the WAITING hue through `.ace-loop-edge`, so it can never
  * be mistaken for a data edge; the dash marches backwards while the run is live, and an arrow-back
- * glyph says which way the jump goes even when nothing is moving. During a run the badge shows the
+ * glyph says which way the jump goes even when nothing is moving. The label says how far it may go
+ * (`loop · max N`), in the same style as a data edge's label; during a run the badge shows the
  * iteration against the maximum, which is the one number a loop needs watching (FR-PAR-005).
  */
 export const LoopEdge = memo(function LoopEdge({
@@ -77,21 +80,19 @@ export const LoopEdge = memo(function LoopEdge({
         className={running ? 'ace-loop-edge ace-loop-edge-running' : 'ace-loop-edge'}
         style={{
           strokeWidth: selected ? 2.5 : 1.5,
+          strokeLinecap: 'round',
           ...(selected ? { stroke: 'var(--color-selection)' } : {}),
         }}
       />
-      <g transform={`translate(${labelX}, ${labelY})`}>
-        <text
-          data-testid={`loop-edge-glyph-${id}`}
-          textAnchor="middle"
-          dominantBaseline="middle"
-          fontSize={13}
-          fill="var(--color-status-WAITING)"
-        >
-          {ARROW_BACK}
+      <g transform={`translate(${labelX}, ${labelY - 7})`}>
+        <text data-testid={`loop-edge-label-${id}`} textAnchor="middle" style={EDGE_LABEL_STYLE}>
+          <tspan data-testid={`loop-edge-glyph-${id}`} fill="var(--color-status-WAITING)">
+            {ARROW_BACK}
+          </tspan>{' '}
+          {maxIterations === undefined ? 'loop' : `loop · max ${maxIterations}`}
         </text>
         {iteration !== undefined && (
-          <g data-testid={`loop-edge-iteration-${id}`} transform="translate(0, 14)">
+          <g data-testid={`loop-edge-iteration-${id}`} transform="translate(0, 16)">
             <rect
               x={-20}
               y={-8}
