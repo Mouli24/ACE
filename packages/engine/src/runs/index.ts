@@ -494,6 +494,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const nodeById = new Map(nodes.map((node) => [node.id, node]));
     const states = new Map<Id, NodeState>(nodes.map((node) => [node.id, 'IDLE' as NodeState]));
     const nodeRunByNode = new Map<Id, NodeRun>();
+    /** When each node run went RUNNING (D66: started, not queued), so its `durationMs` can be measured. */
+    const startedAtByNodeRun = new Map<Id, string>();
     const envelopesFor = new Map<Id, Envelope[]>();
     const deliveredEdges = new Set<Id>();
     const usages: Usage[] = [];
@@ -998,6 +1000,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
     ): Promise<void> {
       const usage = spentBy(nodeRun, outcome.usage);
       usages.push(usage);
+      const startedAt = startedAtByNodeRun.get(nodeRun.id);
 
       await repository.nodeRuns.update(scope, nodeRun.id, {
         status: outcome.status,
@@ -1009,6 +1012,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
         output: outcome.output,
         usage,
         endedAt,
+        // F10: provider latency in the health metrics is read from this (FR-OBS-007).
+        ...(startedAt === undefined
+          ? {}
+          : { durationMs: Math.max(0, Date.parse(endedAt) - Date.parse(startedAt)) }),
       });
 
       // A Stop that landed meanwhile owns the run's totals: it wrote them, and the drive corrects
@@ -1378,10 +1385,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
           // the Stop already wrote (D111, D-063).
           if (running || signal.aborted) return;
           running = true;
-          await repository.nodeRuns.update(scope, nodeRun.id, {
-            status: 'RUNNING',
-            startedAt: now(),
-          });
+          const startedAt = now();
+          startedAtByNodeRun.set(nodeRun.id, startedAt);
+          await repository.nodeRuns.update(scope, nodeRun.id, { status: 'RUNNING', startedAt });
           await emitNodeState(run, nodeRun, 'RUNNING');
         };
 
