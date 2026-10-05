@@ -31,7 +31,10 @@ export interface KnowledgeService {
   /** Checks the overlap against the stored size when a patch names only one of the two (D235). */
   update(id: Id, patch: UpdateKnowledgeBaseRequest): Promise<KnowledgeBase>;
   remove(id: Id): Promise<void>;
-  /** The `pending` document, already queued (the route answers 202). */
+  /**
+   * The `pending` document, already queued (the route answers 202). An artifact the base already
+   * holds answers that document as it stands, idempotently (final-review M7).
+   */
   addDocument(kbId: Id, body: AddKbDocumentRequest): Promise<KbDocument>;
   listDocuments(kbId: Id): Promise<KbDocument[]>;
   removeDocument(docId: Id): Promise<void>;
@@ -169,6 +172,13 @@ export function createKnowledgeService(deps: KnowledgeServiceDeps): KnowledgeSer
       await load(kbId);
       const artifact = await deps.artifacts.get(body.artifactId);
       if (artifact === null) throw notFound(`Artifact ${body.artifactId}`);
+
+      // The same file twice is one document (final-review M7): its chunks twice would crowd the
+      // top k. Answered as it stands, neither queued nor announced again; a reindex re-reads it.
+      const existing = (await repos.kbDocuments.listByKnowledgeBase(scope, kbId)).find(
+        (doc) => doc.artifactId === body.artifactId,
+      );
+      if (existing !== undefined) return existing;
 
       const doc = await repos.kbDocuments.insert(scope, {
         id: nextId(),
