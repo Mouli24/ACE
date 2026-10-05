@@ -178,6 +178,30 @@ export function summariseResult(result: unknown): string {
   return maskSecrets(stringifyResult(result)).slice(0, TOOL_RESULT_SUMMARY_MAX);
 }
 
+/**
+ * A tool result as the context point judges it (round 5 §2.3, FR-GRD-004): the text the model and
+ * the recorded prompt read — the string itself, or its JSON.
+ */
+export function resultText(result: unknown): string {
+  return stringifyResult(result);
+}
+
+/**
+ * The result fed back to the model once the context point has judged its text. Unchanged text keeps
+ * the result exactly as the tool returned it, so a clean result is byte for byte round 4's. Rewritten
+ * text replaces it: a string result becomes the sanitised string, and any other result the sanitised
+ * JSON parsed back — or, when the rewrite left it unparseable, the sanitised text itself.
+ */
+export function withJudgedText(result: unknown, original: string, judged: string): unknown {
+  if (judged === original) return result;
+  if (typeof result === 'string') return judged;
+  try {
+    return JSON.parse(judged) as unknown;
+  } catch {
+    return judged;
+  }
+}
+
 function stringifyResult(result: unknown): string {
   if (typeof result === 'string') return result;
   try {
@@ -250,7 +274,9 @@ export function buildToolCall(input: {
  * shared by the Input node executor (building parts) and pre-flight (the capability check), so the
  * two cannot disagree about whether a `.png` is an image (FR-MM-005).
  */
-export function mediaTypeForMime(mime: string): Extract<DataType, 'image' | 'audio' | 'video' | 'file'> {
+export function mediaTypeForMime(
+  mime: string,
+): Extract<DataType, 'image' | 'audio' | 'video' | 'file'> {
   const base = mime.split(';')[0]?.trim().toLowerCase() ?? '';
   if (base.startsWith('image/')) return 'image';
   if (base.startsWith('audio/')) return 'audio';

@@ -42,7 +42,12 @@ import {
   type Summariser,
 } from '../envelopes/index.js';
 import { buildEnvelope } from '../envelopes/index.js';
-import { autoRetryDecision, upstreamFailedError, userCancelledError } from '../errors/index.js';
+import {
+  autoRetryDecision,
+  failureReasonFor,
+  upstreamFailedError,
+  userCancelledError,
+} from '../errors/index.js';
 import type { EventBus } from '../events/index.js';
 import { notFound } from '../gateway/errors.js';
 import { newId } from '../ids.js';
@@ -633,6 +638,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
      * what the prompt was assembled from, and `GET /node-runs/:id` must show the chunks and the
      * memory it read (FR-RAG-007, FR-MEM-003). Any other node keeps its delivered envelopes byte for
      * byte, whatever the guard did to its prompt.
+     *
+     * With a context guard, the hook also judges each tool result before the model reads it, with
+     * the `tool` label (FR-GRD-004, R5 §2.3).
      */
     function contextFor(
       node: Node,
@@ -666,8 +674,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
         }
       };
 
+      const guard = deps.contextGuard;
       const context: Pick<ExecuteNodeInput, 'context'> =
-        deps.contextGuard === undefined && !hasBases && reader === undefined
+        guard === undefined && !hasBases && reader === undefined
           ? {}
           : {
               context: {
@@ -677,7 +686,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
                     envelopes,
                     memory: reader === undefined ? [] : await reader.list(node.id),
                     search: deps.search,
-                    guard: deps.contextGuard,
+                    guard,
                     target: targetFor(node, nodeRun),
                     signal: runSignal,
                   });
@@ -691,6 +700,31 @@ export function createRunService(deps: RunServiceDeps): RunService {
                   }
                   return step;
                 },
+                ...(guard === undefined
+                  ? {}
+                  : {
+                      // FR-GRD-004: a tool result is judged with the `tool` label before the
+                      // model reads it, its verdicts recorded on this node run (R5 §2.3).
+                      async toolResult(text: string) {
+                        const judged = await guard.sanitise({
+                          target: targetFor(node, nodeRun),
+                          label: 'tool',
+                          text,
+                        });
+                        return judged.kind === 'failed'
+                          ? {
+                              kind: 'failed' as const,
+                              failureReason: failureReasonFor(judged.error),
+                              error: judged.error,
+                              verdicts: judged.verdicts,
+                            }
+                          : {
+                              kind: 'continue' as const,
+                              text: judged.text,
+                              verdicts: judged.verdicts,
+                            };
+                      },
+                    }),
               },
             };
 

@@ -44,8 +44,10 @@ import type { RunGate } from './control/gate.js';
 import { usageFor } from './cost.js';
 import {
   buildToolCall,
+  resultText,
   summariseResult,
   toolResultBlock,
+  withJudgedText,
   type ArtifactMaterialiser,
   type ToolGuardStep,
   type ToolPointInput,
@@ -134,6 +136,13 @@ export interface NodeContextHook {
       usedMemoryIds: Id[];
     }>
   >;
+  /**
+   * The context point over one tool result, before the model reads it (round 5 §2.3, FR-GRD-004):
+   * hidden instructions stripped and PII redacted per the policy, its verdicts recorded on the node
+   * run. A `failed` step ends the node with its reason — `GUARDRAIL_VIOLATION`. Absent, the result
+   * goes back as round 4 sent it.
+   */
+  toolResult?(text: string): Promise<GuardrailStep<{ text: string }>>;
 }
 
 /**
@@ -981,32 +990,68 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             };
           }
 
+          let result: unknown;
+          let status: 'ok' | 'error' | 'timeout' = 'ok';
+          /** A failed call's message, the log's summary of it (FR-TOOL-009). */
+          let failure: string | undefined;
           try {
-            const result = await registered!.run(call.args, {
+            result = await registered!.run(call.args, {
               runId: input.runId,
               sandboxDir,
               signal: toolSignal,
             });
-            await logToolCall(call, {
-              status: 'ok',
-              resultSummary: summariseResult(result),
-              durationMs: durationSince(at),
-              verdicts: step.verdicts ?? [],
-              at,
-            });
-            return { result };
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            const status = isToolTimeout(error) ? 'timeout' : 'error';
+            failure = error instanceof Error ? error.message : String(error);
+            status = isToolTimeout(error) ? 'timeout' : 'error';
+            result = { error: failure, status };
+          }
+
+          // What the model reads next passes the context point first, a failure's message included.
+          const judged = await judgeToolResult(result);
+          if (judged.failed !== undefined) {
             await logToolCall(call, {
-              status,
-              resultSummary: message,
+              status: 'blocked',
+              resultSummary: judged.failed.error.message,
               durationMs: durationSince(at),
               verdicts: step.verdicts ?? [],
               at,
             });
-            return { result: { error: message, status } };
+            return { failed: judged.failed };
           }
+          await logToolCall(call, {
+            status,
+            resultSummary:
+              failure !== undefined && judged.result === result
+                ? failure
+                : summariseResult(judged.result),
+            durationMs: durationSince(at),
+            verdicts: step.verdicts ?? [],
+            at,
+          });
+          return { result: judged.result };
+        }
+
+        /**
+         * The context point over one tool result before the model reads it (round 5 §2.3,
+         * FR-GRD-004): hidden instructions stripped, PII redacted per the policy, the verdicts
+         * recorded on the node run by the hook. A `failed` step ends the node with its reason. With
+         * nothing to change, or no hook, the result goes back exactly as the tool returned it.
+         */
+        async function judgeToolResult(
+          result: unknown,
+        ): Promise<
+          | { result: unknown; failed?: undefined }
+          | { failed: { error: NodeError; failureReason: FailureReason } }
+        > {
+          const judge = input.context?.toolResult;
+          if (judge === undefined) return { result };
+          const text = resultText(result);
+          const step = await judge(text);
+          verdicts.push(...(step.verdicts ?? []));
+          if (step.kind === 'failed') {
+            return { failed: { error: step.error, failureReason: step.failureReason } };
+          }
+          return { result: withJudgedText(result, text, step.text) };
         }
 
         /** Persist one logged ToolCall and emit its `tool.call` event (FR-TOOL-009, §2.5). */
