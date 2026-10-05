@@ -152,6 +152,13 @@
 .ace-dotted-canvas .react-flow__minimap-mask {
   fill: var(--color-minimap-mask) !important;
 }
+/* React Flow's attribution stays visible, in the theme's quiet text instead of its own grey box. */
+.ace-dotted-canvas .react-flow__attribution {
+  background: transparent;
+}
+.ace-dotted-canvas .react-flow__attribution a {
+  color: var(--color-fg-faint);
+}
 
 html,
 body {
