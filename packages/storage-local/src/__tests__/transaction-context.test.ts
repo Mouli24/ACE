@@ -1,3 +1,4 @@
+import type { Repository } from '@ace/engine';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { makeProject, scope } from './fixtures.js';
@@ -143,6 +144,53 @@ describe('TC-NFR-006 a nested transaction joins the one its body opened', () => 
     await expect(blocker).rejects.toThrow('unrelated failure');
     await detached;
     expect(await db.repository.projects.get(scope, late.id)).toEqual(late);
+  });
+
+  it('queues a transaction opened through a body handle kept past its commit, rather than joining a later batch', async () => {
+    const event = { type: 'late.append', payload: {}, createdAt: '2026-10-01T10:00:00.000Z' };
+    let kept: Repository | undefined;
+    await db.repository.transaction(async (tx) => {
+      kept = tx;
+    });
+
+    const blocker = db.repository.transaction(async () => {
+      await delay(30);
+      throw new Error('unrelated failure');
+    });
+    await delay(5);
+    expect(db.sqlite.inTransaction).toBe(true);
+    // The handle outlived its transaction: using it must not land inside the open, doomed batch.
+    const late = kept!.transaction(async (tx) => tx.events.append(scope, event));
+
+    await expect(blocker).rejects.toThrow('unrelated failure');
+    await late;
+    const types = (
+      await db.repository.events.listAfter(scope, 0, { includeEngineScope: true })
+    ).map((row) => row.type);
+    expect(types).toEqual(['late.append']);
+  });
+
+  it('gives a body handle kept past its commit a transaction of its own, rolled back whole', async () => {
+    let kept: Repository | undefined;
+    await db.repository.transaction(async (tx) => {
+      kept = tx;
+    });
+
+    await expect(
+      kept!.transaction(async (tx) => {
+        await tx.events.append(scope, {
+          type: 'half.written',
+          payload: {},
+          createdAt: '2026-10-01T10:00:00.000Z',
+        });
+        throw new Error('second statement failed');
+      }),
+    ).rejects.toThrow('second statement failed');
+
+    expect(await db.repository.events.listAfter(scope, 0, { includeEngineScope: true })).toEqual(
+      [],
+    );
+    expect(db.sqlite.inTransaction).toBe(false);
   });
 
   it('refuses exclusive() from inside a transaction instead of deadlocking', async () => {
