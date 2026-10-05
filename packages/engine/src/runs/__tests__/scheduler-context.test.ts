@@ -406,6 +406,15 @@ function hit(score: number, label: string, chars = 400): SearchHit {
   };
 }
 
+/** Polls until `predicate` holds, failing after five seconds rather than hanging. */
+async function waitFor(predicate: () => boolean, label: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+}
+
 /** A summariser that records every call and, for a node with a model, charges for it. */
 function recordingSummariser(charge?: Usage): Summariser & {
   calls: (SummariseInput & { target?: { providerId: string; modelId: string } })[];
@@ -578,25 +587,36 @@ describe('F3 envelopeBetween hands the summariser the receiving node model', () 
     expect(run.totals.tokensIn).toBe(102);
   });
 
-  it("forwards the run's abort signal to the summariser, on delivery and on the start-from path", async () => {
+  it("forwards the run's own abort signal to the summariser, on delivery and on the start-from path", async () => {
     const summariser = recordingSummariser();
     const h = await build({ summariser });
     const input = inputNode();
     const agent = agentNode('Writer');
     const output = outputNode();
     await h.seed([input, agent, output], [edge(input, agent), edge(agent, output)]);
+    // The Writer's call lasts until the run is stopped, so each run is still going when it is.
+    stall = (_req, signal) =>
+      new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));
 
-    await h.run();
-    expect(summariser.calls).toHaveLength(2);
-    expect(summariser.calls.every((call) => call.signal instanceof AbortSignal)).toBe(true);
+    const first = await h.begin();
+    await waitFor(() => summariser.calls.length === 1, 'Input → Writer to be delivered');
+    const delivered = summariser.calls[0]?.signal;
+    expect(delivered?.aborted).toBe(false);
+    await h.controls.stop(first.run.id);
+    await first.done;
+    // Stopping the run aborted the very signal the summariser was handed: it is the run's own.
+    expect(delivered?.aborted).toBe(true);
 
     summariser.calls.length = 0;
-    const again = await h.service.startRun(workflowId, { startFromNodeId: agent.id });
-
-    expect(again.status).toBe('COMPLETE');
-    // Input → Writer is rebuilt from the copied Input output (the seed path), Writer → Result delivered.
-    expect(summariser.calls).toHaveLength(2);
-    expect(summariser.calls.every((call) => call.signal instanceof AbortSignal)).toBe(true);
+    const again = await h.service.beginRun(workflowId, { startFromNodeId: agent.id });
+    // Input → Writer is rebuilt from the copied Input output (the seed path).
+    await waitFor(() => summariser.calls.length === 1, 'the seed path to rebuild Input → Writer');
+    const seeded = summariser.calls[0]?.signal;
+    expect(seeded?.aborted).toBe(false);
+    expect(seeded).not.toBe(delivered);
+    await h.controls.stop(again.run.id);
+    await again.done;
+    expect(seeded?.aborted).toBe(true);
   });
 });
 
@@ -1092,14 +1112,6 @@ describe('FR-OBS-002 every run ending with spend announces the day totals (13a r
       frames: frames.map(({ event, index }) => ({ payload: event.payload as UsagePayload, index })),
       completed,
     };
-  }
-
-  async function waitFor(predicate: () => boolean, label: string): Promise<void> {
-    const deadline = Date.now() + 5_000;
-    while (!predicate()) {
-      if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
-      await new Promise((resolve) => setTimeout(resolve, 2));
-    }
   }
 
   async function writerReviewer(h: Harness): Promise<{ writer: Node; reviewer: Node }> {
