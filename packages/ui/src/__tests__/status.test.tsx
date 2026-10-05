@@ -5,6 +5,7 @@ import {
   NODE_STATE_META,
   PROVIDER_STATE_LABEL,
   ProviderStatusChip,
+  StatusChip,
   StatusRing,
   StreamingText,
 } from '../index.js';
@@ -80,5 +81,17 @@ describe('FR-EXE-008 streaming text', () => {
     const painted = performance.now() - started;
     expect(screen.getByTestId('stream-nr_1')).toHaveTextContent('one two');
     expect(painted).toBeLessThan(200);
+  });
+});
+
+describe('FR-EXE-009 StatusChip', () => {
+  it.each(NODE_STATES)('%s shows its word in its colour', (state) => {
+    render(<StatusChip state={state} />);
+    const chip = screen.getByTestId('status-chip');
+    expect(chip).toHaveAttribute('data-state', state);
+    expect(chip).toHaveTextContent(NODE_STATE_META[state].label);
+    expect(chip.style.color).toBe(`var(--color-status-${state})`);
+    expect(chip.querySelector('.ace-spin') !== null).toBe(state === 'RUNNING');
+    expect(chip.querySelector('.ace-pulse') !== null).toBe(state === 'WAITING');
   });
 });

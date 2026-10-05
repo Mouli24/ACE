@@ -4,6 +4,7 @@ import { Badge } from '../components/badge.js';
 import { Button } from '../components/button.js';
 import { Input } from '../components/input.js';
 import { Label } from '../components/label.js';
+import { Tabs, TabsList, TabsTrigger } from '../components/tabs.js';
 import { cn } from '../lib/cn.js';
 import type { NodeCardProps, PortHandleProps } from '../types.js';
 
@@ -50,6 +51,35 @@ describe('shadcn base components', () => {
   it('Badge renders inline text', () => {
     render(<Badge>no model</Badge>);
     expect(screen.getByText('no model')).toBeInTheDocument();
+  });
+});
+
+describe('restyled primitives keep their roles and names', () => {
+  it('Button resolves by role and name', () => {
+    render(<Button>Go</Button>);
+    expect(screen.getByRole('button', { name: 'Go' })).toBeInTheDocument();
+  });
+
+  it('TabsTrigger resolves as a tab inside the pill TabsList', () => {
+    render(
+      <Tabs defaultValue="a">
+        <TabsList>
+          <TabsTrigger value="a">A</TabsTrigger>
+        </TabsList>
+      </Tabs>,
+    );
+    expect(screen.getByRole('tablist')).toContainElement(screen.getByRole('tab', { name: 'A' }));
+  });
+
+  it('Badge and Input still render their content', () => {
+    render(
+      <>
+        <Badge>tag</Badge>
+        <Input aria-label="Name" />
+      </>,
+    );
+    expect(screen.getByText('tag')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Name' })).toBeInTheDocument();
   });
 });
 

@@ -14,7 +14,10 @@ import {
 import type { HTMLAttributes } from 'react';
 
 import { cn } from '../lib/cn.js';
-import { PROVIDER_STATUS, STATUS_RING } from '../tokens.js';
+import { PROVIDER_STATUS } from '../tokens.js';
+
+/** The state colour as a CSS variable, so the Paper theme recolours it (tokens.ts keeps the hex). */
+const statusVar = (state: NodeState): string => `var(--color-status-${state})`;
 
 /**
  * One label, one icon and one colour per `NodeState` (FR-EXE-009, TC-EXE-008). Nine states, nine
@@ -31,15 +34,15 @@ export interface NodeStateMeta {
 }
 
 export const NODE_STATE_META: Readonly<Record<NodeState, NodeStateMeta>> = {
-  IDLE: { label: 'idle', Icon: Circle, color: STATUS_RING.IDLE },
-  READY: { label: 'ready', Icon: CircleDot, color: STATUS_RING.READY },
-  RUNNING: { label: 'running', Icon: LoaderCircle, color: STATUS_RING.RUNNING, spin: true },
-  WAITING: { label: 'waiting', Icon: Hourglass, color: STATUS_RING.WAITING },
-  COMPLETED: { label: 'completed', Icon: CircleCheck, color: STATUS_RING.COMPLETED },
-  PAUSED: { label: 'paused', Icon: CirclePause, color: STATUS_RING.PAUSED },
-  STOPPED: { label: 'stopped', Icon: CircleStop, color: STATUS_RING.STOPPED },
-  BLOCKED: { label: 'blocked', Icon: CircleSlash, color: STATUS_RING.BLOCKED },
-  FAILED: { label: 'failed', Icon: CircleX, color: STATUS_RING.FAILED },
+  IDLE: { label: 'idle', Icon: Circle, color: statusVar('IDLE') },
+  READY: { label: 'ready', Icon: CircleDot, color: statusVar('READY') },
+  RUNNING: { label: 'running', Icon: LoaderCircle, color: statusVar('RUNNING'), spin: true },
+  WAITING: { label: 'waiting', Icon: Hourglass, color: statusVar('WAITING') },
+  COMPLETED: { label: 'completed', Icon: CircleCheck, color: statusVar('COMPLETED') },
+  PAUSED: { label: 'paused', Icon: CirclePause, color: statusVar('PAUSED') },
+  STOPPED: { label: 'stopped', Icon: CircleStop, color: statusVar('STOPPED') },
+  BLOCKED: { label: 'blocked', Icon: CircleSlash, color: statusVar('BLOCKED') },
+  FAILED: { label: 'failed', Icon: CircleX, color: statusVar('FAILED') },
 };
 
 export interface StatusRingProps extends Omit<HTMLAttributes<HTMLSpanElement>, 'children'> {
@@ -62,8 +65,47 @@ export function StatusRing({ state, showLabel, className, ...props }: StatusRing
       style={{ color: meta.color }}
       {...props}
     >
-      <meta.Icon className={cn('h-3.5 w-3.5 shrink-0', meta.spin && 'animate-spin')} aria-hidden />
+      <meta.Icon className={cn('h-3.5 w-3.5 shrink-0', meta.spin && 'ace-spin')} aria-hidden />
       {showLabel && <span aria-hidden>{meta.label}</span>}
+    </span>
+  );
+}
+
+export interface StatusChipProps extends Omit<HTMLAttributes<HTMLSpanElement>, 'children'> {
+  state: NodeState;
+}
+
+/**
+ * The design's status treatment: a spinner (RUNNING), a pulsing dot (WAITING), a hollow dot (IDLE)
+ * or a filled dot, then the lowercase state word, all in the state colour (FR-EXE-009). The word
+ * is printed, so colour alone never carries the state.
+ */
+export function StatusChip({ state, className, style, ...props }: StatusChipProps) {
+  const meta = NODE_STATE_META[state];
+  const dot = 'h-[7px] w-[7px] shrink-0 rounded-full';
+  return (
+    <span
+      data-testid="status-chip"
+      data-state={state}
+      aria-label={meta.label}
+      role="img"
+      className={cn('inline-flex items-center gap-1.5 font-machine text-[10.5px]', className)}
+      style={{ ...style, color: meta.color }}
+      {...props}
+    >
+      {state === 'RUNNING' ? (
+        <LoaderCircle className="ace-spin h-3 w-3 shrink-0" aria-hidden />
+      ) : (
+        <span
+          aria-hidden
+          className={cn(
+            dot,
+            state === 'WAITING' && 'ace-pulse',
+            state === 'IDLE' ? 'border border-current' : 'bg-current',
+          )}
+        />
+      )}
+      <span aria-hidden>{meta.label}</span>
     </span>
   );
 }
