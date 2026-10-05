@@ -122,6 +122,7 @@ const run = (overrides: Partial<PreflightInput> = {}) => {
     },
     // Required since round 5: every base these graphs could name exists.
     knowledgeBaseExists: async () => true,
+    embeddingProviderOf: async () => undefined,
     ...overrides,
   });
 };
@@ -492,6 +493,54 @@ describe('FR-RAG-005 every pre-flight looks the knowledge bases up (13a review I
   it('knowledgeBaseExists is required on PreflightInput, so no caller can skip the lookup', () => {
     // Compile-time: an empty object satisfies the pick only while the member is optional.
     const optional: Record<never, never> extends Pick<PreflightInput, 'knowledgeBaseExists'>
+      ? true
+      : false = false;
+
+    expect(optional).toBe(false);
+  });
+});
+
+describe('FR-PRV-005 pre-flight checks an attached base can still embed (final-review I5)', () => {
+  const GONE = '01JBXQ8Z9KQ4R7N2VWXYZ0G0NE';
+
+  it('provider_missing for an agent and a Retrieval node whose base embeds with a removed provider', async () => {
+    const issues = await run({
+      nodes: [
+        inputNode(),
+        agentNode({ knowledgeBaseIds: [KB_ID] }),
+        outputNode(),
+        retrievalNode({ knowledgeBaseId: KB_ID }),
+      ],
+      embeddingProviderOf: async () => GONE,
+    });
+
+    const missing = issues.filter((issue) => issue.code === 'provider_missing');
+    expect(missing).toEqual([
+      expect.objectContaining({
+        severity: 'error',
+        nodeId: AGENT_ID,
+        message: expect.stringContaining('embedding provider'),
+      }),
+      expect.objectContaining({ severity: 'error', nodeId: RETRIEVAL_ID }),
+    ]);
+  });
+
+  it('passes when the embedding provider still exists, asking once per base', async () => {
+    const asked: string[] = [];
+    const issues = await run({
+      nodes: [inputNode(), agentNode({ knowledgeBaseIds: [KB_ID, KB_ID] }), outputNode()],
+      embeddingProviderOf: async (id) => {
+        asked.push(id);
+        return PROVIDER_ID;
+      },
+    });
+
+    expect(issues).toEqual([]);
+    expect(asked).toEqual([KB_ID]);
+  });
+
+  it('embeddingProviderOf is required on PreflightInput, so no caller can skip the lookup', () => {
+    const optional: Record<never, never> extends Pick<PreflightInput, 'embeddingProviderOf'>
       ? true
       : false = false;
 

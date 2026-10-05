@@ -88,6 +88,11 @@ export interface KnowledgeBaseRepository {
   insert(scope: Scope, kb: KnowledgeBase): Promise<KnowledgeBase>;
   get(scope: Scope, id: Id): Promise<KnowledgeBase | null>;
   listByProject(scope: Scope, projectId: Id): Promise<KnowledgeBase[]>;
+  /**
+   * Every base, in any project, that embeds with this provider (FR-PRV-005): a base cannot change
+   * its embedding provider, so removing the provider has to name it first (final-review I5).
+   */
+  listByEmbeddingProvider(scope: Scope, providerId: Id): Promise<KnowledgeBase[]>;
   update(
     scope: Scope,
     id: Id,

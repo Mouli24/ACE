@@ -202,6 +202,18 @@ export function createKnowledgeBaseRepository(
 
     get: async (scope: Scope, id: Id) => read(scope, id),
 
+    listByEmbeddingProvider: async (scope: Scope, providerId: Id) =>
+      selectWithCounts()
+        .where(
+          and(
+            eq(knowledgeBases.workspaceId, scope.workspaceId),
+            eq(knowledgeBases.embeddingProviderId, providerId),
+          ),
+        )
+        .orderBy(asc(knowledgeBases.id))
+        .all()
+        .map(toKnowledgeBase),
+
     listByProject: async (scope: Scope, projectId: Id) =>
       selectWithCounts()
         .where(

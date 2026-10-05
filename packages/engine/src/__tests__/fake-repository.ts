@@ -65,6 +65,7 @@ import type {
   UsageRepository,
 } from '../ports/index.js';
 import { newId } from '../ids.js';
+import { namesKnowledgeBase } from '../knowledge/service.js';
 
 interface State {
   projects: Map<string, Project>;
@@ -314,6 +315,10 @@ export class FakeRepository implements Repository {
     listByProvider: async (scope: Scope, providerId: Id) =>
       [...this.#for(scope).nodes.values()].filter(
         (node) => 'providerId' in node.config && node.config.providerId === providerId,
+      ),
+    listByKnowledgeBase: async (scope: Scope, knowledgeBaseId: Id) =>
+      [...this.#for(scope).nodes.values()].filter((node) =>
+        namesKnowledgeBase(node, knowledgeBaseId),
       ),
     listByWorkflow: async (scope: Scope, workflowId: Id) =>
       [...this.#for(scope).nodes.values()]
@@ -940,6 +945,13 @@ export class FakeRepository implements Repository {
       const state = this.#for(scope);
       const kb = state.knowledgeBases.get(id);
       return kb === undefined ? null : this.#counted(state, kb);
+    },
+    listByEmbeddingProvider: async (scope, providerId) => {
+      const state = this.#for(scope);
+      return [...state.knowledgeBases.values()]
+        .filter((kb) => kb.embeddingProviderId === providerId)
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map((kb) => this.#counted(state, kb));
     },
     listByProject: async (scope, projectId) => {
       const state = this.#for(scope);
