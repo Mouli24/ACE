@@ -156,3 +156,60 @@ describe('D121 a backup route without the service answers 501', () => {
     }
   });
 });
+
+describe('FR-SYS-012 the import re-checks for an active run in the hold of the copy (final-review M4)', () => {
+  const RUN = '01JBXQ8Z9KQ4R7N2VWXYZ0RVN2';
+
+  /** A store that, like the real one, calls `beforeCopy` where the copy would start. */
+  function racing(options: { startsRun: boolean }) {
+    let active: Run[] = [];
+    const copied: Uint8Array[] = [];
+    const after: string[] = [];
+    const store: BackupStore = {
+      exportZip: async () => ZIP,
+      writePreImportBackup: async () => '/tmp/pre-import.zip',
+      importZip: async (bytes, hooks) => {
+        // A run starts while the pre-import backup is written, after the service's first check.
+        if (options.startsRun) active = [{ id: RUN } as Run];
+        await hooks?.beforeCopy?.();
+        copied.push(bytes);
+        return RESTORED;
+      },
+    };
+    const service = createBackupService({
+      store,
+      repository: { runs: { listActive: async () => active } } as never,
+      scope: LOCAL_SCOPE,
+      afterImport: async () => {
+        after.push('recovered');
+      },
+    });
+    return { app: routeApp(createBackupRoutes(service)), copied, after };
+  }
+
+  it('a run that became active before the copy is refused 409, with nothing copied or recovered', async () => {
+    const { app, copied, after } = racing({ startsRun: true });
+
+    const response = await importForm(app, zipForm());
+
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as { error: { code: string; details: unknown } };
+    expect(body.error.code).toBe('invalid_run_state');
+    expect(body.error.details).toEqual({ runIds: [RUN] });
+    expect(copied).toEqual([]);
+    expect(after).toEqual([]);
+  });
+
+  it('after a restore, afterImport runs before the answer', async () => {
+    const { app, copied, after } = racing({ startsRun: false });
+
+    const response = await importForm(app, zipForm());
+
+    expect(response.status).toBe(200);
+    expect(BackupImportResponseSchema.parse(await response.json())).toEqual({
+      restored: RESTORED,
+    });
+    expect(copied).toHaveLength(1);
+    expect(after).toEqual(['recovered']);
+  });
+});

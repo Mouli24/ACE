@@ -445,6 +445,55 @@ describe('TC-SYS-014 import restores rows into a live handle via ATTACH; dataDir
     ).toEqual([live.chunk.id]);
   });
 
+  it('M4 runs beforeCopy in the same hold as the copy: a write that arrives meanwhile lands after it', async () => {
+    const source = await startEngine('source4');
+    await seedData(source);
+    const zip = await source.backup.exportZip();
+
+    const target = await startEngine('target4');
+    const late = makeProject({ name: 'Arrived during the import' });
+    let entered!: () => void;
+    const inside = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+
+    const importing = target.backup.importZip(zip, {
+      beforeCopy: async () => {
+        entered();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      },
+    });
+    await inside;
+    // Another caller — a run starting, say — writes while the import holds the connection: it has
+    // to wait for the copy rather than land before it and be wiped by it.
+    const queued = target.repository.projects.create(scope, late);
+    await importing;
+    await queued;
+
+    expect(await target.repository.projects.get(scope, late.id)).toEqual(late);
+  });
+
+  it('M4 a beforeCopy that throws refuses the import with nothing copied', async () => {
+    const source = await startEngine('source5');
+    const seeded = await seedData(source);
+    const zip = await source.backup.exportZip();
+
+    const target = await startEngine('target5');
+    const live = makeProject({ name: 'Still here' });
+    await target.repository.projects.create(scope, live);
+
+    await expect(
+      target.backup.importZip(zip, {
+        beforeCopy: async () => {
+          throw new Error('a run is active');
+        },
+      }),
+    ).rejects.toThrow('a run is active');
+
+    expect(await target.repository.projects.get(scope, live.id)).toEqual(live);
+    expect(await target.repository.projects.get(scope, seeded.project.id)).toBeNull();
+  });
+
   it('answers the path writePreImportBackup wrote', async () => {
     const engine = await startEngine('pre');
     const path = await engine.backup.writePreImportBackup();

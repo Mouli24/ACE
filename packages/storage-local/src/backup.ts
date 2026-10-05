@@ -416,7 +416,7 @@ export function createBackupStore(deps: BackupStoreDeps): BackupStore {
     exportZip,
     writePreImportBackup,
 
-    importZip: async (bytes: Uint8Array) => {
+    importZip: async (bytes: Uint8Array, hooks: { beforeCopy?: () => Promise<void> } = {}) => {
       const backup = readBackup(bytes);
 
       const temp = mkdtempSync(join(tmpdir(), 'ace-import-'));
@@ -451,7 +451,12 @@ export function createBackupStore(deps: BackupStoreDeps): BackupStore {
           writeFileSync(target, data);
         }
 
-        return await exclusive(async () => copyInto(backupPath));
+        // The caller's last check runs in the same hold as the copy, so nothing it rules out —
+        // a run starting, say — can land in between (final-review M4).
+        return await exclusive(async () => {
+          await hooks.beforeCopy?.();
+          return copyInto(backupPath);
+        });
       } finally {
         removeTemp(temp);
       }

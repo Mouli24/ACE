@@ -916,6 +916,21 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     }),
     repository,
     scope: LOCAL_SCOPE,
+    /*
+     * Final-review M4: the restored rows are live at once, so what this process keeps about them
+     * follows — the catalog cache the router and the summariser read is reloaded, and documents the
+     * backup holds mid-pipeline are queued again, as a start does (F7). The data is restored either
+     * way, so a failure here is logged rather than turned into a failed import.
+     */
+    afterImport: async () => {
+      try {
+        await refreshCatalogCache();
+        const requeued = await knowledge.recover();
+        if (requeued > 0) knowledgeLogger.info({ requeued }, 're-queued restored documents');
+      } catch (error) {
+        logger.warn({ subsystem: 'backup', err: error }, 'could not refresh after a restore');
+      }
+    },
   });
 
   const selfOrigins = [`http://${BIND_HOST}:${port}`, `http://localhost:${port}`];
