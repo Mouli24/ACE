@@ -23,4 +23,14 @@ describe('FR-SYS-005 theme.css mirrors tokens.ts', () => {
     expect(css).toMatch(/\.ace-node\[data-state='RUNNING'\]\s*\{\s*--g: 1;/);
     expect(css).toMatch(/prefers-reduced-motion: reduce[\s\S]*\.ace-spin[\s\S]*animation: none/);
   });
+  it('FR-CAN-001 themes the React Flow attribution rather than hiding it', () => {
+    // scoped to the Canvas so it outranks React Flow's own sheet, which loads after this one
+    expect(css).toMatch(
+      /\.ace-dotted-canvas \.react-flow__attribution \{\s*background: transparent;\s*\}/,
+    );
+    expect(css).toMatch(
+      /\.ace-dotted-canvas \.react-flow__attribution a \{\s*color: var\(--color-fg-faint\);\s*\}/,
+    );
+    expect(css).not.toMatch(/react-flow__attribution[^{]*\{[^}]*display:\s*none/);
+  });
 });
