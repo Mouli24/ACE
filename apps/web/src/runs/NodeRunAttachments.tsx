@@ -117,7 +117,7 @@ export function NodeApproval({ node }: { node: Node }) {
 
   if (requests.length === 0) return null;
   return (
-    <div className="mt-2 w-[320px]" data-testid={`node-approval-${node.id}`}>
+    <div className="mt-4 w-[240px]" data-testid={`node-approval-${node.id}`}>
       <ApprovalStack requests={requests} keyboard={total === 1} />
     </div>
   );

@@ -13,7 +13,6 @@ import {
 import {
   Background,
   BackgroundVariant,
-  Controls,
   MiniMap,
   Panel,
   ReactFlow,
@@ -61,6 +60,7 @@ import { useRunStore } from '../runs/run-store';
 import { useGraphSync, useWorkflowGraph } from '../workflows/hooks';
 import { PALETTE_DRAG_TYPE, PALETTE_INIT_TYPE } from './drag';
 import { useCanvasApi } from './canvas-api';
+import { CanvasZoomPill } from './CanvasZoomPill';
 import { checkConnection, type ConnectionAttempt } from './connect';
 import { DUPLICATE_OFFSET, duplicateNodes } from './duplicate';
 import {
@@ -433,11 +433,21 @@ function CanvasInner({
       const iteration = store.workflowId === workflowId ? store.iterations(edge.to.nodeId) : 0;
       return iteration > 0 ? { iteration, running: runIsLive } : { running: runIsLive };
     };
-    return toFlowEdges(connectable, nodes, live).map((e) => ({
+    // Providers give each data edge its accent, the colour it takes once data crosses it.
+    return toFlowEdges(connectable, nodes, live, providers.data ?? []).map((e) => ({
       ...e,
       selected: selectedEdgeIds.includes(e.id),
     }));
-  }, [edges, nodes, mountedIds, selectedEdgeIds, workflowId, runRevision, runIsLive]);
+  }, [
+    edges,
+    nodes,
+    mountedIds,
+    selectedEdgeIds,
+    workflowId,
+    runRevision,
+    runIsLive,
+    providers.data,
+  ]);
 
   // Edges are fully derived from the query cache, so the only change to honour is selection.
   const onEdgesChange = useCallback(
@@ -974,79 +984,94 @@ function CanvasInner({
             minZoom={0.1}
             maxZoom={2.5}
             className="ace-dotted-canvas"
-            style={{ background: tokens.color.canvas }}
+            style={{ background: 'var(--color-canvas)' }}
           >
             <Background
               variant={BackgroundVariant.Dots}
               gap={tokens.canvas.dotGap}
               size={tokens.canvas.dotSize}
-              color={tokens.color.canvasDot}
+              color="var(--color-canvas-dot)"
             />
             <MiniMap
               pannable
               zoomable
-              nodeColor={tokens.color.card}
-              nodeStrokeColor={tokens.color.border}
-              maskColor="rgba(13, 17, 23, 0.7)"
-              style={{ background: tokens.color.panel }}
+              className="overflow-hidden rounded-card border border-border"
+              nodeColor="var(--color-card)"
+              nodeStrokeColor="var(--color-border)"
+              nodeBorderRadius={4}
+              bgColor="var(--color-panel)"
+              maskColor="var(--color-minimap-mask)"
             />
-            <Controls showInteractive={false} />
-            <Panel position="top-right" className="flex gap-1">
-              {!readOnly && (
-                <>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={undo}
-                    disabled={!canUndo}
-                    title={`Undo (${MOD}Z)`}
-                    aria-label="Undo"
-                  >
-                    <Undo2 className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={redo}
-                    disabled={!canRedo}
-                    title={`Redo (${MOD}Y)`}
-                    aria-label="Redo"
-                  >
-                    <Redo2 className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={autoArrange}
-                    disabled={nodes.length === 0}
-                    title="Auto-arrange left to right"
-                    aria-label="Auto-arrange"
-                  >
-                    <LayoutGrid className="h-3.5 w-3.5" /> Auto-arrange
-                  </Button>
-                </>
-              )}
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={fitView}
-                title="Fit to view (F)"
-                aria-label="Fit to view"
+            <Panel position="bottom-left">
+              <CanvasZoomPill />
+            </Panel>
+            <Panel position="top-right">
+              <div
+                data-testid="canvas-tools-pill"
+                className="flex items-center gap-0.5 rounded-chip border border-border bg-panel p-[3px]"
               >
-                <Maximize2 className="h-3.5 w-3.5" /> Fit
-              </Button>
-              {!readOnly && (
+                {!readOnly && (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={undo}
+                      disabled={!canUndo}
+                      title={`Undo (${MOD}Z)`}
+                      aria-label="Undo"
+                    >
+                      <Undo2 className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={redo}
+                      disabled={!canRedo}
+                      title={`Redo (${MOD}Y)`}
+                      aria-label="Redo"
+                    >
+                      <Redo2 className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={autoArrange}
+                      disabled={nodes.length === 0}
+                      title="Auto-arrange left to right"
+                      aria-label="Auto-arrange"
+                    >
+                      <LayoutGrid className="h-3.5 w-3.5" />
+                    </Button>
+                    <span aria-hidden className="mx-0.5 h-3.5 w-px bg-border" />
+                  </>
+                )}
                 <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={duplicateSelection}
-                  disabled={selectedNodeIds.length === 0}
-                  title={`Duplicate selected nodes (${MOD}D)`}
-                  aria-label="Duplicate selected nodes"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={fitView}
+                  title="Fit to view (F)"
+                  aria-label="Fit to view"
                 >
-                  <Copy className="h-3.5 w-3.5" /> Duplicate
+                  <Maximize2 className="h-3.5 w-3.5" />
                 </Button>
-              )}
+                {!readOnly && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={duplicateSelection}
+                    disabled={selectedNodeIds.length === 0}
+                    title={`Duplicate selected nodes (${MOD}D)`}
+                    aria-label="Duplicate selected nodes"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+              </div>
             </Panel>
           </ReactFlow>
           {loopCandidate && (
