@@ -41,7 +41,11 @@ describe('FR-CAN-001 the zoom pill', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
     expect(flow.zoomIn).toHaveBeenCalledTimes(1);
 
-    await userEvent.click(screen.getByRole('button', { name: 'Fit view' }));
+    // the Canvas's one Fit control: visible "Fit", named "Fit to view"
+    const fit = screen.getByRole('button', { name: 'Fit to view' });
+    expect(fit).toHaveTextContent(/^Fit$/);
+    expect(fit).toHaveAttribute('title', 'Fit to view (F)');
+    await userEvent.click(fit);
     expect(flow.fitView).toHaveBeenCalledWith(expect.objectContaining({ padding: 0.2 }));
   });
 
@@ -52,7 +56,7 @@ describe('FR-CAN-001 the zoom pill', () => {
       'border-border',
       'bg-panel',
     );
-    for (const name of ['Zoom out', 'Zoom in', 'Fit view']) {
+    for (const name of ['Zoom out', 'Zoom in', 'Fit to view']) {
       expect(screen.getByRole('button', { name })).toHaveClass('rounded-chip', 'font-machine');
     }
   });

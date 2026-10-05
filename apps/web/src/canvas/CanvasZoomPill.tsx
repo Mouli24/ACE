@@ -1,7 +1,7 @@
 import { cn } from '@ace/ui';
 import { useReactFlow, useViewport } from '@xyflow/react';
 
-/** The same animation as the Canvas's own Fit (the `F` key, the top-right button). */
+/** The same animation as the Canvas's own Fit (the `F` key, the context menu's Fit view). */
 const ZOOM = { duration: 200 } as const;
 const FIT = { padding: 0.2, duration: 200 } as const;
 
@@ -13,7 +13,7 @@ const round = cn(
 
 /**
  * The zoom pill at the Canvas's bottom-left (FR-CAN-001): out, the zoom as a percentage, in, and
- * Fit. Its own component so the percentage — which moves on every pan and zoom frame — re-renders
+ * Fit — the Canvas's one Fit button (visible "Fit", named "Fit to view"). Its own component so the percentage — which moves on every pan and zoom frame — re-renders
  * this pill and nothing else (NFR-PERF-01). Rendered inside a React Flow `Panel`.
  */
 export function CanvasZoomPill() {
@@ -50,8 +50,8 @@ export function CanvasZoomPill() {
       </button>
       <button
         type="button"
-        aria-label="Fit view"
-        title="Fit view"
+        aria-label="Fit to view"
+        title="Fit to view (F)"
         className={cn(round, 'px-2.5 text-[9.5px] uppercase tracking-[0.14em]')}
         onClick={() => void fitView(FIT)}
       >

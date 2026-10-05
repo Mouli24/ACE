@@ -6,7 +6,7 @@ import {
   type Node,
 } from '@ace/contracts';
 import { ReactFlow, ReactFlowProvider } from '@xyflow/react';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { usePanelsStore } from '../app/stores/panels';
@@ -345,7 +345,7 @@ describe('FR-CAN-003 the selected node toolbar', () => {
     return nodes;
   }
 
-  function mountFlow(nodes: Node[], selectedIds: string[]) {
+  function mountFlow(nodes: Node[], selectedIds: string[], onNodeDoubleClick?: () => void) {
     act(() => useSelectionStore.getState().setSelection(selectedIds, []));
     const flowNodes: AceFlowNode[] = toFlowNodes(nodes, [], undefined, () => undefined).map(
       (node) => (selectedIds.includes(node.id) ? { ...node, selected: true } : node),
@@ -354,7 +354,13 @@ describe('FR-CAN-003 the selected node toolbar', () => {
       <ReactFlowProvider>
         <div style={{ width: 800, height: 600 }}>
           {/* threshold 0: a press on the card starts the drag, as a real move past it would */}
-          <ReactFlow nodes={flowNodes} edges={[]} nodeTypes={nodeTypes} nodeDragThreshold={0} />
+          <ReactFlow
+            nodes={flowNodes}
+            edges={[]}
+            nodeTypes={nodeTypes}
+            nodeDragThreshold={0}
+            {...(onNodeDoubleClick === undefined ? {} : { onNodeDoubleClick })}
+          />
         </div>
       </ReactFlowProvider>,
     );
@@ -383,6 +389,22 @@ describe('FR-CAN-003 the selected node toolbar', () => {
     expect(trash).toHaveAttribute('aria-label', 'Delete node');
     await userEvent.click(trash);
     expect(deleteNodes).toHaveBeenCalledWith([agent.id]);
+  });
+
+  it('a double-click on the toolbar stays there: it never reaches the node’s double-click (Configure)', async () => {
+    const [agent] = seedNodes(['agent']) as [Node];
+    const onNodeDoubleClick = vi.fn();
+    mountFlow([agent], [agent.id], onNodeDoubleClick);
+    await screen.findByTestId(`node-toolbar-${agent.id}`);
+
+    for (const id of ['node-toolbar-inspect', 'node-toolbar-chat']) {
+      fireEvent.doubleClick(screen.getByTestId(id));
+    }
+    expect(onNodeDoubleClick).not.toHaveBeenCalled();
+
+    // the card itself still answers a double-click
+    fireEvent.doubleClick(screen.getByTestId(`node-body-${agent.id}`));
+    expect(onNodeDoubleClick).toHaveBeenCalledTimes(1);
   });
 
   it('FR-CHAT-004 a Merge node has no @ Chat (chat is Agent/Model only)', async () => {

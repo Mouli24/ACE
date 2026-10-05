@@ -258,6 +258,24 @@ describe('FR-CAN-001 Canvas chrome (POC Theme V2)', () => {
       'border-border',
     );
   });
+
+  it('has one Fit control, the zoom pill’s, named "Fit to view"; the F key still fits', async () => {
+    const { workflow } = seed(['input']);
+    await mount(workflow.id);
+    const fits = screen.getAllByRole('button', { name: /fit/i });
+    expect(fits).toHaveLength(1);
+    const [fit] = fits as [HTMLElement];
+    expect(fit).toHaveAccessibleName('Fit to view');
+    expect(fit).toHaveTextContent('Fit');
+    expect(screen.getByTestId('canvas-zoom-pill')).toContainElement(fit);
+    expect(screen.getByTestId('canvas-tools-pill')).not.toContainElement(fit);
+    // F is still the Canvas's own fit shortcut: it handles (and so cancels) the key
+    let notCancelled = true;
+    act(() => {
+      notCancelled = fireEvent.keyDown(document.body, { key: 'f' });
+    });
+    expect(notCancelled).toBe(false);
+  });
 });
 
 describe('FR-MOB-003 readOnly Canvas', () => {
@@ -268,6 +286,8 @@ describe('FR-MOB-003 readOnly Canvas', () => {
     expect(screen.queryByRole('button', { name: 'Auto-arrange' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Fit to view' })).toBeInTheDocument();
+    // nothing left to edit with, so no empty tools pill either
+    expect(screen.queryByTestId('canvas-tools-pill')).toBeNull();
     expect(useCanvasApi.getState().api?.readOnly).toBe(true);
 
     press('a', { ctrlKey: true });
