@@ -28,19 +28,12 @@ import { useRunStore } from './run-store';
 
 installMockServer();
 
-// The desktop top bar no longer carries the halt note; the Canvas does (CanvasHaltNote, mounted by
-// WorkflowPage). The stand-in Canvas mounts it so these tests still see the note where it now lives.
-vi.mock('../canvas/Canvas', async () => {
-  const { CanvasHaltNote } = await import('./controls/CanvasHaltNote');
-  return {
-    Canvas: ({ workflowId }: { workflowId: string }) => (
-      <div data-testid="canvas">
-        {workflowId}
-        <CanvasHaltNote workflowId={workflowId} />
-      </div>
-    ),
-  };
-});
+// The desktop top bar no longer carries the halt note; WorkflowPage mounts it over the Canvas
+// (CanvasHaltNote beside the Canvas in its wrapper), so a plain stand-in Canvas is enough here and
+// these tests see the note where it now lives.
+vi.mock('../canvas/Canvas', () => ({
+  Canvas: ({ workflowId }: { workflowId: string }) => <div data-testid="canvas">{workflowId}</div>,
+}));
 
 afterEach(() => {
   stopSocket();
@@ -394,6 +387,8 @@ describe('TC-PAR-006 the inspector lists every iteration of a loop', () => {
     );
 
     useSelectionStore.getState().setSelection([agent.id], []);
+    // the sheet over the Canvas holds this tab; it is closed until the top bar opens it
+    await user.click(screen.getByTestId('sheet-toggle'));
     await user.click(screen.getByRole('tab', { name: 'Inspector' }));
 
     const selector = await screen.findByTestId('iteration-selector', undefined, { timeout: 5_000 });

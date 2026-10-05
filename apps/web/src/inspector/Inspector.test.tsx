@@ -68,12 +68,16 @@ async function runAndInspect(
   await screen.findByTestId('canvas');
 
   // 'Start run' exactly: round 3 put Restart in the same bar.
-  await user.click(within(screen.getByTestId('run-bar')).getByRole('button', { name: 'Start run' }));
+  await user.click(
+    within(screen.getByTestId('run-bar')).getByRole('button', { name: 'Start run' }),
+  );
   await waitFor(() => expect(useRunStore.getState().nodeRun(seeded.agent.id)).toBeDefined(), {
     timeout: 5_000,
   });
 
   act(() => useSelectionStore.getState().setSelection([seeded.agent.id], []));
+  // the sheet over the Canvas holds this tab; it is closed until the top bar opens it
+  await user.click(screen.getByTestId('sheet-toggle'));
   await user.click(screen.getByRole('tab', { name: 'Inspector' }));
   return { ...seeded, user, inspector: await screen.findByTestId('inspector') };
 }

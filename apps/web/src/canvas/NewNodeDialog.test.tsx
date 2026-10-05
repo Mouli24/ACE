@@ -132,6 +132,38 @@ describe('NewNodeDialog (FR-CAN-002, FR-NODE-001)', () => {
     );
   });
 
+  // Carried over from the deleted left Palette's tests: the one-line descriptions and the
+  // keyboard-only add from a focused item.
+  it('FR-NODE-001 each kind keeps the old palette’s one-line description; Enter on a focused item adds it', async () => {
+    const onAdd = vi.fn();
+    renderDialog({ onAdd });
+    const lines: Record<string, string> = {
+      input: 'Text or files the run starts from',
+      agent: 'A model with instructions and typed ports',
+      model: 'A bare model call',
+      output: 'Marks the end; shows the final result',
+      merge: 'Waits for all or any inputs',
+      transform: 'Template, extract JSON field, join',
+      retrieval: 'Searches a knowledge base; hits out as JSON',
+    };
+    for (const [kind, line] of Object.entries(lines)) {
+      expect(screen.getByTestId(`palette-${kind}`)).toHaveTextContent(line);
+    }
+
+    screen.getByTestId('palette-transform').focus();
+    await user.keyboard('{Enter}');
+    expect(onAdd).toHaveBeenCalledWith('transform', {});
+  });
+
+  it('the preview is a picture: static port dots, no React Flow handles', async () => {
+    renderDialog({});
+    await user.click(screen.getByTestId('palette-merge'));
+    const card = document.querySelector('[data-kind="merge"][data-testid^="node-card-"]');
+    expect(card).not.toBeNull();
+    expect(card?.querySelector('.react-flow__handle')).toBeNull();
+    expect(card?.querySelectorAll('[data-testid^="port-dot-"]').length).toBeGreaterThan(0);
+  });
+
   it('arrow keys move the choice and search filters', async () => {
     renderDialog({});
     // ↓ from Input → Agent, and focus follows the choice in the list

@@ -87,6 +87,8 @@ describe('FR-EXE-001 Start runs the workflow and the top bar follows it', () => 
     expect(screen.getByTestId('run-totals')).toHaveTextContent(/\d+↓ \d+↑ \$\d/);
 
     // TC-EXE-011: the run is in the history, newest first.
+    // the sheet over the Canvas holds this tab; it is closed until the top bar opens it
+    await user.click(screen.getByTestId('sheet-toggle'));
     await user.click(screen.getByRole('tab', { name: 'Runs' }));
     const table = await screen.findByTestId('runs-table');
     const rows = within(table).getAllByTestId(/^run-row-/);
@@ -238,6 +240,8 @@ describe('FR-EXE-010/012 a pane left open during the run catches up when it ends
     // Open both panes *before* starting, which is the case the earlier code never refetched for:
     // the queries mounted while the run had nothing recorded yet and nothing invalidated them.
     act(() => useSelectionStore.getState().setSelection([agent.id], []));
+    // the sheet over the Canvas holds this tab; it is closed until the top bar opens it
+    await user.click(screen.getByTestId('sheet-toggle'));
     await user.click(screen.getByRole('tab', { name: 'Inspector' }));
     expect(await screen.findByText(/start a run to inspect it/i)).toBeInTheDocument();
 

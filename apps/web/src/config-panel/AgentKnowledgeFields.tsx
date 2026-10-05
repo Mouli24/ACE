@@ -9,7 +9,7 @@ const legendClass = 'mb-1 font-machine text-[10px] uppercase tracking-wider text
 /**
  * The Agent's long-term memory switch (FR-MEM-001). On, the prompt gains the memory instructions and
  * the agent's saved facts ride into its next run's envelope; off, nothing is saved or injected. The
- * facts themselves are listed, deleted and cleared in the right pane's Memory tab (FR-MEM-004).
+ * facts themselves are listed, deleted and cleared in the sheet's Memory tab (FR-MEM-004).
  */
 export function AgentMemoryField({
   memory,

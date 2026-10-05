@@ -6,6 +6,7 @@ import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 
 import { configureApi } from '../app/api';
 import { routes } from '../app/routes';
+import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
 import { MockDb } from '../mocks/db';
 import { createHandlers } from '../mocks/handlers';
@@ -28,6 +29,9 @@ export const server = setupServer(
 
 export let queryClient = new QueryClient();
 
+/** The panels store as the app starts: sheet closed, bottom panel open, no dialog, no chat target. */
+const initialPanels = usePanelsStore.getState();
+
 export function installMockServer(): void {
   beforeAll(() => {
     server.listen({ onUnhandledRequest: 'error' });
@@ -39,6 +43,7 @@ export function installMockServer(): void {
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     resetGraphSyncRegistry();
     useSelectionStore.getState().clear();
+    usePanelsStore.setState(initialPanels, true);
   });
   afterEach(() => server.resetHandlers());
   afterAll(() => server.close());

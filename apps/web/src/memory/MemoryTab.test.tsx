@@ -40,6 +40,8 @@ async function openMemory(options: { enabled?: boolean; focus?: 'agent' | 'input
   await screen.findByTestId('canvas');
   const focus = options.focus === 'input' ? input : agent;
   act(() => useSelectionStore.getState().setSelection([focus.id], []));
+  // the sheet over the Canvas holds this tab; it is closed until the top bar opens it
+  await user.click(screen.getByTestId('sheet-toggle'));
   await user.click(screen.getByRole('tab', { name: 'Memory' }));
   return { agent, input, user };
 }

@@ -8,7 +8,7 @@ import { ChatThreadList } from './ChatThreadList';
 import { useChatThreads, useThreadConversation } from './useChat';
 
 /**
- * The "Chat" tab of the right pane (FR-CHAT-004..008, round 4 §5 item 5). It talks to the one
+ * The "Chat" tab of the phone layout (FR-CHAT-004..008, round 4 §5 item 5). It talks to the one
  * focused Agent or Model node using its model, instructions, context policy and tools, in threads
  * of its own that never read or write `runs`/`node_runs` (FR-CHAT-005) — this component fetches only
  * the graph (for the node's kind and name) and the chat endpoints, nothing from a run.
@@ -49,11 +49,7 @@ function ChatForNode({ node }: { node: Node }) {
   const convo = useThreadConversation(node.id, activeThreadId, setActiveThreadId);
 
   return (
-    <section
-      aria-label="Direct chat"
-      data-testid="chat-panel"
-      className="flex h-full flex-col"
-    >
+    <section aria-label="Direct chat" data-testid="chat-panel" className="flex h-full flex-col">
       <ChatThreadList
         nodeId={node.id}
         threads={threads.data ?? []}

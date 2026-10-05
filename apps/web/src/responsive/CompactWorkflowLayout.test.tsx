@@ -47,7 +47,10 @@ describe('FR-MOB-001 / FR-MOB-003 the Canvas screen at phone width', () => {
   it('keeps the desktop editor above 640 px', async () => {
     installMatchMedia(false);
     renderApp(seedWorkflow());
-    expect(await screen.findByRole('tab', { name: 'Configure' })).toBeInTheDocument();
+    // the editor's own chrome: the New node button, the panel toggle and the Chat column
+    expect(await screen.findByTestId('new-node-button')).toBeInTheDocument();
+    expect(screen.getByTestId('sheet-toggle')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-column')).toBeInTheDocument();
     expect(screen.queryByTestId('compact-workflow')).not.toBeInTheDocument();
     expect(screen.queryByTestId('readonly-banner')).not.toBeInTheDocument();
     expect(screen.queryByTestId('topbar-menu')).not.toBeInTheDocument();

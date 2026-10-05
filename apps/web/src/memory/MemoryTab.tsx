@@ -26,7 +26,7 @@ const when = (at: string | undefined) => (at === undefined ? '—' : new Date(at
 type Pending = { kind: 'one'; entry: MemoryEntry } | { kind: 'all' };
 
 /**
- * The right pane's Memory tab (round 5 §5 item 4, FR-MEM-004, TC-MEM-002): the focused agent's
+ * The sheet's Memory tab (round 5 §5 item 4, FR-MEM-004, TC-MEM-002): the focused agent's
  * long-term memory as a table — key, value, created, last used — with delete-one and clear-all, each
  * behind a confirmation, and live updates from `memory.updated`. Memory belongs to Agent nodes; any
  * other selection, or an agent with memory off, says why there is nothing to show.
