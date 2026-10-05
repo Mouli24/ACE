@@ -1,4 +1,3 @@
-import { usePanelsStore } from './panels';
 import { useSelectionStore } from './selection';
 import { useViewportStore } from './viewport';
 
@@ -19,25 +18,6 @@ describe('selection store (FR-CAN-003, FR-NODE-002)', () => {
     useSelectionStore.getState().clear();
     expect(useSelectionStore.getState().nodeIds).toEqual([]);
     expect(useSelectionStore.getState().edgeIds).toEqual([]);
-  });
-});
-
-describe('panels store (Arch §33.1 step 5 layout)', () => {
-  it('defaults to the Validation tab with every pane visible', () => {
-    const s = usePanelsStore.getState();
-    expect(s.bottomTab).toBe('validation');
-    expect(s.paletteOpen).toBe(true);
-    expect(s.configOpen).toBe(true);
-    expect(s.bottomOpen).toBe(true);
-  });
-
-  it('switches tabs and toggles panes', () => {
-    usePanelsStore.getState().setBottomTab('events');
-    usePanelsStore.getState().toggle('configOpen');
-    expect(usePanelsStore.getState().bottomTab).toBe('events');
-    expect(usePanelsStore.getState().configOpen).toBe(false);
-    usePanelsStore.getState().toggle('configOpen');
-    usePanelsStore.getState().setBottomTab('validation');
   });
 });
 

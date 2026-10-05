@@ -88,3 +88,25 @@ export function createNode(kind: CanvasNodeKind, workflowId: string, position: P
   } as Node;
   return { ...node, ...derivePorts(node) } as Node;
 }
+
+/** What the New node dialog hands over besides the kind: a name and, for model kinds, a model. */
+export interface NewNodeInit {
+  name?: string;
+  providerId?: string;
+  modelId?: string;
+}
+
+/** Applies a dialog's choices to a fresh node; a blank name and non-model kinds are left alone. */
+export function applyNewNodeInit(node: Node, init: NewNodeInit = {}): Node {
+  const name = init.name?.trim();
+  const named = name ? { ...node, name } : node;
+  if (init.providerId === undefined) return named;
+  const model = {
+    providerId: init.providerId,
+    ...(init.modelId === undefined ? {} : { modelId: init.modelId }),
+  };
+  // one branch per kind: a spread over the agent | model union does not narrow the config type
+  if (named.kind === 'agent') return { ...named, config: { ...named.config, ...model } };
+  if (named.kind === 'model') return { ...named, config: { ...named.config, ...model } };
+  return named;
+}

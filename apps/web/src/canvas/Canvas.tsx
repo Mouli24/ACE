@@ -39,6 +39,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react';
 
+import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
 import { useViewportStore } from '../app/stores/viewport';
 import { loopEdgeType } from '../edges/loop/LoopEdge';
@@ -51,12 +52,14 @@ import { edgeTypes } from '../nodes/TypedEdge';
 import {
   NODE_KIND_LABEL,
   CANVAS_NODE_KINDS,
+  applyNewNodeInit,
   createNode,
   type CanvasNodeKind,
+  type NewNodeInit,
 } from '../nodes/factory';
 import { useRunStore } from '../runs/run-store';
 import { useGraphSync, useWorkflowGraph } from '../workflows/hooks';
-import { PALETTE_DRAG_TYPE } from './Palette';
+import { PALETTE_DRAG_TYPE, PALETTE_INIT_TYPE } from './drag';
 import { useCanvasApi } from './canvas-api';
 import { checkConnection, type ConnectionAttempt } from './connect';
 import { DUPLICATE_OFFSET, duplicateNodes } from './duplicate';
@@ -121,6 +124,17 @@ export function Canvas({ workflowId, readOnly = false }: CanvasProps) {
       />
     </ReactFlowProvider>
   );
+}
+
+/** The optional name/model a New node drag carries; unreadable JSON is ignored (kind still drops). */
+function readDropInit(event: DragEvent): NewNodeInit | undefined {
+  const raw = event.dataTransfer.getData(PALETTE_INIT_TYPE);
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw) as NewNodeInit;
+  } catch {
+    return undefined;
+  }
 }
 
 function isEditable(target: EventTarget | null): boolean {
@@ -483,12 +497,15 @@ function CanvasInner({
   );
 
   const addNodeAt = useCallback(
-    (kind: CanvasNodeKind, position: { x: number; y: number }) => {
+    (kind: CanvasNodeKind, position: { x: number; y: number }, init?: NewNodeInit) => {
       if (readOnly) return undefined;
-      const node = createNode(kind, workflowId, {
-        x: Math.round(position.x),
-        y: Math.round(position.y),
-      });
+      const node = applyNewNodeInit(
+        createNode(kind, workflowId, {
+          x: Math.round(position.x),
+          y: Math.round(position.y),
+        }),
+        init,
+      );
       editor.edit([{ op: 'add_node', node }], 'Add node');
       setSelection([node.id], []);
       return node;
@@ -497,7 +514,7 @@ function CanvasInner({
   );
 
   const addNodeAtCenter = useCallback(
-    (kind: CanvasNodeKind) => {
+    (kind: CanvasNodeKind, init?: NewNodeInit) => {
       if (readOnly) return undefined;
       const bounds = wrapper.current?.getBoundingClientRect();
       const left = bounds?.left ?? 0;
@@ -516,7 +533,7 @@ function CanvasInner({
 
       // the first free spot: never on top of another card, whose ports would become unreachable
       const slot = freeSlotNear(nodes, { x: center.x - 90, y: center.y - 40 }, visible);
-      const node = addNodeAt(kind, slot);
+      const node = addNodeAt(kind, slot, init);
 
       // when the view was too crowded to hold it, bring the new node into sight
       const inView =
@@ -687,6 +704,7 @@ function CanvasInner({
     () =>
       register({
         addNode: addNodeAtCenter,
+        deleteNodes: (ids) => deleteElements(ids, []),
         fitView,
         duplicateSelection,
         autoArrange,
@@ -694,10 +712,29 @@ function CanvasInner({
         redo,
         readOnly,
       }),
-    [register, addNodeAtCenter, fitView, duplicateSelection, autoArrange, undo, redo, readOnly],
+    [
+      register,
+      addNodeAtCenter,
+      deleteElements,
+      fitView,
+      duplicateSelection,
+      autoArrange,
+      undo,
+      redo,
+      readOnly,
+    ],
   );
 
   /* ---------------------------------------------------------------- drop from palette */
+
+  const onNodeDoubleClick = useCallback(
+    (_event: unknown, node: { id: string }) => {
+      if (readOnly) return;
+      setSelection([node.id], []);
+      usePanelsStore.getState().openSheet('configure');
+    },
+    [readOnly, setSelection],
+  );
 
   const onDragOver = useCallback(
     (event: DragEvent) => {
@@ -717,7 +754,7 @@ function CanvasInner({
       if (!kind) return;
       event.preventDefault();
       const position = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      addNodeAt(kind, position);
+      addNodeAt(kind, position, readDropInit(event));
     },
     [flow, addNodeAt, readOnly],
   );
@@ -905,6 +942,7 @@ function CanvasInner({
             isValidConnection={isValidConnection}
             onEdgeContextMenu={onEdgeContextMenu}
             onPaneClick={() => setEdgeMenu(undefined)}
+            onNodeDoubleClick={onNodeDoubleClick}
             onMoveEnd={onMoveEnd}
             defaultViewport={savedViewport ?? { x: 0, y: 0, zoom: 1 }}
             fitView={!savedViewport && nodes.length > 0}
