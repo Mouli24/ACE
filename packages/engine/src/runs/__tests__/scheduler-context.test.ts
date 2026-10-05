@@ -829,6 +829,105 @@ describe('13a review I2 a plain agent keeps its delivered envelopes byte for byt
   });
 });
 
+/**
+ * A search that answers only after `ms`, unless the signal it is handed aborts first; it remembers
+ * the signals and says when it started.
+ */
+function slowSearch(
+  ms: number,
+  hits: SearchHit[],
+): SearchService & { started: Promise<void>; signals: (AbortSignal | undefined)[] } {
+  let markStarted: () => void = () => undefined;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const signals: (AbortSignal | undefined)[] = [];
+  return {
+    started,
+    signals,
+    search(_kbId, req, options?: { signal?: AbortSignal }) {
+      const signal = options?.signal;
+      signals.push(signal);
+      markStarted();
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => resolve({ hits: hits.slice(0, req.k), tookMs: ms }), ms);
+        signal?.addEventListener(
+          'abort',
+          () => {
+            clearTimeout(timer);
+            reject(signal.reason);
+          },
+          { once: true },
+        );
+      });
+    },
+  };
+}
+
+describe('FR-CTL-003 a Stop during the context step (13a review m3)', () => {
+  it('ends the node STOPPED promptly, with no markUsed, no context verdict and no call', async () => {
+    const recorded: Verdict[] = [];
+    // Every retrieved chunk and memory entry is a finding, so a context step that ran on would
+    // leave verdicts behind.
+    const guard: ContextGuard = {
+      async inspect({ target, label, text }) {
+        if (label === 'upstream') return { kind: 'continue', text, verdicts: [] };
+        const verdict = { id: newId(), nodeRunId: target.nodeRunId } as unknown as Verdict;
+        return { kind: 'continue', text, verdicts: [verdict] };
+      },
+      async record(_target, verdicts) {
+        recorded.push(...verdicts);
+        return [...verdicts];
+      },
+      async sanitise() {
+        throw new Error('the builder judges and records apart');
+      },
+      async checkIngestText({ text }) {
+        return { text, verdicts: [] };
+      },
+    };
+    const search = slowSearch(2_000, [hit(0.9, 'slow', 100)]);
+    const marked: string[][] = [];
+    const h = await build({
+      search,
+      contextGuard: guard,
+      memory: (real) => ({
+        ...real,
+        async markUsed(ids) {
+          marked.push([...ids]);
+          await real.markUsed(ids);
+        },
+      }),
+    });
+    const input = inputNode('What is ACE?');
+    const agent = agentNode('Answerer', { knowledgeBaseIds: [KB_ID], memory: { enabled: true } });
+    const output = outputNode();
+    await h.seed([input, agent, output], [edge(input, agent), edge(agent, output)]);
+    await h.repository.memory.upsert(scope, agent.id, 'tone', 'brief', NOW, newId);
+
+    const begun = await h.begin();
+    await search.started;
+    const stoppedAt = Date.now();
+    await h.controls.stop(begun.run.id);
+    const ended = await begun.done;
+
+    expect(Date.now() - stoppedAt).toBeLessThan(1_000);
+    expect(ended.status).toBe('HALTED');
+    expect(ended.haltReason).toBe('stopped');
+    const row = await h.nodeRunOf(ended, agent);
+    expect(row.status).toBe('STOPPED');
+    expect(row.error?.kind).toBe('user_cancelled');
+    expect(row).not.toHaveProperty('sources');
+    // The search was handed the run's own signal, which the Stop aborted.
+    expect(search.signals).toHaveLength(1);
+    expect(search.signals[0]?.aborted).toBe(true);
+    expect(marked).toEqual([]);
+    expect((await h.memory.list(agent.id))[0]?.lastUsedAt).toBeUndefined();
+    expect(recorded).toEqual([]);
+    expect(h.requests).toHaveLength(0);
+  });
+});
+
 describe('FR-RAG-006 a Retrieval node run', () => {
   it('records its sources and hands its hits on', async () => {
     const hits = [hit(0.9, 'only', 100)];

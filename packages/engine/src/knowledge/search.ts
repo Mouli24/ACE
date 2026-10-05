@@ -32,8 +32,43 @@ import type {
  * whose chunk is gone (deleted between the two reads) is skipped, not reported as a failure.
  */
 
+export interface SearchOptions {
+  /**
+   * The run's abort signal, when a node run searches (13a review m3): once it is aborted the search
+   * stops where it is and rejects with its reason, an `AbortError` — a Stop never waits for an
+   * embedding to finish. Absent (the search route), the search runs to the end.
+   */
+  signal?: AbortSignal;
+}
+
 export interface SearchService {
-  search(kbId: Id, req: SearchRequest): Promise<SearchResponse>;
+  search(kbId: Id, req: SearchRequest, options?: SearchOptions): Promise<SearchResponse>;
+}
+
+/**
+ * `work`, unless the signal aborts first: then its reason, at once. The work itself is left to
+ * finish on its own — an embedder has no way to be told — and whatever it answers is ignored.
+ */
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (signal === undefined) return work;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason);
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 /**
@@ -77,9 +112,14 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
   const { scope } = deps;
   const clock = deps.clock ?? Date.now;
 
-  async function vectorRanking(kb: KnowledgeBase, req: SearchRequest): Promise<string[]> {
+  async function vectorRanking(
+    kb: KnowledgeBase,
+    req: SearchRequest,
+    signal: AbortSignal | undefined,
+  ): Promise<string[]> {
     const embedder = await deps.embedderFor(kb);
-    const [embedding] = await embedder.embed([req.query]);
+    signal?.throwIfAborted();
+    const [embedding] = await untilAborted(embedder.embed([req.query]), signal);
     if (embedding === undefined) {
       throw new Error(`The embedder for "${kb.name}" returned no vector for the query.`);
     }
@@ -91,16 +131,20 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
   }
 
   return {
-    async search(kbId, req) {
+    async search(kbId, req, options = {}) {
+      const { signal } = options;
+      signal?.throwIfAborted();
       const started = clock();
 
       const kb = await deps.knowledgeBases.get(scope, kbId);
       if (kb === null) throw new KnowledgeBaseMissingError(kbId);
+      signal?.throwIfAborted();
 
       const [vectorIds, keywordIds] = await Promise.all([
-        req.mode === 'keyword' ? [] : vectorRanking(kb, req),
+        req.mode === 'keyword' ? [] : vectorRanking(kb, req, signal),
         req.mode === 'vector' ? [] : keywordRanking(kb, req),
       ]);
+      signal?.throwIfAborted();
 
       const fused = fuseRankings(vectorIds, keywordIds).slice(0, req.k);
       const chunks = await deps.chunks.getMany(

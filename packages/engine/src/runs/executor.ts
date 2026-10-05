@@ -116,10 +116,14 @@ export interface ExecuteNodeInput {
  * The context hook (round 5 §2.2–§2.4, F4). Called once per node run, for agent and Model nodes,
  * before the input point and prompt assembly, so what it places is what the input point checks and
  * the prompt shows. A `failed` step fails the node with its own reason — `GUARDRAIL_VIOLATION` for a
- * block, `BLOCKED` for a base deleted mid-run.
+ * block, `BLOCKED` for a base deleted mid-run. It is handed the run's abort signal (13a review m3), so a
+ * Stop cuts a slow search short and the node ends STOPPED with nothing more recorded.
  */
 export interface NodeContextHook {
-  build(envelopes: readonly Envelope[]): Promise<
+  build(
+    envelopes: readonly Envelope[],
+    signal: AbortSignal,
+  ): Promise<
     GuardrailStep<{
       envelopes: Envelope[];
       /** The chunks placed, best first (FR-RAG-007). */
@@ -500,13 +504,22 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
      * It runs first so the input point and the prompt both see exactly what was placed.
      */
     if (input.context !== undefined) {
-      const built = await input.context.build(envelopes);
+      const built = await input.context.build(envelopes, input.signal);
       verdicts.push(...(built.verdicts ?? []));
       if (built.kind === 'failed') {
         return fail(input, built.error, NO_USAGE, {
           failureReason: built.failureReason,
           verdicts,
         });
+      }
+      // Stopped as the context was built (13a review m3): nothing is checked, assembled or called.
+      if (input.signal.aborted) {
+        return fail(
+          input,
+          userCancelledError('The run was stopped while this node read its context.').nodeError,
+          NO_USAGE,
+          { verdicts },
+        );
       }
       envelopes = built.envelopes;
       if (built.sources.length > 0) used.sources = built.sources;

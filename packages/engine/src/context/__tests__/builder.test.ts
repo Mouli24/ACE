@@ -1199,3 +1199,86 @@ describe('FR-RAG-007 / FR-MEM-003 a stored envelope that already carries context
     expect(step.envelopes[0]?.context.budgetTokens).toBe(1000);
   });
 });
+
+describe('FR-CTL-003 a context step the run stops (13a review m3)', () => {
+  it('hands the run signal to the search, and once aborted records no verdict and places nothing', async () => {
+    const kb = newId();
+    const node = agent({ knowledgeBaseIds: [kb] });
+    const { guard, target } = guarded(node);
+    const controller = new AbortController();
+    const signals: (AbortSignal | undefined)[] = [];
+    const search: SearchService = {
+      async search(_kbId, _req, options) {
+        signals.push(options?.signal);
+        // The Stop lands while this search runs, and this search does not listen for it.
+        controller.abort();
+        return { hits: [hit(0.8, POISONED)], tookMs: 1 };
+      },
+    };
+
+    const step = await buildNodeContext({
+      node,
+      envelopes: [envelope(FROM_A, node.id, [text('Which paperwork?')], 'trusted')],
+      memory: [memoryEntry(node.id, 'tone', 'brief', 1)],
+      search,
+      guard,
+      target,
+      signal: controller.signal,
+    });
+
+    expect(signals).toEqual([controller.signal]);
+    if (step.kind !== 'failed') throw new Error('expected failed');
+    expect(step.error.kind).toBe('user_cancelled');
+    // The poisoned chunk would have left a prompt_injection verdict; a stopped node records none.
+    expect(step.verdicts ?? []).toEqual([]);
+  });
+
+  it('ends user_cancelled when the search itself gives up on the abort', async () => {
+    const kb = newId();
+    const node = agent({ knowledgeBaseIds: [kb] });
+    const { guard, target } = guarded(node);
+    const controller = new AbortController();
+    const search: SearchService = {
+      async search(_kbId, _req, options) {
+        controller.abort();
+        options?.signal?.throwIfAborted();
+        return { hits: [], tookMs: 1 };
+      },
+    };
+
+    const step = await buildNodeContext({
+      node,
+      envelopes: [envelope(FROM_A, node.id, [text('Which paperwork?')], 'trusted')],
+      memory: [],
+      search,
+      guard,
+      target,
+      signal: controller.signal,
+    });
+
+    if (step.kind !== 'failed') throw new Error('expected failed');
+    expect(step.error.kind).toBe('user_cancelled');
+    expect(step.verdicts ?? []).toEqual([]);
+  });
+
+  it('records nothing for an upstream read judged after the abort', async () => {
+    const node = agent();
+    const { guard, target } = guarded(node);
+    const controller = new AbortController();
+    controller.abort();
+
+    const step = await buildNodeContext({
+      node,
+      envelopes: [envelope(FROM_A, node.id, [text(POISONED)], 'untrusted')],
+      memory: [],
+      search: undefined,
+      guard,
+      target,
+      signal: controller.signal,
+    });
+
+    if (step.kind !== 'failed') throw new Error('expected failed');
+    expect(step.error.kind).toBe('user_cancelled');
+    expect(step.verdicts ?? []).toEqual([]);
+  });
+});
