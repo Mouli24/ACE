@@ -664,6 +664,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     chunker: createChunker(),
     embedderFor,
     checkContextText: contextGuard.checkIngestText,
+    // The data guardrail the evaluator uses, over every document's text (BR-07, D86).
+    masker,
     // A type the parser does not know is refused there with a reason; prose is only the fallback.
     chunkKindFor: (doc) => chunkKindFor(documentKind(doc) ?? 'text'),
     readArtifact: async (artifactId) => {

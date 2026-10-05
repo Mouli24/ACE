@@ -10,7 +10,9 @@ import type {
   Embedder,
   EmbedderFor,
 } from '../../ports/knowledge.js';
+import type { SecretMasker } from '../../guardrails/checks.js';
 import { createLogger } from '../../logging/index.js';
+import { maskSecrets } from '../../security/secret-patterns.js';
 import { createIngestionWorker, type IngestJob, type IngestionWorkerDeps } from '../ingest.js';
 import {
   createKnowledgeService,
@@ -87,6 +89,17 @@ export const fakeEmbedder: Embedder = {
   },
 };
 
+/**
+ * The data guardrail as the engine's own storage patterns see it, naming one type when it masked
+ * anything; the server wires `@ace/guardrails`, whose shapes are kept in step with these.
+ */
+export const patternMasker: SecretMasker = {
+  mask: (text) => {
+    const masked = maskSecrets(text);
+    return { text: masked, types: masked === text ? [] : ['api_key'] };
+  },
+};
+
 export const passThrough: ContextTextCheck = async ({ text }) => ({ text, verdicts: [] });
 
 export interface Harness {
@@ -110,6 +123,7 @@ export interface HarnessOptions {
   embedder?: EmbedderFor;
   parser?: DocumentParser;
   check?: ContextTextCheck;
+  masker?: SecretMasker;
   /** `null` means the provider does not exist; an object without `embed` has no embeddings. */
   adapter?: Partial<ProviderAdapter> | null;
 }
@@ -163,6 +177,7 @@ export async function makeHarness(options: HarnessOptions = {}): Promise<Harness
     chunker: fakeChunker,
     embedderFor: options.embedder ?? (async () => fakeEmbedder),
     checkContextText: options.check ?? passThrough,
+    masker: options.masker ?? patternMasker,
     chunkKindFor: ({ name }) => (name.endsWith('.ts') ? 'code' : 'prose'),
     readArtifact: async (id) => artifacts.get(id) ?? null,
     nextId,
