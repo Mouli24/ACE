@@ -20,7 +20,7 @@ import {
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { contextChecks } from '../../context/__tests__/context-checks.js';
-import type { ContextGuard } from '../../context/guard.js';
+import { createContextGuard, type ContextGuard } from '../../context/guard.js';
 import {
   estimatePartsTokens,
   estimateTokens,
@@ -814,6 +814,78 @@ describe('TC-RAG-006 an agent with an attached knowledge base', () => {
   });
 });
 
+describe('13a review m7 the production composition keeps round 4 behaviour for a plain agent', () => {
+  /** ULIDs from a counter, so two runs built alike get the same ids and compare byte for byte. */
+  const countingIds = (): (() => string) => {
+    let next = 0;
+    return () => `01JBXQ8Z9KQ4R7N2VW${String(next++).padStart(8, '0')}`;
+  };
+
+  it('with the context guard, search and memory wired and no findings, stores the same envelopes and prompts', async () => {
+    reply = (req) =>
+      req.prompt.includes('Act as Writer.') ? say('A short draft about ACE.') : say('Polished.');
+    const input = inputNode('Write about ACE, briefly.');
+    const writer = agentNode('Writer');
+    const rewriter = modelNode();
+    const output = outputNode();
+    const nodes = [input, writer, rewriter, output];
+    const edges = [edge(input, writer), edge(writer, rewriter), edge(rewriter, output)];
+
+    /** One run of the graph; what each node read and was prompted with. */
+    async function rowsOf(h: Harness) {
+      await h.seed(nodes, edges);
+      const run = await h.run();
+      expect(run.status).toBe('COMPLETE');
+      return Promise.all(
+        [writer, rewriter, output].map(async (node) => {
+          const row = await h.nodeRunOf(run, node);
+          return { inputEnvelopes: row.inputEnvelopes, prompt: row.prompt };
+        }),
+      );
+    }
+
+    // The round 5 services as the server composes them: the real context guard over the project's
+    // default policy and the same check runner, a search, and the memory service.
+    const recorded: unknown[] = [];
+    const judged: string[] = [];
+    const composed = await build({
+      policies: true,
+      nextId: countingIds(),
+      search: fakeSearch([hit(0.9, 'never searched')]),
+      contextGuard: createContextGuard({
+        policies: { resolve: async () => null },
+        evaluator: {
+          evaluate(check, input) {
+            judged.push(check.type);
+            return contextChecks.evaluate(check, input);
+          },
+        },
+        record: async (_target, verdict) => {
+          recorded.push(verdict);
+          return verdict;
+        },
+      }),
+    });
+    const plain = await build({
+      policies: true,
+      nextId: countingIds(),
+      memory: () => undefined,
+    });
+
+    const withRoundFive = await rowsOf(composed);
+    const withoutRoundFive = await rowsOf(plain);
+
+    expect(recorded).toEqual([]);
+    expect(judged).toEqual(
+      expect.arrayContaining(['untrusted_tagging', 'prompt_injection', 'pii']),
+    );
+    expect(JSON.stringify(withRoundFive)).toBe(JSON.stringify(withoutRoundFive));
+    // And the comparison is not vacuous: the reads were there to be judged.
+    expect(withRoundFive[1]?.prompt?.text).toContain('A short draft about ACE.');
+    expect(withRoundFive[1]?.inputEnvelopes[0]?.context.trust).toBe('untrusted');
+  });
+});
+
 describe('13a review I2 a plain agent keeps its delivered envelopes byte for byte', () => {
   it('with a context guard rewriting an upstream read, the stored envelope is still the delivered one', async () => {
     const guard: ContextGuard = {
@@ -948,6 +1020,9 @@ describe('FR-CTL-003 a Stop during the context step (13a review m3)', () => {
     expect(marked).toEqual([]);
     expect((await h.memory.list(agent.id))[0]?.lastUsedAt).toBeUndefined();
     expect(recorded).toEqual([]);
+    expect(judged).toEqual(
+      expect.arrayContaining(['untrusted_tagging', 'prompt_injection', 'pii']),
+    );
     expect(h.requests).toHaveLength(0);
   });
 });
