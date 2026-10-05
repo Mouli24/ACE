@@ -122,11 +122,17 @@ export interface Round5Engine {
 }
 
 export async function startRound5Engine(
-  options: { dataDir?: string; mock?: MockProviderAdapter } = {},
+  options: { dataDir?: string; mock?: MockProviderAdapter; clock?: () => string } = {},
 ): Promise<Round5Engine> {
   const dir = options.dataDir ?? mkdtempSync(join(tmpdir(), 'ace-r5-'));
   const mock = options.mock ?? createMockAdapter();
-  const engine = await startEngine({ dataDir: dir, port: 0, env: {}, mockProvider: mock });
+  const engine = await startEngine({
+    dataDir: dir,
+    port: 0,
+    env: {},
+    mockProvider: mock,
+    ...(options.clock === undefined ? {} : { clock: options.clock }),
+  });
 
   const api = (path: string, init: RequestInit = {}): Promise<Response> =>
     fetch(`${engine.url}/api/v1${path}`, {
