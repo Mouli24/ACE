@@ -19,7 +19,7 @@ import { useSelectionStore } from '../app/stores/selection';
 import { IterationSelector } from '../edges/loop/IterationSelector';
 import { VerdictList } from '../guardrails/VerdictList';
 import { NodeRunMenu } from '../runs/controls/NodeRunMenu';
-import { useRerunNode, useRetryNodeRun, useStartRun, useNodeRuns } from '../runs/hooks';
+import { useRerunNode, useRetryNodeRun, useRuns, useStartRun, useNodeRuns } from '../runs/hooks';
 import { useRunStore } from '../runs/run-store';
 import { useWorkflowGraph } from '../workflows/hooks';
 import { PromptText } from './PromptText';
@@ -36,7 +36,13 @@ const money = (value: number) => `$${value.toFixed(6)}`;
  */
 export function Inspector({ workflowId }: { workflowId: string }) {
   const focusedNodeId = useSelectionStore((s) => s.focusedNodeId);
-  const runId = useRunStore((store) => (store.workflowId === workflowId ? store.runId : undefined));
+  const liveRunId = useRunStore((store) =>
+    store.workflowId === workflowId ? store.runId : undefined,
+  );
+  // The overlay adopts only a live run, so after a reload a finished one is inspected from the
+  // records: the workflow's newest run (D-091).
+  const runs = useRuns(liveRunId === undefined ? workflowId : undefined);
+  const runId = liveRunId ?? runs.data?.[0]?.id;
   const nodeRuns = useNodeRuns(runId);
   const graph = useWorkflowGraph(workflowId);
   const [promptOpen, setPromptOpen] = useState(false);
@@ -60,7 +66,12 @@ export function Inspector({ workflowId }: { workflowId: string }) {
       className="flex h-full flex-col gap-3 overflow-y-auto p-4"
       data-testid="inspector"
     >
-      {runId === undefined && <p className="text-sm text-fg-muted">Start a run to inspect it.</p>}
+      {runId === undefined && runs.isLoading && (
+        <p className="text-sm text-fg-muted">Loading runs…</p>
+      )}
+      {runId === undefined && !runs.isLoading && (
+        <p className="text-sm text-fg-muted">Start a run to inspect it.</p>
+      )}
       {runId !== undefined && focusedNodeId === undefined && (
         <p className="text-sm text-fg-muted">Select a node to see what its run did.</p>
       )}
