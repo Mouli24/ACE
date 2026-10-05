@@ -24,6 +24,7 @@ import { emitIngest, INGEST_PROGRESS, knowledgeRepositories, type IngestJob } fr
 export interface KnowledgeService {
   /** 404 for an unknown project; the embedding provider must exist and support `embed` (validation_failed). */
   create(projectId: Id, body: CreateKnowledgeBaseRequest): Promise<KnowledgeBase>;
+  /** 404 for an unknown project, as `/projects/:id/workflows` is. */
   list(projectId: Id): Promise<KnowledgeBase[]>;
   get(id: Id): Promise<KnowledgeBase>;
   /** Checks the overlap against the stored size when a patch names only one of the two (D235). */
@@ -79,11 +80,16 @@ export function createKnowledgeService(deps: KnowledgeServiceDeps): KnowledgeSer
     });
   }
 
+  /** A project's bases are a project's: an unknown one is 404, as its workflows are. */
+  async function requireProject(projectId: Id): Promise<void> {
+    if ((await repository.projects.get(scope, projectId)) === null) {
+      throw notFound(`Project ${projectId}`);
+    }
+  }
+
   return {
     async create(projectId, body) {
-      if ((await repository.projects.get(scope, projectId)) === null) {
-        throw notFound(`Project ${projectId}`);
-      }
+      await requireProject(projectId);
       let adapter: ProviderAdapter;
       try {
         adapter = await deps.providers.adapterFor(body.embeddingProviderId);
@@ -117,6 +123,7 @@ export function createKnowledgeService(deps: KnowledgeServiceDeps): KnowledgeSer
     },
 
     async list(projectId) {
+      await requireProject(projectId);
       return repos.knowledgeBases.listByProject(scope, projectId);
     },
 
