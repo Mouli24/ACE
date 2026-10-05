@@ -93,7 +93,7 @@ export interface IngestionWorker {
   drain(): Promise<void>;
   /** Begins polling the queue. Idempotent. */
   start(): void;
-  /** Stops polling and waits for the document in flight. */
+  /** Stops polling and waits for the document in flight; queued ones wait for the next start. */
   stop(): Promise<void>;
   /** Asks a started worker to look at the queue now. */
   wake(): void;
@@ -275,12 +275,15 @@ export function createIngestionWorker(deps: IngestionWorkerDeps): IngestionWorke
 
   let inFlight: Promise<void> | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
+  /** Set while `stop()` waits: the drain finishes its document and takes no next one. */
+  let stopping = false;
 
   /** One drain at a time: a second caller joins the one already running. */
   function drain(): Promise<void> {
     if (inFlight !== null) return inFlight;
     const run = (async () => {
       for (;;) {
+        if (stopping) return;
         const job = await queue.dequeue(scope);
         if (job === null) return;
         try {
@@ -319,7 +322,14 @@ export function createIngestionWorker(deps: IngestionWorkerDeps): IngestionWorke
     async stop() {
       if (timer !== null) clearInterval(timer);
       timer = null;
-      await inFlight?.catch(() => undefined);
+      // Only the document in flight is finished: the rest stay `pending` in the store, and the
+      // next start re-queues them (F7) — a shutdown never waits on a whole queue (FR-SYS-008).
+      stopping = true;
+      try {
+        await inFlight?.catch(() => undefined);
+      } finally {
+        stopping = false;
+      }
     },
     wake() {
       if (timer !== null) kick();
