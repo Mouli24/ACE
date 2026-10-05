@@ -99,6 +99,26 @@ describe('FR-CAN-002 / FR-CHAT-004 the Canvas screen in the V2 layout', () => {
     expect(screen.queryByTestId('workflow-sheet')).toBeNull();
   });
 
+  it('closing the sheet from its own Close button hands focus back to the panel toggle', async () => {
+    const user = userEvent.setup();
+    const { path } = seed();
+    renderApp(path);
+    await screen.findByTestId('canvas');
+    const toggle = screen.getByTestId('sheet-toggle');
+
+    await user.click(toggle);
+    const sheet = await screen.findByRole('region', { name: 'Workflow panel' });
+    // the toggle names what it opens
+    expect(toggle).toHaveAttribute('aria-controls', sheet.id);
+    expect(sheet.id).not.toBe('');
+
+    // keyboard-activate Close: focus must not fall to <body> when the sheet unmounts
+    within(sheet).getByRole('button', { name: 'Close panel' }).focus();
+    await user.keyboard('{Enter}');
+    expect(screen.queryByTestId('workflow-sheet')).toBeNull();
+    expect(toggle).toHaveFocus();
+  });
+
   it('New node opens the dialog; adding a kind calls the Canvas’s addNode and closes it', async () => {
     const user = userEvent.setup();
     const { path } = seed();

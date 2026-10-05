@@ -7,7 +7,7 @@ import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
 import { createNode } from '../nodes/factory';
 import { db, installMockServer, queryClient, renderWithQuery } from '../test/app';
-import { WorkflowSheet } from './WorkflowSheet';
+import { SHEET_ID, WorkflowSheet } from './WorkflowSheet';
 import { getGraphSync } from './sync-registry';
 
 installMockServer();
@@ -63,6 +63,9 @@ describe('FR-NODE-002 / FR-EXE-010 the floating sheet over the Canvas', () => {
 
     const sheet = await screen.findByTestId('workflow-sheet');
     expect(sheet).toHaveClass('absolute', 'right-3', 'top-3', 'bottom-3', 'z-20', 'bg-panel');
+    // a landmark named as the top bar's toggle is, with the id that toggle points at
+    expect(screen.getByRole('region', { name: 'Workflow panel' })).toBe(sheet);
+    expect(sheet).toHaveAttribute('id', SHEET_ID);
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
       'Configure',
       'Inspector',
