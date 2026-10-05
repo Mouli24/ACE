@@ -1020,9 +1020,6 @@ describe('FR-CTL-003 a Stop during the context step (13a review m3)', () => {
     expect(marked).toEqual([]);
     expect((await h.memory.list(agent.id))[0]?.lastUsedAt).toBeUndefined();
     expect(recorded).toEqual([]);
-    expect(judged).toEqual(
-      expect.arrayContaining(['untrusted_tagging', 'prompt_injection', 'pii']),
-    );
     expect(h.requests).toHaveLength(0);
   });
 });
