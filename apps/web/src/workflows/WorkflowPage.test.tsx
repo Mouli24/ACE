@@ -72,9 +72,14 @@ describe('FR-CAN-002 / FR-CHAT-004 the Canvas screen in the V2 layout', () => {
     expect(surface.parentElement).toHaveClass('relative', 'min-h-0');
 
     const column = screen.getByTestId('chat-column');
-    expect(column.tagName).toBe('ASIDE');
-    expect(column).toHaveClass('border-l', 'border-border', 'bg-panel');
-    expect(within(column).getByTestId('chat-aside')).toBeInTheDocument();
+    // one Chat landmark (ChatAside's own <aside aria-label="Chat">), not one nested in another
+    expect(column.tagName).toBe('DIV');
+    const chat = within(column).getByRole('complementary', { name: 'Chat' });
+    expect(chat).toBe(within(column).getByTestId('chat-aside'));
+    expect(within(column).getAllByRole('complementary')).toHaveLength(1);
+    // the column's left rule is drawn once, by the Chat aside itself
+    expect(column).not.toHaveClass('border-l');
+    expect(chat).toHaveClass('border-l', 'border-border', 'bg-panel');
 
     expect(screen.queryByLabelText('Node palette')).toBeNull();
     expect(screen.queryByTestId('palette-agent')).toBeNull();

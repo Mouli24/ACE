@@ -81,12 +81,10 @@ export function WorkflowPage() {
           <BottomPanel workflowId={workflowId} />
         </section>
       </div>
-      <aside
-        data-testid="chat-column"
-        className="flex min-h-0 min-w-0 flex-col border-l border-border bg-panel"
-      >
+      {/* a plain box: ChatAside is the landmark (<aside aria-label="Chat">) and draws the rule */}
+      <div data-testid="chat-column" className="flex min-h-0 min-w-0 flex-col">
         <ChatAside workflowId={workflowId} />
-      </aside>
+      </div>
       <NewNodeDialog
         workflowId={workflowId}
         workflowName={graph.data?.workflow.name ?? 'Workflow'}
