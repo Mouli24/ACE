@@ -104,6 +104,26 @@ describe('FR-RAG-001 the fake derives a base counts from its documents and chunk
       chunkCount: 0,
     });
   });
+
+  it('FR-RAG-009 the retention sweep spares an artifact a knowledge-base document references', async () => {
+    const repo = new FakeRepository();
+    const old = '2026-09-01T00:00:00.000Z';
+    for (const id of ['01JBXQ8Z9KQ4R7N2VWXYZ0ARTF', '01JBXQ8Z9KQ4R7N2VWXYZ0ARTG']) {
+      await repo.artifacts.create(scope, {
+        id,
+        hash: id.slice(-1).repeat(64),
+        mime: 'text/markdown',
+        name: 'handbook.md',
+        size: 10,
+        createdAt: old,
+      });
+    }
+    // `document()` points at ...ARTF; nothing points at ...ARTG.
+    await repo.kbDocuments.insert(scope, document('d1', 'ready'));
+
+    const swept = await repo.artifacts.unreferencedBefore(scope, '2026-09-20T00:00:00.000Z');
+    expect(swept.map((artifact) => artifact.id)).toEqual(['01JBXQ8Z9KQ4R7N2VWXYZ0ARTG']);
+  });
 });
 
 describe('FR-MEM-001 the fake memory keeps one value per key', () => {
