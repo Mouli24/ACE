@@ -228,6 +228,7 @@ async function build(
     summariser?: Summariser;
     contextGuard?: ContextGuard;
     usage?: boolean;
+    now?: () => string;
   } = {},
 ): Promise<Harness> {
   const repository = new FakeRepository();
@@ -275,7 +276,7 @@ async function build(
     scope,
     bus,
     logger: createLogger({ level: 'silent', destination: { write: () => undefined } }),
-    now: () => NOW,
+    now: options.now ?? (() => NOW),
     router,
     adapterFor: async () => adapter,
     checkProvider: async () => ({ status: 'CONNECTED', checkedAt: NOW }),
@@ -842,5 +843,30 @@ describe('FR-OBS-002 a completed run announces the day totals', () => {
           (event.payload as { dayTotals?: DayTotals }).dayTotals !== undefined,
       ),
     ).toBe(false);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Node-run duration                                                           */
+/* -------------------------------------------------------------------------- */
+
+describe('F10 / FR-OBS-007 a node run records how long it ran', () => {
+  it('durationMs is endedAt − startedAt on a completed agent node run', async () => {
+    let tick = 0;
+    const clock = (): string => new Date(Date.UTC(2026, 9, 4, 10, 0, 0, tick++ * 10)).toISOString();
+    const h = await build({ now: clock });
+    const input = inputNode();
+    const agent = agentNode('Writer');
+    const output = outputNode();
+    await h.seed([input, agent, output], [edge(input, agent), edge(agent, output)]);
+
+    const run = await h.run();
+
+    expect(run.status).toBe('COMPLETE');
+    const row = await h.nodeRunOf(run, agent);
+    expect(row.startedAt).toBeDefined();
+    expect(row.endedAt).toBeDefined();
+    expect(row.durationMs).toBe(Date.parse(row.endedAt ?? '') - Date.parse(row.startedAt ?? ''));
+    expect(row.durationMs).toBeGreaterThan(0);
   });
 });
