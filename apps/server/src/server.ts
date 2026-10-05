@@ -693,7 +693,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     runGated: async (providerId, fn) => (await providers.semaphoreFor(providerId)).run(fn),
     cache: repository.summaryCache,
     scope: LOCAL_SCOPE,
-    now: () => new Date().toISOString(),
+    // The engine's clock when a test injects one, as the artifact store's is (13b review m6).
+    now: options.clock ?? (() => new Date().toISOString()),
     fallback: createTruncatingSummariser(),
     onFallback: (reason) =>
       logger.warn({ subsystem: 'runs', reason }, 'model summary fell back to truncation'),
