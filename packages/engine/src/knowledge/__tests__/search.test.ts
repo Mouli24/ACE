@@ -8,6 +8,7 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { FakeRepository } from '../../__tests__/fake-repository.js';
+import { CHARS_PER_TOKEN } from '../../envelopes/index.js';
 import { nodeErrorOf } from '../../errors/index.js';
 import { newId } from '../../ids.js';
 import {
@@ -443,5 +444,27 @@ describe('FR-CTL-003 a search is cancelled with the run that asked for it (13a r
     );
 
     expect(response.hits).toHaveLength(2);
+  });
+});
+
+describe('FR-RAG-004 a query is cut to the base chunk size before either arm sees it (final-review M5)', () => {
+  it('embeds and keyword-searches only the start, chunkSize × CHARS_PER_TOKEN characters', async () => {
+    const h = await harness(CORPUS, () => []);
+    const limit = h.kb.chunkSize * CHARS_PER_TOKEN;
+    const query = `zephyrine-protocol-7 ${'lorem ipsum '.repeat(1000)}`;
+
+    await h.service.search(h.kb.id, { query, k: 5, mode: 'hybrid' });
+
+    expect(h.embedder.calls).toEqual([[query.slice(0, limit)]]);
+    expect(h.keywords.calls[0]?.query).toBe(query.slice(0, limit));
+  });
+
+  it('leaves a query within the limit as it is', async () => {
+    const h = await harness(CORPUS, () => []);
+
+    await h.service.search(h.kb.id, { query: 'office hours', k: 5, mode: 'hybrid' });
+
+    expect(h.embedder.calls).toEqual([['office hours']]);
+    expect(h.keywords.calls[0]?.query).toBe('office hours');
   });
 });

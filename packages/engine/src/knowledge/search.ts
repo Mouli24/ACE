@@ -8,6 +8,7 @@ import {
   type SearchResponse,
 } from '@ace/contracts';
 
+import { CHARS_PER_TOKEN } from '../envelopes/index.js';
 import type {
   EmbedderFor,
   KbChunkRepository,
@@ -30,6 +31,11 @@ import type {
  * The indexes answer chunk ids; the text and source a hit carries come from `KbChunkRepository`, so
  * a hit always shows the stored chunk rather than whatever an index happens to keep. An index entry
  * whose chunk is gone (deleted between the two reads) is skipped, not reported as a failure.
+ *
+ * A query is cut to the base's chunk size first — `chunkSize × CHARS_PER_TOKEN` characters, from the
+ * start (final-review M5). An implicit retrieval or a Retrieval node searches with a node's whole
+ * reads, which can run to thousands of tokens, and a real embedder refuses an input that long; a
+ * base's embedder is sized for its chunks, so that is what both arms are given.
  */
 
 export interface SearchOptions {
@@ -140,9 +146,13 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
       if (kb === null) throw new KnowledgeBaseMissingError(kbId);
       signal?.throwIfAborted();
 
+      const fitted: SearchRequest = {
+        ...req,
+        query: req.query.slice(0, kb.chunkSize * CHARS_PER_TOKEN),
+      };
       const [vectorIds, keywordIds] = await Promise.all([
-        req.mode === 'keyword' ? [] : vectorRanking(kb, req, signal),
-        req.mode === 'vector' ? [] : keywordRanking(kb, req),
+        fitted.mode === 'keyword' ? [] : vectorRanking(kb, fitted, signal),
+        fitted.mode === 'vector' ? [] : keywordRanking(kb, fitted),
       ]);
       signal?.throwIfAborted();
 
