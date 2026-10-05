@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -59,16 +59,38 @@ describe('BottomPanel (theme v2)', () => {
     expect(usePanelsStore.getState().bottomOpen).toBe(true);
   });
 
-  it('the Errors tab shows how many node runs failed, were blocked or stopped', () => {
+  it('the Errors count is FAILED node runs only; stopped or blocked runs show none', () => {
     nodeRunRows.rows = [
       { id: 'a', nodeId: 'n1', status: 'FAILED', attempt: 1 },
       { id: 'b', nodeId: 'n2', status: 'BLOCKED', attempt: 1 },
       { id: 'c', nodeId: 'n3', status: 'STOPPED', attempt: 1 },
       { id: 'd', nodeId: 'n4', status: 'COMPLETED', attempt: 1 },
     ];
+    const first = renderPanel();
+    expect(screen.getByRole('tab', { name: 'Errors 1' })).toBeInTheDocument();
+    expect(screen.getByTestId('bottom-count-errors')).toHaveTextContent('1');
+    first.unmount();
+
+    nodeRunRows.rows = [{ id: 'c', nodeId: 'n3', status: 'STOPPED', attempt: 1 }];
+    const second = renderPanel();
+    expect(screen.queryByTestId('bottom-count-errors')).not.toBeInTheDocument();
+    second.unmount();
+
+    nodeRunRows.rows = [{ id: 'b', nodeId: 'n2', status: 'BLOCKED', attempt: 1 }];
     renderPanel();
-    expect(screen.getByRole('tab', { name: 'Errors 3' })).toBeInTheDocument();
-    expect(screen.getByTestId('bottom-count-errors')).toHaveTextContent('3');
+    expect(screen.queryByTestId('bottom-count-errors')).not.toBeInTheDocument();
+  });
+
+  it('the toggle sits outside the tablist and reports aria-expanded', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    const toggle = screen.getByTestId('bottom-toggle');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const tablist = screen.getByRole('tablist');
+    expect(within(tablist).queryAllByRole('button')).toHaveLength(0);
+    expect(tablist).not.toContainElement(toggle);
+    await user.click(toggle);
+    expect(screen.getByTestId('bottom-toggle')).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('the active tab uses the card look, not the inverted segmented look', () => {
