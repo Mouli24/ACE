@@ -107,6 +107,16 @@ describe('FR-SYS-005 both themes meet WCAG AA', () => {
       expect(contrastRatio(c.borderStrong, c.card)).toBeGreaterThan(contrastRatio(c.border, c.card));
     });
 
+    it.each([
+      ...NODE_STATES.map((s) => [`status ${s}`, c.status[s]] as const),
+      ...PROVIDER_TYPES.map((p) => [`provider ${p}`, c.provider[p]] as const),
+      ...PROVIDER_STATES.map((s) => [`provider status ${s}`, c.providerStatus[s]] as const),
+    ])('NFR-USE-02 %s doubles as text: ≥ 4.5:1 on card, panel and canvas', (_label, hex) => {
+      expect(contrastRatio(hex, c.card)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(hex, c.panel)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(hex, c.canvas)).toBeGreaterThanOrEqual(4.5);
+    });
+
     it.each(PROVIDER_TYPES)('provider accent %s ≥ 3:1 on the card', (p) => {
       expect(contrastRatio(c.provider[p], c.card)).toBeGreaterThanOrEqual(3);
     });

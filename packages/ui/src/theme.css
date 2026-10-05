@@ -26,7 +26,7 @@
   --color-provider-ollama: #e8e8ea;
   --color-provider-mock: #9a99a3;
 
-  --color-status-IDLE: #75757d;
+  --color-status-IDLE: #7c7c84;
   --color-status-READY: #93a8ff;
   --color-status-RUNNING: #5cc8ff;
   --color-status-WAITING: #f5c542;
@@ -97,29 +97,29 @@
   --color-danger: #c13a27;
   --color-selection: #7446d8;
 
-  --color-provider-anthropic: #c8562c;
-  --color-provider-google: #d0307c;
-  --color-provider-openai: #0e9483;
+  --color-provider-anthropic: #b04c27;
+  --color-provider-google: #c22d74;
+  --color-provider-openai: #0b786a;
   --color-provider-openai_compatible: #7446d8;
   --color-provider-ollama: #3a3a40;
   --color-provider-mock: #6b6972;
 
-  --color-status-IDLE: #8a8890;
+  --color-status-IDLE: #6b6970;
   --color-status-READY: #3b5bdb;
-  --color-status-RUNNING: #0b84c6;
-  --color-status-WAITING: #ac800b;
-  --color-status-COMPLETED: #15996a;
-  --color-status-PAUSED: #8f7a2a;
+  --color-status-RUNNING: #0970a8;
+  --color-status-WAITING: #886509;
+  --color-status-COMPLETED: #117954;
+  --color-status-PAUSED: #7b6924;
   --color-status-STOPPED: #6b6972;
-  --color-status-BLOCKED: #c26a00;
+  --color-status-BLOCKED: #a15800;
   --color-status-FAILED: #c13a27;
 
   --color-provider-status-UNKNOWN: #6b6972;
   --color-provider-status-CHECKING: #3b5bdb;
-  --color-provider-status-CONNECTED: #15996a;
+  --color-provider-status-CONNECTED: #117954;
   --color-provider-status-AUTH_FAILED: #c13a27;
-  --color-provider-status-UNREACHABLE: #c26a00;
-  --color-provider-status-RATE_LIMITED: #ac800b;
+  --color-provider-status-UNREACHABLE: #a15800;
+  --color-provider-status-RATE_LIMITED: #886509;
 
   --color-chart-1: #2a78d6;
   --color-chart-2: #d4531f;
