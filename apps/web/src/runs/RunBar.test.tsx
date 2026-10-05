@@ -43,8 +43,12 @@ describe('RunBar halt note placement (Review Focus 5)', () => {
     expect(screen.getByTestId('run-status')).toHaveAttribute('data-status', 'HALTED');
   });
 
-  it('keeps Start reachable by name while no run is active', () => {
+  it('shows "Run" and is named "Start run" (WCAG 2.5.3: the visible text is in the name)', () => {
     renderBar();
-    expect(screen.getByRole('button', { name: 'Start' })).toBeInTheDocument();
+    const button = screen.getByRole('button', { name: 'Start run' });
+    expect(button).toHaveTextContent('Run');
+    expect(button.getAttribute('aria-label')?.toLowerCase()).toContain(
+      (button.textContent ?? '').trim().toLowerCase(),
+    );
   });
 });
