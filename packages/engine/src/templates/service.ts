@@ -38,7 +38,7 @@ export interface TemplateService {
 
 export interface TemplateServiceDeps {
   graph: Pick<GraphService, 'createProject' | 'getProject' | 'importWorkflow' | 'deleteProject'>;
-  providers: Pick<ProviderService, 'list' | 'create' | 'refreshModels'>;
+  providers: Pick<ProviderService, 'list' | 'create' | 'refreshModels' | 'listModels'>;
   /** Injected: the knowledge service is built beside this one (round 5 Task 8). */
   createKnowledgeBase(projectId: Id, body: CreateKnowledgeBaseRequest): Promise<KnowledgeBase>;
   /** Compensation: removes a base this service created when a later step failed. */
@@ -56,20 +56,20 @@ export function createTemplateService(deps: TemplateServiceDeps): TemplateServic
   const now = deps.now ?? (() => new Date().toISOString());
 
   /**
-   * F11: the first mock provider, created as `Mock` when the workspace has none. A provider created
-   * here has its catalogue refreshed at once: the router routes only to catalogued models, so
-   * without it every template node would be BLOCKED `unavailable_model` (FR-ONB-002: no setup).
+   * F11: the first mock provider, created as `Mock` when the workspace has none. Whichever it is,
+   * it must have a catalogue: the router routes only to catalogued models, so without one every
+   * template node would be BLOCKED `unavailable_model` (FR-ONB-002: no setup). A new provider is
+   * refreshed at once, and so is a reused one with no models — a refresh that failed before, say.
    */
   async function mockProviderId(): Promise<Id> {
     const existing = (await deps.providers.list()).find((p) => p.type === 'mock');
-    if (existing !== undefined) return existing.id;
-    const created = await deps.providers.create({
-      type: 'mock',
-      name: MOCK_PROVIDER_NAME,
-      concurrency: 4,
-    });
-    await deps.providers.refreshModels(created.id);
-    return created.id;
+    const id =
+      existing?.id ??
+      (await deps.providers.create({ type: 'mock', name: MOCK_PROVIDER_NAME, concurrency: 4 })).id;
+    const catalogued =
+      existing !== undefined && (await deps.providers.listModels({ providerId: id })).length > 0;
+    if (!catalogued) await deps.providers.refreshModels(id);
+    return id;
   }
 
   async function projectFor(
