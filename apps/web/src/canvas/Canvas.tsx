@@ -126,15 +126,27 @@ export function Canvas({ workflowId, readOnly = false }: CanvasProps) {
   );
 }
 
-/** The optional name/model a New node drag carries; unreadable JSON is ignored (kind still drops). */
+/**
+ * The optional name/model a New node drag carries. The data comes from any drag source, so only
+ * string fields of a plain object are kept; anything else (or unreadable JSON) is ignored and the
+ * kind still drops with its defaults.
+ */
 function readDropInit(event: DragEvent): NewNodeInit | undefined {
   const raw = event.dataTransfer.getData(PALETTE_INIT_TYPE);
   if (!raw) return undefined;
+  let parsed: unknown;
   try {
-    return JSON.parse(raw) as NewNodeInit;
+    parsed = JSON.parse(raw);
   } catch {
     return undefined;
   }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
+  const fields = parsed as Record<string, unknown>;
+  const init: NewNodeInit = {};
+  if (typeof fields['name'] === 'string') init.name = fields['name'];
+  if (typeof fields['providerId'] === 'string') init.providerId = fields['providerId'];
+  if (typeof fields['modelId'] === 'string') init.modelId = fields['modelId'];
+  return Object.keys(init).length > 0 ? init : undefined;
 }
 
 function isEditable(target: EventTarget | null): boolean {
