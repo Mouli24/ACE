@@ -109,7 +109,8 @@ let recording = false;
   const original = Socket.prototype.connect;
   const patched = function (this: Socket, ...args: unknown[]): Socket {
     if (recording) {
-      const [first, second] = args;
+      // `net.connect` hands `connect` its already-normalised `[options, callback]` array.
+      const [first, second] = Array.isArray(args[0]) ? (args[0] as unknown[]) : args;
       if (typeof first === 'object' && first !== null && !Array.isArray(first)) {
         const options = first as { host?: unknown; port?: unknown; path?: unknown };
         if (options.path === undefined) {
@@ -788,15 +789,15 @@ function countRows(table: string): number {
 describe('TC-RAG-009 summary cache', () => {
   it('two identical `summary.json` runs make exactly one summarisation call; a cache row is stored', async () => {
     const graph = await importExport(readFixture('summary.json'));
+    const callsBefore = engine.mockProvider.calls().length;
     const first = await runToEnd(graph.workflowId);
     const second = await runToEnd(graph.workflowId);
     expect(first.run.status).toBe('COMPLETE');
     expect(second.run.status).toBe('COMPLETE');
 
-    const runIds = new Set([first.run.id, second.run.id]);
-    const calls = engine.mockProvider
-      .calls()
-      .filter((call) => call.runId !== undefined && runIds.has(call.runId));
+    // Every mock call made from the first run's start to the second run's end. (A summarisation
+    // call is not tied to a run on the call log, so the window is by position, not by `runId`.)
+    const calls = engine.mockProvider.calls().slice(callsBefore);
     const summarising = calls.filter((call) =>
       (call.system ?? '').includes(SUMMARY_PROMPT_VERSION),
     );
@@ -819,6 +820,11 @@ describe('TC-RAG-009 summary cache', () => {
 });
 
 /* --------------------------------- TC-RAG-010 ------------------------------ */
+
+/** The figures §7.2 asks to be printed: straight to stderr, so a passing run still shows them. */
+const report = (line: string): void => {
+  process.stderr.write(`${line}\n`);
+};
 
 interface LabelledFixtureQuestion extends LabelledQuestion {
   kind: string;
@@ -845,7 +851,7 @@ describe('TC-RAG-010 retrieval quality (hit-rate@5)', () => {
     ) as LabelledFixtureQuestion[];
     expect(questions.length).toBeGreaterThanOrEqual(20);
     const { rate, misses } = await hitRateAt5(questions);
-    console.log(`TC-RAG-010 hit-rate@5, fixture set (${questions.length} q): ${rate.toFixed(3)}`);
+    report(`TC-RAG-010 hit-rate@5, fixture set (${questions.length} q): ${rate.toFixed(3)}`);
     expect(misses).toEqual([]);
     expect(rate).toBeGreaterThanOrEqual(1);
   });
@@ -853,7 +859,7 @@ describe('TC-RAG-010 retrieval quality (hit-rate@5)', () => {
   it("this suite's own labelled set: hit-rate@5 printed (no agreed target for it)", async () => {
     expect(INDEPENDENT_QUESTIONS.length).toBeGreaterThanOrEqual(20);
     const { rate, misses } = await hitRateAt5(INDEPENDENT_QUESTIONS);
-    console.log(
+    report(
       `TC-RAG-010 hit-rate@5, independent set (${INDEPENDENT_QUESTIONS.length} q): ${rate.toFixed(3)}` +
         (misses.length > 0 ? `\n  misses:\n  ${misses.join('\n  ')}` : ''),
     );
@@ -1115,11 +1121,14 @@ describe('PII on ingest (§2.3, Arch §21.3)', () => {
 describe('TC-OBS-001 trace = event log', () => {
   it('a run with a tool and guardrails: one trace entry per event, same seq order, kinds per the contract', async () => {
     const graph = await importExport(
-      buildChain('Trace', 'Echo this back please.', [
+      // A verdict is stored and emitted only for a check that triggered (D114), so the agent reads
+      // the poisoned document: the context point strips it and warns (§2.3), and the run goes on.
+      buildChain('Trace', `Echo what the ${POISON_TERM} says.`, [
         {
           name: 'Tooler',
           modelId: 'mock-tool',
           tools: { enabled: ['echo'], maxToolCalls: 10, allowedDomains: [] },
+          knowledgeBaseIds: [corpus.kb.id],
         },
       ]),
     );
