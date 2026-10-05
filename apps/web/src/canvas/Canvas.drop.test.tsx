@@ -65,6 +65,26 @@ describe('drop from the New node dialog (FR-CAN-002)', () => {
     expect(agentsOf(workflowId)[0]?.name).toBe('Agent');
   });
 
+  it('ignores init JSON that is not an object', async () => {
+    const workflowId = await mount();
+    drop({ [PALETTE_DRAG_TYPE]: 'agent', [PALETTE_INIT_TYPE]: 'null' });
+    await waitFor(() => expect(agentsOf(workflowId)).toHaveLength(1));
+    expect(agentsOf(workflowId)[0]?.name).toBe('Agent');
+  });
+
+  it('drops init fields of the wrong type; a lone modelId is ignored without a provider', async () => {
+    const workflowId = await mount();
+    drop({
+      [PALETTE_DRAG_TYPE]: 'agent',
+      [PALETTE_INIT_TYPE]: JSON.stringify({ name: 5, providerId: 7, modelId: 'm1' }),
+    });
+    await waitFor(() => expect(agentsOf(workflowId)).toHaveLength(1));
+    const [agent] = agentsOf(workflowId);
+    expect(agent?.name).toBe('Agent');
+    expect(agent?.kind === 'agent' && agent.config.providerId).toBeUndefined();
+    expect(agent?.kind === 'agent' && agent.config.modelId).toBeUndefined();
+  });
+
   it('deleteNodes on the Canvas API removes the nodes', async () => {
     const workflowId = await mount();
     const [input] = db.nodesOf(workflowId);
