@@ -212,6 +212,43 @@ export interface SqliteRepositoryOptions {
   vectorExtension?: VectorExtension;
 }
 
+/**
+ * Every repository of the `Repository` port this adapter composes — the port's members but
+ * `transaction`, which is the gate itself. The constructor puts exactly these behind the connection
+ * gate (NFR-REL-02), and a test checks the list against the port's members, so a repository added
+ * later without a gate fails it.
+ */
+export const GATED_REPOSITORIES = [
+  'projects',
+  'workflows',
+  'nodes',
+  'edges',
+  'events',
+  'settings',
+  'providers',
+  'models',
+  'priceTables',
+  'runs',
+  'nodeRuns',
+  'guardrailPolicies',
+  'guardrailVerdicts',
+  'approvals',
+  'artifacts',
+  'toolCalls',
+  'mcpServers',
+  'messages',
+  'chatThreads',
+  'chatMessages',
+  'knowledgeBases',
+  'kbDocuments',
+  'kbChunks',
+  'memory',
+  'summaryCache',
+  'usage',
+] as const satisfies readonly Exclude<keyof Repository, 'transaction'>[];
+
+type GatedRepository = (typeof GATED_REPOSITORIES)[number];
+
 /** Whoever holds the connection right now: a plain call, a transaction, or an `exclusive` body. */
 interface Holder {
   token: symbol;
@@ -343,32 +380,10 @@ export class SqliteRepository implements Repository {
     };
     this.#owner = owner;
 
-    this.projects = this.#gate(this.projects);
-    this.workflows = this.#gate(this.workflows);
-    this.nodes = this.#gate(this.nodes);
-    this.edges = this.#gate(this.edges);
-    this.events = this.#gate(this.events);
-    this.settings = this.#gate(this.settings);
-    this.providers = this.#gate(this.providers);
-    this.models = this.#gate(this.models);
-    this.priceTables = this.#gate(this.priceTables);
-    this.runs = this.#gate(this.runs);
-    this.nodeRuns = this.#gate(this.nodeRuns);
-    this.guardrailPolicies = this.#gate(this.guardrailPolicies);
-    this.guardrailVerdicts = this.#gate(this.guardrailVerdicts);
-    this.approvals = this.#gate(this.approvals);
-    this.artifacts = this.#gate(this.artifacts);
-    this.toolCalls = this.#gate(this.toolCalls);
-    this.mcpServers = this.#gate(this.mcpServers);
-    this.messages = this.#gate(this.messages);
-    this.chatThreads = this.#gate(this.chatThreads);
-    this.chatMessages = this.#gate(this.chatMessages);
-    this.knowledgeBases = this.#gate(this.knowledgeBases);
-    this.kbDocuments = this.#gate(this.kbDocuments);
-    this.kbChunks = this.#gate(this.kbChunks);
-    this.memory = this.#gate(this.memory);
-    this.summaryCache = this.#gate(this.summaryCache);
-    this.usage = this.#gate(this.usage);
+    // The public members are the gated copies, every one named in `GATED_REPOSITORIES`. They are
+    // readonly to everyone else; only here, once, are they swapped for their gated selves.
+    const members = this as unknown as Record<GatedRepository, object>;
+    for (const name of GATED_REPOSITORIES) members[name] = this.#gate(members[name]);
 
     const hold = <T>(fn: () => Promise<T>): Promise<T> => this.#hold(() => fn());
     this.vectorIndex = new SqliteVectorIndex(sqlite, { vectorExtension, hold });

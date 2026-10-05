@@ -1,6 +1,7 @@
 import type { Repository } from '@ace/engine';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { GATED_REPOSITORIES } from '../repository.js';
 import { makeProject, scope } from './fixtures.js';
 import { createTempDb, type TempDb } from './temp-db.js';
 
@@ -366,5 +367,91 @@ describe('TC-NFR-006 a plain repository call waits for an unrelated open transac
     expect(
       (db.sqlite.prepare('SELECT count(*) AS n FROM agent_memory').get() as { n: number }).n,
     ).toBe(1);
+  });
+});
+
+/**
+ * Every member of the `Repository` port. `satisfies` keeps the list whole: a member added to the
+ * port fails the typecheck here until it is listed, and the first test below then fails until the
+ * adapter gates it.
+ */
+const PORT_MEMBERS = {
+  transaction: true,
+  projects: true,
+  workflows: true,
+  nodes: true,
+  edges: true,
+  events: true,
+  settings: true,
+  providers: true,
+  models: true,
+  priceTables: true,
+  runs: true,
+  nodeRuns: true,
+  guardrailPolicies: true,
+  guardrailVerdicts: true,
+  approvals: true,
+  artifacts: true,
+  toolCalls: true,
+  mcpServers: true,
+  messages: true,
+  chatThreads: true,
+  chatMessages: true,
+  knowledgeBases: true,
+  kbDocuments: true,
+  kbChunks: true,
+  memory: true,
+  summaryCache: true,
+  usage: true,
+} as const satisfies Record<keyof Repository, true>;
+
+/** The port's repositories the adapter has: every member but `transaction`, which is the gate. */
+const presentRepositories = (): (keyof Repository)[] =>
+  (Object.keys(PORT_MEMBERS) as (keyof Repository)[]).filter(
+    (name) => name !== 'transaction' && name in db.repository,
+  );
+
+describe('NFR-REL-02 every Repository port member SqliteRepository has is gated', () => {
+  it('the gate list names every port member present on the repository, transaction aside', () => {
+    expect([...GATED_REPOSITORIES].sort()).toEqual(presentRepositories().sort());
+  });
+
+  it('every method of every port repository it has waits for an unrelated open transaction', async () => {
+    let released = false;
+    const batch = db.repository.transaction(async () => {
+      await delay(30);
+      released = true;
+      throw new Error('unrelated failure');
+    });
+    await delay(5);
+    expect(db.sqlite.inTransaction).toBe(true);
+
+    // Called with no arguments: whether a call resolves or throws does not matter, only whether it
+    // settled before the batch let the connection go. An ungated method settles at once. The port
+    // decides what is checked, not the gate list, so a repository left off the list is caught here too.
+    const early: string[] = [];
+    const calls: Promise<void>[] = [];
+    for (const name of presentRepositories()) {
+      const methods = db.repository[name] as unknown as Record<string, unknown>;
+      for (const [method, member] of Object.entries(methods)) {
+        if (typeof member !== 'function') continue;
+        calls.push(
+          Promise.resolve()
+            .then(() => (member as () => unknown)())
+            .then(
+              () => undefined,
+              () => undefined,
+            )
+            .then(() => {
+              if (!released) early.push(`${name}.${method}`);
+            }),
+        );
+      }
+    }
+
+    await expect(batch).rejects.toThrow('unrelated failure');
+    await Promise.all(calls);
+    expect(calls.length).toBeGreaterThan(100);
+    expect(early).toEqual([]);
   });
 });
