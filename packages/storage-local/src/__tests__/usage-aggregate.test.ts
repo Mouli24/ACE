@@ -352,6 +352,24 @@ describe('FR-OBS-007 healthCounts names every ErrorKind', () => {
     expect(health.since).toBe('2026-10-01T08:00:00.000Z');
   });
 
+  it('TC-OBS-007 counts a FAILED node run, never a BLOCKED one that carries an error', async () => {
+    const r = run(WORKFLOW_1, '2026-10-01T08:00:00.000Z', 'BLOCKED');
+    await db.repository.runs.create(scope, r);
+    // Pre-flight or the scheduler blocks a node whose upstream failed, with a `workflow` error;
+    // the node did not fail (CLAUDE.md §7, BR-03).
+    await db.repository.nodeRuns.create(
+      scope,
+      nodeRun(r.id, { status: 'FAILED', error: error('workflow') }),
+    );
+    await db.repository.nodeRuns.create(
+      scope,
+      nodeRun(r.id, { status: 'BLOCKED', error: error('workflow') }),
+    );
+
+    const health = await db.repository.usage.healthCounts(scope);
+    expect(health.nodeFailuresByKind.workflow).toBe(1);
+  });
+
   it('answers p50 and p95 latency per provider from completed node runs', async () => {
     const r = run(WORKFLOW_1, '2026-10-01T08:00:00.000Z');
     await db.repository.runs.create(scope, r);

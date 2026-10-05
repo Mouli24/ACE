@@ -173,6 +173,22 @@ describe('FR-OBS-002 the fake usage folds node runs with D234 semantics', () => 
     expect(health.runs).toEqual({ started: 1, completed: 1, halted: 0, blocked: 0 });
     expect(health.since).toBe('2026-10-01T10:00:00.000Z');
   });
+
+  it('TC-OBS-007 counts a FAILED node run, never a BLOCKED one that carries an error', async () => {
+    const repo = new FakeRepository();
+    await repo.runs.create(scope, run('r1', 'w1', '2026-10-01T10:00:00.000Z'));
+    const error = { kind: 'workflow', code: 'x', message: 'upstream failed', retryable: false };
+    for (const [id, status] of [
+      ['n1', 'FAILED'],
+      ['n2', 'BLOCKED'],
+    ] as const) {
+      const row = nodeRun(id, 'r1', '2026-10-01T10:00:00.000Z', 'pa', 0);
+      await repo.nodeRuns.create(scope, { ...row, status, error } as NodeRun);
+    }
+
+    const health = await repo.usage.healthCounts(scope);
+    expect(health.nodeFailuresByKind.workflow).toBe(1);
+  });
 });
 
 describe('FR-RAG-010 the fake summary cache expires and prunes', () => {

@@ -1,5 +1,6 @@
 import {
   ERROR_KINDS,
+  NodeStateSchema,
   type ErrorKind,
   type HealthMetrics,
   type NodeState,
@@ -47,6 +48,7 @@ const COMPLETE: RunState = 'COMPLETE';
 const HALTED: RunState = 'HALTED';
 const BLOCKED: RunState = 'BLOCKED';
 const COMPLETED: NodeState = 'COMPLETED';
+const FAILED = NodeStateSchema.enum.FAILED;
 
 function emptyUsage(): Usage {
   return { tokensIn: 0, tokensOut: 0, costUsd: 0 };
@@ -139,13 +141,15 @@ export function createUsageRepository(sqlite: BetterSqlite3.Database): UsageRepo
         ErrorKind,
         number
       >;
+      // Only a node run that FAILED is a failure: a BLOCKED one carries an error too — kind
+      // `workflow`, when its upstream failed — but it did not fail (CLAUDE.md §7, BR-03).
       const failures = sqlite
         .prepare(
           `SELECT json_extract(error, '$.kind') AS kind, count(*) AS n
-             FROM node_runs WHERE workspace_id = ? AND error IS NOT NULL
+             FROM node_runs WHERE workspace_id = ? AND status = ? AND error IS NOT NULL
             GROUP BY kind`,
         )
-        .all(scope.workspaceId) as { kind: string | null; n: number }[];
+        .all(scope.workspaceId, FAILED) as { kind: string | null; n: number }[];
       for (const { kind, n } of failures) {
         // A kind the contract does not name cannot be reported under it; it is left out.
         if ((ERROR_KINDS as readonly (string | null)[]).includes(kind)) {
