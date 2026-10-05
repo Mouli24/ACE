@@ -989,12 +989,20 @@ describe('TC-OBS-007 health metrics', () => {
         const rows = (await Promise.all(runs.map((run) => nodeRunsOf(own, run.id)))).flat();
         expect(runs).toHaveLength(4);
         expect(health.runs).toEqual({ started: 4, completed: 2, halted: 1, blocked: 1 });
+        // Only a FAILED node run is a failure. The HALTED run's downstream node is BLOCKED with a
+        // `workflow` error, and it did not fail (CLAUDE.md §7, BR-03).
+        const failed = rows.filter((row) => row.status === 'FAILED');
         for (const kind of ERROR_KINDS) {
           expect(health.nodeFailuresByKind[kind], kind).toBe(
-            rows.filter((row) => row.error?.kind === kind).length,
+            failed.filter((row) => row.error?.kind === kind).length,
           );
         }
         expect(health.nodeFailuresByKind.auth).toBe(1);
+        expect(
+          rows.some((row) => row.status === 'BLOCKED' && row.error?.kind === 'workflow'),
+          'a BLOCKED node run carries a workflow error',
+        ).toBe(true);
+        expect(health.nodeFailuresByKind.workflow).toBe(0);
         const verdicts = new Map<string, number>();
         for (const verdict of rows.flatMap((row) => row.verdicts)) {
           verdicts.set(verdict.checkType, (verdicts.get(verdict.checkType) ?? 0) + 1);

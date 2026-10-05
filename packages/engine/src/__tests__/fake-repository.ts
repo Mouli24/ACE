@@ -1,5 +1,6 @@
 import {
   DEFAULT_GUARDRAIL_POLICY_NAME,
+  NodeStateSchema,
   SettingsSchema,
   THREAD_EVENT_TYPES,
   defaultGuardrailChecks,
@@ -1190,8 +1191,11 @@ export class FakeRepository implements Repository {
         ErrorKind,
         number
       >;
+      // Only a node that FAILED is a failure: a BLOCKED node carries an error too, but it did not
+      // fail (CLAUDE.md §7, BR-03). The SQLite fold applies the same rule.
       for (const nodeRun of nodeRuns) {
-        if (nodeRun.error !== undefined) nodeFailuresByKind[nodeRun.error.kind] += 1;
+        if (nodeRun.status !== NodeStateSchema.enum.FAILED || nodeRun.error === undefined) continue;
+        nodeFailuresByKind[nodeRun.error.kind] += 1;
       }
 
       const durations = new Map<string, number[]>();
