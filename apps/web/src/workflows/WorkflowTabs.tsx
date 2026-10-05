@@ -44,7 +44,7 @@ export function WorkflowTabs({
 
   return (
     <div
-      className="flex min-w-0 items-center gap-1 overflow-x-auto"
+      className="flex min-w-0 items-center gap-[3px] overflow-x-auto rounded-chip border border-border bg-card p-[3px]"
       role="tablist"
       aria-label="Workflows"
     >
@@ -54,15 +54,15 @@ export function WorkflowTabs({
           <div
             key={workflow.id}
             className={cn(
-              'flex shrink-0 items-center rounded-md border border-transparent text-sm',
-              active ? 'border-border bg-card text-fg' : 'text-fg-muted hover:text-fg',
+              'flex h-[26px] shrink-0 items-center rounded-chip font-machine text-[10.5px] tracking-[0.04em]',
+              active ? 'bg-fg text-canvas' : 'text-fg-muted hover:text-fg',
             )}
           >
             <button
               type="button"
               role="tab"
               aria-selected={active}
-              className="max-w-[12rem] truncate px-3 py-1 font-human focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              className="h-full max-w-[12rem] truncate rounded-chip pl-[13px] pr-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               onClick={() => navigate(`/projects/${projectId}/workflows/${workflow.id}`)}
             >
               {workflow.name}
@@ -71,10 +71,10 @@ export function WorkflowTabs({
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className="px-1 py-1 text-fg-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  className="h-full rounded-chip pl-0.5 pr-2 opacity-70 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   aria-label={`Workflow actions for ${workflow.name}`}
                 >
-                  <ChevronDown className="h-3.5 w-3.5" />
+                  <ChevronDown className="h-3 w-3" aria-hidden />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start">
@@ -110,12 +110,12 @@ export function WorkflowTabs({
       })}
       <Button
         variant="ghost"
-        size="sm"
-        className="shrink-0"
+        size="icon"
+        className="h-[26px] w-[26px] shrink-0 rounded-full text-fg-muted hover:text-fg"
         onClick={() => setDialog({ kind: 'create' })}
         aria-label="Add workflow"
       >
-        <Plus className="h-4 w-4" />
+        <Plus className="h-3.5 w-3.5" aria-hidden />
       </Button>
 
       {dialog?.kind === 'create' && (

@@ -1,12 +1,12 @@
 import type { Id } from '@ace/contracts';
 import {
-  Badge,
   Button,
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  cn,
 } from '@ace/ui';
 import { ShieldAlert } from 'lucide-react';
 import { useState } from 'react';
@@ -33,15 +33,20 @@ export function ApprovalsBadge({ runId }: { runId: Id | undefined }) {
     <>
       <Button
         variant="ghost"
-        size="sm"
+        size="icon"
         data-testid="approvals-badge"
         data-count={pending.length}
-        className={compact ? 'min-h-11 min-w-11 shrink-0' : undefined}
+        className={cn(
+          'relative h-8 w-8 shrink-0 rounded-full text-fg-muted hover:bg-border hover:text-fg',
+          compact && 'min-h-11 min-w-11',
+        )}
         aria-label={`${pending.length} ${pending.length === 1 ? 'approval' : 'approvals'} waiting`}
         onClick={() => setOpen(true)}
       >
-        <ShieldAlert className="h-4 w-4 text-[var(--color-status-WAITING)]" aria-hidden />
-        <Badge className="border-[var(--color-status-WAITING)]">{pending.length}</Badge>
+        <ShieldAlert className="h-4 w-4" aria-hidden />
+        <span className="absolute right-0.5 top-[3px] grid h-[15px] min-w-[15px] place-items-center rounded-chip bg-status-WAITING px-1 font-machine text-[9px] font-bold text-[#0a0a0b]">
+          {pending.length}
+        </span>
       </Button>
 
       {open && (

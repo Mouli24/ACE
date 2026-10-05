@@ -1,4 +1,4 @@
-import type { Id, Node, Part, RunAction, RunState } from '@ace/contracts';
+import type { HaltReason, Id, Node, Part, RunAction, RunState } from '@ace/contracts';
 import {
   Button,
   Dialog,
@@ -9,6 +9,7 @@ import {
   DialogTitle,
   Label,
   Textarea,
+  cn,
 } from '@ace/ui';
 import { Play } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
@@ -38,6 +39,19 @@ const RUN_STATE_LABEL: Readonly<Record<RunState, string>> = {
   HALTED: 'halted',
 };
 
+/** The run state as a design status colour (V2 chip). A stopped halt reads STOPPED, any other FAILED. */
+function runStateColor(status: RunState, haltReason: HaltReason | undefined): string {
+  const name = {
+    PREFLIGHT: 'READY',
+    RUNNING: 'RUNNING',
+    PAUSED: 'PAUSED',
+    COMPLETE: 'COMPLETED',
+    BLOCKED: 'BLOCKED',
+    HALTED: haltReason === 'stopped' ? 'STOPPED' : 'FAILED',
+  }[status];
+  return `var(--color-status-${name})`;
+}
+
 const money = (value: number) => `$${value.toFixed(4)}`;
 
 /**
@@ -48,7 +62,14 @@ const money = (value: number) => `$${value.toFixed(4)}`;
  * live is not decided here: `RunControls` enables a button only because `Run.allowedActions` names
  * it, and that list comes from the engine through the overlay (FR-CTL-006, BR-01).
  */
-export function RunBar({ workflowId }: { workflowId: string }) {
+export function RunBar({
+  workflowId,
+  haltInline = true,
+}: {
+  workflowId: string;
+  /** False on the desktop top bar, where the Canvas shows the halt note instead. */
+  haltInline?: boolean;
+}) {
   const graph = useWorkflowGraph(workflowId);
   const navigate = useNavigate();
   const start = useStartRun(workflowId);
@@ -117,22 +138,41 @@ export function RunBar({ workflowId }: { workflowId: string }) {
         <span
           data-testid="run-status"
           data-status={run.status}
-          className="rounded-chip border border-border bg-card px-2 py-0.5 font-machine text-xs"
+          className="inline-flex h-[26px] items-center gap-[7px] rounded-chip border px-[11px] font-machine text-[10.5px] uppercase tracking-[0.06em]"
+          style={{
+            color: runStateColor(run.status, run.haltReason),
+            borderColor: `color-mix(in oklab, ${runStateColor(run.status, run.haltReason)} 40%, transparent)`,
+          }}
         >
+          <span
+            aria-hidden
+            className={cn(
+              'h-1.5 w-1.5 shrink-0 rounded-full bg-current',
+              run.status === 'RUNNING' && 'ace-pulse',
+            )}
+          />
           run {RUN_STATE_LABEL[run.status]}
           {run.haltReason ? ` · ${run.haltReason}` : ''}
         </span>
       )}
 
       {run.totals && (
-        <span data-testid="run-totals" className="font-machine text-xs text-fg-muted">
+        <span data-testid="run-totals" className="font-machine text-[10.5px] text-fg-muted">
           {run.totals.tokensIn}↓ {run.totals.tokensOut}↑ {money(run.totals.costUsd)}
         </span>
       )}
 
-      <Button size="sm" onClick={onStart} disabled={run.active || start.isPending}>
-        <Play className="h-4 w-4" /> Start
-      </Button>
+      {!run.active && (
+        <Button
+          size="sm"
+          className="h-[30px] uppercase tracking-[0.08em]"
+          aria-label="Start"
+          onClick={onStart}
+          disabled={start.isPending}
+        >
+          <Play className="h-3.5 w-3.5 fill-current" aria-hidden /> Run
+        </Button>
+      )}
 
       <RunControls
         {...(run.runId === undefined ? {} : { runId: run.runId })}
@@ -143,6 +183,7 @@ export function RunBar({ workflowId }: { workflowId: string }) {
         onAction={onAction}
         onOpenRun={(runId: Id) => navigate(`/runs/${runId}`)}
         busy={busy}
+        showHalt={haltInline}
       />
 
       {dialogNodes && (

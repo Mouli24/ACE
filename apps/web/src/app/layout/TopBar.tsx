@@ -1,7 +1,7 @@
-import { Button } from '@ace/ui';
-import { BarChart3, CircleHelp, Settings, ShieldCheck } from 'lucide-react';
+import { BarChart3, CircleHelp, PanelRight, Plus, Settings, ShieldCheck } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 
+import { cn } from '@ace/ui';
 import { useProject } from '../../projects/hooks';
 import { ProviderStatusBar } from '../../providers/ProviderStatusBar';
 import { CompactMenu } from '../../responsive/CompactMenu';
@@ -11,6 +11,10 @@ import { ApprovalsBadge } from '../../runs/approvals/ApprovalsBadge';
 import { useRunStore } from '../../runs/run-store';
 import { DayTotalsChip } from '../../usage/DayTotalsChip';
 import { WorkflowTabs } from '../../workflows/WorkflowTabs';
+import { usePanelsStore } from '../stores/panels';
+
+const ICON_BUTTON =
+  'grid h-8 w-8 place-items-center rounded-chip text-fg-muted hover:bg-border hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent';
 
 /**
  * Top bar: project name, workflow tabs, live provider status (FR-PRV-004), and — on a Canvas — the
@@ -25,6 +29,10 @@ export function TopBar() {
   const project = useProject(projectId);
   const runId = useRunStore((store) => store.runId);
   const compact = useIsCompact();
+  const sheetOpen = usePanelsStore((store) => store.sheetOpen);
+  const openSheet = usePanelsStore((store) => store.openSheet);
+  const closeSheet = usePanelsStore((store) => store.closeSheet);
+  const openNewNode = usePanelsStore((store) => store.openNewNode);
 
   if (compact) {
     return (
@@ -73,57 +81,80 @@ export function TopBar() {
   }
 
   return (
-    <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border bg-panel px-3">
-      <Link to="/projects" className="font-human text-base font-semibold tracking-tight">
-        ACE
-      </Link>
-      {project.data && (
-        <>
-          <span className="text-fg-muted">/</span>
-          <Link
-            to={`/projects/${project.data.id}`}
-            className="truncate font-human text-sm"
-            data-testid="project-name"
-          >
-            {project.data.name}
-          </Link>
-        </>
-      )}
+    <header className="flex h-[52px] min-w-0 shrink-0 items-center gap-3.5 border-b border-border bg-panel pl-[18px] pr-3.5">
+      <div className="flex shrink-0 items-baseline gap-2">
+        <Link
+          to="/projects"
+          className="font-human text-xl font-semibold tracking-[-0.01em] text-fg"
+        >
+          ACE
+        </Link>
+        {project.data && (
+          <>
+            <span className="text-fg-faint">/</span>
+            <Link
+              to={`/projects/${project.data.id}`}
+              className="max-w-[14rem] truncate text-[15px] text-fg-soft hover:text-fg"
+              data-testid="project-name"
+            >
+              {project.data.name}
+            </Link>
+          </>
+        )}
+      </div>
       {/* A floor for the tabs: without it every other item keeps its width and the tabs (with
           "Add workflow" and each tab's actions menu) are squeezed to nothing under them. */}
       {projectId && (
-        <div className="min-w-48 flex-1">
+        <div className="min-w-48 shrink">
           <WorkflowTabs projectId={projectId} activeWorkflowId={workflowId} />
         </div>
       )}
-      {!projectId && <div className="flex-1" />}
+      <div className="flex-1" />
       <ProviderStatusBar />
-      {workflowId && <RunBar workflowId={workflowId} />}
-      <ApprovalsBadge runId={runId} />
       {/* On a Canvas the run bar already shows this run's totals; the day's wait for a wide screen. */}
       <div className={workflowId ? 'hidden shrink-0 2xl:flex' : 'flex shrink-0'}>
         <DayTotalsChip />
       </div>
-      <Button asChild variant="ghost" size="icon" aria-label="Usage">
-        <Link to="/usage">
-          <BarChart3 className="h-4 w-4" />
+      <div aria-hidden className="h-[22px] w-px shrink-0 bg-border" />
+      {workflowId && <RunBar workflowId={workflowId} haltInline={false} />}
+      <div className="flex shrink-0 items-center gap-0.5">
+        <ApprovalsBadge runId={runId} />
+        {workflowId && (
+          <button
+            type="button"
+            data-testid="sheet-toggle"
+            aria-label="Workflow panel"
+            aria-pressed={sheetOpen}
+            title="Workflow panel"
+            className={cn(ICON_BUTTON, sheetOpen && 'bg-border text-fg')}
+            onClick={() => (sheetOpen ? closeSheet() : openSheet())}
+          >
+            <PanelRight className="h-4 w-4" aria-hidden />
+          </button>
+        )}
+        <Link to="/usage" aria-label="Usage" className={ICON_BUTTON}>
+          <BarChart3 className="h-4 w-4" aria-hidden />
         </Link>
-      </Button>
-      <Button asChild variant="ghost" size="icon" aria-label="Guardrail policies">
-        <Link to="/guardrails">
-          <ShieldCheck className="h-4 w-4" />
+        <Link to="/guardrails" aria-label="Guardrail policies" className={ICON_BUTTON}>
+          <ShieldCheck className="h-4 w-4" aria-hidden />
         </Link>
-      </Button>
-      <Button asChild variant="ghost" size="icon" aria-label="Settings">
-        <Link to="/settings">
-          <Settings className="h-4 w-4" />
+        <Link to="/settings" aria-label="Settings" className={ICON_BUTTON}>
+          <Settings className="h-4 w-4" aria-hidden />
         </Link>
-      </Button>
-      <Button asChild variant="ghost" size="icon" aria-label="Help">
-        <Link to="/help/getting-started">
-          <CircleHelp className="h-4 w-4" />
+        <Link to="/help/getting-started" aria-label="Help" className={ICON_BUTTON}>
+          <CircleHelp className="h-4 w-4" aria-hidden />
         </Link>
-      </Button>
+      </div>
+      {workflowId && (
+        <button
+          type="button"
+          data-testid="new-node-button"
+          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-chip border border-border-strong bg-card pl-[11px] pr-3.5 font-machine text-[10.5px] uppercase tracking-[0.1em] text-fg hover:bg-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          onClick={openNewNode}
+        >
+          <Plus className="h-3.5 w-3.5" aria-hidden /> New node
+        </button>
+      )}
     </header>
   );
 }

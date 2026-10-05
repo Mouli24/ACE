@@ -114,7 +114,7 @@ describe('FR-EXE-001 Start runs the workflow and the top bar follows it', () => 
     ]);
   });
 
-  it('keeps Start disabled while a run is in flight (one active run per workflow)', async () => {
+  it('offers no Start while a run is in flight (one active run per workflow)', async () => {
     setScenario('slow-stream');
     const { project, workflow } = seedRunnableWorkflow({ inputText: 'go' });
     const user = userEvent.setup();
@@ -123,7 +123,8 @@ describe('FR-EXE-001 Start runs the workflow and the top bar follows it', () => 
 
     const start = startButton();
     await user.click(start);
-    await waitFor(() => expect(start).toBeDisabled());
+    await waitFor(() => expect(start).not.toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Start' })).toBeNull();
   });
 });
 
