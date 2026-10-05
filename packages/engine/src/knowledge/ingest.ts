@@ -3,11 +3,13 @@ import type {
   KbChunk,
   KbDocument,
   KbDocumentStatus,
+  KbDocumentVerdict,
   KbIngestPayload,
   Timestamp,
 } from '@ace/contracts';
 
 import type { EventBus } from '../events/index.js';
+import type { SecretMasker } from '../guardrails/checks.js';
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
 import type { Queue, Repository, Scope } from '../ports/index.js';
@@ -26,9 +28,9 @@ import type {
 /**
  * The ingestion pipeline (round 5 §2.1, FR-RAG-002, FR-RAG-003, FR-RAG-009, Arch §21.3).
  *
- * One queued job is one document. The worker runs them one at a time: parse, PII check, chunk,
- * embed, write — announcing a `kb.ingest` event at every stage — and a failure anywhere marks only
- * that document `failed`, so its siblings still reach `ready` (TC-RAG-003).
+ * One queued job is one document. The worker runs them one at a time: parse, secret mask, PII
+ * check, chunk, embed, write — announcing a `kb.ingest` event at every stage — and a failure
+ * anywhere marks only that document `failed`, so its siblings still reach `ready` (TC-RAG-003).
  */
 
 /** One unit of queued work. */
@@ -77,6 +79,12 @@ export interface IngestionWorkerDeps {
   embedderFor: EmbedderFor;
   /** The PII check over the document's full text, at the project's default policy (F6). */
   checkContextText: ContextTextCheck;
+  /**
+   * The data guardrail (BR-07, D86): every credential-shaped string in the document's text, and in
+   * a failure reason, is masked before anything is chunked, stored or announced. The server wires
+   * the same `SecretMasker` the guardrail evaluator uses; it cannot be switched off (BR-15).
+   */
+  masker: SecretMasker;
   /** Prose or code, from the document's media type and name. */
   chunkKindFor: (doc: { mime: string; name: string }) => ChunkKind;
   /** The uploaded file's bytes, or null when the artifact is gone. */
@@ -132,6 +140,20 @@ export function createIngestionWorker(deps: IngestionWorkerDeps): IngestionWorke
   const now = deps.now ?? (() => new Date().toISOString());
   const nextId = deps.nextId ?? newId;
 
+  /** The document-level verdict for what the data guardrail masked (D115's shape, types only). */
+  function secretVerdict(types: readonly string[]): KbDocumentVerdict {
+    return {
+      id: nextId(),
+      point: 'data',
+      checkType: 'secret_leak',
+      action: 'redact',
+      passed: false,
+      reason: 'Credential-shaped values were masked before this document was chunked and stored.',
+      redactedTypes: [...types],
+      at: now(),
+    };
+  }
+
   /** Moves the document to a stage and says so — unless it has been deleted meanwhile. */
   async function enter(job: IngestJob, status: KbDocumentStatus, progress: number): Promise<void> {
     const updated = await repos.kbDocuments.update(scope, job.documentId, { status });
@@ -162,9 +184,16 @@ export function createIngestionWorker(deps: IngestionWorkerDeps): IngestionWorke
       name: doc.name,
     });
 
-    const checked = await deps.checkContextText({ projectId: kb.projectId, text: parsed.text });
+    // The data guardrail first (BR-07, D86): no later step — the PII check included — ever sees a key.
+    const masked = deps.masker.mask(parsed.text);
+    const checked = await deps.checkContextText({ projectId: kb.projectId, text: masked.text });
+    // PII first, then what the data guardrail masked (D115's shape, types only).
+    const verdicts: KbDocumentVerdict[] = [
+      ...checked.verdicts,
+      ...(masked.types.length === 0 ? [] : [secretVerdict(masked.types)]),
+    ];
     if (checked.blocked !== undefined) {
-      await fail(job, checked.blocked, checked.verdicts);
+      await fail(job, checked.blocked, verdicts);
       return;
     }
 
@@ -216,7 +245,7 @@ export function createIngestionWorker(deps: IngestionWorkerDeps): IngestionWorke
       status: 'ready',
       chunkCount: chunks.length,
       ingestedAt: now(),
-      verdicts: checked.verdicts,
+      verdicts,
       error: null,
     });
     if (ready === null) {
@@ -255,7 +284,8 @@ export function createIngestionWorker(deps: IngestionWorkerDeps): IngestionWorke
     verdicts?: KbDocument['verdicts'],
     options: { keepChunks?: boolean } = {},
   ): Promise<void> {
-    const reason = error === '' ? 'Indexing failed.' : error;
+    // `kb_documents.error` is a plain column and the reason is announced: neither may hold a key.
+    const reason = deps.masker.mask(error === '' ? 'Indexing failed.' : error).text;
     const updated = await repos.kbDocuments.update(scope, job.documentId, {
       status: 'failed',
       error: reason,

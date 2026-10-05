@@ -309,3 +309,110 @@ describe('FR-RAG-003 the worker', () => {
     expect(h.bus.ingest()).toEqual([]);
   });
 });
+
+describe('BR-07 ingested text is secret-masked before it is chunked or stored (D86, D115)', () => {
+  // Assembled at runtime: a key-shaped literal in a repository file is what CLAUDE.md §2 forbids.
+  const key = ['ghp', 'A1b2C3d4'.repeat(5)].join('_');
+
+  it('chunks the masked text and records a data-point verdict, types only', async () => {
+    const h = await makeHarness();
+    const kb = await h.createKb();
+    const doc = await h.service.addDocument(kb.id, {
+      artifactId: h.addFile('a.md', `Deploy with ${key} today.\n\nSecond paragraph.`),
+    });
+    await h.worker.drain();
+
+    const stored = await h.repo.kbDocuments.get(LOCAL_SCOPE, doc.id);
+    expect(stored?.status).toBe('ready');
+    expect(h.written.map((chunk) => chunk.text)).toEqual([
+      'Deploy with [REDACTED] today.',
+      'Second paragraph.',
+    ]);
+    expect(stored?.verdicts).toEqual([
+      {
+        id: expect.any(String),
+        point: 'data',
+        checkType: 'secret_leak',
+        action: 'redact',
+        passed: false,
+        reason: expect.any(String),
+        redactedTypes: ['api_key'],
+        at: expect.any(String),
+      },
+    ]);
+    expect(JSON.stringify(stored)).not.toContain(key);
+  });
+
+  it('lists the PII verdicts first, then the data verdict, and rebuilds heading offsets', async () => {
+    const text = `# Setup\ntoken ${key} here\n# Usage\nbody`;
+    const headings = [
+      { level: 1, title: 'Setup', offset: 2 },
+      { level: 1, title: 'Usage', offset: text.indexOf('Usage') },
+    ];
+    const pii = {
+      id: 'v1',
+      point: 'context' as const,
+      checkType: 'pii' as const,
+      action: 'warn' as const,
+      passed: false,
+      reason: 'Found 1 value',
+      at: '2026-01-01T00:00:00.000Z',
+    };
+    const h = await makeHarness({
+      parser: { parse: async () => ({ text, headings }) },
+      check: async ({ text: t }) => {
+        // The PII step reads the masked text: the key never reaches it.
+        expect(t).not.toContain(key);
+        return { text: t, verdicts: [pii] };
+      },
+    });
+    const seen: { text: string; headings: { title: string; offset: number }[] }[] = [];
+    h.workerDeps.chunker = {
+      chunk: ({ document }) => {
+        seen.push(document);
+        return [];
+      },
+    };
+    const kb = await h.createKb();
+    const doc = await h.service.addDocument(kb.id, { artifactId: h.addFile('a.md', 'x') });
+    await h.worker.drain();
+
+    const document = seen[0]!;
+    expect(document.text).toBe('# Setup\ntoken [REDACTED] here\n# Usage\nbody');
+    expect(document.headings.map((x) => x.title)).toEqual(['Setup', 'Usage']);
+    for (const heading of document.headings) {
+      expect(document.text.slice(heading.offset).startsWith(heading.title)).toBe(true);
+    }
+    const stored = await h.repo.kbDocuments.get(LOCAL_SCOPE, doc.id);
+    expect(stored?.verdicts?.map((v) => [v.point, v.checkType])).toEqual([
+      ['context', 'pii'],
+      ['data', 'secret_leak'],
+    ]);
+  });
+
+  it('records no data verdict when nothing was masked', async () => {
+    const h = await makeHarness();
+    const kb = await h.createKb();
+    const doc = await h.service.addDocument(kb.id, { artifactId: h.addFile('a.md', 'clean') });
+    await h.worker.drain();
+
+    expect((await h.repo.kbDocuments.get(LOCAL_SCOPE, doc.id))?.verdicts).toEqual([]);
+  });
+
+  it('masks a failure reason before it is stored or announced', async () => {
+    const h = await makeHarness({
+      embedder: async () => ({
+        embed: async () => {
+          throw new Error(`the provider rejected ${key}`);
+        },
+      }),
+    });
+    const kb = await h.createKb();
+    const doc = await h.service.addDocument(kb.id, { artifactId: h.addFile('a.txt', 'a') });
+    await h.worker.drain();
+
+    const stored = await h.repo.kbDocuments.get(LOCAL_SCOPE, doc.id);
+    expect(stored?.error).toBe('Indexing failed: the provider rejected [REDACTED]');
+    expect(JSON.stringify(h.bus.ingest())).not.toContain(key);
+  });
+});
