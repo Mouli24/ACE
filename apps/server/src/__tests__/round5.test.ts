@@ -364,6 +364,10 @@ describe('TC-RAG-007 the Retrieval node', () => {
           source,
         })),
       );
+      // R5 §7.2: the node run records what it read — its envelope's `context.retrieved` is its sources.
+      expect(row.inputEnvelopes[0]?.context.retrieved?.map((chunk) => chunk.chunkId)).toEqual(
+        row.sources?.map((source) => source.chunkId),
+      );
     },
     LONG,
   );
