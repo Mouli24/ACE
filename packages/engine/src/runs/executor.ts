@@ -17,31 +17,31 @@ import {
   type ToolDefinition,
   type Usage,
   type Verdict,
-} from "@ace/contracts";
+} from '@ace/contracts';
 
-import { createBatcher } from "../events/batcher.js";
+import { createBatcher } from '../events/batcher.js';
 import {
   classifyError,
   failureReasonFor,
   nodeStateFor,
   userCancelledError,
-} from "../errors/index.js";
-import type { EventBus } from "../events/index.js";
-import { newId } from "../ids.js";
-import type { Logger } from "../logging/index.js";
+} from '../errors/index.js';
+import type { EventBus } from '../events/index.js';
+import { newId } from '../ids.js';
+import type { Logger } from '../logging/index.js';
 import type {
   ModelRouter,
   ProducedPart,
   ProviderAdapter,
   StreamChunk,
   ToolResult,
-} from "../ports/index.js";
-import { runRetrievalNode } from "../knowledge/retrieval-node.js";
-import type { SearchService } from "../knowledge/search.js";
-import { extractMemoryOps, maskMemoryValue } from "../memory/ops.js";
-import { assemblePrompt } from "../prompts/index.js";
-import type { RunGate } from "./control/gate.js";
-import { usageFor } from "./cost.js";
+} from '../ports/index.js';
+import { runRetrievalNode } from '../knowledge/retrieval-node.js';
+import type { SearchService } from '../knowledge/search.js';
+import { extractMemoryOps, maskMemoryValue } from '../memory/ops.js';
+import { assemblePrompt } from '../prompts/index.js';
+import type { RunGate } from './control/gate.js';
+import { usageFor } from './cost.js';
 import {
   buildToolCall,
   summariseResult,
@@ -50,8 +50,8 @@ import {
   type ToolGuardStep,
   type ToolPointInput,
   type ToolProvider,
-} from "./tool-loop.js";
-import { runTransform } from "./transform.js";
+} from './tool-loop.js';
+import { runTransform } from './transform.js';
 
 /**
  * The node executor (FR-EXE-004..010, FR-EXE-015, Arch §12.2).
@@ -150,8 +150,8 @@ export interface NodeMemoryHook {
  * block stays `GUARDRAIL_VIOLATION` and a contract failure stays `CONTRACT_VIOLATION` (D9, D85).
  */
 export type GuardrailStep<T> =
-  | ({ kind: "continue"; verdicts?: Verdict[] } & T)
-  | { kind: "failed"; failureReason: FailureReason; error: NodeError; verdicts?: Verdict[] };
+  | ({ kind: 'continue'; verdicts?: Verdict[] } & T)
+  | { kind: 'failed'; failureReason: FailureReason; error: NodeError; verdicts?: Verdict[] };
 
 /**
  * The guardrail points the executor runs, supplied per node run by the scheduler (Arch §13.1).
@@ -167,9 +167,7 @@ export interface NodeGuardrails {
    * build that wires only the tool point (round 4) still satisfies this interface; absent, the input
    * is not checked.
    */
-  beforePrompt?(
-    envelopes: readonly Envelope[],
-  ): Promise<GuardrailStep<{ envelopes: Envelope[] }>>;
+  beforePrompt?(envelopes: readonly Envelope[]): Promise<GuardrailStep<{ envelopes: Envelope[] }>>;
   /**
    * The output point, before the contract decides (FR-GRD-007, §4 item 4). When this is wired it
    * **owns** the contract check too, so an output is validated exactly once (D85). Optional: absent,
@@ -309,8 +307,7 @@ interface PendingToolCall {
 
 /** One model turn: the tool it asked for, or a stop that caught it while it queued for its slot. */
 type TurnOutcome =
-  | { kind: "cancelled" }
-  | { kind: "called"; pendingCall: PendingToolCall | undefined };
+  { kind: 'cancelled' } | { kind: 'called'; pendingCall: PendingToolCall | undefined };
 
 /**
  * What a node the run's abort caught inside a guardrail point records: a cancellation, never a
@@ -320,9 +317,7 @@ type TurnOutcome =
  */
 function stoppedError(error: unknown, message: string): NodeError {
   const classified = error === undefined ? undefined : classifyError(error);
-  return classified?.kind === "user_cancelled"
-    ? classified
-    : userCancelledError(message).nodeError;
+  return classified?.kind === 'user_cancelled' ? classified : userCancelledError(message).nodeError;
 }
 
 /*
@@ -352,22 +347,22 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
   ): Promise<NodeExecutionOutcome> {
     const aborted = input.signal.aborted;
     const error =
-      aborted && failure.kind !== "user_cancelled"
-        ? userCancelledError("The run was stopped before this node run could finish.").nodeError
+      aborted && failure.kind !== 'user_cancelled'
+        ? userCancelledError('The run was stopped before this node run could finish.').nodeError
         : failure;
     const { status: extraStatus, failureReason: extraReason, ...rest } = extra;
-    const status = aborted ? "STOPPED" : (extraStatus ?? nodeStateFor(error));
+    const status = aborted ? 'STOPPED' : (extraStatus ?? nodeStateFor(error));
     // FR-ERR-007: a node the user stopped has not failed, so it records no failure reason. Writing
     // `RUN_FAILED` beside `STOPPED` is exactly the conflation BR-03 forbids.
     const failureReason =
-      status === "STOPPED" ? undefined : (extraReason ?? failureReasonFor(error));
+      status === 'STOPPED' ? undefined : (extraReason ?? failureReasonFor(error));
 
     // A cancellation is not an error frame. `node.error` carries a required `failureReason` and the
     // UI paints one red; a node the user stopped has neither (FR-ERR-007). Its `node.state` frame
     // says `STOPPED`, and the node run still records the `user_cancelled` error behind it.
     if (failureReason !== undefined) {
       await deps.bus.emit({
-        type: "node.error",
+        type: 'node.error',
         workflowId: input.workflowId,
         runId: input.runId,
         payload: {
@@ -409,7 +404,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
     }
 
     await deps.bus.emit({
-      type: "node.output",
+      type: 'node.output',
       workflowId: input.workflowId,
       runId: input.runId,
       payload: {
@@ -418,13 +413,11 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         nodeId: input.node.id,
         output,
         usage,
-        ...(extra.modelUsed === undefined
-          ? {}
-          : { modelUsed: extra.modelUsed }),
+        ...(extra.modelUsed === undefined ? {} : { modelUsed: extra.modelUsed }),
       },
     });
 
-    return { status: "COMPLETED", output, usage, ...extra };
+    return { status: 'COMPLETED', output, usage, ...extra };
   }
 
   /* ---------------------------------------------------------------- agents */
@@ -434,36 +427,30 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
    * run ends as — a contract violation still read those chunks (FR-RAG-007) — and only when there
    * were any, so a node with no knowledge base records exactly the round 4 shape.
    */
-  async function executeAgent(
-    input: ExecuteNodeInput,
-  ): Promise<NodeExecutionOutcome> {
-    const used: Pick<NodeExecutionOutcome, "sources" | "droppedSources"> = {};
+  async function executeAgent(input: ExecuteNodeInput): Promise<NodeExecutionOutcome> {
+    const used: Pick<NodeExecutionOutcome, 'sources' | 'droppedSources'> = {};
     const outcome = await callAgent(input, used);
     return { ...outcome, ...used };
   }
 
   async function callAgent(
     input: ExecuteNodeInput,
-    used: Pick<NodeExecutionOutcome, "sources" | "droppedSources">,
+    used: Pick<NodeExecutionOutcome, 'sources' | 'droppedSources'>,
   ): Promise<NodeExecutionOutcome> {
     const node = input.node;
-    if (node.kind !== "agent" && node.kind !== "model") {
+    if (node.kind !== 'agent' && node.kind !== 'model') {
       throw new Error(`executeAgent called for a ${node.kind} node`);
     }
     // Once per node run: a fallback to a second provider waits at that gate too, but the node has
     // already started (D66).
     let starting: Promise<void> | undefined;
-    const started = (): Promise<void> =>
-      (starting ??= input.onStarted?.() ?? Promise.resolve());
+    const started = (): Promise<void> => (starting ??= input.onStarted?.() ?? Promise.resolve());
 
     const instructions =
-      node.kind === "agent"
-        ? node.config.instructions
-        : (node.config.systemPrompt ?? "");
+      node.kind === 'agent' ? node.config.instructions : (node.config.systemPrompt ?? '');
     const contract: EnvelopeContract = {
       outputTypes: node.config.outputTypes,
-      ...(node.kind === "agent" &&
-      node.config.outputContract?.jsonSchema !== undefined
+      ...(node.kind === 'agent' && node.config.outputContract?.jsonSchema !== undefined
         ? { jsonSchema: node.config.outputContract.jsonSchema }
         : {}),
       ...(node.config.execution.maxTokens === undefined
@@ -486,7 +473,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
     if (input.context !== undefined) {
       const built = await input.context.build(envelopes);
       verdicts.push(...(built.verdicts ?? []));
-      if (built.kind === "failed") {
+      if (built.kind === 'failed') {
         return fail(input, built.error, NO_USAGE, {
           failureReason: built.failureReason,
           verdicts,
@@ -505,7 +492,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
     if (input.guardrails?.beforePrompt !== undefined) {
       const checked = await input.guardrails.beforePrompt(envelopes);
       verdicts.push(...(checked.verdicts ?? []));
-      if (checked.kind === "failed") {
+      if (checked.kind === 'failed') {
         return fail(input, checked.error, NO_USAGE, {
           failureReason: checked.failureReason,
           verdicts,
@@ -530,9 +517,9 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
     /* Route. The router is pure over the catalog and never calls a provider (FR-RTR-006). */
     const catalog = await deps.modelsFor();
     const routing =
-      node.kind === "agent"
+      node.kind === 'agent'
         ? node.config.routing
-        : { policy: "fixed" as const, fallbackModelIds: [] };
+        : { policy: 'fixed' as const, fallbackModelIds: [] };
 
     // The `agent | model` narrowing above does not reach inside `attemptWith`, so the fields it
     // needs are captured here rather than re-narrowed there.
@@ -544,9 +531,9 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
      * The limit is `min(agent's own maxToolCalls, the policy's max_tool_calls)` — the policy's cap
      * arrives on the guardrail hook (`maxToolCalls`), and absent it the agent's own stands.
      */
-    const enabledTools = node.kind === "agent" ? node.config.tools.enabled : [];
-    const allowedDomains = node.kind === "agent" ? node.config.tools.allowedDomains : [];
-    const agentMaxToolCalls = node.kind === "agent" ? node.config.tools.maxToolCalls : 0;
+    const enabledTools = node.kind === 'agent' ? node.config.tools.enabled : [];
+    const allowedDomains = node.kind === 'agent' ? node.config.tools.allowedDomains : [];
+    const agentMaxToolCalls = node.kind === 'agent' ? node.config.tools.maxToolCalls : 0;
     const policyMaxToolCalls = input.guardrails?.maxToolCalls;
     const toolCallLimit = Math.min(
       agentMaxToolCalls,
@@ -559,12 +546,8 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
     });
 
     const routingNode = {
-      ...(node.config.providerId === undefined
-        ? {}
-        : { providerId: node.config.providerId }),
-      ...(node.config.modelId === undefined
-        ? {}
-        : { modelId: node.config.modelId }),
+      ...(node.config.providerId === undefined ? {} : { providerId: node.config.providerId }),
+      ...(node.config.modelId === undefined ? {} : { modelId: node.config.modelId }),
       routing,
     };
     const requirements = {
@@ -580,7 +563,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
      *
      * Retry of the *same* model with backoff is round 3; this is moving to the next one.
      */
-    const failures: { modelId: string; kind: NodeError["kind"] }[] = [];
+    const failures: { modelId: string; kind: NodeError['kind'] }[] = [];
     let lastProviderError: NodeError | undefined;
     let lastUsage: Usage = NO_USAGE;
     let lastModelUsed: ModelUsed | undefined;
@@ -601,7 +584,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
           ? fail(
               input,
               {
-                kind: "invalid_config",
+                kind: 'invalid_config',
                 code: route.code,
                 message: route.reason,
                 retryable: false,
@@ -610,16 +593,14 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               { verdicts: [...verdicts] },
             )
           : fail(input, lastProviderError, lastUsage, {
-              ...(lastModelUsed === undefined
-                ? {}
-                : { modelUsed: lastModelUsed }),
+              ...(lastModelUsed === undefined ? {} : { modelUsed: lastModelUsed }),
               prompt: promptRecord,
               verdicts: [...verdicts],
             });
       }
 
       const outcome = await attemptWith(route.route);
-      if (outcome.kind === "done") return outcome.result;
+      if (outcome.kind === 'done') return outcome.result;
 
       failures.push({ modelId: route.route.modelId, kind: outcome.error.kind });
       lastProviderError = outcome.error;
@@ -631,9 +612,9 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
     return fail(
       input,
       lastProviderError ?? {
-        kind: "provider",
-        code: "no_candidate_left",
-        message: "Every model in the routing chain was tried.",
+        kind: 'provider',
+        code: 'no_candidate_left',
+        message: 'Every model in the routing chain was tried.',
         retryable: false,
       },
       lastUsage,
@@ -644,19 +625,17 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
     async function attemptWith(
       chosen: ModelUsed,
     ): Promise<
-      | { kind: "done"; result: NodeExecutionOutcome }
-      | { kind: "retryable"; error: NodeError; usage: Usage }
+      | { kind: 'done'; result: NodeExecutionOutcome }
+      | { kind: 'retryable'; error: NodeError; usage: Usage }
     > {
       const pricing = catalog.find(
-        (model) =>
-          model.providerId === chosen.providerId &&
-          model.modelId === chosen.modelId,
+        (model) => model.providerId === chosen.providerId && model.modelId === chosen.modelId,
       )?.pricing;
 
       const modelUsed: ModelUsed = chosen;
 
       /* Call, inside this provider's concurrency gate. */
-      let text = "";
+      let text = '';
       let jsonValue: unknown;
       let sawJson = false;
       /**
@@ -667,7 +646,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       const partChunks: ProducedPart[] = [];
       let tokensIn = 0;
       let tokensOut = 0;
-      let finishReason: string = "stop";
+      let finishReason: string = 'stop';
       /** The valid `__memory` ops this attempt's answer carried (round 5 §2.2). */
       let memoryOps: MemoryOp[] = [];
 
@@ -675,13 +654,13 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         intervalMs: batchMs,
         flush: (deltas) => {
           void deps.bus.emitTransient({
-            type: "node.token",
+            type: 'node.token',
             workflowId: input.workflowId,
             runId: input.runId,
             payload: {
               runId: input.runId,
               nodeRunId: input.nodeRunId,
-              delta: deltas.join(""),
+              delta: deltas.join(''),
             },
           });
         },
@@ -694,7 +673,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       let cancelled = false;
 
       /* The run's sandbox folder, the only place a tool may touch (round 4 §2.2, NFR-SEC-03). */
-      const sandboxDir = deps.sandboxDirFor?.(input.runId) ?? "";
+      const sandboxDir = deps.sandboxDirFor?.(input.runId) ?? '';
       /** Untrusted tool-result blocks appended to the *recorded* prompt (FR-TOOL-010, FR-PRM-002). */
       const promptSuffix: string[] = [];
       /** A tool-point block or an approval reject that ends this node GUARDRAIL_VIOLATION (§2.2). */
@@ -709,7 +688,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         text:
           promptSuffix.length === 0
             ? prompt.redactedText
-            : `${prompt.redactedText}\n\n## Tool results\n${promptSuffix.join("\n\n")}`,
+            : `${prompt.redactedText}\n\n## Tool results\n${promptSuffix.join('\n\n')}`,
       });
 
       /** Whether this attempt made a provider call, so a stop records what it spent (FR-ERR-007). */
@@ -735,7 +714,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
         for (;;) {
           const turn = await takeTurn(toolResults.length > 0, finalTurn);
-          if (turn.kind === "cancelled") {
+          if (turn.kind === 'cancelled') {
             cancelled = true;
             break;
           }
@@ -780,23 +759,20 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
          * that already started and is moving to a fallback model: it is RUNNING, and a pause lets it
          * finish.
          */
-        async function takeTurn(
-          continuing: boolean,
-          withoutTools: boolean,
-        ): Promise<TurnOutcome> {
+        async function takeTurn(continuing: boolean, withoutTools: boolean): Promise<TurnOutcome> {
           for (;;) {
             const outcome = await deps.runGated(
               chosen.providerId,
-              async (): Promise<TurnOutcome | { kind: "parked" }> => {
-                if (input.signal.aborted) return { kind: "cancelled" };
+              async (): Promise<TurnOutcome | { kind: 'parked' }> => {
+                if (input.signal.aborted) return { kind: 'cancelled' };
                 if ((starting === undefined || continuing) && input.gate?.isPaused() === true) {
-                  return { kind: "parked" };
+                  return { kind: 'parked' };
                 }
                 await started();
                 try {
                   called = true;
                   return {
-                    kind: "called",
+                    kind: 'called',
                     pendingCall: await generateTurn(continuing, withoutTools),
                   };
                 } finally {
@@ -805,10 +781,10 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
                 }
               },
             );
-            if (outcome.kind !== "parked") return outcome;
+            if (outcome.kind !== 'parked') return outcome;
             // Queue again once the run is resumed; a stop while it waits ends it here (FR-CTL-002).
             if (input.gate === undefined || !(await input.gate.waitUntilDispatchable())) {
-              return { kind: "cancelled" };
+              return { kind: 'cancelled' };
             }
           }
         }
@@ -828,7 +804,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
            * cancelled only by the run's own stop signal.
            */
           const timeoutMs =
-            node.kind === "agent" || node.kind === "model" ? node.config.execution.timeoutMs : 0;
+            node.kind === 'agent' || node.kind === 'model' ? node.config.execution.timeoutMs : 0;
           const callSignal =
             timeoutMs > 0
               ? AbortSignal.any([input.signal, AbortSignal.timeout(timeoutMs)])
@@ -841,12 +817,8 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               system: prompt.system,
               prompt: prompt.text,
               outputTypes,
-              ...(contract.jsonSchema === undefined
-                ? {}
-                : { jsonSchema: contract.jsonSchema }),
-              ...(contract.maxTokens === undefined
-                ? {}
-                : { maxTokens: contract.maxTokens }),
+              ...(contract.jsonSchema === undefined ? {} : { jsonSchema: contract.jsonSchema }),
+              ...(contract.maxTokens === undefined ? {} : { maxTokens: contract.maxTokens }),
               temperature,
               runId: input.runId,
               iteration: input.iteration,
@@ -859,32 +831,32 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
           let pendingCall: PendingToolCall | undefined;
           for await (const chunk of stream as AsyncIterable<StreamChunk>) {
             switch (chunk.type) {
-              case "text":
+              case 'text':
                 text += chunk.delta;
                 tokens.push(chunk.delta);
                 break;
-              case "json":
+              case 'json':
                 jsonValue = chunk.value;
                 sawJson = true;
                 break;
-              case "part":
+              case 'part':
                 partChunks.push(
                   chunk.bytes === undefined
                     ? { part: chunk.part }
                     : { part: chunk.part, bytes: chunk.bytes },
                 );
                 break;
-              case "tool_call":
+              case 'tool_call':
                 // One tool per turn: the mock and the round-4 adapters request a single tool and
                 // end the turn on `tool_calls`, so a second in one turn would be a protocol error.
                 pendingCall ??= { callId: chunk.callId, name: chunk.name, args: chunk.args };
                 break;
-              case "usage":
+              case 'usage':
                 // Summed across turns: every generate() turn is its own billed call (Arch §12.7).
                 tokensIn += chunk.tokensIn;
                 tokensOut += chunk.tokensOut;
                 break;
-              case "finish":
+              case 'finish':
                 finishReason = chunk.reason;
                 break;
             }
@@ -913,7 +885,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             // An enabled name that resolves to no tool — a removed MCP server, say (§2.4). There is
             // no definition to check and nothing to run, so it is a block.
             step = {
-              kind: "block",
+              kind: 'block',
               reason: `The tool "${call.name}" is not registered.`,
             };
           } else if (input.guardrails?.beforeTool !== undefined) {
@@ -925,7 +897,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               allowedDomains,
             });
           } else {
-            step = { kind: "allow" };
+            step = { kind: 'allow' };
           }
 
           /*
@@ -935,14 +907,14 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
            * the loop ends the node as a cancellation with what it spent.
            */
           if (toolSignal.aborted) {
-            throw userCancelledError("The run was stopped before this tool call ran.");
+            throw userCancelledError('The run was stopped before this tool call ran.');
           }
 
           verdicts.push(...(step.verdicts ?? []));
 
-          if (step.kind !== "allow") {
+          if (step.kind !== 'allow') {
             await logToolCall(call, {
-              status: step.kind === "block" ? "blocked" : "rejected",
+              status: step.kind === 'block' ? 'blocked' : 'rejected',
               resultSummary: step.reason,
               durationMs: 0,
               verdicts: step.verdicts ?? [],
@@ -951,12 +923,12 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             return {
               failed: {
                 error: {
-                  kind: "guardrail",
-                  code: step.kind === "block" ? "tool_blocked" : "tool_rejected",
+                  kind: 'guardrail',
+                  code: step.kind === 'block' ? 'tool_blocked' : 'tool_rejected',
                   message: step.reason,
                   retryable: false,
                 },
-                failureReason: "GUARDRAIL_VIOLATION",
+                failureReason: 'GUARDRAIL_VIOLATION',
               },
             };
           }
@@ -968,7 +940,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               signal: toolSignal,
             });
             await logToolCall(call, {
-              status: "ok",
+              status: 'ok',
               resultSummary: summariseResult(result),
               durationMs: durationSince(at),
               verdicts: step.verdicts ?? [],
@@ -977,7 +949,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             return { result };
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            const status = isToolTimeout(error) ? "timeout" : "error";
+            const status = isToolTimeout(error) ? 'timeout' : 'error';
             await logToolCall(call, {
               status,
               resultSummary: message,
@@ -993,7 +965,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         async function logToolCall(
           call: { callId: string; name: string; args: unknown },
           fields: {
-            status: ToolCall["status"];
+            status: ToolCall['status'];
             resultSummary: string;
             durationMs: number;
             verdicts: Verdict[];
@@ -1013,7 +985,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
           });
           await deps.recordToolCall?.(input.runId, toolCall);
           await deps.bus.emit({
-            type: "tool.call",
+            type: 'tool.call',
             workflowId: input.workflowId,
             runId: input.runId,
             payload: { runId: input.runId, nodeRunId: input.nodeRunId, toolCall },
@@ -1025,12 +997,12 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         const usage = usageFor(tokensIn, tokensOut, pricing);
 
         // Only these two are worth another model; everything else stops here (FR-RTR-002).
-        if (nodeError.kind === "provider" || nodeError.kind === "network") {
-          return { kind: "retryable", error: nodeError, usage };
+        if (nodeError.kind === 'provider' || nodeError.kind === 'network') {
+          return { kind: 'retryable', error: nodeError, usage };
         }
 
         return {
-          kind: "done",
+          kind: 'done',
           result: await fail(input, nodeError, usage, {
             modelUsed,
             prompt: recordedPrompt(),
@@ -1042,13 +1014,13 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
       if (cancelled) {
         return {
-          kind: "done",
+          kind: 'done',
           result: await fail(
             input,
             userCancelledError(
               starting === undefined
-                ? "The run was stopped before this node run started."
-                : "The run was stopped before this call was made.",
+                ? 'The run was stopped before this node run started.'
+                : 'The run was stopped before this call was made.',
             ).nodeError,
             // A stop between two turns (D-062) keeps what the turns before it spent (FR-ERR-007).
             called ? usageFor(tokensIn, tokensOut, pricing) : NO_USAGE,
@@ -1068,7 +1040,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
        */
       if (toolFailure !== undefined) {
         return {
-          kind: "done",
+          kind: 'done',
           result: await fail(input, toolFailure.error, usage, {
             modelUsed,
             prompt: recordedPrompt(),
@@ -1084,12 +1056,12 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
        */
       if (toolLimitExceeded) {
         return {
-          kind: "done",
+          kind: 'done',
           result: await fail(
             input,
             {
-              kind: "agent",
-              code: "tool_call_limit",
+              kind: 'agent',
+              code: 'tool_call_limit',
               message: `The model kept requesting tools past its limit of ${toolCallLimit}.`,
               retryable: false,
             },
@@ -1100,14 +1072,14 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       }
 
       /* A refusal is the model declining, which is an `agent` error, not a provider outage. */
-      if (finishReason === "refusal") {
+      if (finishReason === 'refusal') {
         return {
-          kind: "done",
+          kind: 'done',
           result: await fail(
             input,
             {
-              kind: "agent",
-              code: "refusal",
+              kind: 'agent',
+              code: 'refusal',
               message: `The model declined to answer: ${text.trim()}`,
               retryable: false,
             },
@@ -1138,12 +1110,12 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
              * retryable: the same provider would hand back the same output.
              */
             return {
-              kind: "done",
+              kind: 'done',
               result: await fail(
                 input,
                 {
-                  kind: "provider",
-                  code: "media_not_stored",
+                  kind: 'provider',
+                  code: 'media_not_stored',
                   message: `The model's media output could not be stored: ${
                     error instanceof Error ? error.message : String(error)
                   }`,
@@ -1161,7 +1133,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         }
       } else {
         output = [];
-        const wantsJson = outputTypes.includes("json");
+        const wantsJson = outputTypes.includes('json');
 
         if (wantsJson) {
           let value: unknown;
@@ -1174,12 +1146,12 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               // BR-03: the model answered, it just answered wrongly. That is a contract violation,
               // never RUN_FAILED, and never a reason to retry a different provider.
               return {
-                kind: "done",
+                kind: 'done',
                 result: await fail(
                   input,
                   {
-                    kind: "agent",
-                    code: "contract_violation",
+                    kind: 'agent',
+                    code: 'contract_violation',
                     message: `The model did not return valid JSON: ${text.trim().slice(0, 120)}`,
                     retryable: false,
                   },
@@ -1187,7 +1159,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
                   {
                     modelUsed,
                     prompt: recordedPrompt(),
-                    failureReason: "CONTRACT_VIOLATION",
+                    failureReason: 'CONTRACT_VIOLATION',
                   },
                 ),
               };
@@ -1206,25 +1178,23 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             if (extracted.invalid !== undefined) {
               deps.logger.warn(
                 {
-                  subsystem: "memory",
+                  subsystem: 'memory',
                   runId: input.runId,
                   nodeId: input.node.id,
                   nodeRunId: input.nodeRunId,
                   reason: extracted.invalid,
                 },
-                "memory ops ignored",
+                'memory ops ignored',
               );
             }
           }
-          output.push({ type: "json", value });
+          output.push({ type: 'json', value });
         }
 
         for (const type of outputTypes) {
-          if (type === "json") continue;
-          if (type === "code")
-            output.push({ type: "code", language: "text", text: text.trim() });
-          else if (type === "text")
-            output.push({ type: "text", text: text.trim() });
+          if (type === 'json') continue;
+          if (type === 'code') output.push({ type: 'code', language: 'text', text: text.trim() });
+          else if (type === 'text') output.push({ type: 'text', text: text.trim() });
         }
       }
 
@@ -1256,13 +1226,13 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
           checked = await input.guardrails.afterOutput(flowing, contract);
         } catch (error) {
           if (!input.signal.aborted) throw error;
-          return { kind: "done", result: await stopped(error) };
+          return { kind: 'done', result: await stopped(error) };
         }
         verdicts.push(...(checked.verdicts ?? []));
-        if (input.signal.aborted) return { kind: "done", result: await stopped() };
-        if (checked.kind === "failed") {
+        if (input.signal.aborted) return { kind: 'done', result: await stopped() };
+        if (checked.kind === 'failed') {
           return {
-            kind: "done",
+            kind: 'done',
             result: await fail(input, checked.error, usage, {
               modelUsed,
               prompt: recordedPrompt(),
@@ -1276,12 +1246,12 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         const check = validateAgainstContract(flowing, contract);
         if (!check.ok) {
           return {
-            kind: "done",
+            kind: 'done',
             result: await fail(
               input,
               {
-                kind: "agent",
-                code: "contract_violation",
+                kind: 'agent',
+                code: 'contract_violation',
                 message: check.reason,
                 retryable: false,
               },
@@ -1289,7 +1259,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               {
                 modelUsed,
                 prompt: recordedPrompt(),
-                failureReason: "CONTRACT_VIOLATION",
+                failureReason: 'CONTRACT_VIOLATION',
               },
             ),
           };
@@ -1301,18 +1271,18 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
        * answer leaves memory as it was, and a retry never applies them twice. They are recorded as
        * stored — a key-shaped value masked (D86) — and only when there were any (FR-MEM-002).
        */
-      let applied: Pick<NodeExecutionOutcome, "memoryOps"> = {};
+      let applied: Pick<NodeExecutionOutcome, 'memoryOps'> = {};
       if (memoryOps.length > 0 && input.memory !== undefined && !input.signal.aborted) {
         await input.memory.apply(memoryOps);
         applied = {
           memoryOps: memoryOps.map((op): MemoryOp =>
-            op.op === "save" ? { ...op, value: maskMemoryValue(op.value) } : op,
+            op.op === 'save' ? { ...op, value: maskMemoryValue(op.value) } : op,
           ),
         };
       }
 
       return {
-        kind: "done",
+        kind: 'done',
         result: await succeed(input, flowing, usage, {
           ...applied,
           modelUsed,
@@ -1325,14 +1295,12 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
   /* ---------------------------------------------------------------- others */
 
-  async function executeOther(
-    input: ExecuteNodeInput,
-  ): Promise<NodeExecutionOutcome> {
+  async function executeOther(input: ExecuteNodeInput): Promise<NodeExecutionOutcome> {
     const node = input.node;
     const reads = readsOf(input.envelopes);
 
     switch (node.kind) {
-      case "input": {
+      case 'input': {
         // FR-NODE-011: what the user typed at start wins over what the config remembers.
         const supplied = input.runInputs[node.id];
         let parts: Part[];
@@ -1344,9 +1312,9 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
           // The config's text, plus one media `Part` per attached artifact, resolved by MIME to
           // image/audio/video/file — references only, never bytes (FR-MM-003, FR-MM-004).
           parts =
-            node.config.text === undefined || node.config.text === ""
+            node.config.text === undefined || node.config.text === ''
               ? []
-              : [{ type: "text", text: node.config.text }];
+              : [{ type: 'text', text: node.config.text }];
           if (node.config.artifactIds.length > 0 && deps.artifacts !== undefined) {
             parts = [...parts, ...(await deps.artifacts.inputParts(node.config.artifactIds))];
           }
@@ -1360,7 +1328,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
          */
         if (input.guardrails?.afterOutput !== undefined) {
           const checked = await input.guardrails.afterOutput(parts);
-          if (checked.kind === "failed") {
+          if (checked.kind === 'failed') {
             return fail(input, checked.error, NO_USAGE, {
               failureReason: checked.failureReason,
               ...(checked.verdicts === undefined ? {} : { verdicts: checked.verdicts }),
@@ -1374,16 +1342,16 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         return succeed(input, parts, NO_USAGE);
       }
 
-      case "output":
+      case 'output':
         // FR-NODE-012: an Output node is a terminal; what reaches it is the final result.
         return succeed(input, reads, NO_USAGE);
 
-      case "transform": {
+      case 'transform': {
         const result = runTransform(node.config, reads);
         if (!result.ok) {
           return fail(input, {
-            kind: "workflow",
-            code: "transform_failed",
+            kind: 'workflow',
+            code: 'transform_failed',
             message: result.reason,
             retryable: false,
           });
@@ -1391,13 +1359,13 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         return succeed(input, result.parts, NO_USAGE);
       }
 
-      case "retrieval": {
+      case 'retrieval': {
         // Round 5 §2.4 (FR-RAG-006): one search of the chosen base; every hit is a source (FR-RAG-007).
         if (deps.search === undefined) {
           return fail(input, {
-            kind: "invalid_config",
-            code: "knowledge_unavailable",
-            message: "This engine has no knowledge store, so a Retrieval node cannot search.",
+            kind: 'invalid_config',
+            code: 'knowledge_unavailable',
+            message: 'This engine has no knowledge store, so a Retrieval node cannot search.',
             retryable: false,
           });
         }
@@ -1410,8 +1378,8 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       default:
         // Pre-flight refuses these kinds (§2.7 item 5), so reaching here is an engine bug.
         return fail(input, {
-          kind: "invalid_config",
-          code: "not_supported_yet",
+          kind: 'invalid_config',
+          code: 'not_supported_yet',
           message: `A ${node.kind} node cannot be executed by this version.`,
           retryable: false,
         });
@@ -1421,7 +1389,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
   return {
     async execute(input) {
       try {
-        if (input.node.kind === "agent" || input.node.kind === "model") {
+        if (input.node.kind === 'agent' || input.node.kind === 'model') {
           return await executeAgent(input);
         }
         // Nothing to queue for: an input, transform or output node starts the moment it is dispatched.
@@ -1433,7 +1401,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         if (!input.signal.aborted) throw error;
         return fail(
           input,
-          stoppedError(error, "The run was stopped while this node was being checked."),
+          stoppedError(error, 'The run was stopped while this node was being checked.'),
         );
       }
     },

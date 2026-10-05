@@ -631,10 +631,7 @@ export class SqliteRepository implements Repository {
         )
         .all()
         .map(toNode)
-        .filter(
-          (node) =>
-            'providerId' in node.config && node.config.providerId === providerId,
-        ),
+        .filter((node) => 'providerId' in node.config && node.config.providerId === providerId),
 
     listByWorkflow: async (scope: Scope, workflowId: Id) => {
       const rows = this.#db
@@ -778,11 +775,7 @@ export class SqliteRepository implements Repository {
       const threadClause = (threadIds: readonly Id[]) =>
         and(
           inArray(events.type, threadTypes),
-          or(
-            ...threadIds.map(
-              (id) => sql`json_extract(${events.payload}, '$.threadId') = ${id}`,
-            ),
-          ),
+          or(...threadIds.map((id) => sql`json_extract(${events.payload}, '$.threadId') = ${id}`)),
         );
 
       const scoped = (() => {
