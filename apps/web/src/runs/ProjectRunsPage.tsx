@@ -30,7 +30,7 @@ export function ProjectRunsPage() {
       {workflows.data?.map((workflow) => (
         <section key={workflow.id} className="flex flex-col gap-2">
           <h2 className="font-human text-sm font-semibold">{workflow.name}</h2>
-          <div className="rounded-card border border-border bg-panel">
+          <div className="rounded-card border border-border bg-panel p-4">
             <RunsList workflowId={workflow.id} />
           </div>
         </section>

@@ -45,7 +45,7 @@ export function ConfigPanel({ workflowId }: { workflowId: string }) {
       ) : edge?.kind === 'loop' ? (
         <LoopEdgeEditor key={edge.id} edge={edge} workflowId={workflowId} />
       ) : (
-        <div className="flex flex-col gap-2 p-4" data-testid="config-workflow">
+        <div className="flex flex-col gap-2 pt-2" data-testid="config-workflow">
           <h2 className="font-human text-[21px] font-semibold leading-tight">
             {graph.data?.workflow.name ?? 'Workflow'}
           </h2>
@@ -76,7 +76,7 @@ function LoopEdgeEditor({ edge, workflowId }: { edge: Edge; workflowId: string }
     sync.enqueue([{ op: 'update_edge', edgeId: edge.id, patch: { loop } }]);
 
   return (
-    <div className="flex flex-col gap-4 p-4" data-testid="loop-edge-editor">
+    <div className="flex flex-col gap-4" data-testid="loop-edge-editor">
       <header className="flex items-center gap-2">
         <Repeat className="h-4 w-4 text-fg-muted" aria-hidden />
         <h2 className="font-human text-sm font-semibold">Loop edge</h2>
@@ -157,7 +157,7 @@ function NodeEditor({ node, workflowId }: { node: Node; workflowId: string }) {
   );
 
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <div className="flex flex-col gap-4">
       <header className="flex items-center gap-3">
         <span
           className="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] border"

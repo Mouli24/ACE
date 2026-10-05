@@ -24,16 +24,16 @@ const duration = (run: RunSummary): string => {
 export function RunsList({ workflowId }: { workflowId: string }) {
   const runs = useRuns(workflowId);
 
-  if (runs.isPending) return <p className="p-4 text-sm text-fg-muted">Loading runs…</p>;
+  if (runs.isPending) return <p className="text-sm text-fg-muted">Loading runs…</p>;
   if (runs.isError) {
     return (
-      <p role="alert" className="p-4 text-sm text-danger">
+      <p role="alert" className="text-sm text-danger">
         Could not load runs: {runs.error.message}
       </p>
     );
   }
   if ((runs.data?.length ?? 0) === 0) {
-    return <p className="p-4 text-sm text-fg-muted">No runs yet. Press Start to make one.</p>;
+    return <p className="text-sm text-fg-muted">No runs yet. Press Start to make one.</p>;
   }
 
   /*
@@ -41,7 +41,7 @@ export function RunsList({ workflowId }: { workflowId: string }) {
    * fits). The whole card is the link, at least 44 px tall (FR-MOB-001, TC-MOB-001).
    */
   return (
-    <ul className="flex flex-col gap-2 p-4" data-testid="runs-table">
+    <ul className="flex flex-col gap-2" data-testid="runs-table">
       {runs.data?.map((run) => (
         <li
           key={run.id}

@@ -38,14 +38,14 @@ export function MemoryTab({ workflowId }: { workflowId: Id }) {
 
   if (node === undefined) {
     return (
-      <p className="p-4 text-sm text-fg-muted" data-testid="memory-tab-empty-selection">
+      <p className="text-sm text-fg-muted" data-testid="memory-tab-empty-selection">
         Select an agent to see its memory.
       </p>
     );
   }
   if (node.kind !== 'agent') {
     return (
-      <p className="p-4 text-sm text-fg-muted" data-testid="memory-tab-not-agent">
+      <p className="text-sm text-fg-muted" data-testid="memory-tab-not-agent">
         Memory is kept by Agent nodes. {node.name} is a {node.kind} node.
       </p>
     );
@@ -71,7 +71,7 @@ function AgentMemory({ node }: { node: Extract<Node, { kind: 'agent' }> }) {
 
   return (
     <section
-      className="flex flex-col gap-3 p-4"
+      className="flex flex-col gap-3"
       aria-label={`Memory of ${node.name}`}
       data-testid="memory-tab"
       data-node-id={node.id}
