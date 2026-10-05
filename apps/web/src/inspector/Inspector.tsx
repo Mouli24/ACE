@@ -63,7 +63,7 @@ export function Inspector({ workflowId }: { workflowId: string }) {
   return (
     <section
       aria-label="Node run inspector"
-      className="flex h-full flex-col gap-3 overflow-y-auto p-4"
+      className="flex h-full flex-col gap-3 overflow-y-auto"
       data-testid="inspector"
     >
       {runId === undefined && runs.isLoading && (

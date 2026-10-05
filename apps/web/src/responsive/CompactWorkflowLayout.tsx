@@ -41,16 +41,16 @@ export function CompactWorkflowLayout({
       <TabsContent value="Canvas" className="min-h-0 flex-1">
         <ReadOnlyCanvasFrame>{canvas}</ReadOnlyCanvasFrame>
       </TabsContent>
-      <TabsContent value="Runs" className="min-h-0 flex-1 overflow-y-auto">
+      <TabsContent value="Runs" className="min-h-0 flex-1 overflow-y-auto p-4">
         <RunsList workflowId={workflowId} />
       </TabsContent>
-      <TabsContent value="Inspector" className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+      <TabsContent value="Inspector" className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4">
         <Inspector workflowId={workflowId} />
       </TabsContent>
       <TabsContent value="Chat" className={`min-h-0 min-w-0 flex-1 ${TOUCH_TARGETS}`}>
         <ChatPanel workflowId={workflowId} />
       </TabsContent>
-      <TabsContent value="Memory" className="min-h-0 flex-1 overflow-y-auto">
+      <TabsContent value="Memory" className="min-h-0 flex-1 overflow-y-auto p-4">
         <MemoryTab workflowId={workflowId} />
       </TabsContent>
     </Tabs>

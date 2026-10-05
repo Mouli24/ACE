@@ -117,6 +117,30 @@ describe('FR-NODE-002 / FR-EXE-010 the floating sheet over the Canvas', () => {
     expect(screen.getByRole('tab', { name: 'Memory' })).toHaveAttribute('aria-selected', 'true');
   });
 
+  it('insets its content once: the body’s 18 px, none of the contents’ own', async () => {
+    const user = userEvent.setup();
+    const { project, workflow, a } = seed();
+    renderSheet(project.id, workflow.id);
+    open('configure');
+    expect(await screen.findByTestId('workflow-sheet-body')).toHaveClass(
+      'px-[18px]',
+      'pb-[18px]',
+      'pt-1.5',
+    );
+
+    const unpadded = (element: HTMLElement) => expect(element.className).not.toMatch(/(^|\s)p-\d/);
+    unpadded(screen.getByTestId('config-workflow'));
+    select([a.id]);
+    unpadded((await screen.findByLabelText('Name')).closest('[class*="gap-4"]') as HTMLElement);
+
+    await user.click(screen.getByRole('tab', { name: 'Inspector' }));
+    unpadded(screen.getByTestId('inspector'));
+    await user.click(screen.getByRole('tab', { name: 'Runs' }));
+    unpadded(await screen.findByText(/No runs yet/));
+    await user.click(screen.getByRole('tab', { name: 'Memory' }));
+    unpadded(await screen.findByTestId('memory-tab-not-agent'));
+  });
+
   it('the close button (“Close panel”) calls closeSheet', async () => {
     const { project, workflow } = seed();
     renderSheet(project.id, workflow.id);

@@ -44,6 +44,15 @@ describe('FR-MOB-001 / FR-MOB-003 the Canvas screen at phone width', () => {
     expect(await screen.findByText(/No runs yet/)).toBeInTheDocument();
   });
 
+  it('pads the Runs, Inspector and Memory panes itself (their contents carry no padding)', async () => {
+    installMatchMedia(true);
+    renderApp(seedWorkflow());
+    for (const name of ['Runs', 'Inspector', 'Memory']) {
+      await userEvent.click(await screen.findByRole('tab', { name }));
+      expect(screen.getByRole('tabpanel', { name })).toHaveClass('p-4');
+    }
+  });
+
   it('keeps the desktop editor above 640 px', async () => {
     installMatchMedia(false);
     renderApp(seedWorkflow());

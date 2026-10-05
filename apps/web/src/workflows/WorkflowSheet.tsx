@@ -70,7 +70,10 @@ export function WorkflowSheet({ workflowId }: { workflowId: string }) {
             <X className="h-[13px] w-[13px]" strokeWidth={2.4} aria-hidden />
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-[18px] pb-[18px] pt-1.5">
+        <div
+          data-testid="workflow-sheet-body"
+          className="min-h-0 flex-1 overflow-y-auto px-[18px] pb-[18px] pt-1.5"
+        >
           <TabsContent value="configure">
             <ConfigPanel workflowId={workflowId} />
           </TabsContent>
