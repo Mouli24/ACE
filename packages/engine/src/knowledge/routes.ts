@@ -45,16 +45,20 @@ export function createKnowledgeRoutes(
     c.json({ items: await knowledge().list(c.req.param('id')) }),
   );
 
+  // Each handler resolves its service before it reads the body: no service is 501 whatever the
+  // body says, as the template and backup routes answer.
   router.post('/projects/:id/knowledge-bases', async (c) => {
+    const service = knowledge();
     const body = CreateKnowledgeBaseRequestSchema.parse(await readJson(c));
-    return c.json(await knowledge().create(c.req.param('id'), body), 201);
+    return c.json(await service.create(c.req.param('id'), body), 201);
   });
 
   router.get('/knowledge-bases/:id', async (c) => c.json(await knowledge().get(c.req.param('id'))));
 
   router.patch('/knowledge-bases/:id', async (c) => {
+    const service = knowledge();
     const patch = UpdateKnowledgeBaseRequestSchema.parse(await readJson(c));
-    return c.json(await knowledge().update(c.req.param('id'), patch));
+    return c.json(await service.update(c.req.param('id'), patch));
   });
 
   // Removes its documents, chunks, vectors and FTS rows with it (§2.9).
@@ -65,8 +69,9 @@ export function createKnowledgeRoutes(
 
   // 202: the document is recorded `pending` and queued; ingestion reports through `kb.ingest`.
   router.post('/knowledge-bases/:id/documents', async (c) => {
+    const service = knowledge();
     const body = AddKbDocumentRequestSchema.parse(await readJson(c));
-    return c.json(await knowledge().addDocument(c.req.param('id'), body), 202);
+    return c.json(await service.addDocument(c.req.param('id'), body), 202);
   });
 
   router.get('/knowledge-bases/:id/documents', async (c) =>
@@ -85,10 +90,11 @@ export function createKnowledgeRoutes(
   });
 
   router.post('/knowledge-bases/:id/query', async (c) => {
+    const service = search();
     const request = SearchRequestSchema.parse(await readJson(c));
     const id = c.req.param('id');
     try {
-      return c.json(await search().search(id, request));
+      return c.json(await service.search(id, request));
     } catch (error) {
       // The search port names a missing base by type; over HTTP that is the base not found.
       if (error instanceof KnowledgeBaseMissingError) throw notFound(`Knowledge base ${id}`);
