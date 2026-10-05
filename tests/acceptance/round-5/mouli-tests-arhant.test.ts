@@ -1312,6 +1312,9 @@ describe('NFR-PRIV-01 / TC-NFR-012 no outbound connection during a full KB run',
     recording = true;
     try {
       await (await fetch(`http://127.0.0.1:${controlPort}/`)).text();
+      // `fetch` reuses kept-alive sockets opened before the window, so a new WebSocket is the
+      // connect to the engine this window is sure to contain.
+      (await watch({ scope: 'engine' })).close();
       const kb = await createKb('Privacy');
       await addDocs(kb, [SIX_TYPES[2] as CorpusDoc, SIX_TYPES[5] as CorpusDoc]);
       const graph = await importExport(readFixture('rag-qa.json'), { kbId: kb.id });
