@@ -2,7 +2,6 @@ import { MESSAGE_TYPES, type Part } from '@ace/contracts';
 import { render, screen } from '@testing-library/react';
 
 import { MessageBubble } from '../components/message-bubble.js';
-import { PROVIDER_ACCENT } from '../tokens.js';
 
 const text: Part[] = [{ type: 'text', text: 'hello there' }];
 
@@ -26,7 +25,16 @@ describe('FR-CHAT-001 the six message types read differently on sight', () => {
     render(<MessageBubble type="agent" content={text} nodeName="Writer" provider="anthropic" />);
     expect(screen.getByText('Writer')).toBeInTheDocument();
     const bubble = screen.getByTestId('message-bubble');
-    expect(bubble).toHaveStyle({ borderLeftColor: PROVIDER_ACCENT.anthropic });
+    expect(bubble.getAttribute('style') ?? '').toContain('--color-provider-anthropic');
+    expect(bubble.className).toContain('rounded-[14px_14px_14px_4px]');
+    expect(bubble.className).toContain('text-fg-soft');
+  });
+
+  it('user bubbles use the chat shape', () => {
+    render(<MessageBubble type="user" content={text} />);
+    const bubble = screen.getByTestId('message-bubble');
+    expect(bubble.className).toContain('rounded-[14px_14px_4px_14px]');
+    expect(bubble.className).toContain('border-border-strong');
   });
 
   it('output is highlighted and labelled as the final output', () => {
