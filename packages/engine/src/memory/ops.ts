@@ -2,8 +2,10 @@ import {
   MEMORY_OUTPUT_FIELD,
   MEMORY_VALUE_MAX,
   MemoryOpSchema,
+  MemoryOpsSchema,
   type MemoryOp,
 } from '@ace/contracts';
+import { z } from 'zod';
 
 import { maskSecrets } from '../security/secret-patterns.js';
 
@@ -68,4 +70,40 @@ export function extractMemoryOps(value: unknown): {
 export function maskMemoryValue(value: string): string {
   const masked = maskSecrets(value);
   return masked.length > MEMORY_VALUE_MAX ? masked.slice(0, MEMORY_VALUE_MAX) : masked;
+}
+
+/**
+ * The JSON Schema of a `__memory` list, derived from the contract's own `MemoryOpsSchema` so the
+ * provider is held to exactly the ops `extractMemoryOps` accepts (FR-MEM-002).
+ */
+const MEMORY_OPS_JSON_SCHEMA: Record<string, unknown> = (() => {
+  const { $schema: _dialect, ...schema } = z.toJSONSchema(MemoryOpsSchema);
+  return schema;
+})();
+
+/**
+ * The schema an agent with memory on holds its provider to (13a review m2): its own output schema,
+ * with an optional `__memory` list beside its properties. A provider that enforces the schema could
+ * not emit `__memory` otherwise. Only an object schema can carry the field — §2.2 makes `__memory` a
+ * field of the JSON output — so any other schema, and one that already names the field, comes back
+ * as it was. `required` is never touched, and the agent's own schema is never changed: the answer is
+ * validated against it once `__memory` is out.
+ */
+export function withMemoryField(schema: Record<string, unknown>): Record<string, unknown> {
+  const { type, properties } = schema;
+  const isObjectSchema =
+    type === 'object' ||
+    (type === undefined && properties !== null && typeof properties === 'object');
+  if (!isObjectSchema) return schema;
+
+  const existing =
+    properties !== null && typeof properties === 'object' && !Array.isArray(properties)
+      ? (properties as Record<string, unknown>)
+      : {};
+  if (MEMORY_OUTPUT_FIELD in existing) return schema;
+
+  return {
+    ...schema,
+    properties: { ...existing, [MEMORY_OUTPUT_FIELD]: MEMORY_OPS_JSON_SCHEMA },
+  };
 }

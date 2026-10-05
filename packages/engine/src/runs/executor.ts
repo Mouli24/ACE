@@ -38,7 +38,7 @@ import type {
 } from '../ports/index.js';
 import { runRetrievalNode } from '../knowledge/retrieval-node.js';
 import type { SearchService } from '../knowledge/search.js';
-import { extractMemoryOps, maskMemoryValue } from '../memory/ops.js';
+import { extractMemoryOps, maskMemoryValue, withMemoryField } from '../memory/ops.js';
 import { assemblePrompt } from '../prompts/index.js';
 import type { RunGate } from './control/gate.js';
 import { usageFor } from './cost.js';
@@ -476,8 +476,21 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
     /* The collected verdicts of both points, carried on the outcome for the report (FR-GRD-015). */
     const verdicts: Verdict[] = [];
-    /* Round 5 (§2.2): the memory-operations block, and `__memory` read out of the answer. */
-    const memoryOn = input.memory?.enabled === true;
+    /*
+     * Round 5 (§2.2): the memory-operations block, and `__memory` read out of the answer. Only for a
+     * JSON answer (13a review m2): `__memory` is a field of the JSON output, and only the JSON branch
+     * below reads it, so a text-only agent is never told to write one nothing would apply.
+     */
+    const memoryOn = input.memory?.enabled === true && node.config.outputTypes.includes('json');
+    /*
+     * The schema the provider is held to. With memory on it also allows an optional `__memory` list,
+     * or a provider that enforces schemas could never emit one; the answer is still validated against
+     * the agent's own schema, once `__memory` is out of it.
+     */
+    const providerSchema =
+      memoryOn && contract.jsonSchema !== undefined
+        ? withMemoryField(contract.jsonSchema)
+        : contract.jsonSchema;
 
     let envelopes = input.envelopes;
 
@@ -833,7 +846,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               system: prompt.system,
               prompt: prompt.text,
               outputTypes,
-              ...(contract.jsonSchema === undefined ? {} : { jsonSchema: contract.jsonSchema }),
+              ...(providerSchema === undefined ? {} : { jsonSchema: providerSchema }),
               ...(contract.maxTokens === undefined ? {} : { maxTokens: contract.maxTokens }),
               temperature,
               runId: input.runId,

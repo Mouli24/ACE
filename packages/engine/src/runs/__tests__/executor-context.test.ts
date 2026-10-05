@@ -398,6 +398,71 @@ describe('FR-MEM-002 an agent with memory enabled', () => {
     expect(h.requests[0]?.prompt).toContain(MEMORY_PROMPT_HEADING);
   });
 
+  it('m2: a text-only agent with memory on gets no memory block, and its text answer is left alone', async () => {
+    const text = `Hi. {"${MEMORY_OUTPUT_FIELD}": [{"op": "save", "key": "k", "value": "v"}]}`;
+    const h = await harness({ reply: () => say(text) });
+    const memory = memoryHook();
+
+    const outcome = await h.run(agentNode({ memory: { enabled: true } }), { memory });
+
+    // `__memory` is a field of the JSON output (§2.2): nothing reads it from text, so no agent is
+    // told to write it there.
+    expect(h.requests[0]?.prompt).not.toContain(MEMORY_PROMPT_HEADING);
+    expect(outcome.status).toBe('COMPLETED');
+    expect(outcome.output).toEqual([{ type: 'text', text }]);
+    expect(memory.applied).toEqual([]);
+    expect(outcome).not.toHaveProperty('memoryOps');
+  });
+
+  it('m2: the schema sent to the provider allows an optional __memory list; the contract is the user one', async () => {
+    const h = await harness({ reply: () => answerJson({ answer: 'Hi.' }) });
+
+    await h.run(memoryAgent(), { memory: memoryHook() });
+
+    const sent = h.requests[0]?.jsonSchema as {
+      properties: Record<string, { type?: string; items?: unknown }>;
+      required: string[];
+      additionalProperties: boolean;
+    };
+    expect(sent.properties[MEMORY_OUTPUT_FIELD]).toMatchObject({ type: 'array' });
+    expect(sent.properties[MEMORY_OUTPUT_FIELD]?.items).toBeDefined();
+    expect(sent.properties['answer']).toEqual({ type: 'string' });
+    expect(sent.required).toEqual(['answer']);
+    expect(sent.additionalProperties).toBe(false);
+    // The agent's own schema is untouched: it is what the contract is validated against.
+    expect(STRICT_ANSWER.properties).not.toHaveProperty(MEMORY_OUTPUT_FIELD);
+    // …and the prompt's output contract states the agent's schema, not the widened one.
+    expect(h.requests[0]?.prompt).not.toContain(`"${MEMORY_OUTPUT_FIELD}":{"items"`);
+  });
+
+  it('m2: the widened schema accepts a schema-enforced __memory, the contract still rejects anything else', async () => {
+    const h = await harness({
+      reply: () =>
+        answerJson({
+          answer: 'Hi.',
+          extra: 'not in the schema',
+          [MEMORY_OUTPUT_FIELD]: [{ op: 'save', key: 'tone', value: 'brief' }],
+        }),
+    });
+    const memory = memoryHook();
+
+    const outcome = await h.run(memoryAgent(), { memory });
+
+    expect(outcome.failureReason).toBe('CONTRACT_VIOLATION');
+    expect(memory.applied).toEqual([]);
+  });
+
+  it('m2: with memory off the provider gets the agent schema exactly', async () => {
+    const h = await harness({ reply: () => answerJson({ answer: 'Hi.' }) });
+
+    await h.run(
+      agentNode({ outputTypes: ['json'], outputContract: { jsonSchema: STRICT_ANSWER } }),
+      { memory: memoryHook(false) },
+    );
+
+    expect(h.requests[0]?.jsonSchema).toEqual(STRICT_ANSWER);
+  });
+
   it('has __memory stripped before the output point and the contract, then applied and recorded', async () => {
     const h = await harness({
       reply: () =>
