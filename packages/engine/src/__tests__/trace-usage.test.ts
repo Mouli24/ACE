@@ -1,9 +1,11 @@
 import {
   ERROR_KINDS,
+  NODE_STATES,
   PERSISTED_RUN_EVENT_TYPES,
   TRACE_ENTRY_KIND_BY_EVENT_TYPE,
   type HealthMetrics,
   type NodeRun,
+  type NodeState,
   type Run,
   type UsageQuery,
 } from '@ace/contracts';
@@ -397,5 +399,18 @@ describe('usage service', () => {
     expect(Object.keys(filled.nodeFailuresByKind).sort()).toEqual([...ERROR_KINDS].sort());
     expect(filled.nodeFailuresByKind.provider).toBe(2);
     expect(filled.nodeFailuresByKind.agent).toBe(0);
+  });
+});
+
+describe('FR-OBS-001 a span ends on exactly the contract node states that end a node run (final-review M8)', () => {
+  const ENDING: readonly NodeState[] = ['COMPLETED', 'STOPPED', 'BLOCKED', 'FAILED'];
+
+  it.each([...NODE_STATES])('%s', (status) => {
+    const trace = foldTrace([
+      { seq: 1, type: 'node.state', runId: RUN, payload: state('RUNNING', 0)[1], createdAt: at(0) },
+      { seq: 2, type: 'node.state', runId: RUN, payload: state(status, 0)[1], createdAt: at(250) },
+    ]);
+
+    expect(trace[1]?.durationMs).toBe(ENDING.includes(status) ? 250 : undefined);
   });
 });

@@ -1,6 +1,13 @@
 import type { ChunkDraft, ParsedDocument } from '@ace/engine';
 
-import { createLineIndex, estimateTokens, hardSplit, tokensToChars, trimSpan } from './tokens.js';
+import {
+  CHARS_PER_TOKEN,
+  createLineIndex,
+  estimateTokens,
+  hardSplit,
+  tokensToChars,
+  trimSpan,
+} from './tokens.js';
 import type { Span } from './tokens.js';
 
 /** The separator written between an overlap and the text that follows it. */
@@ -107,7 +114,7 @@ export function chunkProse(input: {
   const sizeChars = tokensToChars(input.chunkSize);
   // The overlap never takes more than half of a chunk, so every piece always fits beside it.
   const overlapChars = Math.min(
-    Math.max(0, Math.floor(input.chunkOverlap)) * 4,
+    Math.max(0, Math.floor(input.chunkOverlap)) * CHARS_PER_TOKEN,
     Math.floor(sizeChars / 2),
   );
   const reserved = overlapChars > 0 ? overlapChars + OVERLAP_SEPARATOR.length : 0;

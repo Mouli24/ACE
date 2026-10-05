@@ -1,5 +1,10 @@
-/** Arch §24: a token is estimated as four characters. The engine's `estimateTokens` uses the same rule. */
-const CHARS_PER_TOKEN = 4;
+import { CHARS_PER_TOKEN } from '@ace/engine';
+
+/**
+ * Arch §24: a token is estimated as `CHARS_PER_TOKEN` characters — the engine's one constant,
+ * imported rather than retyped (final-review M8), so the chunker and `estimateTokens` cannot drift.
+ */
+export { CHARS_PER_TOKEN };
 
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);

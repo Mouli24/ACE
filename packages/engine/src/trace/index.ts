@@ -10,6 +10,7 @@ import {
   TRACE_ENTRY_KIND_BY_EVENT_TYPE,
   ToolCallPayloadSchema,
   type Id,
+  type NodeState,
   type PersistedRunEventType,
   type TraceEntry,
 } from '@ace/contracts';
@@ -28,8 +29,8 @@ const PERSISTED = new Set<string>(PERSISTED_RUN_EVENT_TYPES);
 
 const isPersistedRunEvent = (type: string): type is PersistedRunEventType => PERSISTED.has(type);
 
-/** A node run has finished once it reaches one of these. */
-const TERMINAL_NODE_STATES: ReadonlySet<string> = new Set([
+/** A node run has finished once it reaches one of these: contract node states, never retyped (M8). */
+const TERMINAL_NODE_STATES: ReadonlySet<NodeState> = new Set<NodeState>([
   'COMPLETED',
   'STOPPED',
   'BLOCKED',
