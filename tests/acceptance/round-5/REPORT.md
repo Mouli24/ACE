@@ -176,10 +176,10 @@ Both now click the way a person does, then wait for the checked state.
 
 ## Round 5 gate — NOT closed (2026-10-05)
 
-- [x] C5 (#31) and M5 (#32) merged. [ ] A5 merged — its PR is open.
-- [x] `pnpm test:acceptance` green for rounds 1–5 on A5 + `main` (locally; CI pending the PRs).
+- [x] C5 (#31), M5 (#32) and A5 (#35, 01fc0e8) merged; CI green on #35's four jobs.
+- [x] `pnpm test:acceptance` green for rounds 1–5 with these cross-tests, locally on A5 + `main`; CI on this branch's PR runs them on `main`.
 - [x] REPORT.md written; hit-rate@5 and the OI-02 decision recorded (D253).
 - [ ] No open critical/high — round 5 has none of its own, but **round 4's D-083 is open and round 4 is untagged.**
 - [~] §1 demo walked from a clean data dir — by the browser suite end to end; a human walk is still owed.
 - [x] `docs/DECISIONS.md`: OI-02 target (D253), mock model additions (D251), context-guardrail defaults (D246, D247, D256), memory contract (D252, D257).
-- [ ] `CLAUDE.md` §9 rows C5/A5/M5 → VERIFIED, §9.1 round 5 row, `git tag round-5` — after A5 merges, the cross-tests land, and round 4 is tagged.
+- [~] `CLAUDE.md` §9.1 round 5 row filled; rows C5/A5/M5 → VERIFIED and `git tag round-5` — after these cross-tests land, round 4 is tagged and the demo is walked by a person.
