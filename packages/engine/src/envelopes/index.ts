@@ -104,6 +104,12 @@ export interface SummariseInput {
   budgetTokens: number;
   /** Cancels a model summarisation call when the run is stopped. */
   signal?: AbortSignal;
+  /**
+   * The context guard over the text a model would be asked to summarise (BR-13, round 5 §2.3):
+   * hidden instructions stripped and PII redacted per the receiving node's policy. `null` when the
+   * guard refused the text, which is then truncated rather than sent. Absent, nothing is judged.
+   */
+  sanitise?: (text: string) => Promise<string | null>;
 }
 
 export interface SummariseResult {
@@ -194,6 +200,8 @@ export interface BuildEnvelopeInput {
   /** The receiving node's model, for a summariser that calls one (F3). */
   target?: { providerId: Id; modelId: string };
   signal?: AbortSignal;
+  /** The context guard over what a model summary would send (BR-13); see `SummariseInput`. */
+  sanitise?: (text: string) => Promise<string | null>;
 }
 
 /** One envelope for one edge group, built to fit (FR-EXE-005, FR-EXE-007). */
@@ -206,6 +214,7 @@ export async function buildEnvelope(
     budgetTokens: input.budgetTokens,
     ...(input.target === undefined ? {} : { target: input.target }),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
+    ...(input.sanitise === undefined ? {} : { sanitise: input.sanitise }),
   });
 
   const combinedSummary = summary ?? input.inheritedSummary;

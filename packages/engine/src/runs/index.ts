@@ -386,6 +386,37 @@ export function createRunService(deps: RunServiceDeps): RunService {
         ? { providerId: to.config.providerId, modelId: to.config.modelId }
         : undefined;
 
+    /*
+     * BR-13 (final-review I4): a model summary sends untrusted upstream text to a model, so the
+     * context guard sees it first, under the receiving node's policy — hidden instructions stripped,
+     * PII redacted; refused text is truncated, never sent. No node run exists while an envelope is
+     * built, so its verdicts have nothing to be recorded against and are not recorded: the summary
+     * itself is judged again as an upstream read by that node's own context step.
+     */
+    const guard = deps.contextGuard;
+    const sanitise =
+      guard === undefined || target === undefined
+        ? undefined
+        : async (text: string): Promise<string | null> => {
+            const policy =
+              deps.policies === undefined ? null : await deps.policies.resolve(run.projectId, to);
+            const judged = await guard.inspect({
+              target: {
+                runId: run.id,
+                workflowId: run.workflowId,
+                nodeRunId: '',
+                nodeId: to.id,
+                nodeName: to.name,
+                iteration,
+                policy,
+                ...(signal === undefined ? {} : { signal }),
+              },
+              label: 'upstream',
+              text,
+            });
+            return judged.kind === 'failed' ? null : judged.text;
+          };
+
     const { envelope, usage } = await buildEnvelope(
       {
         id: nextId(),
@@ -404,6 +435,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
         createdAt: now(),
         ...(target === undefined ? {} : { target }),
         ...(signal === undefined ? {} : { signal }),
+        ...(sanitise === undefined ? {} : { sanitise }),
       },
       summariser,
     );
