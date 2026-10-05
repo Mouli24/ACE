@@ -16,6 +16,9 @@ const TABS: ReadonlyArray<readonly [SheetTab, string]> = [
 
 const isSheetTab = (value: string): value is SheetTab => TABS.some(([tab]) => tab === value);
 
+/** The sheet's element id: the top bar's panel toggle points `aria-controls` at it. */
+export const SHEET_ID = 'workflow-sheet';
+
 /**
  * The floating sheet over the Canvas (POC Theme V2): configure what a node will do (FR-NODE-002),
  * inspect what its run did (FR-EXE-010), the workflow's runs and the node's memory. Opened by the
@@ -29,8 +32,18 @@ export function WorkflowSheet({ workflowId }: { workflowId: string }) {
   const close = usePanelsStore((s) => s.closeSheet);
   if (!open) return null;
 
+  // Closing unmounts the sheet and the focused Close button with it; rather than drop focus to
+  // <body>, hand it to the control that opens the sheet (the top bar's panel toggle).
+  const closeToToggle = () => {
+    document.querySelector<HTMLElement>(`[aria-controls="${SHEET_ID}"]`)?.focus();
+    close();
+  };
+
   return (
     <div
+      id={SHEET_ID}
+      role="region"
+      aria-label="Workflow panel"
       data-testid="workflow-sheet"
       className="absolute bottom-3 right-3 top-3 z-20 flex w-[min(372px,calc(100%-24px))] flex-col rounded-[16px] border border-border-strong bg-panel shadow-[0_24px_60px_-20px_#000000b0,var(--ace-ground)]"
     >
@@ -51,7 +64,7 @@ export function WorkflowSheet({ workflowId }: { workflowId: string }) {
             type="button"
             aria-label="Close panel"
             title="Close"
-            onClick={close}
+            onClick={closeToToggle}
             className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full text-fg-muted transition-colors hover:bg-border hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
           >
             <X className="h-[13px] w-[13px]" strokeWidth={2.4} aria-hidden />

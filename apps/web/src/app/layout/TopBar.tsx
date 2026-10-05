@@ -10,6 +10,7 @@ import { RunBar } from '../../runs/RunBar';
 import { ApprovalsBadge } from '../../runs/approvals/ApprovalsBadge';
 import { useRunStore } from '../../runs/run-store';
 import { DayTotalsChip } from '../../usage/DayTotalsChip';
+import { SHEET_ID } from '../../workflows/WorkflowSheet';
 import { WorkflowTabs } from '../../workflows/WorkflowTabs';
 import { usePanelsStore } from '../stores/panels';
 
@@ -125,6 +126,7 @@ export function TopBar() {
             data-testid="sheet-toggle"
             aria-label="Workflow panel"
             aria-pressed={sheetOpen}
+            aria-controls={SHEET_ID}
             title="Workflow panel"
             className={cn(ICON_BUTTON, sheetOpen && 'bg-border text-fg')}
             onClick={() => (sheetOpen ? closeSheet() : openSheet())}
