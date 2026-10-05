@@ -5,21 +5,21 @@ import { forwardRef, type ButtonHTMLAttributes } from 'react';
 import { cn } from '../lib/cn.js';
 
 export const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:pointer-events-none disabled:opacity-50',
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-chip font-machine text-[11px] tracking-[0.04em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection disabled:pointer-events-none disabled:opacity-45',
   {
     variants: {
       variant: {
-        default: 'bg-accent text-accent-fg hover:bg-accent/90',
-        secondary: 'bg-card text-fg border border-border hover:bg-border/60',
-        ghost: 'text-fg hover:bg-border/60',
-        destructive: 'bg-danger text-canvas hover:bg-danger/90',
-        outline: 'border border-border bg-transparent text-fg hover:bg-border/40',
+        default: 'bg-accent text-accent-fg font-semibold hover:opacity-90',
+        secondary: 'border border-border bg-card text-fg hover:border-fg-muted',
+        ghost: 'text-fg-muted hover:bg-border hover:text-fg',
+        destructive: 'border border-danger/50 text-danger hover:bg-danger/10',
+        outline: 'border border-border-strong bg-transparent text-fg hover:border-fg-muted',
       },
       size: {
-        default: 'h-9 px-4 py-2',
-        sm: 'h-8 rounded-md px-3 text-xs',
-        lg: 'h-10 rounded-md px-8',
-        icon: 'h-9 w-9',
+        default: 'h-9 px-4',
+        sm: 'h-[30px] px-3.5',
+        lg: 'h-10 px-6',
+        icon: 'h-8 w-8',
       },
     },
     defaultVariants: { variant: 'default', size: 'default' },

@@ -88,31 +88,33 @@ export function ApprovalCard({
       data-check={request.checkType}
       aria-label={`Approval needed for ${request.nodeName}`}
       className={cn(
-        'flex w-full max-w-sm flex-col gap-2 rounded-card border border-[var(--color-status-WAITING)]/70 bg-panel p-3 shadow-lg',
+        'flex w-full max-w-sm flex-col gap-2.5 rounded-card border border-[color-mix(in_oklab,var(--color-status-WAITING)_60%,transparent)] bg-panel p-3.5 shadow-[0_0_0_4px_color-mix(in_oklab,var(--color-status-WAITING)_10%,transparent),0_18px_40px_-16px_#000000aa]',
         className,
       )}
       {...props}
     >
-      <header className="flex items-start gap-2">
-        <ShieldAlert
-          className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-status-WAITING)]"
+      <header className="flex items-center gap-2.5">
+        <span
           aria-hidden
-        />
+          className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[8px] bg-[color-mix(in_oklab,var(--color-status-WAITING)_16%,transparent)] text-[var(--color-status-WAITING)]"
+        >
+          <ShieldAlert className="h-4 w-4" aria-hidden />
+        </span>
         <div className="min-w-0">
-          <p className="truncate font-human text-sm font-semibold">{request.nodeName}</p>
-          <p className="font-machine text-[10px] text-fg-muted">
-            {request.point} · {request.checkType} · asks you
+          <p className="truncate font-human text-[15px] font-semibold">{request.nodeName}</p>
+          <p className="font-machine text-[9.5px] text-fg-muted">
+            {request.point} · {request.checkType} · ask user
           </p>
         </div>
       </header>
 
-      <p className="text-xs text-fg" data-testid="approval-reason">
+      <p className="text-[13.5px] text-fg-soft" data-testid="approval-reason">
         {request.reason}
       </p>
 
       <pre
         data-testid="approval-preview"
-        className="max-h-32 overflow-auto whitespace-pre-wrap rounded border border-border bg-canvas p-2 font-machine text-[11px] text-fg-muted"
+        className="max-h-[76px] overflow-auto whitespace-pre-wrap rounded-[9px] border border-border bg-sunken px-2.5 py-2 font-machine text-[10.5px] text-fg-muted"
       >
         {request.preview}
       </pre>
@@ -122,7 +124,7 @@ export function ApprovalCard({
           <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-fg-muted">
             Note (optional)
             <input
-              className="rounded border border-border bg-canvas px-2 py-1 font-human text-xs text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              className="rounded-field border border-border bg-card px-2 py-1 font-human text-xs text-fg focus-visible:border-selection focus-visible:outline-none"
               value={note ?? ''}
               onChange={(event) => onNoteChange?.(event.target.value)}
               aria-label="Decision note"
