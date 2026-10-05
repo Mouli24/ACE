@@ -66,10 +66,11 @@ export interface PreflightInput {
   mcpServers?: readonly McpServer[];
   /**
    * Whether a knowledge base still exists (round 5 §2.4): a Retrieval node or an agent naming one
-   * that does not is `missing_knowledge_base`. Absent (round 2–4 harnesses), a *named* base is not
-   * looked up — a Retrieval node with no base at all is refused either way.
+   * that does not is `missing_knowledge_base`. Required, so no caller can start a run without the
+   * lookup; a store without knowledge bases answers `false` for every id. A Retrieval node with no
+   * base at all is refused without asking.
    */
-  knowledgeBaseExists?: (id: Id) => Promise<boolean>;
+  knowledgeBaseExists: (id: Id) => Promise<boolean>;
 }
 
 /** An Input node has something to start from when its config or the request carries content. */
@@ -215,8 +216,7 @@ export async function preflight(input: PreflightInput): Promise<ValidationIssue[
 async function knowledgeBaseIssues(input: PreflightInput): Promise<ValidationIssue[]> {
   const issues: ValidationIssue[] = [];
   const lookups = new Map<Id, Promise<boolean>>();
-  const exists = (id: Id): Promise<boolean> | undefined => {
-    if (input.knowledgeBaseExists === undefined) return undefined;
+  const exists = (id: Id): Promise<boolean> => {
     let lookup = lookups.get(id);
     if (lookup === undefined) {
       lookup = input.knowledgeBaseExists(id);
@@ -235,7 +235,7 @@ async function knowledgeBaseIssues(input: PreflightInput): Promise<ValidationIss
           message: `"${node.name}" has no knowledge base chosen.`,
           nodeId: node.id,
         });
-      } else if ((await exists(knowledgeBaseId)) === false) {
+      } else if (!(await exists(knowledgeBaseId))) {
         issues.push({
           severity: 'error',
           code: 'missing_knowledge_base',
@@ -247,7 +247,7 @@ async function knowledgeBaseIssues(input: PreflightInput): Promise<ValidationIss
 
     if (node.kind === 'agent') {
       for (const knowledgeBaseId of new Set(node.config.knowledgeBaseIds)) {
-        if ((await exists(knowledgeBaseId)) !== false) continue;
+        if (await exists(knowledgeBaseId)) continue;
         issues.push({
           severity: 'error',
           code: 'missing_knowledge_base',

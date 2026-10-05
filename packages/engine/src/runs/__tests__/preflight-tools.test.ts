@@ -156,6 +156,7 @@ const run = (enabled: string[], overrides: Partial<PreflightInput> = {}) =>
       status: 'CONNECTED',
       checkedAt: NOW,
     }),
+    knowledgeBaseExists: async () => true,
     ...overrides,
   });
 
