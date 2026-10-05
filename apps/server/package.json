@@ -26,11 +26,13 @@
     "@types/ws": "^8.5.13",
     "@vitest/coverage-v8": "^5.0.1",
     "eslint": "^10.11.0",
+    "fflate": "^0.8.3",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vitest": "^5.0.1"
   },
   "dependencies": {
+    "@ace/context": "workspace:*",
     "@ace/contracts": "workspace:*",
     "@ace/engine": "workspace:*",
     "@ace/guardrails": "workspace:*",

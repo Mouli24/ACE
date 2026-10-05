@@ -12,25 +12,43 @@ import {
   type Timestamp,
   type ToolCall,
 } from '@ace/contracts';
+import {
+  chunkKindFor,
+  createChunker,
+  createDocumentParser,
+  createEmbedder,
+  documentKind,
+} from '@ace/context';
 import { serve } from '@hono/node-server';
 import {
   LOCAL_SCOPE,
   controlStoresFor,
   createApprovalService,
   createArtifactService,
+  createBackupService,
   createBudgetService,
   createChatService,
+  createContextGuard,
   createEngineApp,
   createEventBus,
   createGraphService,
   createGuardrailEvaluator,
+  createIngestionWorker,
+  createKnowledgeService,
   createLogger,
+  createMemoryService,
+  createModelSummariser,
   createPolicyService,
   createProviderService,
   createRunControls,
   createRunGateRegistry,
   createRunService,
+  createSearchService,
+  createTemplateService,
   createToolGuardrailEvaluator,
+  createTraceService,
+  createTruncatingSummariser,
+  createUsageService,
   createWsHub,
   guardrailStoreFor,
   haltActiveRuns,
@@ -41,6 +59,7 @@ import {
   newId,
   pruneOldLogs,
   recoverAfterCrash,
+  requireUsageRepository,
   startTimelinePopulation,
   workflowUpdatedEvent,
   type ArtifactMaterialiser,
@@ -48,7 +67,9 @@ import {
   type ChatService,
   type CheckInput,
   type CheckRunner,
+  type EmbedderFor,
   type EngineEvent,
+  type IngestJob,
   type Logger,
   type McpService,
   type ProviderService,
@@ -64,13 +85,19 @@ import {
   redactSpans,
   type GuardrailInput,
 } from '@ace/guardrails';
-import { createProviderAdapterFactory, createRouter } from '@ace/providers';
+import {
+  createProviderAdapterFactory,
+  createRouter,
+  type MockProviderAdapter,
+} from '@ace/providers';
 import {
   FsBlobStore,
   InProcessPubSub,
+  InProcessQueue,
   KeychainSecretStore,
   SessionTokenAuth,
   SqliteRepository,
+  createBackupStore,
   openDatabase,
 } from '@ace/storage-local';
 import {
@@ -214,6 +241,12 @@ export interface StartEngineOptions {
    * agent's `allowedDomains` — this moves where the pages are, never what is allowed.
    */
   cannedSearchBaseUrl?: string;
+  /**
+   * The mock adapter every `mock` provider row shares (default: a fresh one per engine). A test
+   * injects its own to read `calls()` — TC-RAG-009 counts the summarisation calls on it. It changes
+   * nothing about what the mock answers.
+   */
+  mockProvider?: MockProviderAdapter;
 }
 
 export interface RunningEngine {
@@ -291,14 +324,22 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
 
   /* ---------------------------------------------------------------- adapters */
 
-  const { db, sqlite, backupPath } = openDatabase({
+  const { db, sqlite, backupPath, vectorExtension } = openDatabase({
     path: join(config.dataDir, 'ace.sqlite'),
   });
   if (backupPath !== undefined) {
     logger.info({ subsystem: 'storage', backupPath }, 'backed up the database before migrating');
   }
 
-  const repository = new SqliteRepository(db, sqlite);
+  // F8: without sqlite-vec the vector index answers by an exact cosine scan — correct, slower.
+  if (vectorExtension === 'scan') {
+    logger.warn(
+      { subsystem: 'storage' },
+      'sqlite-vec could not be loaded; vector search falls back to an exact scan',
+    );
+  }
+
+  const repository = new SqliteRepository(db, sqlite, { vectorExtension });
   const pubsub = new InProcessPubSub<EngineEvent>();
   // Wired and returned rather than used here: artifacts arrive in round 4 and provider keys in
   // round 2, and both belong to the one composition root even before anything calls them.
@@ -325,7 +366,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
 
   /* --------------------------------------------------------- model serving */
 
-  const factory = createProviderAdapterFactory();
+  const factory = createProviderAdapterFactory(
+    options.mockProvider === undefined ? {} : { mock: options.mockProvider },
+  );
 
   /* FR-CTL-001..003: the one gate registry the scheduler registers into and the controls read. */
   const gates = createRunGateRegistry();
@@ -566,6 +609,99 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     verdicts: guardrails,
   });
 
+  /* --------------------------------------------- round 5: knowledge, context, memory, usage */
+
+  /*
+   * A knowledge base names the provider and model its vectors come from (§2.1, F1): its embedder is
+   * that provider's adapter with that model riding every call, batched at 32 (`createEmbedder`).
+   */
+  const embedderFor: EmbedderFor = async (kb) =>
+    createEmbedder(await providers.adapterFor(kb.embeddingProviderId), kb.embeddingModelId);
+
+  /*
+   * Hybrid search (FR-RAG-004) reads the repository's own gated indexes — never separate instances,
+   * which would read and write past the storage transaction gate (NFR-REL-02).
+   */
+  const search = createSearchService({
+    scope: LOCAL_SCOPE,
+    knowledgeBases: repository.knowledgeBases,
+    chunks: repository.kbChunks,
+    vectors: repository.vectorIndex,
+    keywords: repository.keywordIndex,
+    embedderFor,
+  });
+
+  /*
+   * The context point of the guardrail engine (FR-GRD-004) on the same rule packs and verdict store
+   * every other point uses: retrieval-time stripping and PII through `inspect`/`record`, and the
+   * ingestion-time PII check (`checkIngestText`, F6) the worker runs before chunking.
+   */
+  const contextGuard = createContextGuard({
+    policies: guardrailPolicies,
+    evaluator: checks,
+    record: (target, verdict) => guardrails.record(target, verdict),
+  });
+
+  /*
+   * Ingestion (Arch §21.3): the knowledge service records and queues, the worker drains the
+   * in-process queue one document at a time — parse, PII, chunk, embed, store — and the service's
+   * `wake` tells it there is work without waiting for its poll.
+   */
+  const ingestQueue = new InProcessQueue<IngestJob>();
+  const knowledgeLogger = logger.child({ subsystem: 'knowledge' });
+  const ingestion = createIngestionWorker({
+    repository,
+    scope: LOCAL_SCOPE,
+    queue: ingestQueue,
+    bus,
+    parser: createDocumentParser(),
+    chunker: createChunker(),
+    embedderFor,
+    checkContextText: contextGuard.checkIngestText,
+    // A type the parser does not know is refused there with a reason; prose is only the fallback.
+    chunkKindFor: (doc) => chunkKindFor(documentKind(doc) ?? 'text'),
+    readArtifact: async (artifactId) => {
+      const found = await artifactService.content(artifactId);
+      return found === null ? null : { bytes: found.bytes };
+    },
+    logger: knowledgeLogger,
+  });
+  const knowledge = createKnowledgeService({
+    repository,
+    scope: LOCAL_SCOPE,
+    providers,
+    artifacts: artifactService,
+    queue: ingestQueue,
+    bus,
+    wake: () => ingestion.wake(),
+  });
+
+  const memory = createMemoryService({ scope: LOCAL_SCOPE, repository, bus });
+  const usage = createUsageService({
+    usage: requireUsageRepository(repository),
+    scope: LOCAL_SCOPE,
+  });
+  const trace = createTraceService({ repository, scope: LOCAL_SCOPE });
+
+  /*
+   * FR-RAG-010: over-budget upstream content is summarised by the receiving node's model, cached by
+   * what was summarised; with no model, or when the call fails, the truncating summariser answers
+   * and the reason is logged. Priced from the same catalog the router reads.
+   */
+  const summariser = createModelSummariser({
+    adapterFor: (providerId) => providers.adapterFor(providerId),
+    runGated: async (providerId, fn) => (await providers.semaphoreFor(providerId)).run(fn),
+    cache: repository.summaryCache,
+    scope: LOCAL_SCOPE,
+    now: () => new Date().toISOString(),
+    fallback: createTruncatingSummariser(),
+    onFallback: (reason) =>
+      logger.warn({ subsystem: 'runs', reason }, 'model summary fell back to truncation'),
+    pricingFor: async (providerId, modelId) =>
+      catalogCache.find((model) => model.providerId === providerId && model.modelId === modelId)
+        ?.pricing,
+  });
+
   const runs = createRunService({
     gates,
     repository,
@@ -594,6 +730,12 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     artifacts: materialiser,
     recordToolCall,
     toolGuardrails,
+    /* Round 5's context, memory, retrieval, summaries and day totals (§2.2–§2.6). */
+    summariser,
+    search,
+    contextGuard,
+    memory,
+    usage,
   });
 
   const controls = createRunControls({
@@ -702,6 +844,14 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     approvals,
   });
 
+  /*
+   * F7: a document the last process left mid-pipeline goes back to `pending` and is queued again —
+   * never stuck `parsing` — and only then does the worker start draining, outside any transaction.
+   */
+  const requeued = await knowledge.recover();
+  if (requeued > 0) knowledgeLogger.info({ requeued }, 're-queued interrupted documents');
+  ingestion.start();
+
   /* FR-PRV-004: re-check every provider on a timer, so the UI's chips stay honest. */
   const stopPeriodicChecks = providers.startPeriodicChecks();
 
@@ -726,6 +876,37 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     tools: toolProvider,
   });
 
+  /*
+   * The onboarding templates (FR-ONB-002, F11): a template's project and workflow go in through the
+   * graph service, `rag-qa`'s base and sample document through the knowledge and artifact services,
+   * and what a failed instantiation created is removed again.
+   */
+  const templates = createTemplateService({
+    graph,
+    providers,
+    createKnowledgeBase: (projectId, body) => knowledge.create(projectId, body),
+    removeKnowledgeBase: (kbId) => knowledge.remove(kbId),
+    addDocument: (kbId, body) => knowledge.addDocument(kbId, body),
+    storeArtifact: (bytes, mime, name) => artifactService.upload(bytes, { mime, name }),
+  });
+
+  /*
+   * Backup and restore (FR-SYS-012, F12) on the live connection. `exclusive` keeps a repository
+   * transaction from opening while `VACUUM INTO` or `ATTACH` runs, which both refuse to inside one.
+   */
+  const backup = createBackupService({
+    store: createBackupStore({
+      sqlite,
+      dataDir: config.dataDir,
+      blobsDir: join(config.dataDir, 'blobs'),
+      settings: repository.settings,
+      scope: LOCAL_SCOPE,
+      exclusive: (fn) => repository.exclusive(fn),
+    }),
+    repository,
+    scope: LOCAL_SCOPE,
+  });
+
   const selfOrigins = [`http://${BIND_HOST}:${port}`, `http://localhost:${port}`];
   const app = createEngineApp({
     repository,
@@ -747,6 +928,14 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     tools: { list: () => toolRegistry.list() },
     mcp: mcpService,
     chat: chatService,
+    /* Round 5's routes (§2.9): knowledge, search, memory, trace, usage, templates and backup. */
+    knowledge,
+    search,
+    memory,
+    trace,
+    usage,
+    templates,
+    backup,
   });
 
   /* -------------------------------------------------------------------- http */
@@ -826,6 +1015,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     sweepsStopped = true;
     clearInterval(sweepTimer);
     await sweeping;
+    // The document in flight finishes before the database closes; the rest are re-queued at start (F7).
+    await ingestion.stop();
     await runs.shutdown();
     await haltActiveRuns({
       repository,
