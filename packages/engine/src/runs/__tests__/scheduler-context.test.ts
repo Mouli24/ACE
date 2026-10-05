@@ -23,6 +23,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { contextChecks } from '../../context/__tests__/context-checks.js';
 import { createContextGuard, type ContextGuard } from '../../context/guard.js';
 import {
+  CHARS_PER_TOKEN,
   estimatePartsTokens,
   estimateTokens,
   type SummariseInput,
@@ -32,7 +33,7 @@ import { createEventBus } from '../../events/index.js';
 import { createPolicyService } from '../../guardrails/policy-service.js';
 import { guardrailStoreFor } from '../../guardrails/store.js';
 import { newId } from '../../ids.js';
-import type { SearchService } from '../../knowledge/search.js';
+import { createSearchService, type SearchService } from '../../knowledge/search.js';
 import type { ToolProvider } from '../tool-loop.js';
 import { createLogger } from '../../logging/index.js';
 import { createMemoryService, type MemoryService } from '../../memory/service.js';
@@ -1747,5 +1748,50 @@ describe('BR-13 a model summary is asked for only of guarded text (final-review 
     await h.run();
 
     expect(summariser.calls.every((call) => call.sanitise === undefined)).toBe(true);
+  });
+});
+
+describe('FR-RAG-005 the implicit retrieval query is cut to the base chunk size (final-review M5)', () => {
+  it("an agent's long reads are embedded only up to chunkSize × CHARS_PER_TOKEN characters", async () => {
+    const embedded: string[] = [];
+    const repository = new FakeRepository();
+    await repository.knowledgeBases.insert(scope, {
+      id: KB_ID,
+      projectId: PROJECT_ID,
+      name: 'Handbook',
+      embeddingProviderId: PROVIDER_ID,
+      embeddingModelId: 'mock-embed',
+      chunkSize: 700,
+      chunkOverlap: 90,
+      documentCount: 0,
+      chunkCount: 0,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    const search = createSearchService({
+      scope,
+      knowledgeBases: repository.knowledgeBases,
+      chunks: repository.kbChunks,
+      vectors: { query: async () => [] },
+      keywords: { search: async () => [] },
+      embedderFor: async () => ({
+        embed: async (texts: string[]) => {
+          embedded.push(...texts);
+          return texts.map(() => [1, 0]);
+        },
+      }),
+    });
+    const h = await build({ search });
+    const question = `What is ACE? ${'More context. '.repeat(300)}`;
+    const input = inputNode(question);
+    const agent = agentNode('Answerer', { knowledgeBaseIds: [KB_ID] });
+    const output = outputNode();
+    await h.seed([input, agent, output], [edge(input, agent), edge(agent, output)]);
+
+    const run = await h.run();
+
+    expect(run.status).toBe('COMPLETE');
+    expect(question.length).toBeGreaterThan(700 * CHARS_PER_TOKEN);
+    expect(embedded).toEqual([question.slice(0, 700 * CHARS_PER_TOKEN)]);
   });
 });
