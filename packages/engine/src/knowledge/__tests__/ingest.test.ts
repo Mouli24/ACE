@@ -237,6 +237,45 @@ describe('FR-RAG-003 the worker', () => {
     expect(doc?.status).toBe('ready');
   });
 
+  it('FR-SYS-008 stop() finishes the document in flight and leaves the rest queued for the next start (F7)', async () => {
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const h = await makeHarness({
+      parser: {
+        async parse({ bytes }) {
+          await gate;
+          return { text: new TextDecoder().decode(bytes), headings: [] };
+        },
+      },
+    });
+    const kb = await h.createKb();
+    for (const name of ['a.txt', 'b.txt', 'c.txt']) {
+      await h.service.addDocument(kb.id, { artifactId: h.addFile(name, name) });
+    }
+    h.worker.start();
+    for (let i = 0; i < 100 && !h.bus.ingest().some((e) => e.status === 'parsing'); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+
+    const stopped = h.worker.stop();
+    release();
+    await stopped;
+
+    const statuses = (await h.service.listDocuments(kb.id)).map((doc) => [doc.name, doc.status]);
+    expect(statuses).toEqual([
+      ['a.txt', 'ready'],
+      ['b.txt', 'pending'],
+      ['c.txt', 'pending'],
+    ]);
+    // A drain after the stop still works through what was left.
+    await h.worker.drain();
+    expect((await h.service.listDocuments(kb.id)).every((doc) => doc.status === 'ready')).toBe(
+      true,
+    );
+  });
+
   it('skips a job whose document is already gone', async () => {
     const h = await makeHarness();
     const kb = await h.createKb();
