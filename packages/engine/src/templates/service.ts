@@ -38,7 +38,7 @@ export interface TemplateService {
 
 export interface TemplateServiceDeps {
   graph: Pick<GraphService, 'createProject' | 'getProject' | 'importWorkflow' | 'deleteProject'>;
-  providers: Pick<ProviderService, 'list' | 'create'>;
+  providers: Pick<ProviderService, 'list' | 'create' | 'refreshModels'>;
   /** Injected: the knowledge service is built beside this one (round 5 Task 8). */
   createKnowledgeBase(projectId: Id, body: CreateKnowledgeBaseRequest): Promise<KnowledgeBase>;
   /** Compensation: removes a base this service created when a later step failed. */
@@ -55,7 +55,11 @@ const KB_CHUNK_OVERLAP = 90;
 export function createTemplateService(deps: TemplateServiceDeps): TemplateService {
   const now = deps.now ?? (() => new Date().toISOString());
 
-  /** F11: the first mock provider, created as `Mock` when the workspace has none. */
+  /**
+   * F11: the first mock provider, created as `Mock` when the workspace has none. A provider created
+   * here has its catalogue refreshed at once: the router routes only to catalogued models, so
+   * without it every template node would be BLOCKED `unavailable_model` (FR-ONB-002: no setup).
+   */
   async function mockProviderId(): Promise<Id> {
     const existing = (await deps.providers.list()).find((p) => p.type === 'mock');
     if (existing !== undefined) return existing.id;
@@ -64,6 +68,7 @@ export function createTemplateService(deps: TemplateServiceDeps): TemplateServic
       name: MOCK_PROVIDER_NAME,
       concurrency: 4,
     });
+    await deps.providers.refreshModels(created.id);
     return created.id;
   }
 
