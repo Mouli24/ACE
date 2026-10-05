@@ -556,7 +556,7 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     const confirm = c.req.query('confirm') === 'true';
     const result = await providers(c).remove(c.req.param('id'), { confirm });
 
-    if (!result.ok) throw providerInUse(result.nodeIds);
+    if (!result.ok) throw providerInUse(result.nodeIds, result.knowledgeBases);
     return c.body(null, 204);
   });
 

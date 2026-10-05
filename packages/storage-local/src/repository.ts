@@ -49,6 +49,7 @@ import type {
   SettingsRepository,
   WorkflowRepository,
 } from '@ace/engine';
+import { namesKnowledgeBase } from '@ace/engine';
 import type BetterSqlite3 from 'better-sqlite3';
 import { and, asc, eq, gt, inArray, isNull, notInArray, or, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
@@ -650,6 +651,21 @@ export class SqliteRepository implements Repository {
         .all()
         .map(toNode)
         .filter((node) => 'providerId' in node.config && node.config.providerId === providerId),
+
+    // The same quoted-id prefilter as `listByProvider`, then the exact rule (FR-PRV-005, round 5).
+    listByKnowledgeBase: async (scope: Scope, knowledgeBaseId: Id) =>
+      this.#db
+        .select()
+        .from(nodes)
+        .where(
+          and(
+            eq(nodes.workspaceId, scope.workspaceId),
+            sql`${nodes.config} LIKE ${`%"${knowledgeBaseId}"%`}`,
+          ),
+        )
+        .all()
+        .map(toNode)
+        .filter((node) => namesKnowledgeBase(node, knowledgeBaseId)),
 
     listByWorkflow: async (scope: Scope, workflowId: Id) => {
       const rows = this.#db

@@ -44,7 +44,13 @@ export function providerSecretKey(providerId: Id): string {
 
 export type RemoveProviderResult =
   | { ok: true }
-  | { ok: false; reason: 'in_use'; nodeIds: Id[] };
+  | {
+      ok: false;
+      reason: 'in_use';
+      nodeIds: Id[];
+      /** The names of the knowledge bases that embed with the provider, when any do. */
+      knowledgeBases?: string[];
+    };
 
 export interface ProviderService {
   create(input: CreateProviderRequest): Promise<Provider>;
@@ -209,9 +215,21 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
 
     async remove(id, options) {
       const nodes = await repository.nodes.listByProvider(scope, id);
+      // A base embeds with its provider for good — the field cannot be changed — so a base counts
+      // as a use, and so do the agent and Retrieval nodes reading it (final-review I5).
+      const bases = (await repository.knowledgeBases?.listByEmbeddingProvider(scope, id)) ?? [];
+      const attached = await Promise.all(
+        bases.map((kb) => repository.nodes.listByKnowledgeBase(scope, kb.id)),
+      );
+      const nodeIds = [...new Set([...nodes, ...attached.flat()].map((node) => node.id))].sort();
 
-      if (nodes.length > 0 && !options.confirm) {
-        return { ok: false, reason: 'in_use', nodeIds: nodes.map((node) => node.id) };
+      if ((nodeIds.length > 0 || bases.length > 0) && !options.confirm) {
+        return {
+          ok: false,
+          reason: 'in_use',
+          nodeIds,
+          ...(bases.length === 0 ? {} : { knowledgeBases: bases.map((kb) => kb.name) }),
+        };
       }
 
       // The nodes are deliberately left pointing at a provider that is gone: `validate` reports
@@ -221,7 +239,15 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       await repository.providers.delete(scope, id);
       gates.delete(id);
 
-      logger.info({ subsystem: 'providers', providerId: id, nodes: nodes.length }, 'provider removed');
+      logger.info(
+        {
+          subsystem: 'providers',
+          providerId: id,
+          nodes: nodeIds.length,
+          knowledgeBases: bases.length,
+        },
+        'provider removed',
+      );
       return { ok: true };
     },
 
@@ -348,7 +374,10 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
    * that was in force when it ran.
    */
   async function freezePriceTables(models: readonly Model[], at: string): Promise<void> {
-    const byVersion = new Map<string, Record<string, { inputPer1k: number; outputPer1k: number }>>();
+    const byVersion = new Map<
+      string,
+      Record<string, { inputPer1k: number; outputPer1k: number }>
+    >();
 
     for (const model of models) {
       if (model.pricing === undefined) continue;

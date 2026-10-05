@@ -71,6 +71,13 @@ export interface PreflightInput {
    * base at all is refused without asking.
    */
   knowledgeBaseExists: (id: Id) => Promise<boolean>;
+  /**
+   * The provider an existing base embeds with (FR-PRV-005, final-review I5): one no longer among
+   * `providers` is `provider_missing` on every node reading the base, since its search can no longer
+   * embed a query. Required, like `knowledgeBaseExists`; asked once per base, and only for a base
+   * that exists.
+   */
+  embeddingProviderOf: (knowledgeBaseId: Id) => Promise<Id | undefined>;
 }
 
 /** An Input node has something to start from when its config or the request carries content. */
@@ -211,7 +218,9 @@ export async function preflight(input: PreflightInput): Promise<ValidationIssue[
 
 /**
  * `missing_knowledge_base`: a Retrieval node with no base chosen, or a Retrieval node or an agent
- * naming a base that no longer exists. Each base is looked up once however many nodes name it.
+ * naming a base that no longer exists. `provider_missing`: a base that exists but embeds with a
+ * provider that was removed (final-review I5), once per node. Each base is looked up once however
+ * many nodes name it.
  */
 async function knowledgeBaseIssues(input: PreflightInput): Promise<ValidationIssue[]> {
   const issues: ValidationIssue[] = [];
@@ -224,6 +233,24 @@ async function knowledgeBaseIssues(input: PreflightInput): Promise<ValidationIss
     }
     return lookup;
   };
+  const providerIds = new Set(input.providers.map((provider) => provider.id));
+  const embedders = new Map<Id, Promise<Id | undefined>>();
+  /** Whether an existing base's embedding provider is gone; asked once per base. */
+  const embedderGone = async (id: Id): Promise<boolean> => {
+    let lookup = embedders.get(id);
+    if (lookup === undefined) {
+      lookup = input.embeddingProviderOf(id);
+      embedders.set(id, lookup);
+    }
+    const providerId = await lookup;
+    return providerId !== undefined && !providerIds.has(providerId);
+  };
+  const embedderMissing = (node: Node): ValidationIssue => ({
+    severity: 'error',
+    code: 'provider_missing',
+    message: `"${node.name}" reads a knowledge base whose embedding provider no longer exists.`,
+    nodeId: node.id,
+  });
 
   for (const node of input.nodes) {
     if (node.kind === 'retrieval') {
@@ -242,12 +269,21 @@ async function knowledgeBaseIssues(input: PreflightInput): Promise<ValidationIss
           message: `"${node.name}" searches a knowledge base that no longer exists.`,
           nodeId: node.id,
         });
+      } else if (await embedderGone(knowledgeBaseId)) {
+        issues.push(embedderMissing(node));
       }
     }
 
     if (node.kind === 'agent') {
+      let embedderReported = false;
       for (const knowledgeBaseId of new Set(node.config.knowledgeBaseIds)) {
-        if (await exists(knowledgeBaseId)) continue;
+        if (await exists(knowledgeBaseId)) {
+          if (!embedderReported && (await embedderGone(knowledgeBaseId))) {
+            issues.push(embedderMissing(node));
+            embedderReported = true;
+          }
+          continue;
+        }
         issues.push({
           severity: 'error',
           code: 'missing_knowledge_base',

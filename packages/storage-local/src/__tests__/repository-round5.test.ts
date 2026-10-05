@@ -1,17 +1,20 @@
-import type {
-  KbChunk,
-  KbDocument,
-  KnowledgeBase,
-  MemoryOp,
-  NodeRun,
-  NodeRunSource,
-  Verdict,
+import {
+  AgentConfigSchema,
+  RetrievalConfigSchema,
+  type KbChunk,
+  type KbDocument,
+  type KnowledgeBase,
+  type MemoryOp,
+  type Node,
+  type NodeRun,
+  type NodeRunSource,
+  type Verdict,
 } from '@ace/contracts';
 import { newId, SecretWriteRejectedError } from '@ace/engine';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { SqliteNodeRunPatch } from '../repository-runs.js';
-import { scope } from './fixtures.js';
+import { makeInputNode, scope } from './fixtures.js';
 import { createTempDb, type TempDb } from './temp-db.js';
 
 /**
@@ -139,6 +142,51 @@ describe('FR-RAG-001 knowledge bases repository', () => {
     // A patch of a derived count is ignored: the rows are the truth.
     const patched = await db.repository.knowledgeBases.update(scope, base.id, { chunkCount: 99 });
     expect(patched?.chunkCount).toBe(2);
+  });
+
+  it('FR-PRV-005 lists the bases that embed with a provider, and the nodes that read a base', async () => {
+    const provider = newId();
+    const first = kb({ embeddingProviderId: provider });
+    const second = kb({ embeddingProviderId: provider, projectId: newId() });
+    for (const base of [first, second, kb()])
+      await db.repository.knowledgeBases.insert(scope, base);
+    await db.repository.knowledgeBases.insert(OTHER, kb({ embeddingProviderId: provider }));
+
+    expect(
+      (await db.repository.knowledgeBases.listByEmbeddingProvider(scope, provider)).map(
+        (b) => b.id,
+      ),
+    ).toEqual([first.id, second.id].sort());
+
+    const workflowId = newId();
+    const agent = {
+      ...makeInputNode(workflowId),
+      kind: 'agent',
+      config: AgentConfigSchema.parse({
+        providerId: newId(),
+        modelId: 'mock-text',
+        instructions: 'Answer.',
+        inputTypes: ['text'],
+        outputTypes: ['text'],
+        knowledgeBaseIds: [first.id],
+      }),
+    } as Node;
+    const retrieval = {
+      ...makeInputNode(workflowId),
+      kind: 'retrieval',
+      config: RetrievalConfigSchema.parse({ knowledgeBaseId: first.id }),
+    } as Node;
+    // Names the id only in its text: the prefilter matches it, the exact rule does not.
+    const mentions = {
+      ...makeInputNode(workflowId),
+      config: { text: `"${first.id}"`, artifactIds: [], outputTypes: ['text'] },
+    } as Node;
+    for (const node of [agent, retrieval, mentions]) await db.repository.nodes.insert(scope, node);
+
+    expect(
+      (await db.repository.nodes.listByKnowledgeBase(scope, first.id)).map((n) => n.id).sort(),
+    ).toEqual([agent.id, retrieval.id].sort());
+    expect(await db.repository.nodes.listByKnowledgeBase(scope, second.id)).toEqual([]);
   });
 });
 

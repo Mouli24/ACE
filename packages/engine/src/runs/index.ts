@@ -1924,6 +1924,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
         // node runs (round 5 §2.4). A store without knowledge bases holds none, so none exists.
         knowledgeBaseExists: async (id) =>
           ((await repository.knowledgeBases?.get(scope, id)) ?? null) !== null,
+        // An attached base whose embedding provider was removed cannot search: refused here too,
+        // as `provider_missing` (FR-PRV-005, final-review I5).
+        embeddingProviderOf: async (id) =>
+          (await repository.knowledgeBases?.get(scope, id))?.embeddingProviderId,
         // The multimodal capability check reads an artifact's type through the same resolver the
         // Input node executor uses, so pre-flight and execution classify a `.png` identically
         // (round 4 §2.1, FR-MM-005). Absent the artifact store, the check does not run.

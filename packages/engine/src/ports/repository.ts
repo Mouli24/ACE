@@ -143,6 +143,11 @@ export interface NodeRepository {
    * provider has to name the nodes it would break before it is allowed to happen.
    */
   listByProvider(scope: Scope, providerId: Id): Promise<Node[]>;
+  /**
+   * Every agent attached to this knowledge base and every Retrieval node searching it, in any
+   * workflow (round 5, FR-PRV-005): what removing the provider the base embeds with would break.
+   */
+  listByKnowledgeBase(scope: Scope, knowledgeBaseId: Id): Promise<Node[]>;
   insert(scope: Scope, node: Node): Promise<void>;
   update(scope: Scope, node: Node): Promise<void>;
   delete(scope: Scope, id: Id): Promise<void>;

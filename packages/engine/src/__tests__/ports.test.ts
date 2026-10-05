@@ -61,6 +61,7 @@ describe('Arch §7 Repository', () => {
         listByWorkflow: async () => [],
         getById: async () => null,
         listByProvider: async () => [],
+        listByKnowledgeBase: async () => [],
         insert: async () => undefined,
         update: async () => undefined,
         delete: async () => undefined,

@@ -118,6 +118,7 @@ const run = (overrides: Partial<PreflightInput>) =>
       checkedAt: NOW,
     }),
     knowledgeBaseExists: async () => true,
+    embeddingProviderOf: async () => undefined,
     ...overrides,
   });
 

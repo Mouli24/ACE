@@ -4,6 +4,7 @@ import type {
   Id,
   KbDocument,
   KnowledgeBase,
+  Node,
   Timestamp,
   UpdateKnowledgeBaseRequest,
 } from '@ace/contracts';
@@ -38,6 +39,16 @@ export interface KnowledgeService {
   reindex(kbId: Id): Promise<void>;
   /** F7: documents interrupted mid-pipeline go back to `pending` and are queued; returns how many. */
   recover(): Promise<number>;
+}
+
+/**
+ * Whether a node reads this knowledge base: an agent attached to it, or a Retrieval node searching
+ * it (round 5 §2.4). Both repositories' `nodes.listByKnowledgeBase` answer by it (FR-PRV-005).
+ */
+export function namesKnowledgeBase(node: Node, knowledgeBaseId: Id): boolean {
+  if (node.kind === 'agent') return (node.config.knowledgeBaseIds ?? []).includes(knowledgeBaseId);
+  if (node.kind === 'retrieval') return node.config.knowledgeBaseId === knowledgeBaseId;
+  return false;
 }
 
 export interface KnowledgeServiceDeps {

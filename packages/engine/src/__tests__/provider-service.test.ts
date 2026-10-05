@@ -1,9 +1,21 @@
-import { AgentConfigSchema, type Node, type Provider, type ProviderState, type Workflow } from '@ace/contracts';
+import {
+  AgentConfigSchema,
+  RetrievalConfigSchema,
+  type Node,
+  type Provider,
+  type ProviderState,
+  type Workflow,
+} from '@ace/contracts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createEventBus, type EventBus } from '../events/index.js';
 import { createProviderService, type ProviderService } from '../providers/index.js';
-import { LOCAL_SCOPE, type EngineEvent, type ProviderAdapter, type SecretStore } from '../ports/index.js';
+import {
+  LOCAL_SCOPE,
+  type EngineEvent,
+  type ProviderAdapter,
+  type SecretStore,
+} from '../ports/index.js';
 import { createLogger } from '../logging/index.js';
 import { newId } from '../ids.js';
 import { FakeRepository } from './fake-repository.js';
@@ -125,7 +137,8 @@ async function build(): Promise<Harness> {
     factory: {
       create: () => stub.adapter,
       manifestFor: () => [],
-      mergeCatalog: (discovered) => discovered.map((m) => ({ ...m, source: 'discovered' as const })),
+      mergeCatalog: (discovered) =>
+        discovered.map((m) => ({ ...m, source: 'discovered' as const })),
       detect: async () => ({ ollama: { baseUrl: 'http://127.0.0.1:11434', detected: false } }),
     },
   });
@@ -456,5 +469,84 @@ describe('FR-PRV-004 the scheduled re-check', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('FR-PRV-005 removing a provider a knowledge base embeds with (final-review I5)', () => {
+  async function baseEmbeddingWith(providerId: string, name = 'Handbook'): Promise<string> {
+    const id = newId();
+    await harness.repository.knowledgeBases.insert(scope, {
+      id,
+      projectId: newId(),
+      name,
+      embeddingProviderId: providerId,
+      embeddingModelId: 'mock-embed',
+      chunkSize: 700,
+      chunkOverlap: 90,
+      documentCount: 0,
+      chunkCount: 0,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    return id;
+  }
+
+  it('refuses without confirmation, naming the bases and the nodes attached to them', async () => {
+    const embedder = await harness.created({ name: 'Embedder' });
+    const other = await harness.created({ name: 'Other' });
+    const kbId = await baseEmbeddingWith(embedder.id);
+    const workflow = makeWorkflow();
+    await harness.repository.workflows.create(scope, workflow);
+    const attached = makeAgentNode(workflow.id, { providerId: other.id });
+    await harness.repository.nodes.insert(scope, {
+      ...attached,
+      config: { ...attached.config, knowledgeBaseIds: [kbId] },
+    } as Node);
+    const retrieval = {
+      id: newId(),
+      workflowId: workflow.id,
+      kind: 'retrieval',
+      name: 'Search',
+      position: { x: 0, y: 0 },
+      inputs: [],
+      outputs: [],
+      config: RetrievalConfigSchema.parse({ knowledgeBaseId: kbId }),
+    } as Node;
+    await harness.repository.nodes.insert(scope, retrieval);
+    // Neither attached nor naming the provider: not in the list.
+    await harness.repository.nodes.insert(
+      scope,
+      makeAgentNode(workflow.id, { providerId: other.id }),
+    );
+
+    const result = await harness.service.remove(embedder.id, { confirm: false });
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'in_use',
+      nodeIds: [attached.id, retrieval.id].sort(),
+      knowledgeBases: ['Handbook'],
+    });
+    expect(await harness.service.get(embedder.id)).not.toBeNull();
+  });
+
+  it('refuses a base nothing references too, with no node ids', async () => {
+    const embedder = await harness.created();
+    await baseEmbeddingWith(embedder.id, 'Lonely');
+
+    expect(await harness.service.remove(embedder.id, { confirm: false })).toEqual({
+      ok: false,
+      reason: 'in_use',
+      nodeIds: [],
+      knowledgeBases: ['Lonely'],
+    });
+  });
+
+  it('removes it with confirmation', async () => {
+    const embedder = await harness.created();
+    await baseEmbeddingWith(embedder.id);
+
+    expect(await harness.service.remove(embedder.id, { confirm: true })).toEqual({ ok: true });
+    expect(await harness.service.get(embedder.id)).toBeNull();
   });
 });

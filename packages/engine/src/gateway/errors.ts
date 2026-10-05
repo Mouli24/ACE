@@ -88,15 +88,31 @@ export const notImplemented = (what: string): HttpError =>
 /**
  * FR-PRV-005: deleting a provider that nodes still name needs `?confirm=true`. The refusal
  * carries the node ids, because "this would break three nodes" is only useful if the user can
- * see which three.
+ * see which three. From round 5 a knowledge base that embeds with the provider is a use too: the
+ * contract's details stay `{ nodeIds }` (the nodes attached to those bases), and the message names
+ * the bases, so a base nothing references yet is still refused, with no node ids (final-review I5).
  */
-export const providerInUse = (nodeIds: readonly string[]): HttpError =>
-  new HttpError(
+export const providerInUse = (
+  nodeIds: readonly string[],
+  knowledgeBases: readonly string[] = [],
+): HttpError => {
+  const nodes = `${nodeIds.length} node${nodeIds.length === 1 ? '' : 's'}`;
+  const bases = knowledgeBases.map((name) => `"${name}"`).join(', ');
+  const plural = knowledgeBases.length === 1 ? 'knowledge base' : 'knowledge bases';
+  const embeds = knowledgeBases.length === 1 ? 'embeds' : 'embed';
+  const what =
+    knowledgeBases.length === 0
+      ? `${nodes} still use this provider.`
+      : nodeIds.length === 0
+        ? `The ${plural} ${bases} ${embeds} with this provider.`
+        : `${nodes} still use this provider, and the ${plural} ${bases} ${embeds} with it.`;
+  return new HttpError(
     'invalid_config',
     'provider_in_use',
-    `${nodeIds.length} node${nodeIds.length === 1 ? '' : 's'} still use this provider. Delete it with ?confirm=true to remove it anyway.`,
+    `${what} Delete it with ?confirm=true to remove it anyway.`,
     { nodeIds: [...nodeIds] },
   );
+};
 
 /** `node(…).config.instructions` → `instructions`; `settings.allowedOrigins[1]` → `allowedOrigins`. */
 function fieldOf(path: string): string {
