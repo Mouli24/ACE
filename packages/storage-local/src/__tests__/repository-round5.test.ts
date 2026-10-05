@@ -612,6 +612,7 @@ describe('FR-RAG-010 summary cache: a hit refreshes last_used_at; >30 days is a 
     expect(await db.repository.summaryCache.get(scope, 'k', day(32))).toBe('again');
   });
 
+  // 5,001 inserts: well under a second alone, but past the 5 s default under a whole-workspace coverage run.
   it('prunes to 5,000 rows, least recently used first', async () => {
     const base = Date.parse('2026-10-01T00:00:00.000Z');
     const at = (n: number) => new Date(base + n * 1000).toISOString();
@@ -629,7 +630,7 @@ describe('FR-RAG-010 summary cache: a hit refreshes last_used_at; >30 days is a 
     expect(await db.repository.summaryCache.get(scope, 'k1', at(6002))).toBeNull();
     expect(await db.repository.summaryCache.get(scope, 'k0', at(6002))).toBe('s');
     expect(await db.repository.summaryCache.get(scope, 'new', at(6002))).toBe('s');
-  });
+  }, 30_000);
 });
 
 /* -------------------------------------------------------------------------- */
