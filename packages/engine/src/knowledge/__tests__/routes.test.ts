@@ -146,6 +146,11 @@ describe('FR-RAG-001 /projects/:id/knowledge-bases and /knowledge-bases/:id', ()
     );
     expect(unknown.status).toBe(404);
     expect(await errorCode(unknown)).toBe('not_found');
+
+    // Listing under a project that does not exist is 404 too, as `/projects/:id/workflows` is.
+    const listed = await send(app, 'GET', '/projects/01JBXQ8Z9KQ4R7N2VWXYZ0ZZZZ/knowledge-bases');
+    expect(listed.status).toBe(404);
+    expect(await errorCode(listed)).toBe('not_found');
   });
 
   it('PATCH renames and re-sizes; a bad patch is 400; DELETE is 204 and the base is then 404', async () => {

@@ -33,6 +33,7 @@ describe('TC-RAG-001 creates a base with its settings', () => {
   it('404s an unknown project, and a missing base', async () => {
     const h = await makeHarness();
     await expect(h.service.create('nope', body)).rejects.toMatchObject({ code: 'not_found' });
+    await expect(h.service.list('nope')).rejects.toMatchObject({ code: 'not_found' });
     await expect(h.service.get('nope')).rejects.toMatchObject({ code: 'not_found' });
     await expect(h.service.remove('nope')).rejects.toMatchObject({ code: 'not_found' });
     await expect(h.service.update('nope', { name: 'x' })).rejects.toMatchObject({
