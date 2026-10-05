@@ -9,5 +9,5 @@
     // what appeared the moment `round-2` and `round-3` joined `include` below.
     "lib": ["ES2023", "DOM"]
   },
-  "include": ["helpers", "round-1", "round-2", "round-3", "round-4", "*.ts"]
+  "include": ["helpers", "round-1", "round-2", "round-3", "round-4", "round-5", "*.ts"]
 }
