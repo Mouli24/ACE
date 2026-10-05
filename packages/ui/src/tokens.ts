@@ -18,7 +18,7 @@ export const PROVIDER_ACCENT: Readonly<Record<ProviderType, string>> = {
 };
 
 export const STATUS_RING: Readonly<Record<NodeState, string>> = {
-  IDLE: '#75757d',
+  IDLE: '#7c7c84',
   READY: '#93a8ff',
   RUNNING: '#5cc8ff',
   WAITING: '#f5c542',
@@ -45,38 +45,40 @@ export const PROVIDER_STATUS: Readonly<Record<ProviderState, string>> = {
 
 /*
  * The light theme (D241, FR-SYS-005). The same semantic slots as the dark set below, stepped for a
- * light surface: text ≥ 4.5:1 and every ring, accent and status colour ≥ 4.5:1 on the card too, so
- * one that doubles as text (JsonTree's string/number colours) still reads. `theme.css` applies these
- * under `:root[data-theme="light"]`.
+ * light surface (Paper): text ≥ 4.5:1, and every provider, status and provider-status colour is
+ * ≥ 4.5:1 on the card, panel and canvas in BOTH themes, because they double as text (JsonTree's
+ * string/number colours, badges, StatusChip labels; NFR-USE-02). The Paper values are the design's
+ * hues stepped darker until they pass; Night keeps the design's values except IDLE, which is
+ * nudged lighter. `theme.css` applies these under `:root[data-theme="light"]`.
  */
 export const LIGHT_PROVIDER_ACCENT: Readonly<Record<ProviderType, string>> = {
-  anthropic: '#c8562c',
-  google: '#d0307c',
-  openai: '#0e9483',
+  anthropic: '#b04c27',
+  google: '#c22d74',
+  openai: '#0b786a',
   openai_compatible: '#7446d8',
   ollama: '#3a3a40',
   mock: '#6b6972',
 };
 
 export const LIGHT_STATUS_RING: Readonly<Record<NodeState, string>> = {
-  IDLE: '#8a8890',
+  IDLE: '#6b6970',
   READY: '#3b5bdb',
-  RUNNING: '#0b84c6',
-  WAITING: '#ac800b',
-  COMPLETED: '#15996a',
-  PAUSED: '#8f7a2a',
+  RUNNING: '#0970a8',
+  WAITING: '#886509',
+  COMPLETED: '#117954',
+  PAUSED: '#7b6924',
   STOPPED: '#6b6972',
-  BLOCKED: '#c26a00',
+  BLOCKED: '#a15800',
   FAILED: '#c13a27',
 };
 
 export const LIGHT_PROVIDER_STATUS: Readonly<Record<ProviderState, string>> = {
   UNKNOWN: '#6b6972',
   CHECKING: '#3b5bdb',
-  CONNECTED: '#15996a',
+  CONNECTED: '#117954',
   AUTH_FAILED: '#c13a27',
-  UNREACHABLE: '#c26a00',
-  RATE_LIMITED: '#ac800b',
+  UNREACHABLE: '#a15800',
+  RATE_LIMITED: '#886509',
 };
 
 /**
