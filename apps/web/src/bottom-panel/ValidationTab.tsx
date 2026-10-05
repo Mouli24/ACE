@@ -1,4 +1,5 @@
 import { Button } from '@ace/ui';
+import { CircleX, TriangleAlert } from 'lucide-react';
 import { useMutation } from '@tanstack/react-query';
 
 import { api } from '../app/api';
@@ -41,13 +42,14 @@ export function ValidationTab({ workflowId }: { workflowId: string }) {
               key={`${issue.code}-${index}`}
               className="flex items-center gap-2.5 rounded-field border border-border bg-card px-3 py-2.5 text-sm"
             >
-              <span
-                role="img"
-                aria-label={issue.severity === 'error' ? 'error' : 'warning'}
-                className={`h-[7px] w-[7px] shrink-0 rounded-full ${
-                  issue.severity === 'error' ? 'bg-danger' : 'bg-status-WAITING'
-                }`}
-              />
+              {issue.severity === 'error' ? (
+                <CircleX className="h-3.5 w-3.5 shrink-0 text-danger" aria-label="error" />
+              ) : (
+                <TriangleAlert
+                  className="h-3.5 w-3.5 shrink-0 text-status-WAITING"
+                  aria-label="warning"
+                />
+              )}
               <span className="flex-1">{issue.message}</span>
               <span className="font-machine text-[9.5px] text-fg-faint">{issue.code}</span>
               {issue.nodeId && (

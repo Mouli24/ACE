@@ -65,9 +65,8 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
 
   const open = usePanelsStore((s) => s.bottomOpen);
   const toggle = usePanelsStore((s) => s.toggleBottom);
-  const errorCount = errorRows.filter(
-    (row) => row.status === 'FAILED' || row.status === 'BLOCKED' || row.status === 'STOPPED',
-  ).length;
+  // Only FAILED, the set the Errors tab lists as cards: a stop or a block is not a fault (FR-ERR-007).
+  const errorCount = errorRows.filter((row) => row.status === 'FAILED').length;
   const counts: Record<BottomTab, number> = {
     validation: 0,
     events: events.length,
@@ -87,33 +86,36 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
       onValueChange={(v) => setTab(v as BottomTab)}
       className="flex h-full flex-col bg-panel"
     >
-      <TabsList className="flex h-10 shrink-0 items-center gap-0.5 rounded-none border-0 bg-transparent p-0 px-2.5">
-        {labels.map(([value, label]) => (
-          <TabsTrigger
-            key={value}
-            value={value}
-            className="h-7 flex-none gap-[7px] rounded-chip px-3 font-machine text-[10.5px] data-[state=active]:bg-card data-[state=active]:text-fg data-[state=active]:shadow-[inset_0_0_0_1px_var(--color-border)]"
-          >
-            {label}{' '}
-            {counts[value] > 0 && (
-              <span
-                data-testid={`bottom-count-${value}`}
-                className={
-                  value === 'errors'
-                    ? 'rounded-chip bg-danger/20 px-1.5 py-px text-[9px] text-danger'
-                    : 'rounded-chip bg-border px-1.5 py-px text-[9px] text-fg-soft'
-                }
-              >
-                {counts[value]}
-              </span>
-            )}
-          </TabsTrigger>
-        ))}
+      <div className="flex h-10 shrink-0 items-center gap-0.5 px-2.5">
+        <TabsList className="flex h-10 items-center gap-0.5 rounded-none border-0 bg-transparent p-0">
+          {labels.map(([value, label]) => (
+            <TabsTrigger
+              key={value}
+              value={value}
+              className="h-7 flex-none gap-[7px] rounded-chip px-3 font-machine text-[10.5px] data-[state=active]:bg-card data-[state=active]:text-fg data-[state=active]:shadow-[inset_0_0_0_1px_var(--color-border)]"
+            >
+              {label}{' '}
+              {counts[value] > 0 && (
+                <span
+                  data-testid={`bottom-count-${value}`}
+                  className={
+                    value === 'errors'
+                      ? 'rounded-chip bg-danger/20 px-1.5 py-px text-[9px] text-danger'
+                      : 'rounded-chip bg-border px-1.5 py-px text-[9px] text-fg-soft'
+                  }
+                >
+                  {counts[value]}
+                </span>
+              )}
+            </TabsTrigger>
+          ))}
+        </TabsList>
         <div className="flex-1" />
         <button
           type="button"
           aria-label="Toggle panel"
           data-testid="bottom-toggle"
+          aria-expanded={open}
           onClick={toggle}
           className="grid h-7 w-7 place-items-center rounded-chip text-fg-muted hover:bg-border hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
         >
@@ -123,7 +125,7 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
             <ChevronUp className="h-3.5 w-3.5" aria-hidden />
           )}
         </button>
-      </TabsList>
+      </div>
 
       {open && (
         <>

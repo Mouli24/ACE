@@ -22,6 +22,8 @@ describe('Bottom panel (round 1 §5 step 3, FR-WF-006)', () => {
     await user.click(screen.getByRole('button', { name: 'Validate' }));
     const list = await screen.findByRole('list');
     expect(within(list).getAllByLabelText('error').length).toBeGreaterThan(0);
+    // severity is a shape, not colour alone (WCAG 1.4.1)
+    expect(within(list).getAllByLabelText('error')[0]!.tagName.toLowerCase()).toBe('svg');
     expect(within(list).getByText('unconnected_required_input')).toBeInTheDocument();
     // Round 2 changed this one: an agent with no model used to be a warning ("providers arrive in
     // round 2"); now that providers exist it blocks the run, so pre-flight and the panel both call
