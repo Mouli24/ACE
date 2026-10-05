@@ -115,6 +115,7 @@ describe('TypedEdge (FR-CON-006)', () => {
       type: 'typed',
       data: { dataType: 'text', kind: 'data', accent: 'anthropic' },
     };
+    expect(edge.data?.dataType).toBe('text');
     expect(edge.data?.accent).toBe('anthropic');
   });
 });
