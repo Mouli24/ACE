@@ -744,6 +744,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     gates,
     // D-054: a Stop rejects a WAITING node's approval before it answers, so no card outlives the run.
     approvals,
+    // A Stop announces the day's totals before its `run.completed`, as every ending does (FR-OBS-002).
+    usage,
     logger: logger.child({ subsystem: 'runs' }),
     // The controls never execute anything themselves; these three are the scheduler (FR-CTL-004/005).
     driveRecordedRun: (run) => runs.driveRecordedRun(run),
