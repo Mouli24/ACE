@@ -86,6 +86,7 @@ import {
   type GuardrailInput,
 } from '@ace/guardrails';
 import {
+  createMockAdapter,
   createProviderAdapterFactory,
   createRouter,
   type MockProviderAdapter,
@@ -266,6 +267,12 @@ export interface RunningEngine {
   /** The round 2 services, exposed for the acceptance harness and the CLI. */
   services: { providers: ProviderService; runs: RunService };
   /**
+   * The shared mock adapter every `mock` provider row uses (the injected one, else the engine's own),
+   * exposed for the acceptance harness as `ports` and `services` are: TC-RAG-009 asserts exactly one
+   * summarisation call through its `calls()`.
+   */
+  mockProvider: MockProviderAdapter;
+  /**
    * Runs the artifact retention sweep once, now — by the injected clock — and answers the rows it
    * deleted (Arch §15.4). The engine already sweeps at start and every
    * {@link ARTIFACT_SWEEP_INTERVAL_MS}; this is for a test that must not wait for the timer. There is
@@ -366,9 +373,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
 
   /* --------------------------------------------------------- model serving */
 
-  const factory = createProviderAdapterFactory(
-    options.mockProvider === undefined ? {} : { mock: options.mockProvider },
-  );
+  const mockProvider = options.mockProvider ?? createMockAdapter();
+  const factory = createProviderAdapterFactory({ mock: mockProvider });
 
   /* FR-CTL-001..003: the one gate registry the scheduler registers into and the controls read. */
   const gates = createRunGateRegistry();
@@ -997,6 +1003,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     logger,
     ports: { repository, blobs, secrets },
     services: { providers, runs },
+    mockProvider,
     sweepArtifacts,
 
     /**
