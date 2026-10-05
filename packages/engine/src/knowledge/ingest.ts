@@ -317,6 +317,8 @@ export function createIngestionWorker(deps: IngestionWorkerDeps): IngestionWorke
     start() {
       if (timer !== null) return;
       timer = setInterval(kick, deps.pollMs ?? DEFAULT_POLL_MS);
+      // Never the reason the process stays alive: shutdown stops it, and a CLI exit must not wait.
+      timer.unref?.();
       kick();
     },
     async stop() {
