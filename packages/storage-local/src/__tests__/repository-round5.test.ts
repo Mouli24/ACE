@@ -10,7 +10,6 @@ import type {
 import { newId, SecretWriteRejectedError } from '@ace/engine';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { Fts5KeywordIndex, SqliteVectorIndex } from '../indexes.js';
 import type { SqliteNodeRunPatch } from '../repository-runs.js';
 import { scope } from './fixtures.js';
 import { createTempDb, type TempDb } from './temp-db.js';
@@ -251,7 +250,7 @@ describe('FR-RAG-002 replaceForDocument writes chunks, vectors and fts rows in o
     expect(await db.repository.kbChunks.getMany(scope, [first[0]!.id, second[0]!.id])).toEqual(
       second,
     );
-    const vectors = new SqliteVectorIndex(db.sqlite);
+    const vectors = db.repository.vectorIndex;
     expect(
       (await vectors.query(scope, document.knowledgeBaseId, [1, 1], 5)).map((m) => m.chunkId),
     ).toEqual([second[0]!.id]);
@@ -280,7 +279,7 @@ describe('FR-RAG-002 replaceForDocument writes chunks, vectors and fts rows in o
     expect(ftsCount('orchid')).toBe(0);
     expect(ftsCount('basalt')).toBe(0);
     expect(
-      await new SqliteVectorIndex(db.sqlite).query(scope, document.knowledgeBaseId, [1, 0], 5),
+      await db.repository.vectorIndex.query(scope, document.knowledgeBaseId, [1, 0], 5),
     ).toEqual([]);
   });
 
@@ -386,7 +385,7 @@ describe('FR-RAG-008 deleting a document removes its chunks, vectors and fts row
     expect(count('SELECT count(*) AS n FROM kb_vectors WHERE document_id = ?', gone.id)).toBe(0);
     expect(ftsCount('orchid')).toBe(0);
     expect(ftsCount('basalt')).toBe(1);
-    const vectors = new SqliteVectorIndex(db.sqlite);
+    const vectors = db.repository.vectorIndex;
     expect((await vectors.query(scope, base.id, [1, 0], 5)).map((m) => m.chunkId)).toHaveLength(1);
     expect((await db.repository.knowledgeBases.get(scope, base.id))?.documentCount).toBe(1);
   });
@@ -428,10 +427,8 @@ describe('FR-RAG-001 deleting a KB cascades', () => {
     );
     expect(ftsCount('lattice')).toBe(0);
     expect(ftsCount('orchid')).toBe(1);
-    expect(await new SqliteVectorIndex(db.sqlite).query(scope, base.id, [1, 0], 5)).toEqual([]);
-    expect(await new Fts5KeywordIndex(db.sqlite).search(scope, other.id, 'orchid', 5)).toHaveLength(
-      1,
-    );
+    expect(await db.repository.vectorIndex.query(scope, base.id, [1, 0], 5)).toEqual([]);
+    expect(await db.repository.keywordIndex.search(scope, other.id, 'orchid', 5)).toHaveLength(1);
     expect(await db.repository.kbDocuments.get(scope, sibling.id)).not.toBeNull();
   });
 });
