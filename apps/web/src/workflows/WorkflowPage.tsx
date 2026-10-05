@@ -35,7 +35,7 @@ export function WorkflowPage() {
   useRunEvents(workflowId);
   // A reload mid-run rebuilds the overlay from the engine's records (FR-EXE-014, D-028).
   useAdoptActiveRun(workflowId);
-  const { paletteOpen, configOpen, bottomOpen } = usePanelsStore();
+  const bottomOpen = usePanelsStore((s) => s.bottomOpen);
   const canvasApi = useCanvasApi((s) => s.api);
   const compact = useIsCompact();
 
@@ -66,14 +66,11 @@ export function WorkflowPage() {
 
   return (
     <PanelGroup direction="horizontal" className="h-full">
-      {paletteOpen && (
-        <>
-          <Panel defaultSize={14} minSize={8} maxSize={30} className="bg-panel">
-            <Palette workflowId={workflowId} onAdd={(kind) => canvasApi?.addNode(kind)} />
-          </Panel>
-          <PanelResizeHandle className={`w-px ${handle}`} />
-        </>
-      )}
+      {/* Temporary: palette and right pane are unconditional until Wave 2 rewrites this page. */}
+      <Panel defaultSize={14} minSize={8} maxSize={30} className="bg-panel">
+        <Palette workflowId={workflowId} onAdd={(kind) => canvasApi?.addNode(kind)} />
+      </Panel>
+      <PanelResizeHandle className={`w-px ${handle}`} />
       <Panel minSize={30}>
         <PanelGroup direction="vertical" className="h-full">
           {/* `relative` + an absolutely filled Canvas: a percentage height inside a flex-sized
@@ -92,38 +89,34 @@ export function WorkflowPage() {
           )}
         </PanelGroup>
       </Panel>
-      {configOpen && (
-        <>
-          <PanelResizeHandle className={`w-px ${handle}`} />
-          <Panel defaultSize={24} minSize={12} maxSize={45} className="bg-panel">
-            {/* Configure what a node will do, or inspect what its run did (FR-EXE-010). */}
-            <Tabs defaultValue="configure" className="flex h-full flex-col">
-              <TabsList className="m-2">
-                <TabsTrigger value="configure">Configure</TabsTrigger>
-                <TabsTrigger value="inspect">Inspector</TabsTrigger>
-                <TabsTrigger value="runs">Runs</TabsTrigger>
-                <TabsTrigger value="chat">Chat</TabsTrigger>
-                <TabsTrigger value="memory">Memory</TabsTrigger>
-              </TabsList>
-              <TabsContent value="configure" className="min-h-0 flex-1">
-                <ConfigPanel workflowId={workflowId} />
-              </TabsContent>
-              <TabsContent value="inspect" className="min-h-0 flex-1">
-                <Inspector workflowId={workflowId} />
-              </TabsContent>
-              <TabsContent value="runs" className="min-h-0 flex-1 overflow-y-auto">
-                <RunsList workflowId={workflowId} />
-              </TabsContent>
-              <TabsContent value="chat" className="min-h-0 flex-1">
-                <ChatPanel workflowId={workflowId} />
-              </TabsContent>
-              <TabsContent value="memory" className="min-h-0 flex-1 overflow-y-auto">
-                <MemoryTab workflowId={workflowId} />
-              </TabsContent>
-            </Tabs>
-          </Panel>
-        </>
-      )}
+      <PanelResizeHandle className={`w-px ${handle}`} />
+      <Panel defaultSize={24} minSize={12} maxSize={45} className="bg-panel">
+        {/* Configure what a node will do, or inspect what its run did (FR-EXE-010). */}
+        <Tabs defaultValue="configure" className="flex h-full flex-col">
+          <TabsList className="m-2">
+            <TabsTrigger value="configure">Configure</TabsTrigger>
+            <TabsTrigger value="inspect">Inspector</TabsTrigger>
+            <TabsTrigger value="runs">Runs</TabsTrigger>
+            <TabsTrigger value="chat">Chat</TabsTrigger>
+            <TabsTrigger value="memory">Memory</TabsTrigger>
+          </TabsList>
+          <TabsContent value="configure" className="min-h-0 flex-1">
+            <ConfigPanel workflowId={workflowId} />
+          </TabsContent>
+          <TabsContent value="inspect" className="min-h-0 flex-1">
+            <Inspector workflowId={workflowId} />
+          </TabsContent>
+          <TabsContent value="runs" className="min-h-0 flex-1 overflow-y-auto">
+            <RunsList workflowId={workflowId} />
+          </TabsContent>
+          <TabsContent value="chat" className="min-h-0 flex-1">
+            <ChatPanel workflowId={workflowId} />
+          </TabsContent>
+          <TabsContent value="memory" className="min-h-0 flex-1 overflow-y-auto">
+            <MemoryTab workflowId={workflowId} />
+          </TabsContent>
+        </Tabs>
+      </Panel>
     </PanelGroup>
   );
 }

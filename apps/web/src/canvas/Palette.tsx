@@ -4,8 +4,10 @@ import type { DragEvent } from 'react';
 import { KIND_ICON } from '../nodes/NodeCard';
 import { CANVAS_NODE_KINDS, NODE_KIND_LABEL, type CanvasNodeKind } from '../nodes/factory';
 
-/** The MIME type the palette puts on a drag so the Canvas knows what was dropped (FR-CAN-002). */
-export const PALETTE_DRAG_TYPE = 'application/x-ace-node-kind';
+import { PALETTE_DRAG_TYPE } from './drag';
+
+// Re-exported until Wave 2 deletes this file.
+export { PALETTE_DRAG_TYPE };
 
 const DESCRIPTION: Record<CanvasNodeKind, string> = {
   input: 'Text or files the run starts from',
