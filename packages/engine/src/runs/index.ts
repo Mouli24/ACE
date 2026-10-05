@@ -685,7 +685,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
           ? {}
           : {
               context: {
-                async build(envelopes) {
+                async build(envelopes, runSignal) {
                   const step = await buildNodeContext({
                     node,
                     envelopes,
@@ -693,11 +693,12 @@ export function createRunService(deps: RunServiceDeps): RunService {
                     search: deps.search,
                     guard: deps.contextGuard,
                     target: targetFor(node, nodeRun),
+                    signal: runSignal,
                   });
-                  if (step.kind === 'continue' && step.usedMemoryIds.length > 0) {
-                    await markUsed(step.usedMemoryIds);
-                  }
-                  if (step.kind === 'continue' && (hasBases || reader !== undefined)) {
+                  // A node the Stop ends STOPPED used nothing and read nothing (13a review m3).
+                  if (step.kind !== 'continue' || runSignal.aborted) return step;
+                  if (step.usedMemoryIds.length > 0) await markUsed(step.usedMemoryIds);
+                  if (hasBases || reader !== undefined) {
                     await repository.nodeRuns.update(scope, nodeRun.id, {
                       inputEnvelopes: maskedForStorage(step.envelopes),
                     });

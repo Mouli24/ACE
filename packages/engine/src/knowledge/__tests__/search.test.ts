@@ -398,3 +398,50 @@ describe('FR-RAG-004 search is scoped to one base', () => {
     expect(h.keywords.calls).toEqual([{ knowledgeBaseId: other.id, query: 'supplier', k: 5 }]);
   });
 });
+
+describe('FR-CTL-003 a search is cancelled with the run that asked for it (13a review m3)', () => {
+  it('searches nothing once the signal is aborted', async () => {
+    const h = await harness(CORPUS, () => []);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      h.service.search(
+        h.kb.id,
+        { query: 'office', k: 5, mode: 'hybrid' },
+        { signal: controller.signal },
+      ),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(h.embedderRequests).toEqual([]);
+    expect(h.keywords.calls).toEqual([]);
+  });
+
+  it('ends at once when the signal aborts while the query is being embedded', async () => {
+    // An embedder that never answers: only the abort can end this search.
+    const h = await harness(CORPUS, () => [], {
+      embedder: { embed: () => new Promise<number[][]>(() => undefined) },
+    });
+    const controller = new AbortController();
+
+    const searching = h.service.search(
+      h.kb.id,
+      { query: 'office', k: 5, mode: 'vector' },
+      { signal: controller.signal },
+    );
+    setTimeout(() => controller.abort(), 5);
+
+    await expect(searching).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('answers as before when the signal is never aborted', async () => {
+    const h = await harness(CORPUS, (chunks) => chunks.map((chunk) => chunk.id));
+
+    const response = await h.service.search(
+      h.kb.id,
+      { query: 'office', k: 2, mode: 'hybrid' },
+      { signal: new AbortController().signal },
+    );
+
+    expect(response.hits).toHaveLength(2);
+  });
+});

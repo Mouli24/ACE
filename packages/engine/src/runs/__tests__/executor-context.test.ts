@@ -356,6 +356,33 @@ describe('FR-RAG-007 the context hook builds what an agent reads, before the inp
     expect(h.requests).toHaveLength(0);
   });
 
+  it('13a review m3: hands the hook the run signal; a Stop during the step ends the node STOPPED with no call', async () => {
+    const h = await harness();
+    const controller = new AbortController();
+    const signals: AbortSignal[] = [];
+    const context: NodeContextHook = {
+      async build(envelopes, signal) {
+        signals.push(signal);
+        controller.abort();
+        return {
+          kind: 'continue',
+          envelopes: [...envelopes],
+          sources: [],
+          droppedSources: [],
+          usedMemoryIds: [],
+        };
+      },
+    };
+
+    const outcome = await h.run(agentNode(), { context, signal: controller.signal });
+
+    expect(signals).toEqual([controller.signal]);
+    expect(outcome.status).toBe('STOPPED');
+    expect(outcome.error?.kind).toBe('user_cancelled');
+    expect(outcome).not.toHaveProperty('failureReason');
+    expect(h.requests).toHaveLength(0);
+  });
+
   it('a BLOCKED step (a base deleted mid-run) leaves the node BLOCKED', async () => {
     const h = await harness();
     const context = contextHook({

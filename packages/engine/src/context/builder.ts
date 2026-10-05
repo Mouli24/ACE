@@ -16,7 +16,7 @@ import {
 } from '@ace/contracts';
 
 import { estimatePartsTokens, estimateTokens } from '../envelopes/index.js';
-import { classifyError, failureReasonFor } from '../errors/index.js';
+import { classifyError, failureReasonFor, userCancelledError } from '../errors/index.js';
 import type { EvaluationTarget } from '../guardrails/evaluator.js';
 import { queryOf, sourceOf } from '../knowledge/retrieval-node.js';
 import type { SearchService } from '../knowledge/search.js';
@@ -85,6 +85,12 @@ export interface BuildNodeContextInput {
   /** Absent when no guardrail engine is wired: content is placed unchecked (the round 4 posture). */
   guard: ContextGuard | undefined;
   target: EvaluationTarget;
+  /**
+   * The run's abort signal (13a review m3). Handed to the search, so a Stop cuts a slow embedding
+   * short; once it is aborted nothing more is judged or recorded and the step ends `user_cancelled`,
+   * which the executor turns into STOPPED — a node the Stop ended leaves no context verdict behind.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -151,16 +157,27 @@ const sum = (costs: readonly { cost: number }[]): number =>
 export async function buildNodeContext(
   input: BuildNodeContextInput,
 ): Promise<GuardrailStep<NodeContext>> {
-  const { node, guard, target } = input;
+  const { node, guard, target, signal } = input;
   /** Recorded verdicts, in the order their content was placed. */
   const verdicts: Verdict[] = [];
+  const aborted = (): boolean => signal?.aborted === true;
 
+  /** Nothing is recorded once the run is aborted: the Stop ends this node STOPPED (13a review m3). */
   async function record(pending: readonly Verdict[]): Promise<void> {
-    if (guard === undefined || pending.length === 0) return;
+    if (guard === undefined || pending.length === 0 || aborted()) return;
     verdicts.push(...(await guard.record(target, pending)));
   }
 
+  /** The step a Stop ends: a cancellation, which the executor records as STOPPED (FR-ERR-007). */
+  function cancelled(): GuardrailStep<NodeContext> {
+    const error = userCancelledError(
+      'The run was stopped while this node read its context.',
+    ).nodeError;
+    return { kind: 'failed', failureReason: failureReasonFor(error), error, verdicts };
+  }
+
   async function failed(error: NodeError, pending: readonly Verdict[] = []) {
+    if (aborted()) return cancelled();
     await record(pending);
     const step: GuardrailStep<NodeContext> = {
       kind: 'failed',
@@ -242,7 +259,11 @@ export async function buildNodeContext(
 
     const responses = await Promise.all(
       [...new Set(knowledgeBaseIds)].map((kbId) =>
-        service.search(kbId, { query, k: DEFAULT_SEARCH_K, mode: DEFAULT_SEARCH_MODE }),
+        service.search(
+          kbId,
+          { query, k: DEFAULT_SEARCH_K, mode: DEFAULT_SEARCH_MODE },
+          signal === undefined ? {} : { signal },
+        ),
       ),
     );
     // Best first across every base; the sort is stable, so equal scores keep base order.
@@ -318,10 +339,15 @@ export async function buildNodeContext(
   }
 
   try {
+    if (aborted()) return cancelled();
+
     const envelopes: Envelope[] = [];
     for (const envelope of input.envelopes) {
       envelopes.push(await sanitiseEnvelope(withoutPlacedContext(envelope)));
     }
+
+    // A Stop while the reads were judged: nothing more is judged, placed or recorded.
+    if (aborted()) return cancelled();
 
     const ordered = [...envelopes].sort(byFromNodeId);
     const first = ordered[0];
@@ -354,9 +380,13 @@ export async function buildNodeContext(
       );
     } catch (error) {
       // A base deleted mid-run is BLOCKED (`missing_knowledge_base`), as pre-flight would have said;
-      // anything else — an embedder that cannot be reached — is classified like any node failure.
+      // anything else — an embedder that cannot be reached — is classified like any node failure,
+      // except a search the Stop cut short, which `failed` ends as a cancellation.
       return failed(classifyError(error));
     }
+
+    // A search that finished as the Stop landed: its hits are neither judged nor placed.
+    if (aborted()) return cancelled();
 
     /*
      * The whole budget (FR-EXE-007): each kind fits inside its share *and* inside what is left of
@@ -375,6 +405,7 @@ export async function buildNodeContext(
       ),
     );
 
+    if (aborted()) return cancelled();
     // Only now is it known what is placed, so only now are its verdicts recorded.
     await record([
       ...retrieved.placed.flatMap((each) => each.pending),
