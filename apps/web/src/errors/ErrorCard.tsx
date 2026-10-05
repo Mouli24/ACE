@@ -51,12 +51,16 @@ export function ErrorCard({
       data-testid={`error-card-${nodeId}`}
       data-kind={error.kind}
       data-state={state}
-      className="flex flex-col gap-2 rounded-card border border-danger/60 bg-card p-3"
+      className="flex flex-col gap-2 rounded-[12px] border bg-card px-3 py-2.5"
+      style={{ borderColor: 'color-mix(in oklab, var(--color-danger) 35%, var(--color-border))' }}
     >
       <header className="flex flex-wrap items-center gap-2">
         <StatusRing state={state} showLabel />
-        <span className="font-human text-sm font-semibold">{nodeName}</span>
-        <Badge data-testid={`error-kind-${nodeId}`} className="border-danger text-danger">
+        <span className="font-human text-[15px] font-semibold">{nodeName}</span>
+        <Badge
+          data-testid={`error-kind-${nodeId}`}
+          className="rounded-chip border-danger/40 px-2 py-[3px] font-machine text-[9px] tracking-[0.08em] text-danger"
+        >
           {error.kind}
         </Badge>
         <span className="font-machine text-[10px] text-fg-muted">{error.code}</span>
@@ -82,7 +86,10 @@ export function ErrorCard({
       </p>
 
       {/* NFR-USE-03: what happened, then what to do about it. */}
-      <p data-testid={`error-next-step-${nodeId}`} className="font-human text-xs text-fg-muted">
+      <p
+        data-testid={`error-next-step-${nodeId}`}
+        className="font-human text-[13px] leading-[1.45] text-fg-soft"
+      >
         {NEXT_STEP_BY_ERROR_KIND[error.kind]}
       </p>
 

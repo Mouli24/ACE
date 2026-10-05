@@ -63,7 +63,7 @@ export function PromptText({ text }: PromptTextProps) {
   return (
     <div
       data-testid="prompt-text"
-      className="max-h-[60vh] overflow-auto rounded-card border border-border bg-canvas p-3 font-machine text-xs"
+      className="max-h-[60vh] flex flex-col overflow-auto rounded-field border border-border bg-sunken font-machine text-xs"
     >
       {segments.map((segment, index) =>
         segment.untrusted ? (
@@ -71,7 +71,7 @@ export function PromptText({ text }: PromptTextProps) {
             key={index}
             data-testid="untrusted-block"
             data-untrusted="true"
-            className="my-1 rounded border border-[var(--color-status-WAITING)]/60 bg-[var(--color-status-WAITING)]/10 p-2"
+            className="border-y border-[var(--color-status-WAITING)]/40 bg-[color-mix(in_oklab,var(--color-status-WAITING)_6%,transparent)] px-3 py-2"
           >
             <p
               data-testid="untrusted-label"
@@ -82,7 +82,7 @@ export function PromptText({ text }: PromptTextProps) {
             <pre className="whitespace-pre-wrap">{segment.text}</pre>
           </div>
         ) : (
-          <pre key={index} className="whitespace-pre-wrap">
+          <pre key={index} className="whitespace-pre-wrap px-3 py-2">
             {segment.text}
           </pre>
         ),

@@ -15,6 +15,10 @@ import { useEffect, useId, useState, type KeyboardEvent, type ReactNode } from '
 
 import { validateNumber, type NumberRange } from './validation';
 
+/** The V2 field label: tiny uppercase mono, faint. */
+export const FIELD_LABEL =
+  'font-machine text-[9px] font-normal uppercase tracking-[0.2em] text-fg-faint';
+
 /** Label + control + optional inline error, the one layout every field uses. */
 export function Field({
   label,
@@ -31,7 +35,9 @@ export function Field({
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor={htmlFor}>{label}</Label>
+      <Label className={FIELD_LABEL} htmlFor={htmlFor}>
+        {label}
+      </Label>
       {children}
       {error && (
         <p role="alert" className="text-xs text-danger">
@@ -224,7 +230,9 @@ export function DataTypeGroup({
   };
   return (
     <div role="group" aria-labelledby={id} className="flex flex-col gap-1.5">
-      <Label id={id}>{label}</Label>
+      <Label className={FIELD_LABEL} id={id}>
+        {label}
+      </Label>
       <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
         {DATA_TYPES.map((type) => {
           const boxId = `${id}-${type}`;
@@ -259,7 +267,9 @@ export function LaterField({
   const id = useId();
   return (
     <div data-testid={`later-${testId}`} className="flex flex-col gap-1.5 opacity-70">
-      <Label htmlFor={id}>{label}</Label>
+      <Label className={FIELD_LABEL} htmlFor={id}>
+        {label}
+      </Label>
       <Input id={id} disabled value="" placeholder={`available in ${round}`} aria-disabled="true" />
       <p className="text-xs text-fg-muted">available in {round}</p>
     </div>

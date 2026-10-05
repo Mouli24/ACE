@@ -8,6 +8,7 @@ import { useParams } from 'react-router-dom';
 import { useSelectionStore } from '../app/stores/selection';
 import { LoopConfigFields } from '../edges/loop/LoopConfigFields';
 import { useRunStore } from '../runs/run-store';
+import { useProviders } from '../providers/hooks';
 import { useCanvasApi } from '../canvas/canvas-api';
 import { KIND_ICON } from '../nodes/NodeCard';
 import { NODE_KIND_LABEL, type CanvasNodeKind } from '../nodes/factory';
@@ -44,11 +45,16 @@ export function ConfigPanel({ workflowId }: { workflowId: string }) {
       ) : edge?.kind === 'loop' ? (
         <LoopEdgeEditor key={edge.id} edge={edge} workflowId={workflowId} />
       ) : (
-        <p className="p-4 text-sm text-fg-muted">
-          {selectedCount > 1
-            ? `${selectedCount} nodes selected. Select one node to configure it.`
-            : 'Select a node to configure it.'}
-        </p>
+        <div className="flex flex-col gap-2 p-4" data-testid="config-workflow">
+          <h2 className="font-human text-[21px] font-semibold leading-tight">
+            {graph.data?.workflow.name ?? 'Workflow'}
+          </h2>
+          <p className="font-human text-sm text-fg-muted">
+            {selectedCount > 1
+              ? `${selectedCount} nodes selected. Select one node to configure it.`
+              : 'Select a node to configure it. These settings apply to the whole workflow.'}
+          </p>
+        </div>
       )}
     </aside>
   );
@@ -87,7 +93,7 @@ function LoopEdgeEditor({ edge, workflowId }: { edge: Edge; workflowId: string }
         <p
           role="status"
           data-testid="applies-next-run"
-          className="rounded-md border border-border bg-card px-3 py-2 text-xs text-fg-muted"
+          className="rounded-field border border-border bg-card px-3 py-2 text-xs text-fg-muted"
         >
           A run is in flight. Edits apply to the next run — this one keeps the values it started
           with.
@@ -125,6 +131,11 @@ function NodeEditor({ node, workflowId }: { node: Node; workflowId: string }) {
   const clearSelection = useSelectionStore((s) => s.clear);
   const canvas = useCanvasApi((s) => s.api);
   const Icon = KIND_ICON[node.kind as CanvasNodeKind];
+  const providers = useProviders();
+  const providerId = (node.config as { providerId?: string }).providerId;
+  const providerType = providers.data?.find((p) => p.id === providerId)?.type;
+  const tone =
+    providerType === undefined ? 'var(--color-fg-soft)' : `var(--color-provider-${providerType})`;
 
   const queryClient = useQueryClient();
 
@@ -147,21 +158,32 @@ function NodeEditor({ node, workflowId }: { node: Node; workflowId: string }) {
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      <header className="flex items-center gap-2">
-        {Icon && <Icon className="h-4 w-4 text-fg-muted" aria-hidden />}
-        <h2 className="font-human text-sm font-semibold">
-          {NODE_KIND_LABEL[node.kind as CanvasNodeKind] ?? node.kind} node
-        </h2>
-        <span className="ml-auto font-machine text-[10px] text-fg-muted" title={node.id}>
-          {node.id.slice(-6)}
+      <header className="flex items-center gap-3">
+        <span
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] border"
+          style={{
+            color: tone,
+            borderColor: `color-mix(in oklab, ${tone} 40%, var(--color-border))`,
+            background: `color-mix(in oklab, ${tone} 14%, transparent)`,
+          }}
+        >
+          {Icon && <Icon className="h-4 w-4" aria-hidden />}
         </span>
+        <div className="flex min-w-0 flex-col">
+          <h2 className="font-machine text-[10px] uppercase tracking-[0.18em] text-fg-faint">
+            {NODE_KIND_LABEL[node.kind as CanvasNodeKind] ?? node.kind} node
+          </h2>
+          <span className="truncate font-machine text-[11px] text-fg-soft" title={node.id}>
+            {node.id.slice(-6)}
+          </span>
+        </div>
       </header>
 
       {runActive && (
         <p
           role="status"
           data-testid="applies-next-run"
-          className="rounded-md border border-border bg-card px-3 py-2 text-xs text-fg-muted"
+          className="rounded-field border border-border bg-card px-3 py-2 text-xs text-fg-muted"
         >
           A run is in flight. Edits apply to the next run — this one keeps the values it started
           with.

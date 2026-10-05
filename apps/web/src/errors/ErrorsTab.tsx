@@ -76,7 +76,7 @@ export function ErrorsTab({
   );
 
   return (
-    <div className="flex flex-col gap-3 p-3" data-testid="errors-tab">
+    <div className="flex flex-col gap-3 py-3" data-testid="errors-tab">
       <RunSummary
         nodeRuns={nodeRuns}
         {...(haltReason === undefined ? {} : { haltReason })}
@@ -96,7 +96,7 @@ export function ErrorsTab({
       )}
 
       {failed.length > 0 && (
-        <ul className="flex flex-col gap-2">
+        <ul className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-2.5">
           {failed.map((nodeRun) => {
             const providerId = nodeRun.error?.providerId;
             const providerName = providerId === undefined ? undefined : providerNames?.[providerId];
@@ -110,7 +110,7 @@ export function ErrorsTab({
                    */
                   <p
                     data-testid={`error-without-detail-${nodeRun.nodeId}`}
-                    className="rounded-card border border-danger/60 bg-card p-3 font-human text-sm"
+                    className="rounded-[12px] border border-danger/40 bg-card px-3 py-2.5 font-human text-sm"
                   >
                     {nameOf(nodeRun.nodeId)} failed
                     {nodeRun.failureReason ? ` — ${nodeRun.failureReason}` : ''}. Waiting for the

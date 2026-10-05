@@ -88,6 +88,13 @@ export function eventNodeIds(
   }
 }
 
+/** The text colour of an event row: the node's state colour for state changes, danger for errors. */
+function eventTone(event: PersistedRunEvent): string {
+  if (event.type === 'node.state') return `var(--color-status-${event.payload.status})`;
+  if (event.type === 'node.error') return 'var(--color-danger)';
+  return 'var(--color-fg-muted)';
+}
+
 /** One line per event, in words. The type is shown beside it, so this never repeats the type. */
 export function describeEvent(event: PersistedRunEvent, nameOf: (nodeId: Id) => string): string {
   switch (event.type) {
@@ -209,7 +216,7 @@ export function EventsTab({ entries, nodes = [], onShowNode }: EventsTabProps) {
         );
 
   return (
-    <div className="flex flex-col gap-2 p-3" data-testid="events-tab">
+    <div className="flex flex-col gap-2 py-3" data-testid="events-tab">
       <div className="flex items-center gap-2">
         <Select value={nodeFilter} onValueChange={setNodeFilter}>
           <SelectTrigger className="w-56" aria-label="Filter by node">
@@ -236,7 +243,7 @@ export function EventsTab({ entries, nodes = [], onShowNode }: EventsTabProps) {
             : 'No events for this node.'}
         </p>
       ) : (
-        <ol className="flex flex-col gap-1" data-testid="events-list">
+        <ol className="flex flex-col font-machine text-[11px]" data-testid="events-list">
           {rows.map((entry) => {
             const nodeIds = eventNodeIds(entry.event, nodeIdByNodeRunId);
             const first = nodeIds[0];
@@ -246,16 +253,16 @@ export function EventsTab({ entries, nodes = [], onShowNode }: EventsTabProps) {
                 data-testid={`event-${entry.event.seq}`}
                 data-type={entry.event.type}
                 {...(first === undefined ? {} : { 'data-node-id': first })}
-                className="flex items-baseline gap-2 text-sm"
+                className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5 border-b border-border py-[5px]"
               >
-                <span className="font-machine text-[10px] text-fg-muted">#{entry.event.seq}</span>
+                <span className="text-fg-faint">#{entry.event.seq}</span>
                 {entry.at !== undefined && (
-                  <span className="font-machine text-[10px] text-fg-muted">
-                    {new Date(entry.at).toLocaleTimeString()}
-                  </span>
+                  <span className="text-fg-faint">{new Date(entry.at).toLocaleTimeString()}</span>
                 )}
-                <span className="font-machine text-[10px] text-fg-muted">{entry.event.type}</span>
-                <span className="flex-1 font-human">{describeEvent(entry.event, nameOf)}</span>
+                <span className="text-fg-soft">{entry.event.type}</span>
+                <span className="flex-1" style={{ color: eventTone(entry.event) }}>
+                  {describeEvent(entry.event, nameOf)}
+                </span>
                 {first !== undefined && onShowNode && (
                   <button
                     type="button"
