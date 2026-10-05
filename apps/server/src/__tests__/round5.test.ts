@@ -578,7 +578,10 @@ describe('TC-GRD-005 context guardrails against the real rule packs', () => {
       for (const phrase of POISON_PHRASES) expect(output).not.toMatch(phrase);
       expect(output).not.toContain(SYSTEM_BASE_TEXT);
 
-      // The chunk reached the prompt inside the labelled untrusted block, stripped.
+      // The chunk reached the prompt inside the labelled untrusted block, stripped. This prompt
+      // check is the load-bearing one: it fails if stripping breaks. The output checks above are
+      // nearly vacuous — `mock-cite` only ever quotes the first sentence of the first passage, so
+      // it would not "comply" with the payload even if the payload reached it.
       const prompt = row.prompt?.text ?? '';
       const block = prompt.indexOf(`Retrieved passages:\n${UNTRUSTED_LABEL}`);
       expect(block).toBeGreaterThan(-1);
@@ -836,7 +839,14 @@ describe('TC-OBS-004 usage grouped by provider and day', () => {
           manual.set(id, bucket);
         }
       }
-      const expected = [...manual.values()].map(({ runIds: _runIds, ...bucket }) => bucket);
+      // Ordered as the API orders buckets — by key, provider then day — so two runs that straddle
+      // UTC midnight make two day buckets on both sides and still compare row by row (D234).
+      const byKey = (a: UsageBucket, b: UsageBucket): number =>
+        String(a.key['provider']).localeCompare(String(b.key['provider'])) ||
+        String(a.key['day']).localeCompare(String(b.key['day']));
+      const expected = [...manual.values()]
+        .map(({ runIds: _runIds, ...bucket }) => bucket)
+        .sort(byKey);
 
       expect(usage.buckets.map(({ costUsd: _c, ...rest }) => rest)).toEqual(
         expected.map(({ costUsd: _c, ...rest }) => rest),
@@ -845,7 +855,11 @@ describe('TC-OBS-004 usage grouped by provider and day', () => {
         expect(bucket.costUsd).toBeCloseTo(expected[index]?.costUsd ?? -1, 10);
       }
       expect(usage.totals.tokensIn).toBe(expected.reduce((total, b) => total + b.tokensIn, 0));
-      expect(usage.buckets).toHaveLength(1);
+      // One provider; one day bucket, or two if the runs straddled midnight.
+      expect(new Set(usage.buckets.map((bucket) => bucket.key['provider']))).toEqual(
+        new Set([providerId]),
+      );
+      expect(usage.buckets.length).toBeGreaterThanOrEqual(1);
 
       const refused = await e.api('/usage');
       expect(refused.status).toBe(400);
