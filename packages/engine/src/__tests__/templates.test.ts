@@ -185,6 +185,8 @@ interface Harness {
   created: CreateProviderRequest[];
   /** Providers whose catalogue was refreshed, in order. */
   refreshed: string[];
+  /** Providers that have catalogued models (a refresh adds one). */
+  catalogued: Set<string>;
   kbs: { projectId: string; name: string; embeddingModelId: string; embeddingProviderId: string }[];
   documents: { kbId: string; artifactId: string }[];
   stored: { mime: string; name: string; text: string }[];
@@ -215,6 +217,7 @@ function harness(initialProviders: Provider[] = []): Harness {
     providers: [...initialProviders],
     created: [] as CreateProviderRequest[],
     refreshed: [] as string[],
+    catalogued: new Set<string>(),
     kbs: [] as Harness['kbs'],
     documents: [] as Harness['documents'],
     stored: [] as Harness['stored'],
@@ -243,8 +246,13 @@ function harness(initialProviders: Provider[] = []): Harness {
       },
       refreshModels: async (id) => {
         state.refreshed.push(id);
+        state.catalogued.add(id);
         return { models: [], refreshedAt: NOW };
       },
+      listModels: async (query) =>
+        query.providerId !== undefined && state.catalogued.has(query.providerId)
+          ? catalogue(query.providerId)
+          : [],
     },
     createKnowledgeBase: async (projectId, body) => {
       state.kbs.push({
@@ -310,6 +318,7 @@ function harness(initialProviders: Provider[] = []): Harness {
     },
     created: state.created,
     refreshed: state.refreshed,
+    catalogued: state.catalogued,
     kbs: state.kbs,
     documents: state.documents,
     stored: state.stored,
@@ -481,6 +490,23 @@ describe('FR-ONB-002 instantiate', () => {
 
     const mock = empty.providers.find((p) => p.type === 'mock');
     expect(empty.refreshed).toEqual([mock?.id]);
+  });
+
+  it('F11 a reused Mock provider with no catalogued models is refreshed; one with models is not', async () => {
+    const bare = {
+      id: newId(),
+      type: 'mock',
+      name: 'Mock',
+      status: 'CONNECTED',
+    } as unknown as Provider;
+    const h = harness([bare]);
+
+    await h.service.instantiate('linear-chain', { projectName: 'a' });
+    await h.service.instantiate('linear-chain', { projectName: 'b' });
+
+    expect(h.created).toEqual([]);
+    // Refreshed once: the second instantiation finds its models catalogued.
+    expect(h.refreshed).toEqual([bare.id]);
   });
 
   it('list returns the definitions', () => {
