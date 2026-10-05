@@ -610,7 +610,10 @@ async function wizardUseMock(page: Page): Promise<void> {
 async function wizardChooseTemplate(page: Page, template: Template): Promise<void> {
   const cards = page.getByRole('radiogroup', { name: 'Templates' });
   await expect(cards).toBeVisible();
-  await cards.getByRole('radio', { name: new RegExp(escapeRegExp(template.name)) }).check();
+  await cards.locator(`[data-testid="template-card-${template.id}"]`).click();
+  await expect(
+    cards.getByRole('radio', { name: new RegExp(escapeRegExp(template.name)) }),
+  ).toBeChecked();
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
 }
 
@@ -1453,7 +1456,12 @@ test.describe('TC-RAG-006/007 Sources listed for an attached KB and for a Retrie
     await page
       .getByRole('group', { name: 'Attached knowledge bases' })
       .getByRole('checkbox', { name: kb.name })
-      .check();
+      .click();
+    await expect(
+      page
+        .getByRole('group', { name: 'Attached knowledge bases' })
+        .getByRole('checkbox', { name: kb.name }),
+    ).toBeChecked();
     await engineSays(
       async () =>
         configOf((await graphOf(flow.workflowId)).nodes.find((n) => n.id === answerer.id) as Node),
@@ -2345,7 +2353,12 @@ test.describe('§1 demo script (round 5 gate)', () => {
       await page
         .getByRole('group', { name: 'Attached knowledge bases' })
         .getByRole('checkbox', { name: base.name })
-        .check();
+        .click();
+      await expect(
+        page
+          .getByRole('group', { name: 'Attached knowledge bases' })
+          .getByRole('checkbox', { name: base.name }),
+      ).toBeChecked();
       await engineSays(
         async () =>
           configOf((await graphOf(workflowId)).nodes.find((n) => n.id === answerer.id) as Node),
