@@ -406,18 +406,30 @@ export class VectorStore {
 /** Runs a body holding the shared connection (`SqliteRepository`'s gate, NFR-REL-02). */
 export type Hold = <T>(fn: () => Promise<T>) => Promise<T>;
 
-const runNow: Hold = (fn) => fn();
+/**
+ * The gate an index was built with, or a refusal. Required rather than defaulted: an index that ran
+ * at once would read — and write into — whatever unrelated transaction holds the connection, and a
+ * cast or a plain-JS caller must not be able to build one that way either.
+ */
+function requireHold(hold: Hold | undefined, index: string): Hold {
+  if (typeof hold !== 'function') {
+    throw new TypeError(
+      `${index} needs the connection gate (hold): use SqliteRepository.vectorIndex and keywordIndex`,
+    );
+  }
+  return hold;
+}
 
 export interface SqliteVectorIndexOptions {
   /** Defaults to whatever this connection has loaded; a test forces `'scan'` to compare the two. */
   vectorExtension?: VectorExtension;
   /**
-   * The connection gate. An index on the repository's connection must run behind it, or its reads
-   * see — and its writes join — an unrelated open transaction: use `SqliteRepository.vectorIndex`
-   * and `keywordIndex`, which are built with it. Defaults to running at once, for a connection no
-   * repository shares.
+   * The connection gate, required. An index on the repository's connection must run behind it, or
+   * its reads see — and its writes join — an unrelated open transaction: use
+   * `SqliteRepository.vectorIndex` and `keywordIndex`, which are built with it. Only an index on a
+   * connection no repository shares may pass a gate that runs at once.
    */
-  hold?: Hold;
+  hold: Hold;
 }
 
 /** `VectorIndex` over `kb_vectors` and sqlite-vec, or the exact scan without it (F8). */
@@ -426,10 +438,10 @@ export class SqliteVectorIndex implements VectorIndex {
   readonly #store: VectorStore;
   readonly #hold: Hold;
 
-  constructor(sqlite: BetterSqlite3.Database, options: SqliteVectorIndexOptions = {}) {
+  constructor(sqlite: BetterSqlite3.Database, options: SqliteVectorIndexOptions) {
+    this.#hold = requireHold(options?.hold, 'SqliteVectorIndex');
     this.#sqlite = sqlite;
     this.#store = new VectorStore(sqlite, options.vectorExtension ?? detectVectorExtension(sqlite));
-    this.#hold = options.hold ?? runNow;
   }
 
   get vectorExtension(): VectorExtension {
@@ -486,8 +498,8 @@ export function toMatchExpression(query: string): string | undefined {
 }
 
 export interface Fts5KeywordIndexOptions {
-  /** The connection gate to run under; see `SqliteVectorIndexOptions.hold`. */
-  hold?: Hold;
+  /** The connection gate to run under, required; see `SqliteVectorIndexOptions.hold`. */
+  hold: Hold;
 }
 
 /** `KeywordIndex` over the FTS5 external-content table `kb_chunks_fts` (F8, FR-RAG-004). */
@@ -495,9 +507,9 @@ export class Fts5KeywordIndex implements KeywordIndex {
   readonly #sqlite: BetterSqlite3.Database;
   readonly #hold: Hold;
 
-  constructor(sqlite: BetterSqlite3.Database, options: Fts5KeywordIndexOptions = {}) {
+  constructor(sqlite: BetterSqlite3.Database, options: Fts5KeywordIndexOptions) {
+    this.#hold = requireHold(options?.hold, 'Fts5KeywordIndex');
     this.#sqlite = sqlite;
-    this.#hold = options.hold ?? runNow;
   }
 
   /**

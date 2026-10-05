@@ -12,6 +12,7 @@ import {
   MAX_VECTOR_DIMS,
   SqliteVectorIndex,
   vectorTableName,
+  type Hold,
 } from '../indexes.js';
 import { SqliteRepository } from '../repository.js';
 import { scope } from './fixtures.js';
@@ -23,6 +24,12 @@ import { scope } from './fixtures.js';
  */
 
 const OTHER = { workspaceId: 'other' };
+
+/**
+ * The gate of an index on a connection no repository shares — these tests open raw connections, so
+ * nothing else can hold one. An index on a repository's connection uses that repository's own.
+ */
+const alone: Hold = (fn) => fn();
 
 let dir: string;
 let handles: OpenDatabase[];
@@ -89,7 +96,7 @@ describe('F8 opening the database records which vector search it has', () => {
 describe('FR-RAG-004 vector query returns nearest by cosine, scoped to its knowledge base', () => {
   it('ranks by cosine similarity, best first, and only within the base asked', async () => {
     const { sqlite } = open();
-    const index = new SqliteVectorIndex(sqlite);
+    const index = new SqliteVectorIndex(sqlite, { hold: alone });
     const same = [1, 0, 0, 0];
     await index.upsert(scope, [
       vector('a1', DOC_A, KB_A, same),
@@ -111,7 +118,7 @@ describe('FR-RAG-004 vector query returns nearest by cosine, scoped to its knowl
 
   it('keeps tenants apart: another workspace sees nothing', async () => {
     const { sqlite } = open();
-    const index = new SqliteVectorIndex(sqlite);
+    const index = new SqliteVectorIndex(sqlite, { hold: alone });
     await index.upsert(scope, [vector('a1', DOC_A, KB_A, [1, 0])]);
 
     expect(await index.query(OTHER, KB_A, [1, 0], 5)).toEqual([]);
@@ -119,7 +126,7 @@ describe('FR-RAG-004 vector query returns nearest by cosine, scoped to its knowl
 
   it('replaces a chunk vector on upsert rather than duplicating it', async () => {
     const { sqlite } = open();
-    const index = new SqliteVectorIndex(sqlite);
+    const index = new SqliteVectorIndex(sqlite, { hold: alone });
     await index.upsert(scope, [vector('a1', DOC_A, KB_A, [1, 0])]);
     await index.upsert(scope, [vector('a1', DOC_A, KB_A, [0, 1])]);
 
@@ -130,7 +137,7 @@ describe('FR-RAG-004 vector query returns nearest by cosine, scoped to its knowl
 
   it('holds bases embedded at different widths side by side', async () => {
     const { sqlite } = open();
-    const index = new SqliteVectorIndex(sqlite);
+    const index = new SqliteVectorIndex(sqlite, { hold: alone });
     await index.upsert(scope, [
       vector('a1', DOC_A, KB_A, [1, 0, 0]),
       vector('b1', DOC_B, KB_B, [1, 0, 0, 0, 0]),
@@ -146,7 +153,7 @@ describe('FR-RAG-004 vector query returns nearest by cosine, scoped to its knowl
 
   it('answers nothing for k below one or an empty base', async () => {
     const { sqlite } = open();
-    const index = new SqliteVectorIndex(sqlite);
+    const index = new SqliteVectorIndex(sqlite, { hold: alone });
     await index.upsert(scope, [vector('a1', DOC_A, KB_A, [1, 0])]);
 
     expect(await index.query(scope, KB_A, [1, 0], 0)).toEqual([]);
@@ -155,7 +162,7 @@ describe('FR-RAG-004 vector query returns nearest by cosine, scoped to its knowl
 
   it('refuses an embedding that is empty or not finite', async () => {
     const { sqlite } = open();
-    const index = new SqliteVectorIndex(sqlite);
+    const index = new SqliteVectorIndex(sqlite, { hold: alone });
 
     await expect(index.upsert(scope, [vector('a1', DOC_A, KB_A, [])])).rejects.toThrow(/embedding/);
     await expect(index.upsert(scope, [vector('a1', DOC_A, KB_A, [1, Number.NaN])])).rejects.toThrow(
@@ -165,7 +172,7 @@ describe('FR-RAG-004 vector query returns nearest by cosine, scoped to its knowl
 
   it('deletes by document and by knowledge base', async () => {
     const { sqlite } = open();
-    const index = new SqliteVectorIndex(sqlite);
+    const index = new SqliteVectorIndex(sqlite, { hold: alone });
     const other = newId();
     await index.upsert(scope, [
       vector('a1', DOC_A, KB_A, [1, 0]),
@@ -186,8 +193,8 @@ describe('F8 scan fallback answers like vec0', () => {
   it('returns the same ids in the same order as the vec0 index', async () => {
     const { sqlite, vectorExtension } = open();
     expect(vectorExtension).toBe('sqlite-vec');
-    const vec0 = new SqliteVectorIndex(sqlite, { vectorExtension: 'sqlite-vec' });
-    const scan = new SqliteVectorIndex(sqlite, { vectorExtension: 'scan' });
+    const vec0 = new SqliteVectorIndex(sqlite, { vectorExtension: 'sqlite-vec', hold: alone });
+    const scan = new SqliteVectorIndex(sqlite, { vectorExtension: 'scan', hold: alone });
 
     // Deterministic pseudo-random directions (a fixed LCG), so the run is repeatable.
     let state = 42;
@@ -219,7 +226,7 @@ describe('F8 scan fallback answers like vec0', () => {
 
   it('writes through the scan index too, so a later vec0 open rebuilds what it missed', async () => {
     const first = open({ loadVectorExtension: false });
-    const scan = new SqliteVectorIndex(first.sqlite);
+    const scan = new SqliteVectorIndex(first.sqlite, { hold: alone });
     await scan.upsert(scope, [
       vector('a1', DOC_A, KB_A, [1, 0]),
       vector('a2', DOC_A, KB_A, [0, 1]),
@@ -232,21 +239,23 @@ describe('F8 scan fallback answers like vec0', () => {
       .prepare(`SELECT name FROM sqlite_master WHERE name = ?`)
       .all(vectorTableName(2));
     expect(tables).toHaveLength(1);
-    const vec0 = new SqliteVectorIndex(second.sqlite);
+    const vec0 = new SqliteVectorIndex(second.sqlite, { hold: alone });
     expect((await vec0.query(scope, KB_A, [0, 1], 5)).map((m) => m.chunkId)).toEqual(['a2', 'a1']);
   });
 
   it('rebuilds a missing vec0 table from kb_vectors at open', async () => {
     const first = open();
-    await new SqliteVectorIndex(first.sqlite).upsert(scope, [vector('a1', DOC_A, KB_A, [1, 0])]);
+    await new SqliteVectorIndex(first.sqlite, { hold: alone }).upsert(scope, [
+      vector('a1', DOC_A, KB_A, [1, 0]),
+    ]);
     first.sqlite.exec(`DROP TABLE ${vectorTableName(2)}`);
     first.sqlite.close();
 
     const second = open();
     expect(
-      (await new SqliteVectorIndex(second.sqlite).query(scope, KB_A, [1, 0], 5)).map(
-        (m) => m.chunkId,
-      ),
+      (
+        await new SqliteVectorIndex(second.sqlite, { hold: alone }).query(scope, KB_A, [1, 0], 5)
+      ).map((m) => m.chunkId),
     ).toEqual(['a1']);
   });
 
@@ -263,7 +272,7 @@ describe('F8 scan fallback answers like vec0', () => {
         .get(vectorTableName(dims)) !== undefined;
 
     const first = open();
-    await new SqliteVectorIndex(first.sqlite).upsert(scope, [
+    await new SqliteVectorIndex(first.sqlite, { hold: alone }).upsert(scope, [
       vector('a1', DOC_A, KB_A, [1, 0]),
       vector('b1', DOC_B, KB_B, [1, 0, 0]),
     ]);
@@ -276,7 +285,7 @@ describe('F8 scan fallback answers like vec0', () => {
 
     // Written while the extension was absent: one width gains a row, the other loses its only one.
     const scanOnly = open({ loadVectorExtension: false });
-    const scan = new SqliteVectorIndex(scanOnly.sqlite);
+    const scan = new SqliteVectorIndex(scanOnly.sqlite, { hold: alone });
     await scan.upsert(scope, [vector('a2', DOC_A, KB_A, [0, 1])]);
     await scan.deleteByKnowledgeBase(scope, KB_B);
     scanOnly.sqlite.close();
@@ -284,15 +293,15 @@ describe('F8 scan fallback answers like vec0', () => {
     const third = open();
     expect(countIn(third, 2)).toBe(2);
     expect(exists(third, 3)).toBe(false);
-    const vec0 = new SqliteVectorIndex(third.sqlite);
+    const vec0 = new SqliteVectorIndex(third.sqlite, { hold: alone });
     expect((await vec0.query(scope, KB_A, [0, 1], 5)).map((m) => m.chunkId)).toEqual(['a2', 'a1']);
     expect(await vec0.query(scope, KB_B, [1, 0, 0], 5)).toEqual([]);
   });
 
   it('never matches a directionless vector, and breaks a tie by chunk id, in both modes', async () => {
     const { sqlite } = open();
-    const vec0 = new SqliteVectorIndex(sqlite, { vectorExtension: 'sqlite-vec' });
-    const scan = new SqliteVectorIndex(sqlite, { vectorExtension: 'scan' });
+    const vec0 = new SqliteVectorIndex(sqlite, { vectorExtension: 'sqlite-vec', hold: alone });
+    const scan = new SqliteVectorIndex(sqlite, { vectorExtension: 'scan', hold: alone });
     await vec0.upsert(scope, [
       vector('zero', DOC_A, KB_A, [0, -0]),
       vector('near', DOC_A, KB_A, [1, 0.1]),
@@ -333,7 +342,9 @@ describe('F8 scan fallback answers like vec0', () => {
 
   it('touches only tables whose name round-trips through vectorTableName at open', async () => {
     const first = open();
-    await new SqliteVectorIndex(first.sqlite).upsert(scope, [vector('a1', DOC_A, KB_A, [1, 0])]);
+    await new SqliteVectorIndex(first.sqlite, { hold: alone }).upsert(scope, [
+      vector('a1', DOC_A, KB_A, [1, 0]),
+    ]);
     // Virtual tables the vec0 GLOB matches but this module never made: a padded width, and a name
     // that is not a bare identifier at all. Neither may be counted, dropped or spliced into SQL.
     // Both are vec0 tables, so only the name check keeps them out. An fts5 table of a matching name
@@ -360,9 +371,9 @@ describe('F8 scan fallback answers like vec0', () => {
       ]),
     );
     expect(
-      (await new SqliteVectorIndex(second.sqlite).query(scope, KB_A, [1, 0], 5)).map(
-        (m) => m.chunkId,
-      ),
+      (
+        await new SqliteVectorIndex(second.sqlite, { hold: alone }).query(scope, KB_A, [1, 0], 5)
+      ).map((m) => m.chunkId),
     ).toEqual(['a1']);
   });
 });
@@ -391,7 +402,8 @@ describe('TC-RAG-004 groundwork: FTS5 finds zephyrine-protocol-7 as one token', 
       [chunk('b1', DOC_B, KB_B, 'The zephyrine-protocol-7 again, in another base.')],
       [[1, 0]],
     );
-    return { repository, keyword: new Fts5KeywordIndex(sqlite) };
+    // The repository's own index, behind its gate: never a second one on the same connection.
+    return { repository, keyword: repository.keywordIndex };
   }
 
   it('matches the hyphenated term only where it appears whole, in the base asked', async () => {
@@ -456,5 +468,17 @@ describe('TC-RAG-004 groundwork: FTS5 finds zephyrine-protocol-7 as one token', 
 
     await keyword.deleteByKnowledgeBase(scope, KB_B);
     expect(await keyword.search(scope, KB_B, 'zephyrine-protocol-7', 5)).toEqual([]);
+  });
+});
+
+describe('NFR-REL-02 an index is built with the connection gate it runs behind', () => {
+  it('refuses to be built without one, so a fresh index can never bypass the transaction gate', () => {
+    const { sqlite } = open();
+
+    // `Reflect.construct`, so a caller the types do not reach — plain JS, a cast — is refused too.
+    for (const Index of [SqliteVectorIndex, Fts5KeywordIndex]) {
+      expect(() => Reflect.construct(Index, [sqlite])).toThrow(/hold/);
+      expect(() => Reflect.construct(Index, [sqlite, {}])).toThrow(/hold/);
+    }
   });
 });

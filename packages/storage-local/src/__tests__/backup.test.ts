@@ -31,7 +31,6 @@ import {
 } from '../backup.js';
 import { FsBlobStore } from '../blob-store.js';
 import { openDatabase, type OpenDatabase } from '../db.js';
-import { Fts5KeywordIndex, SqliteVectorIndex } from '../indexes.js';
 import { MIGRATIONS, ROUND_5_MIGRATION_ID } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
 import { KeychainSecretStore } from '../secret-store.js';
@@ -355,11 +354,11 @@ describe('TC-SYS-014 import restores rows into a live handle via ATTACH; dataDir
     expect(settings.theme).toBe('light');
 
     // Both indexes answer for the restored chunks.
-    const keyword = new Fts5KeywordIndex(target.opened.sqlite);
+    const keyword = target.repository.keywordIndex;
     expect(
       (await keyword.search(scope, seeded.kb.id, 'zephyrine-protocol-7', 5)).map((m) => m.chunkId),
     ).toEqual([seeded.chunk.id]);
-    const vectors = new SqliteVectorIndex(target.opened.sqlite);
+    const vectors = target.repository.vectorIndex;
     expect(vectors.vectorExtension).toBe('sqlite-vec');
     expect((await vectors.query(scope, seeded.kb.id, [1, 0, 0], 5)).map((m) => m.chunkId)).toEqual([
       seeded.chunk.id,
@@ -436,18 +435,13 @@ describe('TC-SYS-014 import restores rows into a live handle via ATTACH; dataDir
     // Both indexes still answer for the live chunks.
     expect(
       (
-        await new Fts5KeywordIndex(target.opened.sqlite).search(
-          scope,
-          live.kb.id,
-          'zephyrine-protocol-7',
-          5,
-        )
+        await target.repository.keywordIndex.search(scope, live.kb.id, 'zephyrine-protocol-7', 5)
       ).map((m) => m.chunkId),
     ).toEqual([live.chunk.id]);
     expect(
-      (
-        await new SqliteVectorIndex(target.opened.sqlite).query(scope, live.kb.id, [1, 0, 0], 5)
-      ).map((m) => m.chunkId),
+      (await target.repository.vectorIndex.query(scope, live.kb.id, [1, 0, 0], 5)).map(
+        (m) => m.chunkId,
+      ),
     ).toEqual([live.chunk.id]);
   });
 
