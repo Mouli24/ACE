@@ -1,6 +1,7 @@
 import {
   allowedRunActions,
   zeroUsage,
+  type DayTotals,
   type Envelope,
   type Id,
   type NodeRun,
@@ -14,6 +15,7 @@ import type { EmittedEvent } from '../../events/index.js';
 import { notFound } from '../../gateway/errors.js';
 import { newId } from '../../ids.js';
 import type { Logger } from '../../logging/index.js';
+import type { UsageService } from '../../usage/index.js';
 import { sumUsage } from '../cost.js';
 import { assertRunAction, withAllowedActions } from './actions.js';
 import type { RunGateRegistry } from './gate.js';
@@ -90,6 +92,13 @@ export interface RunControlsDeps {
    */
   approvals?: Pick<ApprovalService, 'cancelPending'>;
 
+  /**
+   * The day's totals a Stop announces with `usage.updated` before its `run.completed` (round 5 §2.8,
+   * FR-OBS-002, 13a review m5): a stopped run spent money too, and the top bar must count it.
+   * Absent, a Stop carries no day totals.
+   */
+  usage?: Pick<UsageService, 'dayTotals'>;
+
   logger?: Logger;
   now?: () => string;
   nextId?: () => string;
@@ -134,10 +143,7 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
   }
 
   /** Patch the run and always rewrite `allowedActions` from the status it ends up with (D76). */
-  async function patchRun(
-    run: Run,
-    patch: Parameters<ControlRunStore['update']>[1],
-  ): Promise<Run> {
+  async function patchRun(run: Run, patch: Parameters<ControlRunStore['update']>[1]): Promise<Run> {
     const status = patch.status ?? run.status;
     const updated = await deps.runs.update(run.id, {
       ...patch,
@@ -193,6 +199,20 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
     }
 
     return moved;
+  }
+
+  /**
+   * The UTC day's totals across every run, when a usage service is wired (FR-OBS-002). Best effort:
+   * a Stop must land whatever a read model does (FR-CTL-003), so a failure is logged and skipped.
+   */
+  async function dayTotalsAt(runId: Id, at: string): Promise<DayTotals | undefined> {
+    if (deps.usage === undefined) return undefined;
+    try {
+      return await deps.usage.dayTotals(at.slice(0, 10));
+    } catch (error) {
+      deps.logger?.warn({ subsystem: 'runs', runId, err: error }, 'could not read the day totals');
+      return undefined;
+    }
   }
 
   /** The attempt a new node run for this node should carry: one past the highest already recorded. */
@@ -296,6 +316,17 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
         durationMs: Math.max(0, Date.parse(endedAt) - Date.parse(run.startedAt)),
       });
 
+      // Round 5 §2.8 (FR-OBS-002): the day's totals, for the top bar, ahead of `run.completed`.
+      const dayTotals = await dayTotalsAt(run.id, endedAt);
+      if (dayTotals !== undefined) {
+        await deps.bus.emit({
+          type: 'usage.updated',
+          workflowId: run.workflowId,
+          runId: run.id,
+          payload: { runId: run.id, totals: halted.totals, dayTotals },
+        });
+      }
+
       await deps.bus.emit({
         type: 'run.completed',
         workflowId: run.workflowId,
@@ -350,7 +381,8 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
       const previous = rows.filter((row) => row.nodeId === nodeId);
       // The iteration a re-run belongs to is the latest one recorded: a re-run is not a new loop
       // iteration, it is another go at the same one.
-      const iteration = previous.length === 0 ? 1 : Math.max(...previous.map((row) => row.iteration));
+      const iteration =
+        previous.length === 0 ? 1 : Math.max(...previous.map((row) => row.iteration));
 
       // FR-CTL-005: the *latest* upstream outputs, rebuilt — not the envelopes the old node run
       // was given, which is what a retry uses instead (FR-ERR-003).

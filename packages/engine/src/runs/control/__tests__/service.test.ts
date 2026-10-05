@@ -1,7 +1,8 @@
-import type { Id, NodeRun, Run } from '@ace/contracts';
+import type { DayTotals, Id, NodeRun, Run } from '@ace/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { HttpError } from '../../../gateway/errors.js';
+import { createLogger } from '../../../logging/index.js';
 import { createRunGate, createRunGateRegistry, type RunGateRegistry } from '../gate.js';
 import { createRunControls, type PartialRunPlan, type RunControls } from '../service.js';
 import {
@@ -255,7 +256,10 @@ describe('TC-CTL-003 Stop (FR-CTL-003, TC-ERR-008)', () => {
 
   it('aborts before it writes anything, because the 2 s clock starts at the call', async () => {
     const run = makeRun({ snapshot, status: 'RUNNING' });
-    const h = harness({ runs: [run], nodeRuns: [makeNodeRun(run, writer.id, { status: 'RUNNING' })] });
+    const h = harness({
+      runs: [run],
+      nodeRuns: [makeNodeRun(run, writer.id, { status: 'RUNNING' })],
+    });
     const gate = createRunGate(run.id);
     h.gates.register(gate);
 
@@ -641,5 +645,72 @@ describe('TC-ERR-009 Fix and re-run, and FR-CTL-006 on every answer', () => {
 
     expect(resumed).toMatchObject({ status: 'RUNNING' });
     expect(resumed.pausedAt).toBeUndefined();
+  });
+});
+
+describe('FR-OBS-002 a Stop announces the day totals (13a review m5)', () => {
+  function stopping(usage: { dayTotals(day: string): Promise<DayTotals> }) {
+    const run = makeRun({ snapshot, status: 'RUNNING' });
+    const spent = makeNodeRun(run, writer.id, {
+      status: 'COMPLETED',
+      usage: { tokensIn: 5, tokensOut: 7, costUsd: 0.25 },
+    });
+    const stores = createFakeStores({ runs: [run], nodeRuns: [spent] });
+    const bus = createCapturedBus();
+    const logs: string[] = [];
+    const controls = createRunControls({
+      runs: stores.runs,
+      nodeRuns: stores.nodeRuns,
+      bus,
+      gates: createRunGateRegistry(),
+      now: tickingClock(),
+      nextId,
+      usage,
+      logger: createLogger({ level: 'warn', destination: { write: (line) => logs.push(line) } }),
+      driveRecordedRun: async (recorded) => recorded,
+      drivePartialRun: async (plan) => plan.run,
+    });
+    return { run, bus, logs, controls };
+  }
+
+  it('emits usage.updated with the run totals and the day totals, before run.completed', async () => {
+    const days: string[] = [];
+    const h = stopping({
+      async dayTotals(day) {
+        days.push(day);
+        return { day, totals: { tokensIn: 50, tokensOut: 70, costUsd: 2.5 } };
+      },
+    });
+
+    const halted = await h.controls.stop(h.run.id);
+
+    const types = h.bus.events.map((event) => event.type);
+    const updated = types.indexOf('usage.updated');
+    expect(updated).toBeGreaterThan(-1);
+    expect(updated).toBeLessThan(types.indexOf('run.completed'));
+    expect(h.bus.events[updated]?.payload).toEqual({
+      runId: h.run.id,
+      totals: halted.totals,
+      dayTotals: {
+        day: halted.endedAt!.slice(0, 10),
+        totals: { tokensIn: 50, tokensOut: 70, costUsd: 2.5 },
+      },
+    });
+    expect(days).toEqual([halted.endedAt!.slice(0, 10)]);
+  });
+
+  it('still stops when the day totals cannot be read, and says so in the log', async () => {
+    const h = stopping({
+      async dayTotals() {
+        throw new Error('the usage read model is unavailable');
+      },
+    });
+
+    const halted = await h.controls.stop(h.run.id);
+
+    expect(halted).toMatchObject({ status: 'HALTED', haltReason: 'stopped' });
+    expect(h.bus.typesOf('usage.updated')).toEqual([]);
+    expect(h.bus.typesOf('run.completed')).toHaveLength(1);
+    expect(h.logs.some((line) => line.includes('could not read the day totals'))).toBe(true);
   });
 });

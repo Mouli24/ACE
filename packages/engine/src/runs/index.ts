@@ -1659,11 +1659,17 @@ export function createRunService(deps: RunServiceDeps): RunService {
       if (sameUsage(stopped.totals, spent)) return stopped;
 
       const corrected = await repository.runs.update(scope, run.id, { totals: spent });
+      // The day's totals the Stop announced missed the same spend, so they are corrected with it.
+      const dayTotals = await dayTotalsOf(run, now());
       await bus.emit({
         type: 'usage.updated',
         workflowId: run.workflowId,
         runId: run.id,
-        payload: { runId: run.id, totals: spent },
+        payload: {
+          runId: run.id,
+          totals: spent,
+          ...(dayTotals === undefined ? {} : { dayTotals }),
+        },
       });
       return corrected ?? stopped;
     }
@@ -1692,15 +1698,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
     // Round 5 §2.8 (FR-OBS-002): the run's end also carries the day's totals across every run, for
     // the top bar — announced before `run.completed`, so nothing about this run follows its end.
-    const dayTotals = await dayTotalsOf(run, endedAt);
-    if (dayTotals !== undefined) {
-      await bus.emit({
-        type: 'usage.updated',
-        workflowId: run.workflowId,
-        runId: run.id,
-        payload: { runId: run.id, totals, dayTotals },
-      });
-    }
+    await emitDayTotals(run, totals, endedAt);
 
     await bus.emit({
       type: 'run.completed',
@@ -1737,6 +1735,22 @@ export function createRunService(deps: RunServiceDeps): RunService {
     }
   }
 
+  /**
+   * `usage.updated` with this run's totals and the day's (FR-OBS-002), ahead of `run.completed` —
+   * on every ending that spends: the drive's own, and a drive that threw (13a review m5). A Stop's
+   * is the controls' to announce. Nothing goes out without a usage service.
+   */
+  async function emitDayTotals(run: Run, totals: Usage, at: string): Promise<void> {
+    const dayTotals = await dayTotalsOf(run, at);
+    if (dayTotals === undefined) return;
+    await bus.emit({
+      type: 'usage.updated',
+      workflowId: run.workflowId,
+      runId: run.id,
+      payload: { runId: run.id, totals, dayTotals },
+    });
+  }
+
   /* --------------------------------------------------------------- service */
 
   /**
@@ -1771,6 +1785,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
         endedAt,
         durationMs: Math.max(0, Date.parse(endedAt) - Date.parse(run.startedAt)),
       });
+
+      // This ending spent money too: the day's totals go out ahead of it (FR-OBS-002, 13a m5).
+      await emitDayTotals(run, totals, endedAt);
 
       await bus.emit({
         type: 'run.completed',

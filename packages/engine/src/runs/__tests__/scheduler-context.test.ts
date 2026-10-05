@@ -238,6 +238,8 @@ interface Harness {
 }
 
 let reply: (req: GenerateRequest) => StreamChunk[];
+/** When set, a call waits on it before it streams its reply — for a Stop to land mid-call. */
+let stall: ((req: GenerateRequest, signal: AbortSignal) => Promise<void>) | undefined;
 
 async function build(
   options: {
@@ -283,10 +285,11 @@ async function build(
     type: 'mock',
     check: async () => ({ status: 'CONNECTED' }),
     listModels: async () => [],
-    generate(req) {
+    generate(req, signal) {
       requests.push(req);
       const chunks = reply(req);
       return (async function* () {
+        await stall?.(req, signal);
         for (const chunk of chunks) yield chunk;
       })();
     },
@@ -423,6 +426,7 @@ function recordingSummariser(charge?: Usage): Summariser & {
 beforeEach(() => {
   workflowId = newId();
   reply = () => say('ok');
+  stall = undefined;
 });
 
 /* -------------------------------------------------------------------------- */
@@ -1064,6 +1068,144 @@ describe('FR-OBS-002 a completed run announces the day totals', () => {
           (event.payload as { dayTotals?: DayTotals }).dayTotals !== undefined,
       ),
     ).toBe(false);
+  });
+});
+
+describe('FR-OBS-002 every run ending with spend announces the day totals (13a review m5)', () => {
+  type UsagePayload = { runId: string; totals: Usage; dayTotals?: DayTotals };
+
+  /** The `usage.updated` frames of one run that carry day totals, and where its `run.completed` is. */
+  function dayFrames(h: Harness, runId: string) {
+    const frames = h.events
+      .map((event, index) => ({ event, index }))
+      .filter(
+        ({ event }) =>
+          event.type === 'usage.updated' &&
+          (event.payload as UsagePayload).runId === runId &&
+          (event.payload as UsagePayload).dayTotals !== undefined,
+      );
+    const completed = h.events.findIndex(
+      (event) =>
+        event.type === 'run.completed' && (event.payload as { runId: string }).runId === runId,
+    );
+    return {
+      frames: frames.map(({ event, index }) => ({ payload: event.payload as UsagePayload, index })),
+      completed,
+    };
+  }
+
+  async function waitFor(predicate: () => boolean, label: string): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+  }
+
+  async function writerReviewer(h: Harness): Promise<{ writer: Node; reviewer: Node }> {
+    const input = inputNode();
+    const writer = agentNode('Writer');
+    const reviewer = agentNode('Reviewer');
+    const output = outputNode();
+    await h.seed(
+      [input, writer, reviewer, output],
+      [edge(input, writer), edge(writer, reviewer), edge(reviewer, output)],
+    );
+    return { writer, reviewer };
+  }
+
+  it('a Stop through the controls: before its run.completed, and the last one counts what the run spent', async () => {
+    const h = await build({ usage: true });
+    await writerReviewer(h);
+    // The Reviewer's call is under way when the Stop lands; it reports its usage as its stream closes.
+    let reviewing: () => void = () => undefined;
+    const reviewerCalled = new Promise<void>((resolve) => {
+      reviewing = resolve;
+    });
+    stall = async (req, signal) => {
+      if (!req.prompt.includes('Act as Reviewer.')) return;
+      reviewing();
+      await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));
+    };
+
+    const begun = await h.begin();
+    await reviewerCalled;
+    await h.controls.stop(begun.run.id);
+    const ended = await begun.done;
+
+    expect(ended.status).toBe('HALTED');
+    expect(ended.haltReason).toBe('stopped');
+    const { frames, completed } = dayFrames(h, begun.run.id);
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames[0]!.index).toBeLessThan(completed);
+    expect(frames[0]!.payload.dayTotals?.day).toBe(NOW.slice(0, 10));
+    // Whatever landed after the Stop summed the run, the last day totals announced count it all.
+    const last = frames.at(-1)!.payload;
+    expect(last.totals).toEqual(ended.totals);
+    expect(last.dayTotals?.totals.tokensIn).toBe(ended.totals.tokensIn);
+    expect(ended.totals.tokensIn).toBeGreaterThan(0);
+  });
+
+  it('an FR-EXE-011 failure ending — the drive itself threw — before its run.completed', async () => {
+    const h = await build({ usage: true });
+    await writerReviewer(h);
+    // The store refuses the drive's own end-of-run write, once; the run is halted after the throw.
+    const update = h.repository.runs.update;
+    let refused = false;
+    h.repository.runs.update = async (...args: Parameters<typeof update>) => {
+      if (!refused && args[2].finalOutput !== undefined) {
+        refused = true;
+        throw new Error('SQLITE_IOERR: disk I/O error');
+      }
+      return update(...args);
+    };
+
+    const ended = await h.run();
+
+    expect(refused).toBe(true);
+    expect(ended.status).toBe('HALTED');
+    expect(ended.haltReason).toBe('failure');
+    const { frames, completed } = dayFrames(h, ended.id);
+    expect(frames).toHaveLength(1);
+    expect(frames[0]!.index).toBeLessThan(completed);
+    expect(frames[0]!.payload.totals).toEqual(ended.totals);
+    expect(frames[0]!.payload.dayTotals?.totals.tokensIn).toBe(4);
+  });
+
+  it('a restarted run: its own drive ends with the day totals', async () => {
+    const h = await build({ usage: true });
+    await writerReviewer(h);
+    const first = await h.run();
+
+    const restarted = await h.controls.restart(first.id);
+    await waitFor(() => dayFrames(h, restarted.id).completed !== -1, 'the restart to end');
+
+    const { frames, completed } = dayFrames(h, restarted.id);
+    expect(frames).toHaveLength(1);
+    expect(frames[0]!.index).toBeLessThan(completed);
+    // Both runs are today's: 2 tokens in per agent call, four calls.
+    expect(frames[0]!.payload.dayTotals?.totals.tokensIn).toBe(8);
+  });
+
+  it('a re-run of one node (a partial drive): the reopened run ends with the day totals again', async () => {
+    const h = await build({ usage: true });
+    const { reviewer } = await writerReviewer(h);
+    const run = await h.run();
+    const before = dayFrames(h, run.id).frames.length;
+
+    await h.controls.rerunNode(run.id, reviewer.id);
+    await waitFor(
+      () =>
+        h.events.filter(
+          (event) =>
+            event.type === 'run.completed' && (event.payload as { runId: string }).runId === run.id,
+        ).length === 2,
+      'the re-run to end',
+    );
+
+    const { frames } = dayFrames(h, run.id);
+    expect(frames).toHaveLength(before + 1);
+    expect(frames.at(-1)!.payload.dayTotals?.totals.tokensIn).toBe(6);
   });
 });
 
