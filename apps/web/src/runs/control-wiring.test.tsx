@@ -265,7 +265,7 @@ describe('TC-ERR-002 / TC-ERR-007 the Errors tab is the one place a failure is e
       { timeout: 5_000 },
     );
 
-    await user.click(screen.getByRole('tab', { name: 'Errors' }));
+    await user.click(screen.getByRole('tab', { name: /^Errors/ }));
     const tab = await screen.findByTestId('errors-tab');
 
     // The card carries the kind and the next step for that kind (NFR-USE-03).
@@ -293,7 +293,7 @@ describe('TC-ERR-002 / TC-ERR-007 the Errors tab is the one place a failure is e
       { timeout: 5_000 },
     );
 
-    await user.click(screen.getByRole('tab', { name: 'Errors' }));
+    await user.click(screen.getByRole('tab', { name: /^Errors/ }));
     const summary = await screen.findByTestId('run-summary');
     expect(summary).toHaveAttribute('data-failed', '0');
     expect(summary).toHaveAttribute('data-stopped', '1');
@@ -314,7 +314,7 @@ describe('FR-OBS-002 the Events tab is the run’s own history', () => {
       { timeout: 5_000 },
     );
 
-    await user.click(screen.getByRole('tab', { name: 'Events' }));
+    await user.click(screen.getByRole('tab', { name: /^Events/ }));
     const tab = await screen.findByTestId('events-tab');
     const rows = within(tab).getAllByTestId(/^event-\d+$/);
     expect(rows.length).toBeGreaterThan(2);

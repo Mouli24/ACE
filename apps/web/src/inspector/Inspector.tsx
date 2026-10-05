@@ -90,7 +90,10 @@ export function Inspector({ workflowId }: { workflowId: string }) {
             />
           )}
 
-          <header className="flex items-center gap-2">
+          <header className="flex flex-wrap items-center gap-2">
+            <h2 className="mr-auto font-human text-[21px] font-semibold leading-tight">
+              {nodeName}
+            </h2>
             <StatusRing state={nodeRun.status} showLabel />
             {nodeRun.failureReason && (
               <Badge data-testid="inspector-failure-reason" className="border-danger text-danger">
@@ -124,7 +127,7 @@ export function Inspector({ workflowId }: { workflowId: string }) {
             <div
               role="alert"
               data-testid="inspector-error"
-              className="flex flex-col gap-1 rounded-card border border-danger/50 bg-card p-3 text-xs"
+              className="flex flex-col gap-1 rounded-field border border-danger/50 bg-card p-3 text-xs"
             >
               <p className="font-machine">
                 {nodeRun.error.kind} · {nodeRun.error.code}
@@ -174,7 +177,7 @@ export function Inspector({ workflowId }: { workflowId: string }) {
                     key={decision.requestId}
                     data-testid={`approval-decision-${decision.requestId}`}
                     data-decision={decision.decision}
-                    className="flex flex-col gap-0.5 rounded-card border border-border bg-card p-2 text-xs"
+                    className="flex flex-col gap-0.5 rounded-field border border-border bg-card p-2 text-xs"
                   >
                     <span className="font-machine">
                       {decision.decision === 'approve' ? 'approved' : 'rejected'} ·{' '}
@@ -236,28 +239,48 @@ export function Inspector({ workflowId }: { workflowId: string }) {
 }
 
 function Facts({ nodeRun }: { nodeRun: NodeRun }) {
+  const stats: Array<[string, string]> = [
+    ['attempt', String(nodeRun.attempt)],
+    ['tokens', `${nodeRun.usage.tokensIn + nodeRun.usage.tokensOut}`],
+    ['cost', money(nodeRun.usage.costUsd)],
+  ];
   const rows: Array<[string, string]> = [
     ['model', nodeRun.modelUsed ? nodeRun.modelUsed.modelId : '—'],
     ['via fallback', nodeRun.modelUsed ? (nodeRun.modelUsed.viaFallback ? 'yes' : 'no') : '—'],
     ['tokens in', String(nodeRun.usage.tokensIn)],
     ['tokens out', String(nodeRun.usage.tokensOut)],
-    ['cost', money(nodeRun.usage.costUsd)],
     ['price table', nodeRun.usage.priceTableVersion ?? '—'],
     ['duration', nodeRun.durationMs === undefined ? '—' : `${nodeRun.durationMs} ms`],
-    ['attempt', String(nodeRun.attempt)],
     ['iteration', String(nodeRun.iteration)],
   ];
   return (
-    <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs" data-testid="inspector-facts">
-      {rows.map(([label, value]) => (
-        <div key={label} className="flex justify-between gap-2">
-          <dt className="text-fg-muted">{label}</dt>
-          <dd className="truncate font-machine" title={value}>
-            {value}
-          </dd>
-        </div>
-      ))}
-    </dl>
+    <div className="flex flex-col gap-2.5" data-testid="inspector-facts">
+      <div className="grid grid-cols-3 gap-2">
+        {stats.map(([label, value]) => (
+          <div
+            key={label}
+            className="flex min-w-0 flex-col gap-0.5 rounded-field border border-border bg-card px-3 py-2"
+          >
+            <span className="font-machine text-[9px] uppercase tracking-[0.2em] text-fg-faint">
+              {label}
+            </span>
+            <span className="truncate font-machine text-[13px] text-fg" title={value}>
+              {value}
+            </span>
+          </div>
+        ))}
+      </div>
+      <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+        {rows.map(([label, value]) => (
+          <div key={label} className="flex justify-between gap-2">
+            <dt className="text-fg-muted">{label}</dt>
+            <dd className="truncate font-machine" title={value}>
+              {value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }
 
@@ -265,7 +288,7 @@ function Facts({ nodeRun }: { nodeRun: NodeRun }) {
 function EnvelopeView({ envelope }: { envelope: Envelope }) {
   return (
     <div
-      className="flex flex-col gap-1 rounded-card border border-border bg-card p-2 text-xs"
+      className="flex flex-col gap-1 rounded-field border border-border bg-card p-2 text-xs"
       data-testid={`envelope-${envelope.id}`}
     >
       <p className="font-machine text-[10px] text-fg-muted">
@@ -305,7 +328,7 @@ function PartView({ part }: { part: Part }) {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-1.5">
-      <h3 className="font-human text-xs font-semibold uppercase tracking-wide text-fg-muted">
+      <h3 className="font-machine text-[9px] font-normal uppercase tracking-[0.2em] text-fg-faint">
         {title}
       </h3>
       {children}

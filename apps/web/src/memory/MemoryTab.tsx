@@ -38,14 +38,14 @@ export function MemoryTab({ workflowId }: { workflowId: Id }) {
 
   if (node === undefined) {
     return (
-      <p className="p-3 text-sm text-fg-muted" data-testid="memory-tab-empty-selection">
+      <p className="p-4 text-sm text-fg-muted" data-testid="memory-tab-empty-selection">
         Select an agent to see its memory.
       </p>
     );
   }
   if (node.kind !== 'agent') {
     return (
-      <p className="p-3 text-sm text-fg-muted" data-testid="memory-tab-not-agent">
+      <p className="p-4 text-sm text-fg-muted" data-testid="memory-tab-not-agent">
         Memory is kept by Agent nodes. {node.name} is a {node.kind} node.
       </p>
     );
@@ -71,13 +71,13 @@ function AgentMemory({ node }: { node: Extract<Node, { kind: 'agent' }> }) {
 
   return (
     <section
-      className="flex flex-col gap-3 p-3"
+      className="flex flex-col gap-3 p-4"
       aria-label={`Memory of ${node.name}`}
       data-testid="memory-tab"
       data-node-id={node.id}
     >
       <header className="flex items-center gap-2">
-        <h2 className="font-human text-sm font-semibold">{node.name} — memory</h2>
+        <h2 className="font-human text-[21px] font-semibold leading-tight">{node.name} — memory</h2>
         {entries.length > 0 && (
           <Button
             variant="destructive"
@@ -94,7 +94,7 @@ function AgentMemory({ node }: { node: Extract<Node, { kind: 'agent' }> }) {
       {!enabled && (
         <p
           role="status"
-          className="rounded-md border border-border bg-card px-3 py-2 text-xs text-fg-muted"
+          className="rounded-field border border-border bg-card px-3 py-2 text-xs text-fg-muted"
           data-testid="memory-disabled"
         >
           Memory is off for this agent, so nothing new is saved or used. Turn on “Remember facts
@@ -123,8 +123,11 @@ function AgentMemory({ node }: { node: Extract<Node, { kind: 'agent' }> }) {
       )}
 
       {entries.length > 0 && (
-        <table className="w-full table-fixed text-left text-xs" data-testid="memory-table">
-          <thead className="text-fg-muted">
+        <table
+          className="w-full table-fixed rounded-field border border-border bg-card text-left text-xs"
+          data-testid="memory-table"
+        >
+          <thead className="font-machine text-[9px] uppercase tracking-[0.2em] text-fg-faint">
             <tr>
               <th className="w-1/5 pb-1 font-normal">Key</th>
               <th className="pb-1 font-normal">Value</th>

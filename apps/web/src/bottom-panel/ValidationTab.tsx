@@ -1,6 +1,5 @@
 import { Button } from '@ace/ui';
 import { useMutation } from '@tanstack/react-query';
-import { AlertTriangle, CircleX } from 'lucide-react';
 
 import { api } from '../app/api';
 import { useSelectionStore } from '../app/stores/selection';
@@ -12,7 +11,7 @@ export function ValidationTab({ workflowId }: { workflowId: string }) {
   const issues = validate.data?.issues;
 
   return (
-    <div className="flex flex-col gap-3 p-3">
+    <div className="flex flex-col gap-3 py-3">
       <div className="flex items-center gap-3">
         <Button
           size="sm"
@@ -36,19 +35,21 @@ export function ValidationTab({ workflowId }: { workflowId: string }) {
         )}
       </div>
       {issues && issues.length > 0 && (
-        <ul className="flex flex-col gap-1">
+        <ul className="flex flex-col gap-1.5">
           {issues.map((issue, index) => (
-            <li key={`${issue.code}-${index}`} className="flex items-start gap-2 text-sm">
-              {issue.severity === 'error' ? (
-                <CircleX className="mt-0.5 h-4 w-4 shrink-0 text-danger" aria-label="error" />
-              ) : (
-                <AlertTriangle
-                  className="mt-0.5 h-4 w-4 shrink-0 text-status-WAITING"
-                  aria-label="warning"
-                />
-              )}
-              <span className="font-machine text-xs text-fg-muted">{issue.code}</span>
+            <li
+              key={`${issue.code}-${index}`}
+              className="flex items-center gap-2.5 rounded-field border border-border bg-card px-3 py-2.5 text-sm"
+            >
+              <span
+                role="img"
+                aria-label={issue.severity === 'error' ? 'error' : 'warning'}
+                className={`h-[7px] w-[7px] shrink-0 rounded-full ${
+                  issue.severity === 'error' ? 'bg-danger' : 'bg-status-WAITING'
+                }`}
+              />
               <span className="flex-1">{issue.message}</span>
+              <span className="font-machine text-[9.5px] text-fg-faint">{issue.code}</span>
               {issue.nodeId && (
                 <button
                   type="button"
