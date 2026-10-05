@@ -141,3 +141,18 @@ describe('D-076 the inspector download card shows the file hash (FR-MM-006)', ()
     expect(shown).toHaveAttribute('title', hash);
   });
 });
+
+describe('D-091 a run that finished before the page loaded can still be inspected (FR-EXE-010)', () => {
+  it('falls back to the newest recorded run when the overlay has none', async () => {
+    const { inspector, agent } = await runAndInspect('linear-complete');
+    await waitFor(() => expect(useRunStore.getState().nodeState(agent.id)).toBe('COMPLETED'), {
+      timeout: 5_000,
+    });
+
+    // a reload: the overlay adopts only live runs, so a finished one leaves it empty
+    act(() => useRunStore.getState().reset());
+
+    expect(await within(inspector).findByTestId('inspector-output')).not.toBeEmptyDOMElement();
+    expect(within(inspector).queryByText('Start a run to inspect it.')).not.toBeInTheDocument();
+  });
+});
