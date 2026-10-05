@@ -1,6 +1,5 @@
 import {
   allowedRunActions,
-  CONTEXT_BUDGET_SHARES,
   DEFAULT_CONCURRENCY,
   type BudgetHalt,
   type CursorQuery,
@@ -34,9 +33,11 @@ import type { UsageService } from '../usage/index.js';
 import type { EvaluationTarget, GuardrailEvaluator } from '../guardrails/evaluator.js';
 import { policyRef, type PolicyService } from '../guardrails/policy-service.js';
 import {
+  asDelivered,
   contractFor,
   createTruncatingSummariser,
   estimatePartsTokens,
+  readsBudgetFor,
   trustForSource,
   type Summariser,
 } from '../envelopes/index.js';
@@ -261,21 +262,6 @@ function engineFailure(): NodeError {
       'The engine could not finish this node run, so it failed. The engine log has the details.',
     retryable: false,
   };
-}
-
-/**
- * The budget an agent's envelopes are built to (Task 9 review ruling, round 5 §2.2, §2.4): its
- * `budgetTokens` less the share its retrieved chunks may take when it has a knowledge base and the
- * share its memory may take when memory is on — so the reads and their summary leave room for both,
- * and the context builder, given the whole budget, fits them in what is left. An agent with neither
- * keeps the whole budget, exactly as before round 5.
- */
-function readsBudgetFor(agent: Extract<Node, { kind: 'agent' }>): number {
-  const { budgetTokens } = agent.config.contextPolicy;
-  const retrieved =
-    (agent.config.knowledgeBaseIds?.length ?? 0) > 0 ? CONTEXT_BUDGET_SHARES.retrieved : 0;
-  const memory = agent.config.memory?.enabled === true ? CONTEXT_BUDGET_SHARES.memory : 0;
-  return Math.floor(budgetTokens * (1 - retrieved - memory));
 }
 
 /**
@@ -1529,7 +1515,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
       for (const row of seed.nodeRuns) {
         plannedRuns.set(row.nodeId, row);
-        envelopesFor.set(row.nodeId, [...row.inputEnvelopes]);
+        // As delivered, not as read (13b fix I1): the context step builds the context afresh.
+        envelopesFor.set(row.nodeId, asDelivered(row.inputEnvelopes, nodes));
         iterations.set(row.nodeId, row.iteration);
       }
 

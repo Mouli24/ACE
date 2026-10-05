@@ -1317,3 +1317,158 @@ describe('F10 / FR-OBS-007 a node run records how long it ran', () => {
     expect(row.durationMs).toBeGreaterThan(0);
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* A retry reads what the failed attempt was delivered (13b fix I1)            */
+/* -------------------------------------------------------------------------- */
+
+/** A guard that rewrites whatever it judges: a person's own Input text must never reach it. */
+function shoutingGuard(): ContextGuard {
+  return {
+    async inspect({ text }) {
+      return { kind: 'continue', text: text.toUpperCase(), verdicts: [] };
+    },
+    async record(_target, verdicts) {
+      return [...verdicts];
+    },
+    async sanitise() {
+      throw new Error('the builder judges and records apart');
+    },
+    async checkIngestText({ text }) {
+      return { text, verdicts: [] };
+    },
+  };
+}
+
+describe('FR-ERR-003 / BR-13 a retry seeded from a stored node run starts from the delivered envelopes', () => {
+  const shouting = shoutingGuard();
+
+  /** The first provider call fails `auth` (no automatic retry); every later one answers. */
+  function failFirstCall(): void {
+    let calls = 0;
+    stall = async () => {
+      calls += 1;
+      if (calls === 1) throw Object.assign(new Error('Unauthorized'), { status: 401 });
+    };
+  }
+
+  async function failedThenRetried(config: Record<string, unknown>, h: Harness) {
+    const input = inputNode('What is ACE?');
+    const agent = agentNode('Answerer', config);
+    const output = outputNode();
+    await h.seed([input, agent, output], [edge(input, agent), edge(agent, output)]);
+    failFirstCall();
+
+    const run = await h.run();
+    expect(run.status).toBe('HALTED');
+    const failed = await h.nodeRunOf(run, agent);
+    expect(failed.status).toBe('FAILED');
+
+    const retry = await h.controls.retryNodeRun(failed.id, { withDownstream: false });
+    // The retry row is written as delivered, before its own context step runs.
+    const written = await h.repository.nodeRuns.get(scope, retry.id);
+    for (let i = 0; i < 200; i++) {
+      const current = await h.repository.nodeRuns.get(scope, retry.id);
+      if (current?.status === 'COMPLETED' || current?.status === 'FAILED') break;
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    const done = await h.repository.nodeRuns.get(scope, retry.id);
+    return { failed, written, done };
+  }
+
+  it('a KB agent: the Input envelope is trusted again, and the prompt is byte for byte the first one', async () => {
+    const h = await build({ search: fakeSearch([hit(0.9, 'first', 200)]), contextGuard: shouting });
+
+    const { failed, written, done } = await failedThenRetried({ knowledgeBaseIds: [KB_ID] }, h);
+
+    // What the failed attempt read: the chunk placed, the envelope untrusted.
+    expect(failed.inputEnvelopes[0]?.context.retrieved).toHaveLength(1);
+    // What the retry is handed: as delivered — no stale chunk, trusted as the Input node is.
+    expect(written?.inputEnvelopes[0]?.context).not.toHaveProperty('retrieved');
+    expect(written?.inputEnvelopes[0]?.context.trust).toBe('trusted');
+    expect(written?.inputEnvelopes[0]?.reads).toEqual([{ type: 'text', text: 'What is ACE?' }]);
+
+    expect(done?.status).toBe('COMPLETED');
+    expect(done?.prompt?.text).toBe(failed.prompt?.text);
+    expect(done?.prompt?.text).toContain('What is ACE?');
+    expect(done?.inputEnvelopes[0]?.context.retrieved).toHaveLength(1);
+  });
+
+  it('a memory agent: the retry reads its memory fresh, and its Input text unjudged', async () => {
+    const h = await build({ contextGuard: shouting });
+
+    const input = inputNode('Ada here.');
+    const agent = agentNode('Greeter', { memory: { enabled: true } });
+    const output = outputNode();
+    await h.seed([input, agent, output], [edge(input, agent), edge(agent, output)]);
+    await h.memory.apply(agent.id, [{ op: 'save', key: 'tone', value: 'brief' }]);
+    failFirstCall();
+
+    const run = await h.run();
+    const failed = await h.nodeRunOf(run, agent);
+    expect(failed.inputEnvelopes[0]?.context.memory).toEqual([{ key: 'TONE', value: 'BRIEF' }]);
+
+    const retry = await h.controls.retryNodeRun(failed.id, { withDownstream: false });
+
+    expect(retry.inputEnvelopes[0]?.context).not.toHaveProperty('memory');
+    expect(retry.inputEnvelopes[0]?.context.trust).toBe('trusted');
+    for (let i = 0; i < 200; i++) {
+      const current = await h.repository.nodeRuns.get(scope, retry.id);
+      if (current?.status === 'COMPLETED' || current?.status === 'FAILED') break;
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    const done = await h.repository.nodeRuns.get(scope, retry.id);
+    expect(done?.prompt?.text).toBe(failed.prompt?.text);
+    expect(done?.prompt?.text).toContain('Ada here.');
+  });
+});
+
+describe('13b fix I1 a drive seeded with a recorded row reads its envelopes as delivered', () => {
+  it('a planned row whose stored envelope still carries context: the stale chunk is not stacked, the Input is trusted', async () => {
+    const fresh = hit(0.9, 'fresh', 200);
+    const h = await build({ search: fakeSearch([fresh]), contextGuard: shoutingGuard() });
+    const input = inputNode('What is ACE?');
+    const agent = agentNode('Answerer', { knowledgeBaseIds: [KB_ID] });
+    const output = outputNode();
+    await h.seed([input, agent, output], [edge(input, agent), edge(agent, output)]);
+    const first = await h.run();
+    const row = await h.nodeRunOf(first, agent);
+    const read = row.inputEnvelopes[0]!;
+    const stale = {
+      ...read,
+      context: {
+        ...read.context,
+        retrieved: [{ chunkId: newId(), text: 'Stale chunk.', score: 0.99, source: 'old.md#1' }],
+      },
+    };
+    const planned = await h.repository.nodeRuns.create(scope, {
+      ...row,
+      id: newId(),
+      attempt: row.attempt + 1,
+      status: 'READY',
+      inputEnvelopes: [stale],
+      verdicts: [],
+      toolCalls: [],
+    });
+    h.requests.length = 0;
+
+    // Re-opened as the controls re-open a run before they drive it (FR-ERR-003).
+    const reopened = await h.repository.runs.update(scope, first.id, { status: 'RUNNING' });
+    await h.service.drivePartialRun({
+      run: reopened ?? first,
+      nodeRuns: [planned],
+      withDownstream: false,
+    });
+    for (let i = 0; i < 200; i++) {
+      const current = await h.repository.nodeRuns.get(scope, planned.id);
+      if (current?.status === 'COMPLETED' || current?.status === 'FAILED') break;
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+
+    const done = await h.repository.nodeRuns.get(scope, planned.id);
+    expect(done?.status).toBe('COMPLETED');
+    expect(h.requests[0]?.prompt).not.toContain('Stale chunk.');
+    expect(h.requests[0]?.prompt).toContain('What is ACE?');
+    expect(done?.prompt?.text).toBe(row.prompt?.text);
+  });
+});

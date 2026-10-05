@@ -1,13 +1,15 @@
-import type {
-  DataType,
-  Envelope,
-  EnvelopeContract,
-  Id,
-  NodeKind,
-  Part,
-  Timestamp,
-  TrustLevel,
-  Usage,
+import {
+  CONTEXT_BUDGET_SHARES,
+  type DataType,
+  type Envelope,
+  type EnvelopeContract,
+  type Id,
+  type Node,
+  type NodeKind,
+  type Part,
+  type Timestamp,
+  type TrustLevel,
+  type Usage,
 } from '@ace/contracts';
 
 /**
@@ -50,6 +52,47 @@ export function estimatePartsTokens(parts: readonly Part[]): number {
  */
 export function trustForSource(kind: NodeKind): TrustLevel {
   return kind === 'input' ? 'trusted' : 'untrusted';
+}
+
+/**
+ * The budget an agent's envelopes are built to (Task 9 review ruling, round 5 §2.2, §2.4): its
+ * `budgetTokens` less the share its retrieved chunks may take when it has a knowledge base and the
+ * share its memory may take when memory is on — so the reads and their summary leave room for both,
+ * and the context builder, given the whole budget, fits them in what is left. An agent with neither
+ * keeps the whole budget, exactly as before round 5.
+ */
+export function readsBudgetFor(agent: Extract<Node, { kind: 'agent' }>): number {
+  const { budgetTokens } = agent.config.contextPolicy;
+  const retrieved =
+    (agent.config.knowledgeBaseIds?.length ?? 0) > 0 ? CONTEXT_BUDGET_SHARES.retrieved : 0;
+  const memory = agent.config.memory?.enabled === true ? CONTEXT_BUDGET_SHARES.memory : 0;
+  return Math.floor(budgetTokens * (1 - retrieved - memory));
+}
+
+/**
+ * The envelopes a node run was delivered, from the ones its row stores (13b fix I1, FR-ERR-003,
+ * BR-13). A row stores what the node read: its first envelope carries the chunks and memory the
+ * context step placed, is `untrusted` and states the whole budget. A retry, or a drive seeded from
+ * a recorded row, starts from what was *delivered* instead — the placed context taken off, the trust
+ * the source node's kind gives (so a person's Input text is never judged as model output), and an
+ * agent's reads budget — so its context step builds the context afresh, exactly as the first
+ * attempt's did. An envelope as delivered comes back unchanged; `nodes` is the run's snapshot.
+ */
+export function asDelivered(envelopes: readonly Envelope[], nodes: readonly Node[]): Envelope[] {
+  const byId = new Map(nodes.map((node): [Id, Node] => [node.id, node]));
+  return envelopes.map((envelope) => {
+    const { retrieved: _retrieved, memory: _memory, ...context } = envelope.context;
+    const from = byId.get(envelope.fromNodeId);
+    const to = byId.get(envelope.toNodeId);
+    return {
+      ...envelope,
+      context: {
+        ...context,
+        ...(to?.kind === 'agent' ? { budgetTokens: readsBudgetFor(to) } : {}),
+        ...(from === undefined ? {} : { trust: trustForSource(from.kind) }),
+      },
+    };
+  });
 }
 
 /* -------------------------------------------------------------------------- */

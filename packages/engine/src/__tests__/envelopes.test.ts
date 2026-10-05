@@ -1,8 +1,9 @@
-import type { Part } from '@ace/contracts';
+import { AgentConfigSchema, type Node, type Part } from '@ace/contracts';
 import { describe, expect, it } from 'vitest';
 
 import {
   TRUNCATED_SUMMARY,
+  asDelivered,
   buildEnvelope,
   createTruncatingSummariser,
   estimatePartsTokens,
@@ -257,5 +258,48 @@ describe('FR-EXE-007 the summariser is a port', () => {
 
     expect(envelope.reads).toEqual([{ type: 'text', text: 'tl;dr' }]);
     expect(envelope.context.summary).toBe('summarised');
+  });
+});
+
+describe('13b fix I1 asDelivered: a stored envelope back as it was delivered (FR-ERR-003, BR-13)', () => {
+  const input = { id: NODE_A, kind: 'input' } as Node;
+  const agent = {
+    id: NODE_B,
+    kind: 'agent',
+    config: AgentConfigSchema.parse({
+      providerId: NODE_A,
+      modelId: 'mock-text',
+      instructions: 'x',
+      inputTypes: ['text'],
+      outputTypes: ['text'],
+      knowledgeBaseIds: [ARTIFACT],
+      memory: { enabled: true },
+      contextPolicy: { budgetTokens: 4000 },
+    }),
+  } as Node;
+
+  it('takes the placed context off, trusts the Input again and states the reads budget', async () => {
+    const delivered = await build([{ type: 'text', text: 'What is ACE?' }], 1000, 'trusted');
+    const read = {
+      ...delivered,
+      context: {
+        ...delivered.context,
+        budgetTokens: 4000,
+        trust: 'untrusted' as const,
+        retrieved: [{ chunkId: ARTIFACT, text: 'chunk', score: 0.5, source: 'a.md#1' }],
+        memory: [{ key: 'tone', value: 'brief' }],
+      },
+    };
+
+    expect(asDelivered([read], [input, agent])).toEqual([delivered]);
+  });
+
+  it('an envelope as delivered comes back equal; an unknown node leaves trust and budget alone', async () => {
+    const delivered = await build([{ type: 'text', text: 'draft' }], 1000, 'untrusted');
+
+    expect(asDelivered([delivered], [input, agent])).toEqual([
+      { ...delivered, context: { ...delivered.context, trust: 'trusted' } },
+    ]);
+    expect(asDelivered([delivered], [])).toEqual([delivered]);
   });
 });
