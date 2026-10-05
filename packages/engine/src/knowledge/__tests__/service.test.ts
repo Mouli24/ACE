@@ -109,6 +109,28 @@ describe('FR-RAG-002 documents', () => {
     ]);
   });
 
+  it('FR-RAG-002 adding an artifact the base already holds answers the existing document, once (final-review M7)', async () => {
+    const h = await makeHarness();
+    const kb = await h.createKb();
+    const other = await h.createKb();
+    const artifactId = h.addFile('notes.txt', 'hello');
+    const first = await h.service.addDocument(kb.id, { artifactId });
+    await h.worker.drain();
+    const ready = await h.repo.kbDocuments.get(LOCAL_SCOPE, first.id);
+    const events = h.bus.ingest().length;
+
+    const again = await h.service.addDocument(kb.id, { artifactId });
+
+    expect(again).toEqual(ready);
+    expect(await h.service.listDocuments(kb.id)).toEqual([ready]);
+    // Nothing queued or announced: the existing document is not re-ingested.
+    expect(h.queue.jobs).toEqual([]);
+    expect(h.bus.ingest()).toHaveLength(events);
+    // Another base may still hold the same file.
+    const elsewhere = await h.service.addDocument(other.id, { artifactId });
+    expect(elsewhere.id).not.toBe(first.id);
+  });
+
   it('404s a missing base or artifact', async () => {
     const h = await makeHarness();
     const kb = await h.createKb();

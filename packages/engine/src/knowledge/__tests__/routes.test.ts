@@ -214,6 +214,22 @@ describe('FR-RAG-002 / FR-RAG-009 documents and reindex', () => {
     expect((await send(app, 'DELETE', `/kb-documents/${doc.id}`)).status).toBe(404);
   });
 
+  it('adding the same artifact again is 202 with the same document, not a second one (final-review M7)', async () => {
+    const { h, app, create } = await harness();
+    const kb = await create();
+    const artifactId = h.addFile('guide.md');
+    const path = `/knowledge-bases/${kb.id}/documents`;
+
+    const first = KbDocumentSchema.parse(
+      await (await send(app, 'POST', path, { artifactId })).json(),
+    );
+    const again = await send(app, 'POST', path, { artifactId });
+
+    expect(again.status).toBe(202);
+    expect(KbDocumentSchema.parse(await again.json())).toEqual(first);
+    expect(await (await send(app, 'GET', path)).json()).toEqual({ items: [first] });
+  });
+
   it('refuses a bad document body 400, an unknown artifact or base 404', async () => {
     const { h, app, create } = await harness();
     const kb = await create();
