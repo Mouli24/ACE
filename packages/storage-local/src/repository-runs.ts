@@ -577,6 +577,10 @@ export function createNodeRunRepository(db: Db): NodeRunRepository {
           patch.memoryOps === undefined
             ? undefined
             : toJsonColumn(patch.memoryOps, `${at}.memoryOps`),
+        inputEnvelopes:
+          patch.inputEnvelopes === undefined
+            ? undefined
+            : toJsonColumn(patch.inputEnvelopes, `${at}.inputEnvelopes`),
         startedAt: patch.startedAt,
         endedAt: patch.endedAt,
         durationMs: patch.durationMs,
