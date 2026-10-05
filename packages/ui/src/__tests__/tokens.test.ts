@@ -91,6 +91,22 @@ describe('FR-SYS-005 both themes meet WCAG AA', () => {
       expect(contrastRatio(fg, bg)).toBeGreaterThanOrEqual(4.5);
     });
 
+    it.each([
+      ['soft fg on card', c.fgSoft, c.card],
+      ['soft fg on panel', c.fgSoft, c.panel],
+      ['faint fg on card', c.fgFaint, c.card],
+      ['faint fg on panel', c.fgFaint, c.panel],
+      ['faint fg on canvas', c.fgFaint, c.canvas],
+      ['fg on sunken', c.fg, c.sunken],
+      ['muted fg on sunken', c.fgMuted, c.sunken],
+    ])('text: %s ≥ 4.5:1', (_label, fg, bg) => {
+      expect(contrastRatio(fg, bg)).toBeGreaterThanOrEqual(4.5);
+    });
+
+    it('border-strong is a step above border on the card', () => {
+      expect(contrastRatio(c.borderStrong, c.card)).toBeGreaterThan(contrastRatio(c.border, c.card));
+    });
+
     it.each(PROVIDER_TYPES)('provider accent %s ≥ 3:1 on the card', (p) => {
       expect(contrastRatio(c.provider[p], c.card)).toBeGreaterThanOrEqual(3);
     });

@@ -1,31 +1,32 @@
 import type { NodeState, ProviderState, ProviderType } from '@ace/contracts';
 
 /**
- * ACE design tokens (Arch §10.1 design system, CLAUDE.md §2): a dark dotted Canvas, one accent
+ * ACE design tokens (Arch §10.1 design system, CLAUDE.md §2): the Night (dark) and Paper (light) themes over a dotted Canvas, one accent
  * colour per provider, one status-ring colour per NodeState, serif for human text and monospace
- * for machine text. `theme.css` mirrors these values as Tailwind `@theme` variables; the contrast
+ * for machine text. Night and Paper are the POC Theme V2 palettes (D241 added the light theme; theme-v2
+ * restyled both). `theme.css` mirrors these values as Tailwind `@theme` variables; the contrast
  * test in `__tests__/tokens.test.ts` keeps every pair at WCAG AA (NFR-USE-02).
  */
 
 export const PROVIDER_ACCENT: Readonly<Record<ProviderType, string>> = {
-  anthropic: '#e0955f',
-  google: '#6ea8ff',
-  openai: '#5ed3a5',
-  openai_compatible: '#b59cff',
-  ollama: '#e8e2d6',
-  mock: '#9aa3ad',
+  anthropic: '#e8734a',
+  google: '#ec4899',
+  openai: '#2dd4bf',
+  openai_compatible: '#a78bfa',
+  ollama: '#e8e8ea',
+  mock: '#9a99a3',
 };
 
 export const STATUS_RING: Readonly<Record<NodeState, string>> = {
-  IDLE: '#7d8590',
-  READY: '#8fb3ff',
+  IDLE: '#75757d',
+  READY: '#93a8ff',
   RUNNING: '#5cc8ff',
-  WAITING: '#f2c94c',
-  COMPLETED: '#4ade80',
+  WAITING: '#f5c542',
+  COMPLETED: '#34d399',
   PAUSED: '#c8b56a',
-  STOPPED: '#b0b8c1',
+  STOPPED: '#b8b5ae',
   BLOCKED: '#f59e0b',
-  FAILED: '#f87171',
+  FAILED: '#f0563f',
 };
 
 /**
@@ -34,12 +35,12 @@ export const STATUS_RING: Readonly<Record<NodeState, string>> = {
  * are warm, and UNKNOWN/CHECKING stay neutral so an unchecked provider never reads as broken.
  */
 export const PROVIDER_STATUS: Readonly<Record<ProviderState, string>> = {
-  UNKNOWN: '#9da7b3',
-  CHECKING: '#8fb3ff',
-  CONNECTED: '#4ade80',
-  AUTH_FAILED: '#ff8a8a',
+  UNKNOWN: '#8f8c95',
+  CHECKING: '#93a8ff',
+  CONNECTED: '#34d399',
+  AUTH_FAILED: '#f0563f',
   UNREACHABLE: '#f59e0b',
-  RATE_LIMITED: '#f2c94c',
+  RATE_LIMITED: '#f5c542',
 };
 
 /*
@@ -49,33 +50,33 @@ export const PROVIDER_STATUS: Readonly<Record<ProviderState, string>> = {
  * under `:root[data-theme="light"]`.
  */
 export const LIGHT_PROVIDER_ACCENT: Readonly<Record<ProviderType, string>> = {
-  anthropic: '#b4541a',
-  google: '#1a66d9',
-  openai: '#0f7d55',
-  openai_compatible: '#7a4fd6',
-  ollama: '#6b5f4a',
-  mock: '#6e7781',
+  anthropic: '#c8562c',
+  google: '#d0307c',
+  openai: '#0e9483',
+  openai_compatible: '#7446d8',
+  ollama: '#3a3a40',
+  mock: '#6b6972',
 };
 
 export const LIGHT_STATUS_RING: Readonly<Record<NodeState, string>> = {
-  IDLE: '#6e7781',
-  READY: '#3b6fd8',
-  RUNNING: '#0a73a8',
-  WAITING: '#8a6100',
-  COMPLETED: '#1a7f37',
-  PAUSED: '#7d6a1f',
-  STOPPED: '#57606a',
-  BLOCKED: '#b54708',
-  FAILED: '#c9252d',
+  IDLE: '#8a8890',
+  READY: '#3b5bdb',
+  RUNNING: '#0b84c6',
+  WAITING: '#ac800b',
+  COMPLETED: '#15996a',
+  PAUSED: '#8f7a2a',
+  STOPPED: '#6b6972',
+  BLOCKED: '#c26a00',
+  FAILED: '#c13a27',
 };
 
 export const LIGHT_PROVIDER_STATUS: Readonly<Record<ProviderState, string>> = {
-  UNKNOWN: '#6e7781',
-  CHECKING: '#3b6fd8',
-  CONNECTED: '#1a7f37',
-  AUTH_FAILED: '#c9252d',
-  UNREACHABLE: '#b54708',
-  RATE_LIMITED: '#8a6100',
+  UNKNOWN: '#6b6972',
+  CHECKING: '#3b5bdb',
+  CONNECTED: '#15996a',
+  AUTH_FAILED: '#c13a27',
+  UNREACHABLE: '#c26a00',
+  RATE_LIMITED: '#ac800b',
 };
 
 /**
@@ -104,9 +105,13 @@ export interface ThemeColors {
   canvasDot: string;
   panel: string;
   card: string;
+  sunken: string;
   border: string;
+  borderStrong: string;
   fg: string;
+  fgSoft: string;
   fgMuted: string;
+  fgFaint: string;
   accent: string;
   accentFg: string;
   danger: string;
@@ -117,17 +122,21 @@ export interface ThemeColors {
 }
 
 const lightColor: Readonly<ThemeColors> = {
-  canvas: '#eef1f5',
-  canvasDot: '#b6bfca',
-  panel: '#f8f9fb',
-  card: '#ffffff',
-  border: '#d0d7de',
-  fg: '#1f2328',
-  fgMuted: '#57606a',
-  accent: '#7c3aed',
-  accentFg: '#ffffff',
-  danger: '#c9252d',
-  selection: '#7c3aed',
+  canvas: '#f3f1ec',
+  canvasDot: '#d6d2c9',
+  panel: '#eeebe5',
+  card: '#fbfaf7',
+  sunken: '#e9e5de',
+  border: '#dcd8d0',
+  borderStrong: '#c4c0b8',
+  fg: '#1b1a1e',
+  fgSoft: '#46444c',
+  fgMuted: '#66646d',
+  fgFaint: '#6b696f',
+  accent: '#1b1a1e',
+  accentFg: '#fbfaf7',
+  danger: '#c13a27',
+  selection: '#7446d8',
   provider: LIGHT_PROVIDER_ACCENT,
   status: LIGHT_STATUS_RING,
   providerStatus: LIGHT_PROVIDER_STATUS,
@@ -135,17 +144,21 @@ const lightColor: Readonly<ThemeColors> = {
 
 export const tokens = {
   color: {
-    canvas: '#0d1117',
-    canvasDot: '#2a3340',
-    panel: '#161b22',
-    card: '#1c2129',
-    border: '#30363d',
-    fg: '#e6edf3',
-    fgMuted: '#9da7b3',
-    accent: '#d8b4fe',
-    accentFg: '#1a1033',
-    danger: '#ff8a8a',
-    selection: '#d8b4fe',
+    canvas: '#0a0a0b',
+    canvasDot: '#1f1f23',
+    panel: '#0e0e10',
+    card: '#111113',
+    sunken: '#08080a',
+    border: '#232327',
+    borderStrong: '#34343a',
+    fg: '#f6f5f2',
+    fgSoft: '#b8b5ae',
+    fgMuted: '#8f8c95',
+    fgFaint: '#7d7c82',
+    accent: '#f6f5f2',
+    accentFg: '#0a0a0b',
+    danger: '#f0563f',
+    selection: '#c4b5fd',
     provider: PROVIDER_ACCENT,
     status: STATUS_RING,
     providerStatus: PROVIDER_STATUS,
@@ -153,11 +166,11 @@ export const tokens = {
     light: lightColor,
   },
   font: {
-    human: '"Source Serif 4", "Iowan Old Style", Georgia, serif',
-    machine: '"JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace',
+    human: '"Newsreader Variable", "Newsreader", "Iowan Old Style", Georgia, serif',
+    machine: '"JetBrains Mono Variable", "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace',
   },
-  radius: { card: '10px', chip: '999px' },
-  canvas: { dotGap: 20, dotSize: 1 },
+  radius: { card: '14px', field: '10px', chip: '999px' },
+  canvas: { dotGap: 20, dotSize: 1.1 },
 } as const;
 
 export type Tokens = typeof tokens;
@@ -169,9 +182,13 @@ export const THEME_COLORS: Readonly<Record<'dark' | 'light', ThemeColors>> = {
     canvasDot: tokens.color.canvasDot,
     panel: tokens.color.panel,
     card: tokens.color.card,
+    sunken: tokens.color.sunken,
     border: tokens.color.border,
+    borderStrong: tokens.color.borderStrong,
     fg: tokens.color.fg,
+    fgSoft: tokens.color.fgSoft,
     fgMuted: tokens.color.fgMuted,
+    fgFaint: tokens.color.fgFaint,
     accent: tokens.color.accent,
     accentFg: tokens.color.accentFg,
     danger: tokens.color.danger,

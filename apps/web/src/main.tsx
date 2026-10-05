@@ -1,3 +1,6 @@
+import '@fontsource-variable/newsreader';
+import '@fontsource-variable/newsreader/wght-italic.css';
+import '@fontsource-variable/jetbrains-mono';
 import './index.css';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
