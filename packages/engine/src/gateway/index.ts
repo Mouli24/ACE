@@ -368,9 +368,7 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     // A read that touches the database, so "db: ok" means the store really answered.
     await deps.repository.settings.get(deps.scope);
 
-    return c.json(
-      HealthResponseSchema.parse({ status: 'ok', version: deps.version, db: 'ok' }),
-    );
+    return c.json(HealthResponseSchema.parse({ status: 'ok', version: deps.version, db: 'ok' }));
   });
 
   api.get('/settings', async (c) => c.json(await deps.repository.settings.get(deps.scope)));
@@ -440,7 +438,9 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     return c.body(null, 204);
   });
 
-  api.post('/projects/:id/open', async (c) => c.json(await deps.graph.openProject(c.req.param('id'))));
+  api.post('/projects/:id/open', async (c) =>
+    c.json(await deps.graph.openProject(c.req.param('id'))),
+  );
 
   /* ------------------------------------------------------------ workflows */
 
@@ -457,7 +457,9 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     c.json(await deps.graph.importWorkflow(c.req.param('id'), await readJson(c)), 201),
   );
 
-  api.get('/workflows/:id', async (c) => c.json(await deps.graph.getWorkflowGraph(c.req.param('id'))));
+  api.get('/workflows/:id', async (c) =>
+    c.json(await deps.graph.getWorkflowGraph(c.req.param('id'))),
+  );
 
   api.patch('/workflows/:id', async (c) => {
     const { name } = UpdateWorkflowRequestSchema.parse(await readJson(c));
@@ -486,7 +488,6 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.get('/workflows/:id/export', async (c) =>
     c.json(await deps.graph.exportWorkflow(c.req.param('id'))),
   );
-
 
   /* ------------------------------------------------------------- providers */
 
@@ -527,7 +528,9 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     return c.body(null, 204);
   });
 
-  api.post('/providers/:id/check', async (c) => c.json(await providers(c).check(c.req.param('id'))));
+  api.post('/providers/:id/check', async (c) =>
+    c.json(await providers(c).check(c.req.param('id'))),
+  );
 
   api.post('/providers/:id/refresh-models', async (c) =>
     c.json(await providers(c).refreshModels(c.req.param('id'))),
@@ -563,7 +566,9 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
 
   api.get('/runs/:id', async (c) => c.json(await runs(c).getRun(c.req.param('id'))));
 
-  api.get('/runs/:id/node-runs', async (c) => c.json(await runs(c).listNodeRuns(c.req.param('id'))));
+  api.get('/runs/:id/node-runs', async (c) =>
+    c.json(await runs(c).listNodeRuns(c.req.param('id'))),
+  );
 
   api.get('/runs/:id/events', async (c) => {
     const { afterSeq } = EventsQuerySchema.parse(c.req.query());
@@ -575,15 +580,14 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     });
 
     return c.json(
-      events
-        .map((event) => ({
-          seq: event.seq,
-          at: event.createdAt,
-          ...(event.runId === undefined ? {} : { runId: event.runId }),
-          ...(event.workflowId === undefined ? {} : { workflowId: event.workflowId }),
-          type: event.type,
-          payload: event.payload,
-        })),
+      events.map((event) => ({
+        seq: event.seq,
+        at: event.createdAt,
+        ...(event.runId === undefined ? {} : { runId: event.runId }),
+        ...(event.workflowId === undefined ? {} : { workflowId: event.workflowId }),
+        type: event.type,
+        payload: event.payload,
+      })),
     );
   });
 
@@ -708,7 +712,9 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     }
   });
 
-  api.get('/nodes/:id/chat/threads', async (c) => c.json(await chat(c).listThreads(c.req.param('id'))));
+  api.get('/nodes/:id/chat/threads', async (c) =>
+    c.json(await chat(c).listThreads(c.req.param('id'))),
+  );
 
   api.get('/chat/threads/:id', async (c) => {
     try {
@@ -733,7 +739,10 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
    * origin and auth middleware above — a route that skipped `authGuard` would be a hole in
    * FR-SYS-002.
    */
-  api.route('/', createRunControlRoutes(() => deps.controls));
+  api.route(
+    '/',
+    createRunControlRoutes(() => deps.controls),
+  );
   api.route('/', createGuardrailRoutes(deps.guardrailPolicies));
   api.route('/', createApprovalRoutes(deps.approvals));
 
