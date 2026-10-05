@@ -50,6 +50,18 @@ import type { ApprovalService } from '../approvals/index.js';
 import { createApprovalRoutes } from '../approvals/routes.js';
 import { createGuardrailRoutes, type PolicyService } from '../guardrails/index.js';
 import { createRunControlRoutes, type RunControls, type RunService } from '../runs/index.js';
+import type { BackupService } from '../backup/index.js';
+import { createBackupRoutes } from '../backup/routes.js';
+import { createKnowledgeRoutes } from '../knowledge/routes.js';
+import type { SearchService } from '../knowledge/search.js';
+import type { KnowledgeService } from '../knowledge/service.js';
+import { createMemoryRoutes } from '../memory/routes.js';
+import type { MemoryService } from '../memory/service.js';
+import { createTemplateRoutes } from '../templates/routes.js';
+import type { TemplateService } from '../templates/service.js';
+import type { TraceService } from '../trace/index.js';
+import type { UsageService } from '../usage/index.js';
+import { createUsageRoutes } from '../usage/routes.js';
 import {
   HttpError,
   forbiddenOrigin,
@@ -125,6 +137,26 @@ export interface EngineDeps {
   mcp?: McpService;
   /** The timeline and direct-chat routes (FR-CHAT-001..008). */
   chat?: ChatService;
+
+  /*
+   * Round 5 (§2.9, D235). Optional for the same reason the earlier rounds' services are: an app built
+   * without one answers 501 `not_implemented` on the routes that need it (D121).
+   */
+
+  /** `/projects/:id/knowledge-bases`, `/knowledge-bases/:id`, its documents and reindex (FR-RAG-001..003, 009). */
+  knowledge?: KnowledgeService;
+  /** `POST /knowledge-bases/:id/query` (FR-RAG-004, FR-RAG-008). */
+  search?: SearchService;
+  /** `/nodes/:id/memory`: list, delete one, clear (FR-MEM-004). */
+  memory?: MemoryService;
+  /** `GET /runs/:id/trace` (FR-OBS-001). */
+  trace?: TraceService;
+  /** `GET /usage` and `GET /metrics/health` (FR-OBS-004, FR-OBS-007). */
+  usage?: UsageService;
+  /** `GET /templates`, `POST /templates/:id/instantiate` (FR-ONB-002). */
+  templates?: TemplateService;
+  /** `POST /backup/export` and `/backup/import` (FR-SYS-012). */
+  backup?: BackupService;
 }
 
 export interface EngineVariables {
@@ -745,6 +777,12 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   );
   api.route('/', createGuardrailRoutes(deps.guardrailPolicies));
   api.route('/', createApprovalRoutes(deps.approvals));
+  /* Round 5's routes (§2.9), mounted the same way, inside the same middleware. */
+  api.route('/', createKnowledgeRoutes(deps.knowledge, deps.search));
+  api.route('/', createMemoryRoutes(deps.memory));
+  api.route('/', createUsageRoutes(deps.trace, deps.usage));
+  api.route('/', createTemplateRoutes(deps.templates));
+  api.route('/', createBackupRoutes(deps.backup));
 
   app.route(API_BASE_PATH, api);
 
