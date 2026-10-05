@@ -184,8 +184,16 @@ export interface UsageRepository {
 export interface BackupStore {
   /** A zip: `ace.sqlite` (VACUUM INTO snapshot), `blobs/**`, `settings.json`, `backup.json` manifest. */
   exportZip(): Promise<Uint8Array>;
-  /** F12. Throws `BackupFormatError` (name) on a zip that is not an ACE backup, before touching anything. */
-  importZip(bytes: Uint8Array): Promise<BackupImportResponse['restored']>;
+  /**
+   * F12. Throws `BackupFormatError` (name) on a zip that is not an ACE backup, before touching
+   * anything. `beforeCopy` runs inside the same exclusive hold as the copy, just before it: nothing
+   * else can write meanwhile, so a check made there holds for the copy, and a throw refuses the
+   * import with nothing copied (final-review M4).
+   */
+  importZip(
+    bytes: Uint8Array,
+    hooks?: { beforeCopy?: () => Promise<void> },
+  ): Promise<BackupImportResponse['restored']>;
   /** Returns the path written. */
   writePreImportBackup(): Promise<string>;
 }
