@@ -134,13 +134,9 @@ function toNodeRun(row: NodeRunRow): NodeRun {
     verdicts: JSON.parse(row.verdicts),
     toolCalls: JSON.parse(row.toolCalls),
     ...(row.approvals === null ? {} : { approvals: JSON.parse(row.approvals) }),
-    ...(row.guardrailPolicy === null
-      ? {}
-      : { guardrailPolicy: JSON.parse(row.guardrailPolicy) }),
+    ...(row.guardrailPolicy === null ? {} : { guardrailPolicy: JSON.parse(row.guardrailPolicy) }),
     ...(row.loopStop === null ? {} : { loopStop: row.loopStop }),
-    ...(row.reusedFromNodeRunId === null
-      ? {}
-      : { reusedFromNodeRunId: row.reusedFromNodeRunId }),
+    ...(row.reusedFromNodeRunId === null ? {} : { reusedFromNodeRunId: row.reusedFromNodeRunId }),
     // Round 5 (§2.2, §2.4, D233). A node run written before round 5 reads NULL, which stays absent.
     ...(row.sources === null ? {} : { sources: JSON.parse(row.sources) }),
     ...(row.droppedSources === null ? {} : { droppedSources: JSON.parse(row.droppedSources) }),
@@ -249,8 +245,7 @@ export function createModelRepository(db: Db): ModelRepository {
   });
 
   /** A JSON array column holds `["text","image"]`, so a type test is a substring test. */
-  const hasType = (column: AnySQLiteColumn, type: DataType) =>
-    sql`${column} LIKE ${`%"${type}"%`}`;
+  const hasType = (column: AnySQLiteColumn, type: DataType) => sql`${column} LIKE ${`%"${type}"%`}`;
 
   return {
     replaceForProvider: async (scope: Scope, providerId: Id, catalog: readonly Model[]) => {
@@ -432,7 +427,8 @@ export function createRunRepository(db: Db): RunRepository {
           patch.preflightIssues === undefined
             ? undefined
             : toJsonColumn(patch.preflightIssues, `run(${id}).preflightIssues`),
-        totals: patch.totals === undefined ? undefined : toJsonColumn(patch.totals, `run(${id}).totals`),
+        totals:
+          patch.totals === undefined ? undefined : toJsonColumn(patch.totals, `run(${id}).totals`),
         endedAt: patch.endedAt,
         durationMs: patch.durationMs,
         finalOutput:
@@ -499,8 +495,10 @@ export function createNodeRunRepository(db: Db): NodeRunRepository {
               ? null
               : toJsonColumn(nodeRun.modelUsed, `${at}.modelUsed`),
           inputEnvelopes: toJsonColumn(nodeRun.inputEnvelopes, `${at}.inputEnvelopes`),
-          output: nodeRun.output === undefined ? null : toJsonColumn(nodeRun.output, `${at}.output`),
-          prompt: nodeRun.prompt === undefined ? null : toJsonColumn(nodeRun.prompt, `${at}.prompt`),
+          output:
+            nodeRun.output === undefined ? null : toJsonColumn(nodeRun.output, `${at}.output`),
+          prompt:
+            nodeRun.prompt === undefined ? null : toJsonColumn(nodeRun.prompt, `${at}.prompt`),
           usage: toJsonColumn(nodeRun.usage, `${at}.usage`),
           verdicts: toJsonColumn(nodeRun.verdicts, `${at}.verdicts`),
           toolCalls: toJsonColumn(nodeRun.toolCalls, `${at}.toolCalls`),
@@ -557,7 +555,9 @@ export function createNodeRunRepository(db: Db): NodeRunRepository {
         failureReason: patch.failureReason,
         error: patch.error === undefined ? undefined : toJsonColumn(patch.error, `${at}.error`),
         modelUsed:
-          patch.modelUsed === undefined ? undefined : toJsonColumn(patch.modelUsed, `${at}.modelUsed`),
+          patch.modelUsed === undefined
+            ? undefined
+            : toJsonColumn(patch.modelUsed, `${at}.modelUsed`),
         output: patch.output === undefined ? undefined : toJsonColumn(patch.output, `${at}.output`),
         prompt: patch.prompt === undefined ? undefined : toJsonColumn(patch.prompt, `${at}.prompt`),
         usage: patch.usage === undefined ? undefined : toJsonColumn(patch.usage, `${at}.usage`),
@@ -615,10 +615,7 @@ export function createNodeRunRepository(db: Db): NodeRunRepository {
         })
         .from(nodeRuns)
         .where(
-          and(
-            eq(nodeRuns.workspaceId, scope.workspaceId),
-            like(nodeRuns.startedAt, `${day}%`),
-          ),
+          and(eq(nodeRuns.workspaceId, scope.workspaceId), like(nodeRuns.startedAt, `${day}%`)),
         )
         .get();
       return row?.total ?? 0;

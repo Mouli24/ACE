@@ -343,9 +343,7 @@ function hit(score: number, label: string, chars = 400): SearchHit {
 }
 
 /** A summariser that records every call and, for a node with a model, charges for it. */
-function recordingSummariser(
-  charge?: Usage,
-): Summariser & {
+function recordingSummariser(charge?: Usage): Summariser & {
   calls: (SummariseInput & { target?: { providerId: string; modelId: string } })[];
 } {
   const calls: (SummariseInput & { target?: { providerId: string; modelId: string } })[] = [];

@@ -33,7 +33,13 @@ import type { MemoryService } from '../memory/service.js';
 import type { UsageService } from '../usage/index.js';
 import type { EvaluationTarget, GuardrailEvaluator } from '../guardrails/evaluator.js';
 import { policyRef, type PolicyService } from '../guardrails/policy-service.js';
-import { contractFor, createTruncatingSummariser, estimatePartsTokens, trustForSource, type Summariser } from '../envelopes/index.js';
+import {
+  contractFor,
+  createTruncatingSummariser,
+  estimatePartsTokens,
+  trustForSource,
+  type Summariser,
+} from '../envelopes/index.js';
 import { buildEnvelope } from '../envelopes/index.js';
 import { autoRetryDecision, upstreamFailedError, userCancelledError } from '../errors/index.js';
 import type { EventBus } from '../events/index.js';
@@ -68,11 +74,7 @@ import {
   type NodeGuardrails,
 } from './executor.js';
 import { preflight } from './preflight.js';
-import type {
-  ArtifactMaterialiser,
-  ToolGuardrailEvaluator,
-  ToolProvider,
-} from './tool-loop.js';
+import type { ArtifactMaterialiser, ToolGuardrailEvaluator, ToolProvider } from './tool-loop.js';
 import type { ToolCall } from '@ace/contracts';
 import { toSummary } from './summary.js';
 
@@ -255,7 +257,8 @@ function engineFailure(): NodeError {
   return {
     kind: 'workflow',
     code: 'internal',
-    message: 'The engine could not finish this node run, so it failed. The engine log has the details.',
+    message:
+      'The engine could not finish this node run, so it failed. The engine log has the details.',
     retryable: false,
   };
 }
@@ -643,7 +646,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
      * memory it read (FR-RAG-007, FR-MEM-003). Any other node keeps its delivered envelopes byte for
      * byte, whatever the guard did to its prompt.
      */
-    function contextFor(node: Node, nodeRun: NodeRun): Pick<ExecuteNodeInput, 'context' | 'memory'> {
+    function contextFor(
+      node: Node,
+      nodeRun: NodeRun,
+    ): Pick<ExecuteNodeInput, 'context' | 'memory'> {
       if (node.kind !== 'agent' && node.kind !== 'model') return {};
       const memoryService = deps.memory;
       const memoryOn = node.kind === 'agent' && node.config.memory?.enabled === true;
@@ -973,9 +979,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
     ): Pick<NodeRun, 'sources' | 'droppedSources' | 'memoryOps'> {
       return {
         ...(outcome.sources === undefined ? {} : { sources: outcome.sources }),
-        ...(outcome.droppedSources === undefined
-          ? {}
-          : { droppedSources: outcome.droppedSources }),
+        ...(outcome.droppedSources === undefined ? {} : { droppedSources: outcome.droppedSources }),
         ...(outcome.memoryOps === undefined ? {} : { memoryOps: outcome.memoryOps }),
       };
     }
@@ -1042,7 +1046,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
         error:
           outcome.status === 'STOPPED' && outcome.error !== undefined
             ? outcome.error
-            : userCancelledError('The run was stopped before this node run was recorded.').nodeError,
+            : userCancelledError('The run was stopped before this node run was recorded.')
+                .nodeError,
         usage,
         ...(outcome.modelUsed === undefined ? {} : { modelUsed: outcome.modelUsed }),
         ...(outcome.prompt === undefined ? {} : { prompt: outcome.prompt }),
@@ -1541,9 +1546,16 @@ export function createRunService(deps: RunServiceDeps): RunService {
           }
           deliveredEdges.add(edge.id);
           if (plannedRuns.has(target.id)) continue;
-          const envelope = await envelopeBetween(run, node, target, row.output ?? [], row.iteration, {
-            signal,
-          });
+          const envelope = await envelopeBetween(
+            run,
+            node,
+            target,
+            row.output ?? [],
+            row.iteration,
+            {
+              signal,
+            },
+          );
           envelopesFor.set(target.id, [...(envelopesFor.get(target.id) ?? []), envelope]);
         }
       }
@@ -1585,12 +1597,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
     /* FR-EXE-011: COMPLETE only when every Output node finished and nothing is still going. */
     const outputNodes = nodes.filter((node) => node.kind === 'output');
     const allOutputsDone =
-      outputNodes.length > 0 &&
-      outputNodes.every((node) => states.get(node.id) === 'COMPLETED');
+      outputNodes.length > 0 && outputNodes.every((node) => states.get(node.id) === 'COMPLETED');
     const stillBusy = [...states.values()].some((state) => BUSY_STATES.has(state));
 
-    const complete =
-      allOutputsDone && !stillBusy && !signal.aborted && budgetHalt === undefined;
+    const complete = allOutputsDone && !stillBusy && !signal.aborted && budgetHalt === undefined;
     summaryUsage.dropRun(run.id);
     const endedAt = now();
     const totals = sumUsage(usages);
@@ -1691,7 +1701,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
     try {
       return await deps.usage.dayTotals(at.slice(0, 10));
     } catch (error) {
-      logger.warn({ subsystem: 'runs', runId: run.id, err: error }, 'could not read the day totals');
+      logger.warn(
+        { subsystem: 'runs', runId: run.id, err: error },
+        'could not read the day totals',
+      );
       return undefined;
     }
   }
@@ -1834,19 +1847,18 @@ export function createRunService(deps: RunServiceDeps): RunService {
     if (issues.some((issue) => issue.severity === 'error')) {
       // BLOCKED, with zero generate() calls (BR-08). Still a run: it is recorded, inspectable
       // and listed in the history, because "why did it not start" is a question worth keeping.
-      const withIssues =
-        (await repository.runs.update(scope, run.id, {
-          status: 'BLOCKED',
-          allowedActions: allowedRunActions('BLOCKED'),
-          preflightIssues: issues,
-          endedAt: now(),
-          durationMs: 0,
-        })) ?? {
-          ...run,
-          status: 'BLOCKED' as const,
-          allowedActions: allowedRunActions('BLOCKED'),
-          preflightIssues: issues,
-        };
+      const withIssues = (await repository.runs.update(scope, run.id, {
+        status: 'BLOCKED',
+        allowedActions: allowedRunActions('BLOCKED'),
+        preflightIssues: issues,
+        endedAt: now(),
+        durationMs: 0,
+      })) ?? {
+        ...run,
+        status: 'BLOCKED' as const,
+        allowedActions: allowedRunActions('BLOCKED'),
+        preflightIssues: issues,
+      };
 
       await bus.emit({
         type: 'run.started',
@@ -1989,7 +2001,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
         seen.add(edge.from.nodeId);
         envelopes.push(
-          await envelopeBetween(run, from, node, row.output ?? [], row.iteration, { record: false }),
+          await envelopeBetween(run, from, node, row.output ?? [], row.iteration, {
+            record: false,
+          }),
         );
       }
 
