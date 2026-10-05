@@ -87,6 +87,17 @@ import {
  *
  * Responses go through `@ace/sdk`, which parses each one against its contract schema, so the seam
  * is part of every assertion. The multipart upload and the backup zip go over raw `fetch`.
+ *
+ * Corpus and workflows are A5's fixtures (`fixtures/round-5/`, read, never written); this suite's
+ * own data — an independent labelled question set, a second PII document, the long documents for
+ * the budget row and a zip reader — is in `./corpus.ts`.
+ *
+ * First run: A5 (PR #35) had already merged by the time this file first ran, so it ran against the
+ * implementation rather than against its absence. Three checks were red, and all three were this
+ * file's own misreadings, each fixed with its reason beside it: the socket probe ignored the
+ * normalised argument array `net.connect` passes; the trace run triggered no check, and a verdict
+ * is stored only for a check that triggered (D114); and a summarisation call carries no `runId`
+ * on the mock's call log, so calls are counted by position rather than filtered by run.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -1316,6 +1327,10 @@ describe('NFR-PRIV-01 / TC-NFR-012 no outbound connection during a full KB run',
       'the probe recorded the control connect',
     ).toBe(true);
     const enginePort = new URL(engine.url).port;
+    expect(
+      connects.some((c) => String(c.port) === enginePort),
+      'the probe saw this suite talking to the engine',
+    ).toBe(true);
     const unexpected = connects.filter(
       (c) => c.port !== controlPort && !(LOOPBACK.has(c.host) && String(c.port) === enginePort),
     );
