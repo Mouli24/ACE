@@ -401,7 +401,10 @@ describe('FR-EXE-007 an agent with knowledge and memory reserves their shares of
     const readsBudget = Math.floor(
       1000 * (1 - CONTEXT_BUDGET_SHARES.retrieved - CONTEXT_BUDGET_SHARES.memory),
     );
-    expect(delivered?.context.budgetTokens).toBe(readsBudget);
+    // The stored envelope is the one the node read (13a review I2): it carries the chunks and the
+    // memory, so it states the whole budget they were fitted into — the reads alone still fit the
+    // reduced budget they were delivered at.
+    expect(delivered?.context.budgetTokens).toBe(1000);
     const readsCost =
       estimatePartsTokens(delivered?.reads ?? []) +
       estimateTokens(delivered?.context.summary ?? '');
@@ -566,8 +569,14 @@ describe('TC-MEM-001 a memory agent remembers between runs', () => {
       ),
     ).toBe(true);
 
+    expect(firstRow.inputEnvelopes[0]?.context).not.toHaveProperty('memory');
+
     const second = await h.run();
     const secondRow = await h.nodeRunOf(second, agent);
+    // The envelope the second run read is stored with the remembered fact (13a review I2).
+    expect(secondRow.inputEnvelopes[0]?.context.memory).toEqual([
+      { key: 'user_name', value: 'Ada' },
+    ]);
     expect(secondRow.prompt?.text).toContain('### Memory');
     expect(secondRow.prompt?.text).toContain('- user_name: Ada');
     const [entry] = await h.memory.list(agent.id);
@@ -584,6 +593,7 @@ describe('TC-MEM-001 a memory agent remembers between runs', () => {
     const after = await h.run();
 
     const row = await h.nodeRunOf(after, agent);
+    expect(row.inputEnvelopes[0]?.context).not.toHaveProperty('memory');
     expect(row.prompt?.text).not.toContain('### Memory');
     expect(row.prompt?.text).not.toContain('user_name: Ada');
   });
@@ -611,6 +621,90 @@ describe('TC-RAG-006 an agent with an attached knowledge base', () => {
     expect(row).not.toHaveProperty('droppedSources');
     expect(row.prompt?.text).toContain('### Retrieved');
     expect(row.prompt?.text).toContain('Chunk first.');
+    // The envelope the agent read is stored with what was retrieved (13a review I2).
+    expect(row.inputEnvelopes[0]?.context.retrieved).toEqual(
+      hits.map(({ chunkId, text, score, source }) => ({ chunkId, text, score, source })),
+    );
+    expect(row.inputEnvelopes[0]?.context.trust).toBe('untrusted');
+  });
+
+  it('stores a key-shaped string in a retrieved chunk masked, as the stored prompt is (BR-07)', async () => {
+    // Assembled at runtime: a key-shaped literal in a repository file is what CLAUDE.md §2 forbids.
+    const key = ['sk', 'ant', 'a'.repeat(32)].join('-');
+    const leaky = { ...hit(0.9, 'leaky', 100), text: `The deploy key is ${key} for now.` };
+    const h = await build({ search: fakeSearch([leaky]) });
+    const input = inputNode('What is the deploy key?');
+    const agent = agentNode('Answerer', { knowledgeBaseIds: [KB_ID] });
+    const output = outputNode();
+    await h.seed([input, agent, output], [edge(input, agent), edge(agent, output)]);
+
+    const run = await h.run();
+
+    expect(run.status).toBe('COMPLETE');
+    const row = await h.nodeRunOf(run, agent);
+    expect(JSON.stringify(row.inputEnvelopes)).not.toContain(key);
+    expect(row.inputEnvelopes[0]?.context.retrieved?.[0]?.text).toBe(
+      'The deploy key is [REDACTED] for now.',
+    );
+    expect(row.prompt?.text).not.toContain(key);
+  });
+
+  it('a context step that fails leaves the delivered envelope stored as it was', async () => {
+    const search: SearchService = {
+      async search() {
+        throw new Error('the embedder is unreachable');
+      },
+    };
+    const h = await build({ search });
+    const input = inputNode('What is ACE?');
+    const agent = agentNode('Answerer', { knowledgeBaseIds: [KB_ID] });
+    const output = outputNode();
+    await h.seed([input, agent, output], [edge(input, agent), edge(agent, output)]);
+
+    const run = await h.run();
+
+    const row = await h.nodeRunOf(run, agent);
+    expect(row.status).toBe('FAILED');
+    expect(row.inputEnvelopes[0]?.context).toEqual({ budgetTokens: 2000, trust: 'trusted' });
+  });
+});
+
+describe('13a review I2 a plain agent keeps its delivered envelopes byte for byte', () => {
+  it('with a context guard rewriting an upstream read, the stored envelope is still the delivered one', async () => {
+    const guard: ContextGuard = {
+      async inspect({ text }) {
+        return { kind: 'continue', text: text.toUpperCase(), verdicts: [] };
+      },
+      async record(_target, verdicts) {
+        return [...verdicts];
+      },
+      async sanitise() {
+        throw new Error('the builder judges and records apart');
+      },
+      async checkIngestText({ text }) {
+        return { text, verdicts: [] };
+      },
+    };
+    reply = (req) => (req.prompt.includes('Act as Writer.') ? say('lower case draft') : say('ok'));
+    const h = await build({ contextGuard: guard, search: fakeSearch([hit(0.9, 'unused')]) });
+    const input = inputNode();
+    const writer = agentNode('Writer');
+    const editor = agentNode('Editor');
+    const output = outputNode();
+    await h.seed(
+      [input, writer, editor, output],
+      [edge(input, writer), edge(writer, editor), edge(editor, output)],
+    );
+
+    const run = await h.run();
+
+    expect(run.status).toBe('COMPLETE');
+    const row = await h.nodeRunOf(run, editor);
+    // The prompt read the guarded text; the stored envelope is the one delivered, untouched.
+    expect(row.prompt?.text).toContain('LOWER CASE DRAFT');
+    expect(row.inputEnvelopes).toHaveLength(1);
+    expect(row.inputEnvelopes[0]?.reads).toEqual([{ type: 'text', text: 'lower case draft' }]);
+    expect(row.inputEnvelopes[0]?.context).toEqual({ budgetTokens: 4000, trust: 'untrusted' });
   });
 });
 

@@ -40,6 +40,7 @@ import type { EventBus } from '../events/index.js';
 import { notFound } from '../gateway/errors.js';
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
+import { maskSecrets } from '../security/secret-patterns.js';
 import type { ModelRouter, ProviderAdapter, Repository, Scope } from '../ports/index.js';
 import type { ProviderService } from '../providers/index.js';
 import {
@@ -272,6 +273,22 @@ function readsBudgetFor(agent: Extract<Node, { kind: 'agent' }>): number {
     (agent.config.knowledgeBaseIds?.length ?? 0) > 0 ? CONTEXT_BUDGET_SHARES.retrieved : 0;
   const memory = agent.config.memory?.enabled === true ? CONTEXT_BUDGET_SHARES.memory : 0;
   return Math.floor(budgetTokens * (1 - retrieved - memory));
+}
+
+/**
+ * A copy of what a node read, fit to store: every string through the same mask the stored prompt
+ * goes through (BR-07, D86). A retrieved chunk is a document's text, and a document may hold a
+ * key-shaped string the prompt record already masks; the row must not be the one place it is kept.
+ */
+function maskedForStorage<T>(value: T): T {
+  if (typeof value === 'string') return maskSecrets(value) as T;
+  if (Array.isArray(value)) return value.map((item: unknown) => maskedForStorage(item)) as T;
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, maskedForStorage(item)]),
+    ) as T;
+  }
+  return value;
 }
 
 /** Two totals that count the same tokens and the same money. */
@@ -619,6 +636,12 @@ export function createRunService(deps: RunServiceDeps): RunService {
      * what round 4 delivered. It hands `buildNodeContext` the agent's stored memory (only when memory
      * is on), the search, the guard and this node run as the target, and stamps `lastUsedAt` on the
      * memory entries it placed. `memory` is the agent's memory switch and `MemoryService.apply`.
+     *
+     * For an agent with a knowledge base or memory, a context step that succeeds also stores the
+     * envelopes it built on the node run, in place of the ones delivered (13a review I2): they are
+     * what the prompt was assembled from, and `GET /node-runs/:id` must show the chunks and the
+     * memory it read (FR-RAG-007, FR-MEM-003). Any other node keeps its delivered envelopes byte for
+     * byte, whatever the guard did to its prompt.
      */
     function contextFor(node: Node, nodeRun: NodeRun): Pick<ExecuteNodeInput, 'context' | 'memory'> {
       if (node.kind !== 'agent' && node.kind !== 'model') return {};
@@ -644,6 +667,11 @@ export function createRunService(deps: RunServiceDeps): RunService {
                   });
                   if (step.kind === 'continue' && step.usedMemoryIds.length > 0) {
                     await reader?.markUsed(step.usedMemoryIds);
+                  }
+                  if (step.kind === 'continue' && (hasBases || reader !== undefined)) {
+                    await repository.nodeRuns.update(scope, nodeRun.id, {
+                      inputEnvelopes: maskedForStorage(step.envelopes),
+                    });
                   }
                   return step;
                 },

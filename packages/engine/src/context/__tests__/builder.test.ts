@@ -1086,3 +1086,116 @@ describe('FR-GRD-004 a Model node gets the context guard over its upstream reads
     expect(step).toMatchObject({ kind: 'failed', failureReason: 'GUARDRAIL_VIOLATION' });
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Stored envelopes are rebuilt, never stacked (13a review I2)                  */
+/* -------------------------------------------------------------------------- */
+
+describe('FR-RAG-007 / FR-MEM-003 a stored envelope that already carries context is rebuilt, never stacked', () => {
+  /** What a node run's stored envelope looks like once its context step has run (13a review I2). */
+  function storedEnvelope(node: AgentNode, budgetTokens = 4000): Envelope {
+    const delivered = envelope(FROM_A, node.id, [text('What is the policy?')], 'trusted');
+    return {
+      ...delivered,
+      context: {
+        ...delivered.context,
+        budgetTokens,
+        trust: 'untrusted',
+        retrieved: [
+          {
+            chunkId: newId(),
+            text: 'A stale chunk from the run before.',
+            score: 0.9,
+            source: 'old.md#1',
+          },
+        ],
+        memory: [{ key: 'stale', value: 'a fact cleared since' }],
+      },
+    };
+  }
+
+  it('drops the stale retrieved chunks and memory and places only the fresh ones', async () => {
+    const kb = newId();
+    const node = agent({ knowledgeBaseIds: [kb] });
+    const { guard, target } = guarded(node);
+    const fresh = hit(0.7, 'Suppliers send a bank letter.');
+
+    const step = await buildNodeContext({
+      node,
+      envelopes: [storedEnvelope(node)],
+      memory: [memoryEntry(node.id, 'tone', 'brief', 1)],
+      search: fakeSearch({ [kb]: [fresh] }),
+      guard,
+      target,
+    });
+
+    if (step.kind !== 'continue') throw new Error('expected continue');
+    expect(step.envelopes[0]?.context.retrieved).toEqual([
+      { chunkId: fresh.chunkId, text: fresh.text, score: 0.7, source: fresh.source },
+    ]);
+    expect(step.envelopes[0]?.context.memory).toEqual([{ key: 'tone', value: 'brief' }]);
+    expect(JSON.stringify(step.envelopes)).not.toContain('stale');
+  });
+
+  it('a fresh chunk with no memory left (cleared since) carries no stale memory along', async () => {
+    const kb = newId();
+    const node = agent({ knowledgeBaseIds: [kb] });
+    const { guard, target } = guarded(node);
+
+    const step = await buildNodeContext({
+      node,
+      envelopes: [storedEnvelope(node)],
+      memory: [],
+      search: fakeSearch({ [kb]: [hit(0.7, 'Suppliers send a bank letter.')] }),
+      guard,
+      target,
+    });
+
+    if (step.kind !== 'continue') throw new Error('expected continue');
+    expect(step.envelopes[0]?.context.retrieved).toHaveLength(1);
+    expect(step.envelopes[0]?.context).not.toHaveProperty('memory');
+    expect(JSON.stringify(step.envelopes)).not.toContain('stale');
+  });
+
+  it('leaves no context key behind when nothing fresh is placed', async () => {
+    const node = agent({ knowledgeBaseIds: [newId()] });
+    const { guard, target } = guarded(node);
+
+    const step = await buildNodeContext({
+      node,
+      envelopes: [storedEnvelope(node)],
+      memory: [],
+      search: fakeSearch({}),
+      guard,
+      target,
+    });
+
+    if (step.kind !== 'continue') throw new Error('expected continue');
+    expect(step.envelopes[0]?.context).not.toHaveProperty('retrieved');
+    expect(step.envelopes[0]?.context).not.toHaveProperty('memory');
+    expect(step.envelopes[0]?.reads).toEqual([text('What is the policy?')]);
+  });
+
+  it('the envelope that carries the placed context states the whole budget it was built to', async () => {
+    const kb = newId();
+    const node = agent({ knowledgeBaseIds: [kb], budgetTokens: 1000 });
+    const { guard, target } = guarded(node);
+    // Delivered at the reduced reads budget, as the run service builds an agent's envelopes.
+    const delivered = {
+      ...envelope(FROM_A, node.id, [text('What is the policy?')], 'trusted'),
+      context: { budgetTokens: 500, trust: 'trusted' as const },
+    };
+
+    const step = await buildNodeContext({
+      node,
+      envelopes: [delivered],
+      memory: [],
+      search: fakeSearch({ [kb]: [hit(0.7, 'Suppliers send a bank letter.')] }),
+      guard,
+      target,
+    });
+
+    if (step.kind !== 'continue') throw new Error('expected continue');
+    expect(step.envelopes[0]?.context.budgetTokens).toBe(1000);
+  });
+});

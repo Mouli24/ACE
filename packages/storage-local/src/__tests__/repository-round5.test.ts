@@ -634,6 +634,57 @@ describe('FR-RAG-007 FR-MEM-002 a node run keeps its sources, dropped sources an
     expect(updated).toEqual({ ...plain, sources: [source], memoryOps });
   });
 
+  it('replaces the stored envelopes with the ones the node read, and keeps them when not given (13a review I2)', async () => {
+    const delivered: NodeRun['inputEnvelopes'][number] = {
+      id: newId(),
+      runId: newId(),
+      fromNodeId: newId(),
+      toNodeId: NODE_ID,
+      iteration: 1,
+      reads: [{ type: 'text', text: 'What is the policy?' }],
+      context: { budgetTokens: 2000, trust: 'trusted' },
+      contract: { outputTypes: ['text'] },
+      createdAt: NOW,
+    };
+    const nodeRun: NodeRun = {
+      id: newId(),
+      runId: delivered.runId,
+      nodeId: NODE_ID,
+      iteration: 1,
+      attempt: 1,
+      status: 'RUNNING',
+      inputEnvelopes: [delivered],
+      usage: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
+      verdicts: [],
+      toolCalls: [],
+    };
+    await db.repository.nodeRuns.create(scope, nodeRun);
+
+    const read = {
+      ...delivered,
+      context: {
+        budgetTokens: 4000,
+        trust: 'untrusted' as const,
+        retrieved: [
+          {
+            chunkId: newId(),
+            text: 'Suppliers send a bank letter.',
+            score: 0.5,
+            source: 'guide.md#intro',
+          },
+        ],
+        memory: [{ key: 'tone', value: 'formal' }],
+      },
+    };
+    const updated = await db.repository.nodeRuns.update(scope, nodeRun.id, {
+      inputEnvelopes: [read],
+    });
+    expect(updated?.inputEnvelopes).toEqual([read]);
+
+    const later = await db.repository.nodeRuns.update(scope, nodeRun.id, { status: 'COMPLETED' });
+    expect(later?.inputEnvelopes).toEqual([read]);
+  });
+
   it('keeps a verdict strippedTypes in the table of record (TC-GRD-005)', async () => {
     const nodeRunId = newId();
     const verdict: Verdict = {

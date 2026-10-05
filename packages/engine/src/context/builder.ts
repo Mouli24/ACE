@@ -55,8 +55,10 @@ import type { ContextGuard, ContextLabel } from './guard.js';
  *   lengthened it — never reaches a prompt, so its verdicts are never recorded. What a person typed
  *   into an Input node is trusted (BR-13).
  * - **Placement (F4).** Retrieved chunks and memory ride the node's **first** envelope sorted by
- *   `fromNodeId`, which becomes `untrusted`; the other envelopes keep only their own reads and
- *   summary, so nothing is duplicated in the prompt. Envelopes come back in the order given.
+ *   `fromNodeId`, which becomes `untrusted` and states the whole `budgetTokens`; the other
+ *   envelopes keep only their own reads and summary, so nothing is duplicated in the prompt.
+ *   Envelopes come back in the order given. Context an envelope already carries — a stored one,
+ *   reused by a retry or a re-run — is dropped first and rebuilt, never stacked.
  *
  * Token costs are the engine's estimate (`CHARS_PER_TOKEN`, Arch §24): a read as the envelope
  * measures it, a chunk its text, a memory entry its key plus its value — all after guarding.
@@ -119,6 +121,18 @@ interface PlacedMemory {
   id: Id;
   cost: number;
   pending: Verdict[];
+}
+
+/**
+ * An envelope as it was delivered, without the context an earlier context step placed on it. A node
+ * run stores the envelopes it read (13a review I2), and a retry, a re-run or a planned run starts
+ * from those: their chunks and memory are rebuilt here, never stacked on the fresh ones — the reads
+ * cost counts neither, so stacking would overrun the budget unseen.
+ */
+function withoutPlacedContext(envelope: Envelope): Envelope {
+  const { retrieved, memory, ...context } = envelope.context;
+  if (retrieved === undefined && memory === undefined) return envelope;
+  return { ...envelope, context };
 }
 
 /** Arrival order is a race; source node id is not (the prompt manager's order, TC-PRM-001). */
@@ -305,7 +319,9 @@ export async function buildNodeContext(
 
   try {
     const envelopes: Envelope[] = [];
-    for (const envelope of input.envelopes) envelopes.push(await sanitiseEnvelope(envelope));
+    for (const envelope of input.envelopes) {
+      envelopes.push(await sanitiseEnvelope(withoutPlacedContext(envelope)));
+    }
 
     const ordered = [...envelopes].sort(byFromNodeId);
     const first = ordered[0];
@@ -374,6 +390,9 @@ export async function buildNodeContext(
           ...first.context,
           ...(chunks.length === 0 ? {} : { retrieved: chunks }),
           ...(entries.length === 0 ? {} : { memory: entries }),
+          // The reads were delivered at the reduced reads budget; with the chunks and memory on it,
+          // this envelope holds what the whole budget was fitted to, and says so (FR-EXE-007).
+          budgetTokens,
           // Anything retrieved or remembered is untrusted, whoever sent the envelope (BR-13).
           trust: 'untrusted',
         },

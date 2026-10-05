@@ -571,6 +571,7 @@ export class FakeRepository implements Repository {
       if (patch.sources !== undefined) next.sources = patch.sources;
       if (patch.droppedSources !== undefined) next.droppedSources = patch.droppedSources;
       if (patch.memoryOps !== undefined) next.memoryOps = patch.memoryOps;
+      if (patch.inputEnvelopes !== undefined) next.inputEnvelopes = patch.inputEnvelopes;
 
       this.#for(scope).nodeRuns.set(id, next);
       return next;

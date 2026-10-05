@@ -132,6 +132,12 @@ export interface NodeRunPatch {
   droppedSources?: NodeRun['droppedSources'];
   /** Round 5: the `__memory` ops the node run applied, in order (§2.2, FR-MEM-002). */
   memoryOps?: NodeRun['memoryOps'];
+  /**
+   * Round 5: the envelopes the node actually read, once its context step placed retrieved chunks or
+   * memory on them (FR-RAG-007, FR-MEM-003). The row is created with the envelopes as delivered;
+   * this replaces them, so `GET /node-runs/:id` shows what the prompt was built from.
+   */
+  inputEnvelopes?: NodeRun['inputEnvelopes'];
 }
 /**
  * `verdicts` and `approvals` are deliberately absent: they are written through
