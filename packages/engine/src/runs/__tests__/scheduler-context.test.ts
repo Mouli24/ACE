@@ -19,6 +19,7 @@ import {
 } from '@ace/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { contextChecks } from '../../context/__tests__/context-checks.js';
 import type { ContextGuard } from '../../context/guard.js';
 import {
   estimatePartsTokens,
@@ -27,6 +28,8 @@ import {
   type Summariser,
 } from '../../envelopes/index.js';
 import { createEventBus } from '../../events/index.js';
+import { createPolicyService } from '../../guardrails/policy-service.js';
+import { guardrailStoreFor } from '../../guardrails/store.js';
 import { newId } from '../../ids.js';
 import type { SearchService } from '../../knowledge/search.js';
 import { createLogger } from '../../logging/index.js';
@@ -42,7 +45,16 @@ import {
 import { createUsageService } from '../../usage/index.js';
 import { FakeRepository } from '../../__tests__/fake-repository.js';
 import { InProcessPubSubStub } from '../../__tests__/pubsub-stub.js';
-import { createRunGateRegistry, createRunService, type RunService } from '../index.js';
+import {
+  controlStoresFor,
+  createRunControls,
+  createRunGateRegistry,
+  createRunService,
+  type BegunRun,
+  type RunControls,
+  type RunService,
+  type RunServiceDeps,
+} from '../index.js';
 
 /**
  * The scheduler's round 5 wiring (round 5 §2.2–§2.6, Task 13): the context and memory hooks built
@@ -211,12 +223,17 @@ const rememberAda = (): StreamChunk[] => [
 
 interface Harness {
   service: RunService;
+  controls: RunControls;
   repository: FakeRepository;
   memory: MemoryService;
   events: EngineEvent[];
   requests: GenerateRequest[];
+  /** What the run service logged at `warn` and above, one JSON line each. */
+  logs: string[];
   seed(nodes: Node[], edges: Edge[]): Promise<void>;
   run(): Promise<Run>;
+  /** Starts a run and answers as soon as it is under way, with the promise of its end. */
+  begin(): Promise<BegunRun>;
   nodeRunOf(run: Run, node: Node): Promise<NodeRun>;
 }
 
@@ -229,6 +246,11 @@ async function build(
     contextGuard?: ContextGuard;
     usage?: boolean;
     now?: () => string;
+    /** The memory the run service is given, made from the real one; answering `undefined` wires none. */
+    memory?: (real: MemoryService) => RunServiceDeps['memory'];
+    nextId?: () => string;
+    /** The project's default guardrail policy, resolved for every node (FR-GRD-002). */
+    policies?: boolean;
   } = {},
 ): Promise<Harness> {
   const repository = new FakeRepository();
@@ -237,6 +259,7 @@ async function build(
   const events: EngineEvent[] = [];
   await bus.subscribe((event) => events.push(event));
   const requests: GenerateRequest[] = [];
+  const logs: string[] = [];
 
   await repository.providers.create(scope, provider);
   await repository.models.replaceForProvider(scope, PROVIDER_ID, [model]);
@@ -270,33 +293,69 @@ async function build(
   };
 
   const memory = createMemoryService({ scope, repository, bus, now: () => NOW });
+  const memoryDep = options.memory === undefined ? memory : options.memory(memory);
+  const usage =
+    options.usage === true ? createUsageService({ usage: repository.usage, scope }) : undefined;
+  const gates = createRunGateRegistry();
+  const policies = await (async () => {
+    if (options.policies !== true) return undefined;
+    await repository.projects.create(scope, {
+      id: PROJECT_ID,
+      name: 'Project',
+      folderPath: '/tmp/ace/project',
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    const store = guardrailStoreFor(repository, scope);
+    return createPolicyService({
+      scope,
+      policies: store.policies,
+      projects: store.projects,
+      policyUsage: store.policyUsage,
+      checks: contextChecks,
+    });
+  })();
+
   const service = createRunService({
-    gates: createRunGateRegistry(),
+    gates,
     repository,
     scope,
     bus,
-    logger: createLogger({ level: 'silent', destination: { write: () => undefined } }),
+    logger: createLogger({ level: 'warn', destination: { write: (line) => logs.push(line) } }),
     now: options.now ?? (() => NOW),
     router,
     adapterFor: async () => adapter,
     checkProvider: async () => ({ status: 'CONNECTED', checkedAt: NOW }),
     runGated: async (_providerId, fn) => fn(),
     tokenBatchMs: 0,
-    memory,
+    ...(memoryDep === undefined ? {} : { memory: memoryDep }),
     ...(options.search === undefined ? {} : { search: options.search }),
     ...(options.summariser === undefined ? {} : { summariser: options.summariser }),
     ...(options.contextGuard === undefined ? {} : { contextGuard: options.contextGuard }),
-    ...(options.usage === true
-      ? { usage: createUsageService({ usage: repository.usage, scope }) }
-      : {}),
+    ...(usage === undefined ? {} : { usage }),
+    ...(options.nextId === undefined ? {} : { nextId: options.nextId }),
+    ...(policies === undefined ? {} : { policies }),
+  });
+
+  const controls = createRunControls({
+    ...controlStoresFor(repository, scope),
+    bus,
+    gates,
+    driveRecordedRun: (run) => service.driveRecordedRun(run),
+    drivePartialRun: (plan) => service.drivePartialRun(plan),
+    envelopesFor: (run, nodeId) => service.envelopesFor(run, nodeId),
+    ...(usage === undefined ? {} : { usage }),
+    ...(options.now === undefined ? { now: () => NOW } : { now: options.now }),
   });
 
   return {
     service,
+    controls,
     repository,
     memory,
     events,
     requests,
+    logs,
     async seed(nodes, edges) {
       await repository.workflows.create(scope, {
         id: workflowId,
@@ -311,6 +370,7 @@ async function build(
       for (const item of edges) await repository.edges.insert(scope, item);
     },
     run: () => service.startRun(workflowId, {}),
+    begin: () => service.beginRun(workflowId, {}),
     async nodeRunOf(run, node) {
       const rows = await repository.nodeRuns.listByRun(scope, run.id);
       const row = rows.filter((candidate) => candidate.nodeId === node.id).at(-1);
@@ -595,6 +655,68 @@ describe('TC-MEM-001 a memory agent remembers between runs', () => {
     expect(row.inputEnvelopes[0]?.context).not.toHaveProperty('memory');
     expect(row.prompt?.text).not.toContain('### Memory');
     expect(row.prompt?.text).not.toContain('user_name: Ada');
+  });
+});
+
+describe('FR-MEM-002 a memory store error after a paid call keeps what the call spent (13a review m1)', () => {
+  async function greeterFlow(h: Harness): Promise<Node> {
+    const input = inputNode();
+    const agent = agentNode('Greeter', { outputTypes: ['json'], memory: { enabled: true } });
+    const output = outputNode();
+    await h.seed([input, agent, output], [edge(input, agent), edge(agent, output)]);
+    return agent;
+  }
+
+  it('memory ops the store refuses fail the node RUN_FAILED, with its usage on the row and in the run totals', async () => {
+    reply = rememberAda;
+    const h = await build({
+      memory: (real) => ({
+        ...real,
+        async apply() {
+          throw new Error('SQLITE_FULL: database or disk is full');
+        },
+      }),
+    });
+    const agent = await greeterFlow(h);
+
+    const run = await h.run();
+
+    const row = await h.nodeRunOf(run, agent);
+    expect(row.status).toBe('FAILED');
+    expect(row.failureReason).toBe('RUN_FAILED');
+    expect(row.error?.code).toBe('memory_not_saved');
+    expect(row.usage).toMatchObject({ tokensIn: 2, tokensOut: 3 });
+    expect(row.usage.costUsd).toBeGreaterThan(0);
+    expect(row.modelUsed?.modelId).toBe('scripted');
+    expect(row).not.toHaveProperty('memoryOps');
+    expect(run.status).toBe('HALTED');
+    expect(run.haltReason).toBe('failure');
+    expect(run.totals.tokensIn).toBe(2);
+    expect(run.totals.costUsd).toBeCloseTo(row.usage.costUsd, 10);
+    expect(await h.memory.list(agent.id)).toEqual([]);
+  });
+
+  it('a lastUsedAt stamp that fails is logged and never fails the node', async () => {
+    reply = rememberAda;
+    const h = await build({
+      memory: (real) => ({
+        ...real,
+        async markUsed() {
+          throw new Error('SQLITE_BUSY: database is locked');
+        },
+      }),
+    });
+    const agent = await greeterFlow(h);
+    await h.repository.memory.upsert(scope, agent.id, 'tone', 'brief', NOW, newId);
+
+    const run = await h.run();
+
+    expect(run.status).toBe('COMPLETE');
+    const row = await h.nodeRunOf(run, agent);
+    expect(row.status).toBe('COMPLETED');
+    expect(row.inputEnvelopes[0]?.context.memory).toEqual([{ key: 'tone', value: 'brief' }]);
+    expect(row.usage).toMatchObject({ tokensIn: 2, tokensOut: 3 });
+    expect(h.logs.some((line) => line.includes('could not mark memory entries used'))).toBe(true);
   });
 });
 

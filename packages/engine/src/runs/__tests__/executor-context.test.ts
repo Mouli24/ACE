@@ -502,6 +502,44 @@ describe('FR-MEM-002 an agent with memory enabled', () => {
     expect(outcome).not.toHaveProperty('memoryOps');
   });
 
+  it('m1: a store that refuses the ops after a paid call fails the node, keeping what the call spent', async () => {
+    const h = await harness({
+      reply: () =>
+        answerJson({
+          answer: 'Hello, Ada.',
+          [MEMORY_OUTPUT_FIELD]: [{ op: 'save', key: 'user_name', value: 'Ada' }],
+        }),
+    });
+    const memory: NodeMemoryHook = {
+      enabled: true,
+      async apply() {
+        throw new Error('SQLITE_FULL: database or disk is full');
+      },
+    };
+
+    const outcome = await h.run(memoryAgent(), { memory });
+
+    expect(outcome.status).toBe('FAILED');
+    expect(outcome.failureReason).toBe('RUN_FAILED');
+    expect(outcome.error).toMatchObject({
+      kind: 'workflow',
+      code: 'memory_not_saved',
+      retryable: false,
+    });
+    expect(outcome.error?.message).toMatch(/memory/i);
+    // The call was made and paid for: its usage, model and prompt stay on the node run.
+    expect(outcome.usage).toMatchObject({ tokensIn: 2, tokensOut: 3 });
+    expect(outcome.modelUsed?.modelId).toBe('scripted');
+    expect(outcome.prompt?.text).toContain(MEMORY_PROMPT_HEADING);
+    // Nothing was saved, so nothing is recorded as applied, and nothing flows on.
+    expect(outcome).not.toHaveProperty('memoryOps');
+    expect(outcome.output).toEqual([]);
+    expect(h.events.map((event) => event.type)).toContain('node.error');
+    expect(h.events.map((event) => event.type)).not.toContain('node.output');
+    expect(h.logs.some((line) => line.includes('memory ops could not be saved'))).toBe(true);
+    expect(h.logs.join('\n')).not.toContain('Ada"');
+  });
+
   it('with memory off: no block in the prompt, and __memory is left in the output', async () => {
     const h = await harness({
       reply: () =>
