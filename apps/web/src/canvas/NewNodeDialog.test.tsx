@@ -171,6 +171,44 @@ describe('NewNodeDialog (FR-CAN-002, FR-NODE-001)', () => {
     expect(screen.getByText('No node type matches that.')).toBeInTheDocument();
   });
 
+  it('a search that leaves no kind to choose disables the CTA and Enter adds nothing', async () => {
+    const onAdd = vi.fn();
+    renderDialog({ onAdd });
+    const search = screen.getByRole('searchbox', { name: 'Search node types' });
+    const cta = () => screen.getByTestId('new-node-add');
+
+    await user.type(search, 'zzz');
+    expect(cta()).toBeDisabled();
+    // the hidden choice is not offered under another name
+    expect(cta()).toHaveTextContent('Add to canvas');
+    expect(cta()).not.toHaveTextContent(/agent/i);
+    expect(screen.getByText('Nothing to preview')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+    await user.keyboard('{Enter}');
+    expect(onAdd).not.toHaveBeenCalled();
+
+    // clearing the query re-enables it, on the choice that is visible again
+    await user.clear(search);
+    expect(cta()).toBeEnabled();
+    expect(cta()).toHaveTextContent('Add agent to canvas');
+
+    // a match among the Coming later kinds only is still nothing to add
+    await user.type(search, 'guardrail');
+    expect(visibleKinds()).toEqual(['guardrail']);
+    expect(cta()).toBeDisabled();
+    await user.keyboard('{Enter}');
+    expect(onAdd).not.toHaveBeenCalled();
+
+    // matching again makes the first visible kind the choice, and Enter adds it
+    await user.clear(search);
+    await user.type(search, 'transform');
+    expect(cta()).toBeEnabled();
+    expect(cta()).toHaveTextContent('Add transform to canvas');
+    await user.keyboard('{Enter}');
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    expect(onAdd).toHaveBeenCalledWith('transform', {});
+  });
+
   it('Escape and the overlay close it', async () => {
     const onClose = vi.fn();
     renderDialog({ onClose });

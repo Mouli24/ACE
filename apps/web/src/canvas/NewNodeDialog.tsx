@@ -204,8 +204,13 @@ function NewNodeWindow({
   const blank = useMemo(() => createNode(kind, workflowId, { x: 0, y: 0 }), [kind, workflowId]);
   const preview = applyNewNodeInit(blank, initFor(kind));
   const showsProvider = isModelKind(kind);
+
+  // the kinds the search leaves choosable; with none, nothing can be added (the old choice is hidden)
+  const choosable = choosableKinds(query.trim().toLowerCase());
+  const nothingMatches = choosable.length === 0;
+
   const accent =
-    showsProvider && provider !== undefined
+    !nothingMatches && showsProvider && provider !== undefined
       ? `var(--color-provider-${provider.type})`
       : 'var(--color-fg-soft)';
 
@@ -215,8 +220,6 @@ function NewNodeWindow({
   };
 
   /* ---------------------------------------------------------------- search and keys */
-
-  const choosable = choosableKinds(query.trim().toLowerCase());
 
   const onQuery = (value: string) => {
     setQuery(value);
@@ -289,6 +292,8 @@ function NewNodeWindow({
         // Close, Cancel, the CTA, provider and model buttons keep their own Enter
         if (target.tagName === 'BUTTON' && itemKind === undefined) return;
         event.preventDefault();
+        // a search that hides every kind leaves nothing to add, not the stale choice
+        if (itemKind === undefined && nothingMatches) return;
         add(itemKind ?? kind);
         return;
       }
@@ -480,99 +485,111 @@ function NewNodeWindow({
               <span className="absolute right-[18px] top-3.5 font-machine text-[9.5px] text-fg-faint">
                 lands at the centre of your view
               </span>
-              <div ref={makeInert} aria-hidden className="pointer-events-none">
-                <ReactFlowProvider>
-                  <NodeCardView
-                    node={preview}
-                    state="IDLE"
-                    selected={false}
-                    connectedPortIds={NO_PORTS}
-                    provider={showsProvider ? provider?.type : undefined}
-                  />
-                </ReactFlowProvider>
-              </div>
+              {nothingMatches ? (
+                <p className="m-0 font-machine text-[11px] text-fg-faint">Nothing to preview</p>
+              ) : (
+                <div ref={makeInert} aria-hidden className="pointer-events-none">
+                  <ReactFlowProvider>
+                    <NodeCardView
+                      node={preview}
+                      state="IDLE"
+                      selected={false}
+                      connectedPortIds={NO_PORTS}
+                      provider={showsProvider ? provider?.type : undefined}
+                    />
+                  </ReactFlowProvider>
+                </div>
+              )}
             </div>
 
             <div className="flex flex-col gap-[18px] overflow-y-auto px-[26px] pb-[22px] pt-5">
-              <p className="m-0 max-w-[56ch] text-[16px] leading-[1.5] text-fg-soft [text-wrap:pretty]">
-                {LONG[kind]}
-              </p>
-
-              <label className="flex flex-col gap-[7px]">
-                <span className={EYEBROW}>Name</span>
-                <Input
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder={NODE_KIND_LABEL[kind]}
-                  className="h-[42px] max-w-[420px] rounded-[12px] px-3.5 text-[17px]"
-                />
-              </label>
-
-              {showsProvider && (
+              {nothingMatches ? (
+                <p className="m-0 max-w-[56ch] text-[16px] italic leading-[1.5] text-fg-muted">
+                  Nothing to add — clear the search or try another word.
+                </p>
+              ) : (
                 <>
-                  <Section id={`${ids}-provider`} label="Provider">
-                    {providers.length === 0 ? (
-                      <p className="m-0 text-[14px] italic text-fg-muted">
-                        {providerQuery.data === undefined
-                          ? 'Loading providers…'
-                          : 'No providers yet — add one on the Providers screen.'}
-                      </p>
-                    ) : (
-                      <div className="grid grid-cols-[repeat(auto-fill,minmax(136px,1fr))] gap-2">
-                        {providers.map((each) => (
-                          <ProviderCard
-                            key={each.id}
-                            provider={each}
-                            models={byProvider.get(each.id) ?? []}
-                            chosen={each.id === provider?.id}
-                            onPick={() => pickProvider(each.id)}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </Section>
-                  {provider !== undefined && (
-                    <Section id={`${ids}-model`} label="Model">
-                      {providerModels.length === 0 ? (
-                        <p className="m-0 text-[14px] italic text-fg-muted">
-                          {models === undefined
-                            ? 'Loading models…'
-                            : `No models listed for ${provider.name} yet.`}
-                        </p>
-                      ) : (
-                        <div className="flex flex-wrap gap-1.5">
-                          {providerModels.map((each) => (
-                            <ModelChip
-                              key={each.id}
-                              model={each}
-                              chosen={each.id === model?.id}
-                              accent={accent}
-                              onPick={() => setPickedModelId(each.modelId)}
-                            />
-                          ))}
-                        </div>
+                  <p className="m-0 max-w-[56ch] text-[16px] leading-[1.5] text-fg-soft [text-wrap:pretty]">
+                    {LONG[kind]}
+                  </p>
+
+                  <label className="flex flex-col gap-[7px]">
+                    <span className={EYEBROW}>Name</span>
+                    <Input
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
+                      placeholder={NODE_KIND_LABEL[kind]}
+                      className="h-[42px] max-w-[420px] rounded-[12px] px-3.5 text-[17px]"
+                    />
+                  </label>
+
+                  {showsProvider && (
+                    <>
+                      <Section id={`${ids}-provider`} label="Provider">
+                        {providers.length === 0 ? (
+                          <p className="m-0 text-[14px] italic text-fg-muted">
+                            {providerQuery.data === undefined
+                              ? 'Loading providers…'
+                              : 'No providers yet — add one on the Providers screen.'}
+                          </p>
+                        ) : (
+                          <div className="grid grid-cols-[repeat(auto-fill,minmax(136px,1fr))] gap-2">
+                            {providers.map((each) => (
+                              <ProviderCard
+                                key={each.id}
+                                provider={each}
+                                models={byProvider.get(each.id) ?? []}
+                                chosen={each.id === provider?.id}
+                                onPick={() => pickProvider(each.id)}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </Section>
+                      {provider !== undefined && (
+                        <Section id={`${ids}-model`} label="Model">
+                          {providerModels.length === 0 ? (
+                            <p className="m-0 text-[14px] italic text-fg-muted">
+                              {models === undefined
+                                ? 'Loading models…'
+                                : `No models listed for ${provider.name} yet.`}
+                            </p>
+                          ) : (
+                            <div className="flex flex-wrap gap-1.5">
+                              {providerModels.map((each) => (
+                                <ModelChip
+                                  key={each.id}
+                                  model={each}
+                                  chosen={each.id === model?.id}
+                                  accent={accent}
+                                  onPick={() => setPickedModelId(each.modelId)}
+                                />
+                              ))}
+                            </div>
+                          )}
+                        </Section>
                       )}
-                    </Section>
+                    </>
                   )}
+
+                  <Section id={`${ids}-ports`} label="Ports">
+                    <div className="flex flex-wrap gap-1.5">
+                      {ports.map(({ port, dir }) => (
+                        <span
+                          key={port.id}
+                          className="inline-flex h-[26px] items-center gap-1.5 rounded-chip border border-border px-[11px] font-machine text-[10.5px] text-fg-soft"
+                        >
+                          {dir} {port.name}
+                          <span className="text-fg-faint">
+                            {port.dataType}
+                            {port.multi ? ' · many' : ''}
+                          </span>
+                        </span>
+                      ))}
+                    </div>
+                  </Section>
                 </>
               )}
-
-              <Section id={`${ids}-ports`} label="Ports">
-                <div className="flex flex-wrap gap-1.5">
-                  {ports.map(({ port, dir }) => (
-                    <span
-                      key={port.id}
-                      className="inline-flex h-[26px] items-center gap-1.5 rounded-chip border border-border px-[11px] font-machine text-[10.5px] text-fg-soft"
-                    >
-                      {dir} {port.name}
-                      <span className="text-fg-faint">
-                        {port.dataType}
-                        {port.multi ? ' · many' : ''}
-                      </span>
-                    </span>
-                  ))}
-                </div>
-              </Section>
             </div>
           </div>
         </div>
@@ -586,9 +603,16 @@ function NewNodeWindow({
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button data-testid="new-node-add" className="pl-3.5 pr-[18px]" onClick={() => add(kind)}>
+          <Button
+            data-testid="new-node-add"
+            className="pl-3.5 pr-[18px]"
+            disabled={nothingMatches}
+            onClick={() => add(kind)}
+          >
             <Plus className="h-3 w-3" strokeWidth={2.6} aria-hidden />
-            Add {NODE_KIND_LABEL[kind].toLowerCase()} to canvas
+            {nothingMatches
+              ? 'Add to canvas'
+              : `Add ${NODE_KIND_LABEL[kind].toLowerCase()} to canvas`}
           </Button>
         </div>
       </div>
