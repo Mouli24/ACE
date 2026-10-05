@@ -905,45 +905,95 @@ describe('§2.9 route checks', () => {
   });
 });
 
-/* Last, so it counts every run the scenarios above recorded. */
+/*
+ * Its own engine, so the counts are of exactly the runs this test makes — whatever order the
+ * scenarios above run in, or whether they run at all (13b review m9).
+ */
 describe('TC-OBS-007 health metrics', () => {
   it(
-    'the counts match the runs, node failures and verdicts the engine recorded',
+    'the counts match the runs, node failures and verdicts made on a fresh engine',
     async () => {
-      // One BLOCKED run too: a Retrieval node whose base placeholder was never rewritten.
-      const blocked = await importWorkflow(
-        e,
-        projectId,
-        fixtureWorkflow('retrieval-node.json', {}),
-      );
-      expect((await runToEnd(e, blocked.workflow.id)).status).toBe('BLOCKED');
-
-      const health = HealthMetricsSchema.parse(await e.get('/metrics/health'));
-
-      const runs = await everyRun(e);
-      const rows = (await Promise.all(runs.map((run) => nodeRunsOf(e, run.id)))).flat();
-      expect(health.runs).toEqual({
-        started: runs.length,
-        completed: runs.filter((run) => run.status === 'COMPLETE').length,
-        halted: runs.filter((run) => run.status === 'HALTED').length,
-        blocked: runs.filter((run) => run.status === 'BLOCKED').length,
-      });
-      expect(health.runs.blocked).toBeGreaterThan(0);
-      expect(health.runs.halted).toBeGreaterThan(0);
-      for (const kind of ERROR_KINDS) {
-        expect(health.nodeFailuresByKind[kind], kind).toBe(
-          rows.filter((row) => row.error?.kind === kind).length,
+      const own = await startRound5Engine();
+      try {
+        const provider = await mockProvider(own);
+        const project = await createProject(own, 'Health');
+        const agentFlow = (modelId: string) => {
+          const builder = graphBuilder(modelId);
+          const input = builder.add('input', 'Input', {
+            text: 'Say something.',
+            artifactIds: [],
+            outputTypes: ['text'],
+          });
+          const agent = builder.add(
+            'agent',
+            'Agent',
+            AgentConfigSchema.parse({
+              providerId: provider,
+              modelId,
+              instructions: 'Answer.',
+              inputTypes: ['text'],
+              outputTypes: ['text'],
+            }),
+          );
+          const output = builder.add('output', 'Output', {});
+          builder.connect(input, agent);
+          builder.connect(agent, output);
+          return builder.export();
+        };
+        // Two COMPLETE, one HALTED by an `auth` failure, one BLOCKED at pre-flight (a Retrieval
+        // node whose base placeholder was never rewritten), and verdicts from a poisoned chunk.
+        const ok = await importWorkflow(own, project, agentFlow('mock-text'));
+        const refused = await importWorkflow(own, project, agentFlow('mock-401'));
+        const blocked = await importWorkflow(
+          own,
+          project,
+          fixtureWorkflow('retrieval-node.json', {}),
         );
+        const kb = await createKb(own, project, provider, { name: 'Poisoned' });
+        await addCorpusFile(own, kb.id, 'poisoned.md');
+        await settledDocuments(own, kb.id, 1);
+        const poisoned = await importWorkflow(
+          own,
+          project,
+          fixtureWorkflow('rag-qa.json', {
+            [PLACEHOLDER.provider]: provider,
+            [PLACEHOLDER.knowledgeBase]: kb.id,
+            'What is zephyrine-protocol-7?': 'What does the marigold-vendor-checklist list?',
+          }),
+        );
+        const statuses = [
+          (await runToEnd(own, ok.workflow.id)).status,
+          (await runToEnd(own, refused.workflow.id)).status,
+          (await runToEnd(own, blocked.workflow.id)).status,
+          (await runToEnd(own, poisoned.workflow.id)).status,
+        ];
+        expect(statuses).toEqual(['COMPLETE', 'HALTED', 'BLOCKED', 'COMPLETE']);
+
+        const health = HealthMetricsSchema.parse(await own.get('/metrics/health'));
+
+        const runs = await everyRun(own);
+        const rows = (await Promise.all(runs.map((run) => nodeRunsOf(own, run.id)))).flat();
+        expect(runs).toHaveLength(4);
+        expect(health.runs).toEqual({ started: 4, completed: 2, halted: 1, blocked: 1 });
+        for (const kind of ERROR_KINDS) {
+          expect(health.nodeFailuresByKind[kind], kind).toBe(
+            rows.filter((row) => row.error?.kind === kind).length,
+          );
+        }
+        expect(health.nodeFailuresByKind.auth).toBe(1);
+        const verdicts = new Map<string, number>();
+        for (const verdict of rows.flatMap((row) => row.verdicts)) {
+          verdicts.set(verdict.checkType, (verdicts.get(verdict.checkType) ?? 0) + 1);
+        }
+        expect(health.guardrailVerdictsByType).toEqual(Object.fromEntries(verdicts));
+        expect(health.guardrailVerdictsByType['prompt_injection']).toBeGreaterThan(0);
+        const latency = health.providerLatencyMs[provider];
+        expect(latency, JSON.stringify(health)).toBeDefined();
+        expect(latency?.p50).toBeLessThanOrEqual(latency?.p95 ?? -1);
+        expect(health.since).toBe(runs.map((run) => run.startedAt).sort()[0]);
+      } finally {
+        await own.stop();
       }
-      const verdicts = new Map<string, number>();
-      for (const verdict of rows.flatMap((row) => row.verdicts)) {
-        verdicts.set(verdict.checkType, (verdicts.get(verdict.checkType) ?? 0) + 1);
-      }
-      expect(health.guardrailVerdictsByType).toEqual(Object.fromEntries(verdicts));
-      const latency = health.providerLatencyMs[providerId];
-      expect(latency, JSON.stringify(health)).toBeDefined();
-      expect(latency?.p50).toBeLessThanOrEqual(latency?.p95 ?? -1);
-      expect(health.since).toBe(runs.map((run) => run.startedAt).sort()[0]);
     },
     LONG,
   );

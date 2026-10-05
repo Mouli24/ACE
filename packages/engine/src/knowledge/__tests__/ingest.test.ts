@@ -255,7 +255,10 @@ describe('FR-RAG-003 the worker', () => {
       await h.service.addDocument(kb.id, { artifactId: h.addFile(name, name) });
     }
     h.worker.start();
-    for (let i = 0; i < 100 && !h.bus.ingest().some((e) => e.status === 'parsing'); i++) {
+    // Until the first document is in flight, against a deadline that fails loudly, not a count.
+    const deadline = Date.now() + 5000;
+    while (!h.bus.ingest().some((e) => e.status === 'parsing')) {
+      if (Date.now() > deadline) throw new Error('the first document never started parsing');
       await new Promise((resolve) => setTimeout(resolve, 1));
     }
 
