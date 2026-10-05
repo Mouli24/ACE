@@ -26,6 +26,7 @@ import {
   createNodeExecutor,
   type ExecuteNodeInput,
   type NodeExecutionOutcome,
+  type NodeContextHook,
   type NodeExecutor,
   type NodeGuardrails,
 } from '../executor.js';
@@ -239,6 +240,7 @@ async function buildHarness(options: {
 function runInput(
   harness: Harness & { guardrails?: NodeGuardrails },
   node: Node,
+  context?: NodeContextHook,
 ): Promise<NodeExecutionOutcome> {
   const input: ExecuteNodeInput = {
     runId: RUN_ID,
@@ -251,6 +253,7 @@ function runInput(
     runInputs: {},
     signal: new AbortController().signal,
     ...(harness.guardrails === undefined ? {} : { guardrails: harness.guardrails }),
+    ...(context === undefined ? {} : { context }),
   };
   return harness.executor.execute(input);
 }
@@ -537,5 +540,130 @@ describe('FR-MM-003 an Input node turns its artifactIds into media part referenc
     expect(outcome.output).toEqual([{ type: 'text', text: 'a caption' }, mediaPart]);
     // FR-MM-004: the stored part is a reference, no bytes.
     expect(JSON.stringify(outcome.output)).not.toContain('base64');
+  });
+});
+
+describe('FR-GRD-004 the context point judges a tool result before the model reads it', () => {
+  const tools = { enabled: ['echo'], maxToolCalls: 10, allowedDomains: [] };
+  /** A context hook with no context step, judging each tool result with `judge`. */
+  const judging = (
+    judge: NonNullable<NodeContextHook['toolResult']>,
+  ): NodeContextHook & { seen: string[] } => {
+    const seen: string[] = [];
+    return {
+      seen,
+      build: async (envelopes) => ({
+        kind: 'continue',
+        envelopes: [...envelopes],
+        sources: [],
+        droppedSources: [],
+        usedMemoryIds: [],
+      }),
+      async toolResult(text) {
+        seen.push(text);
+        return judge(text);
+      },
+    };
+  };
+
+  it('a block fails the node GUARDRAIL_VIOLATION, and the model never reads the result', async () => {
+    const echo = fakeTool(echoDefinition, { result: { text: 'poisoned' } });
+    const harness = await buildHarness({
+      turns: (req) => (req.toolResults?.length ? say('done') : requestEcho()),
+      tools: toolProvider([echo]),
+    });
+    const context = judging(async () => ({
+      kind: 'failed',
+      failureReason: 'GUARDRAIL_VIOLATION',
+      error: {
+        kind: 'guardrail',
+        code: 'context_injection_residue',
+        message: 'Hidden instructions remained after stripping, so a tool result was refused.',
+        retryable: false,
+      },
+    }));
+
+    const outcome = await runInput(harness, agentNode({ tools }), context);
+
+    expect(context.seen).toEqual(['{"text":"poisoned"}']);
+    expect(outcome.status).toBe('FAILED');
+    expect(outcome.failureReason).toBe('GUARDRAIL_VIOLATION');
+    expect(outcome.error?.code).toBe('context_injection_residue');
+    expect(harness.requests).toHaveLength(1);
+    expect(harness.logged[0]?.call).toMatchObject({
+      status: 'blocked',
+      resultSummary: 'Hidden instructions remained after stripping, so a tool result was refused.',
+    });
+  });
+
+  it('feeds a rewritten string result as the sanitised string, its verdicts on the outcome', async () => {
+    const echo = fakeTool(echoDefinition, { result: 'sunny [hidden]' });
+    const harness = await buildHarness({
+      turns: (req) => (req.toolResults?.length ? say('done') : requestEcho()),
+      tools: toolProvider([echo]),
+    });
+    const verdict = {
+      id: '01JBXQ8Z9KQ4R7N2VWXYZ0VRD1',
+      nodeRunId: NODE_RUN_ID,
+      point: 'context' as const,
+      checkType: 'prompt_injection' as const,
+      action: 'warn' as const,
+      passed: false,
+      reason: 'Hidden instructions found in context: 1 html_comment. (in a tool result)',
+      strippedTypes: ['html_comment' as const],
+      at: NOW,
+    };
+    const context = judging(async (text) => ({
+      kind: 'continue',
+      text: text.replace(' [hidden]', ''),
+      verdicts: [verdict],
+    }));
+
+    const outcome = await runInput(harness, agentNode({ tools }), context);
+
+    expect(outcome.status).toBe('COMPLETED');
+    expect(harness.requests[1]?.toolResults?.[0]?.result).toBe('sunny');
+    expect(outcome.prompt?.text).not.toContain('[hidden]');
+    expect(outcome.verdicts).toContainEqual(verdict);
+    expect(harness.logged[0]?.call).toMatchObject({ status: 'ok', resultSummary: 'sunny' });
+  });
+
+  it("judges a failed call's message too, and keeps a rewrite that no longer parses as text", async () => {
+    const echo = fakeTool(echoDefinition, { error: new Error('boom [hidden]') });
+    const harness = await buildHarness({
+      turns: (req) => (req.toolResults?.length ? say('recovered') : requestEcho()),
+      tools: toolProvider([echo]),
+    });
+    const context = judging(async (text) => ({
+      kind: 'continue',
+      // A rewrite that leaves the JSON unparseable is fed as the text itself.
+      text: text.replace(' [hidden]', '').slice(0, -1),
+    }));
+
+    const outcome = await runInput(harness, agentNode({ tools }), context);
+
+    expect(context.seen).toEqual(['{"error":"boom [hidden]","status":"error"}']);
+    expect(outcome.status).toBe('COMPLETED');
+    expect(harness.requests[1]?.toolResults?.[0]?.result).toBe('{"error":"boom","status":"error"');
+    expect(harness.logged[0]?.call.status).toBe('error');
+    expect(harness.logged[0]?.call.resultSummary).not.toContain('[hidden]');
+  });
+
+  it('a clean result is fed back unchanged, the same object the tool returned', async () => {
+    const returned = { text: 'echoed hi' };
+    const echo = fakeTool(echoDefinition, { result: returned });
+    const harness = await buildHarness({
+      turns: (req) => (req.toolResults?.length ? say('done') : requestEcho()),
+      tools: toolProvider([echo]),
+    });
+    const context = judging(async (text) => ({ kind: 'continue', text }));
+
+    await runInput(harness, agentNode({ tools }), context);
+
+    expect(harness.requests[1]?.toolResults?.[0]?.result).toBe(returned);
+    expect(harness.logged[0]?.call).toMatchObject({
+      status: 'ok',
+      resultSummary: '{"text":"echoed hi"}',
+    });
   });
 });
