@@ -14,12 +14,15 @@ import { createRound2Handlers, stopScenario } from '../mocks/handlers-round2';
 import { createRound3Handlers } from '../mocks/handlers-round3';
 import { createRound4Handlers } from '../mocks/handlers-round4';
 import { createRound5Handlers } from '../mocks/handlers-round5';
+import { createTaskHandlers } from '../mocks/handlers-tasks';
+import { resetMockTasks } from '../mocks/tasks';
 import { resetGraphSyncRegistry } from '../workflows/sync-registry';
 
 /** One mock engine per test file; `installMockServer()` wires the lifecycle hooks. */
 export const db = new MockDb({ persist: false });
 /** Newest round first: a round 3 route wins over a round 2 stand-in for the same path. */
 export const server = setupServer(
+  ...createTaskHandlers(db),
   ...createRound5Handlers(db),
   ...createRound4Handlers(db),
   ...createRound3Handlers(db),
@@ -39,6 +42,7 @@ export function installMockServer(): void {
   });
   beforeEach(() => {
     stopScenario();
+    resetMockTasks();
     db.reset();
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     resetGraphSyncRegistry();

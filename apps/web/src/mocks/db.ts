@@ -27,6 +27,14 @@ import {
   type Provider,
   type Run,
   type ServerFrame,
+  type Task,
+  type TaskActivity,
+  type TaskCheck,
+  type TaskDelivery,
+  type TaskExecution,
+  type TaskReview,
+  type TaskWorkspace,
+  type UpdateProjectRequest,
   type Workflow,
 } from '@ace/contracts';
 
@@ -102,8 +110,42 @@ interface Snapshot {
   kbChunks: KbChunk[];
   /** Agent long-term memory, one row per (node, key) (FR-MEM-001..004). */
   memory: MemoryEntry[];
+  /* ---- ACE parity P0 (design §2, §6) ---- */
+  /** Board tasks. `allowedActions` is recomputed on every read (`mocks/task-actions.ts`). */
+  tasks: Task[];
+  /** The highest task number each project has handed out: a deleted `#3` is never reused. */
+  taskNumbers: Record<string, number>;
+  taskWorkspaces: TaskWorkspace[];
+  taskExecutions: TaskExecution[];
+  taskChecks: TaskCheck[];
+  taskReviews: TaskReview[];
+  taskDeliveries: TaskDelivery[];
+  taskActivity: TaskActivity[];
+  /** The project folder as a Git repository, per project; absent → `repositoryOf`'s default. */
+  repositories: Record<string, MockRepository>;
   /** Artificial delay per request, for the loading-state test (TC-CAN-009). */
   latencyMs?: number;
+}
+
+/**
+ * The mock's stand-in for a project folder's Git state (ACE parity P0): no Git runs in the browser,
+ * so a repository is a branch name and a head commit. `isRepo: false` is a plain folder.
+ */
+export interface MockRepository {
+  isRepo: boolean;
+  branch: string;
+  /** Absent in a repository with no commit yet. */
+  headSha?: string;
+}
+
+/** A project folder the mock treats as not being a Git repository (e.g. `/mock/no-git/app`). */
+export function isPlainFolderPath(path: string): boolean {
+  return /no-?git|plain-folder/i.test(path);
+}
+
+/** A fake but well-formed 40-hex Git object name, stable for a given seed. */
+export function fakeSha(seed: string): string {
+  return sha256Hex(new TextEncoder().encode(seed)).slice(0, 40);
 }
 
 /** What a backup carries (round 5 §2.7): every table, never a key (FR-SYS-012, BR-07). */
@@ -159,6 +201,15 @@ function emptySnapshot(): Snapshot {
     kbDocuments: [],
     kbChunks: [],
     memory: [],
+    tasks: [],
+    taskNumbers: {},
+    taskWorkspaces: [],
+    taskExecutions: [],
+    taskChecks: [],
+    taskReviews: [],
+    taskDeliveries: [],
+    taskActivity: [],
+    repositories: {},
   };
 }
 
@@ -266,13 +317,20 @@ export class MockDb {
     return project;
   }
 
+  /**
+   * A PATCH merged into the record (D72). A `null` setup command reads as absent, so it is removed
+   * rather than stored (ACE parity P0).
+   */
   updateProject(
     id: string,
-    patch: { name?: string; lastOpenedAt?: string; maxCostPerRunUsd?: number | null },
+    patch: UpdateProjectRequest & { lastOpenedAt?: string },
   ): Project | undefined {
     const project = this.getProject(id);
     if (!project) return undefined;
-    Object.assign(project, patch, { updatedAt: now() });
+    const { setupCommand, ...rest } = patch;
+    Object.assign(project, rest, { updatedAt: now() });
+    if (setupCommand === null) delete project.setupCommand;
+    else if (setupCommand !== undefined) project.setupCommand = setupCommand;
     this.save();
     return project;
   }
@@ -285,6 +343,8 @@ export class MockDb {
     );
     for (const wf of this.state.workflows.filter((w) => w.projectId === id))
       this.deleteWorkflow(wf.id);
+    for (const task of this.state.tasks.filter((t) => t.projectId === id)) this.deleteTask(task.id);
+    delete this.state.repositories[id];
     if (this.state.settings.lastProjectId === id) delete this.state.settings.lastProjectId;
     this.save();
     return this.state.projects.length < before;
@@ -992,6 +1052,150 @@ export class MockDb {
 
   allNodeRuns(): NodeRun[] {
     return [...this.state.nodeRuns];
+  }
+
+  /* ------------------------------------------------- tasks (ACE parity P0, design §2, §6) */
+
+  listTasks(projectId: string): Task[] {
+    return this.state.tasks.filter((task) => task.projectId === projectId);
+  }
+
+  getTask(id: string): Task | undefined {
+    return this.state.tasks.find((task) => task.id === id);
+  }
+
+  /** Per project, from 1, never reused — a deleted `#3` leaves a gap, as the engine's counter does. */
+  nextTaskNumber(projectId: string): number {
+    return (this.state.taskNumbers[projectId] ?? 0) + 1;
+  }
+
+  addTask(task: Task): Task {
+    this.state.tasks.push(task);
+    this.state.taskNumbers[task.projectId] = Math.max(
+      this.state.taskNumbers[task.projectId] ?? 0,
+      task.number,
+    );
+    this.save();
+    return task;
+  }
+
+  /** Merge a patch; a key set to `undefined` is removed (a cleared reason, team or outcome). */
+  updateTask(id: string, patch: Partial<Task>): Task | undefined {
+    const task = this.getTask(id);
+    if (task === undefined) return undefined;
+    const record = task as unknown as Record<string, unknown>;
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === undefined) delete record[key];
+      else record[key] = value;
+    }
+    task.updatedAt = now();
+    this.save();
+    return task;
+  }
+
+  /** Removes the task and every row that hangs off it. */
+  deleteTask(id: string): boolean {
+    const before = this.state.tasks.length;
+    this.state.tasks = this.state.tasks.filter((task) => task.id !== id);
+    const keep = <T extends { taskId: string }>(rows: T[]): T[] =>
+      rows.filter((row) => row.taskId !== id);
+    this.state.taskWorkspaces = keep(this.state.taskWorkspaces);
+    this.state.taskExecutions = keep(this.state.taskExecutions);
+    this.state.taskChecks = keep(this.state.taskChecks);
+    this.state.taskReviews = keep(this.state.taskReviews);
+    this.state.taskDeliveries = keep(this.state.taskDeliveries);
+    this.state.taskActivity = keep(this.state.taskActivity);
+    this.save();
+    return this.state.tasks.length < before;
+  }
+
+  taskWorkspaceOf(taskId: string): TaskWorkspace | undefined {
+    return this.state.taskWorkspaces.find((workspace) => workspace.taskId === taskId);
+  }
+
+  putTaskWorkspace(workspace: TaskWorkspace): TaskWorkspace {
+    this.state.taskWorkspaces = [
+      ...this.state.taskWorkspaces.filter((row) => row.taskId !== workspace.taskId),
+      workspace,
+    ];
+    this.save();
+    return workspace;
+  }
+
+  /** Oldest first, by sequence. */
+  taskExecutionsOf(taskId: string): TaskExecution[] {
+    return this.state.taskExecutions
+      .filter((execution) => execution.taskId === taskId)
+      .sort((a, b) => a.sequence - b.sequence);
+  }
+
+  putTaskExecution(execution: TaskExecution): TaskExecution {
+    const index = this.state.taskExecutions.findIndex((row) => row.id === execution.id);
+    if (index === -1) this.state.taskExecutions.push(execution);
+    else this.state.taskExecutions[index] = execution;
+    this.save();
+    return execution;
+  }
+
+  taskChecksOf(taskId: string): TaskCheck[] {
+    return this.state.taskChecks.filter((check) => check.taskId === taskId);
+  }
+
+  addTaskCheck(check: TaskCheck): TaskCheck {
+    this.state.taskChecks.push(check);
+    this.save();
+    return check;
+  }
+
+  taskReviewsOf(taskId: string): TaskReview[] {
+    return this.state.taskReviews.filter((review) => review.taskId === taskId);
+  }
+
+  addTaskReview(review: TaskReview): TaskReview {
+    this.state.taskReviews.push(review);
+    this.save();
+    return review;
+  }
+
+  taskDeliveriesOf(taskId: string): TaskDelivery[] {
+    return this.state.taskDeliveries.filter((delivery) => delivery.taskId === taskId);
+  }
+
+  addTaskDelivery(delivery: TaskDelivery): TaskDelivery {
+    this.state.taskDeliveries.push(delivery);
+    this.save();
+    return delivery;
+  }
+
+  /** Oldest first — the order things happened in. */
+  taskActivityOf(taskId: string): TaskActivity[] {
+    return this.state.taskActivity.filter((row) => row.taskId === taskId);
+  }
+
+  addTaskActivity(row: TaskActivity): TaskActivity {
+    this.state.taskActivity.push(row);
+    this.save();
+    return row;
+  }
+
+  /**
+   * The project folder's Git state. A folder never touched is a repository on `main` with one
+   * commit, unless its path says it is a plain folder (`isPlainFolderPath`).
+   */
+  repositoryOf(projectId: string): MockRepository {
+    const stored = this.state.repositories[projectId];
+    if (stored !== undefined) return stored;
+    const project = this.getProject(projectId);
+    if (project !== undefined && isPlainFolderPath(project.folderPath)) {
+      return { isRepo: false, branch: 'main' };
+    }
+    return { isRepo: true, branch: 'main', headSha: fakeSha(`head:${projectId}`) };
+  }
+
+  setRepository(projectId: string, repository: MockRepository): MockRepository {
+    this.state.repositories[projectId] = repository;
+    this.save();
+    return repository;
   }
 
   /* ------------------------------------------------- backup (round 5 §2.7, FR-SYS-012) */

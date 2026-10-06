@@ -1,7 +1,7 @@
 import { type GuardrailCheckType } from '@ace/contracts';
 import { setupWorker } from 'msw/browser';
 
-import { MockDb } from './db';
+import { MockDb, fakeSha } from './db';
 import { seedPerfFixture } from './fixture';
 import { createFakeWebSocket, dropMockSockets } from './fake-socket';
 import { createHandlers } from './handlers';
@@ -14,6 +14,7 @@ import {
   type ChatScenario,
 } from './handlers-round4';
 import { createRound5Handlers } from './handlers-round5';
+import { createTaskHandlers } from './handlers-tasks';
 import { failNextIngest, setIngestPace } from './knowledge';
 import {
   playRound5Scenario,
@@ -26,6 +27,14 @@ import {
 } from './seeds-round5';
 import { createNode, type CanvasNodeKind } from '../nodes/factory';
 import { applyOpsWithRules } from './graph-rules';
+import {
+  completeMockWork,
+  failNextApply,
+  failNextChecks,
+  failNextWork,
+  resetMockTasks,
+  setTaskWorkPace,
+} from './tasks';
 
 declare global {
   interface Window {
@@ -118,6 +127,21 @@ declare global {
         name: Round5Scenario,
         options?: { projectId?: string; nodeId?: string },
       ): Round5ScenarioResult;
+      /**
+       * ACE parity P0: how long a task's plan or work run takes (default 800 ms); `'manual'` holds
+       * every run until `completeTaskWork` finishes it.
+       */
+      setTaskWorkPace(pace: number | 'manual'): void;
+      /** Finish a task's running plan or work run now; answers whether one was waiting. */
+      completeTaskWork(taskId: string): boolean;
+      /** The next task run fails with this reason (`false` turns it off). */
+      failNextTaskRun(reason?: string | false): void;
+      /** The next checks fail their first command. */
+      failNextChecks(on?: boolean): void;
+      /** The next Apply hits a merge conflict with this reason (`false` turns it off). */
+      failNextApply(reason?: string | false): void;
+      /** Make a project's folder a plain folder (`false`) or a Git repository on `main` (`true`). */
+      setRepository(projectId: string, isRepo: boolean): void;
       /** Connect two seeded nodes by port name through the same rules the handlers use. */
       connect(
         workflowId: string,
@@ -166,6 +190,7 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
   const db = new MockDb({ persist: true });
   restoreScenario();
   const worker = setupWorker(
+    ...createTaskHandlers(db),
     ...createRound5Handlers(db),
     ...createRound4Handlers(db),
     ...createRound3Handlers(db),
@@ -197,6 +222,7 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
       setChatScenario('chat-stream');
       setIngestPace(150);
       failNextIngest(false);
+      resetMockTasks();
     },
     setLatency(ms) {
       db.setLatency(ms);
@@ -333,6 +359,31 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
     playRound5Scenario(name, options) {
       db.load();
       return playRound5Scenario(db, name, options);
+    },
+    setTaskWorkPace(pace) {
+      setTaskWorkPace(pace);
+    },
+    completeTaskWork(taskId) {
+      db.load();
+      return completeMockWork(taskId);
+    },
+    failNextTaskRun(reason) {
+      failNextWork(reason);
+    },
+    failNextChecks(on) {
+      failNextChecks(on);
+    },
+    failNextApply(reason) {
+      failNextApply(reason);
+    },
+    setRepository(projectId, isRepo) {
+      db.load();
+      db.setRepository(
+        projectId,
+        isRepo
+          ? { isRepo: true, branch: 'main', headSha: fakeSha(`seed:${projectId}`) }
+          : { isRepo: false, branch: 'main' },
+      );
     },
     connect(workflowId, fromNodeId, fromPort, toNodeId, toPort) {
       db.load();
