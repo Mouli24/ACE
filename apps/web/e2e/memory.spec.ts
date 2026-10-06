@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-import { freshApp, nodeCard, serverGraph } from './helpers';
+import { freshApp, nodeCard, openSheet, serverGraph } from './helpers';
 import { inspect, startRun } from './round3';
 
 /**
@@ -66,7 +66,7 @@ test.describe('Agent memory (FR-MEM-001, FR-MEM-004)', () => {
 
     // FR-MEM-001: the toggle in the Agent's config
     await nodeCard(page, seeded.agentId).click();
-    await page.getByRole('tab', { name: 'Configure' }).click();
+    await openSheet(page, 'Configure');
     await page.getByLabel('Remember facts between runs').click();
     await expect
       .poll(async () => {
@@ -78,7 +78,7 @@ test.describe('Agent memory (FR-MEM-001, FR-MEM-004)', () => {
       .toEqual({ enabled: true });
 
     // the Memory tab, open while the runs happen, follows memory.updated live
-    await page.getByRole('tab', { name: 'Memory' }).click();
+    await openSheet(page, 'Memory');
     const tab = page.getByTestId('memory-tab');
     await expect(tab.getByTestId('memory-empty')).toBeVisible();
 
@@ -100,7 +100,7 @@ test.describe('Agent memory (FR-MEM-001, FR-MEM-004)', () => {
     await page.keyboard.press('Escape');
 
     // delete it, with confirmation
-    await page.getByRole('tab', { name: 'Memory' }).click();
+    await openSheet(page, 'Memory');
     await tab.getByTestId('memory-delete-user_name').click();
     await page.getByTestId('memory-confirm-delete').click();
     await expect(tab.getByTestId('memory-empty')).toBeVisible();
@@ -132,7 +132,7 @@ test.describe('Agent memory (FR-MEM-001, FR-MEM-004)', () => {
       seeded.agentId,
     );
     await nodeCard(page, seeded.agentId).click();
-    await page.getByRole('tab', { name: 'Memory' }).click();
+    await openSheet(page, 'Memory');
     const tab = page.getByTestId('memory-tab');
     await expect(tab.getByTestId('memory-entry-city')).toBeVisible();
     // memory is off for this agent: the tab says so but still lists what it kept

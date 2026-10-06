@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { flowNode, freshApp, openWorkflow, seedGraph, serverGraph } from './helpers';
+import { configureNode, freshApp, openWorkflow, seedGraph, serverGraph } from './helpers';
 
 /**
  * The Tools UI (round 4 §5 item 6, §7.1): the `/library/tools` registry and MCP servers panel
@@ -66,7 +66,7 @@ test.describe('TC-TOOL-002 tools are enabled per agent (FR-TOOL-002)', () => {
     const seeded = await seedGraph(page, ['agent']);
     const agent = seeded.nodeIds[0]!;
     await openWorkflow(page, seeded);
-    await flowNode(page, agent).click();
+    await configureNode(page, agent);
 
     const section = page.getByTestId('config-panel').getByTestId('agent-tools-section');
     await expect(section).toBeVisible();

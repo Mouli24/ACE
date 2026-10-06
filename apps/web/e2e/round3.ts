@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 
-import { closeSheet, freshApp, openSheet } from './helpers';
+import { freshApp, selectInSheet } from './helpers';
 
 // Type-only: brings the `window.__aceMock` declaration from the mock bootstrap into scope.
 import type {} from '../src/mocks/browser';
@@ -551,14 +551,9 @@ export async function openBottomTab(
   await page.getByRole('tab', { name }).click();
 }
 
-/**
- * Select a node and open the inspector on it. The sheet is closed first: open, it covers the right
- * of the Canvas, and the card may sit under it.
- */
+/** Select a node and open the inspector on it (the V2 sheet's Inspector tab). */
 export async function inspect(page: Page, nodeId: string): Promise<Locator> {
-  await closeSheet(page);
-  await page.getByTestId(`node-card-${nodeId}`).click();
-  await openSheet(page, 'Inspector');
+  await selectInSheet(page, nodeId, 'Inspector');
   const inspector = page.getByTestId('inspector');
   await expect(inspector).toBeVisible();
   return inspector;

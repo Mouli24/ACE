@@ -1,6 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import {
+  addFromDialog,
+  clearOfMinimap,
   connect,
   dragBy,
   dragConnect,
@@ -157,15 +159,16 @@ test.describe('Canvas productivity (round 5)', () => {
     const states = [await snapshot(page, seeded.workflowId)];
 
     // 1. add
-    await page.getByTestId('palette-agent').click();
+    await addFromDialog(page, 'agent');
     await settled(page, seeded.workflowId, 2);
     await quiet(page, seeded.workflowId);
     states.push(await snapshot(page, seeded.workflowId));
     const agent = states[1]!.nodes.find((n) => n.kind === 'agent')!.id;
 
     // 2. move
-    // a one-node graph opened fully zoomed in, so fit both cards into the narrower Canvas first
-    await expect(page.getByRole('complementary', { name: 'Node configuration' })).toBeVisible();
+    // a one-node graph opened fully zoomed in, so fit both cards into the Canvas first — once the
+    // new card is in place and selected (V2: selecting no longer opens its config)
+    await expect(flowNode(page, agent)).toHaveClass(/selected/);
     await page.keyboard.press('f');
     await page.waitForTimeout(400);
     await dragBy(page, nodeCard(page, agent), 120, 140);
@@ -175,7 +178,11 @@ test.describe('Canvas productivity (round 5)', () => {
     await quiet(page, seeded.workflowId);
     states.push(await snapshot(page, seeded.workflowId));
 
-    // 3. connect
+    // 3. connect — the V2 Canvas is shorter (fixed bottom panel), so the moved card can end up
+    // below its edge: fit again (a view change, not an edit) and keep the port clear of the minimap
+    await page.keyboard.press('f');
+    await page.waitForTimeout(400);
+    await clearOfMinimap(page, port(page, agent, 'in', 'text'));
     await dragConnect(page, port(page, inp, 'out', 'text'), port(page, agent, 'in', 'text'));
     await expect.poll(async () => (await snapshot(page, seeded.workflowId)).edges.length).toBe(1);
     await quiet(page, seeded.workflowId);
