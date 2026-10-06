@@ -10,9 +10,9 @@ import type {
   TaskStage,
   TaskState,
   TaskWorkspace,
-} from "@ace/contracts";
+} from '@ace/contracts';
 
-import type { Scope } from "./scope.js";
+import type { Scope } from './scope.js';
 
 /*
  * ACE parity P0 ports (docs/ACE_FEATURE_PARITY.md, D268, D269, D271): where tasks and their
@@ -27,7 +27,7 @@ import type { Scope } from "./scope.js";
 /* -------------------------------------------------------------------------- */
 
 /** A task as stored: `allowedActions` is computed from it on every read, never kept. */
-export type TaskRecord = Omit<Task, "allowedActions">;
+export type TaskRecord = Omit<Task, 'allowedActions'>;
 
 export interface TaskListFilter {
   stage?: TaskStage;
@@ -38,16 +38,9 @@ export interface TaskRepository {
   create(scope: Scope, task: TaskRecord): Promise<TaskRecord>;
   get(scope: Scope, id: Id): Promise<TaskRecord | null>;
   /** One project's tasks, newest number first. */
-  listByProject(
-    scope: Scope,
-    projectId: Id,
-    filter?: TaskListFilter,
-  ): Promise<TaskRecord[]>;
+  listByProject(scope: Scope, projectId: Id, filter?: TaskListFilter): Promise<TaskRecord[]>;
   /** Every project's tasks in these states — what start-up recovery and the capacity queue read. */
-  listByStates(
-    scope: Scope,
-    states: readonly TaskState[],
-  ): Promise<TaskRecord[]>;
+  listByStates(scope: Scope, states: readonly TaskState[]): Promise<TaskRecord[]>;
   /** Replaces the stored task with this one (same id); throws if it does not exist. */
   save(scope: Scope, task: TaskRecord): Promise<TaskRecord>;
   /** Removes the task and every row that belongs to it. `false` if it was not there. */
@@ -117,8 +110,8 @@ export interface RepoStatus {
 
 export type MergeResult =
   | { ok: true; sha: string }
-  | { ok: false; reason: "conflict"; conflicts: string[]; message: string }
-  | { ok: false; reason: "dirty" | "wrong_branch" | "failed"; message: string };
+  | { ok: false; reason: 'conflict'; conflicts: string[]; message: string }
+  | { ok: false; reason: 'dirty' | 'wrong_branch' | 'failed'; message: string };
 
 /**
  * Git on the machine. Every call runs `git` with an argument array — never a shell — and with
@@ -151,10 +144,7 @@ export interface GitPort {
    * `null` when there was nothing to commit. Uses the repository's configured identity, or
    * `ACE <ace@localhost>` when none is configured.
    */
-  commitAll(input: {
-    cwd: string;
-    message: string;
-  }): Promise<{ sha: string } | null>;
+  commitAll(input: { cwd: string; message: string }): Promise<{ sha: string } | null>;
   headSha(cwd: string): Promise<string>;
   /**
    * The files that differ between `baseSha` and HEAD — or the working tree, including untracked

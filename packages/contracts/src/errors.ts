@@ -1,8 +1,8 @@
-import { z } from "zod";
+import { z } from 'zod';
 
-import { ErrorKindSchema, type ErrorKind } from "./enums.js";
-import { IdSchema } from "./graph.js";
-import { ChatVerdictSchema } from "./guardrails.js";
+import { ErrorKindSchema, type ErrorKind } from './enums.js';
+import { IdSchema } from './graph.js';
+import { ChatVerdictSchema } from './guardrails.js';
 
 /**
  * The single error envelope every `/api/v1` response uses (round 1 §2.3, FR-SYS-006, Arch §20.1).
@@ -20,28 +20,25 @@ export type ApiError = z.infer<typeof ApiErrorSchema>;
 
 /** The error codes round 1 §2.3 uses, in the order it lists them. */
 export const ROUND_1_ERROR_CODES = [
-  "unauthorized",
-  "forbidden_origin",
-  "not_found",
-  "validation_failed",
-  "stale_version",
-  "invalid_path",
-  "unsupported_format_version",
-  "not_implemented",
-  "internal",
+  'unauthorized',
+  'forbidden_origin',
+  'not_found',
+  'validation_failed',
+  'stale_version',
+  'invalid_path',
+  'unsupported_format_version',
+  'not_implemented',
+  'internal',
 ] as const;
 
 /** Codes round 2 §2.5 adds: deleting a provider a node still references needs `?confirm=true`. */
-export const ROUND_2_ERROR_CODES = ["provider_in_use"] as const;
+export const ROUND_2_ERROR_CODES = ['provider_in_use'] as const;
 
 /**
  * Codes round 3 §2.5 adds: a control, retry or approval the run or node run is not in a state for
  * (FR-CTL-006), and deleting a guardrail policy agents still use without `?confirm=true`.
  */
-export const ROUND_3_ERROR_CODES = [
-  "invalid_run_state",
-  "policy_in_use",
-] as const;
+export const ROUND_3_ERROR_CODES = ['invalid_run_state', 'policy_in_use'] as const;
 
 /**
  * Codes round 4 §2.1 and §2.3 add: an upload over `Settings.maxUploadMb` (413, with the limit in
@@ -49,9 +46,9 @@ export const ROUND_3_ERROR_CODES = [
  * the agent's policy blocked (422, with the verdicts in `details`, FR-CHAT-008).
  */
 export const ROUND_4_ERROR_CODES = [
-  "upload_too_large",
-  "unsupported_type",
-  "guardrail_blocked",
+  'upload_too_large',
+  'unsupported_type',
+  'guardrail_blocked',
 ] as const;
 
 /**
@@ -62,15 +59,15 @@ export const ROUND_4_ERROR_CODES = [
  * refusing an operation.
  */
 export const PARITY_P0_ERROR_CODES = [
-  "invalid_task_state",
-  "stale_review",
-  "destination_changed",
-  "checks_failed",
-  "not_a_repository",
-  "already_repository",
-  "no_team",
-  "no_workspace",
-  "git_failed",
+  'invalid_task_state',
+  'stale_review',
+  'destination_changed',
+  'checks_failed',
+  'not_a_repository',
+  'already_repository',
+  'no_team',
+  'no_workspace',
+  'git_failed',
 ] as const;
 
 export const ERROR_CODES = [
@@ -149,18 +146,13 @@ export type UploadTooLargeDetails = z.infer<typeof UploadTooLargeDetailsSchema>;
 export const GuardrailBlockedDetailsSchema = z.object({
   verdicts: z.array(ChatVerdictSchema),
 });
-export type GuardrailBlockedDetails = z.infer<
-  typeof GuardrailBlockedDetailsSchema
->;
+export type GuardrailBlockedDetails = z.infer<typeof GuardrailBlockedDetailsSchema>;
 
 /**
  * Error kinds Arch §28 (repeated in CLAUDE.md §10) says are retried with backoff. Used only as the
  * default for `aceError`; a caller that knows better passes `retryable` explicitly.
  */
-const RETRYABLE_KINDS: ReadonlySet<ErrorKind> = new Set<ErrorKind>([
-  "provider",
-  "network",
-]);
+const RETRYABLE_KINDS: ReadonlySet<ErrorKind> = new Set<ErrorKind>(['provider', 'network']);
 
 export interface AceErrorOptions {
   details?: unknown;

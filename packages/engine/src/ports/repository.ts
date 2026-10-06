@@ -18,20 +18,20 @@ import type {
   Timestamp,
   ToolCall,
   Workflow,
-} from "@ace/contracts";
+} from '@ace/contracts';
 
 import type {
   ApprovalRepository,
   GuardrailPolicyRepository,
   GuardrailVerdictRepository,
-} from "./guardrail-repository.js";
+} from './guardrail-repository.js';
 import type {
   ModelRepository,
   NodeRunRepository,
   PriceTableRepository,
   ProviderRepository,
   RunRepository,
-} from "./run-repository.js";
+} from './run-repository.js';
 import type {
   KbChunkRepository,
   KbDocumentRepository,
@@ -39,8 +39,8 @@ import type {
   MemoryRepository,
   SummaryCacheRepository,
   UsageRepository,
-} from "./knowledge.js";
-import type { Scope } from "./scope.js";
+} from './knowledge.js';
+import type { Scope } from './scope.js';
 import type {
   TaskActivityRepository,
   TaskCheckRepository,
@@ -49,7 +49,7 @@ import type {
   TaskRepository,
   TaskReviewRepository,
   TaskWorkspaceRepository,
-} from "./tasks.js";
+} from './tasks.js';
 
 /**
  * One row of the append-only event log (FR-EXE-014, Arch §21.4).
@@ -77,7 +77,7 @@ export interface EngineEvent {
 }
 
 /** An event before the log has given it a `seq`. */
-export type NewEngineEvent = Omit<EngineEvent, "seq">;
+export type NewEngineEvent = Omit<EngineEvent, 'seq'>;
 
 /** Which events `listAfter` should return. */
 export interface EventFilter {
@@ -127,11 +127,7 @@ export interface ProjectRepository {
 export interface WorkflowRepository {
   create(scope: Scope, workflow: Workflow): Promise<Workflow>;
   get(scope: Scope, id: Id): Promise<Workflow | null>;
-  listByProject(
-    scope: Scope,
-    projectId: Id,
-    page: CursorQuery,
-  ): Promise<Page<Workflow>>;
+  listByProject(scope: Scope, projectId: Id, page: CursorQuery): Promise<Page<Workflow>>;
   update(
     scope: Scope,
     id: Id,
@@ -186,11 +182,7 @@ export interface EdgeRepository {
 export interface EventRepository {
   /** Appends and returns the row with the `seq` the log assigned. Never updates or deletes. */
   append(scope: Scope, event: NewEngineEvent): Promise<EngineEvent>;
-  listAfter(
-    scope: Scope,
-    afterSeq: number,
-    filter: EventFilter,
-  ): Promise<EngineEvent[]>;
+  listAfter(scope: Scope, afterSeq: number, filter: EventFilter): Promise<EngineEvent[]>;
   currentSeq(scope: Scope): Promise<number>;
 }
 
@@ -258,11 +250,7 @@ export interface McpServerRepository {
   get(scope: Scope, id: Id): Promise<McpServer | null>;
   /** Oldest first — the order the user added them. */
   list(scope: Scope): Promise<McpServer[]>;
-  updateStatus(
-    scope: Scope,
-    id: Id,
-    patch: McpServerPatch,
-  ): Promise<McpServer | null>;
+  updateStatus(scope: Scope, id: Id, patch: McpServerPatch): Promise<McpServer | null>;
   delete(scope: Scope, id: Id): Promise<boolean>;
 }
 
@@ -274,11 +262,7 @@ export interface MessageRepository {
    * combination of run, node and type, paged by cursor. Oldest first, so a reconnect that replays
    * from a cursor sees the identical order.
    */
-  query(
-    scope: Scope,
-    workflowId: Id,
-    query: MessageQuery,
-  ): Promise<Page<Message>>;
+  query(scope: Scope, workflowId: Id, query: MessageQuery): Promise<Page<Message>>;
 }
 
 export interface ChatThreadRepository {

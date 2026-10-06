@@ -1,11 +1,6 @@
-import { z } from "zod";
+import { z } from 'zod';
 
-import {
-  CHECK_COMMAND_MAX,
-  CHECK_NAME_MAX,
-  IdSchema,
-  TimestampSchema,
-} from "./graph.js";
+import { CHECK_COMMAND_MAX, CHECK_NAME_MAX, IdSchema, TimestampSchema } from './graph.js';
 
 /**
  * Tasks, task workspaces, changes, checks, reviews and deliveries — the ACE parity P0 contract
@@ -27,12 +22,12 @@ import {
 /* -------------------------------------------------------------------------- */
 
 /** What a task produces. App: changes in a workspace. Email: a draft. Document: Markdown. */
-export const TASK_TYPES = ["app", "email", "document"] as const;
+export const TASK_TYPES = ['app', 'email', 'document'] as const;
 export const TaskTypeSchema = z.enum(TASK_TYPES);
 export type TaskType = z.infer<typeof TaskTypeSchema>;
 
 /** The board's columns, in order. */
-export const TASK_STAGES = ["inbox", "plan", "work", "review", "done"] as const;
+export const TASK_STAGES = ['inbox', 'plan', 'work', 'review', 'done'] as const;
 export const TaskStageSchema = z.enum(TASK_STAGES);
 export type TaskStage = z.infer<typeof TaskStageSchema>;
 
@@ -47,48 +42,36 @@ export type TaskStage = z.infer<typeof TaskStageSchema>;
  * - `failed` — the last thing the stage tried failed; `stateReason` says what and Retry re-tries it.
  * - `done` — the task is in the Done column; `outcome` says how it got there.
  */
-export const TASK_STATES = [
-  "idle",
-  "queued",
-  "running",
-  "waiting",
-  "failed",
-  "done",
-] as const;
+export const TASK_STATES = ['idle', 'queued', 'running', 'waiting', 'failed', 'done'] as const;
 export const TaskStateSchema = z.enum(TASK_STATES);
 export type TaskState = z.infer<typeof TaskStateSchema>;
 
 /** The finish lines, by type. A task names one when it is created; it can be changed until Done. */
 export const FINISH_LINES = [
-  "review",
-  "apply_local",
-  "github_merge",
-  "accept_draft",
-  "send_email",
-  "accept_document",
+  'review',
+  'apply_local',
+  'github_merge',
+  'accept_draft',
+  'send_email',
+  'accept_document',
 ] as const;
 export const FinishLineSchema = z.enum(FINISH_LINES);
 export type FinishLine = z.infer<typeof FinishLineSchema>;
 
 export const FINISH_LINES_BY_TYPE = {
-  app: ["review", "apply_local", "github_merge"],
-  email: ["accept_draft", "send_email"],
-  document: ["accept_document"],
+  app: ['review', 'apply_local', 'github_merge'],
+  email: ['accept_draft', 'send_email'],
+  document: ['accept_document'],
 } as const satisfies Record<TaskType, readonly FinishLine[]>;
 
 export const DEFAULT_FINISH_LINE = {
-  app: "review",
-  email: "accept_draft",
-  document: "accept_document",
+  app: 'review',
+  email: 'accept_draft',
+  document: 'accept_document',
 } as const satisfies Record<TaskType, FinishLine>;
 
-export function finishLineFits(
-  type: TaskType,
-  finishLine: FinishLine,
-): boolean {
-  return (FINISH_LINES_BY_TYPE[type] as readonly FinishLine[]).includes(
-    finishLine,
-  );
+export function finishLineFits(type: TaskType, finishLine: FinishLine): boolean {
+  return (FINISH_LINES_BY_TYPE[type] as readonly FinishLine[]).includes(finishLine);
 }
 
 /**
@@ -96,31 +79,28 @@ export function finishLineFits(
  * closure that certifies nothing; `cancelled` is a task stopped for good.
  */
 export const TASK_OUTCOMES = [
-  "reviewed",
-  "applied",
-  "merged",
-  "accepted",
-  "sent",
-  "closed_unverified",
-  "cancelled",
+  'reviewed',
+  'applied',
+  'merged',
+  'accepted',
+  'sent',
+  'closed_unverified',
+  'cancelled',
 ] as const;
 export const TaskOutcomeSchema = z.enum(TASK_OUTCOMES);
 export type TaskOutcome = z.infer<typeof TaskOutcomeSchema>;
 
 /** The outcomes that mean the finish line was reached — what an *after task* trigger waits for. */
 export const VERIFIED_TASK_OUTCOMES = [
-  "reviewed",
-  "applied",
-  "merged",
-  "accepted",
-  "sent",
+  'reviewed',
+  'applied',
+  'merged',
+  'accepted',
+  'sent',
 ] as const satisfies readonly TaskOutcome[];
 
 export function isVerifiedOutcome(outcome: TaskOutcome | undefined): boolean {
-  return (
-    outcome !== undefined &&
-    (VERIFIED_TASK_OUTCOMES as readonly string[]).includes(outcome)
-  );
+  return outcome !== undefined && (VERIFIED_TASK_OUTCOMES as readonly string[]).includes(outcome);
 }
 
 /**
@@ -131,12 +111,12 @@ export function isVerifiedOutcome(outcome: TaskOutcome | undefined): boolean {
  * - `autopilot` — as assisted, and the final action runs by itself too, but only while the approval
  *   mode is Full access, neither the task nor its project is paused and the checks passed (D270).
  */
-export const TASK_AUTOMATIONS = ["manual", "assisted", "autopilot"] as const;
+export const TASK_AUTOMATIONS = ['manual', 'assisted', 'autopilot'] as const;
 export const TaskAutomationSchema = z.enum(TASK_AUTOMATIONS);
 export type TaskAutomation = z.infer<typeof TaskAutomationSchema>;
-export const DEFAULT_TASK_AUTOMATION: TaskAutomation = "assisted";
+export const DEFAULT_TASK_AUTOMATION: TaskAutomation = 'assisted';
 
-export const TASK_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
+export const TASK_PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const;
 export const TaskPrioritySchema = z.enum(TASK_PRIORITIES);
 export type TaskPriority = z.infer<typeof TaskPrioritySchema>;
 
@@ -145,20 +125,20 @@ export type TaskPriority = z.infer<typeof TaskPrioritySchema>;
  * board never guesses (the `allowedRunActions` pattern, FR-CTL-006).
  */
 export const TASK_ACTIONS = [
-  "start",
-  "plan",
-  "work",
-  "stop",
-  "retry",
-  "checks",
-  "approve",
-  "request_changes",
-  "apply",
-  "close",
-  "pause",
-  "resume",
-  "move",
-  "delete",
+  'start',
+  'plan',
+  'work',
+  'stop',
+  'retry',
+  'checks',
+  'approve',
+  'request_changes',
+  'apply',
+  'close',
+  'pause',
+  'resume',
+  'move',
+  'delete',
 ] as const;
 export const TaskActionSchema = z.enum(TASK_ACTIONS);
 export type TaskAction = z.infer<typeof TaskActionSchema>;
@@ -183,9 +163,7 @@ export const TaskLabelSchema = z.string().trim().min(1).max(TASK_LABEL_MAX);
 export const TaskLabelsSchema = z.array(TaskLabelSchema).max(TASK_LABELS_MAX);
 
 /** A full Git object name (SHA-1 or SHA-256), lowercase hex. */
-export const GitShaSchema = z
-  .string()
-  .regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/, "must be a git sha");
+export const GitShaSchema = z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/, 'must be a git sha');
 
 /* -------------------------------------------------------------------------- */
 /* Task                                                                        */
@@ -241,13 +219,7 @@ export type Task = z.infer<typeof TaskSchema>;
  * the destination; the worktree folder is removed, the branch kept. `removed` — discarded with the
  * task. `error` — it could not be created; `error` says why.
  */
-export const WORKSPACE_STATUSES = [
-  "ready",
-  "applied",
-  "merged",
-  "removed",
-  "error",
-] as const;
+export const WORKSPACE_STATUSES = ['ready', 'applied', 'merged', 'removed', 'error'] as const;
 export const WorkspaceStatusSchema = z.enum(WORKSPACE_STATUSES);
 export type WorkspaceStatus = z.infer<typeof WorkspaceStatusSchema>;
 
@@ -275,16 +247,11 @@ export type TaskWorkspace = z.infer<typeof TaskWorkspaceSchema>;
 /* Executions — the runs a task made                                           */
 /* -------------------------------------------------------------------------- */
 
-export const EXECUTION_KINDS = ["plan", "work"] as const;
+export const EXECUTION_KINDS = ['plan', 'work'] as const;
 export const ExecutionKindSchema = z.enum(EXECUTION_KINDS);
 export type ExecutionKind = z.infer<typeof ExecutionKindSchema>;
 
-export const EXECUTION_STATUSES = [
-  "running",
-  "completed",
-  "failed",
-  "stopped",
-] as const;
+export const EXECUTION_STATUSES = ['running', 'completed', 'failed', 'stopped'] as const;
 export const ExecutionStatusSchema = z.enum(EXECUTION_STATUSES);
 export type ExecutionStatus = z.infer<typeof ExecutionStatusSchema>;
 
@@ -317,7 +284,7 @@ export type TaskExecution = z.infer<typeof TaskExecutionSchema>;
 
 /* `CheckCommandSchema` and its bounds live in graph.ts, beside the project that carries them. */
 
-export const CHECK_STATUSES = ["passed", "failed", "error", "timeout"] as const;
+export const CHECK_STATUSES = ['passed', 'failed', 'error', 'timeout'] as const;
 export const CheckStatusSchema = z.enum(CHECK_STATUSES);
 export type CheckStatus = z.infer<typeof CheckStatusSchema>;
 
@@ -342,7 +309,7 @@ export type TaskCheck = z.infer<typeof TaskCheckSchema>;
 /* Reviews and deliveries                                                      */
 /* -------------------------------------------------------------------------- */
 
-export const REVIEW_DECISIONS = ["approved", "changes_requested"] as const;
+export const REVIEW_DECISIONS = ['approved', 'changes_requested'] as const;
 export const ReviewDecisionSchema = z.enum(REVIEW_DECISIONS);
 export type ReviewDecision = z.infer<typeof ReviewDecisionSchema>;
 
@@ -359,12 +326,12 @@ export const TaskReviewSchema = z.strictObject({
 export type TaskReview = z.infer<typeof TaskReviewSchema>;
 
 export const DELIVERY_KINDS = [
-  "apply_local",
-  "github_pr",
-  "github_merge",
-  "document_accept",
-  "email_accept",
-  "email_send",
+  'apply_local',
+  'github_pr',
+  'github_merge',
+  'document_accept',
+  'email_accept',
+  'email_send',
 ] as const;
 export const DeliveryKindSchema = z.enum(DELIVERY_KINDS);
 export type DeliveryKind = z.infer<typeof DeliveryKindSchema>;
@@ -373,7 +340,7 @@ export type DeliveryKind = z.infer<typeof DeliveryKindSchema>;
  * `uncertain` is a delivery the destination did not confirm either way (ACE "Check Gmail"): it is
  * never retried automatically, so it cannot become a duplicate.
  */
-export const DELIVERY_STATUSES = ["succeeded", "failed", "uncertain"] as const;
+export const DELIVERY_STATUSES = ['succeeded', 'failed', 'uncertain'] as const;
 export const DeliveryStatusSchema = z.enum(DELIVERY_STATUSES);
 export type DeliveryStatus = z.infer<typeof DeliveryStatusSchema>;
 
@@ -397,31 +364,31 @@ export type TaskDelivery = z.infer<typeof TaskDeliverySchema>;
 /* -------------------------------------------------------------------------- */
 
 export const TASK_ACTIVITY_KINDS = [
-  "created",
-  "edited",
-  "stage_changed",
-  "queued",
-  "workspace_ready",
-  "workspace_failed",
-  "run_started",
-  "run_completed",
-  "run_failed",
-  "run_stopped",
-  "waiting",
-  "resumed",
-  "committed",
-  "checks_started",
-  "checks_passed",
-  "checks_failed",
-  "approved",
-  "changes_requested",
-  "delivered",
-  "delivery_failed",
-  "closed",
-  "paused",
-  "unpaused",
-  "retried",
-  "error",
+  'created',
+  'edited',
+  'stage_changed',
+  'queued',
+  'workspace_ready',
+  'workspace_failed',
+  'run_started',
+  'run_completed',
+  'run_failed',
+  'run_stopped',
+  'waiting',
+  'resumed',
+  'committed',
+  'checks_started',
+  'checks_passed',
+  'checks_failed',
+  'approved',
+  'changes_requested',
+  'delivered',
+  'delivery_failed',
+  'closed',
+  'paused',
+  'unpaused',
+  'retried',
+  'error',
 ] as const;
 export const TaskActivityKindSchema = z.enum(TASK_ACTIVITY_KINDS);
 export type TaskActivityKind = z.infer<typeof TaskActivityKindSchema>;
@@ -443,12 +410,12 @@ export type TaskActivity = z.infer<typeof TaskActivitySchema>;
 /* -------------------------------------------------------------------------- */
 
 export const CHANGE_STATUSES = [
-  "added",
-  "modified",
-  "deleted",
-  "renamed",
-  "copied",
-  "type_changed",
+  'added',
+  'modified',
+  'deleted',
+  'renamed',
+  'copied',
+  'type_changed',
 ] as const;
 export const ChangeStatusSchema = z.enum(CHANGE_STATUSES);
 export type ChangeStatus = z.infer<typeof ChangeStatusSchema>;
@@ -514,7 +481,7 @@ export type TaskDetail = z.infer<typeof TaskDetailSchema>;
 /* -------------------------------------------------------------------------- */
 
 /** Where a new task goes: captured in the Inbox, or started at once. */
-export const TASK_START_MODES = ["inbox", "now"] as const;
+export const TASK_START_MODES = ['inbox', 'now'] as const;
 export const TaskStartModeSchema = z.enum(TASK_START_MODES);
 export type TaskStartMode = z.infer<typeof TaskStartModeSchema>;
 
@@ -522,14 +489,11 @@ const finishLineMatchesType = (
   body: { type?: TaskType; finishLine?: FinishLine },
   ctx: z.RefinementCtx,
 ): void => {
-  if (
-    body.finishLine !== undefined &&
-    !finishLineFits(body.type ?? "app", body.finishLine)
-  ) {
+  if (body.finishLine !== undefined && !finishLineFits(body.type ?? 'app', body.finishLine)) {
     ctx.addIssue({
-      code: "custom",
-      path: ["finishLine"],
-      message: `A ${body.type ?? "app"} task cannot finish with ${body.finishLine}.`,
+      code: 'custom',
+      path: ['finishLine'],
+      message: `A ${body.type ?? 'app'} task cannot finish with ${body.finishLine}.`,
     });
   }
 };
@@ -569,7 +533,7 @@ export const UpdateTaskRequestSchema = z.strictObject({
   priority: TaskPrioritySchema.optional(),
   labels: TaskLabelsSchema.optional(),
   runChecks: z.boolean().optional(),
-  stage: z.enum(["inbox", "plan", "work", "review"]).optional(),
+  stage: z.enum(['inbox', 'plan', 'work', 'review']).optional(),
 });
 export type UpdateTaskRequest = z.infer<typeof UpdateTaskRequestSchema>;
 
@@ -590,11 +554,11 @@ export const ReviewTaskRequestSchema = z
     headSha: GitShaSchema.optional(),
   })
   .superRefine((body, ctx) => {
-    if (body.decision === "changes_requested" && body.note === undefined) {
+    if (body.decision === 'changes_requested' && body.note === undefined) {
       ctx.addIssue({
-        code: "custom",
-        path: ["note"],
-        message: "Say what should change.",
+        code: 'custom',
+        path: ['note'],
+        message: 'Say what should change.',
       });
     }
   });
@@ -629,8 +593,8 @@ export const TaskListQuerySchema = z.strictObject({
   q: z.string().trim().min(1).max(200).optional(),
   label: TaskLabelSchema.optional(),
   attention: z
-    .enum(["true", "false"])
-    .transform((value) => value === "true")
+    .enum(['true', 'false'])
+    .transform((value) => value === 'true')
     .optional(),
 });
 export type TaskListQuery = z.infer<typeof TaskListQuerySchema>;
@@ -643,14 +607,12 @@ export type TaskListResponse = z.infer<typeof TaskListResponseSchema>;
 export const TaskActivityListResponseSchema = z.strictObject({
   items: z.array(TaskActivitySchema),
 });
-export type TaskActivityListResponse = z.infer<
-  typeof TaskActivityListResponseSchema
->;
+export type TaskActivityListResponse = z.infer<typeof TaskActivityListResponseSchema>;
 
 /** Whether a task is waiting on a person — the board's *Needs attention* filter. */
-export function needsAttention(task: Pick<Task, "stage" | "state">): boolean {
-  if (task.state === "waiting" || task.state === "failed") return true;
-  return task.stage === "review" && task.state === "idle";
+export function needsAttention(task: Pick<Task, 'stage' | 'state'>): boolean {
+  if (task.state === 'waiting' || task.state === 'failed') return true;
+  return task.stage === 'review' && task.state === 'idle';
 }
 
 /* -------------------------------------------------------------------------- */
