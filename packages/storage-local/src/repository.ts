@@ -1,10 +1,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 import {
+  CheckCommandSchema,
   EdgeSchema,
   NodeSchema,
   SettingsSchema,
   THREAD_EVENT_TYPES,
+  type CheckCommand,
   type CursorQuery,
   type Edge,
   type Id,
@@ -47,6 +49,13 @@ import type {
   Repository,
   Scope,
   SettingsRepository,
+  TaskActivityRepository,
+  TaskCheckRepository,
+  TaskDeliveryRepository,
+  TaskExecutionRepository,
+  TaskRepository,
+  TaskReviewRepository,
+  TaskWorkspaceRepository,
   WorkflowRepository,
 } from '@ace/engine';
 import { namesKnowledgeBase } from '@ace/engine';
@@ -90,9 +99,18 @@ import {
   createProviderRepository,
   createRunRepository,
 } from './repository-runs.js';
+import {
+  createTaskActivityRepository,
+  createTaskCheckRepository,
+  createTaskDeliveryRepository,
+  createTaskExecutionRepository,
+  createTaskRepository,
+  createTaskReviewRepository,
+  createTaskWorkspaceRepository,
+} from './repository-tasks.js';
 import type * as schema from './schema.js';
 import { edges, events, nodes, projects, settings, workflows } from './schema.js';
-import { toJsonColumn } from './secret-guard.js';
+import { assertNoSecrets, toJsonColumn } from './secret-guard.js';
 
 type Db = BetterSQLite3Database<typeof schema>;
 
@@ -126,6 +144,9 @@ type NodeRow = typeof nodes.$inferSelect;
 type EdgeRow = typeof edges.$inferSelect;
 type EventRow = typeof events.$inferSelect;
 
+/** A project's check commands, read through the contract so a drifted row fails on read (D271). */
+const CheckCommandsSchema = CheckCommandSchema.array();
+
 function toProject(row: ProjectRow): Project {
   return {
     id: row.id,
@@ -134,9 +155,51 @@ function toProject(row: ProjectRow): Project {
     ...(row.lastOpenedAt === null ? {} : { lastOpenedAt: row.lastOpenedAt }),
     // A cap that was never set and one that was removed read the same: no cap (D72).
     ...(row.maxCostPerRunUsd === null ? {} : { maxCostPerRunUsd: row.maxCostPerRunUsd }),
+    // ACE parity P0 Build settings (D269, D271). Each reads absent when it is the default — not
+    // paused, the default capacity, no checks, no setup — as the contract has it, so a project
+    // written before them reads back exactly as it was written.
+    ...(row.paused ? { paused: true } : {}),
+    ...(row.buildCapacity === null ? {} : { buildCapacity: row.buildCapacity }),
+    ...(row.checkCommands === null
+      ? {}
+      : { checkCommands: CheckCommandsSchema.parse(JSON.parse(row.checkCommands)) }),
+    ...(row.setupCommand === null ? {} : { setupCommand: row.setupCommand }),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+/**
+ * What `projects.update` changes: the port's patch and a project's Build settings (ACE parity P0,
+ * D269, D271). `undefined` leaves a field as it is; `null` removes the cost cap or clears the setup
+ * command (D72).
+ */
+export interface ProjectPatch {
+  name?: string;
+  lastOpenedAt?: Timestamp;
+  maxCostPerRunUsd?: number | null;
+  paused?: boolean;
+  buildCapacity?: number;
+  checkCommands?: CheckCommand[];
+  setupCommand?: string | null;
+  updatedAt: Timestamp;
+}
+
+/** The projects repository this adapter provides: the port's, taking the whole `ProjectPatch`. */
+export interface SqliteProjectRepository extends ProjectRepository {
+  update(scope: Scope, id: Id, patch: ProjectPatch): Promise<Project | null>;
+}
+
+/** A check-command list as its JSON column, through the secret guard (BR-07). */
+function checkCommandsColumn(id: Id, commands: CheckCommand[]): string {
+  return toJsonColumn(commands, `project(${id}).checkCommands`);
+}
+
+/** A plain text column a person typed a command line into gets the guard a JSON column gets. */
+function setupCommandColumn(id: Id, command: string | null | undefined): string | null {
+  if (command === null || command === undefined) return null;
+  assertNoSecrets(command, `project(${id}).setupCommand`);
+  return command;
 }
 
 function toWorkflow(row: WorkflowRow): Workflow {
@@ -246,6 +309,13 @@ export const GATED_REPOSITORIES = [
   'memory',
   'summaryCache',
   'usage',
+  'tasks',
+  'taskWorkspaces',
+  'taskExecutions',
+  'taskChecks',
+  'taskReviews',
+  'taskDeliveries',
+  'taskActivity',
 ] as const satisfies readonly Exclude<keyof Repository, 'transaction'>[];
 
 type GatedRepository = (typeof GATED_REPOSITORIES)[number];
@@ -306,6 +376,15 @@ export class SqliteRepository implements Repository {
   readonly summaryCache: SummaryCacheRepository;
   readonly usage: UsageRepository;
 
+  /* ACE parity P0 (D267–D271). Optional on the port (D218's pattern); all implemented here. */
+  readonly tasks: TaskRepository;
+  readonly taskWorkspaces: TaskWorkspaceRepository;
+  readonly taskExecutions: TaskExecutionRepository;
+  readonly taskChecks: TaskCheckRepository;
+  readonly taskReviews: TaskReviewRepository;
+  readonly taskDeliveries: TaskDeliveryRepository;
+  readonly taskActivity: TaskActivityRepository;
+
   constructor(db: Db, sqlite: BetterSqlite3.Database, options: SqliteRepositoryOptions = {}) {
     this.#db = db;
     this.#sqlite = sqlite;
@@ -344,6 +423,16 @@ export class SqliteRepository implements Repository {
     this.summaryCache = createSummaryCacheRepository(db, sqlite);
     this.usage = createUsageRepository(sqlite);
 
+    // ACE parity P0. Each write is one statement, and a task delete takes its rows with it through
+    // the foreign keys, so none of them needs a transaction of its own.
+    this.tasks = createTaskRepository(db);
+    this.taskWorkspaces = createTaskWorkspaceRepository(db);
+    this.taskExecutions = createTaskExecutionRepository(db);
+    this.taskChecks = createTaskCheckRepository(db);
+    this.taskReviews = createTaskReviewRepository(db);
+    this.taskDeliveries = createTaskDeliveryRepository(db);
+    this.taskActivity = createTaskActivityRepository(db);
+
     // The gate (NFR-REL-02). Every repository is composed twice: as built, for a transaction body,
     // which holds the connection; and gated, for everyone else, so a call that is not part of the
     // work holding the connection waits for it to finish instead of landing inside it.
@@ -378,6 +467,13 @@ export class SqliteRepository implements Repository {
       memory: this.memory,
       summaryCache: this.summaryCache,
       usage: this.usage,
+      tasks: this.tasks,
+      taskWorkspaces: this.taskWorkspaces,
+      taskExecutions: this.taskExecutions,
+      taskChecks: this.taskChecks,
+      taskReviews: this.taskReviews,
+      taskDeliveries: this.taskDeliveries,
+      taskActivity: this.taskActivity,
     };
     this.#owner = owner;
 
@@ -477,7 +573,7 @@ export class SqliteRepository implements Repository {
     });
   }
 
-  readonly projects: ProjectRepository = {
+  readonly projects: SqliteProjectRepository = {
     /**
      * The project and its default guardrail policy, in one transaction (FR-GRD-018, D10).
      *
@@ -498,6 +594,13 @@ export class SqliteRepository implements Repository {
             folderPath: project.folderPath,
             lastOpenedAt: project.lastOpenedAt ?? null,
             maxCostPerRunUsd: project.maxCostPerRunUsd ?? null,
+            paused: project.paused ?? false,
+            buildCapacity: project.buildCapacity ?? null,
+            checkCommands:
+              project.checkCommands === undefined
+                ? null
+                : checkCommandsColumn(project.id, project.checkCommands),
+            setupCommand: setupCommandColumn(project.id, project.setupCommand),
             createdAt: project.createdAt,
             updatedAt: project.updatedAt,
           })
@@ -536,16 +639,7 @@ export class SqliteRepository implements Repository {
       return paginate(rows.map(toProject), page.limit, (project) => project.id);
     },
 
-    update: async (
-      scope: Scope,
-      id: Id,
-      patch: {
-        name?: string;
-        lastOpenedAt?: Timestamp;
-        maxCostPerRunUsd?: number | null;
-        updatedAt: Timestamp;
-      },
-    ) => {
+    update: async (scope: Scope, id: Id, patch: ProjectPatch) => {
       this.#db
         .update(projects)
         .set({
@@ -555,6 +649,14 @@ export class SqliteRepository implements Repository {
           ...(patch.maxCostPerRunUsd === undefined
             ? {}
             : { maxCostPerRunUsd: patch.maxCostPerRunUsd }),
+          ...(patch.paused === undefined ? {} : { paused: patch.paused }),
+          ...(patch.buildCapacity === undefined ? {} : { buildCapacity: patch.buildCapacity }),
+          ...(patch.checkCommands === undefined
+            ? {}
+            : { checkCommands: checkCommandsColumn(id, patch.checkCommands) }),
+          ...(patch.setupCommand === undefined
+            ? {}
+            : { setupCommand: setupCommandColumn(id, patch.setupCommand) }),
           updatedAt: patch.updatedAt,
         })
         .where(and(eq(projects.workspaceId, scope.workspaceId), eq(projects.id, id)))

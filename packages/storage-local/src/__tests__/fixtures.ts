@@ -1,5 +1,5 @@
-import { LOCAL_SCOPE, newId, type Repository } from '@ace/engine';
-import type { Edge, Node, Project, Workflow } from '@ace/contracts';
+import { LOCAL_SCOPE, newId, type Repository, type TaskRecord } from '@ace/engine';
+import type { Edge, Node, Project, TaskActivity, Workflow } from '@ace/contracts';
 import type BetterSqlite3 from 'better-sqlite3';
 
 import { buildDefaultPolicy } from '../default-policy.js';
@@ -102,5 +102,44 @@ export function makeEdge(workflowId: string, from: Node, to: Node): Edge {
     kind: 'data',
     from: { nodeId: from.id, portId: `${from.id}:out:text` },
     to: { nodeId: to.id, portId: `${to.id}:in:text` },
+  };
+}
+
+/** A task as the store keeps it (ACE parity P0): every optional field absent. */
+export function makeTask(projectId: string, overrides: Partial<TaskRecord> = {}): TaskRecord {
+  return {
+    id: newId(),
+    projectId,
+    number: 1,
+    title: 'Add a health check',
+    brief: 'Expose GET /health answering 200.',
+    type: 'app',
+    stage: 'inbox',
+    state: 'idle',
+    finishLine: 'review',
+    automation: 'assisted',
+    priority: 'normal',
+    labels: [],
+    plan: '',
+    acceptance: '',
+    runChecks: true,
+    paused: false,
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+  };
+}
+
+export function makeTaskActivity(
+  taskId: string,
+  overrides: Partial<TaskActivity> = {},
+): TaskActivity {
+  return {
+    id: newId(),
+    taskId,
+    kind: 'created',
+    message: 'Task created.',
+    at: NOW,
+    ...overrides,
   };
 }

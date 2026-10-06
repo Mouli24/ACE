@@ -403,6 +403,13 @@ const PORT_MEMBERS = {
   memory: true,
   summaryCache: true,
   usage: true,
+  tasks: true,
+  taskWorkspaces: true,
+  taskExecutions: true,
+  taskChecks: true,
+  taskReviews: true,
+  taskDeliveries: true,
+  taskActivity: true,
 } as const satisfies Record<keyof Repository, true>;
 
 /** The port's repositories the adapter has: every member but `transaction`, which is the gate. */

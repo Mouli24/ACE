@@ -174,6 +174,8 @@ describe('D267–D271 the P0 migration applies on an X1 database and is recorded
 
     const repository = new SqliteRepository(after.db, after.sqlite);
     expect(await repository.projects.get(scope, project.id)).toEqual(project);
+    expect(await repository.tasks.listByProject(scope, project.id)).toEqual([]);
+    expect(await repository.tasks.nextNumber(scope, project.id)).toBe(1);
     after.sqlite.close();
   });
 
