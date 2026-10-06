@@ -19,6 +19,7 @@ import {
   UpdateProviderRequestSchema,
   UpdateWorkflowRequestSchema,
   artifactETag,
+  cliPatchError,
   type Id,
   type McpServer,
   type MessageQuery,
@@ -529,6 +530,12 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
    */
   api.get('/providers/detect', async (c) => c.json(await providers(c).detect()));
 
+  /** X1 (FR-PRV-008): the terminal scan. Three segments, so `/providers/:id` never swallows it. */
+  api.get('/providers/detect/clis', async (c) => {
+    const service = providers(c);
+    return c.json(service.detectClis === undefined ? { items: [] } : await service.detectClis());
+  });
+
   // Wrapped like every other collection (`/projects`, `/models`, `/workflows/:id/runs`); D64.
   api.get('/providers', async (c) => c.json({ items: await providers(c).list() }));
 
@@ -545,6 +552,12 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
 
   api.patch('/providers/:id', async (c) => {
     const patch = UpdateProviderRequestSchema.parse(await readJson(c));
+    const existing = await providers(c).get(c.req.param('id'));
+    if (existing === null) throw notFound(`provider ${c.req.param('id')}`);
+    // A patch carries no type, so whether a key or a permission fits is decided by the stored row.
+    const misfit = cliPatchError(existing.type, patch);
+    if (misfit !== undefined) throw new HttpError('invalid_config', 'validation_failed', misfit);
+
     const provider = await providers(c).update(c.req.param('id'), patch);
     if (provider === null) throw notFound(`provider ${c.req.param('id')}`);
     return c.json(provider);

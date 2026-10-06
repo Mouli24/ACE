@@ -1,4 +1,7 @@
 import {
+  DEFAULT_CLI_PERMISSION,
+  isCliProviderType,
+  type CliDetectResponse,
   type CreateProviderRequest,
   type Id,
   type Model,
@@ -75,6 +78,8 @@ export interface ProviderService {
   refreshModels(id: Id): Promise<{ models: Model[]; refreshedAt: string }>;
   listModels(query: ModelQuery): Promise<Model[]>;
   detect(): Promise<ProviderDetectResponse>;
+  /** X1 (FR-PRV-008): the terminal scan — installed, version and sign-in per CLI. */
+  detectClis?(): Promise<CliDetectResponse>;
 
   /** The live adapter for a stored provider — built fresh so a rotated key takes effect. */
   adapterFor(id: Id): Promise<ProviderAdapter>;
@@ -171,6 +176,9 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         // A provider is UNKNOWN until something has actually asked it (Arch §19.3).
         status: 'UNKNOWN',
         concurrency: input.concurrency,
+        ...(isCliProviderType(input.type)
+          ? { cliPermission: input.cliPermission ?? DEFAULT_CLI_PERMISSION }
+          : {}),
         createdAt: timestamp,
         updatedAt: timestamp,
       };
@@ -203,6 +211,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         ...(patch.name === undefined ? {} : { name: patch.name }),
         ...(patch.baseUrl === undefined ? {} : { baseUrl: patch.baseUrl }),
         ...(patch.concurrency === undefined ? {} : { concurrency: patch.concurrency }),
+        ...(patch.cliPermission === undefined ? {} : { cliPermission: patch.cliPermission }),
         ...(patch.apiKey === undefined ? {} : { keySet: true }),
         updatedAt: now(),
       });
@@ -347,6 +356,8 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     listModels: (query) => repository.models.list(scope, query),
 
     detect: () => factory.detect(),
+
+    detectClis: async () => (await factory.detectClis?.()) ?? { items: [] },
 
     async adapterFor(id) {
       const provider = await load(id);
