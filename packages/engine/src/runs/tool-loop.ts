@@ -51,6 +51,8 @@ export interface ToolRunContext {
   runId: Id;
   /** `<projectFolder>/.ace/sandbox/<runId>/` — the only folder a tool may touch (NFR-SEC-03). */
   sandboxDir: string;
+  /** X1: the project folder the run works in — the only folder the project tools may touch. */
+  projectDir?: string;
   /** Aborted when the run is stopped, so a tool cancels within the 2 s Stop budget (FR-CTL-003). */
   signal: AbortSignal;
 }

@@ -1682,7 +1682,7 @@ describe('FR-GRD-004 a tool result passes the context guard before the model rea
     expect(run.status).toBe('COMPLETE');
     expect(h.requests).toHaveLength(2);
     expect(h.requests[1]?.toolResults).toEqual([
-      { callId: '01JBXQ8Z9KQ4R7N2VWXYZ0CAL1', name: 'echo', result: { text: 'Weather: sunny. ' } },
+      { callId: '01JBXQ8Z9KQ4R7N2VWXYZ0CAL1', name: 'echo', args: {}, result: { text: 'Weather: sunny. ' } },
     ]);
     const row = await h.nodeRunOf(run, agent);
     expect(row.prompt?.text).not.toContain('ignore previous instructions');
@@ -1699,7 +1699,7 @@ describe('FR-GRD-004 a tool result passes the context guard before the model rea
 
     expect(run.status).toBe('COMPLETE');
     expect(h.requests[1]?.toolResults).toEqual([
-      { callId: '01JBXQ8Z9KQ4R7N2VWXYZ0CAL1', name: 'echo', result: { text: 'Weather: sunny.' } },
+      { callId: '01JBXQ8Z9KQ4R7N2VWXYZ0CAL1', name: 'echo', args: {}, result: { text: 'Weather: sunny.' } },
     ]);
     expect(recorded).toEqual([]);
   });
