@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 
-import { freshApp } from './helpers';
+import { closeSheet, freshApp, openSheet } from './helpers';
 
 // Type-only: brings the `window.__aceMock` declaration from the mock bootstrap into scope.
 import type {} from '../src/mocks/browser';
@@ -526,9 +526,12 @@ export async function stillAllows(page: Page, workflowId: string, action: string
   ).toContain(action);
 }
 
-/** `exact`, because the run bar's own "Restart" contains "start" (D-031). */
+/**
+ * `exact`, because the run bar's own "Restart" contains "start" (D-031). The V2 button shows
+ * "Run"; its accessible name is "Start run" (D259).
+ */
 export const startRun = (page: Page): Locator =>
-  page.getByTestId('run-bar').getByRole('button', { name: 'Start', exact: true });
+  page.getByTestId('run-bar').getByRole('button', { name: 'Start run', exact: true });
 
 export const runStatus = (page: Page): Locator => page.getByTestId('run-status');
 
@@ -540,7 +543,7 @@ export async function stopRun(page: Page): Promise<void> {
   await confirm.getByTestId('stop-confirm-stop').click();
 }
 
-/** Open one of the bottom pane's tabs (Validation · Events · Errors). */
+/** Open one of the bottom pane's tabs (Validation · Events · Errors; V2 names carry a count). */
 export async function openBottomTab(
   page: Page,
   name: 'Validation' | 'Events' | 'Errors',
@@ -548,10 +551,14 @@ export async function openBottomTab(
   await page.getByRole('tab', { name }).click();
 }
 
-/** Select a node and open the inspector on it. */
+/**
+ * Select a node and open the inspector on it. The sheet is closed first: open, it covers the right
+ * of the Canvas, and the card may sit under it.
+ */
 export async function inspect(page: Page, nodeId: string): Promise<Locator> {
+  await closeSheet(page);
   await page.getByTestId(`node-card-${nodeId}`).click();
-  await page.getByRole('tab', { name: 'Inspector' }).click();
+  await openSheet(page, 'Inspector');
   const inspector = page.getByTestId('inspector');
   await expect(inspector).toBeVisible();
   return inspector;

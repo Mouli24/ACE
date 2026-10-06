@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { freshApp, nodeCard, serverGraph } from './helpers';
+import { freshApp, nodeCard, openSheet, serverGraph } from './helpers';
 import { enginePolicies, inspect, openRound3, seedShape, setNodePolicy, startRun } from './round3';
 
 /**
@@ -159,6 +159,7 @@ test.describe('Guardrail policies (FR-GRD-001/011/018, TC-GRD-001/016)', () => {
     await page.goto(`/projects/${seeded.projectId}/workflows/${seeded.workflowId}`);
     await expect(page.getByTestId('canvas')).toBeVisible();
     await nodeCard(page, seeded.agentIds[0]!).click();
+    await openSheet(page, 'Configure');
 
     const panel = page.getByTestId('config-panel');
     const picker = panel.getByLabel('Guardrail policy');
@@ -225,6 +226,7 @@ test.describe('Guardrail policies (FR-GRD-001/011/018, TC-GRD-001/016)', () => {
     await page.goto(`/projects/${seeded.projectId}/workflows/${seeded.workflowId}`);
     await expect(page.getByTestId('canvas')).toBeVisible();
     await nodeCard(page, seeded.agentIds[0]!).click();
+    await openSheet(page, 'Configure');
     const picker = page.getByTestId('config-panel').getByLabel('Guardrail policy');
     await picker.click();
     await page.getByRole('option', { name: `${strict.name} · version ${strict.version}` }).click();

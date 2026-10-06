@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-import { freshApp, nodeCard } from './helpers';
+import { freshApp, nodeCard, openSheet } from './helpers';
 
 // Type-only: brings `window.__aceMock` into scope.
 import type {} from '../src/mocks/browser';
@@ -35,10 +35,11 @@ async function openRunnable(
 
 /*
  * `exact` matters from round 3: the run bar now also holds Pause · Resume · Stop · Restart, and
- * "Restart" contains "start", so a substring match resolves to two buttons (D-031).
+ * "Restart" contains "start", so a substring match resolves to two buttons (D-031). The V2
+ * button shows "Run"; its accessible name is "Start run" (D259).
  */
 const start = (page: Page) =>
-  page.getByTestId('run-bar').getByRole('button', { name: 'Start', exact: true });
+  page.getByTestId('run-bar').getByRole('button', { name: 'Start run', exact: true });
 
 test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
   test('TC-EXE-007 + TC-EXE-008: streamed text lands on the card and the states are distinct', async ({
@@ -48,9 +49,9 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
     await start(page).click();
 
     const card = nodeCard(page, seeded.agentId);
-    // The ring follows the node's own state machine (Arch §19.1).
+    // The status chip follows the node's own state machine (Arch §19.1).
     await expect(card).toHaveAttribute('data-state', 'RUNNING', { timeout: 10_000 });
-    const ring = card.getByTestId('status-ring');
+    const ring = card.getByTestId('status-chip');
     await expect(ring).toHaveAttribute('aria-label', 'running');
 
     // The card streams under the node's id, so the locator does not depend on the run's ids.
@@ -63,7 +64,7 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
       .toBeGreaterThan(first.length);
 
     await expect(card).toHaveAttribute('data-state', 'COMPLETED', { timeout: 20_000 });
-    await expect(card.getByTestId('status-ring')).toHaveAttribute('aria-label', 'completed');
+    await expect(card.getByTestId('status-chip')).toHaveAttribute('aria-label', 'completed');
   });
 
   test('TC-EXE-014: the edge animates when an envelope travels it', async ({ page }) => {
@@ -169,7 +170,7 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
     });
 
     await nodeCard(page, seeded.agentId).click();
-    await page.getByRole('tab', { name: 'Inspector' }).click();
+    await openSheet(page, 'Inspector');
 
     const inspector = page.getByTestId('inspector');
     await expect(inspector.getByTestId('inspector-facts')).toContainText('mock-text');
@@ -191,8 +192,9 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
       timeout: 15_000,
     });
 
-    await page.getByRole('tab', { name: 'Runs' }).click();
-    const rows = page.getByTestId('runs-table').locator('tr[data-testid^="run-row-"]');
+    await openSheet(page, 'Runs');
+    // the run history is a list of cards now, not table rows
+    const rows = page.getByTestId('runs-table').locator('[data-testid^="run-row-"]');
     await expect(rows).toHaveCount(1);
     await expect(rows.first()).toHaveAttribute('data-status', 'COMPLETE');
 

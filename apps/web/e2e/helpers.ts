@@ -94,6 +94,92 @@ export async function settled(
   await page.waitForTimeout(250);
 }
 
+/*
+ * POC Theme V2 layout (D259): the palette is the New node dialog, Configure/Inspector/Runs/Memory
+ * live in a floating sheet that starts closed, and Chat is a permanent column.
+ */
+
+/** Add a node from the New node dialog: open it, choose the kind, optionally name it, add it. */
+export async function addFromDialog(page: Page, kind: Kind, name?: string): Promise<void> {
+  await page.getByTestId('new-node-button').click();
+  await page.getByTestId(`palette-${kind}`).click();
+  if (name) await page.getByLabel('Name').fill(name);
+  await page.getByTestId('new-node-add').click();
+}
+
+/** Show one tab of the workflow sheet, opening the sheet first when it is closed. */
+export async function openSheet(
+  page: Page,
+  tab: 'Configure' | 'Inspector' | 'Runs' | 'Memory',
+): Promise<void> {
+  if (!(await page.getByRole('tab', { name: tab }).isVisible()))
+    await page.getByTestId('sheet-toggle').click();
+  await page.getByRole('tab', { name: tab }).click();
+}
+
+/** Close the workflow sheet when it is open (it covers the right of the Canvas and bottom panel). */
+export async function closeSheet(page: Page): Promise<void> {
+  const close = page.getByRole('button', { name: 'Close panel' });
+  if (await close.isVisible()) await close.click();
+  await expect(page.getByTestId('workflow-sheet')).toHaveCount(0);
+}
+
+/**
+ * Drag a kind out of the New node dialog onto the Canvas at client coordinates. Dispatched events:
+ * the overlay goes `pointer-events: none` once the drag starts, which a mouse-driven `dragTo`
+ * cannot get past, and the drop must land on the Canvas underneath.
+ */
+export async function dragKindToCanvas(
+  page: Page,
+  kind: Kind,
+  at: { x: number; y: number },
+): Promise<void> {
+  await page.getByTestId('new-node-button').click();
+  const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
+  await page.getByTestId(`palette-${kind}`).dispatchEvent('dragstart', { dataTransfer });
+  const canvas = page.getByTestId('canvas');
+  await canvas.dispatchEvent('dragover', { dataTransfer, clientX: at.x, clientY: at.y });
+  await canvas.dispatchEvent('drop', { dataTransfer, clientX: at.x, clientY: at.y });
+  await page.getByTestId(`palette-${kind}`).dispatchEvent('dragend', { dataTransfer });
+}
+
+/** Select one node and open the sheet on its Configure tab. */
+export async function configureNode(page: Page, nodeId: string): Promise<Locator> {
+  await flowNode(page, nodeId).click();
+  await openSheet(page, 'Configure');
+  const panel = page.getByRole('complementary', { name: 'Node configuration' });
+  await expect(panel).toBeVisible();
+  return panel;
+}
+
+/** Point the Chat column at a node (its @mention chip). */
+export async function chatWith(page: Page, nodeId: string): Promise<void> {
+  await page.getByTestId(`chat-mention-${nodeId}`).click();
+  await expect(page.getByTestId(`chat-mention-${nodeId}`)).toHaveAttribute('aria-pressed', 'true');
+}
+
+const overlaps = (
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+): boolean =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+/**
+ * Zoom out (the zoom pill's "Zoom out") until `target` no longer sits under the minimap in the
+ * Canvas's bottom-right corner, so a real mouse press lands on it. At 1280×720 a fitted two-card
+ * graph can put the second card's output port there.
+ */
+export async function clearOfMinimap(page: Page, target: Locator): Promise<void> {
+  const minimap = page.locator('.react-flow__minimap');
+  for (let step = 0; step < 6; step += 1) {
+    const [box, map] = await Promise.all([target.boundingBox(), minimap.boundingBox()]);
+    if (!box || !map || !overlaps(box, map)) return;
+    await page.getByRole('button', { name: 'Zoom out' }).click();
+    await page.waitForTimeout(300);
+  }
+  throw new Error('target is still under the minimap after zooming out');
+}
+
 /** Drag with real mouse events (React Flow listens to pointer events on the document). */
 export async function dragBy(page: Page, target: Locator, dx: number, dy: number): Promise<void> {
   const box = await target.boundingBox();

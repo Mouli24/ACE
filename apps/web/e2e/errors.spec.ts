@@ -89,8 +89,9 @@ test.describe('Errors, BLOCKED and STOPPED (FR-ERR-002/006/007)', () => {
     await expect(page.getByTestId(`blocked-by-${editor}`)).toHaveText(
       `blocked by ${NODE_NAMES.first}`,
     );
-    // Greyed, and never wearing the failure line a FAILED node wears — nor an error card.
-    await expect(blocked).toHaveClass(/grayscale/);
+    // Greyed, and never wearing the failure line a FAILED node wears — nor an error card. The V2
+    // card greys itself in CSS (`.ace-node[data-state='BLOCKED']`), so the computed filter is read.
+    await expect(blocked).toHaveCSS('filter', 'grayscale(1)');
     await expect(page.getByTestId(`failure-${editor}`)).toHaveCount(0);
     await expect(onNode(page, editor)).toHaveCount(0);
 

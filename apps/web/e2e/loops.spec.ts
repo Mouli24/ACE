@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { dragConnect, nodeCard, port, serverGraph } from './helpers';
+import { dragConnect, nodeCard, openSheet, port, serverGraph } from './helpers';
 import {
   NODE_NAMES,
   engineEdges,
@@ -40,8 +40,9 @@ test.describe('Loop edges (FR-CON-007, TC-CON-007)', () => {
       .evaluate((el) => getComputedStyle(el).strokeDasharray);
     expect(dash).not.toBe('none');
 
-    // Selecting it opens its settings in the right-hand pane.
+    // Selecting it puts its settings on the sheet's Configure tab.
     await edge.locator('path').first().click({ force: true });
+    await openSheet(page, 'Configure');
     const editor = page.getByTestId('loop-edge-editor');
     await expect(editor).toBeVisible();
     await expect(editor).toContainText(`${NODE_NAMES.reviewer} sends its output back to`);
@@ -112,6 +113,7 @@ test.describe('Loop edges (FR-CON-007, TC-CON-007)', () => {
       .locator('path')
       .first()
       .click({ force: true });
+    await openSheet(page, 'Configure');
     const editor = page.getByTestId('loop-edge-editor');
     await expect(editor).toBeVisible();
 
@@ -280,6 +282,7 @@ test.describe('Merge node (FR-PAR-002)', () => {
     const mergeId = seeded.mergeId!;
 
     await nodeCard(page, mergeId).click();
+    await openSheet(page, 'Configure');
     const panel = page.getByTestId('config-panel');
     const mode = panel.getByLabel('Mode');
     await expect(mode).toBeVisible();

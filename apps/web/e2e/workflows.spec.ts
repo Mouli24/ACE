@@ -1,6 +1,14 @@
 import { expect, test } from '@playwright/test';
 
-import { freshApp, openWorkflow, seedGraph, serverGraph, settled } from './helpers';
+import {
+  addFromDialog,
+  freshApp,
+  openSheet,
+  openWorkflow,
+  seedGraph,
+  serverGraph,
+  settled,
+} from './helpers';
 
 test.describe('Workflows (FR-WF-001..005)', () => {
   test.beforeEach(async ({ page }) => freshApp(page));
@@ -21,8 +29,14 @@ test.describe('Workflows (FR-WF-001..005)', () => {
     );
     await expect(page.getByTestId('canvas')).toBeVisible();
     await expect(page.locator('.react-flow__node')).toHaveCount(0);
+    // the palette is the New node dialog, one click away in the top bar (D259)
+    await page.getByTestId('new-node-button').click();
     await expect(page.getByLabel('Node palette')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: 'New node' })).toHaveCount(0);
     await expect(page.getByRole('tab', { name: 'Validation' })).toBeVisible();
+    // the workflow-level config is in the sheet, which starts closed
+    await openSheet(page, 'Configure');
     await expect(page.getByText('Select a node to configure it.')).toBeVisible();
   });
 
@@ -78,7 +92,7 @@ test.describe('Workflows (FR-WF-001..005)', () => {
   }) => {
     const seeded = await seedGraph(page, ['input']);
     await openWorkflow(page, seeded);
-    await page.getByTestId('palette-agent').click();
+    await addFromDialog(page, 'agent');
     await expect(page.locator('.react-flow__node')).toHaveCount(2);
     await settled(page, seeded.workflowId, 2);
     await page.reload();
@@ -101,7 +115,7 @@ test.describe('Workflows (FR-WF-001..005)', () => {
     page.on('response', (r) => {
       if (r.url().includes('/graph-ops')) responses.push(r.status());
     });
-    await page.getByTestId('palette-agent').click();
+    await addFromDialog(page, 'agent');
     await expect(page.locator('.react-flow__node')).toHaveCount(2);
     await settled(page, seeded.workflowId, 2);
     expect(responses).toContain(409);
@@ -120,11 +134,11 @@ test.describe('Workflows (FR-WF-001..005)', () => {
     await openWorkflow(page, seeded);
     const other = await context.newPage();
     await openWorkflow(other, seeded);
-    await other.getByTestId('palette-output').click();
+    await addFromDialog(other, 'output');
     await settled(other, seeded.workflowId, 2);
     await expect(page.locator('.react-flow__node')).toHaveCount(2);
     // now this tab edits on top of the version the other tab produced: no 409, no lost node
-    await page.getByTestId('palette-merge').click();
+    await addFromDialog(page, 'merge');
     await settled(page, seeded.workflowId, 3);
     await expect(other.locator('.react-flow__node')).toHaveCount(3);
     expect((await serverGraph(page, seeded.workflowId)).nodes.map((n) => n.kind).sort()).toEqual([
