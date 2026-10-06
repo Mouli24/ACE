@@ -18,3 +18,8 @@ export * from './adapters/ollama.js';
 export * from './catalog/index.js';
 export * from './router/index.js';
 export * from './factory.js';
+export * from './adapters/cli/adapter.js';
+export * from './adapters/cli/claude-code.js';
+export * from './adapters/cli/detect.js';
+export * from './adapters/cli/resolve.js';
+export * from './adapters/cli/runner.js';
