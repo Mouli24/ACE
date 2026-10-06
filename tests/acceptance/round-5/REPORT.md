@@ -8,6 +8,8 @@ Both suites run with `pnpm test:acceptance`. That means:
 
 Both suites stay in CI as regression tests (CLAUDE.md §6.2).
 
+> **Merge note, 2026-10-06.** The §7.2 file on `main` is PR #36's `mouli-tests-arhant.test.ts` (37 passed + 1 todo against the real engine, CLAUDE.md §9.1), not the version this report measures. When `round-5/fix-arhant-1` was rebased onto `main` with the POC Theme V2 work (D259), #36's file was kept and this branch's 40-test version was dropped. The §7.2 section below is the record of that dropped version, kept for its findings. The §7.1 file lands as written here, migrated to the V2 layout, and has not been re-run since that migration.
+
 **Read this before the verdicts.**
 
 - **Who built what.** Round 5 was built by both developers. Arhant wrote C5 (#31) and A5. Mouli wrote M5 (#32), which merged first, with her round 4 web fixes (#33) and the CI split (#34).
