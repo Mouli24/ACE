@@ -135,6 +135,37 @@ import {
   type TraceEntry,
   type UpdateKnowledgeBaseRequest,
   type UsageResponse,
+  // ACE parity P0 (tasks, changes, review, local delivery — design §6)
+  ApplyTaskRequestSchema,
+  CloseTaskRequestSchema,
+  CreateTaskRequestSchema,
+  PauseTaskRequestSchema,
+  RepositoryInfoSchema,
+  ReviewTaskRequestSchema,
+  StartWorkRequestSchema,
+  TaskActivityListResponseSchema,
+  TaskChangesSchema,
+  TaskDetailSchema,
+  TaskFileDiffSchema,
+  TaskListQuerySchema,
+  TaskListResponseSchema,
+  TaskSchema,
+  UpdateTaskRequestSchema,
+  type ApplyTaskRequest,
+  type CloseTaskRequest,
+  type CreateTaskRequest,
+  type PauseTaskRequest,
+  type RepositoryInfo,
+  type ReviewTaskRequest,
+  type StartWorkRequest,
+  type Task,
+  type TaskActivityListResponse,
+  type TaskChanges,
+  type TaskDetail,
+  type TaskFileDiff,
+  type TaskListQuery,
+  type TaskListResponse,
+  type UpdateTaskRequest,
 } from '@ace/contracts';
 import { z } from 'zod';
 
@@ -199,6 +230,18 @@ export type CreateKnowledgeBaseBody = z.input<typeof CreateKnowledgeBaseRequestS
 export type SearchRequestBody = z.input<typeof SearchRequestSchema>;
 /** `groupBy` may be one grouping or several; it travels as a repeated query parameter (D234). */
 export type UsageQueryInput = z.input<typeof UsageQuerySchema>;
+
+/**
+ * The task actions that take no fields (`start`, `plan`, `stop`, `retry`, `checks`, repository
+ * init) send `{}` — design §6 writes their body so — and the strict schema keeps it that way.
+ */
+const EmptyBodySchema = z.strictObject({});
+
+/**
+ * `GET /projects/:id/tasks` as a caller writes it: `attention` is a boolean here and travels as
+ * `"true"`/`"false"`, the way the contract's query schema reads it. A blank `q` is no search.
+ */
+export type TaskListFilter = Partial<TaskListQuery>;
 
 export interface ImportBackupOptions {
   /** The filename sent with the zip; taken from a `File` when omitted. */
@@ -701,6 +744,115 @@ export function createAceClient(options: AceClientOptions) {
       });
       return parseJson(response, '/backup/import', BackupImportResponseSchema);
     },
+
+    /* Tasks (ACE parity P0, design §6) */
+
+    /**
+     * The project's board. Every filter is the engine's (`TaskListQuery`), checked against the
+     * contract before it leaves as a body would be; `attention` keeps only tasks waiting on a person.
+     */
+    listTasks: async (projectId: Id, filter: TaskListFilter = {}): Promise<TaskListResponse> => {
+      const path = `/projects/${projectId}/tasks`;
+      const q = filter.q?.trim();
+      const query = {
+        stage: filter.stage,
+        q: q === '' ? undefined : q,
+        label: filter.label,
+        attention: filter.attention === undefined ? undefined : String(filter.attention),
+      };
+      const parsed = TaskListQuerySchema.safeParse(
+        Object.fromEntries(Object.entries(query).filter(([, value]) => value !== undefined)),
+      );
+      if (!parsed.success) throw AceApiError.invalidRequest(path, parsed.error.issues);
+      return request('GET', path, TaskListResponseSchema, undefined, query);
+    },
+    /** 201 `Task`; `start: 'now'` answers it already started (design §2). */
+    createTask: (projectId: Id, body: CreateTaskRequest): Promise<Task> =>
+      request('POST', `/projects/${projectId}/tasks`, TaskSchema, {
+        schema: CreateTaskRequestSchema,
+        value: body,
+      }),
+    /** The task with its workspace, executions, checks, reviews and deliveries. */
+    getTask: (id: Id): Promise<TaskDetail> => request('GET', `/tasks/${id}`, TaskDetailSchema),
+    /** `null` clears a team or planner (D72); `stage` moves an inactive task, never into Done. */
+    updateTask: (id: Id, body: UpdateTaskRequest): Promise<Task> =>
+      request('PATCH', `/tasks/${id}`, TaskSchema, {
+        schema: UpdateTaskRequestSchema,
+        value: body,
+      }),
+    /** 204. A running or waiting task answers 409 `invalid_transition`. */
+    deleteTask: (id: Id): Promise<void> => request('DELETE', `/tasks/${id}`, NoContentSchema),
+    listTaskActivity: (id: Id): Promise<TaskActivityListResponse> =>
+      request('GET', `/tasks/${id}/activity`, TaskActivityListResponseSchema),
+
+    /*
+     * Task actions. Each answers the task as it stands after the synchronous part (a started run is
+     * `running`); the rest arrives as `task.updated`. An action the task's state does not allow
+     * answers 409 `invalid_transition` — the UI offers only `task.allowedActions` (design §2.1).
+     */
+    startTask: (id: Id): Promise<Task> =>
+      request('POST', `/tasks/${id}/start`, TaskSchema, { schema: EmptyBodySchema, value: {} }),
+    planTask: (id: Id): Promise<Task> =>
+      request('POST', `/tasks/${id}/plan`, TaskSchema, { schema: EmptyBodySchema, value: {} }),
+    stopTask: (id: Id): Promise<Task> =>
+      request('POST', `/tasks/${id}/stop`, TaskSchema, { schema: EmptyBodySchema, value: {} }),
+    retryTask: (id: Id): Promise<Task> =>
+      request('POST', `/tasks/${id}/retry`, TaskSchema, { schema: EmptyBodySchema, value: {} }),
+    runTaskChecks: (id: Id): Promise<Task> =>
+      request('POST', `/tasks/${id}/checks`, TaskSchema, { schema: EmptyBodySchema, value: {} }),
+    /** A work run; `message` is a correction or a follow-up for the team. */
+    workTask: (id: Id, body: StartWorkRequest = {}): Promise<Task> =>
+      request('POST', `/tasks/${id}/work`, TaskSchema, {
+        schema: StartWorkRequestSchema,
+        value: body,
+      }),
+    /** `headSha` is the commit the reviewer looked at; a moved branch answers 409 `stale_review`. */
+    reviewTask: (id: Id, body: ReviewTaskRequest): Promise<Task> =>
+      request('POST', `/tasks/${id}/review`, TaskSchema, {
+        schema: ReviewTaskRequestSchema,
+        value: body,
+      }),
+    /**
+     * Merge the task branch into the source repository. `destination` repeats what the user was
+     * shown; a repository no longer on it answers 409 `destination_changed`, failed checks 409
+     * `checks_failed`.
+     */
+    applyTask: (id: Id, body: ApplyTaskRequest): Promise<Task> =>
+      request('POST', `/tasks/${id}/apply`, TaskSchema, {
+        schema: ApplyTaskRequestSchema,
+        value: body,
+      }),
+    /** Done without verification: outcome `closed_unverified`. */
+    closeTask: (id: Id, body: CloseTaskRequest = {}): Promise<Task> =>
+      request('POST', `/tasks/${id}/close`, TaskSchema, {
+        schema: CloseTaskRequestSchema,
+        value: body,
+      }),
+    /** `paused: false` resumes, and the automatic step that was skipped happens. */
+    pauseTask: (id: Id, body: PauseTaskRequest): Promise<Task> =>
+      request('POST', `/tasks/${id}/pause`, TaskSchema, {
+        schema: PauseTaskRequestSchema,
+        value: body,
+      }),
+
+    /* Changes — derived from Git, never stored */
+
+    /** Base commit → the task branch; 404 `no_workspace` before the first plan or work run. */
+    getTaskChanges: (id: Id): Promise<TaskChanges> =>
+      request('GET', `/tasks/${id}/changes`, TaskChangesSchema),
+    getTaskFileDiff: (id: Id, path: string): Promise<TaskFileDiff> =>
+      request('GET', `/tasks/${id}/changes/diff`, TaskFileDiffSchema, undefined, { path }),
+
+    /* Repository — the project folder as a Git repository */
+
+    getRepository: (projectId: Id): Promise<RepositoryInfo> =>
+      request('GET', `/projects/${projectId}/repository`, RepositoryInfoSchema),
+    /** `git init` + a first commit of the folder; 409 `already_repository` when it is one. */
+    initRepository: (projectId: Id): Promise<RepositoryInfo> =>
+      request('POST', `/projects/${projectId}/repository/init`, RepositoryInfoSchema, {
+        schema: EmptyBodySchema,
+        value: {},
+      }),
   };
 }
 
