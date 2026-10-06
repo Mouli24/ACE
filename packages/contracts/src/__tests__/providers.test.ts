@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import { ProviderInUseDetailsSchema } from '../errors.js';
 import {
+  CLI_INSTALL_HINTS,
+  CLI_LOGIN_HINTS,
   CLI_PERMISSIONS,
   CLI_PROVIDER_TYPES,
+  CliDetectResponseSchema,
+  CliDetectionSchema,
   CreateProviderRequestSchema,
   DEFAULT_CLI_CONCURRENCY,
   DEFAULT_CLI_PERMISSION,
@@ -238,5 +242,54 @@ describe('FR-PRV-008 CLI providers (X1, D261–D262)', () => {
   it('starts a CLI provider at editing project files, one call at a time', () => {
     expect(DEFAULT_CLI_PERMISSION).toBe('edit_files');
     expect(DEFAULT_CLI_CONCURRENCY).toBe(1);
+  });
+});
+
+describe('FR-PRV-008 GET /providers/detect/clis', () => {
+  const found = {
+    type: 'claude_code',
+    installed: true,
+    version: '2.1.282',
+    path: 'C:\Users\me\AppData\Roaming\npm\claude.cmd',
+    login: 'logged_in',
+    loginDetail: 'claude.ai · max',
+    installHint: CLI_INSTALL_HINTS.claude_code,
+    loginHint: CLI_LOGIN_HINTS.claude_code,
+  };
+
+  it('reports an installed, signed-in CLI with its version', () => {
+    expect(CliDetectionSchema.parse(found)).toEqual(found);
+  });
+
+  it('reports a missing CLI with only its hints', () => {
+    const missing = {
+      type: 'gemini_cli',
+      installed: false,
+      login: 'unknown',
+      installHint: CLI_INSTALL_HINTS.gemini_cli,
+      loginHint: CLI_LOGIN_HINTS.gemini_cli,
+    };
+    expect(CliDetectionSchema.safeParse(missing).success).toBe(true);
+  });
+
+  it('refuses a stray field, so nothing credential-shaped can ride along', () => {
+    expect(CliDetectionSchema.safeParse({ ...found, token: 'x' }).success).toBe(false);
+  });
+
+  it('wraps the three in { items }', () => {
+    expect(CliDetectResponseSchema.safeParse({ items: [found] }).success).toBe(true);
+  });
+
+  it('names the npm package and the login command for each CLI', () => {
+    expect(CLI_INSTALL_HINTS).toEqual({
+      claude_code: 'npm install -g @anthropic-ai/claude-code',
+      codex_cli: 'npm install -g @openai/codex',
+      gemini_cli: 'npm install -g @google/gemini-cli',
+    });
+    expect(CLI_LOGIN_HINTS).toEqual({
+      claude_code: 'claude auth login',
+      codex_cli: 'codex login',
+      gemini_cli: 'gemini',
+    });
   });
 });
