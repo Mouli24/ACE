@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { HelpLink } from '../help/HelpLink';
 import { useProject } from '../projects/hooks';
+import { ProjectNav } from '../projects/ProjectNav';
 import { CreateKnowledgeBaseDialog } from './CreateKnowledgeBaseDialog';
 import { useKnowledgeBases } from './hooks';
 
@@ -23,6 +24,7 @@ export function KnowledgeListPage() {
       data-testid="knowledge-list-page"
       className="mx-auto flex h-full w-full max-w-4xl flex-col gap-6 overflow-y-auto px-4 py-10"
     >
+      <ProjectNav projectId={projectId} />
       <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <Link

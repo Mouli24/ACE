@@ -13,7 +13,7 @@ import { AceApiError, type TaskListFilter } from '@ace/sdk';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 
 import { api } from '../app/api';
-import { taskKeys } from './keys';
+import { normalizeTaskFilter, taskKeys } from './keys';
 import { removeTask, writeTask } from './task-cache';
 
 /**
@@ -27,7 +27,7 @@ import { removeTask, writeTask } from './task-cache';
 export function useTasks(projectId: Id, filter: TaskListFilter = {}) {
   return useQuery({
     queryKey: taskKeys.list(projectId, filter),
-    queryFn: async () => (await api().listTasks(projectId, filter)).items,
+    queryFn: async () => (await api().listTasks(projectId, normalizeTaskFilter(filter))).items,
     enabled: projectId !== '',
     // typing in the search box keeps the last answer on screen instead of a loading line
     placeholderData: (previous) => previous,

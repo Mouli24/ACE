@@ -8,6 +8,7 @@ import { ImportWorkflowButton } from '../workflows/ImportWorkflowButton';
 import { CreateWorkflowDialog } from '../workflows/WorkflowDialogs';
 import { useWorkflows } from '../workflows/hooks';
 import { useProject, useUpdateProject } from './hooks';
+import { ProjectNav } from './ProjectNav';
 
 /** `/projects/:projectId` — the project with its workflows; pick one to open the Canvas. */
 export function ProjectPage() {
@@ -30,18 +31,13 @@ export function ProjectPage() {
 
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-10">
+      <ProjectNav projectId={projectId} />
       <header className="flex items-center justify-between">
         <div>
           <h1 className="font-human text-2xl font-semibold">{project.data?.name ?? '…'}</h1>
           <p className="font-machine text-xs text-fg-muted">{project.data?.folderPath}</p>
         </div>
         <div className="flex items-start gap-2">
-          <Button asChild variant="secondary">
-            <Link to={`/projects/${projectId}/runs`}>Runs</Link>
-          </Button>
-          <Button asChild variant="secondary">
-            <Link to={`/projects/${projectId}/knowledge`}>Knowledge</Link>
-          </Button>
           <ImportWorkflowButton projectId={projectId} />
           <Button onClick={() => setCreating(true)}>
             <Plus className="h-4 w-4" /> New workflow

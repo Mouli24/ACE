@@ -1,5 +1,6 @@
 import { useParams } from 'react-router-dom';
 
+import { ProjectNav } from '../projects/ProjectNav';
 import { useWorkflows } from '../workflows/hooks';
 import { RunsList } from './RunsList';
 
@@ -13,6 +14,7 @@ export function ProjectRunsPage() {
 
   return (
     <main className="mx-auto flex h-full w-full max-w-4xl flex-col gap-6 overflow-y-auto px-4 py-8">
+      <ProjectNav projectId={projectId} />
       <h1 className="font-human text-2xl font-semibold">Runs</h1>
 
       {workflows.isPending && <p className="text-fg-muted">Loading workflows…</p>}

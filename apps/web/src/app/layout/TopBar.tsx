@@ -1,6 +1,7 @@
 import {
   BarChart3,
   CircleHelp,
+  ListTodo,
   MoreHorizontal,
   PanelRight,
   Plus,
@@ -28,7 +29,10 @@ import { SHEET_ID } from '../../workflows/WorkflowSheet';
 import { WorkflowTabs } from '../../workflows/WorkflowTabs';
 import { usePanelsStore } from '../stores/panels';
 
-/** Usage, Guardrail policies, Settings and Help: an icon row at xl and up, the More menu below. */
+/**
+ * Usage, Guardrail policies, Settings and Help: an icon row at xl and up, the More menu below. With
+ * a project open, its task board leads the row (ACE parity P0).
+ */
 const LINKS = [
   { to: '/usage', label: 'Usage', Icon: BarChart3 },
   { to: '/guardrails', label: 'Guardrail policies', Icon: ShieldCheck },
@@ -56,6 +60,9 @@ export function TopBar() {
   const openSheet = usePanelsStore((store) => store.openSheet);
   const closeSheet = usePanelsStore((store) => store.closeSheet);
   const openNewNode = usePanelsStore((store) => store.openNewNode);
+  const links = projectId
+    ? [{ to: `/projects/${projectId}/tasks`, label: 'Tasks', Icon: ListTodo }, ...LINKS]
+    : LINKS;
 
   if (compact) {
     return (
@@ -165,7 +172,7 @@ export function TopBar() {
           </button>
         )}
         <div className="hidden items-center gap-0.5 xl:flex">
-          {LINKS.map(({ to, label, Icon }) => (
+          {links.map(({ to, label, Icon }) => (
             <Link key={to} to={to} aria-label={label} className={ICON_BUTTON}>
               <Icon className="h-4 w-4" aria-hidden />
             </Link>
@@ -184,7 +191,7 @@ export function TopBar() {
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-52">
-            {LINKS.map(({ to, label, Icon }) => (
+            {links.map(({ to, label, Icon }) => (
               <DropdownMenuItem key={to} asChild className="gap-2">
                 <Link to={to}>
                   <Icon className="h-4 w-4" aria-hidden />

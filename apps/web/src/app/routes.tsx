@@ -12,6 +12,7 @@ import { ProvidersPage } from '../providers/ProvidersPage';
 import { ProjectRunsPage } from '../runs/ProjectRunsPage';
 import { RunDetailPage } from '../runs/RunDetailPage';
 import { SettingsPage } from '../settings/SettingsPage';
+import { TasksBoardPage } from '../tasks/TasksBoardPage';
 import { ToolsLibraryPage } from '../library/ToolsLibraryPage';
 import { TimelinePage } from '../timeline/TimelinePage';
 import { WorkflowPage } from '../workflows/WorkflowPage';
@@ -20,7 +21,8 @@ import { AppShell } from './layout/AppShell';
 
 /**
  * Routes (Arch §33.3): `/`, `/onboarding`, `/projects`, `/projects/:id`, the Canvas, knowledge,
- * runs, `/providers`, `/guardrails`, `/usage` (D239), `/settings`, and `/help/:page` (D240).
+ * runs, `/providers`, `/guardrails`, `/usage` (D239), `/settings`, and `/help/:page` (D240). ACE
+ * parity P0 adds a project's task board, one task's page and the project's settings.
  */
 export const routes: RouteObject[] = [
   {
@@ -36,6 +38,7 @@ export const routes: RouteObject[] = [
         path: 'projects/:projectId/workflows/:workflowId/timeline',
         element: <TimelinePage />,
       },
+      { path: 'projects/:projectId/tasks', element: <TasksBoardPage /> },
       { path: 'projects/:projectId/runs', element: <ProjectRunsPage /> },
       { path: 'projects/:projectId/knowledge', element: <KnowledgeListPage /> },
       { path: 'knowledge/:kbId', element: <KnowledgeBasePage /> },
