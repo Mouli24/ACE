@@ -102,3 +102,17 @@ export function modelsByProvider(models: Model[]): Map<Id, Model[]> {
   }
   return grouped;
 }
+
+/**
+ * X1 (FR-PRV-008): the terminal scan behind Add provider. Fresh every time the dialog opens — a
+ * CLI installed or signed in a moment ago must show — so nothing is kept between opens.
+ */
+export function useCliScan() {
+  return useQuery({
+    queryKey: queryKeys.cliScan(),
+    queryFn: () => api().detectClis(),
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
+  });
+}

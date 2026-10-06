@@ -9,6 +9,8 @@ export const queryKeys = {
   providers: () => ['providers'] as const,
   provider: (id: string) => ['provider', id] as const,
   providerDetect: () => ['providers', 'detect'] as const,
+  /** X1: the terminal scan — its own root, so invalidating providers never re-runs it. */
+  cliScan: () => ['cli-scan'] as const,
   /** Every model list, whatever its filter — what a refresh invalidates (FR-MOD-006). */
   modelsRoot: () => ['models'] as const,
   models: (query: object) => ['models', query] as const,

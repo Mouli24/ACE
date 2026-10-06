@@ -5,6 +5,7 @@ import {
   StartRunRequestSchema,
   UpdateProviderRequestSchema,
   aceError,
+  cliPatchError,
   allowedRunActions,
   modelMatchesQuery,
   zeroUsage,
@@ -22,6 +23,7 @@ import { HttpResponse, http, type HttpHandler, type PathParams } from 'msw';
 
 import { newId } from '../lib/ulid';
 import { DETECTED_OLLAMA } from './catalog';
+import { MOCK_CLI_SCAN } from './cli-scan';
 import { validateGraph } from './graph-rules';
 import { type MockDb } from './db';
 import { dropMockSockets } from './fake-socket';
@@ -365,6 +367,12 @@ export function createRound2Handlers(db: MockDb): HttpHandler[] {
       guard(() => HttpResponse.json({ ollama: { ...DETECTED_OLLAMA } })),
     ),
 
+    /* X1 (FR-PRV-008): the terminal scan — Claude Code ready, Codex signed out, Gemini missing. */
+    http.get(
+      `${API}/providers/detect/clis`,
+      guard(() => HttpResponse.json(MOCK_CLI_SCAN)),
+    ),
+
     http.get(
       `${API}/providers`,
       guard(() => HttpResponse.json({ items: db.listProviders() })),
@@ -408,6 +416,10 @@ export function createRound2Handlers(db: MockDb): HttpHandler[] {
             parsed.error.issues,
           );
         }
+        const existing = db.getProvider(param(ctx, 'id'));
+        if (!existing) return notFound('Provider');
+        const misfit = cliPatchError(existing.type, parsed.data);
+        if (misfit !== undefined) return error(400, 'invalid_config', 'validation_failed', misfit, []);
         const provider = db.updateProvider(param(ctx, 'id'), parsed.data);
         return provider ? HttpResponse.json(provider) : notFound('Provider');
       }),
