@@ -8,6 +8,7 @@ import {
   CLI_PROVIDER_TYPES,
   CliDetectResponseSchema,
   CliDetectionSchema,
+  cliPatchError,
   CreateProviderRequestSchema,
   DEFAULT_CLI_CONCURRENCY,
   DEFAULT_CLI_PERMISSION,
@@ -291,5 +292,19 @@ describe('FR-PRV-008 GET /providers/detect/clis', () => {
       codex_cli: 'codex login',
       gemini_cli: 'gemini',
     });
+  });
+});
+
+describe('FR-PRV-008 what a patch may change on each kind of provider', () => {
+  it('refuses a key or a base URL for a CLI provider', () => {
+    expect(cliPatchError('claude_code', { apiKey: 'sk-x' })).toMatch(/no API key/);
+    expect(cliPatchError('codex_cli', { baseUrl: 'http://127.0.0.1:1' })).toMatch(/no base URL/);
+  });
+  it('refuses a permission level for any other provider', () => {
+    expect(cliPatchError('openai', { cliPermission: 'full_auto' })).toMatch(/Only a CLI provider/);
+  });
+  it('accepts everything else', () => {
+    expect(cliPatchError('gemini_cli', { cliPermission: 'read_only', name: 'G' })).toBeUndefined();
+    expect(cliPatchError('anthropic', { apiKey: 'sk-new' })).toBeUndefined();
   });
 });
