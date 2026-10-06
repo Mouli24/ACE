@@ -90,6 +90,7 @@ import {
   createMockAdapter,
   createProviderAdapterFactory,
   createRouter,
+  type CliDetector,
   type MockProviderAdapter,
 } from '@ace/providers';
 import {
@@ -249,6 +250,8 @@ export interface StartEngineOptions {
    * nothing about what the mock answers.
    */
   mockProvider?: MockProviderAdapter;
+  /** X1: the terminal scan. Tests inject a fake; the real one runs the installed CLIs. */
+  cliDetector?: CliDetector;
 }
 
 export interface RunningEngine {
@@ -375,7 +378,10 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   /* --------------------------------------------------------- model serving */
 
   const mockProvider = options.mockProvider ?? createMockAdapter();
-  const factory = createProviderAdapterFactory({ mock: mockProvider });
+  const factory = createProviderAdapterFactory({
+    mock: mockProvider,
+    ...(options.cliDetector === undefined ? {} : { cliDetector: options.cliDetector }),
+  });
 
   /* FR-CTL-001..003: the one gate registry the scheduler registers into and the controls read. */
   const gates = createRunGateRegistry();
@@ -705,6 +711,14 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     pricingFor: async (providerId, modelId) => gateway.pricingFor(providerId, modelId),
   });
 
+  /* X1 §4.2: a run's project folder — where an agent-route CLI works, and the project tools reach. */
+  const projectFolderFor = async (runId: Id): Promise<string | undefined> => {
+    const run = await repository.runs.get(LOCAL_SCOPE, runId);
+    if (run === null) return undefined;
+    const project = await repository.projects.get(LOCAL_SCOPE, run.projectId);
+    return project === null || project.folderPath === '' ? undefined : project.folderPath;
+  };
+
   const runs = createRunService({
     gates,
     repository,
@@ -730,6 +744,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     /* Round 4's tool loop and multimodal materialisation (Arch §12.7, FR-TOOL-*, FR-MM-003/004). */
     tools: toolProvider,
     sandboxDirFor,
+    projectFolderFor,
     artifacts: materialiser,
     recordToolCall,
     toolGuardrails,
