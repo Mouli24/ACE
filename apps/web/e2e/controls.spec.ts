@@ -142,7 +142,7 @@ test.describe('Run controls (FR-CTL-001..004, FR-CTL-006)', () => {
 
     const run = await engineRun(page, seeded.workflowId);
     expect(run?.haltReason).toBe('stopped');
-    const halt = page.getByTestId('run-controls').getByTestId('halt-reason');
+    const halt = page.getByTestId('workflow-page').getByTestId('halt-reason');
     await expect(halt).toHaveAttribute('data-reason', 'stopped');
     await expect(halt).toContainText('stopped by you');
     await expect(halt.getByTestId('halt-reason-advice')).toContainText('Nothing failed');

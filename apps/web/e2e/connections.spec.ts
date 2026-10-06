@@ -1,6 +1,9 @@
 import { expect, test } from '@playwright/test';
 
 import {
+  clearOfMinimap,
+  closeSheet,
+  configureNode,
   connect,
   dragConnect,
   freshApp,
@@ -39,13 +42,14 @@ test.describe('Connections (FR-CON-001..006)', () => {
     const seeded = await seedGraph(page, ['input', 'agent']);
     const [inp, agent] = seeded.nodeIds as [string, string];
     await openWorkflow(page, seeded);
-    await page.locator(`.react-flow__node[data-id="${agent}"]`).click();
-    const panel = page.getByRole('complementary', { name: 'Node configuration' });
+    const panel = await configureNode(page, agent);
     const inputTypes = panel.getByRole('group', { name: 'Input types' });
     await inputTypes.getByLabel('image').click();
     await inputTypes.getByLabel('text').click();
     await expect(port(page, agent, 'in', 'image')).toBeVisible();
     await expect(port(page, agent, 'in', 'text')).toHaveCount(0);
+    // the open sheet covers the right of the Canvas, where the ports may sit
+    await closeSheet(page);
     await dragConnect(page, port(page, inp, 'out', 'text'), port(page, agent, 'in', 'image'));
     await expect(page.getByText('Connection refused').first()).toBeVisible();
     await expect(
@@ -63,6 +67,8 @@ test.describe('Connections (FR-CON-001..006)', () => {
     await connect(page, seeded.workflowId, a, 'text', b, 'text');
     await openWorkflow(page, seeded);
     await expect(page.locator('.react-flow__edge')).toHaveCount(1);
+    // the fitted second card's output port can sit under the minimap (V2 Canvas at 1280×720)
+    await clearOfMinimap(page, port(page, b, 'out', 'text'));
     await dragConnect(page, port(page, b, 'out', 'text'), port(page, a, 'in', 'text'));
     await expect(page.getByText('Connection refused').first()).toBeVisible();
     // Round 3 rewrote the sentence: a cycle is now refused *as a data edge* and pointed at the loop

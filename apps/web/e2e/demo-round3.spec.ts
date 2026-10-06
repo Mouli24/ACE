@@ -75,7 +75,7 @@ test.describe('Round 3 §1 — the operator can control, understand and constrai
     });
     await stopRun(page);
     await expect(runStatus(page)).toHaveAttribute('data-status', 'HALTED', { timeout: 10_000 });
-    await expect(page.getByTestId('run-controls').getByTestId('halt-reason')).toContainText(
+    await expect(page.getByTestId('workflow-page').getByTestId('halt-reason')).toContainText(
       'stopped by you',
     );
 
@@ -173,7 +173,7 @@ test.describe('Round 3 §1 — the operator can control, understand and constrai
 
     await startRun(page).click();
     await expect(runStatus(page)).toHaveAttribute('data-status', 'HALTED', { timeout: 20_000 });
-    await expect(page.getByTestId('run-controls').getByTestId('halt-reason')).toContainText(
+    await expect(page.getByTestId('workflow-page').getByTestId('halt-reason')).toContainText(
       'budget exceeded: $0.012 > $0.01 cap',
     );
 

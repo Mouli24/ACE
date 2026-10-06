@@ -1,10 +1,14 @@
 import { expect, test } from '@playwright/test';
 
 import {
+  closeSheet,
+  configureNode,
   connect,
   dragBy,
+  dragKindToCanvas,
   flowNode,
   freshApp,
+  openSheet,
   openWorkflow,
   seedGraph,
   serverGraph,
@@ -18,11 +22,12 @@ test.describe('Canvas (FR-CAN-001..007, 010)', () => {
     const seeded = await seedGraph(page, ['input']);
     await openWorkflow(page, seeded);
     const pane = page.locator('.react-flow');
-    await expect(pane).toHaveCSS('background-color', 'rgb(13, 17, 23)');
+    // the POC Theme V2 Night canvas, #0a0a0b (D259)
+    await expect(pane).toHaveCSS('background-color', 'rgb(10, 10, 11)');
     await expect(page.locator('.react-flow__background pattern circle').first()).toBeAttached();
   });
 
-  test('TC-CAN-001: drag Agent from the palette → node at the drop point, saved', async ({
+  test('TC-CAN-001: drag Agent from the New node dialog → node at the drop point, saved', async ({
     page,
   }) => {
     const seeded = await seedGraph(page, ['input']);
@@ -31,9 +36,9 @@ test.describe('Canvas (FR-CAN-001..007, 010)', () => {
     const box = (await canvas.boundingBox())!;
     const dropX = box.x + box.width * 0.6;
     const dropY = box.y + box.height * 0.6;
-    await page.getByTestId('palette-agent').dragTo(canvas, {
-      targetPosition: { x: dropX - box.x, y: dropY - box.y },
-    });
+    await dragKindToCanvas(page, 'agent', { x: dropX, y: dropY });
+    // the dialog let the drop through to the Canvas and closed when the drag ended
+    await expect(page.getByRole('dialog', { name: 'New node' })).toHaveCount(0);
     await expect(page.locator('.react-flow__node')).toHaveCount(2);
     await settled(page, seeded.workflowId, 2);
     const graph = await serverGraph(page, seeded.workflowId);
@@ -62,6 +67,7 @@ test.describe('Canvas (FR-CAN-001..007, 010)', () => {
     await page.mouse.up();
     await page.keyboard.up('Shift');
     await expect(page.locator('.react-flow__node.selected')).toHaveCount(3);
+    await openSheet(page, 'Configure');
     await expect(
       page.getByText('3 nodes selected. Select one node to configure it.'),
     ).toBeVisible();
@@ -122,11 +128,12 @@ test.describe('Canvas (FR-CAN-001..007, 010)', () => {
     const seeded = await seedGraph(page, ['agent']);
     const original = seeded.nodeIds[0]!;
     await openWorkflow(page, seeded);
-    await flowNode(page, original).click();
-    const panel = page.getByRole('complementary', { name: 'Node configuration' });
+    const panel = await configureNode(page, original);
     await panel.getByLabel('Instructions').fill('Original instructions');
     await panel.getByLabel('Instructions').blur();
     await settled(page, seeded.workflowId, 1);
+    // the open sheet covers the Canvas tools at the top right
+    await closeSheet(page);
     await page.getByRole('button', { name: 'Duplicate selected nodes' }).click();
     await expect(page.locator('.react-flow__node')).toHaveCount(2);
     await settled(page, seeded.workflowId, 2);
@@ -142,6 +149,7 @@ test.describe('Canvas (FR-CAN-001..007, 010)', () => {
     expect((copy.config as { instructions: string }).instructions).toBe('Original instructions');
     // the copy is selected after duplicating; rename it
     await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
+    await openSheet(page, 'Configure');
     await panel.getByLabel('Name').fill('Copy');
     await panel.getByLabel('Name').press('Enter');
     await expect

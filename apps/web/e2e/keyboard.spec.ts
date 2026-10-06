@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 import { freshApp, openWorkflow, port, seedGraph, serverGraph, settled } from './helpers';
 
 /**
- * NFR-USE-02: the core path is possible without a mouse — add a node from the palette, select
+ * NFR-USE-02: the core path is possible without a mouse — add a node from the New node dialog, select
  * nodes, connect two ports and delete — using Tab, Enter and Delete only.
  */
 test.describe('Keyboard-only path (NFR-USE-02)', () => {
@@ -14,15 +14,21 @@ test.describe('Keyboard-only path (NFR-USE-02)', () => {
     const [inp] = seeded.nodeIds as [string];
     await openWorkflow(page, seeded);
 
-    // add: focus the palette entry and press Enter
+    // add: Enter on New node opens the dialog; focus the Agent entry and press Enter
+    await page.getByTestId('new-node-button').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('dialog', { name: 'New node' })).toBeVisible();
     await page.getByTestId('palette-agent').focus();
     await page.keyboard.press('Enter');
+    await expect(page.getByRole('dialog', { name: 'New node' })).toHaveCount(0);
     await expect(page.locator('.react-flow__node')).toHaveCount(2);
     await settled(page, seeded.workflowId, 2);
     const agent = (await serverGraph(page, seeded.workflowId)).nodes.find(
       (n) => n.kind === 'agent',
     )!;
-    // the new node is selected, so its config panel is open
+    // the new node is selected, so the panel toggle opens its config (Enter on the toggle)
+    await page.getByTestId('sheet-toggle').focus();
+    await page.keyboard.press('Enter');
     await expect(page.getByRole('complementary', { name: 'Node configuration' })).toContainText(
       'Agent node',
     );

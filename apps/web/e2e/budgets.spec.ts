@@ -37,7 +37,7 @@ test.describe('Budgets (FR-GRD-008)', () => {
     const run = await engineRun(page, seeded.workflowId);
     expect(run?.haltReason).toBe('budget_exceeded');
 
-    const halt = page.getByTestId('run-controls').getByTestId('halt-reason');
+    const halt = page.getByTestId('workflow-page').getByTestId('halt-reason');
     await expect(halt).toHaveAttribute('data-reason', 'budget_exceeded');
     await expect(halt).toContainText('budget exceeded: $0.012 > $0.01 cap');
     // NFR-USE-03: which of the two caps to raise, since they live on two different screens.

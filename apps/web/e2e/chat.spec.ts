@@ -1,30 +1,33 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
-import { flowNode, freshApp, openWorkflow, seedGraph } from './helpers';
+import { freshApp, openWorkflow, seedGraph } from './helpers';
 
 /**
  * Direct agent chat on the real Canvas (round 4 §5 item 5, §7.1): TC-CHAT-006 (streamed reply),
  * TC-CHAT-007 (attach a PNG → the reply names the image), TC-GRD-022 (a blocked input refused
  * inline with its reason). Driven against MSW + the FakeWebSocket, so it needs no engine.
  *
- * The panel (`apps/web/src/chat/**`) is M4 area E; wiring the "Chat" tab into the node's right pane
- * is a one-line change in `WorkflowPage.tsx` that belongs to that file's owner (see the M4-E report).
- * Until it lands there is no "Chat" tab to click, so each test skips itself when the tab is absent
- * and starts running the moment the wiring is merged — nothing here needs to change.
+ * The panel (`apps/web/src/chat/**`) is M4 area E. In the POC Theme V2 layout (D259) Chat is a
+ * permanent column beside the Canvas: an @mention chip per Agent/Model node points it at that node,
+ * which replaces the old "Chat" tab of the right pane. Each test still skips itself when the chip
+ * is absent (the M4-era guard, kept as it was).
  */
 
-/** Open a workflow with one agent node, select it, and reveal the right pane. Returns the tab. */
+/** Open a workflow with one agent node and return its @mention chip in the Chat column. */
 async function openAgentChat(page: Page): Promise<Locator> {
   const seeded = await seedGraph(page, ['agent']);
   await openWorkflow(page, seeded);
-  await flowNode(page, seeded.nodeIds[0]!).click();
-  return page.getByRole('tab', { name: 'Chat' });
+  await expect(page.getByTestId('chat-aside')).toBeVisible();
+  return page.getByTestId(`chat-mention-${seeded.nodeIds[0]!}`);
 }
 
 async function ensureChatTab(page: Page): Promise<boolean> {
-  const chatTab = await openAgentChat(page);
-  const wired = (await chatTab.count()) > 0;
-  if (wired) await chatTab.click();
+  const mention = await openAgentChat(page);
+  const wired = (await mention.count()) > 0;
+  if (wired) {
+    await mention.click();
+    await expect(mention).toHaveAttribute('aria-pressed', 'true');
+  }
   return wired;
 }
 

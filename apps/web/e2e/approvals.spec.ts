@@ -36,7 +36,7 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     // The node is WAITING while the card is up, and stays WAITING until the engine hears a decision.
     const card = nodeCard(page, writer);
     await expect(card).toHaveAttribute('data-state', 'WAITING', { timeout: 15_000 });
-    await expect(card.getByTestId('status-ring')).toHaveAttribute('aria-label', 'waiting');
+    await expect(card.getByTestId('status-chip')).toHaveAttribute('aria-label', 'waiting');
 
     // Anchored to the node the question is about, and to no other node.
     const approval = approvalOn(page, writer);
@@ -47,7 +47,8 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     await expect(approval).toContainText(NODE_NAMES.first);
     await expect(approval).toHaveAttribute('data-point', 'output');
     await expect(approval).toHaveAttribute('data-check', 'pii');
-    await expect(approval).toContainText('output · pii · asks you');
+    // the action's UI label is "ask user" (CLAUDE.md §7; the V2 card dropped "asks you", D259)
+    await expect(approval).toContainText('output · pii · ask user');
     await expect(approval.getByTestId('approval-reason')).toHaveText(
       'The output contains an email address.',
     );
