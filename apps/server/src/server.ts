@@ -44,6 +44,7 @@ import {
   createRunGateRegistry,
   createRunService,
   createSearchService,
+  createTaskService,
   createTemplateService,
   createToolGuardrailEvaluator,
   createTraceService,
@@ -53,6 +54,7 @@ import {
   guardrailStoreFor,
   haltActiveRuns,
   loadEngineConfig,
+  maskSecrets,
   logDirectory,
   logFileName,
   mediaTypeForMime,
@@ -73,6 +75,7 @@ import {
   type IngestJob,
   type Logger,
   type McpService,
+  type TaskService,
   type ProviderService,
   type RunService,
   type SecretMasker,
@@ -108,6 +111,8 @@ import {
   McpManager,
   ToolRegistry,
   cannedResultsAt,
+  createCommandRunner,
+  createGitPort,
   registerBuiltinTools,
 } from '@ace/tools';
 import { WebSocketServer } from 'ws';
@@ -711,8 +716,22 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     pricingFor: async (providerId, modelId) => gateway.pricingFor(providerId, modelId),
   });
 
-  /* X1 §4.2: a run's project folder — where an agent-route CLI works, and the project tools reach. */
+  /*
+   * The task service is built after the run service it starts runs through; the run service asks it
+   * where a run works, so it is bound late (ACE parity P0).
+   */
+  const late: { tasks?: TaskService } = {};
+
+  /*
+   * X1 §4.2: a run's project folder — where an agent-route CLI works, and the project tools reach.
+   * ACE parity (D269): a run a task started works in the task's Git worktree, never in the project
+   * folder itself; a task run without a ready worktree gets no folder at all.
+   */
   const projectFolderFor = async (runId: Id): Promise<string | undefined> => {
+    if (late.tasks !== undefined) {
+      const owned = await late.tasks.folderForRun(runId);
+      if (owned.task) return owned.folder;
+    }
     const run = await repository.runs.get(LOCAL_SCOPE, runId);
     if (run === null) return undefined;
     const project = await repository.projects.get(LOCAL_SCOPE, run.projectId);
@@ -770,6 +789,26 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     drivePartialRun: (plan) => runs.drivePartialRun(plan),
     envelopesFor: (run, nodeId) => runs.envelopesFor(run, nodeId),
   });
+
+  /*
+   * Tasks (ACE parity P0, D268–D271): the board's state machine. A task's plan and work are runs of
+   * its team workflow, started under a run id the service chooses; its worktrees live under
+   * `<dataDir>/workspaces`; its check commands run through the platform shell (D271).
+   */
+  const taskService = createTaskService({
+    repository,
+    scope: LOCAL_SCOPE,
+    bus,
+    logger: logger.child({ subsystem: 'tasks' }),
+    git: createGitPort(),
+    commands: createCommandRunner(),
+    startRun: async (workflowId, request, runId) =>
+      (await runs.beginRun(workflowId, request, { runId })).run,
+    stopRun: (runId) => controls.stop(runId),
+    workspaceRoot: join(config.dataDir, 'workspaces'),
+    mask: maskSecrets,
+  });
+  late.tasks = taskService;
 
   /*
    * The chat service (FR-CHAT-001..008): the workflow timeline and direct agent threads. It reaches
@@ -863,6 +902,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     // D-061: the approvals that process was waiting on can no longer be answered, so they go too.
     approvals,
   });
+
+  /* ACE parity: tasks whose runs ended (or died) while the engine was away are settled. */
+  const detachTasks = await taskService.attach();
 
   /*
    * F7: a document the last process left mid-pipeline goes back to `pending` and is queued again —
@@ -971,6 +1013,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     usage,
     templates,
     backup,
+    /* ACE parity P0: the Tasks board, workspaces, changes and delivery. */
+    tasks: taskService,
   });
 
   /* -------------------------------------------------------------------- http */
@@ -1061,6 +1105,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
       logger: logger.child({ subsystem: 'runs' }),
       approvals,
     });
+    // Checks and setup commands in flight are cancelled; the halted runs above settle their tasks.
+    await taskService.shutdown();
+    detachTasks();
 
     // Round 4: stop deriving timeline rows and close every MCP connection before the DB closes.
     timeline.unsubscribe();
