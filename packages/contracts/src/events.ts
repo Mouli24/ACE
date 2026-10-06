@@ -1,26 +1,31 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 import {
   FailureReasonSchema,
   HaltReasonSchema,
   NodeStateSchema,
   ProviderStateSchema,
-} from './enums.js';
-import { ChatMessageSchema, MessageSchema } from './chat.js';
-import { PartSchema } from './envelope.js';
-import { IdSchema, LoopStopReasonSchema, TimestampSchema } from './graph.js';
-import { ApprovalDecisionSchema, ApprovalRequestSchema, VerdictSchema } from './guardrails.js';
+} from "./enums.js";
+import { ChatMessageSchema, MessageSchema } from "./chat.js";
+import { PartSchema } from "./envelope.js";
+import { IdSchema, LoopStopReasonSchema, TimestampSchema } from "./graph.js";
+import {
+  ApprovalDecisionSchema,
+  ApprovalRequestSchema,
+  VerdictSchema,
+} from "./guardrails.js";
 import {
   BudgetHaltSchema,
   ModelUsedSchema,
   NodeErrorSchema,
   RunSummarySchema,
   UsageSchema,
-} from './runs.js';
-import { KbDocumentStatusSchema } from './knowledge.js';
-import { MemoryOpSchema } from './memory.js';
-import { McpServerStatusSchema, ToolCallSchema } from './tools.js';
-import { DayTotalsSchema } from './usage.js';
+} from "./runs.js";
+import { KbDocumentStatusSchema } from "./knowledge.js";
+import { MemoryOpSchema } from "./memory.js";
+import { TaskActivitySchema, TaskSchema } from "./tasks.js";
+import { McpServerStatusSchema, ToolCallSchema } from "./tools.js";
+import { DayTotalsSchema } from "./usage.js";
 
 /**
  * The event log and the events that ride the WebSocket (round 2 §2.4, round 3 §2.6,
@@ -61,7 +66,7 @@ export type EventsQuery = z.infer<typeof EventsQuerySchema>;
 /* -------------------------------------------------------------------------- */
 
 /** A run ends in exactly one of three states — `RUNNING` is not an ending (BR-03). */
-export const TERMINAL_RUN_STATES = ['COMPLETE', 'HALTED', 'BLOCKED'] as const;
+export const TERMINAL_RUN_STATES = ["COMPLETE", "HALTED", "BLOCKED"] as const;
 export const TerminalRunStateSchema = z.enum(TERMINAL_RUN_STATES);
 export type TerminalRunState = z.infer<typeof TerminalRunStateSchema>;
 
@@ -70,7 +75,9 @@ export const EDGE_TRANSFER_SUMMARY_MAX = 120;
 
 const PartsByNodeIdSchema = z.record(IdSchema, z.array(PartSchema));
 
-export const RunStartedPayloadSchema = z.strictObject({ run: RunSummarySchema });
+export const RunStartedPayloadSchema = z.strictObject({
+  run: RunSummarySchema,
+});
 export type RunStartedPayload = z.infer<typeof RunStartedPayloadSchema>;
 
 export const RunCompletedPayloadSchema = z.strictObject({
@@ -165,14 +172,18 @@ export const NodeApprovalRequiredPayloadSchema = z.strictObject({
   runId: IdSchema,
   request: ApprovalRequestSchema,
 });
-export type NodeApprovalRequiredPayload = z.infer<typeof NodeApprovalRequiredPayloadSchema>;
+export type NodeApprovalRequiredPayload = z.infer<
+  typeof NodeApprovalRequiredPayloadSchema
+>;
 
 export const NodeApprovalDecidedPayloadSchema = z.strictObject({
   runId: IdSchema,
   nodeRunId: IdSchema,
   decision: ApprovalDecisionSchema,
 });
-export type NodeApprovalDecidedPayload = z.infer<typeof NodeApprovalDecidedPayloadSchema>;
+export type NodeApprovalDecidedPayload = z.infer<
+  typeof NodeApprovalDecidedPayloadSchema
+>;
 
 /** Every verdict is emitted as well as stored on its node run (FR-GRD-015). */
 export const GuardrailVerdictPayloadSchema = z.strictObject({
@@ -180,7 +191,9 @@ export const GuardrailVerdictPayloadSchema = z.strictObject({
   nodeRunId: IdSchema,
   verdict: VerdictSchema,
 });
-export type GuardrailVerdictPayload = z.infer<typeof GuardrailVerdictPayloadSchema>;
+export type GuardrailVerdictPayload = z.infer<
+  typeof GuardrailVerdictPayloadSchema
+>;
 
 /**
  * Without `stop`: a loop edge re-queued its target, and `iteration` is the iteration the target now
@@ -275,29 +288,33 @@ export type MemoryUpdatedPayload = z.infer<typeof MemoryUpdatedPayloadSchema>;
  * Frames are strict: a key the contract does not name is drift, and on this seam drift is how a
  * `seq` would quietly appear on `node.token` or a message list on a payload (BR-02).
  */
-const persistedFrame = <T extends string, P extends z.ZodType>(type: T, payload: P) =>
-  z.strictObject({ type: z.literal(type), payload, seq: SeqSchema });
+const persistedFrame = <T extends string, P extends z.ZodType>(
+  type: T,
+  payload: P,
+) => z.strictObject({ type: z.literal(type), payload, seq: SeqSchema });
 
-const transientFrame = <T extends string, P extends z.ZodType>(type: T, payload: P) =>
-  z.strictObject({ type: z.literal(type), payload });
+const transientFrame = <T extends string, P extends z.ZodType>(
+  type: T,
+  payload: P,
+) => z.strictObject({ type: z.literal(type), payload });
 
 export const RUN_EVENT_FRAME_SCHEMAS = [
-  persistedFrame('run.started', RunStartedPayloadSchema),
-  persistedFrame('run.completed', RunCompletedPayloadSchema),
-  persistedFrame('node.state', NodeStatePayloadSchema),
-  transientFrame('node.token', NodeTokenPayloadSchema),
-  persistedFrame('node.output', NodeOutputPayloadSchema),
-  persistedFrame('node.error', NodeErrorPayloadSchema),
-  persistedFrame('edge.transfer', EdgeTransferPayloadSchema),
-  persistedFrame('usage.updated', UsageUpdatedPayloadSchema),
-  persistedFrame('run.paused', RunPausedPayloadSchema),
-  persistedFrame('run.resumed', RunResumedPayloadSchema),
-  persistedFrame('node.approval_required', NodeApprovalRequiredPayloadSchema),
-  persistedFrame('node.approval_decided', NodeApprovalDecidedPayloadSchema),
-  persistedFrame('guardrail.verdict', GuardrailVerdictPayloadSchema),
-  persistedFrame('loop.iteration', LoopIterationPayloadSchema),
-  persistedFrame('tool.call', ToolCallPayloadSchema),
-  persistedFrame('message.created', MessageCreatedPayloadSchema),
+  persistedFrame("run.started", RunStartedPayloadSchema),
+  persistedFrame("run.completed", RunCompletedPayloadSchema),
+  persistedFrame("node.state", NodeStatePayloadSchema),
+  transientFrame("node.token", NodeTokenPayloadSchema),
+  persistedFrame("node.output", NodeOutputPayloadSchema),
+  persistedFrame("node.error", NodeErrorPayloadSchema),
+  persistedFrame("edge.transfer", EdgeTransferPayloadSchema),
+  persistedFrame("usage.updated", UsageUpdatedPayloadSchema),
+  persistedFrame("run.paused", RunPausedPayloadSchema),
+  persistedFrame("run.resumed", RunResumedPayloadSchema),
+  persistedFrame("node.approval_required", NodeApprovalRequiredPayloadSchema),
+  persistedFrame("node.approval_decided", NodeApprovalDecidedPayloadSchema),
+  persistedFrame("guardrail.verdict", GuardrailVerdictPayloadSchema),
+  persistedFrame("loop.iteration", LoopIterationPayloadSchema),
+  persistedFrame("tool.call", ToolCallPayloadSchema),
+  persistedFrame("message.created", MessageCreatedPayloadSchema),
 ] as const;
 
 /**
@@ -306,27 +323,56 @@ export const RUN_EVENT_FRAME_SCHEMAS = [
  * would also make `PERSISTED_RUN_EVENT_TYPES` shorter by a type no run ever sees.
  */
 export const THREAD_EVENT_FRAME_SCHEMAS = [
-  persistedFrame('chat.message', ChatMessagePayloadSchema),
-  transientFrame('chat.token', ChatTokenPayloadSchema),
+  persistedFrame("chat.message", ChatMessagePayloadSchema),
+  transientFrame("chat.token", ChatTokenPayloadSchema),
 ] as const;
 
+/**
+ * ACE parity P0: a task changed — its stage, state, plan, workspace or anything else on the card —
+ * with the activity row that says why, when there is one. Rides the engine subscription, as the
+ * board shows every project's tasks without subscribing per task.
+ */
+export const TaskUpdatedPayloadSchema = z.strictObject({
+  task: TaskSchema,
+  activity: TaskActivitySchema.optional(),
+});
+export type TaskUpdatedPayload = z.infer<typeof TaskUpdatedPayloadSchema>;
+
+/** A task was deleted; the board drops its card. */
+export const TaskDeletedPayloadSchema = z.strictObject({
+  taskId: IdSchema,
+  projectId: IdSchema,
+});
+export type TaskDeletedPayload = z.infer<typeof TaskDeletedPayloadSchema>;
+
 export const ENGINE_EVENT_FRAME_SCHEMAS = [
-  persistedFrame('provider.status', ProviderStatusPayloadSchema),
-  persistedFrame('mcp.status', McpStatusPayloadSchema),
-  persistedFrame('kb.ingest', KbIngestPayloadSchema),
-  persistedFrame('memory.updated', MemoryUpdatedPayloadSchema),
+  persistedFrame("provider.status", ProviderStatusPayloadSchema),
+  persistedFrame("mcp.status", McpStatusPayloadSchema),
+  persistedFrame("kb.ingest", KbIngestPayloadSchema),
+  persistedFrame("memory.updated", MemoryUpdatedPayloadSchema),
+  persistedFrame("task.updated", TaskUpdatedPayloadSchema),
+  persistedFrame("task.deleted", TaskDeletedPayloadSchema),
 ] as const;
 
 /** Server → client, run scope (round 2 §2.4, round 3 §2.6, round 4 §2.5). */
-export const RunEventSchema = z.discriminatedUnion('type', RUN_EVENT_FRAME_SCHEMAS);
+export const RunEventSchema = z.discriminatedUnion(
+  "type",
+  RUN_EVENT_FRAME_SCHEMAS,
+);
 export type RunEvent = z.infer<typeof RunEventSchema>;
 
 /** Server → client, thread scope (round 4 §2.5). */
-export const ThreadEventSchema = z.discriminatedUnion('type', THREAD_EVENT_FRAME_SCHEMAS);
+export const ThreadEventSchema = z.discriminatedUnion(
+  "type",
+  THREAD_EVENT_FRAME_SCHEMAS,
+);
 export type ThreadEvent = z.infer<typeof ThreadEventSchema>;
 
 /** Server → client, engine scope (§2.4, round 4 §2.5, round 5 §2.8). */
-export const EngineEventSchema = z.discriminatedUnion('type', ENGINE_EVENT_FRAME_SCHEMAS);
+export const EngineEventSchema = z.discriminatedUnion(
+  "type",
+  ENGINE_EVENT_FRAME_SCHEMAS,
+);
 export type EngineEvent = z.infer<typeof EngineEventSchema>;
 
 /* -------------------------------------------------------------------------- */
@@ -334,44 +380,51 @@ export type EngineEvent = z.infer<typeof EngineEventSchema>;
 /* -------------------------------------------------------------------------- */
 
 export const RUN_EVENT_TYPES = [
-  'run.started',
-  'run.completed',
-  'node.state',
-  'node.token',
-  'node.output',
-  'node.error',
-  'edge.transfer',
-  'usage.updated',
-  'run.paused',
-  'run.resumed',
-  'node.approval_required',
-  'node.approval_decided',
-  'guardrail.verdict',
-  'loop.iteration',
-  'tool.call',
-  'message.created',
+  "run.started",
+  "run.completed",
+  "node.state",
+  "node.token",
+  "node.output",
+  "node.error",
+  "edge.transfer",
+  "usage.updated",
+  "run.paused",
+  "run.resumed",
+  "node.approval_required",
+  "node.approval_decided",
+  "guardrail.verdict",
+  "loop.iteration",
+  "tool.call",
+  "message.created",
 ] as const;
 export type RunEventType = (typeof RUN_EVENT_TYPES)[number];
 
-export const THREAD_EVENT_TYPES = ['chat.message', 'chat.token'] as const;
+export const THREAD_EVENT_TYPES = ["chat.message", "chat.token"] as const;
 export type ThreadEventType = (typeof THREAD_EVENT_TYPES)[number];
 
 export const ENGINE_EVENT_TYPES = [
-  'provider.status',
-  'mcp.status',
-  'kb.ingest',
-  'memory.updated',
+  "provider.status",
+  "mcp.status",
+  "kb.ingest",
+  "memory.updated",
+  "task.updated",
+  "task.deleted",
 ] as const;
 export type EngineEventType = (typeof ENGINE_EVENT_TYPES)[number];
 
 /** Not persisted, no `seq`, never replayed by `resume` (§2.4, round 4 §2.5). */
-export const TRANSIENT_EVENT_TYPES = ['node.token', 'chat.token'] as const;
+export const TRANSIENT_EVENT_TYPES = ["node.token", "chat.token"] as const;
 export type TransientEventType = (typeof TRANSIENT_EVENT_TYPES)[number];
 
 export type PersistedRunEventType = Exclude<RunEventType, TransientEventType>;
-export type PersistedThreadEventType = Exclude<ThreadEventType, TransientEventType>;
+export type PersistedThreadEventType = Exclude<
+  ThreadEventType,
+  TransientEventType
+>;
 
-const isTransient = (type: RunEventType | ThreadEventType): type is TransientEventType =>
+const isTransient = (
+  type: RunEventType | ThreadEventType,
+): type is TransientEventType =>
   (TRANSIENT_EVENT_TYPES as readonly string[]).includes(type);
 
 export const PERSISTED_RUN_EVENT_TYPES = RUN_EVENT_TYPES.filter(

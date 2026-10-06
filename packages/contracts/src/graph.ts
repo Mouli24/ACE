@@ -1,6 +1,11 @@
-import { z } from 'zod';
+import { z } from "zod";
 
-import { DataTypeSchema, EdgeKindSchema, RoutingPolicySchema, type DataType } from './enums.js';
+import {
+  DataTypeSchema,
+  EdgeKindSchema,
+  RoutingPolicySchema,
+  type DataType,
+} from "./enums.js";
 
 /* -------------------------------------------------------------------------- */
 /* Primitives (round 1 §2.4)                                                   */
@@ -13,7 +18,7 @@ import { DataTypeSchema, EdgeKindSchema, RoutingPolicySchema, type DataType } fr
  */
 export const ULID_REGEX = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 
-export const IdSchema = z.string().regex(ULID_REGEX, 'must be a ULID');
+export const IdSchema = z.string().regex(ULID_REGEX, "must be a ULID");
 export type Id = z.infer<typeof IdSchema>;
 
 /** ISO-8601 instant, with `Z` or an explicit offset. */
@@ -38,6 +43,32 @@ export const NodeNameSchema = z.string().min(1).max(80);
  */
 export const BudgetUsdSchema = z.number().positive();
 
+/*
+ * A project's Build settings (ACE parity P0, D269, D271). Defined here rather than in tasks.ts
+ * because `ProjectSchema` carries them and tasks.ts imports this module. All of them are optional on
+ * the record — absent reads as the default — so a project written before them parses unchanged.
+ */
+
+export const CHECK_NAME_MAX = 60;
+export const CHECK_COMMAND_MAX = 1_000;
+export const CHECK_COMMANDS_MAX = 10;
+
+/** One verification command, run in a task's workspace after each work run (D271). */
+export const CheckCommandSchema = z.strictObject({
+  name: z.string().trim().min(1).max(CHECK_NAME_MAX),
+  command: z.string().trim().min(1).max(CHECK_COMMAND_MAX),
+});
+export type CheckCommand = z.infer<typeof CheckCommandSchema>;
+
+/** How many tasks may run work at once in one project (ACE "capacity"). */
+export const BUILD_CAPACITY_MAX = 8;
+export const DEFAULT_BUILD_CAPACITY = 2;
+export const BuildCapacitySchema = z
+  .number()
+  .int()
+  .min(1)
+  .max(BUILD_CAPACITY_MAX);
+
 export const ProjectSchema = z.object({
   id: IdSchema,
   name: EntityNameSchema,
@@ -45,6 +76,23 @@ export const ProjectSchema = z.object({
   lastOpenedAt: TimestampSchema.optional(),
   /** A run that would cost more halts `budget_exceeded` (round 3 §2.3, FR-GRD-008). */
   maxCostPerRunUsd: BudgetUsdSchema.nullable().optional(),
+  /** A paused project's tasks take no automatic step; runs already going finish. Absent is false. */
+  paused: z.boolean().optional(),
+  /** Absent is `DEFAULT_BUILD_CAPACITY`. */
+  buildCapacity: BuildCapacitySchema.optional(),
+  /** Run in order in a task's workspace after each work run. Absent is none. */
+  checkCommands: z.array(CheckCommandSchema).max(CHECK_COMMANDS_MAX).optional(),
+  /**
+   * Run once in a new workspace before its first run (e.g. installing dependencies). `null` reads
+   * as absent, so a patch clearing it can be merged into the record as it is (D72).
+   */
+  setupCommand: z
+    .string()
+    .trim()
+    .min(1)
+    .max(CHECK_COMMAND_MAX)
+    .nullable()
+    .optional(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 });
@@ -78,10 +126,17 @@ export const PositionSchema = z.object({ x: z.number(), y: z.number() });
 export type Position = z.infer<typeof PositionSchema>;
 
 /** Port ids are stable and derived: `<nodeId>:in:<name>` / `<nodeId>:out:<name>` (§2.4). */
-export const PORT_ID_REGEX = /^[0-7][0-9A-HJKMNP-TV-Z]{25}:(in|out):[A-Za-z0-9_]+$/;
-export const PortIdSchema = z.string().regex(PORT_ID_REGEX, 'must be <nodeId>:in|out:<name>');
+export const PORT_ID_REGEX =
+  /^[0-7][0-9A-HJKMNP-TV-Z]{25}:(in|out):[A-Za-z0-9_]+$/;
+export const PortIdSchema = z
+  .string()
+  .regex(PORT_ID_REGEX, "must be <nodeId>:in|out:<name>");
 
-export function portId(nodeId: Id, direction: 'in' | 'out', name: string): string {
+export function portId(
+  nodeId: Id,
+  direction: "in" | "out",
+  name: string,
+): string {
   return `${nodeId}:${direction}:${name}`;
 }
 
@@ -97,10 +152,29 @@ export const DEFAULT_EXECUTION_SETTINGS = {
 } as const;
 
 export const ExecutionSettingsSchema = z.object({
-  temperature: z.number().min(0).max(2).default(DEFAULT_EXECUTION_SETTINGS.temperature),
-  maxTokens: z.number().int().min(1).max(200_000).default(DEFAULT_EXECUTION_SETTINGS.maxTokens),
-  timeoutMs: z.number().int().min(1000).max(600_000).default(DEFAULT_EXECUTION_SETTINGS.timeoutMs),
-  retries: z.number().int().min(0).max(5).default(DEFAULT_EXECUTION_SETTINGS.retries),
+  temperature: z
+    .number()
+    .min(0)
+    .max(2)
+    .default(DEFAULT_EXECUTION_SETTINGS.temperature),
+  maxTokens: z
+    .number()
+    .int()
+    .min(1)
+    .max(200_000)
+    .default(DEFAULT_EXECUTION_SETTINGS.maxTokens),
+  timeoutMs: z
+    .number()
+    .int()
+    .min(1000)
+    .max(600_000)
+    .default(DEFAULT_EXECUTION_SETTINGS.timeoutMs),
+  retries: z
+    .number()
+    .int()
+    .min(0)
+    .max(5)
+    .default(DEFAULT_EXECUTION_SETTINGS.retries),
 });
 export type ExecutionSettings = z.infer<typeof ExecutionSettingsSchema>;
 
@@ -113,10 +187,12 @@ export const DEFAULT_MAX_TOOL_CALLS = 10;
  * `.default(value)` hands every parse the same reference, so two agent configs would otherwise
  * share one `fallbackModelIds` array.
  */
-export const defaultExecutionSettings = (): ExecutionSettings => ({ ...DEFAULT_EXECUTION_SETTINGS });
+export const defaultExecutionSettings = (): ExecutionSettings => ({
+  ...DEFAULT_EXECUTION_SETTINGS,
+});
 
 export const defaultRouting = () => ({
-  policy: 'fixed' as const,
+  policy: "fixed" as const,
   fallbackModelIds: [] as string[],
 });
 
@@ -179,11 +255,15 @@ export const ModelConfigSchema = z.object({
 });
 export type ModelConfig = z.infer<typeof ModelConfigSchema>;
 
-export const MERGE_MODES = ['all', 'any'] as const;
+export const MERGE_MODES = ["all", "any"] as const;
 export const MergeConfigSchema = z.object({ mode: z.enum(MERGE_MODES) });
 export type MergeConfig = z.infer<typeof MergeConfigSchema>;
 
-export const TRANSFORM_OPS = ['template', 'extract_json_field', 'join'] as const;
+export const TRANSFORM_OPS = [
+  "template",
+  "extract_json_field",
+  "join",
+] as const;
 export const TransformConfigSchema = z.object({
   op: z.enum(TRANSFORM_OPS),
   template: z.string().optional(),
@@ -197,16 +277,20 @@ export type TransformConfig = z.infer<typeof TransformConfigSchema>;
  * node's config (§2.4). Declared here rather than in `knowledge.ts` because that module imports
  * this one, and one definition is what keeps the node and the search from drifting.
  */
-export const SEARCH_MODES = ['hybrid', 'vector', 'keyword'] as const;
+export const SEARCH_MODES = ["hybrid", "vector", "keyword"] as const;
 export const SearchModeSchema = z.enum(SEARCH_MODES);
 export type SearchMode = z.infer<typeof SearchModeSchema>;
-export const DEFAULT_SEARCH_MODE: SearchMode = 'hybrid';
+export const DEFAULT_SEARCH_MODE: SearchMode = "hybrid";
 
 /** How many hits a search returns (§2.1, §2.4). */
 export const SEARCH_K_MIN = 1;
 export const SEARCH_K_MAX = 20;
 export const DEFAULT_SEARCH_K = 5;
-export const SearchKSchema = z.number().int().min(SEARCH_K_MIN).max(SEARCH_K_MAX);
+export const SearchKSchema = z
+  .number()
+  .int()
+  .min(SEARCH_K_MIN)
+  .max(SEARCH_K_MAX);
 
 /**
  * Round 5 §2.4. A missing `knowledgeBaseId` is pre-flight's `missing_knowledge_base`, not a parse
@@ -220,10 +304,14 @@ export const RetrievalConfigSchema = z.object({
 });
 export type RetrievalConfig = z.infer<typeof RetrievalConfigSchema>;
 
-export const GuardrailNodeConfigSchema = z.object({ policyId: IdSchema.optional() });
+export const GuardrailNodeConfigSchema = z.object({
+  policyId: IdSchema.optional(),
+});
 export type GuardrailNodeConfig = z.infer<typeof GuardrailNodeConfigSchema>;
 
-export const CustomConfigSchema = z.object({ customNodeId: IdSchema.optional() });
+export const CustomConfigSchema = z.object({
+  customNodeId: IdSchema.optional(),
+});
 export type CustomConfig = z.infer<typeof CustomConfigSchema>;
 
 /** The union §2.4 calls `NodeConfig` — selected by the node's `kind`, never self-describing. */
@@ -267,22 +355,58 @@ const nodeBase = {
 };
 
 /** `config` is discriminated by `kind` (§2.4), so the node itself is the discriminated union. */
-export const NodeSchema = z.discriminatedUnion('kind', [
-  z.object({ ...nodeBase, kind: z.literal('input'), config: InputConfigSchema }),
-  z.object({ ...nodeBase, kind: z.literal('output'), config: OutputConfigSchema }),
-  z.object({ ...nodeBase, kind: z.literal('agent'), config: AgentConfigSchema }),
-  z.object({ ...nodeBase, kind: z.literal('model'), config: ModelConfigSchema }),
-  z.object({ ...nodeBase, kind: z.literal('merge'), config: MergeConfigSchema }),
-  z.object({ ...nodeBase, kind: z.literal('transform'), config: TransformConfigSchema }),
-  z.object({ ...nodeBase, kind: z.literal('retrieval'), config: RetrievalConfigSchema }),
-  z.object({ ...nodeBase, kind: z.literal('guardrail'), config: GuardrailNodeConfigSchema }),
-  z.object({ ...nodeBase, kind: z.literal('custom'), config: CustomConfigSchema }),
+export const NodeSchema = z.discriminatedUnion("kind", [
+  z.object({
+    ...nodeBase,
+    kind: z.literal("input"),
+    config: InputConfigSchema,
+  }),
+  z.object({
+    ...nodeBase,
+    kind: z.literal("output"),
+    config: OutputConfigSchema,
+  }),
+  z.object({
+    ...nodeBase,
+    kind: z.literal("agent"),
+    config: AgentConfigSchema,
+  }),
+  z.object({
+    ...nodeBase,
+    kind: z.literal("model"),
+    config: ModelConfigSchema,
+  }),
+  z.object({
+    ...nodeBase,
+    kind: z.literal("merge"),
+    config: MergeConfigSchema,
+  }),
+  z.object({
+    ...nodeBase,
+    kind: z.literal("transform"),
+    config: TransformConfigSchema,
+  }),
+  z.object({
+    ...nodeBase,
+    kind: z.literal("retrieval"),
+    config: RetrievalConfigSchema,
+  }),
+  z.object({
+    ...nodeBase,
+    kind: z.literal("guardrail"),
+    config: GuardrailNodeConfigSchema,
+  }),
+  z.object({
+    ...nodeBase,
+    kind: z.literal("custom"),
+    config: CustomConfigSchema,
+  }),
 ]);
 export type Node = z.infer<typeof NodeSchema>;
 
-export const LOOP_ON_MAX = ['continue', 'fail'] as const;
+export const LOOP_ON_MAX = ["continue", "fail"] as const;
 
-const MAX_ITERATIONS_MESSAGE = 'must be a whole number from 1 to 50';
+const MAX_ITERATIONS_MESSAGE = "must be a whole number from 1 to 50";
 
 /**
  * What round 1 declared, worded for the loop edge editor (NFR-USE-03). The exit path grammar is
@@ -298,10 +422,10 @@ export const LoopConfigSchema = z.object({
   exitCondition: z.object({
     path: z.string(),
     equals: z.union([z.string(), z.number(), z.boolean()], {
-      error: 'must be a string, a number or true/false',
+      error: "must be a string, a number or true/false",
     }),
   }),
-  onMax: z.enum(LOOP_ON_MAX, { error: 'must be continue or fail' }),
+  onMax: z.enum(LOOP_ON_MAX, { error: "must be continue or fail" }),
 });
 export type LoopConfig = z.infer<typeof LoopConfigSchema>;
 
@@ -314,15 +438,24 @@ export type LoopConfig = z.infer<typeof LoopConfigSchema>;
 export const DOTTED_PATH_REGEX = /^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+|\[\d+\])*$/;
 export const DottedPathSchema = z
   .string()
-  .regex(DOTTED_PATH_REGEX, 'must be a dotted path such as verdict or review.issues.0');
+  .regex(
+    DOTTED_PATH_REGEX,
+    "must be a dotted path such as verdict or review.issues.0",
+  );
 
 /** A loop edge's config on the way in: `LoopConfig`, with an exit path the engine can read. */
 const LoopEdgeConfigSchema = LoopConfigSchema.extend({
-  exitCondition: LoopConfigSchema.shape.exitCondition.extend({ path: DottedPathSchema }),
+  exitCondition: LoopConfigSchema.shape.exitCondition.extend({
+    path: DottedPathSchema,
+  }),
 });
 
 /** Why a loop ended, recorded on its last iteration's node run as `loopStop` (§2.4, FR-GRD-009). */
-export const LOOP_STOP_REASONS = ['exit_condition', 'max_iterations', 'repeated_output'] as const;
+export const LOOP_STOP_REASONS = [
+  "exit_condition",
+  "max_iterations",
+  "repeated_output",
+] as const;
 export const LoopStopReasonSchema = z.enum(LOOP_STOP_REASONS);
 export type LoopStopReason = z.infer<typeof LoopStopReasonSchema>;
 
@@ -345,26 +478,25 @@ export type Edge = z.infer<typeof EdgeSchema>;
 
 /** Why `validateLoopConfig` refused an edge. Each is also a validation issue code. */
 export const LOOP_REFUSAL_CODES = [
-  'loop_config_missing',
-  'loop_config_on_data_edge',
-  'invalid_loop_config',
-  'loop_source_not_json',
-  'loop_target_not_upstream',
-  'loop_bodies_overlap',
+  "loop_config_missing",
+  "loop_config_on_data_edge",
+  "invalid_loop_config",
+  "loop_source_not_json",
+  "loop_target_not_upstream",
+  "loop_bodies_overlap",
 ] as const;
 export type LoopRefusalCode = (typeof LOOP_REFUSAL_CODES)[number];
 
 export type LoopConfigCheck =
-  | { ok: true }
-  | { ok: false; code: LoopRefusalCode; reason: string };
+  { ok: true } | { ok: false; code: LoopRefusalCode; reason: string };
 
 /**
  * What `validateLoopConfig` reads of a graph: node outputs, which way the data edges run, and the
  * other loop edges.
  */
 export interface LoopGraph {
-  nodes: readonly Pick<Node, 'id' | 'name' | 'outputs'>[];
-  edges: readonly Pick<Edge, 'id' | 'kind' | 'from' | 'to'>[];
+  nodes: readonly Pick<Node, "id" | "name" | "outputs">[];
+  edges: readonly Pick<Edge, "id" | "kind" | "from" | "to">[];
 }
 
 const refuse = (code: LoopRefusalCode, reason: string): LoopConfigCheck => ({
@@ -374,11 +506,14 @@ const refuse = (code: LoopRefusalCode, reason: string): LoopConfigCheck => ({
 });
 
 /** True when a path of data edges runs from `from` to `to`. Loop edges never count (BR-05). */
-function reaches(from: Id, to: Id, edges: LoopGraph['edges']): boolean {
+function reaches(from: Id, to: Id, edges: LoopGraph["edges"]): boolean {
   const next = new Map<Id, Id[]>();
   for (const edge of edges) {
-    if (edge.kind !== 'data') continue;
-    next.set(edge.from.nodeId, [...(next.get(edge.from.nodeId) ?? []), edge.to.nodeId]);
+    if (edge.kind !== "data") continue;
+    next.set(edge.from.nodeId, [
+      ...(next.get(edge.from.nodeId) ?? []),
+      edge.to.nodeId,
+    ]);
   }
 
   const seen = new Set<Id>();
@@ -413,13 +548,22 @@ function walk(start: Id, next: ReadonlyMap<Id, readonly Id[]>): Set<Id> {
  * both included. One definition, so the engine's scheduler and the Canvas agree on what an
  * iteration re-runs (D84).
  */
-export function loopBody(edge: Pick<Edge, 'from' | 'to'>, edges: LoopGraph['edges']): Set<Id> {
+export function loopBody(
+  edge: Pick<Edge, "from" | "to">,
+  edges: LoopGraph["edges"],
+): Set<Id> {
   const forward = new Map<Id, Id[]>();
   const backward = new Map<Id, Id[]>();
   for (const each of edges) {
-    if (each.kind !== 'data') continue;
-    forward.set(each.from.nodeId, [...(forward.get(each.from.nodeId) ?? []), each.to.nodeId]);
-    backward.set(each.to.nodeId, [...(backward.get(each.to.nodeId) ?? []), each.from.nodeId]);
+    if (each.kind !== "data") continue;
+    forward.set(each.from.nodeId, [
+      ...(forward.get(each.from.nodeId) ?? []),
+      each.to.nodeId,
+    ]);
+    backward.set(each.to.nodeId, [
+      ...(backward.get(each.to.nodeId) ?? []),
+      each.from.nodeId,
+    ]);
   }
 
   const fromTarget = walk(edge.to.nodeId, forward);
@@ -441,63 +585,71 @@ export function loopBody(edge: Pick<Edge, 'from' | 'to'>, edges: LoopGraph['edge
  * text input. The loop edge re-queues its target for the next iteration instead.
  */
 export function validateLoopConfig(
-  edge: Pick<Edge, 'id' | 'kind' | 'from' | 'to' | 'loop'>,
+  edge: Pick<Edge, "id" | "kind" | "from" | "to" | "loop">,
   graph: LoopGraph,
 ): LoopConfigCheck {
-  if (edge.kind !== 'loop') {
+  if (edge.kind !== "loop") {
     return edge.loop === undefined
       ? { ok: true }
       : refuse(
-          'loop_config_on_data_edge',
-          'A data edge cannot carry a loop config — make it a loop edge instead.',
+          "loop_config_on_data_edge",
+          "A data edge cannot carry a loop config — make it a loop edge instead.",
         );
   }
 
   if (edge.loop === undefined) {
     return refuse(
-      'loop_config_missing',
-      'A loop edge needs max iterations, an exit condition and what to do at the maximum.',
+      "loop_config_missing",
+      "A loop edge needs max iterations, an exit condition and what to do at the maximum.",
     );
   }
 
   const parsed = LoopEdgeConfigSchema.safeParse(edge.loop);
   if (!parsed.success) {
     const problems = parsed.error.issues.map((issue) => {
-      const where = issue.path.length === 0 ? 'config' : issue.path.map(String).join('.');
+      const where =
+        issue.path.length === 0 ? "config" : issue.path.map(String).join(".");
       return `${where}: ${issue.message}`;
     });
-    return refuse('invalid_loop_config', `Loop ${problems.join('; ')}.`);
+    return refuse("invalid_loop_config", `Loop ${problems.join("; ")}.`);
   }
 
   const source = graph.nodes.find((node) => node.id === edge.from.nodeId);
-  if (source === undefined || !source.outputs.some((port) => port.dataType === 'json')) {
-    const name = source === undefined ? 'The loop source' : `"${source.name}"`;
+  if (
+    source === undefined ||
+    !source.outputs.some((port) => port.dataType === "json")
+  ) {
+    const name = source === undefined ? "The loop source" : `"${source.name}"`;
     return refuse(
-      'loop_source_not_json',
+      "loop_source_not_json",
       `${name} has no json output for the loop's exit condition to read.`,
     );
   }
 
   if (!reaches(edge.to.nodeId, edge.from.nodeId, graph.edges)) {
     return refuse(
-      'loop_target_not_upstream',
+      "loop_target_not_upstream",
       `A loop edge must lead back to a node upstream of "${source.name}".`,
     );
   }
 
   const body = loopBody(edge, graph.edges);
   for (const other of graph.edges) {
-    if (other.kind !== 'loop' || other.id === edge.id) continue;
-    const shared = [...loopBody(other, graph.edges)].filter((id) => body.has(id));
+    if (other.kind !== "loop" || other.id === edge.id) continue;
+    const shared = [...loopBody(other, graph.edges)].filter((id) =>
+      body.has(id),
+    );
     if (shared.length === 0) continue;
 
     const names = shared
-      .map((id) => `"${graph.nodes.find((node) => node.id === id)?.name ?? id}"`)
-      .join(', ');
+      .map(
+        (id) => `"${graph.nodes.find((node) => node.id === id)?.name ?? id}"`,
+      )
+      .join(", ");
     return refuse(
-      'loop_bodies_overlap',
+      "loop_bodies_overlap",
       `This loop would repeat ${names}, which another loop already repeats; ` +
-        'a node can belong to one loop only.',
+        "a node can belong to one loop only.",
     );
   }
 
@@ -508,7 +660,7 @@ export function validateLoopConfig(
 /* The standard review contract (round 3 §2.4, FR-PAR-004, FR-PAR-007)         */
 /* -------------------------------------------------------------------------- */
 
-export const REVIEW_VERDICTS = ['approved', 'changes_requested'] as const;
+export const REVIEW_VERDICTS = ["approved", "changes_requested"] as const;
 export const REVIEW_SCORE_MIN = 0;
 export const REVIEW_SCORE_MAX = 10;
 
@@ -523,7 +675,7 @@ export const ReviewContractSchema = z.object({
 export type ReviewContract = z.infer<typeof ReviewContractSchema>;
 
 function deepFreeze<T>(value: T): T {
-  if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
+  if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
     Object.freeze(value);
     for (const inner of Object.values(value)) deepFreeze(inner);
   }
@@ -537,12 +689,16 @@ function deepFreeze<T>(value: T): T {
  * frozen all the way down: one agent's contract can never change it for the next.
  */
 export const REVIEW_CONTRACT_SCHEMA = deepFreeze({
-  type: 'object',
-  required: ['score', 'verdict', 'issues'],
+  type: "object",
+  required: ["score", "verdict", "issues"],
   properties: {
-    score: { type: 'number', minimum: REVIEW_SCORE_MIN, maximum: REVIEW_SCORE_MAX },
-    verdict: { type: 'string', enum: [...REVIEW_VERDICTS] },
-    issues: { type: 'array', items: { type: 'string' } },
+    score: {
+      type: "number",
+      minimum: REVIEW_SCORE_MIN,
+      maximum: REVIEW_SCORE_MAX,
+    },
+    verdict: { type: "string", enum: [...REVIEW_VERDICTS] },
+    issues: { type: "array", items: { type: "string" } },
   },
 } as const);
 
@@ -551,10 +707,12 @@ export const REVIEW_CONTRACT_SCHEMA = deepFreeze({
 /* -------------------------------------------------------------------------- */
 
 /** Distributes `Pick` over the node union so `kind` still narrows `config`. */
-type DistributivePick<T, K extends keyof T> = T extends unknown ? Pick<T, K> : never;
+type DistributivePick<T, K extends keyof T> = T extends unknown
+  ? Pick<T, K>
+  : never;
 
 /** What `derivePorts` needs: a node, or a node about to be created (which has no ports yet). */
-export type NodePortSource = DistributivePick<Node, 'id' | 'kind' | 'config'>;
+export type NodePortSource = DistributivePick<Node, "id" | "kind" | "config">;
 
 export interface DerivedPorts {
   inputs: Port[];
@@ -563,28 +721,33 @@ export interface DerivedPorts {
 
 /** The types an `output` node accepts, in the order §2.4 lists them. */
 export const OUTPUT_NODE_INPUT_TYPES = [
-  'text',
-  'json',
-  'image',
-  'audio',
-  'video',
-  'code',
-  'file',
+  "text",
+  "json",
+  "image",
+  "audio",
+  "video",
+  "code",
+  "file",
 ] as const satisfies readonly DataType[];
 
-function inPort(nodeId: Id, name: string, dataType: DataType, multi: boolean): Port {
-  return { id: portId(nodeId, 'in', name), name, dataType, multi };
+function inPort(
+  nodeId: Id,
+  name: string,
+  dataType: DataType,
+  multi: boolean,
+): Port {
+  return { id: portId(nodeId, "in", name), name, dataType, multi };
 }
 
 /** Output ports feed many edges (D22, FR-CON-005 fan-out), so they are always `multi: true`. */
 function outPort(nodeId: Id, name: string, dataType: DataType): Port {
-  return { id: portId(nodeId, 'out', name), name, dataType, multi: true };
+  return { id: portId(nodeId, "out", name), name, dataType, multi: true };
 }
 
 const TRANSFORM_PORTS = {
-  template: { in: { dataType: 'json', multi: false }, out: 'text' },
-  extract_json_field: { in: { dataType: 'json', multi: false }, out: 'json' },
-  join: { in: { dataType: 'text', multi: true }, out: 'text' },
+  template: { in: { dataType: "json", multi: false }, out: "text" },
+  extract_json_field: { in: { dataType: "json", multi: false }, out: "json" },
+  join: { in: { dataType: "text", multi: true }, out: "text" },
 } as const satisfies Record<
   (typeof TRANSFORM_OPS)[number],
   { in: { dataType: DataType; multi: boolean }; out: DataType }
@@ -602,48 +765,51 @@ export function derivePorts(node: NodePortSource): DerivedPorts {
   const { id } = node;
 
   switch (node.kind) {
-    case 'input':
+    case "input":
       return {
         inputs: [],
         outputs: node.config.outputTypes.map((t) => outPort(id, t, t)),
       };
 
-    case 'output':
+    case "output":
       return {
         inputs: OUTPUT_NODE_INPUT_TYPES.map((t) => inPort(id, t, t, false)),
         outputs: [],
       };
 
-    case 'agent':
-    case 'model':
+    case "agent":
+    case "model":
       return {
         inputs: node.config.inputTypes.map((t) => inPort(id, t, t, false)),
         outputs: node.config.outputTypes.map((t) => outPort(id, t, t)),
       };
 
-    case 'merge':
+    case "merge":
       return {
-        inputs: [inPort(id, 'in', 'text', true), inPort(id, 'in_json', 'json', true)],
-        outputs: [outPort(id, 'out', 'json')],
+        inputs: [
+          inPort(id, "in", "text", true),
+          inPort(id, "in_json", "json", true),
+        ],
+        outputs: [outPort(id, "out", "json")],
       };
 
-    case 'transform': {
+    case "transform": {
       const spec = TRANSFORM_PORTS[node.config.op];
       return {
-        inputs: [inPort(id, 'in', spec.in.dataType, spec.in.multi)],
-        outputs: [outPort(id, 'out', spec.out)],
+        inputs: [inPort(id, "in", spec.in.dataType, spec.in.multi)],
+        outputs: [outPort(id, "out", spec.out)],
       };
     }
 
     /* Round 5 §2.4: one text query in, `{ hits: SearchHit[] }` out as json (FR-RAG-006). */
-    case 'retrieval':
+    case "retrieval":
       return {
-        inputs: [inPort(id, 'query', 'text', false)],
-        outputs: [outPort(id, 'out', 'json')],
+        inputs: [inPort(id, "query", "text", false)],
+        outputs: [outPort(id, "out", "json")],
       };
 
-    case 'guardrail':
-    case 'custom':
+    case "guardrail":
+    case "custom":
       return { inputs: [], outputs: [] };
   }
 }

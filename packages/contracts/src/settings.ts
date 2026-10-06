@@ -1,16 +1,16 @@
-import { z } from 'zod';
+import { z } from "zod";
 
-import { ARTIFACT_UPLOAD_FIELD, DEFAULT_MAX_UPLOAD_MB } from './artifacts.js';
-import { BudgetUsdSchema, IdSchema } from './graph.js';
+import { ARTIFACT_UPLOAD_FIELD, DEFAULT_MAX_UPLOAD_MB } from "./artifacts.js";
+import { BudgetUsdSchema, IdSchema } from "./graph.js";
 
 /** Engine settings (round 1 §2.7, round 4 §2.1, round 5 §2.7, FR-SYS-005/010/012). */
 
-export const THEMES = ['dark', 'light', 'system'] as const;
+export const THEMES = ["dark", "light", "system"] as const;
 export const ThemeSchema = z.enum(THEMES);
 export type Theme = z.infer<typeof ThemeSchema>;
 
 export const DEFAULT_CONCURRENCY = 20;
-export const DEFAULT_THEME: Theme = 'dark';
+export const DEFAULT_THEME: Theme = "dark";
 export const DEFAULT_ONBOARDING_COMPLETED = false;
 
 /* Round 4 §2.1. `DEFAULT_MAX_UPLOAD_MB` lives with the upload rules it bounds, in artifacts.ts. */
@@ -19,11 +19,11 @@ export const DEFAULT_ONBOARDING_COMPLETED = false;
  * Whether the code sandbox uses Docker (D13, FR-TOOL-004): `auto` uses it when it is available and
  * falls back to a limited child process, `off` never uses it.
  */
-export const DOCKER_SANDBOX_MODES = ['auto', 'off'] as const;
+export const DOCKER_SANDBOX_MODES = ["auto", "off"] as const;
 export const DockerSandboxModeSchema = z.enum(DOCKER_SANDBOX_MODES);
 export type DockerSandboxMode = z.infer<typeof DockerSandboxModeSchema>;
 
-export const DEFAULT_DOCKER_SANDBOX: DockerSandboxMode = 'auto';
+export const DEFAULT_DOCKER_SANDBOX: DockerSandboxMode = "auto";
 export const DEFAULT_MCP_ENABLED = true;
 
 /**
@@ -36,11 +36,29 @@ export const DEFAULT_TELEMETRY_ENABLED = false;
 
 /** The dev origins the web app is served from (§2.7); a fresh array per parse. */
 export const DEFAULT_ALLOWED_ORIGINS = [
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
 ] as const;
 
 const defaultAllowedOrigins = (): string[] => [...DEFAULT_ALLOWED_ORIGINS];
+
+/**
+ * ACE's one approval choice (Settings > Safety & permissions, ACE parity D270).
+ *
+ * - `ask` — agents work inside the project's bounded access and ask before anything broader; every
+ *   final action (apply, merge, accept, send) waits for a person.
+ * - `auto_review` ("Approve for me") — a CLI agent may use its provider's own permission preset; final
+ *   actions still wait for a person.
+ * - `full_access` — a CLI agent may run with full access, and an Autopilot task's final action runs
+ *   by itself once its checks pass.
+ *
+ * None of them lets a destructive ACE tool call run without its approval card (BR-14, D270).
+ * Absent reads as `ask`.
+ */
+export const APPROVAL_MODES = ["ask", "auto_review", "full_access"] as const;
+export const ApprovalModeSchema = z.enum(APPROVAL_MODES);
+export type ApprovalMode = z.infer<typeof ApprovalModeSchema>;
+export const DEFAULT_APPROVAL_MODE: ApprovalMode = "ask";
 
 export const SettingsSchema = z.object({
   dataDir: z.string(),
@@ -60,6 +78,8 @@ export const SettingsSchema = z.object({
   /** Whether MCP servers may be connected at all (D16, FR-TOOL-007). */
   mcpEnabled: z.boolean().default(DEFAULT_MCP_ENABLED),
   telemetryEnabled: TelemetryEnabledSchema.default(DEFAULT_TELEMETRY_ENABLED),
+  /** ACE parity (D270); absent is `ask`. */
+  approvalMode: ApprovalModeSchema.optional(),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 
@@ -82,6 +102,7 @@ export const SettingsPatchSchema = z.object({
   dockerSandbox: DockerSandboxModeSchema.optional(),
   mcpEnabled: z.boolean().optional(),
   telemetryEnabled: TelemetryEnabledSchema.optional(),
+  approvalMode: ApprovalModeSchema.optional(),
 });
 export type SettingsPatch = z.infer<typeof SettingsPatchSchema>;
 
@@ -98,7 +119,7 @@ export type SettingsPatch = z.infer<typeof SettingsPatchSchema>;
  * `POST /backup/export` answers a `.zip` stream: a SQLite copy, the artifacts folder and the
  * settings — and never a key, because keys live in the keychain and are not in any of the three.
  */
-export const BACKUP_CONTENT_TYPE = 'application/zip';
+export const BACKUP_CONTENT_TYPE = "application/zip";
 
 /** The multipart field `POST /backup/import` reads the zip from — the one uploads use. */
 export const BACKUP_UPLOAD_FIELD = ARTIFACT_UPLOAD_FIELD;

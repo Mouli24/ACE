@@ -37,3 +37,6 @@ export * from './knowledge.js';
 export * from './memory.js';
 export * from './usage.js';
 export * from './templates.js';
+
+/* ACE parity (docs/ACE_FEATURE_PARITY.md, D267+) */
+export * from './tasks.js';
