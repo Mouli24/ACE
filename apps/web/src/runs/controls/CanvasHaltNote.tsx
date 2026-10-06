@@ -20,7 +20,7 @@ export function CanvasHaltNote({ workflowId }: { workflowId: string }) {
   );
   if (run.status !== 'HALTED' || run.haltReason === undefined) return null;
   return (
-    <div className="absolute left-1/2 top-3.5 z-10 -translate-x-1/2 rounded-chip border border-border bg-panel px-3.5 py-2 text-[13.5px] text-fg-soft shadow-[var(--ace-ground)]">
+    <div className="absolute left-1/2 top-3.5 z-10 w-max max-w-[calc(100%-1.5rem)] -translate-x-1/2 rounded-chip border border-border bg-panel px-3.5 py-2 text-[13.5px] text-fg-soft shadow-[var(--ace-ground)]">
       <HaltReasonNote
         reason={run.haltReason}
         {...(run.budgetHalt === undefined ? {} : { budgetHalt: run.budgetHalt })}

@@ -39,6 +39,9 @@ export interface RunActionResult {
   id: Id;
 }
 
+/** What the controls say when the run carries no `allowedActions` (FR-CTL-006). */
+const UNKNOWN_ACTIONS = 'the engine did not say which controls this run allows';
+
 /**
  * Sends one control to the engine: `POST /runs/:id/pause` · `/resume` · `/stop` · `/restart`.
  * Returning the run lets the toolbar follow a restart to its new run; returning nothing is fine for
@@ -116,7 +119,7 @@ export function RunControls({
 
   return (
     <div
-      className="flex flex-wrap items-center gap-2"
+      className="flex flex-wrap items-center gap-2 min-[641px]:shrink-0"
       data-testid="run-controls"
       data-status={status}
     >
@@ -155,13 +158,24 @@ export function RunControls({
       </div>
 
       {allowedActions === undefined && (
-        <span
-          data-testid="run-controls-unknown"
-          className="max-w-[11rem] font-machine text-[10px] leading-tight text-fg-muted"
-          title="FR-CTL-006: the controls follow run.allowedActions, and this run carries none."
-        >
-          the engine did not say which controls this run allows
-        </span>
+        <>
+          {/* From 641 px to xl the words would wrap out of the 52 px bar: they are visually hidden
+              there (still read out) and a "?" carries them as its title. */}
+          <span
+            data-testid="run-controls-unknown"
+            className="max-w-[11rem] font-machine text-[10px] leading-tight text-fg-muted min-[641px]:max-xl:sr-only"
+            title="FR-CTL-006: the controls follow run.allowedActions, and this run carries none."
+          >
+            {UNKNOWN_ACTIONS}
+          </span>
+          <span
+            aria-hidden="true"
+            title={UNKNOWN_ACTIONS}
+            className="hidden h-5 w-5 cursor-help place-items-center rounded-full border border-border font-machine text-[10px] text-fg-muted min-[641px]:max-xl:inline-grid"
+          >
+            ?
+          </span>
+        </>
       )}
 
       {showHalt && haltReason && (

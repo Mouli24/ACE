@@ -1,7 +1,21 @@
-import { BarChart3, CircleHelp, PanelRight, Plus, Settings, ShieldCheck } from 'lucide-react';
+import {
+  BarChart3,
+  CircleHelp,
+  MoreHorizontal,
+  PanelRight,
+  Plus,
+  Settings,
+  ShieldCheck,
+} from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 
-import { cn } from '@ace/ui';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  cn,
+} from '@ace/ui';
 import { useProject } from '../../projects/hooks';
 import { ProviderStatusBar } from '../../providers/ProviderStatusBar';
 import { CompactMenu } from '../../responsive/CompactMenu';
@@ -13,6 +27,14 @@ import { DayTotalsChip } from '../../usage/DayTotalsChip';
 import { SHEET_ID } from '../../workflows/WorkflowSheet';
 import { WorkflowTabs } from '../../workflows/WorkflowTabs';
 import { usePanelsStore } from '../stores/panels';
+
+/** Usage, Guardrail policies, Settings and Help: an icon row at xl and up, the More menu below. */
+const LINKS = [
+  { to: '/usage', label: 'Usage', Icon: BarChart3 },
+  { to: '/guardrails', label: 'Guardrail policies', Icon: ShieldCheck },
+  { to: '/settings', label: 'Settings', Icon: Settings },
+  { to: '/help/getting-started', label: 'Help', Icon: CircleHelp },
+] as const;
 
 const ICON_BUTTON =
   'grid h-8 w-8 place-items-center rounded-chip text-fg-muted hover:bg-border hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent';
@@ -82,8 +104,14 @@ export function TopBar() {
   }
 
   return (
-    <header className="flex h-[52px] min-w-0 shrink-0 items-center gap-3.5 border-b border-border bg-panel pl-[18px] pr-3.5">
-      <div className="flex shrink-0 items-baseline gap-2">
+    /*
+     * Below xl (1280 px) the bar condenses rather than push the page sideways: the workflow tabs
+     * give way first (they scroll), provider chips become dots, the four links fold into More, and
+     * below lg New node keeps only its + and "/ project" folds away. Run, the run chip and New node
+     * never leave the bar.
+     */
+    <header className="flex h-[52px] min-w-0 shrink-0 items-center gap-1.5 border-b border-border bg-panel pl-[18px] pr-3.5 lg:gap-2 xl:gap-3.5">
+      <div className="flex min-w-0 shrink-0 items-baseline gap-2">
         <Link
           to="/projects"
           className="font-human text-xl font-semibold tracking-[-0.01em] text-fg"
@@ -91,22 +119,24 @@ export function TopBar() {
           ACE
         </Link>
         {project.data && (
-          <>
+          // on a Canvas below lg the run controls need the room; ACE and the tabs remain
+          <span className={cn('items-baseline gap-2', workflowId ? 'hidden lg:flex' : 'flex')}>
             <span className="text-fg-faint">/</span>
             <Link
               to={`/projects/${project.data.id}`}
-              className="max-w-[14rem] truncate text-[15px] text-fg-soft hover:text-fg"
+              className="max-w-[7rem] truncate text-[15px] text-fg-soft hover:text-fg xl:max-w-[14rem]"
               data-testid="project-name"
             >
               {project.data.name}
             </Link>
-          </>
+          </span>
         )}
       </div>
       {/* A floor for the tabs: without it every other item keeps its width and the tabs (with
-          "Add workflow" and each tab's actions menu) are squeezed to nothing under them. */}
+          "Add workflow" and each tab's actions menu) are squeezed to nothing under them. Below xl
+          the floor is low and the strip scrolls, so the run controls keep their room. */}
       {projectId && (
-        <div className="min-w-48 shrink">
+        <div className="min-w-16 shrink xl:min-w-40">
           <WorkflowTabs projectId={projectId} activeWorkflowId={workflowId} />
         </div>
       )}
@@ -134,27 +164,47 @@ export function TopBar() {
             <PanelRight className="h-4 w-4" aria-hidden />
           </button>
         )}
-        <Link to="/usage" aria-label="Usage" className={ICON_BUTTON}>
-          <BarChart3 className="h-4 w-4" aria-hidden />
-        </Link>
-        <Link to="/guardrails" aria-label="Guardrail policies" className={ICON_BUTTON}>
-          <ShieldCheck className="h-4 w-4" aria-hidden />
-        </Link>
-        <Link to="/settings" aria-label="Settings" className={ICON_BUTTON}>
-          <Settings className="h-4 w-4" aria-hidden />
-        </Link>
-        <Link to="/help/getting-started" aria-label="Help" className={ICON_BUTTON}>
-          <CircleHelp className="h-4 w-4" aria-hidden />
-        </Link>
+        <div className="hidden items-center gap-0.5 xl:flex">
+          {LINKS.map(({ to, label, Icon }) => (
+            <Link key={to} to={to} aria-label={label} className={ICON_BUTTON}>
+              <Icon className="h-4 w-4" aria-hidden />
+            </Link>
+          ))}
+        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label="More"
+              title="More"
+              data-testid="topbar-more"
+              className={cn(ICON_BUTTON, 'xl:hidden')}
+            >
+              <MoreHorizontal className="h-4 w-4" aria-hidden />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-52">
+            {LINKS.map(({ to, label, Icon }) => (
+              <DropdownMenuItem key={to} asChild className="gap-2">
+                <Link to={to}>
+                  <Icon className="h-4 w-4" aria-hidden />
+                  {label}
+                </Link>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
       {workflowId && (
         <button
           type="button"
           data-testid="new-node-button"
-          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-chip border border-border-strong bg-card pl-[11px] pr-3.5 font-machine text-[10.5px] uppercase tracking-[0.1em] text-fg hover:bg-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          title="New node"
+          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-chip border border-border-strong bg-card px-2 font-machine text-[10.5px] uppercase tracking-[0.1em] text-fg hover:bg-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent lg:pl-[11px] lg:pr-3.5"
           onClick={openNewNode}
         >
-          <Plus className="h-3.5 w-3.5" aria-hidden /> New node
+          <Plus className="h-3.5 w-3.5" aria-hidden />
+          <span className="max-lg:sr-only">New node</span>
         </button>
       )}
     </header>
