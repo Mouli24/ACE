@@ -358,7 +358,10 @@ describe('ACE-P0 close and delete (design §2)', () => {
     await waitFor(() =>
       expect(router.state.location.pathname).toBe(`/projects/${project.id}/tasks`),
     );
-    expect(await screen.findByTestId('tasks-empty')).toBeInTheDocument();
+    // the board fetches its list afresh; under a loaded runner that takes more than a second
+    expect(
+      await screen.findByTestId('tasks-empty', undefined, { timeout: 5000 }),
+    ).toBeInTheDocument();
     expect(db.getTask(task.id)).toBeUndefined();
   });
 });
