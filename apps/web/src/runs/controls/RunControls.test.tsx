@@ -51,6 +51,22 @@ describe('TC-CTL-006 the run controls are enabled strictly from run.allowedActio
     expect(screen.getByTestId('run-controls-unknown')).toBeInTheDocument();
   });
 
+  it('in the desktop bar’s narrow band the note folds to a "?" whose title says the same words', () => {
+    render(<RunControls runId={RUN} status="RUNNING" onAction={vi.fn()} />);
+    const note = screen.getByTestId('run-controls-unknown');
+    // visually hidden from 641 px to xl (so it cannot wrap out of the 52 px bar), still read out;
+    // the phone header and xl+ show it whole
+    expect(note).toHaveClass('min-[641px]:max-xl:sr-only');
+    expect(note).toHaveTextContent('the engine did not say which controls this run allows');
+    const glyph = screen.getByText('?');
+    expect(glyph).toHaveAttribute('aria-hidden', 'true');
+    expect(glyph).toHaveClass('hidden', 'min-[641px]:max-xl:inline-grid');
+    expect(glyph).toHaveAttribute('title', note.textContent);
+    // on the desktop bar the controls never shrink, so nothing in them wraps under the pill;
+    // the phone header keeps wrapping, which is how its inline halt note gets a line of its own
+    expect(screen.getByTestId('run-controls')).toHaveClass('flex-wrap', 'min-[641px]:shrink-0');
+  });
+
   it('sends pause and resume straight through (FR-CTL-001, FR-CTL-002)', async () => {
     const user = userEvent.setup();
     const onAction = vi.fn();

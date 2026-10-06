@@ -123,7 +123,8 @@ export function RunBar({
   };
 
   return (
-    <div className="flex items-center gap-2" data-testid="run-bar">
+    // On the desktop bar (above 641 px) the run bar holds its width and the workflow tabs give way.
+    <div className="flex items-center gap-2 min-[641px]:shrink-0" data-testid="run-bar">
       {socketStatus === 'reconnecting' && (
         <span
           role="status"
@@ -138,7 +139,7 @@ export function RunBar({
         <span
           data-testid="run-status"
           data-status={run.status}
-          className="inline-flex h-[26px] items-center gap-[7px] rounded-chip border px-[11px] font-machine text-[10.5px] uppercase tracking-[0.06em]"
+          className="inline-flex h-[26px] shrink-0 items-center gap-[7px] whitespace-nowrap rounded-chip border px-[11px] font-machine text-[10.5px] uppercase tracking-[0.06em]"
           style={{
             color: runStateColor(run.status, run.haltReason),
             borderColor: `color-mix(in oklab, ${runStateColor(run.status, run.haltReason)} 40%, transparent)`,
@@ -151,13 +152,24 @@ export function RunBar({
               run.status === 'RUNNING' && 'ace-pulse',
             )}
           />
-          run {RUN_STATE_LABEL[run.status]}
-          {run.haltReason ? ` · ${run.haltReason}` : ''}
+          {/* One flex item beside the dot. The desktop bar's narrow band (641 px to lg) shows just
+              the state (the Canvas's halt note says why); the rest is visually hidden, not removed,
+              so assistive tech and the phone header keep the whole label. */}
+          <span>
+            <span className="min-[641px]:max-lg:sr-only">run </span>
+            {RUN_STATE_LABEL[run.status]}
+            {run.haltReason && (
+              <span className="min-[641px]:max-lg:sr-only">{` · ${run.haltReason}`}</span>
+            )}
+          </span>
         </span>
       )}
 
       {run.totals && (
-        <span data-testid="run-totals" className="font-machine text-[10.5px] text-fg-muted">
+        <span
+          data-testid="run-totals"
+          className="shrink-0 whitespace-nowrap font-machine text-[10.5px] text-fg-muted"
+        >
           {run.totals.tokensIn}↓ {run.totals.tokensOut}↑ {money(run.totals.costUsd)}
         </span>
       )}

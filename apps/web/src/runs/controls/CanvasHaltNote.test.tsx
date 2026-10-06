@@ -12,6 +12,13 @@ describe('CanvasHaltNote', () => {
     expect(screen.getByTestId('halt-reason')).toHaveAttribute('data-reason', 'failure');
   });
 
+  it('sizes to its text but never past the Canvas, so a narrow Canvas does not fold it to a column', () => {
+    useRunStore.setState({ workflowId: 'wf1', status: 'HALTED', haltReason: 'stopped' });
+    render(<CanvasHaltNote workflowId="wf1" />);
+    const pill = screen.getByTestId('halt-reason').parentElement;
+    expect(pill).toHaveClass('w-max', 'max-w-[calc(100%-1.5rem)]', 'left-1/2', '-translate-x-1/2');
+  });
+
   it('renders nothing for another workflow, a live run, or a halt without a reason', () => {
     useRunStore.setState({ workflowId: 'wf1', status: 'HALTED', haltReason: 'failure' });
     const { rerender } = render(<CanvasHaltNote workflowId="wf2" />);

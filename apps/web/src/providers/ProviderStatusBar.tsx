@@ -6,6 +6,17 @@ import { useProviders } from './hooks';
 const VISIBLE = 4;
 
 /**
+ * Narrow bars show each provider as its dot: the name and state (every span after the dot) stay in
+ * the DOM for screen readers and in the chip's title for a pointer. One provider keeps its full
+ * chip from xl up, as the design shows it; two or more stay dots up to 2xl, so a full set of long
+ * names cannot push the top bar wider than the page.
+ */
+const DOT_BELOW_XL =
+  'max-xl:gap-0 max-xl:border-transparent max-xl:bg-transparent max-xl:px-0.5 max-xl:[&>span+span]:sr-only';
+const DOT_BELOW_2XL =
+  'max-2xl:gap-0 max-2xl:border-transparent max-2xl:bg-transparent max-2xl:px-0.5 max-2xl:[&>span+span]:sr-only';
+
+/**
  * Provider status in the top bar (FR-PRV-004, TC-PRV-005). It reads the same providers query the
  * screen does, and that query is patched by `provider.status` frames, so a status change shows here
  * without a reload and without this component subscribing to anything itself.
@@ -31,7 +42,7 @@ export function ProviderStatusBar() {
   return (
     <Link
       to="/providers"
-      className="flex shrink-0 items-center gap-1.5 rounded-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      className="flex shrink-0 items-center gap-1 rounded-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent xl:gap-1.5"
       aria-label="Providers"
       data-testid="provider-status-bar"
     >
@@ -39,6 +50,7 @@ export function ProviderStatusBar() {
         <ProviderStatusChip
           key={provider.id}
           data-testid={`provider-status-${provider.id}`}
+          className={shown.length > 1 ? DOT_BELOW_2XL : DOT_BELOW_XL}
           name={provider.name}
           status={provider.status}
           {...(provider.statusMessage === undefined ? {} : { message: provider.statusMessage })}
