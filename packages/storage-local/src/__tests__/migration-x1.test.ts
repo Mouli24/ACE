@@ -5,7 +5,11 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openDatabase } from '../db.js';
-import { MIGRATIONS, X1_CLI_PROVIDERS_MIGRATION_ID } from '../migrations.js';
+import {
+  MIGRATIONS,
+  PARITY_P0_MIGRATION_ID,
+  X1_CLI_PROVIDERS_MIGRATION_ID,
+} from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
 import { scope } from './fixtures.js';
 
@@ -45,7 +49,10 @@ describe('X1 migration: providers.cli_permission (D262)', () => {
     before.sqlite.close();
 
     const after = openDatabase({ path });
-    expect(after.appliedMigrations).toEqual([X1_CLI_PROVIDERS_MIGRATION_ID]);
+    expect(after.appliedMigrations).toEqual([
+      X1_CLI_PROVIDERS_MIGRATION_ID,
+      PARITY_P0_MIGRATION_ID,
+    ]);
     const columns = (
       after.sqlite.prepare('PRAGMA table_info(providers)').all() as { name: string }[]
     ).map((column) => column.name);

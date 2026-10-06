@@ -34,7 +34,7 @@ import { openDatabase, type OpenDatabase } from '../db.js';
 import { MIGRATIONS, ROUND_5_MIGRATION_ID } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
 import { KeychainSecretStore } from '../secret-store.js';
-import { makeProject, scope } from './fixtures.js';
+import { createProjectBeforeP0, makeProject, scope } from './fixtures.js';
 
 /**
  * Backup and restore (round 5 §2.7, FR-SYS-012, TC-SYS-014, F12): the export is a zip of a
@@ -630,7 +630,7 @@ describe('FR-SYS-012 a backup from an older schema is migrated forward before th
     );
     const old = await startEngine('old', BEFORE_ROUND_5);
     const project = makeProject({ name: 'From round 4' });
-    await old.repository.projects.create(scope, project);
+    await createProjectBeforeP0(old.opened.sqlite, old.repository, project);
     const policy = await old.repository.guardrailPolicies.getProjectDefault(scope, project.id);
     // A round 4 install's default policy had no context-point checks.
     old.opened.sqlite

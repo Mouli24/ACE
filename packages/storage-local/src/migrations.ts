@@ -33,6 +33,13 @@ export const ROUND_5_MIGRATION_ID = '20261001T120000_round_5_knowledge_memory_us
 export const X1_CLI_PROVIDERS_MIGRATION_ID = '20261006T120000_x1_cli_providers';
 
 /**
+ * ACE parity P0 (D267–D271): a project's Build settings, and tasks with their workspaces,
+ * executions, checks, reviews, deliveries and activity. Named so a test can apply the chain before
+ * it.
+ */
+export const PARITY_P0_MIGRATION_ID = '20261006T180000_parity_p0_tasks';
+
+/**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
  * written.
@@ -548,6 +555,155 @@ export const MIGRATIONS: readonly Migration[] = [
     up: `
       -- X1 (D262): what a CLI provider may do in the project folder. NULL for every other type.
       ALTER TABLE providers ADD COLUMN cli_permission TEXT;
+    `,
+  },
+  {
+    id: PARITY_P0_MIGRATION_ID,
+    up: `
+      -- A project's Build settings (D269, D271). Every project written before reads not paused,
+      -- the default capacity, no check commands and no setup command. 'check_commands' is a JSON
+      -- CheckCommand[]; NULL is none.
+      ALTER TABLE projects ADD COLUMN paused INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE projects ADD COLUMN build_capacity INTEGER;
+      ALTER TABLE projects ADD COLUMN check_commands TEXT;
+      ALTER TABLE projects ADD COLUMN setup_command TEXT;
+
+      -- A task on a project's board (D267, D268). The schema's first foreign keys: a task and
+      -- everything below it go with its project, and a deleted workflow leaves the task without a
+      -- team or planner rather than pointing at nothing. 'number' is per project, from 1, which the
+      -- unique constraint makes a fact rather than a convention. 'labels' is a JSON string[].
+      CREATE TABLE tasks (
+        id                  TEXT PRIMARY KEY,
+        workspace_id        TEXT NOT NULL,
+        project_id          TEXT NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+        number              INTEGER NOT NULL,
+        title               TEXT NOT NULL,
+        brief               TEXT NOT NULL,
+        type                TEXT NOT NULL,
+        stage               TEXT NOT NULL,
+        state               TEXT NOT NULL,
+        state_reason        TEXT,
+        outcome             TEXT,
+        finish_line         TEXT NOT NULL,
+        automation          TEXT NOT NULL,
+        priority            TEXT NOT NULL,
+        labels              TEXT NOT NULL,
+        workflow_id         TEXT REFERENCES workflows (id) ON DELETE SET NULL,
+        planner_workflow_id TEXT REFERENCES workflows (id) ON DELETE SET NULL,
+        plan                TEXT NOT NULL,
+        acceptance          TEXT NOT NULL,
+        run_checks          INTEGER NOT NULL,
+        paused              INTEGER NOT NULL,
+        pending_request     TEXT,
+        created_at          TEXT NOT NULL,
+        updated_at          TEXT NOT NULL,
+        started_at          TEXT,
+        completed_at        TEXT,
+        UNIQUE (workspace_id, project_id, number)
+      );
+      CREATE INDEX tasks_project_idx ON tasks (workspace_id, project_id);
+      CREATE INDEX tasks_state_idx ON tasks (workspace_id, state);
+
+      -- The rows below belong to one task each. Their indexes lead with task_id, not
+      -- workspace_id: a task id is unique on its own, and the cascade of a task delete looks the
+      -- children up by task_id alone, which an index led by workspace_id could not serve.
+
+      -- A task's Git worktree (D269): at most one per task.
+      CREATE TABLE task_workspaces (
+        id           TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        task_id      TEXT NOT NULL UNIQUE REFERENCES tasks (id) ON DELETE CASCADE,
+        repo_path    TEXT NOT NULL,
+        path         TEXT NOT NULL,
+        branch       TEXT NOT NULL,
+        base_branch  TEXT NOT NULL,
+        base_sha     TEXT NOT NULL,
+        head_sha     TEXT NOT NULL,
+        status       TEXT NOT NULL,
+        error        TEXT,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL
+      );
+
+      -- The plan and work runs a task made, numbered per task. 'workflow_id' and 'run_id' are
+      -- history, as on runs: no foreign key, so deleting a workflow does not rewrite them.
+      CREATE TABLE task_executions (
+        id            TEXT PRIMARY KEY,
+        workspace_id  TEXT NOT NULL,
+        task_id       TEXT NOT NULL REFERENCES tasks (id) ON DELETE CASCADE,
+        kind          TEXT NOT NULL,
+        sequence      INTEGER NOT NULL,
+        workflow_id   TEXT NOT NULL,
+        run_id        TEXT,
+        status        TEXT NOT NULL,
+        request       TEXT NOT NULL,
+        summary       TEXT,
+        commit_sha    TEXT,
+        changed_files INTEGER,
+        error         TEXT,
+        started_at    TEXT NOT NULL,
+        ended_at      TEXT,
+        UNIQUE (task_id, sequence)
+      );
+      CREATE INDEX task_executions_run_idx ON task_executions (workspace_id, run_id);
+
+      -- One run of one project check command in the workspace (D271); 'output' is the masked tail.
+      CREATE TABLE task_checks (
+        id           TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        task_id      TEXT NOT NULL REFERENCES tasks (id) ON DELETE CASCADE,
+        execution_id TEXT,
+        name         TEXT NOT NULL,
+        command      TEXT NOT NULL,
+        status       TEXT NOT NULL,
+        exit_code    INTEGER,
+        output       TEXT NOT NULL,
+        duration_ms  INTEGER NOT NULL,
+        head_sha     TEXT NOT NULL,
+        at           TEXT NOT NULL
+      );
+      CREATE INDEX task_checks_task_idx ON task_checks (task_id, at);
+
+      CREATE TABLE task_reviews (
+        id           TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        task_id      TEXT NOT NULL REFERENCES tasks (id) ON DELETE CASCADE,
+        decision     TEXT NOT NULL,
+        note         TEXT,
+        head_sha     TEXT,
+        at           TEXT NOT NULL
+      );
+      CREATE INDEX task_reviews_task_idx ON task_reviews (task_id, at);
+
+      CREATE TABLE task_deliveries (
+        id           TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        task_id      TEXT NOT NULL REFERENCES tasks (id) ON DELETE CASCADE,
+        kind         TEXT NOT NULL,
+        status       TEXT NOT NULL,
+        destination  TEXT NOT NULL,
+        detail       TEXT,
+        sha          TEXT,
+        url          TEXT,
+        at           TEXT NOT NULL
+      );
+      CREATE INDEX task_deliveries_task_idx ON task_deliveries (task_id, at);
+
+      -- The task's activity feed, append-only. 'seq' is an INTEGER PRIMARY KEY, so it is the rowid
+      -- and keeps the insertion order through VACUUM (as kb_chunks' does); AUTOINCREMENT means a
+      -- seq is never handed out twice, even after the newest rows were deleted.
+      CREATE TABLE task_activity (
+        seq          INTEGER PRIMARY KEY AUTOINCREMENT,
+        id           TEXT NOT NULL UNIQUE,
+        workspace_id TEXT NOT NULL,
+        task_id      TEXT NOT NULL REFERENCES tasks (id) ON DELETE CASCADE,
+        kind         TEXT NOT NULL,
+        message      TEXT NOT NULL,
+        execution_id TEXT,
+        run_id       TEXT,
+        at           TEXT NOT NULL
+      );
+      CREATE INDEX task_activity_task_idx ON task_activity (task_id, seq);
     `,
   },
 ];

@@ -10,12 +10,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '../db.js';
 import {
   MIGRATIONS,
+  PARITY_P0_MIGRATION_ID,
   ROUND_5_MIGRATION_ID,
   X1_CLI_PROVIDERS_MIGRATION_ID,
   type Migration,
 } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
-import { makeProject, scope } from './fixtures.js';
+import { createProjectBeforeP0, makeProject, scope } from './fixtures.js';
 
 /**
  * The round 5 migration (Arch §15.3, §21.3): knowledge bases, documents, chunks, vectors, the FTS5
@@ -101,7 +102,11 @@ describe('Arch §15.3 migration applies on a round-4 database and is recorded', 
     before.sqlite.close();
 
     const after = openDatabase({ path });
-    expect(after.appliedMigrations).toEqual([ROUND_5_MIGRATION_ID, X1_CLI_PROVIDERS_MIGRATION_ID]);
+    expect(after.appliedMigrations).toEqual([
+      ROUND_5_MIGRATION_ID,
+      X1_CLI_PROVIDERS_MIGRATION_ID,
+      PARITY_P0_MIGRATION_ID,
+    ]);
     for (const table of NEW_TABLES) expect(tableNames(after.sqlite)).toContain(table);
     expect(columnsOf(after.sqlite, 'node_runs')).toEqual(
       expect.arrayContaining(['sources', 'dropped_sources', 'memory_ops']),
@@ -118,7 +123,11 @@ describe('Arch §15.3 migration applies on a round-4 database and is recorded', 
   it('keeps every row written before it, and reads them through the repository', async () => {
     const before = openDatabase({ path, migrations: BEFORE_ROUND_5 });
     const project = makeProject();
-    await new SqliteRepository(before.db, before.sqlite).projects.create(scope, project);
+    await createProjectBeforeP0(
+      before.sqlite,
+      new SqliteRepository(before.db, before.sqlite),
+      project,
+    );
     before.sqlite.close();
 
     const after = openDatabase({ path });
@@ -138,10 +147,10 @@ describe('Arch §15.3 migration applies on a round-4 database and is recorded', 
     again.sqlite.close();
   });
 
-  it('sorts after every earlier migration, and only X1 follows it', () => {
+  // Which migration is the latest is pinned by the newest migration's own test, not here.
+  it('sorts after every earlier migration, and X1 follows it directly', () => {
     const ids = MIGRATIONS.map((migration) => migration.id);
-    expect(ids.indexOf(ROUND_5_MIGRATION_ID)).toBe(ids.length - 2);
-    expect(ids.at(-1)).toBe(X1_CLI_PROVIDERS_MIGRATION_ID);
+    expect(ids.indexOf(X1_CLI_PROVIDERS_MIGRATION_ID)).toBe(ids.indexOf(ROUND_5_MIGRATION_ID) + 1);
     expect([...ids].sort()).toEqual(ids);
     expect(ROUND_5_MIGRATION_ID).toBe('20261001T120000_round_5_knowledge_memory_usage');
   });
@@ -152,7 +161,7 @@ describe('FR-GRD-004 DN-2 the context-check seed writes version+1 only for polic
     const before = openDatabase({ path, migrations: BEFORE_ROUND_5 });
     const repository = new SqliteRepository(before.db, before.sqlite);
     const project = makeProject();
-    await repository.projects.create(scope, project);
+    await createProjectBeforeP0(before.sqlite, repository, project);
     const policy = await repository.guardrailPolicies.getProjectDefault(scope, project.id);
     if (policy === null) throw new Error('the project has no default policy');
     // A round 4 install wrote its default policy without the context point.
@@ -208,7 +217,7 @@ describe('FR-GRD-004 DN-2 the context-check seed writes version+1 only for polic
     const before = openDatabase({ path, migrations: BEFORE_ROUND_5 });
     const repository = new SqliteRepository(before.db, before.sqlite);
     const project = makeProject();
-    await repository.projects.create(scope, project);
+    await createProjectBeforeP0(before.sqlite, repository, project);
     const policy = await repository.guardrailPolicies.getProjectDefault(scope, project.id);
     if (policy === null) throw new Error('the project has no default policy');
     const withOneContextCheck = [
@@ -231,7 +240,7 @@ describe('FR-GRD-004 DN-2 the context-check seed writes version+1 only for polic
     const before = openDatabase({ path, migrations: BEFORE_ROUND_5 });
     const repository = new SqliteRepository(before.db, before.sqlite);
     const project = makeProject();
-    await repository.projects.create(scope, project);
+    await createProjectBeforeP0(before.sqlite, repository, project);
     const custom = {
       id: newId(),
       projectId: project.id,

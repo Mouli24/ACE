@@ -31,6 +31,12 @@ export const projects = sqliteTable(
     lastOpenedAt: text('last_opened_at'),
     /** Round 3 §2.3: the per-run cost cap, null when the project has none (FR-GRD-008). */
     maxCostPerRunUsd: real('max_cost_per_run_usd'),
+    /* ACE parity P0 Build settings (D269, D271). NULL reads as the default. */
+    paused: integer('paused', { mode: 'boolean' }).notNull().default(false),
+    buildCapacity: integer('build_capacity'),
+    /** JSON `CheckCommand[]`. */
+    checkCommands: text('check_commands'),
+    setupCommand: text('setup_command'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },
@@ -664,4 +670,182 @@ export const summaryCache = sqliteTable(
     primaryKey({ columns: [table.workspaceId, table.key] }),
     index('summary_cache_lru_idx').on(table.workspaceId, table.lastUsedAt),
   ],
+);
+
+/* -------------------------------------------------------------------------- */
+/* ACE parity P0 (D267–D271): tasks and what belongs to them                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A task on a project's board. The schema's first foreign keys: it goes with its project, and a
+ * deleted workflow leaves it without a team or planner (`ON DELETE SET NULL`).
+ */
+export const tasks = sqliteTable(
+  'tasks',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    /** Per project, from 1. */
+    number: integer('number').notNull(),
+    title: text('title').notNull(),
+    brief: text('brief').notNull(),
+    type: text('type').notNull(),
+    stage: text('stage').notNull(),
+    state: text('state').notNull(),
+    stateReason: text('state_reason'),
+    outcome: text('outcome'),
+    finishLine: text('finish_line').notNull(),
+    automation: text('automation').notNull(),
+    priority: text('priority').notNull(),
+    /** JSON `string[]`. */
+    labels: text('labels').notNull(),
+    workflowId: text('workflow_id').references(() => workflows.id, { onDelete: 'set null' }),
+    plannerWorkflowId: text('planner_workflow_id').references(() => workflows.id, {
+      onDelete: 'set null',
+    }),
+    plan: text('plan').notNull(),
+    acceptance: text('acceptance').notNull(),
+    runChecks: integer('run_checks', { mode: 'boolean' }).notNull(),
+    paused: integer('paused', { mode: 'boolean' }).notNull(),
+    pendingRequest: text('pending_request'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+    startedAt: text('started_at'),
+    completedAt: text('completed_at'),
+  },
+  (table) => [
+    unique().on(table.workspaceId, table.projectId, table.number),
+    index('tasks_project_idx').on(table.workspaceId, table.projectId),
+    index('tasks_state_idx').on(table.workspaceId, table.state),
+  ],
+);
+
+/** A task's Git worktree (D269): at most one per task. */
+export const taskWorkspaces = sqliteTable('task_workspaces', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id').notNull(),
+  taskId: text('task_id')
+    .notNull()
+    .unique()
+    .references(() => tasks.id, { onDelete: 'cascade' }),
+  repoPath: text('repo_path').notNull(),
+  path: text('path').notNull(),
+  branch: text('branch').notNull(),
+  baseBranch: text('base_branch').notNull(),
+  baseSha: text('base_sha').notNull(),
+  headSha: text('head_sha').notNull(),
+  status: text('status').notNull(),
+  error: text('error'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+/** The plan and work runs a task made, numbered per task. `workflowId` and `runId` are history. */
+export const taskExecutions = sqliteTable(
+  'task_executions',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    sequence: integer('sequence').notNull(),
+    workflowId: text('workflow_id').notNull(),
+    runId: text('run_id'),
+    status: text('status').notNull(),
+    request: text('request').notNull(),
+    summary: text('summary'),
+    commitSha: text('commit_sha'),
+    changedFiles: integer('changed_files'),
+    error: text('error'),
+    startedAt: text('started_at').notNull(),
+    endedAt: text('ended_at'),
+  },
+  (table) => [
+    unique().on(table.taskId, table.sequence),
+    index('task_executions_run_idx').on(table.workspaceId, table.runId),
+  ],
+);
+
+/** One run of one project check command in a task's workspace (D271). */
+export const taskChecks = sqliteTable(
+  'task_checks',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    executionId: text('execution_id'),
+    name: text('name').notNull(),
+    command: text('command').notNull(),
+    status: text('status').notNull(),
+    exitCode: integer('exit_code'),
+    output: text('output').notNull(),
+    durationMs: integer('duration_ms').notNull(),
+    headSha: text('head_sha').notNull(),
+    at: text('at').notNull(),
+  },
+  (table) => [index('task_checks_task_idx').on(table.taskId, table.at)],
+);
+
+export const taskReviews = sqliteTable(
+  'task_reviews',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    decision: text('decision').notNull(),
+    note: text('note'),
+    headSha: text('head_sha'),
+    at: text('at').notNull(),
+  },
+  (table) => [index('task_reviews_task_idx').on(table.taskId, table.at)],
+);
+
+export const taskDeliveries = sqliteTable(
+  'task_deliveries',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    status: text('status').notNull(),
+    destination: text('destination').notNull(),
+    detail: text('detail'),
+    sha: text('sha'),
+    url: text('url'),
+    at: text('at').notNull(),
+  },
+  (table) => [index('task_deliveries_task_idx').on(table.taskId, table.at)],
+);
+
+/**
+ * A task's activity feed, append-only. `seq` is the rowid, so it keeps the insertion order through
+ * VACUUM, and AUTOINCREMENT never hands one out twice.
+ */
+export const taskActivity = sqliteTable(
+  'task_activity',
+  {
+    seq: integer('seq').primaryKey({ autoIncrement: true }),
+    id: text('id').notNull().unique(),
+    workspaceId: text('workspace_id').notNull(),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    message: text('message').notNull(),
+    executionId: text('execution_id'),
+    runId: text('run_id'),
+    at: text('at').notNull(),
+  },
+  (table) => [index('task_activity_task_idx').on(table.taskId, table.seq)],
 );

@@ -1,5 +1,8 @@
-import { LOCAL_SCOPE, newId } from '@ace/engine';
+import { LOCAL_SCOPE, newId, type Repository } from '@ace/engine';
 import type { Edge, Node, Project, Workflow } from '@ace/contracts';
+import type BetterSqlite3 from 'better-sqlite3';
+
+import { buildDefaultPolicy } from '../default-policy.js';
 
 /** Narrowed node types, so spreading a fixture keeps `kind` discriminating. */
 export type InputNode = Extract<Node, { kind: 'input' }>;
@@ -18,6 +21,39 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
     updatedAt: NOW,
     ...overrides,
   };
+}
+
+/**
+ * Stores a project in a database migrated only part way — from round 3 to X1 — as an install from
+ * before the ACE parity P0 migration did. The repository's insert names the Build-settings columns
+ * that migration adds, so on an older chain the row goes in with the columns that chain has; the
+ * default policy still goes through the repository, whose table is older than that migration.
+ */
+export async function createProjectBeforeP0(
+  sqlite: BetterSqlite3.Database,
+  repository: Repository,
+  project: Project,
+): Promise<void> {
+  sqlite
+    .prepare(
+      `INSERT INTO projects (id, workspace_id, name, folder_path, last_opened_at,
+         max_cost_per_run_usd, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      project.id,
+      scope.workspaceId,
+      project.name,
+      project.folderPath,
+      project.lastOpenedAt ?? null,
+      project.maxCostPerRunUsd ?? null,
+      project.createdAt,
+      project.updatedAt,
+    );
+  await repository.guardrailPolicies.create(
+    scope,
+    buildDefaultPolicy(project.id, project.createdAt),
+  );
 }
 
 export function makeWorkflow(projectId: string, overrides: Partial<Workflow> = {}): Workflow {
