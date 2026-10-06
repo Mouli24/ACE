@@ -148,6 +148,53 @@ async function openProviders(page: Page): Promise<void> {
 const card = (page: Page, nodeId: string): Locator => page.getByTestId(`node-card-${nodeId}`);
 
 /**
+ * Where to click a card so the card itself receives the click: near the top of its header, a
+ * quarter of the way in (D-089), unless something sits over that point. In the V2 layout the halt
+ * note is a pill centred at the top of the Canvas (D259), and after Fit to view it can cover the
+ * top row of card headers; then the first point of the header, or failing that of the card's body,
+ * that the card receives — never a control inside it.
+ */
+async function clickPoint(target: Locator): Promise<{ x: number; y: number }> {
+  // read once the card has stopped moving: Fit to view animates the viewport
+  let last = '';
+  await expect
+    .poll(
+      async () => {
+        const now = JSON.stringify(await target.boundingBox());
+        const still = now === last;
+        last = now;
+        return still;
+      },
+      { message: 'the card is still', timeout: 10_000, intervals: [50, 100, 100, 200] },
+    )
+    .toBe(true);
+  const point = await target.evaluate((card) => {
+    const box = card.getBoundingClientRect();
+    const header = card.querySelector('header')?.getBoundingClientRect() ?? box;
+    const candidates = [{ x: Math.max(4, Math.min(60, box.width * 0.25)), y: 6 }];
+    for (const y of [
+      6,
+      header.bottom - box.top - header.height / 2,
+      box.height / 2,
+      box.height - 10,
+    ]) {
+      for (let x = 8; x < box.width - 8; x += 8) candidates.push({ x, y });
+    }
+    const control =
+      'button, input, textarea, select, a, [role="button"], .react-flow__handle, .nodrag';
+    for (const candidate of candidates) {
+      const hit = document.elementFromPoint(box.left + candidate.x, box.top + candidate.y);
+      if (hit === null || !card.contains(hit)) continue;
+      const inside = hit.closest(control);
+      if (inside === null || !card.contains(inside)) return candidate;
+    }
+    return null;
+  });
+  expect(point, 'some part of the card receives a click').not.toBeNull();
+  return point as { x: number; y: number };
+}
+
+/**
  * Select a node by clicking its header. Fit to view first, and aim at the header rather than the
  * card: the port handles and the React Flow pane both sit over a card and swallow the click.
  *
@@ -156,14 +203,36 @@ const card = (page: Page, nodeId: string): Locator => page.getByTestId(`node-car
  * neighbour swallows the click and the failure looks like a selection bug rather than a layout one.
  */
 async function selectCard(page: Page, nodeId: string): Promise<void> {
+  // the V2 sheet, when open, covers the right of the Canvas
+  await closeSheet(page);
   await page.getByRole('button', { name: 'Fit to view' }).click();
   await page.waitForTimeout(400);
-  await card(page, nodeId).locator('header').click();
+  await card(page, nodeId).click({ position: await clickPoint(card(page, nodeId)) });
   await expect(card(page, nodeId)).toHaveAttribute('data-selected', 'true');
 }
 const startButton = (page: Page): Locator =>
-  // `exact`, because round 3 put Restart in the same bar and "Start" is a substring of it.
-  page.getByTestId('run-bar').getByRole('button', { name: 'Start', exact: true });
+  // `exact`, because round 3 put Restart in the same bar and "Start" is a substring of it. The V2
+  // button shows "Run"; its accessible name is "Start run" (D259).
+  page.getByTestId('run-bar').getByRole('button', { name: 'Start run', exact: true });
+
+/*
+ * POC Theme V2 layout (D259): Configure, Inspector and Runs are tabs of a floating sheet that starts
+ * closed and covers the right of the Canvas while open.
+ */
+async function openSheet(
+  page: Page,
+  tab: 'Configure' | 'Inspector' | 'Runs' | 'Memory',
+): Promise<void> {
+  if (!(await page.getByRole('tab', { name: tab }).isVisible()))
+    await page.getByTestId('sheet-toggle').click();
+  await page.getByRole('tab', { name: tab }).click();
+}
+
+async function closeSheet(page: Page): Promise<void> {
+  const close = page.getByRole('button', { name: 'Close panel' });
+  if (await close.isVisible()) await close.click();
+  await expect(page.getByTestId('workflow-sheet')).toHaveCount(0);
+}
 
 const nodeOf = (graph: Graph, kind: string): Node =>
   graph.nodes.find((node) => node.kind === kind) as Node;
@@ -364,6 +433,7 @@ test.describe('Config panel (FR-NODE-003/004/005)', () => {
 
     await openCanvas(page, projectId, workflowId);
     await selectCard(page, agent.id);
+    await openSheet(page, 'Configure');
     const panel = page.getByRole('complementary', { name: 'Node configuration' });
 
     await panel.getByLabel('Model').click();
@@ -396,6 +466,7 @@ test.describe('Config panel (FR-NODE-003/004/005)', () => {
     // Selected before Start: the panel is open when the run begins, which is the case FR-NODE-009
     // is about, and the card is still small enough to click.
     await selectCard(page, agent.id);
+    await openSheet(page, 'Configure');
 
     await startButton(page).click();
     await expect(card(page, agent.id)).toHaveAttribute('data-state', 'RUNNING', {
@@ -491,7 +562,7 @@ test.describe('Live run (FR-EXE-001/003/007/008/009/015)', () => {
     await expect(card(page, agent.id)).toHaveAttribute('data-state', 'RUNNING', {
       timeout: 20_000,
     });
-    await expect(card(page, agent.id).getByTestId('status-ring')).toHaveAttribute(
+    await expect(card(page, agent.id).getByTestId('status-chip')).toHaveAttribute(
       'aria-label',
       'running',
     );
@@ -596,7 +667,7 @@ test.describe('Inspector and history (FR-EXE-010/012, FR-PRM-005)', () => {
     const nodeRuns = await api<NodeRun[]>(`/runs/${run.id}/node-runs`);
     const agentRun = nodeRuns.find((nodeRun) => nodeRun.nodeId === agent.id) as NodeRun;
 
-    await page.getByRole('tab', { name: 'Inspector' }).click();
+    await openSheet(page, 'Inspector');
     const inspector = page.getByTestId('inspector');
 
     const facts = inspector.getByTestId('inspector-facts');
@@ -631,8 +702,9 @@ test.describe('Inspector and history (FR-EXE-010/012, FR-PRM-005)', () => {
     }
 
     const history = (await api<{ items: RunSummary[] }>(`/workflows/${workflowId}/runs`)).items;
-    await page.getByRole('tab', { name: 'Runs' }).click();
-    const rows = page.getByTestId('runs-table').locator('tr[data-testid^="run-row-"]');
+    await openSheet(page, 'Runs');
+    // the V2 run history is a list of cards, not table rows
+    const rows = page.getByTestId('runs-table').locator('[data-testid^="run-row-"]');
     await expect(rows).toHaveCount(3);
 
     // Same order as the engine, newest first, and each row carries that run's own numbers.

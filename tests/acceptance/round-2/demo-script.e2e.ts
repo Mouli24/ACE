@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 /**
  * The round 2 §1 demo script, walked through the **UI** in one pass against the real engine.
@@ -57,9 +57,67 @@ interface Graph {
 }
 
 const card = (page: Page, nodeId: string) => page.getByTestId(`node-card-${nodeId}`);
-// `exact`, because round 3 put Restart in the same bar and "Start" is a substring of it.
+// `exact`, because round 3 put Restart in the same bar and "Start" is a substring of it. The V2
+// button shows "Run"; its accessible name is "Start run" (D259).
 const start = (page: Page) =>
-  page.getByTestId('run-bar').getByRole('button', { name: 'Start', exact: true });
+  page.getByTestId('run-bar').getByRole('button', { name: 'Start run', exact: true });
+
+/**
+ * Where to click a card so the card itself receives the click: near the top of its header, a
+ * quarter of the way in (D-089), unless something sits over that point. In the V2 layout the halt
+ * note is a pill centred at the top of the Canvas (D259), and after Fit to view it can cover the
+ * top row of card headers; then the first point of the header, or failing that of the card's body,
+ * that the card receives — never a control inside it.
+ */
+async function clickPoint(target: Locator): Promise<{ x: number; y: number }> {
+  // read once the card has stopped moving: Fit to view animates the viewport
+  let last = '';
+  await expect
+    .poll(
+      async () => {
+        const now = JSON.stringify(await target.boundingBox());
+        const still = now === last;
+        last = now;
+        return still;
+      },
+      { message: 'the card is still', timeout: 10_000, intervals: [50, 100, 100, 200] },
+    )
+    .toBe(true);
+  const point = await target.evaluate((card) => {
+    const box = card.getBoundingClientRect();
+    const header = card.querySelector('header')?.getBoundingClientRect() ?? box;
+    const candidates = [{ x: Math.max(4, Math.min(60, box.width * 0.25)), y: 6 }];
+    for (const y of [
+      6,
+      header.bottom - box.top - header.height / 2,
+      box.height / 2,
+      box.height - 10,
+    ]) {
+      for (let x = 8; x < box.width - 8; x += 8) candidates.push({ x, y });
+    }
+    const control =
+      'button, input, textarea, select, a, [role="button"], .react-flow__handle, .nodrag';
+    for (const candidate of candidates) {
+      const hit = document.elementFromPoint(box.left + candidate.x, box.top + candidate.y);
+      if (hit === null || !card.contains(hit)) continue;
+      const inside = hit.closest(control);
+      if (inside === null || !card.contains(inside)) return candidate;
+    }
+    return null;
+  });
+  expect(point, 'some part of the card receives a click').not.toBeNull();
+  return point as { x: number; y: number };
+}
+
+/** POC Theme V2 (D259): Configure and Inspector are tabs of a floating sheet that starts closed. */
+async function openSheet(
+  page: Page,
+  tab: 'Configure' | 'Inspector' | 'Runs' | 'Memory',
+): Promise<void> {
+  if (!(await page.getByRole('tab', { name: tab }).isVisible()))
+    await page.getByTestId('sheet-toggle').click();
+  await page.getByRole('tab', { name: tab }).click();
+}
 const nodeOf = (graph: Graph, kind: string) => graph.nodes.find((n) => n.kind === kind) as Node;
 
 /** Import a fixture for a step of the script, pointed at the provider the UI just created. */
@@ -135,7 +193,8 @@ test.describe('Round 2 §1 demo script, through the UI', () => {
 
     // Pick `mock-text` in the config panel, as the script says.
     await page.getByRole('button', { name: 'Fit to view' }).click();
-    await card(page, agent.id).locator('header').click();
+    await card(page, agent.id).click({ position: await clickPoint(card(page, agent.id)) });
+    await openSheet(page, 'Configure');
     const panel = page.getByRole('complementary', { name: 'Node configuration' });
     await panel.getByLabel('Model').click();
     await page.getByRole('option', { name: /^Mock text$/ }).click();
@@ -162,7 +221,7 @@ test.describe('Round 2 §1 demo script, through the UI', () => {
     await expect(page.getByTestId(`final-output-${output.id}`)).toBeVisible();
 
     /* ---- inspector shows tokens / cost / model / prompt ---- */
-    await page.getByRole('tab', { name: 'Inspector' }).click();
+    await openSheet(page, 'Inspector');
     const inspector = page.getByTestId('inspector');
     await expect(inspector.getByTestId('inspector-facts')).toContainText('mock-text');
     await expect(inspector.getByTestId('prompt-version')).toContainText('version');
@@ -190,8 +249,9 @@ test.describe('Round 2 §1 demo script, through the UI', () => {
       timeout: 40_000,
     });
     await page.getByRole('button', { name: 'Fit to view' }).click();
-    await card(page, badAgent.id).locator('header').click();
-    await page.getByRole('tab', { name: 'Inspector' }).click();
+    // after the halt, the V2 halt note sits over the top of the Canvas: click where the card is
+    await card(page, badAgent.id).click({ position: await clickPoint(card(page, badAgent.id)) });
+    await openSheet(page, 'Inspector');
     await expect(page.getByTestId('inspector-failure-reason')).toHaveText('CONTRACT_VIOLATION');
 
     /* ---- reload during a slow run → states and text still correct ---- */

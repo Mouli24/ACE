@@ -426,14 +426,70 @@ async function openCanvas(page: Page, projectId: string, workflowId: string): Pr
 
 const card = (page: Page, nodeId: string): Locator => page.getByTestId(`node-card-${nodeId}`);
 
+// The V2 button shows "Run"; its accessible name is "Start run" (D259).
 const startButton = (page: Page): Locator =>
-  page.getByTestId('run-bar').getByRole('button', { name: 'Start', exact: true });
+  page.getByTestId('run-bar').getByRole('button', { name: 'Start run', exact: true });
+
+/** Close the V2 sheet when it is open: it covers the right of the Canvas (D259). */
+async function closeSheet(page: Page): Promise<void> {
+  const close = page.getByRole('button', { name: 'Close panel' });
+  if (await close.isVisible()) await close.click();
+  await expect(page.getByTestId('workflow-sheet')).toHaveCount(0);
+}
 
 const configPanel = (page: Page): Locator =>
   page.getByRole('complementary', { name: 'Node configuration' });
 
+/**
+ * Where to click a card so the card itself receives the click: near the top of its header, a
+ * quarter of the way in (D-089), unless something sits over that point. In the V2 layout the halt
+ * note is a pill centred at the top of the Canvas (D259), and after Fit to view it can cover the
+ * top row of card headers; then the first point of the header, or failing that of the card's body,
+ * that the card receives — never a control inside it.
+ */
+async function clickPoint(target: Locator): Promise<{ x: number; y: number }> {
+  // read once the card has stopped moving: Fit to view animates the viewport
+  let last = '';
+  await expect
+    .poll(
+      async () => {
+        const now = JSON.stringify(await target.boundingBox());
+        const still = now === last;
+        last = now;
+        return still;
+      },
+      { message: 'the card is still', timeout: 10_000, intervals: [50, 100, 100, 200] },
+    )
+    .toBe(true);
+  const point = await target.evaluate((card) => {
+    const box = card.getBoundingClientRect();
+    const header = card.querySelector('header')?.getBoundingClientRect() ?? box;
+    const candidates = [{ x: Math.max(4, Math.min(60, box.width * 0.25)), y: 6 }];
+    for (const y of [
+      6,
+      header.bottom - box.top - header.height / 2,
+      box.height / 2,
+      box.height - 10,
+    ]) {
+      for (let x = 8; x < box.width - 8; x += 8) candidates.push({ x, y });
+    }
+    const control =
+      'button, input, textarea, select, a, [role="button"], .react-flow__handle, .nodrag';
+    for (const candidate of candidates) {
+      const hit = document.elementFromPoint(box.left + candidate.x, box.top + candidate.y);
+      if (hit === null || !card.contains(hit)) continue;
+      const inside = hit.closest(control);
+      if (inside === null || !card.contains(inside)) return candidate;
+    }
+    return null;
+  });
+  expect(point, 'some part of the card receives a click').not.toBeNull();
+  return point as { x: number; y: number };
+}
+
 /** Round 3's selection: fit, then click the card's header, never forced. */
 async function selectNode(page: Page, nodeId: string): Promise<void> {
+  await closeSheet(page);
   await page.getByRole('button', { name: 'Fit to view' }).click();
   await page.waitForTimeout(300);
   const target = card(page, nodeId);
@@ -441,17 +497,18 @@ async function selectNode(page: Page, nodeId: string): Promise<void> {
   // Fit to view can zoom a card narrower than 60 px; a fixed offset then lands on the header's
   // run-actions button and opens its menu instead of selecting the node (D-089, CI only). Click
   // the header a quarter of the way in, whatever the zoom.
-  const box = await target.boundingBox();
-  const x = box === null ? 20 : Math.max(4, Math.min(60, box.width * 0.25));
-  await target.click({ position: { x, y: 6 } });
+  await target.click({ position: await clickPoint(target) });
   await expect(target).toHaveAttribute('data-selected', 'true');
 }
 
-async function openRightTab(
-  page: Page,
-  name: 'Configure' | 'Inspector' | 'Runs' | 'Chat',
-): Promise<void> {
-  await page.getByRole('tab', { name, exact: true }).click();
+/**
+ * The old right pane's tabs live in the V2 sheet (D259), which starts closed: open it first when it
+ * is. Chat is no longer a tab — see `openChat`.
+ */
+async function openRightTab(page: Page, name: 'Configure' | 'Inspector' | 'Runs'): Promise<void> {
+  const tab = page.getByRole('tab', { name, exact: true });
+  if (!(await tab.isVisible())) await page.getByTestId('sheet-toggle').click();
+  await tab.click();
 }
 
 async function openInspector(page: Page, nodeId: string): Promise<Locator> {
@@ -471,11 +528,14 @@ async function openToolCalls(page: Page, inspector: Locator): Promise<Locator> {
   return list;
 }
 
+/** V2: Chat is a permanent column; the node's @mention chip points it at the node (D259). */
 async function openChat(page: Page, nodeId: string): Promise<Locator> {
-  await selectNode(page, nodeId);
-  await openRightTab(page, 'Chat');
-  const panel = page.getByTestId('chat-panel');
+  const mention = page.getByTestId(`chat-mention-${nodeId}`);
+  await mention.click();
+  await expect(mention).toHaveAttribute('aria-pressed', 'true');
+  const panel = page.getByTestId('chat-aside');
   await expect(panel).toBeVisible();
+  await expect(panel.getByLabel('Message this agent')).toBeVisible();
   return panel;
 }
 
@@ -602,6 +662,7 @@ test.describe('Uploads (FR-MM-001/002/007)', () => {
 
     // The config panel's list shows exactly one entry, named and sized.
     await selectNode(page, input.id);
+    await openRightTab(page, 'Configure');
     const list = configPanel(page).getByTestId('input-attachment-list');
     await expect(list).toBeVisible();
     await expect(list.getByTestId(`attachment-${artifactId}`)).toHaveCount(1);
@@ -630,6 +691,7 @@ test.describe('Uploads (FR-MM-001/002/007)', () => {
 
       await openCanvas(page, flow.projectId, flow.workflowId);
       await selectNode(page, input.id);
+      await openRightTab(page, 'Configure');
       const panel = configPanel(page);
       await expect(panel.getByTestId('input-attachments')).toBeVisible();
       await panel.getByTestId('input-attachment-picker-input').setInputFiles(oversized);
@@ -664,6 +726,7 @@ test.describe('Uploads (FR-MM-001/002/007)', () => {
 
     await openCanvas(page, flow.projectId, flow.workflowId);
     await selectNode(page, input.id);
+    await openRightTab(page, 'Configure');
     const panel = configPanel(page);
     await panel
       .getByTestId('input-attachment-picker-input')

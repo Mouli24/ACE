@@ -138,14 +138,46 @@ async function serverHas(
   return last as Graph;
 }
 
-async function addFromPalette(page: Page, kind: string): Promise<void> {
+/*
+ * POC Theme V2 layout (D259): the palette is the New node dialog, and Configure lives in a floating
+ * sheet that starts closed and covers the right of the Canvas while open.
+ */
+
+async function addFromDialog(page: Page, kind: string, name?: string): Promise<void> {
+  await page.getByTestId('new-node-button').click();
   await page.getByTestId(`palette-${kind}`).click();
+  if (name) await page.getByLabel('Name').fill(name);
+  await page.getByTestId('new-node-add').click();
+}
+
+async function openSheet(
+  page: Page,
+  tab: 'Configure' | 'Inspector' | 'Runs' | 'Memory',
+): Promise<void> {
+  if (!(await page.getByRole('tab', { name: tab }).isVisible()))
+    await page.getByTestId('sheet-toggle').click();
+  await page.getByRole('tab', { name: tab }).click();
+}
+
+/** Close the sheet when it is open, so the whole Canvas can be clicked. */
+async function closeSheet(page: Page): Promise<void> {
+  const close = page.getByRole('button', { name: 'Close panel' });
+  if (await close.isVisible()) await close.click();
+  await expect(page.getByTestId('workflow-sheet')).toHaveCount(0);
 }
 
 /** Select a card, bringing it into view first (React Flow drops off-viewport nodes). */
 async function selectNode(page: Page, nodeId: string): Promise<void> {
+  await closeSheet(page);
   await fitView(page);
   await flowNode(page, nodeId).click();
+}
+
+/** Select a card and open the sheet's Configure tab on it. */
+async function configureNode(page: Page, nodeId: string): Promise<Locator> {
+  await selectNode(page, nodeId);
+  await openSheet(page, 'Configure');
+  return configPanel(page);
 }
 
 /** Bring every node into view before touching its ports, the way a user presses F. */
@@ -154,9 +186,31 @@ async function fitView(page: Page): Promise<void> {
   await page.waitForTimeout(400);
 }
 
+const overlaps = (
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+): boolean =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+/** Zoom out until no handle sits under the minimap (bottom right of the V2 Canvas at 1280×720). */
+async function clearOfMinimap(page: Page, ...targets: Locator[]): Promise<void> {
+  const minimap = page.locator('.react-flow__minimap');
+  for (let step = 0; step < 6; step += 1) {
+    const map = await minimap.boundingBox();
+    const boxes = await Promise.all(targets.map((target) => target.boundingBox()));
+    if (!map || boxes.every((box) => !box || !overlaps(box, map))) return;
+    await page.getByRole('button', { name: 'Zoom out' }).click();
+    await page.waitForTimeout(300);
+  }
+  throw new Error('a handle is still under the minimap after zooming out');
+}
+
 async function dragConnect(page: Page, from: Locator, to: Locator): Promise<void> {
-  // every card in view first: React Flow does not render nodes outside the viewport
+  // every card in view first: React Flow does not render nodes outside the viewport — and nothing
+  // over the handles (the V2 sheet, the minimap)
+  await closeSheet(page);
   await fitView(page);
+  await clearOfMinimap(page, from, to);
   const a = await from.boundingBox();
   const b = await to.boundingBox();
   if (!a || !b) throw new Error('a handle has no box');
@@ -178,7 +232,7 @@ test.describe('M1 against the real engine (§8.1)', () => {
   }) => {
     const { projectId, workflowId } = await seedWorkflow('move');
     await openCanvas(page, projectId, workflowId);
-    await addFromPalette(page, 'agent');
+    await addFromDialog(page, 'agent');
     const graph = await serverHas(
       workflowId,
       (g) => g.nodes.length === 1,
@@ -214,8 +268,8 @@ test.describe('M1 against the real engine (§8.1)', () => {
   }) => {
     const { projectId, workflowId } = await seedWorkflow('autosave');
     await openCanvas(page, projectId, workflowId);
-    await addFromPalette(page, 'input');
-    await addFromPalette(page, 'output');
+    await addFromDialog(page, 'input');
+    await addFromDialog(page, 'output');
     await serverHas(workflowId, (g) => g.nodes.length === 2, 'both nodes reach the engine');
 
     await page.reload();
@@ -247,10 +301,10 @@ test.describe('M1 against the real engine (§8.1)', () => {
     await expect(pageB.getByTestId('canvas')).toBeVisible();
 
     // A writes first; B still believes in the older version
-    await pageA.getByTestId('palette-input').click();
+    await addFromDialog(pageA, 'input');
     await serverHas(workflowId, (g) => g.nodes.length === 1, 'A saved');
 
-    await pageB.getByTestId('palette-agent').click();
+    await addFromDialog(pageB, 'agent');
     const graph = await serverHas(workflowId, (g) => g.nodes.length === 2, 'B recovered and saved');
 
     // nothing was lost and B ends up agreeing with the server
@@ -266,15 +320,14 @@ test.describe('M1 against the real engine (§8.1)', () => {
   test('TC-CON-002: text output → image-only input is refused with a reason', async ({ page }) => {
     const { projectId, workflowId } = await seedWorkflow('types');
     await openCanvas(page, projectId, workflowId);
-    await addFromPalette(page, 'input');
-    await addFromPalette(page, 'agent');
+    await addFromDialog(page, 'input');
+    await addFromDialog(page, 'agent');
     const graph = await serverHas(workflowId, (g) => g.nodes.length === 2, 'both nodes exist');
     const input = graph.nodes.find((n) => n.kind === 'input') as Node;
     const agent = graph.nodes.find((n) => n.kind === 'agent') as Node;
 
     // make the agent image-only through its config panel
-    await selectNode(page, agent.id);
-    const panel = configPanel(page);
+    const panel = await configureNode(page, agent.id);
     const inputTypes = panel.getByRole('group', { name: 'Input types' });
     await inputTypes.getByLabel('image').click();
     await inputTypes.getByLabel('text').click();
@@ -296,8 +349,8 @@ test.describe('M1 against the real engine (§8.1)', () => {
   test('TC-CON-003: A→B then B→A as a plain edge is refused with a reason', async ({ page }) => {
     const { projectId, workflowId } = await seedWorkflow('cycle');
     await openCanvas(page, projectId, workflowId);
-    await addFromPalette(page, 'agent');
-    await addFromPalette(page, 'agent');
+    await addFromDialog(page, 'agent');
+    await addFromDialog(page, 'agent');
     const graph = await serverHas(workflowId, (g) => g.nodes.length === 2, 'two agents exist');
     const [a, b] = graph.nodes as [Node, Node];
 
@@ -323,9 +376,9 @@ test.describe('M1 against the real engine (§8.1)', () => {
   test('TC-CON-006: a second edge into a single-input port is refused', async ({ page }) => {
     const { projectId, workflowId } = await seedWorkflow('arity');
     await openCanvas(page, projectId, workflowId);
-    await addFromPalette(page, 'input');
-    await addFromPalette(page, 'input');
-    await addFromPalette(page, 'agent');
+    await addFromDialog(page, 'input');
+    await addFromDialog(page, 'input');
+    await addFromDialog(page, 'agent');
     const graph = await serverHas(workflowId, (g) => g.nodes.length === 3, 'three nodes exist');
     const inputs = graph.nodes.filter((n) => n.kind === 'input') as Node[];
     const agent = graph.nodes.find((n) => n.kind === 'agent') as Node;
@@ -352,10 +405,12 @@ test.describe('M1 against the real engine (§8.1)', () => {
   }) => {
     const { projectId, workflowId } = await seedWorkflow('config');
     await openCanvas(page, projectId, workflowId);
-    await addFromPalette(page, 'agent');
+    await addFromDialog(page, 'agent');
     const seeded = await serverHas(workflowId, (g) => g.nodes.length === 1, 'the agent exists');
     const agent = seeded.nodes[0] as Node;
 
+    // the new node is selected; its config is on the sheet's Configure tab
+    await openSheet(page, 'Configure');
     const panel = configPanel(page);
     await expect(panel).toBeVisible();
 
@@ -409,8 +464,7 @@ test.describe('M1 against the real engine (§8.1)', () => {
 
     // and the UI shows the same values after a reload
     await page.reload();
-    await selectNode(page, agent.id);
-    const reloaded = configPanel(page);
+    const reloaded = await configureNode(page, agent.id);
     await expect(reloaded.getByLabel('Name')).toHaveValue('Reviewer');
     await expect(reloaded.getByLabel('Instructions')).toHaveValue(
       'Review the draft and answer in JSON.',
@@ -425,10 +479,11 @@ test.describe('M1 against the real engine (§8.1)', () => {
   }) => {
     const { projectId, workflowId } = await seedWorkflow('range');
     await openCanvas(page, projectId, workflowId);
-    await addFromPalette(page, 'agent');
+    await addFromDialog(page, 'agent');
     await serverHas(workflowId, (g) => g.nodes.length === 1, 'the agent exists');
     const versionBefore = (await graphOf(workflowId)).workflow.version;
 
+    await openSheet(page, 'Configure');
     const panel = configPanel(page);
     await panel.getByLabel('Temperature').fill('5');
     await panel.getByLabel('Temperature').blur();
@@ -452,9 +507,9 @@ test.describe('M1 against the real engine (§8.1)', () => {
     // build a three-node, two-edge graph through the engine
     await page.goto(`/projects/${projectId}/workflows/${workflowId}?token=${token}`);
     await expect(page.getByTestId('canvas')).toBeVisible();
-    await page.getByTestId('palette-input').click();
-    await page.getByTestId('palette-agent').click();
-    await page.getByTestId('palette-output').click();
+    await addFromDialog(page, 'input');
+    await addFromDialog(page, 'agent');
+    await addFromDialog(page, 'output');
     const built = await serverHas(workflowId, (g) => g.nodes.length === 3, 'three nodes exist');
     const input = built.nodes.find((n) => n.kind === 'input') as Node;
     const agent = built.nodes.find((n) => n.kind === 'agent') as Node;
@@ -493,8 +548,8 @@ test.describe('M1 against the real engine (§8.1)', () => {
   }) => {
     const { projectId, workflowId } = await seedWorkflow('delete-dup');
     await openCanvas(page, projectId, workflowId);
-    await addFromPalette(page, 'input');
-    await addFromPalette(page, 'agent');
+    await addFromDialog(page, 'input');
+    await addFromDialog(page, 'agent');
     const graph = await serverHas(workflowId, (g) => g.nodes.length === 2, 'two nodes exist');
     const input = graph.nodes.find((n) => n.kind === 'input') as Node;
     const agent = graph.nodes.find((n) => n.kind === 'agent') as Node;
@@ -507,7 +562,7 @@ test.describe('M1 against the real engine (§8.1)', () => {
     await serverHas(workflowId, (g) => g.edges.length === 1, 'the edge is saved');
 
     // duplicate the agent and give the copy a different name
-    await selectNode(page, agent.id);
+    await configureNode(page, agent.id);
     await configPanel(page).getByLabel('Instructions').fill('original');
     await configPanel(page).getByLabel('Instructions').blur();
     await serverHas(
@@ -518,6 +573,8 @@ test.describe('M1 against the real engine (§8.1)', () => {
       'the instruction is saved',
     );
 
+    // the open sheet covers the Canvas tools at the top right
+    await closeSheet(page);
     await page.getByRole('button', { name: 'Duplicate selected nodes' }).click();
     const dup = await serverHas(workflowId, (g) => g.nodes.length === 3, 'the copy is saved');
     const copy = dup.nodes.find((n) => n.kind === 'agent' && n.id !== agent.id) as Node;
@@ -528,6 +585,8 @@ test.describe('M1 against the real engine (§8.1)', () => {
       Math.abs(copy.position.y - agent.position.y) >= 120;
     expect(apart).toBe(true);
 
+    // the copy is the selection now; the sheet shows it
+    await openSheet(page, 'Configure');
     await configPanel(page).getByLabel('Name').fill('Copy');
     await configPanel(page).getByLabel('Name').press('Enter');
     await serverHas(
@@ -578,8 +637,8 @@ test.describe('M1 against the real engine (§8.1)', () => {
   }) => {
     const { projectId, workflowId } = await seedWorkflow('export');
     await openCanvas(page, projectId, workflowId);
-    await addFromPalette(page, 'input');
-    await addFromPalette(page, 'agent');
+    await addFromDialog(page, 'input');
+    await addFromDialog(page, 'agent');
     const built = await serverHas(workflowId, (g) => g.nodes.length === 2, 'two nodes exist');
     const input = built.nodes.find((n) => n.kind === 'input') as Node;
     const agent = built.nodes.find((n) => n.kind === 'agent') as Node;
@@ -632,7 +691,12 @@ test.describe('M1 against the real engine (§8.1)', () => {
     const { projectId, workflowId } = await seedWorkflow('keyboard');
     await openCanvas(page, projectId, workflowId);
 
+    // Enter on New node opens the dialog; Enter on a kind adds it (and closes the dialog)
+    await page.getByTestId('new-node-button').focus();
+    await page.keyboard.press('Enter');
     await page.getByTestId('palette-input').focus();
+    await page.keyboard.press('Enter');
+    await page.getByTestId('new-node-button').focus();
     await page.keyboard.press('Enter');
     await page.getByTestId('palette-agent').focus();
     await page.keyboard.press('Enter');
