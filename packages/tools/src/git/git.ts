@@ -5,6 +5,7 @@ import { join, resolve as resolvePath } from 'node:path';
 import type { GitPort, MergeResult, RepoStatus } from '@ace/engine';
 
 import { isDirectory } from '../process/is-directory.js';
+import { killProcessTree } from '../process/kill-tree.js';
 import { mergeEnv, unsetEnv } from '../process/merge-env.js';
 import { countStatusEntries, parseRawNumstat, splitNul } from './parse.js';
 
@@ -36,7 +37,22 @@ export interface GitPortOptions {
   gitBinary?: string;
   /** Laid over the engine's environment for every Git call; a key set to `undefined` removes it. */
   env?: NodeJS.ProcessEnv;
+  /**
+   * How long one Git call may take before its process tree is killed and the call fails. A
+   * repository's own hooks (`post-checkout`, `pre-merge-commit`) or a signing prompt could
+   * otherwise hang a task forever. Default 5 minutes.
+   */
+  timeoutMs?: number;
 }
+
+const DEFAULT_GIT_TIMEOUT_MS = 300_000;
+
+/**
+ * ACE's own bookkeeping commits (the first commit of an initialised folder, a run's changes on a
+ * task branch) are never signed: a signing prompt would block a run with nobody watching. A merge
+ * into the user's branch keeps the user's own signing configuration — it is their history.
+ */
+const UNSIGNED = ['-c', 'commit.gpgsign=false'] as const;
 
 /** The identity of ACE's own commits when the repository has none configured (D269). */
 const FALLBACK_NAME = 'ACE';
@@ -89,6 +105,7 @@ interface RunOptions {
 export function createGitPort(options: GitPortOptions = {}): GitPort {
   const binary = options.gitBinary ?? 'git';
   const env = gitEnvironment(options.env);
+  const timeoutMs = options.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS;
 
   const run = (
     cwd: string | undefined,
@@ -107,6 +124,7 @@ export function createGitPort(options: GitPortOptions = {}): GitPort {
       ],
       cwd,
       runOptions.maxStdout,
+      timeoutMs,
     );
 
   /** As `run`, but a non-zero exit is a `GitError`. */
@@ -257,7 +275,7 @@ export function createGitPort(options: GitPortOptions = {}): GitPort {
         folder,
         ['commit', '-q', '--allow-empty', '--no-verify', '-m', 'Initial commit'],
         {
-          config: await identity(folder),
+          config: [...UNSIGNED, ...(await identity(folder))],
         },
       );
       return inspect(folder);
@@ -307,7 +325,7 @@ export function createGitPort(options: GitPortOptions = {}): GitPort {
       if (staged.code === 0) return null;
       if (staged.code !== 1) throw failure(staged);
       await check(cwd, ['commit', '-q', '--no-verify', '-m', message], {
-        config: await identity(cwd),
+        config: [...UNSIGNED, ...(await identity(cwd))],
       });
       return { sha: await headSha(cwd) };
     },
@@ -453,6 +471,7 @@ function exec(
   args: readonly string[],
   cwd: string | undefined,
   maxStdout: number | undefined,
+  timeoutMs: number,
 ): Promise<GitRun> {
   return new Promise<GitRun>((resolve, reject) => {
     let settled = false;
@@ -495,8 +514,24 @@ function exec(
       kept += piece.length;
     });
     child.stderr?.on('data', (chunk: Buffer) => err.push(chunk));
-    child.on('error', fail);
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      if (child.pid !== undefined) killProcessTree(child.pid);
+      reject(
+        new GitError(
+          `git ${args.join(' ')} did not finish within ${Math.round(timeoutMs / 1000)} s and was stopped.`,
+          { args, exitCode: null, stderr: Buffer.concat(err).toString('utf8') },
+        ),
+      );
+    }, timeoutMs);
+    timer.unref();
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      fail(error);
+    });
     child.on('close', (code) => {
+      clearTimeout(timer);
       if (settled) return;
       settled = true;
       resolve({

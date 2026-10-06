@@ -726,3 +726,45 @@ describe.skipIf(!gitAvailable)("Git errors carry Git's own message", () => {
     expect((error as GitError).args).toContain('add');
   });
 });
+
+describe.skipIf(!gitAvailable)('D269 ACE never waits on a signing prompt or a stuck hook', () => {
+  it('commits its own bookkeeping unsigned even when the user signs every commit', async () => {
+    const repo = repoWith({ 'a.txt': 'a\n' });
+    const signing = createGitPort({
+      env: {
+        ...hermetic,
+        GIT_CONFIG_COUNT: '2',
+        GIT_CONFIG_KEY_0: 'commit.gpgsign',
+        GIT_CONFIG_VALUE_0: 'true',
+        GIT_CONFIG_KEY_1: 'gpg.program',
+        GIT_CONFIG_VALUE_1: join(root, 'no-such-gpg'),
+      },
+    });
+    const tree = join(root, 'wt');
+    await signing.createWorktree({
+      repoPath: repo,
+      worktreePath: tree,
+      branch: 'ace/t',
+      baseRef: 'main',
+    });
+    write(tree, 'b.txt', 'b\n');
+    const committed = await signing.commitAll({ cwd: tree, message: 'run 1' });
+    expect(committed?.sha).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('stops a call whose hook hangs and says so', async () => {
+    const repo = repoWith({ 'a.txt': 'a\n' });
+    write(repo, '.git/hooks/post-checkout', '#!/bin/sh\nsleep 4\n');
+    const impatient = createGitPort({ env: hermetic, timeoutMs: 1_500 });
+    await expect(
+      impatient.createWorktree({
+        repoPath: repo,
+        worktreePath: join(root, 'slow'),
+        branch: 'ace/slow',
+        baseRef: 'main',
+      }),
+    ).rejects.toThrow(/did not finish within 2 s/);
+    // Windows keeps the folder busy until the killed hook's children are gone.
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+  }, 20_000);
+});
