@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { createMockAdapter } from '../adapters/mock.js';
 import { manifestFor } from '../catalog/index.js';
+import type { CliDetector } from '../adapters/cli/detect.js';
 import { UnknownProviderTypeError, createProviderAdapterFactory } from '../factory.js';
 
 /**
@@ -218,5 +219,43 @@ describe('FR-PRV-007 detection', () => {
     server.use(http.get('http://127.0.0.1:11434/v1/models', () => HttpResponse.error()));
 
     expect((await createProviderAdapterFactory().detect()).ollama?.detected).toBe(false);
+  });
+});
+
+describe('X1 CLI providers in the factory', () => {
+  const scan = {
+    type: 'claude_code' as const,
+    installed: true,
+    version: '2.1.282',
+    login: 'logged_in' as const,
+    installHint: 'npm install -g @anthropic-ai/claude-code',
+    loginHint: 'claude auth login',
+  };
+  const detector: CliDetector = {
+    detect: async () => scan,
+    detectAll: async () => ({ items: [scan] }),
+  };
+  const row = (overrides: Partial<Provider> = {}): Provider => ({
+    id: '01JBXQ8Z9KQ4R7N2VWXYZ0PRVD',
+    type: 'claude_code',
+    name: 'Claude Code',
+    keySet: false,
+    status: 'UNKNOWN',
+    concurrency: 1,
+    cliPermission: 'read_only',
+    createdAt: '2026-10-06T10:00:00.000Z',
+    updatedAt: '2026-10-06T10:00:00.000Z',
+    ...overrides,
+  });
+
+  it('builds a Claude Code adapter whose check reads the scan', async () => {
+    const adapter = createProviderAdapterFactory({ cliDetector: detector }).create(row(), undefined);
+    expect(adapter.type).toBe('claude_code');
+    expect(await adapter.check()).toEqual({ status: 'CONNECTED', message: 'v2.1.282' });
+    expect((await adapter.listModels()).map((model) => model.modelId)).toEqual(['default', 'opus', 'sonnet', 'haiku']);
+  });
+
+  it('passes the terminal scan through', async () => {
+    expect(await createProviderAdapterFactory({ cliDetector: detector }).detectClis?.()).toEqual({ items: [scan] });
   });
 });

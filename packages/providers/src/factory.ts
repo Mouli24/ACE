@@ -1,7 +1,9 @@
-import type { Model, Provider, ProviderType } from '@ace/contracts';
+import { DEFAULT_CLI_PERMISSION, type Model, type Provider, type ProviderType } from '@ace/contracts';
 import type { ModelInfo, ProviderAdapter, ProviderAdapterFactory, ProviderDetection } from '@ace/engine';
 
 import { createAnthropicAdapter } from './adapters/anthropic.js';
+import { createClaudeCodeAdapter } from './adapters/cli/claude-code.js';
+import { createCliDetector, type CliDetector } from './adapters/cli/detect.js';
 import { createGoogleAdapter } from './adapters/google.js';
 import { createMockAdapter, type MockProviderAdapter } from './adapters/mock.js';
 import { createOllamaAdapter, detectOllama, DEFAULT_OLLAMA_BASE_URL } from './adapters/ollama.js';
@@ -18,6 +20,8 @@ export interface ProviderFactoryOptions {
   /** Injected by tests, so a mock provider's call log and clock are reachable from outside. */
   mock?: MockProviderAdapter;
   fetchImpl?: typeof fetch;
+  /** X1: the terminal scan; tests inject a fake so `pnpm test` never runs a real CLI. */
+  cliDetector?: CliDetector;
 }
 
 /** Thrown when a provider row asks for a type this build has no adapter for. */
@@ -35,6 +39,7 @@ export function createProviderAdapterFactory(
   // One shared mock per engine, so `calls()` spans a whole run rather than one dispatch.
   const mock = options.mock ?? createMockAdapter();
   const fetchImpl = options.fetchImpl;
+  const cli = options.cliDetector ?? createCliDetector();
 
   return {
     create(provider: Provider, apiKey: string | undefined): ProviderAdapter {
@@ -81,6 +86,12 @@ export function createProviderAdapterFactory(
             ...(fetchImpl === undefined ? {} : { fetchImpl }),
           });
 
+        case 'claude_code':
+          return createClaudeCodeAdapter({
+            permission: provider.cliPermission ?? DEFAULT_CLI_PERMISSION,
+            detect: () => cli.detect('claude_code'),
+          });
+
         default:
           throw new UnknownProviderTypeError(provider.type);
       }
@@ -94,5 +105,8 @@ export function createProviderAdapterFactory(
     detect: async (): Promise<ProviderDetection> => ({
       ollama: await detectOllama(DEFAULT_OLLAMA_BASE_URL, fetchImpl),
     }),
+
+    // The Add-provider scan is always fresh; health checks read the 60 s cache.
+    detectClis: () => cli.detectAll({ force: true }),
   };
 }
