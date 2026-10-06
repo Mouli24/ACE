@@ -116,7 +116,9 @@ describe('FR-ONB-001 the wizard', () => {
     renderApp('/onboarding');
     await chooseMock(user);
     const group = await screen.findByRole('radiogroup', { name: 'Templates' });
-    await waitFor(() => expect(within(group).getAllByRole('radio')).toHaveLength(TEMPLATE_IDS.length));
+    await waitFor(() =>
+      expect(within(group).getAllByRole('radio')).toHaveLength(TEMPLATE_IDS.length),
+    );
     for (const id of TEMPLATE_IDS) {
       expect(screen.getByTestId(`template-thumbnail-${id}`)).toBeInTheDocument();
     }
