@@ -59,6 +59,8 @@ import type { KnowledgeService } from '../knowledge/service.js';
 import { createMemoryRoutes } from '../memory/routes.js';
 import type { MemoryService } from '../memory/service.js';
 import { createTemplateRoutes } from '../templates/routes.js';
+import { createTaskRoutes } from '../tasks/routes.js';
+import type { TaskService } from '../tasks/service.js';
 import type { TemplateService } from '../templates/service.js';
 import type { TraceService } from '../trace/index.js';
 import type { UsageService } from '../usage/index.js';
@@ -158,6 +160,14 @@ export interface EngineDeps {
   templates?: TemplateService;
   /** `POST /backup/export` and `/backup/import` (FR-SYS-012). */
   backup?: BackupService;
+
+  /*
+   * ACE parity P0 (p0-tasks-build-design.md §6). Optional like the rounds' services: built without
+   * it, the task routes answer 501 `not_implemented` (D121).
+   */
+
+  /** `/projects/:id/tasks`, `/tasks/:id/…`, `/projects/:id/repository`. */
+  tasks?: TaskService;
 }
 
 export interface EngineVariables {
@@ -460,10 +470,15 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     const id = c.req.param('id');
     // Every field of the patch, not just the name: `maxCostPerRunUsd` is the cap FR-GRD-008 halts a
     // run against, and reading only `name` here made it unsettable through the API.
-    if (patch.name === undefined && patch.maxCostPerRunUsd === undefined) {
+    if (Object.values(patch).every((value) => value === undefined)) {
       return c.json(await deps.graph.getProject(id));
     }
-    return c.json(await deps.graph.updateProject(id, patch));
+    const updated = await deps.graph.updateProject(id, patch);
+    // A resumed project, or one given more Build slots, starts the work that was waiting (§2.3).
+    if (patch.paused === false || patch.buildCapacity !== undefined) {
+      await deps.tasks?.projectChanged(id);
+    }
+    return c.json(updated);
   });
 
   api.delete('/projects/:id', async (c) => {
@@ -796,6 +811,7 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.route('/', createUsageRoutes(deps.trace, deps.usage));
   api.route('/', createTemplateRoutes(deps.templates));
   api.route('/', createBackupRoutes(deps.backup));
+  api.route('/', createTaskRoutes(deps.tasks));
 
   app.route(API_BASE_PATH, api);
 

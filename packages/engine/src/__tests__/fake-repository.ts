@@ -7,6 +7,7 @@ import {
   modelMatchesQuery,
   type ApprovalDecision,
   type ApprovalRequest,
+  type CheckCommand,
   type Artifact,
   type ChatMessage,
   type ChatThread,
@@ -264,7 +265,15 @@ export class FakeRepository implements Repository {
     update: async (
       scope: Scope,
       id: Id,
-      patch: { name?: string; lastOpenedAt?: Timestamp; updatedAt: Timestamp },
+      patch: {
+        name?: string;
+        lastOpenedAt?: Timestamp;
+        paused?: boolean;
+        buildCapacity?: number;
+        checkCommands?: CheckCommand[];
+        setupCommand?: string | null;
+        updatedAt: Timestamp;
+      },
     ) => {
       const current = this.#for(scope).projects.get(id);
       if (current === undefined) return null;
@@ -272,8 +281,14 @@ export class FakeRepository implements Repository {
         ...current,
         ...(patch.name === undefined ? {} : { name: patch.name }),
         ...(patch.lastOpenedAt === undefined ? {} : { lastOpenedAt: patch.lastOpenedAt }),
+        ...(patch.paused === undefined ? {} : { paused: patch.paused }),
+        ...(patch.buildCapacity === undefined ? {} : { buildCapacity: patch.buildCapacity }),
+        ...(patch.checkCommands === undefined ? {} : { checkCommands: patch.checkCommands }),
         updatedAt: patch.updatedAt,
       };
+      // ACE parity P0: `null` clears the setup command, `undefined` leaves it (D72).
+      if (patch.setupCommand === null) delete next.setupCommand;
+      else if (patch.setupCommand !== undefined) next.setupCommand = patch.setupCommand;
       this.#for(scope).projects.set(id, next);
       return next;
     },

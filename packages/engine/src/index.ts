@@ -36,3 +36,6 @@ export * from './trace/index.js';
 export * from './usage/index.js';
 export * from './templates/service.js';
 export * from './backup/index.js';
+
+/* ACE parity P0: tasks, workspaces, changes, review and local delivery (D268–D271). */
+export * from './tasks/index.js';
