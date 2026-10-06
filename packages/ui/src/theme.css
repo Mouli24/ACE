@@ -30,6 +30,9 @@
   --color-provider-openai_compatible: #a78bfa;
   --color-provider-ollama: #e8e8ea;
   --color-provider-mock: #9a99a3;
+  --color-provider-claude_code: #f2a37f;
+  --color-provider-codex_cli: #7dd3fc;
+  --color-provider-gemini_cli: #f9a8d4;
 
   --color-status-IDLE: #7c7c84;
   --color-status-READY: #93a8ff;
@@ -108,6 +111,9 @@
   --color-provider-openai_compatible: #7446d8;
   --color-provider-ollama: #3a3a40;
   --color-provider-mock: #6b6972;
+  --color-provider-claude_code: #94401c;
+  --color-provider-codex_cli: #0b6380;
+  --color-provider-gemini_cli: #a3245f;
 
   --color-status-IDLE: #6b6970;
   --color-status-READY: #3b5bdb;
