@@ -203,6 +203,8 @@ export interface RunServiceDeps {
   tools?: ToolProvider;
   /** `<projectFolder>/.ace/sandbox/<runId>/` for one run (round 4 §2.2, NFR-SEC-03). */
   sandboxDirFor?: (runId: Id) => string;
+  /** X1 §4.2: a run's project folder, for agent-route providers and the project tools. */
+  projectFolderFor?: (runId: Id) => Promise<string | undefined>;
   /** Resolves Input `artifactIds` to parts and stores produced media parts as artifacts. */
   artifacts?: ArtifactMaterialiser;
   /** Persists a logged `ToolCall`, mirroring it onto its node run (FR-TOOL-009). */
@@ -319,6 +321,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
     // Round 4: the tool loop and multimodal materialisation, threaded through from the gateway.
     ...(deps.tools === undefined ? {} : { tools: deps.tools }),
     ...(deps.sandboxDirFor === undefined ? {} : { sandboxDirFor: deps.sandboxDirFor }),
+    ...(deps.projectFolderFor === undefined ? {} : { projectFolderFor: deps.projectFolderFor }),
     ...(deps.artifacts === undefined ? {} : { artifacts: deps.artifacts }),
     ...(deps.recordToolCall === undefined ? {} : { recordToolCall: deps.recordToolCall }),
     ...(deps.nextId === undefined ? {} : { nextId: deps.nextId }),

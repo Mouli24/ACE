@@ -289,7 +289,7 @@ describe('TC-TOOL-001 an agent runs a tool and feeds its result back', () => {
     // The first turn offered the tool; the second fed the result back.
     expect(harness.requests[0]?.tools?.map((t) => t.name)).toEqual(['echo']);
     expect(harness.requests[1]?.toolResults).toEqual([
-      { callId: '01JBXQ8Z9KQ4R7N2VWXYZ0CAL1', name: 'echo', result: { text: 'echoed hi' } },
+      { callId: '01JBXQ8Z9KQ4R7N2VWXYZ0CAL1', name: 'echo', args: { text: 'hi' }, result: { text: 'echoed hi' } },
     ]);
   });
 
