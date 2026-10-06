@@ -109,7 +109,7 @@ export function TaskPage() {
       )}
 
       <Tabs defaultValue="overview" className="flex flex-col gap-4">
-        <TabsList aria-label="Task" className="self-start">
+        <TabsList aria-label="Task" className="max-w-full self-start overflow-x-auto">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="build">Build</TabsTrigger>
           <TabsTrigger value="changes">Changes</TabsTrigger>
