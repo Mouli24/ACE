@@ -282,6 +282,15 @@ export interface NodeExecutorDeps {
    * services: without it a Retrieval node is BLOCKED (`knowledge_unavailable`) rather than crashing.
    */
   search?: SearchService;
+
+  /* ------------------------------------------------------------------ X1 */
+
+  /**
+   * The project folder a run works in (X1 §4.2): handed to the provider as `workingDir` (an
+   * agent-route CLI runs there) and to the project tools as `projectDir`. Absent, or failing, the
+   * provider gets no folder and the project tools refuse.
+   */
+  projectFolderFor?: (runId: Id) => Promise<string | undefined>;
 }
 
 export interface NodeExecutor {
@@ -298,6 +307,19 @@ function readsOf(envelopes: readonly Envelope[]): Part[] {
 }
 
 /** How long a tool ran, from two ISO timestamps. Never negative; 0 when the clock is fixed (tests). */
+/**
+ * A provider-side action as a ToolCall name (X1 §4.3): `cli_` and the tool in snake_case, so it
+ * satisfies `TOOL_NAME_REGEX` and never collides with an ACE tool — `Bash` → `cli_bash`.
+ */
+export function activityToolName(tool: string): string {
+  const snake = tool
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toLowerCase();
+  return `cli_${snake === '' ? 'action' : snake}`;
+}
+
 function durationSince(startedAt: string): number {
   const started = Date.parse(startedAt);
   if (Number.isNaN(started)) return 0;
@@ -731,6 +753,20 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
       /* The run's sandbox folder, the only place a tool may touch (round 4 §2.2, NFR-SEC-03). */
       const sandboxDir = deps.sandboxDirFor?.(input.runId) ?? '';
+      /* X1 §4.2: the project folder, for an agent-route provider and the project tools. */
+      let workingDir: string | undefined;
+      try {
+        const folder = await deps.projectFolderFor?.(input.runId);
+        workingDir = folder === undefined || folder === '' ? undefined : folder;
+      } catch {
+        workingDir = undefined;
+      }
+      /** What the provider said the call cost (D263), when it says; otherwise the price table. */
+      let reportedCostUsd: number | undefined;
+      const usageNow = (): Usage => {
+        const priced = usageFor(tokensIn, tokensOut, pricing);
+        return reportedCostUsd === undefined ? priced : { ...priced, costUsd: reportedCostUsd };
+      };
       /** Untrusted tool-result blocks appended to the *recorded* prompt (FR-TOOL-010, FR-PRM-002). */
       const promptSuffix: string[] = [];
       /** A tool-point block or an approval reject that ends this node GUARDRAIL_VIOLATION (§2.2). */
@@ -795,6 +831,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
           toolResults.push({
             callId: pendingCall.callId,
             name: pendingCall.name,
+            args: pendingCall.args,
             result: handled.result,
           });
           // The result reaches the *recorded* prompt inside an untrusted block (FR-PRM-002); the
@@ -879,6 +916,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               temperature,
               runId: input.runId,
               iteration: input.iteration,
+              ...(workingDir === undefined ? {} : { workingDir }),
               ...(offerTools ? { tools: offeredTools } : {}),
               ...(withResults ? { toolResults } : {}),
             },
@@ -912,6 +950,22 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
                 // Summed across turns: every generate() turn is its own billed call (Arch §12.7).
                 tokensIn += chunk.tokensIn;
                 tokensOut += chunk.tokensOut;
+                if (chunk.costUsd !== undefined) {
+                  reportedCostUsd = (reportedCostUsd ?? 0) + chunk.costUsd;
+                }
+                break;
+              case 'activity':
+                // The provider already did this (D261): logged for the inspector, never guarded.
+                await logToolCall(
+                  { callId: nextId(), name: activityToolName(chunk.tool), args: chunk.args },
+                  {
+                    status: chunk.status,
+                    resultSummary: chunk.summary,
+                    durationMs: chunk.durationMs,
+                    verdicts: [],
+                    at: deps.now?.() ?? new Date().toISOString(),
+                  },
+                );
                 break;
               case 'finish':
                 finishReason = chunk.reason;
@@ -999,6 +1053,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               runId: input.runId,
               sandboxDir,
               signal: toolSignal,
+              ...(workingDir === undefined ? {} : { projectDir: workingDir }),
             });
           } catch (error) {
             failure = error instanceof Error ? error.message : String(error);
@@ -1087,7 +1142,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       } catch (error) {
         tokens.stop();
         const nodeError = classifyError(error);
-        const usage = usageFor(tokensIn, tokensOut, pricing);
+        const usage = usageNow();
 
         // Only these two are worth another model; everything else stops here (FR-RTR-002).
         if (nodeError.kind === 'provider' || nodeError.kind === 'network') {
@@ -1116,7 +1171,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
                 : 'The run was stopped before this call was made.',
             ).nodeError,
             // A stop between two turns (D-062) keeps what the turns before it spent (FR-ERR-007).
-            called ? usageFor(tokensIn, tokensOut, pricing) : NO_USAGE,
+            called ? usageNow() : NO_USAGE,
             {
               verdicts: [...verdicts],
               ...(called ? { modelUsed, prompt: recordedPrompt() } : {}),
@@ -1125,7 +1180,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         };
       }
 
-      const usage = usageFor(tokensIn, tokensOut, pricing);
+      const usage = usageNow();
 
       /*
        * A tool-point block or a rejected approval ends the node GUARDRAIL_VIOLATION (§2.2). The

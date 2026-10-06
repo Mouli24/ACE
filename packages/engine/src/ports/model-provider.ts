@@ -47,6 +47,8 @@ export type FinishReason = (typeof FINISH_REASONS)[number];
 export interface ToolResult {
   callId: string;
   name: string;
+  /** The arguments the model called the tool with, so an adapter can replay its call (X1 §4.4). */
+  args?: unknown;
   /** Whatever the tool returned; the executor labels it untrusted before it reaches the model (FR-TOOL-010). */
   result: unknown;
 }
@@ -78,6 +80,11 @@ export interface GenerateRequest {
    */
   runId?: string;
   iteration?: number;
+  /**
+   * The project folder this call works in (X1 §4.2). Only an agent-route provider (a coding-agent
+   * CLI) reads it; without it such a provider runs read-only in a fresh temp folder.
+   */
+  workingDir?: string;
 }
 
 /**
@@ -109,7 +116,19 @@ export type StreamChunk =
   | { type: 'json'; value: unknown }
   | { type: 'tool_call'; callId: string; name: string; args: unknown }
   | ({ type: 'part' } & ProducedPart)
-  | { type: 'usage'; tokensIn: number; tokensOut: number }
+  | { type: 'usage'; tokensIn: number; tokensOut: number; costUsd?: number }
+  /**
+   * Something the provider did itself — a CLI's command, file edit or read (X1 §4.2, D261). The
+   * executor records it as a ToolCall; no guardrail runs, because it has already happened.
+   */
+  | {
+      type: 'activity';
+      tool: string;
+      args: unknown;
+      status: 'ok' | 'error';
+      summary: string;
+      durationMs: number;
+    }
   | { type: 'finish'; reason: FinishReason };
 
 export interface ProviderAdapter {
