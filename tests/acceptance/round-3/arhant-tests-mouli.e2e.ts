@@ -210,12 +210,79 @@ async function openRunPage(page: Page, runId: string): Promise<void> {
 const card = (page: Page, nodeId: string): Locator => page.getByTestId(`node-card-${nodeId}`);
 
 const startButton = (page: Page): Locator =>
-  // `exact`, or this also matches the run bar's "Restart" (D-031).
-  page.getByTestId('run-bar').getByRole('button', { name: 'Start', exact: true });
+  // `exact`, or this also matches the run bar's "Restart" (D-031). The V2 button shows "Run"; its
+  // accessible name is "Start run" (D259).
+  page.getByTestId('run-bar').getByRole('button', { name: 'Start run', exact: true });
+
+/*
+ * POC Theme V2 layout (D259): Configure, Inspector and Runs are tabs of a floating sheet that starts
+ * closed and covers the right of the Canvas while open.
+ */
+async function openSheet(
+  page: Page,
+  tab: 'Configure' | 'Inspector' | 'Runs' | 'Memory',
+): Promise<void> {
+  if (!(await page.getByRole('tab', { name: tab }).isVisible()))
+    await page.getByTestId('sheet-toggle').click();
+  await page.getByRole('tab', { name: tab }).click();
+}
+
+async function closeSheet(page: Page): Promise<void> {
+  const close = page.getByRole('button', { name: 'Close panel' });
+  if (await close.isVisible()) await close.click();
+  await expect(page.getByTestId('workflow-sheet')).toHaveCount(0);
+}
 
 const runControls = (page: Page): Locator => page.getByTestId('run-controls');
 const runAction = (page: Page, action: RunAction): Locator =>
   runControls(page).getByTestId(`run-action-${action}`);
+
+/**
+ * Where to click a card so the card itself receives the click: near the top of its header, a
+ * quarter of the way in (D-089), unless something sits over that point. In the V2 layout the halt
+ * note is a pill centred at the top of the Canvas (D259), and after Fit to view it can cover the
+ * top row of card headers; then the first point of the header, or failing that of the card's body,
+ * that the card receives — never a control inside it.
+ */
+async function clickPoint(target: Locator): Promise<{ x: number; y: number }> {
+  // read once the card has stopped moving: Fit to view animates the viewport
+  let last = '';
+  await expect
+    .poll(
+      async () => {
+        const now = JSON.stringify(await target.boundingBox());
+        const still = now === last;
+        last = now;
+        return still;
+      },
+      { message: 'the card is still', timeout: 10_000, intervals: [50, 100, 100, 200] },
+    )
+    .toBe(true);
+  const point = await target.evaluate((card) => {
+    const box = card.getBoundingClientRect();
+    const header = card.querySelector('header')?.getBoundingClientRect() ?? box;
+    const candidates = [{ x: Math.max(4, Math.min(60, box.width * 0.25)), y: 6 }];
+    for (const y of [
+      6,
+      header.bottom - box.top - header.height / 2,
+      box.height / 2,
+      box.height - 10,
+    ]) {
+      for (let x = 8; x < box.width - 8; x += 8) candidates.push({ x, y });
+    }
+    const control =
+      'button, input, textarea, select, a, [role="button"], .react-flow__handle, .nodrag';
+    for (const candidate of candidates) {
+      const hit = document.elementFromPoint(box.left + candidate.x, box.top + candidate.y);
+      if (hit === null || !card.contains(hit)) continue;
+      const inside = hit.closest(control);
+      if (inside === null || !card.contains(inside)) return candidate;
+    }
+    return null;
+  });
+  expect(point, 'some part of the card receives a click').not.toBeNull();
+  return point as { x: number; y: number };
+}
 
 /**
  * Fit the view, then click inside the card's header — offset from its centre, because the port
@@ -227,21 +294,21 @@ const runAction = (page: Page, action: RunAction): Locator =>
  * the tests below select a node *before* starting the run wherever the assertion allows it.
  */
 async function selectNode(page: Page, nodeId: string): Promise<void> {
+  // the V2 sheet, when open, covers the right of the Canvas
+  await closeSheet(page);
   await page.getByRole('button', { name: 'Fit to view' }).click();
   await page.waitForTimeout(300);
   const target = card(page, nodeId);
   await target.scrollIntoViewIfNeeded();
   // Fit to view can zoom a card narrower than 60 px, and a fixed offset then lands on the header's
   // run-actions button (D-089); click a quarter of the way in, whatever the zoom.
-  const box = await target.boundingBox();
-  const x = box === null ? 20 : Math.max(4, Math.min(60, box.width * 0.25));
-  await target.click({ position: { x, y: 6 } });
+  await target.click({ position: await clickPoint(target) });
   await expect(target).toHaveAttribute('data-selected', 'true');
 }
 
 /** The Inspector tab on a node that is already selected. */
 async function openInspectorTab(page: Page): Promise<Locator> {
-  await page.getByRole('tab', { name: 'Inspector' }).click();
+  await openSheet(page, 'Inspector');
   const inspector = page.getByTestId('inspector');
   await expect(inspector).toBeVisible();
   return inspector;
@@ -764,10 +831,10 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     await openCanvas(page, projectId, workflowId);
     await startButton(page).click();
 
-    // The WAITING ring, labelled rather than only coloured (FR-EXE-009).
+    // The WAITING state, labelled rather than only coloured (FR-EXE-009; the V2 card's status chip).
     const writerCard = card(page, writer.id);
     await expect(writerCard).toHaveAttribute('data-state', 'WAITING', { timeout: 40_000 });
-    await expect(writerCard.getByTestId('status-ring').first()).toHaveAttribute(
+    await expect(writerCard.getByTestId('status-chip').first()).toHaveAttribute(
       'aria-label',
       'waiting',
     );
@@ -1095,6 +1162,7 @@ test.describe('Guardrail policies (FR-GRD-001/002/011, TC-GRD-001/016)', () => {
     await openCanvas(page, blocking.projectId, blocking.workflowId);
     // The picker shows the override the node actually carries, with its version (FR-GRD-002).
     await selectNode(page, writer.id);
+    await openSheet(page, 'Configure');
     const picker = page.getByTestId('config-panel').getByLabel('Guardrail policy');
     await expect(picker).toContainText(
       `${blocking.policy.name} · version ${blocking.policy.version}`,
@@ -1186,7 +1254,8 @@ test.describe('Guardrail policies (FR-GRD-001/002/011, TC-GRD-001/016)', () => {
     await expect(inspector.getByTestId('inspector-output')).not.toContainText(address);
     await expect(inspector.getByTestId('verdict-list')).not.toContainText(address);
 
-    await page.getByRole('tab', { name: 'Runs' }).click();
+    // the sheet off the Inspector (onto Runs), so only the Canvas and the run list are swept
+    await openSheet(page, 'Runs');
     expect(await page.content(), 'the redacted address is nowhere on the Canvas').not.toContain(
       address,
     );
@@ -1214,6 +1283,8 @@ test.describe('Loops (FR-CON-007, FR-PAR-005/006)', () => {
     await openCanvas(page, projectId, workflowId);
     await page.getByRole('button', { name: 'Fit to view' }).click();
     await page.getByTestId(`loop-edge-${edgeId}`).locator('path').first().click({ force: true });
+    // the selected edge's settings are on the V2 sheet's Configure tab (D259)
+    await openSheet(page, 'Configure');
 
     const editor = page.getByTestId('loop-edge-editor');
     await expect(editor).toBeVisible();
@@ -1244,6 +1315,7 @@ test.describe('Loops (FR-CON-007, FR-PAR-005/006)', () => {
     await openCanvas(page, projectId, workflowId);
     await page.getByRole('button', { name: 'Fit to view' }).click();
     await page.getByTestId(`loop-edge-${edgeId}`).locator('path').first().click({ force: true });
+    await openSheet(page, 'Configure');
     await expect(page.getByTestId('loop-edge-editor').getByLabel('Max iterations')).toHaveValue(
       '3',
     );

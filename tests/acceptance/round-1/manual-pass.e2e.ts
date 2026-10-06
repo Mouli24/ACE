@@ -128,6 +128,24 @@ async function openCanvas(page: Page, projectId: string, workflowId: string): Pr
 const canvasBox = (page: Page): Promise<{ width: number; height: number } | null> =>
   page.getByTestId('canvas').boundingBox();
 
+/** POC Theme V2 (D259): the palette is the New node dialog; this adds one node from it. */
+async function addFromDialog(page: Page, kind: string, name?: string): Promise<void> {
+  await page.getByTestId('new-node-button').click();
+  await page.getByTestId(`palette-${kind}`).click();
+  if (name) await page.getByLabel('Name').fill(name);
+  await page.getByTestId('new-node-add').click();
+}
+
+/** POC Theme V2: Configure lives in a floating sheet that starts closed. */
+async function openSheet(
+  page: Page,
+  tab: 'Configure' | 'Inspector' | 'Runs' | 'Memory',
+): Promise<void> {
+  if (!(await page.getByRole('tab', { name: tab }).isVisible()))
+    await page.getByTestId('sheet-toggle').click();
+  await page.getByRole('tab', { name: tab }).click();
+}
+
 /**
  * String-form `evaluate` on purpose: this package's tsconfig has no DOM lib (nothing else in the
  * suite reaches into the page), and widening it for one probe is the wrong trade.
@@ -156,8 +174,8 @@ test('§8.1 abuse — every pane dragged to its minimum, the Canvas stays usable
 }) => {
   const { projectId, workflowId } = await freshWorkflow('resize');
   await openCanvas(page, projectId, workflowId);
-  await page.getByTestId('palette-input').click();
-  await page.getByTestId('palette-agent').click();
+  await addFromDialog(page, 'input');
+  await addFromDialog(page, 'agent');
   await expect
     .poll(async () => (await api<Graph>(`/workflows/${workflowId}`)).nodes.length)
     .toBe(2);
@@ -165,31 +183,30 @@ test('§8.1 abuse — every pane dragged to its minimum, the Canvas stays usable
   const before = await canvasBox(page);
   expect(before?.height ?? 0).toBeGreaterThan(0);
 
-  // Drag every resize handle hard against its stop, in both directions. D-004 was a Canvas that
-  // measured 0 px high; the assertion that matters after each drag is that it still measures.
-  const handles = page.locator('[data-panel-resize-handle-id]');
-  const count = await handles.count();
-  expect(count).toBeGreaterThan(0);
-
-  for (let i = 0; i < count; i += 1) {
-    const handle = handles.nth(i);
-    const box = await handle.boundingBox();
-    if (!box) continue;
-    const horizontal = box.height > box.width;
-    const [cx, cy] = [box.x + box.width / 2, box.y + box.height / 2];
-    for (const delta of [-2000, 4000, -2000]) {
-      await page.mouse.move(cx, cy);
-      await page.mouse.down();
-      await page.mouse.move(horizontal ? cx + delta : cx, horizontal ? cy : cy + delta, {
-        steps: 12,
-      });
-      await page.mouse.up();
-      await page.waitForTimeout(150);
-
-      const now = await canvasBox(page);
-      expect(now?.width ?? 0, `canvas width after handle ${i} delta ${delta}`).toBeGreaterThan(0);
-      expect(now?.height ?? 0, `canvas height after handle ${i} delta ${delta}`).toBeGreaterThan(0);
-    }
+  /*
+   * The POC Theme V2 layout (D259) has no drag handles left: the bottom panel collapses to its
+   * header, the sheet floats over the Canvas, Chat is a fixed column. So every pane is pushed to its
+   * extreme the ways the layout allows — bottom panel open and collapsed, sheet open and closed,
+   * and the window at the narrowest and shortest desktop size — and, as before, D-004 (a Canvas
+   * that measured 0 px high) is what is checked after each step.
+   */
+  expect(await page.locator('[data-panel-resize-handle-id]').count()).toBe(0);
+  const toggleBottom = page.getByRole('button', { name: 'Toggle panel' });
+  // (the bottom panel's toggle sits under an open sheet, so it is pressed with the sheet closed)
+  const steps: Array<[string, () => Promise<void>]> = [
+    ['bottom panel collapsed', () => toggleBottom.click()],
+    ['sheet open over it', () => openSheet(page, 'Configure')],
+    ['narrowest, shortest desktop window', () => page.setViewportSize({ width: 641, height: 480 })],
+    ['sheet closed', () => page.getByRole('button', { name: 'Close panel' }).click()],
+    ['bottom panel open again', () => toggleBottom.click()],
+    ['back to 1280 × 720', () => page.setViewportSize({ width: 1280, height: 720 })],
+  ];
+  for (const [step, act] of steps) {
+    await act();
+    await page.waitForTimeout(250);
+    const now = await canvasBox(page);
+    expect(now?.width ?? 0, `canvas width with the ${step}`).toBeGreaterThan(0);
+    expect(now?.height ?? 0, `canvas height with the ${step}`).toBeGreaterThan(0);
   }
 
   // and still usable: fit-to-view works and the cards are reachable
@@ -208,7 +225,7 @@ test('§8.1 abuse — 3,000 characters pasted into Instructions reach the engine
 }) => {
   const { projectId, workflowId } = await freshWorkflow('paste');
   await openCanvas(page, projectId, workflowId);
-  await page.getByTestId('palette-agent').click();
+  await addFromDialog(page, 'agent');
 
   await expect
     .poll(async () => (await api<Graph>(`/workflows/${workflowId}`)).nodes.length, {
@@ -221,6 +238,7 @@ test('§8.1 abuse — 3,000 characters pasted into Instructions reach the engine
   expect(agent, 'the agent card was created').toBeTruthy();
 
   await page.locator(`.react-flow__node[data-id="${agent?.id}"]`).click();
+  await openSheet(page, 'Configure');
   const instructions = page.getByLabel('Instructions');
   await expect(instructions).toBeVisible();
 
@@ -256,7 +274,7 @@ test('§8.1 abuse — the engine is killed mid-drag; the app recovers when it co
 }) => {
   const { projectId, workflowId } = await freshWorkflow('kill-mid-drag');
   await openCanvas(page, projectId, workflowId);
-  await page.getByTestId('palette-input').click();
+  await addFromDialog(page, 'input');
   await expect
     .poll(async () => (await api<Graph>(`/workflows/${workflowId}`)).nodes.length)
     .toBe(1);
@@ -339,9 +357,13 @@ for (const zoom of [0.5, 2]) {
     expect(box?.width ?? 0, `canvas measurable at ${zoom * 100} %`).toBeGreaterThan(0);
     expect(box?.height ?? 0, `canvas measurable at ${zoom * 100} %`).toBeGreaterThan(0);
 
-    // the palette is still reachable and still adds exactly one card (D-006 was a double add)
+    // the palette (V2: the New node dialog) is still reachable and still adds exactly one card
+    // (D-006 was a double add)
+    await expect(page.getByTestId('new-node-button')).toBeVisible();
+    await page.getByTestId('new-node-button').click();
     await expect(page.getByTestId('palette-input')).toBeVisible();
     await page.getByTestId('palette-input').click();
+    await page.getByTestId('new-node-add').click();
     await expect
       .poll(async () => (await api<Graph>(`/workflows/${workflowId}`)).nodes.length, {
         timeout: 10_000,

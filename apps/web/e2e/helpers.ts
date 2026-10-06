@@ -165,12 +165,6 @@ export async function configureNode(page: Page, nodeId: string): Promise<Locator
   return panel;
 }
 
-/** Point the Chat column at a node (its @mention chip). */
-export async function chatWith(page: Page, nodeId: string): Promise<void> {
-  await page.getByTestId(`chat-mention-${nodeId}`).click();
-  await expect(page.getByTestId(`chat-mention-${nodeId}`)).toHaveAttribute('aria-pressed', 'true');
-}
-
 const overlaps = (
   a: { x: number; y: number; width: number; height: number },
   b: { x: number; y: number; width: number; height: number },

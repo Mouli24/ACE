@@ -517,27 +517,96 @@ async function openCanvas(page: Page, projectId: string, workflowId: string): Pr
 
 const card = (page: Page, nodeId: string): Locator => page.getByTestId(`node-card-${nodeId}`);
 
+// The V2 button shows "Run"; its accessible name is "Start run" (D259).
 const startButton = (page: Page): Locator =>
-  page.getByTestId('run-bar').getByRole('button', { name: 'Start', exact: true });
+  page.getByTestId('run-bar').getByRole('button', { name: 'Start run', exact: true });
+
+/** Close the V2 sheet when it is open: it covers the right of the Canvas (D259). */
+async function closeSheet(page: Page): Promise<void> {
+  const close = page.getByRole('button', { name: 'Close panel' });
+  if (await close.isVisible()) await close.click();
+  await expect(page.getByTestId('workflow-sheet')).toHaveCount(0);
+}
+
+/**
+ * Add a node from the palette — in the V2 layout the New node dialog (D259): open it, choose the
+ * kind by its name in the "Node palette" list, add it. The dialog closes itself after the add.
+ */
+async function addFromPalette(page: Page, name: RegExp): Promise<void> {
+  await page.getByTestId('new-node-button').click();
+  await page.getByLabel('Node palette').getByRole('button', { name }).click();
+  await page.getByTestId('new-node-add').click();
+  await expect(page.getByRole('dialog', { name: 'New node' })).toHaveCount(0);
+}
 
 async function fitView(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Fit to view' }).click();
 }
 
+/**
+ * Where to click a card so the card itself receives the click: near the top of its header, a
+ * quarter of the way in (D-089), unless something sits over that point. In the V2 layout the halt
+ * note is a pill centred at the top of the Canvas (D259), and after Fit to view it can cover the
+ * top row of card headers; then the first point of the header, or failing that of the card's body,
+ * that the card receives — never a control inside it.
+ */
+async function clickPoint(target: Locator): Promise<{ x: number; y: number }> {
+  // read once the card has stopped moving: Fit to view animates the viewport
+  let last = '';
+  await expect
+    .poll(
+      async () => {
+        const now = JSON.stringify(await target.boundingBox());
+        const still = now === last;
+        last = now;
+        return still;
+      },
+      { message: 'the card is still', timeout: 10_000, intervals: [50, 100, 100, 200] },
+    )
+    .toBe(true);
+  const point = await target.evaluate((card) => {
+    const box = card.getBoundingClientRect();
+    const header = card.querySelector('header')?.getBoundingClientRect() ?? box;
+    const candidates = [{ x: Math.max(4, Math.min(60, box.width * 0.25)), y: 6 }];
+    for (const y of [
+      6,
+      header.bottom - box.top - header.height / 2,
+      box.height / 2,
+      box.height - 10,
+    ]) {
+      for (let x = 8; x < box.width - 8; x += 8) candidates.push({ x, y });
+    }
+    const control =
+      'button, input, textarea, select, a, [role="button"], .react-flow__handle, .nodrag';
+    for (const candidate of candidates) {
+      const hit = document.elementFromPoint(box.left + candidate.x, box.top + candidate.y);
+      if (hit === null || !card.contains(hit)) continue;
+      const inside = hit.closest(control);
+      if (inside === null || !card.contains(inside)) return candidate;
+    }
+    return null;
+  });
+  expect(point, 'some part of the card receives a click').not.toBeNull();
+  return point as { x: number; y: number };
+}
+
 /** Select a node by its card's header, never forced (round 4's selection). */
 async function selectNode(page: Page, nodeId: string): Promise<void> {
+  await closeSheet(page);
   await fitView(page);
   const target = card(page, nodeId);
   await target.scrollIntoViewIfNeeded();
-  await target.click({ position: { x: 60, y: 6 } });
+  // the point is read once the Fit animation has stopped moving the card
+  await settledBox(target, `node ${nodeId}`);
+  await target.click({ position: await clickPoint(target) });
   await expect(target).toHaveAttribute('data-selected', 'true');
 }
 
 type PaneTab = 'Configure' | 'Inspector' | 'Runs' | 'Chat' | 'Memory' | 'Canvas';
 
 /**
- * A tab of the node pane (right pane, or the phone layout's single pane), never a workflow tab of
- * the same name: `memory.json` imports a workflow called "Memory", whose tab sits in the top bar's
+ * A tab of the node pane (the desktop's floating sheet, or the phone layout's single pane), never a
+ * workflow tab of the same name: `memory.json` imports a workflow called "Memory", whose tab sits in the top bar's
  * "Workflows" list beside the pane's own "Memory" tab.
  */
 function paneTab(page: Page, name: PaneTab): Locator {
@@ -548,7 +617,12 @@ function paneTab(page: Page, name: PaneTab): Locator {
 }
 
 async function openRightTab(page: Page, name: PaneTab): Promise<void> {
-  await paneTab(page, name).click();
+  const tab = paneTab(page, name);
+  // Desktop (POC Theme V2, D259): Configure · Inspector · Runs · Memory are the floating sheet's
+  // tabs and the sheet starts closed. The phone layout's tabs are always on screen.
+  const toggle = page.getByTestId('sheet-toggle');
+  if (!(await tab.isVisible()) && (await toggle.isVisible())) await toggle.click();
+  await tab.click();
 }
 
 async function openInspector(page: Page, nodeId: string): Promise<Locator> {
@@ -1573,10 +1647,7 @@ test.describe('TC-RAG-006/007 Sources listed for an attached KB and for a Retrie
 
     // And the palette offers the node (FR-RAG-006): clicking it adds one with the same two ports.
     const before = await graphOf(flow.workflowId);
-    await page
-      .getByLabel('Node palette')
-      .getByRole('button', { name: /Retrieval/ })
-      .click();
+    await addFromPalette(page, /Retrieval/);
     const after = await landedGraph(
       flow.workflowId,
       before.workflow.version,
@@ -1872,7 +1943,6 @@ test.describe('TC-CAN-007/008/010 Auto-layout, undo/redo and shortcuts (FR-CAN-0
 
     let graph = await graphOf(flow.workflowId);
     const states = [normalised(graph)];
-    const palette = page.getByLabel('Node palette');
 
     const edit = async (what: string, act: () => Promise<void>): Promise<Graph> => {
       await act();
@@ -1882,7 +1952,7 @@ test.describe('TC-CAN-007/008/010 Auto-layout, undo/redo and shortcuts (FR-CAN-0
     };
     const addAgent = async (what: string): Promise<Node> => {
       const known = new Set(graph.nodes.map((node) => node.id));
-      await edit(what, () => palette.getByRole('button', { name: /^Agent\b/ }).click());
+      await edit(what, () => addFromPalette(page, /^Agent\b/));
       const added = graph.nodes.find((node) => !known.has(node.id));
       expect(added, `${what} added a node`).toBeDefined();
       return added as Node;
@@ -2129,6 +2199,8 @@ test.describe('TC-MOB-001/002 + FR-MOB-003 Phone layout at 380 px', () => {
     await openApp(page, `/projects/${flow.projectId}/workflows/${flow.workflowId}`);
     await expect(page.getByRole('note')).toContainText(/editing is available on a larger screen/i);
     for (const node of before.nodes) await expect(card(page, node.id)).toBeVisible();
+    // no palette: in the V2 layout, no New node button to open it from (D259)
+    await expect(page.getByTestId('new-node-button')).toHaveCount(0);
     await expect(page.getByLabel('Node palette')).toHaveCount(0);
     await expectNoHorizontalScroll(page, 'read-only canvas');
 
