@@ -469,6 +469,15 @@ describe('ACE parity P0 — closing, deleting, pausing and recovery', () => {
     expect(await codeOf(h.service.get(task.id))).toBe('not_found');
   });
 
+  it('removes the worktrees of a project about to be deleted, keeping the branches', async () => {
+    const h = await createTaskHarness();
+    const task = await toReview(h);
+    const workspace = (await h.service.get(task.id)).workspace;
+    await h.service.beforeProjectDelete(h.project.id);
+    expect(h.git.removed).toContain(workspace?.path);
+    expect(h.git.branches.has(workspace?.branch ?? '')).toBe(true);
+  });
+
   it('pauses and resumes a task', async () => {
     const h = await createTaskHarness();
     const task = await newTask(h);

@@ -482,6 +482,8 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   });
 
   api.delete('/projects/:id', async (c) => {
+    // ACE parity: a project's task worktrees live in the data folder, not the project's (D269).
+    await deps.tasks?.beforeProjectDelete(c.req.param('id'));
     await deps.graph.deleteProject(c.req.param('id'));
     return c.body(null, 204);
   });

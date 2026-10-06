@@ -111,11 +111,18 @@ export interface TaskService {
 
   /** A project's settings changed: a resumed project or a raised capacity starts queued work. */
   projectChanged(projectId: Id): Promise<void>;
+  /**
+   * A project is about to be deleted: stop its tasks' runs and remove their worktree folders from
+   * the data folder. The task branches stay in the user's repository — they are the user's history.
+   */
+  beforeProjectDelete(projectId: Id): Promise<void>;
 
   /** Subscribes to run events and recovers tasks a stopped engine left mid-flight. */
   attach(): Promise<() => void>;
   /** Resolves once every background step started so far has finished (tests, shutdown). */
   idle(): Promise<void>;
+  /** Cancels setup and check commands in flight and waits for the background to unwind. */
+  shutdown(): Promise<void>;
 }
 
 export interface TaskServiceDeps {
@@ -1826,6 +1833,28 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       }
     },
 
+    async beforeProjectDelete(projectId) {
+      const tasks = await repos().tasks.listByProject(scope, projectId);
+      for (const task of tasks) {
+        aborts.get(task.id)?.abort();
+        const latest = await latestExecution(task.id);
+        if (latest?.status === 'running' && latest.runId !== undefined) {
+          await deps.stopRun(latest.runId).catch(() => undefined);
+        }
+        const workspace = await repos().workspaces.getByTask(scope, task.id);
+        if (workspace !== null && (workspace.status === 'ready' || workspace.status === 'error')) {
+          await git
+            .removeWorktree({ repoPath: workspace.repoPath, worktreePath: workspace.path })
+            .catch((error: unknown) =>
+              logger.warn(
+                { subsystem: 'tasks', err: error, taskId: task.id },
+                'worktree not removed with its project',
+              ),
+            );
+        }
+      }
+    },
+
     async attach() {
       const unsubscribe = await bus.subscribe((event) => {
         if (event.type === 'run.completed' && event.runId !== undefined) {
@@ -1888,6 +1917,11 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       while (background.size > 0) {
         await Promise.allSettled([...background]);
       }
+    },
+
+    async shutdown() {
+      for (const controller of aborts.values()) controller.abort();
+      await service.idle();
     },
   };
 
