@@ -6,6 +6,7 @@ import { KnowledgeListPage } from '../knowledge/KnowledgeListPage';
 import { OnboardingPage } from '../onboarding/OnboardingPage';
 import { UsagePage } from '../usage/UsagePage';
 import { ProjectPage } from '../projects/ProjectPage';
+import { ProjectSettingsPage } from '../projects/ProjectSettingsPage';
 import { ProjectsPage } from '../projects/ProjectsPage';
 import { GuardrailsPage } from '../guardrails/GuardrailsPage';
 import { ProvidersPage } from '../providers/ProvidersPage';
@@ -41,6 +42,7 @@ export const routes: RouteObject[] = [
       },
       { path: 'projects/:projectId/tasks', element: <TasksBoardPage /> },
       { path: 'projects/:projectId/tasks/:taskId', element: <TaskPage /> },
+      { path: 'projects/:projectId/settings', element: <ProjectSettingsPage /> },
       { path: 'projects/:projectId/runs', element: <ProjectRunsPage /> },
       { path: 'projects/:projectId/knowledge', element: <KnowledgeListPage /> },
       { path: 'knowledge/:kbId', element: <KnowledgeBasePage /> },
