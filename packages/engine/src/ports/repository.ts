@@ -48,6 +48,7 @@ import type {
   TaskExecutionRepository,
   TaskRepository,
   TaskReviewRepository,
+  TaskScheduleRepository,
   TaskWorkspaceRepository,
 } from './tasks.js';
 
@@ -118,6 +119,9 @@ export interface ProjectRepository {
       buildCapacity?: number;
       checkCommands?: CheckCommand[];
       setupCommand?: string | null;
+      /* ACE parity P1 (D278): `null` clears either. */
+      previewCommand?: string | null;
+      previewUrl?: string | null;
       updatedAt: Timestamp;
     },
   ): Promise<Project | null>;
@@ -345,4 +349,6 @@ export interface Repository {
   taskReviews?: TaskReviewRepository;
   taskDeliveries?: TaskDeliveryRepository;
   taskActivity?: TaskActivityRepository;
+  /** ACE parity P1 (D277). */
+  taskSchedules?: TaskScheduleRepository;
 }

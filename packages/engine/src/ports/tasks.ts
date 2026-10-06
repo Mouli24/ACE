@@ -7,6 +7,7 @@ import type {
   TaskDelivery,
   TaskExecution,
   TaskReview,
+  TaskSchedule,
   TaskStage,
   TaskState,
   TaskWorkspace,
@@ -81,6 +82,18 @@ export interface TaskDeliveryRepository {
   create(scope: Scope, delivery: TaskDelivery): Promise<TaskDelivery>;
   /** Oldest first. */
   listByTask(scope: Scope, taskId: Id): Promise<TaskDelivery[]>;
+}
+
+/** ACE parity P1 (D277): at most one schedule per task. */
+export interface TaskScheduleRepository {
+  create(scope: Scope, schedule: TaskSchedule): Promise<TaskSchedule>;
+  getByTask(scope: Scope, taskId: Id): Promise<TaskSchedule | null>;
+  /** Every enabled schedule, across projects — what the scheduler ticks over. */
+  listEnabled(scope: Scope): Promise<TaskSchedule[]>;
+  /** Every `after_task` schedule waiting on this task. */
+  listAfterTask(scope: Scope, taskId: Id): Promise<TaskSchedule[]>;
+  save(scope: Scope, schedule: TaskSchedule): Promise<TaskSchedule>;
+  delete(scope: Scope, id: Id): Promise<boolean>;
 }
 
 export interface TaskActivityRepository {
