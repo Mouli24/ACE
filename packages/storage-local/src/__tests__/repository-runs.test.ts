@@ -551,3 +551,16 @@ describe('BR-07 a secret can never reach these tables', () => {
     ).rejects.toThrow(/secret/i);
   });
 });
+
+describe('X1 a CLI provider’s permission level (D262)', () => {
+  it('keeps it and changes it on update', async () => {
+    const cli = provider({ type: 'claude_code', cliPermission: 'edit_files', concurrency: 1 });
+    await db.repository.providers.create(scope, cli);
+    expect(await db.repository.providers.get(scope, PROVIDER_ID)).toEqual(cli);
+
+    const updated = await db.repository.providers.update(scope, PROVIDER_ID, {
+      cliPermission: 'full_auto',
+    });
+    expect(updated?.cliPermission).toBe('full_auto');
+  });
+});

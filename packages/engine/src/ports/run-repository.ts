@@ -1,5 +1,6 @@
 import type {
   BudgetHalt,
+  CliPermission,
   CursorQuery,
   DataType,
   HaltReason,
@@ -41,6 +42,8 @@ export interface ProviderPatch {
   statusMessage?: string | null;
   lastCheckedAt?: Timestamp;
   concurrency?: number;
+  /** X1 (D262): a CLI provider's permission preset. */
+  cliPermission?: CliPermission | null;
   updatedAt?: Timestamp;
 }
 

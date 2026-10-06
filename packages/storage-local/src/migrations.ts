@@ -29,6 +29,9 @@ export const ROUND_4_MIGRATION_ID = '20260929T120000_round_4_artifacts_tools_mes
  */
 export const ROUND_5_MIGRATION_ID = '20261001T120000_round_5_knowledge_memory_usage';
 
+/** X1 (D262): a CLI provider's permission preset. Named so a test can apply the chain before it. */
+export const X1_CLI_PROVIDERS_MIGRATION_ID = '20261006T120000_x1_cli_providers';
+
 /**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
@@ -539,6 +542,13 @@ export const MIGRATIONS: readonly Migration[] = [
     seed: (sqlite) => {
       appendContextChecks(sqlite);
     },
+  },
+  {
+    id: X1_CLI_PROVIDERS_MIGRATION_ID,
+    up: `
+      -- X1 (D262): what a CLI provider may do in the project folder. NULL for every other type.
+      ALTER TABLE providers ADD COLUMN cli_permission TEXT;
+    `,
   },
 ];
 

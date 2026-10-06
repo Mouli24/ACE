@@ -145,6 +145,8 @@ export const providers = sqliteTable(
     statusMessage: text('status_message'),
     lastCheckedAt: text('last_checked_at'),
     concurrency: integer('concurrency').notNull(),
+    /** X1 (D262): a CLI provider's permission preset; NULL for every other type. */
+    cliPermission: text('cli_permission'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },
