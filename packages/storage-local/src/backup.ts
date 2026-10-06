@@ -388,7 +388,15 @@ export function createBackupStore(deps: BackupStoreDeps): BackupStore {
       });
     }
 
+    // The copy empties and refills one table at a time, in name order: `task_activity` before
+    // `tasks`, `tasks` before `workflows` (ACE parity P0). Under enforced foreign keys a child row
+    // would arrive before its parent and be refused, and emptying a parent would cascade into — or
+    // null the references of — rows already copied. The backup is one snapshot of the same schema,
+    // so the keys are off for the copy and checked once, whole, before it commits. The pragma
+    // cannot change inside a transaction, which is why it is set out here.
+    const foreignKeys = sqlite.pragma('foreign_keys', { simple: true }) === 1;
     sqlite.prepare('ATTACH DATABASE ? AS ace_import').run(backupPath);
+    sqlite.pragma('foreign_keys = OFF');
     try {
       const copy = sqlite.transaction(() => {
         for (const table of regularTables(sqlite, 'main')) {
@@ -398,12 +406,20 @@ export function createBackupStore(deps: BackupStoreDeps): BackupStore {
             `INSERT INTO main.${quote(table)} (${columns}) SELECT ${columns} FROM ace_import.${quote(table)}`,
           );
         }
+        const broken = sqlite.pragma('main.foreign_key_check') as { table: string }[];
+        if (broken.length > 0) {
+          // Thrown inside the transaction, so the live rows are rolled back untouched.
+          throw new BackupFormatError(
+            `The backup's ${broken[0]!.table} table has rows whose foreign key points at nothing.`,
+          );
+        }
         keepLiveSettings(sqlite, live, dataDir);
         rebuildKeywordIndex(sqlite);
         if (detectVectorExtension(sqlite) === 'sqlite-vec') rebuildVectorTables(sqlite);
       });
       copy.immediate();
     } finally {
+      if (foreignKeys) sqlite.pragma('foreign_keys = ON');
       sqlite.exec('DETACH DATABASE ace_import');
     }
 

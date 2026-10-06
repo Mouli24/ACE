@@ -34,7 +34,14 @@ import { openDatabase, type OpenDatabase } from '../db.js';
 import { MIGRATIONS, ROUND_5_MIGRATION_ID } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
 import { KeychainSecretStore } from '../secret-store.js';
-import { createProjectBeforeP0, makeProject, scope } from './fixtures.js';
+import {
+  createProjectBeforeP0,
+  makeProject,
+  makeTask,
+  makeTaskActivity,
+  makeWorkflow,
+  scope,
+} from './fixtures.js';
 
 /**
  * Backup and restore (round 5 §2.7, FR-SYS-012, TC-SYS-014, F12): the export is a zip of a
@@ -659,5 +666,64 @@ describe('FR-SYS-012 a backup from an older schema is migrated forward before th
     expect(migrated?.version).toBe(2);
     expect(migrated?.checks.filter((check) => check.point === 'context')).toHaveLength(3);
     expect(await target.repository.knowledgeBases.listByProject(scope, project.id)).toEqual([]);
+  });
+});
+
+describe('FR-SYS-012 an import restores tasks whole, whatever order the tables are copied in', () => {
+  it('keeps every task row, its activity and its team, under the foreign keys (D268)', async () => {
+    const source = await startEngine('tasks-source');
+    const project = makeProject({ name: 'With tasks', paused: true, buildCapacity: 3 });
+    await source.repository.projects.create(scope, project);
+    const workflow = makeWorkflow(project.id);
+    await source.repository.workflows.create(scope, workflow);
+    const task = makeTask(project.id, { workflowId: workflow.id, plannerWorkflowId: workflow.id });
+    await source.repository.tasks.create(scope, task);
+    const activity = makeTaskActivity(task.id);
+    await source.repository.taskActivity.append(scope, activity);
+    const zip = await source.backup.exportZip();
+
+    const target = await startEngine('tasks-target');
+    // A live task of a live project: the import replaces it, and its rows go with it.
+    const liveProject = makeProject({ name: 'Live' });
+    await target.repository.projects.create(scope, liveProject);
+    const liveTask = makeTask(liveProject.id);
+    await target.repository.tasks.create(scope, liveTask);
+    await target.repository.taskActivity.append(scope, makeTaskActivity(liveTask.id));
+
+    await target.backup.importZip(zip);
+
+    expect(await target.repository.projects.get(scope, project.id)).toEqual(project);
+    // `task_activity` sorts before `tasks`, and `tasks` before `workflows`: a copy under enforced
+    // keys would refuse the activity, and emptying `workflows` would null the task's team.
+    expect(await target.repository.tasks.get(scope, task.id)).toEqual(task);
+    expect(await target.repository.taskActivity.listByTask(scope, task.id)).toEqual([activity]);
+    expect(await target.repository.tasks.get(scope, liveTask.id)).toBeNull();
+    expect(await target.repository.taskActivity.listByTask(scope, liveTask.id)).toEqual([]);
+    expect(target.opened.sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
+  });
+
+  it('refuses a backup whose rows break a foreign key, and leaves the live data as it was', async () => {
+    const source = await startEngine('tasks-broken');
+    const project = makeProject({ name: 'Broken' });
+    await source.repository.projects.create(scope, project);
+    const task = makeTask(project.id);
+    await source.repository.tasks.create(scope, task);
+    // Tampered: the task's project is gone, behind the keys' back.
+    source.opened.sqlite.pragma('foreign_keys = OFF');
+    source.opened.sqlite.prepare('DELETE FROM projects WHERE id = ?').run(project.id);
+    source.opened.sqlite.pragma('foreign_keys = ON');
+    const zip = await source.backup.exportZip();
+
+    const target = await startEngine('tasks-kept');
+    const live = makeProject({ name: 'Still here' });
+    await target.repository.projects.create(scope, live);
+
+    await expect(target.backup.importZip(zip)).rejects.toMatchObject({
+      name: 'BackupFormatError',
+      message: expect.stringMatching(/tasks table has rows whose foreign key points at nothing/),
+    });
+    expect(await target.repository.projects.get(scope, live.id)).toEqual(live);
+    expect(await target.repository.tasks.get(scope, task.id)).toBeNull();
+    expect(target.opened.sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
   });
 });
