@@ -1,9 +1,12 @@
 import {
+  DEFAULT_CLI_PERMISSION,
   DEFAULT_CONCURRENCY,
   DEFAULT_GUARDRAIL_POLICY_NAME,
   SettingsSchema,
   defaultGuardrailChecks,
+  isCliProviderType,
   type ApprovalRequest,
+  type CliPermission,
   type Artifact,
   type ChatMessage,
   type ChatThread,
@@ -387,6 +390,7 @@ export class MockDb {
     apiKey?: string;
     baseUrl?: string;
     concurrency?: number;
+    cliPermission?: CliPermission;
   }): Provider {
     const ts = now();
     const provider: Provider = {
@@ -398,6 +402,9 @@ export class MockDb {
       keySet: Boolean(input.apiKey),
       status: 'UNKNOWN',
       concurrency: input.concurrency ?? DEFAULT_CONCURRENCY,
+      ...(isCliProviderType(input.type)
+        ? { cliPermission: input.cliPermission ?? DEFAULT_CLI_PERMISSION }
+        : {}),
       createdAt: ts,
       updatedAt: ts,
     };
@@ -410,13 +417,20 @@ export class MockDb {
 
   updateProvider(
     id: string,
-    patch: { name?: string; apiKey?: string; baseUrl?: string; concurrency?: number },
+    patch: {
+      name?: string;
+      apiKey?: string;
+      baseUrl?: string;
+      concurrency?: number;
+      cliPermission?: CliPermission;
+    },
   ): Provider | undefined {
     const provider = this.getProvider(id);
     if (!provider) return undefined;
     if (patch.name !== undefined) provider.name = patch.name;
     if (patch.baseUrl !== undefined) provider.baseUrl = patch.baseUrl;
     if (patch.concurrency !== undefined) provider.concurrency = patch.concurrency;
+    if (patch.cliPermission !== undefined) provider.cliPermission = patch.cliPermission;
     if (patch.apiKey !== undefined) {
       this.state.providerKeys[id] = patch.apiKey;
       provider.keySet = true;
