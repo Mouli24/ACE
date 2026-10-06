@@ -87,6 +87,14 @@ describe('round 2 §2.5 endpoints', () => {
     ]);
   });
 
+  it('X1 detectClis asks GET /providers/detect/clis', async () => {
+    const { calls, client } = recorder([{ items: [] }]);
+    expect(await client.detectClis()).toEqual({ items: [] });
+    expect(calls.map((c) => `${c.method} ${c.url.replace('http://x/api/v1', '')}`)).toEqual([
+      'GET /providers/detect/clis',
+    ]);
+  });
+
   it('createProvider does not force the caller to supply concurrency (§2.1 says optional)', async () => {
     const { calls, client } = recorder([provider]);
     await client.createProvider({

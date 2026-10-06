@@ -15,6 +15,7 @@ import {
   NodeRunSchema,
   ProviderCheckResultSchema,
   ProviderDetectResponseSchema,
+  CliDetectResponseSchema,
   ProviderSchema,
   RefreshModelsResponseSchema,
   RunSchema,
@@ -53,6 +54,7 @@ import {
   type Provider,
   type ProviderCheckResult,
   type ProviderDetectResponse,
+  type CliDetectResponse,
   type RefreshModelsResponse,
   type Run,
   type RunSummary,
@@ -385,6 +387,9 @@ export function createAceClient(options: AceClientOptions) {
       request('POST', `/providers/${id}/refresh-models`, RefreshModelsResponseSchema),
     detectProviders: (): Promise<ProviderDetectResponse> =>
       request('GET', '/providers/detect', ProviderDetectResponseSchema),
+    /** X1 (FR-PRV-008): which coding-agent CLIs the engine's machine has, and their sign-in. */
+    detectClis: (): Promise<CliDetectResponse> =>
+      request('GET', '/providers/detect/clis', CliDetectResponseSchema),
 
     /* Models */
     listModels: (query: ModelQuery = {}): Promise<ModelListResponse> =>
