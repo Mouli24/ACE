@@ -163,3 +163,45 @@ export const ProviderDetectResponseSchema = z.object({
     .optional(),
 });
 export type ProviderDetectResponse = z.infer<typeof ProviderDetectResponseSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* The terminal scan (X1, FR-PRV-008)                                          */
+/* -------------------------------------------------------------------------- */
+
+/** Whether a CLI is signed in, as far as ACE can tell without reading its credentials (D264). */
+export const CLI_LOGIN_STATES = ['logged_in', 'logged_out', 'unknown'] as const;
+export const CliLoginStateSchema = z.enum(CLI_LOGIN_STATES);
+export type CliLoginState = z.infer<typeof CliLoginStateSchema>;
+
+/** What to run to install each CLI — the install hint FR-PRV-008 asks for. */
+export const CLI_INSTALL_HINTS: Readonly<Record<CliProviderType, string>> = {
+  claude_code: 'npm install -g @anthropic-ai/claude-code',
+  codex_cli: 'npm install -g @openai/codex',
+  gemini_cli: 'npm install -g @google/gemini-cli',
+};
+
+/** What to run in a terminal to sign each CLI in. Gemini signs in on its first interactive run. */
+export const CLI_LOGIN_HINTS: Readonly<Record<CliProviderType, string>> = {
+  claude_code: 'claude auth login',
+  codex_cli: 'codex login',
+  gemini_cli: 'gemini',
+};
+
+/** One CLI as the terminal scan found it. Strict: nothing credential-shaped can ride along. */
+export const CliDetectionSchema = z.strictObject({
+  type: CliProviderTypeSchema,
+  installed: z.boolean(),
+  version: z.string().optional(),
+  /** The file found on PATH, for display. */
+  path: z.string().optional(),
+  login: CliLoginStateSchema,
+  /** How it is signed in, e.g. `claude.ai · max`, `ChatGPT`, `Google sign-in` — never an identity. */
+  loginDetail: z.string().optional(),
+  installHint: z.string(),
+  loginHint: z.string(),
+});
+export type CliDetection = z.infer<typeof CliDetectionSchema>;
+
+/** `GET /providers/detect/clis` — one entry per CLI type, in `CLI_PROVIDER_TYPES` order. */
+export const CliDetectResponseSchema = z.strictObject({ items: z.array(CliDetectionSchema) });
+export type CliDetectResponse = z.infer<typeof CliDetectResponseSchema>;
