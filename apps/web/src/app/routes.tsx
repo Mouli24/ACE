@@ -12,6 +12,7 @@ import { ProvidersPage } from '../providers/ProvidersPage';
 import { ProjectRunsPage } from '../runs/ProjectRunsPage';
 import { RunDetailPage } from '../runs/RunDetailPage';
 import { SettingsPage } from '../settings/SettingsPage';
+import { TaskPage } from '../tasks/TaskPage';
 import { TasksBoardPage } from '../tasks/TasksBoardPage';
 import { ToolsLibraryPage } from '../library/ToolsLibraryPage';
 import { TimelinePage } from '../timeline/TimelinePage';
@@ -39,6 +40,7 @@ export const routes: RouteObject[] = [
         element: <TimelinePage />,
       },
       { path: 'projects/:projectId/tasks', element: <TasksBoardPage /> },
+      { path: 'projects/:projectId/tasks/:taskId', element: <TaskPage /> },
       { path: 'projects/:projectId/runs', element: <ProjectRunsPage /> },
       { path: 'projects/:projectId/knowledge', element: <KnowledgeListPage /> },
       { path: 'knowledge/:kbId', element: <KnowledgeBasePage /> },
