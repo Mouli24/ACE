@@ -11,6 +11,7 @@ import {
   type StreamChunk,
   type ToolResult,
 } from '../adapter.js';
+import { mockCoderPieces, runMockCoder } from './mock-coder.js';
 import { MOCK_MEDIA_TYPES, mockMediaFixture } from './mock-media.js';
 import {
   isSummaryCall,
@@ -201,6 +202,8 @@ const SPECS: readonly MockModelSpec[] = [
     inputTypes: ['text'],
     outputTypes: ['text'],
   },
+  // P0 §7: edits files in the call's working folder, as its prompt's directives say.
+  { modelId: 'mock-coder', displayName: 'Mock coder', inputTypes: ['text'], outputTypes: ['text'] },
 ];
 
 export const MOCK_MODELS: readonly ModelInfo[] = SPECS.map((spec) => ({
@@ -887,6 +890,23 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
         const text = words(req.prompt, TEXT_WORDS);
         yield* stream(text, TEXT_DELAY_MS);
         yield* finishText(text.join(' '));
+        return;
+      }
+
+      case 'mock-coder': {
+        // P0 §7 (`mock-coder.ts`): each write/delete directive is carried out in `workingDir` and
+        // reported as an `activity` chunk, then the answer streams word by word like `mock-text`.
+        const text = yield* runMockCoder(req, {
+          now,
+          throwIfAborted: () => {
+            if (signal.aborted) throw abortError(signal);
+          },
+        });
+        for (const piece of mockCoderPieces(text)) {
+          await pause(TEXT_DELAY_MS, signal, sleep);
+          yield { type: 'text', delta: piece };
+        }
+        yield* finishText(text);
         return;
       }
 

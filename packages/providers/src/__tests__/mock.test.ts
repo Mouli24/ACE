@@ -138,6 +138,7 @@ describe('TC-MOD-001 the mock lists every model of §2.6', () => {
       'mock-cite',
       'mock-memory',
       'mock-summary',
+      'mock-coder',
     ]);
   });
 
