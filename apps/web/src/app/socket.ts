@@ -3,6 +3,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 
 import { patchProviderStatus } from '../providers/status-patch';
+import { patchTaskUpdated, removeTask } from '../tasks/task-cache';
 import { peekGraphSync } from '../workflows/sync-registry';
 import { queryKeys } from '../workflows/query-keys';
 import { wsUrl } from './env';
@@ -34,6 +35,9 @@ export function startSocket(options: StartSocketOptions): AceSocket {
   });
   // FR-PRV-004: provider status is engine-scope and patches the cache, so no screen reloads.
   socket.on('provider.status', (payload) => patchProviderStatus(options.queryClient, payload));
+  // ACE parity P0: the board and the task page follow the engine without a reload, the same way.
+  socket.on('task.updated', (payload) => patchTaskUpdated(options.queryClient, payload));
+  socket.on('task.deleted', (payload) => removeTask(options.queryClient, payload));
   socket.subscribe({ scope: 'engine' });
   socket.connect();
   return socket;
