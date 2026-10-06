@@ -1,9 +1,9 @@
-import type { ProviderState, ProviderType } from '@ace/contracts';
+import type { CliPermission, ProviderState, ProviderType } from '@ace/contracts';
 import { PROVIDER_ACCENT, PROVIDER_STATUS } from '@ace/ui';
 
 export { PROVIDER_STATE_LABEL } from '@ace/ui';
 
-/** Human labels for the six `ProviderType`s (§2.1). The enum value stays the wire value. */
+/** Human labels for every `ProviderType` (§2.1, X1). The enum value stays the wire value. */
 export const PROVIDER_TYPE_LABEL: Readonly<Record<ProviderType, string>> = {
   anthropic: 'Anthropic',
   google: 'Google',
@@ -29,3 +29,17 @@ export const NEEDS_BASE_URL: ReadonlySet<ProviderType> = new Set<ProviderType>([
 
 export const providerAccent = (type: ProviderType): string => PROVIDER_ACCENT[type];
 export const providerStatusColor = (state: ProviderState): string => PROVIDER_STATUS[state];
+
+/** D262's three presets, as the dialogs name them. */
+export const CLI_PERMISSION_LABEL: Readonly<Record<CliPermission, string>> = {
+  read_only: 'Read-only',
+  edit_files: 'Edit project files',
+  full_auto: 'Full auto',
+};
+
+export const CLI_PERMISSION_HINT: Readonly<Record<CliPermission, string>> = {
+  read_only: 'Reads the project folder. Never writes a file or runs a command.',
+  edit_files: 'Reads and edits files in the project folder. Runs no shell commands.',
+  full_auto:
+    'Runs any command on your machine without asking — on Windows with no sandbox. Use only for projects you trust.',
+};

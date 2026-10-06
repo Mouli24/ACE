@@ -1,4 +1,4 @@
-import type { Provider } from '@ace/contracts';
+import { DEFAULT_CLI_PERMISSION, isCliProviderType, type Provider } from '@ace/contracts';
 import {
   Button,
   DropdownMenu,
@@ -17,7 +17,7 @@ import { useState } from 'react';
 import { ModelsTab } from './ModelsTab';
 import { AddProviderDialog, DeleteProviderDialog, EditProviderDialog } from './ProviderDialogs';
 import { useCheckProvider, useProviderDetect, useProviders } from './hooks';
-import { PROVIDER_TYPE_LABEL, providerAccent } from './provider-meta';
+import { CLI_PERMISSION_LABEL, PROVIDER_TYPE_LABEL, providerAccent } from './provider-meta';
 
 type DialogState =
   | { kind: 'add' }
@@ -134,10 +134,16 @@ function ProviderRow({
         </p>
       </div>
 
-      {/* FR-PRV-002: whether a key exists, never the key. */}
-      <span className="font-machine text-xs" data-testid={`provider-key-set-${provider.id}`}>
-        key set: {provider.keySet ? 'yes' : 'no'}
-      </span>
+      {isCliProviderType(provider.type) ? (
+        <span className="font-machine text-xs" data-testid={`provider-permission-${provider.id}`}>
+          permission: {CLI_PERMISSION_LABEL[provider.cliPermission ?? DEFAULT_CLI_PERMISSION]}
+        </span>
+      ) : (
+        /* FR-PRV-002: whether a key exists, never the key. */
+        <span className="font-machine text-xs" data-testid={`provider-key-set-${provider.id}`}>
+          key set: {provider.keySet ? 'yes' : 'no'}
+        </span>
+      )}
 
       <ProviderStatusChip
         data-testid={`provider-status-${provider.id}`}
