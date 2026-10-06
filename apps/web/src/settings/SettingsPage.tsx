@@ -25,6 +25,7 @@ import { Link } from 'react-router-dom';
 
 import { useProviders } from '../providers/hooks';
 import { HealthMetricsPanel } from '../usage/HealthMetricsPanel';
+import { ApprovalModeSection } from './ApprovalModeSection';
 import { BackupSection } from './BackupSection';
 import { BudgetFields } from './BudgetFields';
 import { usePatchSettings, useSettings } from './hooks';
@@ -133,7 +134,8 @@ function SelectField<T extends string>({
 }
 
 /**
- * `/settings` (FR-SYS-005, FR-SYS-012, FR-PRV-004, FR-GRD-008, FR-OBS-007): the engine's settings,
+ * `/settings` (FR-SYS-005, FR-SYS-012, FR-PRV-004, FR-GRD-008, FR-OBS-007, ACE parity D270 — the
+ * approval mode): the engine's settings,
  * each saved on its own as it changes, checked by the contract before it is sent and shown back as
  * the engine holds it. Then provider status, the backup and the health metrics.
  */
@@ -248,6 +250,12 @@ export function SettingsPage() {
           disabled={disabled}
         />
       </Section>
+
+      <ApprovalModeSection
+        value={data?.approvalMode}
+        disabled={disabled}
+        onChange={(approvalMode) => void save({ approvalMode })}
+      />
 
       <Section title="Uploads & tools" testId="settings-uploads-tools">
         <SettingInput
