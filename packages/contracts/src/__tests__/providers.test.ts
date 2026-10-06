@@ -251,7 +251,7 @@ describe('FR-PRV-008 GET /providers/detect/clis', () => {
     type: 'claude_code',
     installed: true,
     version: '2.1.282',
-    path: 'C:\Users\me\AppData\Roaming\npm\claude.cmd',
+    path: 'C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd',
     login: 'logged_in',
     loginDetail: 'claude.ai · max',
     installHint: CLI_INSTALL_HINTS.claude_code,
