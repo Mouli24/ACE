@@ -78,6 +78,13 @@ export const ProjectSchema = z.object({
    * as absent, so a patch clearing it can be merged into the record as it is (D72).
    */
   setupCommand: z.string().trim().min(1).max(CHECK_COMMAND_MAX).nullable().optional(),
+  /**
+   * ACE parity P1 (D278): how to run the app for a preview, in a task's worktree, and where it is
+   * then served — `{port}` in the URL is replaced with the port the engine assigned (also given to
+   * the command as `PORT`). `null` clears either.
+   */
+  previewCommand: z.string().trim().min(1).max(CHECK_COMMAND_MAX).nullable().optional(),
+  previewUrl: z.string().trim().min(1).max(400).nullable().optional(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 });

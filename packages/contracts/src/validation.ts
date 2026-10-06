@@ -133,12 +133,16 @@ export const ROUND_4_VALIDATION_ISSUE_CODES = [
  */
 export const ROUND_5_VALIDATION_ISSUE_CODES = ['missing_knowledge_base'] as const;
 
+/** ACE parity P1 (D272): an agent's `skillIds` names a skill that is not installed. */
+export const PARITY_VALIDATION_ISSUE_CODES = ['missing_skill'] as const;
+
 export const VALIDATION_ISSUE_CODES = [
   ...ROUND_1_VALIDATION_ISSUE_CODES,
   ...ROUND_2_VALIDATION_ISSUE_CODES,
   ...ROUND_3_VALIDATION_ISSUE_CODES,
   ...ROUND_4_VALIDATION_ISSUE_CODES,
   ...ROUND_5_VALIDATION_ISSUE_CODES,
+  ...PARITY_VALIDATION_ISSUE_CODES,
 ] as const;
 export const ValidationIssueCodeSchema = z.enum(VALIDATION_ISSUE_CODES);
 export type ValidationIssueCode = z.infer<typeof ValidationIssueCodeSchema>;

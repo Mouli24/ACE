@@ -20,6 +20,8 @@ const SHAPES: Readonly<Record<TemplateId, { boxes: Box[]; lines: Line[]; loop?: 
   const reviewFix = [box(2, 26), box(36, 26, true), box(70, 26, true), box(104, 26)];
   const research = { i: box(4, 26), a: box(49, 8, true), b: box(49, 44, true), m: box(94, 26) };
   const rag = { i: box(2, 26), r: box(36, 8), a: box(70, 26, true), o: box(104, 26) };
+  const builder = [box(4, 26), box(49, 26, true), box(94, 26)];
+  const team = [box(2, 26), box(28, 26), box(54, 26, true), box(80, 26, true), box(104, 26)];
   const pairs = (list: Box[]): Line[] =>
     list.slice(1).map((to, index) => ({ from: list[index]!, to }));
   return {
@@ -37,6 +39,12 @@ const SHAPES: Readonly<Record<TemplateId, { boxes: Box[]; lines: Line[]; loop?: 
         { from: research.a, to: research.m },
         { from: research.b, to: research.m },
       ],
+    },
+    'single-builder': { boxes: builder, lines: pairs(builder) },
+    'plan-build-review': {
+      boxes: team,
+      lines: pairs(team),
+      loop: { from: team[3]!, to: team[2]! },
     },
     'rag-qa': {
       boxes: Object.values(rag),

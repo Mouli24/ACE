@@ -61,6 +61,7 @@ function catalogue(providerId: string): Model[] {
     row('mock-json', ['text', 'json'], ['json']),
     row('mock-reject-twice', ['text', 'json'], ['json']),
     row('mock-cite', ['text'], ['text']),
+    row('mock-coder', ['text'], ['text']),
   ];
 }
 

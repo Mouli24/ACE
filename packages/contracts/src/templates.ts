@@ -18,7 +18,15 @@ import {
  */
 
 /** In the order the wizard lists them (FR-ONB-002). */
-export const TEMPLATE_IDS = ['linear-chain', 'review-fix', 'parallel-research', 'rag-qa'] as const;
+export const TEMPLATE_IDS = [
+  'linear-chain',
+  'review-fix',
+  'parallel-research',
+  'rag-qa',
+  /* ACE parity P1 (D279): teams a task can be assigned to. */
+  'single-builder',
+  'plan-build-review',
+] as const;
 export const TemplateIdSchema = z.enum(TEMPLATE_IDS);
 export type TemplateId = z.infer<typeof TemplateIdSchema>;
 

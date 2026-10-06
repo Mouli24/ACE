@@ -8,6 +8,7 @@ import {
   ROUND_1_ERROR_CODES,
   ROUND_3_ERROR_CODES,
   PARITY_P0_ERROR_CODES,
+  PARITY_P1_ERROR_CODES,
   ROUND_4_ERROR_CODES,
   aceError,
 } from '../errors.js';
@@ -109,6 +110,7 @@ describe('FR-SYS-006 round 1 error codes', () => {
       'policy_in_use',
       ...ROUND_4_ERROR_CODES,
       ...PARITY_P0_ERROR_CODES,
+      ...PARITY_P1_ERROR_CODES,
     ]);
   });
 
@@ -160,6 +162,12 @@ describe('FR-SYS-006 round 1 error codes', () => {
       no_team: 422,
       no_workspace: 404,
       git_failed: 500,
+      skill_read_only: 409,
+      name_taken: 409,
+      file_exists: 409,
+      not_connected: 422,
+      delivery_failed: 502,
+      no_preview_command: 422,
     });
   });
 });

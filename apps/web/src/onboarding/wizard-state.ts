@@ -30,6 +30,8 @@ export const TEMPLATE_QUESTIONS: Readonly<Record<TemplateId, string>> = {
   'review-fix': 'Write a short product announcement for offline mode.',
   'parallel-research': 'What should a small team know before adopting local models?',
   'rag-qa': 'What does ACE pass between nodes?',
+  'single-builder': 'Add a README section that explains how to run the tests.',
+  'plan-build-review': 'Add a README section that explains how to run the tests.',
 };
 
 const isTemplateId = (value: unknown): value is TemplateId =>

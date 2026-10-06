@@ -45,12 +45,14 @@ const inputNode = {
 };
 
 describe('FR-ONB-002 Template', () => {
-  it('declares exactly the four templates, in the order the wizard lists them (§3)', () => {
+  it('declares the four wizard templates, in the order the wizard lists them (§3), then the parity teams', () => {
     expect([...TEMPLATE_IDS]).toEqual([
       'linear-chain',
       'review-fix',
       'parallel-research',
       'rag-qa',
+      'single-builder',
+      'plan-build-review',
     ]);
   });
 

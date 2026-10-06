@@ -49,6 +49,8 @@ const TEMPLATE_NAMES: Record<(typeof TEMPLATE_IDS)[number], RegExp> = {
   'review-fix': /review and fix/i,
   'parallel-research': /parallel research/i,
   'rag-qa': /rag q&a/i,
+  'single-builder': /single builder/i,
+  'plan-build-review': /plan, build and review/i,
 };
 
 describe('TC-ONB-001 a new user reaches a completed run with no key', () => {
@@ -109,12 +111,12 @@ describe('TC-ONB-002 (UI) every template instantiates from the wizard and comple
 });
 
 describe('FR-ONB-001 the wizard', () => {
-  it('shows four template cards, each with a thumbnail and a description', async () => {
+  it('shows a card per template, each with a thumbnail and a description', async () => {
     const user = userEvent.setup();
     renderApp('/onboarding');
     await chooseMock(user);
     const group = await screen.findByRole('radiogroup', { name: 'Templates' });
-    await waitFor(() => expect(within(group).getAllByRole('radio')).toHaveLength(4));
+    await waitFor(() => expect(within(group).getAllByRole('radio')).toHaveLength(TEMPLATE_IDS.length));
     for (const id of TEMPLATE_IDS) {
       expect(screen.getByTestId(`template-thumbnail-${id}`)).toBeInTheDocument();
     }

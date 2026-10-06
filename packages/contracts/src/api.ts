@@ -81,7 +81,20 @@ export const UpdateProjectRequestSchema = z.object({
   buildCapacity: BuildCapacitySchema.optional(),
   checkCommands: z.array(CheckCommandSchema).max(CHECK_COMMANDS_MAX).optional(),
   setupCommand: z.string().trim().min(1).max(CHECK_COMMAND_MAX).nullable().optional(),
+  previewCommand: z.string().trim().min(1).max(CHECK_COMMAND_MAX).nullable().optional(),
+  previewUrl: z.string().trim().min(1).max(400).nullable().optional(),
 });
+
+/**
+ * `POST /projects/clone` (ACE parity P1, D276): a new project whose folder is a clone of a GitHub
+ * repository, through the signed-in `gh` CLI. `repo` is `owner/name` or a github.com URL.
+ */
+export const CloneProjectRequestSchema = z.strictObject({
+  repo: z.string().trim().min(3).max(400),
+  name: EntityNameSchema.optional(),
+  folderPath: z.string().min(1).optional(),
+});
+export type CloneProjectRequest = z.infer<typeof CloneProjectRequestSchema>;
 export type UpdateProjectRequest = z.infer<typeof UpdateProjectRequestSchema>;
 
 /* -------------------------------------------------------------------------- */

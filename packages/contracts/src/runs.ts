@@ -9,6 +9,7 @@ import {
   type ErrorKind,
   type RunState,
 } from './enums.js';
+import { SnapshotSkillSchema } from './capabilities.js';
 import { EnvelopeSchema, PartSchema } from './envelope.js';
 import {
   BudgetUsdSchema,
@@ -124,6 +125,11 @@ export const RunSnapshotSchema = z.object({
   version: z.number().int().min(0),
   nodes: z.array(NodeSchema),
   edges: z.array(EdgeSchema),
+  /**
+   * ACE parity P1 (D272): the text of every skill an agent of the run uses, frozen at start so a
+   * skill edited later never changes what this run was asked (BR-04). Absent on older runs.
+   */
+  skills: z.array(SnapshotSkillSchema).optional(),
 });
 export type RunSnapshot = z.infer<typeof RunSnapshotSchema>;
 

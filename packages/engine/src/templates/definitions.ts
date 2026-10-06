@@ -20,6 +20,8 @@ import {
 /** The mock models the templates use — all of them exist in the mock provider's catalogue. */
 export const TEMPLATE_MODELS = {
   text: 'mock-text',
+  /** ACE parity (D279): edits files in the run's working folder — the task's worktree. */
+  coder: 'mock-coder',
   reviewer: 'mock-reject-twice',
   cite: 'mock-cite',
   embed: 'mock-embed',
@@ -76,7 +78,26 @@ export const TEMPLATE_DEFINITIONS: readonly Template[] = [
     description: 'An answerer cites a knowledge base seeded with a sample document.',
     requires: { knowledgeBase: true },
   },
+  {
+    id: 'single-builder',
+    name: 'Single builder',
+    description: 'One coding agent takes a task and changes the code in its own workspace.',
+    requires: { knowledgeBase: false },
+  },
+  {
+    id: 'plan-build-review',
+    name: 'Plan, build and review',
+    description:
+      'A planner breaks the task down, a builder changes the code, a reviewer sends it back until it is right.',
+    requires: { knowledgeBase: false },
+  },
 ];
+
+/** What the builder of the two coding teams is told (D279). */
+export const BUILDER_INSTRUCTIONS =
+  'You are a software engineer working in the project repository. Make the change the task asks ' +
+  'for and nothing else; keep it small and consistent with the code around it. Run the project ' +
+  'tests if you can. End with a short summary of what you changed and how you checked it.';
 
 if (TEMPLATE_DEFINITIONS.some((t, i) => t.id !== TEMPLATE_IDS[i])) {
   throw new Error('TEMPLATE_DEFINITIONS must list the templates in TEMPLATE_IDS order.');
@@ -326,6 +347,82 @@ export function templateGraph(
       connect(merge, 'out', render, 'in');
       connect(render, 'out', synthesiser, 'text');
       connect(synthesiser, 'text', output, 'text');
+      break;
+    }
+
+    case 'single-builder': {
+      const input = add(
+        { kind: 'input', name: 'Task', text: 'Describe the change you want.' },
+        0,
+        0,
+      );
+      const builder = add(
+        {
+          kind: 'agent',
+          name: 'Builder',
+          modelId: TEMPLATE_MODELS.coder,
+          instructions: BUILDER_INSTRUCTIONS,
+          outputTypes: ['text'],
+        },
+        1,
+        0,
+      );
+      const output = add({ kind: 'output', name: 'Summary' }, 2, 0);
+      connect(input, 'text', builder, 'text');
+      connect(builder, 'text', output, 'text');
+      break;
+    }
+
+    case 'plan-build-review': {
+      const input = add(
+        { kind: 'input', name: 'Task', text: 'Describe the change you want.' },
+        0,
+        0,
+      );
+      const planner = add(
+        {
+          kind: 'agent',
+          name: 'Planner',
+          modelId: TEMPLATE_MODELS.text,
+          instructions:
+            'Restate the task in full, then write a short numbered plan: the files to change and how ' +
+            'to check the result. Do not change any files.',
+          outputTypes: ['text'],
+        },
+        1,
+        0,
+      );
+      const builder = add(
+        {
+          kind: 'agent',
+          name: 'Builder',
+          modelId: TEMPLATE_MODELS.coder,
+          instructions: `${BUILDER_INSTRUCTIONS} Follow the plan. When the reviewer asks for changes, address every issue listed.`,
+          outputTypes: ['text'],
+        },
+        2,
+        0,
+      );
+      const reviewer = add(
+        {
+          kind: 'agent',
+          name: 'Reviewer',
+          modelId: TEMPLATE_MODELS.reviewer,
+          instructions:
+            'Review the change against the task and the plan. Answer with a score out of ten, a ' +
+            'verdict and the issues you found.',
+          outputTypes: ['json'],
+          review: true,
+        },
+        3,
+        0,
+      );
+      const output = add({ kind: 'output', name: 'Review' }, 4, 0);
+      connect(input, 'text', planner, 'text');
+      connect(planner, 'text', builder, 'text');
+      connect(builder, 'text', reviewer, 'text');
+      connect(reviewer, 'json', output, 'json');
+      connect(reviewer, 'json', builder, 'text', 'loop');
       break;
     }
 

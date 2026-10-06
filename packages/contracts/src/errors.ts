@@ -70,12 +70,27 @@ export const PARITY_P0_ERROR_CODES = [
   'git_failed',
 ] as const;
 
+/**
+ * ACE parity P1: a built-in skill edited; a secret or skill name taken; a document accepted over an
+ * existing file; a delivery whose connection (GitHub's `gh`, an email account) is missing or
+ * refused; a preview asked of a project without a preview command.
+ */
+export const PARITY_P1_ERROR_CODES = [
+  'skill_read_only',
+  'name_taken',
+  'file_exists',
+  'not_connected',
+  'delivery_failed',
+  'no_preview_command',
+] as const;
+
 export const ERROR_CODES = [
   ...ROUND_1_ERROR_CODES,
   ...ROUND_2_ERROR_CODES,
   ...ROUND_3_ERROR_CODES,
   ...ROUND_4_ERROR_CODES,
   ...PARITY_P0_ERROR_CODES,
+  ...PARITY_P1_ERROR_CODES,
 ] as const;
 export const ErrorCodeSchema = z.enum(ERROR_CODES);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
@@ -106,6 +121,12 @@ export const ERROR_CODE_HTTP_STATUS: Readonly<Record<ErrorCode, number>> = {
   no_team: 422,
   no_workspace: 404,
   git_failed: 500,
+  skill_read_only: 409,
+  name_taken: 409,
+  file_exists: 409,
+  not_connected: 422,
+  delivery_failed: 502,
+  no_preview_command: 422,
 };
 
 /** `details` shapes §2.3 names explicitly. */

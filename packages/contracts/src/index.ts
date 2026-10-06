@@ -40,3 +40,4 @@ export * from './templates.js';
 
 /* ACE parity (docs/ACE_FEATURE_PARITY.md, D267+) */
 export * from './tasks.js';
+export * from './capabilities.js';

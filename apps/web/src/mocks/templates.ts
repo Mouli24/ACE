@@ -57,6 +57,19 @@ export const TEMPLATES: readonly Template[] = [
     description: 'Answer questions from your own documents, with every source cited.',
     requires: { knowledgeBase: true },
   },
+  {
+    id: 'single-builder',
+    name: 'Single builder',
+    description: 'One coding agent takes a task and changes the code in its own workspace.',
+    requires: { knowledgeBase: false },
+  },
+  {
+    id: 'plan-build-review',
+    name: 'Plan, build and review',
+    description:
+      'A planner breaks the task down, a builder changes the code, a reviewer sends it back until it is right.',
+    requires: { knowledgeBase: false },
+  },
 ];
 
 export const templateById = (id: string): Template | undefined =>
@@ -222,6 +235,63 @@ function graphOf(
           dataEdge(workflowId, merge, 'out', o, 'json'),
         ],
       };
+    }
+
+    case 'single-builder': {
+      const i = input(workflowId, 'Add a README section that explains how to run the tests.');
+      const builder = agent(workflowId, 'Builder', at(480), {
+        ...mock,
+        modelId: 'mock-coder',
+        instructions: 'Make the change the task asks for, then summarise what you changed.',
+      });
+      const o = output(880);
+      return {
+        nodes: [i, builder, o],
+        edges: [
+          dataEdge(workflowId, i, 'text', builder, 'text'),
+          dataEdge(workflowId, builder, 'text', o, 'text'),
+        ],
+      };
+    }
+
+    case 'plan-build-review': {
+      const i = input(workflowId, 'Add a README section that explains how to run the tests.');
+      const planner = agent(workflowId, 'Planner', at(480), {
+        ...mock,
+        instructions: 'Restate the task, then write a short numbered plan.',
+      });
+      const builder = agent(workflowId, 'Builder', at(880), {
+        ...mock,
+        modelId: 'mock-coder',
+        instructions: 'Follow the plan and make the change.',
+      });
+      const reviewer = agent(workflowId, 'Reviewer', at(1280), {
+        ...mock,
+        modelId: 'mock-json',
+        instructions: 'Score the change from 0 to 10 and say whether it is approved.',
+        outputTypes: ['json'],
+        outputContract: { jsonSchema: REVIEW_CONTRACT_SCHEMA },
+      });
+      const o = output(1680);
+      const loop: Edge = {
+        id: newId(),
+        workflowId,
+        kind: 'loop',
+        from: { nodeId: reviewer.id, portId: portId(reviewer.id, 'out', 'json') },
+        to: { nodeId: builder.id, portId: portId(builder.id, 'in', 'text') },
+        loop: {
+          maxIterations: 2,
+          exitCondition: { path: 'verdict', equals: 'approved' },
+          onMax: 'continue',
+        },
+      };
+      const edges = [
+        dataEdge(workflowId, i, 'text', planner, 'text'),
+        dataEdge(workflowId, planner, 'text', builder, 'text'),
+        dataEdge(workflowId, builder, 'text', reviewer, 'text'),
+        dataEdge(workflowId, reviewer, 'json', o, 'json'),
+      ];
+      return { nodes: [i, planner, builder, reviewer, o], edges: [...edges, loop] };
     }
 
     case 'rag-qa': {

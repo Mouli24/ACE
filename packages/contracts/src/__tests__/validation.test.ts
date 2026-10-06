@@ -131,6 +131,7 @@ describe('FR-WF-006 ValidationIssue', () => {
       ...ROUND_3_VALIDATION_ISSUE_CODES,
       ...ROUND_4_VALIDATION_ISSUE_CODES,
       ...ROUND_5_VALIDATION_ISSUE_CODES,
+      'missing_skill',
     ]);
   });
 

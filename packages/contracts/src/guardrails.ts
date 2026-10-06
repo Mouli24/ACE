@@ -319,6 +319,24 @@ export const ApprovalRequestSchema = z.strictObject({
 });
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
 
+/**
+ * `GET /approvals` (ACE parity P1, D270): every approval still waiting, across runs, with the run's
+ * workflow and project so the inbox can link to it.
+ */
+export const PendingApprovalSchema = z.strictObject({
+  request: ApprovalRequestSchema,
+  workflowId: IdSchema,
+  projectId: IdSchema,
+  /** The task the run belongs to, when a task started it. */
+  taskId: IdSchema.optional(),
+});
+export type PendingApproval = z.infer<typeof PendingApprovalSchema>;
+
+export const PendingApprovalListResponseSchema = z.strictObject({
+  items: z.array(PendingApprovalSchema),
+});
+export type PendingApprovalListResponse = z.infer<typeof PendingApprovalListResponseSchema>;
+
 export const APPROVAL_DECISION_KINDS = ['approve', 'reject'] as const;
 export const ApprovalDecisionKindSchema = z.enum(APPROVAL_DECISION_KINDS);
 export type ApprovalDecisionKind = z.infer<typeof ApprovalDecisionKindSchema>;

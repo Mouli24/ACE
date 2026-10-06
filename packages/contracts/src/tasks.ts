@@ -139,6 +139,12 @@ export const TASK_ACTIONS = [
   'resume',
   'move',
   'delete',
+  /* ACE parity P1 (D275, D276): a Document/Email deliverable, GitHub delivery, the preview. */
+  'accept',
+  'send',
+  'open_pr',
+  'merge_pr',
+  'preview',
 ] as const;
 export const TaskActionSchema = z.enum(TASK_ACTIONS);
 export type TaskAction = z.infer<typeof TaskActionSchema>;
@@ -164,6 +170,76 @@ export const TaskLabelsSchema = z.array(TaskLabelSchema).max(TASK_LABELS_MAX);
 
 /** A full Git object name (SHA-1 or SHA-256), lowercase hex. */
 export const GitShaSchema = z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/, 'must be a git sha');
+
+/* -------------------------------------------------------------------------- */
+/* Deliverables and sources (ACE parity P1, D275)                              */
+/* -------------------------------------------------------------------------- */
+
+export const DOCUMENT_CONTENT_MAX = 500_000;
+export const EMAIL_BODY_MAX = 100_000;
+export const EMAIL_RECIPIENTS_MAX = 50;
+
+/**
+ * A path inside the project folder: relative, `/`-separated, no `..`, no drive or root, and not
+ * inside `.git`. Where a Document task's file is accepted to.
+ */
+export const ProjectRelativePathSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(400)
+  .refine(
+    (path) =>
+      !path.includes('\\') &&
+      !/^[a-zA-Z]:/.test(path) &&
+      !path.startsWith('/') &&
+      !path.split('/').some((segment) => segment === '..' || segment === '') &&
+      path.split('/')[0] !== '.git',
+    'must be a relative path inside the project folder, like docs/notes.md',
+  );
+
+export const EmailAddressSchema = z.email();
+
+/**
+ * What a Document or Email task produces, edited in review and then accepted (or sent).
+ * A document's `content` is Markdown written by the work run; the user may edit it.
+ */
+export const TaskDeliverableSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('document'),
+    path: ProjectRelativePathSchema,
+    content: z.string().max(DOCUMENT_CONTENT_MAX),
+  }),
+  z.strictObject({
+    kind: z.literal('email'),
+    to: z.array(EmailAddressSchema).max(EMAIL_RECIPIENTS_MAX),
+    cc: z.array(EmailAddressSchema).max(EMAIL_RECIPIENTS_MAX),
+    subject: z.string().max(400),
+    body: z.string().max(EMAIL_BODY_MAX),
+  }),
+]);
+export type TaskDeliverable = z.infer<typeof TaskDeliverableSchema>;
+
+/**
+ * Where a task came from, when not the New task dialog: a chat or timeline message handed over with
+ * *Send to Build*, an imported email, an accepted suggestion, or a recurring schedule. Kept so the
+ * card can link back, and so a task from a workflow's chat reports its outcome there.
+ */
+export const TASK_SOURCE_KINDS = ['chat', 'timeline', 'email', 'suggestion', 'schedule'] as const;
+export const TaskSourceKindSchema = z.enum(TASK_SOURCE_KINDS);
+export type TaskSourceKind = z.infer<typeof TaskSourceKindSchema>;
+
+export const TaskSourceSchema = z.strictObject({
+  kind: TaskSourceKindSchema,
+  workflowId: IdSchema.optional(),
+  threadId: IdSchema.optional(),
+  messageId: IdSchema.optional(),
+  /** The template task a schedule occurrence was made from, or the suggestion it came from. */
+  refId: IdSchema.optional(),
+  /** Who/what it is from, in words: an email sender, a suggestion title. */
+  label: z.string().max(400).optional(),
+});
+export type TaskSource = z.infer<typeof TaskSourceSchema>;
 
 /* -------------------------------------------------------------------------- */
 /* Task                                                                        */
@@ -202,6 +278,9 @@ export const TaskSchema = z.strictObject({
   paused: z.boolean(),
   /** A correction waiting to be sent to the next work run (requested while paused or queued). */
   pendingRequest: z.string().max(TASK_NOTE_MAX).optional(),
+  /** ACE parity P1: a Document or Email task's draft (D275). */
+  deliverable: TaskDeliverableSchema.optional(),
+  source: TaskSourceSchema.optional(),
   allowedActions: z.array(TaskActionSchema),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
@@ -238,6 +317,17 @@ export const TaskWorkspaceSchema = z.strictObject({
   headSha: GitShaSchema,
   status: WorkspaceStatusSchema,
   error: z.string().optional(),
+  /** ACE parity P1 (D276): the pull request opened from the task branch, as GitHub last reported it. */
+  pullRequest: z
+    .strictObject({
+      number: z.number().int().min(1),
+      url: z.url(),
+      state: z.enum(['open', 'merged', 'closed']),
+      base: z.string().min(1),
+      /** `owner/name` of the repository the pull request is on. */
+      repo: z.string().min(3),
+    })
+    .optional(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 });
@@ -462,6 +552,83 @@ export const TaskFileDiffSchema = z.strictObject({
 export type TaskFileDiff = z.infer<typeof TaskFileDiffSchema>;
 
 /* -------------------------------------------------------------------------- */
+/* Schedules (ACE parity P1, D277)                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * When a task starts by itself. `once`: at a time. `recurring`: a five-field cron expression in an
+ * IANA time zone — the task is then a template and each occurrence is a new task. `after_task`:
+ * when another task of the project reaches a verified outcome. Schedules run while the engine runs
+ * and skip occurrences missed while it was stopped (ACE: "skip occurrences missed while it is
+ * closed"); a recurring occurrence waits while the previous one is not Done.
+ */
+export const TASK_TRIGGER_KINDS = ['once', 'recurring', 'after_task'] as const;
+export const TaskTriggerKindSchema = z.enum(TASK_TRIGGER_KINDS);
+export type TaskTriggerKind = z.infer<typeof TaskTriggerKindSchema>;
+
+/** Five space-separated cron fields: minute hour day-of-month month day-of-week. */
+export const CRON_REGEX = /^\s*(\S+\s+){4}\S+\s*$/;
+
+export const TaskTriggerSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('once'), at: TimestampSchema }),
+  z.strictObject({
+    kind: z.literal('recurring'),
+    cron: z.string().regex(CRON_REGEX, 'must be five cron fields, like "0 9 * * 1-5"'),
+    timezone: z.string().min(1).max(64),
+  }),
+  z.strictObject({ kind: z.literal('after_task'), taskId: IdSchema }),
+]);
+export type TaskTrigger = z.infer<typeof TaskTriggerSchema>;
+
+export const TaskScheduleSchema = z.strictObject({
+  id: IdSchema,
+  taskId: IdSchema,
+  trigger: TaskTriggerSchema,
+  enabled: z.boolean(),
+  /** The next time it fires (`once`, `recurring`); absent for `after_task` or once it has fired. */
+  nextRunAt: TimestampSchema.optional(),
+  lastRunAt: TimestampSchema.optional(),
+  /** The task the latest occurrence created (`recurring`). */
+  lastTaskId: IdSchema.optional(),
+  /** Occurrences skipped because the engine was stopped or the previous one was not Done. */
+  skipped: z.number().int().min(0),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+export type TaskSchedule = z.infer<typeof TaskScheduleSchema>;
+
+/** `PUT /tasks/:id/schedule` → `TaskSchedule`; `DELETE` removes it. Only an Inbox task is scheduled. */
+export const PutTaskScheduleRequestSchema = z.strictObject({
+  trigger: TaskTriggerSchema,
+  enabled: z.boolean().optional(),
+});
+export type PutTaskScheduleRequest = z.infer<typeof PutTaskScheduleRequestSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* Preview (ACE parity P1, D278)                                               */
+/* -------------------------------------------------------------------------- */
+
+export const PREVIEW_STATUSES = ['starting', 'running', 'stopped', 'failed'] as const;
+export const PreviewStatusSchema = z.enum(PREVIEW_STATUSES);
+export type PreviewStatus = z.infer<typeof PreviewStatusSchema>;
+
+/** The running app of a task's workspace, started from the project's preview command. */
+export const TaskPreviewSchema = z.strictObject({
+  taskId: IdSchema,
+  status: PreviewStatusSchema,
+  command: z.string().min(1),
+  /** Where to open it: the project's `previewUrl` with `{port}` filled in. */
+  url: z.string().optional(),
+  port: z.number().int().min(1).max(65_535).optional(),
+  /** The process output, the last `CHECK_OUTPUT_MAX` characters, secrets masked. */
+  output: z.string().max(CHECK_OUTPUT_MAX),
+  exitCode: z.number().int().optional(),
+  startedAt: TimestampSchema.optional(),
+  endedAt: TimestampSchema.optional(),
+});
+export type TaskPreview = z.infer<typeof TaskPreviewSchema>;
+
+/* -------------------------------------------------------------------------- */
 /* Detail                                                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -469,6 +636,8 @@ export type TaskFileDiff = z.infer<typeof TaskFileDiffSchema>;
 export const TaskDetailSchema = z.strictObject({
   task: TaskSchema,
   workspace: TaskWorkspaceSchema.optional(),
+  schedule: TaskScheduleSchema.optional(),
+  preview: TaskPreviewSchema.optional(),
   executions: z.array(TaskExecutionSchema),
   checks: z.array(TaskCheckSchema),
   reviews: z.array(TaskReviewSchema),
@@ -513,8 +682,32 @@ export const CreateTaskRequestSchema = z
     acceptance: z.string().max(TASK_BRIEF_MAX).optional(),
     runChecks: z.boolean().optional(),
     start: TaskStartModeSchema.optional(),
+    /* ACE parity P1. */
+    /** A Document task's destination, relative to the project folder (D275). */
+    documentPath: ProjectRelativePathSchema.optional(),
+    /** An Email task's recipients (D275). */
+    emailTo: z.array(EmailAddressSchema).max(EMAIL_RECIPIENTS_MAX).optional(),
+    source: TaskSourceSchema.optional(),
+    /** Starts the task later instead of now or in the Inbox (D277); `start` must then be `inbox`. */
+    trigger: TaskTriggerSchema.optional(),
   })
-  .superRefine(finishLineMatchesType);
+  .superRefine(finishLineMatchesType)
+  .superRefine((body, ctx) => {
+    if (body.type === 'document' && body.documentPath === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['documentPath'],
+        message: 'A document task needs the file it will be accepted to.',
+      });
+    }
+    if (body.trigger !== undefined && body.start === 'now') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['start'],
+        message: 'A scheduled task waits in the Inbox; it cannot also start now.',
+      });
+    }
+  });
 export type CreateTaskRequest = z.infer<typeof CreateTaskRequestSchema>;
 
 /**
@@ -582,6 +775,42 @@ export const CloseTaskRequestSchema = z.strictObject({
   reason: z.string().trim().min(1).max(TASK_NOTE_MAX).optional(),
 });
 export type CloseTaskRequest = z.infer<typeof CloseTaskRequestSchema>;
+
+/** `PUT /tasks/:id/deliverable` — the edited draft, kept until it is accepted or sent (D275). */
+export const PutDeliverableRequestSchema = z.strictObject({ deliverable: TaskDeliverableSchema });
+export type PutDeliverableRequest = z.infer<typeof PutDeliverableRequestSchema>;
+
+/**
+ * `POST /tasks/:id/accept` — a Document is written to its path in the project folder (never over an
+ * existing file: 409 `file_exists`); an Email draft is accepted as it stands. `path` repeats the
+ * destination the user saw, as Apply's destination does.
+ */
+export const AcceptTaskRequestSchema = z.strictObject({
+  path: ProjectRelativePathSchema.optional(),
+});
+export type AcceptTaskRequest = z.infer<typeof AcceptTaskRequestSchema>;
+
+/** `POST /tasks/:id/open-pr` — push the task branch and open a pull request (D276). */
+export const OpenPullRequestRequestSchema = z.strictObject({
+  title: z.string().trim().min(1).max(256).optional(),
+  body: z.string().max(60_000).optional(),
+  draft: z.boolean().optional(),
+});
+export type OpenPullRequestRequest = z.infer<typeof OpenPullRequestRequestSchema>;
+
+export const MERGE_METHODS = ['merge', 'squash', 'rebase'] as const;
+export const MergeMethodSchema = z.enum(MERGE_METHODS);
+export type MergeMethod = z.infer<typeof MergeMethodSchema>;
+
+/**
+ * `POST /tasks/:id/merge-pr` — merge the task's pull request on GitHub. `confirm` repeats the
+ * repository and base the user confirmed; the task is `merged` only once GitHub reports the merge.
+ */
+export const MergePullRequestRequestSchema = z.strictObject({
+  method: MergeMethodSchema,
+  confirm: z.strictObject({ repo: z.string().min(3), base: z.string().min(1) }),
+});
+export type MergePullRequestRequest = z.infer<typeof MergePullRequestRequestSchema>;
 
 /** `POST /tasks/:id/pause` — `paused: false` resumes. */
 export const PauseTaskRequestSchema = z.strictObject({ paused: z.boolean() });

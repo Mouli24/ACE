@@ -205,6 +205,16 @@ export const MOCK_CATALOG: CatalogEntry[] = [
     supportsJson: false,
   },
   {
+    // ACE parity: edits files in the run's working folder (the real engine's mock-coder, D279)
+    modelId: 'mock-coder',
+    displayName: 'Mock coder',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+    contextWindow: 8192,
+    supportsTools: false,
+    supportsJson: false,
+  },
+  {
     modelId: 'mock-memory',
     displayName: 'Mock memory',
     inputTypes: ['text'],
