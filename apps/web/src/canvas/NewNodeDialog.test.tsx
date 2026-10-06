@@ -155,6 +155,16 @@ describe('NewNodeDialog (FR-CAN-002, FR-NODE-001)', () => {
     expect(onAdd).toHaveBeenCalledWith('transform', {});
   });
 
+  it('§8.1 zoom 200 %: the preview and details scroll inside their column, never over the Add button', () => {
+    renderDialog({});
+    // At 200 % browser zoom the window is shorter than the 236 px preview: an unclipped column
+    // spilled over the footer and swallowed the click on "Add … to canvas" (manual pass, round 1).
+    const column = screen.getByTestId('new-node-details');
+    expect(column).toContainElement(screen.getByText('lands at the centre of your view'));
+    expect(column).toHaveClass('min-h-0', 'overflow-y-auto');
+    expect(column).not.toContainElement(screen.getByTestId('new-node-add'));
+  });
+
   it('the preview is a picture: static port dots, no React Flow handles', async () => {
     renderDialog({});
     await user.click(screen.getByTestId('palette-merge'));
