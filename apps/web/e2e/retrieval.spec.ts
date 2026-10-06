@@ -1,6 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
 
-import { freshApp, nodeCard, port, serverGraph, settled } from './helpers';
+import {
+  dragKindToCanvas,
+  freshApp,
+  nodeCard,
+  openSheet,
+  port,
+  serverGraph,
+  settled,
+} from './helpers';
 import { inspect, startRun } from './round3';
 
 /**
@@ -85,7 +93,7 @@ test.describe('Retrieval and sources (FR-RAG-005/006/007)', () => {
 
     // attach the base in the Agent's config (FR-RAG-005)
     await nodeCard(page, seeded.agentId).click();
-    await page.getByRole('tab', { name: 'Configure' }).click();
+    await openSheet(page, 'Configure');
     const field = page.getByTestId('agent-knowledge-bases');
     await field.getByLabel('Team handbook').click();
     await expect
@@ -124,8 +132,17 @@ test.describe('Retrieval and sources (FR-RAG-005/006/007)', () => {
   }) => {
     const seeded = await seed(page);
 
-    // place it from the palette (FR-RAG-006)
-    await page.getByTestId('palette-retrieval').click();
+    /*
+     * place it from the New node dialog (FR-RAG-006), dropped under the Input card. The mock engine
+     * plays the executable nodes left to right (after in-degree) and hands the question to the first
+     * one only, so the Retrieval node has to sit left of the Agent to receive it — the V2 dialog's
+     * centre-of-view slot is right of the Agent on this Canvas.
+     */
+    const inputBox = (await nodeCard(page, seeded.inputId).boundingBox())!;
+    await dragKindToCanvas(page, 'retrieval', {
+      x: inputBox.x + 10,
+      y: inputBox.y + inputBox.height + 40,
+    });
     await settled(page, seeded.workflowId, 4);
     const retrieval = (await serverGraph(page, seeded.workflowId)).nodes.find(
       (n) => n.kind === 'retrieval',
@@ -133,7 +150,8 @@ test.describe('Retrieval and sources (FR-RAG-005/006/007)', () => {
     await expect(nodeCard(page, retrieval.id)).toBeVisible();
     await expect(page.getByTestId(`retrieval-kb-${retrieval.id}`)).toHaveText('no knowledge base');
 
-    // configure: base, k, mode — the panel opened on the new node
+    // configure: base, k, mode — the new node is selected, so the sheet's Configure tab shows it
+    await openSheet(page, 'Configure');
     const panel = page.getByRole('complementary', { name: 'Node configuration' });
     await expect(panel).toContainText('Retrieval node');
     await panel.getByLabel('Knowledge base').click();

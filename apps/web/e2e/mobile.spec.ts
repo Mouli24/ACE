@@ -1,6 +1,14 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
-import { flowNode, freshApp, nodeCard, openWorkflow, seedGraph, serverGraph } from './helpers';
+import {
+  flowNode,
+  freshApp,
+  nodeCard,
+  openSheet,
+  openWorkflow,
+  seedGraph,
+  serverGraph,
+} from './helpers';
 import { engineRun, openRound3, runStatus, startRun } from './round3';
 
 /**
@@ -52,9 +60,13 @@ test.describe('Phone layout — monitoring (FR-MOB-001, TC-MOB-001)', () => {
     await completedRun(page);
 
     await expect(page.getByTestId('compact-workflow')).toBeVisible();
-    // The desktop panes are gone: no palette to drag from, no Configure tab.
+    // The desktop panes are gone: no New node dialog (V2's palette) to add from, no sheet with a
+    // Configure tab, no Chat column.
+    await expect(page.getByTestId('new-node-button')).toHaveCount(0);
     await expect(page.getByTestId('palette-agent')).toHaveCount(0);
+    await expect(page.getByTestId('sheet-toggle')).toHaveCount(0);
     await expect(page.getByRole('tab', { name: 'Configure' })).toHaveCount(0);
+    await expect(page.getByTestId('chat-column')).toHaveCount(0);
     for (const name of ['Canvas', 'Runs', 'Inspector', 'Chat', 'Memory']) {
       await expect(page.getByRole('tab', { name })).toBeVisible();
     }
@@ -216,6 +228,7 @@ test.describe('Phone layout — read-only Canvas (FR-MOB-003)', () => {
     const banner = page.getByTestId('readonly-banner');
     await expect(banner).toBeVisible();
     await expect(banner).toHaveText(/Editing is available on a larger screen/);
+    await expect(page.getByTestId('new-node-button')).toHaveCount(0);
     await expect(page.getByTestId('palette-agent')).toHaveCount(0);
     await expectNoHorizontalScroll(page);
 
@@ -263,7 +276,11 @@ test.describe('Desktop is unchanged above 640 px (FR-MOB-001)', () => {
     await openWorkflow(page, seeded);
     await expect(page.getByTestId('compact-workflow')).toHaveCount(0);
     await expect(page.getByTestId('readonly-banner')).toHaveCount(0);
-    await expect(page.getByTestId('palette-agent')).toBeVisible();
+    // V2's desktop editor: New node (the palette's dialog), the Chat column, and the sheet whose
+    // first tab is Configure
+    await expect(page.getByTestId('new-node-button')).toBeVisible();
+    await expect(page.getByTestId('chat-column')).toBeVisible();
+    await openSheet(page, 'Configure');
     await expect(page.getByRole('tab', { name: 'Configure' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Usage', exact: true })).toBeVisible();
     await expect(page.getByTestId('topbar-menu')).toHaveCount(0);

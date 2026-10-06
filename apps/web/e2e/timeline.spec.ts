@@ -27,7 +27,7 @@ async function openRunnable(page: Page, scenario: Scenario): Promise<Runnable> {
 }
 
 const start = (page: Page) =>
-  page.getByTestId('run-bar').getByRole('button', { name: 'Start', exact: true });
+  page.getByTestId('run-bar').getByRole('button', { name: 'Start run', exact: true });
 
 const openTimeline = (page: Page) => page.getByRole('tab', { name: 'Timeline' }).click();
 

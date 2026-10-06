@@ -12,7 +12,16 @@ import {
   RARE_TERM,
   type KbFixture,
 } from '../src/mocks/knowledge-fixtures';
-import { dragBy, flowNode, nodeCard, port, serverGraph } from './helpers';
+import {
+  addFromDialog,
+  dragBy,
+  flowNode,
+  nodeCard,
+  openSheet,
+  port,
+  selectInSheet,
+  serverGraph,
+} from './helpers';
 import { inspect, runStatus, startRun } from './round3';
 
 /**
@@ -196,10 +205,9 @@ async function keyConnect(page: Page, from: [string, string], to: [string, strin
   await page.keyboard.press('Enter');
 }
 
-/** Open a node's Configure tab from its card. */
+/** Open a node's Configure tab from its card (the V2 sheet). */
 async function configure(page: Page, nodeId: string): Promise<Locator> {
-  await nodeCard(page, nodeId).click();
-  await page.getByRole('tab', { name: 'Configure' }).click();
+  await selectInSheet(page, nodeId, 'Configure');
   const panel = configPanel(page);
   await expect(panel).toBeVisible();
   return panel;
@@ -419,10 +427,10 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
     /*
      * The Answerer reads json (the Retrieval node's hits) and `mock-memory` reads text only, so the
      * config panel refuses that model for it. The memory half of §1 is walked on a second agent
-     * added to the same workflow from the palette, reading the same question.
+     * added to the same workflow from the New node dialog, reading the same question.
      */
     const before = (await serverGraph(page, workflowId)).nodes.map((n) => n.id);
-    await page.getByTestId('palette-agent').click();
+    await addFromDialog(page, 'agent');
     await expect
       .poll(async () => (await serverGraph(page, workflowId)).nodes.length)
       .toBe(before.length + 1);
@@ -430,7 +438,7 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
       (n) => !before.includes(n.id),
     )!.id;
 
-    // the new card is selected; the right pane was left on the Inspector, so open Configure
+    // the new card is selected; the sheet was left on the Inspector, so open Configure
     const panel = await configure(page, memoryAgentId);
     await panel.getByRole('combobox', { name: 'Provider' }).click();
     await page.getByRole('option', { name: 'Mock' }).click();
@@ -456,8 +464,7 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
       .toBe(true);
 
     // the Memory tab, open while the runs happen, follows memory.updated live
-    await nodeCard(page, memoryAgentId).click();
-    await page.getByRole('tab', { name: 'Memory' }).click();
+    await selectInSheet(page, memoryAgentId, 'Memory');
     const tab = page.getByTestId('memory-tab');
     await expect(tab.getByTestId('memory-empty')).toBeVisible();
 
@@ -479,7 +486,7 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
     await page.keyboard.press('Escape');
 
     // Memory view: delete it → gone, on screen and in the engine
-    await page.getByRole('tab', { name: 'Memory' }).click();
+    await openSheet(page, 'Memory');
     await tab.getByTestId('memory-delete-user_name').click();
     await page.getByTestId('memory-confirm-delete').click();
     await expect(tab.getByTestId('memory-empty')).toBeVisible();
@@ -492,8 +499,7 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
     ).toBe(0);
 
     // memory has made its point: off again, so the runs below do not re-learn a name
-    await nodeCard(page, memoryAgentId).click();
-    await page.getByRole('tab', { name: 'Configure' }).click();
+    await configure(page, memoryAgentId);
     await configPanel(page).getByLabel('Remember facts between runs').click();
     await expect
       .poll(async () => (await nodeConfig(page, workflowId, memoryAgentId))?.['memory'])
@@ -656,7 +662,7 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
 
   test('run detail Trace is in the order of GET /runs/:id/trace and lists node runs and verdicts (TC-OBS-001)', async () => {
     await openWorkflowPage(page, projectId, workflowId);
-    await page.getByRole('tab', { name: 'Runs' }).click();
+    await openSheet(page, 'Runs');
     await page.getByTestId(`run-row-${poisonRunId}`).getByRole('link').click();
     await expect(page).toHaveURL(new RegExp(`/runs/${poisonRunId}$`));
 
@@ -793,6 +799,8 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
       /Editing is available on a larger screen/,
     );
     await expect(page.getByTestId('canvas')).toHaveAttribute('data-readonly', 'true');
+    // nothing to add nodes with: no New node button (V2's palette is its dialog)
+    await expect(page.getByTestId('new-node-button')).toHaveCount(0);
     await expect(page.getByTestId('palette-agent')).toHaveCount(0);
     await expectNoHorizontalScroll(page, 'Canvas');
 
@@ -867,7 +875,7 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
     await page.setViewportSize({ width: 1280, height: 720 });
     await openWorkflowPage(page, projectId, workflowId);
     await expect(page.getByTestId('compact-workflow')).toHaveCount(0);
-    await expect(page.getByTestId('palette-agent')).toBeVisible();
+    await expect(page.getByTestId('new-node-button')).toBeVisible();
 
     await page.getByRole('link', { name: 'Settings', exact: true }).click();
     const concurrency = page.getByTestId('settings-concurrency');

@@ -143,10 +143,23 @@ export async function dragKindToCanvas(
   await page.getByTestId(`palette-${kind}`).dispatchEvent('dragend', { dataTransfer });
 }
 
+/**
+ * Select one node and show it on a tab of the sheet. The sheet is closed first: open, it covers the
+ * right of the Canvas, and the card may sit under it.
+ */
+export async function selectInSheet(
+  page: Page,
+  nodeId: string,
+  tab: 'Configure' | 'Inspector' | 'Runs' | 'Memory',
+): Promise<void> {
+  await closeSheet(page);
+  await nodeCard(page, nodeId).click();
+  await openSheet(page, tab);
+}
+
 /** Select one node and open the sheet on its Configure tab. */
 export async function configureNode(page: Page, nodeId: string): Promise<Locator> {
-  await flowNode(page, nodeId).click();
-  await openSheet(page, 'Configure');
+  await selectInSheet(page, nodeId, 'Configure');
   const panel = page.getByRole('complementary', { name: 'Node configuration' });
   await expect(panel).toBeVisible();
   return panel;
