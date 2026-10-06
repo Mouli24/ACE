@@ -1,5 +1,6 @@
 import type {
   Artifact,
+  CheckCommand,
   ChatMessage,
   ChatThread,
   CursorQuery,
@@ -112,6 +113,11 @@ export interface ProjectRepository {
       lastOpenedAt?: Timestamp;
       /** Round 3 §2.3: the per-run cost cap. `null` removes it, `undefined` leaves it (D72). */
       maxCostPerRunUsd?: number | null;
+      /* ACE parity P0 (D269, D271): `undefined` leaves a field, `null` clears the setup command. */
+      paused?: boolean;
+      buildCapacity?: number;
+      checkCommands?: CheckCommand[];
+      setupCommand?: string | null;
       updatedAt: Timestamp;
     },
   ): Promise<Project | null>;
