@@ -205,3 +205,22 @@ export type CliDetection = z.infer<typeof CliDetectionSchema>;
 /** `GET /providers/detect/clis` — one entry per CLI type, in `CLI_PROVIDER_TYPES` order. */
 export const CliDetectResponseSchema = z.strictObject({ items: z.array(CliDetectionSchema) });
 export type CliDetectResponse = z.infer<typeof CliDetectResponseSchema>;
+
+/**
+ * Why a patch does not fit the provider it targets, or `undefined` when it does (X1, D262/D264).
+ * A patch carries no type, so the engine checks it against the stored provider before applying it.
+ */
+export function cliPatchError(
+  type: ProviderType,
+  patch: UpdateProviderRequest,
+): string | undefined {
+  const cli = isCliProviderType(type);
+  if (cli && patch.apiKey !== undefined) {
+    return 'A CLI provider uses the CLI’s own login and takes no API key.';
+  }
+  if (cli && patch.baseUrl !== undefined) return 'A CLI provider has no base URL.';
+  if (!cli && patch.cliPermission !== undefined) {
+    return 'Only a CLI provider takes a permission level.';
+  }
+  return undefined;
+}

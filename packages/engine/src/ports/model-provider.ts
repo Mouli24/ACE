@@ -1,4 +1,5 @@
 import type {
+  CliDetectResponse,
   DataType,
   Model,
   ModelPricing,
@@ -160,4 +161,6 @@ export interface ProviderAdapterFactory {
     manifest: readonly ModelInfo[],
   ): (ModelInfo & { source: Model['source'] })[];
   detect(): Promise<ProviderDetection>;
+  /** X1 (FR-PRV-008): which coding-agent CLIs are installed and signed in. */
+  detectClis?(): Promise<CliDetectResponse>;
 }

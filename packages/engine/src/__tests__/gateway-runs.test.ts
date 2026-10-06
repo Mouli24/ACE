@@ -128,6 +128,19 @@ async function build(): Promise<void> {
       },
       listModels: async (query) => (query.inputType === 'image' ? [] : [model()]),
       detect: async () => ({ ollama: { baseUrl: 'http://127.0.0.1:11434', detected: true } }),
+      detectClis: async () => ({
+        items: [
+          {
+            type: 'claude_code',
+            installed: true,
+            version: '2.1.282',
+            login: 'logged_in',
+            loginDetail: 'claude.ai',
+            installHint: 'npm install -g @anthropic-ai/claude-code',
+            loginHint: 'claude auth login',
+          },
+        ],
+      }),
       adapterFor: async () => {
         throw new Error('not used');
       },
@@ -444,5 +457,24 @@ describe('FR-SYS-002 every round 2 route needs the session token', () => {
     `/workflows/${WORKFLOW_ID}/runs`,
   ])('401s %s without one', async (path) => {
     expect((await app.request(`/api/v1${path}`)).status).toBe(401);
+  });
+});
+
+describe('FR-PRV-008 the terminal scan route (X1)', () => {
+  it('answers the scan, and does not read "detect" as a provider id', async () => {
+    const response = await get('/providers/detect/clis');
+    expect(response.status).toBe(200);
+    expect(await body(response)).toMatchObject({
+      items: [{ type: 'claude_code', installed: true }],
+    });
+  });
+
+  it('needs the session token', async () => {
+    expect((await app.request('/api/v1/providers/detect/clis')).status).toBe(401);
+  });
+
+  it('refuses a permission level on a provider that is not a CLI', async () => {
+    const response = await patch(`/providers/${PROVIDER_ID}`, { cliPermission: 'full_auto' });
+    expect(response.status).toBe(400);
   });
 });

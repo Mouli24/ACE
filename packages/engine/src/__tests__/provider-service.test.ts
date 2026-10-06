@@ -140,6 +140,7 @@ async function build(): Promise<Harness> {
       mergeCatalog: (discovered) =>
         discovered.map((m) => ({ ...m, source: 'discovered' as const })),
       detect: async () => ({ ollama: { baseUrl: 'http://127.0.0.1:11434', detected: false } }),
+      detectClis: async () => ({ items: [] }),
     },
   });
 
@@ -548,5 +549,37 @@ describe('FR-PRV-005 removing a provider a knowledge base embeds with (final-rev
 
     expect(await harness.service.remove(embedder.id, { confirm: true })).toEqual({ ok: true });
     expect(await harness.service.get(embedder.id)).toBeNull();
+  });
+});
+
+describe('FR-PRV-008 CLI providers in the service (X1)', () => {
+  it('stores the default permission for a CLI provider created without one', async () => {
+    const created = await harness.service.create({
+      type: 'claude_code',
+      name: 'Claude Code',
+      concurrency: 1,
+    });
+    expect(created.cliPermission).toBe('edit_files');
+    expect((await harness.service.get(created.id))?.cliPermission).toBe('edit_files');
+  });
+
+  it('keeps the permission it was given, and a patch changes it', async () => {
+    const created = await harness.service.create({
+      type: 'codex_cli',
+      name: 'Codex',
+      concurrency: 1,
+      cliPermission: 'read_only',
+    });
+    expect(created.cliPermission).toBe('read_only');
+    const updated = await harness.service.update(created.id, { cliPermission: 'full_auto' });
+    expect(updated?.cliPermission).toBe('full_auto');
+  });
+
+  it('gives a non-CLI provider no permission at all', async () => {
+    expect(await harness.created()).not.toHaveProperty('cliPermission');
+  });
+
+  it('passes the factory’s terminal scan through', async () => {
+    expect(await harness.service.detectClis?.()).toEqual({ items: [] });
   });
 });
