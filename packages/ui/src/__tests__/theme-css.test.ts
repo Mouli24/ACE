@@ -7,7 +7,7 @@ const block = (selector: RegExp): string => {
 };
 
 describe('FR-SYS-005 theme.css mirrors tokens.ts', () => {
-  const dark = block(/@theme \{/);
+  const dark = block(/@theme static \{/);
   const light = block(/:root\[data-theme='light'\] \{/);
   const slots: Array<[string, keyof typeof THEME_COLORS.dark]> = [
     ['canvas', 'canvas'], ['canvas-dot', 'canvasDot'], ['panel', 'panel'], ['card', 'card'],
@@ -18,6 +18,15 @@ describe('FR-SYS-005 theme.css mirrors tokens.ts', () => {
   it.each(slots)('--color-%s matches in both themes', (css_, key) => {
     expect(dark).toContain(`--color-${css_}: ${THEME_COLORS.dark[key] as string};`);
     expect(light).toContain(`--color-${css_}: ${THEME_COLORS.light[key] as string};`);
+  });
+  it('emits every Night variable, including the ones only built at runtime', () => {
+    // `var(--color-provider-${type})` and friends are invisible to Tailwind's class scanner; a
+    // plain `@theme` drops every variable no utility names, so a Night mock card had no fill.
+    expect(css).toMatch(/@theme static \{/);
+    expect(css).not.toMatch(/@theme \{/);
+    expect(dark).toContain('--color-provider-mock:');
+    expect(dark).toContain('--color-status-IDLE:');
+    expect(dark).toContain('--color-provider-status-UNKNOWN:');
   });
   it('defines the glow and reduced-motion rules', () => {
     expect(css).toMatch(/\.ace-node\[data-state='RUNNING'\]\s*\{\s*--g: 1;/);

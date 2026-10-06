@@ -1,8 +1,13 @@
 /*
  * ACE Tailwind v4 theme — the "preset" (Arch §10.1). Values mirror src/tokens.ts.
  * Consumers: `@import "tailwindcss"; @import "@ace/ui/theme.css";`
+ *
+ * `static`: emit every variable, used by a utility class or not. The provider, status and
+ * provider-status colours are read as `var(--color-provider-${type})` built at runtime, which
+ * Tailwind's scanner cannot see — without `static` it drops the ones no class names (in Night,
+ * a mock or Ollama card lost its fill, border and glow).
  */
-@theme {
+@theme static {
   --color-canvas: #0a0a0b;
   --color-canvas-dot: #1f1f23;
   --color-panel: #0e0e10;
