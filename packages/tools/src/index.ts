@@ -25,3 +25,4 @@ export * from './mcp/client.js';
 export * from './mcp/manager.js';
 
 export * from './git/git.js';
+export * from './process/command-runner.js';

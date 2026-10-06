@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 
 import { type Sandbox, type SandboxResult, type SandboxSpec, type Scope } from '@ace/engine';
 
+import { killProcessTree } from '../process/kill-tree.js';
 import { sandboxEnv } from './env.js';
 
 /**
@@ -37,21 +38,6 @@ export const OUTPUT_CAP_BYTES = 1024 * 1024;
 /** Grace between SIGTERM and SIGKILL, and how long we wait for `close` after a kill. */
 const KILL_GRACE_MS = 500;
 
-function killTree(pid: number, platform: NodeJS.Platform): void {
-  try {
-    if (platform === 'win32') {
-      // Windows has no process groups we can signal; taskkill /T ends the child and its descendants.
-      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' }).on('error', () => undefined);
-    } else {
-      // The child is spawned `detached`, so it leads its own group and `-pid` reaches everything it
-      // started — the point of killing a runaway that itself spawned children.
-      process.kill(-pid, 'SIGKILL');
-    }
-  } catch {
-    // Already gone, or never started. Either way there is nothing left to kill.
-  }
-}
-
 /** Appends `chunk` to `parts` while under the cap; returns the running total. */
 function capture(parts: string[], total: number, chunk: string): number {
   if (total >= OUTPUT_CAP_BYTES) return total;
@@ -71,7 +57,7 @@ export class ChildProcessSandbox implements Sandbox {
         cwd: spec.workingDirectory,
         env,
         // A leader of its own group on POSIX, so a runaway's children die with it. Windows has no
-        // equivalent; taskkill /T is the fallback in killTree.
+        // equivalent; taskkill /T is the fallback in killProcessTree.
         detached: this.platform !== 'win32',
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
@@ -95,7 +81,7 @@ export class ChildProcessSandbox implements Sandbox {
 
       const timer = setTimeout(() => {
         timedOut = true;
-        if (child.pid !== undefined) killTree(child.pid, this.platform);
+        if (child.pid !== undefined) killProcessTree(child.pid, this.platform);
         // If the group kill did not take (a stuck Windows taskkill, say), settle anyway so the tool
         // loop is never wedged behind a sandbox that refused to die.
         setTimeout(() => finish(-1), KILL_GRACE_MS);
