@@ -164,6 +164,11 @@ export interface GitPort {
     cwd: string;
     baseSha: string;
     includeUncommitted: boolean;
+    /**
+     * Diff `baseSha`..`headRef` instead of HEAD — how an applied task's changes are still shown
+     * from the source repository once its worktree is gone. Ignored with `includeUncommitted`.
+     */
+    headRef?: string;
   }): Promise<{ files: ChangedFile[]; uncommitted: boolean }>;
   /** One file's unified diff over the same range as `changes`, cut at `maxBytes`. */
   fileDiff(input: {
@@ -172,6 +177,8 @@ export interface GitPort {
     path: string;
     includeUncommitted: boolean;
     maxBytes: number;
+    /** As `changes`' `headRef`. */
+    headRef?: string;
   }): Promise<{ patch: string; truncated: boolean; binary: boolean }>;
   /**
    * Merges `branch` into the repository's current branch with `--no-ff`. Refuses (without touching
