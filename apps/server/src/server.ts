@@ -57,6 +57,7 @@ import {
   logFileName,
   mediaTypeForMime,
   newId,
+  createModelGateway,
   pruneOldLogs,
   recoverAfterCrash,
   requireUsageRepository,
@@ -388,23 +389,18 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     logger: logger.child({ subsystem: 'providers' }),
   });
 
-  // The router reads the catalog lazily, so a refresh takes effect without rewiring anything.
-  let catalogCache: Awaited<ReturnType<typeof repository.models.list>> = [];
-  const refreshCatalogCache = async (): Promise<void> => {
-    catalogCache = await repository.models.list(LOCAL_SCOPE, {});
-  };
-  await refreshCatalogCache();
-
-  const router = createRouter(() =>
-    catalogCache.map((model) => ({
-      providerId: model.providerId,
-      modelId: model.modelId,
-      available: model.available,
-      inputTypes: model.inputTypes,
-      outputTypes: model.outputTypes,
-      ...(model.pricing === undefined ? {} : { pricing: model.pricing }),
-    })),
-  );
+  /*
+   * The model gateway (X1 §4.1): route, adapter, per-provider gate, catalog and price in one place.
+   * Every caller below gets its model through it; the router reads the gateway's catalog lazily, so
+   * a refresh takes effect without rewiring anything.
+   */
+  const gateway = await createModelGateway({
+    providers,
+    models: repository.models,
+    scope: LOCAL_SCOPE,
+    createRouter: (catalog) => createRouter(catalog),
+  });
+  const router = gateway.router;
 
   /* ------------------------------------------------------- guardrails (R3) */
 
@@ -622,7 +618,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
    * that provider's adapter with that model riding every call, batched at 32 (`createEmbedder`).
    */
   const embedderFor: EmbedderFor = async (kb) =>
-    createEmbedder(await providers.adapterFor(kb.embeddingProviderId), kb.embeddingModelId);
+    createEmbedder(await gateway.adapterFor(kb.embeddingProviderId), kb.embeddingModelId);
 
   /*
    * Hybrid search (FR-RAG-004) reads the repository's own gated indexes — never separate instances,
@@ -697,8 +693,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
    * and the reason is logged. Priced from the same catalog the router reads.
    */
   const summariser = createModelSummariser({
-    adapterFor: (providerId) => providers.adapterFor(providerId),
-    runGated: async (providerId, fn) => (await providers.semaphoreFor(providerId)).run(fn),
+    adapterFor: (providerId) => gateway.adapterFor(providerId),
+    runGated: (providerId, fn) => gateway.runGated(providerId, fn),
     cache: repository.summaryCache,
     scope: LOCAL_SCOPE,
     // The engine's clock when a test injects one, as the artifact store's is (13b review m6).
@@ -706,9 +702,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     fallback: createTruncatingSummariser(),
     onFallback: (reason) =>
       logger.warn({ subsystem: 'runs', reason }, 'model summary fell back to truncation'),
-    pricingFor: async (providerId, modelId) =>
-      catalogCache.find((model) => model.providerId === providerId && model.modelId === modelId)
-        ?.pricing,
+    pricingFor: async (providerId, modelId) => gateway.pricingFor(providerId, modelId),
   });
 
   const runs = createRunService({
@@ -718,15 +712,15 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     bus,
     logger: logger.child({ subsystem: 'runs' }),
     router,
-    adapterFor: (providerId) => providers.adapterFor(providerId),
+    adapterFor: (providerId) => gateway.adapterFor(providerId),
     checkProvider: async (providerId) => {
       // §2.7 item 2: a fresh check before every run, and the catalog the router reads is
       // refreshed with it, so a model added a moment ago is routable.
       const result = await providers.check(providerId);
-      await refreshCatalogCache();
+      await gateway.refreshCatalog();
       return result;
     },
-    runGated: async (providerId, fn) => (await providers.semaphoreFor(providerId)).run(fn),
+    runGated: (providerId, fn) => gateway.runGated(providerId, fn),
     // Arch §28: a key refused mid-run marks its provider AUTH_FAILED, through the provider service.
     recordProviderStatus: (providerId, found) => providers.recordStatus(providerId, found),
     policies: guardrailPolicies,
@@ -774,15 +768,15 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     bus,
     logger: logger.child({ subsystem: 'chat' }),
     router,
-    adapterFor: (providerId) => providers.adapterFor(providerId),
+    adapterFor: (providerId) => gateway.adapterFor(providerId),
     modelsFor: () => repository.models.list(LOCAL_SCOPE, {}),
-    runGated: async (providerId, fn) => (await providers.semaphoreFor(providerId)).run(fn),
+    runGated: (providerId, fn) => gateway.runGated(providerId, fn),
     resolveNode: async (nodeId) => {
       // The chat reply resolves its model through the same router the run engine uses, which reads
-      // `catalogCache`. A run refreshes that cache at pre-flight (`checkProvider`); a direct chat has
-      // no pre-flight, so refresh it here — `resolveNode` runs at the start of `chat()`, before the
-      // model is resolved — so a model added a moment ago is chattable (FR-RTR-002).
-      await refreshCatalogCache();
+      // the gateway's catalog. A run refreshes that catalog at pre-flight (`checkProvider`); a direct
+      // chat has no pre-flight, so refresh it here — `resolveNode` runs at the start of `chat()`,
+      // before the model is resolved — so a model added a moment ago is chattable (FR-RTR-002).
+      await gateway.refreshCatalog();
       const resolved = await repository.nodes.getById(LOCAL_SCOPE, nodeId);
       return resolved === null ? null : { node: resolved.node, projectId: resolved.projectId };
     },
@@ -924,7 +918,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
      */
     afterImport: async () => {
       try {
-        await refreshCatalogCache();
+        await gateway.refreshCatalog();
         const requeued = await knowledge.recover();
         if (requeued > 0) knowledgeLogger.info({ requeued }, 're-queued restored documents');
       } catch (error) {
