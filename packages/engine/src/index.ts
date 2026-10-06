@@ -10,6 +10,7 @@ export * from './merge/index.js';
 export * from './events/index.js';
 export * from './graph/index.js';
 export * from './providers/index.js';
+export * from './models/gateway.js';
 export * from './guardrails/index.js';
 export * from './approvals/index.js';
 export * from './approvals/routes.js';
