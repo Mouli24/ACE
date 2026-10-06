@@ -471,8 +471,13 @@ function NewNodeWindow({
             )}
           </div>
 
-          {/* the would-be node */}
-          <div className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)]">
+          {/* the would-be node — when the window is shorter than the preview (200 % zoom) the
+              column scrolls, keeping the details at least 160 px tall, rather than spilling over
+              the footer and its Add button */}
+          <div
+            data-testid="new-node-details"
+            className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(160px,1fr)] overflow-y-auto"
+          >
             <div
               className="relative grid h-[236px] place-items-center border-b border-border bg-canvas"
               style={{
