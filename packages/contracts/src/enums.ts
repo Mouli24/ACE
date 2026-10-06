@@ -85,6 +85,10 @@ export const PROVIDER_TYPES = [
   'openai_compatible',
   'ollama',
   'mock',
+  // X1 (FR-PRV-008, D261): locally installed coding-agent CLIs, run with their own login.
+  'claude_code',
+  'codex_cli',
+  'gemini_cli',
 ] as const;
 export const ProviderTypeSchema = z.enum(PROVIDER_TYPES);
 export type ProviderType = z.infer<typeof ProviderTypeSchema>;

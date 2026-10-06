@@ -11,6 +11,9 @@ export const PROVIDER_TYPE_LABEL: Readonly<Record<ProviderType, string>> = {
   openai_compatible: 'OpenAI-compatible',
   ollama: 'Ollama',
   mock: 'Mock',
+  claude_code: 'Claude Code',
+  codex_cli: 'Codex CLI',
+  gemini_cli: 'Gemini CLI',
 };
 
 /** Which types need an API key, and which need a base URL (§2.1, FR-PRV-001). */
