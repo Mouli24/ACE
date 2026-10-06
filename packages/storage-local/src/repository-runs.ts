@@ -2,6 +2,7 @@ import {
   ModelSchema,
   NodeRunSchema,
   RunSchema,
+  type CliPermission,
   type CursorQuery,
   type DataType,
   type Id,
@@ -65,6 +66,7 @@ function toProvider(row: ProviderRow): Provider {
     ...(row.statusMessage === null ? {} : { statusMessage: row.statusMessage }),
     ...(row.lastCheckedAt === null ? {} : { lastCheckedAt: row.lastCheckedAt }),
     concurrency: row.concurrency,
+    ...(row.cliPermission === null ? {} : { cliPermission: row.cliPermission as CliPermission }),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -173,6 +175,7 @@ export function createProviderRepository(db: Db): ProviderRepository {
           statusMessage: provider.statusMessage ?? null,
           lastCheckedAt: provider.lastCheckedAt ?? null,
           concurrency: provider.concurrency,
+          cliPermission: provider.cliPermission ?? null,
           createdAt: provider.createdAt,
           updatedAt: provider.updatedAt,
         })

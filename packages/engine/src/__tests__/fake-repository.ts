@@ -447,6 +447,10 @@ export class FakeRepository implements Repository {
       }
       if (patch.lastCheckedAt !== undefined) next.lastCheckedAt = patch.lastCheckedAt;
       if (patch.concurrency !== undefined) next.concurrency = patch.concurrency;
+      if (patch.cliPermission !== undefined) {
+        if (patch.cliPermission === null) delete next.cliPermission;
+        else next.cliPermission = patch.cliPermission;
+      }
       if (patch.updatedAt !== undefined) next.updatedAt = patch.updatedAt;
 
       this.#for(scope).providers.set(id, next);
