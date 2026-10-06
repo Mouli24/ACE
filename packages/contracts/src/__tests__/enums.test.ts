@@ -102,7 +102,17 @@ const ENUMS = [
     name: 'ProviderType',
     values: PROVIDER_TYPES,
     schema: ProviderTypeSchema,
-    expected: ['anthropic', 'google', 'openai', 'openai_compatible', 'ollama', 'mock'],
+    expected: [
+      'anthropic',
+      'google',
+      'openai',
+      'openai_compatible',
+      'ollama',
+      'mock',
+      'claude_code',
+      'codex_cli',
+      'gemini_cli',
+    ],
   },
   {
     name: 'ErrorKind',

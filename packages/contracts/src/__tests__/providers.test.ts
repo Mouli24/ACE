@@ -2,8 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import { ProviderInUseDetailsSchema } from '../errors.js';
 import {
+  CLI_PERMISSIONS,
+  CLI_PROVIDER_TYPES,
   CreateProviderRequestSchema,
+  DEFAULT_CLI_CONCURRENCY,
+  DEFAULT_CLI_PERMISSION,
   DEFAULT_PROVIDER_CONCURRENCY,
+  isCliProviderType,
+  routeOf,
   ProviderCheckResultSchema,
   ProviderDetectResponseSchema,
   ProviderSchema,
@@ -160,5 +166,77 @@ describe('FR-PRV-005 deleting a provider a node still uses', () => {
   it('names the affected nodes in the 409 details', () => {
     expect(ProviderInUseDetailsSchema.parse({ nodeIds: [NODE_A] })).toEqual({ nodeIds: [NODE_A] });
     expect(ProviderInUseDetailsSchema.safeParse({ nodeIds: ['node-1'] }).success).toBe(false);
+  });
+});
+
+describe('FR-PRV-008 CLI providers (X1, D261–D262)', () => {
+  it('accepts each CLI type with a permission level and no key', () => {
+    for (const type of CLI_PROVIDER_TYPES) {
+      expect(
+        ProviderSchema.safeParse({ ...provider, type, cliPermission: 'edit_files' }).success,
+        type,
+      ).toBe(true);
+      expect(
+        CreateProviderRequestSchema.safeParse({ type, name: 'CLI', cliPermission: 'read_only' })
+          .success,
+        type,
+      ).toBe(true);
+    }
+  });
+
+  it('refuses an API key or a base URL on a CLI provider', () => {
+    expect(
+      CreateProviderRequestSchema.safeParse({ type: 'claude_code', name: 'C', apiKey: 'sk-x' })
+        .success,
+    ).toBe(false);
+    expect(
+      CreateProviderRequestSchema.safeParse({
+        type: 'codex_cli',
+        name: 'C',
+        baseUrl: 'http://127.0.0.1:1',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('refuses a permission level on a provider that is not a CLI', () => {
+    expect(
+      CreateProviderRequestSchema.safeParse({
+        type: 'anthropic',
+        name: 'A',
+        apiKey: 'k',
+        cliPermission: 'full_auto',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('refuses a permission level outside the three presets', () => {
+    expect(
+      CreateProviderRequestSchema.safeParse({ type: 'gemini_cli', name: 'G', cliPermission: 'root' })
+        .success,
+    ).toBe(false);
+    expect([...CLI_PERMISSIONS]).toEqual(['read_only', 'edit_files', 'full_auto']);
+  });
+
+  it('lets a patch change the permission level', () => {
+    expect(UpdateProviderRequestSchema.parse({ cliPermission: 'full_auto' })).toEqual({
+      cliPermission: 'full_auto',
+    });
+  });
+
+  it('names each type’s route', () => {
+    expect(routeOf('anthropic')).toBe('api');
+    expect(routeOf('google')).toBe('api');
+    expect(routeOf('openai')).toBe('api');
+    expect(routeOf('openai_compatible')).toBe('local');
+    expect(routeOf('ollama')).toBe('local');
+    expect(routeOf('mock')).toBe('mock');
+    for (const type of CLI_PROVIDER_TYPES) expect(routeOf(type)).toBe('cli');
+    expect(isCliProviderType('gemini_cli')).toBe(true);
+    expect(isCliProviderType('openai')).toBe(false);
+  });
+
+  it('starts a CLI provider at editing project files, one call at a time', () => {
+    expect(DEFAULT_CLI_PERMISSION).toBe('edit_files');
+    expect(DEFAULT_CLI_CONCURRENCY).toBe(1);
   });
 });

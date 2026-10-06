@@ -15,6 +15,9 @@ export const PROVIDER_ACCENT: Readonly<Record<ProviderType, string>> = {
   openai_compatible: '#a78bfa',
   ollama: '#e8e8ea',
   mock: '#9a99a3',
+  claude_code: '#f2a37f',
+  codex_cli: '#7dd3fc',
+  gemini_cli: '#f9a8d4',
 };
 
 export const STATUS_RING: Readonly<Record<NodeState, string>> = {
@@ -58,6 +61,9 @@ export const LIGHT_PROVIDER_ACCENT: Readonly<Record<ProviderType, string>> = {
   openai_compatible: '#7446d8',
   ollama: '#3a3a40',
   mock: '#6b6972',
+  claude_code: '#94401c',
+  codex_cli: '#0b6380',
+  gemini_cli: '#a3245f',
 };
 
 export const LIGHT_STATUS_RING: Readonly<Record<NodeState, string>> = {
