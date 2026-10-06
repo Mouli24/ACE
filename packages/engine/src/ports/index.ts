@@ -24,3 +24,4 @@ export * from './knowledge.js';
 export * from './sandbox.js';
 export * from './search-backend.js';
 export * from './auth.js';
+export * from './tasks.js';
