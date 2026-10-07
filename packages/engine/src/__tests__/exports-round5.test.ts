@@ -29,12 +29,14 @@ describe('Round 5 services are exported from @ace/engine', () => {
     expect(typeof (engine as Record<string, unknown>)[name]).toBe('function');
   });
 
-  it('TEMPLATE_DEFINITIONS lists the four templates', () => {
+  it('TEMPLATE_DEFINITIONS lists the four wizard templates, then the two parity teams (D279)', () => {
     expect(engine.TEMPLATE_DEFINITIONS.map((template) => template.id)).toEqual([
       'linear-chain',
       'review-fix',
       'parallel-research',
       'rag-qa',
+      'single-builder',
+      'plan-build-review',
     ]);
   });
 
