@@ -53,6 +53,7 @@ import { notFound } from '../gateway/errors.js';
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
 import { maskSecrets } from '../security/secret-patterns.js';
+import { freezeSkills, skillsForNode } from '../skills/snapshot.js';
 import type { ModelRouter, ProviderAdapter, Repository, Scope } from '../ports/index.js';
 import type { ProviderService } from '../providers/index.js';
 import {
@@ -698,6 +699,15 @@ export function createRunService(deps: RunServiceDeps): RunService {
      * With a context guard, the hook also judges each tool result before the model reads it, with
      * the `tool` label (FR-GRD-004, R5 §2.3).
      */
+    /**
+     * D272: an agent's skills come from the run's snapshot, never the live library, in the order
+     * its `skillIds` names them. A node with none gets nothing, so its prompt is unchanged.
+     */
+    function skillsFor(node: Node): Pick<ExecuteNodeInput, 'skills'> {
+      const skills = skillsForNode(node, run.snapshot);
+      return skills.length === 0 ? {} : { skills };
+    }
+
     function contextFor(
       node: Node,
       nodeRun: NodeRun,
@@ -1556,6 +1566,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
                 },
                 ...guardrailsFor(node, nodeRun),
                 ...contextFor(node, nodeRun),
+                ...skillsFor(node),
                 ...(repairReason === undefined ? {} : { repairReason }),
               });
 
@@ -1970,6 +1981,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
         // as `provider_missing` (FR-PRV-005, final-review I5).
         embeddingProviderOf: async (id) =>
           (await repository.knowledgeBases?.get(scope, id))?.embeddingProviderId,
+        // D272: an agent naming a skill the snapshot did not freeze — never installed, or removed
+        // before the run started — is refused here. A snapshot with no skills has nothing to check.
+        ...(run.snapshot.skills === undefined ? {} : { skills: run.snapshot.skills }),
         // The multimodal capability check reads an artifact's type through the same resolver the
         // Input node executor uses, so pre-flight and execution classify a `.png` identically
         // (round 4 §2.1, FR-MM-005). Absent the artifact store, the check does not run.
@@ -2073,6 +2087,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
           tx.nodes.listByWorkflow(scope, workflowId),
           tx.edges.listByWorkflow(scope, workflowId),
         ]);
+        // D272: the text of every skill an agent uses is frozen with the graph, in the same
+        // transaction, so editing a skill later never changes what this run is asked (BR-04).
+        const skills = await freezeSkills(nodes, tx.skills, scope);
 
         const created: Run = {
           id: options?.runId ?? nextId(),
@@ -2080,7 +2097,12 @@ export function createRunService(deps: RunServiceDeps): RunService {
           projectId: workflow.projectId,
           status: 'PREFLIGHT',
           allowedActions: allowedRunActions('PREFLIGHT'),
-          snapshot: { version: workflow.version, nodes, edges },
+          snapshot: {
+            version: workflow.version,
+            nodes,
+            edges,
+            ...(skills === undefined ? {} : { skills }),
+          },
           inputs: request.inputs ?? {},
           preflightIssues: [],
           totals: { tokensIn: 0, tokensOut: 0, costUsd: 0 },

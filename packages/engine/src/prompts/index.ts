@@ -180,6 +180,16 @@ export interface PromptConversation {
   latestText: string;
 }
 
+/**
+ * A skill as the prompt renders it (D272, FR-PRM-001): the text a run froze into its snapshot. The
+ * version is what the prompt version folds in, with the name.
+ */
+export interface PromptSkill {
+  name: string;
+  version: number;
+  instructions: string;
+}
+
 export interface AssemblePromptInput {
   instructions: string;
   envelopes: readonly Envelope[];
@@ -192,6 +202,12 @@ export interface AssemblePromptInput {
   inputLabel?: string;
   /** Append the memory-operations block under `## Instructions` (the agent's `memory.enabled`). */
   memoryInstructions?: boolean;
+  /**
+   * The agent's skills, in the order its `skillIds` names them (D272). Each renders under
+   * `## Skills` as `### <name>` and its instructions. Absent or empty, the prompt — and its
+   * version — is exactly what it was before skills existed.
+   */
+  skills?: readonly PromptSkill[];
 }
 
 export interface AssembledPrompt {
@@ -209,13 +225,16 @@ export interface AssembledPrompt {
  *
  * Deliberately *not* a hash of the whole prompt: the version identifies the configuration that
  * produced it, so two runs of the same agent over different inputs share a version, and editing
- * the instructions changes it (TC-PRM-004).
+ * the instructions changes it (TC-PRM-004). An agent's skills are part of its configuration, so
+ * each one's `name@version` is folded in (D272) — only when there are any, so every prompt without
+ * skills keeps the version it always had.
  */
 export function promptVersion(
   systemBaseVersion: string,
   instructions: string,
   contract: EnvelopeContract,
   memoryVersion?: string,
+  skills?: readonly Pick<PromptSkill, 'name' | 'version'>[],
 ): string {
   const hash = createHash('sha256')
     .update(systemBaseVersion)
@@ -225,6 +244,10 @@ export function promptVersion(
     .update(stableJson(contract, 0));
   // Only a memory-enabled prompt carries this, so every other prompt keeps its existing version.
   if (memoryVersion !== undefined) hash.update('\u0000').update(memoryVersion);
+  if (skills !== undefined && skills.length > 0) {
+    hash.update('\u0000skills');
+    for (const skill of skills) hash.update('\u0000').update(`${skill.name}@${skill.version}`);
+  }
   return hash.digest('hex').slice(0, 12);
 }
 
@@ -232,6 +255,7 @@ export function assemblePrompt(input: AssemblePromptInput): AssembledPrompt {
   // Arrival order is a race; source node id is not (TC-PRM-001).
   const envelopes = [...input.envelopes].sort((a, b) => a.fromNodeId.localeCompare(b.fromNodeId));
   const memory = input.memory ?? {};
+  const skills = input.skills ?? [];
 
   const reads = envelopes.flatMap((envelope) => envelope.reads);
   const inputText =
@@ -293,9 +317,9 @@ export function assemblePrompt(input: AssemblePromptInput): AssembledPrompt {
       input.memoryInstructions === true
         ? `${resolvePlaceholders(input.instructions, placeholders)}\n\n${MEMORY_PROMPT_TEXT}`
         : resolvePlaceholders(input.instructions, placeholders),
-    // Skills arrive in round 6 and guardrail instructions in round 3; §2.8 keeps the headers so
-    // adding them later does not change the shape of every existing prompt.
-    '## Skills': '',
+    // D272: the agent's frozen skills, one subsection each. §2.8 kept the header from the start, so
+    // a prompt without skills keeps its shape; guardrail instructions arrived in round 3.
+    '## Skills': skills.map((skill) => `### ${skill.name}\n${skill.instructions}`).join('\n\n'),
     '## Guardrails': '',
     '## Context': contextParts.join('\n\n'),
     '## Input': inputSection,
@@ -320,6 +344,7 @@ export function assemblePrompt(input: AssemblePromptInput): AssembledPrompt {
       input.instructions,
       input.contract,
       input.memoryInstructions === true ? MEMORY_PROMPT_VERSION : undefined,
+      skills,
     ),
     system: SYSTEM_BASE_TEXT,
   };

@@ -39,7 +39,7 @@ import type {
 import { runRetrievalNode, withRetrieved } from '../knowledge/retrieval-node.js';
 import type { SearchService } from '../knowledge/search.js';
 import { extractMemoryOps, maskMemoryValue, withMemoryField } from '../memory/ops.js';
-import { assemblePrompt } from '../prompts/index.js';
+import { assemblePrompt, type PromptSkill } from '../prompts/index.js';
 import type { RunGate } from './control/gate.js';
 import { usageFor } from './cost.js';
 import {
@@ -112,6 +112,11 @@ export interface ExecuteNodeInput {
   context?: NodeContextHook;
   /** Round 5: an agent's long-term memory (§2.2, FR-MEM-002); absent, no `__memory` is read. */
   memory?: NodeMemoryHook;
+  /**
+   * ACE parity P1 (D272): the agent's skills as the run's snapshot froze them, in the order its
+   * `skillIds` names them, rendered under `## Skills`. Absent, the prompt has none.
+   */
+  skills?: readonly PromptSkill[];
 }
 
 /**
@@ -591,6 +596,9 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       contract,
       iteration: input.iteration,
       ...(memoryOn ? { memoryInstructions: true } : {}),
+      ...(node.kind === 'agent' && input.skills !== undefined && input.skills.length > 0
+        ? { skills: input.skills }
+        : {}),
     });
 
     /* Route. The router is pure over the catalog and never calls a provider (FR-RTR-006). */

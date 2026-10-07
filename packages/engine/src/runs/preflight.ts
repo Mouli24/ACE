@@ -9,6 +9,7 @@ import type {
   Part,
   Provider,
   ProviderCheckResult,
+  SnapshotSkill,
   ValidationIssue,
 } from '@ace/contracts';
 
@@ -78,6 +79,13 @@ export interface PreflightInput {
    * that exists.
    */
   embeddingProviderOf: (knowledgeBaseId: Id) => Promise<Id | undefined>;
+  /**
+   * The skills the run's snapshot froze (D272). An agent naming a skill id that is not among them
+   * is `missing_skill`: the skill was never installed or was removed before the run started.
+   * Absent — a run snapshotted before skills existed, or one whose agents name none — nothing is
+   * checked.
+   */
+  skills?: readonly SnapshotSkill[];
 }
 
 /** An Input node has something to start from when its config or the request carries content. */
@@ -213,7 +221,30 @@ export async function preflight(input: PreflightInput): Promise<ValidationIssue[
   /* 7. Knowledge bases (round 5 §2.4, FR-RAG-005/006). */
   issues.push(...(await knowledgeBaseIssues(input)));
 
+  /* 8. Skills (D272): one issue per agent, however many of its skills are missing. */
+  if (input.skills !== undefined) issues.push(...missingSkillIssues(input.nodes, input.skills));
+
   return issues;
+}
+
+/** `missing_skill`: an agent naming a skill the run's snapshot does not hold (D272). */
+export function missingSkillIssues(
+  nodes: readonly Node[],
+  skills: readonly SnapshotSkill[],
+): ValidationIssue[] {
+  const installed = new Set(skills.map((skill) => skill.id));
+  return nodes.flatMap((node): ValidationIssue[] =>
+    node.kind === 'agent' && (node.config.skillIds ?? []).some((id) => !installed.has(id))
+      ? [
+          {
+            severity: 'error',
+            code: 'missing_skill',
+            message: `Agent "${node.name}" uses a skill that is not installed.`,
+            nodeId: node.id,
+          },
+        ]
+      : [],
+  );
 }
 
 /**
