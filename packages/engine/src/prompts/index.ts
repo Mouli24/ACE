@@ -49,6 +49,21 @@ export const MEMORY_PROMPT_TEXT = [
 /** Bumped whenever `MEMORY_PROMPT_TEXT` changes; folded into the prompt version only when memory is on. */
 export const MEMORY_PROMPT_VERSION = 'ace-memory-1';
 
+/**
+ * The `### Environment` block under `## Context` (ACE parity P1, D274): the **names** of the secrets
+ * a CLI agent's process was given, never their values, so it can use them without asking for them.
+ * Only a CLI-route run with secrets in scope has it; every other prompt is unchanged by it.
+ */
+export function environmentBlock(names: readonly string[]): string {
+  return [
+    '### Environment',
+    `These environment variables are set for the commands you run: ${names.join(', ')}. Never print their values.`,
+  ].join('\n');
+}
+
+/** Bumped whenever `environmentBlock` changes; folded into the version only when the block is there. */
+export const ENVIRONMENT_PROMPT_VERSION = 'ace-env-1';
+
 /** Bumped whenever the base text below changes; it is part of every prompt version. */
 export const SYSTEM_BASE_VERSION = 'ace-system-1';
 
@@ -208,6 +223,11 @@ export interface AssemblePromptInput {
    * version — is exactly what it was before skills existed.
    */
   skills?: readonly PromptSkill[];
+  /**
+   * The names of the environment variables a CLI agent's process is given (D274) — names only. Empty
+   * or absent, there is no `### Environment` block and the prompt is exactly as it was.
+   */
+  environmentNames?: readonly string[];
 }
 
 export interface AssembledPrompt {
@@ -235,6 +255,7 @@ export function promptVersion(
   contract: EnvelopeContract,
   memoryVersion?: string,
   skills?: readonly Pick<PromptSkill, 'name' | 'version'>[],
+  environmentNames?: readonly string[],
 ): string {
   const hash = createHash('sha256')
     .update(systemBaseVersion)
@@ -247,6 +268,14 @@ export function promptVersion(
   if (skills !== undefined && skills.length > 0) {
     hash.update('\u0000skills');
     for (const skill of skills) hash.update('\u0000').update(`${skill.name}@${skill.version}`);
+  }
+  // Likewise the environment block (D274): a prompt without it keeps the version it always had.
+  if (environmentNames !== undefined && environmentNames.length > 0) {
+    hash
+      .update('\u0000')
+      .update(ENVIRONMENT_PROMPT_VERSION)
+      .update('\u0000')
+      .update(environmentNames.join(','));
   }
   return hash.digest('hex').slice(0, 12);
 }
@@ -288,6 +317,9 @@ export function assemblePrompt(input: AssemblePromptInput): AssembledPrompt {
     const body = memories.map((entry) => `- ${entry.key}: ${entry.value}`).join('\n');
     contextParts.push(`### Memory\n${block('Remembered facts', body)}`);
   }
+  // ACE's own words, not untrusted content: the names of the secrets the CLI process has (D274).
+  const environmentNames = [...new Set(input.environmentNames ?? [])].sort();
+  if (environmentNames.length > 0) contextParts.push(environmentBlock(environmentNames));
 
   /* Input — labelled untrusted when anything in it was produced by a model (BR-13). */
   const anyUntrusted = envelopes.some((envelope) => envelope.context.trust === 'untrusted');
@@ -345,6 +377,7 @@ export function assemblePrompt(input: AssemblePromptInput): AssembledPrompt {
       input.contract,
       input.memoryInstructions === true ? MEMORY_PROMPT_VERSION : undefined,
       skills,
+      environmentNames,
     ),
     system: SYSTEM_BASE_TEXT,
   };

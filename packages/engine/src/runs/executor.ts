@@ -1,5 +1,6 @@
 import {
   TOOL_RESULT_SUMMARY_MAX,
+  routeOf,
   validateAgainstContract,
   type Envelope,
   type EnvelopeContract,
@@ -39,7 +40,12 @@ import type {
 import { runRetrievalNode, withRetrieved } from '../knowledge/retrieval-node.js';
 import type { SearchService } from '../knowledge/search.js';
 import { extractMemoryOps, maskMemoryValue, withMemoryField } from '../memory/ops.js';
-import { assemblePrompt, type PromptSkill } from '../prompts/index.js';
+import {
+  assemblePrompt,
+  type AssembledPrompt,
+  type AssemblePromptInput,
+  type PromptSkill,
+} from '../prompts/index.js';
 import type { RunGate } from './control/gate.js';
 import { usageFor } from './cost.js';
 import {
@@ -296,6 +302,16 @@ export interface NodeExecutorDeps {
    * provider gets no folder and the project tools refuse.
    */
   projectFolderFor?: (runId: Id) => Promise<string | undefined>;
+
+  /* --------------------------------------------------------- ACE parity P1 */
+
+  /**
+   * The secrets in a run's project scope, by name (D274). Handed to a CLI-route provider as the
+   * process environment (`GenerateRequest.env`), and their **names** go into its prompt's
+   * `### Environment` block. An API or local route gets neither. Absent, or failing, no secret is
+   * passed.
+   */
+  envForRun?: (runId: Id) => Promise<Record<string, string> | undefined>;
 }
 
 export interface NodeExecutor {
@@ -585,7 +601,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       envelopes = checked.envelopes;
     }
 
-    const prompt = assemblePrompt({
+    const promptInput: AssemblePromptInput = {
       // FR-ERR-005 / §2.1: the one contract-repair retry is the same prompt with the validation
       // reason appended, so the model is told what was wrong with its last answer.
       instructions:
@@ -599,7 +615,23 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       ...(node.kind === 'agent' && input.skills !== undefined && input.skills.length > 0
         ? { skills: input.skills }
         : {}),
-    });
+    };
+    const prompt = assemblePrompt(promptInput);
+    /**
+     * A CLI-route provider's prompt when secrets are in scope: the same prompt with their names
+     * under `### Environment` (D274). Assembled once, the first time a CLI attempt needs it.
+     */
+    let environmentPrompt: { names: string; prompt: AssembledPrompt } | undefined;
+    const promptWithEnvironment = (names: string[]): AssembledPrompt => {
+      const key = names.join(',');
+      if (environmentPrompt?.names !== key) {
+        environmentPrompt = {
+          names: key,
+          prompt: assemblePrompt({ ...promptInput, environmentNames: names }),
+        };
+      }
+      return environmentPrompt.prompt;
+    };
 
     /* Route. The router is pure over the catalog and never calls a provider (FR-RTR-006). */
     const catalog = await deps.modelsFor();
@@ -654,7 +686,8 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
     let lastProviderError: NodeError | undefined;
     let lastUsage: Usage = NO_USAGE;
     let lastModelUsed: ModelUsed | undefined;
-    const promptRecord = { version: prompt.version, text: prompt.redactedText };
+    /** What the last attempt sent, recorded if the chain runs out (a CLI's carries its names). */
+    let promptRecord = { version: prompt.version, text: prompt.redactedText };
 
     // One attempt per model in the chain, plus one: the router stops before this ever binds.
     const maxAttempts = 2 + routing.fallbackModelIds.length;
@@ -769,6 +802,20 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       } catch {
         workingDir = undefined;
       }
+      /* D274: the secrets in the run's project scope — for a CLI-route provider only. */
+      let runEnv: Record<string, string> | undefined;
+      try {
+        const env = await deps.envForRun?.(input.runId);
+        runEnv = env === undefined || Object.keys(env).length === 0 ? undefined : env;
+      } catch (error) {
+        deps.logger.warn(
+          { subsystem: 'runs', err: error, runId: input.runId },
+          'the secrets for this run could not be read; it runs without them',
+        );
+        runEnv = undefined;
+      }
+      /** The prompt this attempt sends: the node's own, or a CLI's with its environment names. */
+      let sentPrompt: AssembledPrompt = prompt;
       /** What the provider said the call cost (D263), when it says; otherwise the price table. */
       let reportedCostUsd: number | undefined;
       const usageNow = (): Usage => {
@@ -785,11 +832,11 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
       /** The recorded prompt for this attempt, with any untrusted tool-result blocks appended. */
       const recordedPrompt = (): { version: string; text: string } => ({
-        version: prompt.version,
+        version: sentPrompt.version,
         text:
           promptSuffix.length === 0
-            ? prompt.redactedText
-            : `${prompt.redactedText}\n\n## Tool results\n${promptSuffix.join('\n\n')}`,
+            ? sentPrompt.redactedText
+            : `${sentPrompt.redactedText}\n\n## Tool results\n${promptSuffix.join('\n\n')}`,
       });
 
       /** Whether this attempt made a provider call, so a stop records what it spent (FR-ERR-007). */
@@ -898,6 +945,15 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         ): Promise<PendingToolCall | undefined> {
           adapter ??= await deps.adapterFor(chosen.providerId);
           /*
+           * D274: a coding-agent CLI runs commands, so it gets the secrets in scope as its process
+           * environment and their names in its prompt. An API or local model runs nothing on this
+           * machine and gets neither — not even the names.
+           */
+          const cliEnv = routeOf(adapter.type) === 'cli' ? runEnv : undefined;
+          sentPrompt =
+            cliEnv === undefined ? prompt : promptWithEnvironment(Object.keys(cliEnv).sort());
+          promptRecord = { version: sentPrompt.version, text: sentPrompt.redactedText };
+          /*
            * `execution.timeoutMs` is the node's own clock for one provider turn, and it starts here —
            * once the slot is held, never while the node queued for it (D66), and never across a tool
            * call or an approval a person takes their time over (D-062). `AbortSignal.timeout` sets a
@@ -916,8 +972,8 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
           const stream = adapter.generate(
             {
               modelId: chosen.modelId,
-              system: prompt.system,
-              prompt: prompt.text,
+              system: sentPrompt.system,
+              prompt: sentPrompt.text,
               outputTypes,
               ...(providerSchema === undefined ? {} : { jsonSchema: providerSchema }),
               ...(contract.maxTokens === undefined ? {} : { maxTokens: contract.maxTokens }),
@@ -925,6 +981,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               runId: input.runId,
               iteration: input.iteration,
               ...(workingDir === undefined ? {} : { workingDir }),
+              ...(cliEnv === undefined ? {} : { env: cliEnv }),
               ...(offerTools ? { tools: offeredTools } : {}),
               ...(withResults ? { toolResults } : {}),
             },

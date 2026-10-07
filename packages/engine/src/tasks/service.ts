@@ -170,10 +170,16 @@ export interface TaskServiceDeps {
   stopRun: (runId: Id) => Promise<unknown>;
   /** `<dataDir>/workspaces` — every task worktree is a folder in it (D269). */
   workspaceRoot: string;
-  /** Masks secret-shaped text before a check's output is stored (BR-07). */
+  /**
+   * Masks secret-shaped text before a check's output is stored (BR-07); the composition root adds
+   * the exact secret values to it (D274).
+   */
   mask?: (text: string) => string;
-  /** The environment check and setup commands run with (D271). */
-  commandEnv?: () => Record<string, string>;
+  /**
+   * The extra environment a project's check and setup commands run with (D271): the secrets in that
+   * project's scope (D274). Asked once per command, so a secret added a moment ago is there.
+   */
+  commandEnv?: (projectId: Id) => Promise<Record<string, string>>;
   checkTimeoutMs?: number;
   now?: () => string;
   nextId?: () => string;
@@ -518,7 +524,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       const result = await commands.run({
         command: project.setupCommand,
         cwd: path,
-        ...(deps.commandEnv === undefined ? {} : { env: deps.commandEnv() }),
+        ...(deps.commandEnv === undefined ? {} : { env: await deps.commandEnv(task.projectId) }),
         timeoutMs: checkTimeoutMs,
         maxOutput: CHECK_OUTPUT_MAX,
         signal,
@@ -1095,7 +1101,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       const result = await commands.run({
         command: check.command,
         cwd: workspace.path,
-        ...(deps.commandEnv === undefined ? {} : { env: deps.commandEnv() }),
+        ...(deps.commandEnv === undefined ? {} : { env: await deps.commandEnv(task.projectId) }),
         timeoutMs: checkTimeoutMs,
         maxOutput: CHECK_OUTPUT_MAX,
         signal: controller.signal,

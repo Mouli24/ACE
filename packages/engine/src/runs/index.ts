@@ -216,6 +216,11 @@ export interface RunServiceDeps {
   sandboxDirFor?: (runId: Id) => string;
   /** X1 §4.2: a run's project folder, for agent-route providers and the project tools. */
   projectFolderFor?: (runId: Id) => Promise<string | undefined>;
+  /**
+   * ACE parity P1 (D274): the secrets in a run's project scope — a CLI-route provider's process
+   * environment, and their names in its prompt. Absent, no run is given a secret.
+   */
+  envForRun?: (runId: Id) => Promise<Record<string, string> | undefined>;
   /** Resolves Input `artifactIds` to parts and stores produced media parts as artifacts. */
   artifacts?: ArtifactMaterialiser;
   /** Persists a logged `ToolCall`, mirroring it onto its node run (FR-TOOL-009). */
@@ -333,6 +338,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
     ...(deps.tools === undefined ? {} : { tools: deps.tools }),
     ...(deps.sandboxDirFor === undefined ? {} : { sandboxDirFor: deps.sandboxDirFor }),
     ...(deps.projectFolderFor === undefined ? {} : { projectFolderFor: deps.projectFolderFor }),
+    ...(deps.envForRun === undefined ? {} : { envForRun: deps.envForRun }),
     ...(deps.artifacts === undefined ? {} : { artifacts: deps.artifacts }),
     ...(deps.recordToolCall === undefined ? {} : { recordToolCall: deps.recordToolCall }),
     ...(deps.nextId === undefined ? {} : { nextId: deps.nextId }),

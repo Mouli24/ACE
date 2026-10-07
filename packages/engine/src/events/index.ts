@@ -32,6 +32,12 @@ export interface EventBusDeps {
   scope: Scope;
   pubsub: PubSub<EngineEvent>;
   now?: () => string;
+  /**
+   * Applied to every event before it is persisted and published (ACE parity P1, D274): the
+   * composition root passes one that replaces each exact secret value in the payload, so a value a
+   * CLI agent printed never reaches the log, a replay or a client. Absent, events pass unchanged.
+   */
+  scrub?: (event: EmittedEvent) => EmittedEvent;
 }
 
 /** One topic; subscribers filter. A local engine has one process and one client to fan out to. */
@@ -44,11 +50,13 @@ const TOPIC = 'engine.events';
  * sees an event that a reconnecting client could not also replay from the table, which is what
  * makes `resume { afterSeq }` a complete catch-up rather than a best effort (NFR-REL-01).
  */
-export function createEventBus({ repository, scope, pubsub, now }: EventBusDeps): EventBus {
+export function createEventBus({ repository, scope, pubsub, now, scrub }: EventBusDeps): EventBus {
   const timestamp = now ?? (() => new Date().toISOString());
+  const clean = scrub ?? ((event: EmittedEvent) => event);
 
   return {
-    async emit(event) {
+    async emit(emitted) {
+      const event = clean(emitted);
       const stored = await repository.events.append(scope, {
         ...event,
         createdAt: event.createdAt ?? timestamp(),
@@ -57,7 +65,9 @@ export function createEventBus({ repository, scope, pubsub, now }: EventBusDeps)
       return stored;
     },
 
-    async emitTransient(event) {
+    async emitTransient(emitted) {
+      // Never persisted, but still delivered: a live client is as much a place a value must not reach.
+      const event = clean(emitted);
       await pubsub.publish(scope, TOPIC, {
         ...event,
         // Never read: a transient event is not part of the sequence `resume` counts through.

@@ -48,7 +48,7 @@ import {
   type PullRequestInfo,
 } from '../../ports/index.js';
 import type { DeliverableFiles } from '../deliverables.js';
-import { createTaskService, type TaskService } from '../service.js';
+import { createTaskService, type TaskService, type TaskServiceDeps } from '../service.js';
 
 /* -------------------------------------------------------------------------- */
 /* In-memory task repositories                                                */
@@ -465,7 +465,8 @@ export class FakeGit implements GitPort {
 /* -------------------------------------------------------------------------- */
 
 export class FakeCommands implements CommandRunner {
-  readonly ran: { command: string; cwd: string }[] = [];
+  /** `env` is the extra environment the command was given, when it was given one (D274). */
+  readonly ran: { command: string; cwd: string; env?: Record<string, string> }[] = [];
   results = new Map<string, Partial<CommandResult>>();
   /** A command that waits until its signal aborts (to test Stop during checks). */
   hang = new Set<string>();
@@ -473,11 +474,16 @@ export class FakeCommands implements CommandRunner {
   async run(input: {
     command: string;
     cwd: string;
+    env?: Record<string, string>;
     timeoutMs: number;
     maxOutput: number;
     signal?: AbortSignal;
   }): Promise<CommandResult> {
-    this.ran.push({ command: input.command, cwd: input.cwd });
+    this.ran.push({
+      command: input.command,
+      cwd: input.cwd,
+      ...(input.env === undefined ? {} : { env: input.env }),
+    });
     if (this.hang.has(input.command)) {
       await new Promise<void>((resolveWait) => {
         if (input.signal?.aborted === true) resolveWait();
@@ -540,6 +546,9 @@ export async function createTaskHarness(options?: {
   projectPatch?: Partial<Project>;
   /** Starts the engine's clock here (scheduler tests move it). Real time when absent. */
   clock?: string;
+  /** ACE parity P1 (D274): the secrets a project's commands get, and the mask over their output. */
+  commandEnv?: TaskServiceDeps['commandEnv'];
+  mask?: TaskServiceDeps['mask'];
 }): Promise<TaskHarness> {
   const repository = new FakeRepository();
   const repos = new InMemoryTaskRepos();
@@ -611,7 +620,8 @@ export async function createTaskHarness(options?: {
     git,
     commands,
     workspaceRoot: 'C:/ace/workspaces',
-    mask: (text) => text.replace(/sk-[a-z0-9]+/g, '[REDACTED]'),
+    mask: options?.mask ?? ((text) => text.replace(/sk-[a-z0-9]+/g, '[REDACTED]')),
+    ...(options?.commandEnv === undefined ? {} : { commandEnv: options.commandEnv }),
     startRun: async (workflowId, request, runId) => {
       if (options?.startRunError !== undefined) throw options.startRunError;
       runs.set(runId, { workflowId, request });
