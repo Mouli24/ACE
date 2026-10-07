@@ -42,6 +42,11 @@ import type {
 } from './knowledge.js';
 import type { Scope } from './scope.js';
 import type {
+  ProjectNoteRepository,
+  ResponsibilityRepository,
+  SuggestionRepository,
+} from './suggestions.js';
+import type {
   TaskActivityRepository,
   TaskCheckRepository,
   TaskDeliveryRepository,
@@ -351,4 +356,9 @@ export interface Repository {
   taskActivity?: TaskActivityRepository;
   /** ACE parity P1 (D277). */
   taskSchedules?: TaskScheduleRepository;
+
+  /** ACE parity P2 (D280, D281). */
+  responsibilities?: ResponsibilityRepository;
+  suggestions?: SuggestionRepository;
+  projectNotes?: ProjectNoteRepository;
 }

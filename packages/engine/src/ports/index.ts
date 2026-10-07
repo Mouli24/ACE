@@ -26,3 +26,4 @@ export * from './search-backend.js';
 export * from './auth.js';
 export * from './tasks.js';
 export * from './delivery.js';
+export * from './suggestions.js';

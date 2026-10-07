@@ -39,7 +39,9 @@ import {
   type TaskReviewRepository,
   type TaskScheduleRepository,
   type TaskWorkspaceRepository,
+  type GitHubIssue,
   type GitHubPort,
+  type GitHubRun,
   type GitHubStatus,
   type PreviewProcess,
   type PreviewRunner,
@@ -262,6 +264,14 @@ export class FakeGitHub implements GitHubPort {
   }
   async clone(input: { repo: string; folder: string }): Promise<void> {
     this.calls.push(`clone:${input.repo}->${input.folder}`);
+  }
+  issues: GitHubIssue[] = [];
+  runs: GitHubRun[] = [];
+  async listOpenIssues(): Promise<GitHubIssue[]> {
+    return this.issues;
+  }
+  async listFailedRuns(): Promise<GitHubRun[]> {
+    return this.runs;
   }
 }
 

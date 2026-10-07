@@ -13,6 +13,7 @@ import type {
   MergePullRequestRequest,
   OpenPullRequestRequest,
   Project,
+  ProjectNote,
   PutDeliverableRequest,
   PutTaskScheduleRequest,
   RepositoryInfo,
@@ -190,6 +191,8 @@ export interface TaskServiceDeps {
   projectsRoot?: string;
   /** How often the scheduler looks for due schedules (D277); 30 s by default. */
   schedulerTickMs?: number;
+  /** ACE parity P2 (D281): the project's team notes, given to every plan and work run. */
+  notesFor?: (projectId: Id) => Promise<ProjectNote[]>;
 }
 
 const DEFAULT_CHECK_TIMEOUT_MS = 600_000;
@@ -745,10 +748,12 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       return;
     }
 
+    const notes = await deps.notesFor?.(task.projectId);
     const text =
       execution.kind === 'plan'
-        ? planPrompt(task)
+        ? planPrompt(task, notes)
         : workPrompt({
+            notes,
             task,
             workspace,
             request: execution.request === '' ? undefined : execution.request,

@@ -64,6 +64,33 @@ export interface GitHubPort {
   }): Promise<void>;
   /** `gh repo clone <repo> <folder>`; `repo` is `owner/name` or a github.com URL. */
   clone(input: { repo: string; folder: string }): Promise<void>;
+
+  /*
+   * ACE parity P2 (D280): what a Software health scan reads. Optional so an adapter without them
+   * still delivers; the scan then looks at ACE's own records only.
+   */
+  /** `gh issue list --state open` for the repository `cwd` belongs to, newest first. */
+  listOpenIssues?(input: { cwd: string; limit: number }): Promise<GitHubIssue[]>;
+  /** `gh run list --status failure`, newest first. */
+  listFailedRuns?(input: { cwd: string; limit: number }): Promise<GitHubRun[]>;
+}
+
+export interface GitHubIssue {
+  number: number;
+  title: string;
+  url: string;
+  /** The opening of the issue's body. */
+  body: string;
+  labels: string[];
+}
+
+export interface GitHubRun {
+  id: number;
+  /** The workflow's name. */
+  name: string;
+  url: string;
+  branch: string;
+  createdAt: string;
 }
 
 /* -------------------------------------------------------------------------- */

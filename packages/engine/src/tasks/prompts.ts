@@ -1,4 +1,4 @@
-import type { Part, TaskExecution, TaskWorkspace } from '@ace/contracts';
+import type { Part, ProjectNote, TaskExecution, TaskWorkspace } from '@ace/contracts';
 
 import type { TaskRecord } from '../ports/index.js';
 
@@ -18,12 +18,32 @@ function section(title: string, body: string): string {
   return `## ${title}\n${body.trim() === '' ? NOT_STATED : body.trim()}`;
 }
 
+type NoteLine = Pick<ProjectNote, 'text' | 'status'>;
+
+/**
+ * The project's team notes (D281): what the board knows, the unverified ones labelled so a run does
+ * not take an automatic note for a confirmed fact. Empty when there are none.
+ */
+export function notesSection(notes: readonly NoteLine[] | undefined): string {
+  if (notes === undefined || notes.length === 0) return '';
+  const lines = notes.map((note) =>
+    note.status === 'verified' ? `- ${note.text}` : `- (unverified) ${note.text}`,
+  );
+  return [
+    '## Team notes',
+    'Shared notes for this project. Lines marked (unverified) were saved automatically; check them ' +
+      'before relying on them.',
+    ...lines,
+  ].join('\n');
+}
+
 /** What a planner run is asked. */
-export function planPrompt(task: TaskRecord): string {
+export function planPrompt(task: TaskRecord, notes?: readonly NoteLine[]): string {
   return [
     header(task),
     task.brief.trim(),
     section('How the result will be checked', task.acceptance),
+    notesSection(notes),
     '## What to do\nWrite a step-by-step plan for this task: the changes to make, where, and how to ' +
       'check them. Do not change any files.',
   ]
@@ -39,13 +59,16 @@ export function workPrompt(input: {
   previous: TaskExecution | undefined;
   /** What a Document or Email task must produce (D275); absent for an App task. */
   produce?: string | undefined;
+  /** The project's team notes (D281). */
+  notes?: readonly NoteLine[] | undefined;
 }): string {
-  const { task, workspace, request, previous, produce } = input;
+  const { task, workspace, request, previous, produce, notes } = input;
   const blocks = [
     header(task),
     task.brief.trim(),
     `## Plan\n${task.plan.trim() === '' ? NO_PLAN : task.plan.trim()}`,
     section('How the result will be checked', task.acceptance),
+    notesSection(notes),
   ];
   if (workspace !== null) {
     blocks.push(

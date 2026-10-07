@@ -39,3 +39,6 @@ export * from './backup/index.js';
 
 /* ACE parity P0: tasks, workspaces, changes, review and local delivery (D268–D271). */
 export * from './tasks/index.js';
+
+/* ACE parity P2: suggestions, responsibilities, team notes and email import (D280–D282). */
+export * from './suggestions/index.js';

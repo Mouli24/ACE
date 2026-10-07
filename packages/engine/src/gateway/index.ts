@@ -59,6 +59,8 @@ import type { KnowledgeService } from '../knowledge/service.js';
 import { createMemoryRoutes } from '../memory/routes.js';
 import type { MemoryService } from '../memory/service.js';
 import { createTemplateRoutes } from '../templates/routes.js';
+import { createSuggestionRoutes } from '../suggestions/routes.js';
+import type { SuggestionService } from '../suggestions/service.js';
 import { createTaskRoutes } from '../tasks/routes.js';
 import type { TaskService } from '../tasks/service.js';
 import type { TemplateService } from '../templates/service.js';
@@ -168,6 +170,8 @@ export interface EngineDeps {
 
   /** `/projects/:id/tasks`, `/tasks/:id/…`, `/projects/:id/repository`. */
   tasks?: TaskService;
+  /** ACE parity P2: responsibilities, suggestions, team notes, email import. */
+  suggestions?: SuggestionService;
 }
 
 export interface EngineVariables {
@@ -813,6 +817,7 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.route('/', createUsageRoutes(deps.trace, deps.usage));
   api.route('/', createTemplateRoutes(deps.templates));
   api.route('/', createBackupRoutes(deps.backup));
+  api.route('/', createSuggestionRoutes(deps.suggestions));
   api.route('/', createTaskRoutes(deps.tasks));
 
   app.route(API_BASE_PATH, api);
