@@ -192,6 +192,21 @@ import {
   type Secret,
   type SecretListResponse,
   type UpdateSecretRequest,
+  // ACE parity P1 (deliverables, GitHub delivery, previews, schedules — D275–D278)
+  AcceptTaskRequestSchema,
+  CloneProjectRequestSchema,
+  MergePullRequestRequestSchema,
+  OpenPullRequestRequestSchema,
+  PutDeliverableRequestSchema,
+  PutTaskScheduleRequestSchema,
+  TaskScheduleSchema,
+  type AcceptTaskRequest,
+  type CloneProjectRequest,
+  type MergePullRequestRequest,
+  type OpenPullRequestRequest,
+  type PutDeliverableRequest,
+  type PutTaskScheduleRequest,
+  type TaskSchedule,
 } from '@ace/contracts';
 import { z } from 'zod';
 
@@ -213,6 +228,9 @@ export interface AceClientOptions {
 }
 
 type ListQuery = Partial<Pick<CursorQuery, 'cursor' | 'limit'>>;
+
+/** `PUT` arrived with ACE parity P1: a task's deliverable and schedule are replaced whole. */
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 /**
  * Anything that goes into a query string; `undefined` members are left out. An array is sent as a
@@ -299,7 +317,7 @@ export function createAceClient(options: AceClientOptions) {
 
   /** One authenticated round trip; a fetch that throws becomes a `network` `AceApiError`. */
   async function send(
-    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    method: HttpMethod,
     path: string,
     init: { accept: string; contentType?: string; body?: BodyInit; signal?: AbortSignal },
     query?: Query,
@@ -345,7 +363,7 @@ export function createAceClient(options: AceClientOptions) {
   }
 
   async function request<T>(
-    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    method: HttpMethod,
     path: string,
     responseSchema: { parse(value: unknown): T },
     body?: { schema: z.ZodType; value: unknown },
@@ -393,6 +411,16 @@ export function createAceClient(options: AceClientOptions) {
     deleteProject: (id: Id): Promise<void> => request('DELETE', `/projects/${id}`, NoContentSchema),
     openProject: (id: Id): Promise<Project> =>
       request('POST', `/projects/${id}/open`, ProjectSchema),
+    /**
+     * 201 — a new project whose folder is a fresh clone of a GitHub repository, through the
+     * signed-in `gh` CLI (D276). `repo` is `owner/name` or a github.com URL. No signed-in `gh`
+     * answers 422 `not_connected`; a clone that fails answers 502 `delivery_failed`.
+     */
+    cloneProject: (body: CloneProjectRequest): Promise<Project> =>
+      request('POST', '/projects/clone', ProjectSchema, {
+        schema: CloneProjectRequestSchema,
+        value: body,
+      }),
 
     /* Workflows */
     listWorkflows: (projectId: Id, query?: ListQuery): Promise<Page<Workflow>> =>
@@ -866,6 +894,84 @@ export function createAceClient(options: AceClientOptions) {
         schema: PauseTaskRequestSchema,
         value: body,
       }),
+
+    /* Deliverables — a Document or Email task's draft (ACE parity P1, D275) */
+
+    /**
+     * Replaces the draft as edited in review. A kind the task does not have answers 400
+     * `validation_failed`; a task that is running, waiting or Done 409 `invalid_task_state`.
+     */
+    putTaskDeliverable: (id: Id, body: PutDeliverableRequest): Promise<Task> =>
+      request('PUT', `/tasks/${id}/deliverable`, TaskSchema, {
+        schema: PutDeliverableRequestSchema,
+        value: body,
+      }),
+    /**
+     * The Document/Email finish line. `path` repeats where the user saw the document go; a path
+     * that moved answers 409 `destination_changed`, an existing file 409 `file_exists` (a document
+     * is never written over a file). An email draft is accepted as it stands, never sent.
+     */
+    acceptTask: (id: Id, body: AcceptTaskRequest = {}): Promise<Task> =>
+      request('POST', `/tasks/${id}/accept`, TaskSchema, {
+        schema: AcceptTaskRequestSchema,
+        value: body,
+      }),
+    /** Sending needs a mail connection this version does not have: 422 `not_connected`. */
+    sendTask: (id: Id): Promise<Task> =>
+      request('POST', `/tasks/${id}/send`, TaskSchema, { schema: EmptyBodySchema, value: {} }),
+
+    /* GitHub delivery (ACE parity P1, D276) */
+
+    /**
+     * Pushes the task branch and opens a pull request into the branch it was cut from. No GitHub
+     * remote or no signed-in `gh` answers 422 `not_connected`; a push or `gh` that fails answers
+     * the task `failed` in review with the reason.
+     */
+    openTaskPullRequest: (id: Id, body: OpenPullRequestRequest = {}): Promise<Task> =>
+      request('POST', `/tasks/${id}/open-pr`, TaskSchema, {
+        schema: OpenPullRequestRequestSchema,
+        value: body,
+      }),
+    /**
+     * Merges the task's pull request on GitHub. `confirm` repeats the repository and base the user
+     * was shown; anything else answers 409 `destination_changed`. The task is `merged` only once
+     * GitHub reports the merge — otherwise it stays in review with an `uncertain` delivery.
+     */
+    mergeTaskPullRequest: (id: Id, body: MergePullRequestRequest): Promise<Task> =>
+      request('POST', `/tasks/${id}/merge-pr`, TaskSchema, {
+        schema: MergePullRequestRequestSchema,
+        value: body,
+      }),
+
+    /* Preview — the project's preview command in the task's worktree (ACE parity P1, D278) */
+
+    /** Answers the task; the preview itself (status, URL, output) is `TaskDetail.preview`. */
+    startTaskPreview: (id: Id): Promise<Task> =>
+      request('POST', `/tasks/${id}/preview/start`, TaskSchema, {
+        schema: EmptyBodySchema,
+        value: {},
+      }),
+    stopTaskPreview: (id: Id): Promise<Task> =>
+      request('POST', `/tasks/${id}/preview/stop`, TaskSchema, {
+        schema: EmptyBodySchema,
+        value: {},
+      }),
+
+    /* Schedules (ACE parity P1, D277) */
+
+    /**
+     * Sets or replaces an Inbox task's trigger. A time in the past, a cron expression that never
+     * matches, an unknown time zone or a task to wait on that is not another task of the project
+     * answer 400 `validation_failed` with the reason as the message.
+     */
+    putTaskSchedule: (id: Id, body: PutTaskScheduleRequest): Promise<TaskSchedule> =>
+      request('PUT', `/tasks/${id}/schedule`, TaskScheduleSchema, {
+        schema: PutTaskScheduleRequestSchema,
+        value: body,
+      }),
+    /** 204; the task stays in the Inbox, unscheduled. */
+    deleteTaskSchedule: (id: Id): Promise<void> =>
+      request('DELETE', `/tasks/${id}/schedule`, NoContentSchema),
 
     /* Changes — derived from Git, never stored */
 
