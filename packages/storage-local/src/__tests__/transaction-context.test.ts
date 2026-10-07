@@ -416,6 +416,7 @@ const PORT_MEMBERS = {
   projectNotes: true,
   skills: true,
   bundles: true,
+  secrets: true,
 } as const satisfies Record<keyof Repository, true>;
 
 /** The port's repositories the adapter has: every member but `transaction`, which is the gate. */
@@ -445,7 +446,9 @@ describe('NFR-REL-02 every Repository port member SqliteRepository has is gated'
     const early: string[] = [];
     const calls: Promise<void>[] = [];
     for (const name of presentRepositories()) {
-      const methods = db.repository[name] as unknown as Record<string, unknown>;
+      // Read through the port: a member the adapter does not have yet is filtered out above.
+      const repository: Repository = db.repository;
+      const methods = repository[name] as unknown as Record<string, unknown>;
       for (const [method, member] of Object.entries(methods)) {
         if (typeof member !== 'function') continue;
         calls.push(

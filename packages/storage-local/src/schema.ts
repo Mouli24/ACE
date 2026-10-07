@@ -1009,3 +1009,25 @@ export const bundles = sqliteTable(
   },
   (table) => [index('bundles_workspace_idx').on(table.workspaceId, table.createdAt)],
 );
+
+/* -------------------------------------------------------------------------- */
+/* ACE parity P1 (D274): secrets                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A secret's name, description and project scope. Never its value: that lives only in the OS
+ * keychain under `secret:env:<NAME>`, so this table has no column that could hold one. The name is
+ * the key within a workspace. `projectIds` is a JSON `Id[]`; empty means every project.
+ */
+export const secrets = sqliteTable(
+  'secrets',
+  {
+    workspaceId: text('workspace_id').notNull(),
+    name: text('name').notNull(),
+    description: text('description').notNull(),
+    projectIds: text('project_ids').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.workspaceId, table.name] })],
+);

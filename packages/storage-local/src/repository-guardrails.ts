@@ -120,7 +120,10 @@ export function createGuardrailPolicyRepository(
     return name;
   };
 
-  const rowFor = (scope: Scope, policy: GuardrailPolicy): typeof guardrailPolicies.$inferInsert => ({
+  const rowFor = (
+    scope: Scope,
+    policy: GuardrailPolicy,
+  ): typeof guardrailPolicies.$inferInsert => ({
     id: policy.id,
     workspaceId: scope.workspaceId,
     projectId: policy.projectId,
@@ -137,7 +140,9 @@ export function createGuardrailPolicyRepository(
     db
       .select()
       .from(guardrailPolicies)
-      .where(and(eq(guardrailPolicies.workspaceId, scope.workspaceId), eq(guardrailPolicies.id, id)))
+      .where(
+        and(eq(guardrailPolicies.workspaceId, scope.workspaceId), eq(guardrailPolicies.id, id)),
+      )
       .orderBy(asc(guardrailPolicies.version))
       .all();
 
@@ -154,7 +159,9 @@ export function createGuardrailPolicyRepository(
       const seen = byId.get(row.id);
       if (seen === undefined || row.version > seen.version) byId.set(row.id, row);
     }
-    return [...byId.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).map(toPolicy);
+    return [...byId.values()]
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map(toPolicy);
   };
 
   /** Clears the flag on every row of the project, so the unique index has room for the new one. */
@@ -305,7 +312,9 @@ export function createGuardrailPolicyRepository(
     delete: async (scope: Scope, id: Id) =>
       db
         .delete(guardrailPolicies)
-        .where(and(eq(guardrailPolicies.workspaceId, scope.workspaceId), eq(guardrailPolicies.id, id)))
+        .where(
+          and(eq(guardrailPolicies.workspaceId, scope.workspaceId), eq(guardrailPolicies.id, id)),
+        )
         .run().changes > 0,
 
     /**
@@ -317,7 +326,9 @@ export function createGuardrailPolicyRepository(
       db
         .select()
         .from(nodes)
-        .where(and(eq(nodes.workspaceId, scope.workspaceId), sql`${nodes.config} LIKE ${`%"${id}"%`}`))
+        .where(
+          and(eq(nodes.workspaceId, scope.workspaceId), sql`${nodes.config} LIKE ${`%"${id}"%`}`),
+        )
         .all()
         .map(toNodeRow)
         .filter(
@@ -418,10 +429,7 @@ export function createGuardrailVerdictRepository(
 /* Approvals (FR-GRD-013)                                                      */
 /* -------------------------------------------------------------------------- */
 
-export function createApprovalRepository(
-  db: Db,
-  inTransaction: InTransaction,
-): ApprovalRepository {
+export function createApprovalRepository(db: Db, inTransaction: InTransaction): ApprovalRepository {
   const read = (scope: Scope, id: Id): ApprovalRow | undefined =>
     db
       .select()
@@ -507,6 +515,16 @@ export function createApprovalRepository(
           ),
         )
         .orderBy(asc(approvals.id))
+        .all()
+        .map(toApprovalRequest),
+
+    /** ACE parity P1 (D270): every undecided request of the workspace, oldest first. */
+    listPending: async (scope: Scope) =>
+      db
+        .select()
+        .from(approvals)
+        .where(and(eq(approvals.workspaceId, scope.workspaceId), isNull(approvals.decision)))
+        .orderBy(asc(approvals.requestedAt), asc(approvals.id))
         .all()
         .map(toApprovalRequest),
 

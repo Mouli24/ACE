@@ -49,6 +49,7 @@ import type {
   ProjectRepository,
   Repository,
   Scope,
+  SecretRepository,
   SettingsRepository,
   SkillRepository,
   TaskActivityRepository,
@@ -105,6 +106,7 @@ import {
   createProviderRepository,
   createRunRepository,
 } from './repository-runs.js';
+import { createSecretRepository } from './repository-secrets.js';
 import { createBundleRepository, createSkillRepository } from './repository-skills.js';
 import {
   createTaskActivityRepository,
@@ -347,6 +349,7 @@ export const GATED_REPOSITORIES = [
   'projectNotes',
   'skills',
   'bundles',
+  'secrets',
 ] as const satisfies readonly Exclude<keyof Repository, 'transaction'>[];
 
 type GatedRepository = (typeof GATED_REPOSITORIES)[number];
@@ -426,6 +429,9 @@ export class SqliteRepository implements Repository {
   readonly skills: SkillRepository;
   readonly bundles: BundleRepository;
 
+  /* ACE parity P1 (D274). Optional on the port (D218's pattern); implemented here. */
+  readonly secrets: SecretRepository;
+
   constructor(db: Db, sqlite: BetterSqlite3.Database, options: SqliteRepositoryOptions = {}) {
     this.#db = db;
     this.#sqlite = sqlite;
@@ -483,6 +489,9 @@ export class SqliteRepository implements Repository {
     this.skills = createSkillRepository(db);
     this.bundles = createBundleRepository(db);
 
+    // ACE parity P1: a secret's row. One statement per write; its value is never here (D274).
+    this.secrets = createSecretRepository(db);
+
     // The gate (NFR-REL-02). Every repository is composed twice: as built, for a transaction body,
     // which holds the connection; and gated, for everyone else, so a call that is not part of the
     // work holding the connection waits for it to finish instead of landing inside it.
@@ -530,6 +539,7 @@ export class SqliteRepository implements Repository {
       projectNotes: this.projectNotes,
       skills: this.skills,
       bundles: this.bundles,
+      secrets: this.secrets,
     };
     this.#owner = owner;
 

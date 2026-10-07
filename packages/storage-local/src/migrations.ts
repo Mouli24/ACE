@@ -46,6 +46,12 @@ export const PARITY_P0_MIGRATION_ID = '20261006T180000_parity_p0_tasks';
 export const PARITY_P1_SKILLS_MIGRATION_ID = '20261007T100000_parity_p1_skills';
 
 /**
+ * ACE parity P1 (D274): the `secrets` table — names, descriptions and project scopes, never values.
+ * Named so a test can apply the chain before it.
+ */
+export const PARITY_P1_SECRETS_MIGRATION_ID = '20261007T100100_parity_p1_secrets';
+
+/**
  * ACE parity P1 (D275–D278): a task's deliverable and source, a workspace's pull request, a
  * project's preview command and URL, and task schedules. Named so a test can apply the chain
  * before it.
@@ -756,6 +762,25 @@ export const MIGRATIONS: readonly Migration[] = [
         created_at   TEXT NOT NULL
       );
       CREATE INDEX bundles_workspace_idx ON bundles (workspace_id, created_at);
+    `,
+  },
+  {
+    id: PARITY_P1_SECRETS_MIGRATION_ID,
+    up: `
+      -- A secret is a named environment variable (D274). This row is its name, description and
+      -- project scope; its value lives only in the OS keychain under 'secret:env:<NAME>', so there
+      -- is deliberately no column that could hold one (BR-07). The name is unique per workspace.
+      -- 'project_ids' is a JSON Id[]; empty means every project. No foreign key: a deleted project
+      -- leaves an id that matches nothing, which narrows the secret rather than widening it.
+      CREATE TABLE secrets (
+        workspace_id TEXT NOT NULL,
+        name         TEXT NOT NULL,
+        description  TEXT NOT NULL,
+        project_ids  TEXT NOT NULL,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, name)
+      );
     `,
   },
   {
