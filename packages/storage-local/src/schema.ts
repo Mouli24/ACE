@@ -891,3 +891,82 @@ export const taskSchedules = sqliteTable(
     index('task_schedules_after_task_idx').on(table.workspaceId, table.afterTaskId),
   ],
 );
+
+/* -------------------------------------------------------------------------- */
+/* ACE parity P2 (D280, D281): responsibilities, suggestions, team notes        */
+/* -------------------------------------------------------------------------- */
+
+export const responsibilities = sqliteTable(
+  'responsibilities',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    title: text('title').notNull(),
+    why: text('why').notNull(),
+    goodWork: text('good_work').notNull(),
+    query: text('query'),
+    watch: integer('watch', { mode: 'boolean' }).notNull(),
+    watchIntervalMinutes: integer('watch_interval_minutes').notNull(),
+    paused: integer('paused', { mode: 'boolean' }).notNull(),
+    lastScanAt: text('last_scan_at'),
+    lastScanStatus: text('last_scan_status'),
+    lastScanMessage: text('last_scan_message'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    index('responsibilities_project_idx').on(table.workspaceId, table.projectId),
+    index('responsibilities_watch_idx').on(table.workspaceId, table.watch, table.paused),
+  ],
+);
+
+export const suggestions = sqliteTable(
+  'suggestions',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    responsibilityId: text('responsibility_id')
+      .notNull()
+      .references(() => responsibilities.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    reason: text('reason').notNull(),
+    evidence: text('evidence').notNull(),
+    proposedAction: text('proposed_action').notNull(),
+    completionCriteria: text('completion_criteria').notNull(),
+    status: text('status').notNull(),
+    taskId: text('task_id'),
+    fingerprint: text('fingerprint').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    unique('suggestions_fingerprint_unique').on(table.workspaceId, table.projectId, table.fingerprint),
+    index('suggestions_project_idx').on(table.workspaceId, table.projectId, table.status),
+    index('suggestions_responsibility_idx').on(table.responsibilityId),
+  ],
+);
+
+export const projectNotes = sqliteTable(
+  'project_notes',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    text: text('text').notNull(),
+    status: text('status').notNull(),
+    source: text('source').notNull(),
+    refId: text('ref_id'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [index('project_notes_project_idx').on(table.workspaceId, table.projectId)],
+);

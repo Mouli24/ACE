@@ -107,7 +107,9 @@ describe('D275–D278 the P1 migration applies on a P0 database and is recorded'
     before.sqlite.close();
 
     const after = openDatabase({ path });
-    expect(after.appliedMigrations).toEqual([PARITY_P1_MIGRATION_ID]);
+    expect(after.appliedMigrations).toEqual(
+      MIGRATIONS.slice(BEFORE_P1.length).map((migration) => migration.id),
+    );
     expect(tableNames(after.sqlite)).toContain('task_schedules');
     for (const [table, columns] of NEW_COLUMNS) {
       expect(columnNames(after.sqlite, table), table).toEqual(expect.arrayContaining(columns));
@@ -234,9 +236,8 @@ describe('D275–D278 the P1 migration applies on a P0 database and is recorded'
     again.sqlite.close();
   });
 
-  it('is the latest migration, right after P0, and the chain stays sorted', () => {
+  it('comes right after P0, and the chain stays sorted', () => {
     const ids = MIGRATIONS.map((migration) => migration.id);
-    expect(MIGRATIONS.at(-1)?.id).toBe(PARITY_P1_MIGRATION_ID);
     expect(ids.indexOf(PARITY_P1_MIGRATION_ID)).toBe(ids.indexOf(PARITY_P0_MIGRATION_ID) + 1);
     expect([...ids].sort()).toEqual(ids);
     expect(PARITY_P1_MIGRATION_ID).toBe('20261007T100200_parity_p1_tasks');

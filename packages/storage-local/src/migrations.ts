@@ -45,6 +45,7 @@ export const PARITY_P0_MIGRATION_ID = '20261006T180000_parity_p0_tasks';
  * before it.
  */
 export const PARITY_P1_MIGRATION_ID = '20261007T100200_parity_p1_tasks';
+export const PARITY_P2_MIGRATION_ID = '20261007T110000_parity_p2_suggestions';
 
 /**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
@@ -752,6 +753,70 @@ export const MIGRATIONS: readonly Migration[] = [
       );
       CREATE INDEX task_schedules_enabled_idx ON task_schedules (workspace_id, enabled);
       CREATE INDEX task_schedules_after_task_idx ON task_schedules (workspace_id, after_task_id);
+    `,
+  },
+  {
+    id: PARITY_P2_MIGRATION_ID,
+    up: `
+      -- What ACE watches in a project, why and what good work looks like (D280). A scan's outcome
+      -- is kept on the row; nothing here scans.
+      CREATE TABLE responsibilities (
+        id                     TEXT PRIMARY KEY,
+        workspace_id           TEXT NOT NULL,
+        project_id             TEXT NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+        kind                   TEXT NOT NULL,
+        title                  TEXT NOT NULL,
+        why                    TEXT NOT NULL,
+        good_work              TEXT NOT NULL,
+        query                  TEXT,
+        watch                  INTEGER NOT NULL,
+        watch_interval_minutes INTEGER NOT NULL,
+        paused                 INTEGER NOT NULL,
+        last_scan_at           TEXT,
+        last_scan_status       TEXT,
+        last_scan_message      TEXT,
+        created_at             TEXT NOT NULL,
+        updated_at             TEXT NOT NULL
+      );
+      CREATE INDEX responsibilities_project_idx ON responsibilities (workspace_id, project_id);
+      CREATE INDEX responsibilities_watch_idx ON responsibilities (workspace_id, watch, paused);
+
+      -- What a scan found (D280). The fingerprint is unique per project: the same thing is never
+      -- suggested twice, and a dismissed suggestion stays dismissed. 'task_id' names the task an
+      -- accepted one became, without a foreign key: the task's life is its own.
+      CREATE TABLE suggestions (
+        id                  TEXT PRIMARY KEY,
+        workspace_id        TEXT NOT NULL,
+        project_id          TEXT NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+        responsibility_id   TEXT NOT NULL REFERENCES responsibilities (id) ON DELETE CASCADE,
+        title               TEXT NOT NULL,
+        reason              TEXT NOT NULL,
+        evidence            TEXT NOT NULL,
+        proposed_action     TEXT NOT NULL,
+        completion_criteria TEXT NOT NULL,
+        status              TEXT NOT NULL,
+        task_id             TEXT,
+        fingerprint         TEXT NOT NULL,
+        created_at          TEXT NOT NULL,
+        updated_at          TEXT NOT NULL,
+        UNIQUE (workspace_id, project_id, fingerprint)
+      );
+      CREATE INDEX suggestions_project_idx ON suggestions (workspace_id, project_id, status);
+      CREATE INDEX suggestions_responsibility_idx ON suggestions (responsibility_id);
+
+      -- A project's team notes (D281), verified or not.
+      CREATE TABLE project_notes (
+        id           TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        project_id   TEXT NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+        text         TEXT NOT NULL,
+        status       TEXT NOT NULL,
+        source       TEXT NOT NULL,
+        ref_id       TEXT,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL
+      );
+      CREATE INDEX project_notes_project_idx ON project_notes (workspace_id, project_id);
     `,
   },
 ];

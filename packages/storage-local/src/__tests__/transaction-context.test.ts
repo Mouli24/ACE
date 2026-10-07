@@ -411,6 +411,9 @@ const PORT_MEMBERS = {
   taskDeliveries: true,
   taskActivity: true,
   taskSchedules: true,
+  responsibilities: true,
+  suggestions: true,
+  projectNotes: true,
 } as const satisfies Record<keyof Repository, true>;
 
 /** The port's repositories the adapter has: every member but `transaction`, which is the gate. */

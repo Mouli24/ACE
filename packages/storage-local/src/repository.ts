@@ -56,6 +56,9 @@ import type {
   TaskRepository,
   TaskReviewRepository,
   TaskScheduleRepository,
+  ProjectNoteRepository,
+  ResponsibilityRepository,
+  SuggestionRepository,
   TaskWorkspaceRepository,
   WorkflowRepository,
 } from '@ace/engine';
@@ -110,6 +113,11 @@ import {
   createTaskScheduleRepository,
   createTaskWorkspaceRepository,
 } from './repository-tasks.js';
+import {
+  createProjectNoteRepository,
+  createResponsibilityRepository,
+  createSuggestionRepository,
+} from './repository-suggestions.js';
 import type * as schema from './schema.js';
 import { edges, events, nodes, projects, settings, workflows } from './schema.js';
 import { assertNoSecrets, toJsonColumn } from './secret-guard.js';
@@ -331,6 +339,9 @@ export const GATED_REPOSITORIES = [
   'taskDeliveries',
   'taskActivity',
   'taskSchedules',
+  'responsibilities',
+  'suggestions',
+  'projectNotes',
 ] as const satisfies readonly Exclude<keyof Repository, 'transaction'>[];
 
 type GatedRepository = (typeof GATED_REPOSITORIES)[number];
@@ -401,6 +412,10 @@ export class SqliteRepository implements Repository {
   readonly taskActivity: TaskActivityRepository;
   /* ACE parity P1 (D277). */
   readonly taskSchedules: TaskScheduleRepository;
+  /* ACE parity P2 (D280, D281). */
+  readonly responsibilities: ResponsibilityRepository;
+  readonly suggestions: SuggestionRepository;
+  readonly projectNotes: ProjectNoteRepository;
 
   constructor(db: Db, sqlite: BetterSqlite3.Database, options: SqliteRepositoryOptions = {}) {
     this.#db = db;
@@ -450,6 +465,9 @@ export class SqliteRepository implements Repository {
     this.taskDeliveries = createTaskDeliveryRepository(db);
     this.taskActivity = createTaskActivityRepository(db);
     this.taskSchedules = createTaskScheduleRepository(db);
+    this.responsibilities = createResponsibilityRepository(db);
+    this.suggestions = createSuggestionRepository(db);
+    this.projectNotes = createProjectNoteRepository(db);
 
     // The gate (NFR-REL-02). Every repository is composed twice: as built, for a transaction body,
     // which holds the connection; and gated, for everyone else, so a call that is not part of the
@@ -493,6 +511,9 @@ export class SqliteRepository implements Repository {
       taskDeliveries: this.taskDeliveries,
       taskActivity: this.taskActivity,
       taskSchedules: this.taskSchedules,
+      responsibilities: this.responsibilities,
+      suggestions: this.suggestions,
+      projectNotes: this.projectNotes,
     };
     this.#owner = owner;
 

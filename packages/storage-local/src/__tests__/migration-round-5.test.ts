@@ -12,6 +12,7 @@ import {
   MIGRATIONS,
   PARITY_P0_MIGRATION_ID,
   PARITY_P1_MIGRATION_ID,
+  PARITY_P2_MIGRATION_ID,
   ROUND_5_MIGRATION_ID,
   X1_CLI_PROVIDERS_MIGRATION_ID,
   type Migration,
@@ -108,6 +109,7 @@ describe('Arch §15.3 migration applies on a round-4 database and is recorded', 
       X1_CLI_PROVIDERS_MIGRATION_ID,
       PARITY_P0_MIGRATION_ID,
       PARITY_P1_MIGRATION_ID,
+      PARITY_P2_MIGRATION_ID,
     ]);
     for (const table of NEW_TABLES) expect(tableNames(after.sqlite)).toContain(table);
     expect(columnsOf(after.sqlite, 'node_runs')).toEqual(

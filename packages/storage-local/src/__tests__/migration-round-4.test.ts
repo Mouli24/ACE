@@ -10,6 +10,7 @@ import {
   MIGRATIONS,
   PARITY_P0_MIGRATION_ID,
   PARITY_P1_MIGRATION_ID,
+  PARITY_P2_MIGRATION_ID,
   ROUND_4_MIGRATION_ID,
   ROUND_5_MIGRATION_ID,
   X1_CLI_PROVIDERS_MIGRATION_ID,
@@ -68,6 +69,7 @@ describe('Arch §15.3 the round 4 migration adds the six new tables', () => {
       X1_CLI_PROVIDERS_MIGRATION_ID,
       PARITY_P0_MIGRATION_ID,
       PARITY_P1_MIGRATION_ID,
+      PARITY_P2_MIGRATION_ID,
     ]);
     const tablesAfter = (
       after.sqlite.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as {

@@ -10,7 +10,6 @@ import { openDatabase } from '../db.js';
 import {
   MIGRATIONS,
   PARITY_P0_MIGRATION_ID,
-  PARITY_P1_MIGRATION_ID,
   X1_CLI_PROVIDERS_MIGRATION_ID,
 } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
@@ -124,7 +123,9 @@ describe('D267–D271 the P0 migration applies on an X1 database and is recorded
     before.sqlite.close();
 
     const after = openDatabase({ path });
-    expect(after.appliedMigrations).toEqual([PARITY_P0_MIGRATION_ID, PARITY_P1_MIGRATION_ID]);
+    expect(after.appliedMigrations).toEqual(
+      MIGRATIONS.slice(MIGRATIONS.findIndex((m) => m.id === PARITY_P0_MIGRATION_ID)).map((m) => m.id),
+    );
     for (const [table] of NEW_TABLES) expect(tableNames(after.sqlite)).toContain(table);
 
     const projectColumns = columnsOf(after.sqlite, 'projects');
