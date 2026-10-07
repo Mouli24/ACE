@@ -207,6 +207,41 @@ import {
   type PutDeliverableRequest,
   type PutTaskScheduleRequest,
   type TaskSchedule,
+  // ACE parity P2 (suggestions, team notes, email import, the Assistant — D280–D283)
+  AcceptSuggestionRequestSchema,
+  AssistantApplyRequestSchema,
+  AssistantApplyResponseSchema,
+  AssistantProposalSchema,
+  AssistantProposeRequestSchema,
+  CreateProjectNoteRequestSchema,
+  CreateResponsibilityRequestSchema,
+  ImportEmailRequestSchema,
+  ProjectNoteListResponseSchema,
+  ProjectNoteSchema,
+  ResponsibilityListResponseSchema,
+  ResponsibilitySchema,
+  SuggestionListQuerySchema,
+  SuggestionListResponseSchema,
+  SuggestionSchema,
+  UpdateProjectNoteRequestSchema,
+  UpdateResponsibilityRequestSchema,
+  type AcceptSuggestionRequest,
+  type AssistantApplyRequest,
+  type AssistantApplyResponse,
+  type AssistantProposal,
+  type AssistantProposeRequest,
+  type CreateProjectNoteRequest,
+  type CreateResponsibilityRequest,
+  type ImportEmailRequest,
+  type ProjectNote,
+  type ProjectNoteListResponse,
+  type Responsibility,
+  type ResponsibilityListResponse,
+  type Suggestion,
+  type SuggestionListQuery,
+  type SuggestionListResponse,
+  type UpdateProjectNoteRequest,
+  type UpdateResponsibilityRequest,
 } from '@ace/contracts';
 import { z } from 'zod';
 
@@ -1047,6 +1082,129 @@ export function createAceClient(options: AceClientOptions) {
     /** 204; the keychain entry goes with it. */
     deleteSecret: (name: string): Promise<void> =>
       request('DELETE', `/secrets/${encodeURIComponent(name)}`, NoContentSchema),
+
+    /*
+     * Responsibilities and suggestions (ACE parity P2, D280). Saving a responsibility scans
+     * nothing; a scan runs on `scanResponsibility` or on the watch timer, and what it finds arrives
+     * as suggestions. Each change is also announced as `project.changed` on the engine scope.
+     */
+
+    /** `{ items }`, oldest first. */
+    listResponsibilities: (projectId: Id): Promise<ResponsibilityListResponse> =>
+      request('GET', `/projects/${projectId}/responsibilities`, ResponsibilityListResponseSchema),
+    /** 201 `Responsibility`: watch off and a 60-minute interval unless the body says otherwise. */
+    createResponsibility: (
+      projectId: Id,
+      body: CreateResponsibilityRequest,
+    ): Promise<Responsibility> =>
+      request('POST', `/projects/${projectId}/responsibilities`, ResponsibilitySchema, {
+        schema: CreateResponsibilityRequestSchema,
+        value: body,
+      }),
+    /** Edit it, turn *Watch automatically* on or off, or pause it (`paused: true`). */
+    updateResponsibility: (id: Id, body: UpdateResponsibilityRequest): Promise<Responsibility> =>
+      request('PATCH', `/responsibilities/${id}`, ResponsibilitySchema, {
+        schema: UpdateResponsibilityRequestSchema,
+        value: body,
+      }),
+    /** 204; a scan still running is cancelled. */
+    deleteResponsibility: (id: Id): Promise<void> =>
+      request('DELETE', `/responsibilities/${id}`, NoContentSchema),
+    /**
+     * *Scan now*: answers at once with `lastScanStatus: 'running'`; the result lands on the
+     * responsibility and in the suggestions. 409 `scan_running` while one runs; an `email`
+     * responsibility answers 422 `not_connected`.
+     */
+    scanResponsibility: (id: Id): Promise<Responsibility> =>
+      request('POST', `/responsibilities/${id}/scan`, ResponsibilitySchema, {
+        schema: EmptyBodySchema,
+        value: {},
+      }),
+    /** Stops a running scan and answers the responsibility once it has (`cancelled`). */
+    cancelResponsibilityScan: (id: Id): Promise<Responsibility> =>
+      request('POST', `/responsibilities/${id}/cancel-scan`, ResponsibilitySchema, {
+        schema: EmptyBodySchema,
+        value: {},
+      }),
+
+    /** `{ items }`, newest first; `status` keeps one kind (`new`, `later`, `dismissed`, `accepted`). */
+    listSuggestions: async (
+      projectId: Id,
+      query: SuggestionListQuery = {},
+    ): Promise<SuggestionListResponse> => {
+      const path = `/projects/${projectId}/suggestions`;
+      const parsed = SuggestionListQuerySchema.safeParse(query);
+      if (!parsed.success) throw AceApiError.invalidRequest(path, parsed.error.issues);
+      return request('GET', path, SuggestionListResponseSchema, undefined, {
+        status: parsed.data.status,
+      });
+    },
+    /**
+     * *Add to Inbox*: creates an Inbox task (finish line Pass review) and starts nothing; the answer
+     * carries its `taskId`. An accepted or dismissed suggestion answers 409 `invalid_task_state`.
+     */
+    acceptSuggestion: (id: Id, body: AcceptSuggestionRequest = {}): Promise<Suggestion> =>
+      request('POST', `/suggestions/${id}/accept`, SuggestionSchema, {
+        schema: AcceptSuggestionRequestSchema,
+        value: body,
+      }),
+    /** *Later*: keeps it out of the way; it can still be added or dismissed. */
+    laterSuggestion: (id: Id): Promise<Suggestion> =>
+      request('POST', `/suggestions/${id}/later`, SuggestionSchema, {
+        schema: EmptyBodySchema,
+        value: {},
+      }),
+    /** *Dismiss*: final — a later scan never suggests the same thing again. */
+    dismissSuggestion: (id: Id): Promise<Suggestion> =>
+      request('POST', `/suggestions/${id}/dismiss`, SuggestionSchema, {
+        schema: EmptyBodySchema,
+        value: {},
+      }),
+
+    /* Team notes (ACE parity P2, D281) — given to every plan and work run of the project's tasks */
+
+    /** `{ items }`, oldest first. */
+    listProjectNotes: (projectId: Id): Promise<ProjectNoteListResponse> =>
+      request('GET', `/projects/${projectId}/notes`, ProjectNoteListResponseSchema),
+    /** 201 `ProjectNote`; a note written by hand (`source: 'user'`) is `verified`. */
+    createProjectNote: (projectId: Id, body: CreateProjectNoteRequest): Promise<ProjectNote> =>
+      request('POST', `/projects/${projectId}/notes`, ProjectNoteSchema, {
+        schema: CreateProjectNoteRequestSchema,
+        value: body,
+      }),
+    /** New text also confirms it (`verified`); `status` alone marks it verified or unverified. */
+    updateProjectNote: (id: Id, body: UpdateProjectNoteRequest): Promise<ProjectNote> =>
+      request('PATCH', `/notes/${id}`, ProjectNoteSchema, {
+        schema: UpdateProjectNoteRequestSchema,
+        value: body,
+      }),
+    /** 204 — *Forget*. */
+    deleteProjectNote: (id: Id): Promise<void> =>
+      request('DELETE', `/notes/${id}`, NoContentSchema),
+
+    /* Email import (ACE parity P2, D282) */
+
+    /** 201 `Task` in the Inbox, never started; `raw` is the message as an `.eml` file holds it. */
+    importEmail: (projectId: Id, body: ImportEmailRequest): Promise<Task> =>
+      request('POST', `/projects/${projectId}/tasks/import-email`, TaskSchema, {
+        schema: ImportEmailRequestSchema,
+        value: body,
+      }),
+
+    /* The Ace Assistant (ACE parity P2, D283) */
+
+    /** Drafts a project and team; writes nothing. `source` says whether a model or rules drafted it. */
+    assistantPropose: (body: AssistantProposeRequest): Promise<AssistantProposal> =>
+      request('POST', '/assistant/propose', AssistantProposalSchema, {
+        schema: AssistantProposeRequestSchema,
+        value: body,
+      }),
+    /** The confirmation: 201 with the new (or named) project and the team's workflow. */
+    assistantApply: (body: AssistantApplyRequest): Promise<AssistantApplyResponse> =>
+      request('POST', '/assistant/apply', AssistantApplyResponseSchema, {
+        schema: AssistantApplyRequestSchema,
+        value: body,
+      }),
   };
 }
 
