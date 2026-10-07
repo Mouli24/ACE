@@ -1,4 +1,9 @@
-import type { CreateProjectRequest, Project, UpdateProjectRequest } from '@ace/contracts';
+import type {
+  CloneProjectRequest,
+  CreateProjectRequest,
+  Project,
+  UpdateProjectRequest,
+} from '@ace/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api } from '../app/api';
@@ -31,6 +36,15 @@ export function useCreateProject() {
   const done = useProjectsInvalidator();
   return useMutation({
     mutationFn: (body: CreateProjectRequest) => api().createProject(body),
+    onSuccess: (project) => done(project),
+  });
+}
+
+/** `POST /projects/clone` — a new project in a clone of a GitHub repository (D276). */
+export function useCloneProject() {
+  const done = useProjectsInvalidator();
+  return useMutation({
+    mutationFn: (body: CloneProjectRequest) => api().cloneProject(body),
     onSuccess: (project) => done(project),
   });
 }

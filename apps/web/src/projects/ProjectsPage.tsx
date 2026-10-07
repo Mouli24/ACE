@@ -1,4 +1,4 @@
-import type { Project } from '@ace/contracts';
+import { CloneProjectRequestSchema, type Project } from '@ace/contracts';
 import { AceApiError } from '@ace/sdk';
 import {
   Button,
@@ -14,13 +14,15 @@ import {
   DropdownMenuTrigger,
   Input,
   Label,
+  toast,
 } from '@ace/ui';
-import { FolderOpen, MoreHorizontal, Plus } from 'lucide-react';
+import { FolderOpen, GitBranchPlus, MoreHorizontal, Plus } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 import { HelpLink } from '../help/HelpLink';
 import {
+  useCloneProject,
   useCreateProject,
   useDeleteProject,
   useOpenProject,
@@ -30,22 +32,31 @@ import {
 
 type DialogState =
   | { kind: 'create' }
+  | { kind: 'clone' }
   | { kind: 'rename'; project: Project }
   | { kind: 'delete'; project: Project }
   | undefined;
 
-/** `/projects` — list, create, rename, delete, open (FR-PRJ-001/002). */
+/**
+ * `/projects` — list, create, rename, delete, open (FR-PRJ-001/002), and Clone from GitHub
+ * (ACE parity P1, D276).
+ */
 export function ProjectsPage() {
   const projects = useProjects();
   const [dialog, setDialog] = useState<DialogState>();
 
   return (
     <main className="mx-auto flex h-full w-full max-w-3xl flex-col gap-6 px-4 py-10">
-      <header className="flex items-center justify-between">
+      <header className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="font-human text-2xl font-semibold">Projects</h1>
-        <Button onClick={() => setDialog({ kind: 'create' })}>
-          <Plus className="h-4 w-4" /> New project
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={() => setDialog({ kind: 'clone' })}>
+            <GitBranchPlus className="h-4 w-4" /> Clone from GitHub
+          </Button>
+          <Button onClick={() => setDialog({ kind: 'create' })}>
+            <Plus className="h-4 w-4" /> New project
+          </Button>
+        </div>
       </header>
 
       {projects.isPending && <p className="text-fg-muted">Loading projects…</p>}
@@ -68,6 +79,7 @@ export function ProjectsPage() {
       </ul>
 
       {dialog?.kind === 'create' && <CreateProjectDialog onClose={() => setDialog(undefined)} />}
+      {dialog?.kind === 'clone' && <CloneProjectDialog onClose={() => setDialog(undefined)} />}
       {dialog?.kind === 'rename' && (
         <RenameProjectDialog project={dialog.project} onClose={() => setDialog(undefined)} />
       )}
@@ -187,6 +199,131 @@ function CreateProjectDialog({ onClose }: { onClose: () => void }) {
             </Button>
             <Button type="submit" disabled={!name.trim() || create.isPending}>
               Create
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Clone from GitHub (D276): `owner/name` or a github.com URL, cloned by the engine through the
+ * signed-in `gh` CLI into a new project, which opens on success. No `gh` signed in is said plainly
+ * (422 `not_connected`), as is a clone GitHub refused (502 `delivery_failed`).
+ */
+function CloneProjectDialog({ onClose }: { onClose: () => void }) {
+  const clone = useCloneProject();
+  const navigate = useNavigate();
+  const [repo, setRepo] = useState('');
+  const [name, setName] = useState('');
+  const [folderPath, setFolderPath] = useState('');
+  const [repoError, setRepoError] = useState<string>();
+  const error = clone.error;
+  const code = AceApiError.is(error) ? error.code : undefined;
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const parsed = CloneProjectRequestSchema.safeParse({
+      repo: repo.trim(),
+      ...(name.trim() === '' ? {} : { name: name.trim() }),
+      ...(folderPath.trim() === '' ? {} : { folderPath: folderPath.trim() }),
+    });
+    if (!parsed.success) {
+      const field = String(parsed.error.issues[0]?.path[0] ?? 'repo');
+      setRepoError(
+        field === 'repo'
+          ? 'Name the repository as owner/name or paste its github.com address.'
+          : (parsed.error.issues[0]?.message ?? 'Check the fields.'),
+      );
+      return;
+    }
+    setRepoError(undefined);
+    clone.mutate(parsed.data, {
+      onSuccess: (project) => {
+        toast.success(`Cloned ${parsed.data.repo} into ${project.folderPath}`);
+        onClose();
+        navigate(`/projects/${project.id}`);
+      },
+    });
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <form onSubmit={submit} noValidate className="flex flex-col gap-4">
+          <DialogHeader>
+            <DialogTitle>Clone from GitHub</DialogTitle>
+            <DialogDescription>
+              ACE clones the repository with your signed-in GitHub CLI (gh) and makes it a new
+              project. ACE never reads your GitHub token.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="clone-repo">Repository</Label>
+            <Input
+              id="clone-repo"
+              className="font-machine"
+              value={repo}
+              maxLength={400}
+              placeholder="owner/name or https://github.com/owner/name"
+              autoFocus
+              aria-invalid={repoError ? true : undefined}
+              onChange={(e) => setRepo(e.target.value)}
+            />
+            {repoError && (
+              <p role="alert" className="text-sm text-danger">
+                {repoError}
+              </p>
+            )}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="clone-name">Project name (optional)</Label>
+            <Input
+              id="clone-name"
+              value={name}
+              maxLength={120}
+              placeholder="the repository’s name"
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="clone-folder">Folder (optional)</Label>
+            <Input
+              id="clone-folder"
+              className="font-machine"
+              value={folderPath}
+              placeholder="next to your other projects"
+              onChange={(e) => setFolderPath(e.target.value)}
+            />
+          </div>
+          {error && (
+            <p
+              role="alert"
+              data-testid="clone-error"
+              data-code={code}
+              className="text-sm text-danger"
+            >
+              {code === 'not_connected' ? (
+                <>
+                  <strong className="font-semibold">GitHub is not connected.</strong>{' '}
+                  {error.message}
+                </>
+              ) : code === 'delivery_failed' ? (
+                <>
+                  <strong className="font-semibold">The clone failed.</strong> {error.message}
+                </>
+              ) : (
+                error.message
+              )}
+            </p>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={repo.trim() === '' || clone.isPending}>
+              {clone.isPending ? 'Cloning…' : 'Clone'}
             </Button>
           </DialogFooter>
         </form>

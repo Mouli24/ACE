@@ -24,8 +24,9 @@ import { ProjectNav } from './ProjectNav';
 /**
  * `/projects/:projectId/settings` (ACE parity P0, design §8): the project folder as a Git
  * repository (with Initialize Git), the check commands every work run is checked with, the setup
- * command a new workspace runs, how many tasks may work at once, and pausing the project. Each
- * section saves on its own, checked by the contract first, with a toast either way — as Settings.
+ * command a new workspace runs, how many tasks may work at once, how a task's app is previewed
+ * (P1, D278), and pausing the project. Each section saves on its own, checked by the contract
+ * first, with a toast either way — as Settings.
  */
 export function ProjectSettingsPage() {
   const { projectId = '' } = useParams();
@@ -92,6 +93,36 @@ export function ProjectSettingsPage() {
             project={data}
             onSave={(buildCapacity) => save({ buildCapacity }, 'Build capacity')}
           />
+          <Section title="Preview" testId="project-preview">
+            <p className="text-sm text-fg-muted">
+              How to run the app for a preview of a task: the command runs in the task’s workspace
+              with <code className="font-machine">PORT</code> set to a free port, and the address is
+              where you open it.
+            </p>
+            <OptionalCommand
+              key={`command:${data.previewCommand ?? ''}`}
+              label="Preview command"
+              placeholder="pnpm dev --port $PORT"
+              max={CHECK_COMMAND_MAX}
+              saved={data.previewCommand ?? ''}
+              onSave={(previewCommand) => save({ previewCommand }, 'Preview command')}
+            />
+            <OptionalCommand
+              key={`url:${data.previewUrl ?? ''}`}
+              label="Preview URL"
+              placeholder="http://localhost:{port}"
+              max={PREVIEW_URL_MAX}
+              saved={data.previewUrl ?? ''}
+              hint={
+                <>
+                  <code className="font-machine">{'{port}'}</code> is replaced with the port the
+                  engine picked. Empty means{' '}
+                  <code className="font-machine">{'http://localhost:{port}'}</code>.
+                </>
+              }
+              onSave={(previewUrl) => save({ previewUrl }, 'Preview URL')}
+            />
+          </Section>
           <Section title="Pause" testId="project-pause">
             <p className="text-sm text-fg-muted">
               {data.paused === true
@@ -385,6 +416,66 @@ function SetupSection({
         </Button>
       </div>
     </Section>
+  );
+}
+
+/** The contract's bound on `previewUrl` (graph.ts, `UpdateProjectRequest`). */
+const PREVIEW_URL_MAX = 400;
+
+/**
+ * One optional project command or address, saved on its own and cleared with `null` (D72) — the
+ * preview command and URL (ACE parity P1, D278).
+ */
+function OptionalCommand({
+  label,
+  placeholder,
+  max,
+  saved,
+  hint,
+  onSave,
+}: {
+  label: string;
+  placeholder: string;
+  max: number;
+  saved: string;
+  hint?: ReactNode;
+  onSave: (value: string | null) => Promise<boolean>;
+}) {
+  const [draft, setDraft] = useState(saved);
+  const id = `project-${label.toLowerCase().replace(/\s+/g, '-')}`;
+  // 'Preview URL' → 'preview URL', for the buttons
+  const named = label.charAt(0).toLowerCase() + label.slice(1);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={id}>{label}</Label>
+      <div className="flex flex-wrap gap-2">
+        <Input
+          id={id}
+          placeholder={placeholder}
+          value={draft}
+          maxLength={max}
+          className="min-w-0 flex-1 font-machine"
+          onChange={(event) => setDraft(event.target.value)}
+        />
+        <Button
+          size="sm"
+          disabled={draft.trim() === '' || draft.trim() === saved}
+          onClick={() => void onSave(draft.trim())}
+        >
+          Save {named}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-label={`Clear ${named}`}
+          disabled={saved === ''}
+          onClick={() => void onSave(null)}
+        >
+          Clear
+        </Button>
+      </div>
+      {hint !== undefined && <p className="text-xs text-fg-muted">{hint}</p>}
+    </div>
   );
 }
 
