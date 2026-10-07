@@ -105,6 +105,11 @@ export interface ApprovalRepository {
   /** `GET /runs/:id/approvals` — the pending ones, oldest first. */
   listPendingByRun(scope: Scope, runId: Id): Promise<ApprovalRequest[]>;
   /**
+   * `GET /approvals` (ACE parity P1, D270): every undecided request of the workspace, across runs,
+   * oldest first — what the approvals inbox lists.
+   */
+  listPending(scope: Scope): Promise<ApprovalRequest[]>;
+  /**
    * Records the decision, its note and its time, and mirrors it onto the node run's `approvals`
    * list in the same transaction. Null when there is no such request; a request that was already
    * decided keeps its first decision.

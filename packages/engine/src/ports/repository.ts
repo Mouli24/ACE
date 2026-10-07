@@ -42,6 +42,7 @@ import type {
 } from './knowledge.js';
 import type { BundleRepository, SkillRepository } from './capabilities.js';
 import type { Scope } from './scope.js';
+import type { SecretRepository } from './secrets.js';
 import type {
   ProjectNoteRepository,
   ResponsibilityRepository,
@@ -368,4 +369,10 @@ export interface Repository {
    */
   skills?: SkillRepository;
   bundles?: BundleRepository;
+  /**
+   * ACE parity P1 (D274): secrets' names, descriptions and project scopes — never their values,
+   * which live only in the `SecretStore`. Optional, D218's pattern: the secret service fails clearly
+   * when the adapter does not provide it.
+   */
+  secrets?: SecretRepository;
 }

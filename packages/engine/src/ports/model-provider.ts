@@ -86,6 +86,12 @@ export interface GenerateRequest {
    * CLI) reads it; without it such a provider runs read-only in a fresh temp folder.
    */
   workingDir?: string;
+  /**
+   * Extra environment for the process this call starts (ACE parity P1, D274): the secrets in the
+   * run's project scope, by name. Only an agent-route provider (a coding-agent CLI) reads it, merged
+   * over its own environment; every other adapter ignores it. Never logged, never in a prompt.
+   */
+  env?: Record<string, string>;
 }
 
 /**

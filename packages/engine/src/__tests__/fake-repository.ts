@@ -32,6 +32,7 @@ import {
   type Project,
   type Provider,
   type Run,
+  type Secret,
   type Settings,
   type SettingsPatch,
   type Timestamp,
@@ -61,6 +62,7 @@ import type {
   Repository,
   RunPatch,
   Scope,
+  SecretRepository,
   StoredApproval,
   SummaryCacheRepository,
   UsageRepository,
@@ -97,6 +99,8 @@ interface State {
   kbChunks: Map<string, { chunk: KbChunk; embedding: number[] }>;
   memory: Map<string, MemoryEntry>;
   summaryCache: Map<string, { summary: string; createdAt: Timestamp; lastUsedAt: Timestamp }>;
+  /** ACE parity P1 (D274): rows only, by name — a value never reaches a repository. */
+  secrets: Map<string, Secret>;
 }
 
 function emptyState(): State {
@@ -127,6 +131,7 @@ function emptyState(): State {
     kbChunks: new Map(),
     memory: new Map(),
     summaryCache: new Map(),
+    secrets: new Map(),
   };
 }
 
@@ -158,6 +163,7 @@ function cloneState(state: State): State {
     kbChunks: new Map(state.kbChunks),
     memory: new Map(state.memory),
     summaryCache: new Map(state.summaryCache),
+    secrets: new Map(state.secrets),
   };
 }
 
@@ -723,6 +729,12 @@ export class FakeRepository implements Repository {
         .filter((stored) => stored.request.runId === runId && stored.decision === undefined)
         .map((stored) => stored.request)
         .sort((a, b) => a.id.localeCompare(b.id)),
+    /** Oldest first across every run, as the SQLite adapter orders them (ACE parity P1, D270). */
+    listPending: async (scope: Scope) =>
+      [...this.#for(scope).approvals.values()]
+        .filter((stored) => stored.decision === undefined)
+        .map((stored) => stored.request)
+        .sort((a, b) => a.requestedAt.localeCompare(b.requestedAt) || a.id.localeCompare(b.id)),
     decide: async (scope: Scope, decision: ApprovalDecision) => {
       const state = this.#for(scope);
       const stored = state.approvals.get(decision.requestId);
@@ -1280,5 +1292,27 @@ export class FakeRepository implements Repository {
         since,
       };
     },
+  };
+
+  /* ------------------------------------------------- ACE parity P1 (D274) */
+
+  /** Names, descriptions and scopes only; the values are the `SecretStore`'s. */
+  readonly secrets: SecretRepository = {
+    list: async (scope) =>
+      [...this.#for(scope).secrets.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    get: async (scope, name) => this.#for(scope).secrets.get(name) ?? null,
+    create: async (scope, secret) => {
+      const state = this.#for(scope);
+      if (state.secrets.has(secret.name)) throw new Error(`secret ${secret.name} exists`);
+      state.secrets.set(secret.name, secret);
+      return secret;
+    },
+    save: async (scope, secret) => {
+      const state = this.#for(scope);
+      if (!state.secrets.has(secret.name)) throw new Error(`secret ${secret.name} missing`);
+      state.secrets.set(secret.name, secret);
+      return secret;
+    },
+    delete: async (scope, name) => this.#for(scope).secrets.delete(name),
   };
 }

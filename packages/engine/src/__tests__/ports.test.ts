@@ -140,6 +140,7 @@ describe('Arch §7 Repository', () => {
         get: async () => null,
         findPendingByNodeRun: async () => null,
         listPendingByRun: async () => [],
+        listPending: async () => [],
         decide: async () => null,
       },
       artifacts: {
