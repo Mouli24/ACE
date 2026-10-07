@@ -181,6 +181,17 @@ import {
   type Skill,
   type SkillListResponse,
   type UpdateSkillRequest,
+  // ACE parity P1 (D270, D274): the approvals inbox and secrets
+  CreateSecretRequestSchema,
+  PendingApprovalListResponseSchema,
+  SecretListResponseSchema,
+  SecretSchema,
+  UpdateSecretRequestSchema,
+  type CreateSecretRequest,
+  type PendingApprovalListResponse,
+  type Secret,
+  type SecretListResponse,
+  type UpdateSecretRequest,
 } from '@ace/contracts';
 import { z } from 'zod';
 
@@ -520,6 +531,12 @@ export function createAceClient(options: AceClientOptions) {
     /** The pending requests, for a card the UI can show after a reload (Arch §21.2). */
     listApprovals: (runId: Id): Promise<ApprovalRequest[]> =>
       request('GET', `/runs/${runId}/approvals`, ApprovalRequestListSchema),
+    /**
+     * The inbox (ACE parity P1, D270): every pending approval across runs, oldest first, with the
+     * run's workflow and project and, when a task started it, the task. Decide with the two above.
+     */
+    listPendingApprovals: (): Promise<PendingApprovalListResponse> =>
+      request('GET', '/approvals', PendingApprovalListResponseSchema),
 
     /* Guardrail policies (round 3 §2.5, FR-GRD-001, 002, 011, 018) */
 
@@ -905,6 +922,25 @@ export function createAceClient(options: AceClientOptions) {
       request('POST', '/bundles/import', BundleSchema, { schema: BundleFileSchema, value: file }),
     /** 204; the skills the bundle installed go with it. */
     deleteBundle: (id: Id): Promise<void> => request('DELETE', `/bundles/${id}`, NoContentSchema),
+    /*
+     * Secrets (ACE parity P1, D274): a value goes in on create or update and never comes back —
+     * every answer is the row (name, description, project scope), parsed by the strict contract.
+     */
+
+    listSecrets: (): Promise<SecretListResponse> =>
+      request('GET', '/secrets', SecretListResponseSchema),
+    /** 201; 409 `name_taken`; a reserved name (`PATH`, `ACE_DATA_DIR`, …) is refused before it is sent. */
+    createSecret: (body: CreateSecretRequest): Promise<Secret> =>
+      request('POST', '/secrets', SecretSchema, { schema: CreateSecretRequestSchema, value: body }),
+    /** A `value` replaces the stored one; description and scope change in place. */
+    updateSecret: (name: string, body: UpdateSecretRequest): Promise<Secret> =>
+      request('PATCH', `/secrets/${encodeURIComponent(name)}`, SecretSchema, {
+        schema: UpdateSecretRequestSchema,
+        value: body,
+      }),
+    /** 204; the keychain entry goes with it. */
+    deleteSecret: (name: string): Promise<void> =>
+      request('DELETE', `/secrets/${encodeURIComponent(name)}`, NoContentSchema),
   };
 }
 
