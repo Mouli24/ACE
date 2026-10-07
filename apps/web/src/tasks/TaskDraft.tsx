@@ -8,7 +8,7 @@ import {
   type TaskDeliverable,
 } from '@ace/contracts';
 import { Button, Input, Label, Markdown, Textarea, toast } from '@ace/ui';
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 
 import { FieldError } from '../knowledge/fields';
 import { usePutDeliverable } from './hooks';
@@ -54,14 +54,21 @@ export function TaskDraft({ task }: { task: Task }) {
 type DocumentDeliverable = Extract<TaskDeliverable, { kind: 'document' }>;
 type EmailDeliverable = Extract<TaskDeliverable, { kind: 'email' }>;
 
+/** Saves the draft whole; what the contract refuses is said, never silently dropped. */
 function useSaveDraft(task: Task) {
   const put = usePutDeliverable(task.id);
+  const [invalid, setInvalid] = useState<Error | null>(null);
   const save = (deliverable: TaskDeliverable) => {
     const parsed = TaskDeliverableSchema.safeParse(deliverable);
-    if (!parsed.success) return;
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      setInvalid(new Error(`${issue?.path.join('.') ?? 'draft'}: ${issue?.message ?? 'invalid'}`));
+      return;
+    }
+    setInvalid(null);
     put.mutate(parsed.data, { onSuccess: () => toast.success('Draft saved') });
   };
-  return { save, pending: put.isPending, error: put.error };
+  return { save, pending: put.isPending, error: invalid ?? put.error };
 }
 
 function SaveRow({
@@ -69,13 +76,11 @@ function SaveRow({
   pending,
   error,
   onSave,
-  children,
 }: {
   disabled: boolean;
   pending: boolean;
   error: Error | null;
   onSave: () => void;
-  children?: ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-2">
@@ -84,12 +89,9 @@ function SaveRow({
           Draft not saved: {error.message}
         </p>
       )}
-      <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" disabled={disabled || pending} onClick={onSave}>
-          Save draft
-        </Button>
-        {children}
-      </div>
+      <Button size="sm" className="self-start" disabled={disabled || pending} onClick={onSave}>
+        Save draft
+      </Button>
     </div>
   );
 }
