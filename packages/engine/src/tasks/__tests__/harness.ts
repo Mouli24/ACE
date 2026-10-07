@@ -10,6 +10,7 @@ import type {
   TaskDelivery,
   TaskExecution,
   TaskReview,
+  TaskSchedule,
   TaskWorkspace,
   Workflow,
 } from '@ace/contracts';
@@ -36,8 +37,15 @@ import {
   type TaskRecord,
   type TaskRepository,
   type TaskReviewRepository,
+  type TaskScheduleRepository,
   type TaskWorkspaceRepository,
+  type GitHubPort,
+  type GitHubStatus,
+  type PreviewProcess,
+  type PreviewRunner,
+  type PullRequestInfo,
 } from '../../ports/index.js';
+import type { DeliverableFiles } from '../deliverables.js';
 import { createTaskService, type TaskService } from '../service.js';
 
 /* -------------------------------------------------------------------------- */
@@ -171,6 +179,147 @@ export class InMemoryTaskRepos {
       return limit === undefined ? rows : rows.slice(-limit);
     },
   };
+
+  readonly scheduleRows = new Map<Id, TaskSchedule>();
+
+  readonly taskSchedules: TaskScheduleRepository = {
+    create: async (_scope, schedule) => {
+      this.scheduleRows.set(schedule.id, clone(schedule));
+      return clone(schedule);
+    },
+    getByTask: async (_scope, taskId) => {
+      const row = [...this.scheduleRows.values()].find((candidate) => candidate.taskId === taskId);
+      return row === undefined ? null : clone(row);
+    },
+    listEnabled: async () =>
+      [...this.scheduleRows.values()].filter((row) => row.enabled).map(clone),
+    listAfterTask: async (_scope, taskId) =>
+      [...this.scheduleRows.values()]
+        .filter((row) => row.trigger.kind === 'after_task' && row.trigger.taskId === taskId)
+        .map(clone),
+    save: async (_scope, schedule) => {
+      this.scheduleRows.set(schedule.id, clone(schedule));
+      return clone(schedule);
+    },
+    delete: async (_scope, id) => this.scheduleRows.delete(id),
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* P1 fakes: GitHub, preview, files                                           */
+/* -------------------------------------------------------------------------- */
+
+export class FakeGitHub implements GitHubPort {
+  statusValue: GitHubStatus = { installed: true, loggedIn: true, user: 'octo' };
+  readonly calls: string[] = [];
+  /** What GitHub reports after a merge request. */
+  mergedState: PullRequestInfo['state'] = 'merged';
+  failPush: Error | undefined;
+  #prs = new Map<number, PullRequestInfo>();
+  #next = 7;
+
+  async status(): Promise<GitHubStatus> {
+    return this.statusValue;
+  }
+  async push(input: { cwd: string; branch: string }): Promise<void> {
+    this.calls.push(`push:${input.branch}`);
+    if (this.failPush !== undefined) throw this.failPush;
+  }
+  async createPullRequest(input: {
+    base: string;
+    head: string;
+    title: string;
+    body: string;
+    draft: boolean;
+  }): Promise<PullRequestInfo> {
+    this.calls.push(`create:${input.head}->${input.base}:${input.title}`);
+    const number = this.#next++;
+    const pr: PullRequestInfo = {
+      number,
+      url: `https://github.com/acme/shop/pull/${number}`,
+      state: 'open',
+      base: input.base,
+      head: input.head,
+    };
+    this.#prs.set(number, pr);
+    return pr;
+  }
+  async viewPullRequest(input: { number: number }): Promise<PullRequestInfo> {
+    const pr = this.#prs.get(input.number);
+    if (pr === undefined) throw new Error('no such pull request');
+    return pr;
+  }
+  async mergePullRequest(input: { number: number; method: string }): Promise<void> {
+    this.calls.push(`merge:${input.number}:${input.method}`);
+    const pr = this.#prs.get(input.number);
+    if (pr !== undefined) {
+      this.#prs.set(input.number, {
+        ...pr,
+        state: this.mergedState,
+        ...(this.mergedState === 'merged' ? { mergeCommitSha: 'c'.repeat(40) } : {}),
+      });
+    }
+  }
+  async clone(input: { repo: string; folder: string }): Promise<void> {
+    this.calls.push(`clone:${input.repo}->${input.folder}`);
+  }
+}
+
+export class FakePreviewRunner implements PreviewRunner {
+  readonly started: { command: string; cwd: string; env?: Record<string, string> }[] = [];
+  readonly processes: FakePreviewProcess[] = [];
+  async freePort(): Promise<number> {
+    return 5199;
+  }
+  start(input: { command: string; cwd: string; env?: Record<string, string> }): PreviewProcess {
+    this.started.push(input);
+    const process = new FakePreviewProcess();
+    this.processes.push(process);
+    return process;
+  }
+}
+
+export class FakePreviewProcess implements PreviewProcess {
+  #running = true;
+  #code: number | null | undefined;
+  #listeners: ((code: number | null) => void)[] = [];
+  text = 'ready on token sk-abc123';
+  output(): string {
+    return this.text;
+  }
+  running(): boolean {
+    return this.#running;
+  }
+  exitCode(): number | null | undefined {
+    return this.#code;
+  }
+  async stop(): Promise<void> {
+    this.exit(null);
+  }
+  onExit(listener: (code: number | null) => void): void {
+    this.#listeners.push(listener);
+  }
+  exit(code: number | null): void {
+    if (!this.#running) return;
+    this.#running = false;
+    this.#code = code;
+    for (const listener of this.#listeners) listener(code);
+  }
+}
+
+export class FakeFiles implements DeliverableFiles {
+  readonly written = new Map<string, string>();
+  readonly existing = new Set<string>();
+  outside = false;
+  async exists(path: string): Promise<boolean> {
+    return this.existing.has(path) || this.written.has(path);
+  }
+  async write(path: string, content: string): Promise<void> {
+    this.written.set(path, content);
+  }
+  async inside(): Promise<boolean> {
+    return !this.outside;
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -365,6 +514,11 @@ export interface TaskHarness {
   settle(): Promise<void>;
   stopped: Id[];
   detach(): void;
+  github: FakeGitHub;
+  preview: FakePreviewRunner;
+  files: FakeFiles;
+  notes: { workflowId: Id; text: string }[];
+  clock: { now: string };
 }
 
 const NOW = '2026-10-06T12:00:00.000Z';
@@ -374,6 +528,8 @@ export async function createTaskHarness(options?: {
   /** A run the engine already finished by the time `startRun` answers. */
   blockAtPreflight?: boolean;
   projectPatch?: Partial<Project>;
+  /** Starts the engine's clock here (scheduler tests move it). Real time when absent. */
+  clock?: string;
 }): Promise<TaskHarness> {
   const repository = new FakeRepository();
   const repos = new InMemoryTaskRepos();
@@ -385,6 +541,7 @@ export async function createTaskHarness(options?: {
     taskReviews: repos.taskReviews,
     taskDeliveries: repos.taskDeliveries,
     taskActivity: repos.taskActivity,
+    taskSchedules: repos.taskSchedules,
   });
   const scope = LOCAL_SCOPE;
   const bus = createEventBus({ repository, scope, pubsub: new InProcessPubSubStub<EngineEvent>() });
@@ -430,6 +587,11 @@ export async function createTaskHarness(options?: {
   const runs = new Map<Id, { workflowId: Id; request: StartRunRequest }>();
   const stopped: Id[] = [];
   let lastRun: Id | undefined;
+  const github = new FakeGitHub();
+  const preview = new FakePreviewRunner();
+  const files = new FakeFiles();
+  const notes: { workflowId: Id; text: string }[] = [];
+  const clock = { now: options?.clock ?? '' };
 
   const service = createTaskService({
     repository,
@@ -464,6 +626,21 @@ export async function createTaskHarness(options?: {
     stopRun: async (runId) => {
       stopped.push(runId);
     },
+    github,
+    preview,
+    files,
+    postNote: async (workflowId, text) => {
+      notes.push({ workflowId, text });
+    },
+    createProject: async (body) => {
+      const created: Project = { id: newId(), createdAt: NOW, updatedAt: NOW, ...body };
+      await repository.projects.create(scope, created);
+      return created;
+    },
+    projectsRoot: 'D:/repos',
+    // A huge tick so the timer never fires on its own in a test; tests call `tick()` themselves.
+    schedulerTickMs: 3_600_000,
+    ...(options?.clock === undefined ? {} : { now: () => clock.now }),
   });
   const detach = await service.attach();
 
@@ -481,6 +658,11 @@ export async function createTaskHarness(options?: {
     runs,
     stopped,
     detach,
+    github,
+    preview,
+    files,
+    notes,
+    clock,
     lastRunId: () => {
       if (lastRun === undefined) throw new Error('no run started');
       return lastRun;

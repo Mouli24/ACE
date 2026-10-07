@@ -1,5 +1,11 @@
 import {
+  AcceptTaskRequestSchema,
   ApplyTaskRequestSchema,
+  CloneProjectRequestSchema,
+  MergePullRequestRequestSchema,
+  OpenPullRequestRequestSchema,
+  PutDeliverableRequestSchema,
+  PutTaskScheduleRequestSchema,
   CloseTaskRequestSchema,
   CreateTaskRequestSchema,
   PauseTaskRequestSchema,
@@ -130,6 +136,67 @@ export function createTaskRoutes(taskService: TaskService | undefined): TaskRout
     const service = tasks();
     const body = PauseTaskRequestSchema.parse(await readJson(c));
     return c.json(await service.pause(c.req.param('id'), body.paused));
+  });
+
+  /* ACE parity P1 (D275–D278). */
+
+  router.put('/tasks/:id/deliverable', async (c) => {
+    const service = tasks();
+    const body = PutDeliverableRequestSchema.parse(await readJson(c));
+    return c.json(await service.putDeliverable(c.req.param('id'), body));
+  });
+
+  router.post('/tasks/:id/accept', async (c) => {
+    const service = tasks();
+    const body = AcceptTaskRequestSchema.parse(await readOptionalJson(c));
+    return c.json(await service.accept(c.req.param('id'), body));
+  });
+
+  router.post('/tasks/:id/send', async (c) => {
+    const service = tasks();
+    EmptyBodySchema.parse(await readOptionalJson(c));
+    return c.json(await service.send(c.req.param('id')));
+  });
+
+  router.post('/tasks/:id/open-pr', async (c) => {
+    const service = tasks();
+    const body = OpenPullRequestRequestSchema.parse(await readOptionalJson(c));
+    return c.json(await service.openPullRequest(c.req.param('id'), body));
+  });
+
+  router.post('/tasks/:id/merge-pr', async (c) => {
+    const service = tasks();
+    const body = MergePullRequestRequestSchema.parse(await readJson(c));
+    return c.json(await service.mergePullRequest(c.req.param('id'), body));
+  });
+
+  router.post('/tasks/:id/preview/start', async (c) => {
+    const service = tasks();
+    EmptyBodySchema.parse(await readOptionalJson(c));
+    return c.json(await service.startPreview(c.req.param('id')));
+  });
+
+  router.post('/tasks/:id/preview/stop', async (c) => {
+    const service = tasks();
+    EmptyBodySchema.parse(await readOptionalJson(c));
+    return c.json(await service.stopPreview(c.req.param('id')));
+  });
+
+  router.put('/tasks/:id/schedule', async (c) => {
+    const service = tasks();
+    const body = PutTaskScheduleRequestSchema.parse(await readJson(c));
+    return c.json(await service.putSchedule(c.req.param('id'), body));
+  });
+
+  router.delete('/tasks/:id/schedule', async (c) => {
+    await tasks().removeSchedule(c.req.param('id'));
+    return c.body(null, 204);
+  });
+
+  router.post('/projects/clone', async (c) => {
+    const service = tasks();
+    const body = CloneProjectRequestSchema.parse(await readJson(c));
+    return c.json(await service.cloneProject(body), 201);
   });
 
   router.get('/tasks/:id/changes', async (c) => c.json(await tasks().changes(c.req.param('id'))));

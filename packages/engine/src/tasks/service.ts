@@ -1,15 +1,20 @@
 import { isAbsolute, join, resolve } from 'node:path';
 
 import type {
+  AcceptTaskRequest,
   ApplyTaskRequest,
   ApprovalMode,
   CheckStatus,
+  CloneProjectRequest,
   CloseTaskRequest,
   CreateTaskRequest,
   ExecutionKind,
-  GitHubRepo,
   Id,
+  MergePullRequestRequest,
+  OpenPullRequestRequest,
   Project,
+  PutDeliverableRequest,
+  PutTaskScheduleRequest,
   RepositoryInfo,
   ReviewTaskRequest,
   Run,
@@ -17,7 +22,6 @@ import type {
   StartWorkRequest,
   Task,
   TaskActivity,
-  TaskActivityKind,
   TaskCheck,
   TaskChanges,
   TaskDetail,
@@ -25,6 +29,7 @@ import type {
   TaskFileDiff,
   TaskListQuery,
   TaskPriority,
+  TaskSchedule,
   TaskWorkspace,
   UpdateTaskRequest,
 } from '@ace/contracts';
@@ -48,20 +53,31 @@ import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
 import type {
   CommandRunner,
+  GitHubPort,
   GitPort,
+  PreviewRunner,
   Repository,
   Scope,
-  TaskActivityRepository,
-  TaskCheckRepository,
-  TaskDeliveryRepository,
-  TaskExecutionRepository,
   TaskRecord,
-  TaskRepository,
-  TaskReviewRepository,
-  TaskWorkspaceRepository,
 } from '../ports/index.js';
 import { allowedTaskActions, withActions, type ActionContext } from './actions.js';
+import {
+  acceptDeliverable,
+  createNodeDeliverableFiles,
+  deliverableFromOutput,
+  deliverableInstructions,
+  initialDeliverable,
+  putDeliverable,
+  sendDeliverable,
+  type DeliverableFiles,
+} from './deliverables.js';
+import { mergePullRequest, openPullRequest, parseGitHubRemote } from './github-delivery.js';
+import type { ActivityInput, TaskKernel, TaskRepos } from './kernel.js';
+import { createPreviewManager, type PreviewManager } from './previews.js';
 import { branchName, outputText, planPrompt, workPrompt } from './prompts.js';
+import { createTaskScheduler, type TaskScheduler } from './scheduler.js';
+
+export { parseGitHubRemote } from './github-delivery.js';
 
 /**
  * The task service (ACE parity P0, docs/team-prompts/p0-tasks-build-design.md, D268–D271).
@@ -117,6 +133,21 @@ export interface TaskService {
    */
   beforeProjectDelete(projectId: Id): Promise<void>;
 
+  /* ACE parity P1 (D275–D278). Each answers 501 when the engine was built without its port. */
+  putDeliverable(id: Id, body: PutDeliverableRequest): Promise<Task>;
+  accept(id: Id, body: AcceptTaskRequest): Promise<Task>;
+  send(id: Id): Promise<Task>;
+  openPullRequest(id: Id, body: OpenPullRequestRequest): Promise<Task>;
+  mergePullRequest(id: Id, body: MergePullRequestRequest): Promise<Task>;
+  startPreview(id: Id): Promise<Task>;
+  stopPreview(id: Id): Promise<Task>;
+  putSchedule(id: Id, body: PutTaskScheduleRequest): Promise<TaskSchedule>;
+  removeSchedule(id: Id): Promise<void>;
+  /** `POST /projects/clone`: a new project in a fresh clone of a GitHub repository (D276). */
+  cloneProject(body: CloneProjectRequest): Promise<Project>;
+  /** One pass over the due schedules — what the scheduler's timer runs (D277). */
+  tickSchedules(): Promise<void>;
+
   /** Subscribes to run events and recovers tasks a stopped engine left mid-flight. */
   attach(): Promise<() => void>;
   /** Resolves once every background step started so far has finished (tests, shutdown). */
@@ -145,10 +176,27 @@ export interface TaskServiceDeps {
   checkTimeoutMs?: number;
   now?: () => string;
   nextId?: () => string;
+
+  /* ACE parity P1 (D275–D278). Each feature answers 501 `not_implemented` without its port. */
+  github?: GitHubPort;
+  preview?: PreviewRunner;
+  /** How an accepted Document is written into the project folder; Node's filesystem by default. */
+  files?: DeliverableFiles;
+  /** Posts a line on a workflow's timeline — how a task sent from a chat reports its outcome. */
+  postNote?: (workflowId: Id, text: string) => Promise<void>;
+  /** Creates a project as `POST /projects` does — what Clone from GitHub ends with. */
+  createProject?: (body: { name: string; folderPath: string }) => Promise<Project>;
+  /** Where a cloned project's folder goes when the request names none. */
+  projectsRoot?: string;
+  /** How often the scheduler looks for due schedules (D277); 30 s by default. */
+  schedulerTickMs?: number;
 }
 
 const DEFAULT_CHECK_TIMEOUT_MS = 600_000;
 const SETUP_CHECK_NAME = 'setup';
+
+/** The activity kinds that move a task into Done (what `reachedDone` reacts to). */
+const ENTERS_DONE = new Set<ActivityInput['kind']>(['approved', 'delivered', 'closed']);
 
 /** What a failed stage says when the engine stopped under it. */
 const ENGINE_STOPPED = 'The engine stopped while this was running. Retry to run it again.';
@@ -171,17 +219,6 @@ const PRIORITY_RANK = new Map<TaskPriority, number>(
   TASK_PRIORITIES.map((priority, index) => [priority, TASK_PRIORITIES.length - index]),
 );
 
-/** Parses `owner/repo` out of a GitHub remote URL (https or ssh), or undefined. */
-export function parseGitHubRemote(url: string | undefined): GitHubRepo | undefined {
-  if (url === undefined) return undefined;
-  const match =
-    /^(?:https?:\/\/(?:[^@/]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i.exec(
-      url.trim(),
-    );
-  if (match === null || match[1] === undefined || match[2] === undefined) return undefined;
-  return { owner: match[1], repo: match[2] };
-}
-
 function samePath(a: string, b: string): boolean {
   const left = resolve(a);
   const right = resolve(b);
@@ -202,16 +239,6 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
   /* ------------------------------------------------------------------------ */
   /* Repositories                                                              */
   /* ------------------------------------------------------------------------ */
-
-  interface TaskRepos {
-    tasks: TaskRepository;
-    workspaces: TaskWorkspaceRepository;
-    executions: TaskExecutionRepository;
-    checks: TaskCheckRepository;
-    reviews: TaskReviewRepository;
-    deliveries: TaskDeliveryRepository;
-    activity: TaskActivityRepository;
-  }
 
   function repos(): TaskRepos {
     const {
@@ -307,6 +334,8 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       workspaceReady: workspace?.status === 'ready',
       projectHasChecks: (project?.checkCommands ?? []).length > 0,
       hasActiveRun: aborts.has(task.id) || latest?.status === 'running',
+      projectHasPreview: project?.previewCommand !== undefined && project.previewCommand !== null,
+      pullRequestOpen: workspace?.pullRequest?.state === 'open',
     };
   }
 
@@ -329,10 +358,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
   /* ------------------------------------------------------------------------ */
 
   /** Persists the task, appends the activity row and announces both in one `task.updated`. */
-  async function commit(
-    task: TaskRecord,
-    activity?: { kind: TaskActivityKind; message: string; executionId?: Id; runId?: Id },
-  ): Promise<Task> {
+  async function commit(task: TaskRecord, activity?: ActivityInput): Promise<Task> {
     const stamped: TaskRecord = { ...task, updatedAt: now() };
     const saved = await repos().tasks.save(scope, stamped);
     let row: TaskActivity | undefined;
@@ -352,7 +378,25 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       type: 'task.updated',
       payload: { task: presented, ...(row === undefined ? {} : { activity: row }) },
     });
+    if (saved.stage === 'done' && activity !== undefined && ENTERS_DONE.has(activity.kind)) {
+      track(() => reachedDone(saved));
+    }
     return presented;
+  }
+
+  /**
+   * After a task reaches Done: the tasks waiting on its verified outcome start (D277), and a task
+   * sent from a workflow's chat reports its outcome there (Send to Build).
+   */
+  async function reachedDone(task: TaskRecord): Promise<void> {
+    await scheduler?.taskDone(task);
+    const workflowId = task.source?.workflowId;
+    if (workflowId !== undefined && deps.postNote !== undefined) {
+      await deps.postNote(
+        workflowId,
+        `Task #${task.number} "${task.title}" reached Done: ${task.outcome ?? 'closed'}.`,
+      );
+    }
   }
 
   /** A task with the optional fields removed when they are `undefined`. */
@@ -709,6 +753,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
             workspace,
             request: execution.request === '' ? undefined : execution.request,
             previous: previous?.kind === 'work' ? previous : undefined,
+            produce: deliverableInstructions(task),
           });
 
     const runId = nextId();
@@ -827,7 +872,11 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         }
         await repos().executions.save(scope, completed);
         await commit(
-          set(task, { stateReason: task.type === 'app' ? 'Recording changes…' : undefined }),
+          set(task, {
+            stateReason: task.type === 'app' ? 'Recording changes…' : undefined,
+            // D275: a Document or Email task's run output is its draft.
+            ...(task.type === 'app' ? {} : { deliverable: deliverableFromOutput(task, summary) }),
+          }),
           {
             kind: 'run_completed',
             message: 'The run finished.',
@@ -1155,6 +1204,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       sha: result.sha,
       at,
     });
+    await previews?.stopFor(task.id);
     await git
       .removeWorktree({ repoPath: workspace.repoPath, worktreePath: workspace.path })
       .catch((error: unknown) =>
@@ -1273,9 +1323,13 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       repos().reviews.listByTask(scope, id),
       repos().deliveries.listByTask(scope, id),
     ]);
+    const schedule = await scheduler?.get(id);
+    const preview = previews?.info(id);
     return {
       task: await present(task),
       ...(workspace === null ? {} : { workspace }),
+      ...(schedule === undefined ? {} : { schedule }),
+      ...(preview === undefined ? {} : { preview }),
       executions,
       checks,
       reviews,
@@ -1309,6 +1363,43 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       headRef: workspace.headSha,
     };
   }
+
+  /* ------------------------------------------------------------------------ */
+  /* P1 feature modules (D275–D278)                                             */
+  /* ------------------------------------------------------------------------ */
+
+  const kernel: TaskKernel = {
+    repository,
+    scope,
+    bus,
+    logger,
+    now,
+    nextId,
+    repos,
+    load,
+    loadProject,
+    withLock,
+    track,
+    commit,
+    set,
+    moveTo,
+    assertAllowed,
+    present,
+    settings,
+    headChecksFailed,
+    isPaused,
+    mask,
+    commandEnv: async () => deps.commandEnv?.(),
+    createTask: (projectId, body) => service.create(projectId, body),
+    startTask: (id) => service.start(id),
+  };
+  const files = deps.files ?? createNodeDeliverableFiles();
+  const previews: PreviewManager | undefined =
+    deps.preview === undefined ? undefined : createPreviewManager(kernel, deps.preview);
+  const scheduler: TaskScheduler | undefined =
+    repository.taskSchedules === undefined
+      ? undefined
+      : createTaskScheduler(kernel, repository.taskSchedules);
 
   const service: TaskService = {
     async list(projectId, query) {
@@ -1357,14 +1448,25 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         acceptance: body.acceptance ?? '',
         runChecks: body.runChecks ?? true,
         paused: false,
+        ...(body.source === undefined ? {} : { source: body.source }),
         createdAt: timestamp,
         updatedAt: timestamp,
       };
+      const deliverable = initialDeliverable(type, body);
+      if (deliverable !== undefined) record.deliverable = deliverable;
+      if (body.trigger !== undefined && scheduler === undefined) throw notImplemented('schedules');
       const created = await repos().tasks.create(scope, record);
       const presented = await commit(created, {
         kind: 'created',
-        message: 'Task created in the Inbox.',
+        message:
+          body.source?.kind === 'chat' || body.source?.kind === 'timeline'
+            ? 'Task created from a chat message.'
+            : 'Task created in the Inbox.',
       });
+      if (body.trigger !== undefined && scheduler !== undefined) {
+        await scheduler.put(created.id, { trigger: body.trigger });
+        return present(await load(created.id));
+      }
       if (body.start === 'now') return service.start(created.id);
       return presented;
     },
@@ -1416,6 +1518,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       await withLock(id, async () => {
         const task = await load(id);
         await assertAllowed(task, 'delete', 'be deleted');
+        await previews?.stopFor(id);
         const workspace = await repos().workspaces.getByTask(scope, id);
         if (workspace !== null && (workspace.status === 'ready' || workspace.status === 'error')) {
           await git
@@ -1910,7 +2013,12 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
           await dequeue(projectId);
       });
 
-      return unsubscribe;
+      const stopScheduler =
+        scheduler === undefined ? () => undefined : await scheduler.start(deps.schedulerTickMs);
+      return () => {
+        unsubscribe();
+        stopScheduler();
+      };
     },
 
     async idle() {
@@ -1921,7 +2029,73 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
 
     async shutdown() {
       for (const controller of aborts.values()) controller.abort();
+      await previews?.stopAll();
       await service.idle();
+    },
+
+    putDeliverable: (id, body) => putDeliverable(kernel, id, body),
+    accept: (id, body) => acceptDeliverable(kernel, files, id, body),
+    send: (id) => sendDeliverable(kernel, id),
+
+    openPullRequest(id, body) {
+      if (deps.github === undefined) throw notImplemented('GitHub delivery');
+      return openPullRequest(kernel, git, deps.github, id, body);
+    },
+    mergePullRequest(id, body) {
+      if (deps.github === undefined) throw notImplemented('GitHub delivery');
+      return mergePullRequest(kernel, git, deps.github, id, body, async (task) => {
+        await previews?.stopFor(task.id);
+      });
+    },
+
+    startPreview(id) {
+      if (previews === undefined) throw notImplemented('previews');
+      return previews.start(id);
+    },
+    stopPreview(id) {
+      if (previews === undefined) throw notImplemented('previews');
+      return previews.stop(id);
+    },
+
+    putSchedule(id, body) {
+      if (scheduler === undefined) throw notImplemented('schedules');
+      return scheduler.put(id, body);
+    },
+    async tickSchedules() {
+      await scheduler?.tick();
+      await service.idle();
+    },
+
+    async removeSchedule(id) {
+      if (scheduler === undefined) throw notImplemented('schedules');
+      await load(id);
+      await scheduler.remove(id);
+    },
+
+    async cloneProject(body) {
+      if (deps.github === undefined || deps.createProject === undefined) {
+        throw notImplemented('Clone from GitHub');
+      }
+      const repoName = /([^/]+?)(?:\.git)?\/?$/.exec(body.repo.trim())?.[1] ?? 'project';
+      const folderPath = body.folderPath ?? join(deps.projectsRoot ?? deps.workspaceRoot, repoName);
+      const status = await deps.github.status();
+      if (!status.installed || !status.loggedIn) {
+        throw new HttpError(
+          'invalid_config',
+          'not_connected',
+          status.detail ?? 'The GitHub CLI is not signed in. Run gh auth login in a terminal.',
+        );
+      }
+      try {
+        await deps.github.clone({ repo: body.repo, folder: folderPath });
+      } catch (error) {
+        throw new HttpError(
+          'invalid_config',
+          'delivery_failed',
+          `Cloning ${body.repo} failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      return deps.createProject({ name: body.name ?? repoName, folderPath });
     },
   };
 

@@ -140,3 +140,107 @@ describe('ACE parity P0 — task routes', () => {
     expect(await errorCode(second)).toBe('already_repository');
   });
 });
+
+describe('ACE parity P1 — deliverable, GitHub, preview, schedule and clone routes', () => {
+  it('edits and accepts a document, refuses send for it, and answers the P1 shapes', async () => {
+    const h = await createTaskHarness();
+    const app = routeApp(createTaskRoutes(h.service));
+    const created = TaskSchema.parse(
+      await (
+        await send(app, 'POST', `/projects/${h.project.id}/tasks`, {
+          title: 'Notes',
+          type: 'document',
+          documentPath: 'docs/notes.md',
+          finishLine: 'accept_document',
+          workflowId: h.team.id,
+          start: 'now',
+        })
+      ).json(),
+    );
+    await h.settle();
+    await h.finishRun(h.lastRunId(), 'COMPLETE', { text: '# Notes' });
+
+    const edited = await send(app, 'PUT', `/tasks/${created.id}/deliverable`, {
+      deliverable: { kind: 'document', path: 'docs/notes.md', content: '# Notes, edited' },
+    });
+    expect(TaskSchema.parse(await edited.json()).deliverable).toMatchObject({
+      content: '# Notes, edited',
+    });
+    expect((await send(app, 'POST', `/tasks/${created.id}/send`)).status).toBe(409);
+    const accepted = await send(app, 'POST', `/tasks/${created.id}/accept`, {
+      path: 'docs/notes.md',
+    });
+    expect(TaskSchema.parse(await accepted.json()).outcome).toBe('accepted');
+  });
+
+  it('opens and merges a pull request over HTTP and validates the merge body', async () => {
+    const h = await createTaskHarness();
+    h.git.status = { ...h.git.status, remoteUrl: 'git@github.com:acme/shop.git' };
+    const app = routeApp(createTaskRoutes(h.service));
+    const created = TaskSchema.parse(
+      await (
+        await send(app, 'POST', `/projects/${h.project.id}/tasks`, {
+          title: 'Search',
+          finishLine: 'github_merge',
+          workflowId: h.team.id,
+          start: 'now',
+        })
+      ).json(),
+    );
+    await h.settle();
+    await h.finishRun(h.lastRunId(), 'COMPLETE', { text: 'ok', changes: [file('a.ts')] });
+    expect(
+      TaskSchema.parse(await (await send(app, 'POST', `/tasks/${created.id}/open-pr`)).json())
+        .allowedActions,
+    ).toContain('merge_pr');
+    expect(
+      (await send(app, 'POST', `/tasks/${created.id}/merge-pr`, { method: 'squash' })).status,
+    ).toBe(400);
+    const merged = await send(app, 'POST', `/tasks/${created.id}/merge-pr`, {
+      method: 'merge',
+      confirm: { repo: 'acme/shop', base: 'main' },
+    });
+    expect(TaskSchema.parse(await merged.json()).outcome).toBe('merged');
+  });
+
+  it('starts and stops a preview, schedules and unschedules a task, and clones a project', async () => {
+    const h = await createTaskHarness({ projectPatch: { previewCommand: 'pnpm dev' } });
+    const app = routeApp(createTaskRoutes(h.service));
+    const created = TaskSchema.parse(
+      await (
+        await send(app, 'POST', `/projects/${h.project.id}/tasks`, {
+          title: 'Search',
+          workflowId: h.team.id,
+          start: 'now',
+        })
+      ).json(),
+    );
+    await h.settle();
+    await h.finishRun(h.lastRunId(), 'COMPLETE', { text: 'ok', changes: [file('a.ts')] });
+    expect((await send(app, 'POST', `/tasks/${created.id}/preview/start`)).status).toBe(200);
+    expect(
+      TaskDetailSchema.parse(await (await send(app, 'GET', `/tasks/${created.id}`)).json()).preview
+        ?.status,
+    ).toBe('running');
+    expect((await send(app, 'POST', `/tasks/${created.id}/preview/stop`)).status).toBe(200);
+
+    const inbox = TaskSchema.parse(
+      await (
+        await send(app, 'POST', `/projects/${h.project.id}/tasks`, {
+          title: 'Later',
+          workflowId: h.team.id,
+        })
+      ).json(),
+    );
+    const scheduled = await send(app, 'PUT', `/tasks/${inbox.id}/schedule`, {
+      trigger: { kind: 'recurring', cron: '0 9 * * 1-5', timezone: 'UTC' },
+    });
+    expect(scheduled.status).toBe(200);
+    expect(((await scheduled.json()) as { enabled: boolean }).enabled).toBe(true);
+    expect((await send(app, 'DELETE', `/tasks/${inbox.id}/schedule`)).status).toBe(204);
+
+    const cloned = await send(app, 'POST', '/projects/clone', { repo: 'acme/storefront' });
+    expect(cloned.status).toBe(201);
+    expect((await send(app, 'POST', '/projects/clone', {})).status).toBe(400);
+  });
+});

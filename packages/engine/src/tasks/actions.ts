@@ -13,6 +13,10 @@ export interface ActionContext {
   projectHasChecks: boolean;
   /** The task's latest execution has a run still going. */
   hasActiveRun: boolean;
+  /** ACE parity P1 (D278): the project has a preview command. */
+  projectHasPreview?: boolean;
+  /** ACE parity P1 (D276): the task's workspace has an open pull request. */
+  pullRequestOpen?: boolean;
 }
 
 /**
@@ -25,6 +29,7 @@ export function allowedTaskActions(task: TaskRecord, context: ActionContext): Ta
   const done = stage === 'done';
   const busy = state === 'running' || state === 'waiting';
   const settled = state === 'idle' || state === 'failed';
+  const inReview = stage === 'review' && settled;
   const actions: TaskAction[] = [];
 
   if (stage === 'inbox' && state === 'idle') actions.push('start');
@@ -44,11 +49,32 @@ export function allowedTaskActions(task: TaskRecord, context: ActionContext): Ta
   ) {
     actions.push('checks');
   }
-  if (stage === 'review' && settled) {
+  if (inReview) {
     actions.push('approve', 'request_changes');
-    if (task.type === 'app' && task.finishLine !== 'review' && context.workspaceReady) {
+    if (task.type === 'app' && task.finishLine === 'apply_local' && context.workspaceReady) {
       actions.push('apply');
     }
+    // D276: GitHub delivery — open the pull request, then merge it.
+    if (task.type === 'app' && task.finishLine === 'github_merge' && context.workspaceReady) {
+      actions.push(context.pullRequestOpen === true ? 'merge_pr' : 'open_pr');
+    }
+    // D275: a Document or Email deliverable is accepted; an email whose finish line is Send asks to send.
+    if (
+      task.deliverable !== undefined &&
+      (task.finishLine === 'accept_document' || task.finishLine === 'accept_draft')
+    ) {
+      actions.push('accept');
+    }
+    if (task.type === 'email' && task.finishLine === 'send_email') actions.push('send');
+  }
+  // D278: a preview of the workspace, whenever there is one and the project says how.
+  if (
+    task.type === 'app' &&
+    !done &&
+    context.workspaceReady &&
+    context.projectHasPreview === true
+  ) {
+    actions.push('preview');
   }
   if (!done && !busy) actions.push('close');
   if (!done) actions.push(task.paused ? 'resume' : 'pause');

@@ -37,8 +37,10 @@ export function workPrompt(input: {
   workspace: TaskWorkspace | null;
   request: string | undefined;
   previous: TaskExecution | undefined;
+  /** What a Document or Email task must produce (D275); absent for an App task. */
+  produce?: string | undefined;
 }): string {
-  const { task, workspace, request, previous } = input;
+  const { task, workspace, request, previous, produce } = input;
   const blocks = [
     header(task),
     task.brief.trim(),
@@ -56,6 +58,9 @@ export function workPrompt(input: {
   }
   if (request !== undefined && request.trim() !== '') {
     blocks.push(`## Requested changes\n${request.trim()}`);
+  }
+  if (produce !== undefined) {
+    blocks.push(produce);
   }
   if (previous?.summary !== undefined && previous.summary.trim() !== '') {
     blocks.push(`## Your previous summary\n${previous.summary.trim()}`);
