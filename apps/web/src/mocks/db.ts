@@ -35,6 +35,7 @@ import {
   type TaskDelivery,
   type TaskExecution,
   type TaskReview,
+  type TaskSchedule,
   type TaskWorkspace,
   type UpdateProjectRequest,
   type Workflow,
@@ -131,6 +132,14 @@ interface Snapshot {
   skills: Skill[];
   /** Imported bundles with their (never connected) MCP server definitions. */
   bundles: Bundle[];
+  /* ---- ACE parity P1 (D275, D277) ---- */
+  /** One schedule per Inbox task (D277). */
+  taskSchedules: TaskSchedule[];
+  /**
+   * The files a project folder holds, as far as the mock knows: project id → relative path →
+   * content. What an accepted document is written into, and what refuses a second one (D275).
+   */
+  projectFiles: Record<string, Record<string, string>>;
   /** Artificial delay per request, for the loading-state test (TC-CAN-009). */
   latencyMs?: number;
 }
@@ -144,6 +153,8 @@ export interface MockRepository {
   branch: string;
   /** Absent in a repository with no commit yet. */
   headSha?: string;
+  /** `origin`'s URL (ACE parity P1, D276); absent in a repository with no remote. */
+  remoteUrl?: string;
 }
 
 /** A project folder the mock treats as not being a Git repository (e.g. `/mock/no-git/app`). */
@@ -220,6 +231,8 @@ function emptySnapshot(): Snapshot {
     repositories: {},
     skills: BUILTIN_SKILLS.map((skill) => structuredClone(skill)),
     bundles: [],
+    taskSchedules: [],
+    projectFiles: {},
   };
 }
 
@@ -337,10 +350,15 @@ export class MockDb {
   ): Project | undefined {
     const project = this.getProject(id);
     if (!project) return undefined;
-    const { setupCommand, ...rest } = patch;
+    const { setupCommand, previewCommand, previewUrl, ...rest } = patch;
     Object.assign(project, rest, { updatedAt: now() });
+    // `null` clears (D72): the key goes, so the record reads as it did before it was set
     if (setupCommand === null) delete project.setupCommand;
     else if (setupCommand !== undefined) project.setupCommand = setupCommand;
+    if (previewCommand === null) delete project.previewCommand;
+    else if (previewCommand !== undefined) project.previewCommand = previewCommand;
+    if (previewUrl === null) delete project.previewUrl;
+    else if (previewUrl !== undefined) project.previewUrl = previewUrl;
     this.save();
     return project;
   }
@@ -355,6 +373,7 @@ export class MockDb {
       this.deleteWorkflow(wf.id);
     for (const task of this.state.tasks.filter((t) => t.projectId === id)) this.deleteTask(task.id);
     delete this.state.repositories[id];
+    delete this.state.projectFiles[id];
     if (this.state.settings.lastProjectId === id) delete this.state.settings.lastProjectId;
     this.save();
     return this.state.projects.length < before;
@@ -1168,6 +1187,7 @@ export class MockDb {
     this.state.taskReviews = keep(this.state.taskReviews);
     this.state.taskDeliveries = keep(this.state.taskDeliveries);
     this.state.taskActivity = keep(this.state.taskActivity);
+    this.state.taskSchedules = keep(this.state.taskSchedules);
     this.save();
     return this.state.tasks.length < before;
   }
@@ -1241,9 +1261,50 @@ export class MockDb {
     return row;
   }
 
+  /** The schedule of one task (D277), if it has one. */
+  taskScheduleOf(taskId: string): TaskSchedule | undefined {
+    return this.state.taskSchedules.find((schedule) => schedule.taskId === taskId);
+  }
+
+  listTaskSchedules(): TaskSchedule[] {
+    return [...this.state.taskSchedules];
+  }
+
+  putTaskSchedule(schedule: TaskSchedule): TaskSchedule {
+    this.state.taskSchedules = [
+      ...this.state.taskSchedules.filter((row) => row.taskId !== schedule.taskId),
+      schedule,
+    ];
+    this.save();
+    return schedule;
+  }
+
+  deleteTaskSchedule(taskId: string): boolean {
+    const before = this.state.taskSchedules.length;
+    this.state.taskSchedules = this.state.taskSchedules.filter((row) => row.taskId !== taskId);
+    this.save();
+    return this.state.taskSchedules.length < before;
+  }
+
+  /** Whether the project folder holds this relative path (D275: Accept never overwrites one). */
+  projectFileExists(projectId: string, path: string): boolean {
+    return this.state.projectFiles[projectId]?.[path] !== undefined;
+  }
+
+  projectFileOf(projectId: string, path: string): string | undefined {
+    return this.state.projectFiles[projectId]?.[path];
+  }
+
+  /** Puts a file in the mock project folder — an accepted document, or a test's existing file. */
+  writeProjectFile(projectId: string, path: string, content: string): void {
+    this.state.projectFiles[projectId] = { ...this.state.projectFiles[projectId], [path]: content };
+    this.save();
+  }
+
   /**
    * The project folder's Git state. A folder never touched is a repository on `main` with one
-   * commit, unless its path says it is a plain folder (`isPlainFolderPath`).
+   * commit and a GitHub `origin` named after the folder, unless its path says it is a plain
+   * folder (`isPlainFolderPath`).
    */
   repositoryOf(projectId: string): MockRepository {
     const stored = this.state.repositories[projectId];
@@ -1252,7 +1313,14 @@ export class MockDb {
     if (project !== undefined && isPlainFolderPath(project.folderPath)) {
       return { isRepo: false, branch: 'main' };
     }
-    return { isRepo: true, branch: 'main', headSha: fakeSha(`head:${projectId}`) };
+    const folder = (project?.folderPath ?? '').split(/[\\/]/).filter(Boolean).at(-1) ?? '';
+    const name = folder.toLowerCase().replace(/[^a-z0-9._-]+/g, '-') || 'project';
+    return {
+      isRepo: true,
+      branch: 'main',
+      headSha: fakeSha(`head:${projectId}`),
+      remoteUrl: `https://github.com/mock/${name}.git`,
+    };
   }
 
   setRepository(projectId: string, repository: MockRepository): MockRepository {

@@ -2,14 +2,25 @@ import {
   DEFAULT_BUILD_CAPACITY,
   DEFAULT_FINISH_LINE,
   DEFAULT_TASK_AUTOMATION,
+  DOCUMENT_CONTENT_MAX,
+  EMAIL_BODY_MAX,
+  EXECUTION_SUMMARY_MAX,
   TASK_PRIORITIES,
   finishLineFits,
+  isVerifiedOutcome,
+  type AcceptTaskRequest,
   type ApplyTaskRequest,
   type ChangedFile,
   type CheckCommand,
+  type CloneProjectRequest,
   type CreateTaskRequest,
   type ErrorKind,
   type ExecutionKind,
+  type GitHubRepo,
+  type MergePullRequestRequest,
+  type OpenPullRequestRequest,
+  type Project,
+  type PutTaskScheduleRequest,
   type RepositoryInfo,
   type ReviewTaskRequest,
   type Task,
@@ -18,14 +29,19 @@ import {
   type TaskActivityKind,
   type TaskChanges,
   type TaskCheck,
+  type TaskDeliverable,
   type TaskDetail,
   type TaskExecution,
   type TaskFileDiff,
+  type TaskPreview,
+  type TaskSchedule,
+  type TaskTrigger,
   type TaskWorkspace,
   type UpdateTaskRequest,
 } from '@ace/contracts';
 
 import { newId } from '../lib/ulid';
+import { CronError, nextOccurrence } from '../tasks/cron';
 import { fakeSha, type MockDb } from './db';
 import { allowedTaskActions } from './task-actions';
 
@@ -37,6 +53,13 @@ import { allowedTaskActions } from './task-actions';
  *
  * Knobs, like the run and ingest paces (D200): `setTaskWorkPace` (`'manual'` holds every run until a
  * test calls `completeMockWork`), `failNextWork`, `failNextChecks`, `failNextApply`.
+ *
+ * ACE parity P1 (D275–D278) adds, without a filesystem, `gh` or a process: a Document or Email
+ * task's draft written by the run (a fixed Markdown document / email), Accept into the project's
+ * mock files (`db.writeProjectFile` seeds one Accept must refuse), Send answering `not_connected`,
+ * GitHub delivery (`setMockGitHub`, `failNextPush`, `failNextMerge` for the uncertain path,
+ * `failNextClone`), a preview that "runs" on a fake port (`exitMockPreview`), and schedules with the
+ * engine's validation and messages (`tickMockSchedules` fires the due ones).
  */
 
 /* -------------------------------------------------------------------------- */
@@ -108,6 +131,43 @@ export function pendingMockWork(): string[] {
   return [...pending.keys()];
 }
 
+/** GitHub as the mock sees it (D276): a signed-in `gh`, and repositories with their `origin`. */
+const DEFAULT_GITHUB = { signedIn: true, remotes: true };
+let gitHub = { ...DEFAULT_GITHUB };
+/**
+ * `signedIn: false` is a `gh` that is not signed in; `remotes: false` hides every repository's
+ * GitHub `origin`. Either makes open PR, merge and clone answer 422 `not_connected`.
+ */
+export function setMockGitHub(state: Partial<typeof DEFAULT_GITHUB>): void {
+  gitHub = { ...gitHub, ...state };
+}
+
+let failNextPushReason: string | undefined;
+/** The next push of a task branch is rejected: the task stays in review, `failed`, with the reason. */
+export function failNextPush(reason: string | false = 'rejected: non-fast-forward'): void {
+  failNextPushReason = reason === false ? undefined : reason;
+}
+
+let nextMergeOutcome: 'uncertain' | 'failed' | undefined;
+/**
+ * The next merge on GitHub is not confirmed (`'uncertain'`: GitHub still reports the pull request
+ * open, the delivery is `uncertain` and the task waits in review) or fails (`'failed'`).
+ */
+export function failNextMerge(outcome: 'uncertain' | 'failed' | false = 'uncertain'): void {
+  nextMergeOutcome = outcome === false ? undefined : outcome;
+}
+
+let failNextCloneReason: string | undefined;
+/** The next clone fails: 502 `delivery_failed` with this reason. */
+export function failNextClone(reason: string | false = 'repository not found'): void {
+  failNextCloneReason = reason === false ? undefined : reason;
+}
+
+/** The previews "running", by task — kept in memory, as the engine keeps its own (D278). */
+const previews = new Map<string, TaskPreview>();
+const FIRST_PREVIEW_PORT = 5199;
+let nextPreviewPort = FIRST_PREVIEW_PORT;
+
 /** Every pending run dropped and every knob back to its default: what a test calls between cases. */
 export function resetMockTasks(): void {
   for (const taskId of [...pending.keys()]) cancelPending(taskId);
@@ -115,6 +175,12 @@ export function resetMockTasks(): void {
   failNextWorkReason = undefined;
   failNextChecksOn = false;
   failNextApplyReason = undefined;
+  gitHub = { ...DEFAULT_GITHUB };
+  failNextPushReason = undefined;
+  nextMergeOutcome = undefined;
+  failNextCloneReason = undefined;
+  previews.clear();
+  nextPreviewPort = FIRST_PREVIEW_PORT;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -128,6 +194,7 @@ export class TaskEngineError extends Error {
     readonly kind: ErrorKind,
     readonly code: string,
     message: string,
+    readonly details?: unknown,
   ) {
     super(message);
   }
@@ -279,6 +346,34 @@ const MOCK_PLAN = [
   '4. Add tests for accented and plain queries.',
 ].join('\n');
 
+/** What a Document task's work run answers: the document itself (D275). */
+const MOCK_DOCUMENT = [
+  '# Release notes',
+  '',
+  'Search now ignores accents and case, so “cafe” finds “Café Nord”.',
+  '',
+  '## What changed',
+  '',
+  '- A blank search answers nothing instead of everything.',
+  '- Results are capped at 50.',
+  '',
+  '## Who it is for',
+  '',
+  'Everyone who searches the shop.',
+].join('\n');
+
+/** What an Email task's work run answers; a first "Subject:" line proposes the subject (D275). */
+const MOCK_EMAIL = [
+  'Subject: An update on your order',
+  '',
+  'Hi,',
+  '',
+  'Thanks for your patience. Your order left our warehouse today and should arrive within three',
+  'working days.',
+  '',
+  'Best regards',
+].join('\n');
+
 /** The stand-in check of a project that never named any (absent `checkCommands`; `[]` is none). */
 const STAND_IN_CHECKS: readonly CheckCommand[] = [{ name: 'test', command: 'npm test' }];
 
@@ -310,6 +405,7 @@ export function readTask(db: MockDb, task: Task): Task {
     hasLiveRun: latest?.status === 'running' && latest.runId !== undefined,
     projectHasChecks: checkCommandsOf(db, task.projectId).length > 0,
     workspace: db.taskWorkspaceOf(task.id),
+    projectHasPreview: (db.getProject(task.projectId)?.previewCommand ?? undefined) !== undefined,
   });
   return { ...structuredClone(task), allowedActions };
 }
@@ -317,9 +413,13 @@ export function readTask(db: MockDb, task: Task): Task {
 export function taskDetail(db: MockDb, id: string): TaskDetail {
   const task = requireTask(db, id);
   const workspace = db.taskWorkspaceOf(id);
+  const schedule = db.taskScheduleOf(id);
+  const preview = previews.get(id);
   return structuredClone({
     task: readTask(db, task),
     ...(workspace === undefined ? {} : { workspace }),
+    ...(schedule === undefined ? {} : { schedule }),
+    ...(preview === undefined ? {} : { preview }),
     executions: db.taskExecutionsOf(id),
     checks: db.taskChecksOf(id),
     reviews: db.taskReviewsOf(id),
@@ -373,6 +473,7 @@ function change(
           ...(activity.runId === undefined ? {} : { runId: activity.runId }),
         });
   announce(db, task, row);
+  if (patch.stage === 'done') reachedDone(db, task);
   return task;
 }
 
@@ -435,13 +536,47 @@ export function createTask(db: MockDb, projectId: string, body: CreateTaskReques
     acceptance: body.acceptance ?? '',
     runChecks: body.runChecks ?? true,
     paused: false,
+    ...(body.source === undefined ? {} : { source: body.source }),
+    ...initialDeliverable(type, body),
     allowedActions: [],
     createdAt: ts,
     updatedAt: ts,
   });
-  announce(db, task, record(db, task, 'created', `Task #${task.number} created.`));
+  const fromChat = body.source?.kind === 'chat' || body.source?.kind === 'timeline';
+  announce(
+    db,
+    task,
+    record(
+      db,
+      task,
+      'created',
+      fromChat ? 'Task created from a chat message.' : `Task #${task.number} created.`,
+    ),
+  );
+  // D277: as the engine, the task exists before its trigger is checked — a refused trigger leaves
+  // it in the Inbox, unscheduled
+  if (body.trigger !== undefined) {
+    putSchedule(db, task.id, { trigger: body.trigger });
+    return readTask(db, requireTask(db, task.id));
+  }
   if (body.start === 'now') startTask(db, task.id);
   return readTask(db, requireTask(db, task.id));
+}
+
+/** The empty draft a new Document or Email task starts with (D275), as the engine makes it. */
+function initialDeliverable(
+  type: Task['type'],
+  body: CreateTaskRequest,
+): { deliverable?: TaskDeliverable } {
+  if (type === 'document' && body.documentPath !== undefined) {
+    return { deliverable: { kind: 'document', path: body.documentPath, content: '' } };
+  }
+  if (type === 'email') {
+    return {
+      deliverable: { kind: 'email', to: body.emailTo ?? [], cc: [], subject: body.title, body: '' },
+    };
+  }
+  return {};
 }
 
 const EDIT_WORDS: Partial<Record<keyof UpdateTaskRequest, string>> = {
@@ -498,6 +633,7 @@ export function deleteTask(db: MockDb, id: string): void {
   const task = requireTask(db, id);
   requireAllowed(db, task, 'delete');
   cancelPending(id);
+  previews.delete(id);
   db.deleteTask(id);
   db.emit({
     type: 'task.deleted',
@@ -795,19 +931,25 @@ function finishWork(db: MockDb, taskId: string, executionId: string, failure?: s
     ...(execution.runId === undefined ? {} : { runId: execution.runId }),
   };
   if (workspace === undefined) {
-    // an Email or Document task: the run's answer is the result
+    // an Email or Document task: the run's answer is the result — its draft (D275)
+    const output =
+      task.deliverable?.kind === 'document'
+        ? MOCK_DOCUMENT
+        : task.deliverable?.kind === 'email'
+          ? MOCK_EMAIL
+          : MOCK_SUMMARY;
     db.putTaskExecution({
       ...execution,
       status: 'completed',
-      summary: MOCK_SUMMARY,
+      summary: output.slice(0, EXECUTION_SUMMARY_MAX),
       endedAt: now(),
     });
-    change(
-      db,
-      taskId,
-      {},
-      { kind: 'run_completed', message: `Work run ${execution.sequence} completed.`, ...refs },
-    );
+    const deliverable = deliverableFromOutput(task.deliverable, output);
+    change(db, taskId, deliverable === undefined ? {} : { deliverable }, {
+      kind: 'run_completed',
+      message: `Work run ${execution.sequence} completed.`,
+      ...refs,
+    });
   } else {
     const commitSha = fakeSha(`commit:${taskId}:${execution.sequence}`);
     db.putTaskExecution({
@@ -1074,6 +1216,8 @@ function deliver(db: MockDb, task: Task): Task {
   if (workspace !== undefined) {
     db.putTaskWorkspace({ ...workspace, status: 'applied', updatedAt: now() });
   }
+  // the worktree is gone, so is anything running in it (D278)
+  endPreview(task.id, 'stopped');
   db.addTaskDelivery({
     id: newId(),
     taskId: task.id,
@@ -1284,6 +1428,8 @@ export function repositoryInfo(db: MockDb, projectId: string): RepositoryInfo {
   if (!repository.isRepo) {
     return { folderPath: project.folderPath, gitAvailable: true, isRepo: false };
   }
+  const remoteUrl = remoteOf(db, projectId);
+  const github = parseGitHubRemote(remoteUrl);
   return {
     folderPath: project.folderPath,
     gitAvailable: true,
@@ -1292,6 +1438,8 @@ export function repositoryInfo(db: MockDb, projectId: string): RepositoryInfo {
     ...(repository.headSha === undefined ? {} : { headSha: repository.headSha }),
     clean: true,
     changedFiles: 0,
+    ...(remoteUrl === undefined ? {} : { remoteUrl }),
+    ...(github === undefined ? {} : { github }),
   };
 }
 
@@ -1311,4 +1459,722 @@ export function initRepository(db: MockDb, projectId: string): RepositoryInfo {
     headSha: fakeSha(`init:${projectId}:${now()}`),
   });
   return repositoryInfo(db, projectId);
+}
+
+/* -------------------------------------------------------------------------- */
+/* ACE parity P1 — deliverables (D275)                                         */
+/* -------------------------------------------------------------------------- */
+
+const invalidTaskState = (message: string) =>
+  new TaskEngineError(409, 'workflow', 'invalid_task_state', message);
+
+/** The draft a completed work run produced from its output text, as the engine reads it. */
+function deliverableFromOutput(
+  deliverable: TaskDeliverable | undefined,
+  text: string,
+): TaskDeliverable | undefined {
+  if (deliverable === undefined) return undefined;
+  if (deliverable.kind === 'document') {
+    return { ...deliverable, content: text.slice(0, DOCUMENT_CONTENT_MAX) };
+  }
+  // a first "Subject: …" line proposes the subject; the rest is the body
+  const subjectLine = /^subject:\s*(.+)\r?\n+/i.exec(text);
+  const body = (subjectLine === null ? text : text.slice(subjectLine[0].length)).slice(
+    0,
+    EMAIL_BODY_MAX,
+  );
+  return {
+    ...deliverable,
+    ...(subjectLine?.[1] === undefined ? {} : { subject: subjectLine[1].trim() }),
+    body,
+  };
+}
+
+/** `PUT /tasks/:id/deliverable` — the user's edit of the draft. */
+export function putDeliverable(db: MockDb, id: string, deliverable: TaskDeliverable): Task {
+  const task = requireTask(db, id);
+  if (task.deliverable === undefined || task.deliverable.kind !== deliverable.kind) {
+    throw new TaskEngineError(
+      400,
+      'invalid_config',
+      'validation_failed',
+      `Task #${task.number} has no ${deliverable.kind} to edit.`,
+    );
+  }
+  if (task.stage === 'done' || task.state === 'running' || task.state === 'waiting') {
+    throw invalidTaskState(
+      `Task #${task.number} is ${task.stage} / ${task.state}; its draft cannot be edited now.`,
+    );
+  }
+  return readTask(
+    db,
+    change(
+      db,
+      id,
+      { deliverable },
+      {
+        kind: 'edited',
+        message: deliverable.kind === 'document' ? 'Document edited.' : 'Email draft edited.',
+      },
+    ),
+  );
+}
+
+/** `POST /tasks/:id/accept` — the Document or Email finish line; never over an existing file. */
+export function acceptTask(db: MockDb, id: string, body: AcceptTaskRequest): Task {
+  const task = requireTask(db, id);
+  requireAllowed(db, task, 'accept');
+  const deliverable = task.deliverable;
+  if (deliverable === undefined) {
+    throw invalidTaskState(`Task #${task.number} has nothing to accept.`);
+  }
+  const at = now();
+  const done = {
+    stage: 'done',
+    state: 'done',
+    outcome: 'accepted',
+    stateReason: undefined,
+    completedAt: at,
+  } as const;
+
+  if (deliverable.kind === 'email') {
+    const destination =
+      deliverable.to.length === 0 ? 'no recipient yet' : deliverable.to.join(', ');
+    db.addTaskDelivery({
+      id: newId(),
+      taskId: id,
+      kind: 'email_accept',
+      status: 'succeeded',
+      destination,
+      detail: `Draft accepted: "${deliverable.subject}". It was not sent.`,
+      at,
+    });
+    return readTask(
+      db,
+      change(db, id, done, {
+        kind: 'delivered',
+        message: `Email draft accepted for ${destination}.`,
+      }),
+    );
+  }
+
+  if (body.path !== undefined && body.path !== deliverable.path) {
+    throw new TaskEngineError(
+      409,
+      'workflow',
+      'destination_changed',
+      `The document is now set to be saved as ${deliverable.path}, not ${body.path}. Check it and accept again.`,
+      { path: deliverable.path },
+    );
+  }
+  if (db.projectFileExists(task.projectId, deliverable.path)) {
+    throw new TaskEngineError(
+      409,
+      'workflow',
+      'file_exists',
+      `${deliverable.path} already exists in the project folder; ACE never overwrites a file on accept. Choose another path.`,
+      { path: deliverable.path },
+    );
+  }
+  db.writeProjectFile(task.projectId, deliverable.path, deliverable.content);
+  const folder = db.getProject(task.projectId)?.folderPath ?? '';
+  db.addTaskDelivery({
+    id: newId(),
+    taskId: id,
+    kind: 'document_accept',
+    status: 'succeeded',
+    destination: `${folder}/${deliverable.path}`,
+    at,
+  });
+  return readTask(
+    db,
+    change(db, id, done, {
+      kind: 'delivered',
+      message: `Document accepted as ${deliverable.path}.`,
+    }),
+  );
+}
+
+/** `POST /tasks/:id/send` — no mail connection exists in this version (D275); never a pretend send. */
+export function sendTask(db: MockDb, id: string): Task {
+  requireAllowed(db, requireTask(db, id), 'send');
+  throw new TaskEngineError(
+    422,
+    'invalid_config',
+    'not_connected',
+    'Sending needs an email connection, which this version of ACE does not have. Accept the draft and send it from your mail app.',
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* ACE parity P1 — GitHub delivery and clone (D276)                            */
+/* -------------------------------------------------------------------------- */
+
+const notConnected = (message: string) =>
+  new TaskEngineError(422, 'invalid_config', 'not_connected', message);
+
+const GH_NOT_SIGNED_IN = 'The GitHub CLI is not signed in. Run gh auth login in a terminal.';
+
+/** `owner/repo` out of a GitHub remote URL (https or ssh), or undefined — the engine's reading. */
+export function parseGitHubRemote(url: string | undefined): GitHubRepo | undefined {
+  if (url === undefined) return undefined;
+  const match =
+    /^(?:https?:\/\/(?:[^@/]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i.exec(
+      url.trim(),
+    );
+  if (match?.[1] === undefined || match[2] === undefined) return undefined;
+  return { owner: match[1], repo: match[2] };
+}
+
+/** The project repository's `origin`, unless `setMockGitHub({ remotes: false })` hides it. */
+function remoteOf(db: MockDb, projectId: string): string | undefined {
+  return gitHub.remotes ? db.repositoryOf(projectId).remoteUrl : undefined;
+}
+
+function readyWorkspace(db: MockDb, task: Task): TaskWorkspace {
+  const workspace = db.taskWorkspaceOf(task.id);
+  if (workspace?.status !== 'ready') {
+    throw new TaskEngineError(
+      404,
+      'workflow',
+      'no_workspace',
+      `Task #${task.number} has no workspace to deliver.`,
+    );
+  }
+  return workspace;
+}
+
+/** Design §5 + D276: no failed check on the head, a GitHub `origin`, a signed-in `gh`. */
+function assertDeliverable(db: MockDb, task: Task, workspace: TaskWorkspace): GitHubRepo {
+  if (headChecksFailed(db.taskChecksOf(task.id), workspace.headSha)) {
+    const failed = [
+      ...new Set(
+        db
+          .taskChecksOf(task.id)
+          .filter((check) => check.headSha === workspace.headSha && check.status !== 'passed')
+          .map((check) => check.name),
+      ),
+    ];
+    throw new TaskEngineError(
+      409,
+      'workflow',
+      'checks_failed',
+      `Checks failed on ${short(workspace.headSha)}: ${failed.join(', ')}. Request changes or close the task.`,
+      { checks: failed },
+    );
+  }
+  const remote = parseGitHubRemote(remoteOf(db, task.projectId));
+  if (remote === undefined) {
+    throw notConnected(
+      'The project repository has no GitHub remote named origin. Add one (git remote add origin …), or clone the project from GitHub.',
+    );
+  }
+  if (!gitHub.signedIn) throw notConnected(GH_NOT_SIGNED_IN);
+  return remote;
+}
+
+function nextPullRequestNumber(db: MockDb, projectId: string): number {
+  const numbers = db
+    .listTasks(projectId)
+    .map((task) => db.taskWorkspaceOf(task.id)?.pullRequest?.number ?? 0);
+  return Math.max(0, ...numbers) + 1;
+}
+
+/** `POST /tasks/:id/open-pr` — push the task branch and open a pull request into its base. */
+export function openPullRequest(db: MockDb, id: string, body: OpenPullRequestRequest): Task {
+  const task = requireTask(db, id);
+  requireAllowed(db, task, 'open_pr');
+  const workspace = readyWorkspace(db, task);
+  const remote = assertDeliverable(db, task, workspace);
+  const repo = `${remote.owner}/${remote.repo}`;
+  const destination = `${repo}: ${workspace.branch} → ${workspace.baseBranch}`;
+
+  const rejected = failNextPushReason;
+  failNextPushReason = undefined;
+  if (rejected !== undefined) {
+    db.addTaskDelivery({
+      id: newId(),
+      taskId: id,
+      kind: 'github_pr',
+      status: 'failed',
+      destination,
+      detail: rejected,
+      at: now(),
+    });
+    const reason = `Opening the pull request failed: ${rejected}`;
+    return readTask(
+      db,
+      change(
+        db,
+        id,
+        { stage: 'review', state: 'failed', stateReason: reason },
+        { kind: 'delivery_failed', message: reason },
+      ),
+    );
+  }
+
+  const number = nextPullRequestNumber(db, task.projectId);
+  const url = `https://github.com/${repo}/pull/${number}`;
+  db.putTaskWorkspace({
+    ...workspace,
+    pullRequest: { number, url, state: 'open', base: workspace.baseBranch, repo },
+    updatedAt: now(),
+  });
+  db.addTaskDelivery({
+    id: newId(),
+    taskId: id,
+    kind: 'github_pr',
+    status: 'succeeded',
+    destination,
+    detail: `${body.draft === true ? 'Draft pull request' : 'Pull request'}: ${body.title ?? task.title}`,
+    url,
+    at: now(),
+  });
+  return readTask(
+    db,
+    change(
+      db,
+      id,
+      {
+        stage: 'review',
+        state: 'idle',
+        stateReason: `Pull request #${number} is open on GitHub. Merge it from here when it is ready.`,
+      },
+      { kind: 'delivered', message: `Opened pull request #${number} (${url}).` },
+    ),
+  );
+}
+
+/**
+ * `POST /tasks/:id/merge-pr` — only into the repository and base the client repeats, and `merged`
+ * only when GitHub reports it; otherwise an `uncertain` delivery and the task waits in review.
+ */
+export function mergePullRequest(db: MockDb, id: string, body: MergePullRequestRequest): Task {
+  const task = requireTask(db, id);
+  requireAllowed(db, task, 'merge_pr');
+  const workspace = readyWorkspace(db, task);
+  const pr = workspace.pullRequest;
+  if (pr === undefined) throw invalidTaskState(`Task #${task.number} has no pull request.`);
+  if (body.confirm.repo !== pr.repo || body.confirm.base !== pr.base) {
+    throw new TaskEngineError(
+      409,
+      'workflow',
+      'destination_changed',
+      `Pull request #${pr.number} merges into ${pr.repo} @ ${pr.base}, not the destination you confirmed.`,
+      { repo: pr.repo, base: pr.base },
+    );
+  }
+  assertDeliverable(db, task, workspace);
+  const destination = `${pr.repo} @ ${pr.base} (#${pr.number})`;
+  const outcome = nextMergeOutcome;
+  nextMergeOutcome = undefined;
+  const at = now();
+
+  if (outcome === 'failed') {
+    const detail = 'Pull request is not mergeable: the base branch was modified.';
+    db.addTaskDelivery({
+      id: newId(),
+      taskId: id,
+      kind: 'github_merge',
+      status: 'failed',
+      destination,
+      detail,
+      at,
+    });
+    const reason = `Merging #${pr.number} failed: ${detail}`;
+    return readTask(
+      db,
+      change(
+        db,
+        id,
+        { stage: 'review', state: 'failed', stateReason: reason },
+        { kind: 'delivery_failed', message: reason },
+      ),
+    );
+  }
+
+  if (outcome === 'uncertain') {
+    db.addTaskDelivery({
+      id: newId(),
+      taskId: id,
+      kind: 'github_merge',
+      status: 'uncertain',
+      destination,
+      detail: 'GitHub reports the pull request as open after the merge request.',
+      url: pr.url,
+      at,
+    });
+    const reason = `GitHub has not confirmed the merge of #${pr.number} (it is open). Check it on GitHub, then try Merge again.`;
+    return readTask(
+      db,
+      change(
+        db,
+        id,
+        { stage: 'review', state: 'idle', stateReason: reason },
+        { kind: 'delivery_failed', message: reason },
+      ),
+    );
+  }
+
+  const sha = fakeSha(`merge-pr:${id}:${pr.number}:${body.method}`);
+  db.addTaskDelivery({
+    id: newId(),
+    taskId: id,
+    kind: 'github_merge',
+    status: 'succeeded',
+    destination,
+    sha,
+    url: pr.url,
+    at,
+  });
+  db.putTaskWorkspace({
+    ...workspace,
+    status: 'merged',
+    pullRequest: { ...pr, state: 'merged' },
+    updatedAt: at,
+  });
+  endPreview(id, 'stopped');
+  return readTask(
+    db,
+    change(
+      db,
+      id,
+      { stage: 'done', state: 'done', outcome: 'merged', stateReason: undefined, completedAt: at },
+      {
+        kind: 'delivered',
+        message: `Merged pull request #${pr.number} into ${pr.base} on GitHub.`,
+      },
+    ),
+  );
+}
+
+/** `owner/name` or a github.com URL, read the way `gh repo clone` would take it. */
+function cloneSource(repo: string): GitHubRepo | undefined {
+  const text = repo.trim();
+  const ownerName = /^([\w.-]+)\/([\w.-]+?)(?:\.git)?$/.exec(text);
+  if (ownerName?.[1] !== undefined && ownerName[2] !== undefined) {
+    return { owner: ownerName[1], repo: ownerName[2] };
+  }
+  return parseGitHubRemote(text);
+}
+
+/** `POST /projects/clone` — a new project in a fresh clone of a GitHub repository (201). */
+export function cloneProject(db: MockDb, body: CloneProjectRequest): Project {
+  const repoName = /([^/]+?)(?:\.git)?\/?$/.exec(body.repo.trim())?.[1] ?? 'project';
+  if (!gitHub.signedIn) throw notConnected(GH_NOT_SIGNED_IN);
+  const source = cloneSource(body.repo);
+  const failure =
+    failNextCloneReason ??
+    (source === undefined ? 'GraphQL: Could not resolve to a Repository.' : undefined);
+  failNextCloneReason = undefined;
+  if (failure !== undefined || source === undefined) {
+    throw new TaskEngineError(
+      502,
+      'invalid_config',
+      'delivery_failed',
+      `Cloning ${body.repo} failed: ${failure ?? 'unknown repository'}`,
+    );
+  }
+  const project = db.createProject({
+    name: body.name ?? repoName,
+    folderPath: body.folderPath ?? `/mock/projects/${repoName}`,
+  });
+  db.setRepository(project.id, {
+    isRepo: true,
+    branch: 'main',
+    headSha: fakeSha(`clone:${source.owner}/${source.repo}:${project.id}`),
+    remoteUrl: `https://github.com/${source.owner}/${source.repo}.git`,
+  });
+  return structuredClone(db.getProject(project.id) ?? project);
+}
+
+/* -------------------------------------------------------------------------- */
+/* ACE parity P1 — previews (D278)                                             */
+/* -------------------------------------------------------------------------- */
+
+const DEFAULT_PREVIEW_URL = 'http://localhost:{port}';
+
+/** A running preview ends: stopped by the user (or with its worktree), or it exited by itself. */
+function endPreview(taskId: string, status: 'stopped' | 'failed', exitCode?: number): boolean {
+  const preview = previews.get(taskId);
+  if (preview === undefined || preview.status !== 'running') return false;
+  const last = status === 'stopped' ? 'Stopped.\n' : `Exited with code ${exitCode ?? 1}.\n`;
+  previews.set(taskId, {
+    ...preview,
+    status,
+    ...(exitCode === undefined ? {} : { exitCode }),
+    output: `${preview.output}${last}`,
+    endedAt: now(),
+  });
+  return true;
+}
+
+/** `POST /tasks/:id/preview/start` — the project's preview command, "running" on a fake port. */
+export function startPreview(db: MockDb, id: string): Task {
+  const task = requireTask(db, id);
+  requireAllowed(db, task, 'preview');
+  const project = db.getProject(task.projectId);
+  const command = project?.previewCommand ?? undefined;
+  if (command === undefined) {
+    throw new TaskEngineError(
+      422,
+      'invalid_config',
+      'no_preview_command',
+      'Set a preview command in the project settings first (for example: pnpm dev --port $PORT).',
+    );
+  }
+  if (db.taskWorkspaceOf(id)?.status !== 'ready') {
+    throw new TaskEngineError(
+      404,
+      'workflow',
+      'no_workspace',
+      `Task #${task.number} has no workspace to preview.`,
+    );
+  }
+  if (previews.get(id)?.status === 'running') return readTask(db, task);
+  const port = nextPreviewPort;
+  nextPreviewPort += 1;
+  const url = (project?.previewUrl ?? DEFAULT_PREVIEW_URL).replaceAll('{port}', String(port));
+  previews.set(id, {
+    taskId: id,
+    status: 'running',
+    command,
+    port,
+    url,
+    output: `$ ${command}\n\n  ready in 412 ms\n  ➜  Local: ${url}\n`,
+    startedAt: now(),
+  });
+  return readTask(
+    db,
+    change(db, id, {}, { kind: 'edited', message: `Preview started on port ${port}.` }),
+  );
+}
+
+/** `POST /tasks/:id/preview/stop` — answers the task; the preview reads `stopped` afterwards. */
+export function stopPreview(db: MockDb, id: string): Task {
+  const task = requireTask(db, id);
+  if (endPreview(id, 'stopped')) announce(db, task);
+  return readTask(db, task);
+}
+
+/** The preview process exits by itself — a crash (non-zero) reads `failed`, as the engine's does. */
+export function exitMockPreview(db: MockDb, taskId: string, exitCode: number): boolean {
+  const task = db.getTask(taskId);
+  if (task === undefined) return false;
+  if (!endPreview(taskId, exitCode === 0 ? 'stopped' : 'failed', exitCode)) return false;
+  announce(db, task);
+  return true;
+}
+
+/* -------------------------------------------------------------------------- */
+/* ACE parity P1 — schedules (D277)                                            */
+/* -------------------------------------------------------------------------- */
+
+const scheduleRefused = (message: string) =>
+  new TaskEngineError(400, 'invalid_config', 'validation_failed', message, [
+    { severity: 'error', code: 'invalid_schedule', message },
+  ]);
+
+/** The reason line the engine writes on a scheduled task, word for word. */
+function describeTrigger(trigger: TaskTrigger, nextRunAt: string | undefined): string {
+  switch (trigger.kind) {
+    case 'once':
+      return `Scheduled for ${trigger.at}.`;
+    case 'recurring':
+      return `Repeats "${trigger.cron}" (${trigger.timezone})${nextRunAt === undefined ? '' : ` — next ${nextRunAt}`}.`;
+    case 'after_task':
+      return 'Starts when the task it waits on reaches its finish line.';
+  }
+}
+
+function nextRunOf(trigger: TaskTrigger, afterMs: number): string | undefined {
+  if (trigger.kind === 'once') return trigger.at;
+  if (trigger.kind === 'after_task') return undefined;
+  const next = nextOccurrence(trigger.cron, trigger.timezone, afterMs);
+  return next === undefined ? undefined : new Date(next).toISOString();
+}
+
+/** `PUT /tasks/:id/schedule` — only an Inbox task, with the engine's validation and messages. */
+export function putSchedule(db: MockDb, id: string, body: PutTaskScheduleRequest): TaskSchedule {
+  const task = requireTask(db, id);
+  if (task.stage !== 'inbox' || (task.state !== 'idle' && task.state !== 'failed')) {
+    throw invalidTaskState(
+      `Task #${task.number} is ${task.stage} / ${task.state}; only an Inbox task can be scheduled.`,
+    );
+  }
+  const trigger = body.trigger;
+  const nowMs = Date.now();
+  let nextRunAt: string | undefined;
+  try {
+    nextRunAt = nextRunOf(trigger, nowMs);
+  } catch (error) {
+    if (error instanceof CronError) throw scheduleRefused(error.message);
+    throw error;
+  }
+  if (trigger.kind === 'once' && Date.parse(trigger.at) <= nowMs) {
+    throw scheduleRefused('The time must be in the future.');
+  }
+  if (trigger.kind === 'recurring' && nextRunAt === undefined) {
+    throw scheduleRefused('That cron expression never matches.');
+  }
+  let waitsOnDone = false;
+  if (trigger.kind === 'after_task') {
+    const other = db.getTask(trigger.taskId);
+    if (other === undefined || other.projectId !== task.projectId || other.id === task.id) {
+      throw scheduleRefused('The task to wait on must be another task of this project.');
+    }
+    waitsOnDone = isVerifiedOutcome(other.outcome);
+  }
+
+  const at = now();
+  const existing = db.taskScheduleOf(id);
+  const saved = db.putTaskSchedule({
+    id: existing?.id ?? newId(),
+    taskId: id,
+    trigger,
+    enabled: body.enabled ?? true,
+    ...(nextRunAt === undefined ? {} : { nextRunAt }),
+    skipped: existing?.skipped ?? 0,
+    createdAt: existing?.createdAt ?? at,
+    updatedAt: at,
+  });
+  const words = describeTrigger(trigger, nextRunAt);
+  change(db, id, { stateReason: words }, { kind: 'edited', message: words });
+  // already satisfied: an after-task trigger whose task is done starts now
+  if (waitsOnDone && saved.enabled) {
+    db.putTaskSchedule({ ...saved, enabled: false, lastRunAt: at });
+    automatic(db, id, () => startTask(db, id));
+  }
+  return structuredClone(db.taskScheduleOf(id) ?? saved);
+}
+
+/** `DELETE /tasks/:id/schedule` — the task stays in the Inbox, unscheduled. */
+export function removeSchedule(db: MockDb, id: string): void {
+  requireTask(db, id);
+  if (!db.deleteTaskSchedule(id)) return;
+  change(db, id, { stateReason: undefined }, { kind: 'edited', message: 'Schedule removed.' });
+}
+
+/** A recurring occurrence: a new task made from the template and started at once. */
+function occurrence(db: MockDb, template: Task): string {
+  const deliverable = template.deliverable;
+  const created = createTask(db, template.projectId, {
+    title: `${template.title} · ${now().slice(0, 10)}`.slice(0, 200),
+    brief: template.brief,
+    type: template.type,
+    finishLine: template.finishLine,
+    automation: template.automation,
+    priority: template.priority,
+    labels: template.labels,
+    acceptance: template.acceptance,
+    runChecks: template.runChecks,
+    ...(template.workflowId === undefined ? {} : { workflowId: template.workflowId }),
+    ...(template.plannerWorkflowId === undefined
+      ? {}
+      : { plannerWorkflowId: template.plannerWorkflowId }),
+    ...(deliverable?.kind === 'document' ? { documentPath: deliverable.path } : {}),
+    ...(deliverable?.kind === 'email' ? { emailTo: deliverable.to } : {}),
+    source: { kind: 'schedule', refId: template.id, label: template.title },
+    start: 'now',
+  });
+  return created.id;
+}
+
+/**
+ * One pass over the due schedules, as the engine's 30-second timer makes (D277): a once trigger
+ * starts its task; a recurring one makes an occurrence, or skips it while the last is not Done; a
+ * paused task or project skips and counts it.
+ */
+export function tickMockSchedules(db: MockDb, nowMs: number = Date.now()): void {
+  const due = db
+    .listTaskSchedules()
+    .filter(
+      (schedule) =>
+        schedule.enabled &&
+        schedule.nextRunAt !== undefined &&
+        Date.parse(schedule.nextRunAt) <= nowMs,
+    );
+  for (const schedule of due) {
+    const task = db.getTask(schedule.taskId);
+    if (task === undefined) {
+      db.deleteTaskSchedule(schedule.taskId);
+      continue;
+    }
+    const at = new Date(nowMs).toISOString();
+    const nextRunAt =
+      schedule.trigger.kind === 'recurring' ? nextRunOf(schedule.trigger, nowMs) : undefined;
+    const advance = (changes: Partial<TaskSchedule>): TaskSchedule => {
+      const next: TaskSchedule = { ...schedule, ...changes, updatedAt: at };
+      if (next.nextRunAt === undefined) delete next.nextRunAt;
+      return db.putTaskSchedule(next);
+    };
+    if (isPaused(db, task)) {
+      advance({
+        skipped: schedule.skipped + 1,
+        enabled: schedule.trigger.kind === 'recurring',
+        nextRunAt,
+      });
+      if (task.stage === 'inbox' && task.state === 'idle') {
+        change(db, task.id, {
+          stateReason: 'Skipped an occurrence: the task or project is paused.',
+        });
+      }
+      continue;
+    }
+    if (schedule.trigger.kind === 'once') {
+      advance({ enabled: false, lastRunAt: at, nextRunAt: undefined });
+      if (task.stage === 'inbox' && task.state === 'idle') {
+        automatic(db, task.id, () => startTask(db, task.id));
+      }
+      continue;
+    }
+    if (schedule.trigger.kind === 'recurring') {
+      const previous =
+        schedule.lastTaskId === undefined ? undefined : db.getTask(schedule.lastTaskId);
+      if (previous !== undefined && previous.stage !== 'done') {
+        advance({ skipped: schedule.skipped + 1, nextRunAt });
+        change(db, task.id, {
+          stateReason: `Skipped an occurrence: task #${previous.number} is not Done yet. ${describeTrigger(schedule.trigger, nextRunAt)}`,
+        });
+        continue;
+      }
+      const lastTaskId = occurrence(db, task);
+      advance({ lastRunAt: at, lastTaskId, nextRunAt });
+      change(db, task.id, { stateReason: describeTrigger(schedule.trigger, nextRunAt) });
+    }
+  }
+}
+
+/**
+ * A task reached Done (any `change` into the Done column): the tasks waiting on its verified
+ * outcome start (D277), and a task sent from a workflow's chat reports its outcome on that
+ * workflow's timeline (Send to Build).
+ */
+function reachedDone(db: MockDb, task: Task): void {
+  if (isVerifiedOutcome(task.outcome)) {
+    for (const schedule of db.listTaskSchedules()) {
+      if (schedule.trigger.kind !== 'after_task' || schedule.trigger.taskId !== task.id) continue;
+      if (!schedule.enabled) continue;
+      db.putTaskSchedule({ ...schedule, enabled: false, lastRunAt: now(), updatedAt: now() });
+      const waiting = db.getTask(schedule.taskId);
+      if (waiting === undefined || waiting.stage !== 'inbox' || waiting.state !== 'idle') continue;
+      if (isPaused(db, waiting)) continue;
+      automatic(db, waiting.id, () => startTask(db, waiting.id));
+    }
+  }
+  const workflowId = task.source?.workflowId;
+  if (workflowId !== undefined && db.getWorkflow(workflowId) !== undefined) {
+    db.addMessage({
+      id: newId(),
+      workflowId,
+      type: 'system',
+      content: [
+        {
+          type: 'text',
+          text: `Task #${task.number} "${task.title}" reached Done: ${task.outcome ?? 'closed'}.`,
+        },
+      ],
+      at: now(),
+    });
+  }
 }

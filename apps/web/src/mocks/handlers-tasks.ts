@@ -1,8 +1,14 @@
 import {
+  AcceptTaskRequestSchema,
   ApplyTaskRequestSchema,
+  CloneProjectRequestSchema,
   CloseTaskRequestSchema,
   CreateTaskRequestSchema,
+  MergePullRequestRequestSchema,
+  OpenPullRequestRequestSchema,
   PauseTaskRequestSchema,
+  PutDeliverableRequestSchema,
+  PutTaskScheduleRequestSchema,
   ReviewTaskRequestSchema,
   StartWorkRequestSchema,
   TaskListQuerySchema,
@@ -21,20 +27,30 @@ import { z } from 'zod';
 import type { MockDb } from './db';
 import {
   TaskEngineError,
+  acceptTask,
   applyTask,
+  cloneProject,
   closeTask,
   createTask,
   deleteTask,
   initRepository,
+  mergePullRequest,
+  openPullRequest,
   pauseTask,
   planTask,
+  putDeliverable,
+  putSchedule,
   readTask,
+  removeSchedule,
   repositoryInfo,
   resumeProject,
   retryTask,
   reviewTask,
   runTaskChecks,
+  sendTask,
+  startPreview,
   startTask,
+  stopPreview,
   stopTask,
   taskChanges,
   taskDetail,
@@ -48,7 +64,8 @@ import {
  * one file's diff, the project repository, and the project PATCH with its new Build fields. The
  * state machine itself is `mocks/tasks.ts`; these only parse, call it and answer. Registered ahead
  * of every round's handlers, so this project PATCH (which also resumes a paused project's queue)
- * wins over round 1's.
+ * wins over round 1's. ACE parity P1 adds the deliverable, accept/send, pull request, preview and
+ * schedule routes and `POST /projects/clone` (D275–D278).
  */
 
 const API = '*/api/v1';
@@ -102,7 +119,7 @@ function answer(run: () => unknown, status = 200): Response {
     return HttpResponse.json(result as Record<string, unknown>, { status });
   } catch (cause) {
     if (cause instanceof TaskEngineError) {
-      return error(cause.status, cause.kind, cause.code, cause.message);
+      return error(cause.status, cause.kind, cause.code, cause.message, cause.details);
     }
     throw cause;
   }
@@ -265,5 +282,43 @@ export function createTaskHandlers(db: MockDb): HttpHandler[] {
     action('apply', ApplyTaskRequestSchema, (id, data) => applyTask(db, id, data)),
     action('close', CloseTaskRequestSchema, (id, data) => closeTask(db, id, data.reason)),
     action('pause', PauseTaskRequestSchema, (id, data) => pauseTask(db, id, data.paused)),
+
+    /* ------------------------------------------------- ACE parity P1 (D275–D278) */
+    http.put(
+      `${API}/tasks/:id/deliverable`,
+      guard(async (ctx) => {
+        const parsed = await body(ctx.request, PutDeliverableRequestSchema);
+        if (!parsed.ok) return parsed.response;
+        return answer(() => putDeliverable(db, param(ctx, 'id'), parsed.data.deliverable));
+      }),
+    ),
+    action('accept', AcceptTaskRequestSchema, (id, data) => acceptTask(db, id, data)),
+    action('send', EmptyBodySchema, (id) => sendTask(db, id)),
+    action('open-pr', OpenPullRequestRequestSchema, (id, data) => openPullRequest(db, id, data)),
+    action('merge-pr', MergePullRequestRequestSchema, (id, data) => mergePullRequest(db, id, data)),
+    action('preview/start', EmptyBodySchema, (id) => startPreview(db, id)),
+    action('preview/stop', EmptyBodySchema, (id) => stopPreview(db, id)),
+
+    http.put(
+      `${API}/tasks/:id/schedule`,
+      guard(async (ctx) => {
+        const parsed = await body(ctx.request, PutTaskScheduleRequestSchema);
+        if (!parsed.ok) return parsed.response;
+        return answer(() => putSchedule(db, param(ctx, 'id'), parsed.data));
+      }),
+    ),
+    http.delete(
+      `${API}/tasks/:id/schedule`,
+      guard((ctx) => answer(() => removeSchedule(db, param(ctx, 'id')))),
+    ),
+
+    http.post(
+      `${API}/projects/clone`,
+      guard(async (ctx) => {
+        const parsed = await body(ctx.request, CloneProjectRequestSchema);
+        if (!parsed.ok) return parsed.response;
+        return answer(() => cloneProject(db, parsed.data), 201);
+      }),
+    ),
   ];
 }

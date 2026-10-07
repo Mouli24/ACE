@@ -31,11 +31,17 @@ import { createNode, type CanvasNodeKind } from '../nodes/factory';
 import { applyOpsWithRules } from './graph-rules';
 import {
   completeMockWork,
+  exitMockPreview,
   failNextApply,
   failNextChecks,
+  failNextClone,
+  failNextMerge,
+  failNextPush,
   failNextWork,
   resetMockTasks,
+  setMockGitHub,
   setTaskWorkPace,
+  tickMockSchedules,
 } from './tasks';
 import { resetMockSecrets } from './secrets';
 
@@ -153,9 +159,26 @@ declare global {
         toNodeId: string,
         toPort: string,
       ): void;
+      /** ACE parity P1 (D276): `gh` signed in or not, repositories with a GitHub origin or not. */
+      setGitHub(state: Parameters<typeof setMockGitHub>[0]): void;
+      /** The next merge on GitHub is unconfirmed (`'uncertain'`) or fails (`'failed'`). */
+      failNextMerge(outcome?: 'uncertain' | 'failed' | false): void;
+      /** The next push of a task branch is rejected with this reason. */
+      failNextPush(reason?: string | false): void;
+      /** The next clone fails with this reason. */
+      failNextClone(reason?: string | false): void;
+      /** A file the project folder already holds, so a document accepted to it is refused (D275). */
+      addProjectFile(projectId: string, path: string, content?: string): void;
+      /** A task's running preview exits by itself with this code (D278). */
+      exitPreview(taskId: string, exitCode: number): boolean;
+      /** Fire the due schedules now, or as at `at` (D277); the page also ticks every 30 s. */
+      tickSchedules(at?: string): void;
     };
   }
 }
+
+/** How often the mock looks for due schedules, as the engine does (D277). */
+const SCHEDULE_TICK_MS = 30_000;
 
 /**
  * Mock mode (VITE_ACE_MOCK=1): MSW intercepts `/api/v1` in the browser and a FakeWebSocket
@@ -408,7 +431,37 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
       if (!result.ok) throw new Error(result.message);
       db.commitGraph(workflowId, result.nodes, result.edges, { silent: true });
     },
+    setGitHub(state) {
+      setMockGitHub(state);
+    },
+    failNextMerge(outcome) {
+      failNextMerge(outcome);
+    },
+    failNextPush(reason) {
+      failNextPush(reason);
+    },
+    failNextClone(reason) {
+      failNextClone(reason);
+    },
+    addProjectFile(projectId, path, content = '') {
+      db.load();
+      db.writeProjectFile(projectId, path, content);
+    },
+    exitPreview(taskId, exitCode) {
+      db.load();
+      return exitMockPreview(db, taskId, exitCode);
+    },
+    tickSchedules(at) {
+      db.load();
+      tickMockSchedules(db, at === undefined ? Date.now() : Date.parse(at));
+    },
   };
+
+  // D277: due schedules fire while the page is open, as they do while the engine runs
+  setInterval(() => {
+    db.load();
+    tickMockSchedules(db);
+  }, SCHEDULE_TICK_MS);
 
   return { WebSocket: createFakeWebSocket(db) as unknown as typeof WebSocket };
 }
