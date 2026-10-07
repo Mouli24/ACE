@@ -49,6 +49,27 @@ describe('D274 setup and check commands get the secrets of their project', () =>
     expect(JSON.stringify(checks)).not.toContain(VALUE);
   });
 
+  it('gives a preview the same secrets, with its PORT on top', async () => {
+    const h = await createTaskHarness({
+      projectPatch: { previewCommand: 'pnpm dev', previewUrl: 'http://localhost:{port}' },
+      commandEnv: async () => ({ DEPLOY_TOKEN: VALUE, PORT: 'not-this-one' }),
+    });
+    const task = await h.service.create(h.project.id, {
+      title: 'Look at it',
+      workflowId: h.team.id,
+      start: 'now',
+    });
+    await h.settle();
+    await h.finishRun(h.lastRunId(), 'COMPLETE', {
+      text: 'Done.',
+      changes: [file('src/app.ts')],
+    });
+    await h.settle();
+
+    await h.service.startPreview(task.id);
+    expect(h.preview.started[0]?.env).toMatchObject({ DEPLOY_TOKEN: VALUE, PORT: '5199' });
+  });
+
   it('runs commands with no extra environment when none is wired', async () => {
     const h = await createTaskHarness({ projectPatch: { setupCommand: 'pnpm install' } });
     await h.service.create(h.project.id, { title: 'x', workflowId: h.team.id, start: 'now' });

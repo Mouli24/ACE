@@ -1400,7 +1400,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     headChecksFailed,
     isPaused,
     mask,
-    commandEnv: async () => deps.commandEnv?.(),
+    commandEnv: async (projectId) => deps.commandEnv?.(projectId),
     createTask: (projectId, body) => service.create(projectId, body),
     startTask: (id) => service.start(id),
   };
