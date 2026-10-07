@@ -5,7 +5,9 @@ import { join } from 'node:path';
 
 import {
   WS_PATH,
+  type ApprovalMode,
   type Artifact,
+  type CliPermission,
   type GuardrailCheck,
   type Id,
   type Part,
@@ -23,6 +25,7 @@ import { serve } from '@hono/node-server';
 import {
   LOCAL_SCOPE,
   controlStoresFor,
+  createApprovalInbox,
   createApprovalService,
   createArtifactService,
   createBackupService,
@@ -45,6 +48,7 @@ import {
   createRunService,
   createSearchService,
   createAssistantService,
+  createSecretService,
   createSkillService,
   createSuggestionService,
   createTaskService,
@@ -54,6 +58,7 @@ import {
   createTruncatingSummariser,
   createUsageService,
   createWsHub,
+  eventScrubber,
   guardrailStoreFor,
   haltActiveRuns,
   loadEngineConfig,
@@ -66,6 +71,7 @@ import {
   pruneOldLogs,
   recoverAfterCrash,
   requireUsageRepository,
+  scrubDeep,
   startTimelinePopulation,
   workflowUpdatedEvent,
   type ArtifactMaterialiser,
@@ -83,6 +89,8 @@ import {
   type ProviderService,
   type RunService,
   type SecretMasker,
+  type SecretService,
+  type SecretStore,
   type ToolProvider,
 } from '@ace/engine';
 import {
@@ -225,6 +233,15 @@ export function createArtifactMaterialiser(
   };
 }
 
+/**
+ * D270: the most a coding-agent CLI may do under the approval mode, over its own permission preset.
+ * *Ask* (and no choice yet) keeps it inside the project's bounded access — it may edit files, never
+ * run with full access; *Approve for me* and *Full access* let the provider's preset stand.
+ */
+export function cliPermissionCeiling(mode: ApprovalMode | undefined): CliPermission | undefined {
+  return mode === undefined || mode === 'ask' ? 'edit_files' : undefined;
+}
+
 /** FR-SYS-001 / NFR-SEC-01: the engine binds the loopback interface and nothing else. */
 export const BIND_HOST = '127.0.0.1';
 
@@ -263,6 +280,11 @@ export interface StartEngineOptions {
   mockProvider?: MockProviderAdapter;
   /** X1: the terminal scan. Tests inject a fake; the real one runs the installed CLIs. */
   cliDetector?: CliDetector;
+  /**
+   * Where provider keys and secret values live (default: the OS keychain). A test injects an
+   * in-memory store, so it never writes the real keychain of the machine it runs on.
+   */
+  secretStore?: SecretStore;
 }
 
 export interface RunningEngine {
@@ -277,10 +299,10 @@ export interface RunningEngine {
   ports: {
     repository: SqliteRepository;
     blobs: FsBlobStore;
-    secrets: KeychainSecretStore;
+    secrets: SecretStore;
   };
-  /** The round 2 services, exposed for the acceptance harness and the CLI. */
-  services: { providers: ProviderService; runs: RunService };
+  /** The round 2 services (and P1's secrets), exposed for the acceptance harness and the CLI. */
+  services: { providers: ProviderService; runs: RunService; secrets: SecretService };
   /**
    * The shared mock adapter every `mock` provider row uses (the injected one, else the engine's own),
    * exposed for the acceptance harness as `ports` and `services` are: TC-RAG-009 asserts exactly one
@@ -366,7 +388,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   // Wired and returned rather than used here: artifacts arrive in round 4 and provider keys in
   // round 2, and both belong to the one composition root even before anything calls them.
   const blobs = new FsBlobStore(join(config.dataDir, 'blobs'));
-  const secrets = new KeychainSecretStore();
+  const secrets = options.secretStore ?? new KeychainSecretStore();
 
   const token = generateSessionToken();
   const auth = new SessionTokenAuth(token);
@@ -375,9 +397,30 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   // Settings must exist before the origin guard reads them on the first request.
   await repository.settings.update(LOCAL_SCOPE, { dataDir: config.dataDir });
 
+  /* ----------------------------------------------------------------- secrets */
+
+  /*
+   * ACE parity P1 (D274): named environment variables — rows in the database, values in the
+   * keychain. Their values are read into memory once here, so every event below can be scrubbed of
+   * them before it is stored or sent, and a check's output before it is kept.
+   */
+  const secretService = createSecretService({
+    repository,
+    scope: LOCAL_SCOPE,
+    store: secrets,
+    logger: logger.child({ subsystem: 'secrets' }),
+  });
+  await secretService.load();
+  const scrubSecrets = secretService.scrubber();
+
   /* ------------------------------------------------------------------ engine */
 
-  const bus = createEventBus({ repository, scope: LOCAL_SCOPE, pubsub });
+  const bus = createEventBus({
+    repository,
+    scope: LOCAL_SCOPE,
+    pubsub,
+    scrub: eventScrubber(scrubSecrets),
+  });
   const hub = createWsHub({
     bus,
     repository,
@@ -392,6 +435,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   const factory = createProviderAdapterFactory({
     mock: mockProvider,
     ...(options.cliDetector === undefined ? {} : { cliDetector: options.cliDetector }),
+    // D270: read on every CLI call, so a change of approval mode applies to the next one.
+    permissionCeiling: async () =>
+      cliPermissionCeiling((await repository.settings.get(LOCAL_SCOPE)).approvalMode),
   });
 
   /* FR-CTL-001..003: the one gate registry the scheduler registers into and the controls read. */
@@ -603,7 +649,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
 
   /* Persist one logged tool call, mirrored onto its node run in the same write (FR-TOOL-009). */
   const recordToolCall = async (runId: Id, call: ToolCall): Promise<void> => {
-    await repository.toolCalls.append(LOCAL_SCOPE, runId, call);
+    // A CLI's command line can carry a secret it was given (D274): the row keeps the marker instead.
+    await repository.toolCalls.append(LOCAL_SCOPE, runId, scrubDeep(call, scrubSecrets));
   };
 
   /*
@@ -770,6 +817,11 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     tools: toolProvider,
     sandboxDirFor,
     projectFolderFor,
+    // D274: the secrets of the run's project, for a CLI-route provider's process and prompt.
+    envForRun: async (runId) => {
+      const run = await repository.runs.get(LOCAL_SCOPE, runId);
+      return run === null ? undefined : secretService.envFor(run.projectId);
+    },
     artifacts: materialiser,
     recordToolCall,
     toolGuardrails,
@@ -815,7 +867,10 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
       (await runs.beginRun(workflowId, request, { runId })).run,
     stopRun: (runId) => controls.stop(runId),
     workspaceRoot: join(config.dataDir, 'workspaces'),
-    mask: maskSecrets,
+    // The exact secret values first, so the marker names the secret; then every credential shape.
+    mask: (text) => maskSecrets(scrubSecrets(text)),
+    // D274: a project's setup and check commands get the secrets in its scope.
+    commandEnv: (projectId) => secretService.envFor(projectId),
     github: githubPort,
     preview: createPreviewRunner(),
     /* ACE parity P1/P2: a task from a chat reports back; Clone makes a project; notes reach runs. */
@@ -1052,6 +1107,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     afterImport: async () => {
       try {
         await gateway.refreshCatalog();
+        // The restored secret rows name the values the scrubber and the commands use (D274).
+        await secretService.load();
         const requeued = await knowledge.recover();
         if (requeued > 0) knowledgeLogger.info({ requeued }, 're-queued restored documents');
         await skillService.ensureBuiltinSkills();
@@ -1096,6 +1153,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     assistant,
     /* ACE parity P1: the skills library and bundles. */
     skills: skillService,
+    /* ACE parity P1: secrets (D274) and the approvals inbox across runs (D270). */
+    secrets: secretService,
+    approvalInbox: createApprovalInbox({ repository, scope: LOCAL_SCOPE }),
   });
 
   /* -------------------------------------------------------------------- http */
@@ -1153,7 +1213,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     token,
     logger,
     ports: { repository, blobs, secrets },
-    services: { providers, runs },
+    services: { providers, runs, secrets: secretService },
     mockProvider,
     sweepArtifacts,
 
