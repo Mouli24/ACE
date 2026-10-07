@@ -55,6 +55,7 @@ import type {
   TaskExecutionRepository,
   TaskRepository,
   TaskReviewRepository,
+  TaskScheduleRepository,
   TaskWorkspaceRepository,
   WorkflowRepository,
 } from '@ace/engine';
@@ -106,6 +107,7 @@ import {
   createTaskExecutionRepository,
   createTaskRepository,
   createTaskReviewRepository,
+  createTaskScheduleRepository,
   createTaskWorkspaceRepository,
 } from './repository-tasks.js';
 import type * as schema from './schema.js';
@@ -164,6 +166,9 @@ function toProject(row: ProjectRow): Project {
       ? {}
       : { checkCommands: CheckCommandsSchema.parse(JSON.parse(row.checkCommands)) }),
     ...(row.setupCommand === null ? {} : { setupCommand: row.setupCommand }),
+    // ACE parity P1 preview (D278): absent when none, as the setup command.
+    ...(row.previewCommand === null ? {} : { previewCommand: row.previewCommand }),
+    ...(row.previewUrl === null ? {} : { previewUrl: row.previewUrl }),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -171,8 +176,8 @@ function toProject(row: ProjectRow): Project {
 
 /**
  * What `projects.update` changes: the port's patch and a project's Build settings (ACE parity P0,
- * D269, D271). `undefined` leaves a field as it is; `null` removes the cost cap or clears the setup
- * command (D72).
+ * D269, D271) and preview (P1, D278). `undefined` leaves a field as it is; `null` removes the cost
+ * cap or clears the setup command, the preview command or the preview URL (D72).
  */
 export interface ProjectPatch {
   name?: string;
@@ -182,6 +187,8 @@ export interface ProjectPatch {
   buildCapacity?: number;
   checkCommands?: CheckCommand[];
   setupCommand?: string | null;
+  previewCommand?: string | null;
+  previewUrl?: string | null;
   updatedAt: Timestamp;
 }
 
@@ -195,11 +202,18 @@ function checkCommandsColumn(id: Id, commands: CheckCommand[]): string {
   return toJsonColumn(commands, `project(${id}).checkCommands`);
 }
 
-/** A plain text column a person typed a command line into gets the guard a JSON column gets. */
-function setupCommandColumn(id: Id, command: string | null | undefined): string | null {
-  if (command === null || command === undefined) return null;
-  assertNoSecrets(command, `project(${id}).setupCommand`);
-  return command;
+/**
+ * A plain text column a person typed into — a setup or preview command line, a preview URL — gets
+ * the guard a JSON column gets. `null` and `undefined` are none.
+ */
+function typedTextColumn(
+  id: Id,
+  field: 'setupCommand' | 'previewCommand' | 'previewUrl',
+  value: string | null | undefined,
+): string | null {
+  if (value === null || value === undefined) return null;
+  assertNoSecrets(value, `project(${id}).${field}`);
+  return value;
 }
 
 function toWorkflow(row: WorkflowRow): Workflow {
@@ -316,6 +330,7 @@ export const GATED_REPOSITORIES = [
   'taskReviews',
   'taskDeliveries',
   'taskActivity',
+  'taskSchedules',
 ] as const satisfies readonly Exclude<keyof Repository, 'transaction'>[];
 
 type GatedRepository = (typeof GATED_REPOSITORIES)[number];
@@ -384,6 +399,8 @@ export class SqliteRepository implements Repository {
   readonly taskReviews: TaskReviewRepository;
   readonly taskDeliveries: TaskDeliveryRepository;
   readonly taskActivity: TaskActivityRepository;
+  /* ACE parity P1 (D277). */
+  readonly taskSchedules: TaskScheduleRepository;
 
   constructor(db: Db, sqlite: BetterSqlite3.Database, options: SqliteRepositoryOptions = {}) {
     this.#db = db;
@@ -432,6 +449,7 @@ export class SqliteRepository implements Repository {
     this.taskReviews = createTaskReviewRepository(db);
     this.taskDeliveries = createTaskDeliveryRepository(db);
     this.taskActivity = createTaskActivityRepository(db);
+    this.taskSchedules = createTaskScheduleRepository(db);
 
     // The gate (NFR-REL-02). Every repository is composed twice: as built, for a transaction body,
     // which holds the connection; and gated, for everyone else, so a call that is not part of the
@@ -474,6 +492,7 @@ export class SqliteRepository implements Repository {
       taskReviews: this.taskReviews,
       taskDeliveries: this.taskDeliveries,
       taskActivity: this.taskActivity,
+      taskSchedules: this.taskSchedules,
     };
     this.#owner = owner;
 
@@ -600,7 +619,9 @@ export class SqliteRepository implements Repository {
               project.checkCommands === undefined
                 ? null
                 : checkCommandsColumn(project.id, project.checkCommands),
-            setupCommand: setupCommandColumn(project.id, project.setupCommand),
+            setupCommand: typedTextColumn(project.id, 'setupCommand', project.setupCommand),
+            previewCommand: typedTextColumn(project.id, 'previewCommand', project.previewCommand),
+            previewUrl: typedTextColumn(project.id, 'previewUrl', project.previewUrl),
             createdAt: project.createdAt,
             updatedAt: project.updatedAt,
           })
@@ -656,7 +677,13 @@ export class SqliteRepository implements Repository {
             : { checkCommands: checkCommandsColumn(id, patch.checkCommands) }),
           ...(patch.setupCommand === undefined
             ? {}
-            : { setupCommand: setupCommandColumn(id, patch.setupCommand) }),
+            : { setupCommand: typedTextColumn(id, 'setupCommand', patch.setupCommand) }),
+          ...(patch.previewCommand === undefined
+            ? {}
+            : { previewCommand: typedTextColumn(id, 'previewCommand', patch.previewCommand) }),
+          ...(patch.previewUrl === undefined
+            ? {}
+            : { previewUrl: typedTextColumn(id, 'previewUrl', patch.previewUrl) }),
           updatedAt: patch.updatedAt,
         })
         .where(and(eq(projects.workspaceId, scope.workspaceId), eq(projects.id, id)))

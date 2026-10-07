@@ -16,6 +16,8 @@ import {
   type KbChunk,
   type KnowledgeBase,
   type Run,
+  type TaskSchedule,
+  type TaskWorkspace,
 } from '@ace/contracts';
 import { newId, type BackupStore } from '@ace/engine';
 import BetterSqlite3 from 'better-sqlite3';
@@ -699,6 +701,89 @@ describe('FR-SYS-012 an import restores tasks whole, whatever order the tables a
     expect(await target.repository.taskActivity.listByTask(scope, task.id)).toEqual([activity]);
     expect(await target.repository.tasks.get(scope, liveTask.id)).toBeNull();
     expect(await target.repository.taskActivity.listByTask(scope, liveTask.id)).toEqual([]);
+    expect(target.opened.sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
+  });
+
+  it('keeps the P1 rows: schedules, a deliverable and source, a pull request, a preview', async () => {
+    const source = await startEngine('tasks-p1-source');
+    const project = makeProject({
+      name: 'With a preview',
+      previewCommand: 'pnpm dev',
+      previewUrl: 'http://127.0.0.1:{port}/',
+    });
+    await source.repository.projects.create(scope, project);
+    const awaited = makeTask(project.id, {
+      type: 'document',
+      deliverable: { kind: 'document', path: 'docs/notes.md', content: '# Notes' },
+      source: { kind: 'suggestion', label: 'Write the notes' },
+    });
+    const waiter = makeTask(project.id, { number: 2 });
+    await source.repository.tasks.create(scope, awaited);
+    await source.repository.tasks.create(scope, waiter);
+    const workspace: TaskWorkspace = {
+      id: newId(),
+      taskId: waiter.id,
+      repoPath: 'D:/projects/demo',
+      path: 'D:/ace-data/workspaces/task-2',
+      branch: 'ace/task-2',
+      baseBranch: 'main',
+      baseSha: 'a'.repeat(40),
+      headSha: 'b'.repeat(40),
+      status: 'ready',
+      pullRequest: {
+        number: 7,
+        url: 'https://github.com/octo/demo/pull/7',
+        state: 'open',
+        base: 'main',
+        repo: 'octo/demo',
+      },
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+    await source.repository.taskWorkspaces.create(scope, workspace);
+    const recurring: TaskSchedule = {
+      id: newId(),
+      taskId: awaited.id,
+      trigger: { kind: 'recurring', cron: '0 9 * * 1', timezone: 'Europe/London' },
+      enabled: true,
+      nextRunAt: NOW,
+      skipped: 4,
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+    const after: TaskSchedule = {
+      id: newId(),
+      taskId: waiter.id,
+      trigger: { kind: 'after_task', taskId: awaited.id },
+      enabled: true,
+      skipped: 0,
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+    await source.repository.taskSchedules.create(scope, recurring);
+    await source.repository.taskSchedules.create(scope, after);
+    const zip = await source.backup.exportZip();
+
+    const target = await startEngine('tasks-p1-target');
+    const liveProject = makeProject({ name: 'Live' });
+    await target.repository.projects.create(scope, liveProject);
+    const liveTask = makeTask(liveProject.id);
+    await target.repository.tasks.create(scope, liveTask);
+    await target.repository.taskSchedules.create(scope, {
+      ...after,
+      id: newId(),
+      taskId: liveTask.id,
+    });
+
+    await target.backup.importZip(zip);
+
+    expect(await target.repository.projects.get(scope, project.id)).toEqual(project);
+    expect(await target.repository.tasks.get(scope, awaited.id)).toEqual(awaited);
+    expect(await target.repository.taskWorkspaces.getByTask(scope, waiter.id)).toEqual(workspace);
+    // `task_schedules` sorts before `tasks`: copied under enforced keys it would be refused.
+    expect(await target.repository.taskSchedules.listEnabled(scope)).toEqual([recurring, after]);
+    expect(await target.repository.taskSchedules.listAfterTask(scope, awaited.id)).toEqual([after]);
+    expect(await target.repository.taskSchedules.getByTask(scope, liveTask.id)).toBeNull();
     expect(target.opened.sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
   });
 

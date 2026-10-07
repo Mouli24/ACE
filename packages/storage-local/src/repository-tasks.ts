@@ -4,6 +4,7 @@ import {
   TaskDeliverySchema,
   TaskExecutionSchema,
   TaskReviewSchema,
+  TaskScheduleSchema,
   TaskSchema,
   TaskWorkspaceSchema,
   type Id,
@@ -12,6 +13,7 @@ import {
   type TaskDelivery,
   type TaskExecution,
   type TaskReview,
+  type TaskSchedule,
   type TaskState,
   type TaskWorkspace,
 } from '@ace/contracts';
@@ -25,6 +27,7 @@ import type {
   TaskRecord,
   TaskRepository,
   TaskReviewRepository,
+  TaskScheduleRepository,
   TaskWorkspaceRepository,
 } from '@ace/engine';
 import { and, asc, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
@@ -38,6 +41,7 @@ import {
   taskExecutions,
   taskReviews,
   tasks,
+  taskSchedules,
   taskWorkspaces,
 } from './schema.js';
 import { assertNoSecrets, toJsonColumn } from './secret-guard.js';
@@ -46,7 +50,7 @@ type Db = BetterSQLite3Database<typeof schema>;
 
 /**
  * The ACE parity P0 repositories (D267–D271): tasks, and the workspace, executions, checks,
- * reviews, deliveries and activity that belong to each.
+ * reviews, deliveries and activity that belong to each — and, from P1 (D277), its schedule.
  *
  * Split out of `repository.ts` so one file stays one feature's worth of tables; `SqliteRepository`
  * composes them. Every row is parsed through its contract on the way out, so a row that drifted
@@ -72,6 +76,7 @@ type TaskCheckRow = typeof taskChecks.$inferSelect;
 type TaskReviewRow = typeof taskReviews.$inferSelect;
 type TaskDeliveryRow = typeof taskDeliveries.$inferSelect;
 type TaskActivityRow = typeof taskActivity.$inferSelect;
+type TaskScheduleRow = typeof taskSchedules.$inferSelect;
 
 function toTaskRecord(row: TaskRow): TaskRecord {
   return TaskRecordSchema.parse({
@@ -96,6 +101,9 @@ function toTaskRecord(row: TaskRow): TaskRecord {
     runChecks: row.runChecks,
     paused: row.paused,
     ...(row.pendingRequest === null ? {} : { pendingRequest: row.pendingRequest }),
+    // ACE parity P1 (D275): JSON, checked against the contract by the parse around this.
+    ...(row.deliverable === null ? {} : { deliverable: JSON.parse(row.deliverable) }),
+    ...(row.source === null ? {} : { source: JSON.parse(row.source) }),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     ...(row.startedAt === null ? {} : { startedAt: row.startedAt }),
@@ -115,6 +123,7 @@ function toTaskWorkspace(row: TaskWorkspaceRow): TaskWorkspace {
     headSha: row.headSha,
     status: row.status,
     ...(row.error === null ? {} : { error: row.error }),
+    ...(row.pullRequest === null ? {} : { pullRequest: JSON.parse(row.pullRequest) }),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   });
@@ -180,6 +189,21 @@ function toTaskDelivery(row: TaskDeliveryRow): TaskDelivery {
   });
 }
 
+function toTaskSchedule(row: TaskScheduleRow): TaskSchedule {
+  return TaskScheduleSchema.parse({
+    id: row.id,
+    taskId: row.taskId,
+    trigger: JSON.parse(row.trigger),
+    enabled: row.enabled,
+    ...(row.nextRunAt === null ? {} : { nextRunAt: row.nextRunAt }),
+    ...(row.lastRunAt === null ? {} : { lastRunAt: row.lastRunAt }),
+    ...(row.lastTaskId === null ? {} : { lastTaskId: row.lastTaskId }),
+    skipped: row.skipped,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  });
+}
+
 function toTaskActivity(row: TaskActivityRow): TaskActivity {
   return TaskActivitySchema.parse({
     id: row.id,
@@ -216,6 +240,11 @@ function taskColumns(task: TaskRecord) {
     runChecks: task.runChecks,
     paused: task.paused,
     pendingRequest: task.pendingRequest ?? null,
+    deliverable:
+      task.deliverable === undefined
+        ? null
+        : toJsonColumn(task.deliverable, `task(${task.id}).deliverable`),
+    source: task.source === undefined ? null : toJsonColumn(task.source, `task(${task.id}).source`),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     startedAt: task.startedAt ?? null,
@@ -235,6 +264,10 @@ function workspaceColumns(workspace: TaskWorkspace) {
     headSha: workspace.headSha,
     status: workspace.status,
     error: workspace.error ?? null,
+    pullRequest:
+      workspace.pullRequest === undefined
+        ? null
+        : toJsonColumn(workspace.pullRequest, `taskWorkspace(${workspace.id}).pullRequest`),
     createdAt: workspace.createdAt,
     updatedAt: workspace.updatedAt,
   };
@@ -256,6 +289,28 @@ function executionColumns(execution: TaskExecution) {
     error: execution.error ?? null,
     startedAt: execution.startedAt,
     endedAt: execution.endedAt ?? null,
+  };
+}
+
+/**
+ * Every column of a schedule but the id and the workspace. The trigger's kind, and the task an
+ * `after_task` trigger waits on, are repeated as columns for the scheduler's two queries.
+ */
+function scheduleColumns(schedule: TaskSchedule) {
+  assertNoSecrets(schedule, `taskSchedule(${schedule.id})`);
+  const { trigger } = schedule;
+  return {
+    taskId: schedule.taskId,
+    trigger: toJsonColumn(trigger, `taskSchedule(${schedule.id}).trigger`),
+    kind: trigger.kind,
+    afterTaskId: trigger.kind === 'after_task' ? trigger.taskId : null,
+    enabled: schedule.enabled,
+    nextRunAt: schedule.nextRunAt ?? null,
+    lastRunAt: schedule.lastRunAt ?? null,
+    lastTaskId: schedule.lastTaskId ?? null,
+    skipped: schedule.skipped,
+    createdAt: schedule.createdAt,
+    updatedAt: schedule.updatedAt,
   };
 }
 
@@ -557,6 +612,72 @@ export function createTaskDeliveryRepository(db: Db): TaskDeliveryRepository {
         .orderBy(asc(taskDeliveries.at), asc(taskDeliveries.id))
         .all()
         .map(toTaskDelivery),
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Schedules (ACE parity P1, D277) — at most one per task                      */
+/* -------------------------------------------------------------------------- */
+
+export function createTaskScheduleRepository(db: Db): TaskScheduleRepository {
+  const inScope = (scope: Scope, ...conditions: (SQL | undefined)[]) =>
+    and(eq(taskSchedules.workspaceId, scope.workspaceId), ...conditions);
+
+  return {
+    create: async (scope: Scope, schedule: TaskSchedule) => {
+      db.insert(taskSchedules)
+        .values({ id: schedule.id, workspaceId: scope.workspaceId, ...scheduleColumns(schedule) })
+        .run();
+      return schedule;
+    },
+
+    getByTask: async (scope: Scope, taskId: Id) => {
+      const row = db
+        .select()
+        .from(taskSchedules)
+        .where(inScope(scope, eq(taskSchedules.taskId, taskId)))
+        .get();
+      return row === undefined ? null : toTaskSchedule(row);
+    },
+
+    /** Oldest schedule first (ids are monotonic), across every project of the workspace. */
+    listEnabled: async (scope: Scope) =>
+      db
+        .select()
+        .from(taskSchedules)
+        .where(inScope(scope, eq(taskSchedules.enabled, true)))
+        .orderBy(asc(taskSchedules.id))
+        .all()
+        .map(toTaskSchedule),
+
+    /**
+     * Every `after_task` schedule whose trigger names this task, oldest first — enabled or not:
+     * whether a disabled one may fire is the scheduler's to decide.
+     */
+    listAfterTask: async (scope: Scope, taskId: Id) =>
+      db
+        .select()
+        .from(taskSchedules)
+        .where(inScope(scope, eq(taskSchedules.afterTaskId, taskId)))
+        .orderBy(asc(taskSchedules.id))
+        .all()
+        .map(toTaskSchedule),
+
+    save: async (scope: Scope, schedule: TaskSchedule) => {
+      const { changes } = db
+        .update(taskSchedules)
+        .set(scheduleColumns(schedule))
+        .where(inScope(scope, eq(taskSchedules.id, schedule.id)))
+        .run();
+      assertSaved(changes, 'Task schedule', schedule.id);
+      return schedule;
+    },
+
+    delete: async (scope: Scope, id: Id) =>
+      db
+        .delete(taskSchedules)
+        .where(inScope(scope, eq(taskSchedules.id, id)))
+        .run().changes > 0,
   };
 }
 
