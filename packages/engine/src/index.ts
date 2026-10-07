@@ -43,3 +43,5 @@ export * from './tasks/index.js';
 /* ACE parity P2: suggestions, responsibilities, team notes and email import (D280–D282). */
 export * from './suggestions/index.js';
 export * from './assistant/index.js';
+/* ACE parity P1: skills and bundles (D272, D273). */
+export * from './skills/index.js';

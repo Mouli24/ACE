@@ -58,6 +58,8 @@ import type { SearchService } from '../knowledge/search.js';
 import type { KnowledgeService } from '../knowledge/service.js';
 import { createMemoryRoutes } from '../memory/routes.js';
 import type { MemoryService } from '../memory/service.js';
+import { createSkillRoutes } from '../skills/routes.js';
+import type { SkillService } from '../skills/service.js';
 import { createTemplateRoutes } from '../templates/routes.js';
 import { createAssistantRoutes } from '../assistant/routes.js';
 import type { AssistantService } from '../assistant/service.js';
@@ -176,6 +178,14 @@ export interface EngineDeps {
   suggestions?: SuggestionService;
   /** ACE parity P2 (D283): Ace Assistant project setup. */
   assistant?: AssistantService;
+
+  /*
+   * ACE parity P1 (D272, D273). Optional like the rest: built without it, the skill and bundle
+   * routes answer 501 `not_implemented` (D121).
+   */
+
+  /** `/skills`, `/skills/:id`, `/skills/:id/duplicate`, `/bundles`, `/bundles/import`. */
+  skills?: SkillService;
 }
 
 export interface EngineVariables {
@@ -824,6 +834,7 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.route('/', createSuggestionRoutes(deps.suggestions));
   api.route('/', createAssistantRoutes(deps.assistant));
   api.route('/', createTaskRoutes(deps.tasks));
+  api.route('/', createSkillRoutes(deps.skills));
 
   app.route(API_BASE_PATH, api);
 
