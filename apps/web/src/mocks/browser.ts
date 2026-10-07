@@ -14,6 +14,7 @@ import {
   type ChatScenario,
 } from './handlers-round4';
 import { createRound5Handlers } from './handlers-round5';
+import { createSecretHandlers } from './handlers-secrets';
 import { createSkillHandlers } from './handlers-skills';
 import { createTaskHandlers } from './handlers-tasks';
 import { failNextIngest, setIngestPace } from './knowledge';
@@ -36,6 +37,7 @@ import {
   resetMockTasks,
   setTaskWorkPace,
 } from './tasks';
+import { resetMockSecrets } from './secrets';
 
 declare global {
   interface Window {
@@ -192,6 +194,7 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
   restoreScenario();
   const worker = setupWorker(
     ...createSkillHandlers(db),
+    ...createSecretHandlers(db),
     ...createTaskHandlers(db),
     ...createRound5Handlers(db),
     ...createRound4Handlers(db),
@@ -225,6 +228,7 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
       setIngestPace(150);
       failNextIngest(false);
       resetMockTasks();
+      resetMockSecrets();
     },
     setLatency(ms) {
       db.setLatency(ms);
