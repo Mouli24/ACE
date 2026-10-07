@@ -45,6 +45,7 @@ import {
   createRunService,
   createSearchService,
   createAssistantService,
+  createSkillService,
   createSuggestionService,
   createTaskService,
   createTemplateService,
@@ -947,6 +948,17 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   const stopWatching = suggestions.start();
 
   /*
+   * ACE parity P1 (D272, D273): the skills library and bundle imports. The built-in skills an
+   * install does not hold yet are added on every start, so a new install has them and an existing
+   * one gains a built-in a release adds; it changes nothing on an up-to-date database.
+   */
+  const skillService = createSkillService({ repository, scope: LOCAL_SCOPE });
+  const builtinsAdded = await skillService.ensureBuiltinSkills();
+  if (builtinsAdded.length > 0) {
+    logger.info({ subsystem: 'skills', added: builtinsAdded.length }, 'installed built-in skills');
+  }
+
+  /*
    * F7: a document the last process left mid-pipeline goes back to `pending` and is queued again —
    * never stuck `parsing` — and only then does the worker start draining, outside any transaction.
    */
@@ -1080,6 +1092,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     tasks: taskService,
     suggestions,
     assistant,
+    /* ACE parity P1: the skills library and bundles. */
+    skills: skillService,
   });
 
   /* -------------------------------------------------------------------- http */
