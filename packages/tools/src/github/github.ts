@@ -123,12 +123,21 @@ export function createGitHubPort(options: GitHubPortOptions = {}): GitHubPort {
   const viewPullRequest = async ({
     cwd,
     number,
+    repo,
   }: {
     cwd: string;
     number: number;
+    repo?: string;
   }): Promise<PullRequestInfo> => {
     assertPullRequestNumber(number);
-    const result = await checkGh(cwd, ['pr', 'view', String(number), '--json', PR_FIELDS]);
+    const result = await checkGh(cwd, [
+      'pr',
+      'view',
+      String(number),
+      '--json',
+      PR_FIELDS,
+      ...repoFlag(repo),
+    ]);
     return toPullRequestInfo(result);
   };
 
@@ -208,11 +217,52 @@ export function createGitHubPort(options: GitHubPortOptions = {}): GitHubPort {
 
     viewPullRequest,
 
-    async mergePullRequest({ cwd, number, method }) {
+    async mergePullRequest({ cwd, number, method, repo }) {
       assertPullRequestNumber(number);
       // Never `--admin` (it would bypass the branch's protection) and never `--delete-branch`
       // (the task branch is the user's to remove).
-      await checkGh(cwd, ['pr', 'merge', String(number), mergeFlag(method)]);
+      await checkGh(cwd, ['pr', 'merge', String(number), mergeFlag(method), ...repoFlag(repo)]);
+    },
+
+    /* ACE parity P2 (D280): what a Software health scan reads. */
+    async listOpenIssues({ cwd, limit }) {
+      const result = await checkGh(cwd, [
+        'issue',
+        'list',
+        '--state',
+        'open',
+        '--limit',
+        String(Math.max(1, Math.min(100, Math.floor(limit)))),
+        '--json',
+        'number,title,url,body,labels',
+      ]);
+      return parseList(result, IssueListSchema, 'gh issue list').map((issue) => ({
+        number: issue.number,
+        title: issue.title,
+        url: issue.url,
+        body: issue.body.slice(0, 4_000),
+        labels: issue.labels.map((label) => label.name),
+      }));
+    },
+
+    async listFailedRuns({ cwd, limit }) {
+      const result = await checkGh(cwd, [
+        'run',
+        'list',
+        '--status',
+        'failure',
+        '--limit',
+        String(Math.max(1, Math.min(50, Math.floor(limit)))),
+        '--json',
+        'databaseId,workflowName,url,headBranch,createdAt',
+      ]);
+      return parseList(result, RunListSchema, 'gh run list').map((run) => ({
+        id: run.databaseId,
+        name: run.workflowName,
+        url: run.url,
+        branch: run.headBranch,
+        createdAt: run.createdAt,
+      }));
     },
 
     async clone({ repo, folder }) {
@@ -406,6 +456,46 @@ function toPullRequestInfo(result: CliRun): PullRequestInfo {
   const sha = parsed.mergeCommit?.oid;
   if (sha !== undefined) info.mergeCommitSha = sha;
   return info;
+}
+
+/** `--repo owner/name` when one is named — refused unless it is a plain slug, so it is never a flag. */
+function repoFlag(repo: string | undefined): string[] {
+  if (repo === undefined) return [];
+  const slug = repositorySlug(repo);
+  if (slug === undefined)
+    throw new GitHubError(`"${repo}" is not a GitHub repository (owner/name).`);
+  return ['--repo', slug];
+}
+
+const IssueListSchema = z.array(
+  z.object({
+    number: z.number().int(),
+    title: z.string(),
+    url: z.string(),
+    body: z.string().default(''),
+    labels: z.array(z.object({ name: z.string() })).default([]),
+  }),
+);
+
+const RunListSchema = z.array(
+  z.object({
+    databaseId: z.number().int(),
+    workflowName: z.string(),
+    url: z.string(),
+    headBranch: z.string(),
+    createdAt: z.string(),
+  }),
+);
+
+function parseList<T extends z.ZodType>(result: CliRun, schema: T, label: string): z.infer<T> {
+  try {
+    return schema.parse(JSON.parse(result.stdout));
+  } catch {
+    throw new GitHubError(
+      `${label} answered something ACE could not read: ${result.stdout.trim().slice(0, 400)}`,
+      { args: result.args, exitCode: result.code, stderr: result.stderr },
+    );
+  }
 }
 
 function mergeFlag(method: 'merge' | 'squash' | 'rebase'): string {

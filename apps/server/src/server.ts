@@ -115,7 +115,9 @@ import {
   ToolRegistry,
   cannedResultsAt,
   createCommandRunner,
+  createGitHubPort,
   createGitPort,
+  createPreviewRunner,
   registerBuiltinTools,
 } from '@ace/tools';
 import { WebSocketServer } from 'ws';
@@ -799,6 +801,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
    * `<dataDir>/workspaces`; its check commands run through the platform shell (D271).
    */
   const gitPort = createGitPort();
+  /* ACE parity P1 (D276, D278): GitHub through the signed-in gh CLI; previews of a worktree. */
+  const githubPort = createGitHubPort();
   const taskService = createTaskService({
     repository,
     scope: LOCAL_SCOPE,
@@ -811,6 +815,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     stopRun: (runId) => controls.stop(runId),
     workspaceRoot: join(config.dataDir, 'workspaces'),
     mask: maskSecrets,
+    github: githubPort,
+    preview: createPreviewRunner(),
     /* ACE parity P1/P2: a task from a chat reports back; Clone makes a project; notes reach runs. */
     postNote: async (workflowId, text) => {
       const message = {
@@ -839,6 +845,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     logger: logger.child({ subsystem: 'suggestions' }),
     createTask: (projectId, body) => taskService.create(projectId, body),
     git: gitPort,
+    github: githubPort,
     mask: maskSecrets,
   });
 

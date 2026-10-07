@@ -200,8 +200,13 @@ export async function mergePullRequest(
         cwd: workspace.path,
         number: pr.number,
         method: body.method,
+        repo: pr.repo,
       });
-      const after = await github.viewPullRequest({ cwd: workspace.path, number: pr.number });
+      const after = await github.viewPullRequest({
+        cwd: workspace.path,
+        number: pr.number,
+        repo: pr.repo,
+      });
       const at = kernel.now();
       const updated: TaskWorkspace = {
         ...workspace,

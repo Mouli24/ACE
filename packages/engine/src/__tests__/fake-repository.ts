@@ -272,6 +272,8 @@ export class FakeRepository implements Repository {
         buildCapacity?: number;
         checkCommands?: CheckCommand[];
         setupCommand?: string | null;
+        previewCommand?: string | null;
+        previewUrl?: string | null;
         updatedAt: Timestamp;
       },
     ) => {
@@ -289,6 +291,10 @@ export class FakeRepository implements Repository {
       // ACE parity P0: `null` clears the setup command, `undefined` leaves it (D72).
       if (patch.setupCommand === null) delete next.setupCommand;
       else if (patch.setupCommand !== undefined) next.setupCommand = patch.setupCommand;
+      if (patch.previewCommand === null) delete next.previewCommand;
+      else if (patch.previewCommand !== undefined) next.previewCommand = patch.previewCommand;
+      if (patch.previewUrl === null) delete next.previewUrl;
+      else if (patch.previewUrl !== undefined) next.previewUrl = patch.previewUrl;
       this.#for(scope).projects.set(id, next);
       return next;
     },

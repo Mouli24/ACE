@@ -171,6 +171,8 @@ export function createGraphService(deps: GraphServiceDeps): GraphService {
         ...(patch.buildCapacity === undefined ? {} : { buildCapacity: patch.buildCapacity }),
         ...(patch.checkCommands === undefined ? {} : { checkCommands: patch.checkCommands }),
         ...(patch.setupCommand === undefined ? {} : { setupCommand: patch.setupCommand }),
+        ...(patch.previewCommand === undefined ? {} : { previewCommand: patch.previewCommand }),
+        ...(patch.previewUrl === undefined ? {} : { previewUrl: patch.previewUrl }),
         updatedAt: now(),
       });
       if (updated === null) throw notFound(`Project ${id}`);

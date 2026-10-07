@@ -664,3 +664,79 @@ describe.runIf(gitAvailable)('D276 push the task branch', () => {
     );
   });
 });
+
+describe('D276 --repo pins the repository; D280 issues and failed runs for a scan', () => {
+  it('passes --repo owner/name to view and merge when it is named, and refuses a flag-like one', async () => {
+    answer({
+      'pr view': { stdout: prJson({ state: 'MERGED', mergeCommit: { oid: MERGE_SHA } }) },
+      'pr merge': {},
+    });
+    const gh = port();
+    await gh.mergePullRequest({ cwd: repo, number: 12, method: 'squash', repo: 'octo/demo' });
+    const info = await gh.viewPullRequest({ cwd: repo, number: 12, repo: 'octo/demo' });
+    expect(info.state).toBe('merged');
+    expect(calls().map((call) => call.argv.slice(-2))).toEqual([
+      ['--repo', 'octo/demo'],
+      ['--repo', 'octo/demo'],
+    ]);
+    await expect(gh.viewPullRequest({ cwd: repo, number: 12, repo: '--admin' })).rejects.toThrow(
+      /not a GitHub repository/,
+    );
+  });
+
+  it('lists open issues and failed workflow runs as the scan reads them', async () => {
+    answer({
+      'issue list': {
+        stdout: JSON.stringify([
+          {
+            number: 4,
+            title: 'Search is slow',
+            url: 'https://github.com/octo/demo/issues/4',
+            body: 'It takes 3 s.',
+            labels: [{ name: 'bug' }],
+          },
+        ]),
+      },
+      'run list': {
+        stdout: JSON.stringify([
+          {
+            databaseId: 99,
+            workflowName: 'CI',
+            url: 'https://github.com/octo/demo/actions/runs/99',
+            headBranch: 'main',
+            createdAt: '2026-10-07T10:00:00Z',
+          },
+        ]),
+      },
+    });
+    const gh = port();
+    expect(await gh.listOpenIssues?.({ cwd: repo, limit: 500 })).toEqual([
+      {
+        number: 4,
+        title: 'Search is slow',
+        url: 'https://github.com/octo/demo/issues/4',
+        body: 'It takes 3 s.',
+        labels: ['bug'],
+      },
+    ]);
+    expect(await gh.listFailedRuns?.({ cwd: repo, limit: 5 })).toEqual([
+      {
+        id: 99,
+        name: 'CI',
+        url: 'https://github.com/octo/demo/actions/runs/99',
+        branch: 'main',
+        createdAt: '2026-10-07T10:00:00Z',
+      },
+    ]);
+    const [issues, runs] = calls();
+    expect(issues?.argv).toContain('100');
+    expect(runs?.argv).toEqual(expect.arrayContaining(['--status', 'failure', '--limit', '5']));
+  });
+
+  it('fails on a list it cannot read', async () => {
+    answer({ 'issue list': { stdout: 'not json' } });
+    await expect(port().listOpenIssues?.({ cwd: repo, limit: 5 })).rejects.toThrow(
+      /could not read/,
+    );
+  });
+});

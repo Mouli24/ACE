@@ -51,7 +51,7 @@ export interface GitHubPort {
     draft: boolean;
   }): Promise<PullRequestInfo>;
   /** `gh pr view <number> --json …` — the pull request as GitHub reports it now. */
-  viewPullRequest(input: { cwd: string; number: number }): Promise<PullRequestInfo>;
+  viewPullRequest(input: { cwd: string; number: number; repo?: string }): Promise<PullRequestInfo>;
   /**
    * `gh pr merge <number> --merge|--squash|--rebase`. Answers when the CLI returns; the caller then
    * reads the pull request back, because only GitHub's own `merged` state counts (ACE: "a GitHub
@@ -61,6 +61,11 @@ export interface GitHubPort {
     cwd: string;
     number: number;
     method: 'merge' | 'squash' | 'rebase';
+    /**
+     * `owner/name`: passed as `--repo` so `gh` never has to guess between several GitHub remotes
+     * of the checkout. Absent, `gh` works it out from the remotes.
+     */
+    repo?: string;
   }): Promise<void>;
   /** `gh repo clone <repo> <folder>`; `repo` is `owner/name` or a github.com URL. */
   clone(input: { repo: string; folder: string }): Promise<void>;
