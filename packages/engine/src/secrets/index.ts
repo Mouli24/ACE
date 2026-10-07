@@ -10,6 +10,7 @@ import type { EmittedEvent } from '../events/index.js';
 import { HttpError, notFound, notImplemented, validationFailed } from '../gateway/errors.js';
 import type { Logger } from '../logging/index.js';
 import type { Repository, Scope, SecretRepository, SecretStore } from '../ports/index.js';
+import { looksLikeSecret } from '../security/secret-patterns.js';
 
 /**
  * Secrets — named environment variables (ACE parity P1, D274, FR-PRV-002, BR-07, NFR-SEC-02).
@@ -33,8 +34,21 @@ export const secretStoreKey = (name: string): string => `secret:env:${name}`;
 /** Values shorter than this are not scrubbed: a two-letter value would rewrite ordinary words. */
 export const SCRUB_MIN_LENGTH = 4;
 
-/** What an exact value is replaced with in an event or a check's output. */
-export const scrubMarker = (name: string): string => `[SECRET:${name}]`;
+/** How much of a name a shortened marker keeps: under the label rule's 32-character run. */
+const MARKER_NAME_MAX = 31;
+
+/**
+ * What an exact value is replaced with in an event or a check's output: `[SECRET:<NAME>]`.
+ *
+ * One exception. Behind `SECRET:`, a name of 32+ characters that mixes letters and digits (say
+ * `S3_UPLOAD_ACCESS_KEY_FOR_PRODUCTION`) reads as a labelled credential to the shared secret
+ * patterns — so the store's guard would refuse the very event the marker was meant to make safe,
+ * and the run would fail on it. Such a name is shortened to its first 31 characters and `…`.
+ */
+export const scrubMarker = (name: string): string => {
+  const marker = `[SECRET:${name}]`;
+  return looksLikeSecret(marker) ? `[SECRET:${name.slice(0, MARKER_NAME_MAX)}…]` : marker;
+};
 
 export interface SecretService {
   /** `GET /secrets` — every secret by name, never a value. */

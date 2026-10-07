@@ -5,6 +5,7 @@ import { FakeRepository } from '../../__tests__/fake-repository.js';
 import { HttpError } from '../../gateway/errors.js';
 import { newId } from '../../ids.js';
 import { LOCAL_SCOPE, SecretStoreUnavailableError, type SecretStore } from '../../ports/index.js';
+import { looksLikeSecret } from '../../security/secret-patterns.js';
 import {
   SCRUB_MIN_LENGTH,
   createSecretService,
@@ -285,6 +286,19 @@ describe('D274 the exact-value scrubber', () => {
     expect(scrub('PIN is 123')).toBe('PIN is 123');
     expect(scrub('abc')).toBe('abc');
     expect(scrub('nothing to see')).toBe('nothing to see');
+  });
+
+  it('shortens a marker the store’s secret guard would itself refuse', async () => {
+    const long = 'S3_UPLOAD_ACCESS_KEY_FOR_PRODUCTION_2026';
+    expect(looksLikeSecret(`[SECRET:${long}]`)).toBe(true);
+    expect(scrubMarker(long)).toBe(`[SECRET:${long.slice(0, 31)}…]`);
+    expect(looksLikeSecret(scrubMarker(long))).toBe(false);
+
+    const { service } = setUp();
+    await service.create({ name: long, value: VALUE });
+    const scrubbed = service.scrubber()(`token ${VALUE}`);
+    expect(scrubbed).toBe(`token ${scrubMarker(long)}`);
+    expect(looksLikeSecret(scrubbed)).toBe(false);
   });
 
   it('replaces a longer value whole before a shorter one it contains', async () => {
