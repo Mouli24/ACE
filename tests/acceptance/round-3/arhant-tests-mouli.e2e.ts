@@ -690,22 +690,14 @@ test.describe('Errors (FR-ERR-002/006/007)', () => {
   });
 
   /*
-   * FINDING, reported and deliberately not fixed here (the fix is A3's, `packages/engine`).
-   *
-   * FR-ERR-002 lists the **provider** among the six things a failure has to show, and `ErrorCard`
-   * renders it from `error.providerId` (falling back to the provider's name). The engine never
-   * records one: `packages/engine/src/runs/executor.ts` calls `classifyError(error)` with **no
-   * context**, while `ClassifyContext.providerId` exists for exactly this purpose and says so in its
-   * own comment — "Recorded on the error so the UI can say which provider to fix (FR-ERR-002)".
-   * The model the router chose (`chosen.providerId`) is in scope on the line above. So the card has
-   * nothing to render and the `error-provider-…` element is absent.
-   *
-   * This is the engine's half of the row, not the screen's: nothing `apps/web` can do recovers a
-   * field the record does not carry. Marked `test.fail()` so it stays visible and turns green by
-   * itself the day the executor passes the context.
+   * FINDING, since fixed. FR-ERR-002 lists the **provider** among the six things a failure has to
+   * show, and `ErrorCard` renders it from `error.providerId`. The executor used to classify a
+   * provider failure with no context, so no provider was recorded and this row was marked
+   * `test.fail()`. X1's model gateway now stamps the provider on every classified failure that
+   * lacks one (`stampProvider`, `packages/engine/src/models/gateway.ts`), so the row passes and the
+   * marker is gone.
    */
   test('TC-ERR-002: the error card names the provider that refused the key', async ({ page }) => {
-    test.fail();
     const { projectId, workflowId, byName } = await importFixture('auth-401.json');
     const gatekeeper = byName('Gatekeeper');
 
