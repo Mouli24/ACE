@@ -151,6 +151,11 @@ const ACTION_WORDS: Readonly<Record<TaskAction, string>> = {
   resume: 'be resumed',
   move: 'move',
   delete: 'be deleted',
+  accept: 'be accepted',
+  send: 'be sent',
+  open_pr: 'open a pull request',
+  merge_pr: 'merge its pull request',
+  preview: 'start a preview',
 };
 
 /* -------------------------------------------------------------------------- */

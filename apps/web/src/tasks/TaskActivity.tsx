@@ -52,7 +52,9 @@ export function TaskActivityFeed({ taskId }: { taskId: string }) {
       </p>
     );
   }
-  const rows = [...activity.data.items].sort((a, b) => b.at.localeCompare(a.at));
+  // The engine lists activity oldest first in the order it happened; two rows written in the same
+  // millisecond share a timestamp, so reversing that order is exact where sorting by `at` is not.
+  const rows = [...activity.data.items].reverse();
   return (
     <ol aria-label="Activity" className="flex flex-col" data-testid="task-activity">
       {rows.map((row) => (
