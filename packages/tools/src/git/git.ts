@@ -61,9 +61,10 @@ const FALLBACK_EMAIL = 'ace@localhost';
 /**
  * Variables that point Git at a different repository than the folder it runs in. They are set
  * while a Git hook runs (an engine started from one, a test run from a pre-commit hook) and would
- * silently redirect every call here, so they are never passed on.
+ * silently redirect every call here, so they are never passed on — here, and by the GitHub port,
+ * whose `gh` runs Git too.
  */
-const REPOSITORY_VARIABLES = [
+export const REPOSITORY_VARIABLES: readonly string[] = [
   'GIT_DIR',
   'GIT_WORK_TREE',
   'GIT_INDEX_FILE',
