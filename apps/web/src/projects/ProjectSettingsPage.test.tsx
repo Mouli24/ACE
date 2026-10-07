@@ -130,3 +130,44 @@ describe('ACE-P0 project settings (design §8)', () => {
     }
   });
 });
+
+describe('ACE-P1 D278 the Preview settings', () => {
+  it('saves the preview command and URL each on its own, and clears them', async () => {
+    const project = db.createProject({ name: 'Shop' });
+    const user = userEvent.setup();
+    renderApp(`/projects/${project.id}/settings`);
+    const preview = await screen.findByTestId('project-preview');
+    expect(within(preview).getByText(/is replaced with the port the/)).toBeInTheDocument();
+
+    await user.type(within(preview).getByLabelText('Preview command'), 'pnpm dev --port $PORT');
+    await user.click(within(preview).getByRole('button', { name: 'Save preview command' }));
+    await waitFor(() =>
+      expect(db.getProject(project.id)?.previewCommand).toBe('pnpm dev --port $PORT'),
+    );
+    expect(db.getProject(project.id)?.previewUrl).toBeUndefined();
+
+    await user.type(
+      within(section('project-preview')).getByLabelText('Preview URL'),
+      'http://localhost:{{port}/app',
+    );
+    await user.click(
+      within(section('project-preview')).getByRole('button', { name: 'Save preview URL' }),
+    );
+    await waitFor(() =>
+      expect(db.getProject(project.id)?.previewUrl).toBe('http://localhost:{port}/app'),
+    );
+    expect(db.getProject(project.id)?.previewCommand).toBe('pnpm dev --port $PORT');
+
+    await user.click(
+      within(section('project-preview')).getByRole('button', { name: 'Clear preview command' }),
+    );
+    await waitFor(() => expect(db.getProject(project.id)?.previewCommand).toBeUndefined());
+    await user.click(
+      within(section('project-preview')).getByRole('button', { name: 'Clear preview URL' }),
+    );
+    await waitFor(() => expect(db.getProject(project.id)?.previewUrl).toBeUndefined());
+    expect(
+      within(section('project-preview')).getByRole('button', { name: 'Clear preview URL' }),
+    ).toBeDisabled();
+  });
+});

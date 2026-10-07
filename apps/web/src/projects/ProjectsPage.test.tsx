@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
+import { failNextClone, setMockGitHub } from '../mocks/tasks';
 import { db, installMockServer, renderApp } from '../test/app';
 
 installMockServer();
@@ -83,5 +84,53 @@ describe('Projects screen (FR-PRJ-001..004)', () => {
     await user.click(await screen.findByRole('link', { name: /open me/i }));
     await waitFor(() => expect(router.state.location.pathname).toBe(`/projects/${p.id}`));
     await waitFor(() => expect(db.settings.lastProjectId).toBe(p.id));
+  });
+});
+
+describe('ACE-P1 D276 Clone from GitHub', () => {
+  it('clones owner/name into a new project and opens it', async () => {
+    const user = userEvent.setup();
+    const { router } = renderApp('/projects');
+    await user.click(await screen.findByRole('button', { name: 'Clone from GitHub' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Clone from GitHub' });
+    expect(within(dialog).getByRole('button', { name: 'Clone' })).toBeDisabled();
+    await user.type(within(dialog).getByLabelText('Repository'), 'acme/storefront');
+    await user.type(within(dialog).getByLabelText('Project name (optional)'), 'Storefront');
+    await user.click(within(dialog).getByRole('button', { name: 'Clone' }));
+
+    await waitFor(() => expect(db.listProjects().map((p) => p.name)).toEqual(['Storefront']));
+    const project = db.listProjects()[0];
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/projects/${project?.id}`));
+    expect(project?.folderPath).toBe('/mock/projects/storefront');
+    expect(db.repositoryOf(project?.id ?? '').remoteUrl).toBe(
+      'https://github.com/acme/storefront.git',
+    );
+  });
+
+  it('says plainly when GitHub is not connected, and when the clone fails', async () => {
+    setMockGitHub({ signedIn: false });
+    const user = userEvent.setup();
+    renderApp('/projects');
+    await user.click(await screen.findByRole('button', { name: 'Clone from GitHub' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Clone from GitHub' });
+    await user.type(within(dialog).getByLabelText('Repository'), 'https://github.com/acme/api');
+    await user.type(within(dialog).getByLabelText('Folder (optional)'), '/mock/elsewhere/api');
+    await user.click(within(dialog).getByRole('button', { name: 'Clone' }));
+    const refusal = await within(dialog).findByTestId('clone-error');
+    expect(refusal).toHaveAttribute('data-code', 'not_connected');
+    expect(refusal).toHaveTextContent(
+      'GitHub is not connected. The GitHub CLI is not signed in. Run gh auth login in a terminal.',
+    );
+    expect(db.listProjects()).toHaveLength(0);
+
+    setMockGitHub({ signedIn: true });
+    failNextClone('repository not found');
+    await user.click(within(dialog).getByRole('button', { name: 'Clone' }));
+    await waitFor(() =>
+      expect(within(dialog).getByTestId('clone-error')).toHaveTextContent(
+        'The clone failed. Cloning https://github.com/acme/api failed: repository not found',
+      ),
+    );
+    expect(screen.getByRole('dialog', { name: 'Clone from GitHub' })).toBeInTheDocument();
   });
 });

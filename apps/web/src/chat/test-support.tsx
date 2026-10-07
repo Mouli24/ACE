@@ -13,6 +13,8 @@ import { createHandlers } from '../mocks/handlers';
 import { createRound2Handlers, stopScenario } from '../mocks/handlers-round2';
 import { createRound3Handlers } from '../mocks/handlers-round3';
 import { createRound4Handlers, setChatScenario } from '../mocks/handlers-round4';
+import { createTaskHandlers } from '../mocks/handlers-tasks';
+import { resetMockTasks } from '../mocks/tasks';
 import { createNode } from '../nodes/factory';
 import { resetGraphSyncRegistry } from '../workflows/sync-registry';
 
@@ -20,10 +22,12 @@ import { resetGraphSyncRegistry } from '../workflows/sync-registry';
  * A self-contained mock engine for the chat panel's component tests. The shared `test/app.tsx`
  * harness does not register round 4's handlers (and is not this feature's to edit), so the chat
  * tests wire their own — round 4 newest, then 3/2/1 for the graph and catalogue endpoints the panel
- * leans on — plus the fake socket the streaming reply arrives on.
+ * leans on — plus the fake socket the streaming reply arrives on. The tasks engine (ACE parity P1)
+ * answers *Send to Build*.
  */
 export const db = new MockDb({ persist: false });
 export const server = setupServer(
+  ...createTaskHandlers(db),
   ...createRound4Handlers(db),
   ...createRound3Handlers(db),
   ...createRound2Handlers(db),
@@ -40,6 +44,7 @@ export function installChatMockServer(): void {
   beforeEach(() => {
     stopScenario();
     setChatScenario('chat-stream');
+    resetMockTasks();
     db.reset();
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     resetGraphSyncRegistry();
