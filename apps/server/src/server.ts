@@ -1046,13 +1046,15 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
      * Final-review M4: the restored rows are live at once, so what this process keeps about them
      * follows — the catalog cache the router and the summariser read is reloaded, and documents the
      * backup holds mid-pipeline are queued again, as a start does (F7). The data is restored either
-     * way, so a failure here is logged rather than turned into a failed import.
+     * way, so a failure here is logged rather than turned into a failed import. A backup taken
+     * before skills existed holds no built-in skill, so they are put back too (D272).
      */
     afterImport: async () => {
       try {
         await gateway.refreshCatalog();
         const requeued = await knowledge.recover();
         if (requeued > 0) knowledgeLogger.info({ requeued }, 're-queued restored documents');
+        await skillService.ensureBuiltinSkills();
       } catch (error) {
         logger.warn({ subsystem: 'backup', err: error }, 'could not refresh after a restore');
       }
