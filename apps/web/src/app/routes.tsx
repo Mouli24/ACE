@@ -1,4 +1,4 @@
-import type { RouteObject } from 'react-router-dom';
+import { Navigate, type RouteObject } from 'react-router-dom';
 
 import { HelpPage } from '../help/HelpPage';
 import { KnowledgeBasePage } from '../knowledge/KnowledgeBasePage';
@@ -15,7 +15,7 @@ import { RunDetailPage } from '../runs/RunDetailPage';
 import { SettingsPage } from '../settings/SettingsPage';
 import { TaskPage } from '../tasks/TaskPage';
 import { TasksBoardPage } from '../tasks/TasksBoardPage';
-import { ToolsLibraryPage } from '../library/ToolsLibraryPage';
+import { LibraryPage } from '../library/LibraryPage';
 import { TimelinePage } from '../timeline/TimelinePage';
 import { WorkflowPage } from '../workflows/WorkflowPage';
 import { HomeRedirect } from './HomeRedirect';
@@ -24,7 +24,8 @@ import { AppShell } from './layout/AppShell';
 /**
  * Routes (Arch §33.3): `/`, `/onboarding`, `/projects`, `/projects/:id`, the Canvas, knowledge,
  * runs, `/providers`, `/guardrails`, `/usage` (D239), `/settings`, and `/help/:page` (D240). ACE
- * parity P0 adds a project's task board, one task's page and the project's settings.
+ * parity P0 adds a project's task board, one task's page and the project's settings; P1 turns
+ * `/library/tools` into the Library's tabs (`/library/:tab`: tools, skills, plugins, bundles).
  */
 export const routes: RouteObject[] = [
   {
@@ -49,7 +50,8 @@ export const routes: RouteObject[] = [
       { path: 'runs/:runId', element: <RunDetailPage /> },
       { path: 'providers', element: <ProvidersPage /> },
       { path: 'guardrails', element: <GuardrailsPage /> },
-      { path: 'library/tools', element: <ToolsLibraryPage /> },
+      { path: 'library', element: <Navigate to="/library/tools" replace /> },
+      { path: 'library/:tab', element: <LibraryPage /> },
       { path: 'usage', element: <UsagePage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: 'help/:page', element: <HelpPage /> },

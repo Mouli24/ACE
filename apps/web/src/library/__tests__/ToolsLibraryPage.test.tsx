@@ -3,7 +3,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { serverSlug } from '../../mocks/tools-catalog';
-import { ToolsLibraryPage } from '../ToolsLibraryPage';
+import { ToolsTab } from '../ToolsLibraryPage';
 import { db, installToolsMockServer, renderTools, startToolsSocket } from './harness';
 
 installToolsMockServer();
@@ -20,7 +20,7 @@ async function addServer(user: ReturnType<typeof userEvent.setup>, name: string)
 
 describe('TC-TOOL-001 the registry lists built-ins and MCP tools with their permissions', () => {
   it('shows every built-in with source and permission badges', async () => {
-    renderTools(<ToolsLibraryPage />);
+    renderTools(<ToolsTab />);
 
     // Every contract built-in has a row (FR-TOOL-001).
     for (const name of BUILTIN_TOOL_NAMES) {
@@ -43,7 +43,7 @@ describe('TC-TOOL-001 the registry lists built-ins and MCP tools with their perm
 
   it('adds a connected MCP server, whose tools join the registry with the server name as source', async () => {
     const user = userEvent.setup();
-    renderTools(<ToolsLibraryPage />);
+    renderTools(<ToolsTab />);
     await screen.findByTestId('tool-row-echo');
 
     await addServer(user, 'files');
@@ -60,7 +60,7 @@ describe('TC-TOOL-001 the registry lists built-ins and MCP tools with their perm
 describe('FR-TOOL-007 MCP servers connect, show status and tool count, and can be removed', () => {
   it('connects a stdio server with tool count 2', async () => {
     const user = userEvent.setup();
-    renderTools(<ToolsLibraryPage />);
+    renderTools(<ToolsTab />);
     await addServer(user, 'files');
 
     await waitFor(() => expect(db.listMcpServers()).toHaveLength(1));
@@ -72,7 +72,7 @@ describe('FR-TOOL-007 MCP servers connect, show status and tool count, and can b
 
   it('shows an unreachable server (a name containing "unreachable") with an error, no tools', async () => {
     const user = userEvent.setup();
-    renderTools(<ToolsLibraryPage />);
+    renderTools(<ToolsTab />);
     await addServer(user, 'unreachable-one');
 
     await waitFor(() => expect(db.listMcpServers()).toHaveLength(1));
@@ -86,7 +86,7 @@ describe('FR-TOOL-007 MCP servers connect, show status and tool count, and can b
 
   it('removes a server and its tools leave the registry', async () => {
     const user = userEvent.setup();
-    renderTools(<ToolsLibraryPage />);
+    renderTools(<ToolsTab />);
     await addServer(user, 'files');
 
     const slug = serverSlug('files');
@@ -103,7 +103,7 @@ describe('FR-TOOL-007 MCP servers connect, show status and tool count, and can b
 
   it('re-checks a server on demand', async () => {
     const user = userEvent.setup();
-    renderTools(<ToolsLibraryPage />);
+    renderTools(<ToolsTab />);
     await addServer(user, 'files');
     const created = db.listMcpServers()[0]!;
     const firstCheckedAt = created.lastCheckedAt;
@@ -120,7 +120,7 @@ describe('FR-TOOL-007 mcp.status keeps the chip current without a reload', () =>
   it('folds an engine-scope mcp.status frame into the registry', async () => {
     const user = userEvent.setup();
     startToolsSocket();
-    renderTools(<ToolsLibraryPage />);
+    renderTools(<ToolsTab />);
     await addServer(user, 'files');
 
     const created = db.listMcpServers()[0]!;

@@ -10,6 +10,7 @@ import {
   BarChart3,
   CircleHelp,
   History,
+  Library,
   ListTodo,
   Menu,
   Settings,
@@ -19,9 +20,9 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 /**
- * The top bar's links at phone width (FR-MOB-001): the same four destinations as the desktop icon
- * row — Usage, Guardrail policies, Settings, Help — plus the project's tasks and runs, behind one
- * button.
+ * The top bar's links at phone width (FR-MOB-001): the same five destinations as the desktop icon
+ * row — Usage, Guardrail policies, Library, Settings, Help — plus the project's tasks and runs,
+ * behind one button.
  * `status` is what the desktop bar shows inline (provider status, the day's totals), shown at the
  * top of the menu instead of squeezed into a 380 px bar.
  */
@@ -71,6 +72,7 @@ export function CompactMenu({ projectId, status }: { projectId?: string; status?
           label="Guardrail policies"
           icon={<ShieldCheck className="h-4 w-4" />}
         />
+        <MenuLink to="/library" label="Library" icon={<Library className="h-4 w-4" />} />
         <MenuLink to="/settings" label="Settings" icon={<Settings className="h-4 w-4" />} />
         <MenuLink
           to="/help/getting-started"

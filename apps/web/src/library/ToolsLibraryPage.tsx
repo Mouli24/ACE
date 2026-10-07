@@ -3,27 +3,28 @@ import { ToolRegistryTable } from './ToolRegistryTable';
 import { useMcpServers, useMcpStatusSubscription, useTools } from './tools-hooks';
 
 /**
- * `/library/tools` (Arch §33.2, Library › Tools; round 4 §5 item 6, FR-TOOL-001/007): the tool
- * registry — every built-in and every connected MCP server's tools, with their permissions and
- * timeout — over the panel that connects, checks and removes MCP servers. `mcp.status` keeps both
- * current without a reload.
+ * Library › Tools (Arch §33.2; round 4 §5 item 6, FR-TOOL-001/007): the tool registry — every
+ * built-in and every connected MCP server's tools, with their permissions and timeout — over the
+ * panel that connects, checks and removes MCP servers, which the Plugins tab also shows (ACE
+ * parity P1). `mcp.status` keeps both current without a reload. Rendered by `LibraryPage` at
+ * `/library/tools`.
  */
-export function ToolsLibraryPage() {
+export function ToolsTab() {
   useMcpStatusSubscription();
   const tools = useTools();
   const servers = useMcpServers();
 
   return (
-    <main className="mx-auto flex h-full w-full max-w-5xl flex-col gap-8 overflow-y-auto px-4 py-10">
+    <div className="flex flex-col gap-8" data-testid="tools-tab">
       <header>
-        <h1 className="font-human text-2xl font-semibold">Tools</h1>
+        <h2 className="font-human text-lg font-semibold">Tools</h2>
         <p className="mt-1 font-human text-sm text-fg-muted">
           The tools agents can call — built-ins and those from connected MCP servers (FR-TOOL-001).
         </p>
       </header>
 
       <section className="flex flex-col gap-3">
-        <h2 className="font-human text-lg font-semibold">Registry</h2>
+        <h3 className="font-human text-base font-semibold">Registry</h3>
         {tools.isPending && <p className="text-fg-muted">Loading tools…</p>}
         {tools.isError && (
           <p role="alert" className="text-danger">
@@ -34,6 +35,6 @@ export function ToolsLibraryPage() {
       </section>
 
       <McpServersPanel />
-    </main>
+    </div>
   );
 }

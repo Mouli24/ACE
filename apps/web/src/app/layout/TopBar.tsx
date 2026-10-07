@@ -1,6 +1,7 @@
 import {
   BarChart3,
   CircleHelp,
+  Library,
   ListTodo,
   MoreHorizontal,
   PanelRight,
@@ -30,12 +31,14 @@ import { WorkflowTabs } from '../../workflows/WorkflowTabs';
 import { usePanelsStore } from '../stores/panels';
 
 /**
- * Usage, Guardrail policies, Settings and Help: an icon row at xl and up, the More menu below. With
- * a project open, its task board leads the row (ACE parity P0).
+ * Usage, Guardrail policies, Library, Settings and Help: an icon row at xl and up, the More menu
+ * below. With a project open, its task board leads the row (ACE parity P0). The Library — tools,
+ * skills, plugins and bundles — joined in P1.
  */
 const LINKS = [
   { to: '/usage', label: 'Usage', Icon: BarChart3 },
   { to: '/guardrails', label: 'Guardrail policies', Icon: ShieldCheck },
+  { to: '/library', label: 'Library', Icon: Library },
   { to: '/settings', label: 'Settings', Icon: Settings },
   { to: '/help/getting-started', label: 'Help', Icon: CircleHelp },
 ] as const;
