@@ -545,6 +545,7 @@ describe('FR-PRV-004 EngineEvent', () => {
       'memory.updated',
       'task.updated',
       'task.deleted',
+      'project.changed',
     ]);
   });
 

@@ -331,6 +331,17 @@ export const TaskDeletedPayloadSchema = z.strictObject({
 });
 export type TaskDeletedPayload = z.infer<typeof TaskDeletedPayloadSchema>;
 
+/**
+ * ACE parity P2 (D280, D281): a project's suggestions, responsibilities or team notes changed — the
+ * client refetches that project's lists. A scan can add many suggestions at once, so the frame names
+ * the project, not each row.
+ */
+export const SuggestionsChangedPayloadSchema = z.strictObject({
+  projectId: IdSchema,
+  what: z.enum(['suggestions', 'responsibilities', 'notes']),
+});
+export type SuggestionsChangedPayload = z.infer<typeof SuggestionsChangedPayloadSchema>;
+
 export const ENGINE_EVENT_FRAME_SCHEMAS = [
   persistedFrame('provider.status', ProviderStatusPayloadSchema),
   persistedFrame('mcp.status', McpStatusPayloadSchema),
@@ -338,6 +349,7 @@ export const ENGINE_EVENT_FRAME_SCHEMAS = [
   persistedFrame('memory.updated', MemoryUpdatedPayloadSchema),
   persistedFrame('task.updated', TaskUpdatedPayloadSchema),
   persistedFrame('task.deleted', TaskDeletedPayloadSchema),
+  persistedFrame('project.changed', SuggestionsChangedPayloadSchema),
 ] as const;
 
 /** Server → client, run scope (round 2 §2.4, round 3 §2.6, round 4 §2.5). */
@@ -386,6 +398,7 @@ export const ENGINE_EVENT_TYPES = [
   'memory.updated',
   'task.updated',
   'task.deleted',
+  'project.changed',
 ] as const;
 export type EngineEventType = (typeof ENGINE_EVENT_TYPES)[number];
 

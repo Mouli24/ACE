@@ -84,6 +84,9 @@ export const PARITY_P1_ERROR_CODES = [
   'no_preview_command',
 ] as const;
 
+/** ACE parity P2: a scan already running for the responsibility (D280). */
+export const PARITY_P2_ERROR_CODES = ['scan_running'] as const;
+
 export const ERROR_CODES = [
   ...ROUND_1_ERROR_CODES,
   ...ROUND_2_ERROR_CODES,
@@ -91,6 +94,7 @@ export const ERROR_CODES = [
   ...ROUND_4_ERROR_CODES,
   ...PARITY_P0_ERROR_CODES,
   ...PARITY_P1_ERROR_CODES,
+  ...PARITY_P2_ERROR_CODES,
 ] as const;
 export const ErrorCodeSchema = z.enum(ERROR_CODES);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
@@ -127,6 +131,7 @@ export const ERROR_CODE_HTTP_STATUS: Readonly<Record<ErrorCode, number>> = {
   not_connected: 422,
   delivery_failed: 502,
   no_preview_command: 422,
+  scan_running: 409,
 };
 
 /** `details` shapes §2.3 names explicitly. */

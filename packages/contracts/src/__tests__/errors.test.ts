@@ -9,6 +9,7 @@ import {
   ROUND_3_ERROR_CODES,
   PARITY_P0_ERROR_CODES,
   PARITY_P1_ERROR_CODES,
+  PARITY_P2_ERROR_CODES,
   ROUND_4_ERROR_CODES,
   aceError,
 } from '../errors.js';
@@ -111,6 +112,7 @@ describe('FR-SYS-006 round 1 error codes', () => {
       ...ROUND_4_ERROR_CODES,
       ...PARITY_P0_ERROR_CODES,
       ...PARITY_P1_ERROR_CODES,
+      ...PARITY_P2_ERROR_CODES,
     ]);
   });
 
@@ -168,6 +170,7 @@ describe('FR-SYS-006 round 1 error codes', () => {
       not_connected: 422,
       delivery_failed: 502,
       no_preview_command: 422,
+      scan_running: 409,
     });
   });
 });
