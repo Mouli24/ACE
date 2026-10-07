@@ -177,6 +177,16 @@ function CanvasInner({
   const savedViewport = useViewportStore((s) => s.viewports[workflowId]);
   const setViewport = useViewportStore((s) => s.setViewport);
   const [armedPortId, setArmedPortId] = useState<string>();
+  /**
+   * The armed port as of the last key press, which the port handlers read. React Flow hands a node
+   * its new `onKey` only after an effect, so a quick second Enter can reach a handler still holding
+   * the render from before the arming — and the connection would be lost (NFR-USE-02).
+   */
+  const armedRef = useRef<string | undefined>(undefined);
+  const arm = useCallback((portId: string | undefined) => {
+    armedRef.current = portId;
+    setArmedPortId(portId);
+  }, []);
   const [edgeMenu, setEdgeMenu] = useState<{ edgeId: string; x: number; y: number }>();
   /** A drawn arrow that closes a cycle and could legally be the loop edge (FR-CON-007). */
   const [loopCandidate, setLoopCandidate] = useState<LoopEdgeCandidate>();
@@ -322,25 +332,26 @@ function CanvasInner({
     (port: Port, direction: 'in' | 'out', nodeId: string) => {
       if (readOnly) return;
       if (direction === 'out') {
-        setArmedPortId((current) => (current === port.id ? undefined : port.id));
+        arm(armedRef.current === port.id ? undefined : port.id);
         toast.message(`Output “${port.name}” armed`, {
           description: 'Tab to an input port and press Enter to connect.',
         });
         return;
       }
-      if (!armedPortId) return;
-      const source = nodes.find((n) => n.outputs.some((p) => p.id === armedPortId));
+      const armed = armedRef.current;
+      if (!armed) return;
+      const source = nodes.find((n) => n.outputs.some((p) => p.id === armed));
       if (source) {
         tryConnect({
           source: source.id,
-          sourceHandle: armedPortId,
+          sourceHandle: armed,
           target: nodeId,
           targetHandle: port.id,
         });
       }
-      setArmedPortId(undefined);
+      arm(undefined);
     },
-    [armedPortId, nodes, tryConnect, readOnly],
+    [arm, nodes, tryConnect, readOnly],
   );
 
   /* ---------------------------------------------------------------- nodes */
@@ -802,7 +813,7 @@ function CanvasInner({
         return;
       }
       if (event.key === 'Escape') {
-        setArmedPortId(undefined);
+        arm(undefined);
         setEdgeMenu(undefined);
         return;
       }
@@ -842,7 +853,7 @@ function CanvasInner({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [fitView, selectAll, copySelection, paste, duplicateSelection, editor, readOnly]);
+  }, [fitView, selectAll, copySelection, paste, duplicateSelection, editor, readOnly, arm]);
 
   /* ---------------------------------------------------------------- edge context menu (FR-CON-004) */
 
