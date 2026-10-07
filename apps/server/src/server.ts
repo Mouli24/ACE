@@ -44,6 +44,8 @@ import {
   createRunGateRegistry,
   createRunService,
   createSearchService,
+  createAssistantService,
+  createSuggestionService,
   createTaskService,
   createTemplateService,
   createToolGuardrailEvaluator,
@@ -75,6 +77,7 @@ import {
   type IngestJob,
   type Logger,
   type McpService,
+  type Repository,
   type TaskService,
   type ProviderService,
   type RunService,
@@ -795,20 +798,49 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
    * its team workflow, started under a run id the service chooses; its worktrees live under
    * `<dataDir>/workspaces`; its check commands run through the platform shell (D271).
    */
+  const gitPort = createGitPort();
   const taskService = createTaskService({
     repository,
     scope: LOCAL_SCOPE,
     bus,
     logger: logger.child({ subsystem: 'tasks' }),
-    git: createGitPort(),
+    git: gitPort,
     commands: createCommandRunner(),
     startRun: async (workflowId, request, runId) =>
       (await runs.beginRun(workflowId, request, { runId })).run,
     stopRun: (runId) => controls.stop(runId),
     workspaceRoot: join(config.dataDir, 'workspaces'),
     mask: maskSecrets,
+    /* ACE parity P1/P2: a task from a chat reports back; Clone makes a project; notes reach runs. */
+    postNote: async (workflowId, text) => {
+      const message = {
+        id: newId(),
+        workflowId,
+        type: 'system' as const,
+        content: [{ type: 'text' as const, text }],
+        at: new Date().toISOString(),
+      };
+      await repository.messages.append(LOCAL_SCOPE, message);
+      await bus.emit({ type: 'message.created', workflowId, payload: { workflowId, message } });
+    },
+    createProject: (body) => graph.createProject(body),
+    projectsRoot: join(process.cwd(), 'ace-projects'),
+    // The port is optional until the store implements it (D218); read it through the port type.
+    notesFor: async (projectId) =>
+      (await (repository as Repository).projectNotes?.listByProject(LOCAL_SCOPE, projectId)) ?? [],
   });
   late.tasks = taskService;
+
+  /* ACE parity P2 (D280–D282): responsibilities, suggestions, team notes, email import. */
+  const suggestions = createSuggestionService({
+    repository,
+    scope: LOCAL_SCOPE,
+    bus,
+    logger: logger.child({ subsystem: 'suggestions' }),
+    createTask: (projectId, body) => taskService.create(projectId, body),
+    git: gitPort,
+    mask: maskSecrets,
+  });
 
   /*
    * The chat service (FR-CHAT-001..008): the workflow timeline and direct agent threads. It reaches
@@ -905,6 +937,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
 
   /* ACE parity: tasks whose runs ended (or died) while the engine was away are settled. */
   const detachTasks = await taskService.attach();
+  const stopWatching = suggestions.start();
 
   /*
    * F7: a document the last process left mid-pipeline goes back to `pending` and is queued again —
@@ -956,6 +989,29 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
    * Backup and restore (FR-SYS-012, F12) on the live connection. `exclusive` keeps a repository
    * transaction from opening while `VACUUM INTO` or `ATTACH` runs, which both refuse to inside one.
    */
+  /*
+   * ACE parity P2 (D283): the Ace Assistant. A proposal is drafted by the model the user picks —
+   * one completion through the model gateway, gated like any call — or by rules.
+   */
+  const assistant = createAssistantService({
+    graph,
+    templates,
+    providers: () => providers.list(),
+    logger: logger.child({ subsystem: 'assistant' }),
+    complete: async ({ providerId, modelId, system, prompt }) =>
+      gateway.runGated(providerId, async () => {
+        const adapter = await gateway.adapterFor(providerId);
+        let text = '';
+        for await (const chunk of adapter.generate(
+          { modelId, system, prompt, outputTypes: ['text'], temperature: 0.2, maxTokens: 2_000 },
+          AbortSignal.timeout(120_000),
+        )) {
+          if (chunk.type === 'text') text += chunk.delta;
+        }
+        return text;
+      }),
+  });
+
   const backup = createBackupService({
     store: createBackupStore({
       sqlite,
@@ -1015,6 +1071,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     backup,
     /* ACE parity P0: the Tasks board, workspaces, changes and delivery. */
     tasks: taskService,
+    suggestions,
+    assistant,
   });
 
   /* -------------------------------------------------------------------- http */
@@ -1108,6 +1166,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     // Checks and setup commands in flight are cancelled; the halted runs above settle their tasks.
     await taskService.shutdown();
     detachTasks();
+    stopWatching();
+    await suggestions.shutdown();
 
     // Round 4: stop deriving timeline rows and close every MCP connection before the DB closes.
     timeline.unsubscribe();
