@@ -24,6 +24,7 @@ import { CompactMenu } from '../../responsive/CompactMenu';
 import { useIsCompact } from '../../responsive/useIsCompact';
 import { RunBar } from '../../runs/RunBar';
 import { ApprovalsBadge } from '../../runs/approvals/ApprovalsBadge';
+import { ApprovalsInbox } from '../../runs/approvals/ApprovalsInbox';
 import { useRunStore } from '../../runs/run-store';
 import { DayTotalsChip } from '../../usage/DayTotalsChip';
 import { SHEET_ID } from '../../workflows/WorkflowSheet';
@@ -49,7 +50,8 @@ const ICON_BUTTON =
 /**
  * Top bar: project name, workflow tabs, live provider status (FR-PRV-004), and — on a Canvas — the
  * run controls with the run's status and totals (FR-EXE-001, FR-OBS-002, FR-CTL-001..004), plus a
- * count of the approvals waiting on a person (FR-GRD-013).
+ * count of the approvals waiting on a person (FR-GRD-013) — the open run's, and the inbox of every
+ * run's (ACE parity P1, D270).
  *
  * At phone width (FR-MOB-001) the links and status chips fold into one menu, the approvals badge
  * stays in sight (FR-MOB-002), and the run bar gets a row of its own.
@@ -93,6 +95,7 @@ export function TopBar() {
             </>
           )}
           <div className="flex-1" />
+          <ApprovalsInbox />
           <ApprovalsBadge runId={runId} />
           <CompactMenu
             {...(projectId === undefined ? {} : { projectId })}
@@ -159,6 +162,7 @@ export function TopBar() {
       <div aria-hidden className="h-[22px] w-px shrink-0 bg-border" />
       {workflowId && <RunBar workflowId={workflowId} haltInline={false} />}
       <div className="flex shrink-0 items-center gap-0.5">
+        <ApprovalsInbox />
         <ApprovalsBadge runId={runId} />
         {workflowId && (
           <button
