@@ -16,6 +16,7 @@ import { Button } from '@ace/ui';
 import { PolicyPicker } from '../guardrails/PolicyPicker';
 import { useWorkflowProjectId } from '../nodes/retrieval/hooks';
 import { AgentKnowledgeBasesField, AgentMemoryField } from './AgentKnowledgeFields';
+import { AgentSkillsField } from './AgentSkillsField';
 import { AgentToolsSection } from './AgentToolsSection';
 import { RetrievalPanel } from './RetrievalPanel';
 import { InputAttachments } from './InputAttachments';
@@ -25,15 +26,7 @@ import { useRunStore } from '../runs/run-store';
 import { useWorkflowGraph } from '../workflows/hooks';
 import { JsonSchemaEditor } from './JsonSchemaEditor';
 import { FallbackModels, ProviderAndModel } from './ProviderAndModel';
-import {
-  DataTypeGroup,
-  Field,
-  LaterField,
-  NumberField,
-  SelectField,
-  TextAreaField,
-  TextField,
-} from './fields';
+import { DataTypeGroup, Field, NumberField, SelectField, TextAreaField, TextField } from './fields';
 import { BUDGET_RANGE, EXECUTION_RANGES } from './validation';
 
 /** A config patch for the node being edited; ConfigPanel completes it to the whole config (D-001). */
@@ -174,7 +167,7 @@ export function AgentPanel({
         onCommit={(budgetTokens) => patch({ contextPolicy: { budgetTokens } })}
       />
       <AgentToolsSection tools={config.tools} onChange={(tools) => patch({ tools })} />
-      <LaterField label="Skills" round="Round 6+" testId="skills" />
+      <AgentSkillsField value={config.skillIds} onChange={(skillIds) => patch({ skillIds })} />
       <AgentMemoryField memory={config.memory} onChange={(memory) => patch({ memory })} />
       <PolicyPicker
         projectId={projectId}

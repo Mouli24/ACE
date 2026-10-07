@@ -84,14 +84,11 @@ describe('Config panel (FR-NODE-002/003/007/008)', () => {
     // their round.
     expect(q.getByLabelText(/guardrail policy/i)).toBeInTheDocument();
     // Tools became a real section in round 4 (FR-TOOL-002), memory and knowledge bases in round 5
-    // (FR-MEM-001, FR-RAG-005); skills still announce their round.
+    // (FR-MEM-001, FR-RAG-005), skills in ACE parity P1 (D272): no field announces a round any more.
     expect(q.getByTestId('agent-memory')).toBeInTheDocument();
     expect(q.getByTestId('agent-knowledge-bases')).toBeInTheDocument();
-    for (const [label, round] of [['skills', 'Round 6+']] as const) {
-      const field = q.getByTestId(`later-${label.replace(/\s+/g, '-')}`);
-      expect(field).toHaveTextContent(new RegExp(`available in ${round}`, 'i'));
-      expect(field.querySelector('[disabled], [aria-disabled="true"]')).not.toBeNull();
-    }
+    expect(q.getByTestId('agent-skills')).toBeInTheDocument();
+    expect(q.queryByTestId('later-skills')).toBeNull();
   });
 
   it('shows a prompt when nothing is selected', async () => {
