@@ -41,18 +41,22 @@ import {
 } from './hooks';
 import { OUTCOME_LABEL, STAGE_LABEL, TYPE_LABEL } from './meta';
 import { ReviewPanel } from './ReviewPanel';
+import { ScheduleCard } from './ScheduleCard';
 import { TaskActivityFeed } from './TaskActivity';
 import { TaskBuild } from './TaskBuild';
 import { TaskChanges } from './TaskChanges';
 import { TaskChecks } from './TaskChecks';
+import { TaskOutcome } from './TaskOutcome';
 import { TaskOverview } from './TaskOverview';
+import { TaskPreview } from './TaskPreview';
 import { TaskStateChip } from './TaskStateChip';
 
 /**
  * `/projects/:projectId/tasks/:taskId` — one task (ACE parity P0, design §8): its number and title,
  * where it is on the way to Done, what is happening and why, and only the actions the engine allows
- * right now (`task.allowedActions`). In review, the Review panel; below, Overview · Build · Changes ·
- * Checks · Activity.
+ * right now (`task.allowedActions`). An Inbox task shows its Schedule (P1, D277); in review, the
+ * Review panel; once Done, how it was delivered. Below, Overview · Build · Changes · Checks ·
+ * Preview (when the project has a preview command, D278) · Activity.
  */
 export function TaskPage() {
   const { projectId = '', taskId = '' } = useParams();
@@ -84,7 +88,9 @@ export function TaskPage() {
     );
   }
 
-  const { task, workspace, executions, checks, reviews } = detail.data;
+  const { task, workspace, schedule, preview, executions, checks, reviews, deliveries } =
+    detail.data;
+  const showPreview = task.allowedActions.includes('preview') || preview !== undefined;
   return (
     <main
       data-testid="task-page"
@@ -99,14 +105,25 @@ export function TaskPage() {
       </Link>
       <TaskHeader task={task} boardPath={boardPath} />
 
+      {task.stage === 'inbox' && (
+        <ScheduleCard task={task} {...(schedule === undefined ? {} : { schedule })} />
+      )}
+
       {task.stage === 'review' && (
         <ReviewPanel
           task={task}
           {...(workspace === undefined ? {} : { workspace })}
           checks={checks}
           reviews={reviews}
+          deliveries={deliveries}
         />
       )}
+
+      <TaskOutcome
+        task={task}
+        deliveries={deliveries}
+        {...(workspace === undefined ? {} : { workspace })}
+      />
 
       <Tabs defaultValue="overview" className="flex flex-col gap-4">
         <TabsList aria-label="Task" className="max-w-full self-start overflow-x-auto">
@@ -114,6 +131,7 @@ export function TaskPage() {
           <TabsTrigger value="build">Build</TabsTrigger>
           <TabsTrigger value="changes">Changes</TabsTrigger>
           <TabsTrigger value="checks">Checks</TabsTrigger>
+          {showPreview && <TabsTrigger value="preview">Preview</TabsTrigger>}
           <TabsTrigger value="activity">Activity</TabsTrigger>
         </TabsList>
         <TabsContent value="overview">
@@ -132,6 +150,11 @@ export function TaskPage() {
             projectId={projectId}
           />
         </TabsContent>
+        {showPreview && (
+          <TabsContent value="preview">
+            <TaskPreview task={task} {...(preview === undefined ? {} : { preview })} />
+          </TabsContent>
+        )}
         <TabsContent value="activity">
           <TaskActivityFeed taskId={task.id} />
         </TabsContent>

@@ -5,6 +5,8 @@ import {
   type CheckStatus,
   type ExecutionStatus,
   type FinishLine,
+  type MergeMethod,
+  type PreviewStatus,
   type TaskAutomation,
   type TaskOutcome,
   type TaskPriority,
@@ -61,8 +63,19 @@ export const FINISH_LINE_LABEL: Readonly<Record<FinishLine, string>> = {
   accept_document: 'Accept the document',
 };
 
-/** Shown so the road ahead is visible, but not offered yet: the engine has no GitHub delivery. */
-export const FINISH_LINES_LATER: ReadonlySet<FinishLine> = new Set<FinishLine>(['github_merge']);
+/**
+ * Finish lines shown so the road ahead is visible but not offered in this version, with why:
+ * sending needs a mail connection ACE does not have yet (D275 — Send answers `not_connected`).
+ */
+export const FINISH_LINES_UNAVAILABLE: Readonly<Partial<Record<FinishLine, string>>> = {
+  send_email: 'needs an email connection — not available yet',
+};
+
+/** A finish line as an `<option>` reads: its label, and why it cannot be chosen when it cannot. */
+export function finishLineOption(line: FinishLine): string {
+  const why = FINISH_LINES_UNAVAILABLE[line];
+  return why === undefined ? FINISH_LINE_LABEL[line] : `${FINISH_LINE_LABEL[line]} (${why})`;
+}
 
 export const TYPE_LABEL: Readonly<Record<TaskType, string>> = {
   app: 'App',
@@ -70,8 +83,52 @@ export const TYPE_LABEL: Readonly<Record<TaskType, string>> = {
   document: 'Document',
 };
 
-/** Only App tasks are built in this step; Email and Document are shown, disabled. */
-export const TYPES_LATER: ReadonlySet<TaskType> = new Set<TaskType>(['email', 'document']);
+/** GitHub's own words for the three merge methods (D276). */
+export const MERGE_METHOD_LABEL: Readonly<Record<MergeMethod, string>> = {
+  merge: 'Create a merge commit',
+  squash: 'Squash and merge',
+  rebase: 'Rebase and merge',
+};
+
+export const PULL_REQUEST_STATE_COLOR: Readonly<Record<'open' | 'merged' | 'closed', string>> = {
+  open: 'var(--color-status-RUNNING)',
+  merged: 'var(--color-status-COMPLETED)',
+  closed: 'var(--color-status-STOPPED)',
+};
+
+export const PREVIEW_STATUS_COLOR: Readonly<Record<PreviewStatus, string>> = {
+  starting: 'var(--color-status-READY)',
+  running: 'var(--color-status-RUNNING)',
+  stopped: 'var(--color-status-STOPPED)',
+  failed: 'var(--color-status-FAILED)',
+};
+
+/** A timestamp in the viewer's own clock and words, e.g. "Wed 7 Oct 2026, 09:00". */
+export function formatWhen(at: string): string {
+  const date = new Date(at);
+  if (Number.isNaN(date.getTime())) return at;
+  return date.toLocaleString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+/**
+ * "a@x.com, b@y.org ," → `['a@x.com', 'b@y.org']`: what an address field holds, trimmed, blanks
+ * and repeats dropped. Whether each is an address is the contract's to say.
+ */
+export function parseAddresses(raw: string): string[] {
+  const addresses: string[] = [];
+  for (const part of raw.split(/[,;\n]/)) {
+    const address = part.trim();
+    if (address !== '' && !addresses.includes(address)) addresses.push(address);
+  }
+  return addresses;
+}
 
 export const AUTOMATION_META: Readonly<Record<TaskAutomation, { label: string; hint: string }>> = {
   manual: { label: 'Manual', hint: 'You start every stage yourself.' },

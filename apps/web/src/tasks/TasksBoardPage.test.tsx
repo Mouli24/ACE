@@ -209,19 +209,19 @@ describe('ACE-P0 New task (design §8)', () => {
     await user.type(within(dialog).getByLabelText('Title'), 'Fix search');
     await user.type(within(dialog).getByLabelText('Brief'), 'Accents are ignored.');
     await user.type(within(dialog).getByLabelText('How you will check it'), 'café finds cafe');
-    // only App tasks for now; the others are visible but disabled
-    expect(within(dialog).getByRole('radio', { name: 'Email' })).toBeDisabled();
-    expect(within(dialog).getByRole('radio', { name: 'Document' })).toBeDisabled();
-    expect(within(dialog).getByText(/coming in a later step/)).toBeInTheDocument();
+    // ACE parity P1: all three types are offered (D275)
+    expect(within(dialog).getByRole('radio', { name: 'Email' })).toBeEnabled();
+    expect(within(dialog).getByRole('radio', { name: 'Document' })).toBeEnabled();
+    expect(within(dialog).queryByText(/coming in a later step/)).toBeNull();
     await user.selectOptions(within(dialog).getByLabelText('Team'), 'Builders');
-    // the finish lines of an App task; GitHub is not offered yet
+    // the finish lines of an App task, GitHub included (D276)
     const finish = within(dialog).getByLabelText('Finish line');
     expect(
       within(finish)
         .getAllByRole('option')
         .map((o) => o.textContent),
-    ).toEqual(['Pass review', 'Apply changes locally', 'Merge on GitHub (coming later)']);
-    expect(within(finish).getByRole('option', { name: /Merge on GitHub/ })).toBeDisabled();
+    ).toEqual(['Pass review', 'Apply changes locally', 'Merge on GitHub']);
+    expect(within(finish).getByRole('option', { name: /Merge on GitHub/ })).toBeEnabled();
     await user.selectOptions(finish, 'apply_local');
     await user.click(within(dialog).getByRole('radio', { name: /^Manual/ }));
     expect(within(dialog).getByText(/needs Full access|only with Full access/)).toBeInTheDocument();
@@ -252,6 +252,8 @@ describe('ACE-P0 New task (design §8)', () => {
     const dialog = await screen.findByRole('dialog', { name: 'New task' });
     await user.type(within(dialog).getByLabelText('Title'), 'Fix search');
     await user.selectOptions(within(dialog).getByLabelText('Team'), 'Builders');
+    // the Timing section decides what the dialog's button does (D277)
+    await user.click(within(dialog).getByRole('radio', { name: 'Start now' }));
     await user.click(within(dialog).getByRole('button', { name: 'Start now' }));
 
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());

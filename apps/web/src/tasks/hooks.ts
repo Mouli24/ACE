@@ -1,12 +1,18 @@
 import type {
+  AcceptTaskRequest,
   ApplyTaskRequest,
   CloseTaskRequest,
   CreateTaskRequest,
   Id,
+  MergePullRequestRequest,
+  OpenPullRequestRequest,
+  PutTaskScheduleRequest,
   RepositoryInfo,
   ReviewTaskRequest,
   StartWorkRequest,
   Task,
+  TaskDeliverable,
+  TaskSchedule,
   UpdateTaskRequest,
 } from '@ace/contracts';
 import { AceApiError, type TaskListFilter } from '@ace/sdk';
@@ -34,12 +40,17 @@ export function useTasks(projectId: Id, filter: TaskListFilter = {}) {
   });
 }
 
-/** `GET /tasks/:id` — the task with its workspace, executions, checks, reviews and deliveries. */
-export function useTask(id: Id) {
+/**
+ * `GET /tasks/:id` — the task with its workspace, schedule, preview, executions, checks, reviews
+ * and deliveries. `refetchInterval` is for a view that must follow what no frame announces — a
+ * running preview's output (D278).
+ */
+export function useTask(id: Id, options: { refetchInterval?: number | false } = {}) {
   return useQuery({
     queryKey: taskKeys.detail(id),
     queryFn: () => api().getTask(id),
     enabled: id !== '',
+    ...(options.refetchInterval === undefined ? {} : { refetchInterval: options.refetchInterval }),
   });
 }
 
@@ -104,12 +115,21 @@ function refetchAfterRefusal(queryClient: QueryClient, id: Id, error: unknown): 
   }
 }
 
-/** `POST /projects/:id/tasks` — into the Inbox, or started at once (`start: 'now'`). */
+/**
+ * `POST /projects/:id/tasks` — into the Inbox, started at once (`start: 'now'`), or scheduled
+ * (`trigger`). The engine creates the task before it checks a trigger, so a refused one can still
+ * leave the task in the Inbox: a refusal refetches the board too.
+ */
 export function useCreateTask(projectId: Id) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: CreateTaskRequest): Promise<Task> => api().createTask(projectId, body),
     onSuccess: (task) => settleTask(queryClient, task),
+    onError: (_error, body) => {
+      if (body.trigger !== undefined) {
+        void queryClient.invalidateQueries({ queryKey: taskKeys.lists(projectId) });
+      }
+    },
   });
 }
 
@@ -168,3 +188,54 @@ export const useCloseTask = (id: Id) =>
   useTaskAction<CloseTaskRequest>(id, (taskId, body) => api().closeTask(taskId, body));
 export const usePauseTask = (id: Id) =>
   useTaskAction<boolean>(id, (taskId, paused) => api().pauseTask(taskId, { paused }));
+
+/* ACE parity P1 (D275–D278) */
+
+/** `PUT /tasks/:id/deliverable` — the edited Document or Email draft. */
+export const usePutDeliverable = (id: Id) =>
+  useTaskAction<TaskDeliverable>(id, (taskId, deliverable) =>
+    api().putTaskDeliverable(taskId, { deliverable }),
+  );
+export const useAcceptTask = (id: Id) =>
+  useTaskAction<AcceptTaskRequest>(id, (taskId, body) => api().acceptTask(taskId, body));
+export const useSendTask = (id: Id) => useTaskAction<void>(id, (taskId) => api().sendTask(taskId));
+export const useOpenPullRequest = (id: Id) =>
+  useTaskAction<OpenPullRequestRequest>(id, (taskId, body) =>
+    api().openTaskPullRequest(taskId, body),
+  );
+export const useMergePullRequest = (id: Id) =>
+  useTaskAction<MergePullRequestRequest>(id, (taskId, body) =>
+    api().mergeTaskPullRequest(taskId, body),
+  );
+export const useStartPreview = (id: Id) =>
+  useTaskAction<void>(id, (taskId) => api().startTaskPreview(taskId));
+export const useStopPreview = (id: Id) =>
+  useTaskAction<void>(id, (taskId) => api().stopTaskPreview(taskId));
+
+/**
+ * `PUT /tasks/:id/schedule` — answers the schedule, not the task: the task's reason line changed
+ * too, so the detail and the board follow the engine.
+ */
+export function usePutSchedule(task: Pick<Task, 'id' | 'projectId'>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: PutTaskScheduleRequest): Promise<TaskSchedule> =>
+      api().putTaskSchedule(task.id, body),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: taskKeys.detail(task.id) });
+      void queryClient.invalidateQueries({ queryKey: taskKeys.lists(task.projectId) });
+    },
+  });
+}
+
+/** `DELETE /tasks/:id/schedule` — the task stays in the Inbox, unscheduled. */
+export function useDeleteSchedule(task: Pick<Task, 'id' | 'projectId'>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (): Promise<void> => api().deleteTaskSchedule(task.id),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: taskKeys.detail(task.id) });
+      void queryClient.invalidateQueries({ queryKey: taskKeys.lists(task.projectId) });
+    },
+  });
+}

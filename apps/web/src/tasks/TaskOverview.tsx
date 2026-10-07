@@ -13,23 +13,26 @@ import {
 } from '@ace/contracts';
 import { Button, Checkbox, Input, Label, Textarea, toast } from '@ace/ui';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 
 import { selectClass } from '../knowledge/fields';
 import { useUpdateTask } from './hooks';
 import {
   AUTOMATION_META,
-  FINISH_LINE_LABEL,
-  FINISH_LINES_LATER,
+  FINISH_LINES_UNAVAILABLE,
   PRIORITY_LABEL,
+  finishLineOption,
   parseLabels,
 } from './meta';
+import { TaskDraft } from './TaskDraft';
 
 const NO_WORKFLOW = '';
 
 /**
- * The Overview tab (ACE parity P0, design §8): the brief, the plan, how it will be checked, and the
- * task's settings — each saved on its own through `PATCH /tasks/:id` as it changes (text on blur, or
- * with the plan's Save button), and shown back as the engine holds it. A Done task is read-only.
+ * The Overview tab (ACE parity P0, design §8): where the task came from, a Document or Email task's
+ * draft (P1, D275), the brief, the plan, how it will be checked, and the task's settings — each
+ * saved on its own through `PATCH /tasks/:id` as it changes (text on blur, or with the plan's Save
+ * button), and shown back as the engine holds it. A Done task is read-only.
  */
 export function TaskOverview({ task, workflows }: { task: Task; workflows: readonly Workflow[] }) {
   const update = useUpdateTask(task.id);
@@ -51,6 +54,8 @@ export function TaskOverview({ task, workflows }: { task: Task; workflows: reado
 
   return (
     <div className="flex flex-col gap-6" data-testid="task-overview">
+      <TaskSourceLine task={task} />
+      <TaskDraft task={task} />
       <SavedText
         label="Brief"
         value={task.brief}
@@ -119,9 +124,12 @@ export function TaskOverview({ task, workflows }: { task: Task; workflows: reado
           onChange={(line) => void save({ finishLine: line as FinishLine }, 'Finish line')}
         >
           {FINISH_LINES_BY_TYPE[task.type].map((line) => (
-            <option key={line} value={line} disabled={FINISH_LINES_LATER.has(line)}>
-              {FINISH_LINE_LABEL[line]}
-              {FINISH_LINES_LATER.has(line) ? ' (coming later)' : ''}
+            <option
+              key={line}
+              value={line}
+              disabled={FINISH_LINES_UNAVAILABLE[line] !== undefined && line !== task.finishLine}
+            >
+              {finishLineOption(line)}
             </option>
           ))}
         </SelectField>
@@ -171,6 +179,49 @@ export function TaskOverview({ task, workflows }: { task: Task; workflows: reado
         </Label>
       </div>
     </div>
+  );
+}
+
+/**
+ * Where the task came from (ACE parity P1, `Task.source`): a chat or timeline message handed over
+ * with *Send to Build* links back to its workflow; an occurrence of a schedule links to the template
+ * task it was made from.
+ */
+function TaskSourceLine({ task }: { task: Task }) {
+  const source = task.source;
+  if (source === undefined) return null;
+  const project = `/projects/${task.projectId}`;
+  let body: ReactNode;
+  if ((source.kind === 'chat' || source.kind === 'timeline') && source.workflowId !== undefined) {
+    const where = source.kind === 'chat' ? 'a chat' : 'the timeline';
+    body = (
+      <>
+        From {where}
+        {source.label === undefined ? '' : ` with ${source.label}`} ·{' '}
+        <Link
+          to={`${project}/workflows/${source.workflowId}${source.kind === 'timeline' ? '/timeline' : ''}`}
+          className="underline underline-offset-2"
+        >
+          Open the workflow
+        </Link>
+      </>
+    );
+  } else if (source.kind === 'schedule' && source.refId !== undefined) {
+    body = (
+      <>
+        Made by a schedule ·{' '}
+        <Link to={`${project}/tasks/${source.refId}`} className="underline underline-offset-2">
+          {source.label === undefined ? 'Open the template task' : `Template: ${source.label}`}
+        </Link>
+      </>
+    );
+  } else {
+    body = `From ${source.label ?? `a ${source.kind}`}`;
+  }
+  return (
+    <p data-testid="task-source" className="font-human text-sm text-fg-soft">
+      {body}
+    </p>
   );
 }
 
