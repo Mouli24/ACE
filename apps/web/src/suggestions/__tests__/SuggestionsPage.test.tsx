@@ -72,6 +72,10 @@ describe('ACE-P2 D280 responsibilities', () => {
       'aria-current',
       'page',
     );
+    expect(within(nav).getByRole('link', { name: 'Notes' })).toHaveAttribute(
+      'href',
+      `/projects/${project.id}/notes`,
+    );
   });
 
   it('adds a responsibility from the dialog; saving it scans nothing', async () => {

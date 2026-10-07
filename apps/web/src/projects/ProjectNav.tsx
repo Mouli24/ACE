@@ -6,7 +6,7 @@ import { NavLink } from 'react-router-dom';
  * Knowledge · Settings, as a pill row at the top of every project page. The current page is marked
  * `aria-current="page"`; a task page counts as Tasks. The Settings pill is named "Project settings"
  * for assistive tech, so it is never mistaken for the engine's Settings in the top bar. ACE parity P2
- * adds Suggestions after Knowledge.
+ * adds Suggestions and Notes after Knowledge.
  */
 const ITEMS = [
   { path: '', label: 'Overview', end: true },
@@ -14,6 +14,7 @@ const ITEMS = [
   { path: '/runs', label: 'Runs', end: true },
   { path: '/knowledge', label: 'Knowledge', end: true },
   { path: '/suggestions', label: 'Suggestions', end: true },
+  { path: '/notes', label: 'Notes', end: true },
   { path: '/settings', label: 'Settings', end: true, name: 'Project settings' },
 ] as const;
 
