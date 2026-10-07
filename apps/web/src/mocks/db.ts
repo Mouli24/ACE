@@ -8,6 +8,7 @@ import {
   type ApprovalRequest,
   type CliPermission,
   type Artifact,
+  type Bundle,
   type ChatMessage,
   type ChatThread,
   type Edge,
@@ -22,6 +23,7 @@ import {
   type Node,
   type Project,
   type Settings,
+  type Skill,
   type Model,
   type NodeRun,
   type Provider,
@@ -39,6 +41,7 @@ import {
 } from '@ace/contracts';
 
 import { newId } from '../lib/ulid';
+import { BUILTIN_SKILLS } from './builtin-skills';
 import { catalogFor, checkOutcome } from './catalog';
 import { publishMockEvent } from './event-bus';
 import { base64ToBytes, bytesToBase64, sha256Hex } from './sha256';
@@ -123,6 +126,11 @@ interface Snapshot {
   taskActivity: TaskActivity[];
   /** The project folder as a Git repository, per project; absent → `repositoryOf`'s default. */
   repositories: Record<string, MockRepository>;
+  /* ---- ACE parity P1 (D272, D273) ---- */
+  /** Installed skills; the five built-ins are there from the start, as the engine installs them. */
+  skills: Skill[];
+  /** Imported bundles with their (never connected) MCP server definitions. */
+  bundles: Bundle[];
   /** Artificial delay per request, for the loading-state test (TC-CAN-009). */
   latencyMs?: number;
 }
@@ -210,6 +218,8 @@ function emptySnapshot(): Snapshot {
     taskDeliveries: [],
     taskActivity: [],
     repositories: {},
+    skills: BUILTIN_SKILLS.map((skill) => structuredClone(skill)),
+    bundles: [],
   };
 }
 
@@ -908,6 +918,59 @@ export class MockDb {
     this.state.mcpServers = this.state.mcpServers.filter((server) => server.id !== id);
     this.save();
     return this.state.mcpServers.length < before;
+  }
+
+  /* ------------------------------------------------- skills and bundles (ACE parity P1, D272) */
+
+  listSkills(): Skill[] {
+    return [...this.state.skills];
+  }
+
+  getSkill(id: string): Skill | undefined {
+    return this.state.skills.find((skill) => skill.id === id);
+  }
+
+  /** The skill with this name, compared case-insensitively — as the engine's unique index does. */
+  findSkillByName(name: string): Skill | undefined {
+    const lower = name.toLowerCase();
+    return this.state.skills.find((skill) => skill.name.toLowerCase() === lower);
+  }
+
+  /** Inserts the skill, or replaces the stored one with the same id. */
+  putSkill(skill: Skill): Skill {
+    const index = this.state.skills.findIndex((stored) => stored.id === skill.id);
+    if (index === -1) this.state.skills.push(skill);
+    else this.state.skills[index] = skill;
+    this.save();
+    return skill;
+  }
+
+  deleteSkill(id: string): boolean {
+    const before = this.state.skills.length;
+    this.state.skills = this.state.skills.filter((skill) => skill.id !== id);
+    this.save();
+    return this.state.skills.length < before;
+  }
+
+  listBundles(): Bundle[] {
+    return [...this.state.bundles];
+  }
+
+  getBundle(id: string): Bundle | undefined {
+    return this.state.bundles.find((bundle) => bundle.id === id);
+  }
+
+  addBundle(bundle: Bundle): Bundle {
+    this.state.bundles.push(bundle);
+    this.save();
+    return bundle;
+  }
+
+  deleteBundle(id: string): boolean {
+    const before = this.state.bundles.length;
+    this.state.bundles = this.state.bundles.filter((bundle) => bundle.id !== id);
+    this.save();
+    return this.state.bundles.length < before;
   }
 
   /* ------------------------------------------------- knowledge (round 5 §2.1, FR-RAG-001..009) */

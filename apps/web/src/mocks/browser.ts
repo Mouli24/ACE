@@ -14,6 +14,7 @@ import {
   type ChatScenario,
 } from './handlers-round4';
 import { createRound5Handlers } from './handlers-round5';
+import { createSkillHandlers } from './handlers-skills';
 import { createTaskHandlers } from './handlers-tasks';
 import { failNextIngest, setIngestPace } from './knowledge';
 import {
@@ -190,6 +191,7 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
   const db = new MockDb({ persist: true });
   restoreScenario();
   const worker = setupWorker(
+    ...createSkillHandlers(db),
     ...createTaskHandlers(db),
     ...createRound5Handlers(db),
     ...createRound4Handlers(db),
