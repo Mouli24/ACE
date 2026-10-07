@@ -166,6 +166,21 @@ import {
   type TaskListQuery,
   type TaskListResponse,
   type UpdateTaskRequest,
+  // ACE parity P1 (skills and bundles — D272, D273)
+  BundleFileSchema,
+  BundleListResponseSchema,
+  BundleSchema,
+  CreateSkillRequestSchema,
+  SkillListResponseSchema,
+  SkillSchema,
+  UpdateSkillRequestSchema,
+  type Bundle,
+  type BundleFile,
+  type BundleListResponse,
+  type CreateSkillRequest,
+  type Skill,
+  type SkillListResponse,
+  type UpdateSkillRequest,
 } from '@ace/contracts';
 import { z } from 'zod';
 
@@ -853,6 +868,43 @@ export function createAceClient(options: AceClientOptions) {
         schema: EmptyBodySchema,
         value: {},
       }),
+
+    /* Skills (ACE parity P1, D272) — installed here, enabled per agent by its `skillIds` */
+
+    /** Built-in skills first, then the rest by name. */
+    listSkills: (): Promise<SkillListResponse> =>
+      request('GET', '/skills', SkillListResponseSchema),
+    /** 201 `Skill` (source `user`, version 1); a taken name answers 409 `name_taken`. */
+    createSkill: (body: CreateSkillRequest): Promise<Skill> =>
+      request('POST', '/skills', SkillSchema, { schema: CreateSkillRequestSchema, value: body }),
+    getSkill: (id: Id): Promise<Skill> => request('GET', `/skills/${id}`, SkillSchema),
+    /** A built-in answers 409 `skill_read_only`; a new name or new instructions add a version. */
+    updateSkill: (id: Id, body: UpdateSkillRequest): Promise<Skill> =>
+      request('PATCH', `/skills/${id}`, SkillSchema, {
+        schema: UpdateSkillRequestSchema,
+        value: body,
+      }),
+    /** 204; a built-in answers 409 `skill_read_only`. */
+    deleteSkill: (id: Id): Promise<void> => request('DELETE', `/skills/${id}`, NoContentSchema),
+    /** 201: a `user` copy named "<name> (copy)" — the way to change a built-in. */
+    duplicateSkill: (id: Id): Promise<Skill> =>
+      request('POST', `/skills/${id}/duplicate`, SkillSchema, {
+        schema: EmptyBodySchema,
+        value: {},
+      }),
+
+    /* Bundles (ACE parity P1, D273) — an import installs skills and connects nothing */
+
+    listBundles: (): Promise<BundleListResponse> =>
+      request('GET', '/bundles', BundleListResponseSchema),
+    /**
+     * 201 `Bundle`. The file is checked against `BundleFileSchema` before it leaves; its MCP server
+     * definitions are recorded on the bundle, and each is connected only by `createMcpServer`.
+     */
+    importBundle: (file: BundleFile): Promise<Bundle> =>
+      request('POST', '/bundles/import', BundleSchema, { schema: BundleFileSchema, value: file }),
+    /** 204; the skills the bundle installed go with it. */
+    deleteBundle: (id: Id): Promise<void> => request('DELETE', `/bundles/${id}`, NoContentSchema),
   };
 }
 
