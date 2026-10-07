@@ -6,6 +6,7 @@ import { api } from '../app/api';
 import { useProviders } from '../providers/hooks';
 import { ChatComposer } from './ChatComposer';
 import { ChatRefusalCard, ChatVerdicts } from './ChatVerdicts';
+import { SendToBuildButton } from './SendToBuild';
 import type { ChatConversation as Conversation } from './useChat';
 
 const money = (value: number) => `$${value.toFixed(6)}`;
@@ -24,7 +25,8 @@ function usageMeta(message: ChatMessage) {
 /**
  * One thread's turns, the streaming reply, and the composer (FR-CHAT-004/006/007/008). Every part is
  * rendered by the same `MessageBubble`/`PartRenderer` the timeline and inspector use, so an image or
- * JSON reply looks the same everywhere; media resolves through the SDK's `artifactContentUrl`.
+ * JSON reply looks the same everywhere; media resolves through the SDK's `artifactContentUrl`. Each
+ * settled agent reply can be handed over as a task with *Send to Build* (ACE parity P1).
  */
 export function ChatConversation({
   node,
@@ -50,7 +52,10 @@ export function ChatConversation({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="chat-conversation">
-      <div ref={scroller} className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-[18px] py-4">
+      <div
+        ref={scroller}
+        className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-[18px] py-4"
+      >
         {convo.messages.length === 0 && !convo.streaming && convo.refusal === undefined && (
           <p className="text-sm text-fg-muted">
             Chat directly with {node.name}. This uses its model and instructions and never touches a
@@ -71,6 +76,11 @@ export function ChatConversation({
             {message.verdicts.length > 0 && (
               <div className="mt-1 pl-1">
                 <ChatVerdicts verdicts={message.verdicts} />
+              </div>
+            )}
+            {message.role === 'agent' && (
+              <div className="mt-1 pl-1">
+                <SendToBuildButton node={node} message={message} />
               </div>
             )}
           </div>
