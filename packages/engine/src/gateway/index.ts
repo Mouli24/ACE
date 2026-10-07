@@ -47,6 +47,7 @@ import type { Logger } from '../logging/index.js';
 import type { GraphService } from '../graph/index.js';
 import type { ProviderService } from '../providers/index.js';
 import type { Auth, Repository, Scope } from '../ports/index.js';
+import type { ApprovalInbox } from '../approvals/inbox.js';
 import type { ApprovalService } from '../approvals/index.js';
 import { createApprovalRoutes } from '../approvals/routes.js';
 import { createGuardrailRoutes, type PolicyService } from '../guardrails/index.js';
@@ -193,6 +194,8 @@ export interface EngineDeps {
 
   /** `GET/POST /secrets`, `PATCH/DELETE /secrets/:name` (D274). */
   secrets?: SecretService;
+  /** `GET /approvals` — every pending approval across runs (D270). */
+  approvalInbox?: ApprovalInbox;
 }
 
 export interface EngineVariables {
@@ -831,7 +834,7 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     createRunControlRoutes(() => deps.controls),
   );
   api.route('/', createGuardrailRoutes(deps.guardrailPolicies));
-  api.route('/', createApprovalRoutes(deps.approvals));
+  api.route('/', createApprovalRoutes(deps.approvals, deps.approvalInbox));
   /* Round 5's routes (§2.9), mounted the same way, inside the same middleware. */
   api.route('/', createKnowledgeRoutes(deps.knowledge, deps.search));
   api.route('/', createMemoryRoutes(deps.memory));

@@ -13,6 +13,7 @@ export * from './providers/index.js';
 export * from './models/gateway.js';
 export * from './guardrails/index.js';
 export * from './approvals/index.js';
+export * from './approvals/inbox.js';
 export * from './approvals/routes.js';
 export * from './budgets/index.js';
 export * from './runs/index.js';

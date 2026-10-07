@@ -3,6 +3,7 @@ import { Hono, type Context } from 'hono';
 
 import { HttpError, notImplemented } from '../gateway/errors.js';
 import { readJson } from '../gateway/read-json.js';
+import type { ApprovalInbox } from './inbox.js';
 import {
   ApprovalAlreadyDecidedError,
   ApprovalNotFoundError,
@@ -10,7 +11,8 @@ import {
 } from './index.js';
 
 /**
- * `/runs/:id/approvals`, `/node-runs/:id/approve` and `/node-runs/:id/reject` (§2.5, FR-GRD-013).
+ * `/runs/:id/approvals`, `/node-runs/:id/approve` and `/node-runs/:id/reject` (§2.5, FR-GRD-013),
+ * and the inbox across runs, `GET /approvals` (ACE parity P1, D270), which answers `{ items }`.
  *
  * The route *is* the decision — there is no `{ decision }` field to get wrong — and the body carries
  * only an optional note (§2.2). The answer is the node run, so the UI has the row back without a
@@ -23,11 +25,7 @@ import {
 export type ApprovalRouter = Hono<{ Variables: { requestId: string } }>;
 
 export const noPendingApproval = (nodeRunId: Id): HttpError =>
-  new HttpError(
-    'workflow',
-    'not_found',
-    `Node run ${nodeRunId} is not waiting for an approval.`,
-  );
+  new HttpError('workflow', 'not_found', `Node run ${nodeRunId} is not waiting for an approval.`);
 
 /**
  * A second decision on one request is a state error, not a not-found: the request exists, it has
@@ -45,16 +43,24 @@ export const nodeRunNotFound = (nodeRunId: Id): HttpError =>
   new HttpError('workflow', 'not_found', `Node run ${nodeRunId} was not found.`);
 
 /**
- * `service` may be `undefined`: an app built without an approval service answers these routes 501
+ * `service` and `inbox` may be `undefined`: an app built without one answers its routes 501
  * `not_implemented`, which is the gateway's own convention for a service it was built without.
  */
-export function createApprovalRoutes(service: ApprovalService | undefined): ApprovalRouter {
+export function createApprovalRoutes(
+  service: ApprovalService | undefined,
+  inbox?: ApprovalInbox,
+): ApprovalRouter {
   const router: ApprovalRouter = new Hono<{ Variables: { requestId: string } }>();
 
   const approvals = (): ApprovalService => {
     if (service === undefined) throw notImplemented('approvals');
     return service;
   };
+
+  router.get('/approvals', async (c) => {
+    if (inbox === undefined) throw notImplemented('the approvals inbox');
+    return c.json({ items: await inbox.listPending() });
+  });
 
   router.get('/runs/:id/approvals', async (c) =>
     c.json(await approvals().listPending(c.req.param('id'))),
