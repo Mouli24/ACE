@@ -21,6 +21,7 @@ import {
 import type {
   ApprovalRepository,
   ArtifactRepository,
+  BundleRepository,
   ChatMessageRepository,
   ChatThreadRepository,
   EdgeRepository,
@@ -49,6 +50,7 @@ import type {
   Repository,
   Scope,
   SettingsRepository,
+  SkillRepository,
   TaskActivityRepository,
   TaskCheckRepository,
   TaskDeliveryRepository,
@@ -103,6 +105,7 @@ import {
   createProviderRepository,
   createRunRepository,
 } from './repository-runs.js';
+import { createBundleRepository, createSkillRepository } from './repository-skills.js';
 import {
   createTaskActivityRepository,
   createTaskCheckRepository,
@@ -342,6 +345,8 @@ export const GATED_REPOSITORIES = [
   'responsibilities',
   'suggestions',
   'projectNotes',
+  'skills',
+  'bundles',
 ] as const satisfies readonly Exclude<keyof Repository, 'transaction'>[];
 
 type GatedRepository = (typeof GATED_REPOSITORIES)[number];
@@ -417,6 +422,10 @@ export class SqliteRepository implements Repository {
   readonly suggestions: SuggestionRepository;
   readonly projectNotes: ProjectNoteRepository;
 
+  /* ACE parity P1 (D272, D273). Optional on the port (D218's pattern); implemented here. */
+  readonly skills: SkillRepository;
+  readonly bundles: BundleRepository;
+
   constructor(db: Db, sqlite: BetterSqlite3.Database, options: SqliteRepositoryOptions = {}) {
     this.#db = db;
     this.#sqlite = sqlite;
@@ -469,6 +478,11 @@ export class SqliteRepository implements Repository {
     this.suggestions = createSuggestionRepository(db);
     this.projectNotes = createProjectNoteRepository(db);
 
+    // ACE parity P1. Each write is one statement; a bundle import or delete that touches both
+    // tables runs inside the caller's transaction.
+    this.skills = createSkillRepository(db);
+    this.bundles = createBundleRepository(db);
+
     // The gate (NFR-REL-02). Every repository is composed twice: as built, for a transaction body,
     // which holds the connection; and gated, for everyone else, so a call that is not part of the
     // work holding the connection waits for it to finish instead of landing inside it.
@@ -514,6 +528,8 @@ export class SqliteRepository implements Repository {
       responsibilities: this.responsibilities,
       suggestions: this.suggestions,
       projectNotes: this.projectNotes,
+      skills: this.skills,
+      bundles: this.bundles,
     };
     this.#owner = owner;
 

@@ -40,6 +40,12 @@ export const X1_CLI_PROVIDERS_MIGRATION_ID = '20261006T120000_x1_cli_providers';
 export const PARITY_P0_MIGRATION_ID = '20261006T180000_parity_p0_tasks';
 
 /**
+ * ACE parity P1 (D272, D273): installed skills and imported bundles. Named so a test can apply the
+ * chain before it.
+ */
+export const PARITY_P1_SKILLS_MIGRATION_ID = '20261007T100000_parity_p1_skills';
+
+/**
  * ACE parity P1 (D275–D278): a task's deliverable and source, a workspace's pull request, a
  * project's preview command and URL, and task schedules. Named so a test can apply the chain
  * before it.
@@ -712,6 +718,44 @@ export const MIGRATIONS: readonly Migration[] = [
         at           TEXT NOT NULL
       );
       CREATE INDEX task_activity_task_idx ON task_activity (task_id, seq);
+    `,
+  },
+  {
+    id: PARITY_P1_SKILLS_MIGRATION_ID,
+    up: `
+      -- An installed skill (D272): reusable instructions an agent enables by id. 'source' is
+      -- builtin, user or bundle; 'bundle_id' names the bundle a bundle skill came from. No foreign
+      -- key to bundles: the skill service removes a bundle's skills with it, in one transaction,
+      -- and a skill the user deleted on its own leaves the bundle as it was imported.
+      CREATE TABLE skills (
+        id           TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        name         TEXT NOT NULL,
+        description  TEXT NOT NULL,
+        instructions TEXT NOT NULL,
+        version      INTEGER NOT NULL,
+        source       TEXT NOT NULL,
+        bundle_id    TEXT,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL
+      );
+      -- One skill per name in a workspace, whatever its case: "Test first" and "test first" would
+      -- be the same skill to the person choosing one for an agent.
+      CREATE UNIQUE INDEX skills_name_idx ON skills (workspace_id, lower(name));
+
+      -- An imported bundle (D273). 'skill_ids' is a JSON Id[] of the skills the import created;
+      -- 'mcp_servers' is a JSON CreateMcpServerRequest[] of the plugin definitions it named, kept
+      -- as named and never connected by the import.
+      CREATE TABLE bundles (
+        id           TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        name         TEXT NOT NULL,
+        description  TEXT NOT NULL,
+        skill_ids    TEXT NOT NULL,
+        mcp_servers  TEXT NOT NULL,
+        created_at   TEXT NOT NULL
+      );
+      CREATE INDEX bundles_workspace_idx ON bundles (workspace_id, created_at);
     `,
   },
   {

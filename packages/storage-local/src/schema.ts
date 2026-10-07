@@ -970,3 +970,42 @@ export const projectNotes = sqliteTable(
   },
   (table) => [index('project_notes_project_idx').on(table.workspaceId, table.projectId)],
 );
+
+/* -------------------------------------------------------------------------- */
+/* ACE parity P1 (D272, D273): skills and bundles                              */
+/* -------------------------------------------------------------------------- */
+
+/** An installed skill. The name is unique per workspace, case-insensitively. */
+export const skills = sqliteTable(
+  'skills',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    name: text('name').notNull(),
+    description: text('description').notNull(),
+    instructions: text('instructions').notNull(),
+    version: integer('version').notNull(),
+    source: text('source').notNull(),
+    bundleId: text('bundle_id'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [uniqueIndex('skills_name_idx').on(table.workspaceId, sql`lower(${table.name})`)],
+);
+
+/** An imported bundle: the skills it created and the plugin definitions it named, never connected. */
+export const bundles = sqliteTable(
+  'bundles',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    name: text('name').notNull(),
+    description: text('description').notNull(),
+    /** JSON `Id[]`. */
+    skillIds: text('skill_ids').notNull(),
+    /** JSON `CreateMcpServerRequest[]`. */
+    mcpServers: text('mcp_servers').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [index('bundles_workspace_idx').on(table.workspaceId, table.createdAt)],
+);

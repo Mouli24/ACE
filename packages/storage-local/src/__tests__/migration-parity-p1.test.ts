@@ -8,7 +8,12 @@ import { getTableColumns, type Table } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openDatabase } from '../db.js';
-import { MIGRATIONS, PARITY_P0_MIGRATION_ID, PARITY_P1_MIGRATION_ID } from '../migrations.js';
+import {
+  MIGRATIONS,
+  PARITY_P0_MIGRATION_ID,
+  PARITY_P1_MIGRATION_ID,
+  PARITY_P1_SKILLS_MIGRATION_ID,
+} from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
 import { projects, tasks, taskSchedules, taskWorkspaces } from '../schema.js';
 import { createProjectBeforeP0, makeProject, makeTask, NOW, scope } from './fixtures.js';
@@ -236,9 +241,11 @@ describe('D275–D278 the P1 migration applies on a P0 database and is recorded'
     again.sqlite.close();
   });
 
-  it('comes right after P0, and the chain stays sorted', () => {
+  it('comes right after the P1 skills migration, and the chain stays sorted', () => {
     const ids = MIGRATIONS.map((migration) => migration.id);
-    expect(ids.indexOf(PARITY_P1_MIGRATION_ID)).toBe(ids.indexOf(PARITY_P0_MIGRATION_ID) + 1);
+    expect(ids.indexOf(PARITY_P1_MIGRATION_ID)).toBe(
+      ids.indexOf(PARITY_P1_SKILLS_MIGRATION_ID) + 1,
+    );
     expect([...ids].sort()).toEqual(ids);
     expect(PARITY_P1_MIGRATION_ID).toBe('20261007T100200_parity_p1_tasks');
   });

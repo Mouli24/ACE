@@ -9,6 +9,7 @@ import {
   MIGRATIONS,
   PARITY_P0_MIGRATION_ID,
   PARITY_P1_MIGRATION_ID,
+  PARITY_P1_SKILLS_MIGRATION_ID,
   PARITY_P2_MIGRATION_ID,
   X1_CLI_PROVIDERS_MIGRATION_ID,
 } from '../migrations.js';
@@ -54,6 +55,7 @@ describe('X1 migration: providers.cli_permission (D262)', () => {
     expect(after.appliedMigrations).toEqual([
       X1_CLI_PROVIDERS_MIGRATION_ID,
       PARITY_P0_MIGRATION_ID,
+      PARITY_P1_SKILLS_MIGRATION_ID,
       PARITY_P1_MIGRATION_ID,
       PARITY_P2_MIGRATION_ID,
     ]);
