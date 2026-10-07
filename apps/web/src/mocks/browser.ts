@@ -16,6 +16,7 @@ import {
 import { createRound5Handlers } from './handlers-round5';
 import { createSecretHandlers } from './handlers-secrets';
 import { createSkillHandlers } from './handlers-skills';
+import { createSuggestionHandlers } from './handlers-suggestions';
 import { createTaskHandlers } from './handlers-tasks';
 import { failNextIngest, setIngestPace } from './knowledge';
 import {
@@ -216,6 +217,7 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
   const db = new MockDb({ persist: true });
   restoreScenario();
   const worker = setupWorker(
+    ...createSuggestionHandlers(db, { persist: true }),
     ...createSkillHandlers(db),
     ...createSecretHandlers(db),
     ...createTaskHandlers(db),

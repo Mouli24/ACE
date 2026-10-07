@@ -16,8 +16,10 @@ import { createRound4Handlers } from '../mocks/handlers-round4';
 import { createRound5Handlers } from '../mocks/handlers-round5';
 import { createSecretHandlers } from '../mocks/handlers-secrets';
 import { createSkillHandlers } from '../mocks/handlers-skills';
+import { createSuggestionHandlers } from '../mocks/handlers-suggestions';
 import { createTaskHandlers } from '../mocks/handlers-tasks';
 import { resetMockSecrets } from '../mocks/secrets';
+import { resetMockSuggestions } from '../mocks/suggestions';
 import { resetMockTasks } from '../mocks/tasks';
 import { resetGraphSyncRegistry } from '../workflows/sync-registry';
 
@@ -25,6 +27,7 @@ import { resetGraphSyncRegistry } from '../workflows/sync-registry';
 export const db = new MockDb({ persist: false });
 /** Newest round first: a round 3 route wins over a round 2 stand-in for the same path. */
 export const server = setupServer(
+  ...createSuggestionHandlers(db),
   ...createSkillHandlers(db),
   ...createSecretHandlers(db),
   ...createTaskHandlers(db),
@@ -49,6 +52,7 @@ export function installMockServer(): void {
     stopScenario();
     resetMockTasks();
     resetMockSecrets();
+    resetMockSuggestions();
     db.reset();
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     resetGraphSyncRegistry();
