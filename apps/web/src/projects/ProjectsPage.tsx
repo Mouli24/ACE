@@ -20,6 +20,7 @@ import { FolderOpen, GitBranchPlus, MoreHorizontal, Plus } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
+import { AssistantPanel } from '../assistant/AssistantPanel';
 import { HelpLink } from '../help/HelpLink';
 import {
   useCloneProject,
@@ -58,6 +59,8 @@ export function ProjectsPage() {
           </Button>
         </div>
       </header>
+
+      <AssistantPanel />
 
       {projects.isPending && <p className="text-fg-muted">Loading projects…</p>}
       {projects.isError && (
