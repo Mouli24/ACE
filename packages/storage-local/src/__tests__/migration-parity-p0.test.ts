@@ -124,7 +124,9 @@ describe('D267–D271 the P0 migration applies on an X1 database and is recorded
 
     const after = openDatabase({ path });
     expect(after.appliedMigrations).toEqual(
-      MIGRATIONS.slice(MIGRATIONS.findIndex((m) => m.id === PARITY_P0_MIGRATION_ID)).map((m) => m.id),
+      MIGRATIONS.slice(MIGRATIONS.findIndex((m) => m.id === PARITY_P0_MIGRATION_ID)).map(
+        (m) => m.id,
+      ),
     );
     for (const [table] of NEW_TABLES) expect(tableNames(after.sqlite)).toContain(table);
 
