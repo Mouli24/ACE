@@ -189,7 +189,9 @@ describe('FR-SYS-004 the engine really persists', () => {
 });
 
 describe('TC-SYS-003 WebSocket over a real socket', () => {
-  function open(token: string): Promise<{ socket: WebSocket; frames: unknown[]; closed: Promise<number> }> {
+  function open(
+    token: string,
+  ): Promise<{ socket: WebSocket; frames: unknown[]; closed: Promise<number> }> {
     const socket = new WebSocket(`${engine.wsUrl}?token=${token}`);
     const frames: unknown[] = [];
     socket.on('message', (data) => frames.push(JSON.parse(String(data))));
@@ -258,7 +260,9 @@ describe('TC-SYS-003 WebSocket over a real socket', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 150));
 
-    const updates = frames.map((f) => WsServerFrameSchema.parse(f)).filter((f) => f.type === 'workflow.updated');
+    const updates = frames
+      .map((f) => WsServerFrameSchema.parse(f))
+      .filter((f) => f.type === 'workflow.updated');
     expect(updates).toHaveLength(1);
     expect(updates[0]?.type === 'workflow.updated' && updates[0].payload.version).toBe(1);
 
@@ -307,10 +311,12 @@ describe('§2.9 the WebSocket lives only at /ws', () => {
 describe('startEngine defaults', () => {
   it('reads the port from the config when none is passed', async () => {
     const other = mkdtempSync(join(tmpdir(), 'ace-default-port-'));
-    writeFileSync(join(other, 'ace.config.json'), JSON.stringify({ port: 47_595 }));
+    // A port no other test of this package binds: crash-while-waiting holds 47595 (D-061), and two
+    // files running at once on one fixed port fail with EADDRINUSE.
+    writeFileSync(join(other, 'ace.config.json'), JSON.stringify({ port: 47_591 }));
 
     const started = await startEngine({ dataDir: other, env: {} });
-    expect(started.port).toBe(47_595);
+    expect(started.port).toBe(47_591);
 
     await started.stop();
     try {
@@ -487,7 +493,9 @@ describe('Round 2 wiring: a run goes through the real router, provider check and
       spans.set(frame.payload.nodeRunId, { from: span?.from ?? at, to: at });
     });
     await new Promise((resolve) => socket.on('open', resolve));
-    socket.send(JSON.stringify({ type: 'subscribe', payload: { scope: 'workflow', id: workflowId } }));
+    socket.send(
+      JSON.stringify({ type: 'subscribe', payload: { scope: 'workflow', id: workflowId } }),
+    );
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     const started = RunSchema.parse(await post(`/workflows/${workflowId}/runs`, {}));
@@ -572,27 +580,51 @@ describe('guardrailInputFor maps each check family to the field it reads (FR-GRD
   });
 
   it('reads the iteration counter for max_iterations, and nothing when there is no loop', () => {
-    const input = { point: 'loop' as const, text: '', loop: { iteration: 4, toolCalls: 1, outputHashes: [] } };
+    const input = {
+      point: 'loop' as const,
+      text: '',
+      loop: { iteration: 4, toolCalls: 1, outputHashes: [] },
+    };
     expect(guardrailInputFor(check('max_iterations', 'loop'), input).value).toBe(4);
     // The same check with no loop figures falls back to the base — it adds no `value`.
-    expect(guardrailInputFor(check('max_iterations', 'loop'), { point: 'loop', text: '' }).value).toBeUndefined();
+    expect(
+      guardrailInputFor(check('max_iterations', 'loop'), { point: 'loop', text: '' }).value,
+    ).toBeUndefined();
   });
 
   it('reads the tool-call counter for max_tool_calls', () => {
-    const input = { point: 'loop' as const, text: '', loop: { iteration: 1, toolCalls: 7, outputHashes: [] } };
+    const input = {
+      point: 'loop' as const,
+      text: '',
+      loop: { iteration: 1, toolCalls: 7, outputHashes: [] },
+    };
     expect(guardrailInputFor(check('max_tool_calls', 'loop'), input).value).toBe(7);
   });
 
   it('reads the output hashes for repeated_output', () => {
-    const input = { point: 'loop' as const, text: '', loop: { iteration: 3, toolCalls: 0, outputHashes: ['a', 'a', 'a'] } };
-    expect(guardrailInputFor(check('repeated_output', 'loop'), input).outputHashes).toEqual(['a', 'a', 'a']);
-    expect(guardrailInputFor(check('repeated_output', 'loop'), { point: 'loop', text: '' }).outputHashes).toBeUndefined();
+    const input = {
+      point: 'loop' as const,
+      text: '',
+      loop: { iteration: 3, toolCalls: 0, outputHashes: ['a', 'a', 'a'] },
+    };
+    expect(guardrailInputFor(check('repeated_output', 'loop'), input).outputHashes).toEqual([
+      'a',
+      'a',
+      'a',
+    ]);
+    expect(
+      guardrailInputFor(check('repeated_output', 'loop'), { point: 'loop', text: '' }).outputHashes,
+    ).toBeUndefined();
   });
 
   it.each(['max_cost_per_run', 'daily_budget', 'max_tokens_per_node'] as const)(
     'reads the cost figures for %s as value + limit',
     (type) => {
-      const input = { point: 'cost' as const, text: '', cost: { costUsd: 0.5, capUsd: 0.4, projected: true } };
+      const input = {
+        point: 'cost' as const,
+        text: '',
+        cost: { costUsd: 0.5, capUsd: 0.4, projected: true },
+      };
       const mapped = guardrailInputFor(check(type, 'cost'), input);
       expect(mapped.value).toBe(0.5);
       expect(mapped.limit).toBe(0.4);
@@ -604,7 +636,10 @@ describe('guardrailInputFor maps each check family to the field it reads (FR-GRD
   );
 
   it('returns the base unchanged for a check that needs no extra field (default)', () => {
-    const mapped = guardrailInputFor(check('required_citations', 'output'), { point: 'output', text: 'cited' });
+    const mapped = guardrailInputFor(check('required_citations', 'output'), {
+      point: 'output',
+      text: 'cited',
+    });
     expect(mapped).toEqual({ text: 'cited' });
   });
 });
@@ -647,7 +682,8 @@ describe('Round 3 wiring: guardrail approvals and run controls over the real ser
       new URL(`../../../../tests/acceptance/fixtures/round-3/${file}`, import.meta.url),
       'utf8',
     ).replaceAll(PLACEHOLDER_PROVIDER, options.providerId);
-    if (options.policyId !== undefined) text = text.replaceAll(PLACEHOLDER_POLICY, options.policyId);
+    if (options.policyId !== undefined)
+      text = text.replaceAll(PLACEHOLDER_POLICY, options.policyId);
     const imported = WorkflowGraphResponseSchema.parse(
       await post(`/projects/${project.id}/workflows/import`, JSON.parse(text) as WorkflowExport),
     );
@@ -658,7 +694,10 @@ describe('Round 3 wiring: guardrail approvals and run controls over the real ser
   async function askPolicy(projectId: string): Promise<string> {
     const sidecar = JSON.parse(
       readFileSync(
-        new URL('../../../../tests/acceptance/fixtures/round-3/pii-ask.policy.json', import.meta.url),
+        new URL(
+          '../../../../tests/acceptance/fixtures/round-3/pii-ask.policy.json',
+          import.meta.url,
+        ),
         'utf8',
       ),
     ) as Record<string, unknown>;
@@ -696,7 +735,9 @@ describe('Round 3 wiring: guardrail approvals and run controls over the real ser
     const request = await waitForApproval(started.id);
 
     // The node is parked WAITING while the person decides — the wiring's `onWaiting` did that.
-    const waiting = NodeRunSchema.parse(await (await api(`/node-runs/${request.nodeRunId}`)).json());
+    const waiting = NodeRunSchema.parse(
+      await (await api(`/node-runs/${request.nodeRunId}`)).json(),
+    );
     expect(waiting.status).toBe('WAITING');
 
     const approved = NodeRunSchema.parse(
@@ -768,7 +809,10 @@ describe('Round 4 wiring: artifacts, tools, MCP, chat and the tool loop over the
   const fixturesDir = new URL('../../../../tests/acceptance/fixtures/round-4/', import.meta.url);
 
   const api = (path: string, init: RequestInit = {}) =>
-    fetch(`${engine.url}/api/v1${path}`, { ...init, headers: { ...authHeaders(), ...init.headers } });
+    fetch(`${engine.url}/api/v1${path}`, {
+      ...init,
+      headers: { ...authHeaders(), ...init.headers },
+    });
   const json = (path: string, init: RequestInit = {}) =>
     api(path, { ...init, headers: { 'Content-Type': 'application/json', ...init.headers } });
   const post = async (path: string, body: unknown): Promise<unknown> => {
@@ -780,7 +824,11 @@ describe('Round 4 wiring: artifacts, tools, MCP, chat and the tool loop over the
   async function uploadFile(bytes: Uint8Array, name: string, mime: string): Promise<Response> {
     const form = new FormData();
     form.append('file', new File([bytes], name, { type: mime }));
-    return fetch(`${engine.url}/api/v1/artifacts`, { method: 'POST', headers: authHeaders(), body: form });
+    return fetch(`${engine.url}/api/v1/artifacts`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: form,
+    });
   }
 
   async function mockProvider(): Promise<string> {
@@ -845,16 +893,24 @@ describe('Round 4 wiring: artifacts, tools, MCP, chat and the tool loop over the
 
   it('dedupes identical bytes to one artifact id (FR-MM-002)', async () => {
     const bytes = png();
-    const first = ArtifactSchema.parse(await (await uploadFile(bytes, 'a.png', 'image/png')).json());
-    const second = ArtifactSchema.parse(await (await uploadFile(bytes, 'b.png', 'image/png')).json());
+    const first = ArtifactSchema.parse(
+      await (await uploadFile(bytes, 'a.png', 'image/png')).json(),
+    );
+    const second = ArtifactSchema.parse(
+      await (await uploadFile(bytes, 'b.png', 'image/png')).json(),
+    );
     expect(second.id).toBe(first.id);
   });
 
   it('serves a byte range as 206 with Content-Range (FR-MM-009)', async () => {
     const bytes = png();
-    const artifact = ArtifactSchema.parse(await (await uploadFile(bytes, 'r.png', 'image/png')).json());
+    const artifact = ArtifactSchema.parse(
+      await (await uploadFile(bytes, 'r.png', 'image/png')).json(),
+    );
 
-    const ranged = await api(`/artifacts/${artifact.id}/content`, { headers: { Range: 'bytes=0-3' } });
+    const ranged = await api(`/artifacts/${artifact.id}/content`, {
+      headers: { Range: 'bytes=0-3' },
+    });
     expect(ranged.status).toBe(206);
     expect(ranged.headers.get('Content-Range')).toBe(`bytes 0-3/${bytes.byteLength}`);
     expect(new Uint8Array(await ranged.arrayBuffer()).byteLength).toBe(4);
@@ -872,7 +928,11 @@ describe('Round 4 wiring: artifacts, tools, MCP, chat and the tool loop over the
   });
 
   it('refuses a type §2.1 does not allow 415 unsupported_type (TC-MM-002)', async () => {
-    const response = await uploadFile(new Uint8Array([1, 2, 3]), 'evil.exe', 'application/x-msdownload');
+    const response = await uploadFile(
+      new Uint8Array([1, 2, 3]),
+      'evil.exe',
+      'application/x-msdownload',
+    );
     expect(response.status).toBe(415);
     expect(ApiErrorSchema.parse(await response.json()).error.code).toBe('unsupported_type');
   });
@@ -949,8 +1009,12 @@ describe('Round 4 wiring: artifacts, tools, MCP, chat and the tool loop over the
 
   it('materialises an uploaded image onto the Input node so a vision run completes (FR-MM-003/005)', async () => {
     const providerId = await mockProvider();
-    const artifact = ArtifactSchema.parse(await (await uploadFile(png(), 'sample.png', 'image/png')).json());
-    const graph = await importFixture('vision.json', providerId, { [PLACEHOLDER_ARTIFACT]: artifact.id });
+    const artifact = ArtifactSchema.parse(
+      await (await uploadFile(png(), 'sample.png', 'image/png')).json(),
+    );
+    const graph = await importFixture('vision.json', providerId, {
+      [PLACEHOLDER_ARTIFACT]: artifact.id,
+    });
 
     const started = RunSchema.parse(await post(`/workflows/${graph.workflow.id}/runs`, {}));
     const run = await waitForEnd(started.id);
@@ -1046,14 +1110,20 @@ describe('Round 4 wiring: artifacts, tools, MCP, chat and the tool loop over the
     expect(begun.messageId).toBeDefined();
 
     // The reply streams in the background; poll the thread until the agent turn is persisted.
-    let detail = ChatThreadDetailSchema.parse(await (await api(`/chat/threads/${begun.threadId}`)).json());
+    let detail = ChatThreadDetailSchema.parse(
+      await (await api(`/chat/threads/${begun.threadId}`)).json(),
+    );
     for (let i = 0; i < 200 && detail.messages.length < 2; i++) {
       await new Promise((resolve) => setTimeout(resolve, 50));
-      detail = ChatThreadDetailSchema.parse(await (await api(`/chat/threads/${begun.threadId}`)).json());
+      detail = ChatThreadDetailSchema.parse(
+        await (await api(`/chat/threads/${begun.threadId}`)).json(),
+      );
     }
     expect(detail.messages.map((message) => message.role)).toEqual(['user', 'agent']);
 
-    const threads = (await (await api(`/nodes/${agentId}/chat/threads`)).json()) as { id: string }[];
+    const threads = (await (await api(`/nodes/${agentId}/chat/threads`)).json()) as {
+      id: string;
+    }[];
     expect(threads.map((thread) => thread.id)).toContain(begun.threadId);
 
     const deleted = await api(`/chat/threads/${begun.threadId}`, { method: 'DELETE' });
