@@ -10,6 +10,7 @@ import { openDatabase } from '../db.js';
 import {
   MIGRATIONS,
   PARITY_P0_MIGRATION_ID,
+  PARITY_P1_MIGRATION_ID,
   X1_CLI_PROVIDERS_MIGRATION_ID,
 } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
@@ -123,7 +124,7 @@ describe('D267–D271 the P0 migration applies on an X1 database and is recorded
     before.sqlite.close();
 
     const after = openDatabase({ path });
-    expect(after.appliedMigrations).toEqual([PARITY_P0_MIGRATION_ID]);
+    expect(after.appliedMigrations).toEqual([PARITY_P0_MIGRATION_ID, PARITY_P1_MIGRATION_ID]);
     for (const [table] of NEW_TABLES) expect(tableNames(after.sqlite)).toContain(table);
 
     const projectColumns = columnsOf(after.sqlite, 'projects');
@@ -189,9 +190,9 @@ describe('D267–D271 the P0 migration applies on an X1 database and is recorded
     again.sqlite.close();
   });
 
-  it('is the latest migration, right after X1, and the chain stays sorted', () => {
+  // Which migration is the latest is asserted by the newest migration's own test (P1's).
+  it('comes right after X1, and the chain stays sorted', () => {
     const ids = MIGRATIONS.map((migration) => migration.id);
-    expect(MIGRATIONS.at(-1)?.id).toBe(PARITY_P0_MIGRATION_ID);
     expect(ids.indexOf(PARITY_P0_MIGRATION_ID)).toBe(
       ids.indexOf(X1_CLI_PROVIDERS_MIGRATION_ID) + 1,
     );

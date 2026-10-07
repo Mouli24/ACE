@@ -13,6 +13,7 @@ import {
   applyMigrations,
   MIGRATIONS,
   PARITY_P0_MIGRATION_ID,
+  PARITY_P1_MIGRATION_ID,
   ROUND_3_MIGRATION_ID,
   ROUND_3_RUN_COLUMNS_MIGRATION_ID,
   ROUND_4_MIGRATION_ID,
@@ -104,6 +105,7 @@ describe('FR-GRD-018 The migration backfills a project that existed before it ra
       ROUND_5_MIGRATION_ID,
       X1_CLI_PROVIDERS_MIGRATION_ID,
       PARITY_P0_MIGRATION_ID,
+      PARITY_P1_MIGRATION_ID,
     ]);
 
     const rows = after.sqlite.prepare(SELECT_POLICIES).all() as PolicyRow[];
@@ -136,9 +138,7 @@ describe('FR-GRD-018 The migration backfills a project that existed before it ra
     );
     expect(policy?.isProjectDefault).toBe(true);
     expect(policy?.checks.map((check) => `${check.point}/${check.type}/${check.action}`)).toEqual(
-      defaultGuardrailChecks(newId).map(
-        (check) => `${check.point}/${check.type}/${check.action}`,
-      ),
+      defaultGuardrailChecks(newId).map((check) => `${check.point}/${check.type}/${check.action}`),
     );
 
     after.sqlite.close();
@@ -175,9 +175,7 @@ describe('FR-GRD-018 The migration backfills a project that existed before it ra
 
     const after = openDatabase({ path });
     expect(backfillDefaultPolicies(after.sqlite)).toBe(0);
-    expect(
-      (after.sqlite.prepare(SELECT_POLICIES).all() as PolicyRow[]).length,
-    ).toBe(1);
+    expect((after.sqlite.prepare(SELECT_POLICIES).all() as PolicyRow[]).length).toBe(1);
 
     after.sqlite.close();
   });
@@ -208,7 +206,9 @@ describe('FR-GRD-018 The migration backfills a project that existed before it ra
     );
 
     // The schema change and its data step commit together or not at all.
-    expect(() => opened.sqlite.prepare(`SELECT 1 FROM half_written`).all()).toThrow(/no such table/);
+    expect(() => opened.sqlite.prepare(`SELECT 1 FROM half_written`).all()).toThrow(
+      /no such table/,
+    );
     expect(appliedMigrations(opened.sqlite).has(broken.id)).toBe(false);
 
     opened.sqlite.close();
@@ -272,6 +272,7 @@ describe('FR-CTL-006 The run-controls migration adds four columns to an existing
       ROUND_5_MIGRATION_ID,
       X1_CLI_PROVIDERS_MIGRATION_ID,
       PARITY_P0_MIGRATION_ID,
+      PARITY_P1_MIGRATION_ID,
     ]);
 
     const columnsAfter = (

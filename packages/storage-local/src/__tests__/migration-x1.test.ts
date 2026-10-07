@@ -8,6 +8,7 @@ import { openDatabase } from '../db.js';
 import {
   MIGRATIONS,
   PARITY_P0_MIGRATION_ID,
+  PARITY_P1_MIGRATION_ID,
   X1_CLI_PROVIDERS_MIGRATION_ID,
 } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
@@ -52,6 +53,7 @@ describe('X1 migration: providers.cli_permission (D262)', () => {
     expect(after.appliedMigrations).toEqual([
       X1_CLI_PROVIDERS_MIGRATION_ID,
       PARITY_P0_MIGRATION_ID,
+      PARITY_P1_MIGRATION_ID,
     ]);
     const columns = (
       after.sqlite.prepare('PRAGMA table_info(providers)').all() as { name: string }[]

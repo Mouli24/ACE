@@ -40,6 +40,13 @@ export const X1_CLI_PROVIDERS_MIGRATION_ID = '20261006T120000_x1_cli_providers';
 export const PARITY_P0_MIGRATION_ID = '20261006T180000_parity_p0_tasks';
 
 /**
+ * ACE parity P1 (D275–D278): a task's deliverable and source, a workspace's pull request, a
+ * project's preview command and URL, and task schedules. Named so a test can apply the chain
+ * before it.
+ */
+export const PARITY_P1_MIGRATION_ID = '20261007T100200_parity_p1_tasks';
+
+/**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
  * written.
@@ -704,6 +711,47 @@ export const MIGRATIONS: readonly Migration[] = [
         at           TEXT NOT NULL
       );
       CREATE INDEX task_activity_task_idx ON task_activity (task_id, seq);
+    `,
+  },
+  {
+    id: PARITY_P1_MIGRATION_ID,
+    up: `
+      -- A Document or Email task's draft (D275) and where a task came from: each a JSON object,
+      -- NULL when the task has none. Every task written before reads with neither.
+      ALTER TABLE tasks ADD COLUMN deliverable TEXT;
+      ALTER TABLE tasks ADD COLUMN source TEXT;
+
+      -- The pull request opened from a task branch, as GitHub last reported it (D276): JSON, or
+      -- NULL before one is opened.
+      ALTER TABLE task_workspaces ADD COLUMN pull_request TEXT;
+
+      -- A project's preview (D278): the command line, and the URL to open ('{port}' in it is the
+      -- port the preview was given). NULL is none.
+      ALTER TABLE projects ADD COLUMN preview_command TEXT;
+      ALTER TABLE projects ADD COLUMN preview_url TEXT;
+
+      -- When a task starts by itself (D277): at most one schedule per task, gone with its task.
+      -- 'trigger' is the JSON TaskTrigger; 'kind' and 'after_task_id' repeat its kind and awaited
+      -- task so the scheduler's two reads are indexed queries rather than a scan of the JSON.
+      -- 'after_task_id' and 'last_task_id' name tasks without a foreign key: a schedule waiting
+      -- on a deleted task, or recording one, is the engine's to resolve, not a cascade's.
+      CREATE TABLE task_schedules (
+        id            TEXT PRIMARY KEY,
+        workspace_id  TEXT NOT NULL,
+        task_id       TEXT NOT NULL UNIQUE REFERENCES tasks (id) ON DELETE CASCADE,
+        "trigger"     TEXT NOT NULL,
+        kind          TEXT NOT NULL,
+        after_task_id TEXT,
+        enabled       INTEGER NOT NULL,
+        next_run_at   TEXT,
+        last_run_at   TEXT,
+        last_task_id  TEXT,
+        skipped       INTEGER NOT NULL,
+        created_at    TEXT NOT NULL,
+        updated_at    TEXT NOT NULL
+      );
+      CREATE INDEX task_schedules_enabled_idx ON task_schedules (workspace_id, enabled);
+      CREATE INDEX task_schedules_after_task_idx ON task_schedules (workspace_id, after_task_id);
     `,
   },
 ];

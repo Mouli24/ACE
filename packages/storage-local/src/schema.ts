@@ -37,6 +37,9 @@ export const projects = sqliteTable(
     /** JSON `CheckCommand[]`. */
     checkCommands: text('check_commands'),
     setupCommand: text('setup_command'),
+    /* ACE parity P1 preview (D278). NULL is none. */
+    previewCommand: text('preview_command'),
+    previewUrl: text('preview_url'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },
@@ -128,7 +131,6 @@ export const settings = sqliteTable(
   },
   (table) => [primaryKey({ columns: [table.workspaceId] })],
 );
-
 
 /* -------------------------------------------------------------------------- */
 /* Round 2 (Arch §15.3): providers, catalog, price tables, runs, node runs     */
@@ -711,6 +713,10 @@ export const tasks = sqliteTable(
     runChecks: integer('run_checks', { mode: 'boolean' }).notNull(),
     paused: integer('paused', { mode: 'boolean' }).notNull(),
     pendingRequest: text('pending_request'),
+    /** ACE parity P1 (D275): JSON `TaskDeliverable`, NULL when the task has none. */
+    deliverable: text('deliverable'),
+    /** ACE parity P1: JSON `TaskSource`, NULL for a task made in the New task dialog. */
+    source: text('source'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
     startedAt: text('started_at'),
@@ -739,6 +745,8 @@ export const taskWorkspaces = sqliteTable('task_workspaces', {
   headSha: text('head_sha').notNull(),
   status: text('status').notNull(),
   error: text('error'),
+  /** ACE parity P1 (D276): JSON — the pull request as GitHub last reported it. */
+  pullRequest: text('pull_request'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
@@ -848,4 +856,38 @@ export const taskActivity = sqliteTable(
     at: text('at').notNull(),
   },
   (table) => [index('task_activity_task_idx').on(table.taskId, table.seq)],
+);
+
+/* -------------------------------------------------------------------------- */
+/* ACE parity P1 (D277): task schedules                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * When a task starts by itself: at most one schedule per task, gone with its task. `trigger` is the
+ * JSON `TaskTrigger`; `kind` and `afterTaskId` repeat what the scheduler queries by.
+ */
+export const taskSchedules = sqliteTable(
+  'task_schedules',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    taskId: text('task_id')
+      .notNull()
+      .unique()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    trigger: text('trigger').notNull(),
+    kind: text('kind').notNull(),
+    afterTaskId: text('after_task_id'),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull(),
+    nextRunAt: text('next_run_at'),
+    lastRunAt: text('last_run_at'),
+    lastTaskId: text('last_task_id'),
+    skipped: integer('skipped').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    index('task_schedules_enabled_idx').on(table.workspaceId, table.enabled),
+    index('task_schedules_after_task_idx').on(table.workspaceId, table.afterTaskId),
+  ],
 );

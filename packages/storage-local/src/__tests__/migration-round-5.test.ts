@@ -11,6 +11,7 @@ import { openDatabase } from '../db.js';
 import {
   MIGRATIONS,
   PARITY_P0_MIGRATION_ID,
+  PARITY_P1_MIGRATION_ID,
   ROUND_5_MIGRATION_ID,
   X1_CLI_PROVIDERS_MIGRATION_ID,
   type Migration,
@@ -106,6 +107,7 @@ describe('Arch §15.3 migration applies on a round-4 database and is recorded', 
       ROUND_5_MIGRATION_ID,
       X1_CLI_PROVIDERS_MIGRATION_ID,
       PARITY_P0_MIGRATION_ID,
+      PARITY_P1_MIGRATION_ID,
     ]);
     for (const table of NEW_TABLES) expect(tableNames(after.sqlite)).toContain(table);
     expect(columnsOf(after.sqlite, 'node_runs')).toEqual(
@@ -277,8 +279,10 @@ describe('FR-GRD-004 DN-2 the context-check seed writes version+1 only for polic
   });
 
   it('rolls the seed back with the schema when it throws (D99)', () => {
+    // Round 5's own migration — by id, not by position: it was the last one when this was written,
+    // and a later migration's schema would not apply on a database from before round 5.
     const throwing: Migration = {
-      ...MIGRATIONS.at(-1)!,
+      ...MIGRATIONS.find((migration) => migration.id === ROUND_5_MIGRATION_ID)!,
       seed: () => {
         throw new Error('seed failed');
       },
