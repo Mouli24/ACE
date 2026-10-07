@@ -58,10 +58,13 @@ export function allowedTaskActions(task: TaskRecord, context: ActionContext): Ta
     if (task.type === 'app' && task.finishLine === 'github_merge' && context.workspaceReady) {
       actions.push(context.pullRequestOpen === true ? 'merge_pr' : 'open_pr');
     }
-    // D275: a Document or Email deliverable is accepted; an email whose finish line is Send asks to send.
+    // D275: a Document or Email deliverable is accepted; an email whose finish line is Send asks to
+    // send, and — with no mail connection to send through — can still be accepted and sent by hand.
     if (
       task.deliverable !== undefined &&
-      (task.finishLine === 'accept_document' || task.finishLine === 'accept_draft')
+      (task.finishLine === 'accept_document' ||
+        task.finishLine === 'accept_draft' ||
+        (task.type === 'email' && task.finishLine === 'send_email'))
     ) {
       actions.push('accept');
     }

@@ -219,7 +219,7 @@ describe('ACE-P1 D275 Email tasks', () => {
       workflowId: team.id,
     });
     expect(sending.allowedActions).toContain('send');
-    expect(sending.allowedActions).not.toContain('accept');
+    expect(sending.allowedActions).toContain('accept');
     const refused = await failure(client.sendTask(sending.id));
     expect(refused).toMatchObject({ status: 422, code: 'not_connected' });
     expect(refused.message).toContain('Sending needs an email connection');

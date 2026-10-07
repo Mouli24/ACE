@@ -162,9 +162,14 @@ describe('D275 Email tasks', () => {
       finishLine: 'send_email',
     });
     expect(sending.allowedActions).toContain('send');
-    expect(sending.allowedActions).not.toContain('accept');
     expect(await codeOf(h.service.send(sending.id))).toBe('not_connected');
     expect((await h.service.get(sending.id)).task.stage).toBe('review');
+    // What the refusal says to do is possible: accept the draft and send it by hand.
+    expect(sending.allowedActions).toContain('accept');
+    expect(await h.service.accept(sending.id, {})).toMatchObject({
+      stage: 'done',
+      outcome: 'accepted',
+    });
   });
 });
 

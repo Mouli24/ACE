@@ -55,7 +55,9 @@ export function allowedTaskActions(task: ActionFields, context: TaskActionContex
       'accept',
       inReview &&
         task.deliverable !== undefined &&
-        (task.finishLine === 'accept_document' || task.finishLine === 'accept_draft'),
+        (task.finishLine === 'accept_document' ||
+          task.finishLine === 'accept_draft' ||
+          (task.type === 'email' && task.finishLine === 'send_email')),
     ],
     ['send', inReview && task.type === 'email' && task.finishLine === 'send_email'],
     // D278: a preview of the workspace, whenever there is one and the project says how

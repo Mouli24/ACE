@@ -247,14 +247,17 @@ describe('ACE-P1 D275 an Email task', () => {
     });
     const user = await openTask(project.id, task.id);
     const panel = screen.getByTestId('review-panel');
-    expect(within(panel).queryByTestId('accept-section')).toBeNull();
+    // With no mail connection, the draft can still be accepted and sent by hand.
+    expect(within(panel).getByTestId('accept-section')).toBeVisible();
     await user.click(within(panel).getByRole('button', { name: 'Send email' }));
     const refusal = await within(panel).findByTestId('delivery-error');
     expect(refusal).toHaveAttribute('data-code', 'not_connected');
     expect(refusal).toHaveTextContent(
       'Not connected: Sending needs an email connection, which this version of ACE does not have.',
     );
-    expect(within(panel).getByText(/change the finish line to “Accept the draft”/)).toBeVisible();
+    expect(
+      within(panel).getByText(/accept the draft above and send it from your mail app/),
+    ).toBeVisible();
     expect(db.getTask(task.id)?.stage).toBe('review');
     // the finish line it has is shown as it is, with why it cannot be reached yet
     expect(screen.getByLabelText('Finish line')).toHaveDisplayValue(

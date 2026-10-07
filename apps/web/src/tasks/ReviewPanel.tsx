@@ -427,8 +427,7 @@ function SendSection({ task }: { task: Task }) {
       <DeliveryError error={send.error} what="Send" />
       {notConnected && (
         <p className="text-xs text-fg-muted">
-          To finish without sending, change the finish line to “{FINISH_LINE_LABEL.accept_draft}” on
-          the Overview tab and accept the draft.
+          To finish without sending, accept the draft above and send it from your mail app.
         </p>
       )}
       <Button
