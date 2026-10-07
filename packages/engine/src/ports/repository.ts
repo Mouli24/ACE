@@ -40,6 +40,7 @@ import type {
   SummaryCacheRepository,
   UsageRepository,
 } from './knowledge.js';
+import type { BundleRepository, SkillRepository } from './capabilities.js';
 import type { Scope } from './scope.js';
 import type {
   ProjectNoteRepository,
@@ -361,4 +362,10 @@ export interface Repository {
   responsibilities?: ResponsibilityRepository;
   suggestions?: SuggestionRepository;
   projectNotes?: ProjectNoteRepository;
+  /**
+   * ACE parity P1 (D272, D273): installed skills and imported bundles. Optional, D218's pattern: a
+   * store without them holds no skill, so an agent naming one is refused at pre-flight.
+   */
+  skills?: SkillRepository;
+  bundles?: BundleRepository;
 }
