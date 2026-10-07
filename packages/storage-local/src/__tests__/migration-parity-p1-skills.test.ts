@@ -14,7 +14,7 @@ import {
 } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
 import { bundles, skills } from '../schema.js';
-import { makeProject, scope } from './fixtures.js';
+import { createProjectBeforeP0, makeProject, scope } from './fixtures.js';
 
 /**
  * The ACE parity P1 skills migration (D272, D273): the `skills` and `bundles` tables.
@@ -88,7 +88,12 @@ describe('D272 D273 the skills migration applies on a P0 database and is recorde
     expect(before.appliedMigrations).not.toContain(PARITY_P1_SKILLS_MIGRATION_ID);
     for (const [table] of NEW_TABLES) expect(tableNames(before.sqlite)).not.toContain(table);
     const project = makeProject();
-    await new SqliteRepository(before.db, before.sqlite).projects.create(scope, project);
+    // Written as an install before P0 would hold it: the repository now writes later columns too.
+    await createProjectBeforeP0(
+      before.sqlite,
+      new SqliteRepository(before.db, before.sqlite),
+      project,
+    );
     before.sqlite.close();
 
     const after = openDatabase({ path });
