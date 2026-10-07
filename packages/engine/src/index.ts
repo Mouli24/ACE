@@ -45,3 +45,6 @@ export * from './suggestions/index.js';
 export * from './assistant/index.js';
 /* ACE parity P1: skills and bundles (D272, D273). */
 export * from './skills/index.js';
+/* ACE parity P1: secrets — names in the database, values in the keychain (D274). */
+export * from './secrets/index.js';
+export * from './secrets/routes.js';

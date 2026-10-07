@@ -58,6 +58,8 @@ import type { SearchService } from '../knowledge/search.js';
 import type { KnowledgeService } from '../knowledge/service.js';
 import { createMemoryRoutes } from '../memory/routes.js';
 import type { MemoryService } from '../memory/service.js';
+import type { SecretService } from '../secrets/index.js';
+import { createSecretRoutes } from '../secrets/routes.js';
 import { createSkillRoutes } from '../skills/routes.js';
 import type { SkillService } from '../skills/service.js';
 import { createTemplateRoutes } from '../templates/routes.js';
@@ -186,6 +188,11 @@ export interface EngineDeps {
 
   /** `/skills`, `/skills/:id`, `/skills/:id/duplicate`, `/bundles`, `/bundles/import`. */
   skills?: SkillService;
+
+  /* ACE parity P1. Optional like the rest: built without one, its routes answer 501 (D121). */
+
+  /** `GET/POST /secrets`, `PATCH/DELETE /secrets/:name` (D274). */
+  secrets?: SecretService;
 }
 
 export interface EngineVariables {
@@ -835,6 +842,8 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.route('/', createAssistantRoutes(deps.assistant));
   api.route('/', createTaskRoutes(deps.tasks));
   api.route('/', createSkillRoutes(deps.skills));
+  /* ACE parity P1's routes (D274), inside the same middleware. */
+  api.route('/', createSecretRoutes(deps.secrets));
 
   app.route(API_BASE_PATH, api);
 
