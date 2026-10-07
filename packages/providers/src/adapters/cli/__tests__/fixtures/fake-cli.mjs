@@ -22,7 +22,12 @@ if (mode === 'echo-stdin') {
     sha: createHash('sha256').update(input).digest('hex'),
     cwd: process.cwd(),
     argv: process.argv.slice(2),
-    env: { GEMINI_CLI_NO_RELAUNCH: process.env.GEMINI_CLI_NO_RELAUNCH ?? null },
+    env: Object.fromEntries(
+      // GEMINI_CLI_NO_RELAUNCH always; FAKE_CLI_ECHO_ENV names more to report (comma-separated).
+      ['GEMINI_CLI_NO_RELAUNCH', ...(process.env.FAKE_CLI_ECHO_ENV ?? '').split(',')]
+        .filter((name) => name !== '')
+        .map((name) => [name, process.env[name] ?? null]),
+    ),
   });
   // Adapter tests read this back after a call that (rightly) fails for want of a result event.
   if (process.env.FAKE_CLI_ECHO_FILE) writeFileSync(process.env.FAKE_CLI_ECHO_FILE, report);

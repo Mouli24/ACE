@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import {
   CLI_INSTALL_HINTS,
+  CLI_PERMISSIONS,
   type CliDetection,
   type CliPermission,
   type CliProviderType,
@@ -53,6 +54,12 @@ export interface CliDialect {
 
 export interface CliAdapterOptions {
   permission: CliPermission;
+  /**
+   * The most this provider may do right now, whatever its preset (ACE parity P1, D270): read on
+   * every `generate`, so a change of approval mode applies to the next call. `undefined` is no
+   * ceiling. The preset is lowered to it, never raised.
+   */
+  permissionCeiling?: () => Promise<CliPermission | undefined>;
   /** The terminal scan for this CLI — what `check()` reports. */
   detect: () => Promise<CliDetection>;
   /** Finds the binary; `resolveCommand(dialect.bin)` by default. Tests point it at a fake. */
@@ -76,7 +83,9 @@ export function cliModel(modelId: string, displayName: string): ModelInfo {
 
 /** ACE's system section first, then the prompt — for CLIs with no system-prompt flag. */
 export function withSystem(req: GenerateRequest): string {
-  return req.system === undefined || req.system === '' ? req.prompt : `${req.system}\n\n${req.prompt}`;
+  return req.system === undefined || req.system === ''
+    ? req.prompt
+    : `${req.system}\n\n${req.prompt}`;
 }
 
 /** What a tool returned, as one line for the inspector (FR-TOOL-009 keeps 500 characters). */
@@ -87,7 +96,9 @@ export function summariseToolOutput(content: unknown): string {
       : Array.isArray(content)
         ? content
             .map((part) =>
-              typeof part === 'object' && part !== null && typeof (part as { text?: unknown }).text === 'string'
+              typeof part === 'object' &&
+              part !== null &&
+              typeof (part as { text?: unknown }).text === 'string'
                 ? (part as { text: string }).text
                 : '',
             )
@@ -120,6 +131,18 @@ export function cliExitError(label: string, exit: CliExit): NodeError {
   };
 }
 
+/**
+ * The lower of a preset and a ceiling, in `CLI_PERMISSIONS` order — `read_only` < `edit_files` <
+ * `full_auto` (D270). No ceiling leaves the preset as it is.
+ */
+export function capPermission(
+  preset: CliPermission,
+  ceiling: CliPermission | undefined,
+): CliPermission {
+  if (ceiling === undefined) return preset;
+  return CLI_PERMISSIONS.indexOf(ceiling) < CLI_PERMISSIONS.indexOf(preset) ? ceiling : preset;
+}
+
 function isDirectory(path: string): boolean {
   try {
     return statSync(path).isDirectory();
@@ -139,7 +162,10 @@ export function createCliAdapter(dialect: CliDialect, options: CliAdapterOptions
     async check(): Promise<ProviderStatus> {
       const found = await options.detect();
       if (!found.installed) {
-        return { status: 'UNREACHABLE', message: `${dialect.label} is not installed — ${found.installHint}` };
+        return {
+          status: 'UNREACHABLE',
+          message: `${dialect.label} is not installed — ${found.installHint}`,
+        };
       }
       if (found.login === 'logged_out') {
         return {
@@ -159,6 +185,9 @@ export function createCliAdapter(dialect: CliDialect, options: CliAdapterOptions
 
     generate(req: GenerateRequest, signal: AbortSignal): AsyncIterable<StreamChunk> {
       return (async function* (): AsyncGenerator<StreamChunk> {
+        // Read first, before anything is found or spawned: a ceiling that cannot be read fails the
+        // call rather than letting the preset through unchecked (D270).
+        const ceiling = await options.permissionCeiling?.();
         const command = resolve();
         if (command === undefined) {
           throw new ProviderCallError({
@@ -178,15 +207,20 @@ export function createCliAdapter(dialect: CliDialect, options: CliAdapterOptions
         }
 
         // No project folder (direct chat, a summary): a throwaway folder, read-only (spec §4.2).
-        const scratch = req.workingDir === undefined ? mkdtempSync(join(tmpdir(), 'ace-cli-')) : undefined;
+        const scratch =
+          req.workingDir === undefined ? mkdtempSync(join(tmpdir(), 'ace-cli-')) : undefined;
         const cwd = req.workingDir ?? (scratch as string);
-        const permission: CliPermission = scratch === undefined ? options.permission : 'read_only';
+        // The approval mode's ceiling lowers the preset (D270); a scratch folder is read-only anyway.
+        const permission: CliPermission =
+          scratch === undefined ? capPermission(options.permission, ceiling) : 'read_only';
+        // The run's secrets (D274) over the CLI's own environment: a name in both takes the secret.
+        const base = dialect.env?.(env) ?? env;
 
         const run = runCli({
           command: command.command,
           args: [...command.prefixArgs, ...dialect.args(req, permission)],
           cwd,
-          env: dialect.env?.(env) ?? env,
+          env: req.env === undefined ? base : { ...base, ...req.env },
           stdin: dialect.stdin(req),
           signal,
           platform,

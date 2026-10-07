@@ -1,5 +1,16 @@
-import { DEFAULT_CLI_PERMISSION, type Model, type Provider, type ProviderType } from '@ace/contracts';
-import type { ModelInfo, ProviderAdapter, ProviderAdapterFactory, ProviderDetection } from '@ace/engine';
+import {
+  DEFAULT_CLI_PERMISSION,
+  type CliPermission,
+  type Model,
+  type Provider,
+  type ProviderType,
+} from '@ace/contracts';
+import type {
+  ModelInfo,
+  ProviderAdapter,
+  ProviderAdapterFactory,
+  ProviderDetection,
+} from '@ace/engine';
 
 import { createAnthropicAdapter } from './adapters/anthropic.js';
 import { createClaudeCodeAdapter } from './adapters/cli/claude-code.js';
@@ -22,6 +33,11 @@ export interface ProviderFactoryOptions {
   fetchImpl?: typeof fetch;
   /** X1: the terminal scan; tests inject a fake so `pnpm test` never runs a real CLI. */
   cliDetector?: CliDetector;
+  /**
+   * ACE parity P1 (D270): the most any CLI provider may do right now — the approval mode's ceiling
+   * over its permission preset, read on every call. Absent, every preset applies as it is.
+   */
+  permissionCeiling?: () => Promise<CliPermission | undefined>;
 }
 
 /** Thrown when a provider row asks for a type this build has no adapter for. */
@@ -40,6 +56,7 @@ export function createProviderAdapterFactory(
   const mock = options.mock ?? createMockAdapter();
   const fetchImpl = options.fetchImpl;
   const cli = options.cliDetector ?? createCliDetector();
+  const permissionCeiling = options.permissionCeiling;
 
   return {
     create(provider: Provider, apiKey: string | undefined): ProviderAdapter {
@@ -90,6 +107,7 @@ export function createProviderAdapterFactory(
           return createClaudeCodeAdapter({
             permission: provider.cliPermission ?? DEFAULT_CLI_PERMISSION,
             detect: () => cli.detect('claude_code'),
+            ...(permissionCeiling === undefined ? {} : { permissionCeiling }),
           });
 
         default:
@@ -100,7 +118,17 @@ export function createProviderAdapterFactory(
     manifestFor: (type: ProviderType): ModelInfo[] => manifestFor(type),
 
     mergeCatalog: (discovered, manifest): (ModelInfo & { source: Model['source'] })[] =>
-      mergeCatalog(discovered, manifest.map((model) => ({ ...model, pricing: model.pricing ?? { inputPer1k: 0, outputPer1k: 0, priceTableVersion: 'unpriced' } }))),
+      mergeCatalog(
+        discovered,
+        manifest.map((model) => ({
+          ...model,
+          pricing: model.pricing ?? {
+            inputPer1k: 0,
+            outputPer1k: 0,
+            priceTableVersion: 'unpriced',
+          },
+        })),
+      ),
 
     detect: async (): Promise<ProviderDetection> => ({
       ollama: await detectOllama(DEFAULT_OLLAMA_BASE_URL, fetchImpl),

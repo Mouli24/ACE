@@ -86,7 +86,9 @@ describe('Arch §14.1 every provider type maps to its own adapter', () => {
 });
 
 describe('D-025 a mock provider answers §2.6 from its own row (TC-PRV-003, TC-PRV-004)', () => {
-  const factory = createProviderAdapterFactory({ mock: createMockAdapter({ sleep: async () => {} }) });
+  const factory = createProviderAdapterFactory({
+    mock: createMockAdapter({ sleep: async () => {} }),
+  });
 
   it.each([
     ['bad', undefined, 'AUTH_FAILED'],
@@ -249,13 +251,52 @@ describe('X1 CLI providers in the factory', () => {
   });
 
   it('builds a Claude Code adapter whose check reads the scan', async () => {
-    const adapter = createProviderAdapterFactory({ cliDetector: detector }).create(row(), undefined);
+    const adapter = createProviderAdapterFactory({ cliDetector: detector }).create(
+      row(),
+      undefined,
+    );
     expect(adapter.type).toBe('claude_code');
     expect(await adapter.check()).toEqual({ status: 'CONNECTED', message: 'v2.1.282' });
-    expect((await adapter.listModels()).map((model) => model.modelId)).toEqual(['default', 'opus', 'sonnet', 'haiku']);
+    expect((await adapter.listModels()).map((model) => model.modelId)).toEqual([
+      'default',
+      'opus',
+      'sonnet',
+      'haiku',
+    ]);
   });
 
   it('passes the terminal scan through', async () => {
-    expect(await createProviderAdapterFactory({ cliDetector: detector }).detectClis?.()).toEqual({ items: [scan] });
+    expect(await createProviderAdapterFactory({ cliDetector: detector }).detectClis?.()).toEqual({
+      items: [scan],
+    });
+  });
+
+  it('D270 asks the permission ceiling on every call of a CLI adapter it builds', async () => {
+    let asked = 0;
+    const factory = createProviderAdapterFactory({
+      cliDetector: detector,
+      permissionCeiling: async () => {
+        asked += 1;
+        return 'edit_files';
+      },
+    });
+    const adapter = factory.create(row({ cliPermission: 'full_auto' }), undefined);
+    // A folder that does not exist: the call stops before any CLI could start, installed or not.
+    const call = async () => {
+      for await (const chunk of adapter.generate(
+        {
+          modelId: 'sonnet',
+          prompt: 'x',
+          outputTypes: ['text'],
+          workingDir: '/nonexistent/ace-folder',
+        },
+        new AbortController().signal,
+      )) {
+        void chunk;
+      }
+    };
+    await expect(call()).rejects.toMatchObject({ nodeError: { kind: expect.any(String) } });
+    await expect(call()).rejects.toBeDefined();
+    expect(asked).toBe(2);
   });
 });
