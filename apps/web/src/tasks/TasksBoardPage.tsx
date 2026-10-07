@@ -16,6 +16,7 @@ import { useProject, useUpdateProject } from '../projects/hooks';
 import { ProjectNav } from '../projects/ProjectNav';
 import { useWorkflows } from '../workflows/hooks';
 import { useTasks } from './hooks';
+import { ImportEmailButton } from './ImportEmailDialog';
 import { OUTCOME_LABEL, PRIORITY_LABEL, STAGE_LABEL, TYPE_LABEL } from './meta';
 import { NewTaskDialog } from './NewTaskDialog';
 import { TaskStateChip } from './TaskStateChip';
@@ -170,6 +171,11 @@ export function TasksBoardPage() {
             Clear filters
           </Button>
         )}
+        <ImportEmailButton
+          projectId={projectId}
+          workflows={workflows.data ?? []}
+          className="sm:ml-auto"
+        />
       </div>
 
       {tasks.isPending && <p className="text-fg-muted">Loading tasks…</p>}
