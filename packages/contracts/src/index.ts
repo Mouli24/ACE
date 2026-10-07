@@ -42,3 +42,4 @@ export * from './templates.js';
 export * from './tasks.js';
 export * from './capabilities.js';
 export * from './suggestions.js';
+export * from './assistant.js';
