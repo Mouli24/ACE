@@ -1,10 +1,11 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 
 import type { CommandResult, CommandRunner } from '@ace/engine';
 
 import { isDirectory } from './is-directory.js';
 import { killProcessTree } from './kill-tree.js';
 import { mergeEnv } from './merge-env.js';
+import { appendOutput, outputTail, spawnShell } from './shell.js';
 
 /**
  * How long a killed command may take to close its pipes before the result is settled anyway — a
@@ -64,29 +65,12 @@ async function runCommand(input: RunInput): Promise<CommandResult> {
     let graceTimer: NodeJS.Timeout | undefined;
 
     const append = (chunk: string): void => {
-      output += chunk;
-      // Trim as we go so a command that prints without end cannot grow the buffer without bound.
-      if (output.length > input.maxOutput * 2 + 4_096) output = tail(output, input.maxOutput);
+      output = appendOutput(output, chunk, input.maxOutput);
     };
 
     let child: ChildProcess;
     try {
-      child =
-        platform === 'win32'
-          ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `"${input.command}"`], {
-              cwd: input.cwd,
-              env,
-              stdio: ['ignore', 'pipe', 'pipe'],
-              windowsHide: true,
-              windowsVerbatimArguments: true,
-            })
-          : spawn('/bin/sh', ['-c', input.command], {
-              cwd: input.cwd,
-              env,
-              stdio: ['ignore', 'pipe', 'pipe'],
-              // A leader of its own group, so the kill reaches everything the command started.
-              detached: true,
-            });
+      child = spawnShell(input.command, { cwd: input.cwd, env, platform });
     } catch (error) {
       resolve({
         exitCode: null,
@@ -107,7 +91,7 @@ async function runCommand(input: RunInput): Promise<CommandResult> {
       child.stderr?.destroy();
       resolve({
         exitCode: killed ? null : exitCode,
-        output: tail(output, input.maxOutput),
+        output: outputTail(output, input.maxOutput),
         timedOut,
         durationMs: elapsed(),
       });
@@ -139,15 +123,6 @@ async function runCommand(input: RunInput): Promise<CommandResult> {
     });
     child.on('close', (code) => finish(code));
   });
-}
-
-/** The last `max` characters, without starting on the second half of a surrogate pair. */
-function tail(text: string, max: number): string {
-  if (max <= 0) return '';
-  if (text.length <= max) return text;
-  const cut = text.slice(text.length - max);
-  const first = cut.charCodeAt(0);
-  return first >= 0xdc00 && first <= 0xdfff ? cut.slice(1) : cut;
 }
 
 function messageOf(error: unknown): string {
