@@ -1,11 +1,19 @@
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { TaskDetailSchema, TaskListResponseSchema, type TaskDetail } from '@ace/contracts';
 import { expect, test } from '@playwright/test';
+
+import {
+  api,
+  engine,
+  git,
+  makeRepository,
+  projectWithTeam,
+  removeCreated,
+  type Created,
+} from './support.js';
 
 /**
  * ACE parity P0 end to end (docs/ACE_FEATURE_PARITY.md §5, D267–D271): the Build loop through the
@@ -18,60 +26,16 @@ import { expect, test } from '@playwright/test';
  * happen?" is asked of the engine over REST or of the repository with `git`, never of the page alone.
  */
 
-interface EngineHandle {
-  url: string;
-  token: string;
-}
-
-function engine(): EngineHandle {
-  const handleFile = fileURLToPath(new URL('../.playwright-engine.json', import.meta.url));
-  return JSON.parse(readFileSync(handleFile, 'utf8')) as EngineHandle;
-}
-
-async function api<T = unknown>(path: string, init: { method?: string; body?: unknown } = {}) {
-  const { url, token } = engine();
-  const response = await fetch(`${url}/api/v1${path}`, {
-    method: init.method ?? 'GET',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-  });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`${init.method ?? 'GET'} ${path} → ${response.status} ${text}`);
-  return (text === '' ? undefined : JSON.parse(text)) as T;
-}
-
-function git(cwd: string, ...args: string[]): string {
-  return execFileSync(
-    'git',
-    ['-c', 'user.name=T', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args],
-    { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] },
-  ).trim();
-}
-
 let root: string;
-/** What this test added to the suite's shared engine, removed afterwards so later rows see none of it. */
-let created: { projectId?: string; providerId?: string };
+let created: Created;
 
 test.beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'ace-parity-e2e-'));
-  created = {};
+  created = { projectIds: [] };
 });
 
 test.afterEach(async () => {
-  // The project first, its workflows before it: deleting a project leaves its workflows (and their
-  // nodes, which name the provider) in place, so they go explicitly. Its task worktrees go with it.
-  if (created.projectId !== undefined) {
-    const workflows = await api<{ items: { id: string }[] }>(
-      `/projects/${created.projectId}/workflows`,
-    );
-    for (const workflow of workflows.items) {
-      await api(`/workflows/${workflow.id}`, { method: 'DELETE' });
-    }
-    await api(`/projects/${created.projectId}`, { method: 'DELETE' });
-  }
-  if (created.providerId !== undefined) {
-    await api(`/providers/${created.providerId}`, { method: 'DELETE' });
-  }
+  await removeCreated(created);
   try {
     rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   } catch {
@@ -83,33 +47,8 @@ test('a brief becomes a task, runs in its worktree, and Apply merges it into mai
   page,
 }) => {
   // A repository with one commit on main, a project on it, the mock provider and a team.
-  const repo = join(root, 'shop');
-  mkdirSync(repo, { recursive: true });
-  git(repo, 'init', '-q', '-b', 'main');
-  writeFileSync(join(repo, 'README.md'), '# Demo shop\n');
-  git(repo, 'add', '-A');
-  git(repo, 'commit', '-q', '-m', 'base');
-  const baseSha = git(repo, 'rev-parse', 'HEAD');
-
-  const project = await api<{ id: string }>('/projects', {
-    method: 'POST',
-    body: { name: `Shop ${Date.now()}`, folderPath: repo },
-  });
-  created.projectId = project.id;
-  const providers = await api<{ items: { id: string; type: string }[] }>('/providers');
-  let mock = providers.items.find((provider) => provider.type === 'mock');
-  if (mock === undefined) {
-    mock = await api<{ id: string; type: string }>('/providers', {
-      method: 'POST',
-      body: { type: 'mock', name: 'Mock' },
-    });
-    created.providerId = mock.id;
-  }
-  await api(`/providers/${mock.id}/refresh-models`, { method: 'POST' });
-  await api('/templates/single-builder/instantiate', {
-    method: 'POST',
-    body: { projectId: project.id },
-  });
+  const { repo, baseSha } = makeRepository(root, 'shop');
+  const project = { id: (await projectWithTeam(created, repo)).projectId };
 
   // The brief, through the New task dialog.
   const { token } = engine();
