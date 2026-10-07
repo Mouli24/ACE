@@ -1466,6 +1466,8 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       const deliverable = initialDeliverable(type, body);
       if (deliverable !== undefined) record.deliverable = deliverable;
       if (body.trigger !== undefined && scheduler === undefined) throw notImplemented('schedules');
+      // Checked before the task exists, so a refused trigger leaves no unscheduled task behind.
+      if (body.trigger !== undefined) await scheduler?.check(projectId, body.trigger);
       const created = await repos().tasks.create(scope, record);
       const presented = await commit(created, {
         kind: 'created',

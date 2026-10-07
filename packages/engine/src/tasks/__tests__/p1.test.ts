@@ -436,6 +436,30 @@ describe('D277 schedules', () => {
     await h.service.removeSchedule(task.id);
     expect((await h.service.get(task.id)).schedule).toBeUndefined();
   });
+
+  it('creates no task when the trigger it was created with is refused', async () => {
+    const h = await createTaskHarness({ clock: '2026-10-07T08:00:00.000Z' });
+    const before = (await h.service.list(h.project.id, {})).length;
+    expect(
+      await codeOf(
+        h.service.create(h.project.id, {
+          title: 'Yesterday',
+          workflowId: h.team.id,
+          trigger: { kind: 'once', at: '2026-10-06T08:00:00.000Z' },
+        }),
+      ),
+    ).toBe('validation_failed');
+    expect(
+      await codeOf(
+        h.service.create(h.project.id, {
+          title: 'After nothing',
+          workflowId: h.team.id,
+          trigger: { kind: 'after_task', taskId: '01J0000000000000000000NONE' },
+        }),
+      ),
+    ).toBe('validation_failed');
+    expect(await h.service.list(h.project.id, {})).toHaveLength(before);
+  });
 });
 
 describe('Send to Build — a task from a chat reports back', () => {

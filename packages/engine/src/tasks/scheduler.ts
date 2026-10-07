@@ -24,6 +24,11 @@ import type { TaskKernel } from './kernel.js';
  * counted, never run late in a burst. A paused task or project takes no scheduled step.
  */
 export interface TaskScheduler {
+  /**
+   * Refuses a trigger `put` would refuse for a task of this project (400 `validation_failed`,
+   * `invalid_schedule`), so a task created with one is never left behind unscheduled.
+   */
+  check(projectId: Id, trigger: TaskTrigger): Promise<void>;
   put(taskId: Id, body: PutTaskScheduleRequest): Promise<TaskSchedule>;
   remove(taskId: Id): Promise<void>;
   get(taskId: Id): Promise<TaskSchedule | undefined>;
@@ -163,7 +168,66 @@ export function createTaskScheduler(
     }
   }
 
+  /**
+   * The trigger's next run, and whether it is an after-task trigger already satisfied — or a 400
+   * naming what is wrong with it. `selfId` is the task being scheduled, when it exists yet.
+   */
+  async function validated(
+    projectId: Id,
+    trigger: TaskTrigger,
+    selfId?: Id,
+  ): Promise<{ nextRunAt: string | undefined; waitsOnDone: boolean }> {
+    let nextRunAt: string | undefined;
+    try {
+      nextRunAt = nextRun(trigger, nowMs());
+    } catch (error) {
+      if (error instanceof CronError) {
+        throw validationFailed(error.message, [
+          { severity: 'error', code: 'invalid_schedule', message: error.message },
+        ]);
+      }
+      throw error;
+    }
+    if (trigger.kind === 'once' && Date.parse(trigger.at) <= nowMs()) {
+      throw validationFailed('The time must be in the future.', [
+        {
+          severity: 'error',
+          code: 'invalid_schedule',
+          message: 'The time must be in the future.',
+        },
+      ]);
+    }
+    if (trigger.kind === 'recurring' && nextRunAt === undefined) {
+      throw validationFailed('That cron expression never matches.', [
+        {
+          severity: 'error',
+          code: 'invalid_schedule',
+          message: 'That cron expression never matches.',
+        },
+      ]);
+    }
+    let waitsOnDone = false;
+    if (trigger.kind === 'after_task') {
+      const other = await kernel.repos().tasks.get(kernel.scope, trigger.taskId);
+      if (other === null || other.projectId !== projectId || other.id === selfId) {
+        throw validationFailed('The task to wait on must be another task of this project.', [
+          {
+            severity: 'error',
+            code: 'invalid_schedule',
+            message: 'The task to wait on must be another task of this project.',
+          },
+        ]);
+      }
+      waitsOnDone = isVerifiedOutcome(other.outcome);
+    }
+    return { nextRunAt, waitsOnDone };
+  }
+
   const scheduler: TaskScheduler = {
+    async check(projectId, trigger) {
+      await validated(projectId, trigger);
+    },
+
     async put(taskId, body) {
       const task = await kernel.load(taskId);
       if (task.stage !== 'inbox' || (task.state !== 'idle' && task.state !== 'failed')) {
@@ -174,49 +238,7 @@ export function createTaskScheduler(
         );
       }
       const trigger = body.trigger;
-      let nextRunAt: string | undefined;
-      try {
-        nextRunAt = nextRun(trigger, nowMs());
-      } catch (error) {
-        if (error instanceof CronError) {
-          throw validationFailed(error.message, [
-            { severity: 'error', code: 'invalid_schedule', message: error.message },
-          ]);
-        }
-        throw error;
-      }
-      if (trigger.kind === 'once' && Date.parse(trigger.at) <= nowMs()) {
-        throw validationFailed('The time must be in the future.', [
-          {
-            severity: 'error',
-            code: 'invalid_schedule',
-            message: 'The time must be in the future.',
-          },
-        ]);
-      }
-      if (trigger.kind === 'recurring' && nextRunAt === undefined) {
-        throw validationFailed('That cron expression never matches.', [
-          {
-            severity: 'error',
-            code: 'invalid_schedule',
-            message: 'That cron expression never matches.',
-          },
-        ]);
-      }
-      let waitsOnDone = false;
-      if (trigger.kind === 'after_task') {
-        const other = await kernel.repos().tasks.get(kernel.scope, trigger.taskId);
-        if (other === null || other.projectId !== task.projectId || other.id === task.id) {
-          throw validationFailed('The task to wait on must be another task of this project.', [
-            {
-              severity: 'error',
-              code: 'invalid_schedule',
-              message: 'The task to wait on must be another task of this project.',
-            },
-          ]);
-        }
-        waitsOnDone = isVerifiedOutcome(other.outcome);
-      }
+      const { nextRunAt, waitsOnDone } = await validated(task.projectId, trigger, task.id);
 
       const at = kernel.now();
       const existing = await schedules.getByTask(kernel.scope, taskId);
