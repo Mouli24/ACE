@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 
 import { patchProviderStatus } from '../providers/status-patch';
 import { approvalsInboxKey } from '../runs/approvals/inbox';
+import { invalidateProjectChanged } from '../suggestions/hooks';
 import { patchTaskUpdated, removeTask } from '../tasks/task-cache';
 import { peekGraphSync } from '../workflows/sync-registry';
 import { queryKeys } from '../workflows/query-keys';
@@ -43,6 +44,8 @@ export function startSocket(options: StartSocketOptions): AceSocket {
     void options.queryClient.invalidateQueries({ queryKey: approvalsInboxKey() });
   });
   socket.on('task.deleted', (payload) => removeTask(options.queryClient, payload));
+  // ACE parity P2: responsibilities, suggestions and team notes refetch when the engine says so.
+  socket.on('project.changed', (payload) => invalidateProjectChanged(options.queryClient, payload));
   socket.subscribe({ scope: 'engine' });
   socket.connect();
   return socket;

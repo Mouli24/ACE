@@ -13,6 +13,7 @@ import { ProvidersPage } from '../providers/ProvidersPage';
 import { ProjectRunsPage } from '../runs/ProjectRunsPage';
 import { RunDetailPage } from '../runs/RunDetailPage';
 import { SettingsPage } from '../settings/SettingsPage';
+import { SuggestionsPage } from '../suggestions/SuggestionsPage';
 import { TaskPage } from '../tasks/TaskPage';
 import { TasksBoardPage } from '../tasks/TasksBoardPage';
 import { LibraryPage } from '../library/LibraryPage';
@@ -26,6 +27,7 @@ import { AppShell } from './layout/AppShell';
  * runs, `/providers`, `/guardrails`, `/usage` (D239), `/settings`, and `/help/:page` (D240). ACE
  * parity P0 adds a project's task board, one task's page and the project's settings; P1 turns
  * `/library/tools` into the Library's tabs (`/library/:tab`: tools, skills, plugins, bundles).
+ * ACE parity P2 adds a project's Suggestions.
  */
 export const routes: RouteObject[] = [
   {
@@ -46,6 +48,7 @@ export const routes: RouteObject[] = [
       { path: 'projects/:projectId/settings', element: <ProjectSettingsPage /> },
       { path: 'projects/:projectId/runs', element: <ProjectRunsPage /> },
       { path: 'projects/:projectId/knowledge', element: <KnowledgeListPage /> },
+      { path: 'projects/:projectId/suggestions', element: <SuggestionsPage /> },
       { path: 'knowledge/:kbId', element: <KnowledgeBasePage /> },
       { path: 'runs/:runId', element: <RunDetailPage /> },
       { path: 'providers', element: <ProvidersPage /> },
