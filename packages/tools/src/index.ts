@@ -22,6 +22,7 @@ export * from './builtins/web-search.js';
 export * from './builtins/web-fetch.js';
 export * from './builtins/project-files.js';
 export * from './builtins/git.js';
+export * from './builtins/run-command.js';
 export * from './builtins/factory.js';
 
 export * from './mcp/transport.js';
