@@ -16,6 +16,12 @@ export interface ToolContext {
   readonly runId: string;
   /** Absolute path of `<projectFolder>/.ace/sandbox/<runId>/` — the only folder tools may touch. */
   readonly sandboxDir: string;
+  /**
+   * X1 (FR-TOOL-008): the project folder the run works in — the only folder the project tools
+   * (`list_files`, `read_file`, `write_file`, `edit_file`, `git_*`, `run_command`) may touch. Absent
+   * when the run has no project folder; those tools then refuse.
+   */
+  readonly projectDir?: string;
   readonly logger: ToolLogger;
   /** Aborted when the run is stopped, so a tool cancels within the 2 s Stop budget. */
   readonly signal?: AbortSignal;

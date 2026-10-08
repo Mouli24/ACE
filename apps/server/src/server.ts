@@ -578,6 +578,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
             scope: LOCAL_SCOPE,
             runId: ctx.runId,
             sandboxDir: ctx.sandboxDir,
+            ...(ctx.projectDir === undefined ? {} : { projectDir: ctx.projectDir }),
             logger: toolLogger,
             signal: ctx.signal,
           }),
