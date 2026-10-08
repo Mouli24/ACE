@@ -1,5 +1,13 @@
-import type { ProviderType } from '@ace/contracts';
-import { streamText, type LanguageModel } from 'ai';
+import type { ProviderType, ToolDefinition } from '@ace/contracts';
+import {
+  jsonSchema,
+  streamText,
+  tool,
+  type JSONValue,
+  type LanguageModel,
+  type ModelMessage,
+  type ToolSet,
+} from 'ai';
 
 import {
   ProviderCallError,
@@ -263,6 +271,54 @@ export interface AiSdkAdapterOptions {
 }
 
 /**
+ * ACE's enabled tools, offered **without** `execute` (X1 §4.4): the SDK surfaces the model's call as
+ * a `tool-call` part and ACE's own loop runs it, under the tool-point guardrails and approvals
+ * (Arch §12.7). The SDK never runs a tool itself.
+ */
+export function toToolSet(tools: readonly ToolDefinition[] | undefined): ToolSet | undefined {
+  if (tools === undefined || tools.length === 0) return undefined;
+  return Object.fromEntries(
+    tools.map((definition) => [
+      definition.name,
+      tool({
+        description: definition.description,
+        inputSchema: jsonSchema(definition.inputSchema as Parameters<typeof jsonSchema>[0]),
+      }),
+    ]),
+  );
+}
+
+const toJsonValue = (value: unknown): JSONValue =>
+  JSON.parse(JSON.stringify(value ?? null)) as JSONValue;
+
+/**
+ * The turns so far, rebuilt from the executor's tool results (X1 §4.4): the prompt, then each call
+ * the model made and what it returned. `undefined` for a first turn, which stays a single prompt.
+ */
+export function continuationMessages(req: GenerateRequest): ModelMessage[] | undefined {
+  if (req.toolResults === undefined || req.toolResults.length === 0) return undefined;
+  const messages: ModelMessage[] = [{ role: 'user', content: req.prompt }];
+  for (const result of req.toolResults) {
+    messages.push({
+      role: 'assistant',
+      content: [{ type: 'tool-call', toolCallId: result.callId, toolName: result.name, input: result.args ?? {} }],
+    });
+    messages.push({
+      role: 'tool',
+      content: [
+        {
+          type: 'tool-result',
+          toolCallId: result.callId,
+          toolName: result.name,
+          output: { type: 'json', value: toJsonValue(result.result) },
+        },
+      ],
+    });
+  }
+  return messages;
+}
+
+/**
  * Wrap a provider's AI SDK handle as a `ProviderAdapter`.
  *
  * Output is always streamed as text, even when the contract asks for JSON: the executor parses and
@@ -279,10 +335,14 @@ export function createAiSdkAdapter(options: AiSdkAdapterOptions): ProviderAdapte
     generate(req: GenerateRequest, signal: AbortSignal): AsyncIterable<StreamChunk> {
       return (async function* (): AsyncGenerator<StreamChunk> {
         try {
+          const tools = toToolSet(req.tools);
+          const messages = continuationMessages(req);
+          const input = messages === undefined ? { prompt: req.prompt } : { messages };
           const result = streamText({
             model: options.model(req.modelId),
             ...(req.system === undefined ? {} : { system: req.system }),
-            prompt: req.prompt,
+            ...input,
+            ...(tools === undefined ? {} : { tools }),
             ...(req.maxTokens === undefined ? {} : { maxOutputTokens: req.maxTokens }),
             ...(req.temperature === undefined ? {} : { temperature: req.temperature }),
             abortSignal: signal,
@@ -298,6 +358,11 @@ export function createAiSdkAdapter(options: AiSdkAdapterOptions): ProviderAdapte
           for await (const part of result.fullStream) {
             if (part.type === 'text-delta') {
               yield { type: 'text', delta: part.text };
+              continue;
+            }
+
+            if (part.type === 'tool-call') {
+              yield { type: 'tool_call', callId: part.toolCallId, name: part.toolName, args: part.input };
               continue;
             }
 
