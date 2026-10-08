@@ -37,7 +37,7 @@ export const OUTPUT_CAP_BYTES = 1024 * 1024;
 /** Grace between SIGTERM and SIGKILL, and how long we wait for `close` after a kill. */
 const KILL_GRACE_MS = 500;
 
-function killTree(pid: number, platform: NodeJS.Platform): void {
+export function killTree(pid: number, platform: NodeJS.Platform): void {
   try {
     if (platform === 'win32') {
       // Windows has no process groups we can signal; taskkill /T ends the child and its descendants.
