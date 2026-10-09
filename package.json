@@ -5,7 +5,7 @@
   "type": "module",
   "packageManager": "pnpm@9.15.9",
   "engines": {
-    "node": ">=20.11.0"
+    "node": ">=24.0.0"
   },
   "scripts": {
     "dev": "pnpm build:packages && concurrently --names engine,web --prefix-colors cyan,magenta \"pnpm --filter @ace/server dev\" \"pnpm --filter @ace/web dev\"",

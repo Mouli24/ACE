@@ -9,6 +9,7 @@
  *   adapters      -> contracts (+ the engine port interfaces they implement)
  *   sdk / ui      -> contracts only
  *   web           -> sdk, ui, contracts; never Node APIs
+ *   desktop       -> contracts only; never the engine side or a native module (D292)
  *   apps          -> packages; packages never import apps
  */
 import js from '@eslint/js';
@@ -184,6 +185,75 @@ export const serverApp = tseslint.config(...base, {
     ),
   },
 });
+
+/** The engine side: the packages that make up the engine process (D292 keeps them out of Electron). */
+const ENGINE_SIDE_PACKAGES = [
+  '@ace/engine',
+  '@ace/storage-local',
+  '@ace/providers',
+  '@ace/guardrails',
+  '@ace/context',
+  '@ace/tools',
+  '@ace/server',
+];
+
+/** The engine's native modules — Node-ABI-bound or N-API; none may load in an Electron process. */
+const NATIVE_MODULES = ['better-sqlite3', 'sqlite-vec', '@napi-rs/keyring'];
+
+/**
+ * `apps/desktop` — the Electron shell (D292).
+ *
+ * It is a Node process, so Node built-ins are allowed. What it must never do is run the engine in
+ * its own process: Electron's ABI breaks `better-sqlite3`, `process.execPath` would stop being Node
+ * for the sandbox and the CLI shims, and SQLite's synchronous calls would freeze the window. So every
+ * engine-side package — bare or by subpath — and the three native modules are banned, and the only
+ * workspace import left is `@ace/contracts` (the bridge and IPC message shapes).
+ *
+ * `console.info/warn/error` are allowed and `console.log` is not: the shell has no pino (the engine's
+ * log is the log), and its few lines — "waiting for the engine", a failed spawn — go to the console
+ * that launched it.
+ */
+export const desktopApp = tseslint.config(
+  ...base,
+  {
+    languageOptions: { globals: globals.node },
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/ban-ts-comment': 'error',
+      'no-console': ['error', { allow: ['info', 'warn', 'error'] }],
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            ...ACE_PACKAGES.filter((p) => p !== '@ace/contracts').map((name) => ({
+              name,
+              message:
+                'apps/desktop imports @ace/contracts only; the engine runs in its own Node process (D292).',
+            })),
+            ...NATIVE_MODULES.map((name) => ({
+              name,
+              message: 'No native module may load inside Electron (D292).',
+            })),
+          ],
+          patterns: [
+            {
+              group: [...ENGINE_SIDE_PACKAGES, ...NATIVE_MODULES].map((name) => `${name}/*`),
+              message:
+                'apps/desktop imports @ace/contracts only; the engine runs in its own Node process (D292).',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // The sandboxed preload (`*.cts`) is CommonJS that runs beside the page: DOM globals exist there,
+    // and under `verbatimModuleSyntax` `import x = require('electron')` is its only import form.
+    files: ['**/*.cts'],
+    languageOptions: { globals: { ...globals.browser, ...globals.node } },
+    rules: { '@typescript-eslint/no-require-imports': ['error', { allowAsImport: true }] },
+  },
+);
 
 /** `packages/sdk` and `packages/ui` — import only `@ace/contracts`, never Node APIs. */
 export const clientLib = tseslint.config(...base, {

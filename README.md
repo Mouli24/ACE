@@ -10,7 +10,7 @@ local route to real models; cloud providers (Anthropic, Google, OpenAI) are opti
 
 ## From clone to first run
 
-Requirements: Node.js 20 LTS or newer and pnpm 9 (`corepack enable` gives you the pinned version).
+Requirements: Node.js 24 (the version in `.nvmrc`) and pnpm 9 (`corepack enable` gives you the pinned version).
 
 ```sh
 git clone <this repository> ace

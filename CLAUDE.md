@@ -32,7 +32,7 @@ Never invent a requirement, endpoint, table, state name or behaviour. If the doc
 |---|---|
 | Web client | React 18, Vite, TypeScript, React Flow, Tailwind, shadcn/ui, Zustand (selection/panels/viewport/live overlay), TanStack Query (engine data), Monaco, react-resizable-panels, cmdk, MSW (dev/test mocks) |
 | Client SDK | `@ace/sdk`: typed fetch client + WebSocket client (reconnect, `resume { afterSeq }`) generated/derived from `@ace/contracts` |
-| Engine | Node.js 20 LTS, TypeScript, Hono (gateway), XState v5 (node/run state machines), Zod (all contracts), Vercel AI SDK (provider calls where possible), pino (logs) |
+| Engine | Node.js 24 (`.nvmrc`; dev, CI and the desktop app's bundled `node.exe` — D293), TypeScript, Hono (gateway), XState v5 (node/run state machines), Zod (all contracts), Vercel AI SDK (provider calls where possible), pino (logs) |
 | Data | SQLite via better-sqlite3 + Drizzle ORM, sqlite-vec (vectors), FTS5 (keyword), local artifact folder (content-addressed), OS keychain via `keytar`-compatible lib (secrets) |
 | Guardrails | Zod contracts, regex/key-format rule packs, Llama Guard via Ollama (optional, later) |
 | Tools | child-process sandbox (Docker when available), SearXNG (search, optional), MCP client, unpdf, mammoth, sharp |
@@ -73,6 +73,7 @@ Two developers, each with Claude Code. Ownership is by **path**, permanent for t
 | `packages/context/**` | Parsers, chunking, embeddings, hybrid retrieval, summaries |
 | `packages/tools/**` | Tool registry, sandbox, HTTP tool, web search, MCP client, media |
 | `apps/server/**` | Local engine entry point (`ace-engine`), config loading, adapter wiring |
+| `apps/desktop/**` | Electron shell (D292): window, preload bridge, dev attach to `pnpm dev`, packaged engine supervisor, staging and electron-builder config. Imports `@ace/contracts` types only — never the engine |
 | `tests/acceptance/round-N/arhant-tests-mouli.e2e.ts` | Arhant's cross-test of Mouli's feature (Playwright against real engine + web) |
 | `tests/acceptance/round-N/REPORT.md` — section "Arhant → Mouli" | His verification write-up |
 
@@ -101,7 +102,7 @@ Two developers, each with Claude Code. Ownership is by **path**, permanent for t
 
 1. **Never edit a path you do not own.** Not "just a one-liner", not "to unblock myself". If your feature needs a change on the other side: (a) if it is a contract change, post a DECISION NEEDED and Arhant lands it in a contracts-only PR; (b) if it is a bug, log it in `docs/defect-log.md` and the owner fixes it; (c) if it is a missing feature, it goes into the next round's prompt.
 2. **`packages/contracts` is the only seam.** Each round file has a "Shared contract" section. Arhant implements it *first* (Step 0 of the round) in a small PR that Mouli reviews against the section text. Mouli codes against it — using MSW mocks until Arhant's engine feature merges. If the merged engine and the contract disagree, the contract section wins and the engine is the defect.
-3. **Dependency rules (Arch §30):** `engine` imports only `contracts` and its own port interfaces · `storage-local`, `providers`, `guardrails`, `context`, `tools` implement engine ports and import `contracts` · `web` imports `sdk`, `ui`, `contracts` and never Node modules · `sdk` and `ui` import only `contracts` · apps import packages, packages never import apps.
+3. **Dependency rules (Arch §30):** `engine` imports only `contracts` and its own port interfaces · `storage-local`, `providers`, `guardrails`, `context`, `tools` implement engine ports and import `contracts` · `web` imports `sdk`, `ui`, `contracts` and never Node modules · `sdk` and `ui` import only `contracts` · `desktop` imports only `contracts` and never runs the engine in its own process (D292) · apps import packages, packages never import apps.
 4. **Adding a dependency** goes in *your own* package's `package.json` (never the root, except Arhant for root-level tooling). Lockfile conflicts: `git checkout --theirs pnpm-lock.yaml && pnpm install && git add pnpm-lock.yaml`. Never hand-edit the lockfile.
 5. **Drizzle migrations** are timestamped and never edited once on `main`; add a new one.
 6. **New folders outside your ownership map = drift.** Revert them.
@@ -118,6 +119,7 @@ ace/
 ├─ .github/workflows/                 [Arhant]  ci.yml (PR), nightly-providers.yml
 ├─ apps/
 │  ├─ server/                         [Arhant]  local engine entry, config, adapter wiring
+│  ├─ desktop/                        [Arhant]  Electron shell (D292): dev attach + packaged Windows app
 │  └─ web/                            [Mouli]   Vite SPA · src/app · src/canvas · src/nodes · src/config-panel ·
 │                                               src/inspector · src/runs · src/providers · src/guardrails ·
 │                                               src/chat · src/knowledge · src/usage · src/onboarding ·
@@ -148,7 +150,7 @@ ace/
    └─ team-prompts/                              (this pack)
 ```
 
-Reserved for later rounds (do not create yet): `apps/desktop`, `apps/cli`, `apps/site`, `packages/storage-cloud`, `services/training`, `bench/`, `infra/`.
+Reserved for later rounds (do not create yet): `apps/cli`, `apps/site`, `packages/storage-cloud`, `services/training`, `bench/`, `infra/`.
 
 ---
 

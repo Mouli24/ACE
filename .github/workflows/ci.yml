@@ -28,13 +28,17 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
 
-      # No env vars are set anywhere in this job: `pnpm test` must pass without any
+      # No env vars are set for any step after this one: `pnpm test` must pass without any
       # (CLAUDE.md §2, §7). A test that needs a key is a defect, not a CI setting.
+      # The install alone skips Electron's ~100 MB binary (D292): no CI job launches the desktop
+      # shell yet, and `electron` still installs its types for apps/desktop's typecheck.
       - name: Install
         run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
       - name: Lint
         run: pnpm lint
@@ -71,11 +75,13 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
 
       - name: Install
         run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
       # Both suites run against built packages, as they did when they followed `verify`'s Build.
       # NODE_OPTIONS: see `verify`'s Build (D-094).
@@ -119,11 +125,13 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
 
       - name: Install
         run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
       # Both suites run against built packages, as they did when they followed `verify`'s Build.
       # NODE_OPTIONS: see `verify`'s Build (D-094).
@@ -199,10 +207,11 @@ jobs:
           '
 
       # CLAUDE.md §4 reserves these paths for later rounds. A new folder outside the
-      # ownership map is drift and should be reverted, not merged.
+      # ownership map is drift and should be reverted, not merged. `apps/desktop` left the list
+      # when the desktop shell was built (D292).
       - name: Refuse folders reserved for later rounds
         run: |
-          reserved="apps/desktop apps/cli apps/site packages/storage-cloud services/training bench"
+          reserved="apps/cli apps/site packages/storage-cloud services/training bench"
           failed=0
           for path in $reserved; do
             if [ -e "$path" ]; then
