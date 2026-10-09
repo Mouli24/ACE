@@ -268,7 +268,7 @@ function startRun(db: MockDb, workflowId: string, projectId: string): Run {
 /* Tools                                                                       */
 /* -------------------------------------------------------------------------- */
 
-/** The whole registry: the six built-ins plus every connected MCP server's tools (FR-TOOL-001/007). */
+/** The whole registry: the built-ins plus every connected MCP server's tools (FR-TOOL-001/007). */
 function toolRegistry(db: MockDb): ToolDefinition[] {
   const mcp = db
     .listMcpServers()

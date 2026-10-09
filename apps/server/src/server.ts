@@ -545,9 +545,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   };
 
   /*
-   * The tool registry: the six built-ins in §2.2's order, plus whatever MCP servers connect. The
-   * built-ins default to the child-process sandbox (D13) and the canned search backend (D14), so
-   * this needs no Docker and no network. The MCP manager registers a connected server's tools into
+   * The tool registry: the thirteen built-ins (§2.2's six, then X1's seven), plus whatever MCP
+   * servers connect. The built-ins default to the child-process sandbox (D13) and the canned search
+   * backend (D14), so this needs no Docker and no network. The MCP manager registers a connected server's tools into
    * the same registry, and `DELETE /mcp-servers/:id` drops them again (FR-TOOL-007).
    */
   const toolRegistry = new ToolRegistry();

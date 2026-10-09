@@ -188,6 +188,13 @@ describe('§2.2 the six built-in tools', () => {
       'http_request',
       'web_search',
       'web_fetch',
+      'list_files',
+      'read_file',
+      'write_file',
+      'edit_file',
+      'git_status',
+      'git_diff',
+      'run_command',
     ]);
     for (const name of BUILTIN_TOOL_NAMES) {
       expect(TOOL_NAME_REGEX.test(name), name).toBe(true);
