@@ -701,11 +701,10 @@ test.describe('Errors (FR-ERR-002/006/007)', () => {
    * nothing to render and the `error-provider-…` element is absent.
    *
    * This is the engine's half of the row, not the screen's: nothing `apps/web` can do recovers a
-   * field the record does not carry. Marked `test.fail()` so it stays visible and turns green by
-   * itself the day the executor passes the context.
+   * field the record does not carry. Fixed by X1's model gateway (`stampProvider`, cdad990), which
+   * stamps the chosen provider on every adapter error; D-032 closed, the `test.fail()` removed.
    */
   test('TC-ERR-002: the error card names the provider that refused the key', async ({ page }) => {
-    test.fail();
     const { projectId, workflowId, byName } = await importFixture('auth-401.json');
     const gatekeeper = byName('Gatekeeper');
 
