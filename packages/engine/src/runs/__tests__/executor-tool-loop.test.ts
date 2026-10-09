@@ -130,16 +130,34 @@ const deleteDefinition: ToolDefinition = {
 
 /* An adapter driven by a per-turn script: each call sees what the last tool returned. */
 type Turn = StreamChunk[];
-function scriptedAdapter(turns: (req: GenerateRequest) => Turn) {
+function scriptedAdapter(
+  turns: (req: GenerateRequest) => Turn,
+  options: { type?: ProviderAdapter['type']; delayMs?: number } = {},
+) {
   const requests: GenerateRequest[] = [];
   const adapter: ProviderAdapter = {
-    type: 'mock',
+    type: options.type ?? 'mock',
     check: async () => ({ status: 'CONNECTED' }),
     listModels: async () => [],
-    generate(req) {
+    generate(req, signal) {
       requests.push(req);
       const chunks = turns(req);
       return (async function* () {
+        if (options.delayMs !== undefined) {
+          const delayMs = options.delayMs;
+          // A slow turn that gives up when its signal does, as a real adapter would.
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, delayMs);
+            signal.addEventListener(
+              'abort',
+              () => {
+                clearTimeout(timer);
+                reject(new Error('the turn was cut off'));
+              },
+              { once: true },
+            );
+          });
+        }
         for (const chunk of chunks) yield chunk;
       })();
     },
@@ -196,6 +214,8 @@ async function buildHarness(options: {
   artifacts?: ArtifactMaterialiser;
   beforeTool?: (input: ToolPointInput) => Promise<ToolGuardStep>;
   maxToolCalls?: number;
+  adapterType?: ProviderAdapter['type'];
+  delayMs?: number;
 }): Promise<Harness & { guardrails?: NodeGuardrails }> {
   const repository = new FakeRepository();
   const pubsub = new InProcessPubSubStub<EngineEvent>();
@@ -204,7 +224,10 @@ async function buildHarness(options: {
   await bus.subscribe((event) => events.push(event));
 
   const models = options.models ?? [model()];
-  const { adapter, requests } = scriptedAdapter(options.turns);
+  const { adapter, requests } = scriptedAdapter(options.turns, {
+    ...(options.adapterType === undefined ? {} : { type: options.adapterType }),
+    ...(options.delayMs === undefined ? {} : { delayMs: options.delayMs }),
+  });
   const logged: { runId: string; call: ToolCall }[] = [];
   let idSeq = 0;
 
@@ -665,5 +688,72 @@ describe('FR-GRD-004 the context point judges a tool result before the model rea
       status: 'ok',
       resultSummary: '{"text":"echoed hi"}',
     });
+  });
+});
+
+describe('X1 review fixes in the tool loop', () => {
+  const echoTools = { enabled: ['echo'], maxToolCalls: 10, allowedDomains: [] };
+  const CALL_ONE = '01JBXQ8Z9KQ4R7N2VWXYZ0CAL1';
+  const CALL_TWO = '01JBXQ8Z9KQ4R7N2VWXYZ0CAL2';
+  const requestTwoEchoes = (): StreamChunk[] => [
+    { type: 'tool_call', callId: CALL_ONE, name: 'echo', args: { text: 'one' } },
+    { type: 'tool_call', callId: CALL_TWO, name: 'echo', args: { text: 'two' } },
+    usage(2, 0),
+    finish('tool_calls'),
+  ];
+
+  it('runs every tool the model asked for in one turn, in order (review I2)', async () => {
+    const echo = fakeTool(echoDefinition);
+    const harness = await buildHarness({
+      turns: (req) => (req.toolResults?.length ? say('done') : requestTwoEchoes()),
+      tools: toolProvider([echo]),
+    });
+
+    const outcome = await runInput(harness, agentNode({ tools: echoTools }));
+
+    expect(outcome.status).toBe('COMPLETED');
+    expect(echo.calls).toEqual([{ text: 'one' }, { text: 'two' }]);
+    expect(harness.requests[1]?.toolResults?.map((result) => result.callId)).toEqual([CALL_ONE, CALL_TWO]);
+    expect(harness.logged).toHaveLength(2);
+  });
+
+  it('stops at the call limit inside a turn, and asks the model to finish without tools (review I2)', async () => {
+    const echo = fakeTool(echoDefinition);
+    const harness = await buildHarness({
+      turns: (req) => (req.toolResults?.length ? say('done') : requestTwoEchoes()),
+      tools: toolProvider([echo]),
+    });
+
+    const outcome = await runInput(harness, agentNode({ tools: { ...echoTools, maxToolCalls: 1 } }));
+
+    expect(outcome.status).toBe('COMPLETED');
+    expect(echo.calls).toEqual([{ text: 'one' }]);
+    expect(harness.requests[1]?.tools).toBeUndefined();
+    expect(harness.requests[1]?.toolResults).toHaveLength(1);
+  });
+
+  it('offers no tools to a model whose catalog row says it cannot call them (review I3)', async () => {
+    const harness = await buildHarness({
+      turns: () => say('hi'),
+      models: [model({ supportsTools: false })],
+      tools: toolProvider([fakeTool(echoDefinition)]),
+    });
+
+    const outcome = await runInput(harness, agentNode({ tools: echoTools }));
+
+    expect(outcome.status).toBe('COMPLETED');
+    expect(harness.requests[0]?.tools).toBeUndefined();
+  });
+
+  it('an API model turn is still cut off at the node timeout', async () => {
+    const harness = await buildHarness({ turns: () => say('done'), delayMs: 1_500 });
+    const outcome = await runInput(harness, agentNode({ execution: { timeoutMs: 1_000 } }));
+    expect(outcome.status).not.toBe('COMPLETED');
+  });
+
+  it('a coding-agent CLI turn is a whole session, so it gets at least the longest node timeout (review I6)', async () => {
+    const harness = await buildHarness({ turns: () => say('done'), adapterType: 'claude_code', delayMs: 1_500 });
+    const outcome = await runInput(harness, agentNode({ execution: { timeoutMs: 1_000 } }));
+    expect(outcome.status).toBe('COMPLETED');
   });
 });
