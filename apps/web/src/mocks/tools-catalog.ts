@@ -1,7 +1,7 @@
 import type { McpServer, ToolDefinition } from '@ace/contracts';
 
 /**
- * The tool registry the mock serves at `GET /tools` (round 4 §2.2, FR-TOOL-001). The six built-ins
+ * The tool registry the mock serves at `GET /tools` (round 4 §2.2, FR-TOOL-001). The built-ins
  * are the contract's own names and permissions, so the tools screen and an agent's `tools.enabled`
  * list mean the same thing here as against the real engine. A connected MCP server contributes its
  * tools prefixed `mcp_<server>_<tool>` (FR-TOOL-007, D16), which is what `mock-mcp` reaches for.
@@ -9,6 +9,26 @@ import type { McpServer, ToolDefinition } from '@ace/contracts';
 
 /** The sandbox folder a code tool is confined to, as §2.2 writes it. */
 export const SANDBOX_PATH = '<sandbox>';
+
+/** X1's project tools (FR-TOOL-008), shaped as the engine registers them; `run_command` asks for approval. */
+const projectTool = (
+  name: string,
+  description: string,
+  properties: Record<string, unknown>,
+  required: string[],
+): ToolDefinition => ({
+  name,
+  description,
+  inputSchema: { type: 'object', properties, required, additionalProperties: false },
+  outputSchema: { type: 'object' },
+  permissions: {
+    network: name === 'run_command',
+    fsPaths: ['<project>'],
+    destructive: name === 'run_command',
+  },
+  timeoutMs: name === 'run_command' ? 600_000 : 10_000,
+  source: 'builtin',
+});
 
 export const BUILTIN_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
@@ -131,6 +151,13 @@ export const BUILTIN_TOOL_DEFINITIONS: ToolDefinition[] = [
     timeoutMs: 20_000,
     source: 'builtin',
   },
+  projectTool('list_files', 'List files and folders in the project folder.', { path: { type: 'string' }, recursive: { type: 'boolean' } }, []),
+  projectTool('read_file', 'Read a text file in the project folder.', { path: { type: 'string' } }, ['path']),
+  projectTool('write_file', 'Create or overwrite a file in the project folder.', { path: { type: 'string' }, content: { type: 'string' } }, ['path', 'content']),
+  projectTool('edit_file', 'Replace exact text in a file in the project folder.', { path: { type: 'string' }, oldString: { type: 'string' }, newString: { type: 'string' } }, ['path', 'oldString', 'newString']),
+  projectTool('git_status', 'Show the project repository’s branch and changed files.', {}, []),
+  projectTool('git_diff', 'Show the project’s uncommitted changes.', { staged: { type: 'boolean' }, path: { type: 'string' } }, []),
+  projectTool('run_command', 'Run a shell command in the project folder. Asks for approval.', { command: { type: 'string' } }, ['command']),
 ];
 
 /** A server name reduced to a snake_case fragment a tool name can carry (`ToolNameSchema`). */
