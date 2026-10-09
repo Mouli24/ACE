@@ -1645,20 +1645,14 @@ test.describe('TC-RAG-006/007 Sources listed for an attached KB and for a Retrie
     await openInspector(page, retrieval.id);
     await expectSourcesMatch(await sourcesOnScreen(page), sources);
 
-    // And the palette offers the node (FR-RAG-006): clicking it adds one with the same two ports.
-    const before = await graphOf(flow.workflowId);
-    await addFromPalette(page, /Retrieval/);
-    const after = await landedGraph(
-      flow.workflowId,
-      before.workflow.version,
-      'the new Retrieval node',
-    );
-    const added = after.nodes.find(
-      (node) => node.kind === 'retrieval' && !before.nodes.some((old) => old.id === node.id),
-    );
-    expect(added, 'a Retrieval node was added from the palette').toBeDefined();
-    expect(added?.inputs.map((port) => [port.name, port.dataType])).toEqual([['query', 'text']]);
-    expect(added?.outputs.map((port) => [port.name, port.dataType])).toEqual([['out', 'json']]);
+    // D285 amends FR-RAG-006's palette half: the New node dialog offers one kind, an Agent. A
+    // Retrieval node still loads, edits and runs (everything above), it is just no longer offered.
+    await page.getByTestId('new-node-button').click();
+    const palette = page.getByLabel('Node palette');
+    await expect(palette.getByTestId('palette-agent')).toBeVisible();
+    await expect(palette.getByRole('button', { name: /Retrieval/ })).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: 'New node' })).toHaveCount(0);
   });
 });
 
