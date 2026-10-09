@@ -143,6 +143,9 @@ function toChatMessage(row: ChatMessageRow): ChatMessage {
     verdicts: JSON.parse(row.verdicts),
     ...(row.usage === null ? {} : { usage: JSON.parse(row.usage) }),
     at: row.at,
+    ...(row.runId === null ? {} : { runId: row.runId }),
+    ...(row.error === null ? {} : { error: JSON.parse(row.error) }),
+    ...(row.modelId === null ? {} : { modelId: row.modelId }),
   });
 }
 
@@ -543,6 +546,9 @@ export function createChatMessageRepository(db: Db): ChatMessageRepository {
           verdicts: toJsonColumn(message.verdicts, `${at}.verdicts`),
           usage: message.usage === undefined ? null : toJsonColumn(message.usage, `${at}.usage`),
           at: message.at,
+          runId: message.runId ?? null,
+          error: message.error === undefined ? null : toJsonColumn(message.error, `${at}.error`),
+          modelId: message.modelId ?? null,
         })
         .run();
       return message;

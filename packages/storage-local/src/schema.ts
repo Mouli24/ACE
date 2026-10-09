@@ -173,6 +173,10 @@ export const models = sqliteTable(
     lastCheckedAt: text('last_checked_at').notNull(),
     /** JSON ModelPricing, null for a model with no published price. */
     pricing: text('pricing'),
+    /** D286: the provider's description, alias resolution and unavailability reason. */
+    description: text('description'),
+    resolvedModelId: text('resolved_model_id'),
+    unavailableReason: text('unavailable_reason'),
   },
   (table) => [index('models_provider_idx').on(table.workspaceId, table.providerId, table.modelId)],
 );
@@ -523,6 +527,12 @@ export const chatMessages = sqliteTable(
     /** JSON `Usage`, null on a user turn. */
     usage: text('usage'),
     at: text('at').notNull(),
+    /** D285: the run that wrote this turn into its node's session; null for a direct chat. */
+    runId: text('run_id'),
+    /** D285: JSON `NodeError` for a reply that failed; null otherwise. */
+    error: text('error'),
+    /** D285: the model the provider reported answering. */
+    modelId: text('model_id'),
   },
   (table) => [index('chat_messages_thread_idx').on(table.workspaceId, table.threadId, table.id)],
 );
