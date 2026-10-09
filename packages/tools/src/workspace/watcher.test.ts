@@ -96,6 +96,38 @@ describe('D299 the project watcher', () => {
     expect(leaked).toEqual([]);
   });
 
+  it('never reports an ignored folder itself, only real files', async () => {
+    writeFileSync(join(root, '.gitignore'), 'out/\n');
+    mkdirSync(join(root, 'out'));
+    const seen = collect();
+    await settle();
+    mkdirSync(join(root, 'node_modules', 'pkg'));
+    writeFileSync(join(root, 'node_modules', 'pkg', 'index.js'), 'x');
+    writeFileSync(join(root, 'out', 'bundle.js'), 'x');
+    writeFileSync(join(root, 'marker.txt'), 'x');
+
+    await vi.waitFor(() => expect(seen.changes().map((c) => c.path)).toContain('marker.txt'), {
+      timeout: 4000,
+    });
+    await settle();
+    const leaked = seen
+      .changes()
+      .map((c) => c.path)
+      .filter((p) => ['node_modules', 'out'].some((d) => p === d || p.startsWith(`${d}/`)));
+    expect(leaked).toEqual([]);
+  });
+
+  it("does not report a folder's own change, only the file inside it", async () => {
+    const seen = collect();
+    await settle();
+    writeFileSync(join(root, 'sub', 'c.txt'), 'x');
+    await vi.waitFor(() => expect(seen.changes().map((c) => c.path)).toContain('sub/c.txt'), {
+      timeout: 4000,
+    });
+    await settle();
+    expect(seen.changes().filter((c) => c.path === 'sub' && c.kind === 'changed')).toEqual([]);
+  });
+
   it('a burst over the limit arrives as one resync', async () => {
     const seen = collect({ maxChanges: 3 });
     await settle();

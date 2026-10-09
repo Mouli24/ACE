@@ -53,20 +53,22 @@ export function watchProject(
       onChange({ changes: [], resync: true });
       return;
     }
-    const changes: FileChange[] = await Promise.all(
-      entries.map(async ([path, eventType]) => {
-        const exists = await stat(join(root, path)).then(
-          () => true,
-          () => false,
-        );
-        const kind: FileChange['kind'] = !exists
-          ? 'deleted'
-          : eventType === 'rename'
-            ? 'created'
-            : 'changed';
-        return { path, kind };
+    const settled = await Promise.all(
+      entries.map(async ([path, eventType]): Promise<FileChange | undefined> => {
+        const info = await stat(join(root, path)).catch(() => undefined);
+        // An ignored folder is never reported (design �6.1), and neither is a path that is gone
+        // and may have been one: the cheap test in the callback only drops what is *under* it.
+        if ((info === undefined || info.isDirectory()) && rules.isIgnored(path, true))
+          return undefined;
+        if (info === undefined) return { path, kind: 'deleted' };
+        if (eventType === 'rename') return { path, kind: 'created' };
+        // A folder's own "changed" only means something inside it changed; the children report
+        // themselves, so `src` is not announced on every save inside it.
+        return info.isDirectory() ? undefined : { path, kind: 'changed' };
       }),
     );
+    const changes = settled.filter((change): change is FileChange => change !== undefined);
+    if (changes.length === 0) return;
     if (!closed) onChange({ changes, resync: false });
   }
 
