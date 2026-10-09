@@ -64,22 +64,38 @@ const PROTECTED_FOLDERS: ReadonlySet<string> = new Set(['.git', '.ace']);
 const asFilesystemSees = (segment: string): string =>
   (segment.split(':')[0] ?? '').replace(/[. ]+$/, '').toLowerCase();
 
-function protectedTop(projectDir: string, absolute: string): string | undefined {
-  const top = asFilesystemSees(projectRelative(projectDir, absolute).split('/')[0] ?? '');
-  return PROTECTED_FOLDERS.has(top) ? top : undefined;
+/** The first protected folder name anywhere on `absolute`'s path below `projectDir`. */
+function protectedSegment(projectDir: string, absolute: string): string | undefined {
+  for (const segment of projectRelative(projectDir, absolute).split('/')) {
+    const name = asFilesystemSees(segment);
+    if (PROTECTED_FOLDERS.has(name)) return name;
+  }
+  return undefined;
 }
 
 /**
- * Writes never touch git's own data or ACE's per-project folder — by name, and through a link or a
- * short (8.3) name that resolves into one (review C1). A write into `.git/config` would let a planted
- * `core.fsmonitor` run on the next, auto-approved, `git_status`.
+ * The protected folder (`.git` or `.ace`) a write to `absolute` would land in — at any depth, so a
+ * nested repository's hooks are as safe as the top-level one's (D299) — by name, and through a link
+ * or a short (8.3) name that resolves into one (review C1).
+ */
+export function protectedFolderIn(projectDir: string, absolute: string): string | undefined {
+  return (
+    protectedSegment(projectDir, absolute) ??
+    protectedSegment(
+      realpathOfDeepestExisting(resolve(projectDir)),
+      realpathOfDeepestExisting(absolute),
+    )
+  );
+}
+
+/**
+ * Writes never touch git's own data or ACE's per-project folder. A write into `.git/config` would
+ * let a planted `core.fsmonitor` run on the next, auto-approved, `git_status`.
  */
 export function assertWritable(projectDir: string, absolute: string, toolName: string): void {
-  const top =
-    protectedTop(projectDir, absolute) ??
-    protectedTop(realpathOfDeepestExisting(resolve(projectDir)), realpathOfDeepestExisting(absolute));
-  if (top !== undefined) {
-    throw new ToolError('denied', toolName, `${toolName} may not write inside ${top}/.`, {
+  const folder = protectedFolderIn(projectDir, absolute);
+  if (folder !== undefined) {
+    throw new ToolError('denied', toolName, `${toolName} may not write inside ${folder}/.`, {
       reason: 'protected_folder',
     });
   }
