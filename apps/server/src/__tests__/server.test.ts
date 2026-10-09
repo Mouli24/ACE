@@ -307,10 +307,12 @@ describe('§2.9 the WebSocket lives only at /ws', () => {
 describe('startEngine defaults', () => {
   it('reads the port from the config when none is passed', async () => {
     const other = mkdtempSync(join(tmpdir(), 'ace-default-port-'));
-    writeFileSync(join(other, 'ace.config.json'), JSON.stringify({ port: 47_595 }));
+    // A port no other test of this package binds: crash-while-waiting holds 47595, and the two
+    // files run at once (the same fix as a6ff6a8 on ace/parity, not yet on main).
+    writeFileSync(join(other, 'ace.config.json'), JSON.stringify({ port: 47_591 }));
 
     const started = await startEngine({ dataDir: other, env: {} });
-    expect(started.port).toBe(47_595);
+    expect(started.port).toBe(47_591);
 
     await started.stop();
     try {

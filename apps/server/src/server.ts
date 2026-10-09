@@ -92,6 +92,7 @@ import {
   createRouter,
   type CliDetector,
   type MockProviderAdapter,
+  type ResolvedCommand,
 } from '@ace/providers';
 import {
   FsBlobStore,
@@ -252,6 +253,11 @@ export interface StartEngineOptions {
   mockProvider?: MockProviderAdapter;
   /** X1: the terminal scan. Tests inject a fake; the real one runs the installed CLIs. */
   cliDetector?: CliDetector;
+  /**
+   * D286: where a CLI's binary is found for a call or a model listing — `PATH` by default. Tests
+   * point it at a scripted CLI, so `pnpm test` never starts a real one.
+   */
+  cliResolve?: (bin: string) => ResolvedCommand | undefined;
 }
 
 export interface RunningEngine {
@@ -381,6 +387,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   const factory = createProviderAdapterFactory({
     mock: mockProvider,
     ...(options.cliDetector === undefined ? {} : { cliDetector: options.cliDetector }),
+    ...(options.cliResolve === undefined ? {} : { cliResolve: options.cliResolve }),
   });
 
   /* FR-CTL-001..003: the one gate registry the scheduler registers into and the controls read. */
@@ -755,6 +762,11 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     contextGuard,
     memory,
     usage,
+    // D285: a finished goal-driven node's result lands in its chat session before its final state
+    // is announced. `chatService` is built below; a run only reaches this after startup.
+    recordNodeTurn: async (turn) => {
+      await chatService.recordRunTurn(turn);
+    },
   });
 
   const controls = createRunControls({
