@@ -20,6 +20,7 @@ export * from './router/index.js';
 export * from './factory.js';
 export * from './adapters/cli/adapter.js';
 export * from './adapters/cli/claude-code.js';
+export * from './adapters/cli/claude-models.js';
 export * from './adapters/cli/codex.js';
 export * from './adapters/cli/gemini.js';
 export * from './adapters/cli/detect.js';

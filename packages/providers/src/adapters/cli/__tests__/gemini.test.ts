@@ -6,7 +6,14 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { StreamChunk } from '../../../adapter.js';
-import { GEMINI_BASE_ARGS, createGeminiAdapter, createGeminiParser, geminiDialect, geminiError } from '../gemini.js';
+import {
+  GEMINI_BASE_ARGS,
+  createGeminiAdapter,
+  createGeminiParser,
+  geminiDialect,
+  geminiError,
+  geminiModelsFrom,
+} from '../gemini.js';
 
 const FAKE = fileURLToPath(new URL('./fixtures/fake-cli.mjs', import.meta.url));
 let dir: string;
@@ -91,5 +98,39 @@ describe('X1 the Gemini adapter against a fake CLI', () => {
       for await (const chunk of adapter.generate({ modelId: 'default', prompt: 'x', outputTypes: ['text'], workingDir: dir }, new AbortController().signal)) drained.push(chunk);
     })().catch(() => undefined);
     expect((JSON.parse(readFileSync(echo, 'utf8')) as { env: { GEMINI_CLI_NO_RELAUNCH: string } }).env.GEMINI_CLI_NO_RELAUNCH).toBe('true');
+  });
+});
+
+describe('D286 Gemini CLI models come from the CLI’s own configuration, never a list kept in ACE', () => {
+  it('offers the CLI’s default and the model its settings and environment name — nothing invented', () => {
+    const models = geminiModelsFrom({
+      settings: { model: { name: 'gemini-3.5-pro' } },
+      env: { GEMINI_MODEL: 'gemini-3.5-flash' },
+    });
+    expect(models.map((model) => model.modelId)).toEqual(['default', 'gemini-3.5-pro', 'gemini-3.5-flash']);
+    expect(models.every((model) => model.available !== false)).toBe(true);
+    expect(models[0]?.description).toMatch(/configured/i);
+  });
+
+  it('reads the older settings shape and drops a repeat', () => {
+    expect(
+      geminiModelsFrom({ settings: { model: 'gemini-3.5-pro' }, env: { GEMINI_MODEL: 'gemini-3.5-pro' } }).map(
+        (model) => model.modelId,
+      ),
+    ).toEqual(['default', 'gemini-3.5-pro']);
+  });
+
+  it('offers only the default when nothing is configured', () => {
+    expect(geminiModelsFrom({ settings: undefined, env: {} }).map((model) => model.modelId)).toEqual(['default']);
+  });
+
+  it('says how to install a CLI that is not there instead of listing models for it', async () => {
+    const failure = await geminiDialect.listModels(() => undefined).catch((error: unknown) => error);
+    expect((failure as { nodeError?: { code?: string } }).nodeError?.code).toBe('cli_not_found');
+  });
+
+  it('reports the model the CLI says it is using', () => {
+    const chunks = replay(RUN);
+    expect(chunks).toContainEqual({ type: 'model', modelId: 'gemini-2.5-pro' });
   });
 });

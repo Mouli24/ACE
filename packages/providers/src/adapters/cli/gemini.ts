@@ -1,4 +1,8 @@
-import type { CliPermission, NodeError } from '@ace/contracts';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+import { CLI_INSTALL_HINTS, type CliPermission, type NodeError } from '@ace/contracts';
 
 import { ProviderCallError, type ModelInfo, type ProviderAdapter, type StreamChunk } from '../../adapter.js';
 import {
@@ -27,12 +31,53 @@ const APPROVAL_MODE: Readonly<Record<CliPermission, string>> = {
   full_auto: 'yolo',
 };
 
-export const GEMINI_MODELS: readonly ModelInfo[] = [
-  cliModel('default', 'Gemini CLI default'),
-  cliModel('pro', 'Gemini Pro'),
-  cliModel('flash', 'Gemini Flash'),
-  cliModel('flash-lite', 'Gemini Flash-Lite'),
-];
+/**
+ * Gemini CLI's models (D286). It has no command that lists them, so ACE offers only what the CLI
+ * itself is set up to use — never a list of its own: `default` (no `-m`, whatever the CLI's
+ * configuration picks), the model its `~/.gemini/settings.json` names, and `GEMINI_MODEL` from the
+ * environment. Another model can be chosen by setting it there.
+ */
+export function geminiModelsFrom(source: {
+  settings: unknown;
+  env: NodeJS.ProcessEnv | Record<string, string | undefined>;
+}): ModelInfo[] {
+  const settings = (typeof source.settings === 'object' && source.settings !== null
+    ? source.settings
+    : {}) as { model?: unknown };
+  const configured =
+    typeof settings.model === 'string'
+      ? settings.model
+      : typeof settings.model === 'object' && settings.model !== null
+        ? (settings.model as { name?: unknown }).name
+        : undefined;
+
+  const models: ModelInfo[] = [
+    {
+      ...cliModel('default', 'Gemini CLI default'),
+      description: 'Whatever model Gemini CLI is configured to use',
+    },
+  ];
+  const named: [unknown, string][] = [
+    [configured, 'Set as the model in ~/.gemini/settings.json'],
+    [source.env['GEMINI_MODEL'], 'Set by GEMINI_MODEL in the environment'],
+  ];
+  for (const [value, description] of named) {
+    if (typeof value !== 'string' || value.trim() === '') continue;
+    const modelId = value.trim();
+    if (models.some((model) => model.modelId === modelId)) continue;
+    models.push({ ...cliModel(modelId, modelId), description });
+  }
+  return models;
+}
+
+function readGeminiSettings(): unknown {
+  try {
+    return JSON.parse(readFileSync(join(homedir(), '.gemini', 'settings.json'), 'utf8')) as unknown;
+  } catch {
+    // No settings file: the CLI has never been configured on this machine.
+    return undefined;
+  }
+}
 
 export function geminiError(message: string, exitCode?: number | null): NodeError {
   if (exitCode === 41 || /not signed in|login|credential|api key|authenticat/i.test(message)) {
@@ -68,6 +113,11 @@ export function createGeminiParser(now: () => number = Date.now): CliParser {
   return {
     onEvent(event) {
       switch (event['type']) {
+        case 'init':
+          // The session's opening event names the model it is using (D286).
+          return typeof event['model'] === 'string' && event['model'] !== ''
+            ? [{ type: 'model', modelId: event['model'] }]
+            : [];
         case 'message': {
           if (event['role'] !== 'assistant' || typeof event['content'] !== 'string') return [];
           if (event['delta'] === true) {
@@ -146,7 +196,17 @@ export const geminiDialect: CliDialect = {
   stdin: withSystem,
   env: (base) => ({ ...base, GEMINI_CLI_NO_RELAUNCH: 'true' }),
   createParser: () => createGeminiParser(),
-  listModels: async () => [...GEMINI_MODELS],
+  listModels: async (resolve) => {
+    if (resolve() === undefined) {
+      throw new ProviderCallError({
+        kind: 'provider',
+        code: 'cli_not_found',
+        message: `Gemini CLI is not installed — ${CLI_INSTALL_HINTS.gemini_cli}`,
+        retryable: false,
+      });
+    }
+    return geminiModelsFrom({ settings: readGeminiSettings(), env: process.env });
+  },
 };
 
 export function createGeminiAdapter(options: CliAdapterOptions): ProviderAdapter {

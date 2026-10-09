@@ -108,3 +108,10 @@ describe('X1 the Codex adapter against a fake CLI', () => {
     expect(chunks.filter((c) => c.type === 'activity')).toHaveLength(2);
   });
 });
+
+describe('D286 Codex CLI models', () => {
+  it('says how to install a CLI that is not there instead of offering its default', async () => {
+    const failure = await codexDialect.listModels(() => undefined).catch((error: unknown) => error);
+    expect((failure as { nodeError?: { code?: string } }).nodeError?.code).toBe('cli_not_found');
+  });
+});
