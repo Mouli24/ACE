@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { PartSchema } from './envelope.js';
 import { IdSchema, TimestampSchema } from './graph.js';
 import { ChatVerdictSchema } from './guardrails.js';
-import { RunSchema, UsageSchema } from './runs.js';
+import { NodeErrorSchema, RunSchema, UsageSchema } from './runs.js';
 
 /**
  * The timeline and direct chat (round 4 §2.3, FR-CHAT-001..008, Arch §12.2, §20.2).
@@ -12,7 +12,9 @@ import { RunSchema, UsageSchema } from './runs.js';
  * sent, what an agent answered, what an Output node produced, and the run's own events and errors.
  * A `ChatThread` is a conversation with one agent that uses its model, instructions, context policy
  * and tools but **never reads or writes `runs`/`node_runs`** (FR-CHAT-005), which is why its
- * messages are a different type with a different id space.
+ * messages are a different type with a different id space. D285 opens one door the other way: a
+ * finished run of the node writes its goal and result into the node's session as two turns tagged
+ * with the run's id, so the chat is where a node's results are read.
  *
  * Every body is strict, as round 3's are: content is `Part[]`, so a file in a message is an
  * artifact reference and never bytes (FR-MM-004, BR-02), and a stray key cannot turn a chat into
@@ -134,6 +136,18 @@ export const ChatMessageSchema = z.strictObject({
   /** What the reply cost; a user turn has none. */
   usage: UsageSchema.optional(),
   at: TimestampSchema,
+  /**
+   * Set on the two turns a workflow run writes into its node's session: the goal the node was
+   * run with, and what it produced (or why it failed). A direct-chat turn has none.
+   */
+  runId: IdSchema.optional(),
+  /**
+   * Set on an agent turn that failed — the model call, the provider or the CLI did not answer. Its
+   * content then says the same thing in words; the turn is never part of a later prompt.
+   */
+  error: NodeErrorSchema.optional(),
+  /** The model that actually answered, as the provider reported it (an alias resolved). */
+  modelId: z.string().min(1).optional(),
 });
 export type ChatMessage = z.infer<typeof ChatMessageSchema>;
 

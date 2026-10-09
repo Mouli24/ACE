@@ -181,6 +181,11 @@ export const ModelUsedSchema = z.object({
   providerId: IdSchema,
   modelId: z.string().min(1),
   viaFallback: z.boolean(),
+  /**
+   * The model the provider reports actually answered — what `modelId` (often an alias such as
+   * `opus`) resolved to. Absent when the provider does not say.
+   */
+  resolvedModelId: z.string().min(1).optional(),
 });
 export type ModelUsed = z.infer<typeof ModelUsedSchema>;
 

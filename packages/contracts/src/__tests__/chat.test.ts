@@ -210,16 +210,37 @@ describe('FR-CHAT-004 FR-CHAT-005 chat threads are separate from runs', () => {
     expect(ChatMessageSchema.parse(chatMessage)).toEqual(chatMessage);
   });
 
-  it('has two roles, and no run to belong to', () => {
+  it('has two roles, and no node run to belong to', () => {
     expect([...CHAT_ROLES]).toEqual(['user', 'agent']);
     expect(ChatMessageSchema.safeParse({ ...chatMessage, role: 'system' }).success).toBe(false);
-    for (const key of ['runId', 'nodeRunId', 'iteration']) {
+    for (const key of ['nodeRunId', 'iteration']) {
       expect(
         ChatMessageSchema.safeParse({ ...chatMessage, [key]: RUN_ID }).success,
-        `${key} would tie a chat to a run (FR-CHAT-005)`,
+        `${key} would tie a chat to a node run (FR-CHAT-005)`,
       ).toBe(false);
     }
     expect(ChatThreadSchema.safeParse({ ...thread, runId: RUN_ID }).success).toBe(false);
+  });
+
+  it('D285: a turn a run wrote into its node’s session names the run, and only by id', () => {
+    expect(ChatMessageSchema.parse({ ...chatMessage, runId: RUN_ID }).runId).toBe(RUN_ID);
+    expect(ChatMessageSchema.safeParse({ ...chatMessage, runId: 'not-a-ulid' }).success).toBe(false);
+  });
+
+  it('D285: a failed reply carries its error, and the model that answered is named', () => {
+    const failed = {
+      ...chatMessage,
+      error: { kind: 'auth', code: 'cli_not_signed_in', message: 'Not signed in.', retryable: false },
+      modelId: 'claude-opus-5-5',
+    };
+    expect(ChatMessageSchema.parse(failed)).toMatchObject({
+      error: { code: 'cli_not_signed_in' },
+      modelId: 'claude-opus-5-5',
+    });
+    expect(
+      ChatMessageSchema.safeParse({ ...chatMessage, error: { kind: 'nonsense', code: 'x', message: '', retryable: false } })
+        .success,
+    ).toBe(false);
   });
 
   it('carries usage on a reply and none on a user turn', () => {
