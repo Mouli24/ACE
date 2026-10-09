@@ -10,6 +10,7 @@ import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
 import { MockDb } from '../mocks/db';
 import { createHandlers } from '../mocks/handlers';
+import { createForgeHandlers } from '../mocks/handlers-forge';
 import { createRound2Handlers, stopScenario } from '../mocks/handlers-round2';
 import { createRound3Handlers } from '../mocks/handlers-round3';
 import { createRound4Handlers } from '../mocks/handlers-round4';
@@ -20,6 +21,7 @@ import { resetGraphSyncRegistry } from '../workflows/sync-registry';
 export const db = new MockDb({ persist: false });
 /** Newest round first: a round 3 route wins over a round 2 stand-in for the same path. */
 export const server = setupServer(
+  ...createForgeHandlers(db),
   ...createRound5Handlers(db),
   ...createRound4Handlers(db),
   ...createRound3Handlers(db),
