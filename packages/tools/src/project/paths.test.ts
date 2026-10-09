@@ -117,3 +117,13 @@ describe('D299 FR-GIT-008 protected folders at any depth', () => {
     }
   });
 });
+
+describe('review r1: a dangling link into a protected folder', () => {
+  it('refuses a write through a dangling junction that points at .git/hooks', () => {
+    mkdirSync(join(project, '.git'));
+    symlinkSync(join(project, '.git', 'hooks'), join(project, 'evil'), 'junction');
+    const target = join(project, 'evil', 'pre-commit');
+    expect(() => assertWritable(project, target, 'write_file')).toThrow(/may not write inside/);
+    expect(protectedFolderIn(project, target)).toBe('.git');
+  });
+});
