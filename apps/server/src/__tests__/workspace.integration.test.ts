@@ -111,26 +111,40 @@ describe('D299 FR-GIT-003 FR-GIT-004 Forge’s files through the real engine', (
     const socket = new WebSocket(`${engine.wsUrl}?token=${engine.token}`);
     const frames: { type: string; payload: { changes?: { path: string }[] } }[] = [];
     socket.on('message', (data) => frames.push(JSON.parse(String(data))));
-    await new Promise<void>((resolve) => socket.on('open', () => resolve()));
-    socket.send(
-      JSON.stringify({ type: 'subscribe', payload: { scope: 'project', id: projectId } }),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.on('open', () => resolve());
+        socket.on('error', reject);
+      });
+      socket.send(
+        JSON.stringify({ type: 'subscribe', payload: { scope: 'project', id: projectId } }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
 
-    writeFileSync(join(folder, 'agent-wrote.ts'), 'export const x = 1;\n');
-
-    await vi.waitFor(
-      () =>
-        expect(
-          frames.some(
-            (frame) =>
-              frame.type === 'files.changed' &&
-              (frame.payload.changes ?? []).some((change) => change.path === 'agent-wrote.ts'),
-          ),
-        ).toBe(true),
-      { timeout: 5000 },
-    );
-    expect(frames.find((frame) => frame.type === 'files.changed')).not.toHaveProperty('seq');
-    socket.close();
-  });
+      // The watcher starts asynchronously after the subscribe, so a write that lands too early is
+      // never seen. Write again on every poll, with a changing body, until one is caught.
+      let writes = 0;
+      await vi.waitFor(
+        () => {
+          writes += 1;
+          writeFileSync(
+            join(folder, 'agent-wrote.ts'),
+            `export const x = ${writes};
+`,
+          );
+          expect(
+            frames.some(
+              (frame) =>
+                frame.type === 'files.changed' &&
+                (frame.payload.changes ?? []).some((change) => change.path === 'agent-wrote.ts'),
+            ),
+          ).toBe(true);
+        },
+        { timeout: 10_000, interval: 250 },
+      );
+      expect(frames.find((frame) => frame.type === 'files.changed')).not.toHaveProperty('seq');
+    } finally {
+      socket.close();
+    }
+  }, 20_000);
 });
