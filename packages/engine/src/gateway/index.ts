@@ -27,6 +27,7 @@ import {
   ModelCapabilitiesPatchSchema,
   UpdateProviderRequestSchema,
   UpdateWorkflowRequestSchema,
+  WS_PATH,
   artifactETag,
   cliPatchError,
   maxUploadBytes,
@@ -224,6 +225,14 @@ export interface EngineDeps {
 
   /** `/bench/*`: ACE Bench's tasks, experiments, blind export, scores and report (PG-5.6). */
   bench?: BenchService;
+
+  /**
+   * D297: the built web app, served on the engine's own origin for the packaged desktop app
+   * (`ACE_WEB_DIR`). Called for {@link isWebRequest}s only, after the origin guard and before the
+   * token check — a page has to load before it can hold the token. The composition root builds it
+   * (`apps/server`); absent, every non-API path is a 401 / JSON 404 exactly as before.
+   */
+  web?: MiddlewareHandler<{ Variables: EngineVariables }>;
 }
 
 export interface EngineVariables {
@@ -357,6 +366,22 @@ function authGuard(deps: EngineDeps): MiddlewareHandler<{ Variables: EngineVaria
     if (!(await deps.auth.verifyToken(deps.scope, token))) throw unauthorized();
     return next();
   };
+}
+
+/**
+ * D297: a request for the web app — a GET or HEAD outside `/api/v1` and `/ws`. These are the only
+ * requests the session token is not asked of, and only when the engine serves a web app at all.
+ */
+export function isWebRequest(method: string, path: string): boolean {
+  if (method !== 'GET' && method !== 'HEAD') return false;
+  const under = (base: string) => path === base || path.startsWith(`${base}/`);
+  return !under(API_BASE_PATH) && !under(WS_PATH);
+}
+
+function webLayer(
+  handler: MiddlewareHandler<{ Variables: EngineVariables }>,
+): MiddlewareHandler<{ Variables: EngineVariables }> {
+  return async (c, next) => (isWebRequest(c.req.method, c.req.path) ? handler(c, next) : next());
 }
 
 /** Arch §11: every request carries an id, echoed back so a client can quote it in a report. */
@@ -501,6 +526,7 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   app.use('*', hostGuard(deps));
   app.use('*', corsLayer(deps));
   app.use('*', originGuard(deps));
+  if (deps.web !== undefined) app.use('*', webLayer(deps.web));
   app.use('*', authGuard(deps));
 
   const api = new Hono<{ Variables: EngineVariables }>();

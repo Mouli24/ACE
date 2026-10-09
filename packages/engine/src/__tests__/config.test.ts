@@ -150,3 +150,15 @@ describe('TC-SYS-011 Bad config file', () => {
     expect(() => loadEngineConfig({ dataDir: dir, env: {} })).toThrow(/refusing to start/i);
   });
 });
+
+describe('FR-DSK-002 ACE_WEB_DIR (D297)', () => {
+  it('names the web app the engine serves; unset or empty, there is none', () => {
+    expect(
+      loadEngineConfig({ dataDir: dir, env: { ACE_WEB_DIR: 'C:/ACE/resources/web' } }).webDir,
+    ).toBe('C:/ACE/resources/web');
+    expect(loadEngineConfig({ dataDir: dir, env: {} })).not.toHaveProperty('webDir');
+    expect(loadEngineConfig({ dataDir: dir, env: { ACE_WEB_DIR: '' } })).not.toHaveProperty(
+      'webDir',
+    );
+  });
+});

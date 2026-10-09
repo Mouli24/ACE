@@ -32,3 +32,38 @@ export const DesktopBridgeSchema = z.object({
   mode: z.enum(DESKTOP_MODES),
 });
 export type DesktopBridge = z.infer<typeof DesktopBridgeSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* Engine IPC (D296)                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The messages between the packaged desktop app and the engine it starts on its bundled Node, over
+ * the IPC channel of `child_process.spawn` (`stdio: [..., 'ipc']`). Without a channel the engine
+ * sends and listens to nothing — a terminal or `pnpm dev` run is unchanged.
+ *
+ * - `ready` (engine → shell): sent where the CLI prints its ready line, once the engine listens and
+ *   can shut down cleanly. `url` is the engine's own origin, which serves the SPA when `ACE_WEB_DIR`
+ *   is set (D297); `token` is this start's session token.
+ * - `shutdown` (shell → engine): run the same shutdown Ctrl-C runs — active runs end `HALTED
+ *   shutdown`, the database closes — then exit 0. The channel closing (`disconnect`, the shell
+ *   died) does the same.
+ */
+export const EngineIpcReadySchema = z.object({
+  type: z.literal('ready'),
+  url: z.url({ protocol: /^http$/, hostname: /^(127\.0\.0\.1|localhost)$/ }),
+  port: z.number().int().min(1).max(65_535),
+  token: z.string().min(1),
+});
+export type EngineIpcReady = z.infer<typeof EngineIpcReadySchema>;
+
+/** Engine → shell. One message today; a union so a later one is an addition, not a change. */
+export const EngineToShellMessageSchema = z.discriminatedUnion('type', [EngineIpcReadySchema]);
+export type EngineToShellMessage = z.infer<typeof EngineToShellMessageSchema>;
+
+export const EngineIpcShutdownSchema = z.object({ type: z.literal('shutdown') });
+export type EngineIpcShutdown = z.infer<typeof EngineIpcShutdownSchema>;
+
+/** Shell → engine. */
+export const ShellToEngineMessageSchema = z.discriminatedUnion('type', [EngineIpcShutdownSchema]);
+export type ShellToEngineMessage = z.infer<typeof ShellToEngineMessageSchema>;

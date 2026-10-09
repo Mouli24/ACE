@@ -143,6 +143,7 @@ import { WebSocketServer } from 'ws';
 import { migrateFullAutoProviders } from './full-auto-migration.js';
 import { createPricingLoader } from './pricing.js';
 import { settingsSearchBackend } from './search-backend.js';
+import { createWebHandler } from './web.js';
 
 export const ENGINE_VERSION = '0.1.0';
 
@@ -294,6 +295,11 @@ export interface StartEngineOptions {
    * `GET /providers/detect`. Only `ace-engine` turns it on; a test engine never starts anything.
    */
   autoLocalRuntime?: boolean;
+  /**
+   * D297: a built web app (`apps/web/dist`) to serve on the engine's own origin, for the packaged
+   * desktop app. Overrides `ACE_WEB_DIR`. Unset, the engine serves the API only, as before.
+   */
+  webDir?: string;
 }
 
 export interface RunningEngine {
@@ -420,6 +426,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
 
   const config = loadEngineConfig({ dataDir: options.dataDir, env });
   const port = options.port ?? config.port;
+  // Checked before anything opens, so a bad ACE_WEB_DIR refuses to start with nothing to undo.
+  const webDir = options.webDir ?? config.webDir;
+  const web = webDir === undefined ? undefined : createWebHandler(webDir);
 
   /* ----------------------------------------------------------------- logging */
 
@@ -1377,6 +1386,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     language,
     /* PG-5.6: ACE Bench. */
     bench,
+    /* D297: the SPA on the engine's own origin, when ACE_WEB_DIR (or `webDir`) names one. */
+    ...(web === undefined ? {} : { web }),
   });
 
   /* -------------------------------------------------------------------- http */

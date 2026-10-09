@@ -1,0 +1,57 @@
+# electron-builder: the Windows installer for the ACE desktop app (D292, D298).
+# `pnpm desktop:package` stages first (scripts/stage.ts), then runs this; `pnpm -r build` never does.
+appId: local.ace.desktop
+productName: ACE
+# The packaged package.json's name: it names the install folder (%LOCALAPPDATA%/Programs/ace),
+# which would otherwise be the sanitised workspace name, "@acedesktop". The app's own name — and
+# so %APPDATA%\ACE — comes from productName.
+extraMetadata:
+  name: ace
+copyright: ACE — personal build
+directories:
+  output: release
+  buildResources: build
+
+# The asar holds the shell only: its compiled main process and preload. It has no runtime
+# dependencies (D292), so no node_modules go in.
+asar: true
+files:
+  - package.json
+  - dist/**/*.js
+  - dist/**/*.cjs
+  - '!dist/**/__tests__/**'
+
+# The engine, its Node and the SPA sit beside the asar as plain files: node.exe has to be
+# executable, the native modules loadable, and sqlite-vec's vec0.dll a real path (D298).
+extraResources:
+  - from: stage
+    to: .
+    filter:
+      - '**/*'
+
+# Nothing here is rebuilt for Electron: the engine never loads in an Electron process (D292).
+npmRebuild: false
+nodeGypRebuild: false
+buildDependenciesFromSource: false
+
+# The Electron that `pnpm install` put in node_modules, not a second download.
+electronVersion: 44.7.0
+electronDist: ../../node_modules/electron/dist
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # TODO(icon): the repo has no app icon yet, so Electron's default is used. Add build/icon.ico
+  # (256x256) and it is picked up from buildResources.
+
+nsis:
+  # Per-user, one click: installs to %LOCALAPPDATA%\Programs\ace, no admin prompt. Uninstalling
+  # leaves %APPDATA%\ACE\data (the user's projects, runs and settings) in place.
+  oneClick: true
+  perMachine: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: ACE
+  artifactName: ACE-Setup-${version}.${ext}

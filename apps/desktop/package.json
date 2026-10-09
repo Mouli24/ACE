@@ -8,11 +8,14 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc --build",
-    "typecheck": "tsc --build",
+    "typecheck": "tsc --build && tsc -p tsconfig.scripts.json",
     "lint": "eslint .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "dev": "tsc --build && node scripts/run-electron.mjs"
+    "dev": "tsc --build && node scripts/run-electron.mjs",
+    "stage": "tsx scripts/stage.ts",
+    "package": "tsx scripts/stage.ts && electron-builder --win nsis",
+    "package:dir": "tsx scripts/stage.ts && electron-builder --win --dir"
   },
   "devDependencies": {
     "@ace/config": "workspace:*",
@@ -20,7 +23,9 @@
     "@types/node": "^22.10.5",
     "@vitest/coverage-v8": "^5.0.1",
     "electron": "44.7.0",
+    "electron-builder": "26.15.3",
     "eslint": "^10.11.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vitest": "^5.0.1"
   }

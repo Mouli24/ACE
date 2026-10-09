@@ -1,11 +1,25 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { DEFAULT_WEB_ORIGIN } from '@ace/contracts';
+import {
+  DEFAULT_WEB_ORIGIN,
+  ShellToEngineMessageSchema,
+  type EngineToShellMessage,
+} from '@ace/contracts';
 
 import { readyLine, startEngine, type RunningEngine } from './server.js';
 
 export type SignalName = 'SIGINT' | 'SIGTERM';
+
+/**
+ * The IPC channel a parent opened when it started this process (`stdio: [..., 'ipc']`) — the
+ * packaged desktop app does (D296). Narrowed to what the engine uses, so a test can stand in for it.
+ */
+export interface EngineIpc {
+  send(message: EngineToShellMessage): void;
+  onMessage(handler: (message: unknown) => void): void;
+  onDisconnect(handler: () => void): void;
+}
 
 export interface CliIo {
   env?: Record<string, string | undefined>;
@@ -14,6 +28,32 @@ export interface CliIo {
   /** Injectable so the ordering below can be asserted without sending real signals. */
   onSignal?: (signal: SignalName, handler: () => void) => void;
   exit?: (code: number) => void;
+  /**
+   * The parent's IPC channel, if it opened one. Never detected here: `main.ts` passes
+   * {@link processIpc}'s answer, so code that calls `runEngine` in-process — a test in a forked
+   * worker, which has a channel of its own — is not wired to a parent it does not know.
+   */
+  ipc?: EngineIpc;
+}
+
+/** This process's IPC channel, when its parent opened one; otherwise `undefined`. */
+export function processIpc(proc: NodeJS.Process = process): EngineIpc | undefined {
+  if (typeof proc.send !== 'function') return undefined;
+  return {
+    send(message) {
+      try {
+        proc.send?.(message);
+      } catch {
+        // The parent already closed the channel; `disconnect` is on its way.
+      }
+    },
+    onMessage(handler) {
+      proc.on('message', handler);
+    },
+    onDisconnect(handler) {
+      proc.on('disconnect', handler);
+    },
+  };
 }
 
 /** §2.1: data lives in `ACE_DATA_DIR`, or `~/.ace` when that is not set. */
@@ -84,6 +124,20 @@ export async function runEngine(io: CliIo = {}): Promise<{
   onSignal('SIGTERM', () => shutdown('SIGTERM'));
 
   stdout.write(`${readyLine(engine.url, DEFAULT_WEB_ORIGIN, engine.token)}\n`);
+
+  // D296: started by the desktop app. Windows has no real SIGTERM — the parent's `kill()` is a hard
+  // kill — so the parent asks over IPC instead, and a parent that dies closes the channel. Either
+  // way it is the same shutdown Ctrl-C runs, guarded the same way against a second request. The
+  // listeners go on before `ready` is sent, for the same reason the signal handlers go on before
+  // the banner.
+  if (io.ipc !== undefined) {
+    const ipc = io.ipc;
+    ipc.onMessage((message) => {
+      if (ShellToEngineMessageSchema.safeParse(message).success) shutdown('ipc:shutdown');
+    });
+    ipc.onDisconnect(() => shutdown('ipc:disconnect'));
+    ipc.send({ type: 'ready', url: engine.url, port: engine.port, token: engine.token });
+  }
 
   return { engine, shutdown };
 }

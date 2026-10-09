@@ -20,3 +20,6 @@ data/
 
 # a project created without a folder used to land under the working directory [audit E-8]
 ace-projects/
+# the desktop app's staged resources and electron-builder output (D298)
+apps/desktop/stage/
+apps/desktop/release/
