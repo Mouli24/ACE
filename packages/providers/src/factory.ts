@@ -3,6 +3,7 @@ import type { ModelInfo, ProviderAdapter, ProviderAdapterFactory, ProviderDetect
 
 import { createAnthropicAdapter } from './adapters/anthropic.js';
 import { createClaudeCodeAdapter } from './adapters/cli/claude-code.js';
+import { createCodexAdapter } from './adapters/cli/codex.js';
 import { createCliDetector, type CliDetector } from './adapters/cli/detect.js';
 import { createGoogleAdapter } from './adapters/google.js';
 import { createMockAdapter, type MockProviderAdapter } from './adapters/mock.js';
@@ -90,6 +91,12 @@ export function createProviderAdapterFactory(
           return createClaudeCodeAdapter({
             permission: provider.cliPermission ?? DEFAULT_CLI_PERMISSION,
             detect: () => cli.detect('claude_code'),
+          });
+
+        case 'codex_cli':
+          return createCodexAdapter({
+            permission: provider.cliPermission ?? DEFAULT_CLI_PERMISSION,
+            detect: () => cli.detect('codex_cli'),
           });
 
         default:
