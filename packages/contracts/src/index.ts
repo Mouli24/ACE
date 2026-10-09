@@ -37,3 +37,6 @@ export * from './knowledge.js';
 export * from './memory.js';
 export * from './usage.js';
 export * from './templates.js';
+
+/* IDE — Forge (D299) */
+export * from './workspace.js';

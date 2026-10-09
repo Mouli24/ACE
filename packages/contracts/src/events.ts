@@ -21,6 +21,7 @@ import { KbDocumentStatusSchema } from './knowledge.js';
 import { MemoryOpSchema } from './memory.js';
 import { McpServerStatusSchema, ToolCallSchema } from './tools.js';
 import { DayTotalsSchema } from './usage.js';
+import { FilesChangedPayloadSchema } from './workspace.js';
 
 /**
  * The event log and the events that ride the WebSocket (round 2 §2.4, round 3 §2.6,
@@ -317,6 +318,14 @@ export const ENGINE_EVENT_FRAME_SCHEMAS = [
   persistedFrame('memory.updated', MemoryUpdatedPayloadSchema),
 ] as const;
 
+/**
+ * Forge's frames (D299). They ride the `project` scope and are never persisted: a file watcher's
+ * burst is worth sending to a client that is looking and worth nothing in the log.
+ */
+export const PROJECT_EVENT_FRAME_SCHEMAS = [
+  transientFrame('files.changed', FilesChangedPayloadSchema),
+] as const;
+
 /** Server → client, run scope (round 2 §2.4, round 3 §2.6, round 4 §2.5). */
 export const RunEventSchema = z.discriminatedUnion('type', RUN_EVENT_FRAME_SCHEMAS);
 export type RunEvent = z.infer<typeof RunEventSchema>;
@@ -328,6 +337,10 @@ export type ThreadEvent = z.infer<typeof ThreadEventSchema>;
 /** Server → client, engine scope (§2.4, round 4 §2.5, round 5 §2.8). */
 export const EngineEventSchema = z.discriminatedUnion('type', ENGINE_EVENT_FRAME_SCHEMAS);
 export type EngineEvent = z.infer<typeof EngineEventSchema>;
+
+/** Server → client, project scope (D299). */
+export const ProjectEventSchema = z.discriminatedUnion('type', PROJECT_EVENT_FRAME_SCHEMAS);
+export type ProjectEvent = z.infer<typeof ProjectEventSchema>;
 
 /* -------------------------------------------------------------------------- */
 /* Type lists                                                                  */
@@ -364,14 +377,19 @@ export const ENGINE_EVENT_TYPES = [
 ] as const;
 export type EngineEventType = (typeof ENGINE_EVENT_TYPES)[number];
 
-/** Not persisted, no `seq`, never replayed by `resume` (§2.4, round 4 §2.5). */
-export const TRANSIENT_EVENT_TYPES = ['node.token', 'chat.token'] as const;
+export const PROJECT_EVENT_TYPES = ['files.changed'] as const;
+export type ProjectEventType = (typeof PROJECT_EVENT_TYPES)[number];
+
+/** Not persisted, no `seq`, never replayed by `resume` (§2.4, round 4 §2.5, D299). */
+export const TRANSIENT_EVENT_TYPES = ['node.token', 'chat.token', 'files.changed'] as const;
 export type TransientEventType = (typeof TRANSIENT_EVENT_TYPES)[number];
 
 export type PersistedRunEventType = Exclude<RunEventType, TransientEventType>;
 export type PersistedThreadEventType = Exclude<ThreadEventType, TransientEventType>;
 
-const isTransient = (type: RunEventType | ThreadEventType): type is TransientEventType =>
+const isTransient = (
+  type: RunEventType | ThreadEventType | ProjectEventType,
+): type is TransientEventType =>
   (TRANSIENT_EVENT_TYPES as readonly string[]).includes(type);
 
 export const PERSISTED_RUN_EVENT_TYPES = RUN_EVENT_TYPES.filter(
