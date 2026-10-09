@@ -9,6 +9,7 @@ import {
 import { ZodError } from 'zod';
 
 import { maskSecrets } from '../security/secret-patterns.js';
+import { isWorkspaceFsError, type WorkspaceFsError } from '../ports/workspace.js';
 import { isSecretWriteRejectedError } from '../security/secret-write-rejected.js';
 
 /**
@@ -139,6 +140,16 @@ export const secretRejected = (rawPath: string): HttpError => {
 };
 
 /**
+ * D299: a `ProjectFiles` refusal, with the status §6.1 pairs with its code. A conflict, an
+ * existing name and a missing file are about the project's state (`workflow`); the rest are about
+ * the path the person asked for (`invalid_config`).
+ */
+export function workspaceRefusal(error: WorkspaceFsError): HttpError {
+  const state = error.code === 'file_changed' || error.code === 'exists' || error.code === 'not_found';
+  return new HttpError(state ? 'workflow' : 'invalid_config', error.code, error.message, error.details, false);
+}
+
+/**
  * Turn anything thrown inside a handler into the §2.3 envelope.
  *
  * An unexpected error becomes a 500 whose message is fixed text: the thrown message could carry a
@@ -148,6 +159,11 @@ export const secretRejected = (rawPath: string): HttpError => {
 export function toApiError(error: unknown): { status: number; body: ApiError } {
   if (error instanceof HttpError) {
     return { status: error.status, body: error.toApiError() };
+  }
+
+  if (isWorkspaceFsError(error)) {
+    const refused = workspaceRefusal(error);
+    return { status: refused.status, body: refused.toApiError() };
   }
 
   if (isSecretWriteRejectedError(error)) {
