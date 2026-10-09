@@ -249,10 +249,20 @@ describe('X1 CLI providers in the factory', () => {
   });
 
   it('builds a Claude Code adapter whose check reads the scan', async () => {
-    const adapter = createProviderAdapterFactory({ cliDetector: detector }).create(row(), undefined);
+    const adapter = createProviderAdapterFactory({ cliDetector: detector, cliResolve: () => undefined }).create(
+      row(),
+      undefined,
+    );
     expect(adapter.type).toBe('claude_code');
     expect(await adapter.check()).toEqual({ status: 'CONNECTED', message: 'v2.1.282' });
-    expect((await adapter.listModels()).map((model) => model.modelId)).toEqual(['default', 'opus', 'sonnet', 'haiku']);
+  });
+
+  it('D286: lists Claude Code models by asking the CLI — with no CLI there is no list, not a remembered one', async () => {
+    const adapter = createProviderAdapterFactory({ cliDetector: detector, cliResolve: () => undefined }).create(
+      row(),
+      undefined,
+    );
+    await expect(adapter.listModels()).rejects.toMatchObject({ nodeError: { code: 'cli_not_found' } });
   });
 
   it('passes the terminal scan through', async () => {

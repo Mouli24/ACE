@@ -1,4 +1,4 @@
-import type { CliPermission, NodeError } from '@ace/contracts';
+import { CLI_INSTALL_HINTS, type CliPermission, type NodeError } from '@ace/contracts';
 
 import { ProviderCallError, type ProviderAdapter, type StreamChunk } from '../../adapter.js';
 import {
@@ -186,9 +186,17 @@ export const codexDialect: CliDialect = {
   stdin: withSystem,
   createParser: () => createCodexParser(),
   listModels: async (resolve) => {
-    const fallback = [cliModel('default', 'Codex default')];
     const command = resolve();
-    if (command === undefined) return fallback;
+    // No CLI, no models: offering its `default` would show a model as usable that cannot run (D286).
+    if (command === undefined) {
+      throw new ProviderCallError({
+        kind: 'provider',
+        code: 'cli_not_found',
+        message: `Codex CLI is not installed — ${CLI_INSTALL_HINTS.codex_cli}`,
+        retryable: false,
+      });
+    }
+    const fallback = [cliModel('default', 'Codex default')];
     const listed = await probeCommand(command, ['debug', 'models', '--bundled'], 10_000);
     return [...fallback, ...codexModelsFrom(listed.stdout).map((id) => cliModel(id, id))];
   },

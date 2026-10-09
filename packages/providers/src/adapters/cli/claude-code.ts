@@ -1,6 +1,7 @@
 import type { CliPermission, NodeError } from '@ace/contracts';
+import { CLI_INSTALL_HINTS } from '@ace/contracts';
 
-import { ProviderCallError, type ModelInfo, type ProviderAdapter, type StreamChunk } from '../../adapter.js';
+import { ProviderCallError, type ProviderAdapter, type StreamChunk } from '../../adapter.js';
 import {
   cliExitError,
   cliModel,
@@ -11,6 +12,7 @@ import {
   type CliDialect,
   type CliParser,
 } from './adapter.js';
+import { listClaudeCodeModels } from './claude-models.js';
 
 /**
  * Claude Code in print mode (X1 spec §5.1). The flags were verified against Claude Code 2.1.282 on
@@ -38,13 +40,11 @@ const PERMISSION_ARGS: Readonly<Record<CliPermission, readonly string[]>> = {
   full_auto: ['--permission-mode', 'bypassPermissions'],
 };
 
-/** Claude Code takes model aliases; `default` leaves the choice to the CLI's own setting. */
-export const CLAUDE_CODE_MODELS: readonly ModelInfo[] = [
-  cliModel('default', 'Claude Code default'),
-  cliModel('opus', 'Claude Opus'),
-  cliModel('sonnet', 'Claude Sonnet'),
-  cliModel('haiku', 'Claude Haiku'),
-];
+/*
+ * Which models Claude Code offers is the installed CLI's to say, not ACE's (D286): the list comes
+ * from its own `initialize` answer — see `./claude-models.ts`. `default` is one of the values it
+ * lists, and a run with it passes no `--model`, leaving the choice to the CLI.
+ */
 
 type Block = Record<string, unknown>;
 
@@ -54,7 +54,11 @@ const blocksOf = (event: Record<string, unknown>): Block[] => {
 };
 
 /** A `result` event that says the call failed, as the error kind it deserves (Arch §28). */
-export function claudeResultError(result: Record<string, unknown>): NodeError {
+export function claudeResultError(
+  result: Record<string, unknown>,
+  /** The `error` an `assistant` event carried — `model_not_found`, say — when the CLI gave one. */
+  apiError?: string,
+): NodeError {
   const said = [
     typeof result['result'] === 'string' ? result['result'] : '',
     ...(Array.isArray(result['errors']) ? result['errors'].map(String) : []),
@@ -69,6 +73,16 @@ export function claudeResultError(result: Record<string, unknown>): NodeError {
       kind: 'auth',
       code: 'cli_not_signed_in',
       message: `Claude Code is not signed in — run \`claude auth login\`. ${said}`.trim(),
+      retryable: false,
+    };
+  }
+  // A model this account or this CLI cannot use: a setting to change, never something a retry or
+  // a fallback fixes on its own (D286). The CLI says it as a 404 and `model_not_found`.
+  if (status === 404 || apiError === 'model_not_found' || /issue with the selected model/i.test(said)) {
+    return {
+      kind: 'invalid_config',
+      code: 'model_unavailable',
+      message: `Claude Code cannot use the chosen model. ${said}`.trim(),
       retryable: false,
     };
   }
@@ -105,6 +119,8 @@ export function createClaudeCodeParser(now: () => number = Date.now): CliParser 
   let wroteText = false;
   let newMessage = false;
   let result: Record<string, unknown> | undefined;
+  /** The API error an `assistant` event reported; its text is the CLI's notice, not an answer. */
+  let apiError: string | undefined;
 
   const text = (delta: string): StreamChunk => {
     const prefix = newMessage && wroteText ? '\n\n' : '';
@@ -120,6 +136,14 @@ export function createClaudeCodeParser(now: () => number = Date.now): CliParser 
       if (parent !== undefined && parent !== null) return [];
 
       switch (event['type']) {
+        case 'system': {
+          // The session's opening event names the model the CLI resolved the request to — what
+          // `opus` or `default` actually means today (D286).
+          const model = event['subtype'] === 'init' ? event['model'] : undefined;
+          return typeof model === 'string' && model !== '' && !model.startsWith('<')
+            ? [{ type: 'model', modelId: model }]
+            : [];
+        }
         case 'stream_event': {
           const inner = event['event'] as
             | { type?: unknown; delta?: { type?: unknown; text?: unknown } }
@@ -139,6 +163,12 @@ export function createClaudeCodeParser(now: () => number = Date.now): CliParser 
           return [];
         }
         case 'assistant': {
+          // A failed API call comes back as a synthetic message whose text explains the failure;
+          // it is the error's wording, and `finish` raises it as the error (D286).
+          if (typeof event['error'] === 'string' && event['error'] !== '') {
+            apiError = event['error'];
+            return [];
+          }
           const out: StreamChunk[] = [];
           for (const block of blocksOf(event)) {
             if (block['type'] === 'tool_use' && typeof block['id'] === 'string') {
@@ -182,8 +212,8 @@ export function createClaudeCodeParser(now: () => number = Date.now): CliParser 
 
     finish(exit) {
       if (result === undefined) throw new ProviderCallError(cliExitError('Claude Code', exit));
-      if (result['is_error'] === true || result['subtype'] !== 'success') {
-        throw new ProviderCallError(claudeResultError(result));
+      if (result['is_error'] === true || result['subtype'] !== 'success' || apiError !== undefined) {
+        throw new ProviderCallError(claudeResultError(result, apiError));
       }
       const usage = (result['usage'] ?? {}) as Record<string, unknown>;
       const cost = result['total_cost_usd'];
@@ -215,7 +245,32 @@ export const claudeCodeDialect: CliDialect = {
   ],
   stdin: (req) => req.prompt,
   createParser: () => createClaudeCodeParser(),
-  listModels: async () => [...CLAUDE_CODE_MODELS],
+  listModels: async (resolve) => {
+    const command = resolve();
+    if (command === undefined) {
+      throw new ProviderCallError({
+        kind: 'provider',
+        code: 'cli_not_found',
+        message: `Claude Code is not installed — ${CLI_INSTALL_HINTS.claude_code}`,
+        retryable: false,
+      });
+    }
+    try {
+      return await listClaudeCodeModels(command);
+    } catch (error) {
+      // A version too old to answer the handshake can still run with its own default model — no
+      // `--model` flag at all — so that, and only that, is offered, saying why (D286).
+      if (error instanceof ProviderCallError && error.nodeError.code === 'cli_model_list_unsupported') {
+        return [
+          {
+            ...cliModel('default', 'Claude Code default'),
+            description: `Its own default model. ${error.message}`,
+          },
+        ];
+      }
+      throw error;
+    }
+  },
 };
 
 export function createClaudeCodeAdapter(options: CliAdapterOptions): ProviderAdapter {

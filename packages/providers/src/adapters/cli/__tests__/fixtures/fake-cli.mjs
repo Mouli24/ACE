@@ -45,6 +45,50 @@ if (mode === 'echo-stdin') {
   writeFileSync(process.env.FAKE_CLI_PIDFILE, String(child.pid));
   process.stdout.write(JSON.stringify({ type: 'ready' }) + '\n');
   setInterval(() => {}, 1000);
+} else if (mode === 'claude-init') {
+  // Claude Code's stream-json control handshake: answer `initialize` with FAKE_CLI_INIT (a JSON
+  // response body), record the argv and cwd it was started with, then exit when stdin closes.
+  if (process.env.FAKE_CLI_ECHO_FILE) {
+    writeFileSync(
+      process.env.FAKE_CLI_ECHO_FILE,
+      JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }),
+    );
+  }
+  let buffered = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => {
+    buffered += chunk;
+    let newline;
+    while ((newline = buffered.indexOf('\n')) >= 0) {
+      const line = buffered.slice(0, newline);
+      buffered = buffered.slice(newline + 1);
+      const request = JSON.parse(line);
+      if (request.type === 'control_request' && request.request?.subtype === 'initialize') {
+        const reply =
+          process.env.FAKE_CLI_INIT_ERROR !== undefined
+            ? {
+                subtype: 'error',
+                request_id: request.request_id,
+                error: process.env.FAKE_CLI_INIT_ERROR,
+              }
+            : {
+                subtype: 'success',
+                request_id: request.request_id,
+                response: JSON.parse(process.env.FAKE_CLI_INIT ?? '{"models":[]}'),
+              };
+        process.stdout.write(JSON.stringify({ type: 'control_response', response: reply }) + '\n');
+      }
+    }
+  });
+  process.stdin.on('end', () => process.exit(0));
+} else if (mode === 'ignore-stdin-exit') {
+  // An older CLI that does not speak the control protocol: it complains and exits.
+  process.stderr.write(
+    'Error: Input must be provided either through stdin or as a prompt argument',
+  );
+  process.exitCode = 1;
+} else if (mode === 'hang') {
+  setInterval(() => {}, 1000);
 } else if (mode === 'print') {
   // Detection probes: print what the test asks for, exit with its code.
   process.stdout.write(process.env.FAKE_CLI_STDOUT ?? '');

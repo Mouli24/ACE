@@ -6,6 +6,7 @@ import { createClaudeCodeAdapter } from './adapters/cli/claude-code.js';
 import { createCodexAdapter } from './adapters/cli/codex.js';
 import { createGeminiAdapter } from './adapters/cli/gemini.js';
 import { createCliDetector, type CliDetector } from './adapters/cli/detect.js';
+import type { ResolvedCommand } from './adapters/cli/resolve.js';
 import { createGoogleAdapter } from './adapters/google.js';
 import { createMockAdapter, type MockProviderAdapter } from './adapters/mock.js';
 import { createOllamaAdapter, detectOllama, DEFAULT_OLLAMA_BASE_URL } from './adapters/ollama.js';
@@ -24,6 +25,11 @@ export interface ProviderFactoryOptions {
   fetchImpl?: typeof fetch;
   /** X1: the terminal scan; tests inject a fake so `pnpm test` never runs a real CLI. */
   cliDetector?: CliDetector;
+  /**
+   * Finds a CLI's binary for a call or a model listing — `PATH` by default. Tests inject one so a
+   * model listing never starts the real CLI (D286).
+   */
+  cliResolve?: (bin: string) => ResolvedCommand | undefined;
 }
 
 /** Thrown when a provider row asks for a type this build has no adapter for. */
@@ -42,6 +48,7 @@ export function createProviderAdapterFactory(
   const mock = options.mock ?? createMockAdapter();
   const fetchImpl = options.fetchImpl;
   const cli = options.cliDetector ?? createCliDetector();
+  const cliResolve = options.cliResolve;
 
   return {
     create(provider: Provider, apiKey: string | undefined): ProviderAdapter {
@@ -92,18 +99,21 @@ export function createProviderAdapterFactory(
           return createClaudeCodeAdapter({
             permission: provider.cliPermission ?? DEFAULT_CLI_PERMISSION,
             detect: () => cli.detect('claude_code'),
+            ...(cliResolve === undefined ? {} : { resolve: () => cliResolve('claude') }),
           });
 
         case 'codex_cli':
           return createCodexAdapter({
             permission: provider.cliPermission ?? DEFAULT_CLI_PERMISSION,
             detect: () => cli.detect('codex_cli'),
+            ...(cliResolve === undefined ? {} : { resolve: () => cliResolve('codex') }),
           });
 
         case 'gemini_cli':
           return createGeminiAdapter({
             permission: provider.cliPermission ?? DEFAULT_CLI_PERMISSION,
             detect: () => cli.detect('gemini_cli'),
+            ...(cliResolve === undefined ? {} : { resolve: () => cliResolve('gemini') }),
           });
 
         default:
