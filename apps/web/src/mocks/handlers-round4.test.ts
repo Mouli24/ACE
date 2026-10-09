@@ -277,7 +277,7 @@ describe('GET /artifacts/:id/content (§2.1, FR-MM-009)', () => {
 /* ---------------------------------------------------------------- tools + MCP */
 
 describe('GET /tools and MCP servers (§2.2/§2.4, FR-TOOL-001/007)', () => {
-  it('lists the six built-ins as { items }', async () => {
+  it('lists the built-ins as { items }', async () => {
     const { body } = await call('GET', '/tools');
     const parsed = ToolListResponseSchema.parse(body);
     expect(parsed.items.map((tool) => tool.name)).toEqual([...BUILTIN_TOOL_NAMES]);

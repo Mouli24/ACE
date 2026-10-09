@@ -7,15 +7,19 @@ import { ChildProcessSandbox } from '../sandbox/runner.js';
 import { CannedSearchBackend } from '../search/backends.js';
 import { createCodeSandboxTool, type CodeSandboxToolOptions } from './code-sandbox.js';
 import { createEchoTool } from './echo.js';
+import { createGitDiffTool, createGitStatusTool } from './git.js';
 import { createHttpRequestTool } from './http-request.js';
+import { createEditFileTool, createListFilesTool, createReadFileTool, createWriteFileTool } from './project-files.js';
+import { createRunCommandTool } from './run-command.js';
 import { createSandboxDeleteTool } from './sandbox-delete.js';
 import { createWebFetchTool } from './web-fetch.js';
 import { createWebSearchTool } from './web-search.js';
 
 /**
- * Builds the six built-in tools of §2.2 and registers them (FR-TOOL-001). This is the engine's
- * entry point: `registerBuiltinTools(registry, { sandbox, searchBackend })` at start-up, and the
- * `GET /tools` list is then `registry.list()` — the built-ins in §2.2's order, before any MCP tool.
+ * Builds the thirteen built-in tools — §2.2's six, then X1's seven project tools (FR-TOOL-008) — and
+ * registers them (FR-TOOL-001). This is the engine's entry point:
+ * `registerBuiltinTools(registry, { sandbox, searchBackend })` at start-up, and the `GET /tools` list
+ * is then `registry.list()` — the built-ins in that order, before any MCP tool.
  *
  * Every dependency has a hermetic default so a caller (and a test) can build the set with no wiring:
  * the child-process sandbox (D13) and the canned search backend (D14). The engine passes a
@@ -31,7 +35,7 @@ export interface BuiltinToolDeps {
   readonly codeSandbox?: Omit<CodeSandboxToolOptions, 'sandbox'>;
 }
 
-/** The six built-ins, in §2.2's order, ready to register. */
+/** The thirteen built-ins, in §2.2's order and then X1's, ready to register. */
 export function createBuiltinTools(deps: BuiltinToolDeps = {}): RegisteredTool[] {
   const sandbox = deps.sandbox ?? new ChildProcessSandbox();
   const searchBackend = deps.searchBackend ?? new CannedSearchBackend();
@@ -43,10 +47,17 @@ export function createBuiltinTools(deps: BuiltinToolDeps = {}): RegisteredTool[]
     createHttpRequestTool(),
     createWebSearchTool({ searchBackend }),
     createWebFetchTool(),
+    createListFilesTool(),
+    createReadFileTool(),
+    createWriteFileTool(),
+    createEditFileTool(),
+    createGitStatusTool(),
+    createGitDiffTool(),
+    createRunCommandTool(),
   ];
 }
 
-/** Registers the six built-ins on `registry`, in order. */
+/** Registers the thirteen built-ins on `registry`, in order. */
 export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinToolDeps = {}): void {
   for (const tool of createBuiltinTools(deps)) {
     registry.register(tool.definition, tool.implementation);

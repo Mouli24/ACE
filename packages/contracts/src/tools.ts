@@ -108,12 +108,10 @@ export type ToolListResponse = z.infer<typeof ToolListResponseSchema>;
 /* -------------------------------------------------------------------------- */
 
 /**
- * The six built-in tool names, in §2.2's order. Frozen and shared, so the engine's registry, an
- * agent's `tools.enabled` list and the web app's tools screen cannot disagree about what a
- * built-in tool is called (D52's reasoning). `sandbox_delete` is the destructive one, so it is the
- * one that asks for approval (FR-GRD-006).
- *
- * File and Git tools (FR-TOOL-008) are not in this round.
+ * The built-in tool names, in §2.2's order and then X1's (FR-TOOL-008, D266). Frozen and shared, so
+ * the engine's registry, an agent's `tools.enabled` list and the web app's tools screen cannot
+ * disagree about what a built-in tool is called (D52's reasoning). `sandbox_delete` and
+ * `run_command` are the destructive ones, so they are the ones that ask for approval (FR-GRD-006).
  */
 export const BUILTIN_TOOL_NAMES = [
   'echo',
@@ -122,6 +120,13 @@ export const BUILTIN_TOOL_NAMES = [
   'http_request',
   'web_search',
   'web_fetch',
+  'list_files',
+  'read_file',
+  'write_file',
+  'edit_file',
+  'git_status',
+  'git_diff',
+  'run_command',
 ] as const;
 export const BuiltinToolNameSchema = z.enum(BUILTIN_TOOL_NAMES);
 export type BuiltinToolName = z.infer<typeof BuiltinToolNameSchema>;
