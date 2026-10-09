@@ -7,6 +7,7 @@ import type { CliDetection } from '@ace/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { StreamChunk } from '../../../adapter.js';
+import { cliModel } from '../adapter.js';
 import { parseJsonLine } from '../lines.js';
 import {
   CLAUDE_CODE_BASE_ARGS,
@@ -155,11 +156,17 @@ describe('X1 Claude Code failures (spec §5.2)', () => {
     ).toMatchObject({ kind: 'provider', code: 'http_429', retryable: true });
   });
 
-  it('reads the turn limit as the agent’s own failure', () => {
+  it('reads the turn limit as a final provider failure, never one a retry re-runs (review I4)', () => {
+    // kind 'agent' would trigger contract repair, re-running a CLI over files it already changed (§5.2).
     expect(claudeResultError({ type: 'result', subtype: 'error_max_turns', is_error: true })).toMatchObject({
-      kind: 'agent',
+      kind: 'provider',
       code: 'cli_max_turns',
+      retryable: false,
     });
+  });
+
+  it('offers text out only, so a JSON-contract node is refused before a CLI runs (spec §5.1, review I4)', () => {
+    expect(cliModel('sonnet', 'Claude Sonnet').outputTypes).toEqual(['text']);
   });
 
   it('turns an exit with no result into an error carrying the stderr tail', async () => {

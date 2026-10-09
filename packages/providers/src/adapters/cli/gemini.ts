@@ -42,7 +42,7 @@ export function geminiError(message: string, exitCode?: number | null): NodeErro
     return { kind: 'invalid_config', code: 'cli_untrusted_folder', message: `Gemini CLI does not trust this folder. ${message}`.trim(), retryable: false };
   }
   if (exitCode === 53) {
-    return { kind: 'agent', code: 'cli_max_turns', message: `Gemini CLI stopped at its turn limit. ${message}`.trim(), retryable: false };
+    return { kind: 'provider', code: 'cli_max_turns', message: `Gemini CLI stopped at its turn limit. ${message}`.trim(), retryable: false };
   }
   if (/quota|\b429\b|rate limit|resource exhausted/i.test(message)) {
     return { kind: 'provider', code: 'http_429', message: `Gemini CLI limit reached: ${message}`, retryable: true };

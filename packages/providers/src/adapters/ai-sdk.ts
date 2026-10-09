@@ -1,4 +1,5 @@
 import type { ProviderType, ToolDefinition } from '@ace/contracts';
+import { toolResultBlock } from '@ace/engine';
 import {
   jsonSchema,
   streamText,
@@ -294,11 +295,24 @@ const toJsonValue = (value: unknown): JSONValue =>
 /**
  * The turns so far, rebuilt from the executor's tool results (X1 §4.4): the prompt, then each call
  * the model made and what it returned. `undefined` for a first turn, which stays a single prompt.
+ *
+ * With no tools on offer — the final turn after the call limit — the calls are replayed as plain
+ * text instead (review I1): Anthropic rejects `tool_use`/`tool_result` blocks in a request that
+ * defines no tools, and a text replay means the same thing to every provider. Each result keeps its
+ * untrusted label (FR-TOOL-010), since it now sits in a user turn.
  */
-export function continuationMessages(req: GenerateRequest): ModelMessage[] | undefined {
+export function continuationMessages(req: GenerateRequest, withTools = true): ModelMessage[] | undefined {
   if (req.toolResults === undefined || req.toolResults.length === 0) return undefined;
   const messages: ModelMessage[] = [{ role: 'user', content: req.prompt }];
   for (const result of req.toolResults) {
+    if (!withTools) {
+      messages.push({
+        role: 'assistant',
+        content: [{ type: 'text', text: `I called the tool ${result.name} with ${JSON.stringify(result.args ?? {})}.` }],
+      });
+      messages.push({ role: 'user', content: [{ type: 'text', text: toolResultBlock(result.name, result.result) }] });
+      continue;
+    }
     messages.push({
       role: 'assistant',
       content: [{ type: 'tool-call', toolCallId: result.callId, toolName: result.name, input: result.args ?? {} }],
@@ -336,7 +350,7 @@ export function createAiSdkAdapter(options: AiSdkAdapterOptions): ProviderAdapte
       return (async function* (): AsyncGenerator<StreamChunk> {
         try {
           const tools = toToolSet(req.tools);
-          const messages = continuationMessages(req);
+          const messages = continuationMessages(req, tools !== undefined);
           const input = messages === undefined ? { prompt: req.prompt } : { messages };
           const result = streamText({
             model: options.model(req.modelId),

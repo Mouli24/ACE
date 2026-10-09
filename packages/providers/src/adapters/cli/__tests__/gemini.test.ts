@@ -68,6 +68,10 @@ describe('X1 Gemini CLI stream', () => {
     expect(geminiError('Quota exceeded (429)')).toMatchObject({ code: 'http_429', retryable: true });
   });
 
+  it('reads the turn limit (exit 53) as a final provider failure, never one a retry re-runs (review I4)', () => {
+    expect(geminiError('turn limit', 53)).toMatchObject({ kind: 'provider', code: 'cli_max_turns', retryable: false });
+  });
+
   it('a result with status error is an error', () => {
     expect(() => replay([{ type: 'result', status: 'error', error: { type: 'x', message: 'model not found' } }], 1)).toThrow(/model not found/);
   });

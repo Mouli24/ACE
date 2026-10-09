@@ -11,6 +11,11 @@ import { createLineSplitter } from './lines.js';
 export const STDERR_TAIL_CHARS = 8 * 1024;
 /** How long an aborted call waits for the process to close before giving up on it. */
 const KILL_SETTLE_MS = 1_500;
+/**
+ * After the CLI exits, how long its last output may take to arrive. The call then ends even if
+ * something the CLI started (a build server, a daemon) still holds stdout open (review I5).
+ */
+export const EXIT_DRAIN_MS = 300;
 
 export interface CliRunOptions {
   command: string;
@@ -142,6 +147,13 @@ export function runCli(options: CliRunOptions): CliRun {
     settle({ code: null, signal: null, spawnError: error }),
   );
   child.on('close', (code, signal) => settle({ code, signal }));
+  child.on('exit', (code, signal) => {
+    setTimeout(() => {
+      settle({ code, signal });
+      child?.stdout?.destroy();
+      child?.stderr?.destroy();
+    }, EXIT_DRAIN_MS).unref();
+  });
 
   // A CLI that exits before reading everything closes the pipe; that is its answer, not a crash.
   child.stdin?.on('error', () => undefined);

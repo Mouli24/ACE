@@ -107,6 +107,35 @@ describe('X1 §4.4 API and local models call ACE’s tools (FR-TOOL-003)', () =>
     expect(JSON.stringify(prompt[2])).toContain('export const add');
   });
 
+  it('a final turn with no tools replays earlier calls as text, which every provider accepts (review I1)', async () => {
+    // Anthropic rejects tool_use/tool_result blocks in a request that defines no tools.
+    const model = saysDone();
+    await drain(
+      adapterOver(model).generate(
+        {
+          modelId: 'm',
+          prompt: 'Fix it.',
+          outputTypes: ['text'],
+          toolResults: [
+            { callId: 'call_1', name: 'read_file', args: { path: 'src/math.js' }, result: { content: 'export const add' } },
+          ],
+        },
+        new AbortController().signal,
+      ),
+    );
+
+    const call = model.doStreamCalls[0];
+    expect(call?.tools ?? []).toEqual([]);
+    const prompt = call?.prompt ?? [];
+    expect(prompt.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
+    const partTypes = prompt.flatMap((message) =>
+      typeof message.content === 'string' ? [] : message.content.map((part) => part.type),
+    );
+    expect(partTypes.every((type) => type === 'text')).toBe(true);
+    expect(JSON.stringify(prompt[1])).toContain('read_file');
+    expect(JSON.stringify(prompt[2])).toContain('export const add');
+  });
+
   it('a call with no tools is a single prompt with no tools, as before', async () => {
     const model = saysDone();
     await drain(adapterOver(model).generate({ modelId: 'm', prompt: 'Hi.', outputTypes: ['text'] }, new AbortController().signal));

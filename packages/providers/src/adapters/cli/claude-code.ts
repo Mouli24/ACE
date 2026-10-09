@@ -80,9 +80,11 @@ export function claudeResultError(result: Record<string, unknown>): NodeError {
       retryable: true,
     };
   }
+  // A provider failure, not the agent's: kind 'agent' would trigger contract repair, re-running a
+  // CLI over files it already changed (§5.2, review I4).
   if (subtype === 'error_max_turns') {
     return {
-      kind: 'agent',
+      kind: 'provider',
       code: 'cli_max_turns',
       message: `Claude Code stopped at its turn limit. ${said}`.trim(),
       retryable: false,
