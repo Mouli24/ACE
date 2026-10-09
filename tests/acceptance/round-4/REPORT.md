@@ -150,3 +150,17 @@ The defect log has the full text of each (D-054, D-061 – D-086). Grouped:
 - [~] §1 demo walked — by the browser suite end to end; a human walk is still owed.
 - [~] `docs/DECISIONS.md`: D221 – D228 written; OI confirmations not yet.
 - [ ] `CLAUDE.md` §9 rows → VERIFIED, §9.1 row, `git tag round-4` — after D-071 and D-083.
+
+## Round 4 gate — CLOSED (2026-10-09, Mouli, on `round-4/fix-arhant-2`)
+
+What changed since the 2026-09-30 entry:
+
+- **D-083 closed by D288** (the owner's choice, option C): `code_sandbox` refuses `python` and `shell` as `unavailable` before anything spawns, and says to use JavaScript; JavaScript stays confined by Node's permission model (D227). Tests: `packages/tools/src/builtins/code-sandbox.test.ts` › "D-083 …", written red first. A Docker runner (D13) is still unbuilt and goes to rounds 6+.
+- **D-071 closed** in PR #33 (earlier).
+- Gates on this branch, rebased on `main` 2a3634d:
+- `pnpm typecheck` 0 · `pnpm lint` 0/0 · `pnpm test` green with zero env vars — contracts 1095 · sdk 135 · ui 316 · engine 1561 · guardrails 357 · context 52 · providers 437 (+1 skip, 3 todo) · storage-local 301 · tools 190 (+1 skip) · web 868 · server 158. One providers flake on the first full run, D-092 (Low, Windows `EPERM` on a temp-folder cleanup), green on re-run.
+- `pnpm test:acceptance` for rounds 1–5: vitest **180 passed + 1 todo**; Playwright **92 passed, 0 failed**, 1 flaky (round 1 NFR-USE-02, D-012), 2 skipped (D-039) — 4.3 min, including the round 4 and round 5 §1 demo walks against the real engine.
+
+- [x] C4, A4, M4 merged. [x] `pnpm test:acceptance` green, rounds 1–4. [x] No open critical/high.
+- [~] §1 demo walked by the browser suite end to end, with the local MCP test server; **no human walk is claimed** (§6.3).
+- Carried, none blocking: D-077 (Medium, DECISION NEEDED — a blocked chat reply is streamed first), D-064 (Low, no `ToolCallStatus` for a stop), D-058, D-059, D-060, D-031, D-072/D-074/D-076/D-080/D-086 as listed above; the OI-03/11/12/14 confirmations are still not written.

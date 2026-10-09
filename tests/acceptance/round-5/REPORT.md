@@ -185,3 +185,17 @@ Both now click the way a person does, then wait for the checked state.
 - [~] §1 demo walked from a clean data dir — by the browser suite end to end; a human walk is still owed.
 - [x] `docs/DECISIONS.md`: OI-02 target (D253), mock model additions (D251), context-guardrail defaults (D246, D247, D256), memory contract (D252, D257).
 - [~] `CLAUDE.md` §9.1 round 5 row filled; rows C5/A5/M5 → VERIFIED and `git tag round-5` — after these cross-tests land, round 4 is tagged and the demo is walked by a person.
+
+## Round 5 gate — CLOSED (2026-10-09, Mouli, on `round-4/fix-arhant-2`)
+
+- **Round 4 is tagged first** (D-083 closed by D288), so §5's order holds.
+- **The three §7.2 items are decided in D289:** a run BLOCKED at pre-flight counts in `runs.started`; hit-rate@5 ≥ 0.90 for a non-fixture set (0.960 measured), the fixture floor stays D253's; FR-OBS-007's test is named by FR.
+- **§7.1 on the V2 layout:** re-run green. Two specs needed updating for work merged after round 5 — not round 5 defects: TC-RAG-007's last step asserted the palette offers a Retrieval node, which D285 removed on purpose (it now asserts the palette offers only the Agent; the Retrieval node's config, run, Sources and scores are unchanged and green); and round 3's TC-ERR-002 `test.fail()` passed, because D-032 was fixed by X1's model gateway (cdad990) — marker removed, D-032 closed.
+- **D-091 closed** (#37, re-run green).
+- Gates:
+- `pnpm typecheck` 0 · `pnpm lint` 0/0 · `pnpm test` green with zero env vars — contracts 1095 · sdk 135 · ui 316 · engine 1561 · guardrails 357 · context 52 · providers 437 (+1 skip, 3 todo) · storage-local 301 · tools 190 (+1 skip) · web 868 · server 158. One providers flake on the first full run, D-092 (Low, Windows `EPERM` on a temp-folder cleanup), green on re-run.
+- `pnpm test:acceptance` for rounds 1–5: vitest **180 passed + 1 todo**; Playwright **92 passed, 0 failed**, 1 flaky (round 1 NFR-USE-02, D-012), 2 skipped (D-039) — 4.3 min, including the round 4 and round 5 §1 demo walks against the real engine.
+
+- [x] C5, A5, M5 merged. [x] `pnpm test:acceptance` green, rounds 1–5. [x] No open critical/high. [x] DECISIONS: D288, D289.
+- [~] §1 demo walked from a clean data dir by the browser suite against the real engine; **no human walk is claimed** (§6.3).
+- Carried, none blocking: D258's five A5 items listed above; D-092 (Low, X1 test flake).
