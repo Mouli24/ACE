@@ -80,10 +80,22 @@ export function createWsHub({
   /** How many connections watch each project; the watcher's life follows 0 ↔ 1 (D299). */
   const projectWatchers = new Map<Id, number>();
 
+  /** A failing callback must not break the hub or skew the counts, so it is logged and dropped. */
+  function notifyWatch(projectId: Id, watched: boolean): void {
+    try {
+      onProjectWatch?.(projectId, watched);
+    } catch (error) {
+      logger.warn(
+        { subsystem: 'ws', projectId, reason: error instanceof Error ? error.message : String(error) },
+        'project watch callback failed',
+      );
+    }
+  }
+
   function retain(projectId: Id): void {
     const count = projectWatchers.get(projectId) ?? 0;
     projectWatchers.set(projectId, count + 1);
-    if (count === 0) onProjectWatch?.(projectId, true);
+    if (count === 0) notifyWatch(projectId, true);
   }
 
   function release(projectId: Id): void {
@@ -93,7 +105,7 @@ export function createWsHub({
       return;
     }
     projectWatchers.delete(projectId);
-    if (count === 1) onProjectWatch?.(projectId, false);
+    if (count === 1) notifyWatch(projectId, false);
   }
 
   /** Idempotent: the set is emptied first, so a second call (close after closeAll) releases nothing. */

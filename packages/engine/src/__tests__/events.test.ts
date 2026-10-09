@@ -427,4 +427,32 @@ describe('D299 the project scope', () => {
       [OTHER, false],
     ]);
   });
+
+  it('a throwing onProjectWatch never breaks the hub', async () => {
+    const calls: boolean[] = [];
+    hub = createWsHub({
+      bus,
+      repository,
+      scope,
+      auth,
+      logger: silent,
+      onProjectWatch: (_id, on) => {
+        calls.push(on);
+        throw new Error('watcher failed');
+      },
+    });
+    const a = await connect();
+    const b = await connect();
+    await a.receive(subscribe(PROJECT));
+    await b.receive(subscribe(PROJECT));
+
+    expect(() => hub.closeAll()).not.toThrow();
+    expect(a.closedWith).toBeDefined();
+    expect(b.closedWith).toBeDefined();
+    expect(calls).toEqual([true, false]);
+
+    const c = await connect();
+    await c.receive(subscribe(PROJECT));
+    expect(calls).toEqual([true, false, true]);
+  });
 });
