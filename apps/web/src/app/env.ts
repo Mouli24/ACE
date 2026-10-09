@@ -1,4 +1,6 @@
-import { DEFAULT_ENGINE_ORIGIN, WS_PATH } from '@ace/contracts';
+import { DEFAULT_ENGINE_ORIGIN, WS_PATH, type DesktopBridge } from '@ace/contracts';
+
+import { desktopBridge } from './desktop';
 
 export interface WebEnv {
   VITE_ACE_URL?: string;
@@ -7,13 +9,23 @@ export interface WebEnv {
 
 const current = (): WebEnv => import.meta.env as unknown as WebEnv;
 
-/** Engine origin: `VITE_ACE_URL` at build time (D27), else the contract default. */
-export function engineOrigin(env: WebEnv = current()): string {
-  return (env.VITE_ACE_URL || DEFAULT_ENGINE_ORIGIN).replace(/\/+$/, '');
+/**
+ * Engine origin: the desktop bridge's `engineUrl` when the page runs in the desktop app (D294) —
+ * the packaged app's engine sits on a port picked at start — else `VITE_ACE_URL` at build time
+ * (D27), else the contract default.
+ */
+export function engineOrigin(
+  env: WebEnv = current(),
+  bridge: DesktopBridge | undefined = desktopBridge(),
+): string {
+  return (bridge?.engineUrl || env.VITE_ACE_URL || DEFAULT_ENGINE_ORIGIN).replace(/\/+$/, '');
 }
 
-export function wsUrl(env: WebEnv = current()): string {
-  const origin = new URL(engineOrigin(env));
+export function wsUrl(
+  env: WebEnv = current(),
+  bridge: DesktopBridge | undefined = desktopBridge(),
+): string {
+  const origin = new URL(engineOrigin(env, bridge));
   origin.protocol = origin.protocol === 'https:' ? 'wss:' : 'ws:';
   origin.pathname = WS_PATH;
   return origin.toString();

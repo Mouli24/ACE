@@ -1,0 +1,27 @@
+{
+  "name": "@ace/desktop",
+  "productName": "ACE",
+  "version": "0.1.0",
+  "description": "ACE desktop app: an Electron shell around the local engine and the web app",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "dev": "tsc --build && node scripts/run-electron.mjs"
+  },
+  "devDependencies": {
+    "@ace/config": "workspace:*",
+    "@ace/contracts": "workspace:*",
+    "@types/node": "^22.10.5",
+    "@vitest/coverage-v8": "^5.0.1",
+    "electron": "44.7.0",
+    "eslint": "^10.11.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.1"
+  }
+}

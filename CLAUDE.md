@@ -44,8 +44,10 @@ Canonical root scripts (Arhant maintains them; nobody adds alternatives):
 
 | Script | What it does |
 |---|---|
-| `pnpm dev` | Starts engine (`apps/server`, port 4747) and web (`apps/web`, port 5173) together and prints the login URL with the session token |
+| `pnpm dev` | Starts engine (`apps/server`, port 4747), web (`apps/web`, port 5173) and the package rebuilder (`pnpm dev:packages`) together and prints the login URL with the session token |
 | `pnpm dev:engine` / `pnpm dev:web` | One side only |
+| `pnpm dev:packages` | `tsc --build --watch` over the engine-side packages; the engine's `tsx watch` restarts on their new `dist` (D295) |
+| `pnpm desktop:dev` | The Electron dev window, attached to a running `pnpm dev` (D292, D295) |
 | `pnpm build` | Builds every package and app |
 | `pnpm typecheck` / `pnpm lint` | Whole workspace |
 | `pnpm test` | Unit + integration + component, every package, mock provider only, **zero env vars needed** |
@@ -289,6 +291,7 @@ Status values: `TODO` → `IN PROGRESS` → `IN REVIEW` → `MERGED` → `VERIFI
 | PG | PG3 | Product gaps Phase 3 — one spine: Domain in the layout, one selected run, one node state, follow a node anywhere, controls and approvals in every mode, findable chats, mode links everywhere, Chat and Team toggles | Mouli | `fix/pg-3-one-spine` | IN REVIEW | — | 2026-10-16 | — | D354, D356, D363. The Gate 3 "one run, three modes" walk passed against the real engine (same states and totals everywhere, nothing stuck RUNNING); its e2e is owed. D-058 closed. |
 | PG | PG4 | Product gaps Phase 4 — envelopes on screen, states you can tell apart, cost before you run, overlay from the run's snapshot, nothing recorded hidden | Mouli | `fix/pg-4-envelopes-states-cost` | IN REVIEW | — | 2026-10-16 | — | Built features only on the owner's instruction (2026-10-16): typecheck and lint clean; no tests run. Owed and likely-broken tests listed in tests-todo. |
 | PG | PG5 | Product gaps Phase 5 — per-node checkpoints, one write lock, agent commands visible, replay, compare, run export, ACE Bench, CLI env allowlist | Mouli | `fix/pg-5-forge-replay-bench` | IN REVIEW | — | 2026-10-16 | — | D364–D366; plan `docs/team-prompts/ace-bench-plan.md` approved 2026-10-16. Features only: typecheck and lint clean; no tests run. D-093 closed. PG-5.7's provider tests not built (they are tests). |
+| DSK | DSK1 | Desktop shell (Electron): a dev window attached to `pnpm dev`, and a packaged Windows app that runs its own engine on bundled Node, with an NSIS installer | Arhant | `feat/desktop-shell` | IN PROGRESS | — | 2026-10-09 | — | FR-DSK-001 (Windows x64 only — D292), FR-DSK-002, FR-DSK-004. **FR-DSK-003 is already met** by the keychain `SecretStore` (`KeychainSecretStore`, `@napi-rs/keyring`, since round 1): the desktop app's engine uses the same OS keychain, so it is not redone. FR-DSK-005 (auto-update) is out of scope (D292); FR-DSK-006 (the e2e suite in the desktop app, TC-DSK-005) is the next task. Phase 0 d8a1fd6: Node 24 (D293), `apps/desktop` un-reserved, `desktopApp` lint preset (D292). Phase 1: the dev window and the web bridge (D294, D295). Decisions D292–D295. |
 
 ### 9.1 Round gates
 

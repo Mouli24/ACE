@@ -48,3 +48,6 @@ export * from './checkpoints.js';
 export * from './domain.js';
 /* ACE Bench (PG-5.6) */
 export * from './bench.js';
+
+/* Desktop shell (D292, D294) */
+export * from './desktop.js';

@@ -1,11 +1,45 @@
 import { DEFAULT_ENGINE_ORIGIN } from '@ace/contracts';
 
+export interface TokenMissingProps {
+  /**
+   * The page runs in the desktop app, but the bridge it was handed did not parse (D294). The browser
+   * instructions — run `pnpm dev`, open the printed link — would be wrong there.
+   */
+  desktop?: boolean;
+  /** Audit U-2: the engine no longer accepts the token this page holds (it restarted). */
+  expired?: boolean;
+}
+
 /**
  * No session token in the URL or sessionStorage (round 1 §2.10) — or, `expired` (audit U-2), one
  * the engine no longer accepts: every engine start prints a new link, so a page left open across a
- * restart holds a stale token. A centred theme card on the canvas colour (D328).
+ * restart holds a stale token — or an unusable desktop bridge. A centred theme card on the canvas
+ * colour (D328).
  */
-export function TokenMissing({ expired = false }: { expired?: boolean }) {
+export function TokenMissing({ expired = false, desktop = false }: TokenMissingProps) {
+  if (desktop) {
+    return (
+      <main
+        data-testid="token-missing-desktop"
+        className="flex h-full items-center justify-center bg-[var(--canvas)] px-4 py-8 text-[var(--ink)]"
+      >
+        <div className="flex w-full max-w-[520px] flex-col gap-4 rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-5">
+          <h1 className="text-[20px] font-bold tracking-[-0.01em]">
+            ACE could not connect to its engine
+          </h1>
+          <p className="text-[13px] leading-[1.55] text-[var(--muted)]">
+            The desktop app handed this window an engine address or session token it could not
+            use. Reload the window with{' '}
+            <code className="rounded-[4px] bg-[var(--hover)] px-[5px] py-px font-machine text-[12px] text-[var(--ink)]">
+              Ctrl+R
+            </code>
+            . If this keeps happening, quit ACE and open it again.
+          </p>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main
       data-testid={expired ? 'session-lost' : 'token-missing'}
