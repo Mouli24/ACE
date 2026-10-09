@@ -13,10 +13,18 @@ import { killTree } from '../sandbox/runner.js';
  * Windows, `/bin/sh` elsewhere — returning its exit code and the tail of its output. It is
  * **destructive**, so under the default policy every call waits for an approval card: on Windows it
  * runs with no sandbox at all (the D-083 risk). A Stop or the timeout kills the whole process tree.
+ *
+ * It ends when the shell exits, not when its output closes (review I5): something the command left
+ * running (a build server, `start /b`, a daemon) inherits the output pipe and would hold it open
+ * past the timeout and past a Stop.
  */
 
 const OUTPUT_TAIL_CHARS = 64 * 1024;
 const DEFAULT_TIMEOUT_MS = 120_000;
+/** After the shell exits, how long its last output may take to arrive before the pipes are dropped. */
+const EXIT_DRAIN_MS = 300;
+/** After a kill, how long to wait for the shell to go before answering anyway. */
+const KILL_SETTLE_MS = 1_500;
 
 const RunArgs = z.strictObject({
   command: z.string().min(1).max(8_000),
@@ -98,8 +106,14 @@ export function createRunCommandTool(options: RunCommandOptions = {}): Registere
           // POSIX: lead a process group so one kill reaches everything the command started.
           detached: platform !== 'win32',
         });
+        const timers: NodeJS.Timeout[] = [];
+        const later = (ms: number, fn: () => void): void => {
+          timers.push(setTimeout(fn, ms));
+        };
         const stop = (): void => {
           if (child.pid !== undefined) killTree(child.pid, platform);
+          // A shell that outlives its kill must not hang the call.
+          later(KILL_SETTLE_MS, () => done(null));
         };
         const timer = setTimeout(() => {
           timedOut = true;
@@ -112,6 +126,9 @@ export function createRunCommandTool(options: RunCommandOptions = {}): Registere
           if (settled) return;
           settled = true;
           clearTimeout(timer);
+          for (const pending of timers) clearTimeout(pending);
+          child.stdout.destroy();
+          child.stderr.destroy();
           context.signal?.removeEventListener('abort', onAbort);
           settle();
         };
@@ -125,7 +142,7 @@ export function createRunCommandTool(options: RunCommandOptions = {}): Registere
         child.on('error', (error) =>
           finish(() => reject(new ToolError('failed', 'run_command', `Could not start the shell: ${error.message}`))),
         );
-        child.on('close', (code) =>
+        const done = (code: number | null): void =>
           finish(() => {
             if (timedOut) {
               reject(
@@ -139,8 +156,9 @@ export function createRunCommandTool(options: RunCommandOptions = {}): Registere
             } else {
               resolve({ exitCode: code, stdout, stderr, truncated });
             }
-          }),
-        );
+          });
+        child.on('exit', (code) => later(EXIT_DRAIN_MS, () => done(code)));
+        child.on('close', (code) => done(code));
       });
     },
   };

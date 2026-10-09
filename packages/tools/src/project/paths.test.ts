@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -52,6 +52,21 @@ describe('FR-TOOL-008 paths stay inside the project folder', () => {
     expect(() => assertWritable(project, join(project, '.git', 'config'), 'write_file')).toThrow(/\.git/);
     expect(() => assertWritable(project, join(project, '.ace', 'x'), 'write_file')).toThrow(/\.ace/);
     expect(() => assertWritable(project, join(project, 'src', 'a.js'), 'write_file')).not.toThrow();
+  });
+
+  it('keeps writes out of .git and .ace however the name is spelled (review C1)', () => {
+    mkdirSync(join(project, '.git'));
+    for (const spelled of ['.GIT', '.Git', '.git.', '.git ', '.git::$INDEX_ALLOCATION', '.ACE']) {
+      expect(() => assertWritable(project, join(project, spelled, 'config'), 'write_file'), spelled).toThrow(
+        /may not write inside/,
+      );
+    }
+  });
+
+  it('keeps writes out of .git through a link that points at it (review C1)', () => {
+    mkdirSync(join(project, '.git'));
+    symlinkSync(join(project, '.git'), join(project, 'gitlink'), 'junction');
+    expect(() => assertWritable(project, join(project, 'gitlink', 'config'), 'write_file')).toThrow(/\.git/);
   });
 
   it('shows paths to the model relative, with forward slashes', () => {

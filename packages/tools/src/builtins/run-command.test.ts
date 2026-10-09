@@ -72,6 +72,18 @@ describe('FR-TOOL-008 run_command (X1, D266)', () => {
     ).rejects.toMatchObject({ kind: 'timeout' });
   });
 
+  it('returns once the shell exits, even if something it started still holds the output (review I5)', async () => {
+    // A grandchild that inherits stdout and outlives the shell: 'close' would wait 4 s for it.
+    const orphan = node(
+      "require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 4000)'], { stdio: 'inherit', detached: true, cwd: require('os').tmpdir(), windowsHide: true }).unref(); console.log('started')",
+    );
+    const started = Date.now();
+    const result = (await run.implementation({ command: orphan }, ctx())) as { exitCode: number; stdout: string };
+    expect(Date.now() - started).toBeLessThan(2_500);
+    expect(result).toMatchObject({ exitCode: 0 });
+    expect(result.stdout).toContain('started');
+  });
+
   it('a Stop ends it within 2 s', async () => {
     const controller = new AbortController();
     const started = Date.now();
