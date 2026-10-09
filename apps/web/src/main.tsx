@@ -13,6 +13,7 @@ import { RouterProvider, createBrowserRouter } from 'react-router-dom';
 
 import { TokenMissing } from './app/TokenMissing';
 import { configureApi } from './app/api';
+import { readDesktopBridge } from './app/desktop';
 import { isMockMode } from './app/env';
 import { routes } from './app/routes';
 import { startSocket } from './app/socket';
@@ -49,7 +50,7 @@ async function boot(): Promise<void> {
   if (!token) {
     root.render(
       <StrictMode>
-        <TokenMissing />
+        <TokenMissing desktop={readDesktopBridge().status === 'invalid'} />
       </StrictMode>,
     );
     return;

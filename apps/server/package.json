@@ -16,7 +16,7 @@
     "typecheck": "tsc --build",
     "lint": "eslint .",
     "test": "vitest run --passWithNoTests",
-    "dev": "tsx watch src/main.ts",
+    "dev": "tsx watch --include \"../../packages/*/dist/**/*.js\" src/main.ts",
     "start": "node dist/main.js",
     "test:coverage": "vitest run --coverage"
   },

@@ -8,9 +8,11 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "dev": "concurrently --names engine,web --prefix-colors cyan,magenta \"pnpm --filter @ace/server dev\" \"pnpm --filter @ace/web dev\"",
+    "dev": "concurrently --names engine,web,packages --prefix-colors cyan,magenta,yellow \"pnpm --filter @ace/server dev\" \"pnpm --filter @ace/web dev\" \"pnpm dev:packages\"",
     "dev:engine": "pnpm --filter @ace/server dev",
     "dev:web": "pnpm --filter @ace/web dev",
+    "dev:packages": "tsc --build --watch --preserveWatchOutput packages/contracts packages/engine packages/storage-local packages/providers packages/guardrails packages/context packages/tools",
+    "desktop:dev": "pnpm --filter @ace/desktop dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",
