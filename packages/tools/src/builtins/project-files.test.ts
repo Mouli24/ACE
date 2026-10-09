@@ -104,6 +104,8 @@ describe('FR-TOOL-008 write_file', () => {
 
   it('refuses .git', async () => {
     await expect(createWriteFileTool().implementation({ path: '.git/config', content: 'x' }, ctx())).rejects.toThrow(/\.git/);
+    // Windows and macOS fold case: .GIT is the same folder (review C1).
+    await expect(createWriteFileTool().implementation({ path: '.GIT/config', content: 'x' }, ctx())).rejects.toThrow(/\.git/);
     expect(WRITE_FILE_DEFINITION.permissions.destructive).toBe(false);
   });
 });

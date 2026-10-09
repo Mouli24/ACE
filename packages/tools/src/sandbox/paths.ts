@@ -76,7 +76,7 @@ function isInside(root: string, candidate: string): boolean {
  * re-appending the segments that do not exist yet. Needed because a file about to be *created*
  * cannot be `realpath`ed, yet the folder it would land in can be a symlink out.
  */
-function realpathOfDeepestExisting(target: string): string {
+export function realpathOfDeepestExisting(target: string): string {
   const missing: string[] = [];
   let current = target;
 

@@ -11,7 +11,15 @@ import { type ToolContext } from '../tool.js';
 /**
  * `git_status` and `git_diff` (X1, FR-TOOL-008): read-only views of the project's repository. git
  * runs with an argument array (no shell), never prompts, never pages, and takes no optional locks.
+ *
+ * Both are auto-approved, so neither may run a program the repository's config names (review C1):
+ * no fsmonitor hook, no external diff, no textconv filter. Both stay inside the project folder even
+ * when it is a sub-folder of a larger repository, and a path is a literal name, never pathspec magic
+ * such as `:(top)` (review I7).
  */
+
+/** Ahead of every git command: config that would otherwise run a program from the repository. */
+const SAFE_CONFIG = ['-c', 'core.fsmonitor=false'] as const;
 
 const OUTPUT_LIMIT_CHARS = 256 * 1024;
 const GIT_TIMEOUT_MS = 15_000;
@@ -28,9 +36,15 @@ function runGit(args: string[], cwd: string, tool: string, signal: AbortSignal |
     let stdout = '';
     let stderr = '';
     let truncated = false;
-    const child = spawn('git', args, {
+    const child = spawn('git', [...SAFE_CONFIG, ...args], {
       cwd,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', GIT_OPTIONAL_LOCKS: '0' },
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        GIT_PAGER: 'cat',
+        GIT_OPTIONAL_LOCKS: '0',
+        GIT_LITERAL_PATHSPECS: '1',
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
       timeout: GIT_TIMEOUT_MS,
@@ -99,7 +113,7 @@ export function createGitStatusTool(): RegisteredTool {
     definition: GIT_STATUS_DEFINITION,
     implementation: async (_args, context) => {
       const cwd = projectRoot(context, 'git_status');
-      const result = await runGit(['status', '--porcelain=v1', '-b'], cwd, 'git_status', context.signal);
+      const result = await runGit(['status', '--porcelain=v1', '-b', '--', '.'], cwd, 'git_status', context.signal);
       if (result.code !== 0) throw failed('git_status', result);
       const [head = '', ...entries] = result.stdout.split(/\r?\n/).filter((line) => line !== '');
       const branch = head.replace(/^## /, '').split('...')[0] ?? '';
@@ -141,7 +155,16 @@ export function createGitDiffTool(): RegisteredTool {
               }),
             );
       const result = await runGit(
-        ['diff', '--no-color', ...(parsed.data.staged === true ? ['--cached'] : []), ...(path === undefined ? [] : ['--', path])],
+        [
+          'diff',
+          '--no-color',
+          '--no-ext-diff',
+          '--no-textconv',
+          '--relative',
+          ...(parsed.data.staged === true ? ['--cached'] : []),
+          '--',
+          path ?? '.',
+        ],
         cwd,
         'git_diff',
         context.signal,
