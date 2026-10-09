@@ -201,6 +201,18 @@ describe('FR-SYS-003 CORS, so a browser may actually use the allow-list', () => 
     expect(response.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:5173');
   });
 
+  it('D299 allows PUT in a CORS preflight from an allowed origin', async () => {
+    const response = await app.request('/api/v1/projects/x/files/content', {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'http://127.0.0.1:4747',
+        'Access-Control-Request-Method': 'PUT',
+      },
+    });
+
+    expect(response.headers.get('access-control-allow-methods')).toContain('PUT');
+  });
+
   it('tells a foreign origin nothing, so the browser blocks it', async () => {
     const response = await app.request('/api/v1/projects', {
       method: 'OPTIONS',

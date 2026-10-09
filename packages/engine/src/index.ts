@@ -36,3 +36,7 @@ export * from './trace/index.js';
 export * from './usage/index.js';
 export * from './templates/service.js';
 export * from './backup/index.js';
+
+/* IDE (D299): Forge's project files. */
+export * from './workspace/service.js';
+export * from './workspace/routes.js';

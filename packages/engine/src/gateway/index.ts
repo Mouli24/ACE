@@ -63,6 +63,8 @@ import type { TemplateService } from '../templates/service.js';
 import type { TraceService } from '../trace/index.js';
 import type { UsageService } from '../usage/index.js';
 import { createUsageRoutes } from '../usage/routes.js';
+import { createWorkspaceRoutes } from '../workspace/routes.js';
+import type { WorkspaceService } from '../workspace/service.js';
 import {
   HttpError,
   forbiddenOrigin,
@@ -158,6 +160,14 @@ export interface EngineDeps {
   templates?: TemplateService;
   /** `POST /backup/export` and `/backup/import` (FR-SYS-012). */
   backup?: BackupService;
+
+  /*
+   * IDE (D299). Optional for the same reason as every round's services: an app built without it
+   * answers 501 `not_implemented` on the routes that need it (D121).
+   */
+
+  /** `/projects/:id/files/*`: Forge's project files (FR-GIT-003, FR-GIT-004, FR-GIT-008). */
+  workspace?: WorkspaceService;
 }
 
 export interface EngineVariables {
@@ -193,7 +203,8 @@ function corsLayer(deps: EngineDeps): MiddlewareHandler<{ Variables: EngineVaria
       const allowed = new Set([...settings.allowedOrigins, ...(deps.selfOrigins ?? [])]);
       return allowed.has(origin) ? origin : null;
     },
-    allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    // PUT: Forge's save (D299).
+    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization', 'x-request-id'],
     maxAge: 600,
   });
@@ -796,6 +807,8 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.route('/', createUsageRoutes(deps.trace, deps.usage));
   api.route('/', createTemplateRoutes(deps.templates));
   api.route('/', createBackupRoutes(deps.backup));
+  /* IDE (D299): Forge's project files, inside the same middleware. */
+  api.route('/', createWorkspaceRoutes(deps.workspace));
 
   app.route(API_BASE_PATH, api);
 
