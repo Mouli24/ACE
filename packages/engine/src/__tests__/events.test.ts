@@ -363,3 +363,68 @@ describe('Arch §24 token batching', () => {
     expect(flushed).toEqual([['a']]);
   });
 });
+
+describe('D299 the project scope', () => {
+  const silent = createLogger({ level: 'silent', destination: { write: () => undefined } });
+  const PROJECT = newId();
+  const OTHER = newId();
+  const changed = (projectId: string) => ({
+    type: 'files.changed',
+    payload: { projectId, changes: [{ path: 'a.ts', kind: 'changed' }], resync: false },
+  });
+  const subscribe = (id: string) => ({ type: 'subscribe', payload: { scope: 'project', id } });
+
+  it('delivers a project’s files.changed to its subscribers only, without a seq', async () => {
+    const watching = await connect();
+    const engineOnly = await connect();
+    const other = await connect();
+    await watching.receive(subscribe(PROJECT));
+    await engineOnly.receive({ type: 'subscribe', payload: { scope: 'engine' } });
+    await other.receive(subscribe(OTHER));
+
+    await bus.emitTransient(changed(PROJECT));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(watching.frames().filter((f) => f.type === 'files.changed')).toEqual([changed(PROJECT)]);
+    expect(engineOnly.frames().some((f) => f.type === 'files.changed')).toBe(false);
+    expect(other.frames().some((f) => f.type === 'files.changed')).toBe(false);
+  });
+
+  it('asks for a watcher on the first subscriber and releases it after the last one leaves', async () => {
+    const calls: Array<[string, boolean]> = [];
+    hub = createWsHub({ bus, repository, scope, auth, logger: silent, onProjectWatch: (id, on) => calls.push([id, on]) });
+    const a = await connect();
+    const b = await connect();
+
+    await a.receive(subscribe(PROJECT));
+    await a.receive(subscribe(PROJECT));
+    await b.receive(subscribe(PROJECT));
+    expect(calls).toEqual([[PROJECT, true]]);
+
+    await a.receive({ type: 'unsubscribe', payload: { scope: 'project', id: PROJECT } });
+    expect(calls).toEqual([[PROJECT, true]]);
+
+    b.close(1000);
+    expect(calls).toEqual([
+      [PROJECT, true],
+      [PROJECT, false],
+    ]);
+  });
+
+  it('closeAll releases every watched project exactly once', async () => {
+    const calls: Array<[string, boolean]> = [];
+    hub = createWsHub({ bus, repository, scope, auth, logger: silent, onProjectWatch: (id, on) => calls.push([id, on]) });
+    const a = await connect();
+    await a.receive(subscribe(PROJECT));
+    await a.receive(subscribe(OTHER));
+
+    hub.closeAll();
+
+    expect(calls).toEqual([
+      [PROJECT, true],
+      [OTHER, true],
+      [PROJECT, false],
+      [OTHER, false],
+    ]);
+  });
+});
