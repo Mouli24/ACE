@@ -53,6 +53,8 @@ export function ModelsTab({ providers }: { providers: Provider[] }) {
   const models = useModels(toQuery(filter));
   const refresh = useRefreshModels();
   const [refreshedAt, setRefreshedAt] = useState<string>();
+  /** D286: why the last refresh could not ask its provider — a CLI not installed or signed out. */
+  const [warning, setWarning] = useState<string>();
 
   const byId = new Map(providers.map((provider) => [provider.id, provider]));
   const set = (patch: Partial<Filter>) => setFilter((current) => ({ ...current, ...patch }));
@@ -108,7 +110,11 @@ export function ModelsTab({ providers }: { providers: Provider[] }) {
             pending={refresh.isPending}
             onRefresh={(providerId) =>
               refresh.mutate(providerId, {
-                onSuccess: (result) => setRefreshedAt(result.refreshedAt),
+                onSuccess: (result) => {
+                  setRefreshedAt(result.refreshedAt);
+                  setWarning(result.warning);
+                },
+                onError: (error) => setWarning(error.message),
               })
             }
           />
@@ -118,6 +124,16 @@ export function ModelsTab({ providers }: { providers: Provider[] }) {
           </p>
         </div>
       </div>
+
+      {warning !== undefined && (
+        <p
+          role="alert"
+          data-testid="models-refresh-warning"
+          className="rounded-card border border-danger/50 bg-danger/5 px-3 py-2 text-sm text-fg"
+        >
+          The provider could not list its models: {warning}
+        </p>
+      )}
 
       {models.isError && (
         <p role="alert" className="text-danger">
@@ -169,11 +185,25 @@ function ModelRow({ model, provider }: { model: Model; provider: Provider | unde
       </td>
       <td className="py-2 pr-3">
         <span className="font-machine">{model.modelId}</span>
+        {/* D286: what an alias means today, as the provider resolved it */}
+        {model.resolvedModelId !== undefined && (
+          <span className="ml-1 font-machine text-xs text-fg-muted" data-testid="model-resolves-to">
+            → {model.resolvedModelId}
+          </span>
+        )}
         <span className="ml-2 text-fg-muted">{model.displayName}</span>
         {!model.available && (
-          <span className="ml-2 rounded-chip border border-border px-1.5 py-0.5 text-xs text-fg-muted">
+          <span
+            className="ml-2 rounded-chip border border-border px-1.5 py-0.5 text-xs text-fg-muted"
+            title={model.unavailableReason}
+          >
             unavailable
           </span>
+        )}
+        {(model.available ? model.description : model.unavailableReason) !== undefined && (
+          <p className="mt-0.5 text-xs text-fg-muted" data-testid="model-note">
+            {model.available ? model.description : model.unavailableReason}
+          </p>
         )}
       </td>
       <td className="py-2 pr-3 font-machine text-xs text-fg-muted">

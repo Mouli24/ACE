@@ -24,7 +24,9 @@ describe('Bottom panel (round 1 §5 step 3, FR-WF-006)', () => {
     expect(within(list).getAllByLabelText('error').length).toBeGreaterThan(0);
     // severity is a shape, not colour alone (WCAG 1.4.1)
     expect(within(list).getAllByLabelText('error')[0]!.tagName.toLowerCase()).toBe('svg');
-    expect(within(list).getByText('unconnected_required_input')).toBeInTheDocument();
+    // D285: an Agent with nothing upstream starts from its goal — and this one has none yet
+    expect(within(list).getByText('missing_input')).toBeInTheDocument();
+    expect(within(list).queryByText('unconnected_required_input')).toBeNull();
     // Round 2 changed this one: an agent with no model used to be a warning ("providers arrive in
     // round 2"); now that providers exist it blocks the run, so pre-flight and the panel both call
     // it an error (R2 §2.7 item 2, D50).

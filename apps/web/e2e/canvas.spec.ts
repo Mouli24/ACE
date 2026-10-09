@@ -129,8 +129,9 @@ test.describe('Canvas (FR-CAN-001..007, 010)', () => {
     const original = seeded.nodeIds[0]!;
     await openWorkflow(page, seeded);
     const panel = await configureNode(page, original);
-    await panel.getByLabel('Instructions').fill('Original instructions');
-    await panel.getByLabel('Instructions').blur();
+    // D285: an Agent's instructions are its Goal
+    await panel.getByLabel('Goal').fill('Original instructions');
+    await panel.getByLabel('Goal').blur();
     await settled(page, seeded.workflowId, 1);
     // the open sheet covers the Canvas tools at the top right
     await closeSheet(page);

@@ -1,14 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-import {
-  dragKindToCanvas,
-  freshApp,
-  nodeCard,
-  openSheet,
-  port,
-  serverGraph,
-  settled,
-} from './helpers';
+import { freshApp, nodeCard, openSheet, port, serverGraph, settled } from './helpers';
 import { inspect, startRun } from './round3';
 
 /**
@@ -138,15 +130,24 @@ test.describe('Retrieval and sources (FR-RAG-005/006/007)', () => {
      * one only, so the Retrieval node has to sit left of the Agent to receive it — the V2 dialog's
      * centre-of-view slot is right of the Agent on this Canvas.
      */
-    const inputBox = (await nodeCard(page, seeded.inputId).boundingBox())!;
-    await dragKindToCanvas(page, 'retrieval', {
-      x: inputBox.x + 10,
-      y: inputBox.y + inputBox.height + 40,
-    });
+    // D285: the dialog no longer offers a Retrieval node; a workflow made before it can hold one,
+    // so it is placed under the Input card the way such a workflow would have it.
+    const input = (await serverGraph(page, seeded.workflowId)).nodes.find(
+      (n) => n.id === seeded.inputId,
+    )!;
+    await page.evaluate(
+      ({ workflowId, position }) => window.__aceMock!.addNode(workflowId, 'retrieval', position),
+      {
+        workflowId: seeded.workflowId,
+        position: { x: input.position.x, y: input.position.y + 220 },
+      },
+    );
     await settled(page, seeded.workflowId, 4);
     const retrieval = (await serverGraph(page, seeded.workflowId)).nodes.find(
       (n) => n.kind === 'retrieval',
     )!;
+    // selected, so the sheet's Configure tab shows it
+    await nodeCard(page, retrieval.id).click();
     await expect(nodeCard(page, retrieval.id)).toBeVisible();
     await expect(page.getByTestId(`retrieval-kb-${retrieval.id}`)).toHaveText('no knowledge base');
 

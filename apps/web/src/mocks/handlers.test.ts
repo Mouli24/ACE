@@ -345,10 +345,10 @@ describe('mock engine — workflows (FR-WF-001..008)', () => {
     });
     const { issues } = await client.validateWorkflow(workflow.id);
     const codes = issues.map((i) => i.code);
-    expect(codes).toContain('unconnected_required_input');
-    expect(codes).toContain('no_input_node');
-    expect(codes).toContain('no_output_node');
-    expect(issues.find((i) => i.code === 'unconnected_required_input')).toMatchObject({
+    // D285: an Agent with nothing upstream starts from its goal — and this one has none yet.
+    expect(codes).not.toContain('unconnected_required_input');
+    expect(codes).not.toContain('no_output_node');
+    expect(issues.find((i) => i.code === 'missing_input')).toMatchObject({
       severity: 'error',
       nodeId: agent.id,
     });

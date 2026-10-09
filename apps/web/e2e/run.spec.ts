@@ -42,7 +42,7 @@ const start = (page: Page) =>
   page.getByTestId('run-bar').getByRole('button', { name: 'Start run', exact: true });
 
 test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
-  test('TC-EXE-007 + TC-EXE-008: streamed text lands on the card and the states are distinct', async ({
+  test('TC-EXE-007 + TC-EXE-008: streamed text lands in the node’s chat, and the states are distinct', async ({
     page,
   }) => {
     const seeded = await openRunnable(page, 'slow-stream');
@@ -54,8 +54,12 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
     const ring = card.getByTestId('status-chip');
     await expect(ring).toHaveAttribute('aria-label', 'running');
 
-    // The card streams under the node's id, so the locator does not depend on the run's ids.
-    const streamed = card.getByTestId(`stream-${seeded.agentId}`);
+    // D285: the card says it is running and never prints the text; the text is read in the node's
+    // chat, which streams it live.
+    await expect(card.getByTestId(`running-note-${seeded.agentId}`)).toBeVisible();
+    await expect(card.getByTestId(`stream-${seeded.agentId}`)).toHaveCount(0);
+    await page.getByTestId(`chat-mention-${seeded.agentId}`).click();
+    const streamed = page.getByTestId('chat-run-live');
     await expect(streamed).toBeVisible();
     const first = (await streamed.textContent()) ?? '';
     // TC-EXE-007: the text grows while the node is still running, not only at the end.
@@ -65,6 +69,8 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
 
     await expect(card).toHaveAttribute('data-state', 'COMPLETED', { timeout: 20_000 });
     await expect(card.getByTestId('status-chip')).toHaveAttribute('aria-label', 'completed');
+    // …and once it settles, the run's result stays in the node's session
+    await expect(page.getByTestId('chat-run-badge').first()).toBeVisible({ timeout: 10_000 });
   });
 
   test('TC-EXE-014: the edge animates when an envelope travels it', async ({ page }) => {
@@ -89,7 +95,7 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
     await expect(agentEdge).toHaveAttribute('data-transferred', 'true');
   });
 
-  test('TC-RTR-004 + FR-NODE-012: the card names the fallback model and the Output shows the result', async ({
+  test('TC-RTR-004 + D285: the card names the fallback model and the result is read in the chat', async ({
     page,
   }) => {
     const seeded = await openRunnable(page, 'fallback-used');
@@ -99,10 +105,14 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
       /used: mock-text-fallback \(fallback\)/,
       { timeout: 15_000 },
     );
-    await expect(page.getByTestId(`final-output-${seeded.outputId}`)).toBeVisible({
+    await expect(page.getByTestId('run-status')).toHaveAttribute('data-status', 'COMPLETE', {
       timeout: 15_000,
     });
-    await expect(page.getByTestId('run-status')).toHaveAttribute('data-status', 'COMPLETE');
+    // the Output card points to where its result is and never prints it (D285)…
+    await expect(page.getByTestId(`final-output-${seeded.outputId}`)).toHaveCount(0);
+    // …and the agent's chat holds the run's goal and answer
+    await page.getByTestId(`chat-mention-${seeded.agentId}`).click();
+    await expect(page.getByTestId('chat-run-badge').first()).toBeVisible({ timeout: 10_000 });
     await expect(page.getByTestId('run-totals')).toContainText('$');
   });
 

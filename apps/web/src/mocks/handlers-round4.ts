@@ -171,7 +171,7 @@ export function parseMultipartFile(bytes: Uint8Array, boundary: string): Multipa
  * refuses the input with a 422 the way a block policy would; `chat-reply-blocked` streams nothing
  * and settles with a reply the output point blocked (FR-CHAT-008).
  */
-export type ChatScenario = 'chat-stream' | 'chat-blocked' | 'chat-reply-blocked';
+export type ChatScenario = 'chat-stream' | 'chat-blocked' | 'chat-reply-blocked' | 'chat-fails';
 
 let chatScenario: ChatScenario = 'chat-stream';
 export function setChatScenario(next: ChatScenario): void {
@@ -590,6 +590,20 @@ export function createRound4Handlers(db: MockDb): HttpHandler[] {
           );
         }
 
+        // The engine resolves the node's model before it stores anything (D285): no model, a 400.
+        if (
+          found !== undefined &&
+          (found.kind === 'agent' || found.kind === 'model') &&
+          (found.config.providerId === undefined || found.config.modelId === undefined)
+        ) {
+          return error(
+            400,
+            'invalid_config',
+            'validation_failed',
+            `"${found.name}" has no provider and model chosen yet.`,
+          );
+        }
+
         // Open or reuse the thread; store the user turn, whose id the client echoes while it waits.
         const threadId = parsed.data.threadId ?? openThread(db, nodeId, parsed.data.content);
         if (parsed.data.threadId !== undefined && db.getChatThread(threadId) === undefined) {
@@ -671,6 +685,52 @@ function openThread(db: MockDb, nodeId: string, content: Part[]): string {
  * after the 202 does not miss the stream.
  */
 function streamReply(db: MockDb, threadId: string, node: Node | undefined, content: Part[]): void {
+  if (chatScenario === 'chat-fails') {
+    // The model call fails after a word or two — a signed-out CLI, say. The engine stores the
+    // failure as an agent turn carrying the error and announces it like any reply (D285).
+    const failure = {
+      kind: 'auth' as const,
+      code: 'cli_not_signed_in',
+      message: 'Claude Code is not signed in — run `claude auth login`.',
+      retryable: false,
+    };
+    const message: ChatMessage = {
+      id: newId(),
+      threadId,
+      role: 'agent',
+      content: [{ type: 'text', text: failure.message }],
+      verdicts: [],
+      at: new Date().toISOString(),
+      error: failure,
+    };
+    startPlayback(threadId, [
+      {
+        after: 40,
+        play: () => {
+          db.emit({
+            type: 'chat.token',
+            payload: { threadId, delta: 'Let me ' },
+            scope: 'thread',
+            threadId,
+            transient: true,
+          });
+        },
+      },
+      {
+        after: 25,
+        play: () => {
+          db.addChatMessage(message);
+          db.emit({
+            type: 'chat.message',
+            payload: { threadId, message },
+            scope: 'thread',
+            threadId,
+          });
+        },
+      },
+    ]);
+    return;
+  }
   if (chatScenario === 'chat-reply-blocked') {
     const reason = 'The reply contained content the output policy blocks.';
     const verdict: ChatVerdict = {

@@ -50,7 +50,7 @@ import { nodeTypes, type AceFlowNode } from '../nodes/NodeCard';
 import { edgeTypes } from '../nodes/TypedEdge';
 import {
   NODE_KIND_LABEL,
-  CANVAS_NODE_KINDS,
+  PALETTE_NODE_KINDS,
   applyNewNodeInit,
   createNode,
   type CanvasNodeKind,
@@ -1137,7 +1137,7 @@ function CanvasInner({
               <div className="px-2 py-1 text-[11px] uppercase tracking-wide text-fg-muted">
                 Add node ▸
               </div>
-              {CANVAS_NODE_KINDS.map((kind) => (
+              {PALETTE_NODE_KINDS.map((kind) => (
                 <ContextMenuItem
                   key={kind}
                   className="pl-4"

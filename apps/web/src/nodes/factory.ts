@@ -35,6 +35,14 @@ export const CANVAS_NODE_KINDS = [
 
 export type CanvasNodeKind = (typeof CANVAS_NODE_KINDS)[number];
 
+/**
+ * What can be added to a Canvas (D285): one node — an Agent, given a goal and a model. The other
+ * kinds stay in `CANVAS_NODE_KINDS` so a workflow that already has them still loads, renders, edits
+ * and runs; they are just no longer offered. A node's input and its results are read in the chat
+ * column, never on the Canvas.
+ */
+export const PALETTE_NODE_KINDS = ['agent'] as const satisfies readonly CanvasNodeKind[];
+
 export const NODE_KIND_LABEL: Record<CanvasNodeKind, string> = {
   input: 'Input',
   agent: 'Agent',

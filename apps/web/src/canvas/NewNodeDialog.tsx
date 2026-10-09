@@ -18,8 +18,8 @@ import { createPortal } from 'react-dom';
 
 import { KIND_ICON, NodeCardView } from '../nodes/NodeCard';
 import {
-  CANVAS_NODE_KINDS,
   NODE_KIND_LABEL,
+  PALETTE_NODE_KINDS,
   applyNewNodeInit,
   createNode,
   type CanvasNodeKind,
@@ -51,7 +51,7 @@ const LATER: Readonly<Record<LaterKind, { label: string; icon: LucideIcon; round
 /** One line per kind; the placeable ones keep the old palette's wording. */
 const DESCRIPTION: Readonly<Record<ListKind, string>> = {
   input: 'Text or files the run starts from',
-  agent: 'A model with instructions and typed ports',
+  agent: 'An AI model working toward the goal you give it',
   model: 'A bare model call',
   output: 'Marks the end; shows the final result',
   merge: 'Waits for all or any inputs',
@@ -66,7 +66,7 @@ const LONG: Readonly<Record<CanvasNodeKind, string>> = {
   input:
     'Where a run begins. Type the brief or drop files — they travel downstream as artifact references, never as pasted history.',
   agent:
-    'A model with instructions, typed ports and its own guardrail policy. The workhorse of any workflow.',
+    'Pick a model and give it a goal. Run the workflow and its answer appears in the chat column, where you can keep talking to it. Connect agents to hand one’s result to the next.',
   model:
     'One bare model call — no instructions, no tools. Good for a quick classify or rewrite step.',
   merge: 'Waits for all — or any — of its inputs, then hands one envelope downstream.',
@@ -77,17 +77,16 @@ const LONG: Readonly<Record<CanvasNodeKind, string>> = {
     'Searches one of the project’s knowledge bases and hands the hits downstream as JSON, labelled untrusted.',
 };
 
+/**
+ * D285: the Canvas offers one node — an Agent with a goal. The input, output, model, merge,
+ * transform and retrieval kinds are no longer added from here; workflows that have them keep them.
+ */
 const GROUPS: ReadonlyArray<{ label: string; kinds: readonly ListKind[] }> = [
-  { label: 'Start', kinds: ['input'] },
-  { label: 'Think', kinds: ['agent', 'model'] },
-  { label: 'Knowledge', kinds: ['retrieval'] },
-  { label: 'Shape', kinds: ['merge', 'transform'] },
-  { label: 'Finish', kinds: ['output'] },
-  { label: 'Coming later', kinds: ['guardrail', 'custom'] },
+  { label: 'Nodes', kinds: PALETTE_NODE_KINDS },
 ];
 
 const isPlaceable = (kind: ListKind): kind is CanvasNodeKind =>
-  (CANVAS_NODE_KINDS as readonly string[]).includes(kind);
+  (PALETTE_NODE_KINDS as readonly string[]).includes(kind);
 
 const labelOf = (kind: ListKind): string =>
   isPlaceable(kind) ? NODE_KIND_LABEL[kind] : LATER[kind].label;

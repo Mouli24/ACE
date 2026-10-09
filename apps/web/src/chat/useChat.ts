@@ -1,19 +1,28 @@
-import type { ChatMessage, ChatThread, ChatThreadDetail, ChatVerdict, Part } from '@ace/contracts';
+import type { ChatMessage, ChatThread, ChatThreadDetail, NodeState, Part } from '@ace/contracts';
 import { GuardrailBlockedDetailsSchema } from '@ace/contracts';
-import { AceApiError, ThreadEventBuffer, type ThreadView } from '@ace/sdk';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { AceApiError } from '@ace/sdk';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo, useRef } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import { api } from '../app/api';
 import { getSocket } from '../app/socket';
 import { chatKeys } from './keys';
+import { sessionOf, useChatSessions, type ChatRefusal, type NodeSession } from './session-store';
 
-/** The threads of one agent node (FR-CHAT-004). A bare array, the way §2.4 answers it (D78). */
+export type { ChatRefusal } from './session-store';
+
+/** Most recently used first; the ULID id breaks a tie, so the order never flickers. */
+const byRecency = (threads: readonly ChatThread[]): ChatThread[] =>
+  [...threads].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
+
+/** The threads of one node, most recently used first (FR-CHAT-004). A bare array, as §2.4 answers (D78). */
 export function useChatThreads(nodeId: string | undefined) {
-  return useQuery<ChatThread[]>({
+  return useQuery<ChatThread[], Error, ChatThread[]>({
     queryKey: chatKeys.threads(nodeId ?? ''),
     queryFn: () => api().listNodeChatThreads(nodeId ?? ''),
     enabled: Boolean(nodeId),
+    select: byRecency,
   });
 }
 
@@ -26,133 +35,266 @@ export function useChatThreadDetail(threadId: string | undefined) {
   });
 }
 
-/** An input the agent's guardrail policy refused (422 `guardrail_blocked`, FR-CHAT-008). */
-export interface ChatRefusal {
-  message: string;
-  verdicts: ChatVerdict[];
-}
-
-export interface ChatConversation {
-  /** Settled turns plus the user turn still echoing and any agent reply not yet re-fetched. */
-  messages: ChatMessage[];
-  /** The assistant reply streaming in right now (FR-CHAT-006); `''` when nothing streams. */
-  streamingText: string;
-  streaming: boolean;
-  /** Set when the last send was refused on the input; cleared on the next send. */
-  refusal: ChatRefusal | undefined;
-  send: (content: Part[]) => void;
-  sending: boolean;
+/**
+ * The thread a node's chat shows (D285): the one the user picked; none for a session they just
+ * started with "New chat"; otherwise the node's most recent thread — the one a run of the node
+ * writes its result into, so a run and the chat land in the same place.
+ */
+export function effectiveThreadId(
+  session: NodeSession,
+  threads: readonly ChatThread[] | undefined,
+): string | undefined {
+  if (session.fresh === true) return undefined;
+  return session.threadId ?? threads?.[0]?.id;
 }
 
 /**
- * The live conversation with one agent (FR-CHAT-004/006/008). It never reads or writes a run or a
- * node run (FR-CHAT-005): its only sources are `POST /nodes/:id/chat`, `GET /chat/threads/:id`, and
- * the thread's own `chat.token`/`chat.message` frames folded by the SDK's `ThreadEventBuffer`.
- *
- * `chat.token` is transient and builds the streaming reply; the agent's `chat.message` settles it,
- * at which point the thread detail is re-fetched so the settled list is the engine's, not ours. A
- * just-sent user turn echoes optimistically until that re-fetch carries it, and an agent reply from
- * the buffer shows in the same gap — both de-duplicated by id, so nothing appears twice.
+ * Send one message to a node, in its current session (FR-CHAT-004/006/008, D285). Every outcome is
+ * written onto that node's session — accepted (the reply is then awaited), refused by a guardrail,
+ * or failed before the engine took it — so it stays with the node whichever node is on screen.
  */
-export function useThreadConversation(
+export async function sendToNode(
+  queryClient: QueryClient,
   nodeId: string,
-  threadId: string | undefined,
-  onThreadOpened: (threadId: string) => void,
-): ChatConversation {
+  content: Part[],
+): Promise<void> {
+  const { update } = useChatSessions.getState();
+  update(nodeId, ({ error: _error, refusal: _refusal, ...session }) => ({
+    ...session,
+    sending: true,
+  }));
+
+  try {
+    const session = sessionOf(nodeId);
+    let threadId: string | undefined;
+    if (session.fresh !== true) {
+      threadId =
+        session.threadId ??
+        byRecency(
+          await queryClient.fetchQuery({
+            queryKey: chatKeys.threads(nodeId),
+            queryFn: () => api().listNodeChatThreads(nodeId),
+          }),
+        )[0]?.id;
+    }
+
+    const response = await api().postNodeChat(
+      nodeId,
+      threadId === undefined ? { content } : { threadId, content },
+    );
+    const userMessage: ChatMessage = {
+      id: response.messageId,
+      threadId: response.threadId,
+      role: 'user',
+      content,
+      verdicts: [],
+      at: new Date().toISOString(),
+    };
+    update(nodeId, ({ sending: _sending, fresh: _fresh, ...rest }) => ({
+      ...rest,
+      threadId: response.threadId,
+      pending: { threadId: response.threadId, userMessage },
+    }));
+    void queryClient.invalidateQueries({ queryKey: chatKeys.threads(nodeId) });
+  } catch (error) {
+    let refusal: ChatRefusal | undefined;
+    if (AceApiError.is(error) && error.code === 'guardrail_blocked') {
+      const parsed = GuardrailBlockedDetailsSchema.safeParse(error.details);
+      refusal = { message: error.message, verdicts: parsed.success ? parsed.data.verdicts : [] };
+    }
+    const message =
+      error instanceof Error && error.message !== ''
+        ? error.message
+        : 'The message could not be sent to the engine.';
+    update(nodeId, ({ sending: _sending, ...rest }) =>
+      refusal === undefined ? { ...rest, error: message } : { ...rest, refusal },
+    );
+  }
+}
+
+const NO_SESSION: NodeSession = {};
+
+/** A run ended for this node (or never reached it): its turns are in its chat now (D285). */
+const SETTLED: ReadonlySet<NodeState> = new Set(['COMPLETED', 'FAILED', 'BLOCKED', 'STOPPED']);
+
+/**
+ * The chat's one link to the socket (FR-CHAT-006, D285). Mounted once by the chat column, so a
+ * reply keeps arriving for a node that is not on screen: it stays subscribed to every thread a
+ * reply is still owed on, as well as the thread being read.
+ *
+ * - `chat.token` builds the streaming text of its thread;
+ * - `chat.message` ends it, settles whichever node was waiting, and re-reads the thread, so the
+ *   engine's stored turns — not a client copy — are what is shown;
+ * - a node's run ending re-reads that node's chat, which already holds the run's goal and result:
+ *   the engine writes them before it announces the state.
+ *
+ * A subscription is followed by a re-read of its thread, so a reply that settled in the moment
+ * before the subscription took is still shown.
+ */
+export function useChatSocket(activeNodeId: string | undefined): void {
   const queryClient = useQueryClient();
-  const detail = useChatThreadDetail(threadId);
-  const [refusal, setRefusal] = useState<ChatRefusal | undefined>();
-  const [pendingUser, setPendingUser] = useState<ChatMessage | undefined>();
+  const activeSession = useChatSessions((state) =>
+    activeNodeId === undefined ? undefined : state.sessions[activeNodeId],
+  );
+  const activeThreads = useChatThreads(activeNodeId);
+  const activeThreadId =
+    activeNodeId === undefined
+      ? undefined
+      : effectiveThreadId(activeSession ?? NO_SESSION, activeThreads.data);
+  const owed = useChatSessions(
+    useShallow((state) =>
+      Object.values(state.sessions).flatMap((session) =>
+        session.pending === undefined ? [] : [session.pending.threadId],
+      ),
+    ),
+  );
+  const watched = useMemo(
+    () => [...new Set([...owed, ...(activeThreadId === undefined ? [] : [activeThreadId])])].sort(),
+    [owed, activeThreadId],
+  );
+  const watchedKey = watched.join(',');
 
-  const bufferRef = useRef<ThreadEventBuffer>(new ThreadEventBuffer(threadId));
-  const [view, setView] = useState<ThreadView>(() => bufferRef.current.view);
-
-  // A fresh buffer per thread, subscribed to that thread's frames while it is open (§2.5).
   useEffect(() => {
-    const buffer = new ThreadEventBuffer(threadId);
-    bufferRef.current = buffer;
-    setView(buffer.view);
-    setRefusal(undefined);
-
     const socket = getSocket();
-    if (threadId === undefined || socket === undefined) return;
-
-    const payload = { scope: 'thread' as const, id: threadId };
-    socket.subscribe(payload);
-
-    const offToken = socket.on('chat.token', (_payload, frame) => {
-      buffer.apply(frame);
-      setView(buffer.view);
+    if (socket === undefined) return;
+    const offToken = socket.on('chat.token', (payload) => {
+      useChatSessions.getState().appendToken(payload.threadId, payload.delta);
     });
-    const offMessage = socket.on('chat.message', (_payload, frame) => {
-      buffer.apply(frame);
-      setView(buffer.view);
-      // The reply settled: let the engine's stored list become the source of truth.
-      if (frame.payload.message.role === 'agent') {
-        void queryClient.invalidateQueries({ queryKey: chatKeys.thread(threadId) });
-      }
+    const offMessage = socket.on('chat.message', (payload) => {
+      if (payload.message.role === 'agent')
+        useChatSessions.getState().settleThread(payload.threadId);
+      void queryClient.invalidateQueries({ queryKey: chatKeys.thread(payload.threadId) });
+      void queryClient.invalidateQueries({ queryKey: ['chat-threads'] });
     });
-
+    const offState = socket.on('node.state', (payload) => {
+      if (!SETTLED.has(payload.status)) return;
+      void queryClient.invalidateQueries({ queryKey: chatKeys.threads(payload.nodeId) });
+      void queryClient.invalidateQueries({ queryKey: ['chat-thread'] });
+    });
     return () => {
       offToken();
       offMessage();
-      socket.unsubscribe(payload);
+      offState();
     };
-  }, [threadId, queryClient]);
+  }, [queryClient]);
 
-  const post = useMutation({
-    mutationFn: (content: Part[]) =>
-      api().postNodeChat(nodeId, threadId === undefined ? { content } : { threadId, content }),
-    onMutate: () => setRefusal(undefined),
-    onSuccess: (response, content) => {
-      setPendingUser({
-        id: response.messageId,
-        threadId: response.threadId,
-        role: 'user',
-        content,
-        verdicts: [],
-        at: new Date().toISOString(),
-      });
-      if (response.threadId !== threadId) {
-        onThreadOpened(response.threadId);
-        void queryClient.invalidateQueries({ queryKey: chatKeys.threads(nodeId) });
-      }
+  // Subscribe and unsubscribe by difference, so a thread that stays watched is never dropped.
+  const subscribed = useRef(new Set<string>());
+  useEffect(() => {
+    const socket = getSocket();
+    if (socket === undefined) return;
+    const next = new Set(watchedKey === '' ? [] : watchedKey.split(','));
+    for (const id of next) {
+      if (subscribed.current.has(id)) continue;
+      socket.subscribe({ scope: 'thread', id });
+      void queryClient.invalidateQueries({ queryKey: chatKeys.thread(id) });
+    }
+    for (const id of subscribed.current) {
+      if (!next.has(id)) socket.unsubscribe({ scope: 'thread', id });
+    }
+    subscribed.current = next;
+  }, [watchedKey, queryClient]);
+  useEffect(
+    () => () => {
+      const socket = getSocket();
+      for (const id of subscribed.current) socket?.unsubscribe({ scope: 'thread', id });
+      subscribed.current = new Set();
     },
-    onError: (err) => {
-      if (AceApiError.is(err) && err.code === 'guardrail_blocked') {
-        const parsed = GuardrailBlockedDetailsSchema.safeParse(err.details);
-        setRefusal({ message: err.message, verdicts: parsed.success ? parsed.data.verdicts : [] });
-      }
-    },
-  });
+    [],
+  );
+}
+
+export interface ChatConversation {
+  /** The thread on screen; undefined for a session with no thread yet. */
+  threadId: string | undefined;
+  /** The node's threads, most recently used first. */
+  threads: ChatThread[];
+  /** The stored turns, plus the just-sent user turn until the engine's copy is read back. */
+  messages: ChatMessage[];
+  /** The reply streaming in right now (FR-CHAT-006); `''` when nothing streams. */
+  streamingText: string;
+  /** A sent message's reply has not landed yet. */
+  awaitingReply: boolean;
+  /** The message is on its way to the engine. */
+  sending: boolean;
+  /** Set when the last send was refused on the input; cleared on the next send. */
+  refusal: ChatRefusal | undefined;
+  /** Set when the last send failed before the engine took it; cleared on the next send. */
+  error: string | undefined;
+  send: (content: Part[]) => void;
+  selectThread: (threadId: string) => void;
+  /** Start an empty session; its first message opens a thread. */
+  newThread: () => void;
+}
+
+/**
+ * One node's conversation (FR-CHAT-004/006/008, D285). Everything about it — the thread on screen,
+ * a reply still on its way, an error — lives in the node's session, so switching nodes and back
+ * shows exactly what was there. Its sources are the chat endpoints and the thread's frames; a
+ * direct chat itself never reads or writes a run (FR-CHAT-005).
+ */
+export function useThreadConversation(nodeId: string): ChatConversation {
+  const queryClient = useQueryClient();
+  const session = useChatSessions((state) => state.sessions[nodeId]) ?? NO_SESSION;
+  const threads = useChatThreads(nodeId);
+  const threadId = effectiveThreadId(session, threads.data);
+  const detail = useChatThreadDetail(threadId);
+  const streamingText = useChatSessions((state) =>
+    threadId === undefined ? '' : (state.streams[threadId] ?? ''),
+  );
 
   const loaded = detail.data?.messages ?? [];
-  const loadedIds = new Set(loaded.map((message) => message.id));
-  const liveAgents = view.messages.filter(
-    (message) => message.role === 'agent' && !loadedIds.has(message.id),
-  );
+  const pending = session.pending?.threadId === threadId ? session.pending : undefined;
   const echo =
-    pendingUser !== undefined &&
-    pendingUser.threadId === threadId &&
-    !loadedIds.has(pendingUser.id)
-      ? [pendingUser]
+    pending !== undefined && !loaded.some((message) => message.id === pending.userMessage.id)
+      ? [pending.userMessage]
       : [];
+  // Engine ids are monotonic: an agent turn after the sent one is its reply (or its failure).
+  const replied =
+    pending !== undefined &&
+    loaded.some((message) => message.role === 'agent' && message.id > pending.userMessage.id);
 
+  // A reply read back before its frame arrived (a frame missed during a reconnect) still settles.
+  useEffect(() => {
+    if (replied && pending !== undefined) useChatSessions.getState().settleThread(pending.threadId);
+  }, [replied, pending]);
+
+  const update = useChatSessions.getState().update;
   return {
-    messages: [...loaded, ...echo, ...liveAgents],
-    streamingText: view.streamingText,
-    streaming: view.streaming,
-    refusal,
-    send: (content) => post.mutate(content),
-    sending: post.isPending,
+    threadId,
+    threads: threads.data ?? [],
+    messages: [...loaded, ...echo],
+    streamingText,
+    awaitingReply: pending !== undefined && !replied,
+    sending: session.sending === true,
+    refusal: session.refusal,
+    error: session.error,
+    send: (content) => void sendToNode(queryClient, nodeId, content),
+    selectThread: (id) =>
+      update(nodeId, ({ fresh: _fresh, error: _error, refusal: _refusal, ...rest }) => ({
+        ...rest,
+        threadId: id,
+      })),
+    newThread: () =>
+      update(nodeId, ({ threadId: _threadId, error: _error, refusal: _refusal, ...rest }) => ({
+        ...rest,
+        fresh: true,
+      })),
   };
 }
 
-/** Delete a thread; the owner clears the active selection when its own thread went (FR-CHAT-004). */
+/** Delete a thread; a node whose session was showing it falls back to its latest (FR-CHAT-004). */
 export function useDeleteThread(nodeId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (threadId: string) => api().deleteChatThread(threadId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: chatKeys.threads(nodeId) }),
+    onSuccess: (_result, threadId) => {
+      useChatSessions.getState().update(nodeId, (session) => {
+        if (session.threadId !== threadId) return session;
+        const { threadId: _gone, ...rest } = session;
+        return rest;
+      });
+      return queryClient.invalidateQueries({ queryKey: chatKeys.threads(nodeId) });
+    },
   });
 }

@@ -135,7 +135,7 @@ test.describe('Phone layout — monitoring (FR-MOB-001, TC-MOB-001)', () => {
 
   test('TC-MOB-001: chat is usable at 380 px', async ({ page }) => {
     await freshApp(page);
-    const seeded = await seedGraph(page, ['agent']);
+    const seeded = await seedGraph(page, ['agent'], { withModel: true });
     await openWorkflow(page, seeded);
     await flowNode(page, seeded.nodeIds[0]!).click();
     await page.getByRole('tab', { name: 'Chat' }).click();

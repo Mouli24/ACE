@@ -5,6 +5,8 @@ export { ChatThreadList } from './ChatThreadList';
 export { ChatComposer } from './ChatComposer';
 export { ChatVerdicts, ChatRefusalCard } from './ChatVerdicts';
 export {
+  sendToNode,
+  useChatSocket,
   useChatThreads,
   useChatThreadDetail,
   useThreadConversation,
@@ -12,3 +14,4 @@ export {
   type ChatConversation as ChatConversationState,
   type ChatRefusal,
 } from './useChat';
+export { useChatSessions } from './session-store';

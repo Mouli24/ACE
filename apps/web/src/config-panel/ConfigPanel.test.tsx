@@ -69,9 +69,12 @@ describe('Config panel (FR-NODE-002/003/007/008)', () => {
     // Round 2: with no provider on the engine the picker says where to add one (FR-NODE-003).
     expect(q.getByText(/add a provider on the providers screen/i)).toBeInTheDocument();
     expect(q.getByLabelText(/routing policy/i)).toBeInTheDocument();
-    expect(q.getByLabelText(/instructions/i)).toBeInTheDocument();
-    expect(q.getByRole('group', { name: /input types/i })).toBeInTheDocument();
-    expect(q.getByRole('group', { name: /output types/i })).toBeInTheDocument();
+    // D285: the node's objective is its Goal, and there are no typed-port pickers to wire
+    expect(q.getByLabelText(/^goal$/i)).toBeInTheDocument();
+    expect(q.queryByRole('group', { name: /input types/i })).toBeNull();
+    expect(q.queryByRole('group', { name: /output types/i })).toBeNull();
+    // the structured-output contract stays, out of the way under "advanced"
+    expect(q.getByTestId('agent-advanced-output')).toBeInTheDocument();
     // Monaco is lazily imported, so its label exists before its control does: on a cold CI
     // runner the `getBy` form raced the import and failed with "no form control was found".
     expect(await q.findByLabelText(/json schema/i)).toBeInTheDocument();
@@ -102,7 +105,7 @@ describe('Config panel (FR-NODE-002/003/007/008)', () => {
     expect(await screen.findByText(/select a node/i)).toBeInTheDocument();
   });
 
-  it('TC-NODE-002: edits are saved through graph-ops (name, instructions, types, execution, budget)', async () => {
+  it('TC-NODE-002: edits are saved through graph-ops (name, goal, execution, budget)', async () => {
     const { panel, user, workflow, node } = await openPanel('agent');
     const q = within(panel);
 
@@ -111,13 +114,9 @@ describe('Config panel (FR-NODE-002/003/007/008)', () => {
     await user.type(name, 'Writer');
     await user.tab();
 
-    const instructions = q.getByLabelText(/instructions/i);
-    await user.type(instructions, 'Write well.');
+    const goal = q.getByLabelText(/^goal$/i);
+    await user.type(goal, 'Write well.');
     await user.tab();
-
-    await user.click(
-      within(q.getByRole('group', { name: /output types/i })).getByLabelText('image'),
-    );
 
     const temperature = q.getByLabelText(/temperature/i);
     await user.clear(temperature);
@@ -138,11 +137,12 @@ describe('Config panel (FR-NODE-002/003/007/008)', () => {
       expect(saved.name).toBe('Writer');
       if (saved.kind !== 'agent') throw new Error('kind changed');
       expect(saved.config.instructions).toBe('Write well.');
-      expect(saved.config.outputTypes).toEqual(['text', 'image']);
       expect(saved.config.execution.temperature).toBe(0.3);
       expect(saved.config.contextPolicy.budgetTokens).toBe(8000);
       expect(saved.config.routing.policy).toBe('fallback');
-      expect(saved.outputs.map((p) => p.name)).toEqual(['text', 'image']);
+      // one text port each way: the goal-driven node takes text and answers in text (D285)
+      expect(saved.inputs.map((p) => p.name)).toEqual(['text']);
+      expect(saved.outputs.map((p) => p.name)).toEqual(['text']);
     });
   });
 

@@ -116,7 +116,19 @@ test.describe('Run controls (FR-CTL-001..004, FR-CTL-006)', () => {
     await runAction(page, 'resume').click();
     await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE', { timeout: 30_000 });
     await expect(nodeCard(page, editor)).toHaveAttribute('data-state', 'COMPLETED');
-    await expect(page.getByTestId(`final-output-${seeded.outputId}`)).toBeVisible();
+    // D285: the result is no longer printed on the Output card; the run itself carries it
+    const finalOutput = await page.evaluate(
+      ({ workflowId, outputId }) => {
+        const db = window.__aceMock!.db;
+        db.load();
+        const run = [...db.listRuns(workflowId)].sort((a, b) =>
+          b.startedAt.localeCompare(a.startedAt),
+        )[0];
+        return run?.finalOutput?.[outputId];
+      },
+      { workflowId: seeded.workflowId, outputId: seeded.outputId },
+    );
+    expect(finalOutput?.length).toBeGreaterThan(0);
   });
 
   test('TC-CTL-003: Stop asks first, then halts the run "stopped by you" with no failure', async ({

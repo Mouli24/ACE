@@ -153,9 +153,9 @@ describe('NodeCardView (FR-NODE-005/006/010/012)', () => {
     expect(screen.getByTestId(`node-card-${node.id}`)).toHaveAttribute('data-selected', 'true');
   });
 
-  it('Output node shows the round-1 placeholder (FR-NODE-012)', () => {
+  it('D285 an Output node says where its result is read, never shows it', () => {
     renderCard(createNode('output', WF, { x: 0, y: 0 }));
-    expect(screen.getByText('final result appears here after a run')).toBeInTheDocument();
+    expect(screen.getByText('the final result — read it in Inspect')).toBeInTheDocument();
   });
 
   it('handles are keyboard focusable and describe their port (NFR-USE-02)', () => {
@@ -248,8 +248,10 @@ describe('FR-NODE-010 / FR-EXE-009 the glowing card', () => {
   });
 
   it.each([
-    ['agent', {}, 'streamed output appears here'],
-    ['model', {}, 'streamed output appears here'],
+    ['agent', {}, 'no goal yet — Edit to give it one'],
+    ['model', {}, 'no goal yet — Edit to give it one'],
+    ['agent', { instructions: 'Write a haiku about rain.' }, 'Write a haiku about rain.'],
+    ['model', { systemPrompt: 'Classify the ticket.' }, 'Classify the ticket.'],
     ['merge', { mode: 'all' }, 'waits for every input'],
     ['merge', { mode: 'any' }, 'waits for the first input'],
     ['transform', { op: 'template' }, 'same result every time — no model'],
