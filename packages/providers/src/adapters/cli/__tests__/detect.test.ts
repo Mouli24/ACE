@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createCliDetector, detectCli, type ProbeResult } from '../detect.js';
+import { createCliDetector, detectCli, probeCommand, type ProbeResult } from '../detect.js';
 import type { ResolvedCommand } from '../resolve.js';
 
 let home: string;
@@ -170,5 +170,19 @@ describe('FR-PRV-008 the terminal scan (X1)', () => {
       'codex_cli',
       'gemini_cli',
     ]);
+  });
+
+  it('a probe answers once the CLI exits, even if something it started still holds stdout (review I5)', async () => {
+    const orphanThenPrint =
+      "require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 4000)'], { stdio: 'inherit', detached: true, cwd: require('os').tmpdir(), windowsHide: true }).unref(); console.log('1.2.3')";
+    const started = Date.now();
+    const result = await probeCommand(
+      { command: process.execPath, prefixArgs: ['-e', orphanThenPrint], path: process.execPath },
+      [],
+      10_000,
+    );
+    expect(result).toMatchObject({ code: 0 });
+    expect(result.stdout.trim()).toBe('1.2.3');
+    expect(Date.now() - started).toBeLessThan(2_500);
   });
 });

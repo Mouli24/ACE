@@ -67,7 +67,7 @@ export function cliModel(modelId: string, displayName: string): ModelInfo {
     modelId,
     displayName,
     inputTypes: ['text'],
-    outputTypes: ['text', 'json', 'code'],
+    outputTypes: ['text'],
     contextWindow: 200_000,
     supportsTools: false,
     supportsJson: false,

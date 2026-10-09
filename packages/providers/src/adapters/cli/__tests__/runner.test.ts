@@ -9,6 +9,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runCli } from '../runner.js';
 
 const FAKE = fileURLToPath(new URL('./fixtures/fake-cli.mjs', import.meta.url));
+/** Starts a detached grandchild that inherits stdout and lives 4 s, prints one line, and exits. */
+const ORPHAN_THEN_PRINT =
+  "require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 4000)'], { stdio: 'inherit', detached: true, cwd: require('os').tmpdir(), windowsHide: true }).unref(); console.log(JSON.stringify({ type: 'result' }))";
 let dir: string;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'ace-runner-'));
@@ -99,6 +102,21 @@ describe('X1 running a CLI (review focus 2–4)', () => {
     }
     expect(alive(grandchild)).toBe(false);
     expect(Date.now() - stoppedAt).toBeLessThan(2_000);
+  });
+
+  it('ends once the CLI exits, even if something it started still holds stdout (review I5)', async () => {
+    const started = Date.now();
+    const run = runCli({
+      command: process.execPath,
+      args: ['-e', ORPHAN_THEN_PRINT],
+      cwd: dir,
+      env: process.env,
+      stdin: '',
+      signal: new AbortController().signal,
+    });
+    expect(await collect(run.lines)).toEqual(['{"type":"result"}']);
+    expect((await run.exit).code).toBe(0);
+    expect(Date.now() - started).toBeLessThan(2_500);
   });
 
   it('reports a binary that does not exist instead of throwing', async () => {

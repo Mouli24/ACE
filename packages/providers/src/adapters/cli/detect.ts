@@ -13,6 +13,7 @@ import {
 } from '@ace/contracts';
 
 import { resolveCommand, type ResolvedCommand } from './resolve.js';
+import { EXIT_DRAIN_MS } from './runner.js';
 
 /**
  * The terminal scan (X1, FR-PRV-008): is each CLI on PATH, which version, is it signed in?
@@ -73,6 +74,14 @@ export function probeCommand(
     });
     child.on('error', () => resolve({ code: null, stdout, stderr }));
     child.on('close', (code) => resolve({ code, stdout, stderr }));
+    // A CLI that left something running must not hold the scan open (review I5).
+    child.on('exit', (code) => {
+      setTimeout(() => {
+        resolve({ code, stdout, stderr });
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      }, EXIT_DRAIN_MS).unref();
+    });
   });
 }
 
