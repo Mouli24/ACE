@@ -24,7 +24,9 @@ import {
   type Settings,
   type Model,
   type NodeRun,
+  type FileChange,
   type Provider,
+  type RepoStatus,
   type Run,
   type ServerFrame,
   type Workflow,
@@ -33,6 +35,7 @@ import {
 import { newId } from '../lib/ulid';
 import { catalogFor, checkOutcome } from './catalog';
 import { publishMockEvent } from './event-bus';
+import { ensureFolders, type MockFs } from './files';
 import { base64ToBytes, bytesToBase64, sha256Hex } from './sha256';
 
 /**
@@ -54,7 +57,9 @@ export interface MockEvent {
    * Which subscription delivers it: a run frame belongs to its workflow, a direct-chat frame to its
    * thread (round 4 §2.5), and `provider.status`/`mcp.status` to the engine scope.
    */
-  scope: 'workflow' | 'engine' | 'thread';
+  scope: 'workflow' | 'engine' | 'thread' | 'project';
+  /** The project a `project`-scope frame (`files.changed`) belongs to (D299). */
+  projectId?: string;
   workflowId?: string;
   /** The thread a `thread`-scope frame (`chat.token`, `chat.message`) rides (round 4 §2.5). */
   threadId?: string;
@@ -102,6 +107,11 @@ interface Snapshot {
   kbChunks: KbChunk[];
   /** Agent long-term memory, one row per (node, key) (FR-MEM-001..004). */
   memory: MemoryEntry[];
+  /* ---- IDE (D299) ---- */
+  /** Each project's folder, path → entry (Forge). */
+  projectFiles: Record<string, MockFs>;
+  /** What `GET /files/status` answers per project; `{ repo: false }` when absent. */
+  repoStatus: Record<string, RepoStatus>;
   /** Artificial delay per request, for the loading-state test (TC-CAN-009). */
   latencyMs?: number;
 }
@@ -159,6 +169,8 @@ function emptySnapshot(): Snapshot {
     kbDocuments: [],
     kbChunks: [],
     memory: [],
+    projectFiles: {},
+    repoStatus: {},
   };
 }
 
@@ -1017,6 +1029,62 @@ export class MockDb {
       ...(latencyMs === undefined ? {} : { latencyMs }),
     };
     this.save();
+  }
+
+  /* ------------------------------------------------------------ files (D299) */
+
+  /** A project's folder, created empty on first use. */
+  filesOf(projectId: string): MockFs {
+    const folders = this.state.projectFiles;
+    folders[projectId] ??= {};
+    return folders[projectId];
+  }
+
+  /** Put files in a project's folder (tests, `__aceMock.seedFiles`); parent folders appear too. */
+  seedFiles(projectId: string, files: Record<string, string>): void {
+    const fs = this.filesOf(projectId);
+    const at = new Date().toISOString();
+    for (const [path, content] of Object.entries(files)) {
+      ensureFolders(fs, path);
+      fs[path] = { kind: 'file', content, mtime: at };
+    }
+    this.save();
+  }
+
+  /** Change a file the way an agent or another editor would, and announce it like the watcher. */
+  writeFileExternally(projectId: string, path: string, content: string): void {
+    const fs = this.filesOf(projectId);
+    const existed = fs[path] !== undefined;
+    ensureFolders(fs, path);
+    fs[path] = { kind: 'file', content, mtime: new Date().toISOString() };
+    this.save();
+    this.emitFilesChanged(projectId, [{ path, kind: existed ? 'changed' : 'created' }]);
+  }
+
+  deleteFileExternally(projectId: string, path: string): void {
+    delete this.filesOf(projectId)[path];
+    this.save();
+    this.emitFilesChanged(projectId, [{ path, kind: 'deleted' }]);
+  }
+
+  repoStatusOf(projectId: string): RepoStatus {
+    return this.state.repoStatus[projectId] ?? { repo: false };
+  }
+
+  setRepoStatus(projectId: string, status: RepoStatus): void {
+    this.state.repoStatus[projectId] = status;
+    this.save();
+  }
+
+  /** The watcher's frame: transient, on the project's scope, paths only. */
+  emitFilesChanged(projectId: string, changes: FileChange[]): void {
+    this.emit({
+      type: 'files.changed',
+      payload: { projectId, changes, resync: false },
+      scope: 'project',
+      projectId,
+      transient: true,
+    });
   }
 
   /* ---------------------------------------------------------------- events */

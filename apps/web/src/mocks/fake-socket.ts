@@ -70,6 +70,7 @@ export function createFakeWebSocket(db: MockDb): FakeWebSocketClass {
     onerror: ((ev: Event) => void) | null = null;
 
     private subscriptions = new Set<string>();
+    private projects = new Set<string>();
     private engineScope = false;
     private unsubscribe: (() => void) | undefined;
 
@@ -100,11 +101,15 @@ export function createFakeWebSocket(db: MockDb): FakeWebSocketClass {
     /**
      * §2.4/round 4 §2.5: a workflow subscription delivers `workflow.updated` and every run event of
      * that workflow's runs; a thread subscription delivers that thread's `chat.token`/`chat.message`;
-     * `provider.status` and `mcp.status` are engine scope. A thread id and a workflow id both live in
-     * `subscriptions`, so the scope is what tells them apart.
+     * a project subscription delivers `files.changed` (D299); `provider.status` and `mcp.status` are
+     * engine scope. A thread id and a workflow id both live in `subscriptions`, so the scope is what
+     * tells them apart.
      */
     private wants(event: MockEvent): boolean {
       if (event.scope === 'engine') return this.engineScope;
+      if (event.scope === 'project') {
+        return event.projectId !== undefined && this.projects.has(event.projectId);
+      }
       if (event.scope === 'thread') {
         return event.threadId !== undefined && this.subscriptions.has(event.threadId);
       }
@@ -132,7 +137,10 @@ export function createFakeWebSocket(db: MockDb): FakeWebSocketClass {
           break;
         case 'unsubscribe':
           if (frame.payload.scope === 'engine') this.engineScope = false;
-          else if (frame.payload.id) this.subscriptions.delete(frame.payload.id);
+          else if (frame.payload.scope === 'project') {
+            if (frame.payload.id) this.projects.delete(frame.payload.id);
+            else this.projects.clear();
+          } else if (frame.payload.id) this.subscriptions.delete(frame.payload.id);
           break;
         case 'resume':
           db.load();
@@ -143,6 +151,7 @@ export function createFakeWebSocket(db: MockDb): FakeWebSocketClass {
 
     private addSubscription(payload: WsSubscribePayload): void {
       if (payload.scope === 'engine') this.engineScope = true;
+      else if (payload.scope === 'project') this.projects.add(payload.id);
       else this.subscriptions.add(payload.id);
     }
 

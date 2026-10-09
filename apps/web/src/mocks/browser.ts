@@ -1,4 +1,4 @@
-import { derivePorts, type GuardrailCheckType } from '@ace/contracts';
+import { derivePorts, type GuardrailCheckType, type RepoFileStatus } from '@ace/contracts';
 import { setupWorker } from 'msw/browser';
 
 import { MockDb } from './db';
@@ -13,6 +13,7 @@ import {
   setChatScenario,
   type ChatScenario,
 } from './handlers-round4';
+import { createForgeHandlers } from './handlers-forge';
 import { createRound5Handlers } from './handlers-round5';
 import { failNextIngest, setIngestPace } from './knowledge';
 import {
@@ -138,6 +139,13 @@ declare global {
         toNodeId: string,
         toPort: string,
       ): void;
+      /** Forge (D299): put files in a project's folder, as if they were on disk. */
+      seedFiles(projectId: string, files: Record<string, string>): void;
+      /** Forge: change a file the way an agent or another editor would; an open tab hears `files.changed`. */
+      writeFileExternally(projectId: string, path: string, content: string): void;
+      deleteFileExternally(projectId: string, path: string): void;
+      /** Forge: what the Explorer's git decorations read. */
+      setRepoStatus(projectId: string, files: Array<{ path: string; status: RepoFileStatus }>): void;
     };
   }
 }
@@ -178,6 +186,7 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
   const db = new MockDb({ persist: true });
   restoreScenario();
   const worker = setupWorker(
+    ...createForgeHandlers(db),
     ...createRound5Handlers(db),
     ...createRound4Handlers(db),
     ...createRound3Handlers(db),
@@ -370,6 +379,22 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
     playRound5Scenario(name, options) {
       db.load();
       return playRound5Scenario(db, name, options);
+    },
+    seedFiles(projectId, files) {
+      db.load();
+      db.seedFiles(projectId, files);
+    },
+    writeFileExternally(projectId, path, content) {
+      db.load();
+      db.writeFileExternally(projectId, path, content);
+    },
+    deleteFileExternally(projectId, path) {
+      db.load();
+      db.deleteFileExternally(projectId, path);
+    },
+    setRepoStatus(projectId, files) {
+      db.load();
+      db.setRepoStatus(projectId, { repo: true, branch: 'main', files, truncated: false });
     },
     connect(workflowId, fromNodeId, fromPort, toNodeId, toPort) {
       db.load();
