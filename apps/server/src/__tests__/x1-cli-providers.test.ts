@@ -69,6 +69,19 @@ describe('FR-PRV-008 CLI providers through the real engine (X1)', () => {
     expect(models.items.map((model) => model.modelId).sort()).toEqual(['default', 'haiku', 'opus', 'sonnet']);
   });
 
+  it.each([
+    ['claude_code', 'CONNECTED'],
+    ['codex_cli', 'UNREACHABLE'],
+    ['gemini_cli', 'UNREACHABLE'],
+  ])('adds %s with no key and the default permission; Test says %s', async (type, status) => {
+    const created = (await (
+      await api('/providers', { method: 'POST', body: JSON.stringify({ type, name: type, concurrency: 1 }) })
+    ).json()) as { id: string; cliPermission: string; keySet: boolean };
+    expect(created).toMatchObject({ cliPermission: 'edit_files', keySet: false });
+    const check = (await (await api(`/providers/${created.id}/check`, { method: 'POST' })).json()) as { status: string };
+    expect(check.status).toBe(status);
+  });
+
   it('refuses a key on a CLI provider', async () => {
     const response = await api('/providers', {
       method: 'POST',
