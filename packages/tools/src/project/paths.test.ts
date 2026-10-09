@@ -6,7 +6,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ToolError } from '../errors.js';
 import { RecordingToolLogger } from '../logging.js';
-import { assertInsideProject, assertWritable, projectRelative } from './paths.js';
+import {
+  assertInsideProject,
+  assertWritable,
+  projectRelative,
+  protectedFolderIn,
+} from './paths.js';
 
 let root: string;
 let project: string;
@@ -37,40 +42,78 @@ describe('FR-TOOL-008 paths stay inside the project folder', () => {
   });
 
   it('TC-TOOL-009 refuses a write to the parent folder, an absolute path and a home path', () => {
-    for (const candidate of ['../outside.txt', 'src/../../outside.txt', resolve(root, 'x.txt'), '~/x']) {
+    for (const candidate of [
+      '../outside.txt',
+      'src/../../outside.txt',
+      resolve(root, 'x.txt'),
+      '~/x',
+    ]) {
       expect(() => resolveIn(candidate), candidate).toThrow(ToolError);
     }
   });
 
   it('refuses when the run has no project folder', () => {
     expect(() =>
-      assertInsideProject({ projectDir: undefined, candidate: 'a', toolName: 'read_file', operation: 'read', logger: new RecordingToolLogger(), runId: 'r' }),
+      assertInsideProject({
+        projectDir: undefined,
+        candidate: 'a',
+        toolName: 'read_file',
+        operation: 'read',
+        logger: new RecordingToolLogger(),
+        runId: 'r',
+      }),
     ).toThrow(/needs a project folder/);
   });
 
   it('keeps writes out of .git and .ace', () => {
-    expect(() => assertWritable(project, join(project, '.git', 'config'), 'write_file')).toThrow(/\.git/);
-    expect(() => assertWritable(project, join(project, '.ace', 'x'), 'write_file')).toThrow(/\.ace/);
+    expect(() => assertWritable(project, join(project, '.git', 'config'), 'write_file')).toThrow(
+      /\.git/,
+    );
+    expect(() => assertWritable(project, join(project, '.ace', 'x'), 'write_file')).toThrow(
+      /\.ace/,
+    );
     expect(() => assertWritable(project, join(project, 'src', 'a.js'), 'write_file')).not.toThrow();
   });
 
   it('keeps writes out of .git and .ace however the name is spelled (review C1)', () => {
     mkdirSync(join(project, '.git'));
     for (const spelled of ['.GIT', '.Git', '.git.', '.git ', '.git::$INDEX_ALLOCATION', '.ACE']) {
-      expect(() => assertWritable(project, join(project, spelled, 'config'), 'write_file'), spelled).toThrow(
-        /may not write inside/,
-      );
+      expect(
+        () => assertWritable(project, join(project, spelled, 'config'), 'write_file'),
+        spelled,
+      ).toThrow(/may not write inside/);
     }
   });
 
   it('keeps writes out of .git through a link that points at it (review C1)', () => {
     mkdirSync(join(project, '.git'));
     symlinkSync(join(project, '.git'), join(project, 'gitlink'), 'junction');
-    expect(() => assertWritable(project, join(project, 'gitlink', 'config'), 'write_file')).toThrow(/\.git/);
+    expect(() => assertWritable(project, join(project, 'gitlink', 'config'), 'write_file')).toThrow(
+      /\.git/,
+    );
   });
 
   it('shows paths to the model relative, with forward slashes', () => {
     expect(projectRelative(project, join(project, 'src', 'a.js'))).toBe('src/a.js');
     expect(projectRelative(project, project)).toBe('.');
+  });
+});
+
+describe('D299 FR-GIT-008 protected folders at any depth', () => {
+  it.each(['sub/.git/config', 'a/b/.GIT/hooks/pre-commit', 'x/.git./HEAD', 'deep/.ace/state.json'])(
+    'refuses a write into %j',
+    (rel) => {
+      expect(() => assertWritable(project, join(project, rel), 'write_file')).toThrow(
+        /may not write inside/,
+      );
+      expect(protectedFolderIn(project, join(project, rel))).toMatch(/^\.(git|ace)$/);
+    },
+  );
+
+  it('still allows look-alikes: .github, .gitignore, my.git.txt', () => {
+    for (const rel of ['.github/workflows/ci.yml', '.gitignore', 'notes/my.git.txt']) {
+      expect(() => assertWritable(project, join(project, rel), 'write_file')).not.toThrow();
+      expect(protectedFolderIn(project, join(project, rel))).toBeUndefined();
+    }
   });
 });
