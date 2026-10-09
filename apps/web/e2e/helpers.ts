@@ -27,7 +27,7 @@ export async function freshApp(page: Page): Promise<void> {
 export async function seedGraph(
   page: Page,
   kinds: Kind[],
-  names?: { projectName?: string; workflowName?: string },
+  names?: { projectName?: string; workflowName?: string; withModel?: boolean },
 ): Promise<Seeded> {
   return page.evaluate(({ kinds, names }) => window.__aceMock!.seedGraph(kinds, names), {
     kinds,

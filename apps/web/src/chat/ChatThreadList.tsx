@@ -5,8 +5,8 @@ import { Plus, Trash2 } from 'lucide-react';
 import { useDeleteThread } from './useChat';
 
 /**
- * The thread switcher for one agent (FR-CHAT-004): start a new thread, pick an existing one, or
- * delete one. A row of pills plus "New chat" so the conversation has the room in the 340 px column
+ * The thread switcher for one node's session (FR-CHAT-004, D285): start a new thread, pick an
+ * earlier one, or delete one. A row of pills plus "New chat" so the conversation has the room in the 340 px column
  * (NFR-USE-03).
  */
 export function ChatThreadList({
@@ -15,14 +15,13 @@ export function ChatThreadList({
   activeThreadId,
   onSelect,
   onNew,
-  onDeleted,
 }: {
   nodeId: string;
+  /** Most recently used first. */
   threads: ChatThread[];
   activeThreadId: string | undefined;
   onSelect: (threadId: string) => void;
   onNew: () => void;
-  onDeleted: (threadId: string) => void;
 }) {
   const del = useDeleteThread(nodeId);
 
@@ -67,9 +66,8 @@ export function ChatThreadList({
                   type="button"
                   aria-label={`Delete chat ${thread.title || 'New chat'}`}
                   data-testid={`chat-delete-${thread.id}`}
-                  onClick={() =>
-                    del.mutate(thread.id, { onSuccess: () => onDeleted(thread.id) })
-                  }
+                  // a session showing it falls back to the node's latest thread (useDeleteThread)
+                  onClick={() => del.mutate(thread.id)}
                   className="text-fg-muted hover:text-danger"
                 >
                   <Trash2 className="h-3 w-3" aria-hidden />

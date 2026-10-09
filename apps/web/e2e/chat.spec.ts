@@ -15,7 +15,8 @@ import { freshApp, openWorkflow, seedGraph } from './helpers';
 
 /** Open a workflow with one agent node and return its @mention chip in the Chat column. */
 async function openAgentChat(page: Page): Promise<Locator> {
-  const seeded = await seedGraph(page, ['agent']);
+  // D287: a node chats with the model it has chosen — one with none is refused up front
+  const seeded = await seedGraph(page, ['agent'], { withModel: true });
   await openWorkflow(page, seeded);
   await expect(page.getByTestId('chat-aside')).toBeVisible();
   return page.getByTestId(`chat-mention-${seeded.nodeIds[0]!}`);

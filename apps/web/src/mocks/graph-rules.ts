@@ -181,15 +181,35 @@ export function applyOpsWithRules(
 export function validateGraph(nodes: readonly Node[], edges: readonly Edge[]): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
-  if (!nodes.some((n) => n.kind === 'input')) {
-    issues.push(issue('no_input_node', 'The workflow has no Input node.'));
-  }
-  if (!nodes.some((n) => n.kind === 'output')) {
-    issues.push(issue('no_output_node', 'The workflow has no Output node.'));
+  // D285, as the engine has it: a goal-driven node (Agent or Model) with nothing upstream starts
+  // the run from its own goal, and no Output node is needed for the run to finish.
+  const fed = new Set(edges.filter((e) => e.kind === 'data').map((e) => e.to.nodeId));
+  const goalOf = (node: Node): string | undefined =>
+    node.kind === 'agent'
+      ? node.config.instructions.trim()
+      : node.kind === 'model'
+        ? (node.config.systemPrompt ?? '').trim()
+        : undefined;
+  const startsFromGoal = (node: Node): boolean => goalOf(node) !== undefined && !fed.has(node.id);
+
+  if (!nodes.some((n) => n.kind === 'input' || startsFromGoal(n))) {
+    issues.push(
+      issue(
+        'no_input_node',
+        'This workflow has nothing to start from yet — add an Agent node and give it a goal.',
+      ),
+    );
   }
 
   for (const node of nodes) {
-    if (node.kind === 'agent' || node.kind === 'model' || node.kind === 'transform') {
+    if (startsFromGoal(node) && goalOf(node) === '') {
+      issues.push(
+        issue('missing_input', `"${node.name}" has no goal yet — say what it should achieve.`, {
+          nodeId: node.id,
+        }),
+      );
+    }
+    if (node.kind === 'transform') {
       for (const port of node.inputs) {
         if (!edges.some((e) => e.to.portId === port.id)) {
           issues.push(

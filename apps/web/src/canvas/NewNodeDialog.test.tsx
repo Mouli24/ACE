@@ -100,59 +100,49 @@ describe('NewNodeDialog (FR-CAN-002, FR-NODE-001)', () => {
     });
   });
 
-  it('double-click adds; Coming later kinds are disabled', async () => {
+  it('D285: offers one node — an Agent with a goal — and a double-click adds it', async () => {
     const onAdd = vi.fn();
     const onClose = vi.fn();
     renderDialog({ onAdd, onClose });
-    await user.dblClick(screen.getByTestId('palette-merge'));
-    expect(onAdd).toHaveBeenCalledTimes(1);
-    expect(onAdd).toHaveBeenCalledWith('merge', {});
-    // adding is the dialog's last act
-    expect(onClose).toHaveBeenCalled();
-
-    for (const kind of ['guardrail', 'custom']) {
-      const item = screen.getByTestId(`palette-${kind}`);
-      expect(item).toBeDisabled();
-      expect(item).toHaveTextContent('Round 6+');
+    expect(visibleKinds()).toEqual(['agent']);
+    for (const gone of [
+      'input',
+      'output',
+      'model',
+      'merge',
+      'transform',
+      'retrieval',
+      'guardrail',
+      'custom',
+    ]) {
+      expect(screen.queryByTestId(`palette-${gone}`)).toBeNull();
     }
-    expect(screen.getByRole('group', { name: 'Coming later' })).toBeInTheDocument();
     // the old left palette's label, kept so suites can scope to the list
     expect(screen.getByRole('group', { name: 'Node palette' })).toContainElement(
-      screen.getByTestId('palette-custom'),
+      screen.getByTestId('palette-agent'),
     );
-    // every placeable kind is offered, Retrieval included (FR-RAG-006)
-    for (const kind of ['input', 'agent', 'model', 'retrieval', 'merge', 'transform', 'output']) {
-      const item = screen.getByTestId(`palette-${kind}`);
-      expect(item).toBeEnabled();
-      expect(item).toHaveAttribute('draggable', 'true');
-    }
+    expect(screen.getByTestId('palette-agent')).toHaveAttribute('draggable', 'true');
     expect(screen.getByTestId('palette-agent')).toHaveAttribute(
       'title',
       'Add Agent node (double-click, Enter, or drag onto the Canvas)',
     );
+    expect(screen.getByTestId('palette-agent')).toHaveTextContent(
+      'An AI model working toward the goal you give it',
+    );
+
+    await user.dblClick(screen.getByTestId('palette-agent'));
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    expect(onAdd).toHaveBeenCalledWith('agent', { providerId: 'p-anthropic', modelId: 'claude-x' });
+    // adding is the dialog's last act
+    expect(onClose).toHaveBeenCalled();
   });
 
-  // Carried over from the deleted left Palette's tests: the one-line descriptions and the
-  // keyboard-only add from a focused item.
-  it('FR-NODE-001 each kind keeps the old palette’s one-line description; Enter on a focused item adds it', async () => {
+  it('FR-NODE-001 Enter on the focused item adds it', async () => {
     const onAdd = vi.fn();
     renderDialog({ onAdd });
-    const lines: Record<string, string> = {
-      input: 'Text or files the run starts from',
-      agent: 'A model with instructions and typed ports',
-      model: 'A bare model call',
-      output: 'Marks the end; shows the final result',
-      merge: 'Waits for all or any inputs',
-      transform: 'Template, extract JSON field, join',
-      retrieval: 'Searches a knowledge base; hits out as JSON',
-    };
-    for (const [kind, line] of Object.entries(lines)) {
-      expect(screen.getByTestId(`palette-${kind}`)).toHaveTextContent(line);
-    }
-
-    screen.getByTestId('palette-transform').focus();
+    screen.getByTestId('palette-agent').focus();
     await user.keyboard('{Enter}');
-    expect(onAdd).toHaveBeenCalledWith('transform', {});
+    expect(onAdd).toHaveBeenCalledWith('agent', { providerId: 'p-anthropic', modelId: 'claude-x' });
   });
 
   it('§8.1 zoom 200 %: the preview and details scroll inside their column, never over the Add button', () => {
@@ -165,48 +155,19 @@ describe('NewNodeDialog (FR-CAN-002, FR-NODE-001)', () => {
     expect(column).not.toContainElement(screen.getByTestId('new-node-add'));
   });
 
-  it('the preview is a picture: static port dots, no React Flow handles', async () => {
+  it('the preview is a picture: static port dots, no React Flow handles', () => {
     renderDialog({});
-    await user.click(screen.getByTestId('palette-merge'));
-    const card = document.querySelector('[data-kind="merge"][data-testid^="node-card-"]');
+    const card = document.querySelector('[data-kind="agent"][data-testid^="node-card-"]');
     expect(card).not.toBeNull();
     expect(card?.querySelector('.react-flow__handle')).toBeNull();
     expect(card?.querySelectorAll('[data-testid^="port-dot-"]').length).toBeGreaterThan(0);
   });
 
-  it('arrow keys move the choice and search filters', async () => {
+  it('search filters by name and description, and says when nothing matches', async () => {
     renderDialog({});
-    // ↓ from Input → Agent, and focus follows the choice in the list
-    await user.click(screen.getByTestId('palette-input'));
-    expect(screen.getByTestId('palette-input')).toHaveAttribute('aria-pressed', 'true');
-    await user.keyboard('{ArrowDown}');
-    expect(screen.getByTestId('palette-agent')).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('palette-input')).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getByTestId('palette-agent')).toHaveFocus();
-    await user.keyboard('{ArrowUp}');
-    expect(screen.getByTestId('palette-input')).toHaveAttribute('aria-pressed', 'true');
-    // ↑ from the first enabled kind wraps to the last (Output)
-    await user.keyboard('{ArrowUp}');
-    expect(screen.getByTestId('palette-output')).toHaveAttribute('aria-pressed', 'true');
-
-    // from the search box the choice moves but the caret stays put
     const search = screen.getByRole('searchbox', { name: 'Search node types' });
-    await user.click(search);
-    await user.keyboard('{ArrowDown}');
-    expect(screen.getByTestId('palette-input')).toHaveAttribute('aria-pressed', 'true');
-    expect(search).toHaveFocus();
-
-    // filtering hides the chosen kind, so the choice moves to the first one left
-    await user.type(search, 'merge');
-    expect(visibleKinds()).toEqual(['merge']);
-    expect(screen.getByTestId('palette-merge')).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('new-node-add')).toHaveTextContent('Add merge to canvas');
-
-    // descriptions match too
-    await user.clear(search);
-    await user.type(search, 'knowledge');
-    expect(visibleKinds()).toEqual(['retrieval']);
-
+    await user.type(search, 'goal');
+    expect(visibleKinds()).toEqual(['agent']);
     await user.clear(search);
     await user.type(search, 'zzz');
     expect(visibleKinds()).toEqual([]);
@@ -234,21 +195,10 @@ describe('NewNodeDialog (FR-CAN-002, FR-NODE-001)', () => {
     expect(cta()).toBeEnabled();
     expect(cta()).toHaveTextContent('Add agent to canvas');
 
-    // a match among the Coming later kinds only is still nothing to add
-    await user.type(search, 'guardrail');
-    expect(visibleKinds()).toEqual(['guardrail']);
-    expect(cta()).toBeDisabled();
-    await user.keyboard('{Enter}');
-    expect(onAdd).not.toHaveBeenCalled();
-
-    // matching again makes the first visible kind the choice, and Enter adds it
-    await user.clear(search);
-    await user.type(search, 'transform');
-    expect(cta()).toBeEnabled();
-    expect(cta()).toHaveTextContent('Add transform to canvas');
+    // Enter on the choice that is visible again adds it
     await user.keyboard('{Enter}');
     expect(onAdd).toHaveBeenCalledTimes(1);
-    expect(onAdd).toHaveBeenCalledWith('transform', {});
+    expect(onAdd).toHaveBeenCalledWith('agent', { providerId: 'p-anthropic', modelId: 'claude-x' });
   });
 
   it('Escape and the overlay close it', async () => {
@@ -289,16 +239,19 @@ describe('NewNodeDialog (FR-CAN-002, FR-NODE-001)', () => {
     renderDialog({ onClose });
     const data = new Map<string, string>();
     const dataTransfer = { setData: (k: string, v: string) => data.set(k, v), effectAllowed: '' };
-    fireEvent.dragStart(screen.getByTestId('palette-merge'), { dataTransfer });
-    expect(data.get(PALETTE_DRAG_TYPE)).toBe('merge');
-    expect(JSON.parse(data.get(PALETTE_INIT_TYPE) ?? 'null')).toEqual({});
+    fireEvent.dragStart(screen.getByTestId('palette-agent'), { dataTransfer });
+    expect(data.get(PALETTE_DRAG_TYPE)).toBe('agent');
+    expect(JSON.parse(data.get(PALETTE_INIT_TYPE) ?? 'null')).toEqual({
+      providerId: 'p-anthropic',
+      modelId: 'claude-x',
+    });
     expect(dataTransfer.effectAllowed).toBe('move');
     expect(screen.getByRole('dialog', { hidden: true }).className).toMatch(/pointer-events-none/);
     expect(screen.getByTestId('new-node-overlay').className).toMatch(/pointer-events-none/);
     expect(screen.getByTestId('new-node-overlay').className).toMatch(/opacity-0/);
     expect(onClose).not.toHaveBeenCalled();
 
-    fireEvent.dragEnd(screen.getByTestId('palette-merge'), { dataTransfer });
+    fireEvent.dragEnd(screen.getByTestId('palette-agent'), { dataTransfer });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -320,7 +273,7 @@ describe('NewNodeDialog (FR-CAN-002, FR-NODE-001)', () => {
   it('provider grid: first CONNECTED provider by default, its models, and a switch', async () => {
     const onAdd = vi.fn();
     renderDialog({ onAdd });
-    await user.click(screen.getByTestId('palette-model'));
+    await user.click(screen.getByTestId('palette-agent'));
 
     const providers = screen.getByRole('group', { name: 'Provider' });
     const anthropic = screen.getByRole('button', { name: /^Anthropic/ });
@@ -350,32 +303,22 @@ describe('NewNodeDialog (FR-CAN-002, FR-NODE-001)', () => {
     expect(screen.getByRole('button', { name: 'gpt-x' })).toHaveAttribute('aria-pressed', 'true');
 
     await user.click(screen.getByTestId('new-node-add'));
-    expect(onAdd).toHaveBeenCalledWith('model', { providerId: 'p-openai', modelId: 'gpt-x' });
+    expect(onAdd).toHaveBeenCalledWith('agent', { providerId: 'p-openai', modelId: 'gpt-x' });
   });
 
-  it('shows the would-be node: preview card, long description, ports; no provider for Merge', async () => {
+  it('shows the would-be node: preview card, what it does, ports', async () => {
     renderDialog({});
     expect(screen.getByText('Add to · Launch post')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'New node' })).toBeInTheDocument();
-
-    await user.click(screen.getByTestId('palette-merge'));
-    expect(screen.getByText(/Waits for all — or any — of its inputs/)).toBeInTheDocument();
-    expect(screen.getByLabelText('Name')).toHaveAttribute('placeholder', 'Merge');
-    expect(screen.queryByRole('group', { name: 'Provider' })).not.toBeInTheDocument();
+    expect(screen.getByText(/give it a goal/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('Name')).toHaveAttribute('placeholder', 'Agent');
+    expect(screen.getByRole('group', { name: 'Provider' })).toBeInTheDocument();
     const ports = screen.getByRole('group', { name: 'Ports' });
-    expect(ports).toHaveTextContent('← in');
-    expect(ports).toHaveTextContent('→ out');
-    expect(document.querySelector('[data-kind="merge"][data-testid^="node-card-"]')).not.toBeNull();
+    expect(ports).toHaveTextContent('← text');
+    expect(ports).toHaveTextContent('→ text');
 
-    await user.type(screen.getByLabelText('Name'), 'Join');
-    expect(document.querySelector('[data-testid^="node-card-"]')).toHaveTextContent('Join');
-
-    await user.click(screen.getByTestId('palette-retrieval'));
-    expect(
-      screen.getByText(
-        'Searches one of the project’s knowledge bases and hands the hits downstream as JSON, labelled untrusted.',
-      ),
-    ).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Name'), 'Poet');
+    expect(document.querySelector('[data-testid^="node-card-"]')).toHaveTextContent('Poet');
   });
 
   it('focus: the search box on open, Tab stays inside, back to the opener on close', async () => {

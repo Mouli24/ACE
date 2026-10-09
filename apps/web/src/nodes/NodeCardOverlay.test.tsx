@@ -1,7 +1,7 @@
 import { NODE_STATES, type NodeState } from '@ace/contracts';
 import { ReactFlowProvider } from '@xyflow/react';
 import { render, screen } from '@testing-library/react';
-import { act, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 import { createNode } from './factory';
 import { NodeCardView } from './NodeCard';
@@ -106,15 +106,26 @@ describe('TC-RTR-004 the card says which model answered', () => {
   });
 });
 
-describe('FR-NODE-012 the Output node shows the run’s final output', () => {
-  it('replaces the placeholder once the run produced something', () => {
+describe('D285 a card never shows a run’s output — that is read in the chat', () => {
+  it('an Output node points to where its result is, and never prints it', () => {
     const node = output();
-    const { unmount } = view({ node });
-    expect(screen.getByText(/final result appears here after a run/i)).toBeInTheDocument();
+    view({ node, state: 'COMPLETED' });
+    expect(screen.getByText(/read it in Inspect/i)).toBeInTheDocument();
+    expect(screen.queryByTestId(`final-output-${node.id}`)).toBeNull();
+  });
+
+  it('an Agent shows its goal, or asks for one', () => {
+    const blank = agent();
+    const { unmount } = view({ node: blank });
+    expect(screen.getByText(/no goal yet/i)).toBeInTheDocument();
     unmount();
 
-    view({ node, state: 'COMPLETED', finalOutput: [{ type: 'text', text: 'the answer' }] });
-    expect(screen.getByTestId(`final-output-${node.id}`)).toHaveTextContent('the answer');
+    const base = agent();
+    const goal = { ...base, config: { ...base.config, instructions: 'Write a haiku about rain.' } };
+    view({ node: goal as typeof base });
+    expect(screen.getByTestId(`node-goal-${goal.id}`)).toHaveTextContent(
+      'Write a haiku about rain.',
+    );
   });
 });
 
@@ -126,74 +137,17 @@ describe('FR-PRV-005 a node whose provider is gone says so', () => {
   });
 });
 
-describe('TC-EXE-007 streamed text appears on the card as it arrives', () => {
-  it('grows with each delta', () => {
-    const node = agent();
-    const { rerender } = render(
-      inFlow(
-        <NodeCardView
-          node={node}
-          state="RUNNING"
-          selected={false}
-          connectedPortIds={new Set()}
-          streamedText="The "
-        />,
-      ),
+describe('D285 a running node says so, and its stream goes to the chat, not the card', () => {
+  it('shows "running — answer in Chat" while it runs, beside its goal', () => {
+    const base = agent();
+    const node = {
+      ...base,
+      config: { ...base.config, instructions: 'Write a haiku.' },
+    } as typeof base;
+    view({ node, state: 'RUNNING' });
+    expect(screen.getByTestId(`running-note-${node.id}`)).toHaveTextContent(
+      'running — answer in Chat',
     );
-    expect(screen.getByText(/^The$/)).toBeInTheDocument();
-
-    rerender(
-      inFlow(
-        <NodeCardView
-          node={node}
-          state="RUNNING"
-          selected={false}
-          connectedPortIds={new Set()}
-          streamedText="The quick brown"
-        />,
-      ),
-    );
-    expect(screen.getByText('The quick brown')).toBeInTheDocument();
-  });
-
-  /**
-   * TC-NFR-003 / NFR-PERF-04: the text must be on screen within 200 ms of the frame arriving. The
-   * render is synchronous inside `act`, so what this measures is the component's own cost — if a
-   * future change made streaming async or throttled, this is the test that would catch it.
-   */
-  it('paints a delta within 200 ms of receiving it', () => {
-    const node = agent();
-    const { rerender } = render(
-      inFlow(
-        <NodeCardView
-          node={node}
-          state="RUNNING"
-          selected={false}
-          connectedPortIds={new Set()}
-          streamedText=""
-        />,
-      ),
-    );
-
-    const started = performance.now();
-    act(() => {
-      rerender(
-        inFlow(
-          <NodeCardView
-            node={node}
-            state="RUNNING"
-            selected={false}
-            connectedPortIds={new Set()}
-            streamedText="a delta that must be visible"
-          />,
-        ),
-      );
-    });
-    const painted = performance.now() - started;
-
-    expect(screen.getByText('a delta that must be visible')).toBeInTheDocument();
-    expect(painted).toBeLessThan(200);
-    // the round file asks for the measurement to appear in the output
-    console.info(`TC-NFR-003 paint latency: ${painted.toFixed(1)} ms`);
+    expect(screen.getByTestId(`node-goal-${node.id}`)).toHaveTextContent('Write a haiku.');
   });
 });

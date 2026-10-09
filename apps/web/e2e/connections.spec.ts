@@ -2,8 +2,6 @@ import { expect, test } from '@playwright/test';
 
 import {
   clearOfMinimap,
-  closeSheet,
-  configureNode,
   connect,
   dragConnect,
   freshApp,
@@ -41,15 +39,16 @@ test.describe('Connections (FR-CON-001..006)', () => {
   }) => {
     const seeded = await seedGraph(page, ['input', 'agent']);
     const [inp, agent] = seeded.nodeIds as [string, string];
+    // D285: the config panel no longer offers typed ports, but a workflow made before it can still
+    // hold an image-only agent, and the Canvas must still refuse the wrong connection to it.
+    await page.evaluate(
+      ({ workflowId, nodeId }) =>
+        window.__aceMock!.patchNodeConfig(workflowId, nodeId, { inputTypes: ['image'] }),
+      { workflowId: seeded.workflowId, nodeId: agent },
+    );
     await openWorkflow(page, seeded);
-    const panel = await configureNode(page, agent);
-    const inputTypes = panel.getByRole('group', { name: 'Input types' });
-    await inputTypes.getByLabel('image').click();
-    await inputTypes.getByLabel('text').click();
     await expect(port(page, agent, 'in', 'image')).toBeVisible();
     await expect(port(page, agent, 'in', 'text')).toHaveCount(0);
-    // the open sheet covers the right of the Canvas, where the ports may sit
-    await closeSheet(page);
     await dragConnect(page, port(page, inp, 'out', 'text'), port(page, agent, 'in', 'image'));
     await expect(page.getByText('Connection refused').first()).toBeVisible();
     await expect(

@@ -134,17 +134,18 @@ test.describe('Workflows (FR-WF-001..005)', () => {
     await openWorkflow(page, seeded);
     const other = await context.newPage();
     await openWorkflow(other, seeded);
-    await addFromDialog(other, 'output');
+    // D285: the dialog offers one node, an Agent
+    await addFromDialog(other, 'agent');
     await settled(other, seeded.workflowId, 2);
     await expect(page.locator('.react-flow__node')).toHaveCount(2);
     // now this tab edits on top of the version the other tab produced: no 409, no lost node
-    await addFromDialog(page, 'merge');
+    await addFromDialog(page, 'agent');
     await settled(page, seeded.workflowId, 3);
     await expect(other.locator('.react-flow__node')).toHaveCount(3);
     expect((await serverGraph(page, seeded.workflowId)).nodes.map((n) => n.kind).sort()).toEqual([
+      'agent',
+      'agent',
       'input',
-      'merge',
-      'output',
     ]);
     await other.close();
   });

@@ -107,6 +107,17 @@ export function AgentPanel({
         outputTypes={config.outputTypes}
         onChange={patch}
       />
+      {/*
+       * D285: the node's objective. It is what a run of the node is asked to achieve and the
+       * standing instruction of every chat with it; its answers are read in the Chat column.
+       */}
+      <TextAreaField
+        label="Goal"
+        value={config.instructions}
+        onCommit={(instructions) => patch({ instructions })}
+        rows={6}
+        placeholder="What should this model achieve? e.g. Write a launch tweet for the product brief."
+      />
       <SelectField
         label="Routing policy"
         value={config.routing.policy}
@@ -119,50 +130,47 @@ export function AgentPanel({
         fallbackModelIds={config.routing.fallbackModelIds}
         onChange={(fallbackModelIds) => patch({ routing: { ...config.routing, fallbackModelIds } })}
       />
-      <TextAreaField
-        label="Instructions"
-        value={config.instructions}
-        onCommit={(instructions) => patch({ instructions })}
-        rows={8}
-        placeholder="What this agent does, how it should answer…"
-      />
-      <DataTypeGroup
-        label="Input types"
-        value={config.inputTypes}
-        onChange={(inputTypes) => patch({ inputTypes })}
-      />
-      <DataTypeGroup
-        label="Output types"
-        value={config.outputTypes}
-        onChange={(outputTypes) => patch({ outputTypes })}
-      />
-      <JsonSchemaEditor
-        value={config.outputContract?.jsonSchema}
-        onCommit={(jsonSchema) => patch({ outputContract: jsonSchema ? { jsonSchema } : {} })}
-      />
       {/*
-       * The contract a Review→Fix loop needs, in one press (§5 item 8): score, verdict and issues,
-       * exactly as the contract defines them — so the loop's exit condition can read `verdict` and
-       * the output is checked like any other (FR-PAR-004, FR-PAR-007).
+       * D285: no input/output type pickers — a node takes text and answers in text, so there are
+       * no JSON, video or other typed ports to wire. A structured-output contract stays available
+       * for the review loop, out of the way.
        */}
-      <Button
-        variant="secondary"
-        size="sm"
-        data-testid="use-review-contract"
-        disabled={usesReviewContract}
-        title={
-          usesReviewContract
-            ? 'This agent already outputs the standard review contract.'
-            : 'Fill the output contract with score, verdict and issues.'
-        }
-        onClick={() =>
-          patch({
-            outputContract: { jsonSchema: JSON.parse(reviewContract) as Record<string, unknown> },
-          })
-        }
-      >
-        Use standard review contract
-      </Button>
+      <details className="flex flex-col gap-3" data-testid="agent-advanced-output">
+        <summary className="cursor-pointer font-machine text-[10px] uppercase tracking-wider text-fg-muted">
+          Structured output (advanced)
+        </summary>
+        <div className="mt-3 flex flex-col gap-3">
+          <JsonSchemaEditor
+            value={config.outputContract?.jsonSchema}
+            onCommit={(jsonSchema) => patch({ outputContract: jsonSchema ? { jsonSchema } : {} })}
+          />
+          {/*
+           * The contract a Review→Fix loop needs, in one press (§5 item 8): score, verdict and
+           * issues, exactly as the contract defines them — so the loop's exit condition can read
+           * `verdict` and the output is checked like any other (FR-PAR-004, FR-PAR-007).
+           */}
+          <Button
+            variant="secondary"
+            size="sm"
+            data-testid="use-review-contract"
+            disabled={usesReviewContract}
+            title={
+              usesReviewContract
+                ? 'This agent already outputs the standard review contract.'
+                : 'Fill the output contract with score, verdict and issues.'
+            }
+            onClick={() =>
+              patch({
+                outputContract: {
+                  jsonSchema: JSON.parse(reviewContract) as Record<string, unknown>,
+                },
+              })
+            }
+          >
+            Use standard review contract
+          </Button>
+        </div>
+      </details>
       <ExecutionFields
         execution={config.execution}
         onChange={(execution) => patch({ execution })}

@@ -1,4 +1,4 @@
-import type { Node } from '@ace/contracts';
+import type { DataType, Node } from '@ace/contracts';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, type RenderResult } from '@testing-library/react';
 import { setupServer } from 'msw/node';
@@ -13,8 +13,10 @@ import { createHandlers } from '../mocks/handlers';
 import { createRound2Handlers, stopScenario } from '../mocks/handlers-round2';
 import { createRound3Handlers } from '../mocks/handlers-round3';
 import { createRound4Handlers, setChatScenario } from '../mocks/handlers-round4';
+import { usePanelsStore } from '../app/stores/panels';
 import { createNode } from '../nodes/factory';
 import { resetGraphSyncRegistry } from '../workflows/sync-registry';
+import { useChatSessions } from './session-store';
 
 /**
  * A self-contained mock engine for the chat panel's component tests. The shared `test/app.tsx`
@@ -44,6 +46,9 @@ export function installChatMockServer(): void {
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     resetGraphSyncRegistry();
     useSelectionStore.getState().clear();
+    // Sessions outlive components on purpose (D285); between tests they must not.
+    useChatSessions.getState().reset();
+    usePanelsStore.getState().chatWith(undefined);
     startSocket({
       token: 'mock',
       queryClient,
@@ -58,28 +63,41 @@ export function installChatMockServer(): void {
   afterAll(() => server.close());
 }
 
-/** Seed a project + workflow with one agent node (mock-chat behaviour) and focus it. */
-export function seedAgentNode(options: { instructions?: string; name?: string } = {}): {
+/**
+ * Seed a project + workflow with one agent node on the mock provider's `mock-chat` model and focus
+ * it. `withModel: false` leaves the model unchosen, which the engine refuses up front (D285).
+ */
+export function seedAgentNode(
+  options: {
+    instructions?: string;
+    name?: string;
+    withModel?: boolean;
+    workflowId?: string;
+    /** `['text', 'image']` by default, for the attachment tests; a run needs what the model reads. */
+    inputTypes?: DataType[];
+  } = {},
+): {
   workflowId: string;
   node: Node;
 } {
-  const project = db.createProject({ name: 'P' });
-  const workflow = db.createWorkflow(project.id, 'F');
-  db.createProvider({ type: 'mock', name: 'Mock' });
-  const base = createNode('agent', workflow.id, { x: 0, y: 0 });
-  // mock-chat replies regardless of the model row; instructions drive the French variant (§2.6).
+  const workflowId =
+    options.workflowId ?? db.createWorkflow(db.createProject({ name: 'P' }).id, 'F').id;
+  const provider = db.listProviders()[0] ?? db.createProvider({ type: 'mock', name: 'Mock' });
+  const base = createNode('agent', workflowId, { x: 0, y: 0 });
+  // instructions drive the French variant of mock-chat (§2.6).
   const node = {
     ...base,
     name: options.name ?? 'Writer',
     config: {
       ...base.config,
+      ...(options.withModel === false ? {} : { providerId: provider.id, modelId: 'mock-chat' }),
       instructions: options.instructions ?? '',
-      inputTypes: ['text', 'image'],
+      inputTypes: options.inputTypes ?? ['text', 'image'],
     },
   } as Node;
-  db.commitGraph(workflow.id, [node], []);
+  db.commitGraph(workflowId, [...db.nodesOf(workflowId), node], db.edgesOf(workflowId));
   useSelectionStore.getState().setSelection([node.id], []);
-  return { workflowId: workflow.id, node };
+  return { workflowId, node };
 }
 
 export function renderChat(ui: ReactElement): RenderResult {

@@ -1,4 +1,4 @@
-import { type GuardrailCheckType } from '@ace/contracts';
+import { derivePorts, type GuardrailCheckType } from '@ace/contracts';
 import { setupWorker } from 'msw/browser';
 
 import { MockDb } from './db';
@@ -56,8 +56,20 @@ declare global {
       /** Create a project + workflow with one node per kind, laid out left to right. */
       seedGraph(
         kinds: CanvasNodeKind[],
-        options?: { projectName?: string; workflowName?: string },
+        options?: {
+          projectName?: string;
+          workflowName?: string;
+          /** Put Agent/Model nodes on the mock provider's `mock-chat`, so they can chat (D287). */
+          withModel?: boolean;
+        },
       ): { projectId: string; workflowId: string; nodeIds: string[] };
+      /**
+       * Place one node of any kind — including the ones the New node dialog no longer offers (D285)
+       * — the way a workflow made before then holds it. Announced, so an open Canvas refetches.
+       */
+      addNode(workflowId: string, kind: CanvasNodeKind, position: { x: number; y: number }): string;
+      /** Patch one node's config and re-derive its ports — a legacy shape the UI cannot make (D285). */
+      patchNodeConfig(workflowId: string, nodeId: string, patch: Record<string, unknown>): void;
       /**
        * A workflow a run can actually execute (round 2): Input → Agent → Output with the mock
        * provider chosen, so an e2e test can press Start without walking the config panel first.
@@ -234,11 +246,36 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
       db.load();
       const project = db.createProject({ name: options.projectName ?? 'E2E' });
       const workflow = db.createWorkflow(project.id, options.workflowName ?? 'Flow');
-      const nodes = kinds.map((kind, i) =>
-        createNode(kind, workflow.id, { x: 80 + i * 300, y: 120 + (i % 2) * 40 }),
-      );
+      const provider =
+        options.withModel === true
+          ? (db.listProviders().find((each) => each.type === 'mock') ??
+            db.createProvider({ type: 'mock', name: 'Mock' }))
+          : undefined;
+      const nodes = kinds.map((kind, i) => {
+        const node = createNode(kind, workflow.id, { x: 80 + i * 300, y: 120 + (i % 2) * 40 });
+        if (provider === undefined || (node.kind !== 'agent' && node.kind !== 'model')) return node;
+        return {
+          ...node,
+          config: { ...node.config, providerId: provider.id, modelId: 'mock-chat' },
+        } as typeof node;
+      });
       db.commitGraph(workflow.id, nodes, [], { silent: true });
       return { projectId: project.id, workflowId: workflow.id, nodeIds: nodes.map((n) => n.id) };
+    },
+    addNode(workflowId, kind, position) {
+      db.load();
+      const node = createNode(kind, workflowId, position);
+      db.commitGraph(workflowId, [...db.nodesOf(workflowId), node], db.edgesOf(workflowId));
+      return node.id;
+    },
+    patchNodeConfig(workflowId, nodeId, patch) {
+      db.load();
+      const nodes = db.nodesOf(workflowId).map((node) => {
+        if (node.id !== nodeId) return node;
+        const patched = { ...node, config: { ...node.config, ...patch } } as typeof node;
+        return { ...patched, ...derivePorts(patched) } as typeof node;
+      });
+      db.commitGraph(workflowId, nodes, db.edgesOf(workflowId), { silent: true });
     },
     seedRunnable(options = {}) {
       db.load();

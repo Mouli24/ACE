@@ -28,6 +28,7 @@ import { validateGraph } from './graph-rules';
 import { type MockDb } from './db';
 import { dropMockSockets } from './fake-socket';
 import { retrieveForAgent, searchChunks, stopAllIngestion } from './knowledge';
+import { recordMockRunTurn } from './chat-sessions';
 import { pausePlayback, startPlayback, stopAllPlayback } from './playback';
 import { buildScenario, type ScenarioName, type ScriptedFrame, type StreamPace } from './scenarios';
 
@@ -103,6 +104,10 @@ function applyFrame(db: MockDb, run: Run, frame: ScriptedFrame): void {
   }
   if (frame.run !== undefined) db.updateRun(run.id, frame.run);
   if (frame.approval !== undefined) db.addApproval(frame.approval);
+  // D285: a goal-driven node's chat hears how it ended before its final state goes out.
+  if (frame.event.type === 'node.state') {
+    recordMockRunTurn(db, run, frame.event.payload as Record<string, unknown>);
+  }
 
   const emitted = db.emit(frame.event);
   if (frame.event.type === 'run.completed') {
@@ -259,14 +264,7 @@ export function preflight(
     }
   }
 
-  if (!nodes.some((node) => node.kind === 'output')) {
-    issues.push({
-      severity: 'error',
-      code: 'no_output_node',
-      message: 'The workflow has no Output node.',
-    });
-  }
-
+  // D285: a workflow of goal-driven nodes needs no Output node — it finishes on its last nodes.
   return issues;
 }
 

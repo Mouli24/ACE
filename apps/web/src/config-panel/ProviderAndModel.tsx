@@ -24,7 +24,7 @@ export function modelBlockedReason(
   inputTypes: readonly DataType[],
   outputTypes: readonly DataType[],
 ): string | undefined {
-  if (!model.available) return 'unavailable';
+  if (!model.available) return model.unavailableReason ?? 'unavailable';
   const missingIn = inputTypes.filter((type) => !model.inputTypes.includes(type));
   const missingOut = outputTypes.filter((type) => !model.outputTypes.includes(type));
   if (missingIn.length > 0) return `no ${missingIn.join('/')} input`;
@@ -57,6 +57,15 @@ export function ProviderAndModel({
   const providerList = providers.data ?? [];
   const chosen = providerList.find((provider) => provider.id === providerId);
   const modelList = providerId === undefined ? [] : (models.data?.items ?? []);
+  const picked = modelList.find((model) => model.modelId === modelId);
+  // D286: a model the node names that its provider no longer lists — never shown as if usable.
+  const gone = modelId !== undefined && modelId !== '' && models.isSuccess && picked === undefined;
+  const modelHint =
+    providerId === undefined
+      ? 'choose a provider first'
+      : models.isSuccess && modelList.length === 0
+        ? 'no models listed — Providers › Models › Refresh models'
+        : undefined;
 
   return (
     <>
@@ -90,11 +99,7 @@ export function ProviderAndModel({
         </p>
       )}
 
-      <Field
-        label="Model"
-        htmlFor="config-model"
-        hint={providerId === undefined ? 'choose a provider first' : undefined}
-      >
+      <Field label="Model" htmlFor="config-model" hint={modelHint}>
         <Select
           value={modelId ?? ''}
           onValueChange={(value) => onChange({ modelId: value })}
@@ -114,6 +119,7 @@ export function ProviderAndModel({
                   data-blocked={blocked ?? undefined}
                 >
                   {model.displayName}
+                  {model.resolvedModelId !== undefined ? ` · ${model.resolvedModelId}` : ''}
                   {blocked ? ` — ${blocked}` : ''}
                 </SelectItem>
               );
@@ -121,6 +127,24 @@ export function ProviderAndModel({
           </SelectContent>
         </Select>
       </Field>
+
+      {/* D286: what the chosen model really is — an alias resolved — in the provider's words */}
+      {picked !== undefined &&
+        (picked.resolvedModelId !== undefined || picked.description !== undefined) && (
+          <p className="text-xs text-fg-muted" data-testid="config-model-detail">
+            <span className="font-machine">{picked.modelId}</span>
+            {picked.resolvedModelId !== undefined && (
+              <span className="font-machine"> → {picked.resolvedModelId}</span>
+            )}
+            {picked.description !== undefined && <span> · {picked.description}</span>}
+          </p>
+        )}
+      {gone && (
+        <p role="alert" className="text-xs text-danger" data-testid="config-model-gone">
+          “{modelId}” is not in this provider’s model list any more. Choose another, or refresh the
+          provider’s models.
+        </p>
+      )}
     </>
   );
 }

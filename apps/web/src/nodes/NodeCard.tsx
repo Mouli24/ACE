@@ -1,13 +1,5 @@
-import type {
-  FailureReason,
-  ModelUsed,
-  Node,
-  NodeState,
-  Part,
-  Port,
-  ProviderType,
-} from '@ace/contracts';
-import { Badge, StatusChip, StreamingText, cn } from '@ace/ui';
+import type { FailureReason, ModelUsed, Node, NodeState, Port, ProviderType } from '@ace/contracts';
+import { Badge, StatusChip, cn } from '@ace/ui';
 import { Handle, Position, type NodeProps, type Node as FlowNode } from '@xyflow/react';
 import {
   BookOpen,
@@ -80,12 +72,8 @@ export interface NodeCardViewProps {
    * dialog's preview): nothing to connect to, and no React Flow store to register with.
    */
   preview?: boolean;
-  /** Text streamed by this node's current run, as it arrives (FR-EXE-008). */
-  streamedText?: string;
   /** What the router actually used, so a fallback is visible on the card (FR-RTR-006). */
   modelUsed?: ModelUsed;
-  /** The run's final output for this node — Output nodes render it (FR-NODE-012). */
-  finalOutput?: Part[];
   /** The node names a provider the engine no longer has (FR-PRV-005). */
   providerMissing?: boolean;
   /** Why the node failed, so the card says which kind of failure it was (FR-ERR-002, BR-03). */
@@ -103,14 +91,6 @@ const FAILURE_TEXT: Readonly<Record<FailureReason, string>> = {
   GUARDRAIL_VIOLATION: 'blocked by a guardrail',
   BLOCKED: 'never ran',
 };
-
-/** Enough of a `Part` to show on a card; the inspector renders the typed view (round 4 adds more). */
-function partText(part: Part): string {
-  if (part.type === 'text') return part.text;
-  if (part.type === 'json') return JSON.stringify(part.value);
-  if (part.type === 'code') return part.text;
-  return `[${part.type}]`;
-}
 
 const isModelKind = (node: Node): boolean => node.kind === 'agent' || node.kind === 'model';
 
@@ -139,9 +119,9 @@ function chipLabel(node: Node, knowledgeBaseName: string | undefined): string {
   }
 }
 
-/** The body text before anything has run: what will appear here, in the node's own terms. */
+/** The body text of a node with no content of its own to show, in the node's own terms. */
 function placeholder(node: Node): string | undefined {
-  if (isModelKind(node)) return 'streamed output appears here';
+  if (isModelKind(node)) return 'no goal yet — Edit to give it one';
   if (node.kind === 'merge') {
     return node.config.mode === 'any' ? 'waits for the first input' : 'waits for every input';
   }
@@ -240,21 +220,27 @@ function PortRow({
   );
 }
 
+/** What a goal-driven node is asked to achieve (D285). */
+function goalOf(node: Node): string {
+  if (node.kind === 'agent') return node.config.instructions.trim();
+  if (node.kind === 'model') return (node.config.systemPrompt ?? '').trim();
+  return '';
+}
+
 /**
  * What the card's body box says. First match wins: a state that needs explaining (stopped, blocked,
  * failed, waiting) beats the node's own content, and the content beats the placeholder.
+ *
+ * D285: a card shows what a node *is* — its goal, its settings — never what went into it or came
+ * out of it. A run's answers, as they stream and once they settle, are read in the node's chat
+ * session; the card only says where the node is (`running — answer in Chat`).
  */
 function CardBody({
   node,
   state,
-  streamedText,
-  finalOutput,
   failureReason,
   blockedByName,
-}: Pick<
-  NodeCardViewProps,
-  'node' | 'state' | 'streamedText' | 'finalOutput' | 'failureReason' | 'blockedByName'
->) {
+}: Pick<NodeCardViewProps, 'node' | 'state' | 'failureReason' | 'blockedByName'>) {
   /*
    * BLOCKED is greyed and locked because nothing went wrong here — the run never reached this node
    * (FR-ERR-006). STOPPED gets no fault styling at all: a cancellation the operator asked for must
@@ -285,32 +271,36 @@ function CardBody({
     );
   }
   if (state === 'WAITING') return <p className={ITALIC}>waiting on your approval…</p>;
-  if (streamedText) {
+  if (isModelKind(node)) {
+    const goal = goalOf(node);
     return (
-      <StreamingText
-        text={streamedText}
-        nodeRunId={node.id}
-        // `!` beats StreamingText's inline max-height, so the text fills the box and no more.
-        className={cn('!max-h-full leading-normal', MONO)}
-      />
+      <>
+        {state === 'RUNNING' && (
+          <p className={cn(ITALIC, 'animate-pulse')} data-testid={`running-note-${node.id}`}>
+            running — answer in Chat
+          </p>
+        )}
+        {goal === '' ? (
+          state === 'RUNNING' ? null : (
+            <p className={ITALIC}>{placeholder(node)}</p>
+          )
+        ) : (
+          <p
+            className={cn('line-clamp-3 whitespace-pre-wrap break-words', MONO)}
+            data-testid={`node-goal-${node.id}`}
+            title={goal}
+          >
+            {goal}
+          </p>
+        )}
+      </>
     );
   }
   if (node.kind === 'output') {
-    return finalOutput === undefined ? (
-      <p className={ITALIC}>final result appears here after a run</p>
-    ) : (
-      <p
-        className={cn('line-clamp-3 whitespace-pre-wrap break-words', MONO)}
-        data-testid={`final-output-${node.id}`}
-      >
-        {finalOutput.map((part) => partText(part)).join('\n')}
-      </p>
-    );
+    return <p className={ITALIC}>the final result — read it in Inspect</p>;
   }
   if (node.kind === 'input') {
-    return node.config.text ? (
-      <p className={cn('line-clamp-3 break-words', MONO)}>{node.config.text}</p>
-    ) : null;
+    return <p className={ITALIC}>{node.config.text ? 'start text set' : 'no start text yet'}</p>;
   }
   if (node.kind === 'retrieval') {
     return (
@@ -343,9 +333,7 @@ export function NodeCardView({
   provider,
   armedPortId,
   onPortKey,
-  streamedText,
   modelUsed,
-  finalOutput,
   providerMissing,
   failureReason,
   blockedByName,
@@ -458,8 +446,6 @@ export function NodeCardView({
         <CardBody
           node={node}
           state={state}
-          {...(streamedText === undefined ? {} : { streamedText })}
-          {...(finalOutput === undefined ? {} : { finalOutput })}
           {...(failureReason === undefined ? {} : { failureReason })}
           {...(blockedByName === undefined ? {} : { blockedByName })}
         />
@@ -587,11 +573,9 @@ export const FlowNodeCard = memo(function FlowNodeCard({
       connectedPortIds={data.connectedPortIds}
       armedPortId={data.armedPortId}
       onPortKey={(port, direction) => data.onPortKey(port, direction, node.id)}
-      streamedText={overlay.streamedText}
       actions={<NodeRunActions node={node} />}
       {...(selected && !dragging ? { toolbar: <NodeToolbar node={node} /> } : {})}
       {...(overlay.modelUsed === undefined ? {} : { modelUsed: overlay.modelUsed })}
-      {...(overlay.finalOutput === undefined ? {} : { finalOutput: overlay.finalOutput })}
       {...(overlay.failureReason === undefined ? {} : { failureReason: overlay.failureReason })}
       {...(blockedByName === undefined ? {} : { blockedByName })}
       {...(knowledgeBaseName === undefined ? {} : { knowledgeBaseName })}

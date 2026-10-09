@@ -151,6 +151,8 @@ test('TC-OBS-001: the trace tab is in the order of GET /runs/:id/trace and of th
         return (
           e.seq !== undefined &&
           e.type !== 'node.token' &&
+          // a run's turns in a node's chat are thread events, never the run's (D285)
+          e.type !== 'chat.message' &&
           (p.runId === id || p.run?.id === id || p.message?.runId === id)
         );
       })

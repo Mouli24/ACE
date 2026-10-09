@@ -134,8 +134,9 @@ describe('FR-CAN-002 / FR-CHAT-004 the Canvas screen in the V2 layout', () => {
     const dialog = await screen.findByRole('dialog', { name: 'New node' });
     expect(dialog).toHaveTextContent('Launch post');
 
-    await user.dblClick(within(dialog).getByTestId('palette-merge'));
-    expect(canvas.addNode).toHaveBeenCalledWith('merge', {});
+    // D285: the one node the Canvas offers is an Agent
+    await user.dblClick(within(dialog).getByTestId('palette-agent'));
+    expect(canvas.addNode).toHaveBeenCalledWith('agent', expect.any(Object));
     expect(usePanelsStore.getState().newNodeOpen).toBe(false);
     expect(screen.queryByRole('dialog', { name: 'New node' })).toBeNull();
   });
