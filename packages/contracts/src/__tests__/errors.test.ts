@@ -4,6 +4,7 @@ import {
   ERROR_CODES,
   ERROR_CODE_HTTP_STATUS,
   ApiErrorSchema,
+  IDE_ERROR_CODES,
   PolicyInUseDetailsSchema,
   ROUND_1_ERROR_CODES,
   ROUND_3_ERROR_CODES,
@@ -100,6 +101,7 @@ describe('FR-SYS-006 round 1 error codes', () => {
       'invalid_run_state',
       'policy_in_use',
       ...ROUND_4_ERROR_CODES,
+      ...IDE_ERROR_CODES,
     ]);
   });
 
@@ -108,6 +110,16 @@ describe('FR-SYS-006 round 1 error codes', () => {
       'upload_too_large',
       'unsupported_type',
       'guardrail_blocked',
+    ]);
+  });
+
+  it('adds the five codes Forge’s file API names (D299, design §6.1)', () => {
+    expect([...IDE_ERROR_CODES]).toEqual([
+      'file_changed',
+      'exists',
+      'file_too_large',
+      'outside_project',
+      'protected_path',
     ]);
   });
 
@@ -128,6 +140,11 @@ describe('FR-SYS-006 round 1 error codes', () => {
       upload_too_large: 413,
       unsupported_type: 415,
       guardrail_blocked: 422,
+      file_changed: 409,
+      exists: 409,
+      file_too_large: 413,
+      outside_project: 403,
+      protected_path: 403,
     });
   });
 });
