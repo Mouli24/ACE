@@ -268,14 +268,15 @@ test.describe('M1 against the real engine (§8.1)', () => {
   }) => {
     const { projectId, workflowId } = await seedWorkflow('autosave');
     await openCanvas(page, projectId, workflowId);
-    await addFromDialog(page, 'input');
-    await addFromDialog(page, 'output');
+    // D285: the dialog offers one node, an Agent
+    await addFromDialog(page, 'agent');
+    await addFromDialog(page, 'agent');
     await serverHas(workflowId, (g) => g.nodes.length === 2, 'both nodes reach the engine');
 
     await page.reload();
     await expect(page.locator('.react-flow__node')).toHaveCount(2);
     const graph = await graphOf(workflowId);
-    expect(graph.nodes.map((n) => n.kind).sort()).toEqual(['input', 'output']);
+    expect(graph.nodes.map((n) => n.kind).sort()).toEqual(['agent', 'agent']);
     expect(graph.workflow.version).toBeGreaterThan(0);
   });
 
@@ -301,14 +302,14 @@ test.describe('M1 against the real engine (§8.1)', () => {
     await expect(pageB.getByTestId('canvas')).toBeVisible();
 
     // A writes first; B still believes in the older version
-    await addFromDialog(pageA, 'input');
+    await addFromDialog(pageA, 'agent');
     await serverHas(workflowId, (g) => g.nodes.length === 1, 'A saved');
 
     await addFromDialog(pageB, 'agent');
     const graph = await serverHas(workflowId, (g) => g.nodes.length === 2, 'B recovered and saved');
 
     // nothing was lost and B ends up agreeing with the server
-    expect(graph.nodes.map((n) => n.kind).sort()).toEqual(['agent', 'input']);
+    expect(graph.nodes.map((n) => n.kind).sort()).toEqual(['agent', 'agent']);
     await expect(pageB.locator('.react-flow__node').first()).toBeVisible();
     await expect(pageA.locator('.react-flow__node').first()).toBeVisible();
     if (conflicts.includes(409)) expect(conflicts.at(-1)).toBe(200);
@@ -320,17 +321,22 @@ test.describe('M1 against the real engine (§8.1)', () => {
   test('TC-CON-002: text output → image-only input is refused with a reason', async ({ page }) => {
     const { projectId, workflowId } = await seedWorkflow('types');
     await openCanvas(page, projectId, workflowId);
-    await addFromDialog(page, 'input');
+    await addFromDialog(page, 'agent');
     await addFromDialog(page, 'agent');
     const graph = await serverHas(workflowId, (g) => g.nodes.length === 2, 'both nodes exist');
-    const input = graph.nodes.find((n) => n.kind === 'input') as Node;
-    const agent = graph.nodes.find((n) => n.kind === 'agent') as Node;
+    const [input, agent] = [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id)) as [Node, Node];
 
-    // make the agent image-only through its config panel
-    const panel = await configureNode(page, agent.id);
-    const inputTypes = panel.getByRole('group', { name: 'Input types' });
-    await inputTypes.getByLabel('image').click();
-    await inputTypes.getByLabel('text').click();
+    // D285: the config panel no longer offers typed ports, but a workflow made before it can hold
+    // an image-only agent — written through the engine — and the Canvas must still refuse it.
+    await api(`/workflows/${workflowId}/graph-ops`, {
+      method: 'POST',
+      body: JSON.stringify({
+        baseVersion: graph.workflow.version,
+        ops: [{ op: 'update_node', nodeId: agent.id, patch: { config: { inputTypes: ['image'] } } }],
+      }),
+    });
+    // a fresh load, as a workflow saved that way would open: the Canvas measures the new handle
+    await page.reload();
     await expect(portHandle(page, agent.id, 'in', 'image')).toBeVisible();
 
     await fitView(page);
@@ -376,12 +382,13 @@ test.describe('M1 against the real engine (§8.1)', () => {
   test('TC-CON-006: a second edge into a single-input port is refused', async ({ page }) => {
     const { projectId, workflowId } = await seedWorkflow('arity');
     await openCanvas(page, projectId, workflowId);
-    await addFromDialog(page, 'input');
-    await addFromDialog(page, 'input');
+    // D285: two source Agents and a target Agent, oldest first
+    await addFromDialog(page, 'agent');
+    await addFromDialog(page, 'agent');
     await addFromDialog(page, 'agent');
     const graph = await serverHas(workflowId, (g) => g.nodes.length === 3, 'three nodes exist');
-    const inputs = graph.nodes.filter((n) => n.kind === 'input') as Node[];
-    const agent = graph.nodes.find((n) => n.kind === 'agent') as Node;
+    const [first, second, agent] = [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id)) as [Node, Node, Node];
+    const inputs = [first, second];
 
     await fitView(page);
     await dragConnect(
@@ -416,9 +423,8 @@ test.describe('M1 against the real engine (§8.1)', () => {
 
     await panel.getByLabel('Name').fill('Reviewer');
     await panel.getByLabel('Name').press('Enter');
-    await panel.getByLabel('Instructions').fill('Review the draft and answer in JSON.');
-    await panel.getByLabel('Instructions').blur();
-    await panel.getByRole('group', { name: 'Output types' }).getByLabel('json').click();
+    await panel.getByLabel('Goal').fill('Review the draft and answer in JSON.');
+    await panel.getByLabel('Goal').blur();
     await panel.getByLabel('Temperature').fill('0.2');
     await panel.getByLabel('Temperature').blur();
     await panel.getByLabel('Max tokens').fill('1024');
@@ -445,7 +451,6 @@ test.describe('M1 against the real engine (§8.1)', () => {
           };
           contextPolicy?: { budgetTokens?: number };
           routing?: { policy?: string };
-          outputTypes?: string[];
         };
         return (
           (g.nodes[0] as Node).name === 'Reviewer' &&
@@ -455,8 +460,7 @@ test.describe('M1 against the real engine (§8.1)', () => {
           config.execution?.timeoutMs === 30_000 &&
           config.execution?.retries === 1 &&
           config.contextPolicy?.budgetTokens === 8000 &&
-          config.routing?.policy === 'fallback' &&
-          (config.outputTypes ?? []).includes('json')
+          config.routing?.policy === 'fallback'
         );
       },
       'every field reaches the engine',
@@ -466,12 +470,13 @@ test.describe('M1 against the real engine (§8.1)', () => {
     await page.reload();
     const reloaded = await configureNode(page, agent.id);
     await expect(reloaded.getByLabel('Name')).toHaveValue('Reviewer');
-    await expect(reloaded.getByLabel('Instructions')).toHaveValue(
+    await expect(reloaded.getByLabel('Goal')).toHaveValue(
       'Review the draft and answer in JSON.',
     );
     await expect(reloaded.getByLabel('Temperature')).toHaveValue('0.2');
     await expect(reloaded.getByLabel('Context budget (tokens)')).toHaveValue('8000');
-    expect((saved.nodes[0] as Node).outputs.map((p) => p.name)).toContain('json');
+    // D285: a goal-driven node answers in text — one text port, no typed outputs to wire
+    expect((saved.nodes[0] as Node).outputs.map((p) => p.name)).toEqual(['text']);
   });
 
   test('TC-NODE-006: temperature 5 shows an inline error and never reaches the engine', async ({
@@ -507,13 +512,16 @@ test.describe('M1 against the real engine (§8.1)', () => {
     // build a three-node, two-edge graph through the engine
     await page.goto(`/projects/${projectId}/workflows/${workflowId}?token=${token}`);
     await expect(page.getByTestId('canvas')).toBeVisible();
-    await addFromDialog(page, 'input');
+    // D285: a chain of three Agents, oldest first
     await addFromDialog(page, 'agent');
-    await addFromDialog(page, 'output');
+    await addFromDialog(page, 'agent');
+    await addFromDialog(page, 'agent');
     const built = await serverHas(workflowId, (g) => g.nodes.length === 3, 'three nodes exist');
-    const input = built.nodes.find((n) => n.kind === 'input') as Node;
-    const agent = built.nodes.find((n) => n.kind === 'agent') as Node;
-    const output = built.nodes.find((n) => n.kind === 'output') as Node;
+    const [input, agent, output] = [...built.nodes].sort((a, b) => a.id.localeCompare(b.id)) as [
+      Node,
+      Node,
+      Node,
+    ];
     await dragConnect(
       page,
       portHandle(page, input.id, 'out', 'text'),
@@ -548,11 +556,11 @@ test.describe('M1 against the real engine (§8.1)', () => {
   }) => {
     const { projectId, workflowId } = await seedWorkflow('delete-dup');
     await openCanvas(page, projectId, workflowId);
-    await addFromDialog(page, 'input');
+    // D285: a source Agent feeding the Agent under test, oldest first
+    await addFromDialog(page, 'agent');
     await addFromDialog(page, 'agent');
     const graph = await serverHas(workflowId, (g) => g.nodes.length === 2, 'two nodes exist');
-    const input = graph.nodes.find((n) => n.kind === 'input') as Node;
-    const agent = graph.nodes.find((n) => n.kind === 'agent') as Node;
+    const [input, agent] = [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id)) as [Node, Node];
 
     await dragConnect(
       page,
@@ -563,8 +571,8 @@ test.describe('M1 against the real engine (§8.1)', () => {
 
     // duplicate the agent and give the copy a different name
     await configureNode(page, agent.id);
-    await configPanel(page).getByLabel('Instructions').fill('original');
-    await configPanel(page).getByLabel('Instructions').blur();
+    await configPanel(page).getByLabel('Goal').fill('original');
+    await configPanel(page).getByLabel('Goal').blur();
     await serverHas(
       workflowId,
       (g) =>
@@ -577,7 +585,7 @@ test.describe('M1 against the real engine (§8.1)', () => {
     await closeSheet(page);
     await page.getByRole('button', { name: 'Duplicate selected nodes' }).click();
     const dup = await serverHas(workflowId, (g) => g.nodes.length === 3, 'the copy is saved');
-    const copy = dup.nodes.find((n) => n.kind === 'agent' && n.id !== agent.id) as Node;
+    const copy = dup.nodes.find((n) => n.id !== agent.id && n.id !== input.id) as Node;
     expect((copy.config as { instructions?: string }).instructions).toBe('original');
     // the copy is offset and does not cover the original, whose ports must stay reachable
     const apart =
@@ -637,11 +645,11 @@ test.describe('M1 against the real engine (§8.1)', () => {
   }) => {
     const { projectId, workflowId } = await seedWorkflow('export');
     await openCanvas(page, projectId, workflowId);
-    await addFromDialog(page, 'input');
+    // D285: Agent → Agent, oldest first
+    await addFromDialog(page, 'agent');
     await addFromDialog(page, 'agent');
     const built = await serverHas(workflowId, (g) => g.nodes.length === 2, 'two nodes exist');
-    const input = built.nodes.find((n) => n.kind === 'input') as Node;
-    const agent = built.nodes.find((n) => n.kind === 'agent') as Node;
+    const [input, agent] = [...built.nodes].sort((a, b) => a.id.localeCompare(b.id)) as [Node, Node];
     await dragConnect(
       page,
       portHandle(page, input.id, 'out', 'text'),
@@ -691,18 +699,19 @@ test.describe('M1 against the real engine (§8.1)', () => {
     const { projectId, workflowId } = await seedWorkflow('keyboard');
     await openCanvas(page, projectId, workflowId);
 
-    // Enter on New node opens the dialog; Enter on a kind adds it (and closes the dialog)
+    // Enter on New node opens the dialog; Enter on a kind adds it (and closes the dialog). D285:
+    // the one kind it offers is an Agent, so the chain is two of them.
     await page.getByTestId('new-node-button').focus();
     await page.keyboard.press('Enter');
-    await page.getByTestId('palette-input').focus();
+    await page.getByTestId('palette-agent').focus();
     await page.keyboard.press('Enter');
+    await serverHas(workflowId, (g) => g.nodes.length === 1, 'the first node was added');
     await page.getByTestId('new-node-button').focus();
     await page.keyboard.press('Enter');
     await page.getByTestId('palette-agent').focus();
     await page.keyboard.press('Enter');
     const graph = await serverHas(workflowId, (g) => g.nodes.length === 2, 'both nodes were added');
-    const input = graph.nodes.find((n) => n.kind === 'input') as Node;
-    const agent = graph.nodes.find((n) => n.kind === 'agent') as Node;
+    const [input, agent] = [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id)) as [Node, Node];
 
     await fitView(page);
     await portHandle(page, input.id, 'out', 'text').focus();
@@ -720,6 +729,7 @@ test.describe('M1 against the real engine (§8.1)', () => {
       (g) => g.nodes.length === 1 && g.edges.length === 0,
       'the keyboard delete is saved',
     );
-    expect(after.nodes[0]?.kind).toBe('input');
+    // the source Agent is what is left
+    expect(after.nodes[0]?.id).toBe(input.id);
   });
 });

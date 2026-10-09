@@ -169,7 +169,9 @@ test.describe('Round 2 §1 demo script, through the UI', () => {
     await page.getByRole('tab', { name: 'Models' }).click();
     await page.getByRole('button', { name: /refresh models/i }).click();
     await expect(page.getByTestId('models-table')).toBeVisible();
-    await expect(page.getByTestId('model-row-mock-text')).toBeVisible();
+    // `.first()`: earlier specs on the same engine add Mock providers of their own, each with a
+    // mock-text row in this unfiltered table
+    await expect(page.getByTestId('model-row-mock-text').first()).toBeVisible();
 
     const project = await api<{ id: string }>('/projects', {
       method: 'POST',
@@ -218,7 +220,10 @@ test.describe('Round 2 §1 demo script, through the UI', () => {
       timeout: 40_000,
     });
     await expect(page.getByTestId('run-status')).toHaveAttribute('data-status', 'COMPLETE');
-    await expect(page.getByTestId(`final-output-${output.id}`)).toBeVisible();
+    // D285: the answer is read in the agent's chat, tagged with the run — not on the Output card
+    await expect(page.getByTestId(`final-output-${output.id}`)).toHaveCount(0);
+    await page.getByTestId(`chat-mention-${agent.id}`).click();
+    await expect(page.getByTestId('chat-run-badge').first()).toBeVisible({ timeout: 20_000 });
 
     /* ---- inspector shows tokens / cost / model / prompt ---- */
     await openSheet(page, 'Inspector');

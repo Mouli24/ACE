@@ -359,7 +359,7 @@ describe('TC-WF-005 stale baseVersion (FR-WF-005)', () => {
 });
 
 describe('TC-WF-006 validation (FR-WF-006)', () => {
-  it('an agent with an unconnected input and no Output node lists issues with severity, code, message and nodeId', async () => {
+  it('a lone agent with no goal lists issues with severity, code, message and nodeId (D285)', async () => {
     const { workflow } = await freshWorkflow();
     const agent = agentNode(workflow.id, { name: 'Lonely' });
     await client.applyGraphOps(workflow.id, {
@@ -369,14 +369,16 @@ describe('TC-WF-006 validation (FR-WF-006)', () => {
 
     const { issues } = await client.validateWorkflow(workflow.id);
     const codes = issues.map((issue) => issue.code);
-    expect(codes).toContain('unconnected_required_input');
-    expect(codes).toContain('no_output_node');
-    expect(codes).toContain('no_input_node');
+    // D285: an Agent with nothing upstream starts from its own goal and the run needs no Output
+    // node — so the issue is the missing goal, named on the node.
+    expect(codes).not.toContain('unconnected_required_input');
+    expect(codes).not.toContain('no_output_node');
+    expect(codes).not.toContain('no_input_node');
 
-    const unconnected = issues.find((issue) => issue.code === 'unconnected_required_input');
-    expect(unconnected?.severity).toBe('error');
-    expect(unconnected?.nodeId).toBe(agent.id);
-    expect(unconnected?.message).toMatch(/\S/);
+    const noGoal = issues.find((issue) => issue.code === 'missing_input');
+    expect(noGoal?.severity).toBe('error');
+    expect(noGoal?.nodeId).toBe(agent.id);
+    expect(noGoal?.message).toMatch(/\S/);
     for (const issue of issues) expect(['error', 'warning']).toContain(issue.severity);
   });
 });

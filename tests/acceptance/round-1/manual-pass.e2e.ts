@@ -174,7 +174,8 @@ test('§8.1 abuse — every pane dragged to its minimum, the Canvas stays usable
 }) => {
   const { projectId, workflowId } = await freshWorkflow('resize');
   await openCanvas(page, projectId, workflowId);
-  await addFromDialog(page, 'input');
+  // D285: the dialog offers one node, an Agent
+  await addFromDialog(page, 'agent');
   await addFromDialog(page, 'agent');
   await expect
     .poll(async () => (await api<Graph>(`/workflows/${workflowId}`)).nodes.length)
@@ -239,7 +240,7 @@ test('§8.1 abuse — 3,000 characters pasted into Instructions reach the engine
 
   await page.locator(`.react-flow__node[data-id="${agent?.id}"]`).click();
   await openSheet(page, 'Configure');
-  const instructions = page.getByLabel('Instructions');
+  const instructions = page.getByLabel('Goal');
   await expect(instructions).toBeVisible();
 
   // A real paste, not a typed 3,000 characters: the clipboard path is what a user takes.
@@ -274,7 +275,7 @@ test('§8.1 abuse — the engine is killed mid-drag; the app recovers when it co
 }) => {
   const { projectId, workflowId } = await freshWorkflow('kill-mid-drag');
   await openCanvas(page, projectId, workflowId);
-  await addFromDialog(page, 'input');
+  await addFromDialog(page, 'agent');
   await expect
     .poll(async () => (await api<Graph>(`/workflows/${workflowId}`)).nodes.length)
     .toBe(1);
@@ -361,8 +362,9 @@ for (const zoom of [0.5, 2]) {
     // (D-006 was a double add)
     await expect(page.getByTestId('new-node-button')).toBeVisible();
     await page.getByTestId('new-node-button').click();
-    await expect(page.getByTestId('palette-input')).toBeVisible();
-    await page.getByTestId('palette-input').click();
+    // D285: the one kind it offers is an Agent
+    await expect(page.getByTestId('palette-agent')).toBeVisible();
+    await page.getByTestId('palette-agent').click();
     await page.getByTestId('new-node-add').click();
     await expect
       .poll(async () => (await api<Graph>(`/workflows/${workflowId}`)).nodes.length, {
