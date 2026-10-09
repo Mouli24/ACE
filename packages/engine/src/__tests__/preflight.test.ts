@@ -149,14 +149,21 @@ describe('FR-EXE-003 a workflow that is ready to run has no issues', () => {
 });
 
 describe('§2.7 item 1 — a structural error blocks the run', () => {
-  it('reports a workflow with no Input node', async () => {
-    const issues = await run({ nodes: [agentNode(), outputNode()], edges: [edges()[1]!] });
+  it('reports a workflow with nothing to start from — no Input node and no goal-driven node', async () => {
+    const issues = await run({ nodes: [outputNode()], edges: [] });
 
     expect(codes(issues)).toContain('no_input_node');
   });
 
-  it('reports a disconnected agent', async () => {
-    const issues = await run({ edges: [edges()[1]!] });
+  it('D285: an Agent with a goal starts the run itself — no Input node needed', async () => {
+    const issues = await run({ nodes: [agentNode(), outputNode()], edges: [edges()[1]!] });
+
+    expect(codes(issues)).not.toContain('no_input_node');
+    expect(codes(issues)).not.toContain('unconnected_required_input');
+  });
+
+  it('reports a disconnected Output node', async () => {
+    const issues = await run({ edges: [edges()[0]!] });
 
     expect(codes(issues)).toContain('unconnected_required_input');
   });

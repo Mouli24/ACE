@@ -79,6 +79,21 @@ function toolIssues(
   return issues;
 }
 
+/**
+ * A node that works toward a goal of its own (D285): an Agent, or a bare Model node, as opposed to
+ * the plumbing kinds that only reshape what they are handed.
+ */
+export function isGoalDriven(node: Node): node is Extract<Node, { kind: 'agent' | 'model' }> {
+  return node.kind === 'agent' || node.kind === 'model';
+}
+
+/** What a goal-driven node is asked to achieve — an Agent's instructions, a Model's system prompt. */
+export function goalOf(node: Node): string {
+  if (node.kind === 'agent') return node.config.instructions.trim();
+  if (node.kind === 'model') return (node.config.systemPrompt ?? '').trim();
+  return '';
+}
+
 /** Does this model cover everything the node needs to read and produce? */
 function covers(model: Model, inputTypes: DataType[], outputTypes: DataType[]): boolean {
   return (
@@ -104,19 +119,20 @@ export function validateGraph(
   const providersById = new Map((context.providers ?? []).map((p) => [p.id, p]));
   const hasCatalog = context.models !== undefined;
 
-  if (!nodes.some((node) => node.kind === 'input')) {
+  /*
+   * D285: a run starts from an Input node or from a goal-driven node — an Agent or Model with no
+   * data edge into it, which begins from its own goal. It no longer needs an Output node to end:
+   * without one the run is COMPLETE once every node nothing is downstream of has completed, so
+   * `no_output_node` is not raised any more (the code stays in the contract, NFR-VER-01).
+   */
+  const fed = new Set(edges.filter((edge) => edge.kind === 'data').map((edge) => edge.to.nodeId));
+  const startsFromGoal = (node: Node): boolean => isGoalDriven(node) && !fed.has(node.id);
+
+  if (!nodes.some((node) => node.kind === 'input' || startsFromGoal(node))) {
     issues.push({
       severity: 'error',
       code: 'no_input_node',
-      message: 'This workflow has no Input node, so a run would have nothing to start from.',
-    });
-  }
-
-  if (!nodes.some((node) => node.kind === 'output')) {
-    issues.push({
-      severity: 'error',
-      code: 'no_output_node',
-      message: 'This workflow has no Output node, so a run would never be able to complete.',
+      message: 'This workflow has nothing to start from yet — add an Agent node and give it a goal.',
     });
   }
 
@@ -124,12 +140,26 @@ export function validateGraph(
 
   for (const node of nodes) {
     // A node with input ports needs at least one of them connected; which particular port is
-    // required depends on the node kind, and no round-1 kind requires a specific one.
-    if (node.inputs.length > 0 && !node.inputs.some((port) => incoming.has(port.id))) {
+    // required depends on the node kind, and no round-1 kind requires a specific one. A
+    // goal-driven node is the exception: with nothing upstream it starts from its goal (D285).
+    if (
+      !isGoalDriven(node) &&
+      node.inputs.length > 0 &&
+      !node.inputs.some((port) => incoming.has(port.id))
+    ) {
       issues.push({
         severity: 'error',
         code: 'unconnected_required_input',
         message: `"${node.name}" has no incoming connection, so it would never receive anything.`,
+        nodeId: node.id,
+      });
+    }
+
+    if (startsFromGoal(node) && goalOf(node) === '') {
+      issues.push({
+        severity: 'error',
+        code: 'missing_input',
+        message: `"${node.name}" has no goal yet — say what it should achieve.`,
         nodeId: node.id,
       });
     }

@@ -720,7 +720,9 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       const pricing = catalogRow?.pricing;
       const modelTakesTools = catalogRow?.supportsTools !== false;
 
-      const modelUsed: ModelUsed = chosen;
+      // A copy: a `model` chunk adds what the provider says actually answered, and the router's
+      // route object is not this attempt's to change.
+      const modelUsed: ModelUsed = { ...chosen };
 
       /* Call, inside this provider's concurrency gate. */
       let text = '';
@@ -988,6 +990,9 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
                     at: deps.now?.() ?? new Date().toISOString(),
                   },
                 );
+                break;
+              case 'model':
+                modelUsed.resolvedModelId = chunk.modelId;
                 break;
               case 'finish':
                 finishReason = chunk.reason;

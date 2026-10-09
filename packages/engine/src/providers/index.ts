@@ -13,6 +13,7 @@ import {
   type UpdateProviderRequest,
 } from '@ace/contracts';
 
+import { classifyError } from '../errors/index.js';
 import type { EventBus } from '../events/index.js';
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
@@ -24,6 +25,7 @@ import type {
   Scope,
   SecretStore,
 } from '../ports/index.js';
+import { maskSecrets } from '../security/secret-patterns.js';
 import { createSemaphore, type Semaphore } from './semaphore.js';
 
 export * from './semaphore.js';
@@ -75,7 +77,11 @@ export interface ProviderService {
   /** Starts the 60 s timer; the returned function stops it. */
   startPeriodicChecks(): () => void;
 
-  refreshModels(id: Id): Promise<{ models: Model[]; refreshedAt: string }>;
+  /**
+   * FR-MOD-006, D286: ask the provider for its models. When it cannot be asked, `warning` says why;
+   * the models it last listed are then kept, marked unavailable — never replaced by a guess.
+   */
+  refreshModels(id: Id): Promise<{ models: Model[]; refreshedAt: string; warning?: string }>;
   listModels(query: ModelQuery): Promise<Model[]>;
   detect(): Promise<ProviderDetectResponse>;
   /** X1 (FR-PRV-008): the terminal scan — installed, version and sign-in per CLI. */
@@ -185,6 +191,22 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
 
       await repository.providers.create(scope, provider);
       logger.info({ subsystem: 'providers', providerId: id, type: input.type }, 'provider added');
+
+      /*
+       * D286: a CLI provider lists its models by asking the installed CLI, which costs no tokens,
+       * so it arrives with them — an empty catalog until someone presses Refresh left every node
+       * on it unrunnable. Best effort: a CLI that cannot list yet still gets added.
+       */
+      if (isCliProviderType(input.type)) {
+        try {
+          await service.refreshModels(id);
+        } catch (error) {
+          logger.warn(
+            { subsystem: 'providers', providerId: id, err: error },
+            'the new CLI provider could not list its models yet',
+          );
+        }
+      }
       return provider;
     },
 
@@ -314,43 +336,73 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       const adapter = await service.adapterFor(id);
 
       let discovered: ModelInfo[] = [];
+      let warning: string | undefined;
       try {
         discovered = await adapter.listModels();
       } catch (error) {
-        // A provider that cannot list is exactly what the manifest exists for (FR-MOD-002).
+        // A provider that cannot list is exactly what the manifest exists for (FR-MOD-002) — but
+        // the reason is reported, never swallowed (D286).
+        warning = maskSecrets(classifyError(error, { providerId: id }).message);
         logger.warn(
           { subsystem: 'providers', providerId: id, err: error },
           'model discovery failed; falling back to the manifest',
         );
       }
 
-      const merged = factory.mergeCatalog(discovered, factory.manifestFor(provider.type));
+      const manifest = factory.manifestFor(provider.type);
       const refreshedAt = now();
 
       // Row ids are stable across refreshes, so a node that names a model keeps working.
       const existing = await repository.models.list(scope, { providerId: id });
       const idByModelId = new Map(existing.map((model) => [model.modelId, model.id]));
 
-      const models: Model[] = merged.map((model) => ({
-        id: idByModelId.get(model.modelId) ?? nextId(),
-        providerId: id,
-        modelId: model.modelId,
-        displayName: model.displayName,
-        inputTypes: model.inputTypes,
-        outputTypes: model.outputTypes,
-        contextWindow: model.contextWindow,
-        supportsTools: model.supportsTools,
-        supportsJson: model.supportsJson,
-        available: true,
-        source: model.source,
-        lastCheckedAt: refreshedAt,
-        ...(model.pricing === undefined ? {} : { pricing: model.pricing }),
-      }));
+      /*
+       * D286: nothing to fall back on — a CLI has no manifest — so the models it last listed stay,
+       * each marked unavailable with the reason. A node naming one is refused with that reason
+       * rather than the model vanishing, and no model is ever offered that nothing vouched for.
+       */
+      if (warning !== undefined && manifest.length === 0) {
+        const models: Model[] = existing.map((model) => ({
+          ...model,
+          available: false,
+          unavailableReason: warning,
+          lastCheckedAt: refreshedAt,
+        }));
+        await repository.models.replaceForProvider(scope, id, models);
+        return { models, refreshedAt, warning };
+      }
+
+      const merged = factory.mergeCatalog(discovered, manifest);
+      const models: Model[] = merged.map((model) => {
+        const available = model.available ?? true;
+        return {
+          id: idByModelId.get(model.modelId) ?? nextId(),
+          providerId: id,
+          modelId: model.modelId,
+          displayName: model.displayName,
+          inputTypes: model.inputTypes,
+          outputTypes: model.outputTypes,
+          contextWindow: model.contextWindow,
+          supportsTools: model.supportsTools,
+          supportsJson: model.supportsJson,
+          available,
+          source: model.source,
+          lastCheckedAt: refreshedAt,
+          ...(model.pricing === undefined ? {} : { pricing: model.pricing }),
+          ...(model.description === undefined ? {} : { description: model.description }),
+          ...(model.resolvedModelId === undefined
+            ? {}
+            : { resolvedModelId: model.resolvedModelId }),
+          ...(available || model.unavailableReason === undefined
+            ? {}
+            : { unavailableReason: model.unavailableReason }),
+        };
+      });
 
       await repository.models.replaceForProvider(scope, id, models);
       await freezePriceTables(models, refreshedAt);
 
-      return { models, refreshedAt };
+      return { models, refreshedAt, ...(warning === undefined ? {} : { warning }) };
     },
 
     listModels: (query) => repository.models.list(scope, query),

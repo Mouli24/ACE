@@ -180,12 +180,12 @@ describe('direct chat with an agent (FR-CHAT-004..007)', () => {
     );
   });
 
-  it('rejects the reply with ChatModelError when the router refuses a model', async () => {
+  it('refuses with ChatModelError up front when the router refuses a model — no thread is opened', async () => {
     await setup({
       router: makeRouter({ refuse: { ok: false, code: 'incompatible_model', reason: 'no model' } }),
     });
-    const begun = await service.chat(agent.id, { content: hi });
-    await expect(begun.done).rejects.toBeInstanceOf(ChatModelError);
+    await expect(service.chat(agent.id, { content: hi })).rejects.toBeInstanceOf(ChatModelError);
+    expect(await service.listThreads(agent.id)).toHaveLength(0);
   });
 
   it('404s on an unknown thread and deletes a thread with its messages', async () => {
