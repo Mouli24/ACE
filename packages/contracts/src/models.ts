@@ -40,6 +40,15 @@ export const ModelSchema = z.object({
   source: ModelSourceSchema,
   lastCheckedAt: TimestampSchema,
   pricing: ModelPricingSchema.optional(),
+  /** The provider's own one-line description of the model, when its listing carries one. */
+  description: z.string().optional(),
+  /**
+   * The exact model an alias stands for right now, as the provider reported it — `opus` →
+   * `claude-opus-5-5`. Absent when `modelId` is already the full name or the provider does not say.
+   */
+  resolvedModelId: z.string().optional(),
+  /** Why an `available: false` model cannot be used, in the provider's words or the engine's. */
+  unavailableReason: z.string().optional(),
 });
 export type Model = z.infer<typeof ModelSchema>;
 
@@ -79,5 +88,10 @@ export type ModelListResponse = z.infer<typeof ModelListResponseSchema>;
 export const RefreshModelsResponseSchema = z.object({
   models: z.array(ModelSchema),
   refreshedAt: TimestampSchema,
+  /**
+   * Set when the provider could not list its models — a CLI that is not installed or not signed in.
+   * The models already known are then returned `available: false`, never guessed at.
+   */
+  warning: z.string().optional(),
 });
 export type RefreshModelsResponse = z.infer<typeof RefreshModelsResponseSchema>;
