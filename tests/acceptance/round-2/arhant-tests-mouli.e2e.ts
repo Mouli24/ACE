@@ -476,7 +476,8 @@ test.describe('Config panel (FR-NODE-003/004/005)', () => {
     const panel = page.getByRole('complementary', { name: 'Node configuration' });
     await expect(panel.getByTestId('applies-next-run')).toBeVisible();
 
-    const instructions = panel.getByLabel(/instructions/i);
+    // D285: an Agent's instructions are its Goal
+    const instructions = panel.getByLabel('Goal');
     await instructions.fill('Edited while the run was going.');
     await instructions.blur();
 
@@ -567,8 +568,11 @@ test.describe('Live run (FR-EXE-001/003/007/008/009/015)', () => {
       'running',
     );
 
-    // TC-EXE-007: the text grows while the node is still running.
-    const streamed = card(page, agent.id).getByTestId(`stream-${agent.id}`);
+    // TC-EXE-007: the text grows while the node is still running — in the node's chat; the card
+    // only says it is running (D285).
+    await expect(card(page, agent.id).getByTestId(`running-note-${agent.id}`)).toBeVisible();
+    await page.getByTestId(`chat-mention-${agent.id}`).click();
+    const streamed = page.getByTestId('chat-run-live');
     await expect(streamed).toBeVisible();
     const first = ((await streamed.textContent()) ?? '').length;
     await expect
@@ -585,14 +589,16 @@ test.describe('Live run (FR-EXE-001/003/007/008/009/015)', () => {
     await expect(card(page, agent.id)).toHaveAttribute('data-state', 'COMPLETED', {
       timeout: 40_000,
     });
-    // FR-NODE-012: the Output node shows the result the engine recorded.
+    // D285: the result the engine recorded is read in the agent's chat, tagged with the run, and
+    // never printed on the Output card.
     const output = nodeOf(graph, 'output');
-    await expect(page.getByTestId(`final-output-${output.id}`)).toBeVisible();
+    await expect(page.getByTestId(`final-output-${output.id}`)).toHaveCount(0);
     const run = await latestRun(workflowId);
     const finalOutput = await api<{ finalOutput?: Record<string, Array<{ text?: string }>> }>(
       `/runs/${run.id}`,
     );
-    await expect(page.getByTestId(`final-output-${output.id}`)).toContainText(
+    await expect(page.getByTestId('chat-run-badge').first()).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId('chat-conversation')).toContainText(
       (finalOutput.finalOutput?.[output.id]?.[0]?.text ?? '').slice(0, 40),
     );
   });
