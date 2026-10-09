@@ -87,6 +87,9 @@ function toModel(row: ModelRow): Model {
     source: row.source,
     lastCheckedAt: row.lastCheckedAt,
     ...(row.pricing === null ? {} : { pricing: JSON.parse(row.pricing) }),
+    ...(row.description === null ? {} : { description: row.description }),
+    ...(row.resolvedModelId === null ? {} : { resolvedModelId: row.resolvedModelId }),
+    ...(row.unavailableReason === null ? {} : { unavailableReason: row.unavailableReason }),
   });
 }
 
@@ -245,6 +248,9 @@ export function createModelRepository(db: Db): ModelRepository {
       model.pricing === undefined
         ? null
         : toJsonColumn(model.pricing, `model(${model.modelId}).pricing`),
+    description: model.description ?? null,
+    resolvedModelId: model.resolvedModelId ?? null,
+    unavailableReason: model.unavailableReason ?? null,
   });
 
   /** A JSON array column holds `["text","image"]`, so a type test is a substring test. */

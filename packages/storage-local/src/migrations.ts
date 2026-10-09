@@ -33,6 +33,13 @@ export const ROUND_5_MIGRATION_ID = '20261001T120000_round_5_knowledge_memory_us
 export const X1_CLI_PROVIDERS_MIGRATION_ID = '20261006T120000_x1_cli_providers';
 
 /**
+ * D285/D286: a chat turn written by a workflow run or standing for a failed reply, the model that
+ * actually answered it, and what a provider says about each model it lists. Named so a test can
+ * apply the chain before it.
+ */
+export const CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID = '20261009T120000_chat_sessions_cli_models';
+
+/**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
  * written.
@@ -548,6 +555,22 @@ export const MIGRATIONS: readonly Migration[] = [
     up: `
       -- X1 (D262): what a CLI provider may do in the project folder. NULL for every other type.
       ALTER TABLE providers ADD COLUMN cli_permission TEXT;
+    `,
+  },
+  {
+    id: CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
+    up: `
+      -- D285: the run a chat turn was written by, the error a failed reply stands for (JSON
+      -- NodeError) and the model that actually answered. NULL on every turn stored before.
+      ALTER TABLE chat_messages ADD COLUMN run_id TEXT;
+      ALTER TABLE chat_messages ADD COLUMN error TEXT;
+      ALTER TABLE chat_messages ADD COLUMN model_id TEXT;
+
+      -- D286: what a provider's own listing says about a model — its description, what an alias
+      -- resolves to, and why it cannot be used. NULL where the provider says nothing.
+      ALTER TABLE models ADD COLUMN description TEXT;
+      ALTER TABLE models ADD COLUMN resolved_model_id TEXT;
+      ALTER TABLE models ADD COLUMN unavailable_reason TEXT;
     `,
   },
 ];

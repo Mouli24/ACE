@@ -13,6 +13,7 @@ import {
   ROUND_5_MIGRATION_ID,
   X1_CLI_PROVIDERS_MIGRATION_ID,
   type Migration,
+  CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
 } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
 import { makeProject, scope } from './fixtures.js';
@@ -101,7 +102,11 @@ describe('Arch §15.3 migration applies on a round-4 database and is recorded', 
     before.sqlite.close();
 
     const after = openDatabase({ path });
-    expect(after.appliedMigrations).toEqual([ROUND_5_MIGRATION_ID, X1_CLI_PROVIDERS_MIGRATION_ID]);
+    expect(after.appliedMigrations).toEqual([
+      ROUND_5_MIGRATION_ID,
+      X1_CLI_PROVIDERS_MIGRATION_ID,
+      CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
+    ]);
     for (const table of NEW_TABLES) expect(tableNames(after.sqlite)).toContain(table);
     expect(columnsOf(after.sqlite, 'node_runs')).toEqual(
       expect.arrayContaining(['sources', 'dropped_sources', 'memory_ops']),
@@ -138,10 +143,13 @@ describe('Arch §15.3 migration applies on a round-4 database and is recorded', 
     again.sqlite.close();
   });
 
-  it('sorts after every earlier migration, and only X1 follows it', () => {
+  it('sorts after every earlier migration, and only X1 and the chat-sessions one follow it', () => {
     const ids = MIGRATIONS.map((migration) => migration.id);
-    expect(ids.indexOf(ROUND_5_MIGRATION_ID)).toBe(ids.length - 2);
-    expect(ids.at(-1)).toBe(X1_CLI_PROVIDERS_MIGRATION_ID);
+    expect(ids.indexOf(ROUND_5_MIGRATION_ID)).toBe(ids.length - 3);
+    expect(ids.slice(-2)).toEqual([
+      X1_CLI_PROVIDERS_MIGRATION_ID,
+      CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
+    ]);
     expect([...ids].sort()).toEqual(ids);
     expect(ROUND_5_MIGRATION_ID).toBe('20261001T120000_round_5_knowledge_memory_usage');
   });
