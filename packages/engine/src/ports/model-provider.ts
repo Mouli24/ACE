@@ -35,6 +35,17 @@ export interface ModelInfo {
   supportsTools: boolean;
   supportsJson: boolean;
   pricing?: ModelPricing;
+  /**
+   * False for a model the provider names but cannot serve right now — a CLI listing a model its
+   * installed version is too old for. Absent means available.
+   */
+  available?: boolean;
+  /** Why it is unavailable, in the provider's own words. */
+  unavailableReason?: string;
+  /** The provider's one-line description. */
+  description?: string;
+  /** What an alias resolves to today (`opus` → `claude-opus-5-5`), when the provider says. */
+  resolvedModelId?: string;
 }
 
 export const FINISH_REASONS = ['stop', 'length', 'refusal', 'tool_calls', 'error'] as const;
@@ -130,6 +141,11 @@ export type StreamChunk =
       summary: string;
       durationMs: number;
     }
+  /**
+   * The model the provider says is actually serving this call — what an alias such as `opus`
+   * resolved to. Recorded as `ModelUsed.resolvedModelId`; it changes nothing about the answer.
+   */
+  | { type: 'model'; modelId: string }
   | { type: 'finish'; reason: FinishReason };
 
 export interface ProviderAdapter {

@@ -25,6 +25,8 @@ import {
 
 import type { ApprovalService } from '../approvals/index.js';
 import type { BudgetService } from '../budgets/index.js';
+import type { NodeRunTurn } from '../chat/service.js';
+import { goalOf, isGoalDriven } from '../graph/validate.js';
 import { buildNodeContext } from '../context/builder.js';
 import type { ContextGuard } from '../context/guard.js';
 import type { SearchService } from '../knowledge/search.js';
@@ -226,6 +228,14 @@ export interface RunServiceDeps {
   memory?: Pick<MemoryService, 'list' | 'apply' | 'markUsed'>;
   /** The day's totals a finished run announces with `usage.updated` (round 5 §2.8, FR-OBS-002). */
   usage?: Pick<UsageService, 'dayTotals'>;
+
+  /**
+   * D285: hands a finished Agent or Model node's goal and result (or failure) to its chat session —
+   * the chat service's `recordRunTurn` — before the node's final state is announced, so a client
+   * that hears the state can already read the turns. Absent, a run writes no chat. A failure here
+   * is logged and never fails the run.
+   */
+  recordNodeTurn?: (turn: NodeRunTurn) => Promise<void>;
 }
 
 /** A ≤120-character description of what crossed an edge (FR-EXE-015, §2.4). */
@@ -1146,6 +1156,57 @@ export function createRunService(deps: RunServiceDeps): RunService {
       });
     }
 
+    /** A failed node whose outcome carried no error of its own — said plainly rather than left blank. */
+    const didNotFinish = (node: Node): NodeError => ({
+      kind: 'workflow',
+      code: 'node_failed',
+      message: `"${node.name}" did not finish.`,
+      retryable: false,
+    });
+
+    /**
+     * D285: a goal-driven node's run, as two turns of its chat session — what it was asked (its
+     * goal, or with none of its own, the text it was handed) and what it produced or why it failed.
+     * The chat is where a node's results are read, so this is not optional bookkeeping; but it is
+     * never allowed to fail the run it describes.
+     */
+    async function handTurnToChat(
+      node: Node,
+      outcome: NodeExecutionOutcome,
+      /** Why it ended without a result; `undefined` means it produced `outcome.output`. */
+      failure: NodeError | undefined,
+    ): Promise<void> {
+      if (deps.recordNodeTurn === undefined || !isGoalDriven(node)) return;
+
+      const goal = goalOf(node);
+      const handed = (envelopesFor.get(node.id) ?? [])
+        .flatMap((envelope) => envelope.reads)
+        .filter((part): part is Extract<Part, { type: 'text' }> => part.type === 'text')
+        .map((part) => part.text)
+        .join('\n\n')
+        .trim();
+      const asked = goal !== '' ? goal : handed;
+
+      try {
+        await deps.recordNodeTurn({
+          nodeId: node.id,
+          runId: run.id,
+          goal: asked === '' ? [] : [{ type: 'text', text: maskSecrets(asked) }],
+          ...(failure === undefined ? { output: outcome.output } : { error: failure }),
+          // The call's own usage; `spentBy` would take the summary ledger's share a second time.
+          usage: outcome.usage,
+          ...(outcome.modelUsed?.resolvedModelId === undefined
+            ? {}
+            : { modelId: outcome.modelUsed.resolvedModelId }),
+        });
+      } catch (error) {
+        logger.warn(
+          { subsystem: 'runs', runId: run.id, nodeId: node.id, err: error },
+          'the node chat could not record this run',
+        );
+      }
+    }
+
     async function finish(
       node: Node,
       nodeRun: NodeRun,
@@ -1190,6 +1251,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
        */
       let status = outcome.status;
       let failureReason = outcome.failureReason;
+      let failure = outcome.error;
       let requeued = false;
 
       if (outcome.status === 'COMPLETED') {
@@ -1239,13 +1301,14 @@ export function createRunService(deps: RunServiceDeps): RunService {
           await repository.nodeRuns.update(scope, nodeRun.id, { loopStop: decision.reason });
 
           if (decision.after === 'fail') {
-            const failure = loopFailure(decision);
+            const loopFailed = loopFailure(decision);
             status = 'FAILED';
-            failureReason = failure.failureReason;
+            failureReason = loopFailed.failureReason;
+            failure = loopFailed.error;
             await repository.nodeRuns.update(scope, nodeRun.id, {
               status: 'FAILED',
-              failureReason: failure.failureReason,
-              error: failure.error,
+              failureReason: loopFailed.failureReason,
+              error: loopFailed.error,
             });
             continue;
           }
@@ -1258,6 +1321,14 @@ export function createRunService(deps: RunServiceDeps): RunService {
             await deliver(from, held.parts, iterations.get(held.nodeId) ?? iteration, held.edges);
           }
         }
+      }
+
+      // D285: the node's chat session hears how it ended before anyone is told the state — a
+      // result, or its own failure (an `invalid_config` one ends it BLOCKED, Arch §28).
+      if (status === 'COMPLETED') {
+        await handTurnToChat(node, outcome, undefined);
+      } else if (status === 'FAILED' || status === 'BLOCKED') {
+        await handTurnToChat(node, outcome, failure ?? didNotFinish(node));
       }
 
       // The requeue has already put the whole body back to IDLE at the next iteration, so only the
@@ -1685,10 +1756,20 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
     await Promise.allSettled(inFlight);
 
-    /* FR-EXE-011: COMPLETE only when every Output node finished and nothing is still going. */
+    /*
+     * FR-EXE-011: COMPLETE only when every Output node finished and nothing is still going. A
+     * workflow with no Output node (goal-driven nodes, D285) finishes on the nodes nothing is
+     * downstream of — every one of them has to have COMPLETED. Loop edges point backwards (D73), so
+     * only data edges make a node "upstream".
+     */
     const outputNodes = nodes.filter((node) => node.kind === 'output');
+    const feeds = new Set(
+      edges.filter((edge) => edge.kind === 'data').map((edge) => edge.from.nodeId),
+    );
+    const finishLine =
+      outputNodes.length > 0 ? outputNodes : nodes.filter((node) => !feeds.has(node.id));
     const allOutputsDone =
-      outputNodes.length > 0 && outputNodes.every((node) => states.get(node.id) === 'COMPLETED');
+      finishLine.length > 0 && finishLine.every((node) => states.get(node.id) === 'COMPLETED');
     const stillBusy = [...states.values()].some((state) => BUSY_STATES.has(state));
 
     const complete = allOutputsDone && !stillBusy && !signal.aborted && budgetHalt === undefined;

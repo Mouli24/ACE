@@ -11,14 +11,18 @@ import {
   type MessageListResponse,
   type MessageQuery,
   type Model,
+  type ModelUsed,
   type Node,
+  type NodeError,
   type Part,
   type PostMessageRequest,
   type PostMessageResponse,
   type Run,
   type StartRunRequest,
+  type Usage,
 } from '@ace/contracts';
 
+import { classifyError } from '../errors/index.js';
 import { createBatcher } from '../events/batcher.js';
 import { workflowUpdatedEvent, type EventBus } from '../events/index.js';
 import type { CheckRunner, SecretMasker } from '../guardrails/checks.js';
@@ -27,6 +31,7 @@ import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
 import type { ModelRouter, ProviderAdapter, Repository, Scope, StreamChunk } from '../ports/index.js';
 import { usageFor } from '../runs/cost.js';
+import { maskSecrets } from '../security/secret-patterns.js';
 import {
   ChatInputBlockedError,
   ChatModelError,
@@ -70,8 +75,29 @@ export interface ChatBegun {
   threadId: Id;
   /** The stored **user** turn, which the client echoes while the reply streams (§2.3). */
   messageId: Id;
-  /** Settles with the persisted agent reply (or a blocked reply), or rejects if the model call failed. */
+  /**
+   * Settles with the persisted agent turn: the reply, a blocked reply, or — when the model call
+   * failed — a turn carrying the `error`, which the client has been sent as `chat.message` too. It
+   * rejects only when not even that turn could be stored.
+   */
   done: Promise<ChatMessage>;
+}
+
+/**
+ * What one finished workflow run of a node writes into that node's chat session: the goal it was
+ * run with and what it produced, or why it failed. The run service hands this over before it
+ * announces the node's final state, so a client that hears the state can already read the turns.
+ */
+export interface NodeRunTurn {
+  nodeId: Id;
+  runId: Id;
+  /** What the node was asked: its goal, or — with no goal of its own — what it was handed. */
+  goal: Part[];
+  output?: Part[];
+  error?: NodeError;
+  usage?: Usage;
+  /** The model the provider reported actually answering (`ModelUsed.resolvedModelId`). */
+  modelId?: string;
 }
 
 export interface ChatService {
@@ -87,6 +113,11 @@ export interface ChatService {
   getThread(threadId: Id): Promise<ChatThreadDetail>;
   /** `DELETE /chat/threads/:id` (§2.4): the thread and its messages, in one transaction. */
   deleteThread(threadId: Id): Promise<void>;
+  /**
+   * Write a finished run of the node into its session — the thread it was last talked to in, or a
+   * new one — and announce both turns on the thread (see {@link NodeRunTurn}).
+   */
+  recordRunTurn(turn: NodeRunTurn): Promise<{ threadId: Id }>;
 }
 
 export interface ChatServiceDeps {
@@ -141,37 +172,50 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     return { checks: deps.checks, masker: deps.masker, now, nextId };
   }
 
+  /** Store one turn, move its thread's `updatedAt`, and announce it on the thread (FR-CHAT-006). */
+  async function store(message: ChatMessage): Promise<ChatMessage> {
+    await repository.chatMessages.append(scope, message);
+    await repository.chatThreads.touch(scope, message.threadId, now());
+    await bus.emit({ type: 'chat.message', payload: { threadId: message.threadId, message } });
+    return message;
+  }
+
   /**
-   * Generate, guard and persist one reply (FR-CHAT-004, FR-CHAT-006, FR-CHAT-008). Never touches a
-   * run: it calls the adapter directly, prices with `usageFor`, and writes only a `ChatMessage`.
+   * The agent turn that stands where a reply could not be produced: the error itself for the client
+   * to style, and the same words as content so every renderer shows something. Only the kind, code
+   * and message are kept — `details` can carry whatever the provider returned — and the message is
+   * masked, because a provider's refusal can quote the key it refused (BR-07).
    */
-  async function generateReply(context: {
-    node: ChatNode;
-    policy: Awaited<ReturnType<PolicyService['resolve']>> | null;
-    threadId: Id;
-    history: readonly ChatMessage[];
-    userParts: readonly Part[];
-    guardrails: ChatGuardrailDeps | undefined;
-  }): Promise<ChatMessage> {
-    const { node, policy, threadId, history, userParts, guardrails } = context;
+  function failedTurn(
+    threadId: Id,
+    error: NodeError,
+    extra: Pick<ChatMessage, 'runId' | 'usage'> = {},
+  ): ChatMessage {
+    const message = maskSecrets(error.message);
+    return {
+      id: nextId(),
+      threadId,
+      role: 'agent',
+      content: [{ type: 'text', text: message }],
+      verdicts: [],
+      error: {
+        kind: error.kind,
+        code: error.code,
+        message,
+        retryable: error.retryable,
+        ...(error.providerId === undefined ? {} : { providerId: error.providerId }),
+      },
+      at: now(),
+      ...extra,
+    };
+  }
 
-    const instructions =
-      node.kind === 'agent' ? node.config.instructions : (node.config.systemPrompt ?? '');
-    const budgetTokens =
-      node.kind === 'agent' ? node.config.contextPolicy.budgetTokens : DEFAULT_CONTEXT_POLICY.budgetTokens;
-
-    const prompt = buildChatPrompt({
-      conversationId: nextId(),
-      nodeId: node.id,
-      instructions,
-      inputTypes: node.config.inputTypes,
-      budgetTokens,
-      history,
-      userParts,
-      now: now(),
-    });
-
-    /* Resolve the model the agent uses (FR-RTR-002); a chat asks for text out. */
+  /**
+   * The model a chat with this node uses (FR-RTR-002), resolved before anything is stored: a node
+   * with no model, a model that is gone or one that cannot answer in text is refused with the
+   * router's own reason, as the 400 the client shows — never a 202 whose reply silently never comes.
+   */
+  function routeFor(node: ChatNode): ModelUsed {
     const routing =
       node.kind === 'agent'
         ? node.config.routing
@@ -186,7 +230,42 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       { failures: [] },
     );
     if (!route.ok) throw new ChatModelError(route.code, route.reason);
-    const chosen = route.route;
+    return route.route;
+  }
+
+  /**
+   * Generate, guard and persist one reply (FR-CHAT-004, FR-CHAT-006, FR-CHAT-008). Never touches a
+   * run: it calls the adapter directly, prices with `usageFor`, and writes only a `ChatMessage`. A
+   * failed call is written too, as a turn carrying its `error`, so the client always hears how the
+   * turn ended.
+   */
+  async function generateReply(context: {
+    node: ChatNode;
+    chosen: ModelUsed;
+    policy: Awaited<ReturnType<PolicyService['resolve']>> | null;
+    threadId: Id;
+    history: readonly ChatMessage[];
+    userParts: readonly Part[];
+    guardrails: ChatGuardrailDeps | undefined;
+  }): Promise<ChatMessage> {
+    const { node, chosen, policy, threadId, history, userParts, guardrails } = context;
+
+    const instructions =
+      node.kind === 'agent' ? node.config.instructions : (node.config.systemPrompt ?? '');
+    const budgetTokens =
+      node.kind === 'agent' ? node.config.contextPolicy.budgetTokens : DEFAULT_CONTEXT_POLICY.budgetTokens;
+
+    const prompt = buildChatPrompt({
+      conversationId: nextId(),
+      nodeId: node.id,
+      instructions,
+      inputTypes: node.config.inputTypes,
+      budgetTokens,
+      // A failed turn is the engine speaking, not the model: it is never replayed as its answer.
+      history: history.filter((message) => message.error === undefined),
+      userParts,
+      now: now(),
+    });
 
     const catalog = await deps.modelsFor();
     const pricing = catalog.find(
@@ -210,6 +289,10 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     let text = '';
     let tokensIn = 0;
     let tokensOut = 0;
+    let answeredBy: string | undefined;
+    /** What the provider itself said the call cost — a CLI's own figure (D263), as a run uses it. */
+    let reportedCostUsd: number | undefined;
+    let failure: NodeError | undefined;
 
     try {
       await deps.runGated(chosen.providerId, async () => {
@@ -236,11 +319,30 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
           } else if (chunk.type === 'usage') {
             tokensIn = chunk.tokensIn;
             tokensOut = chunk.tokensOut;
+            if (chunk.costUsd !== undefined) reportedCostUsd = chunk.costUsd;
+          } else if (chunk.type === 'model') {
+            answeredBy = chunk.modelId;
           }
         }
       });
+    } catch (error) {
+      failure = classifyError(error, { providerId: chosen.providerId });
     } finally {
+      // Before the closing `chat.message`: a token flushed after it would restart the stream.
       tokens.stop();
+    }
+
+    const priced = usageFor(tokensIn, tokensOut, pricing);
+    const usage = reportedCostUsd === undefined ? priced : { ...priced, costUsd: reportedCostUsd };
+
+    if (failure !== undefined) {
+      logger.warn(
+        { subsystem: 'chat', threadId, code: failure.code, kind: failure.kind },
+        'chat reply failed',
+      );
+      return store(
+        failedTurn(threadId, failure, { usage }),
+      );
     }
 
     /* The output point (FR-CHAT-008): a block turns the reply into `[blocked by guardrail: …]`. */
@@ -255,19 +357,16 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       verdicts = checked.verdicts;
     }
 
-    const message: ChatMessage = {
+    return store({
       id: nextId(),
       threadId,
       role: 'agent',
       content: replyParts,
       verdicts,
-      usage: usageFor(tokensIn, tokensOut, pricing),
+      usage,
       at: now(),
-    };
-    await repository.chatMessages.append(scope, message);
-    await repository.chatThreads.touch(scope, threadId, now());
-    await bus.emit({ type: 'chat.message', payload: { threadId, message } });
-    return message;
+      ...(answeredBy === undefined ? {} : { modelId: answeredBy }),
+    });
   }
 
   return {
@@ -342,6 +441,9 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       const { node, projectId } = resolved;
       if (node.kind !== 'agent' && node.kind !== 'model') throw new NotAnAgentNodeError(nodeId);
 
+      // First, before a thread or a turn exists: a node that cannot answer says so in the 400.
+      const chosen = routeFor(node);
+
       const policy =
         deps.policies === undefined ? null : await deps.policies.resolve(projectId, node);
 
@@ -391,6 +493,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
 
       const done = generateReply({
         node,
+        chosen,
         policy,
         threadId: thread.id,
         history,
@@ -418,6 +521,67 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     async deleteThread(threadId) {
       const removed = await repository.chatThreads.delete(scope, threadId);
       if (!removed) throw new ChatThreadNotFoundError(threadId);
+    },
+
+    async recordRunTurn(turn) {
+      /*
+       * The node's session is the thread it was last talked to in — what the chat panel opens on —
+       * or a new one named after the goal. Recency is `updatedAt`, with the ULID id breaking a tie,
+       * so the choice does not depend on the order the repository lists threads in.
+       */
+      const threads = await repository.chatThreads.listByNode(scope, turn.nodeId);
+      const latest = threads.reduce<ChatThread | undefined>(
+        (best, thread) =>
+          best === undefined ||
+          thread.updatedAt > best.updatedAt ||
+          (thread.updatedAt === best.updatedAt && thread.id > best.id)
+            ? thread
+            : best,
+        undefined,
+      );
+      const goal: Part[] = turn.goal.length > 0 ? turn.goal : [{ type: 'text', text: 'Run' }];
+      let thread = latest;
+      if (thread === undefined) {
+        const at = now();
+        thread = await repository.chatThreads.create(scope, {
+          id: nextId(),
+          nodeId: turn.nodeId,
+          title: titleFor(goal),
+          createdAt: at,
+          updatedAt: at,
+        });
+      }
+
+      await store({
+        id: nextId(),
+        threadId: thread.id,
+        role: 'user',
+        content: goal,
+        verdicts: [],
+        at: now(),
+        runId: turn.runId,
+      });
+
+      const extra = {
+        runId: turn.runId,
+        ...(turn.usage === undefined ? {} : { usage: turn.usage }),
+      };
+      await store(
+        turn.error !== undefined
+          ? failedTurn(thread.id, turn.error, extra)
+          : {
+              id: nextId(),
+              threadId: thread.id,
+              role: 'agent',
+              content: turn.output ?? [],
+              verdicts: [],
+              at: now(),
+              ...extra,
+              ...(turn.modelId === undefined ? {} : { modelId: turn.modelId }),
+            },
+      );
+
+      return { threadId: thread.id };
     },
   };
 }

@@ -679,10 +679,12 @@ describe('TC-WF-006 Validation list', () => {
     const unconnected = issues.filter((i) => i.code === 'unconnected_required_input');
     expect(unconnected.length).toBeGreaterThan(0);
     expect(unconnected[0]?.severity).toBe('error');
-    expect(unconnected.map((i) => i.nodeId)).toContain(agent.id);
+    expect(unconnected.map((i) => i.nodeId)).toContain(output.id);
+    // D285: an Agent with a goal may start on its own, so it is not "unconnected".
+    expect(unconnected.map((i) => i.nodeId)).not.toContain(agent.id);
   });
 
-  it('reports a missing Input node and a missing Output node', async () => {
+  it('reports an empty workflow as having nothing to start from, and no longer asks for an Output node', async () => {
     const { workflow } = await seed();
 
     const { issues } = await body<{ issues: ValidationIssue[] }>(
@@ -690,7 +692,7 @@ describe('TC-WF-006 Validation list', () => {
     );
 
     expect(issues.map((i) => i.code)).toContain('no_input_node');
-    expect(issues.map((i) => i.code)).toContain('no_output_node');
+    expect(issues.map((i) => i.code)).not.toContain('no_output_node');
   });
 
   it('reports a missing model as an error from round 2, because a run cannot start without one', async () => {
