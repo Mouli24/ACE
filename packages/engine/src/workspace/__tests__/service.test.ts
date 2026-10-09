@@ -155,4 +155,70 @@ describe('D299 a project folder is watched while someone looks at it', () => {
     service.stopAll();
     expect(stopped).toBe(1);
   });
+
+  it('a late error from a replaced watcher never touches its successor', async () => {
+    const errors: Array<(error: Error) => void> = [];
+    const stops: number[] = [];
+    const service = await serviceOver(
+      fakeFiles({
+        watch: (_root, _onChange, onError) => {
+          const index = errors.length;
+          errors.push(onError);
+          return () => {
+            stops.push(index);
+          };
+        },
+      }),
+    );
+    await service.setWatched(project.id, true);
+    await service.setWatched(project.id, false);
+    await service.setWatched(project.id, true);
+    errors[0]?.(new Error('late'));
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(errors).toHaveLength(2);
+    expect(changedFrames()).toEqual([]);
+    await service.setWatched(project.id, false);
+    expect(stops).toEqual([0, 1]);
+  });
+
+  it('an error after the last subscriber left announces nothing and restarts nothing', async () => {
+    let starts = 0;
+    let fail: ((error: Error) => void) | undefined;
+    const service = await serviceOver(
+      fakeFiles({
+        watch: (_root, _onChange, onError) => {
+          starts += 1;
+          fail = onError;
+          return () => undefined;
+        },
+      }),
+    );
+    await service.setWatched(project.id, true);
+    await service.setWatched(project.id, false);
+    fail?.(new Error('late'));
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(starts).toBe(1);
+    expect(changedFrames()).toEqual([]);
+  });
+
+  it('a restart whose watch throws is retried, never unhandled, and stopAll cancels it', async () => {
+    let starts = 0;
+    let fail: ((error: Error) => void) | undefined;
+    const service = await serviceOver(
+      fakeFiles({
+        watch: (_root, _onChange, onError) => {
+          starts += 1;
+          if (starts === 2) throw new Error('ENOENT: the folder is gone');
+          fail = onError;
+          return () => undefined;
+        },
+      }),
+    );
+    await service.setWatched(project.id, true);
+    fail?.(new Error('died'));
+    await vi.waitFor(() => expect(starts).toBe(3));
+    service.stopAll();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(starts).toBe(3);
+  });
 });
