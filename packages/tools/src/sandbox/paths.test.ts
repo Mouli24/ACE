@@ -237,3 +237,22 @@ describe('TC-GRD-006 a refusal is denied AND logged (NFR-SEC-04)', () => {
     expect(logger.lines).toEqual([]);
   });
 });
+
+describe('review r1: a dangling link cannot hide where it points', () => {
+  it('refuses a path through a dangling junction that points outside', () => {
+    const outside = join(projectFolder, '..', `ace-outside-${Date.now()}`);
+    symlinkSync(outside, join(sandboxDir, 'evil'), 'junction');
+    const resolution = resolveInsideSandbox(sandboxDir, 'evil/new.txt');
+    expect(resolution).toMatchObject({ ok: false, reason: 'symlink_escape' });
+  });
+
+  it('follows a chain of dangling links, and refuses a loop of them', () => {
+    const outside = join(projectFolder, '..', `ace-outside2-${Date.now()}`);
+    symlinkSync(outside, join(sandboxDir, 'b'), 'junction');
+    symlinkSync(join(sandboxDir, 'b'), join(sandboxDir, 'a'), 'junction');
+    expect(resolveInsideSandbox(sandboxDir, 'a/x')).toMatchObject({ reason: 'symlink_escape' });
+    symlinkSync(join(sandboxDir, 'q'), join(sandboxDir, 'p'), 'junction');
+    symlinkSync(join(sandboxDir, 'p'), join(sandboxDir, 'q'), 'junction');
+    expect(resolveInsideSandbox(sandboxDir, 'p/x')).toMatchObject({ ok: false });
+  });
+});

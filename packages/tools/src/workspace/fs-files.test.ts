@@ -1,4 +1,6 @@
 import {
+  chmodSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -12,7 +14,7 @@ import { join } from 'node:path';
 
 import { FILE_EDIT_MAX_BYTES } from '@ace/contracts';
 import { isWorkspaceFsError } from '@ace/engine';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createEntry,
@@ -25,6 +27,20 @@ import {
   versionOf,
   writeFile,
 } from './fs-files.js';
+
+/** A file symlink needs a privilege on Windows; without it the link tests are skipped. */
+const canFileSymlink = ((): boolean => {
+  const dir = mkdtempSync(join(tmpdir(), 'ace-link-probe-'));
+  try {
+    writeFileSync(join(dir, 't'), '');
+    symlinkSync(join(dir, 't'), join(dir, 'l'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
 
 const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
@@ -407,5 +423,57 @@ describe('D299 image previews', () => {
   it('refuses a file over the preview limit', async () => {
     put('big.png', Buffer.alloc(5));
     expect((await refusal(readRaw(project, 'big.png', 4))).code).toBe('file_too_large');
+  });
+});
+
+describe('review r1: saves through links, failed saves, leftovers', () => {
+  it.skipIf(!canFileSymlink)('saves through a symlinked file and keeps the link', async () => {
+    put('AGENTS.md', 'one');
+    symlinkSync(join(project, 'AGENTS.md'), join(project, 'CLAUDE.md'), 'file');
+    const read = await readFile(project, 'CLAUDE.md');
+    if (read.kind !== 'text') throw new Error('expected text');
+    await save('CLAUDE.md', 'two', read.version);
+    expect(lstatSync(join(project, 'CLAUDE.md')).isSymbolicLink()).toBe(true);
+    expect(disk('AGENTS.md').toString()).toBe('two');
+  });
+
+  it.skipIf(process.platform !== 'win32')(
+    'removes its temporary file when the rename fails, and says why',
+    async () => {
+      put('ro.txt', 'one');
+      chmodSync(join(project, 'ro.txt'), 0o444);
+      try {
+        const failure = await refusal(save('ro.txt', 'two', versionOf(Buffer.from('one'))));
+        expect(failure.code).toBe('protected_path');
+        expect(readdirSync(project).filter((n) => n.endsWith('.ace-save'))).toEqual([]);
+        expect(disk('ro.txt').toString()).toBe('one');
+      } finally {
+        chmodSync(join(project, 'ro.txt'), 0o666);
+      }
+    },
+  );
+
+  it('answers a full disk as file_too_large and leaves no temporary file', async () => {
+    const { promises } = await import('node:fs');
+    const real = promises.writeFile.bind(promises);
+    const spy = vi.spyOn(promises, 'writeFile').mockImplementation(async (file) => {
+      await real(file, 'partial');
+      throw Object.assign(new Error('no space'), { code: 'ENOSPC' });
+    });
+    try {
+      const failure = await refusal(save('full.txt', 'x', null));
+      expect(failure.code).toBe('file_too_large');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(readdirSync(project)).toEqual([]);
+  });
+
+  it('never lists a leftover temporary save file', async () => {
+    put('a.ts');
+    put('.x.ace-save', 'junk');
+    put('sub/.y.ace-save', 'junk');
+    expect((await listFolder(project, '')).items.map((e) => e.name)).toEqual(['sub', 'a.ts']);
+    expect((await listAllFiles(project)).files).toEqual(['a.ts']);
   });
 });

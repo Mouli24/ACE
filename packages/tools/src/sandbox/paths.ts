@@ -1,5 +1,5 @@
-import { realpathSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { lstatSync, readlinkSync, realpathSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 
 import { ToolError } from '../errors.js';
 import { SANDBOX_DENIED_MESSAGE, type ToolLogger } from '../logging.js';
@@ -71,6 +71,18 @@ function isInside(root: string, candidate: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
+const MAX_LINK_HOPS = 40;
+
+/** Where `path` points when it is itself a symbolic link that does not resolve, else undefined. */
+function danglingLinkTarget(path: string): string | undefined {
+  try {
+    if (!lstatSync(path).isSymbolicLink()) return undefined;
+    return resolve(dirname(path), readlinkSync(path));
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * The real path of `target`, resolving symlinks as far up the chain as actually exists and then
  * re-appending the segments that do not exist yet. Needed because a file about to be *created*
@@ -79,12 +91,23 @@ function isInside(root: string, candidate: string): boolean {
 export function realpathOfDeepestExisting(target: string): string {
   const missing: string[] = [];
   let current = target;
+  let hops = 0;
 
   for (;;) {
     try {
       const real = realpathSync.native(current);
       return missing.length === 0 ? real : join(real, ...[...missing].reverse());
     } catch {
+      // A dangling link (a junction counts) is not "missing": it says where the file would be
+      // created. Follow it, bounded, so a link out of the folder or into .git cannot hide.
+      const pointsTo = danglingLinkTarget(current);
+      if (pointsTo !== undefined) {
+        hops += 1;
+        // Past the bound (a loop) report the filesystem root: outside any folder worth guarding.
+        if (hops > MAX_LINK_HOPS) return parse(target).root;
+        current = pointsTo;
+        continue;
+      }
       const parent = dirname(current);
       if (parent === current) return target;
       missing.push(basename(current));

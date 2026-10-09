@@ -69,7 +69,12 @@ const notFound = (path: string): WorkspaceFsError =>
 /** The operating system refused: say so, rather than a 500 with no reason (design §10). */
 function refusedByOs(error: unknown, path: string): never {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') {
+  if (code === 'ENOSPC' || code === 'EDQUOT') {
+    throw new WorkspaceFsError('file_too_large', `${path} could not be saved: the disk is full.`, {
+      reason: code,
+    });
+  }
+  if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS' || code === 'EBUSY') {
     throw new WorkspaceFsError(
       'protected_path',
       `${path} cannot be changed: the operating system refused access.`,
@@ -107,6 +112,7 @@ export async function listFolder(root: string, path: string): Promise<FolderList
   const rules = createIgnoreRules(base);
   const items: FileEntry[] = [];
   for (const dirent of await fs.readdir(folder, { withFileTypes: true })) {
+    if (dirent.name.endsWith(SAVE_TEMP_SUFFIX)) continue;
     const absolute = join(folder, dirent.name);
     const rel = relOf(base, absolute);
     if (rules.isHidden(rel)) continue;
@@ -206,8 +212,8 @@ async function atomicWrite(
     dirname(absolute),
     `.${basename(absolute)}.${randomBytes(6).toString('hex')}${SAVE_TEMP_SUFFIX}`,
   );
-  await fs.writeFile(temp, bytes, { flag: 'wx' });
   try {
+    await fs.writeFile(temp, bytes, { flag: 'wx' });
     if (mode !== undefined) await fs.chmod(temp, mode);
     await renameWithRetry(temp, absolute);
   } catch (error) {
@@ -248,7 +254,9 @@ export async function writeFile(root: string, request: SaveFileRequest): Promise
   if (parent === null || !parent.isDirectory()) throw notFound(relOf(base, dirname(absolute)));
 
   try {
-    await atomicWrite(absolute, bytes, current?.mode);
+    // through an existing link, to its (confined) real target, so the link survives
+    const destination = current === null ? absolute : await fs.realpath(absolute);
+    await atomicWrite(destination, bytes, current?.mode);
   } catch (error) {
     refusedByOs(error, request.path);
   }
@@ -352,6 +360,7 @@ export async function listAllFiles(
     }
     dirents.sort((a, b) => collator.compare(a.name, b.name));
     for (const dirent of dirents) {
+      if (dirent.name.endsWith(SAVE_TEMP_SUFFIX)) continue;
       const rel = folder === '' ? dirent.name : `${folder}/${dirent.name}`;
       if (rules.isHidden(rel)) continue;
       if (dirent.isDirectory()) {
