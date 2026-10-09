@@ -66,6 +66,17 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): WorkspaceSer
     void bus.emitTransient({ type: 'files.changed', payload: { projectId, ...batch } });
   };
 
+  /** One delayed restart, shared by a watcher that died and a restart that failed. */
+  function scheduleRestart(projectId: Id): void {
+    if (!wanted.has(projectId)) return;
+    const timer = setTimeout(() => {
+      restarts.delete(timer);
+      void start(projectId);
+    }, restartDelayMs);
+    timer.unref?.();
+    restarts.add(timer);
+  }
+
   async function start(projectId: Id): Promise<void> {
     if (!wanted.has(projectId) || watchers.has(projectId)) return;
     let root: string;
@@ -79,25 +90,36 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): WorkspaceSer
       return;
     }
     if (!wanted.has(projectId) || watchers.has(projectId)) return;
-    const stop = files.watch(
-      root,
-      (batch) => announce(projectId, batch),
-      (error) => {
-        watchers.delete(projectId);
-        logger.warn(
-          { subsystem: 'workspace', projectId, reason: error.message },
-          'the file watcher stopped',
-        );
-        announce(projectId, { changes: [], resync: true });
-        const timer = setTimeout(() => {
-          restarts.delete(timer);
-          void start(projectId);
-        }, restartDelayMs);
-        timer.unref?.();
-        restarts.add(timer);
-      },
-    );
-    watchers.set(projectId, stop);
+    let stop: (() => void) | undefined;
+    let died = false;
+    const onError = (error: Error): void => {
+      // Only the current watcher of a still-wanted project may act; a late error from a
+      // replaced or stopped watcher must not touch its successor or schedule anything.
+      if (!wanted.has(projectId) || watchers.get(projectId) !== stop) return;
+      died = true;
+      watchers.delete(projectId);
+      logger.warn(
+        { subsystem: 'workspace', projectId, reason: error.message },
+        'the file watcher stopped',
+      );
+      announce(projectId, { changes: [], resync: true });
+      scheduleRestart(projectId);
+    };
+    try {
+      stop = files.watch(root, (batch) => announce(projectId, batch), onError);
+    } catch (error) {
+      logger.warn(
+        {
+          subsystem: 'workspace',
+          projectId,
+          reason: error instanceof Error ? error.message : String(error),
+        },
+        'the file watcher could not start',
+      );
+      scheduleRestart(projectId);
+      return;
+    }
+    if (!died) watchers.set(projectId, stop);
   }
 
   return {
