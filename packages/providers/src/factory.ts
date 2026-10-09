@@ -4,6 +4,7 @@ import type { ModelInfo, ProviderAdapter, ProviderAdapterFactory, ProviderDetect
 import { createAnthropicAdapter } from './adapters/anthropic.js';
 import { createClaudeCodeAdapter } from './adapters/cli/claude-code.js';
 import { createCodexAdapter } from './adapters/cli/codex.js';
+import { createGeminiAdapter } from './adapters/cli/gemini.js';
 import { createCliDetector, type CliDetector } from './adapters/cli/detect.js';
 import { createGoogleAdapter } from './adapters/google.js';
 import { createMockAdapter, type MockProviderAdapter } from './adapters/mock.js';
@@ -97,6 +98,12 @@ export function createProviderAdapterFactory(
           return createCodexAdapter({
             permission: provider.cliPermission ?? DEFAULT_CLI_PERMISSION,
             detect: () => cli.detect('codex_cli'),
+          });
+
+        case 'gemini_cli':
+          return createGeminiAdapter({
+            permission: provider.cliPermission ?? DEFAULT_CLI_PERMISSION,
+            detect: () => cli.detect('gemini_cli'),
           });
 
         default:
