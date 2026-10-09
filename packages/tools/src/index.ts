@@ -11,6 +11,7 @@ export * from './sandbox/languages.js';
 export * from './sandbox/collect-files.js';
 
 export * from './project/paths.js';
+export * from './workspace/project-files.js';
 
 export * from './search/backends.js';
 
