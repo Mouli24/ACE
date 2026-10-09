@@ -35,7 +35,7 @@ import { useState, type FormEvent } from 'react';
 import { CliScanSection } from './CliScanSection';
 import { useCreateProvider, useDeleteProvider, useUpdateProvider } from './hooks';
 import {
-  CLI_PERMISSION_HINT,
+  cliPermissionHint,
   CLI_PERMISSION_LABEL,
   NEEDS_API_KEY,
   NEEDS_BASE_URL,
@@ -63,10 +63,12 @@ function ErrorLine({ error }: { error: Error | null }) {
 /** D262's preset, with what it lets the CLI do spelled out under it. */
 function PermissionField({
   id,
+  cliType,
   value,
   onChange,
 }: {
   id: string;
+  cliType: CliProviderType;
   value: CliPermission;
   onChange: (next: CliPermission) => void;
 }) {
@@ -89,7 +91,7 @@ function PermissionField({
         data-testid="cli-permission-hint"
         className={value === 'full_auto' ? 'text-xs text-danger' : 'text-xs text-fg-muted'}
       >
-        {CLI_PERMISSION_HINT[value]}
+        {cliPermissionHint(cliType, value)}
       </p>
     </div>
   );
@@ -197,8 +199,13 @@ export function AddProviderDialog({
             />
           </div>
 
-          {isCli && (
-            <PermissionField id="provider-cli-permission" value={permission} onChange={setPermission} />
+          {isCliProviderType(type) && (
+            <PermissionField
+              id="provider-cli-permission"
+              cliType={type}
+              value={permission}
+              onChange={setPermission}
+            />
           )}
 
           {needsKey && (
@@ -337,9 +344,10 @@ export function EditProviderDialog({
             />
           </div>
 
-          {isCli && (
+          {isCliProviderType(provider.type) && (
             <PermissionField
               id="edit-provider-cli-permission"
+              cliType={provider.type}
               value={permission}
               onChange={setPermission}
             />

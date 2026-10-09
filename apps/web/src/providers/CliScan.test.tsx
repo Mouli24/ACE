@@ -60,6 +60,18 @@ describe('FR-PRV-008 the terminal scan in Add provider (X1)', () => {
     expect(within(dialog).getByTestId('cli-permission-hint')).toHaveTextContent(/any command on your machine/);
   });
 
+  it('tells Codex users it runs commands in its own sandbox, which the other CLIs do not (review I8)', async () => {
+    const user = userEvent.setup();
+    db.createProvider({ type: 'codex_cli', name: 'Codex CLI', concurrency: 1, cliPermission: 'edit_files' });
+    renderApp('/providers');
+
+    await user.click(await screen.findByRole('button', { name: 'Actions for Codex CLI' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Edit' }));
+    const hint = within(screen.getByRole('dialog')).getByTestId('cli-permission-hint');
+    expect(hint).toHaveTextContent(/runs commands inside Codex’s workspace sandbox/);
+    expect(hint).not.toHaveTextContent(/no shell commands/);
+  });
+
   it('shows a CLI provider’s permission where others show the key, and edits it', async () => {
     const user = userEvent.setup();
     const created = db.createProvider({ type: 'claude_code', name: 'Claude Code', concurrency: 1, cliPermission: 'read_only' });
