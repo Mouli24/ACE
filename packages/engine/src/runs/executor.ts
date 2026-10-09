@@ -1,5 +1,6 @@
 import {
   TOOL_RESULT_SUMMARY_MAX,
+  isCliProviderType,
   validateAgainstContract,
   type Envelope,
   type EnvelopeContract,
@@ -346,9 +347,15 @@ interface PendingToolCall {
   args: unknown;
 }
 
-/** One model turn: the tool it asked for, or a stop that caught it while it queued for its slot. */
-type TurnOutcome =
-  { kind: 'cancelled' } | { kind: 'called'; pendingCall: PendingToolCall | undefined };
+/** One model turn: the tools it asked for, or a stop that caught it while it queued for its slot. */
+type TurnOutcome = { kind: 'cancelled' } | { kind: 'called'; pendingCalls: PendingToolCall[] };
+
+/**
+ * A coding-agent CLI's one "turn" is its whole session — reading, editing, running tests — so it
+ * gets at least the longest node timeout the contract allows rather than the 2-minute default sized
+ * for one model reply (review I6). Stop still ends it at once.
+ */
+const CLI_SESSION_MIN_TIMEOUT_MS = 600_000;
 
 /**
  * An accepted, paid-for answer whose memory ops the store refused (13a review m1): Arch §28's
@@ -707,9 +714,11 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       | { kind: 'done'; result: NodeExecutionOutcome }
       | { kind: 'retryable'; error: NodeError; usage: Usage }
     > {
-      const pricing = catalog.find(
+      const catalogRow = catalog.find(
         (model) => model.providerId === chosen.providerId && model.modelId === chosen.modelId,
-      )?.pricing;
+      );
+      const pricing = catalogRow?.pricing;
+      const modelTakesTools = catalogRow?.supportsTools !== false;
 
       const modelUsed: ModelUsed = chosen;
 
@@ -812,9 +821,9 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             break;
           }
 
-          const pendingCall = turn.pendingCall;
+          const pendingCalls = turn.pendingCalls;
           // No tool requested: the turn's text/json/parts are this node's answer (FR-TOOL-003).
-          if (pendingCall === undefined) break;
+          if (pendingCalls.length === 0) break;
 
           // A tool after the model was asked to finish without tools ends the node (FR-TOOL-003).
           if (finalTurn) {
@@ -822,25 +831,34 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             break;
           }
 
-          const handled = await runToolCall(pendingCall, input.signal);
-          if (handled.failed !== undefined) {
-            toolFailure = handled.failed;
-            break;
+          // Every call of the turn, in order — models ask for several at once (review I2). Each is
+          // guarded and counted on its own; the adapter replays them one call, one result at a time.
+          for (const pendingCall of pendingCalls) {
+            const handled = await runToolCall(pendingCall, input.signal);
+            if (handled.failed !== undefined) {
+              toolFailure = handled.failed;
+              break;
+            }
+
+            toolResults.push({
+              callId: pendingCall.callId,
+              name: pendingCall.name,
+              args: pendingCall.args,
+              result: handled.result,
+            });
+            // The result reaches the *recorded* prompt inside an untrusted block (FR-PRM-002); the
+            // adapter itself reads `toolResults` (FR-TOOL-010).
+            promptSuffix.push(toolResultBlock(pendingCall.name, handled.result));
+            toolCallCount += 1;
+
+            // Reaching the limit ends the loop; the model is asked once more with no tools (§2.2).
+            // The turn's later calls are not run, and are not replayed.
+            if (toolCallCount >= toolCallLimit) {
+              finalTurn = true;
+              break;
+            }
           }
-
-          toolResults.push({
-            callId: pendingCall.callId,
-            name: pendingCall.name,
-            args: pendingCall.args,
-            result: handled.result,
-          });
-          // The result reaches the *recorded* prompt inside an untrusted block (FR-PRM-002); the
-          // adapter itself reads `toolResults` (FR-TOOL-010).
-          promptSuffix.push(toolResultBlock(pendingCall.name, handled.result));
-          toolCallCount += 1;
-
-          // Reaching the limit ends the loop; the model is asked once more with no tools (§2.2).
-          if (toolCallCount >= toolCallLimit) finalTurn = true;
+          if (toolFailure !== undefined) break;
         }
 
         /**
@@ -867,7 +885,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
                   called = true;
                   return {
                     kind: 'called',
-                    pendingCall: await generateTurn(continuing, withoutTools),
+                    pendingCalls: await generateTurn(continuing, withoutTools),
                   };
                 } finally {
                   // Still inside the gate: the next node's startedAt can never precede this endedAt.
@@ -883,11 +901,11 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
           }
         }
 
-        /** One generate() call, streamed to the end; the tool it asked for, if any. */
+        /** One generate() call, streamed to the end; the tools it asked for, if any. */
         async function generateTurn(
           withResults: boolean,
           withoutTools: boolean,
-        ): Promise<PendingToolCall | undefined> {
+        ): Promise<PendingToolCall[]> {
           adapter ??= await deps.adapterFor(chosen.providerId);
           /*
            * `execution.timeoutMs` is the node's own clock for one provider turn, and it starts here —
@@ -897,14 +915,20 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
            * rather than a cancellation (D97, Arch §28). A tool enforces its own `timeoutMs` and is
            * cancelled only by the run's own stop signal.
            */
-          const timeoutMs =
+          const nodeTimeoutMs =
             node.kind === 'agent' || node.kind === 'model' ? node.config.execution.timeoutMs : 0;
+          const timeoutMs =
+            nodeTimeoutMs > 0 && isCliProviderType(adapter.type)
+              ? Math.max(nodeTimeoutMs, CLI_SESSION_MIN_TIMEOUT_MS)
+              : nodeTimeoutMs;
           const callSignal =
             timeoutMs > 0
               ? AbortSignal.any([input.signal, AbortSignal.timeout(timeoutMs)])
               : input.signal;
 
-          const offerTools = offeredTools.length > 0 && !withoutTools;
+          // A model the catalog says cannot call tools is not offered them (review I3): a local model
+          // without tool support answers a request that carries them with an error.
+          const offerTools = offeredTools.length > 0 && !withoutTools && modelTakesTools;
           const stream = adapter.generate(
             {
               modelId: chosen.modelId,
@@ -923,7 +947,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             callSignal,
           );
 
-          let pendingCall: PendingToolCall | undefined;
+          const pendingCalls: PendingToolCall[] = [];
           for await (const chunk of stream as AsyncIterable<StreamChunk>) {
             switch (chunk.type) {
               case 'text':
@@ -942,9 +966,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
                 );
                 break;
               case 'tool_call':
-                // One tool per turn: the mock and the round-4 adapters request a single tool and
-                // end the turn on `tool_calls`, so a second in one turn would be a protocol error.
-                pendingCall ??= { callId: chunk.callId, name: chunk.name, args: chunk.args };
+                pendingCalls.push({ callId: chunk.callId, name: chunk.name, args: chunk.args });
                 break;
               case 'usage':
                 // Summed across turns: every generate() turn is its own billed call (Arch §12.7).
@@ -972,7 +994,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
                 break;
             }
           }
-          return pendingCall;
+          return pendingCalls;
         }
 
         /**
