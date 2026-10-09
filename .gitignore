@@ -17,3 +17,7 @@ data/
 
 # the acceptance harness writes the engine's address and token here at run time
 .playwright-engine.json
+
+# the desktop app's staged resources and electron-builder output (D298)
+apps/desktop/stage/
+apps/desktop/release/

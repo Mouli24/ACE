@@ -2,13 +2,16 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { EngineToShellMessageSchema } from '@ace/contracts';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createShutdownHandler,
+  processIpc,
   reportStartupFailure,
   resolveDataDir,
   runEngine,
+  type EngineIpc,
 } from '../cli.js';
 import type { RunningEngine } from '../server.js';
 
@@ -219,4 +222,124 @@ describe('runEngine wiring', () => {
       }),
     ).rejects.toThrow(/Refusing to start/);
   }, 30_000);
+});
+
+describe('FR-DSK-002 the desktop app’s IPC channel (D296)', () => {
+  /** A stand-in for the parent's channel: records what is sent, lets the test deliver. */
+  function fakeIpc() {
+    const sent: unknown[] = [];
+    let onMessage: ((message: unknown) => void) | undefined;
+    let onDisconnect: (() => void) | undefined;
+    const ipc: EngineIpc = {
+      send: (message) => sent.push(message),
+      onMessage: (handler) => {
+        onMessage = handler;
+      },
+      onDisconnect: (handler) => {
+        onDisconnect = handler;
+      },
+    };
+    return {
+      ipc,
+      sent,
+      deliver: (message: unknown) => onMessage?.(message),
+      disconnect: () => onDisconnect?.(),
+    };
+  }
+
+  async function start(port: number, channel: ReturnType<typeof fakeIpc>, codes: number[]) {
+    const order: string[] = [];
+    const { engine } = await runEngine({
+      env: { ACE_DATA_DIR: dir, ACE_PORT: String(port) },
+      exit: (code) => codes.push(code),
+      stdout: { write: () => order.push('banner') },
+      onSignal: () => undefined,
+      ipc: {
+        ...channel.ipc,
+        send: (message) => {
+          order.push('ready');
+          channel.ipc.send(message);
+        },
+      },
+    });
+    return { engine, order };
+  }
+
+  it('sends ready — url, port, token — right after the banner', async () => {
+    const channel = fakeIpc();
+    const { engine, order } = await start(47621, channel, []);
+
+    expect(order).toEqual(['banner', 'ready']);
+    expect(channel.sent).toEqual([
+      { type: 'ready', url: 'http://127.0.0.1:47621', port: 47621, token: engine.token },
+    ]);
+    expect(EngineToShellMessageSchema.parse(channel.sent[0])).toEqual(channel.sent[0]);
+
+    await engine.stop();
+  }, 30_000);
+
+  it('a shutdown message runs the Ctrl-C shutdown and exits 0, once', async () => {
+    const channel = fakeIpc();
+    const codes: number[] = [];
+    const { engine } = await start(47622, channel, codes);
+
+    channel.deliver({ type: 'something-else' });
+    channel.deliver('shutdown');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(codes).toEqual([]);
+
+    channel.deliver({ type: 'shutdown' });
+    channel.deliver({ type: 'shutdown' });
+    channel.disconnect();
+    await vi.waitFor(() => expect(codes).toEqual([0]), { timeout: 10_000 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(codes).toEqual([0]);
+
+    // stop() already ran; a second call is the no-op it always is.
+    await engine.stop();
+  }, 30_000);
+
+  it('a closed channel (the desktop app died) shuts down the same way', async () => {
+    const channel = fakeIpc();
+    const codes: number[] = [];
+    await start(47623, channel, codes);
+
+    channel.disconnect();
+    await vi.waitFor(() => expect(codes).toEqual([0]), { timeout: 10_000 });
+  }, 30_000);
+
+  it('without a channel nothing is sent or listened to (a terminal start is unchanged)', async () => {
+    expect(processIpc({ send: undefined } as unknown as NodeJS.Process)).toBeUndefined();
+  });
+
+  it('processIpc wraps a real parent channel', () => {
+    const sent: unknown[] = [];
+    const listeners: string[] = [];
+    const proc = {
+      send: (message: unknown) => {
+        sent.push(message);
+        return true;
+      },
+      on: (event: string) => {
+        listeners.push(event);
+        return proc;
+      },
+    };
+    const ipc = processIpc(proc as unknown as NodeJS.Process);
+    ipc?.onMessage(() => undefined);
+    ipc?.onDisconnect(() => undefined);
+    ipc?.send({ type: 'ready', url: 'http://127.0.0.1:1', port: 1, token: 't' });
+    expect(listeners).toEqual(['message', 'disconnect']);
+    expect(sent).toHaveLength(1);
+
+    const closed = processIpc({
+      send: () => {
+        throw new Error('ERR_IPC_CHANNEL_CLOSED');
+      },
+      on: () => undefined,
+    } as unknown as NodeJS.Process);
+    expect(() =>
+      closed?.send({ type: 'ready', url: 'http://127.0.0.1:1', port: 1, token: 't' }),
+    ).not.toThrow();
+  });
 });

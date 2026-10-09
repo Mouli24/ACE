@@ -69,6 +69,12 @@ export interface EngineConfig {
   dataDir: string;
   logLevel: (typeof LOG_LEVELS)[number];
   logRetentionDays: number;
+  /**
+   * `ACE_WEB_DIR` (D297): a built web app (`apps/web/dist`) the engine serves on its own origin, as
+   * the packaged desktop app needs. Unset — `pnpm dev`, the browser, the tests — and the engine
+   * serves the API only, as before.
+   */
+  webDir?: string;
 }
 
 export const DEFAULT_ENGINE_CONFIG = {
@@ -142,6 +148,7 @@ function readPortFromEnv(env: Record<string, string | undefined>): number | unde
 export function loadEngineConfig({ dataDir, env }: LoadEngineConfigOptions): EngineConfig {
   const file = readConfigFile(join(dataDir, ENGINE_CONFIG_FILENAME));
   const envPort = readPortFromEnv(env);
+  const webDir = env['ACE_WEB_DIR'];
 
   return {
     host: DEFAULT_ENGINE_CONFIG.host,
@@ -149,5 +156,6 @@ export function loadEngineConfig({ dataDir, env }: LoadEngineConfigOptions): Eng
     dataDir: env['ACE_DATA_DIR'] ?? file.dataDir ?? dataDir,
     logLevel: file.logLevel ?? DEFAULT_ENGINE_CONFIG.logLevel,
     logRetentionDays: file.logRetentionDays ?? DEFAULT_ENGINE_CONFIG.logRetentionDays,
+    ...(webDir === undefined || webDir === '' ? {} : { webDir }),
   };
 }

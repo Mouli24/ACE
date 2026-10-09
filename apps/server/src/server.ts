@@ -125,6 +125,7 @@ import {
 import { WebSocketServer } from 'ws';
 
 import { createPricingLoader } from './pricing.js';
+import { createWebHandler } from './web.js';
 
 export const ENGINE_VERSION = '0.1.0';
 
@@ -271,6 +272,11 @@ export interface StartEngineOptions {
    * point it at a scripted CLI, so `pnpm test` never starts a real one.
    */
   cliResolve?: (bin: string) => ResolvedCommand | undefined;
+  /**
+   * D297: a built web app (`apps/web/dist`) to serve on the engine's own origin, for the packaged
+   * desktop app. Overrides `ACE_WEB_DIR`. Unset, the engine serves the API only, as before.
+   */
+  webDir?: string;
 }
 
 export interface RunningEngine {
@@ -342,6 +348,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
 
   const config = loadEngineConfig({ dataDir: options.dataDir, env });
   const port = options.port ?? config.port;
+  // Checked before anything opens, so a bad ACE_WEB_DIR refuses to start with nothing to undo.
+  const webDir = options.webDir ?? config.webDir;
+  const web = webDir === undefined ? undefined : createWebHandler(webDir);
 
   /* ----------------------------------------------------------------- logging */
 
@@ -1095,6 +1104,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     processes,
     /* IDE (D300): review, keep and revert agents' changes. */
     checkpoints,
+    /* D297: the SPA on the engine's own origin, when ACE_WEB_DIR (or `webDir`) names one. */
+    ...(web === undefined ? {} : { web }),
   });
 
   /* -------------------------------------------------------------------- http */

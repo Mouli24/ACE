@@ -1,3 +1,4 @@
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -15,9 +16,24 @@ import {
 
 import { BRIDGE_CHANNEL, type DesktopBridge } from './bridge.js';
 import { resolveDevConfig, type DevConfig } from './dev-config.js';
+import {
+  EngineStartError,
+  startEngineProcess,
+  type EngineExit,
+  type EngineProcess,
+} from './engine-process.js';
 import { appMenuTemplate, contextMenuTemplate } from './menus.js';
 import { decideLink, engineOrigins, type LinkAction, type ShellOrigins } from './navigation.js';
+import {
+  engineFailureDetail,
+  packagedEngineEnv,
+  packagedFolders,
+  packagedLayout,
+  type PackagedFolders,
+  type PackagedLayout,
+} from './packaged.js';
 import { permissionAllowed } from './permissions.js';
+import { pickFreePort } from './ports.js';
 import { waitForDev, waitForEngine, type DevWaitState } from './readiness.js';
 import { startingPageUrl } from './starting-page.js';
 import { readTokenFile, watchSessionToken } from './token-watch.js';
@@ -28,8 +44,12 @@ import { readTokenFile, watchSessionToken } from './token-watch.js';
  * what a menu holds — is made by an Electron-free module beside it, tested on its own.
  *
  * The engine never runs in this process. In dev the shell attaches to the engine and Vite that
- * `pnpm dev` (or Start ACE.cmd) started, and never starts or stops them.
+ * `pnpm dev` (or Start ACE.cmd) started, and never starts or stops them. Packaged, it starts the
+ * bundled `node.exe` on the deployed engine, talks to it over IPC, and stops it on quit (D296, D298).
  */
+
+/** `appId` in electron-builder.yml: the taskbar and Start-menu identity of the installed app. */
+const APP_ID = 'local.ace.desktop';
 
 const PRELOAD = fileURLToPath(new URL('./preload.cjs', import.meta.url));
 const mode: DesktopBridge['mode'] = app.isPackaged ? 'packaged' : 'dev';
@@ -220,8 +240,125 @@ async function startDev(win: BrowserWindow): Promise<void> {
 
 /* ------------------------------------------------------------- packaged */
 
-async function startPackaged(_win: BrowserWindow): Promise<void> {
-  throw new Error('The packaged app is not built yet (desktop shell, phase 2).');
+/** The engine this shell started (packaged only). */
+let engine: EngineProcess | undefined;
+/** A quit is under way: the engine is being asked to stop. */
+let quitting = false;
+/** The engine has been stopped for the quit; the next `before-quit` goes through. */
+let engineStopped = false;
+
+function engineDialogParent(): BrowserWindow | undefined {
+  return mainWindow !== undefined && !mainWindow.isDestroyed() ? mainWindow : undefined;
+}
+
+/**
+ * Start the bundled engine on a free port and load the SPA from it. A start that fails — the engine
+ * exits first, or says nothing for 60 s — shows its last stderr lines and the log folder, then quits.
+ */
+async function launchEngine(
+  win: BrowserWindow,
+  layout: PackagedLayout,
+  folders: PackagedFolders,
+): Promise<void> {
+  const port = await pickFreePort();
+  const started = startEngineProcess({
+    nodePath: layout.nodePath,
+    mainPath: layout.engineMain,
+    cwd: folders.workDir,
+    env: packagedEngineEnv(process.env, { dataDir: folders.dataDir, port, webDir: layout.webDir }),
+  });
+  engine = started;
+
+  let ready;
+  try {
+    ready = await started.ready;
+  } catch (error) {
+    if (quitting) return;
+    const stderr = error instanceof EngineStartError ? error.stderr : started.tail();
+    const options = {
+      type: 'error' as const,
+      title: 'ACE could not start',
+      message: error instanceof Error ? error.message : 'The engine did not start.',
+      detail: engineFailureDetail(stderr, folders.logDir),
+      buttons: ['Quit'],
+    };
+    const parent = engineDialogParent();
+    if (parent === undefined) dialog.showMessageBoxSync(options);
+    else dialog.showMessageBoxSync(parent, options);
+    app.quit();
+    return;
+  }
+
+  origins = { app: ready.url, engine: engineOrigins(ready.url) };
+  bridge = { engineUrl: ready.url, token: ready.token, mode: 'packaged' };
+  void started.exited.then((exit) => {
+    if (!quitting && engine === started) void engineStoppedUnexpectedly(win, layout, folders, exit);
+  });
+  await load(win, ready.url);
+}
+
+/** The engine died after it was ready: say so, and offer to start it again. */
+async function engineStoppedUnexpectedly(
+  win: BrowserWindow,
+  layout: PackagedLayout,
+  folders: PackagedFolders,
+  exit: EngineExit,
+): Promise<void> {
+  bridge = undefined;
+  const how = exit.code === null ? `signal ${exit.signal ?? 'unknown'}` : `exit code ${exit.code}`;
+  const options = {
+    type: 'error' as const,
+    title: 'ACE',
+    message: `The ACE engine stopped (${how}).`,
+    detail: engineFailureDetail(engine?.tail() ?? [], folders.logDir),
+    buttons: ['Restart', 'Quit'],
+    defaultId: 0,
+    cancelId: 1,
+  };
+  const parent = engineDialogParent();
+  const { response } =
+    parent === undefined
+      ? await dialog.showMessageBox(options)
+      : await dialog.showMessageBox(parent, options);
+  if (response !== 0 || quitting || win.isDestroyed()) {
+    app.quit();
+    return;
+  }
+  await showStatus(win, 'Restarting ACE…');
+  await launchEngine(win, layout, folders);
+}
+
+async function startPackaged(win: BrowserWindow): Promise<void> {
+  const layout = packagedLayout(process.resourcesPath);
+  const folders = packagedFolders({
+    userData: app.getPath('userData'),
+    documents: app.getPath('documents'),
+  });
+  mkdirSync(folders.dataDir, { recursive: true });
+  mkdirSync(folders.workDir, { recursive: true });
+  console.info(
+    `[ace-desktop] packaged: data ${folders.dataDir}, projects under ${folders.workDir}`,
+  );
+  await launchEngine(win, layout, folders);
+}
+
+/**
+ * Quit = stop the engine first: the same shutdown Ctrl-C runs (active runs end HALTED `shutdown`,
+ * the database closes), asked over IPC; after 10 s it is killed. Only then does the app exit.
+ */
+function stopEngineBeforeQuit(event: Electron.Event): void {
+  if (engine === undefined || engineStopped) return;
+  event.preventDefault();
+  if (quitting) return;
+  quitting = true;
+  const running = engine;
+  void running
+    .shutdown(10_000)
+    .then((result) => console.info(`[ace-desktop] engine stopped: ${result}`))
+    .finally(() => {
+      engineStopped = true;
+      app.quit();
+    });
 }
 
 /* ------------------------------------------------------------ lifecycle */
@@ -248,6 +385,7 @@ function fatal(error: unknown): void {
 // A dev window and the installed app must never take each other's single-instance lock or profile:
 // the lock is per user-data folder, and the installed app's is %APPDATA%\ACE.
 if (mode === 'dev') app.setPath('userData', join(app.getPath('appData'), 'ACE Dev'));
+else app.setAppUserModelId(APP_ID);
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -255,6 +393,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', focusWindow);
   app.on('web-contents-created', (_event, contents) => wireContents(contents));
   app.on('window-all-closed', () => app.quit());
+  app.on('before-quit', stopEngineBeforeQuit);
   ipcMain.on(BRIDGE_CHANNEL, (event) => {
     event.returnValue = bridgeFor(event);
   });

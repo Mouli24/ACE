@@ -13,6 +13,8 @@
     "dev:web": "pnpm --filter @ace/web dev",
     "dev:packages": "tsc --build --watch --preserveWatchOutput packages/contracts packages/engine packages/storage-local packages/providers packages/guardrails packages/context packages/tools",
     "desktop:dev": "pnpm --filter @ace/desktop dev",
+    "desktop:stage": "pnpm --filter @ace/desktop stage",
+    "desktop:package": "pnpm --filter @ace/desktop package",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",

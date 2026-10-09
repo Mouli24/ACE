@@ -52,8 +52,11 @@ offline.
 
 | Script                             | What it does                                                           |
 | ---------------------------------- | ---------------------------------------------------------------------- |
-| `pnpm dev`                         | Engine + web together (login URL printed)                              |
+| `pnpm dev`                         | Engine + web + package rebuilder together (login URL printed)          |
 | `pnpm dev:engine` / `pnpm dev:web` | One side only                                                          |
+| `pnpm dev:packages`                | Rebuild engine-side packages on change; the engine restarts on them    |
+| `pnpm desktop:dev`                 | The desktop window, attached to a running `pnpm dev`                   |
+| `pnpm desktop:package`             | Stage, smoke-test and build the Windows installer                      |
 | `pnpm build`                       | Builds every package and app                                           |
 | `pnpm typecheck` / `pnpm lint`     | Whole workspace                                                        |
 | `pnpm test`                        | Unit, integration and component tests, mock provider only, no env vars |
@@ -71,9 +74,25 @@ VITE_ACE_MOCK=1 pnpm dev:web
 Mock state lives in `localStorage`, so two tabs act as two clients of the same engine. Add
 `?fixture=200` to the URL to open a generated 200-node / 400-edge workflow.
 
+## Desktop app (Windows)
+
+ACE also runs as a desktop app. Electron is only the window: the engine always runs in its own
+Node process (`docs/DECISIONS.md` D292–D298).
+
+- **While developing:** start ACE as usual (`Start ACE.cmd`, or `pnpm dev`), then
+  `pnpm desktop:dev`. The window attaches to that engine and Vite — HMR works, and when an
+  engine edit restarts the engine the window reloads itself, still signed in. Closing the window
+  leaves both running. Its profile is `%APPDATA%\ACE Dev`.
+- **Installer:** `pnpm desktop:package` builds everything, stages the engine with its own
+  `node.exe` (`apps/desktop/stage/`), smoke-tests it, and writes
+  `apps/desktop/release/ACE-Setup-<version>.exe` (x64, unsigned, per-user, no admin). The
+  installed app keeps its data in `%APPDATA%\ACE\data` — never `~/.ace` — and new project
+  folders in `Documents\ACE\ace-projects`, so it runs side by side with a dev setup.
+
 ## Layout
 
 ```
+apps/desktop       Electron shell — dev window, packaged app, staging and installer config
 apps/server        local engine entry point (ace-engine)
 apps/web           React/Vite SPA — Canvas, runs, chat, knowledge, onboarding, settings
 packages/contracts the shared contract: every Zod schema, enum and API/WS type
