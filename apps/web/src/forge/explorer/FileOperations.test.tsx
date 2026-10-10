@@ -2,9 +2,10 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { db, installMockServer, renderWithQuery } from '../../test/app';
+import { db, installMockServer, queryClient, renderWithQuery } from '../../test/app';
 import { openFile } from '../editor/actions';
 import { useEditorStore } from '../editor/editor-store';
+import { fileKeys } from '../files/keys';
 import { ExplorerView } from './ExplorerView';
 
 installMockServer();
@@ -108,6 +109,43 @@ describe('D299 FR-GIT-003 file operations in the Explorer', () => {
     }
     await user.click(screen.getByRole('menuitem', { name: /New Folder/ }));
     expect(screen.getByRole('textbox', { name: 'New folder name' })).toBeInTheDocument();
+  });
+});
+
+describe('review minor 1: the context menu acts on what was right-clicked', () => {
+  const menuItems = () => screen.queryAllByRole('menuitem').map((item) => item.textContent);
+
+  it('offers root actions only on the empty area, after a row was right-clicked', async () => {
+    const user = userEvent.setup();
+    const lonely = db.createProject({ name: 'Lonely' }).id;
+    db.seedFiles(lonely, { 'only.md': '' });
+    renderWithQuery(<ExplorerView projectId={lonely} />);
+    fireEvent.contextMenu(await screen.findByTestId('tree-item-only.md'));
+    expect(await screen.findByRole('menuitem', { name: /Rename/ })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+
+    act(() => {
+      db.deleteFileExternally(lonely, 'only.md');
+      void queryClient.invalidateQueries({ queryKey: fileKeys.all(lonely) });
+    });
+    fireEvent.contextMenu(await screen.findByText('This folder is empty.'));
+
+    expect(await screen.findByRole('menuitem', { name: /New File/ })).toBeInTheDocument();
+    expect(menuItems()).toEqual(['New File', 'New Folder']);
+  });
+
+  it('leaves the name field’s own menu to the browser, for paste', async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<ExplorerView projectId={projectId} />);
+    fireEvent.contextMenu(await screen.findByTestId('tree-item-notes.md'));
+    await user.click(await screen.findByRole('menuitem', { name: /New File/ }));
+    const input = screen.getByRole('textbox', { name: 'New file name' });
+
+    // fireEvent answers false when a handler called preventDefault (which hides the native menu)
+    expect(fireEvent.contextMenu(input)).toBe(true);
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(screen.getByRole('textbox', { name: 'New file name' })).toBeInTheDocument();
   });
 });
 

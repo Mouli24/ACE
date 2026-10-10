@@ -205,7 +205,12 @@ export const useEditorStore = create<EditorState>()((set) => {
           files: Object.fromEntries(
             Object.entries(editor.files).map(([path, file]) => [
               move(path),
-              { ...file, path: move(path) },
+              isWithin(path, from)
+                ? // A save begun during the move answers for the old path and never clears these,
+                  // so they start over here; the unsaved mark stays, to save at the new path
+                  // (review minor 2).
+                  { ...file, path: move(path), saving: false, error: undefined }
+                : file,
             ]),
           ),
           active: editor.active === undefined ? undefined : move(editor.active),
@@ -229,6 +234,13 @@ export const useOpenFile = (projectId: string, path: string | undefined): OpenFi
   useEditorStore((state) =>
     path === undefined ? undefined : state.projects[projectId]?.files[path],
   );
+
+/**
+ * What Save all saves, and what enables its button (review I1): an unsaved buffer that is not in
+ * conflict. A clean tab is never written — even one deleted on disk, which Save all would bring
+ * back; that stays the Deleted bar's explicit choice. A conflict is the conflict bar's to resolve.
+ */
+export const needsSaveAll = (file: OpenFile): boolean => file.dirty && file.conflict === undefined;
 
 export const hasUnsavedWork = (state: Pick<EditorState, 'projects'>): boolean =>
   Object.values(state.projects).some((editor) =>
