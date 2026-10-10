@@ -2,7 +2,10 @@ import type { TextFileContent } from '@ace/contracts';
 import { render } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { db, installMockServer, renderWithQuery } from '../../test/app';
 import { asMonaco, createFakeMonaco, type FakeMonaco } from '../../test/fake-monaco';
+import { StatusBar } from '../layout/StatusBar';
+import { useEditorStore } from './editor-store';
 import type * as EditorHostTypes from './EditorHost';
 import { ensureModel, resetModels, setMonaco, viewStateOf } from './models';
 
@@ -23,6 +26,8 @@ const INITIAL: TextFileContent = {
   bom: false,
   size: 1,
 };
+installMockServer();
+
 const P = '01J9ZZZZZZZZZZZZZZZZZZZZZZ';
 let fake: FakeMonaco;
 
@@ -63,6 +68,22 @@ describe('D299 the real editor host keeps each file’s place', () => {
     fake.editors[0]!.line = 7;
     view.rerender(<EditorHost projectId={P} path="b.ts" initial={undefined} />);
     expect(viewStateOf(P, 'a.ts')).toEqual({ line: 7 });
+    view.unmount();
+  });
+});
+
+describe('D299 the status bar reports the encoding of the content actually loaded', () => {
+  it('a file opened with a BOM says so on first open, before any edit or save', async () => {
+    const EditorHost = await realHost();
+    const projectId = db.createProject({ name: 'P' }).id;
+    useEditorStore.getState().open(projectId, 'a.ts');
+    const view = renderWithQuery(
+      <>
+        <EditorHost projectId={projectId} path="a.ts" initial={{ ...INITIAL, bom: true }} />
+        <StatusBar projectId={projectId} />
+      </>,
+    );
+    expect(await view.findByText('UTF-8 with BOM')).toBeInTheDocument();
     view.unmount();
   });
 });

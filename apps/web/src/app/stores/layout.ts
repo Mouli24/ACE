@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 
 export type ForgeView = 'explorer';
-export type ForgePanelTab = 'output';
+export type ForgePanelTab = 'problems' | 'output';
 
 interface LayoutState {
   /** The chat column, in Ideate and in Forge (D299). */
@@ -52,7 +52,7 @@ export const useLayoutStore = create<LayoutState>()(
       sidebarOpen: true,
       sidebarView: 'explorer',
       panelOpen: false,
-      panelTab: 'output',
+      panelTab: 'problems',
       panelMaximized: false,
       toggleChat: () => set((s) => ({ chatOpen: !s.chatOpen })),
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),

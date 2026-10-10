@@ -9,9 +9,12 @@ import { useEditorStore } from './editor-store';
 import { useEditorStatus } from './editor-status';
 import { applyForgeTheme } from './forge-theme';
 import { languageOf } from './languages';
+import { watchMarkers } from '../panel/problems-store';
 import { ensureModel, getModel, saveViewState, setMonaco, viewStateOf } from './models';
 
 setMonaco(monaco);
+// Problems follows every Forge model's markers from the moment the editor chunk loads (6.4).
+watchMarkers(monaco);
 
 export interface EditorHostProps {
   projectId: string;
@@ -86,15 +89,18 @@ export function EditorHost({ projectId, path, initial }: EditorHostProps) {
       shown.current = null;
       return;
     }
-    const file = useEditorStore.getState().projects[projectId]?.files[path];
-    if (initial && file?.baseVersion === undefined)
+    const before = useEditorStore.getState().projects[projectId]?.files[path];
+    if (initial && before?.baseVersion === undefined)
       useEditorStore.getState().loaded(projectId, path, initial.version, initial.bom);
     editor.setModel(model);
     shown.current = { projectId, path };
     const view = viewStateOf(projectId, path);
     if (view !== null) editor.restoreViewState(view);
     editor.focus();
-    useEditorStatus.getState().describe(model, file?.bom ?? initial?.bom ?? false);
+    // Read after loaded(): the store's default bom is false, so a render-time value would hide the
+    // BOM of the content just loaded.
+    const loadedBom = useEditorStore.getState().projects[projectId]?.files[path]?.bom ?? false;
+    useEditorStatus.getState().describe(model, loadedBom);
     const position = editor.getPosition();
     if (position) useEditorStatus.getState().setCursor(position.lineNumber, position.column);
     return () => {

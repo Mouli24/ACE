@@ -12,7 +12,9 @@ import { useSelectionStore } from '../app/stores/selection';
 import { useEditorStore } from '../forge/editor/editor-store';
 import { resetModels, setMonaco } from '../forge/editor/models';
 import { useExplorerStore } from '../forge/explorer/explorer-store';
+import { useEditorStatus } from '../forge/editor/editor-status';
 import { useOutputStore } from '../forge/panel/output-store';
+import { useProblemsStore } from '../forge/panel/problems-store';
 import { useQuickOpen } from '../forge/quick-open/quick-open-store';
 import { MockDb } from '../mocks/db';
 import { createHandlers } from '../mocks/handlers';
@@ -63,6 +65,15 @@ export function installMockServer(): void {
     localStorage.removeItem(LAYOUT_STORAGE_KEY);
     useLayoutStore.setState(initialLayout, true);
     useOutputStore.setState({ lines: {} });
+    useProblemsStore.setState({ byProject: {} });
+    useEditorStatus.setState({
+      line: 1,
+      column: 1,
+      language: 'plaintext',
+      eol: 'LF',
+      indentation: 'Spaces: 2',
+      bom: false,
+    });
   });
   afterEach(() => server.resetHandlers());
   afterAll(() => server.close());
