@@ -39,6 +39,8 @@ export function matches(event: KeyboardEvent, shortcut: Shortcut): boolean {
 export const SHORTCUTS = {
   ideate: { code: 'Digit1', mod: true, shift: true },
   forge: { code: 'Digit2', mod: true, shift: true },
+  /** D303: the third mode beside Ideate and Forge. */
+  domain: { code: 'Digit3', mod: true, shift: true },
   toggleChat: { code: 'KeyB', mod: true, alt: true },
   save: { code: 'KeyS', mod: true },
   saveAll: { code: 'KeyS', mod: true, alt: true },

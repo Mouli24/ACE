@@ -161,7 +161,8 @@ export function TopBar() {
       {workflowId && <RunBar workflowId={workflowId} haltInline={false} />}
       <div className="flex shrink-0 items-center gap-0.5">
         <ApprovalsBadge runId={runId} />
-        {workflowId && mode !== undefined && (
+        {/* The chat column belongs to Ideate and Forge; Domain is a conversation of its own. */}
+        {workflowId && (mode === 'ideate' || mode === 'forge') && (
           <button
             type="button"
             data-testid="chat-toggle"

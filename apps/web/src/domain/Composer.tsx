@@ -22,6 +22,8 @@ export interface ComposerProps {
   states: Readonly<Record<Id, NodeState>>;
   /** A live run takes messages; without one, the message starts a run. */
   live: boolean;
+  /** The run shown has ended: its conversation is read-only, and a message starts a new run. */
+  ended?: boolean;
   readOnly?: boolean;
   onSend(body: ComposerSend): Promise<unknown>;
   onStart(goal: string): Promise<unknown>;
@@ -49,6 +51,7 @@ export function Composer({
   roster,
   states,
   live,
+  ended = false,
   readOnly = false,
   onSend,
   onStart,
@@ -202,7 +205,9 @@ export function Composer({
       )}
       {!live && !readOnly && (
         <p className="text-xs text-fg-muted">
-          No run is going: this starts one, with your message as its goal.
+          {ended
+            ? 'This run has ended — its conversation is read-only. Sending starts a new run, with your message as its goal.'
+            : 'No run is going: this starts one, with your message as its goal.'}
         </p>
       )}
       {errors.length > 0 && (
