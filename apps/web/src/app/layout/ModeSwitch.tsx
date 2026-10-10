@@ -23,7 +23,7 @@ export function ModeSwitch({ projectId, workflowId }: { projectId: string; workf
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     event.preventDefault();
-    const next: WorkflowMode = mode === 'ideate' ? 'forge' : 'ideate';
+    const next: WorkflowMode = mode === 'forge' ? 'ideate' : 'forge';
     go(next);
     buttons.current[next === 'ideate' ? 0 : 1]?.focus();
   };
@@ -44,7 +44,7 @@ export function ModeSwitch({ projectId, workflowId }: { projectId: string; workf
           type="button"
           role="radio"
           aria-checked={mode === value}
-          tabIndex={mode === value ? 0 : -1}
+          tabIndex={(mode ?? 'ideate') === value ? 0 : -1}
           data-testid={`mode-${value}`}
           title={`${label} (${keys})`}
           onClick={() => go(value)}

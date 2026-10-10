@@ -83,4 +83,19 @@ describe('D299 Ideate and Forge, one click apart', () => {
     renderApp(`/projects/${project.id}/workflows/01J9ZZZZZZZZZZZZZZZZZZZZZZ/forge`);
     expect(await screen.findByRole('alert')).toHaveTextContent('Workflow not found.');
   });
+
+  it('offers the switch on the timeline with neither mode checked, and Ideate leads back', async () => {
+    const user = userEvent.setup();
+    const { project, main, ideate } = seed();
+    const { router } = renderApp(`${ideate}/timeline`);
+    expect(await screen.findByTestId('mode-switch')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /Ideate/ })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('radio', { name: /Forge/ })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.queryByTestId('chat-toggle')).toBeNull();
+    expect(screen.queryByTestId('new-node-button')).toBeNull();
+    await user.click(screen.getByRole('radio', { name: /Ideate/ }));
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(`/projects/${project.id}/workflows/${main.id}`),
+    );
+  });
 });

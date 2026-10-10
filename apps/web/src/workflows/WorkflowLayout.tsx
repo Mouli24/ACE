@@ -55,11 +55,12 @@ export function WorkflowLayout() {
         <>
           <PanelResizeHandle className={RESIZE_HANDLE_X} />
           <Panel
+            // the spec's 340 px / 280–560 px, approximated in percent: the library sizes in percent (≈320/256/512 px at 1280 wide)
             id="workflow-chat"
             order={2}
-            defaultSize={24}
-            minSize={16}
-            maxSize={45}
+            defaultSize={25}
+            minSize={20}
+            maxSize={40}
             className="min-h-0 min-w-0"
           >
             {/* a plain box: ChatAside is the landmark (<aside aria-label="Chat">) and draws the rule */}

@@ -65,7 +65,7 @@ export function WorkflowTabs({
               role="tab"
               aria-selected={active}
               className="h-full max-w-[12rem] truncate rounded-chip pl-[13px] pr-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              onClick={() => navigate(workflowPath(projectId, workflow.id, mode))}
+              onClick={() => navigate(workflowPath(projectId, workflow.id, mode ?? 'ideate'))}
             >
               {workflow.name}
             </button>
@@ -87,7 +87,7 @@ export function WorkflowTabs({
                   onSelect={() =>
                     duplicate.mutate(workflow.id, {
                       onSuccess: (graph) =>
-                        navigate(workflowPath(projectId, graph.workflow.id, mode)),
+                        navigate(workflowPath(projectId, graph.workflow.id, mode ?? 'ideate')),
                     })
                   }
                 >
