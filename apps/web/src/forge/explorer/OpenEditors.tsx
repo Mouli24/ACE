@@ -5,7 +5,7 @@ import { useState } from 'react';
 
 import { saveAll } from '../editor/actions';
 import { useCloseRequest } from '../editor/CloseDialogs';
-import { useEditorStore, useProjectEditor } from '../editor/editor-store';
+import { needsSaveAll, useEditorStore, useProjectEditor } from '../editor/editor-store';
 import { nameOf, parentOf } from '../files/paths';
 import { IconAction } from '../layout/IconAction';
 import { FileIcon } from './FileIcon';
@@ -34,7 +34,12 @@ export function OpenEditors({ projectId }: { projectId: string }) {
         <IconAction
           label="Save all"
           Icon={SaveAll}
-          disabled={!editor.tabs.some((path) => editor.files[path]?.dirty === true)}
+          disabled={
+            !editor.tabs.some((path) => {
+              const file = editor.files[path];
+              return file !== undefined && needsSaveAll(file);
+            })
+          }
           onClick={() => void saveAll(projectId, queryClient)}
         />
       </div>

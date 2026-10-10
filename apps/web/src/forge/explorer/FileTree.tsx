@@ -360,10 +360,7 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
             setDropTarget(undefined);
           }}
           {...(editable ? dragTargetProps(folder ? entry.path : parentOf(entry.path), true) : {})}
-          onContextMenu={() => {
-            setMenuTarget(entry);
-            store.getState().select(projectId, entry.path);
-          }}
+          onContextMenu={() => store.getState().select(projectId, entry.path)}
           className={cn(
             'flex h-[22px] cursor-pointer select-none items-center gap-1 pr-2 font-machine text-[12px] outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent',
             entry.path === selected ? 'bg-selection/20 text-fg' : 'text-fg-soft hover:bg-card',
@@ -432,7 +429,12 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
       className={cn('min-h-full py-1 outline-none', dropTarget === '' && 'bg-selection/10')}
       onKeyDown={onKeyDown}
       onContextMenu={(event) => {
-        if (event.target === event.currentTarget) setMenuTarget(undefined);
+        // The menu acts on the row under the pointer, or on the project folder anywhere else — the
+        // empty note and a name field included — never on a row right-clicked earlier (review
+        // minor 1). The name field keeps the browser's own menu: it never reaches this handler.
+        const row = (event.target as Element).closest('[role="treeitem"]');
+        const hit = rows.find((candidate) => rowElements.current.get(candidate.entry.path) === row);
+        setMenuTarget(hit?.entry);
       }}
       {...(editable ? dragTargetProps('', false) : {})}
     >

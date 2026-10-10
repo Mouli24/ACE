@@ -65,6 +65,8 @@ export function InlineName({
           setValue(event.target.value);
           setProblem(undefined);
         }}
+        // the browser's own menu (paste), not the tree's: the tree's menu would preventDefault it
+        onContextMenu={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
           event.stopPropagation();
           if (event.key === 'Enter') void commit(true);

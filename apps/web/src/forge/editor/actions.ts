@@ -8,7 +8,7 @@ import { fileContentQuery } from '../files/hooks';
 import { fileKeys } from '../files/keys';
 import { isWithin, parentOf } from '../files/paths';
 import { logOutput } from '../panel/output-store';
-import { EMPTY_EDITOR, replaceablePreview, useEditorStore } from './editor-store';
+import { EMPTY_EDITOR, needsSaveAll, replaceablePreview, useEditorStore } from './editor-store';
 import { languageOf } from './languages';
 import { disposeModel, getModel, markSaved, moveModels, replaceContent } from './models';
 
@@ -102,8 +102,6 @@ export async function saveFile(
       eol,
       bom: file.bom,
     });
-    markSaved(projectId, path, sent);
-    useEditorStore.getState().saved(projectId, path, result.version);
     const cached: FileContent = {
       kind: 'text',
       path,
@@ -113,7 +111,15 @@ export async function saveFile(
       bom: file.bom,
       size: result.size,
     };
-    queryClient.setQueryData(fileKeys.content(projectId, path), cached);
+    // A refetch that started before the save would land the older text over the saved one, and
+    // the sync would then revert a clean buffer or raise a phantom conflict (review I2): cancel
+    // it before the cache takes the saved text — and both before the store stops `saving`, so the
+    // sync never sees the save finished with the older text still cached.
+    const queryKey = fileKeys.content(projectId, path);
+    await queryClient.cancelQueries({ queryKey });
+    queryClient.setQueryData(queryKey, cached);
+    markSaved(projectId, path, sent);
+    useEditorStore.getState().saved(projectId, path, result.version);
     logOutput(projectId, 'info', `Saved ${path}`);
     return true;
   } catch (error) {
@@ -136,11 +142,11 @@ export async function saveFile(
   }
 }
 
-/** Save every unsaved buffer of the project, one after another. */
+/** Save every unsaved buffer of the project that is not in conflict, one after another (review I1). */
 export async function saveAll(projectId: string, queryClient: QueryClient): Promise<void> {
   const files = useEditorStore.getState().projects[projectId]?.files ?? {};
   for (const [path, file] of Object.entries(files)) {
-    if (file.dirty || file.deletedOnDisk) await saveFile(projectId, path, queryClient);
+    if (needsSaveAll(file)) await saveFile(projectId, path, queryClient);
   }
 }
 

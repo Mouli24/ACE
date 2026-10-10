@@ -10,6 +10,26 @@ import { OpenEditors } from './OpenEditors';
 const P = 'p1';
 beforeEach(() => useEditorStore.setState({ projects: {} }));
 
+describe('review I1: the Save all button', () => {
+  it('is enabled only while an unsaved buffer that is not in conflict exists', () => {
+    renderWithQuery(<OpenEditors projectId={P} />);
+    const button = () => screen.getByRole('button', { name: 'Save all' });
+    act(() => {
+      openFile(P, 'gone.ts');
+      useEditorStore.getState().markDeletedOnDisk(P, 'gone.ts');
+      openFile(P, 'a.ts');
+    });
+    expect(button()).toBeDisabled();
+    act(() => {
+      useEditorStore.getState().setDirty(P, 'a.ts', true);
+      useEditorStore.getState().conflicted(P, 'a.ts', 'changed');
+    });
+    expect(button()).toBeDisabled();
+    act(() => useEditorStore.getState().resolved(P, 'a.ts', 'v2'));
+    expect(button()).toBeEnabled();
+  });
+});
+
 describe('D299 Open editors from the keyboard', () => {
   it('each row is a button that activates its file; a dirty row still has a focusable close button', async () => {
     const user = userEvent.setup();
