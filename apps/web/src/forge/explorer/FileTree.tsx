@@ -54,7 +54,9 @@ export interface FileTreeProps {
  */
 export function FileTree({ projectId, label, onOpen, editable = true }: FileTreeProps) {
   const { rows, loading, error } = useTreeRows(projectId);
-  const { expanded, selected, editing } = useProjectExplorer(projectId);
+  const { expanded, selected, editing: storedEditing } = useProjectExplorer(projectId);
+  // A name field left open at desktop width must not show on a phone; it resumes when the window widens.
+  const editing = editable ? storedEditing : undefined;
   const store = useExplorerStore;
   const status = useRepoStatus(projectId);
   const project = useProject(projectId);
