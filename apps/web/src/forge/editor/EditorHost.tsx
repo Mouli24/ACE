@@ -8,11 +8,14 @@ import { dirtyHandler } from './actions';
 import { useEditorStore } from './editor-store';
 import { useEditorStatus } from './editor-status';
 import { applyForgeTheme } from './forge-theme';
+import { configureLanguageDefaults } from './language-defaults';
 import { languageOf } from './languages';
 import { watchMarkers } from '../panel/problems-store';
 import { ensureModel, getModel, saveViewState, setMonaco, viewStateOf } from './models';
 
 setMonaco(monaco);
+// TS/JS and JSON set for real projects before the first model exists (review I3).
+configureLanguageDefaults(monaco);
 // Problems follows every Forge model's markers from the moment the editor chunk loads (6.4).
 watchMarkers(monaco);
 

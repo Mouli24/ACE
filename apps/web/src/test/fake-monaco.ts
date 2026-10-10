@@ -101,10 +101,57 @@ export function createFakeMonaco() {
     return editor;
   }
 
+  /** A language service's settings, starting from what Monaco 0.55 starts with. */
+  function tsDefaults(compiler: Record<string, unknown>) {
+    let compilerOptions = compiler;
+    let diagnosticsOptions: { diagnosticCodesToIgnore?: number[]; [key: string]: unknown } = {
+      noSemanticValidation: false,
+      noSyntaxValidation: false,
+    };
+    return {
+      getCompilerOptions: () => compilerOptions,
+      setCompilerOptions(next: Record<string, unknown>) {
+        compilerOptions = next;
+      },
+      getDiagnosticsOptions: () => diagnosticsOptions,
+      setDiagnosticsOptions(next: typeof diagnosticsOptions) {
+        diagnosticsOptions = next;
+      },
+    };
+  }
+  let jsonOptions: Record<string, unknown> = {
+    validate: true,
+    allowComments: true,
+    schemas: [],
+    enableSchemaRequest: false,
+    schemaRequest: 'warning',
+    schemaValidation: 'warning',
+    comments: 'error',
+    trailingCommas: 'error',
+  };
+
   return {
     Uri,
     /** Test helper: every editor `editor.create` has made, oldest first. */
     editors,
+    /** The numbers Monaco 0.55's enums carry, and its two TS language services. */
+    typescript: {
+      JsxEmit: { ReactJSX: 4 },
+      ModuleKind: { ESNext: 99 },
+      ScriptTarget: { ESNext: 99 },
+      typescriptDefaults: tsDefaults({ allowNonTsExtensions: true, target: 99 }),
+      javascriptDefaults: tsDefaults({ allowNonTsExtensions: true, allowJs: true, target: 99 }),
+    },
+    json: {
+      jsonDefaults: {
+        get diagnosticsOptions() {
+          return jsonOptions;
+        },
+        setDiagnosticsOptions(next: Record<string, unknown>) {
+          jsonOptions = next;
+        },
+      },
+    },
     MarkerSeverity: { Hint: 1, Info: 2, Warning: 4, Error: 8 },
     editor: {
       createModel,
