@@ -40,35 +40,35 @@ export function OpenEditors({ projectId }: { projectId: string }) {
                 key={path}
                 data-testid={`open-editor-${path}`}
                 className={cn(
-                  'group flex h-[22px] cursor-pointer items-center gap-1.5 pl-6 pr-2 font-machine text-[12px]',
+                  'group flex h-[22px] items-center gap-1.5 pr-2 font-machine text-[12px]',
                   editor.active === path ? 'bg-selection/20 text-fg' : 'text-fg-soft hover:bg-card',
                 )}
-                onClick={() => useEditorStore.getState().activate(projectId, path)}
               >
-                <FileIcon path={path} />
-                <span className="truncate">{nameOf(path)}</span>
-                <span className="min-w-0 flex-1 truncate text-[11px] text-fg-faint">
-                  {parentOf(path)}
-                </span>
-                {file?.dirty === true && (
-                  <span
-                    aria-label="Unsaved changes"
-                    className="h-2 w-2 shrink-0 rounded-full bg-fg group-hover:hidden"
-                  />
-                )}
+                <button
+                  type="button"
+                  onClick={() => useEditorStore.getState().activate(projectId, path)}
+                  className="flex h-full min-w-0 flex-1 items-center gap-1.5 pl-6 text-left"
+                >
+                  <FileIcon path={path} />
+                  <span className="truncate">{nameOf(path)}</span>
+                  <span className="min-w-0 flex-1 truncate text-[11px] text-fg-faint">
+                    {parentOf(path)}
+                  </span>
+                  {file?.dirty === true && (
+                    <>
+                      <span
+                        aria-hidden
+                        className="h-2 w-2 shrink-0 rounded-full bg-fg group-hover:hidden"
+                      />
+                      <span className="sr-only"> (unsaved)</span>
+                    </>
+                  )}
+                </button>
                 <button
                   type="button"
                   aria-label={`Close ${nameOf(path)}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    close([path]);
-                  }}
-                  className={cn(
-                    'h-4 w-4 shrink-0 place-items-center rounded hover:bg-card',
-                    file?.dirty === true
-                      ? 'hidden group-hover:grid'
-                      : 'grid opacity-0 group-hover:opacity-100',
-                  )}
+                  onClick={() => close([path])}
+                  className="grid h-4 w-4 shrink-0 place-items-center rounded opacity-0 hover:bg-card focus-visible:opacity-100 group-hover:opacity-100"
                 >
                   <X className="h-3 w-3" aria-hidden />
                 </button>

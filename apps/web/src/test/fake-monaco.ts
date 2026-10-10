@@ -4,6 +4,20 @@ import type * as Monaco from 'monaco-editor';
  * The slice of Monaco the model registry and the Problems store use, without a browser: models with
  * values, alternative version ids and change events, and markers. `setMarkers` drives Problems.
  */
+interface FakeEditor {
+  line: number;
+  setModel(model: object | null): void;
+  getModel(): object | null;
+  saveViewState(): { line: number } | null;
+  restoreViewState: ReturnType<typeof vi.fn>;
+  focus(): void;
+  dispose(): void;
+  getPosition(): { lineNumber: number; column: number };
+  onDidChangeCursorPosition(listener: unknown): { dispose(): void };
+  revealLineInCenter(line: number): void;
+  setPosition(position: unknown): void;
+}
+
 export function createFakeMonaco() {
   class Uri {
     constructor(
@@ -60,11 +74,41 @@ export function createFakeMonaco() {
     return model;
   }
 
+  const editors: FakeEditor[] = [];
+  function createEditor(): FakeEditor {
+    let attached: object | null = null;
+    let disposed = false;
+    const editor: FakeEditor = {
+      line: 1,
+      setModel: (model) => {
+        attached = model;
+      },
+      getModel: () => attached,
+      /** Like Monaco: nothing to save once the editor is disposed and detached from its model. */
+      saveViewState: () => (disposed || attached === null ? null : { line: editor.line }),
+      restoreViewState: vi.fn(),
+      focus: () => undefined,
+      dispose: () => {
+        disposed = true;
+        attached = null;
+      },
+      getPosition: () => ({ lineNumber: editor.line, column: 1 }),
+      onDidChangeCursorPosition: () => ({ dispose: () => undefined }),
+      revealLineInCenter: () => undefined,
+      setPosition: () => undefined,
+    };
+    editors.push(editor);
+    return editor;
+  }
+
   return {
     Uri,
+    /** Test helper: every editor `editor.create` has made, oldest first. */
+    editors,
     MarkerSeverity: { Hint: 1, Info: 2, Warning: 4, Error: 8 },
     editor: {
       createModel,
+      create: createEditor,
       getModel: (uri: Uri) => models.get(uri.toString()) ?? null,
       getModels: () => [...models.values()],
       getModelMarkers: () => markers,

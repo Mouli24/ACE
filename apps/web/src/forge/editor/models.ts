@@ -98,7 +98,8 @@ export function saveViewState(
   viewState: Monaco.editor.ICodeEditorViewState | null,
 ): void {
   const entry = entries.get(keyOf(projectId, path));
-  if (entry !== undefined) entry.viewState = viewState;
+  // A null is Monaco having nothing to give (a disposed editor), never a reason to forget a place.
+  if (entry !== undefined && viewState !== null) entry.viewState = viewState;
 }
 
 export function viewStateOf(
