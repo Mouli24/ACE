@@ -28,6 +28,8 @@ export interface EditorHostProps {
 export function EditorHost({ projectId, path, initial }: EditorHostProps) {
   const container = useRef<HTMLDivElement>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  /** The file whose model the editor shows now, so unmounting can save its place first. */
+  const shown = useRef<{ projectId: string; path: string } | null>(null);
   const theme = useResolvedTheme();
   const reveal = useEditorStore((state) => state.projects[projectId]?.reveal);
 
@@ -54,6 +56,10 @@ export function EditorHost({ projectId, path, initial }: EditorHostProps) {
       useEditorStatus.getState().setCursor(event.position.lineNumber, event.position.column),
     );
     return () => {
+      // Before dispose: a disposed editor has detached its model and has no view state to give.
+      if (shown.current !== null) {
+        saveViewState(shown.current.projectId, shown.current.path, editor.saveViewState());
+      }
       cursor.dispose();
       editor.dispose();
       editorRef.current = null;
@@ -76,18 +82,25 @@ export function EditorHost({ projectId, path, initial }: EditorHostProps) {
             dirtyHandler(projectId, path),
           )
         : undefined);
-    if (model === undefined) return;
+    if (model === undefined) {
+      shown.current = null;
+      return;
+    }
     const file = useEditorStore.getState().projects[projectId]?.files[path];
     if (initial && file?.baseVersion === undefined)
       useEditorStore.getState().loaded(projectId, path, initial.version, initial.bom);
     editor.setModel(model);
+    shown.current = { projectId, path };
     const view = viewStateOf(projectId, path);
     if (view !== null) editor.restoreViewState(view);
     editor.focus();
     useEditorStatus.getState().describe(model, file?.bom ?? initial?.bom ?? false);
     const position = editor.getPosition();
     if (position) useEditorStatus.getState().setCursor(position.lineNumber, position.column);
-    return () => saveViewState(projectId, path, editor.saveViewState());
+    return () => {
+      // On a path change the editor is alive; on unmount the creation cleanup has already saved.
+      saveViewState(projectId, path, editor.saveViewState());
+    };
     // `initial` only seeds a new model (see above), so it is not a dependency.
   }, [projectId, path]);
 

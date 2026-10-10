@@ -92,3 +92,38 @@ describe('D299 FR-GIT-004 the editor area', () => {
     expect(screen.queryByTestId('fake-editor')).toBeNull();
   });
 });
+
+describe('D299 the tabs work from the keyboard', () => {
+  it('ArrowRight moves to and activates the next tab, wrapping at the end', async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<EditorArea projectId={projectId} />);
+    act(() => {
+      openFile(projectId, 'src/app.ts');
+      openFile(projectId, 'src/index.ts');
+    });
+    const first = await screen.findByTestId('tab-src/app.ts');
+    act(() => useEditorStore.getState().activate(projectId, 'src/app.ts'));
+    first.focus();
+    await user.keyboard('{ArrowRight}');
+    expect(screen.getByTestId('tab-src/index.ts')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('tab-src/index.ts')).toHaveFocus();
+    await user.keyboard('{ArrowRight}');
+    expect(screen.getByTestId('tab-src/app.ts')).toHaveAttribute('aria-selected', 'true');
+    await user.keyboard('{End}');
+    expect(screen.getByTestId('tab-src/index.ts')).toHaveFocus();
+    await user.keyboard('{Home}');
+    expect(screen.getByTestId('tab-src/app.ts')).toHaveFocus();
+  });
+
+  it('a dirty tab says so in its name, and its close button is not inside the tab', async () => {
+    renderWithQuery(<EditorArea projectId={projectId} />);
+    act(() => {
+      openFile(projectId, 'src/app.ts');
+      useEditorStore.getState().setDirty(projectId, 'src/app.ts', true);
+    });
+    expect(await screen.findByRole('tab', { name: /app\.ts.*unsaved/i })).toBeInTheDocument();
+    const tab = screen.getByTestId('tab-src/app.ts');
+    expect(within(tab).queryByRole('button')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Close app.ts' })).toBeInTheDocument();
+  });
+});
