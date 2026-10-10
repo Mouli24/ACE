@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import {
   ENGINE_EVENT_FRAME_SCHEMAS,
+  PROJECT_EVENT_FRAME_SCHEMAS,
   RUN_EVENT_FRAME_SCHEMAS,
   SeqSchema,
   THREAD_EVENT_FRAME_SCHEMAS,
@@ -26,8 +27,10 @@ export const WS_CLOSE_UNAUTHORIZED = 4401;
  * What a client may subscribe to. Round 4 §2.5 adds `thread`: a direct chat streams on its own
  * subscription, so an open chat panel receives `chat.token` and `chat.message` without the run
  * traffic of the workflow it belongs to — and a chat touches no run at all (FR-CHAT-005).
+ * D299 adds `project`: Forge's `files.changed` frames for one project folder, and the engine
+ * watches that folder only while someone subscribes.
  */
-export const WS_SCOPES = ['workflow', 'engine', 'thread'] as const;
+export const WS_SCOPES = ['workflow', 'engine', 'thread', 'project'] as const;
 export const WsScopeSchema = z.enum(WS_SCOPES);
 export type WsScope = z.infer<typeof WsScopeSchema>;
 
@@ -43,6 +46,7 @@ export const WsSubscribePayloadSchema = z.discriminatedUnion('scope', [
   z.object({ scope: z.literal('workflow'), id: IdSchema }),
   z.object({ scope: z.literal('engine') }),
   z.object({ scope: z.literal('thread'), id: IdSchema }),
+  z.object({ scope: z.literal('project'), id: IdSchema }),
 ]);
 export type WsSubscribePayload = z.infer<typeof WsSubscribePayloadSchema>;
 
@@ -104,6 +108,7 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
   ...RUN_EVENT_FRAME_SCHEMAS,
   ...THREAD_EVENT_FRAME_SCHEMAS,
   ...ENGINE_EVENT_FRAME_SCHEMAS,
+  ...PROJECT_EVENT_FRAME_SCHEMAS,
 ]);
 export type ServerFrame = z.infer<typeof ServerFrameSchema>;
 

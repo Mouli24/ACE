@@ -90,6 +90,25 @@ import {
   type Workflow,
   type WorkflowExport,
   type WorkflowGraphResponse,
+  // Forge (D299): project files
+  CreateEntryRequestSchema,
+  FileContentSchema,
+  FileEntrySchema,
+  FileListSchema,
+  FolderListingSchema,
+  MoveEntryRequestSchema,
+  RepoStatusSchema,
+  SaveFileRequestSchema,
+  SaveFileResultSchema,
+  type CreateEntryRequest,
+  type FileContent,
+  type FileEntry,
+  type FileList,
+  type FolderListing,
+  type MoveEntryRequest,
+  type RepoStatus,
+  type SaveFileRequest,
+  type SaveFileResult,
   // Round 4 §2.4 (artifacts, tools, MCP servers, timeline messages, direct chat)
   ArtifactSchema,
   ToolListResponseSchema,
@@ -760,6 +779,44 @@ export function createAceClient(options: AceClientOptions) {
       });
       return parseJson(response, '/backup/import', BackupImportResponseSchema);
     },
+
+    /* IDE — Forge's project files (D299, design §6.1) */
+    listFolder: (projectId: Id, path = ''): Promise<FolderListing> =>
+      request('GET', `/projects/${projectId}/files/tree`, FolderListingSchema, undefined, { path }),
+    readFile: (projectId: Id, path: string): Promise<FileContent> =>
+      request('GET', `/projects/${projectId}/files/content`, FileContentSchema, undefined, { path }),
+    /** The bytes of a file (image previews); an error answers as an `AceApiError` like any route. */
+    readFileRaw: async (projectId: Id, path: string, signal?: AbortSignal): Promise<Blob> => {
+      const response = await send(
+        'GET',
+        `/projects/${projectId}/files/raw`,
+        { accept: '*/*', ...(signal === undefined ? {} : { signal }) },
+        { path },
+      );
+      if (!response.ok) throw AceApiError.fromResponse(response.status, await readJson(response));
+      return response.blob();
+    },
+    saveFile: (projectId: Id, body: SaveFileRequest): Promise<SaveFileResult> =>
+      request('PUT', `/projects/${projectId}/files/content`, SaveFileResultSchema, {
+        schema: SaveFileRequestSchema,
+        value: body,
+      }),
+    createEntry: (projectId: Id, body: CreateEntryRequest): Promise<FileEntry> =>
+      request('POST', `/projects/${projectId}/files/entries`, FileEntrySchema, {
+        schema: CreateEntryRequestSchema,
+        value: body,
+      }),
+    moveEntry: (projectId: Id, body: MoveEntryRequest): Promise<FileEntry> =>
+      request('POST', `/projects/${projectId}/files/move`, FileEntrySchema, {
+        schema: MoveEntryRequestSchema,
+        value: body,
+      }),
+    deleteEntry: (projectId: Id, path: string): Promise<void> =>
+      request('DELETE', `/projects/${projectId}/files/entries`, NoContentSchema, undefined, { path }),
+    listAllFiles: (projectId: Id): Promise<FileList> =>
+      request('GET', `/projects/${projectId}/files/list`, FileListSchema),
+    repoStatus: (projectId: Id): Promise<RepoStatus> =>
+      request('GET', `/projects/${projectId}/files/status`, RepoStatusSchema),
   };
 }
 

@@ -51,11 +51,25 @@ export const ROUND_4_ERROR_CODES = [
   'guardrail_blocked',
 ] as const;
 
+/**
+ * Codes Forge's file API adds (D299, design §6.1): a save on a stale base (409, with the disk's
+ * version in `details`), a create or move onto an existing path (409), a save over the editable
+ * size (413), a path outside the project folder (403) and a write into `.git`/`.ace` (403).
+ */
+export const IDE_ERROR_CODES = [
+  'file_changed',
+  'exists',
+  'file_too_large',
+  'outside_project',
+  'protected_path',
+] as const;
+
 export const ERROR_CODES = [
   ...ROUND_1_ERROR_CODES,
   ...ROUND_2_ERROR_CODES,
   ...ROUND_3_ERROR_CODES,
   ...ROUND_4_ERROR_CODES,
+  ...IDE_ERROR_CODES,
 ] as const;
 export const ErrorCodeSchema = z.enum(ERROR_CODES);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
@@ -77,6 +91,11 @@ export const ERROR_CODE_HTTP_STATUS: Readonly<Record<ErrorCode, number>> = {
   upload_too_large: 413,
   unsupported_type: 415,
   guardrail_blocked: 422,
+  file_changed: 409,
+  exists: 409,
+  file_too_large: 413,
+  outside_project: 403,
+  protected_path: 403,
 };
 
 /** `details` shapes §2.3 names explicitly. */

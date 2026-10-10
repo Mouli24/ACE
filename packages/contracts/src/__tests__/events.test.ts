@@ -8,6 +8,7 @@ import {
   EventsQuerySchema,
   PERSISTED_RUN_EVENT_TYPES,
   PERSISTED_THREAD_EVENT_TYPES,
+  PROJECT_EVENT_TYPES,
   RUN_EVENT_TYPES,
   RunEventSchema,
   THREAD_EVENT_TYPES,
@@ -345,7 +346,8 @@ describe('FR-EXE-014 RunEvent covers every type of round 2 §2.4 and round 3 §2
 
 describe('§2.4 node.token is transient, and round 4 §2.5 chat.token with it', () => {
   it('names the two types that carry no seq', () => {
-    expect([...TRANSIENT_EVENT_TYPES]).toEqual(['node.token', 'chat.token']);
+    expect([...TRANSIENT_EVENT_TYPES]).toEqual(['node.token', 'chat.token', 'files.changed']);
+    expect([...PROJECT_EVENT_TYPES]).toEqual(['files.changed']);
     expect([...PERSISTED_RUN_EVENT_TYPES]).not.toContain('node.token');
     expect(PERSISTED_RUN_EVENT_TYPES).toHaveLength(RUN_EVENT_TYPES.length - 1);
     expect([...PERSISTED_THREAD_EVENT_TYPES]).toEqual(['chat.message']);

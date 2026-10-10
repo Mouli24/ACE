@@ -51,6 +51,7 @@ import {
   createTraceService,
   createTruncatingSummariser,
   createUsageService,
+  createWorkspaceService,
   createWsHub,
   guardrailStoreFor,
   haltActiveRuns,
@@ -111,6 +112,7 @@ import {
   McpManager,
   ToolRegistry,
   cannedResultsAt,
+  createFsProjectFiles,
   registerBuiltinTools,
 } from '@ace/tools';
 import { WebSocketServer } from 'ws';
@@ -377,12 +379,28 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   /* ------------------------------------------------------------------ engine */
 
   const bus = createEventBus({ repository, scope: LOCAL_SCOPE, pubsub });
+  // Forge's project files (D299): a project folder is watched while a client subscribes to its scope.
+  const workspace = createWorkspaceService({
+    repository,
+    scope: LOCAL_SCOPE,
+    files: createFsProjectFiles(),
+    bus,
+    logger: logger.child({ subsystem: 'workspace' }),
+  });
   const hub = createWsHub({
     bus,
     repository,
     scope: LOCAL_SCOPE,
     auth,
     logger,
+    onProjectWatch: (projectId, watched) => {
+      workspace.setWatched(projectId, watched).catch((error: unknown) => {
+        logger.warn(
+          { subsystem: 'workspace', projectId, reason: error instanceof Error ? error.message : String(error) },
+          'could not change the project watch',
+        );
+      });
+    },
   });
 
   /* --------------------------------------------------------- model serving */
@@ -1019,6 +1037,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     usage,
     templates,
     backup,
+    /* IDE (D299): Forge's project files. */
+    workspace,
   });
 
   /* -------------------------------------------------------------------- http */
@@ -1114,6 +1134,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     timeline.unsubscribe();
     await mcpManager.closeAll();
 
+    workspace.stopAll();
     hub.closeAll();
     wss.close();
     // `server.close()` stops accepting, then waits for every open connection to end. Node closes

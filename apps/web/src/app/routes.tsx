@@ -8,6 +8,7 @@ import { OnboardingPage } from '../onboarding/OnboardingPage';
 import { UsagePage } from '../usage/UsagePage';
 import { ProjectPage } from '../projects/ProjectPage';
 import { ProjectsPage } from '../projects/ProjectsPage';
+import { ForgePage } from '../forge/ForgePage';
 import { GuardrailsPage } from '../guardrails/GuardrailsPage';
 import { ProvidersPage } from '../providers/ProvidersPage';
 import { ProjectRunsPage } from '../runs/ProjectRunsPage';
@@ -15,6 +16,7 @@ import { RunDetailPage } from '../runs/RunDetailPage';
 import { SettingsPage } from '../settings/SettingsPage';
 import { ToolsLibraryPage } from '../library/ToolsLibraryPage';
 import { TimelinePage } from '../timeline/TimelinePage';
+import { WorkflowLayout } from '../workflows/WorkflowLayout';
 import { WorkflowPage } from '../workflows/WorkflowPage';
 import { HomeRedirect } from './HomeRedirect';
 import { AppShell } from './layout/AppShell';
@@ -32,8 +34,16 @@ export const routes: RouteObject[] = [
       { path: 'onboarding', element: <OnboardingPage /> },
       { path: 'projects', element: <ProjectsPage /> },
       { path: 'projects/:projectId', element: <ProjectPage /> },
-      { path: 'projects/:projectId/workflows/:workflowId', element: <WorkflowPage /> },
-      // Domain (D303): the run as its team's conversation; ?run= and ?node= pick the run and lens.
+      {
+        path: 'projects/:projectId/workflows/:workflowId',
+        element: <WorkflowLayout />,
+        children: [
+          { index: true, element: <WorkflowPage /> },
+          { path: 'forge', element: <ForgePage /> },
+        ],
+      },
+      // Domain (D303): the run as its team's conversation, full screen with its own team panel —
+      // beside the workflow layout, not inside its chat column. ?run= and ?node= pick run and lens.
       { path: 'projects/:projectId/workflows/:workflowId/domain', element: <DomainPage /> },
       {
         path: 'projects/:projectId/workflows/:workflowId/timeline',

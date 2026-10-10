@@ -1,6 +1,7 @@
 import {
   BarChart3,
   CircleHelp,
+  MessageSquare,
   MoreHorizontal,
   PanelRight,
   Plus,
@@ -16,6 +17,7 @@ import {
   DropdownMenuTrigger,
   cn,
 } from '@ace/ui';
+import { useWorkflowMode } from '../../forge/mode';
 import { useProject } from '../../projects/hooks';
 import { ProviderStatusBar } from '../../providers/ProviderStatusBar';
 import { CompactMenu } from '../../responsive/CompactMenu';
@@ -26,7 +28,10 @@ import { useRunStore } from '../../runs/run-store';
 import { DayTotalsChip } from '../../usage/DayTotalsChip';
 import { SHEET_ID } from '../../workflows/WorkflowSheet';
 import { WorkflowTabs } from '../../workflows/WorkflowTabs';
+import { useLayoutStore } from '../stores/layout';
 import { usePanelsStore } from '../stores/panels';
+import { ModeSwitch } from './ModeSwitch';
+import { SHORTCUTS, shortcutLabel } from '../shortcuts';
 
 /** Usage, Guardrail policies, Settings and Help: an icon row at xl and up, the More menu below. */
 const LINKS = [
@@ -40,7 +45,8 @@ const ICON_BUTTON =
   'grid h-8 w-8 place-items-center rounded-chip text-fg-muted hover:bg-border hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent';
 
 /**
- * Top bar: project name, workflow tabs, live provider status (FR-PRV-004), and — on a Canvas — the
+ * Top bar: project name, workflow tabs, the Ideate | Forge switch (D299, New node and the workflow
+ * panel toggle belong to Ideate), a chat toggle, live provider status (FR-PRV-004), and — on a Canvas — the
  * run controls with the run's status and totals (FR-EXE-001, FR-OBS-002, FR-CTL-001..004), plus a
  * count of the approvals waiting on a person (FR-GRD-013).
  *
@@ -56,6 +62,9 @@ export function TopBar() {
   const openSheet = usePanelsStore((store) => store.openSheet);
   const closeSheet = usePanelsStore((store) => store.closeSheet);
   const openNewNode = usePanelsStore((store) => store.openNewNode);
+  const mode = useWorkflowMode();
+  const chatOpen = useLayoutStore((store) => store.chatOpen);
+  const toggleChat = useLayoutStore((store) => store.toggleChat);
 
   if (compact) {
     return (
@@ -95,7 +104,8 @@ export function TopBar() {
           />
         </div>
         {workflowId && (
-          <div className="min-w-0 overflow-x-auto px-3 pb-2">
+          <div className="flex min-w-0 items-center gap-2 overflow-x-auto px-3 pb-2">
+            {projectId && <ModeSwitch projectId={projectId} workflowId={workflowId} />}
             <RunBar workflowId={workflowId} />
           </div>
         )}
@@ -140,6 +150,7 @@ export function TopBar() {
           <WorkflowTabs projectId={projectId} activeWorkflowId={workflowId} />
         </div>
       )}
+      {projectId && workflowId && <ModeSwitch projectId={projectId} workflowId={workflowId} />}
       <div className="flex-1" />
       <ProviderStatusBar />
       {/* On a Canvas the run bar already shows this run's totals; the day's wait for a wide screen. */}
@@ -150,7 +161,20 @@ export function TopBar() {
       {workflowId && <RunBar workflowId={workflowId} haltInline={false} />}
       <div className="flex shrink-0 items-center gap-0.5">
         <ApprovalsBadge runId={runId} />
-        {workflowId && (
+        {workflowId && mode !== undefined && (
+          <button
+            type="button"
+            data-testid="chat-toggle"
+            aria-label="Chat"
+            aria-pressed={chatOpen}
+            title={`Chat (${shortcutLabel(SHORTCUTS.toggleChat)})`}
+            className={cn(ICON_BUTTON, chatOpen && 'bg-border text-fg')}
+            onClick={toggleChat}
+          >
+            <MessageSquare className="h-4 w-4" aria-hidden />
+          </button>
+        )}
+        {workflowId && mode === 'ideate' && (
           <button
             type="button"
             data-testid="sheet-toggle"
@@ -195,7 +219,7 @@ export function TopBar() {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      {workflowId && (
+      {workflowId && mode === 'ideate' && (
         <button
           type="button"
           data-testid="new-node-button"

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   WS_CLOSE_UNAUTHORIZED,
   WS_PATH,
+  ServerFrameSchema,
   WS_SCOPES,
   WsClientFrameSchema,
   WsServerFrameSchema,
@@ -62,8 +63,24 @@ describe('FR-EXE-014 WebSocket client frames', () => {
     expect(WsClientFrameSchema.safeParse({ type: 'ping', payload: {} }).success).toBe(false);
   });
 
-  it('declares §2.9’s two scopes plus round 4 §2.5’s thread', () => {
-    expect([...WS_SCOPES]).toEqual(['workflow', 'engine', 'thread']);
+  it('declares §2.9’s two scopes, round 4 §2.5’s thread and Forge’s project (D299)', () => {
+    expect([...WS_SCOPES]).toEqual(['workflow', 'engine', 'thread', 'project']);
+  });
+
+  it('subscribes to a project by id and carries files.changed without a seq (D299)', () => {
+    const frame = { type: 'subscribe', payload: { scope: 'project', id: WORKFLOW_ID } };
+    expect(WsClientFrameSchema.parse(frame)).toEqual(frame);
+    expect(
+      WsClientFrameSchema.safeParse({ type: 'subscribe', payload: { scope: 'project' } }).success,
+    ).toBe(false);
+    const changed = {
+      type: 'files.changed',
+      payload: { projectId: WORKFLOW_ID, changes: [{ path: 'a.ts', kind: 'changed' }], resync: false },
+    };
+    expect(ServerFrameSchema.parse(changed)).toEqual(changed);
+    expect(ServerFrameSchema.safeParse({ ...changed, seq: 3 }).success, 'transient: no seq').toBe(
+      false,
+    );
   });
 
   it('subscribes to a thread by id (round 4 §2.5, FR-CHAT-006)', () => {

@@ -24,14 +24,19 @@ const SAFE_CONFIG = ['-c', 'core.fsmonitor=false'] as const;
 const OUTPUT_LIMIT_CHARS = 256 * 1024;
 const GIT_TIMEOUT_MS = 15_000;
 
-interface GitResult {
+export interface GitResult {
   code: number | null;
   stdout: string;
   stderr: string;
   truncated: boolean;
 }
 
-function runGit(args: string[], cwd: string, tool: string, signal: AbortSignal | undefined): Promise<GitResult> {
+/**
+ * git with ACE's hygiene (X1): argument arrays only, no pager, no prompt, no optional locks,
+ * literal pathspecs, `core.fsmonitor` off, a timeout and capped output. Also used, read-only, by
+ * Forge's Explorer decorations (D299).
+ */
+export function runGit(args: string[], cwd: string, tool: string, signal: AbortSignal | undefined): Promise<GitResult> {
   return new Promise((resolve, reject) => {
     let stdout = '';
     let stderr = '';

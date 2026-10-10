@@ -6,22 +6,30 @@ import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 
 import { configureApi } from '../app/api';
 import { routes } from '../app/routes';
+import { LAYOUT_STORAGE_KEY, useLayoutStore } from '../app/stores/layout';
 import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
+import { useEditorStore } from '../forge/editor/editor-store';
+import { resetModels, setMonaco } from '../forge/editor/models';
+import { useExplorerStore } from '../forge/explorer/explorer-store';
+import { useOutputStore } from '../forge/panel/output-store';
 import { MockDb } from '../mocks/db';
 import { createHandlers } from '../mocks/handlers';
 import { createDomainHandlers, domainMock } from '../mocks/handlers-domain';
+import { createForgeHandlers } from '../mocks/handlers-forge';
 import { createRound2Handlers, stopScenario } from '../mocks/handlers-round2';
 import { createRound3Handlers } from '../mocks/handlers-round3';
 import { createRound4Handlers } from '../mocks/handlers-round4';
 import { createRound5Handlers } from '../mocks/handlers-round5';
 import { resetGraphSyncRegistry } from '../workflows/sync-registry';
+import { asMonaco, createFakeMonaco } from './fake-monaco';
 
 /** One mock engine per test file; `installMockServer()` wires the lifecycle hooks. */
 export const db = new MockDb({ persist: false });
 /** Newest round first: a round 3 route wins over a round 2 stand-in for the same path. */
 export const server = setupServer(
   ...createDomainHandlers(db),
+  ...createForgeHandlers(db),
   ...createRound5Handlers(db),
   ...createRound4Handlers(db),
   ...createRound3Handlers(db),
@@ -33,6 +41,8 @@ export let queryClient = new QueryClient();
 
 /** The panels store as the app starts: sheet closed, bottom panel open, no dialog, no chat target. */
 const initialPanels = usePanelsStore.getState();
+/** The Forge layout as the app starts: chat and side bar open, bottom panel closed. */
+const initialLayout = useLayoutStore.getState();
 
 export function installMockServer(): void {
   beforeAll(() => {
@@ -47,6 +57,13 @@ export function installMockServer(): void {
     resetGraphSyncRegistry();
     useSelectionStore.getState().clear();
     usePanelsStore.setState(initialPanels, true);
+    useExplorerStore.setState({ projects: {} });
+    useEditorStore.setState({ projects: {} });
+    resetModels();
+    setMonaco(asMonaco(createFakeMonaco()));
+    localStorage.removeItem(LAYOUT_STORAGE_KEY);
+    useLayoutStore.setState(initialLayout, true);
+    useOutputStore.setState({ lines: {} });
   });
   afterEach(() => server.resetHandlers());
   afterAll(() => server.close());

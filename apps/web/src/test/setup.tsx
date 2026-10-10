@@ -6,14 +6,23 @@ import type { ReactNode } from 'react';
  * in jsdom, so every pointerdown on the page is captured as a drag start and menus never open.
  * The panes are layout only; Playwright covers them in a real browser.
  */
-vi.mock('react-resizable-panels', () => ({
-  Panel: ({ children, className }: { children?: ReactNode; className?: string }) => (
-    <div className={className}>{children}</div>
-  ),
-  PanelGroup: ({ children, className }: { children?: ReactNode; className?: string }) => (
-    <div className={className}>{children}</div>
-  ),
-  PanelResizeHandle: () => <div role="separator" />,
+vi.mock('react-resizable-panels', () => {
+  type Props = { children?: ReactNode; className?: string; id?: string; 'data-testid'?: string };
+  const Box = ({ children, className, id, 'data-testid': testId }: Props) => (
+    <div className={className} id={id} data-testid={testId}>
+      {children}
+    </div>
+  );
+  return { Panel: Box, PanelGroup: Box, PanelResizeHandle: () => <div role="separator" /> };
+});
+
+// Forge's Monaco host is a lazy chunk that needs a browser; every test gets the textarea stand-in.
+vi.mock('../forge/editor/CompareView', () => ({
+  CompareView: ({ path }: { path: string }) => <div data-testid="compare-view">{path}</div>,
+}));
+
+vi.mock('../forge/editor/EditorHost', async () => ({
+  EditorHost: (await import('./FakeEditorHost')).FakeEditorHost,
 }));
 
 /* jsdom has neither; React Flow and Radix need both to exist. */

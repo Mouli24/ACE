@@ -14,6 +14,7 @@ import * as runs from '../runs.js';
 import * as templates from '../templates.js';
 import * as tools from '../tools.js';
 import * as usage from '../usage.js';
+import * as workspace from '../workspace.js';
 
 /**
  * Round 1 §3 item 3 requires the barrel to export every module of §2 plus an empty placeholder per
@@ -135,6 +136,13 @@ describe('FR-SYS-006 contracts barrel', () => {
     ['usage', 'TraceEntrySchema'],
     ['usage', 'TRACE_ENTRY_KIND_BY_EVENT_TYPE'],
     ['usage', 'HealthMetricsSchema'],
+    ['workspace', 'FileEntrySchema'],
+    ['workspace', 'FileContentSchema'],
+    ['workspace', 'SaveFileRequestSchema'],
+    ['workspace', 'RepoStatusSchema'],
+    ['workspace', 'FilesChangedPayloadSchema'],
+    ['errors', 'IDE_ERROR_CODES'],
+    ['events', 'PROJECT_EVENT_TYPES'],
     ['templates', 'TemplateSchema'],
     ['templates', 'TEMPLATE_IDS'],
     ['templates', 'InstantiateTemplateRequestSchema'],
@@ -149,6 +157,10 @@ describe('FR-SYS-006 contracts barrel', () => {
     ['events', 'MemoryUpdatedPayloadSchema'],
   ])('re-exports %s -> %s', (_module, symbol) => {
     expect(contracts).toHaveProperty(symbol);
+  });
+
+  it('re-exports the workspace module itself (D299)', () => {
+    expect(contracts.FileEntrySchema).toBe(workspace.FileEntrySchema);
   });
 
   it('re-exports every enum of §2.2 through the barrel', () => {
