@@ -15,6 +15,7 @@ import { RunDetailPage } from '../runs/RunDetailPage';
 import { SettingsPage } from '../settings/SettingsPage';
 import { ToolsLibraryPage } from '../library/ToolsLibraryPage';
 import { TimelinePage } from '../timeline/TimelinePage';
+import { WorkflowLayout } from '../workflows/WorkflowLayout';
 import { WorkflowPage } from '../workflows/WorkflowPage';
 import { HomeRedirect } from './HomeRedirect';
 import { AppShell } from './layout/AppShell';
@@ -32,8 +33,14 @@ export const routes: RouteObject[] = [
       { path: 'onboarding', element: <OnboardingPage /> },
       { path: 'projects', element: <ProjectsPage /> },
       { path: 'projects/:projectId', element: <ProjectPage /> },
-      { path: 'projects/:projectId/workflows/:workflowId', element: <WorkflowPage /> },
-      { path: 'projects/:projectId/workflows/:workflowId/forge', element: <ForgePage /> },
+      {
+        path: 'projects/:projectId/workflows/:workflowId',
+        element: <WorkflowLayout />,
+        children: [
+          { index: true, element: <WorkflowPage /> },
+          { path: 'forge', element: <ForgePage /> },
+        ],
+      },
       {
         path: 'projects/:projectId/workflows/:workflowId/timeline',
         element: <TimelinePage />,
