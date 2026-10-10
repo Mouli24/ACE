@@ -1,8 +1,10 @@
 import { rosterFor, type Id, type NodeState, type RosterEntry } from '@ace/contracts';
 import { Button } from '@ace/ui';
 import { useMemo } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
+import { SHORTCUTS, useShortcuts } from '../app/shortcuts';
+import { workflowPath } from '../forge/mode';
 import { useEndRun, useRun, useRuns, useStartRun } from '../runs/hooks';
 import { Composer } from './Composer';
 import { orderedMessages } from './conversation-state';
@@ -24,6 +26,12 @@ import { TeamPanel } from './TeamPanel';
 export function DomainPage() {
   const { projectId = '', workflowId = '' } = useParams();
   const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
+  // The mode switch's keys work here too (D299): Domain sits outside the workflow layout.
+  useShortcuts([
+    [SHORTCUTS.ideate, () => navigate(workflowPath(projectId, workflowId, 'ideate'))],
+    [SHORTCUTS.forge, () => navigate(workflowPath(projectId, workflowId, 'forge'))],
+  ]);
   const runs = useRuns(workflowId);
   const requested = params.get('run') ?? undefined;
   const node = params.get('node') ?? undefined;
@@ -38,6 +46,11 @@ export function DomainPage() {
   const live = run.data !== undefined && isLiveRun(run.data);
   const roster: RosterEntry[] = useMemo(
     () => (run.data === undefined ? [] : rosterFor(run.data.snapshot.nodes)),
+    [run.data],
+  );
+  /** Every node's name, so a node with no handle (an Input, an Output) is named, not an id. */
+  const names = useMemo(
+    () => new Map((run.data?.snapshot.nodes ?? []).map((each) => [each.id, each.name])),
     [run.data],
   );
 
@@ -176,6 +189,7 @@ export function DomainPage() {
             <Conversation
               messages={orderedMessages(conversation)}
               roster={roster}
+              names={names}
               tokens={conversation.tokens}
               readOnly={!live}
               onRoute={(envelopeId, body) => route.mutateAsync({ envelopeId, body })}
@@ -188,7 +202,9 @@ export function DomainPage() {
             roster={roster}
             states={states}
             live={live}
-            readOnly={runId !== undefined && !live}
+            // An ended run's conversation is read-only, but the composer never is: a message
+            // starts a new run, with itself as the goal (D3, D312).
+            ended={runId !== undefined && !live}
             onSend={(body) => post.mutateAsync(body)}
             onStart={async (goal) => {
               // D312: the message is the run's goal; a run started here stays open (D323).

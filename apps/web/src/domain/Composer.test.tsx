@@ -125,6 +125,16 @@ describe('Domain composer', () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  it('after a run has ended, the composer still writes: it starts a new run', async () => {
+    const user = userEvent.setup();
+    const { onStart, box } = setup({ live: false, ended: true });
+    expect(screen.getByText(/has ended/i)).toBeInTheDocument();
+    expect(box).toBeEnabled();
+    await user.type(box, 'Once more');
+    await user.click(screen.getByRole('button', { name: 'Start team run' }));
+    expect(onStart).toHaveBeenCalledWith('Once more');
+  });
+
   it('an ended run is read-only: nothing can be written', () => {
     setup({ readOnly: true });
     expect(screen.getByRole('textbox', { name: 'Message' })).toBeDisabled();

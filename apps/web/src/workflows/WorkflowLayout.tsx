@@ -31,6 +31,7 @@ export function WorkflowLayout() {
   useShortcuts([
     [SHORTCUTS.ideate, () => navigate(workflowPath(projectId, workflowId, 'ideate'))],
     [SHORTCUTS.forge, () => navigate(workflowPath(projectId, workflowId, 'forge'))],
+    [SHORTCUTS.domain, () => navigate(workflowPath(projectId, workflowId, 'domain'))],
     [SHORTCUTS.toggleChat, toggleChat],
   ]);
 
