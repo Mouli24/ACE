@@ -3,7 +3,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { RESIZE_HANDLE_X, RESIZE_HANDLE_Y } from '../app/layout/resize-handle';
 import { SHORTCUTS, useShortcuts } from '../app/shortcuts';
 import { useLayoutStore } from '../app/stores/layout';
-import { EmptyEditor } from './editor/EmptyEditor';
+import { EditorArea } from './editor/EditorArea';
 import { ActivityBar } from './layout/ActivityBar';
 import { SideBar } from './layout/SideBar';
 import { StatusBar } from './layout/StatusBar';
@@ -55,9 +55,7 @@ export function ForgeWorkbench({ projectId }: { projectId: string }) {
             <PanelGroup direction="vertical" autoSaveId="ace.forge.rows" className="h-full">
               {showEditor && (
                 <Panel id="forge-editor" order={1} minSize={20} className="min-h-0 min-w-0">
-                  <section aria-label="Editor" className="h-full min-h-0">
-                    <EmptyEditor />
-                  </section>
+                  <EditorArea projectId={projectId} />
                 </Panel>
               )}
               {panelOpen && (
