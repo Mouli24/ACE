@@ -1,14 +1,18 @@
 import type {
   DeliveryMode,
+  EnvelopeKind,
   Id,
   InstructionState,
   NodeState,
+  Part,
   RosterEntry,
   Run,
   RunDomainConfig,
 } from '@ace/contracts';
 
 import type { EmittedEvent } from '../events/index.js';
+import { pairKey } from './brain.js';
+import type { OpenQuery } from './envelope-block.js';
 
 /**
  * One live run's Domain state (D309, D323): the human messages waiting for each node, the turn each
@@ -31,6 +35,44 @@ export interface QueuedMessage {
    * message that names the node does start one when the node is not busy (D309).
    */
   startsTurn: boolean;
+}
+
+/** An envelope as it waits for one node's turn (D310): it reaches the node's `## Team messages`. */
+export interface QueuedEnvelope {
+  envelopeId: Id;
+  kind: EnvelopeKind;
+  fromNodeId: Id;
+  /** As forwarded — the human's edit, when there was one. */
+  summary: string;
+  /** The rest of the sender's answer, secret-masked; empty for a note. */
+  body: string;
+  inReplyTo?: Id;
+  at: string;
+}
+
+/** An envelope the router held: the human decides, or a resume releases it (D305, D310). */
+export interface HeldEnvelope {
+  envelopeId: Id;
+  kind: EnvelopeKind;
+  fromNodeId: Id;
+  /** The turn that sent it — a HANDOFF carries that turn's output along its edges. */
+  fromNodeRunId: Id;
+  toNodeIds: Id[];
+  summary: string;
+  body: string;
+  inReplyTo?: Id;
+  /** The output a HANDOFF carries; absent after a restart, when it is read back from the row. */
+  output?: Part[];
+  iteration: number;
+  reason: 'manual routing' | 'LOOP_GUARD';
+}
+
+/** What became of a held envelope. The router or the human decided; the drive carries it out. */
+export interface EnvelopeDecision {
+  held: HeldEnvelope;
+  decision: 'FORWARDED' | 'EDITED' | 'REJECTED';
+  /** EDITED: what the human changed. */
+  edit?: { kind?: EnvelopeKind; toNodeIds?: Id[]; summary?: string };
 }
 
 /** Why a turn's own abort fired: a message cut it short, or the run was ended (D309, D323). */
@@ -104,6 +146,35 @@ export interface RunDomain {
   /** The run is ending: every PENDING delivery is DROPPED, and no message is taken after this. */
   close(): Promise<void>;
   isClosed(): boolean;
+  /* Envelopes (D310). */
+  /** Forwarded envelopes for these nodes: each starts a turn, and the drive is woken. */
+  enqueueEnvelope(envelope: QueuedEnvelope, nodeIds: readonly Id[]): void;
+  pendingEnvelopes(nodeId: Id): QueuedEnvelope[];
+  /** The turn has started: these envelopes are in its prompt. */
+  envelopesDelivered(nodeId: Id, envelopeIds: readonly Id[]): void;
+  /** A turn another message cut short: its envelopes wait for the next one. */
+  returnEnvelopes(nodeId: Id, envelopes: readonly QueuedEnvelope[]): void;
+  hold(envelope: HeldEnvelope): void;
+  held(envelopeId: Id): HeldEnvelope | undefined;
+  heldEnvelopes(): HeldEnvelope[];
+  /**
+   * The human decided about a held envelope (or a resume released it): announced `by: 'human'` and
+   * handed to the drive, which forwards it.
+   */
+  decide(decision: EnvelopeDecision, reason?: string): Promise<void>;
+  takeDecisions(): EnvelopeDecision[];
+  /** Whether anything is waiting on the human: a held envelope, or a decision not yet carried out. */
+  awaitingHuman(): boolean;
+  /** QUERYs still waiting for their ANSWER, by envelope id. */
+  readonly openQueries: Map<Id, OpenQuery>;
+  /** QUERY and FLAG envelopes sent between each unordered pair (the loop guard). */
+  readonly loopCounts: Map<string, number>;
+  /** D305: a resume after LOOP_GUARD resets the held pairs' counts and forwards what was held. */
+  releaseLoopGuard(): Promise<void>;
+  /** The Brain's digest: one line per envelope routed, oldest first (D304). */
+  digest(): string[];
+  noteRouted(line: string): void;
+
   /** Each node's state, as the scheduler sees it — what `@all` and the turn rules read. */
   nodeStates(): Record<Id, NodeState>;
   /** The scheduler hands over its view of the node states. */
@@ -116,6 +187,10 @@ export interface RunDomain {
 export function createRunDomain(deps: RunDomainDeps): RunDomain {
   const { run, config, roster, emit } = deps;
   const queue = new Map<Id, QueuedMessage[]>();
+  const envelopeQueue = new Map<Id, QueuedEnvelope[]>();
+  const heldById = new Map<Id, HeldEnvelope>();
+  let decisions: EnvelopeDecision[] = [];
+  const digestLines: string[] = [];
   const turns = new Map<Id, AbortController>();
   let waiters: (() => void)[] = [];
   let ending = false;
@@ -163,10 +238,14 @@ export function createRunDomain(deps: RunDomainDeps): RunDomain {
 
     pending: (nodeId) => [...(queue.get(nodeId) ?? [])],
 
-    nodesWantingTurn: () =>
-      [...queue.entries()]
-        .filter(([, messages]) => messages.some((message) => message.startsTurn))
-        .map(([nodeId]) => nodeId),
+    nodesWantingTurn: () => [
+      ...new Set([
+        ...[...queue.entries()]
+          .filter(([, messages]) => messages.some((message) => message.startsTurn))
+          .map(([nodeId]) => nodeId),
+        ...envelopeQueue.keys(),
+      ]),
+    ],
 
     async delivered(nodeId, nodeRunId, messages) {
       const taken = new Set(messages.map((message) => message.messageId));
@@ -186,6 +265,83 @@ export function createRunDomain(deps: RunDomainDeps): RunDomain {
       // D309: a turn another message cut short never finished these, so the next turn gets them.
       queue.set(nodeId, [...messages, ...(queue.get(nodeId) ?? [])]);
       for (const message of messages) await announce(message.messageId, nodeId, 'PENDING');
+    },
+
+    enqueueEnvelope(envelope, nodeIds) {
+      for (const nodeId of nodeIds) {
+        envelopeQueue.set(nodeId, [...(envelopeQueue.get(nodeId) ?? []), envelope]);
+      }
+      domain.wake();
+    },
+
+    pendingEnvelopes: (nodeId) => [...(envelopeQueue.get(nodeId) ?? [])],
+
+    envelopesDelivered(nodeId, envelopeIds) {
+      const taken = new Set(envelopeIds);
+      const left = (envelopeQueue.get(nodeId) ?? []).filter(
+        (envelope) => !taken.has(envelope.envelopeId),
+      );
+      if (left.length === 0) envelopeQueue.delete(nodeId);
+      else envelopeQueue.set(nodeId, left);
+    },
+
+    returnEnvelopes(nodeId, envelopes) {
+      if (envelopes.length === 0) return;
+      envelopeQueue.set(nodeId, [...envelopes, ...(envelopeQueue.get(nodeId) ?? [])]);
+    },
+
+    hold(envelope) {
+      heldById.set(envelope.envelopeId, envelope);
+    },
+
+    held: (envelopeId) => heldById.get(envelopeId),
+
+    heldEnvelopes: () => [...heldById.values()],
+
+    async decide(decision, reason) {
+      heldById.delete(decision.held.envelopeId);
+      await emit({
+        type: 'envelope.routed',
+        workflowId: run.workflowId,
+        runId: run.id,
+        payload: {
+          runId: run.id,
+          envelopeId: decision.held.envelopeId,
+          decision: decision.decision,
+          by: 'human',
+          ...(reason === undefined ? {} : { reason }),
+          ...(decision.edit === undefined ? {} : { edit: decision.edit }),
+        },
+      });
+      decisions.push(decision);
+      domain.wake();
+    },
+
+    takeDecisions() {
+      const taken = decisions;
+      decisions = [];
+      return taken;
+    },
+
+    awaitingHuman: () => heldById.size > 0 || decisions.length > 0,
+
+    openQueries: new Map<Id, OpenQuery>(),
+
+    loopCounts: new Map<string, number>(),
+
+    async releaseLoopGuard() {
+      for (const held of [...heldById.values()]) {
+        if (held.reason !== 'LOOP_GUARD') continue;
+        for (const nodeId of held.toNodeIds)
+          domain.loopCounts.delete(pairKey(held.fromNodeId, nodeId));
+        await domain.decide({ held, decision: 'FORWARDED' }, 'released by resume');
+      }
+    },
+
+    digest: () => [...digestLines],
+
+    noteRouted(line) {
+      digestLines.push(line);
     },
 
     beginTurn(nodeId) {
@@ -241,6 +397,9 @@ export function createRunDomain(deps: RunDomainDeps): RunDomain {
         for (const message of messages) await announce(message.messageId, nodeId, 'DROPPED');
       }
       queue.clear();
+      envelopeQueue.clear();
+      heldById.clear();
+      decisions = [];
       domain.wake();
     },
 

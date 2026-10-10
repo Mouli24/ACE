@@ -1,11 +1,16 @@
 import {
+  EnvelopeSentPayloadSchema,
   PostRunMessageRequestSchema,
+  RouteEnvelopeRequestSchema,
+  closestHandles,
   parseAddressing,
   resolveAddressing,
   type HumanMention,
   type Id,
   type PostRunMessageRequest,
   type PostRunMessageResponse,
+  type RouteEnvelopeRequest,
+  type RouteEnvelopeResponse,
   type Run,
 } from '@ace/contracts';
 
@@ -14,8 +19,10 @@ import { HttpError, notFound } from '../gateway/errors.js';
 import { newId } from '../ids.js';
 import type { Repository, Scope } from '../ports/index.js';
 import { assertRunAction, withAllowedActions } from '../runs/control/actions.js';
+import type { RunGateRegistry } from '../runs/control/gate.js';
 import { maskSecrets } from '../security/secret-patterns.js';
 import type { DomainRegistry } from './registry.js';
+import type { EnvelopeDecision, HeldEnvelope, RunDomain } from './run-domain.js';
 
 /**
  * The human's way into a run (D309, D323–D326): `POST /runs/:runId/messages` and `POST /runs/:runId/end`.
@@ -25,19 +32,31 @@ import type { DomainRegistry } from './registry.js';
  * to finished nodes is refused before a single event is written. A message that passes is one
  * `human.message` and one `instruction.state` PENDING per recipient, written under the run's lock so
  * it can never land after the drive has closed the run.
+ *
+ * `POST /runs/:runId/envelopes/:id/route` is the human's decision on an envelope the Brain's router
+ * held (D310): approve forwards it, edit forwards the edited version (both are logged), reject drops
+ * it and tells its sender why, as a message addressed to it.
  */
 
 export interface DomainService {
   postMessage(runId: Id, request: PostRunMessageRequest): Promise<PostRunMessageResponse>;
   /** D323: end a run started from Domain; answers with the run as it ended. */
   end(runId: Id): Promise<Run>;
+  /** D310: decide what becomes of a held envelope. */
+  routeEnvelope(
+    runId: Id,
+    envelopeId: Id,
+    request: RouteEnvelopeRequest,
+  ): Promise<RouteEnvelopeResponse>;
 }
 
 export interface DomainServiceDeps {
-  repository: Pick<Repository, 'runs'>;
+  repository: Pick<Repository, 'runs' | 'events'>;
   scope: Scope;
   bus: Pick<EventBus, 'emit'>;
   domains: DomainRegistry;
+  /** D305: End lifts a run BLOCKED mid-run, so its drive can wind down. Absent, nothing to lift. */
+  gates?: Pick<RunGateRegistry, 'get'>;
   now?: () => string;
   nextId?: () => string;
 }
@@ -47,6 +66,9 @@ const isLive = (run: Run): boolean =>
   run.status === 'RUNNING' ||
   run.status === 'PAUSED' ||
   (run.status === 'BLOCKED' && run.blockedReason !== undefined);
+
+const invalid = (message: string, details?: unknown): HttpError =>
+  new HttpError('invalid_config', 'validation_failed', message, details);
 
 const ended = (run: Run): HttpError =>
   new HttpError(
@@ -64,6 +86,103 @@ export function createDomainService(deps: DomainServiceDeps): DomainService {
     const run = await deps.repository.runs.get(deps.scope, runId);
     if (run === null) throw notFound(`run ${runId}`);
     return run;
+  }
+
+  /** D310: a rejected envelope's sender is told why, as a message addressed to it (trusted). */
+  async function tellSender(
+    run: Run,
+    domain: RunDomain,
+    held: HeldEnvelope,
+    reason: string | undefined,
+  ): Promise<void> {
+    const handleOf = (nodeId: Id): string =>
+      domain.roster.find((entry) => entry.nodeId === nodeId)?.handle ?? 'node';
+    const to = held.toNodeIds.map((nodeId) => `@${handleOf(nodeId)}`).join(', ');
+    const why = reason === undefined || reason.trim() === '' ? '.' : `: ${reason.trim()}`;
+    const text = maskSecrets(
+      `Your ${held.kind} to ${to} ("${held.summary}") was not forwarded${why}`,
+    );
+    const messageId = nextId();
+    await deps.bus.emit({
+      type: 'human.message',
+      workflowId: run.workflowId,
+      runId: run.id,
+      payload: {
+        runId: run.id,
+        messageId,
+        text,
+        addressing: 'direct',
+        mentions: [{ nodeId: held.fromNodeId, handle: handleOf(held.fromNodeId), via: 'handle' }],
+        deliveryMode: 'queue',
+      },
+    });
+    await domain.enqueue({ messageId, text, at: now(), deliveryMode: 'queue', startsTurn: true }, [
+      held.fromNodeId,
+    ]);
+  }
+
+  /** D310: the human's edit, checked against the team and the graph as an agent's block is. */
+  function editOf(
+    run: Run,
+    domain: RunDomain,
+    held: HeldEnvelope,
+    request: RouteEnvelopeRequest,
+  ): NonNullable<EnvelopeDecision['edit']> {
+    const edit = request.edit;
+    if (
+      edit === undefined ||
+      (edit.kind === undefined && edit.to === undefined && edit.summary === undefined)
+    ) {
+      throw invalid('An edit changes the kind, the recipients or the summary.');
+    }
+    const kind = edit.kind ?? held.kind;
+    const tied = (value: string): boolean => value === 'QUERY' || value === 'ANSWER';
+    if (kind !== held.kind && (tied(kind) || tied(held.kind))) {
+      throw invalid('A QUERY or an ANSWER keeps its kind: the asker is waiting on it.');
+    }
+
+    let toNodeIds: Id[] | undefined;
+    if (edit.to !== undefined) {
+      toNodeIds = [];
+      for (const raw of edit.to) {
+        const handle = raw.trim().replace(/^@/u, '').toLowerCase();
+        const entry = domain.roster.find((each) => each.handle === handle);
+        if (entry === undefined) {
+          throw invalid(`@${handle} is not on the team.`, {
+            errors: [
+              {
+                code: 'unknown_handle',
+                handle,
+                suggestions: closestHandles(handle, domain.roster).filter(
+                  (each) => each !== '@all',
+                ),
+              },
+            ],
+          });
+        }
+        if (entry.nodeId === held.fromNodeId) {
+          throw invalid(`An envelope cannot go back to its own sender (@${handle}).`);
+        }
+        if (!toNodeIds.includes(entry.nodeId)) toNodeIds.push(entry.nodeId);
+      }
+    }
+
+    if (kind === 'HANDOFF') {
+      const fed = new Set(
+        run.snapshot.edges
+          .filter((each) => each.kind === 'data' && each.from.nodeId === held.fromNodeId)
+          .map((each) => each.to.nodeId),
+      );
+      if ((toNodeIds ?? held.toNodeIds).some((nodeId) => !fed.has(nodeId))) {
+        throw invalid('A HANDOFF goes only to nodes its sender feeds.');
+      }
+    }
+
+    return {
+      ...(edit.kind === undefined ? {} : { kind: edit.kind }),
+      ...(toNodeIds === undefined ? {} : { toNodeIds }),
+      ...(edit.summary === undefined ? {} : { summary: maskSecrets(edit.summary) }),
+    };
   }
 
   return {
@@ -175,7 +294,65 @@ export function createDomainService(deps: DomainServiceDeps): DomainService {
       const domain = deps.domains.get(runId);
       if (domain === undefined) throw ended(run);
       domain.requestEnd();
+      // D305: a run BLOCKED mid-run has a paused gate; its drive has to get past it to end.
+      if (run.status === 'BLOCKED') deps.gates?.get(runId)?.resume();
       return withAllowedActions(await domain.finished());
+    },
+
+    async routeEnvelope(runId, envelopeId, body) {
+      const parsedBody = RouteEnvelopeRequestSchema.safeParse(body);
+      if (!parsedBody.success) {
+        throw invalid('The routing decision is not valid.', parsedBody.error.issues);
+      }
+      const request = parsedBody.data;
+
+      const run = await load(runId);
+      if (!isLive(run)) throw ended(run);
+      const domain = deps.domains.get(runId);
+      if (domain === undefined) throw ended(run);
+
+      return domain.withLock(async () => {
+        if (domain.isClosed()) {
+          throw new HttpError('workflow', 'invalid_run_state', 'The run is ending.', {
+            runId: run.id,
+          });
+        }
+        const held = domain.held(envelopeId);
+        if (held === undefined) {
+          const logged = await deps.repository.events.listAfter(deps.scope, 0, {
+            runIds: [run.id],
+          });
+          const known = logged.some(
+            (event) =>
+              event.type === 'envelope.sent' &&
+              EnvelopeSentPayloadSchema.safeParse(event.payload).data?.envelopeId === envelopeId,
+          );
+          if (!known) throw notFound(`envelope ${envelopeId}`);
+          throw new HttpError(
+            'workflow',
+            'invalid_run_state',
+            'That envelope is not held: it has already been routed.',
+            { envelopeId },
+          );
+        }
+        const reason = request.reason === undefined ? undefined : maskSecrets(request.reason);
+
+        if (request.decision === 'approve') {
+          await domain.decide({ held, decision: 'FORWARDED' }, reason);
+          return { envelopeId, routing: 'FORWARDED' as const };
+        }
+
+        if (request.decision === 'reject') {
+          await domain.decide({ held, decision: 'REJECTED' }, reason);
+          domain.openQueries.delete(envelopeId);
+          await tellSender(run, domain, held, reason);
+          return { envelopeId, routing: 'REJECTED' as const };
+        }
+
+        const edit = editOf(run, domain, held, request);
+        await domain.decide({ held, decision: 'EDITED', edit }, reason);
+        return { envelopeId, routing: 'EDITED' as const };
+      });
     },
   };
 }

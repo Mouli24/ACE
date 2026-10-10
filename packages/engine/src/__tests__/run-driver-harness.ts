@@ -4,6 +4,8 @@ import {
   type Edge,
   type PostRunMessageRequest,
   type PostRunMessageResponse,
+  type RouteEnvelopeRequest,
+  type RouteEnvelopeResponse,
   type StartRunRequest,
   type Model,
   type Node,
@@ -64,6 +66,8 @@ const NOW = '2026-09-29T10:00:00.000Z';
 export interface Step {
   /** The answer, when it answers. */
   text?: string;
+  /** The answer, worked out from the prompt — an ANSWER must quote its QUERY's id (D310). */
+  reply?: (prompt: string) => string;
   /** Thrown after the hold (if any): a 503 is `{ status: 503 }`, a 401 `{ status: 401 }`. */
   throws?: unknown;
   /** Yielded before anything else, so a call cut short has still spent something. */
@@ -155,6 +159,12 @@ export interface RunDriverHarness {
   ): Promise<PostRunMessageResponse>;
   /** `POST /runs/:runId/end`. */
   end(runId: string): Promise<Run>;
+  /** `POST /runs/:runId/envelopes/:id/route` (D310). */
+  route(
+    runId: string,
+    envelopeId: string,
+    body: RouteEnvelopeRequest,
+  ): Promise<RouteEnvelopeResponse>;
   /** Payloads of every event of this type, in order. */
   payloads<T = Record<string, unknown>>(type: string): T[];
   /** Resolves once an event of this type has been emitted `count` times. */
@@ -259,7 +269,10 @@ export async function createRunDriverHarness(
         else await Promise.resolve();
         if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
         if (step.throws !== undefined) throw step.throws;
-        yield { type: 'text', delta: step.text ?? 'ok' };
+        yield {
+          type: 'text',
+          delta: step.reply?.(`${request.system ?? ''}\n${request.prompt}`) ?? step.text ?? 'ok',
+        };
         yield { type: 'usage', tokensIn: 2, tokensOut: 3 };
         yield { type: 'finish', reason: 'stop' };
         step.afterFinish?.();
@@ -332,7 +345,7 @@ export async function createRunDriverHarness(
     envelopesFor: (run, nodeId) => service.envelopesFor(run, nodeId),
   });
 
-  const domain = createDomainService({ repository, scope, bus, domains });
+  const domain = createDomainService({ repository, scope, bus, domains, gates });
 
   const port = (nodeId: string, dir: 'in' | 'out', multi = false) => ({
     id: `${nodeId}:${dir}:text`,
@@ -472,6 +485,7 @@ export async function createRunDriverHarness(
     start: (request = {}) => service.beginRun(workflowId, request),
     post: (runId, text, options = {}) => domain.postMessage(runId, { text, ...options }),
     end: (runId) => domain.end(runId),
+    route: (runId, envelopeId, body) => domain.routeEnvelope(runId, envelopeId, body),
     payloads: <T,>(type: string) =>
       events.filter((event) => event.type === type).map((event) => event.payload as T),
     waitForEvent: (type, count = 1) =>

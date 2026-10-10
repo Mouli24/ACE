@@ -40,8 +40,14 @@ import type {
 import { runRetrievalNode, withRetrieved } from '../knowledge/retrieval-node.js';
 import type { SearchService } from '../knowledge/search.js';
 import { extractMemoryOps, maskMemoryValue, withMemoryField } from '../memory/ops.js';
+import {
+  extractEnvelopeBlocks,
+  type EnvelopeJudgement,
+  type JudgedEnvelope,
+} from '../domain/envelope-block.js';
 import { isTurnAbortReason } from '../domain/run-domain.js';
 import { estimateTokens } from '../envelopes/index.js';
+import { maskSecrets } from '../security/secret-patterns.js';
 import { assemblePrompt, type TeamPromptInput } from '../prompts/index.js';
 import type { RunGate } from './control/gate.js';
 import { usageFor } from './cost.js';
@@ -120,6 +126,16 @@ export interface ExecuteNodeInput {
    * `## Human instructions`. Agent and Model nodes only; absent, the prompt is unchanged.
    */
   team?: TeamPromptInput;
+  /**
+   * D310: the turn's envelope blocks are taken out of the answer and judged here, before the JSON
+   * parse and the output point. Absent, the answer is left as it is.
+   */
+  teamEnvelopes?: NodeEnvelopeRules;
+}
+
+/** How a turn's ```ace-envelope blocks are judged (D310): a refusal is a CONTRACT_VIOLATION. */
+export interface NodeEnvelopeRules {
+  judge(blocks: readonly string[]): EnvelopeJudgement;
 }
 
 /**
@@ -245,6 +261,11 @@ export interface NodeExecutionOutcome {
    * log (`node.interrupted`), never handed off.
    */
   partialOutput?: Part[];
+  /**
+   * D310: the envelopes the answer's blocks asked for, judged, their summaries through the output
+   * point and secret-masked. Absent when the node was given no rules; empty when it wrote none.
+   */
+  teamEnvelopes?: JudgedEnvelope[];
 }
 
 export interface NodeExecutorDeps {
@@ -1303,6 +1324,36 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       }
 
       /*
+       * D310: the envelope blocks come out of the answer first, so a JSON node can write them too and
+       * the contract judges only what is left. A block that is malformed, or that breaks the team's
+       * rules, is the agent answering wrongly: CONTRACT_VIOLATION, with the reason the repair retry
+       * hands back to it.
+       */
+      let teamEnvelopes: JudgedEnvelope[] | undefined;
+      if (input.teamEnvelopes !== undefined && partChunks.length === 0) {
+        const extracted = extractEnvelopeBlocks(text);
+        const judged = input.teamEnvelopes.judge(extracted.blocks);
+        if (!judged.ok) {
+          return {
+            kind: 'done',
+            result: await fail(
+              input,
+              {
+                kind: 'agent',
+                code: 'contract_violation',
+                message: judged.reason,
+                retryable: false,
+              },
+              usage,
+              { modelUsed, prompt: recordedPrompt(), failureReason: 'CONTRACT_VIOLATION' },
+            ),
+          };
+        }
+        text = extracted.text;
+        teamEnvelopes = judged.envelopes;
+      }
+
+      /*
        * The output parts. A model that emitted `part` chunks (round 4 §2.6 `mock-media`) produced
        * them directly, so those *are* the output — each media part backed by a stored artifact
        * (FR-MM-003, FR-MM-004). Otherwise the answer is assembled from the streamed text and json.
@@ -1480,6 +1531,39 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       }
 
       /*
+       * D310: the summaries are what the team reads, so the output point judges them too (no
+       * contract: they are not the node's output), and they are secret-masked like everything stored.
+       */
+      if (teamEnvelopes !== undefined && teamEnvelopes.length > 0) {
+        let summaries = teamEnvelopes.map((envelope) => envelope.summary);
+        if (input.guardrails?.afterOutput !== undefined) {
+          const checked = await input.guardrails.afterOutput(
+            summaries.map((summary) => ({ type: 'text' as const, text: summary })),
+          );
+          verdicts.push(...(checked.verdicts ?? []));
+          if (checked.kind === 'failed') {
+            return {
+              kind: 'done',
+              result: await fail(input, checked.error, usage, {
+                modelUsed,
+                prompt: recordedPrompt(),
+                failureReason: checked.failureReason,
+                verdicts: [...verdicts],
+              }),
+            };
+          }
+          summaries = summaries.map((summary, index) => {
+            const part = checked.parts[index];
+            return part?.type === 'text' ? part.text : summary;
+          });
+        }
+        teamEnvelopes = teamEnvelopes.map((envelope, index) => ({
+          ...envelope,
+          summary: maskSecrets(summaries[index] ?? envelope.summary),
+        }));
+      }
+
+      /*
        * The memory ops apply only now, once the answer has been accepted: a rejected or failed
        * answer leaves memory as it was, and a retry never applies them twice. They are recorded as
        * stored — a key-shaped value masked (D86) — and only when there were any (FR-MEM-002).
@@ -1527,6 +1611,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         kind: 'done',
         result: await succeed(input, flowing, usage, {
           ...applied,
+          ...(teamEnvelopes === undefined ? {} : { teamEnvelopes }),
           modelUsed,
           prompt: recordedPrompt(),
           verdicts: [...verdicts],

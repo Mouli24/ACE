@@ -482,6 +482,11 @@ export function createDomainProjection(context: DomainContext): DomainProjection
       const parsed = EnvelopeSentPayloadSchema.safeParse(payload);
       if (!parsed.success) return;
       const envelope = parsed.data;
+      // FR-MM-004: the engine keeps file refs out of the log; a HANDOFF carries its turn's files.
+      const artifacts =
+        envelope.artifacts.length > 0 || envelope.kind !== 'HANDOFF'
+          ? envelope.artifacts
+          : artifactRefs(byId.get(turnMessageId(envelope.nodeRunId))?.output ?? []);
       if (envelope.kind === 'QUERY') {
         openQueries.set(envelope.fromNodeId, {
           envelopeId: envelope.envelopeId,
@@ -503,7 +508,7 @@ export function createDomainProjection(context: DomainContext): DomainProjection
             ...(envelope.inReplyTo === undefined ? {} : { inReplyTo: envelope.inReplyTo }),
             history: [],
           },
-          ...(envelope.artifacts.length === 0 ? {} : { artifacts: envelope.artifacts }),
+          ...(artifacts.length === 0 ? {} : { artifacts }),
         },
         ops,
       );
