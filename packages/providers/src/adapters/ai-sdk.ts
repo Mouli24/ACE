@@ -393,11 +393,17 @@ export function createAiSdkAdapter(options: AiSdkAdapterOptions): ProviderAdapte
             }
 
             if (part.type === 'finish') {
-              yield {
-                type: 'usage',
-                tokensIn: part.totalUsage.inputTokens ?? 0,
-                tokensOut: part.totalUsage.outputTokens ?? 0,
-              };
+              // D313: a provider that reported no usage yields none, and the executor estimates.
+              const { inputTokens, outputTokens, inputTokenDetails } = part.totalUsage;
+              if (inputTokens !== undefined || outputTokens !== undefined) {
+                const cached = inputTokenDetails?.cacheReadTokens ?? 0;
+                yield {
+                  type: 'usage',
+                  tokensIn: inputTokens ?? 0,
+                  tokensOut: outputTokens ?? 0,
+                  ...(cached > 0 ? { cachedTokensIn: cached } : {}),
+                };
+              }
               yield { type: 'finish', reason: toFinishReason(part.finishReason) };
             }
           }

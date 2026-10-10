@@ -4,6 +4,8 @@ import {
   type Edge,
   type PostRunMessageRequest,
   type PostRunMessageResponse,
+  type DomainUsageSnapshot,
+  type PricingTable,
   type RouteEnvelopeRequest,
   type RouteEnvelopeResponse,
   type StartRunRequest,
@@ -70,6 +72,11 @@ export interface Step {
   reply?: (prompt: string) => string;
   /** Thrown after the hold (if any): a 503 is `{ status: 503 }`, a 401 `{ status: 401 }`. */
   throws?: unknown;
+  /**
+   * The closing usage chunk: `{ tokensIn: 2, tokensOut: 3 }` by default, `null` for a provider that
+   * reports none (D313: the executor then estimates).
+   */
+  usage?: { tokensIn: number; tokensOut: number; costUsd?: number; cachedTokensIn?: number } | null;
   /** Yielded before anything else, so a call cut short has still spent something. */
   usageFirst?: { tokensIn: number; tokensOut: number };
   /** Streamed before the hold, so a turn cut short has already written something (D309). */
@@ -165,6 +172,12 @@ export interface RunDriverHarness {
     envelopeId: string,
     body: RouteEnvelopeRequest,
   ): Promise<RouteEnvelopeResponse>;
+  /** `PUT /runs/:runId/budget` (D313); `null` removes the budget. */
+  budget(runId: string, limit: number | null): Promise<DomainUsageSnapshot>;
+  /** `GET /runs/:runId/usage` (D303, D306). */
+  usage(runId: string): Promise<DomainUsageSnapshot>;
+  /** The `ace.pricing.json` Domain prices against; empty unless a test sets it (D306). */
+  pricing: { table: PricingTable };
   /** Payloads of every event of this type, in order. */
   payloads<T = Record<string, unknown>>(type: string): T[];
   /** Resolves once an event of this type has been emitted `count` times. */
@@ -273,7 +286,7 @@ export async function createRunDriverHarness(
           type: 'text',
           delta: step.reply?.(`${request.system ?? ''}\n${request.prompt}`) ?? step.text ?? 'ok',
         };
-        yield { type: 'usage', tokensIn: 2, tokensOut: 3 };
+        if (step.usage !== null) yield { type: 'usage', ...(step.usage ?? { tokensIn: 2, tokensOut: 3 }) };
         yield { type: 'finish', reason: 'stop' };
         step.afterFinish?.();
       })();
@@ -345,7 +358,16 @@ export async function createRunDriverHarness(
     envelopesFor: (run, nodeId) => service.envelopesFor(run, nodeId),
   });
 
-  const domain = createDomainService({ repository, scope, bus, domains, gates });
+  const pricing: { table: PricingTable } = { table: { models: [] } };
+  const domain = createDomainService({
+    repository,
+    scope,
+    bus,
+    domains,
+    gates,
+    pricing: () => pricing.table,
+    resume: (runId) => controls.resume(runId),
+  });
 
   const port = (nodeId: string, dir: 'in' | 'out', multi = false) => ({
     id: `${nodeId}:${dir}:text`,
@@ -486,6 +508,9 @@ export async function createRunDriverHarness(
     post: (runId, text, options = {}) => domain.postMessage(runId, { text, ...options }),
     end: (runId) => domain.end(runId),
     route: (runId, envelopeId, body) => domain.routeEnvelope(runId, envelopeId, body),
+    budget: (runId, limit) => domain.setBudget(runId, { limit }),
+    usage: (runId) => domain.usage(runId),
+    pricing,
     payloads: <T,>(type: string) =>
       events.filter((event) => event.type === type).map((event) => event.payload as T),
     waitForEvent: (type, count = 1) =>

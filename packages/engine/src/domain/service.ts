@@ -1,12 +1,18 @@
 import {
   EnvelopeSentPayloadSchema,
   PostRunMessageRequestSchema,
+  PutRunBudgetRequestSchema,
   RouteEnvelopeRequestSchema,
   closestHandles,
+  defaultRunDomainConfig,
+  emptyPricingTable,
   parseAddressing,
   resolveAddressing,
+  type DomainUsageSnapshot,
   type HumanMention,
   type Id,
+  type PricingTable,
+  type PutRunBudgetRequest,
   type PostRunMessageRequest,
   type PostRunMessageResponse,
   type RouteEnvelopeRequest,
@@ -21,6 +27,8 @@ import type { Repository, Scope } from '../ports/index.js';
 import { assertRunAction, withAllowedActions } from '../runs/control/actions.js';
 import type { RunGateRegistry } from '../runs/control/gate.js';
 import { maskSecrets } from '../security/secret-patterns.js';
+import { domainContextFor } from './context.js';
+import { projectUsage } from './project-usage.js';
 import type { DomainRegistry } from './registry.js';
 import type { EnvelopeDecision, HeldEnvelope, RunDomain } from './run-domain.js';
 
@@ -36,12 +44,21 @@ import type { EnvelopeDecision, HeldEnvelope, RunDomain } from './run-domain.js'
  * `POST /runs/:runId/envelopes/:id/route` is the human's decision on an envelope the Brain's router
  * held (D310): approve forwards it, edit forwards the edited version (both are logged), reject drops
  * it and tells its sender why, as a message addressed to it.
+ *
+ * `GET /runs/:runId/usage` is the run's usage snapshot, priced from `ace.pricing.json` (D306), and
+ * `PUT /runs/:runId/budget` sets, changes or removes its token budget (D313). Raising it above what
+ * the run has used, or removing it, resumes a run BLOCKED `BUDGET_EXCEEDED`; lowering it under that
+ * blocks it at once.
  */
 
 export interface DomainService {
   postMessage(runId: Id, request: PostRunMessageRequest): Promise<PostRunMessageResponse>;
   /** D323: end a run started from Domain; answers with the run as it ended. */
   end(runId: Id): Promise<Run>;
+  /** D313: the run's token budget: set, changed, or removed (`null`). Answers with the usage. */
+  setBudget(runId: Id, request: PutRunBudgetRequest): Promise<DomainUsageSnapshot>;
+  /** D303, D306: what the run used, per node and per turn, against its budget, priced. */
+  usage(runId: Id): Promise<DomainUsageSnapshot>;
   /** D310: decide what becomes of a held envelope. */
   routeEnvelope(
     runId: Id,
@@ -51,12 +68,19 @@ export interface DomainService {
 }
 
 export interface DomainServiceDeps {
-  repository: Pick<Repository, 'runs' | 'events'>;
+  repository: Pick<Repository, 'runs' | 'events' | 'providers'>;
   scope: Scope;
   bus: Pick<EventBus, 'emit'>;
   domains: DomainRegistry;
   /** D305: End lifts a run BLOCKED mid-run, so its drive can wind down. Absent, nothing to lift. */
   gates?: Pick<RunGateRegistry, 'get'>;
+  /** D306: `<dataDir>/ace.pricing.json`, read when asked. Absent, nothing is priced. */
+  pricing?: () => PricingTable;
+  /**
+   * D305: the run controls' resume, for a budget raised above what was used. A getter's worth of
+   * indirection, so the composition root can build the controls after this service.
+   */
+  resume?: (runId: Id) => Promise<unknown>;
   now?: () => string;
   nextId?: () => string;
 }
@@ -86,6 +110,22 @@ export function createDomainService(deps: DomainServiceDeps): DomainService {
     const run = await deps.repository.runs.get(deps.scope, runId);
     if (run === null) throw notFound(`run ${runId}`);
     return run;
+  }
+
+  /** The run's usage snapshot, from its whole log, priced by the table as it is now. */
+  async function snapshotOf(run: Run): Promise<DomainUsageSnapshot> {
+    const events = await deps.repository.events.listAfter(deps.scope, 0, { runIds: [run.id] });
+    const providerTypes = new Map(
+      (await deps.repository.providers.list(deps.scope)).map((provider) => [
+        provider.id,
+        provider.type,
+      ]),
+    );
+    return projectUsage(
+      events,
+      domainContextFor(run.id, run.snapshot.nodes, providerTypes),
+      deps.pricing?.() ?? emptyPricingTable(),
+    );
   }
 
   /** D310: a rejected envelope's sender is told why, as a message addressed to it (trusted). */
@@ -297,6 +337,44 @@ export function createDomainService(deps: DomainServiceDeps): DomainService {
       // D305: a run BLOCKED mid-run has a paused gate; its drive has to get past it to end.
       if (run.status === 'BLOCKED') deps.gates?.get(runId)?.resume();
       return withAllowedActions(await domain.finished());
+    },
+
+    async usage(runId) {
+      return snapshotOf(await load(runId));
+    },
+
+    async setBudget(runId, body) {
+      const parsedBody = PutRunBudgetRequestSchema.safeParse(body);
+      if (!parsedBody.success) {
+        throw invalid('The budget is not valid.', parsedBody.error.issues);
+      }
+      const { limit } = parsedBody.data;
+
+      const run = await load(runId);
+      if (!isLive(run)) throw ended(run);
+      const domain = deps.domains.get(runId);
+      if (domain === undefined) throw ended(run);
+
+      await domain.withLock(async () => {
+        if (domain.isClosed()) throw ended(run);
+        const used = domain.usedTokens();
+        domain.setBudget(limit);
+        await deps.repository.runs.update(deps.scope, run.id, {
+          domain: { ...(run.domain ?? defaultRunDomainConfig()), tokenBudget: limit },
+        });
+        await deps.bus.emit({
+          type: 'run.token_budget',
+          workflowId: run.workflowId,
+          runId: run.id,
+          payload: { runId: run.id, limit, used, level: 'SET' },
+        });
+        // D305: room again — the run carries on. Lowered under what was used, the drive blocks it.
+        const room = limit === null || used < limit;
+        if (run.status === 'BLOCKED' && run.blockedReason === 'BUDGET_EXCEEDED' && room) {
+          await deps.resume?.(run.id);
+        }
+      });
+      return snapshotOf((await deps.repository.runs.get(deps.scope, run.id)) ?? run);
     },
 
     async routeEnvelope(runId, envelopeId, body) {

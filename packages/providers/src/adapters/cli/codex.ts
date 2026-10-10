@@ -1,12 +1,11 @@
 import { CLI_INSTALL_HINTS, type CliPermission, type NodeError } from '@ace/contracts';
 
-import { ProviderCallError, type ProviderAdapter, type StreamChunk } from '../../adapter.js';
+import { ProviderCallError, type ProviderAdapter } from '../../adapter.js';
 import {
   cliExitError,
   cliModel,
   createCliAdapter,
   summariseToolOutput,
-  tokenCount,
   withSystem,
   type CliAdapterOptions,
   type CliDialect,
@@ -17,7 +16,11 @@ import { probeCommand } from './detect.js';
 /**
  * Codex CLI's `exec` mode (X1 spec §5.1, from Codex's docs and source; not installed on the dev
  * machine, so verified against a fake CLI only). `exec` never asks for approval; the sandbox flag
- * is the preset. Codex reports whole messages, not deltas, and tokens but no cost (D263).
+ * is the preset. Codex reports whole messages, not deltas.
+ *
+ * D313: Codex is estimated-only. Its usage fields have never been seen in real output — it is not
+ * installed where ACE is built — so none is read, no usage chunk is yielded, and the executor
+ * estimates the turn. Capture its output with `scripts/live/capture-usage.ts` before reading any.
  */
 export const CODEX_BASE_ARGS = ['exec', '--json', '--skip-git-repo-check', '--color', 'never'] as const;
 
@@ -47,7 +50,7 @@ export function codexError(message: string): NodeError {
 export function createCodexParser(now: () => number = Date.now): CliParser {
   const started = new Map<string, number>();
   let wroteText = false;
-  let usage: StreamChunk | undefined;
+  let completed = false;
   let turnFailure: string | undefined;
   let lastError: string | undefined;
 
@@ -122,11 +125,9 @@ export function createCodexParser(now: () => number = Date.now): CliParser {
               return [];
           }
         }
-        case 'turn.completed': {
-          const counts = (event['usage'] ?? {}) as Record<string, unknown>;
-          usage = { type: 'usage', tokensIn: tokenCount(counts['input_tokens']), tokensOut: tokenCount(counts['output_tokens']) };
+        case 'turn.completed':
+          completed = true;
           return [];
-        }
         case 'turn.failed':
           turnFailure = messageOf(event['error']);
           return [];
@@ -141,7 +142,7 @@ export function createCodexParser(now: () => number = Date.now): CliParser {
 
     finish(exit) {
       if (turnFailure !== undefined) throw new ProviderCallError(codexError(turnFailure));
-      if (usage !== undefined) return [usage, { type: 'finish', reason: 'stop' }];
+      if (completed) return [{ type: 'finish', reason: 'stop' }];
       if (lastError !== undefined) throw new ProviderCallError(codexError(lastError));
       throw new ProviderCallError(cliExitError('Codex CLI', exit));
     },

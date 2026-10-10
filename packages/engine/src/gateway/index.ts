@@ -207,7 +207,7 @@ function corsLayer(deps: EngineDeps): MiddlewareHandler<{ Variables: EngineVaria
       const allowed = new Set([...settings.allowedOrigins, ...(deps.selfOrigins ?? [])]);
       return allowed.has(origin) ? origin : null;
     },
-    // PUT: Forge's save (D299).
+    // PUT: Forge's save (D299) and Domain's budget (D313).
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization', 'x-request-id'],
     maxAge: 600,

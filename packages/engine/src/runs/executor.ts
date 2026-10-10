@@ -808,9 +808,18 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       }
       /** What the provider said the call cost (D263), when it says; otherwise the price table. */
       let reportedCostUsd: number | undefined;
+      /** D313: whether the provider reported usage at all, and how much input it read from cache. */
+      let sawUsage = false;
+      let cachedTokensIn = 0;
       const usageNow = (): Usage => {
         const priced = usageFor(tokensIn, tokensOut, pricing);
-        return reportedCostUsd === undefined ? priced : { ...priced, costUsd: reportedCostUsd };
+        return {
+          ...priced,
+          ...(reportedCostUsd === undefined
+            ? {}
+            : { costUsd: reportedCostUsd, costSource: 'reported' as const }),
+          ...(cachedTokensIn > 0 ? { cachedTokensIn } : {}),
+        };
       };
       /** Untrusted tool-result blocks appended to the *recorded* prompt (FR-TOOL-010, FR-PRM-002). */
       const promptSuffix: string[] = [];
@@ -1006,8 +1015,10 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
                 break;
               case 'usage':
                 // Summed across turns: every generate() turn is its own billed call (Arch §12.7).
+                sawUsage = true;
                 tokensIn += chunk.tokensIn;
                 tokensOut += chunk.tokensOut;
+                cachedTokensIn += chunk.cachedTokensIn ?? 0;
                 if (chunk.costUsd !== undefined) {
                   reportedCostUsd = (reportedCostUsd ?? 0) + chunk.costUsd;
                 }
@@ -1266,7 +1277,17 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         };
       }
 
-      const usage = usageNow();
+      /*
+       * D313: a provider that reported no usage has its turn estimated — characters ÷ 4 on the
+       * prompt and on what it wrote — marked `estimated`, so Track and Domain show the same numbers
+       * and both say they are estimates.
+       */
+      if (!sawUsage && called) {
+        tokensIn = estimateTokens(prompt.text);
+        tokensOut = estimateTokens(text);
+      }
+      const usage: Usage =
+        sawUsage || !called ? usageNow() : { ...usageNow(), source: 'estimated' };
 
       /*
        * A tool-point block or a rejected approval ends the node GUARDRAIL_VIOLATION (§2.2). The

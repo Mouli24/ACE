@@ -143,6 +143,31 @@ describe('X1 Claude Code stream (recorded from the real CLI)', () => {
   });
 });
 
+describe('D313 Claude Code usage, against output captured by scripts/live/capture-usage.ts', () => {
+  // Claude Code 2.1.282, `haiku`, captured 2026-10-10: `result.usage` holds the tokens and
+  // `result.total_cost_usd` the CLI's own cost.
+  it('reads the tokens, the cached input and the cost the CLI reported', () => {
+    const chunks = replay('cli-output/claude_code-tiny.jsonl');
+    expect(textOf(chunks)).toBe('ok');
+    expect(chunks.at(-2)).toEqual({
+      type: 'usage',
+      tokensIn: 10 + 4570 + 4808,
+      tokensOut: 35,
+      cachedTokensIn: 4570,
+      costUsd: 0.011222,
+    });
+  });
+
+  it('counts cache reads as cached input, and says nothing when there were none', () => {
+    expect(replay('claude-read-tool.jsonl').find((chunk) => chunk.type === 'usage')).toMatchObject({
+      cachedTokensIn: 8247,
+    });
+    expect(replay('claude-plain.jsonl').find((chunk) => chunk.type === 'usage')).not.toHaveProperty(
+      'cachedTokensIn',
+    );
+  });
+});
+
 describe('X1 Claude Code failures (spec §5.2)', () => {
   it('reads "not logged in" as an auth failure', () => {
     expect(
