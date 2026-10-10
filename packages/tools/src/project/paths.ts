@@ -55,6 +55,8 @@ export function assertInsideProject(options: AssertInsideProjectOptions): string
 }
 
 const PROTECTED_FOLDERS: ReadonlySet<string> = new Set(['.git', '.ace']);
+/** Git's own data alone: never written, and never read through Forge either (D299). */
+export const GIT_FOLDER: ReadonlySet<string> = new Set(['.git']);
 
 /**
  * A folder name as Windows and macOS resolve it: case folded, with an NTFS `:stream` suffix and the
@@ -64,26 +66,35 @@ const PROTECTED_FOLDERS: ReadonlySet<string> = new Set(['.git', '.ace']);
 const asFilesystemSees = (segment: string): string =>
   (segment.split(':')[0] ?? '').replace(/[. ]+$/, '').toLowerCase();
 
-/** The first protected folder name anywhere on `absolute`'s path below `projectDir`. */
-function protectedSegment(projectDir: string, absolute: string): string | undefined {
+/** The first of `folders` named anywhere on `absolute`'s path below `projectDir`. */
+function protectedSegment(
+  projectDir: string,
+  absolute: string,
+  folders: ReadonlySet<string>,
+): string | undefined {
   for (const segment of projectRelative(projectDir, absolute).split('/')) {
     const name = asFilesystemSees(segment);
-    if (PROTECTED_FOLDERS.has(name)) return name;
+    if (folders.has(name)) return name;
   }
   return undefined;
 }
 
 /**
- * The protected folder (`.git` or `.ace`) a write to `absolute` would land in — at any depth, so a
- * nested repository's hooks are as safe as the top-level one's (D299) — by name, and through a link
- * or a short (8.3) name that resolves into one (review C1).
+ * The protected folder (`.git` or `.ace`, or only those in `folders`) a write to `absolute` would
+ * land in — at any depth, so a nested repository's hooks are as safe as the top-level one's
+ * (D299) — by name, and through a link or a short (8.3) name that resolves into one (review C1).
  */
-export function protectedFolderIn(projectDir: string, absolute: string): string | undefined {
+export function protectedFolderIn(
+  projectDir: string,
+  absolute: string,
+  folders: ReadonlySet<string> = PROTECTED_FOLDERS,
+): string | undefined {
   return (
-    protectedSegment(projectDir, absolute) ??
+    protectedSegment(projectDir, absolute, folders) ??
     protectedSegment(
       realpathOfDeepestExisting(resolve(projectDir)),
       realpathOfDeepestExisting(absolute),
+      folders,
     )
   );
 }

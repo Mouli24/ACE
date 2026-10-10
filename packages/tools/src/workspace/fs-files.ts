@@ -289,10 +289,38 @@ export async function createEntry(root: string, request: CreateEntryRequest): Pr
   return entryOf(base, createIgnoreRules(base), absolute, await fs.stat(absolute));
 }
 
-/** The same file under two spellings — a case-only rename on a case-insensitive disk. */
-async function sameEntry(a: string, b: string): Promise<boolean> {
-  const [x, y] = await Promise.all([fs.stat(a), fs.stat(b)]);
-  return x.ino !== 0 && x.ino === y.ino && x.dev === y.dev;
+/** A file's identity on its disk, exactly: `stat(..., { bigint: true })`'s `dev` and `ino`. */
+export interface EntryId {
+  readonly dev: bigint;
+  readonly ino: bigint;
+}
+
+/** A project-relative path as a case-insensitive disk compares it. */
+const folded = (rel: string): string => rel.normalize('NFC').toLowerCase();
+
+/**
+ * Whether `from` and `to` are one entry under two spellings — a case-only rename on a
+ * case-insensitive disk — so moving one onto the other is a rename, not an overwrite (review C1).
+ * Both must hold: the project-relative paths are equal ignoring case (after Unicode
+ * normalisation), and the disk reports the same file id. The ids are bigints because NTFS file
+ * ids exceed 2^53: as Numbers, two neighbouring files can round to one id.
+ */
+export function isSameEntry(from: string, to: string, a: EntryId, b: EntryId): boolean {
+  return folded(from) === folded(to) && a.ino !== 0n && a.ino === b.ino && a.dev === b.dev;
+}
+
+async function sameEntry(
+  relFrom: string,
+  relTo: string,
+  from: string,
+  to: string,
+): Promise<boolean> {
+  if (folded(relFrom) !== folded(relTo)) return false;
+  const [a, b] = await Promise.all([
+    fs.stat(from, { bigint: true }),
+    fs.stat(to, { bigint: true }),
+  ]);
+  return isSameEntry(relFrom, relTo, a, b);
 }
 
 /** `POST /files/move`: rename or move inside the project. */
@@ -311,7 +339,8 @@ export async function moveEntry(root: string, from: string, to: string): Promise
   }
   if (relSource !== relTarget) {
     const existing = await lstatOrNull(target);
-    if (existing !== null && !(await sameEntry(source, target))) {
+    // anything else that exists is never replaced (review C1)
+    if (existing !== null && !(await sameEntry(relSource, relTarget, source, target))) {
       throw new WorkspaceFsError('exists', `${to} already exists.`);
     }
     try {

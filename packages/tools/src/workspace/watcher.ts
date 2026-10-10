@@ -42,6 +42,19 @@ export function watchProject(
     watcher?.close();
   };
 
+  /**
+   * `ignore` throws on some names (an all-dots path such as `...` on POSIX). Such a path counts as
+   * not ignored: a throw in the `fs.watch` listener would be an uncaught exception, and in a burst
+   * an unhandled rejection — either takes the engine down (review minor 5).
+   */
+  const isIgnored = (rel: string, isFolder: boolean): boolean => {
+    try {
+      return rules.isIgnored(rel, isFolder);
+    } catch {
+      return false;
+    }
+  };
+
   async function flush(): Promise<void> {
     timer = undefined;
     const entries = [...pending.entries()];
@@ -56,10 +69,9 @@ export function watchProject(
     const settled = await Promise.all(
       entries.map(async ([path, eventType]): Promise<FileChange | undefined> => {
         const info = await stat(join(root, path)).catch(() => undefined);
-        // An ignored folder is never reported (design �6.1), and neither is a path that is gone
+        // An ignored folder is never reported (design §6.1), and neither is a path that is gone
         // and may have been one: the cheap test in the callback only drops what is *under* it.
-        if ((info === undefined || info.isDirectory()) && rules.isIgnored(path, true))
-          return undefined;
+        if ((info === undefined || info.isDirectory()) && isIgnored(path, true)) return undefined;
         if (info === undefined) return { path, kind: 'deleted' };
         if (eventType === 'rename') return { path, kind: 'created' };
         // A folder's own "changed" only means something inside it changed; the children report
@@ -73,7 +85,16 @@ export function watchProject(
   }
 
   const schedule = (): void => {
-    if (timer === undefined) timer = setTimeout(() => void flush(), debounceMs);
+    if (timer === undefined) {
+      timer = setTimeout(() => {
+        // A burst that cannot be sent stops this watcher and says so, as an `error` event does;
+        // the owner restarts it (review minor 5).
+        flush().catch((error: unknown) => {
+          stop();
+          onError(error instanceof Error ? error : new Error(String(error)));
+        });
+      }, debounceMs);
+    }
   };
 
   try {
@@ -90,7 +111,7 @@ export function watchProject(
         rel === '' ||
         rules.isHidden(rel) ||
         rel.endsWith(SAVE_TEMP_SUFFIX) ||
-        rules.isIgnored(rel, false)
+        isIgnored(rel, false)
       )
         return;
       if (rel === '.gitignore' || rel.endsWith('/.gitignore')) rules.clear();

@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createEntry,
+  isSameEntry,
   listAllFiles,
   listFolder,
   moveEntry,
@@ -159,6 +160,31 @@ describe('FR-GIT-008 every path stays inside the project', () => {
     expect((await refusal(createEntry(project, { path, kind: 'file' }))).code).toBe(
       'protected_path',
     );
+  });
+
+  it.each(['.git/config', '.GIT/config', '.git./config', 'sub/.git/config', 'x/.ace/.git/HEAD'])(
+    'review minor 6: refuses to read %j, as .git is never listed',
+    async (path) => {
+      put(path, '[remote "origin"]\n\turl = https://user:token@example.com/r.git\n');
+      expect(await refusal(readFile(project, path))).toEqual({
+        code: 'protected_path',
+        details: { folder: '.git' },
+      });
+      expect((await refusal(readRaw(project, path))).code).toBe('protected_path');
+    },
+  );
+
+  it('review minor 6: refuses to list .git at any depth, but still reads .ace', async () => {
+    put('.git/HEAD', 'ref: refs/heads/main');
+    put('sub/.git/HEAD', 'ref: refs/heads/main');
+    put('.ace/state.json', '{}');
+    expect((await refusal(listFolder(project, '.git'))).code).toBe('protected_path');
+    expect((await refusal(listFolder(project, '.Git'))).code).toBe('protected_path');
+    expect((await refusal(listFolder(project, 'sub/.git'))).code).toBe('protected_path');
+    expect((await listFolder(project, 'sub')).items.map((e) => e.name)).toEqual([]);
+    expect((await listFolder(project, '.ace')).items.map((e) => e.name)).toEqual(['state.json']);
+    expect((await readFile(project, '.ace/state.json')).kind).toBe('text');
+    expect((await listAllFiles(project)).files).not.toContain('.git/HEAD');
   });
 
   it.each(['CON', 'aux.txt', 'nul.md', 'trailing.', 'trailing ', 'a<b', 'a|b', 'q?.txt'])(
@@ -361,6 +387,51 @@ describe('FR-GIT-003 creating, moving and deleting', () => {
     expect((await refusal(moveEntry(project, 'a.txt', 'b.txt'))).code).toBe('exists');
     expect((await refusal(moveEntry(project, 'src', 'src/inner'))).code).toBe('invalid_path');
     expect((await refusal(moveEntry(project, 'nope', 'x'))).code).toBe('not_found');
+    expect(disk('b.txt').toString()).toBe('b');
+  });
+
+  it('review C1: never treats two different files as one, though their Number inos collide', async () => {
+    // NTFS file ids exceed 2^53: as Numbers, neighbouring ids round to one value
+    const base = 2n ** 60n;
+    expect(Number(base + 1n)).toBe(Number(base + 2n));
+    const one = { dev: 7n, ino: base + 1n };
+    const other = { dev: 7n, ino: base + 2n };
+    expect(isSameEntry('src/index.ts', 'lib/index.ts', one, other)).toBe(false);
+    // the same id under two different names (a hard link) is not a case-only rename either
+    expect(isSameEntry('a.txt', 'b.txt', one, one)).toBe(false);
+    // two files differing only by case, on a case-sensitive disk
+    expect(isSameEntry('readme.md', 'README.md', one, other)).toBe(false);
+    expect(isSameEntry('readme.md', 'README.md', one, { ...one, dev: 8n })).toBe(false);
+    expect(isSameEntry('readme.md', 'README.md', one, one)).toBe(true);
+    expect(isSameEntry('Docs/Ü.md', 'docs/ü.md', one, one)).toBe(true);
+    // macOS hands back decomposed names: compared after Unicode normalisation
+    expect(isSameEntry('docs/ü.md', 'Docs/Ü.md', one, one)).toBe(true);
+  });
+
+  it('review C1: a move onto a different existing file answers exists and keeps both', async () => {
+    put('a.txt', 'a');
+    put('b.txt', 'b');
+    const { promises } = await import('node:fs');
+    const real = promises.stat.bind(promises);
+    const ids: Record<string, bigint> = { 'a.txt': 2n ** 60n + 1n, 'b.txt': 2n ** 60n + 2n };
+    // the disk reports ids that collide as Numbers and differ as bigints, as NTFS can
+    const spy = vi.spyOn(promises, 'stat').mockImplementation((async (
+      path: Parameters<typeof real>[0],
+      options?: { bigint?: boolean },
+    ) => {
+      const stats = await real(path, options);
+      const id = ids[String(path).split(/[\\/]/).pop() ?? ''];
+      if (id === undefined) return stats;
+      return options?.bigint === true
+        ? Object.assign(stats, { dev: 7n, ino: id })
+        : Object.assign(stats, { dev: 7, ino: Number(id) });
+    }) as typeof promises.stat);
+    try {
+      expect((await refusal(moveEntry(project, 'a.txt', 'b.txt'))).code).toBe('exists');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(disk('a.txt').toString()).toBe('a');
     expect(disk('b.txt').toString()).toBe('b');
   });
 
