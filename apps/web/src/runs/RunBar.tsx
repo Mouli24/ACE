@@ -26,6 +26,7 @@ import {
   useSocketStatus,
   useStartRun,
   useStopRun,
+  useEndRun,
 } from './hooks';
 import { useRunStore } from './run-store';
 
@@ -102,11 +103,13 @@ export function RunBar({
   const resume = useResumeRun();
   const stop = useStopRun();
   const restart = useRestartRun();
-  const busy = pause.isPending || resume.isPending || stop.isPending || restart.isPending;
+  const end = useEndRun();
+  const busy =
+    pause.isPending || resume.isPending || stop.isPending || restart.isPending || end.isPending;
 
   const onAction = async (action: RunAction) => {
     if (run.runId === undefined) return;
-    const mutation = { pause, resume, stop, restart }[action];
+    const mutation = { pause, resume, stop, restart, end }[action];
     return mutation.mutateAsync(run.runId);
   };
 

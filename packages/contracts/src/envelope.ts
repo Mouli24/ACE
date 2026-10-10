@@ -115,6 +115,11 @@ export const EnvelopeSchema = z.strictObject({
   /** The input-point verdicts on this envelope's reads (round 3 §2.2, Arch §12.4). */
   guardrailVerdicts: z.array(VerdictSchema).optional(),
   createdAt: TimestampSchema,
+  /**
+   * D310: the team envelope (`envelope.sent`) this edge delivery carries. Domain's envelopes are one
+   * per message and may fan out; this one is one per edge. Absent on envelopes from before Domain.
+   */
+  teamEnvelopeId: IdSchema.optional(),
 });
 export type Envelope = z.infer<typeof EnvelopeSchema>;
 

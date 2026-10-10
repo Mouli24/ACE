@@ -154,6 +154,8 @@ describe('BR-02 an envelope has no field that can hold a message list', () => {
       'contract',
       'guardrailVerdicts',
       'createdAt',
+      // D310: an id linking the edge delivery to its team envelope — never a message list.
+      'teamEnvelopeId',
     ]);
   });
 });

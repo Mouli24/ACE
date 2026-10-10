@@ -84,7 +84,21 @@ export function eventNodeIds(
     case 'run.paused':
     case 'run.resumed':
     case 'usage.updated':
+    case 'envelope.routed':
+    case 'run.token_budget':
+    case 'run.config':
+    case 'run.parked':
       return [];
+    /* Domain (D303): the events a run's conversation is projected from. */
+    case 'human.message':
+      return event.payload.mentions.map((mention) => mention.nodeId);
+    case 'instruction.state':
+    case 'node.interrupted':
+      return [event.payload.nodeId];
+    case 'envelope.sent':
+      return [event.payload.fromNodeId, ...event.payload.toNodeIds];
+    case 'run.blocked':
+      return event.payload.nodeIds ?? [];
   }
 }
 
@@ -161,6 +175,40 @@ export function describeEvent(event: PersistedRunEvent, nameOf: (nodeId: Id) => 
       const from = message.nodeId === undefined ? message.type : nameOf(message.nodeId);
       return `${from} added a ${message.type} message to the timeline`;
     }
+    /* Domain (D303). */
+    case 'human.message': {
+      const { mentions, text } = event.payload;
+      const to =
+        mentions.length === 0 ? 'every node (the goal)' : mentions.map((each) => `@${each.handle}`).join(', ');
+      return `you → ${to}: ${text}`;
+    }
+    case 'instruction.state':
+      return `message ${event.payload.state.toLowerCase()} for ${nameOf(event.payload.nodeId)}`;
+    case 'envelope.sent': {
+      const { fromNodeId, toNodeIds, kind, summary } = event.payload;
+      return `${nameOf(fromNodeId)} → ${toNodeIds.map(nameOf).join(', ')}: ${kind} — ${summary}`;
+    }
+    case 'envelope.routed': {
+      const { decision, by, reason } = event.payload;
+      return `envelope ${decision.toLowerCase()} by ${by}${reason === undefined ? '' : ` — ${reason}`}`;
+    }
+    case 'node.interrupted':
+      return `${nameOf(event.payload.nodeId)}'s turn was interrupted by a new message`;
+    case 'run.token_budget': {
+      const { level, used, limit } = event.payload;
+      if (level === 'SET') return limit === null ? 'token budget removed' : `token budget set to ${limit}`;
+      return `token budget ${level === 'WARN' ? 'at 80%' : 'exceeded'}: ${used} of ${limit ?? '?'}`;
+    }
+    case 'run.config': {
+      const { routing, loopGuardLimit, tokenBudget } = event.payload.config;
+      return `${routing} routing, loop guard ${loopGuardLimit}${tokenBudget === null ? '' : `, budget ${tokenBudget} tokens`}`;
+    }
+    case 'run.blocked':
+      return `run blocked — ${event.payload.reason}: ${event.payload.detail}`;
+    case 'run.parked':
+      return event.payload.graph === 'complete'
+        ? 'the graph finished — the run stays open'
+        : 'the graph stopped with failures — the run stays open';
   }
 }
 

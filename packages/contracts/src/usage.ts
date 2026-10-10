@@ -123,6 +123,15 @@ export const TRACE_ENTRY_KIND_BY_EVENT_TYPE = {
   'loop.iteration': 'loop',
   'tool.call': 'tool_call',
   'message.created': 'run_event',
+  'human.message': 'run_event',
+  'instruction.state': 'run_event',
+  'envelope.sent': 'run_event',
+  'envelope.routed': 'run_event',
+  'node.interrupted': 'node_run',
+  'run.token_budget': 'run_event',
+  'run.config': 'run_event',
+  'run.blocked': 'run_event',
+  'run.parked': 'run_event',
 } as const satisfies Record<PersistedRunEventType, TraceEntryKind>;
 
 /**

@@ -232,6 +232,18 @@ export function buildTrace(db: MockDb, run: Run): TraceEntry[] {
         case 'message.created':
           label = `Message: ${payload.message?.type ?? 'message'}`;
           break;
+        /* Domain (D303): the mock engine emits none of these yet; a run that has one reads by type. */
+        case 'human.message':
+        case 'instruction.state':
+        case 'envelope.sent':
+        case 'envelope.routed':
+        case 'node.interrupted':
+        case 'run.token_budget':
+        case 'run.config':
+        case 'run.blocked':
+        case 'run.parked':
+          label = type;
+          break;
       }
 
       return {

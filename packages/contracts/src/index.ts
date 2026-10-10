@@ -40,3 +40,5 @@ export * from './templates.js';
 
 /* IDE — Forge (D299) */
 export * from './workspace.js';
+/* Domain (D303–D327) */
+export * from './domain.js';

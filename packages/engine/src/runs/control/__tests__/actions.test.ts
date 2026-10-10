@@ -17,9 +17,20 @@ describe('TC-CTL-006 Allowed actions come from one table (FR-CTL-006, D76)', () 
   it('never invents a second table — the answer is identical to the contract helper', () => {
     for (const status of RUN_STATES) {
       for (const action of RUN_ACTIONS) {
-        expect(isRunActionAllowed(status, action)).toBe(allowedRunActions(status).includes(action));
+        expect(isRunActionAllowed({ status }, action)).toBe(allowedRunActions(status).includes(action));
       }
     }
+  });
+
+  it('reads why a run is blocked (D305) and whether it stays open (D323) from the run itself', () => {
+    expect(withAllowedActions({ status: 'BLOCKED', blockedReason: 'LOOP_GUARD' }).allowedActions).toEqual([
+      'resume',
+      'stop',
+    ]);
+    const open = { id: RUN_ID, status: 'RUNNING' as RunState, domain: { stayOpen: true } };
+    expect(isRunActionAllowed(open, 'end')).toBe(true);
+    expect(isRunActionAllowed(run('RUNNING'), 'end')).toBe(false);
+    expect(() => assertRunAction(run('RUNNING'), 'end')).toThrow('cannot be ended');
   });
 
   it('keeps every other field of the run untouched', () => {
