@@ -1,5 +1,5 @@
 import { cn } from '@ace/ui';
-import { Code2, Workflow, type LucideIcon } from 'lucide-react';
+import { Code2, MessagesSquare, Workflow, type LucideIcon } from 'lucide-react';
 import { useRef, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -10,9 +10,18 @@ const MODES: ReadonlyArray<{ mode: WorkflowMode; label: string; Icon: LucideIcon
   [
     { mode: 'ideate', label: 'Ideate', Icon: Workflow, keys: shortcutLabel(SHORTCUTS.ideate) },
     { mode: 'forge', label: 'Forge', Icon: Code2, keys: shortcutLabel(SHORTCUTS.forge) },
+    {
+      mode: 'domain',
+      label: 'Domain',
+      Icon: MessagesSquare,
+      keys: shortcutLabel(SHORTCUTS.domain),
+    },
   ];
 
-/** The top bar's `Ideate | Forge` switch (D299): a radio group, arrow keys move between the two. */
+/**
+ * The top bar's `Ideate | Forge | Domain` switch (D299, D303): a radio group, and the arrow keys
+ * move along it.
+ */
 export function ModeSwitch({ projectId, workflowId }: { projectId: string; workflowId: string }) {
   const mode = useWorkflowMode();
   const navigate = useNavigate();
@@ -23,9 +32,12 @@ export function ModeSwitch({ projectId, workflowId }: { projectId: string; workf
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     event.preventDefault();
-    const next: WorkflowMode = mode === 'forge' ? 'ideate' : 'forge';
+    const at = MODES.findIndex((entry) => entry.mode === (mode ?? 'ideate'));
+    const step = event.key === 'ArrowRight' ? 1 : MODES.length - 1;
+    const index = (at + step) % MODES.length;
+    const next = MODES[index]?.mode ?? 'ideate';
     go(next);
-    buttons.current[next === 'ideate' ? 0 : 1]?.focus();
+    buttons.current[index]?.focus();
   };
   return (
     <div

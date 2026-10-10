@@ -15,17 +15,26 @@ import { openArtifactHref } from './open-artifact';
 export interface ConversationProps {
   messages: readonly DomainMessage[];
   roster: readonly RosterEntry[];
+  /** Every node of the run's snapshot by id, so one without a handle (an Input) has its name. */
+  names?: ReadonlyMap<Id, string>;
   /** Live text of the turns still running, by turn id. */
   tokens: Readonly<Record<string, string>>;
   readOnly: boolean;
   onRoute(envelopeId: Id, body: RouteEnvelopeRequest): Promise<unknown>;
 }
 
-export function Conversation({ messages, roster, tokens, readOnly, onRoute }: ConversationProps) {
+export function Conversation({
+  messages,
+  roster,
+  names,
+  tokens,
+  readOnly,
+  onRoute,
+}: ConversationProps) {
   const label = (nodeId: Id | undefined): string => {
     if (nodeId === undefined) return '?';
     const entry = roster.find((each) => each.nodeId === nodeId);
-    return entry === undefined ? nodeId : `@${entry.handle}`;
+    return entry === undefined ? (names?.get(nodeId) ?? nodeId) : `@${entry.handle}`;
   };
   const handle = (nodeId: Id): string =>
     roster.find((each) => each.nodeId === nodeId)?.handle ?? nodeId;
