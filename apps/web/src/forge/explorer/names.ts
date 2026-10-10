@@ -19,6 +19,8 @@ export function nameProblem(
     if (/[. ]$/.test(segment)) return 'A name cannot end with a dot or a space.';
     if (RESERVED.test(segment)) return 'Windows reserves that name.';
   }
+  // a multi-segment create goes through (or makes) folders; the engine judges what exists there
+  if (segments.length !== 1) return undefined;
   const first = segments[0] ?? name;
   if (siblings.some((sibling) => sibling.toLowerCase() === first.toLowerCase()))
     return `“${first}” already exists here.`;
