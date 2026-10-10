@@ -8,6 +8,7 @@ import { configureApi } from '../app/api';
 import { routes } from '../app/routes';
 import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
+import { useExplorerStore } from '../forge/explorer/explorer-store';
 import { MockDb } from '../mocks/db';
 import { createHandlers } from '../mocks/handlers';
 import { createForgeHandlers } from '../mocks/handlers-forge';
@@ -46,6 +47,7 @@ export function installMockServer(): void {
     resetGraphSyncRegistry();
     useSelectionStore.getState().clear();
     usePanelsStore.setState(initialPanels, true);
+    useExplorerStore.setState({ projects: {} });
   });
   afterEach(() => server.resetHandlers());
   afterAll(() => server.close());
