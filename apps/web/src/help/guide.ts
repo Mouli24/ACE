@@ -15,6 +15,7 @@ const ORDER = [
   'getting-started',
   'providers',
   'building-a-workflow',
+  'forge',
   'guardrails',
   'knowledge-bases',
   'tools',
