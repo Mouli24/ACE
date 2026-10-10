@@ -61,6 +61,9 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
     await page.getByTestId(`chat-mention-${seeded.agentId}`).click();
     const streamed = page.getByTestId('chat-run-live');
     await expect(streamed).toBeVisible();
+    // The bubble reads "Working on its goal…" until the first token lands, and that placeholder is
+    // longer than the first few words — so growth is measured from the first streamed text.
+    await expect(streamed).not.toContainText('Working on its goal…');
     const first = (await streamed.textContent()) ?? '';
     // TC-EXE-007: the text grows while the node is still running, not only at the end.
     await expect
