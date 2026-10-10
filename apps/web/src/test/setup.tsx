@@ -16,6 +16,11 @@ vi.mock('react-resizable-panels', () => {
   return { Panel: Box, PanelGroup: Box, PanelResizeHandle: () => <div role="separator" /> };
 });
 
+// Forge's Monaco host is a lazy chunk that needs a browser; every test gets the textarea stand-in.
+vi.mock('../forge/editor/EditorHost', async () => ({
+  EditorHost: (await import('./FakeEditorHost')).FakeEditorHost,
+}));
+
 /* jsdom has neither; React Flow and Radix need both to exist. */
 class ResizeObserverStub {
   observe(): void {}

@@ -9,6 +9,8 @@ import { routes } from '../app/routes';
 import { LAYOUT_STORAGE_KEY, useLayoutStore } from '../app/stores/layout';
 import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
+import { useEditorStore } from '../forge/editor/editor-store';
+import { resetModels, setMonaco } from '../forge/editor/models';
 import { useExplorerStore } from '../forge/explorer/explorer-store';
 import { useOutputStore } from '../forge/panel/output-store';
 import { MockDb } from '../mocks/db';
@@ -19,6 +21,7 @@ import { createRound3Handlers } from '../mocks/handlers-round3';
 import { createRound4Handlers } from '../mocks/handlers-round4';
 import { createRound5Handlers } from '../mocks/handlers-round5';
 import { resetGraphSyncRegistry } from '../workflows/sync-registry';
+import { asMonaco, createFakeMonaco } from './fake-monaco';
 
 /** One mock engine per test file; `installMockServer()` wires the lifecycle hooks. */
 export const db = new MockDb({ persist: false });
@@ -52,6 +55,9 @@ export function installMockServer(): void {
     useSelectionStore.getState().clear();
     usePanelsStore.setState(initialPanels, true);
     useExplorerStore.setState({ projects: {} });
+    useEditorStore.setState({ projects: {} });
+    resetModels();
+    setMonaco(asMonaco(createFakeMonaco()));
     localStorage.removeItem(LAYOUT_STORAGE_KEY);
     useLayoutStore.setState(initialLayout, true);
     useOutputStore.setState({ lines: {} });
