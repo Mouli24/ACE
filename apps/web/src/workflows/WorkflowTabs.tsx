@@ -17,6 +17,7 @@ import {
   DeleteWorkflowDialog,
   RenameWorkflowDialog,
 } from './WorkflowDialogs';
+import { useWorkflowMode, workflowPath } from '../forge/mode';
 import { useDuplicateWorkflow, useWorkflows } from './hooks';
 import { downloadWorkflowExport } from './export';
 
@@ -40,6 +41,7 @@ export function WorkflowTabs({
   const workflows = useWorkflows(projectId);
   const duplicate = useDuplicateWorkflow(projectId);
   const navigate = useNavigate();
+  const mode = useWorkflowMode();
   const [dialog, setDialog] = useState<DialogState>();
 
   return (
@@ -63,7 +65,7 @@ export function WorkflowTabs({
               role="tab"
               aria-selected={active}
               className="h-full max-w-[12rem] truncate rounded-chip pl-[13px] pr-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              onClick={() => navigate(`/projects/${projectId}/workflows/${workflow.id}`)}
+              onClick={() => navigate(workflowPath(projectId, workflow.id, mode))}
             >
               {workflow.name}
             </button>
@@ -85,7 +87,7 @@ export function WorkflowTabs({
                   onSelect={() =>
                     duplicate.mutate(workflow.id, {
                       onSuccess: (graph) =>
-                        navigate(`/projects/${projectId}/workflows/${graph.workflow.id}`),
+                        navigate(workflowPath(projectId, graph.workflow.id, mode)),
                     })
                   }
                 >

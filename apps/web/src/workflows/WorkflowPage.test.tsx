@@ -67,11 +67,12 @@ describe('FR-CAN-002 / FR-CHAT-004 the Canvas screen in the V2 layout', () => {
     const surface = await screen.findByTestId('canvas');
 
     const page = screen.getByTestId('workflow-page');
-    expect(page).toHaveClass('grid', 'h-full', 'grid-cols-[minmax(0,1fr)_340px]');
     // the Canvas sits in its own positioned box, so the sheet and the halt note float over it
     expect(surface.parentElement).toHaveClass('relative', 'min-h-0');
 
+    // the chat column is the layout's (D299): beside the page, never inside it
     const column = screen.getByTestId('chat-column');
+    expect(page.contains(column)).toBe(false);
     // one Chat landmark (ChatAside's own <aside aria-label="Chat">), not one nested in another
     expect(column.tagName).toBe('DIV');
     const chat = within(column).getByRole('complementary', { name: 'Chat' });
