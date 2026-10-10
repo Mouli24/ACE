@@ -1,8 +1,10 @@
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { HttpResponse, http } from 'msw';
+import { describe, expect, it, vi } from 'vitest';
 
-import { db, installMockServer, renderApp } from '../../test/app';
+import { db, installMockServer, renderApp, server } from '../../test/app';
+import { openFile } from '../editor/actions';
 import { useEditorStore } from '../editor/editor-store';
 
 installMockServer();
@@ -47,17 +49,48 @@ describe('D299 Ctrl/⌘+P opens any file by a few letters', () => {
     });
   });
 
-  it('puts open files first, moves with the arrows, and closes with Escape', async () => {
+  it('puts open files first, moves with the arrows, keeps the highlight in view, and closes with Escape', async () => {
     const user = userEvent.setup();
-    const { path } = seed();
+    const { projectId, path } = seed();
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
     renderApp(path);
     await screen.findByTestId('forge');
-    await user.click(screen.getByRole('button', { name: /Go to file/ }));
+    openFile(projectId, 'src/util/math.ts', { preview: false });
+    await user.keyboard('{Control>}p{/Control}');
     await screen.findByRole('combobox', { name: 'Go to file' });
     await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(3));
+    expect(screen.getAllByRole('option')[0]).toHaveAttribute('data-path', 'src/util/math.ts');
+    scroll.mockClear();
     await user.keyboard('{ArrowDown}');
     expect(screen.getAllByRole('option')[1]).toHaveAttribute('aria-selected', 'true');
+    expect(scroll).toHaveBeenLastCalledWith({ block: 'nearest' });
+    await user.keyboard('{ArrowUp}');
+    expect(screen.getAllByRole('option')[0]).toHaveAttribute('aria-selected', 'true');
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Go to file' })).toBeNull());
+  });
+
+  it('says when the file list failed, and Retry brings the files', async () => {
+    const user = userEvent.setup();
+    const { path } = seed();
+    server.use(
+      http.get(
+        '*/api/v1/projects/:id/files/list',
+        () =>
+          HttpResponse.json(
+            { error: { code: 'internal', message: 'disk on fire' } },
+            { status: 500 },
+          ),
+        { once: true },
+      ),
+    );
+    renderApp(path);
+    await screen.findByTestId('forge');
+    await user.keyboard('{Control>}p{/Control}');
+    expect(await screen.findByText(/Could not list the project’s files/)).toBeInTheDocument();
+    expect(screen.queryByText('No file matches.')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(3));
   });
 });
