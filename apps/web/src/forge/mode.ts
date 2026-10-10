@@ -8,6 +8,10 @@ export function workflowPath(projectId: string, workflowId: string, mode: Workfl
   return mode === 'forge' ? `${base}/forge` : base;
 }
 
-export function useWorkflowMode(): WorkflowMode {
-  return useMatch('/projects/:projectId/workflows/:workflowId/forge') === null ? 'ideate' : 'forge';
+/** `undefined` on a workflow's other routes (the timeline): in neither mode. */
+export function useWorkflowMode(): WorkflowMode | undefined {
+  const ideate = useMatch('/projects/:projectId/workflows/:workflowId');
+  const forge = useMatch('/projects/:projectId/workflows/:workflowId/forge');
+  if (forge !== null) return 'forge';
+  return ideate === null ? undefined : 'ideate';
 }

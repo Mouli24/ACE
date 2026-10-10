@@ -161,7 +161,7 @@ export function TopBar() {
       {workflowId && <RunBar workflowId={workflowId} haltInline={false} />}
       <div className="flex shrink-0 items-center gap-0.5">
         <ApprovalsBadge runId={runId} />
-        {workflowId && (
+        {workflowId && mode !== undefined && (
           <button
             type="button"
             data-testid="chat-toggle"
