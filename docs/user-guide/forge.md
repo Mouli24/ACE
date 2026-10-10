@@ -21,7 +21,7 @@ Every panel can be resized by dragging its edge.
 - **Rename:** select it and press **F2**.
 - **Move:** drag it onto a folder, or onto a file to move it into that file's folder.
 - **Delete:** select it and press **Delete**. In this version a delete cannot be undone.
-- A rename, move or delete waits while a file inside it is still saving.
+- A rename, move or delete is refused while a file inside it is still saving; try again once the save finishes.
 - **Go to a file:** **Ctrl+P**, then type a few letters of its name.
 
 ## Saving, and files that change underneath you
