@@ -34,8 +34,9 @@ If a file changes on disk — an agent wrote it, or another editor — while it 
 - with unsaved changes, a bar appears: **Compare** (yours against the disk), **Take theirs**, or
   **Keep mine** (your next save wins). Forge never overwrites a change it has not shown you.
 
-If a file you are editing is deleted on disk, its bar offers **Save** (recreates it) and **Close**,
-and closing unsaved text always asks first.
+If a file is deleted on disk while it is open, a bar says so. With no unsaved changes it offers
+**Save** (puts the file back) and **Close**. With unsaved changes it offers **Keep mine** (your next
+save puts the file back) and **Discard and close**. Closing unsaved text always asks first.
 
 Closing a tab with unsaved changes asks first, and so does closing or reloading the browser tab.
 
