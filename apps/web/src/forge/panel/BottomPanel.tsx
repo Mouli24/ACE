@@ -4,13 +4,17 @@ import { Maximize2, Minimize2, X } from 'lucide-react';
 import { useLayoutStore, type ForgePanelTab } from '../../app/stores/layout';
 import { IconAction } from '../layout/IconAction';
 import { OutputView } from './OutputView';
+import { ProblemsView } from './ProblemsView';
+import { useProblemsStore } from './problems-store';
 
 /** Phase 1: Problems (Task 18) and Output. The Terminal arrives in Phase 2 with its view. */
 const TABS: ReadonlyArray<{ tab: ForgePanelTab; label: string }> = [
+  { tab: 'problems', label: 'Problems' },
   { tab: 'output', label: 'Output' },
 ];
 
 export function BottomPanel({ projectId }: { projectId: string }) {
+  const count = useProblemsStore((s) => (s.byProject[projectId] ?? []).length);
   const panelTab = useLayoutStore((s) => s.panelTab);
   const showPanel = useLayoutStore((s) => s.showPanel);
   const closePanel = useLayoutStore((s) => s.closePanel);
@@ -38,6 +42,11 @@ export function BottomPanel({ projectId }: { projectId: string }) {
               )}
             >
               {label}
+              {tab === 'problems' && count > 0 && (
+                <span className="ml-1.5 rounded-chip bg-card px-1.5 text-[10px] text-fg-soft">
+                  {count}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -50,6 +59,7 @@ export function BottomPanel({ projectId }: { projectId: string }) {
         <IconAction label="Close panel" Icon={X} onClick={closePanel} />
       </div>
       <div role="tabpanel" className="min-h-0 flex-1">
+        {panelTab === 'problems' && <ProblemsView projectId={projectId} />}
         {panelTab === 'output' && <OutputView projectId={projectId} />}
       </div>
     </section>
