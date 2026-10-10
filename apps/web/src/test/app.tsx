@@ -6,9 +6,11 @@ import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 
 import { configureApi } from '../app/api';
 import { routes } from '../app/routes';
+import { LAYOUT_STORAGE_KEY, useLayoutStore } from '../app/stores/layout';
 import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
 import { useExplorerStore } from '../forge/explorer/explorer-store';
+import { useOutputStore } from '../forge/panel/output-store';
 import { MockDb } from '../mocks/db';
 import { createHandlers } from '../mocks/handlers';
 import { createForgeHandlers } from '../mocks/handlers-forge';
@@ -34,6 +36,8 @@ export let queryClient = new QueryClient();
 
 /** The panels store as the app starts: sheet closed, bottom panel open, no dialog, no chat target. */
 const initialPanels = usePanelsStore.getState();
+/** The Forge layout as the app starts: chat and side bar open, bottom panel closed. */
+const initialLayout = useLayoutStore.getState();
 
 export function installMockServer(): void {
   beforeAll(() => {
@@ -48,6 +52,9 @@ export function installMockServer(): void {
     useSelectionStore.getState().clear();
     usePanelsStore.setState(initialPanels, true);
     useExplorerStore.setState({ projects: {} });
+    localStorage.removeItem(LAYOUT_STORAGE_KEY);
+    useLayoutStore.setState(initialLayout, true);
+    useOutputStore.setState({ lines: {} });
   });
   afterEach(() => server.resetHandlers());
   afterAll(() => server.close());
