@@ -115,6 +115,8 @@ import {
 } from '@ace/tools';
 import { WebSocketServer } from 'ws';
 
+import { createPricingLoader } from './pricing.js';
+
 export const ENGINE_VERSION = '0.1.0';
 
 /**
@@ -736,12 +738,17 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
    * each drive's Domain here; the routes look it up.
    */
   const domains = createDomainRegistry({ bus, repository, scope: LOCAL_SCOPE });
+  // D306: what Domain prices a turn with when its provider reported no cost. Ships empty.
+  const pricing = createPricingLoader({ dataDir: config.dataDir, logger });
   const domainService = createDomainService({
     repository,
     scope: LOCAL_SCOPE,
     bus,
     domains,
     gates,
+    pricing: () => pricing.current(),
+    // D305: a budget raised above what was used resumes the run; the controls are built below.
+    resume: (runId) => controls.resume(runId),
   });
 
   const runs = createRunService({

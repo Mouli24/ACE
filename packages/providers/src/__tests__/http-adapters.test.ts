@@ -257,8 +257,10 @@ describe('TC-PRV-008 Ollama on the default address is detected', () => {
 /* generate() — the shared AI SDK streaming path                               */
 /* -------------------------------------------------------------------------- */
 
-/** A real OpenAI chat-completions SSE stream, trimmed to three chunks. */
-function sseStream(): HttpResponse<string> {
+/** A real OpenAI chat-completions SSE stream, trimmed to three chunks. `usage: null` sends none. */
+function sseStream(
+  usage: object | null = { prompt_tokens: 7, completion_tokens: 2, total_tokens: 9 },
+): HttpResponse<string> {
   const chunk = (delta: object, finish: string | null, usage?: object): string =>
     `data: ${JSON.stringify({
       id: 'chatcmpl-1',
@@ -273,7 +275,7 @@ function sseStream(): HttpResponse<string> {
     chunk({ role: 'assistant', content: '' }, null) +
     chunk({ content: 'Hel' }, null) +
     chunk({ content: 'lo' }, null) +
-    chunk({}, 'stop', { prompt_tokens: 7, completion_tokens: 2, total_tokens: 9 }) +
+    chunk({}, 'stop', usage ?? undefined) +
     'data: [DONE]\n\n';
 
   return new HttpResponse(body, {
@@ -300,6 +302,38 @@ describe('FR-EXE-008 the adapter streams text, then usage, then finish', () => {
     expect(text).toBe('Hello');
     expect(chunks.at(-2)).toEqual({ type: 'usage', tokensIn: 7, tokensOut: 2 });
     expect(chunks.at(-1)).toEqual({ type: 'finish', reason: 'stop' });
+  });
+
+  it('a stream that reports no usage yields no usage chunk, so the executor estimates (D313)', async () => {
+    server.use(http.post('http://localhost:1234/v1/chat/completions', () => sseStream(null)));
+    const chunks = await collect(
+      createOpenAiCompatibleAdapter({ baseUrl: 'http://localhost:1234' }).generate(
+        { modelId: 'local-model', prompt: 'say hello', outputTypes: ['text'] },
+        new AbortController().signal,
+      ),
+    );
+    expect(chunks.some((c) => c.type === 'usage')).toBe(false);
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: 'stop' });
+  });
+
+  it('carries the cached prompt tokens the provider reported (D313)', async () => {
+    server.use(
+      http.post('http://localhost:1234/v1/chat/completions', () =>
+        sseStream({
+          prompt_tokens: 7,
+          completion_tokens: 2,
+          total_tokens: 9,
+          prompt_tokens_details: { cached_tokens: 5 },
+        }),
+      ),
+    );
+    const chunks = await collect(
+      createOpenAiCompatibleAdapter({ baseUrl: 'http://localhost:1234' }).generate(
+        { modelId: 'local-model', prompt: 'say hello', outputTypes: ['text'] },
+        new AbortController().signal,
+      ),
+    );
+    expect(chunks.at(-2)).toEqual({ type: 'usage', tokensIn: 7, tokensOut: 2, cachedTokensIn: 5 });
   });
 
   it('sends the assembled prompt and the system section separately', async () => {

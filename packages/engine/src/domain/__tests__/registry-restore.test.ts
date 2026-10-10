@@ -67,13 +67,13 @@ function routed(log: RunLog, env: number, decision: string, by = 'brain', reason
   });
 }
 
-async function reopen(events: EngineEvent[]) {
+async function reopen(events: EngineEvent[], config: Partial<RunDomainConfig> = {}) {
   const registry = createDomainRegistry({
     bus: { emit: async (event) => event as never },
     repository: { events: { listAfter: async () => events } } as never,
     scope: { workspaceId: 'local' } as never,
   });
-  return registry.open(runOn());
+  return registry.open(runOn(config));
 }
 
 /** Review flagged the writer (forwarded) and the writer asked Review a QUERY the guard held. */
@@ -160,5 +160,29 @@ describe('D323 the envelope state comes back from the log', () => {
     });
     const domain = await reopen(log.events);
     expect(domain.openQueries.has(envOf(2))).toBe(false);
+  });
+});
+
+describe('D313 the token budget comes back from the log', () => {
+  const used = (log: RunLog, tokensIn: number, tokensOut: number) =>
+    log.push('usage.updated', { runId: RUN, totals: { tokensIn, tokensOut, costUsd: 0 } });
+
+  it('the limit the run had, what it has used, and which thresholds were said', async () => {
+    const log = new RunLog(nodes).started().config({ stayOpen: true, tokenBudget: 100 });
+    used(log, 70, 15);
+    log.push('run.token_budget', { runId: RUN, limit: 100, used: 85, level: 'WARN' });
+    const domain = await reopen(log.events, { tokenBudget: 100 });
+    expect(domain.budget()).toEqual({ limit: 100, warned: true, exceeded: false });
+    expect(domain.usedTokens()).toBe(85);
+  });
+
+  it('a limit set after the budget was exceeded starts fresh', async () => {
+    const log = new RunLog(nodes).started().config({ stayOpen: true, tokenBudget: 100 });
+    used(log, 100, 20);
+    log.push('run.token_budget', { runId: RUN, limit: 100, used: 120, level: 'EXCEEDED' });
+    log.push('run.token_budget', { runId: RUN, limit: 1000, used: 120, level: 'SET' });
+    const domain = await reopen(log.events, { tokenBudget: 1000 });
+    expect(domain.budget()).toEqual({ limit: 1000, warned: false, exceeded: false });
+    expect(domain.usedTokens()).toBe(120);
   });
 });

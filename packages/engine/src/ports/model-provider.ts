@@ -128,7 +128,18 @@ export type StreamChunk =
   | { type: 'json'; value: unknown }
   | { type: 'tool_call'; callId: string; name: string; args: unknown }
   | ({ type: 'part' } & ProducedPart)
-  | { type: 'usage'; tokensIn: number; tokensOut: number; costUsd?: number }
+  /**
+   * What the provider reported the call used (D313). `tokensIn` includes cached input;
+   * `cachedTokensIn` is the part of it read from the provider's cache, when it says. A provider
+   * that reports nothing yields no usage chunk at all, and the executor estimates the turn.
+   */
+  | {
+      type: 'usage';
+      tokensIn: number;
+      tokensOut: number;
+      costUsd?: number;
+      cachedTokensIn?: number;
+    }
   /**
    * Something the provider did itself — a CLI's command, file edit or read (X1 §4.2, D261). The
    * executor records it as a ToolCall; no guardrail runs, because it has already happened.

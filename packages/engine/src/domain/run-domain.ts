@@ -12,6 +12,7 @@ import type {
 
 import type { EmittedEvent } from '../events/index.js';
 import { pairKey } from './brain.js';
+import { freshBudget, type BudgetState } from './budget.js';
 import type { OpenQuery } from './envelope-block.js';
 
 /**
@@ -175,6 +176,16 @@ export interface RunDomain {
   digest(): string[];
   noteRouted(line: string): void;
 
+  /* The token budget (D313). */
+  budget(): BudgetState;
+  /** A new limit, or none: its thresholds start fresh, and the drive is woken to read it. */
+  setBudget(limit: number | null): void;
+  /** The drive's record of what it has said about the budget. */
+  noteBudget(state: BudgetState): void;
+  /** Input + output tokens the run has used so far, as the drive last counted them. */
+  usedTokens(): number;
+  noteUsed(used: number): void;
+
   /** Each node's state, as the scheduler sees it — what `@all` and the turn rules read. */
   nodeStates(): Record<Id, NodeState>;
   /** The scheduler hands over its view of the node states. */
@@ -191,6 +202,8 @@ export function createRunDomain(deps: RunDomainDeps): RunDomain {
   const heldById = new Map<Id, HeldEnvelope>();
   let decisions: EnvelopeDecision[] = [];
   const digestLines: string[] = [];
+  let budget = freshBudget(config.tokenBudget);
+  let used = 0;
   const turns = new Map<Id, AbortController>();
   let waiters: (() => void)[] = [];
   let ending = false;
@@ -404,6 +417,23 @@ export function createRunDomain(deps: RunDomainDeps): RunDomain {
     },
 
     isClosed: () => closed,
+
+    budget: () => budget,
+
+    setBudget(limit) {
+      budget = freshBudget(limit);
+      domain.wake();
+    },
+
+    noteBudget(state) {
+      budget = state;
+    },
+
+    usedTokens: () => used,
+
+    noteUsed(value) {
+      used = value;
+    },
 
     nodeStates: () => readStates(),
 

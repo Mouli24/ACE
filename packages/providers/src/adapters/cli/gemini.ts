@@ -10,7 +10,6 @@ import {
   cliModel,
   createCliAdapter,
   summariseToolOutput,
-  tokenCount,
   withSystem,
   type CliAdapterOptions,
   type CliDialect,
@@ -21,7 +20,11 @@ import {
  * Gemini CLI headless (X1 spec §5.1, from its docs and source; not installed on the dev machine, so
  * verified against a fake CLI only). It runs headless when stdin is not a terminal; `--skip-trust`
  * stops an untrusted folder forcing the approval mode back to default, and GEMINI_CLI_NO_RELAUNCH
- * keeps it one process, so a Stop's tree kill reaches it. Tokens, no cost (D263).
+ * keeps it one process, so a Stop's tree kill reaches it.
+ *
+ * D313: Gemini is estimated-only. Its usage fields have never been seen in real output — it is not
+ * installed where ACE is built — so none is read, no usage chunk is yielded, and the executor
+ * estimates the turn. Capture its output with `scripts/live/capture-usage.ts` before reading any.
  */
 export const GEMINI_BASE_ARGS = ['-o', 'stream-json', '--skip-trust'] as const;
 
@@ -167,11 +170,7 @@ export function createGeminiParser(now: () => number = Date.now): CliParser {
 
     finish(exit) {
       if (result !== undefined && result['status'] !== 'error') {
-        const stats = (result['stats'] ?? {}) as Record<string, unknown>;
-        return [
-          { type: 'usage', tokensIn: tokenCount(stats['input_tokens']), tokensOut: tokenCount(stats['output_tokens']) },
-          { type: 'finish', reason: 'stop' },
-        ];
+        return [{ type: 'finish', reason: 'stop' }];
       }
       const said = (result?.['error'] as { message?: unknown } | undefined)?.message;
       const message = typeof said === 'string' ? said : (lastError ?? '');

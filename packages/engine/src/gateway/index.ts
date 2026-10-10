@@ -197,7 +197,8 @@ function corsLayer(deps: EngineDeps): MiddlewareHandler<{ Variables: EngineVaria
       const allowed = new Set([...settings.allowedOrigins, ...(deps.selfOrigins ?? [])]);
       return allowed.has(origin) ? origin : null;
     },
-    allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    // PUT for Domain's budget (D313).
+    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization', 'x-request-id'],
     maxAge: 600,
   });
