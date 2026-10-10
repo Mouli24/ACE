@@ -1,17 +1,21 @@
 import { cn } from '@ace/ui';
-import { ChevronRight, X } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
+import { ChevronRight, SaveAll, X } from 'lucide-react';
 import { useState } from 'react';
 
-import { closeFiles } from '../editor/actions';
+import { saveAll } from '../editor/actions';
+import { useCloseRequest } from '../editor/CloseDialogs';
 import { useEditorStore, useProjectEditor } from '../editor/editor-store';
 import { nameOf, parentOf } from '../files/paths';
+import { IconAction } from '../layout/IconAction';
 import { FileIcon } from './FileIcon';
 
 /** The Explorer's "Open editors" section (§6.4): the files the person is editing, unsaved ones marked. */
 export function OpenEditors({ projectId }: { projectId: string }) {
   const editor = useProjectEditor(projectId);
   const [collapsed, setCollapsed] = useState(false);
-  const close = (paths: readonly string[]): void => closeFiles(projectId, paths);
+  const queryClient = useQueryClient();
+  const { request: close, dialog } = useCloseRequest(projectId);
   return (
     <section aria-label="Open editors" className="shrink-0 border-b border-border">
       <div className="flex h-7 items-center gap-0.5 px-2">
@@ -27,6 +31,12 @@ export function OpenEditors({ projectId }: { projectId: string }) {
           />
           Open editors
         </button>
+        <IconAction
+          label="Save all"
+          Icon={SaveAll}
+          disabled={!editor.tabs.some((path) => editor.files[path]?.dirty === true)}
+          onClick={() => void saveAll(projectId, queryClient)}
+        />
       </div>
       {!collapsed && (
         <ul className="pb-1">
@@ -77,6 +87,7 @@ export function OpenEditors({ projectId }: { projectId: string }) {
           })}
         </ul>
       )}
+      {dialog}
     </section>
   );
 }

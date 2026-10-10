@@ -1,7 +1,8 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { renderWithQuery } from '../../test/app';
 import { openFile } from '../editor/actions';
 import { useEditorStore } from '../editor/editor-store';
 import { OpenEditors } from './OpenEditors';
@@ -12,7 +13,7 @@ beforeEach(() => useEditorStore.setState({ projects: {} }));
 describe('D299 Open editors from the keyboard', () => {
   it('each row is a button that activates its file; a dirty row still has a focusable close button', async () => {
     const user = userEvent.setup();
-    render(<OpenEditors projectId={P} />);
+    renderWithQuery(<OpenEditors projectId={P} />);
     act(() => {
       openFile(P, 'src/a.ts');
       openFile(P, 'src/b.ts');

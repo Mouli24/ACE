@@ -17,6 +17,10 @@ vi.mock('react-resizable-panels', () => {
 });
 
 // Forge's Monaco host is a lazy chunk that needs a browser; every test gets the textarea stand-in.
+vi.mock('../forge/editor/CompareView', () => ({
+  CompareView: ({ path }: { path: string }) => <div data-testid="compare-view">{path}</div>,
+}));
+
 vi.mock('../forge/editor/EditorHost', async () => ({
   EditorHost: (await import('./FakeEditorHost')).FakeEditorHost,
 }));
