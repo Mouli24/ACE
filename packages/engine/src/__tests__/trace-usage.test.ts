@@ -126,6 +126,16 @@ const script: [string, unknown, number][] = [
   ['run.resumed', { runId: RUN }, 660],
   ['usage.updated', { runId: RUN, totals: usage }, 670],
   ['message.created', { workflowId: WF, message: {} }, 680],
+  /* Domain (D303): its run events trace like any other. */
+  ['run.config', { runId: RUN, config: { routing: 'supervised', loopGuardLimit: 3, tokenBudget: null, stayOpen: true } }, 681],
+  ['human.message', { runId: RUN, messageId: NODE_RUN, text: 'Writer, go', addressing: 'direct', mentions: [], deliveryMode: 'queue' }, 682],
+  ['instruction.state', { runId: RUN, messageId: NODE_RUN, nodeId: NODE, state: 'PENDING' }, 683],
+  ['envelope.sent', { runId: RUN, envelopeId: NODE_RUN, nodeRunId: NODE_RUN, kind: 'FLAG', fromNodeId: NODE, toNodeIds: [NODE], summary: 's', textSource: 'summary', artifacts: [] }, 684],
+  ['envelope.routed', { runId: RUN, envelopeId: NODE_RUN, decision: 'FORWARDED', by: 'brain' }, 685],
+  ['node.interrupted', { runId: RUN, nodeRunId: NODE_RUN, nodeId: NODE, messageId: NODE_RUN, partialOutput: [] }, 686],
+  ['run.token_budget', { runId: RUN, limit: 100, used: 90, level: 'WARN' }, 687],
+  ['run.blocked', { runId: RUN, reason: 'LOOP_GUARD', detail: 'd' }, 688],
+  ['run.parked', { runId: RUN, graph: 'complete' }, 689],
   ['run.completed', { runId: RUN, status: 'COMPLETE', totals: usage }, 700],
 ];
 
@@ -204,6 +214,15 @@ describe('FR-OBS-001 kinds, labels and durations', () => {
       'run.resumed',
       'usage.updated',
       'message.created',
+      'run.config',
+      'human.message',
+      'instruction.state',
+      'envelope.sent',
+      'envelope.routed',
+      'node.interrupted',
+      'run.token_budget',
+      'run.blocked',
+      'run.parked',
       'run.completed',
     ]);
   });

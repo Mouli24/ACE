@@ -37,3 +37,6 @@ export * from './knowledge.js';
 export * from './memory.js';
 export * from './usage.js';
 export * from './templates.js';
+
+/* Domain (D303–D327) */
+export * from './domain.js';

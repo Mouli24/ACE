@@ -36,3 +36,4 @@ export * from './trace/index.js';
 export * from './usage/index.js';
 export * from './templates/service.js';
 export * from './backup/index.js';
+export * from './domain/index.js';

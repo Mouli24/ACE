@@ -232,6 +232,90 @@ const ENTRIES: RunEventEntry[] = [
       },
     },
   },
+  /* Domain (D303): its run events are listed in Track's Events tab too. */
+  {
+    event: {
+      type: 'run.config',
+      seq: 17,
+      payload: {
+        runId: RUN,
+        config: { routing: 'supervised', loopGuardLimit: 3, tokenBudget: 5000, stayOpen: true },
+      },
+    },
+  },
+  {
+    event: {
+      type: 'human.message',
+      seq: 18,
+      payload: {
+        runId: RUN,
+        messageId: MESSAGE,
+        text: 'Writer, tighten it',
+        addressing: 'direct',
+        mentions: [{ nodeId: WRITER, handle: 'writer', via: 'name' }],
+        deliveryMode: 'queue',
+      },
+    },
+  },
+  {
+    event: {
+      type: 'instruction.state',
+      seq: 19,
+      payload: { runId: RUN, messageId: MESSAGE, nodeId: WRITER, state: 'DELIVERED' },
+    },
+  },
+  {
+    event: {
+      type: 'envelope.sent',
+      seq: 20,
+      payload: {
+        runId: RUN,
+        envelopeId: MESSAGE,
+        nodeRunId: REVIEWER_RUN,
+        kind: 'FLAG',
+        fromNodeId: REVIEWER,
+        toNodeIds: [WRITER],
+        summary: 'The hook is too long.',
+        textSource: 'summary',
+        artifacts: [],
+      },
+    },
+  },
+  {
+    event: {
+      type: 'envelope.routed',
+      seq: 21,
+      payload: { runId: RUN, envelopeId: MESSAGE, decision: 'FORWARDED', by: 'brain' },
+    },
+  },
+  {
+    event: {
+      type: 'node.interrupted',
+      seq: 22,
+      payload: {
+        runId: RUN,
+        nodeRunId: WRITER_RUN,
+        nodeId: WRITER,
+        messageId: MESSAGE,
+        partialOutput: [{ type: 'text', text: 'Half' }],
+      },
+    },
+  },
+  {
+    event: {
+      type: 'run.token_budget',
+      seq: 23,
+      payload: { runId: RUN, limit: 5000, used: 4100, level: 'WARN' },
+    },
+  },
+  {
+    event: {
+      type: 'run.blocked',
+      seq: 24,
+      payload: { runId: RUN, reason: 'LOOP_GUARD', detail: 'Held a fourth round trip.', nodeIds: [WRITER, REVIEWER] },
+    },
+  },
+  { event: { type: 'run.parked', seq: 25, payload: { runId: RUN, graph: 'complete' } } },
 ];
 
 describe('Events tab — the run, in order (round 3 §5 item 7, NFR-OBS-01)', () => {
@@ -319,7 +403,8 @@ describe('Events tab — the run, in order (round 3 §5 item 7, NFR-OBS-01)', ()
     await user.click(screen.getByLabelText('Filter by node'));
     await user.click(await screen.findByRole('option', { name: 'Reviewer' }));
 
-    // The Reviewer's own events: the transfer into it, its approval request and decision, its error.
+    // The Reviewer's own events: the transfer into it, its approval request and decision, its error,
+    // the FLAG it sent and the loop guard that named it (D303).
     const types = within(screen.getByTestId('events-list'))
       .getAllByRole('listitem')
       .map((row) => row.getAttribute('data-type'));
@@ -328,6 +413,8 @@ describe('Events tab — the run, in order (round 3 §5 item 7, NFR-OBS-01)', ()
       'node.approval_required',
       'node.approval_decided',
       'node.error',
+      'envelope.sent',
+      'run.blocked',
     ]);
     // The Writer's state change is not the Reviewer's business, and neither is the run's own halt,
     // the Writer's tool call, or a timeline message that names no node.
@@ -335,7 +422,7 @@ describe('Events tab — the run, in order (round 3 §5 item 7, NFR-OBS-01)', ()
     expect(screen.queryByTestId('event-14')).not.toBeInTheDocument();
     expect(screen.queryByTestId('event-15')).not.toBeInTheDocument();
     expect(screen.queryByTestId('event-16')).not.toBeInTheDocument();
-    expect(screen.getByTestId('events-count')).toHaveTextContent('4 events');
+    expect(screen.getByTestId('events-count')).toHaveTextContent('6 events');
   });
 
   it('can point at the node a row is about', async () => {

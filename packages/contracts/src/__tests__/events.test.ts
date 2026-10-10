@@ -207,6 +207,74 @@ const frames: Record<string, { type: string; payload: unknown; seq?: number }> =
     payload: { workflowId: WORKFLOW_ID, message: timelineMessage },
     seq: 15,
   },
+  /* Domain (D303). */
+  'human.message': {
+    type: 'human.message',
+    payload: {
+      runId: RUN_ID,
+      messageId: MESSAGE_ID,
+      text: 'Nova, tighten the hook',
+      addressing: 'direct',
+      mentions: [{ nodeId: NODE_A, handle: 'nova', via: 'name' }],
+      deliveryMode: 'queue',
+    },
+    seq: 30,
+  },
+  'instruction.state': {
+    type: 'instruction.state',
+    payload: { runId: RUN_ID, messageId: MESSAGE_ID, nodeId: NODE_A, state: 'PENDING' },
+    seq: 31,
+  },
+  'envelope.sent': {
+    type: 'envelope.sent',
+    payload: {
+      runId: RUN_ID,
+      envelopeId: MESSAGE_ID,
+      nodeRunId: NODE_RUN_ID,
+      kind: 'HANDOFF',
+      fromNodeId: NODE_A,
+      toNodeIds: [NODE_B],
+      summary: 'Draft attached.',
+      textSource: 'summary',
+      artifacts: [],
+    },
+    seq: 32,
+  },
+  'envelope.routed': {
+    type: 'envelope.routed',
+    payload: { runId: RUN_ID, envelopeId: MESSAGE_ID, decision: 'FORWARDED', by: 'brain' },
+    seq: 33,
+  },
+  'node.interrupted': {
+    type: 'node.interrupted',
+    payload: {
+      runId: RUN_ID,
+      nodeRunId: NODE_RUN_ID,
+      nodeId: NODE_A,
+      messageId: MESSAGE_ID,
+      partialOutput: [{ type: 'text', text: 'Half' }],
+    },
+    seq: 34,
+  },
+  'run.token_budget': {
+    type: 'run.token_budget',
+    payload: { runId: RUN_ID, limit: 1000, used: 0, level: 'SET' },
+    seq: 35,
+  },
+  'run.config': {
+    type: 'run.config',
+    payload: {
+      runId: RUN_ID,
+      config: { routing: 'supervised', loopGuardLimit: 3, tokenBudget: null, stayOpen: false },
+    },
+    seq: 36,
+  },
+  'run.blocked': {
+    type: 'run.blocked',
+    payload: { runId: RUN_ID, reason: 'BUDGET_EXCEEDED', detail: '1012 of 1000 tokens' },
+    seq: 37,
+  },
+  'run.parked': { type: 'run.parked', payload: { runId: RUN_ID, graph: 'complete' }, seq: 38 },
 };
 
 /** One valid frame per thread event type (round 4 §2.5). */
@@ -227,7 +295,7 @@ const payloadOf = (type: string): Record<string, unknown> => {
 };
 
 describe('FR-EXE-014 RunEvent covers every type of round 2 §2.4 and round 3 §2.6', () => {
-  it('declares exactly the sixteen run event types; round 5 §2.8 adds none (D230)', () => {
+  it('declares exactly the run event types: sixteen through round 5 (D230), then the nine Domain adds (D303)', () => {
     expect([...RUN_EVENT_TYPES]).toEqual([
       'run.started',
       'run.completed',
@@ -245,6 +313,15 @@ describe('FR-EXE-014 RunEvent covers every type of round 2 §2.4 and round 3 §2
       'loop.iteration',
       'tool.call',
       'message.created',
+      'human.message',
+      'instruction.state',
+      'envelope.sent',
+      'envelope.routed',
+      'node.interrupted',
+      'run.token_budget',
+      'run.config',
+      'run.blocked',
+      'run.parked',
     ]);
   });
 

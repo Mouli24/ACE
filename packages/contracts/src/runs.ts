@@ -18,6 +18,14 @@ import {
   NodeSchema,
   TimestampSchema,
 } from './graph.js';
+import {
+  BlockedReasonSchema,
+  MESSAGE_TEXT_MAX,
+  RunDomainConfigInputSchema,
+  RunDomainConfigSchema,
+  UsageSourceSchema,
+  type BlockedReason,
+} from './domain.js';
 import { ApprovalDecisionSchema, GuardrailPolicyRefSchema, VerdictSchema } from './guardrails.js';
 import { NodeRunSourceSchema } from './knowledge.js';
 import { MemoryOpSchema } from './memory.js';
@@ -42,6 +50,15 @@ export const UsageSchema = z.object({
   costUsd: z.number().min(0),
   /** Absent only where nothing was spent — a priced node run always names its table version. */
   priceTableVersion: z.string().min(1).optional(),
+  /**
+   * D313: whether the token counts came from the provider's own output or were estimated
+   * (characters ÷ 4). Absent on usage recorded before Domain, which was always the provider's.
+   */
+  source: UsageSourceSchema.optional(),
+  /** D306: where `costUsd` came from — the provider's own report, or the catalog's price table. */
+  costSource: z.enum(['reported', 'catalog']).optional(),
+  /** D313: the part of `tokensIn` read from a prompt cache; `tokensIn` already includes it. */
+  cachedTokensIn: z.number().int().min(0).optional(),
 });
 export type Usage = z.infer<typeof UsageSchema>;
 
@@ -68,7 +85,7 @@ export type NodeError = z.infer<typeof NodeErrorSchema>;
 /* Run controls (round 3 §2.1, FR-CTL-001..006)                                */
 /* -------------------------------------------------------------------------- */
 
-export const RUN_ACTIONS = ['pause', 'resume', 'stop', 'restart'] as const;
+export const RUN_ACTIONS = ['pause', 'resume', 'stop', 'restart', 'end'] as const;
 export const RunActionSchema = z.enum(RUN_ACTIONS);
 export type RunAction = z.infer<typeof RunActionSchema>;
 
@@ -87,8 +104,19 @@ const ALLOWED_RUN_ACTIONS: Readonly<Record<RunState, readonly RunAction[]>> = {
  * the web mocks (D76). Stop is allowed while paused because nodes that were running when the run
  * paused may still be finishing; restart is allowed from any ending, and starts a new run.
  */
-export function allowedRunActions(status: RunState): RunAction[] {
-  return [...ALLOWED_RUN_ACTIONS[status]];
+export function allowedRunActions(
+  status: RunState,
+  context: { blockedReason?: BlockedReason | undefined; stayOpen?: boolean | undefined } = {},
+): RunAction[] {
+  // D305: a run blocked mid-run waits to be resumed; one blocked at pre-flight can only restart.
+  const actions: RunAction[] =
+    status === 'BLOCKED' && context.blockedReason !== undefined
+      ? ['resume', 'stop']
+      : [...ALLOWED_RUN_ACTIONS[status]];
+  // D323: a run started from Domain stays open until the human ends it.
+  const live = status === 'RUNNING' || status === 'PAUSED' || actions.includes('resume');
+  if (context.stayOpen === true && live) actions.push('end');
+  return actions;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -156,6 +184,10 @@ export const RunSchema = z.object({
   restartedFromRunId: IdSchema.optional(),
   /** Set only when `haltReason` is `budget_exceeded` (D80). */
   budgetHalt: BudgetHaltSchema.optional(),
+  /** D305: why a run is BLOCKED mid-run. Absent on a run blocked at pre-flight. */
+  blockedReason: BlockedReasonSchema.optional(),
+  /** D312: the run's Domain settings. Absent on runs from before Domain. */
+  domain: RunDomainConfigSchema.optional(),
 });
 export type Run = z.infer<typeof RunSchema>;
 
@@ -255,6 +287,10 @@ export type NodeRun = z.infer<typeof NodeRunSchema>;
 export const StartRunRequestSchema = z.object({
   inputs: PartsByNodeIdSchema.optional(),
   startFromNodeId: IdSchema.optional(),
+  /** D312: the run's goal. Every node reads it in `## Team goal`; it is the run's first message. */
+  goal: z.string().trim().min(1).max(MESSAGE_TEXT_MAX).optional(),
+  /** D312: Domain settings. Omitted, a run is supervised, has no budget and ends as it always has. */
+  domain: RunDomainConfigInputSchema.optional(),
 });
 export type StartRunRequest = z.infer<typeof StartRunRequestSchema>;
 

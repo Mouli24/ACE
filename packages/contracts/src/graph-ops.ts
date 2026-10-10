@@ -6,6 +6,7 @@ import {
   IdSchema,
   LoopConfigSchema,
   NODE_CONFIG_SCHEMA_BY_KIND,
+  NodeHandleSchema,
   NodeNameSchema,
   NodeSchema,
   PositionSchema,
@@ -92,6 +93,8 @@ export function nodeConfigPatchSchema<K extends NodeKind>(kind: K) {
 
 export const NodePatchSchema = z.object({
   name: NodeNameSchema.optional(),
+  /** D308: set a handle, or `null` to go back to the default (a slug of the name). */
+  handle: NodeHandleSchema.nullable().optional(),
   config: NodeConfigPatchSchema.optional(),
 });
 export type NodePatch = z.infer<typeof NodePatchSchema>;

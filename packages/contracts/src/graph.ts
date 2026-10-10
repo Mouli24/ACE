@@ -156,6 +156,11 @@ export const AgentConfigSchema = z.object({
   knowledgeBaseIds: z.array(IdSchema).default(() => []),
   memory: z.object({ enabled: z.boolean() }).default(DEFAULT_AGENT_MEMORY),
   skillIds: z.array(IdSchema).default(() => []),
+  /**
+   * This Agent is the workflow's Brain (D304): at most one per workflow, always `@brain`. It hears
+   * the human's unaddressed messages and a digest of the envelopes routed in a run.
+   */
+  brain: z.boolean().optional(),
 });
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
 
@@ -257,10 +262,20 @@ export const NODE_CONFIG_SCHEMA_BY_KIND = {
 /* Node and edge                                                               */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * A node's Domain handle (D308): how a human message or an envelope addresses it. Optional — absent,
+ * it defaults to a slug of the name (`rosterFor`). The pattern is `HANDLE_REGEX` in `domain.ts`,
+ * repeated here because that module imports this one.
+ */
+export const NodeHandleSchema = z
+  .string()
+  .regex(/^[a-z][a-z0-9-]{0,31}$/, 'a handle is a lowercase letter, then letters, digits or hyphens (32 at most)');
+
 const nodeBase = {
   id: IdSchema,
   workflowId: IdSchema,
   name: NodeNameSchema,
+  handle: NodeHandleSchema.optional(),
   position: PositionSchema,
   inputs: z.array(PortSchema),
   outputs: z.array(PortSchema),

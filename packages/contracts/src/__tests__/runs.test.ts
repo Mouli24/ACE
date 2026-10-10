@@ -396,8 +396,8 @@ describe('FR-EXE-001 StartRunRequest', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('FR-CTL-006 the controls a run allows', () => {
-  it('declares the four controls', () => {
-    expect([...RUN_ACTIONS]).toEqual(['pause', 'resume', 'stop', 'restart']);
+  it('declares the four controls, and D323 adds end', () => {
+    expect([...RUN_ACTIONS]).toEqual(['pause', 'resume', 'stop', 'restart', 'end']);
   });
 
   it.each([

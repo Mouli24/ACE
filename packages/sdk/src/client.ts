@@ -429,6 +429,8 @@ export function createAceClient(options: AceClientOptions) {
     stopRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/stop`, RunSchema),
     /** Answers the **new** run, which carries `restartedFromRunId` (FR-CTL-004). */
     restartRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/restart`, RunSchema),
+    /** D323: end a run started from Domain — in-flight turns stop, pending messages are dropped. */
+    endRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/end`, RunSchema),
 
     /* Retries and re-runs (round 3 §2.1, FR-ERR-003/004, FR-CTL-005) */
 
