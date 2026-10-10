@@ -27,7 +27,7 @@ export function EditorArea({ projectId }: { projectId: string }) {
       {editor.tabs.length > 0 && <TabsBar projectId={projectId} />}
       <div className="relative min-h-0 flex-1">
         {active === undefined ? (
-          <EmptyEditor />
+          <EmptyEditor projectId={projectId} />
         ) : isImagePath(active) ? (
           <ImagePreview projectId={projectId} path={active} />
         ) : (

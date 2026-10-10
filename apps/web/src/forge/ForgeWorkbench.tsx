@@ -13,6 +13,8 @@ import { ActivityBar } from './layout/ActivityBar';
 import { SideBar } from './layout/SideBar';
 import { StatusBar } from './layout/StatusBar';
 import { BottomPanel } from './panel/BottomPanel';
+import { QuickOpen } from './quick-open/QuickOpen';
+import { useQuickOpen } from './quick-open/quick-open-store';
 
 /**
  * Forge laid out like VS Code (D299, design §2.2): activity bar, side bar, editor, bottom panel and
@@ -34,6 +36,7 @@ export function ForgeWorkbench({ projectId }: { projectId: string }) {
   useShortcuts([
     [SHORTCUTS.toggleSidebar, toggleSidebar],
     [SHORTCUTS.togglePanel, togglePanel],
+    [SHORTCUTS.quickOpen, () => useQuickOpen.getState().show()],
     [
       SHORTCUTS.save,
       () => {
@@ -102,6 +105,7 @@ export function ForgeWorkbench({ projectId }: { projectId: string }) {
         </PanelGroup>
       </div>
       {closeRequest.dialog}
+      <QuickOpen projectId={projectId} />
       <StatusBar projectId={projectId} />
     </div>
   );
