@@ -282,4 +282,24 @@ describe('D299 an edit ended by a click elsewhere leaves focus there', () => {
     expect(screen.queryByRole('textbox', { name: 'New file name' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Elsewhere' })).toHaveFocus();
   });
+
+  it('never replays a focus request it could not honour onto a later click', async () => {
+    const user = userEvent.setup();
+    withOutside();
+    const row = await screen.findByTestId('tree-item-notes.md');
+    act(() => openFile(projectId, 'notes.md'));
+    act(() => row.focus());
+    await user.keyboard('{F2}');
+    const input = screen.getByRole('textbox', { name: 'Rename notes.md' });
+    await user.clear(input);
+    await user.type(input, 'journal.md');
+    fireEvent.keyDown(input, { key: 'Enter' });
+    // the person (or the editor) takes focus before the renamed row renders
+    act(() => screen.getByRole('button', { name: 'Elsewhere' }).focus());
+    await screen.findByTestId('tree-item-journal.md');
+    await user.click(screen.getByTestId('tree-item-src'));
+    await waitFor(() => expect(screen.getByTestId('tree-item-src')).toHaveFocus());
+    expect(screen.getByTestId('tree-item-src')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('tree-item-journal.md')).toHaveAttribute('aria-selected', 'false');
+  });
 });

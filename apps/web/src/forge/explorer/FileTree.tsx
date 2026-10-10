@@ -90,8 +90,11 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
     if (request === undefined || pendingDelete !== undefined || pendingMove !== undefined) return;
     // focus the person moved elsewhere (the editor, a field) is not ours to take back
     const active = document.activeElement;
-    if (active !== null && active !== document.body && !treeElement.current?.contains(active))
+    if (active !== null && active !== document.body && !treeElement.current?.contains(active)) {
+      // a request lives for one decision: declined now, it must not fire on a later click
+      focusRequest.current = undefined;
       return;
+    }
     const path =
       request.path ??
       (rows[index]?.entry.path !== request.avoid
