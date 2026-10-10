@@ -18,8 +18,9 @@ export function InlineName({
   /** The reason a name cannot be used, checked locally, or undefined. */
   problemOf(name: string): string | undefined;
   /** Resolves with a refusal to show (the engine's), or undefined when done. */
-  onCommit(name: string): Promise<string | undefined>;
-  onCancel(): void;
+  onCommit(name: string, wantFocus: boolean): Promise<string | undefined>;
+  /** `wantFocus`: the edit ended by a key or by focus being lost, not by focus moving elsewhere. */
+  onCancel(wantFocus: boolean): void;
   depth: number;
 }) {
   const input = useRef<HTMLInputElement>(null);
@@ -35,10 +36,10 @@ export function InlineName({
     element.setSelectionRange(0, dot > 0 ? dot : initial.length);
   }, [initial]);
 
-  const commit = async (): Promise<void> => {
+  const commit = async (wantFocus: boolean): Promise<void> => {
     if (busy) return;
     if (value === initial) {
-      onCancel();
+      onCancel(wantFocus);
       return;
     }
     const local = problemOf(value);
@@ -47,7 +48,7 @@ export function InlineName({
       return;
     }
     setBusy(true);
-    const refused = await onCommit(value);
+    const refused = await onCommit(value, wantFocus);
     setBusy(false);
     setProblem(refused);
   };
@@ -66,12 +67,14 @@ export function InlineName({
         }}
         onKeyDown={(event) => {
           event.stopPropagation();
-          if (event.key === 'Enter') void commit();
-          if (event.key === 'Escape') onCancel();
+          if (event.key === 'Enter') void commit(true);
+          if (event.key === 'Escape') onCancel(true);
         }}
-        onBlur={() => {
-          if (value.trim() === '' || value === initial) onCancel();
-          else void commit();
+        onBlur={(event) => {
+          // focus that moved to another element is the person's choice; only a lost focus is ours to restore
+          const lost = event.relatedTarget === null;
+          if (value.trim() === '' || value === initial) onCancel(lost);
+          else void commit(lost);
         }}
         className="h-[22px] w-full rounded-sm border border-accent bg-canvas px-1 font-machine text-[12px] text-fg outline-none"
       />

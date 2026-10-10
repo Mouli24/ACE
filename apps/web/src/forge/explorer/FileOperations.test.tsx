@@ -246,3 +246,40 @@ describe('D299 nothing moves mid-save', () => {
     expect(onDisk()).toContain('src/app.ts');
   });
 });
+
+describe('D299 an edit ended by a click elsewhere leaves focus there', () => {
+  const withOutside = () =>
+    renderWithQuery(
+      <>
+        <button type="button">Elsewhere</button>
+        <ExplorerView projectId={projectId} />
+      </>,
+    );
+
+  it('keeps focus on the button clicked during a rename', async () => {
+    const user = userEvent.setup();
+    withOutside();
+    const row = await screen.findByTestId('tree-item-notes.md');
+    act(() => openFile(projectId, 'notes.md'));
+    act(() => row.focus());
+    await user.keyboard('{F2}');
+    const input = screen.getByRole('textbox', { name: 'Rename notes.md' });
+    await user.clear(input);
+    await user.type(input, 'journal.md');
+    await user.click(screen.getByRole('button', { name: 'Elsewhere' }));
+    await waitFor(() => expect(onDisk()).toContain('journal.md'));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.getByRole('button', { name: 'Elsewhere' })).toHaveFocus();
+  });
+
+  it('keeps focus on the button clicked during a New File', async () => {
+    const user = userEvent.setup();
+    withOutside();
+    await screen.findByTestId('tree-item-notes.md');
+    await user.click(screen.getByRole('button', { name: 'New File' }));
+    await user.click(screen.getByRole('button', { name: 'Elsewhere' }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByRole('textbox', { name: 'New file name' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Elsewhere' })).toHaveFocus();
+  });
+});

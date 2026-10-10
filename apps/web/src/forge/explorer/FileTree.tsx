@@ -62,6 +62,7 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
   const create = useCreateEntry(projectId);
   const move = useMoveEntry(projectId);
   const remove = useDeleteEntry(projectId);
+  const treeElement = useRef<HTMLDivElement>(null);
   const rowElements = useRef(new Map<string, HTMLDivElement>());
   const typed = useRef({ text: '', at: 0 });
   const dragging = useRef<string | undefined>(undefined);
@@ -87,6 +88,10 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
     const request = focusRequest.current;
     // a dialog traps focus until it has closed
     if (request === undefined || pendingDelete !== undefined || pendingMove !== undefined) return;
+    // focus the person moved elsewhere (the editor, a field) is not ours to take back
+    const active = document.activeElement;
+    if (active !== null && active !== document.body && !treeElement.current?.contains(active))
+      return;
     const path =
       request.path ??
       (rows[index]?.entry.path !== request.avoid
@@ -128,10 +133,11 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
     parent: string,
     kind: FileEntry['kind'],
     name: string,
+    wantFocus: boolean,
   ): Promise<string | undefined> => {
     try {
       const entry = await create.mutateAsync({ path: joinPath(parent, name), kind });
-      requestFocus(entry.path);
+      if (wantFocus) requestFocus(entry.path);
       store.getState().stopEditing(projectId);
       if (kind === 'file') openFile(projectId, entry.path, { preview: false });
       else store.getState().expand(projectId, entry.path);
@@ -141,11 +147,15 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
     }
   };
 
-  const commitMove = async (from: string, to: string): Promise<string | undefined> => {
+  const commitMove = async (
+    from: string,
+    to: string,
+    wantFocus = true,
+  ): Promise<string | undefined> => {
     if (savingWithin(from)) return SAVING;
     try {
       await move.mutateAsync({ from, to });
-      requestFocus(to);
+      if (wantFocus) requestFocus(to);
       store.getState().stopEditing(projectId);
       filesMoved(projectId, from, to);
       return undefined;
@@ -274,9 +284,9 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
         initial=""
         depth={depth}
         problemOf={(name) => nameProblem(name, siblingsOf(parent), { allowSlash: true })}
-        onCommit={(name) => commitCreate(parent, kind, name)}
-        onCancel={() => {
-          requestFocus(parent === '' ? undefined : parent);
+        onCommit={(name, wantFocus) => commitCreate(parent, kind, name, wantFocus)}
+        onCancel={(wantFocus) => {
+          if (wantFocus) requestFocus(parent === '' ? undefined : parent);
           store.getState().stopEditing(projectId);
         }}
       />
@@ -312,9 +322,11 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
           problemOf={(name) =>
             nameProblem(name, siblingsOf(parentOf(entry.path), entry.path), { allowSlash: false })
           }
-          onCommit={(name) => commitMove(entry.path, joinPath(parentOf(entry.path), name))}
-          onCancel={() => {
-            requestFocus(entry.path);
+          onCommit={(name, wantFocus) =>
+            commitMove(entry.path, joinPath(parentOf(entry.path), name), wantFocus)
+          }
+          onCancel={(wantFocus) => {
+            if (wantFocus) requestFocus(entry.path);
             store.getState().stopEditing(projectId);
           }}
         />
@@ -409,6 +421,7 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
   const target = menuTarget;
   const tree = (
     <div
+      ref={treeElement}
       role="tree"
       aria-label={label}
       className={cn('min-h-full py-1 outline-none', dropTarget === '' && 'bg-selection/10')}
