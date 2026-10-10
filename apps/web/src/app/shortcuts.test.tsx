@@ -29,6 +29,29 @@ describe('D299 Forge’s keyboard shortcuts', () => {
     ).toBe(true);
   });
 
+  it('follows the typed letter, so Dvorak’s Ctrl+C is never togglePanel', () => {
+    const dvorakC = new KeyboardEvent('keydown', { code: 'KeyJ', key: 'c', ctrlKey: true });
+    const dvorakJ = new KeyboardEvent('keydown', { code: 'KeyC', key: 'j', ctrlKey: true });
+    expect(matches(dvorakC, SHORTCUTS.togglePanel)).toBe(false);
+    expect(matches(dvorakJ, SHORTCUTS.togglePanel)).toBe(true);
+  });
+
+  it('falls back to the key’s place when the layout types no Latin letter', () => {
+    const cyrillic = new KeyboardEvent('keydown', { code: 'KeyS', key: 'ы', ctrlKey: true });
+    expect(matches(cyrillic, SHORTCUTS.save)).toBe(true);
+  });
+
+  it('never treats AltGr as a shortcut', () => {
+    const altGr = new KeyboardEvent('keydown', {
+      code: 'KeyB',
+      key: 'b',
+      ctrlKey: true,
+      altKey: true,
+    });
+    altGr.getModifierState = (key: string) => key === 'AltGraph';
+    expect(matches(altGr, SHORTCUTS.toggleChat)).toBe(false);
+  });
+
   it('never binds a key the browser keeps for itself', () => {
     const reserved = [
       'KeyW',
