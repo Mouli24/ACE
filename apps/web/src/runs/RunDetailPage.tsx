@@ -1,4 +1,4 @@
-import type { Id, NodeRun } from '@ace/contracts';
+import type { Id, NodeRun, RunAction } from '@ace/contracts';
 import { PartRenderer, StatusRing } from '@ace/ui';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
@@ -20,6 +20,7 @@ import {
   useRetryNodeRun,
   useRun,
   useStopRun,
+  useEndRun,
 } from './hooks';
 
 /**
@@ -41,12 +42,14 @@ export function RunDetailPage() {
   const resume = useResumeRun();
   const stop = useStopRun();
   const restart = useRestartRun();
+  const end = useEndRun();
   const retry = useRetryNodeRun();
   const compact = useIsCompact();
   // The trace and the node states arrive as the workflow's run frames (FR-OBS-001); counted, so an
   // open Canvas on the same workflow keeps its own feed when this page unmounts.
   useWorkflowSubscription(run.data?.workflowId);
-  const busy = pause.isPending || resume.isPending || stop.isPending || restart.isPending;
+  const busy =
+    pause.isPending || resume.isPending || stop.isPending || restart.isPending || end.isPending;
 
   if (run.isPending) return <p className="p-6 text-fg-muted">Loading run…</p>;
   if (run.isError) {
@@ -63,8 +66,8 @@ export function RunDetailPage() {
   );
 
   const record = run.data;
-  const onAction = async (action: 'pause' | 'resume' | 'stop' | 'restart') =>
-    ({ pause, resume, stop, restart })[action].mutateAsync(record.id);
+  const onAction = async (action: RunAction) =>
+    ({ pause, resume, stop, restart, end })[action].mutateAsync(record.id);
 
   const providerNames = Object.fromEntries(
     (providers.data ?? []).map((provider) => [provider.id, provider.name]),

@@ -56,6 +56,7 @@ const ACTION_META: Readonly<Record<RunAction, { label: string; Icon: LucideIcon 
   resume: { label: 'Resume', Icon: Play },
   stop: { label: 'Stop', Icon: CircleStop },
   restart: { label: 'Restart', Icon: RotateCcw },
+  end: { label: 'End', Icon: CircleStop },
 };
 
 export interface RunControlsProps {

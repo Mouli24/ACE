@@ -240,6 +240,8 @@ export const usePauseRun = () => useRunControl((runId) => api().pauseRun(runId))
 export const useResumeRun = () => useRunControl((runId) => api().resumeRun(runId));
 export const useStopRun = () => useRunControl((runId) => api().stopRun(runId));
 export const useRestartRun = () => useRunControl((runId) => api().restartRun(runId));
+/** D323: a run started from Domain stays open until it is ended. */
+export const useEndRun = () => useRunControl((runId) => api().endRun(runId));
 
 /** `POST /node-runs/:id/retry` — attempt + 1, optionally with everything downstream (FR-ERR-003/004). */
 export function useRetryNodeRun() {
