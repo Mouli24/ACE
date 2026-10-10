@@ -71,11 +71,7 @@ describe('FR-GIT-003 the Explorer tree', () => {
     // focus, not click: a click on a folder also opens it
     const first = await screen.findByTestId('tree-item-node_modules');
     act(() => first.focus());
-    await user.keyboard('{ArrowDown}');
-    expect(
-      useExplorerStore.getState().projects[projectId]?.selected,
-      'nothing selected yet: the first row',
-    ).toBe('node_modules');
+    // nothing selected: the focused first row is the current row, so one ArrowDown reaches the second
     await user.keyboard('{ArrowDown}');
     expect(useExplorerStore.getState().projects[projectId]?.selected).toBe('src');
     await user.keyboard('{ArrowRight}');
@@ -86,6 +82,21 @@ describe('FR-GIT-003 the Explorer tree', () => {
     expect(useExplorerStore.getState().projects[projectId]?.selected).toBe('src');
     await user.keyboard('{ArrowLeft}');
     expect(screen.getByTestId('tree-item-src')).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('keeps exactly one tab stop when the selected row is hidden, and keys start from it', async () => {
+    const user = userEvent.setup();
+    const projectId = seed();
+    renderWithQuery(<FileTree projectId={projectId} label="Files" onOpen={vi.fn()} />);
+    await user.click(await screen.findByTestId('tree-item-src'));
+    await user.click(await screen.findByTestId('tree-item-src/app.ts'));
+    act(() => useExplorerStore.getState().collapse(projectId, 'src'));
+    await waitFor(() => expect(screen.queryByTestId('tree-item-src/app.ts')).toBeNull());
+    const stops = screen.getAllByRole('treeitem').filter((item) => item.tabIndex === 0);
+    expect(stops.map((item) => item.textContent)).toEqual(['node_modules']);
+    act(() => stops[0]!.focus());
+    await user.keyboard('{ArrowDown}');
+    expect(useExplorerStore.getState().projects[projectId]?.selected).toBe('src');
   });
 
   it('says so when the folder cannot be read', async () => {
