@@ -205,11 +205,21 @@ test.describe('Domain end to end on mock-script agents', () => {
     await expect(envelope(page, 'The hook is weak.')).toHaveCount(1);
     await expect(messages(page)).toHaveCount(served);
 
-    // End: COMPLETE, and the conversation is read-only (D323).
+    // End: COMPLETE, and the conversation is read-only (D323) — but the composer still writes: a
+    // message now starts a new run.
     await page.getByRole('button', { name: 'End run' }).click();
     await expect(page.getByText(/read-only/iu)).toBeVisible();
-    await expect(box).toBeDisabled();
+    await expect(box).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Start team run' })).toBeVisible();
     await expect.poll(async () => (await api<Run>(`/runs/${runId}`)).status).toBe('COMPLETE');
+
+    // Domain is a mode beside Ideate and Forge.
+    await expect(page.getByRole('radio', { name: /Domain/ })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    await page.getByRole('radio', { name: /Ideate/ }).click();
+    await expect(page).toHaveURL(new RegExp(`/workflows/${workflowId}$`));
   });
 
   test('manual routing: a held envelope is approved from the conversation', async ({ page }) => {

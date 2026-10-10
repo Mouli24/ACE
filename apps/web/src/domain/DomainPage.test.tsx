@@ -287,7 +287,7 @@ describe('Domain page', () => {
     expect(await screen.findByText('Draft: Go further.')).toBeInTheDocument();
   });
 
-  it('End ends the run, and the conversation becomes read-only', async () => {
+  it('End ends the run: its conversation becomes read-only, and the composer starts a new one', async () => {
     const user = userEvent.setup();
     const team = seedTeam();
     renderApp(pathOf(team));
@@ -295,9 +295,39 @@ describe('Domain page', () => {
     await user.click(screen.getByRole('button', { name: 'End run' }));
     await waitFor(() => expect(requestsTo('/end')).toHaveLength(1));
     expect(await screen.findByText(/read-only/i)).toBeInTheDocument();
-    expect(screen.getByRole('textbox', { name: 'Message' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'End run' })).not.toBeInTheDocument();
+    // You can still write: the message starts a new run, with itself as the goal.
+    const box = screen.getByRole('textbox', { name: 'Message' });
+    expect(box).toBeEnabled();
+    await user.type(box, 'Again, shorter');
+    expect(screen.getByRole('button', { name: 'Start team run' })).toBeEnabled();
+  });
+
+  it("an ended run's composer starts a new run with the message as its goal", async () => {
+    const user = userEvent.setup();
+    const team = seedTeam('COMPLETE');
+    const bodies: unknown[] = [];
+    server.events.on('request:start', async ({ request }) => {
+      if (
+        request.method === 'POST' &&
+        request.url.endsWith(`/workflows/${team.workflow.id}/runs`)
+      ) {
+        bodies.push(await request.clone().json());
+      }
+    });
+    const { router } = renderApp(pathOf(team));
+    await screen.findByText('Draft: Go further.');
+    expect(screen.getByText(/read-only/i)).toBeInTheDocument();
+    await user.type(screen.getByRole('textbox', { name: 'Message' }), 'Write it again, shorter');
+    await user.click(screen.getByRole('button', { name: 'Start team run' }));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0]).toMatchObject({
+      goal: 'Write it again, shorter',
+      domain: { stayOpen: true },
+    });
+    await waitFor(() => expect(router.state.location.search).not.toContain(team.run.id));
+    server.events.removeAllListeners();
   });
 
   it('the run switcher opens a past run read-only, from pages', async () => {
@@ -358,14 +388,37 @@ describe('Domain entry points (D303)', () => {
   const nodeEl = (id: string) =>
     document.querySelector(`.react-flow__node[data-id="${id}"]`) as HTMLElement | null;
 
-  it('the board links to Domain, and an agent node menu opens its lens', async () => {
+  it('Domain sits in the mode switch beside Ideate and Forge, by click and by Ctrl+Shift+3', async () => {
+    const user = userEvent.setup();
+    const team = seedTeam();
+    const board = `/projects/${team.project.id}/workflows/${team.workflow.id}`;
+    const { router } = renderApp(board);
+    await screen.findByTestId('canvas');
+    const switcher = screen.getByRole('radiogroup', { name: 'Mode' });
+    expect(
+      within(switcher)
+        .getAllByRole('radio')
+        .map((radio) => radio.textContent),
+    ).toEqual(['Ideate', 'Forge', 'Domain']);
+
+    await user.click(within(switcher).getByRole('radio', { name: /Domain/ }));
+    await waitFor(() => expect(router.state.location.pathname).toBe(`${board}/domain`));
+    expect(await screen.findByTestId('domain-page')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /Domain/ })).toHaveAttribute('aria-checked', 'true');
+
+    // From Domain, Ctrl+Shift+1 goes back to Ideate; from Ideate, Ctrl+Shift+3 comes back.
+    await user.keyboard('{Control>}{Shift>}1{/Shift}{/Control}');
+    expect(await screen.findByTestId('canvas')).toBeInTheDocument();
+    await user.keyboard('{Control>}{Shift>}3{/Shift}{/Control}');
+    expect(await screen.findByTestId('domain-page')).toBeInTheDocument();
+    // The run bar no longer carries a separate Domain link.
+    expect(screen.queryByRole('link', { name: 'Domain' })).not.toBeInTheDocument();
+  });
+
+  it('an agent node menu opens its lens in Domain', async () => {
     const user = userEvent.setup();
     const team = seedTeam();
     const { router } = renderApp(`/projects/${team.project.id}/workflows/${team.workflow.id}`);
-    const [link] = await screen.findAllByRole('link', { name: 'Domain' });
-    expect(link?.getAttribute('href')).toMatch(
-      new RegExp(`^/projects/${team.project.id}/workflows/${team.workflow.id}/domain`),
-    );
 
     await waitFor(() => expect(nodeEl(team.writer.id)).not.toBeNull());
     fireEvent.contextMenu(nodeEl(team.writer.id) as HTMLElement);
