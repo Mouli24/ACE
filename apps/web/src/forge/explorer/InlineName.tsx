@@ -58,7 +58,8 @@ export function InlineName({
         ref={input}
         aria-label={label}
         value={value}
-        disabled={busy}
+        readOnly={busy}
+        aria-busy={busy}
         onChange={(event) => {
           setValue(event.target.value);
           setProblem(undefined);

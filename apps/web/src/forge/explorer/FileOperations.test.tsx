@@ -110,3 +110,139 @@ describe('D299 FR-GIT-003 file operations in the Explorer', () => {
     expect(screen.getByRole('textbox', { name: 'New folder name' })).toBeInTheDocument();
   });
 });
+
+function dragOf() {
+  const data = new Map<string, string>();
+  return {
+    setData: (type: string, value: string) => data.set(type, value),
+    getData: (type: string) => data.get(type) ?? '',
+    effectAllowed: 'move',
+    dropEffect: 'move',
+    types: ['application/x-ace-path'],
+  };
+}
+
+describe('D299 drops land where they are aimed', () => {
+  const open = async (user: ReturnType<typeof userEvent.setup>) => {
+    renderWithQuery(<ExplorerView projectId={projectId} />);
+    await user.click(await screen.findByTestId('tree-item-src'));
+    await user.click(await screen.findByTestId('tree-item-docs'));
+    return {
+      app: await screen.findByTestId('tree-item-src/app.ts'),
+      readme: await screen.findByTestId('tree-item-docs/readme.md'),
+      src: screen.getByTestId('tree-item-src'),
+    };
+  };
+
+  it('refuses a drop onto the folder the file is already in', async () => {
+    const user = userEvent.setup();
+    const { app, src } = await open(user);
+    const dataTransfer = dragOf();
+    fireEvent.dragStart(app, { dataTransfer });
+    fireEvent.dragOver(src, { dataTransfer });
+    fireEvent.drop(src, { dataTransfer });
+    expect(dataTransfer.dropEffect).toBe('none');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('treats a drop onto a file as a drop into its folder', async () => {
+    const user = userEvent.setup();
+    const { app, readme } = await open(user);
+    const dataTransfer = dragOf();
+    fireEvent.dragStart(app, { dataTransfer });
+    fireEvent.dragOver(readme, { dataTransfer });
+    fireEvent.drop(readme, { dataTransfer });
+    expect(
+      await screen.findByRole('dialog', { name: 'Move “app.ts” into docs?' }),
+    ).toBeInTheDocument();
+  });
+
+  it('means the project folder only on the empty area of the tree', async () => {
+    const user = userEvent.setup();
+    const { app } = await open(user);
+    const dataTransfer = dragOf();
+    fireEvent.dragStart(app, { dataTransfer });
+    fireEvent.dragOver(screen.getByRole('tree'), { dataTransfer });
+    fireEvent.drop(screen.getByRole('tree'), { dataTransfer });
+    expect(
+      await screen.findByRole('dialog', { name: 'Move “app.ts” into the project folder?' }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe('D299 focus stays in the Explorer', () => {
+  it('returns to the renamed row after Enter and to the original row after Escape', async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<ExplorerView projectId={projectId} />);
+    const row = await screen.findByTestId('tree-item-notes.md');
+    act(() => openFile(projectId, 'notes.md'));
+    act(() => row.focus());
+    await user.keyboard('{F2}');
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.getByTestId('tree-item-notes.md')).toHaveFocus());
+    await user.keyboard('{F2}');
+    const input = screen.getByRole('textbox', { name: 'Rename notes.md' });
+    await user.clear(input);
+    await user.type(input, 'journal.md{Enter}');
+    await waitFor(() => expect(screen.getByTestId('tree-item-journal.md')).toHaveFocus());
+  });
+
+  it('lands on a row after a delete confirm', async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<ExplorerView projectId={projectId} />);
+    const row = await screen.findByTestId('tree-item-notes.md');
+    act(() => openFile(projectId, 'notes.md'));
+    act(() => row.focus());
+    await user.keyboard('{Delete}');
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(onDisk()).not.toContain('notes.md'));
+    await waitFor(() => expect(document.activeElement?.getAttribute('role')).toBe('treeitem'));
+  });
+
+  it('keeps the caret in the field when the engine refuses', async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<ExplorerView projectId={projectId} />);
+    await screen.findByTestId('tree-item-notes.md');
+    await user.click(screen.getByRole('button', { name: 'New File' }));
+    const input = screen.getByRole('textbox', { name: 'New file name' });
+    await user.type(input, 'docs/readme.md{Enter}');
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(input).toHaveFocus();
+    expect(input).not.toBeDisabled();
+  });
+});
+
+describe('D299 nothing moves mid-save', () => {
+  it('refuses a rename while the file is saving', async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<ExplorerView projectId={projectId} />);
+    const row = await screen.findByTestId('tree-item-notes.md');
+    act(() => openFile(projectId, 'notes.md'));
+    act(() => useEditorStore.getState().saveStarted(projectId, 'notes.md'));
+    act(() => row.focus());
+    await user.keyboard('{F2}');
+    const input = screen.getByRole('textbox', { name: 'Rename notes.md' });
+    await user.clear(input);
+    await user.type(input, 'journal.md{Enter}');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Wait for the save to finish.');
+    expect(onDisk()).toContain('notes.md');
+    expect(onDisk()).not.toContain('journal.md');
+  });
+
+  it('refuses a delete while a file inside is saving', async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<ExplorerView projectId={projectId} />);
+    const row = await screen.findByTestId('tree-item-src');
+    act(() => openFile(projectId, 'src/app.ts'));
+    act(() => useEditorStore.getState().saveStarted(projectId, 'src/app.ts'));
+    act(() => row.focus());
+    await user.keyboard('{Delete}');
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'Wait for the save to finish.',
+    );
+    expect(onDisk()).toContain('src/app.ts');
+  });
+});

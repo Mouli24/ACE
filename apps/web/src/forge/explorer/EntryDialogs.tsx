@@ -31,7 +31,12 @@ function ConfirmDialog({
   const [problem, setProblem] = useState<string | undefined>();
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent>
+      <DialogContent
+        onCloseAutoFocus={(event) => {
+          // the tree puts focus on the right row itself; the dialog's row may be gone
+          event.preventDefault();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>

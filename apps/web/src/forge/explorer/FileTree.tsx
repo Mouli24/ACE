@@ -11,6 +11,7 @@ import {
 import { AceApiError } from '@ace/sdk';
 import { ChevronRight, Folder, FolderOpen } from 'lucide-react';
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -21,6 +22,7 @@ import {
 
 import { useProject } from '../../projects/hooks';
 import { filesMoved, filesRemoved, openFile } from '../editor/actions';
+import { useEditorStore } from '../editor/editor-store';
 import { useCreateEntry, useDeleteEntry, useMoveEntry, useRepoStatus } from '../files/hooks';
 import { isWithin, joinPath, nameOf, parentOf } from '../files/paths';
 import { buildDecorations, TONE_COLOR } from './decorations';
@@ -31,6 +33,7 @@ import { InlineName } from './InlineName';
 import { nameProblem } from './names';
 import { useTreeRows, type TreeRow } from './useTreeRows';
 
+const SAVING = 'Wait for the save to finish.';
 const DRAG_TYPE = 'application/x-ace-path';
 const messageOf = (error: unknown): string =>
   AceApiError.is(error) || error instanceof Error ? error.message : String(error);
@@ -66,10 +69,44 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
   const [menuTarget, setMenuTarget] = useState<FileEntry | undefined>();
   const [pendingMove, setPendingMove] = useState<{ from: string; folder: string } | undefined>();
   const [pendingDelete, setPendingDelete] = useState<FileEntry | undefined>();
+  /** The row to focus once it renders: a path, or none for the current row (never `avoid`). */
+  const focusRequest = useRef<{ path?: string; avoid?: string } | undefined>(undefined);
+  const requestFocus = (path?: string, avoid?: string): void => {
+    focusRequest.current = { path, avoid };
+  };
+  /** Keep the first request of an operation: a success asked for a better row than the close did. */
+  const requestFocusUnlessAsked = (path: string): void => {
+    focusRequest.current ??= { path };
+  };
 
   // One current row for the tab stop and the keys alike: the selected row if visible, else the first.
   const found = rows.findIndex((row) => row.entry.path === selected);
   const index = found === -1 ? 0 : found;
+
+  useEffect(() => {
+    const request = focusRequest.current;
+    // a dialog traps focus until it has closed
+    if (request === undefined || pendingDelete !== undefined || pendingMove !== undefined) return;
+    const path =
+      request.path ??
+      (rows[index]?.entry.path !== request.avoid
+        ? rows[index]?.entry.path
+        : rows.find((row) => row.entry.path !== request.avoid)?.entry.path);
+    if (path === undefined) {
+      if (request.path === undefined) focusRequest.current = undefined;
+      return;
+    }
+    const element = rowElements.current.get(path);
+    if (element === undefined) return;
+    focusRequest.current = undefined;
+    store.getState().select(projectId, path);
+    element.focus();
+  });
+
+  const savingWithin = (path: string): boolean =>
+    Object.values(useEditorStore.getState().projects[projectId]?.files ?? {}).some(
+      (file) => file.saving && isWithin(file.path, path),
+    );
 
   const siblingsOf = (folder: string, except?: string): string[] =>
     rows
@@ -94,6 +131,7 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
   ): Promise<string | undefined> => {
     try {
       const entry = await create.mutateAsync({ path: joinPath(parent, name), kind });
+      requestFocus(entry.path);
       store.getState().stopEditing(projectId);
       if (kind === 'file') openFile(projectId, entry.path, { preview: false });
       else store.getState().expand(projectId, entry.path);
@@ -104,8 +142,10 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
   };
 
   const commitMove = async (from: string, to: string): Promise<string | undefined> => {
+    if (savingWithin(from)) return SAVING;
     try {
       await move.mutateAsync({ from, to });
+      requestFocus(to);
       store.getState().stopEditing(projectId);
       filesMoved(projectId, from, to);
       return undefined;
@@ -115,8 +155,10 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
   };
 
   const commitDelete = async (path: string): Promise<string | undefined> => {
+    if (savingWithin(path)) return SAVING;
     try {
       await remove.mutateAsync(path);
+      requestFocus(undefined, path);
       filesRemoved(projectId, path);
       return undefined;
     } catch (failure) {
@@ -194,10 +236,15 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
   /** Not into itself or its own subtree, and not where it already is. */
   const canMove = (from: string, folder: string): boolean =>
     !isWithin(folder, from) && parentOf(from) !== folder;
-  const dragTargetProps = (folder: string) => ({
+  const dragTargetProps = (folder: string, isRow: boolean) => ({
     onDragOver: (event: DragEvent) => {
+      if (isRow) event.stopPropagation();
+      else if ((event.target as Element).closest('[role="treeitem"]') !== null) return;
       // the dragged path is only readable on drop, so the drag in progress is remembered here
-      if (dragging.current === undefined || !canMove(dragging.current, folder)) return;
+      if (dragging.current === undefined || !canMove(dragging.current, folder)) {
+        if (isRow) event.dataTransfer.dropEffect = 'none';
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       event.dataTransfer.dropEffect = 'move';
@@ -205,6 +252,8 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
     },
     onDragLeave: () => setDropTarget((current) => (current === folder ? undefined : current)),
     onDrop: (event: DragEvent) => {
+      if (isRow) event.stopPropagation();
+      else if ((event.target as Element).closest('[role="treeitem"]') !== null) return;
       const from = dragging.current ?? event.dataTransfer.getData(DRAG_TYPE);
       setDropTarget(undefined);
       dragging.current = undefined;
@@ -226,7 +275,10 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
         depth={depth}
         problemOf={(name) => nameProblem(name, siblingsOf(parent), { allowSlash: true })}
         onCommit={(name) => commitCreate(parent, kind, name)}
-        onCancel={() => store.getState().stopEditing(projectId)}
+        onCancel={() => {
+          requestFocus(parent === '' ? undefined : parent);
+          store.getState().stopEditing(projectId);
+        }}
       />
     );
   };
@@ -261,7 +313,10 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
             nameProblem(name, siblingsOf(parentOf(entry.path), entry.path), { allowSlash: false })
           }
           onCommit={(name) => commitMove(entry.path, joinPath(parentOf(entry.path), name))}
-          onCancel={() => store.getState().stopEditing(projectId)}
+          onCancel={() => {
+            requestFocus(entry.path);
+            store.getState().stopEditing(projectId);
+          }}
         />
       ) : (
         <div
@@ -287,7 +342,7 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
             dragging.current = undefined;
             setDropTarget(undefined);
           }}
-          {...(editable && folder ? dragTargetProps(entry.path) : {})}
+          {...(editable ? dragTargetProps(folder ? entry.path : parentOf(entry.path), true) : {})}
           onContextMenu={() => {
             setMenuTarget(entry);
             store.getState().select(projectId, entry.path);
@@ -361,7 +416,7 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
       onContextMenu={(event) => {
         if (event.target === event.currentTarget) setMenuTarget(undefined);
       }}
-      {...(editable ? dragTargetProps('') : {})}
+      {...(editable ? dragTargetProps('', false) : {})}
     >
       {rows.length === 0 && editing === undefined && (
         <p className="px-3 py-2 text-[12px] text-fg-muted">This folder is empty.</p>
@@ -429,7 +484,10 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
           path={pendingDelete.path}
           isFolder={pendingDelete.kind === 'folder'}
           onConfirm={() => commitDelete(pendingDelete.path)}
-          onClose={() => setPendingDelete(undefined)}
+          onClose={() => {
+            requestFocusUnlessAsked(pendingDelete.path);
+            setPendingDelete(undefined);
+          }}
         />
       )}
       {pendingMove !== undefined && (
@@ -439,7 +497,10 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
           onConfirm={() =>
             commitMove(pendingMove.from, joinPath(pendingMove.folder, nameOf(pendingMove.from)))
           }
-          onClose={() => setPendingMove(undefined)}
+          onClose={() => {
+            requestFocusUnlessAsked(pendingMove.from);
+            setPendingMove(undefined);
+          }}
         />
       )}
     </>

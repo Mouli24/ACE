@@ -20,4 +20,9 @@ describe('D299 a name the engine will accept, checked before asking', () => {
     expect(nameProblem('a/b.ts', [], { allowSlash: false })).toBe('A name cannot contain a slash.');
     expect(nameProblem('a/b.ts', [], { allowSlash: true })).toBeUndefined();
   });
+
+  it('leaves a create through an existing folder to the engine', () => {
+    expect(nameProblem('src/a.ts', ['src'], { allowSlash: true })).toBeUndefined();
+    expect(nameProblem('src', ['src'], { allowSlash: true })).toBe('“src” already exists here.');
+  });
 });
