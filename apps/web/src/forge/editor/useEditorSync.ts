@@ -17,7 +17,7 @@ function diskChanged(projectId: string, file: OpenFile, disk: TextFileContent): 
     logOutput(projectId, 'info', `${file.path} changed on disk; reloaded.`);
     return;
   }
-  if (file.conflict === undefined) {
+  if (file.conflict !== 'changed') {
     store.conflicted(projectId, file.path, 'changed');
     logOutput(projectId, 'warn', `${file.path} changed on disk while you were editing it.`);
   }
@@ -26,7 +26,9 @@ function diskChanged(projectId: string, file: OpenFile, disk: TextFileContent): 
 function diskGone(projectId: string, file: OpenFile): void {
   const store = useEditorStore.getState();
   if (file.dirty) {
-    if (file.conflict === undefined) {
+    // A buffer typed into after the delete is the Deleted bar's (Save / Close), not a conflict.
+    const barState = file.deletedOnDisk && file.conflict === undefined;
+    if (file.conflict !== 'deleted' && !barState) {
       store.conflicted(projectId, file.path, 'deleted');
       logOutput(projectId, 'warn', `${file.path} was deleted on disk while you were editing it.`);
     }
@@ -66,7 +68,7 @@ export function useEditorSync(projectId: string): void {
         if (
           AceApiError.is(result.error) &&
           result.error.status === 404 &&
-          file.baseVersion !== null
+          (file.baseVersion !== null || file.conflict === 'changed')
         )
           diskGone(projectId, file);
         return;
