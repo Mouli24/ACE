@@ -1,4 +1,4 @@
-import { Dialog, DialogContent, DialogTitle, Input, cn } from '@ace/ui';
+import { Button, Dialog, DialogContent, DialogTitle, Input, cn } from '@ace/ui';
 import { useEffect, useMemo, useState } from 'react';
 
 import { openFile } from '../editor/actions';
@@ -29,6 +29,11 @@ export function QuickOpen({ projectId }: { projectId: string }) {
     const candidates = [...editor.tabs, ...files.filter((file) => !editor.tabs.includes(file))];
     return rankPaths(query, candidates);
   }, [list.data, editor.tabs, query]);
+
+  useEffect(() => {
+    if (!open) return;
+    document.getElementById(`quick-open-${index}`)?.scrollIntoView?.({ block: 'nearest' });
+  }, [open, index, results]);
 
   const choose = (path: string | undefined): void => {
     if (path === undefined) return;
@@ -92,10 +97,18 @@ export function QuickOpen({ projectId }: { projectId: string }) {
               <span className="truncate text-[11px] text-fg-faint">{parentOf(path)}</span>
             </li>
           ))}
+          {list.isError && (
+            <li className="flex items-center gap-2 px-3 py-1 text-[12px] text-danger">
+              <span>Could not list the project’s files: {list.error.message}.</span>
+              <Button variant="secondary" size="sm" onClick={() => void list.refetch()}>
+                Retry
+              </Button>
+            </li>
+          )}
           {list.isPending && (
             <li className="px-3 py-1 text-[12px] text-fg-muted">Listing the project’s files…</li>
           )}
-          {!list.isPending && results.length === 0 && (
+          {list.isSuccess && results.length === 0 && (
             <li className="px-3 py-1 text-[12px] text-fg-muted">No file matches.</li>
           )}
         </ul>
