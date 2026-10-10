@@ -271,8 +271,16 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
       const run = await load(runId);
       assertRunAction(run, 'resume');
 
-      const resumed = await patchRun(run, { status: 'RUNNING', pausedAt: null });
+      // D305: a run BLOCKED mid-run leaves BLOCKED the same way, and loses its reason.
+      const resumed = await patchRun(run, {
+        status: 'RUNNING',
+        pausedAt: null,
+        ...(run.blockedReason === undefined ? {} : { blockedReason: null }),
+      });
       await moveNodeRuns(resumed, new Set<NodeState>(['PAUSED']), 'READY');
+
+      // D310: resuming past the loop guard resets the held pairs and forwards what it held.
+      if (run.blockedReason === 'LOOP_GUARD') await deps.domains?.get(runId)?.releaseLoopGuard();
 
       // The gate last: every row says READY before the scheduler is allowed to dispatch again.
       deps.gates.get(runId)?.resume();

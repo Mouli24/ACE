@@ -1,7 +1,25 @@
 /**
  * Domain (D303–D327): the team-chat view of a run, projected from its event log on the server.
  */
+export {
+  LOOP_COUNTED_KINDS,
+  countLoop,
+  digestLine,
+  pairKey,
+  routeEnvelope,
+  type BrainRoute,
+  type BrainRouteInput,
+} from './brain.js';
 export { domainContextFor, labelOf, type DomainContext } from './context.js';
+export {
+  envelopeBody,
+  extractEnvelopeBlocks,
+  judgeEnvelopeBlocks,
+  type EnvelopeJudgement,
+  type JudgeContext,
+  type JudgedEnvelope,
+  type OpenQuery,
+} from './envelope-block.js';
 export { costOfTurn, findPrice, sumCosts } from './pricing.js';
 export {
   artifactRefs,
@@ -17,6 +35,9 @@ export {
   TURN_NOW_STATES,
   createRunDomain,
   isTurnAbortReason,
+  type EnvelopeDecision,
+  type HeldEnvelope,
+  type QueuedEnvelope,
   type QueuedMessage,
   type RunDomain,
   type TurnAbortReason,

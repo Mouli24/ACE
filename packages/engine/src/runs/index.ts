@@ -1,7 +1,9 @@
 import {
   allowedRunActions,
   DEFAULT_CONCURRENCY,
+  ENVELOPE_SUMMARY_MAX,
   RunDomainConfigInputSchema,
+  type BlockedReason,
   type BudgetHalt,
   type CursorQuery,
   type DayTotals,
@@ -26,14 +28,24 @@ import {
   type ValidationIssue,
 } from '@ace/contracts';
 
+import { countLoop, digestLine, routeEnvelope as routeByBrain } from '../domain/brain.js';
+import {
+  envelopeBody,
+  judgeEnvelopeBlocks,
+  type JudgedEnvelope,
+} from '../domain/envelope-block.js';
+import { autoExcerpt } from '../domain/projection.js';
 import type { DomainRegistry } from '../domain/registry.js';
 import {
   TURN_NOW_STATES,
   isTurnAbortReason,
+  type EnvelopeDecision,
+  type QueuedEnvelope,
   type QueuedMessage,
   type RunDomain,
   type TurnAbortReason,
 } from '../domain/run-domain.js';
+import type { TeamPromptInput } from '../prompts/index.js';
 
 import type { ApprovalService } from '../approvals/index.js';
 import type { BudgetService } from '../budgets/index.js';
@@ -268,6 +280,20 @@ interface TurnContext {
   trigger: TurnTriggerKind;
   /** Absent without Domain, or for a node that takes no turns (a merge, a transform). */
   abort?: AbortController;
+  /** D310: the envelopes this turn has delivered, across its attempts. */
+  envelopes?: readonly QueuedEnvelope[];
+}
+
+/** D310: how a finished turn's output moves on, once its envelopes have been routed. */
+interface TurnRouting {
+  /** It sent a QUERY: its node run waits for the ANSWER. */
+  waiting: boolean;
+  /** Its output travels now, waits for the human (a held HANDOFF), or does not travel at all. */
+  handoff: 'now' | 'held' | 'none';
+  /** The HANDOFF envelope the output travels as. */
+  envelopeId?: Id;
+  /** The edges it travels along. */
+  edges: Edge[];
 }
 
 /** A ≤120-character description of what crossed an edge (FR-EXE-015, §2.4). */
@@ -570,6 +596,11 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const limit = settings.concurrency > 0 ? settings.concurrency : DEFAULT_CONCURRENCY;
     /** D323: started from Domain — when the graph has nothing left to do, the run parks. */
     const stayOpen = run.domain?.stayOpen === true;
+    // D305, D323: a run re-opened after a restart while paused or BLOCKED mid-run stays held until
+    // a resume, exactly as it was.
+    if (run.status === 'PAUSED' || (run.status === 'BLOCKED' && run.blockedReason !== undefined)) {
+      gate.pause();
+    }
 
     const nodeById = new Map(nodes.map((node) => [node.id, node]));
     const states = new Map<Id, NodeState>(nodes.map((node) => [node.id, 'IDLE' as NodeState]));
@@ -617,6 +648,19 @@ export function createRunService(deps: RunServiceDeps): RunService {
     /** Each node run's own signal — the run's, or that and its turn's (D309). */
     const turnSignals = new Map<Id, AbortSignal>();
     domain?.attachStates(() => Object.fromEntries(states));
+
+    /* D304, D310: the team as envelopes name it, and the askers waiting on an ANSWER. */
+    const roster = domain?.roster ?? [];
+    const onRoster = new Set(roster.map((entry) => entry.nodeId));
+    const brainId = roster.find((entry) => entry.brain)?.nodeId;
+    const labelOf = (nodeId: Id): string => {
+      const handle = roster.find((entry) => entry.nodeId === nodeId)?.handle;
+      return handle === undefined ? (nodeById.get(nodeId)?.name ?? nodeId) : `@${handle}`;
+    };
+    /** The QUERY turn each asker is waiting on, until its next turn closes it. */
+    const waitingRows = new Map<Id, NodeRun>();
+    const dataEdgesFrom = (nodeId: Id): Edge[] =>
+      edges.filter((edge) => edge.kind === 'data' && edge.from.nodeId === nodeId);
 
     /**
      * The policy this node is judged against (FR-GRD-002): the agent's override, else the project
@@ -1022,6 +1066,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
        * replaces the one it sent before rather than joining it.
        */
       replace = false,
+      /** D310: the HANDOFF this delivery is, so the edge envelope and the transfer name it. */
+      teamEnvelopeId?: Id,
     ): Promise<void> {
       const outgoing =
         only ?? edges.filter((edge) => edge.from.nodeId === node.id && edge.kind === 'data');
@@ -1035,7 +1081,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
         if (plannedRuns.has(targetId)) continue;
 
         // Built before the list is read: another delivery may land while this one awaits.
-        const envelope = await envelopeBetween(run, node, target, parts, iteration, { signal });
+        const built = await envelopeBetween(run, node, target, parts, iteration, { signal });
+        const envelope = teamEnvelopeId === undefined ? built : { ...built, teamEnvelopeId };
         const kept = (envelopesFor.get(targetId) ?? []).filter(
           (earlier) => !replace || earlier.fromNodeId !== node.id,
         );
@@ -1069,6 +1116,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
             toNodeId: edge.to.nodeId,
             iteration,
             summary: transferSummary(parts),
+            ...(teamEnvelopeId === undefined ? {} : { envelopeId: teamEnvelopeId }),
           },
         });
       }
@@ -1333,6 +1381,315 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
     }
 
+    /** D305: RUNNING → BLOCKED mid-run. The gate holds what has not started; resume lifts it. */
+    async function blockRun(reason: BlockedReason, detail: string, nodeIds?: Id[]): Promise<void> {
+      gate.pause();
+      await repository.runs.update(scope, run.id, {
+        status: 'BLOCKED',
+        blockedReason: reason,
+        allowedActions: allowedRunActions('BLOCKED', { blockedReason: reason, stayOpen }),
+      });
+      await bus.emit({
+        type: 'run.blocked',
+        workflowId: run.workflowId,
+        runId: run.id,
+        payload: { runId: run.id, reason, detail, ...(nodeIds === undefined ? {} : { nodeIds }) },
+      });
+    }
+
+    /**
+     * D310: a turn an envelope started that is not the node's own work — answering a QUERY, or any
+     * envelope reaching a node the graph has not dispatched yet. It hands nothing on unless it says
+     * so, and the node goes back to the state it was in.
+     */
+    function isSideTurn(node: Node, turn: TurnContext | undefined): boolean {
+      if (turn?.trigger !== 'envelope') return false;
+      const carried = turn.envelopes ?? [];
+      return (
+        stateBeforeTurn.get(node.id) === 'IDLE' ||
+        (carried.length > 0 && carried.every((envelope) => envelope.kind === 'QUERY'))
+      );
+    }
+
+    /** D310: the asker's next turn has begun, so the QUERY turn it was waiting on is over. */
+    async function closeWaiting(nodeId: Id): Promise<void> {
+      const row = waitingRows.get(nodeId);
+      if (row === undefined) return;
+      waitingRows.delete(nodeId);
+      await repository.nodeRuns.update(scope, row.id, { status: 'COMPLETED' });
+      await emitNodeState(run, row, 'COMPLETED');
+    }
+
+    /**
+     * D310: what a finished turn sent its team. Every envelope — the blocks the agent wrote, or the
+     * implicit HANDOFF of an answer that wrote none — is announced, goes through the Brain's router
+     * and is forwarded or held. A QUERY or a FLAG holds the output back; so does a side turn.
+     */
+    async function sendEnvelopes(
+      node: Node,
+      nodeRun: NodeRun,
+      outcome: NodeExecutionOutcome,
+      outgoing: readonly Edge[],
+      side: boolean,
+    ): Promise<TurnRouting> {
+      if (domain === undefined) return { waiting: false, handoff: 'now', edges: [...outgoing] };
+      const explicit = outcome.teamEnvelopes ?? [];
+      const kinds = new Set(explicit.map((envelope) => envelope.kind));
+      const waiting = kinds.has('QUERY');
+      const named = explicit.find((envelope) => envelope.kind === 'HANDOFF');
+      const handsOn = !waiting && !kinds.has('FLAG') && (named !== undefined || !side);
+      const body = envelopeBody(outcome.output);
+
+      const sends: (JudgedEnvelope & { textSource: 'summary' | 'auto' })[] = explicit.map(
+        (envelope) => ({ ...envelope, textSource: 'summary' }),
+      );
+      let along: Edge[] = [];
+      if (handsOn) {
+        // An explicit HANDOFF picks among the teammates it feeds; what cannot be named (an Output
+        // node, a merge) is fed regardless.
+        along =
+          named === undefined
+            ? [...outgoing]
+            : outgoing.filter(
+                (edge) => named.toNodeIds.includes(edge.to.nodeId) || !onRoster.has(edge.to.nodeId),
+              );
+        if (named === undefined && along.length > 0) {
+          sends.push({
+            kind: 'HANDOFF',
+            toNodeIds: [...new Set(along.map((edge) => edge.to.nodeId))],
+            summary: autoExcerpt(outcome.output),
+            textSource: 'auto',
+          });
+        }
+      }
+
+      let handoff: TurnRouting['handoff'] = handsOn ? 'now' : 'none';
+      let handoffId: Id | undefined;
+      let guard: { nodeIds: Id[]; count: number } | undefined;
+      for (const send of sends) {
+        const envelopeId = nextId();
+        const summary = send.summary.slice(0, ENVELOPE_SUMMARY_MAX);
+        const inReplyTo = send.inReplyTo === undefined ? {} : { inReplyTo: send.inReplyTo };
+        await bus.emit({
+          type: 'envelope.sent',
+          workflowId: run.workflowId,
+          runId: run.id,
+          payload: {
+            runId: run.id,
+            envelopeId,
+            nodeRunId: nodeRun.id,
+            kind: send.kind,
+            fromNodeId: node.id,
+            toNodeIds: send.toNodeIds,
+            summary,
+            textSource: send.textSource,
+            ...inReplyTo,
+            // FR-MM-004: no file refs in the log — the projection reads them off `node.output`.
+            artifacts: [],
+          },
+        });
+        if (send.kind === 'QUERY') {
+          domain.openQueries.set(envelopeId, { from: node.id, to: send.toNodeIds });
+        }
+        if (send.kind === 'ANSWER' && send.inReplyTo !== undefined) {
+          domain.openQueries.delete(send.inReplyTo);
+        }
+        countLoop(domain.loopCounts, send.kind, node.id, send.toNodeIds);
+        const verdict = routeByBrain({
+          mode: domain.config.routing,
+          kind: send.kind,
+          from: node.id,
+          to: send.toNodeIds,
+          counts: domain.loopCounts,
+          limit: domain.config.loopGuardLimit,
+        });
+        await bus.emit({
+          type: 'envelope.routed',
+          workflowId: run.workflowId,
+          runId: run.id,
+          payload: {
+            runId: run.id,
+            envelopeId,
+            decision: verdict.decision,
+            by: 'brain',
+            ...(verdict.decision === 'HELD' ? { reason: verdict.reason } : {}),
+          },
+        });
+        domain.noteRouted(
+          digestLine(
+            labelOf,
+            { kind: send.kind, from: node.id, to: send.toNodeIds, summary },
+            verdict.decision,
+          ),
+        );
+        if (send.kind === 'HANDOFF') handoffId = envelopeId;
+
+        if (verdict.decision === 'FORWARDED') {
+          if (send.kind !== 'HANDOFF') {
+            domain.enqueueEnvelope(
+              {
+                envelopeId,
+                kind: send.kind,
+                fromNodeId: node.id,
+                summary,
+                body,
+                at: now(),
+                ...inReplyTo,
+              },
+              send.toNodeIds,
+            );
+          }
+          continue;
+        }
+        domain.hold({
+          envelopeId,
+          kind: send.kind,
+          fromNodeId: node.id,
+          fromNodeRunId: nodeRun.id,
+          toNodeIds: send.toNodeIds,
+          summary,
+          body,
+          ...inReplyTo,
+          output: outcome.output,
+          iteration: nodeRun.iteration,
+          reason: verdict.reason,
+        });
+        if (send.kind === 'HANDOFF') handoff = 'held';
+        if (verdict.reason === 'LOOP_GUARD') guard ??= verdict.loopGuard;
+      }
+
+      if (guard !== undefined) {
+        const [a = '', b = ''] = guard.nodeIds;
+        await blockRun(
+          'LOOP_GUARD',
+          `${labelOf(a)} and ${labelOf(b)} have sent each other ${guard.count} QUERY and FLAG envelopes, over the limit of ${domain.config.loopGuardLimit}. Resume to let them carry on, or reject the held envelope first.`,
+          guard.nodeIds,
+        );
+      }
+
+      return {
+        waiting,
+        handoff,
+        edges: along,
+        ...(handoffId === undefined ? {} : { envelopeId: handoffId }),
+      };
+    }
+
+    /**
+     * D310: a turn that was handed a QUERY and ended without answering it — it failed — so the
+     * asker would wait for ever. The Brain answers for it with a note, and the asker carries on.
+     */
+    async function noteUnanswered(
+      node: Node,
+      nodeRun: NodeRun,
+      failure: NodeError | undefined,
+      turn: TurnContext | undefined,
+    ): Promise<void> {
+      if (domain === undefined) return;
+      for (const query of turn?.envelopes ?? []) {
+        if (query.kind !== 'QUERY' || !domain.openQueries.has(query.envelopeId)) continue;
+        domain.openQueries.delete(query.envelopeId);
+        const envelopeId = nextId();
+        const summary = maskSecrets(
+          `${labelOf(node.id)} could not answer: ${failure?.message ?? 'its turn did not finish.'}`,
+        ).slice(0, ENVELOPE_SUMMARY_MAX);
+        await bus.emit({
+          type: 'envelope.sent',
+          workflowId: run.workflowId,
+          runId: run.id,
+          payload: {
+            runId: run.id,
+            envelopeId,
+            nodeRunId: nodeRun.id,
+            kind: 'ANSWER',
+            fromNodeId: node.id,
+            toNodeIds: [query.fromNodeId],
+            summary,
+            textSource: 'auto',
+            inReplyTo: query.envelopeId,
+            artifacts: [],
+          },
+        });
+        await bus.emit({
+          type: 'envelope.routed',
+          workflowId: run.workflowId,
+          runId: run.id,
+          payload: {
+            runId: run.id,
+            envelopeId,
+            decision: 'FORWARDED',
+            by: 'brain',
+            reason: 'the addressee could not answer',
+          },
+        });
+        domain.noteRouted(
+          digestLine(
+            labelOf,
+            { kind: 'ANSWER', from: node.id, to: [query.fromNodeId], summary },
+            'FORWARDED',
+          ),
+        );
+        domain.enqueueEnvelope(
+          {
+            envelopeId,
+            kind: 'ANSWER',
+            fromNodeId: node.id,
+            summary,
+            body: '',
+            inReplyTo: query.envelopeId,
+            at: now(),
+          },
+          [query.fromNodeId],
+        );
+      }
+    }
+
+    /** D310: carry out what the human decided about a held envelope (or a resume released). */
+    async function applyDecision(decision: EnvelopeDecision): Promise<void> {
+      if (domain === undefined) return;
+      const { held } = decision;
+      const kind = decision.edit?.kind ?? held.kind;
+      const toNodeIds = decision.edit?.toNodeIds ?? held.toNodeIds;
+      const summary = decision.edit?.summary ?? held.summary;
+      domain.noteRouted(
+        digestLine(
+          labelOf,
+          { kind, from: held.fromNodeId, to: toNodeIds, summary },
+          decision.decision,
+        ),
+      );
+      if (decision.decision === 'REJECTED') return;
+
+      if (kind !== 'HANDOFF') {
+        if (kind === 'QUERY') {
+          domain.openQueries.set(held.envelopeId, { from: held.fromNodeId, to: toNodeIds });
+        }
+        domain.enqueueEnvelope(
+          {
+            envelopeId: held.envelopeId,
+            kind,
+            fromNodeId: held.fromNodeId,
+            summary,
+            body: held.body,
+            at: now(),
+            ...(held.inReplyTo === undefined ? {} : { inReplyTo: held.inReplyTo }),
+          },
+          toNodeIds,
+        );
+        return;
+      }
+
+      const from = nodeById.get(held.fromNodeId);
+      if (from === undefined) return;
+      const output =
+        held.output ?? (await repository.nodeRuns.get(scope, held.fromNodeRunId))?.output ?? [];
+      const along = dataEdgesFrom(from.id).filter(
+        (edge) => toNodeIds.includes(edge.to.nodeId) || !onRoster.has(edge.to.nodeId),
+      );
+      await deliver(from, output, held.iteration, along, true, held.envelopeId);
+      rearmSuccessors(from);
+    }
+
     async function finish(
       node: Node,
       nodeRun: NodeRun,
@@ -1418,6 +1775,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
       let failureReason = outcome.failureReason;
       let failure = outcome.error;
       let requeued = false;
+      /** D310: a turn-taking node in a run with Domain routes what it sends through the Brain. */
+      const teamTurn = domain !== undefined && onRoster.has(node.id);
+      const side = teamTurn && isSideTurn(node, turn);
+      let routing: TurnRouting | undefined;
 
       if (outcome.status === 'COMPLETED') {
         if (node.kind === 'output') finalOutput[node.id] = outcome.output;
@@ -1439,11 +1800,39 @@ export function createRunService(deps: RunServiceDeps): RunService {
         const fresh = triggered || again;
 
         const { inside } = splitOutgoing(node.id, edges, body);
-        await deliver(node, outcome.output, iteration, inside, fresh);
-        if (fresh) rearmSuccessors(node);
+        if (teamTurn) {
+          routing = await sendEnvelopes(node, nodeRun, outcome, inside, side);
+          if (routing.waiting) {
+            // D310: the asker's node run stays WAITING until the ANSWER starts its next turn.
+            await repository.nodeRuns.update(scope, nodeRun.id, { status: 'WAITING' });
+            waitingRows.set(node.id, nodeRun);
+            states.set(node.id, 'WAITING');
+            const took = durationOf(nodeRun, endedAt);
+            await emitNodeState(
+              run,
+              nodeRun,
+              'WAITING',
+              undefined,
+              took === undefined ? {} : { durationMs: took },
+            );
+            return;
+          }
+        }
+        if (routing === undefined || routing.handoff === 'now') {
+          await deliver(
+            node,
+            outcome.output,
+            iteration,
+            routing?.edges ?? inside,
+            fresh,
+            routing?.envelopeId,
+          );
+          if (fresh) rearmSuccessors(node);
+        }
 
         /* Every loop this node is the source of decides now (FR-PAR-003..006, FR-GRD-009). */
-        for (const loopEdge of triggered ? [] : loops.loopEdgesFrom(node.id)) {
+        const heldBack = routing !== undefined && routing.handoff === 'none';
+        for (const loopEdge of triggered || heldBack ? [] : loops.loopEdgesFrom(node.id)) {
           const decision = decideLoop({
             edge: loopEdge,
             edges,
@@ -1499,9 +1888,14 @@ export function createRunService(deps: RunServiceDeps): RunService {
         }
       }
 
+      /** D310: a side turn that handed nothing on leaves the node as it found it, whatever happened. */
+      const sideEnded = side && (routing === undefined || routing.handoff === 'none');
+
       // D285: the node's chat session hears how it ended before anyone is told the state — a
       // result, or its own failure (an `invalid_config` one ends it BLOCKED, Arch §28).
-      if (status === 'COMPLETED') {
+      if (sideEnded) {
+        // A side turn is a word with a teammate, not the node's own work.
+      } else if (status === 'COMPLETED') {
         await handTurnToChat(node, outcome, undefined);
       } else if (status === 'FAILED' || status === 'BLOCKED') {
         await handTurnToChat(node, outcome, failure ?? didNotFinish(node));
@@ -1510,7 +1904,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
       // The requeue has already put the whole body back to IDLE at the next iteration, so only the
       // scheduler's own bookkeeping is conditional; the frame names this node run, which really did
       // finish, so the inspector still sees the iteration close.
-      if (!requeued) states.set(node.id, status);
+      if (!requeued) {
+        states.set(node.id, sideEnded ? (stateBeforeTurn.get(node.id) ?? 'IDLE') : status);
+      }
       // A node run the Stop cut short was announced STOPPED by the control that stopped it; a second
       // STOPPED frame for it would be one node run ending twice (FR-CTL-003).
       if (!(status === 'STOPPED' && stoppedByControl())) {
@@ -1524,9 +1920,16 @@ export function createRunService(deps: RunServiceDeps): RunService {
         );
       }
 
+      // D310: an asker whose QUERY this turn was handed is not left waiting on a turn that failed.
+      if (teamTurn && (status === 'FAILED' || status === 'BLOCKED') && !signal.aborted) {
+        await noteUnanswered(node, nodeRun, failure, turn);
+      }
+
       // BLOCKED means "an upstream failed" (FR-ERR-006), and a stop is not a failure (FR-ERR-007):
       // once the run is aborted nothing more is blocked — nor written after its `run.completed`.
-      if (status !== 'COMPLETED' && !requeued && !signal.aborted) await blockDownstream(node);
+      if (status !== 'COMPLETED' && !requeued && !signal.aborted && !sideEnded) {
+        await blockDownstream(node);
+      }
 
       // D309: handed a fresh envelope while it was busy, it runs again on it now.
       if (status === 'COMPLETED' && !requeued && staleSuccessors.delete(node.id)) {
@@ -1687,12 +2090,15 @@ export function createRunService(deps: RunServiceDeps): RunService {
           : undefined;
       const turnSignal =
         turnAbort === undefined ? signal : AbortSignal.any([signal, turnAbort.signal]);
-      const turn: TurnContext = {
-        trigger,
-        ...(turnAbort === undefined ? {} : { abort: turnAbort }),
-      };
       /** The human messages this turn has delivered, across all of its attempts. */
       const carried: QueuedMessage[] = [];
+      /** D310: the envelopes this turn has delivered, likewise. */
+      const carriedEnvelopes: QueuedEnvelope[] = [];
+      const turn: TurnContext = {
+        trigger,
+        envelopes: carriedEnvelopes,
+        ...(turnAbort === undefined ? {} : { abort: turnAbort }),
+      };
       let lastNodeRunId: Id | undefined;
 
       /** What waits for this node that this turn has not delivered yet (D309, D326). */
@@ -1701,22 +2107,90 @@ export function createRunService(deps: RunServiceDeps): RunService {
         const seen = new Set(carried.map((message) => message.messageId));
         return domain.pending(node.id).filter((message) => !seen.has(message.messageId));
       };
-      /** Why the attempt starts: absent for a plain dispatch that carries no message. */
-      const triggerFor = (incoming: readonly QueuedMessage[]): TurnTrigger | undefined => {
-        const ids = [...carried, ...incoming].map((message) => message.messageId);
-        if (trigger === 'dispatch' && ids.length === 0) return undefined;
-        return { kind: trigger, ...(ids.length === 0 ? {} : { messageIds: ids }) };
+      /** What the router forwarded to this node that this turn has not delivered yet (D310). */
+      const freshEnvelopes = (): QueuedEnvelope[] => {
+        if (turnAbort === undefined || domain === undefined) return [];
+        const seen = new Set(carriedEnvelopes.map((envelope) => envelope.envelopeId));
+        return domain
+          .pendingEnvelopes(node.id)
+          .filter((envelope) => !seen.has(envelope.envelopeId));
       };
-      /** D311: the run's goal and the human's words to this node, for an agent or model. */
-      const teamFor = (messages: readonly QueuedMessage[]): Pick<ExecuteNodeInput, 'team'> => {
-        if (node.kind !== 'agent' && node.kind !== 'model') return {};
-        if (run.goal === undefined && messages.length === 0) return {};
+      /** Why the attempt starts: absent for a plain dispatch that carries no message. */
+      const triggerFor = (
+        incoming: readonly QueuedMessage[],
+        incomingEnvelopes: readonly QueuedEnvelope[],
+      ): TurnTrigger | undefined => {
+        const ids = [...carried, ...incoming].map((message) => message.messageId);
+        const envelopeIds = [...carriedEnvelopes, ...incomingEnvelopes].map(
+          (envelope) => envelope.envelopeId,
+        );
+        if (trigger === 'dispatch' && ids.length === 0 && envelopeIds.length === 0)
+          return undefined;
         return {
-          team: {
-            ...(run.goal === undefined ? {} : { goal: run.goal }),
-            ...(messages.length === 0
-              ? {}
-              : { humanInstructions: messages.map((message) => message.text) }),
+          kind: trigger,
+          ...(ids.length === 0 ? {} : { messageIds: ids }),
+          ...(envelopeIds.length === 0 ? {} : { envelopeIds }),
+        };
+      };
+      /**
+       * D311: the run's goal, the team, the human's words to this node, what its teammates sent it
+       * and — for the Brain — the digest of what was routed. An agent or model only.
+       */
+      const teamFor = (
+        messages: readonly QueuedMessage[],
+        envelopes: readonly QueuedEnvelope[],
+      ): Pick<ExecuteNodeInput, 'team'> => {
+        if (node.kind !== 'agent' && node.kind !== 'model') return {};
+        const lines = roster.map((entry) => ({
+          handle: entry.handle,
+          name: entry.name,
+          brain: entry.brain,
+          you: entry.nodeId === node.id,
+        }));
+        const digest = domain !== undefined && node.id === brainId ? domain.digest() : [];
+        const team: TeamPromptInput = {
+          ...(run.goal === undefined ? {} : { goal: run.goal }),
+          ...(lines.length < 2 ? {} : { roster: lines }),
+          ...(messages.length === 0
+            ? {}
+            : { humanInstructions: messages.map((message) => message.text) }),
+          ...(envelopes.length === 0
+            ? {}
+            : {
+                teamMessages: envelopes.map((envelope) => ({
+                  kind: envelope.kind,
+                  envelopeId: envelope.envelopeId,
+                  fromHandle:
+                    roster.find((entry) => entry.nodeId === envelope.fromNodeId)?.handle ?? 'node',
+                  summary: envelope.summary,
+                  ...(envelope.body === '' ? {} : { body: envelope.body }),
+                })),
+              }),
+          ...(digest.length === 0 ? {} : { digest }),
+        };
+        return Object.keys(team).length === 0 ? {} : { team };
+      };
+      /** D310: how this turn's envelope blocks are judged — the QUERYs it was handed it must answer. */
+      const rulesFor = (
+        envelopes: readonly QueuedEnvelope[],
+      ): Pick<ExecuteNodeInput, 'teamEnvelopes'> => {
+        if (domain === undefined || !onRoster.has(node.id)) return {};
+        const mustAnswer = envelopes
+          .filter(
+            (envelope) => envelope.kind === 'QUERY' && domain.openQueries.has(envelope.envelopeId),
+          )
+          .map((envelope) => envelope.envelopeId);
+        const successors = new Set(dataEdgesFrom(node.id).map((edge) => edge.to.nodeId));
+        return {
+          teamEnvelopes: {
+            judge: (blocks) =>
+              judgeEnvelopeBlocks(blocks, {
+                roster,
+                fromNodeId: node.id,
+                successors,
+                openQueries: domain.openQueries,
+                mustAnswer,
+              }),
           },
         };
       };
@@ -1728,6 +2202,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
         // DONE when the turn ended; cut short, the messages wait for the next turn (D309).
         if (domain !== undefined && carried.length > 0 && lastNodeRunId !== undefined) {
           await domain.turnEnded(node.id, lastNodeRunId, carried, turnCut(turn) !== undefined);
+        }
+        // D310: an interrupted turn never answered what it was handed; the next one gets it.
+        if (domain !== undefined && turnCut(turn)?.domain === 'interrupt') {
+          domain.returnEnvelopes(node.id, carriedEnvelopes);
         }
       }
 
@@ -1745,9 +2223,14 @@ export function createRunService(deps: RunServiceDeps): RunService {
         // row here would leave the client holding the id of a node run that never ran.
         const planned = plannedRuns.get(node.id);
         plannedRuns.delete(node.id);
+        // D310: the asker's next turn ends the QUERY turn it was waiting on — unless this turn is
+        // only a word with a teammate, and the asker still waits.
+        if (!isSideTurn(node, turn)) await closeWaiting(node.id);
         let incoming = freshMessages();
+        let incomingEnvelopes = freshEnvelopes();
         let nodeRun =
-          planned ?? (await beginNodeRun(node, iteration, attempt, triggerFor(incoming)));
+          planned ??
+          (await beginNodeRun(node, iteration, attempt, triggerFor(incoming, incomingEnvelopes)));
         lastNodeRunId = nodeRun.id;
         if (planned !== undefined) {
           nodeRunByNode.set(node.id, planned);
@@ -1814,8 +2297,18 @@ export function createRunService(deps: RunServiceDeps): RunService {
               carried.push(...delivering);
               await domain.delivered(node.id, nodeRun.id, delivering);
             }
+            if (domain !== undefined && incomingEnvelopes.length > 0) {
+              const delivering = incomingEnvelopes;
+              incomingEnvelopes = [];
+              carriedEnvelopes.push(...delivering);
+              domain.envelopesDelivered(
+                node.id,
+                delivering.map((envelope) => envelope.envelopeId),
+              );
+            }
           };
           const messagesForPrompt = [...carried, ...incoming];
+          const envelopesForPrompt = [...carriedEnvelopes, ...incomingEnvelopes];
           turnSignals.set(nodeRun.id, turnSignal);
 
           const outcome =
@@ -1863,7 +2356,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
                   ...guardrailsFor(node, nodeRun),
                   ...contextFor(node, nodeRun),
                   ...(repairReason === undefined ? {} : { repairReason }),
-                  ...teamFor(messagesForPrompt),
+                  ...teamFor(messagesForPrompt, envelopesForPrompt),
+                  ...rulesFor(envelopesForPrompt),
                 });
 
           // A node that failed before it got a slot (no route, say) still passes through RUNNING, so
@@ -1901,7 +2395,13 @@ export function createRunService(deps: RunServiceDeps): RunService {
                */
               // D309, D326: a message that arrived meanwhile — `@all` included — rides this retry.
               incoming = freshMessages();
-              nodeRun = await beginNodeRun(node, iteration, attempt, triggerFor(incoming));
+              incomingEnvelopes = freshEnvelopes();
+              nodeRun = await beginNodeRun(
+                node,
+                iteration,
+                attempt,
+                triggerFor(incoming, incomingEnvelopes),
+              );
               lastNodeRunId = nodeRun.id;
               if (nodeRun.status === 'STOPPED') {
                 states.set(node.id, 'STOPPED');
@@ -2053,10 +2553,16 @@ export function createRunService(deps: RunServiceDeps): RunService {
           }));
     /** D323: `run.parked` is said once each time the run goes idle, not on every wake-up. */
     let parked = false;
-    /** D309: a node with nothing in flight that a waiting message names gets a turn now. */
+    /**
+     * D309: a node with nothing in flight that a waiting message names gets a turn now. D310: so
+     * does an asker WAITING on its answer, and an envelope starts a turn even for a node the graph
+     * has not dispatched yet.
+     */
     const wantsTurnNow = (nodeId: Id): boolean => {
       const state = states.get(nodeId);
-      return !inFlightNodes.has(nodeId) && state !== undefined && TURN_NOW_STATES.has(state);
+      if (inFlightNodes.has(nodeId) || state === undefined) return false;
+      if (TURN_NOW_STATES.has(state) || state === 'WAITING') return true;
+      return state === 'IDLE' && (domain?.pendingEnvelopes(nodeId).length ?? 0) > 0;
     };
 
     // §2.3: once a cap has been crossed the run dispatches nothing further. What is already in
@@ -2068,6 +2574,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
       if (!(await gate.waitUntilDispatchable())) break;
       // D323: an End starts nothing new; the turns it cut short unwind, then the run ends.
       const ending = domain?.endRequested() === true;
+      // D310: what the human decided about held envelopes is carried out first.
+      if (domain !== undefined && !ending) {
+        for (const decision of domain.takeDecisions()) await applyDecision(decision);
+      }
 
       if (!ending) {
         const ready = nodes.filter(
@@ -2083,7 +2593,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
           const node = nodeById.get(nodeId);
           if (node === undefined || !wantsTurnNow(nodeId)) continue;
           stateBeforeTurn.set(nodeId, states.get(nodeId) ?? 'IDLE');
-          launch(node, 'instruction');
+          // A human message names the node (D309); otherwise an envelope reached it (D310).
+          const human = domain?.pending(nodeId).some((message) => message.startsTurn) === true;
+          launch(node, human ? 'instruction' : 'envelope');
         }
       }
 
@@ -2107,13 +2619,17 @@ export function createRunService(deps: RunServiceDeps): RunService {
         }
 
         // A board run ends here, unless a message slipped in first: the lock decides which, and a
-        // message after it is refused rather than left waiting for a turn that never comes.
-        const closed = await domain.withLock(async () => {
-          if (domain.nodesWantingTurn().some(wantsTurnNow)) return false;
+        // message after it is refused rather than left waiting for a turn that never comes. One
+        // with an envelope held for the human waits for the decision (D310).
+        const woken = domainWake();
+        const next = await domain.withLock(async () => {
+          if (domain.nodesWantingTurn().some(wantsTurnNow)) return 'turn' as const;
+          if (domain.awaitingHuman()) return 'wait' as const;
           await domain.close();
-          return true;
+          return 'closed' as const;
         });
-        if (closed) break;
+        if (next === 'closed') break;
+        if (next === 'wait') await Promise.race([woken, abortedOrNever]);
         continue;
       }
 
@@ -2122,6 +2638,15 @@ export function createRunService(deps: RunServiceDeps): RunService {
     }
 
     await Promise.allSettled(inFlight);
+
+    // D310: an asker still waiting when the run ends never got its answer. A Stop ends it itself.
+    if (!stoppedByControl()) {
+      for (const [nodeId, row] of waitingRows) {
+        states.set(nodeId, 'STOPPED');
+        await repository.nodeRuns.update(scope, row.id, { status: 'STOPPED', endedAt: now() });
+        await emitNodeState(run, row, 'STOPPED');
+      }
+    }
 
     // D309: whatever is still PENDING was never delivered — DROPPED, before the run's end is said.
     // A Stop says its own end, and drops them itself before it does (FR-CTL-003).

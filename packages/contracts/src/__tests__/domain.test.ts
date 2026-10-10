@@ -10,6 +10,7 @@ import {
   PostRunMessageRequestSchema,
   PricingTableSchema,
   RouteEnvelopeRequestSchema,
+  RouteEnvelopeResponseSchema,
   RunDomainConfigInputSchema,
   defaultRunDomainConfig,
 } from '../domain.js';
@@ -349,6 +350,15 @@ describe('D310/D314 bodies and frames', () => {
       RouteEnvelopeRequestSchema.parse({ decision: 'edit', edit: { summary: 'x' } }).decision,
     ).toBe('edit');
     expect(() => RouteEnvelopeRequestSchema.parse({ decision: 'forward' })).toThrow();
+  });
+
+  it('a route answer names the envelope and what became of it', () => {
+    const envelopeId = '01JBXQ8Z9KQ4R7N2VWXYZ0E001';
+    expect(RouteEnvelopeResponseSchema.parse({ envelopeId, routing: 'EDITED' })).toEqual({
+      envelopeId,
+      routing: 'EDITED',
+    });
+    expect(() => RouteEnvelopeResponseSchema.parse({ envelopeId, routing: 'SENT' })).toThrow();
   });
 
   it('the chat query reads a cursor and caps the page', () => {
