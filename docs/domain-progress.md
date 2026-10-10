@@ -19,8 +19,8 @@ Domain is the team-chat view of a run. This file is the resume point: read it fi
 |---|---|---|---|
 | 0 Pre-flight | done | e3138fa | docs only; baseline below |
 | 1 Projection core | done | 2785cdf | green — see Phase 1 |
-| 2 Human → node | done | (this commit) | green — see Phase 2 |
-| 3 Node → node | not started | — | — |
+| 2 Human → node | done | e86808f | green — see Phase 2 |
+| 3 Node → node | done | (this commit) | green — see Phase 3 |
 | 4 Usage, cost, budget | not started | — | — |
 | 5 Domain surface | not started | — | — |
 
@@ -262,6 +262,94 @@ Check — what Track shows that this transcript does not:
 - `service.test.ts` "leaves a run that is already RUNNING where it is" now asserts the D309 409.
 - The `lifecycle` and `crash-recovery-approvals` tests expect the new `reopened: []` in the recovery result.
 - The migration-list tests include the Domain migration.
+
+## Phase 3 — node → node
+
+**Done**
+
+- **Envelope blocks (D310), `engine/src/domain/envelope-block.ts`.**
+  - `extractEnvelopeBlocks` takes every fenced ```` ```ace-envelope ```` block out of an answer. Other fences, and an answer with no block, are left exactly as they were.
+  - `judgeEnvelopeBlocks` checks each block against the team and the graph. Any refusal is a CONTRACT_VIOLATION, with the reason handed to the single contract-repair retry:
+    - not JSON, or not a valid envelope (the reason names the field);
+    - an unknown handle (with the closest ones), `@all`, or the sender itself;
+    - a HANDOFF to a node the sender does not feed (the reason lists the ones it does);
+    - an ANSWER with no `inReplyTo`, with no QUERY open to this node, or not back to the asker;
+    - a turn that sends a QUERY or a FLAG and also a HANDOFF;
+    - a turn that was handed a QUERY and does not answer it.
+  - The executor takes the blocks out before the JSON parse, so a JSON node can write them too and its contract judges only what is left. The summaries then pass through the output point (with no contract) and are secret-masked.
+- **The Brain's router (D304, D310), `engine/src/domain/brain.ts`.**
+  - Every envelope is announced (`envelope.sent`) and routed `by: 'brain'` (`envelope.routed`). That covers the blocks an agent wrote and the implicit HANDOFF of an answer that wrote none (`textSource: 'auto'`, the 280-character excerpt).
+  - Supervised mode forwards with no model call. Manual mode holds every envelope.
+  - A forwarded HANDOFF travels the edges as before; its `edge.transfer` and edge envelope carry the team envelope's id. A forwarded QUERY, FLAG or ANSWER waits for each recipient's turn and reaches its prompt under `## Team messages`.
+- **The loop guard (D305, D310).**
+  - QUERY and FLAG envelopes are counted per unordered pair. The one over `loopGuardLimit` is HELD with reason `LOOP_GUARD`.
+  - The run goes BLOCKED: the gate is paused, the row gets `blockedReason: 'LOOP_GUARD'` and actions `[resume, stop]`, and `run.blocked` names the pair.
+  - Resume clears the reason, resets that pair's count, and forwards what the guard held (`by: 'human'`, reason "released by resume"). To drop it instead, reject it before resuming.
+- **QUERY and ANSWER.**
+  - The asker's node run ends WAITING (Track agrees). Its next turn closes that row COMPLETED and reads the ANSWER.
+  - The addressee gets a turn at once, even before the graph has dispatched it.
+  - If the addressee's turn fails, the Brain answers for it: an ANSWER note (`textSource: 'auto'`, "@x could not answer: …") is sent to the asker, so it never waits for ever.
+- **FLAG.** The flagging turn hands nothing on. The flagged node gets a turn with the FLAG, and its revised output is a fresh HANDOFF (D309), so what it feeds runs again.
+- **The human's decision (D310).** `POST /runs/:runId/envelopes/:id/route` with `{ decision: approve | reject | edit, reason?, edit? }`:
+  - **approve** forwards it;
+  - **edit** forwards the edited version. `envelope.sent` keeps the original and `envelope.routed` (EDITED) carries the edit, so both versions are logged, and the projection shows the original beside the edit. An edit is checked as a block is: known handles, not the sender, a HANDOFF only to nodes the sender feeds. A QUERY or ANSWER keeps its kind;
+  - **reject** drops it, and tells the sender why as a message addressed to it (trusted, in its `## Human instructions`).
+  - Errors: 400 for a bad decision or edit, 404 for no such envelope, 409 once it has been routed or the run has ended. A refusal writes nothing.
+  - The server wires it (`apps/server`). A board run with an envelope held for the human waits for the decision instead of closing.
+- **Prompt (D311), `prompts/team.ts`.** `DOMAIN_PROMPT_VERSION` is now `ace-domain-2`. Each section appears only when it has content:
+  - `## Team`: one line per addressable node (handle, name, Brain, you — never another node's instructions), plus the envelope format in six lines. Only when there are two or more.
+  - `## Team messages`: each envelope as `[KIND id] from @x: summary`, its body quoted with `> `. It is labelled as information from other agents, not instructions (BR-13). A QUERY says how to answer it.
+  - `## Envelope digest`: the Brain's prompt only, one line per envelope routed so far.
+- **Restart (D323).**
+  - `DomainRegistry.open` rebuilds the envelope state from the log: what is held, forwarded envelopes that no turn has taken yet (with their bodies), open QUERYs, the loop counts (a resume after LOOP_GUARD resets its pair) and the Brain's digest.
+  - A run re-opened while BLOCKED mid-run or PAUSED starts with its gate held, as it was.
+
+**Implementation details worth knowing** (within D310; not new decisions):
+
+- **Side turns.** An envelope turn that only answers QUERYs, or that reaches a node the graph hasn't dispatched yet, is a side turn.
+  - It hands nothing on unless it writes an explicit HANDOFF, and the node goes back to the state it was in.
+  - A failure there blocks nothing downstream.
+  - Without this, a QUERY to a node that hasn't run would make it hand off before its inputs arrive.
+- **An explicit HANDOFF also feeds non-addressable successors**, an Output or a merge, which no block can name.
+- **`envelope.sent` carries no artifact refs (`artifacts: []`).** D307's ref has a `bytes` size field, and FR-MM-004's guard (server `D-082 …` test) refuses any `"bytes":` key in the event log. Gate 3's first run caught exactly that.
+  - The projection reads a HANDOFF's files off its turn's `node.output` instead: new test "a HANDOFF's files come from its turn's output …".
+  - D307 and the guard both stand unchanged.
+- **Envelope deliveries emit no `instruction.state`.** They show on the RUNNING frame's `trigger.envelopeIds`. `instruction.state` stays the human messages' delivery record.
+- **A turn that took an envelope and then crashed has used it.** The envelope isn't handed out again after a restart. A crashed asker's WAITING row ends FAILED `crash`, but its QUERY stays open, so the ANSWER still gives it a turn.
+
+**Gate 3 evidence** (`engine/src/domain/__tests__/domain-envelopes.test.ts`, 13 scenarios on the scripted provider; `envelope-block.test.ts`, 13 pure; `team-prompt.test.ts`, 5; `registry-restore.test.ts`, 5; server `domain-wiring.test.ts` +1):
+
+| Gate item | Test |
+|---|---|
+| A reviewer FLAG reaches the writer, and the writer's revised HANDOFF completes | "a reviewer FLAG reaches the writer, and the revised HANDOFF completes the run" |
+| A QUERY gets an ANSWER linked by `inReplyTo` | "a QUERY gets an ANSWER linked by inReplyTo while the asker waits" (frames `1:WAITING` → `1:COMPLETED` → `2:RUNNING`) |
+| Forced ping-pong → LOOP_GUARD → BLOCKED | "ping-pong past the limit holds the envelope and blocks the run; resume carries on" |
+| A malformed envelope → CONTRACT_VIOLATION | "a malformed envelope is a CONTRACT_VIOLATION, repaired once with the reason"; "a HANDOFF to a node it does not feed fails the node …" |
+| A manual-mode edit is forwarded, and both versions are logged | "an edited envelope is forwarded as edited, and both versions are logged" |
+| Reject → dropped, and the sender told why | "a rejected envelope is dropped, and its sender gets a turn with the reason" |
+| The addressee fails → the asker gets a note | "an addressee that cannot answer sends the asker a note …" |
+| An `@` in prose or code triggers nothing (D324) | "a handle written in prose or code addresses nobody" |
+| The Brain digest | "the Brain reads a digest of what was routed …" |
+| Restart keeps what is held | "what is held, and what is forwarded but not yet taken, survive an engine restart"; `registry-restore.test.ts` |
+| HTTP 200 / 400 / 404 / 409 | "POST /runs/:runId/envelopes/:id/route"; real engine: "manual routing holds the handoff until the human approves it over HTTP" |
+
+**Gate 3 run** (`pnpm build`, `pnpm typecheck`, `pnpm lint`: exit 0; `pnpm -r --workspace-concurrency=1 --no-bail test`: exit 0):
+
+| Package | Tests |
+|---|---|
+| contracts | 1167 (+1) |
+| engine | 1669 (1632 at Gate 2; +37 Domain) |
+| sdk | 135 |
+| ui | 316 |
+| web | 868 |
+| context | 52 |
+| guardrails | 357 |
+| providers | 437 + 1 skipped + 3 todo |
+| storage-local | 303 |
+| tools | 190 + 1 skipped |
+| server | 160 (+1, `domain-wiring.test.ts`) |
+
+The first full run had one failure: server `D-082 stores the real PNG/MP3/MP4/ZIP mock-media …`. Its FR-MM-004 guard found `"bytes":` in the event log, which came from the artifact refs the first cut put on `envelope.sent`. Fixed as described above, and the re-run was all green. No existing test was changed in this phase.
 
 ## Open decisions
 

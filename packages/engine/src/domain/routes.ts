@@ -10,6 +10,8 @@ import type { DomainService } from './service.js';
  *   POST /runs/:runId/messages  { text, deliveryMode?, exclude? }  → 201 { messageId, delivery[] }
  *                                400 a bad address (details.errors) · 409 the run has ended
  *   POST /runs/:runId/end                                          → Run
+ *   POST /runs/:runId/envelopes/:id/route  { decision, reason?, edit? } → { envelopeId, routing }
+ *                                400 a bad edit · 404 no such envelope · 409 not held, or the run has ended
  *
  * `resolve` is a getter, as for the run controls: an app built without Domain answers 501.
  */
@@ -30,6 +32,13 @@ export function createDomainRoutes<E extends Env>(
   });
 
   routes.post('/runs/:runId/end', async (c) => c.json(await domain().end(c.req.param('runId'))));
+
+  routes.post('/runs/:runId/envelopes/:envelopeId/route', async (c) => {
+    const body = (await readJson(c)) as Parameters<DomainService['routeEnvelope']>[2];
+    return c.json(
+      await domain().routeEnvelope(c.req.param('runId'), c.req.param('envelopeId'), body),
+    );
+  });
 
   return routes;
 }

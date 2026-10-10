@@ -749,11 +749,18 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
 
   /*
    * Domain (D303–D327): each live run's conversation — the messages waiting for a node's turn, the
-   * turn a message may cut short — and the human's way into it, `POST /runs/:runId/messages` and
-   * `/end`. The run service registers each drive's Domain here; the routes look it up.
+   * turn a message may cut short, the envelopes the Brain's router holds — and the human's way into
+   * it: `POST /runs/:runId/messages`, `/end` and `/envelopes/:id/route`. The run service registers
+   * each drive's Domain here; the routes look it up.
    */
   const domains = createDomainRegistry({ bus, repository, scope: LOCAL_SCOPE });
-  const domainService = createDomainService({ repository, scope: LOCAL_SCOPE, bus, domains });
+  const domainService = createDomainService({
+    repository,
+    scope: LOCAL_SCOPE,
+    bus,
+    domains,
+    gates,
+  });
 
   const runs = createRunService({
     gates,

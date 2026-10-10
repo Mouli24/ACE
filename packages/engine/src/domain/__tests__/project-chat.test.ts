@@ -110,6 +110,28 @@ describe('D303/D310 projectChat — a handoff chain', () => {
     expect(messages.filter((message) => message.type === 'envelope')).toHaveLength(1);
   });
 
+  it("a HANDOFF's files come from its turn's output, so the log never repeats them (FR-MM-004)", () => {
+    const image = {
+      type: 'image' as const,
+      artifactId: '01JBXQ8Z9KQ4R7N2VWXYZ0ART1',
+      mime: 'image/png',
+      name: 'logo.png',
+      size: 512,
+    };
+    const withFile = new RunLog([agent(1, 'Writer'), agent(2, 'Review')])
+      .started()
+      .state(1, 1, 'RUNNING')
+      .output(1, 1, [image])
+      .state(1, 1, 'COMPLETED')
+      .envelope(1, 1, 1, [2], 'HANDOFF', 'The logo.');
+    const handoff = projectChat(withFile.events, withFile.context()).find(
+      (message) => message.type === 'envelope',
+    );
+    expect(handoff?.artifacts).toEqual([
+      { path: 'logo.png', bytes: 512, commit: null, artifactId: image.artifactId },
+    ]);
+  });
+
   it('narrates a run from before Domain, whose handoffs are bare edge transfers', () => {
     const legacy = new RunLog([agent(1, 'Writer'), agent(2, 'Review')])
       .started()

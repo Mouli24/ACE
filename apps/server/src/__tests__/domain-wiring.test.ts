@@ -90,4 +90,50 @@ describe('Domain through the HTTP API', () => {
     });
     expect(after.status).toBe(409);
   }, 30_000);
+
+  it('manual routing holds the handoff until the human approves it over HTTP', async () => {
+    const providerId = await mockProvider(e);
+    const projectId = await createProject(e, 'Domain routing');
+    const graph = graphBuilder('Routed');
+    const agent = (name: string) =>
+      graph.add('agent', name, {
+        providerId,
+        modelId: 'mock-text',
+        instructions: `You are ${name}.`,
+        inputTypes: ['text'],
+        outputTypes: ['text'],
+      });
+    const writer = agent('Writer');
+    const review = agent('Review');
+    graph.connect(writer, review);
+    const imported = await importWorkflow(e, projectId, graph.export());
+
+    const started = RunSchema.parse(
+      await e.post(`/workflows/${imported.workflow.id}/runs`, { domain: { routing: 'manual' } }),
+    );
+    const held = await until('the handoff to be held', async () =>
+      (await eventsOf(started.id)).find(
+        (event) =>
+          event.type === 'envelope.routed' &&
+          (event.payload as { decision: string }).decision === 'HELD',
+      ),
+    );
+    const { envelopeId } = held.payload as { envelopeId: string };
+
+    const route = (body: unknown) =>
+      e.api(`/runs/${started.id}/envelopes/${envelopeId}/route`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+        headers: { 'Content-Type': 'application/json' },
+      });
+    const approved = await route({ decision: 'approve' });
+    expect(approved.status).toBe(200);
+    expect(await approved.json()).toEqual({ envelopeId, routing: 'FORWARDED' });
+
+    // The review runs on it, its own handoff has nowhere to go, and the run completes.
+    await until('the run to complete', async () =>
+      RunSchema.parse(await e.get(`/runs/${started.id}`)).status === 'COMPLETE' ? true : undefined,
+    );
+    expect((await route({ decision: 'approve' })).status).toBe(409);
+  }, 30_000);
 });

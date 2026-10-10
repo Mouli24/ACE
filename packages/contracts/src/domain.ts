@@ -962,6 +962,13 @@ export const RouteEnvelopeRequestSchema = z.strictObject({
 });
 export type RouteEnvelopeRequest = z.infer<typeof RouteEnvelopeRequestSchema>;
 
+/** What the decision did: FORWARDED (approve), EDITED, or REJECTED. */
+export const RouteEnvelopeResponseSchema = z.strictObject({
+  envelopeId: IdSchema,
+  routing: RoutingDecisionSchema,
+});
+export type RouteEnvelopeResponse = z.infer<typeof RouteEnvelopeResponseSchema>;
+
 /** `PUT /runs/:runId/budget` (D313). `null` removes the budget. */
 export const PutRunBudgetRequestSchema = z.strictObject({
   limit: z.number().int().positive().nullable(),
