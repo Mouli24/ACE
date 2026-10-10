@@ -5,6 +5,7 @@ import { MockDb } from './db';
 import { seedPerfFixture } from './fixture';
 import { createFakeWebSocket, dropMockSockets } from './fake-socket';
 import { createHandlers } from './handlers';
+import { createDomainHandlers } from './handlers-domain';
 import { createRound2Handlers, setScenario, setStreamPace } from './handlers-round2';
 import { createRound3Handlers, decideApproval, requireApproval } from './handlers-round3';
 import {
@@ -186,6 +187,7 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
   const db = new MockDb({ persist: true });
   restoreScenario();
   const worker = setupWorker(
+    ...createDomainHandlers(db),
     ...createForgeHandlers(db),
     ...createRound5Handlers(db),
     ...createRound4Handlers(db),

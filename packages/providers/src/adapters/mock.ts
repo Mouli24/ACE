@@ -201,6 +201,13 @@ const SPECS: readonly MockModelSpec[] = [
     inputTypes: ['text'],
     outputTypes: ['text'],
   },
+  // D315: Domain's scriptable model — see `scriptTurn`.
+  {
+    modelId: 'mock-script',
+    displayName: 'Mock script',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+  },
 ];
 
 export const MOCK_MODELS: readonly ModelInfo[] = SPECS.map((spec) => ({
@@ -463,6 +470,52 @@ function abortError(signal?: AbortSignal): ProviderCallError {
   });
 }
 
+/**
+ * D315: `mock-script`. A node's instructions hold its script as sections:
+ *
+ *   [[turn 1]]   what it answers on its first call in a run
+ *   [[turn 2]]   … on its second
+ *   [[turn *]]   on any call no numbered section names
+ *
+ * With no section for the call, the last section answers again. Inside a section, `{{query}}` is
+ * the id of the QUERY the prompt's `## Team messages` quotes (an ANSWER has to name it), and a line
+ * `[[hold]]` streams what comes before it and then holds until the call is aborted — a turn
+ * for an interrupt or an End to cut short.
+ *
+ * The port gives an adapter a run but no node, so a node's calls are counted per run and script.
+ * A contract repair is the next call; the rejection the executor appends to the instructions is
+ * never read as script.
+ */
+export const SCRIPT_HOLD = '[[hold]]';
+const SCRIPT_SECTION = /^\[\[turn (\d+|\*)\]\]\s*$/gmu;
+const REPAIR_SUFFIX = '\n\nYour previous answer was rejected:';
+
+/** The `## Instructions` section of an assembled prompt, without any repair the executor added. */
+function scriptOf(text: string): string {
+  const start = text.indexOf('## Instructions\n');
+  const from = start < 0 ? text : text.slice(start + '## Instructions\n'.length);
+  const end = from.search(/^## /mu);
+  const instructions = end < 0 ? from : from.slice(0, end);
+  const repair = instructions.indexOf(REPAIR_SUFFIX);
+  return (repair < 0 ? instructions : instructions.slice(0, repair)).trimEnd();
+}
+
+/** The section this call answers with: `[[turn N]]`, else `[[turn *]]`, else the last one. */
+export function scriptTurn(script: string, turn: number): string | undefined {
+  const marks = [...script.matchAll(SCRIPT_SECTION)];
+  if (marks.length === 0) return undefined;
+  const sections = marks.map((mark, index) => {
+    const bodyStart = (mark.index ?? 0) + mark[0].length;
+    const bodyEnd = marks[index + 1]?.index ?? script.length;
+    return { name: mark[1] ?? '*', body: script.slice(bodyStart, bodyEnd).replace(/^\n/u, '').trimEnd() };
+  });
+  return (
+    sections.find((section) => section.name === String(turn))?.body ??
+    sections.find((section) => section.name === '*')?.body ??
+    sections.at(-1)?.body
+  );
+}
+
 /** Rejects the moment the signal aborts, and never resolves otherwise. */
 function untilAborted(signal: AbortSignal): Promise<never> {
   return new Promise((_resolve, reject) => {
@@ -529,6 +582,8 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
    */
   const attempts = new Map<string, number>();
   const callsPerNode = new Map<string, number>();
+  /** D315: `mock-script` calls per run and script — which section a node is on. */
+  const scriptTurns = new Map<string, number>();
   let inFlight = 0;
   let peak = 0;
   /** Bumped for every `tool_call` chunk, so repeated requests get distinct (still stable) ids. */
@@ -887,6 +942,28 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
         const text = words(req.prompt, TEXT_WORDS);
         yield* stream(text, TEXT_DELAY_MS);
         yield* finishText(text.join(' '));
+        return;
+      }
+
+      case 'mock-script': {
+        const whole = `${req.system ?? ''}\n${req.prompt}`;
+        const script = scriptOf(whole);
+        const key = `${req.runId ?? 'no-run'}|${hash(script)}`;
+        const turn = (scriptTurns.get(key) ?? 0) + 1;
+        scriptTurns.set(key, turn);
+
+        const query = /\[QUERY (\w+)\]/u.exec(whole)?.[1] ?? '';
+        const section = (scriptTurn(script, turn) ?? 'ok').replaceAll('{{query}}', query);
+        const holdAt = section.split('\n').findIndex((line) => line.trim() === SCRIPT_HOLD);
+        const lines = (holdAt < 0 ? section : section.split('\n').slice(0, holdAt).join('\n')).split('\n');
+
+        // Line by line, so an envelope block keeps its fences and a cut-short turn has written something.
+        for (const [index, line] of lines.entries()) {
+          await pause(TEXT_DELAY_MS, signal, sleep);
+          yield { type: 'text', delta: index === lines.length - 1 ? line : `${line}\n` };
+        }
+        if (holdAt >= 0) await untilAborted(signal);
+        yield* finishText(lines.join('\n'));
         return;
       }
 

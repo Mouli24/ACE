@@ -21,8 +21,8 @@ Domain is the team-chat view of a run. This file is the resume point: read it fi
 | 1 Projection core | done | 2785cdf | green — see Phase 1 |
 | 2 Human → node | done | e86808f | green — see Phase 2 |
 | 3 Node → node | done | a732df2 | green — see Phase 3 |
-| 4 Usage, cost, budget | done | (this commit) | green — see Phase 4 |
-| 5 Domain surface | not started | — | — |
+| 4 Usage, cost, budget | done | 79290c1 | green — see Phase 4 |
+| 5 Domain surface | done | (this commit) | green — see Phase 5 |
 
 ## Phase 0 — pre-flight
 
@@ -449,6 +449,127 @@ What the capture also showed:
 | server | 164 (+4: `pricing.test.ts` 3, `domain-wiring.test.ts` +1) |
 
 **Deliberate changes to existing tests**, per D313: `codex.test.ts` and `gemini.test.ts` no longer expect a usage chunk, because both providers are estimated-only.
+
+## Phase 5 — the Domain surface (functional, unstyled)
+
+**Done**
+
+**Server (D9, D314)**
+- **`GET /runs/:runId/chat?node=&after=&limit=`** pages forward through a cursor (`seq.index`), with a lens via `node`. It reads a per-run incremental projection cache: the most recent 32 runs are kept, each read catches up from the log, and reads of one run are serialised so no event is folded twice.
+- **`GET /runs/:runId/chat/stream?node=&after=`** is SSE, using Hono's `streamSSE`, in `engine/src/domain/chat-stream.ts`.
+  - It subscribes first, then backfills from the log, then goes live. Events up to `after` (or the `Last-Event-ID` header) are folded silently.
+  - All frames from one event go together, and the last carries the event's seq as its id. An event the backfill already sent is dropped by seq when it arrives live.
+  - `turn.token` frames carry live text with no id, naming the speaker resolved from `node.state`.
+  - A `usage.snapshot` frame follows the backfill and every batch that moved the numbers. A keep-alive comment goes out every 15 s.
+  - A bad query is a 400 and an unknown run a 404, before the stream opens.
+- **CORS** allows `Last-Event-ID`.
+
+**SDK**
+- `sse-parse.ts`: the event-stream rules — CR, LF or CRLF line ends, comments, multi-line data, and an event with no data is not dispatched.
+- **`streamChat`** reads with `fetch` and the Bearer token. On a dropped connection it reconnects with `Last-Event-ID` = the last id it saw; a 4xx ends it for good. `close()` cancels the read even where the body ignores the signal.
+- Also `chatPage`, `postRunMessage`, `routeEnvelope`, `setRunBudget` (PUT) and `runUsage`.
+
+**Providers (D315): `mock-script`**
+- A node's reply is its `[[turn N]]` section, else `[[turn *]]`, else the last section. Turns are counted per run and per script.
+- `{{query}}` becomes the QUERY id the prompt quotes. A `[[hold]]` line streams what comes before it and then holds until aborted.
+- The repair suffix the executor appends is never read as script.
+
+**Web: `/projects/:projectId/workflows/:workflowId/domain?run=&node=`, in `apps/web/src/domain/`**
+- **The page.**
+  - A run switcher lists the workflow's runs; the live one is the default, and `?run=new` starts a new one.
+  - End is shown when the run allows it; New run when nothing is live.
+  - A live run is read from its stream. An ended run is read from its pages once, read-only, together with `GET /usage`. The conversation is loaded only once the run is known.
+- **Lenses:** All, plus one per roster node, through `?node=`.
+- **Conversation** renders every type:
+  - human messages with each recipient's delivery state;
+  - envelopes as from → to, kind and routing history, with the original kept beside an edit; a held one gets Approve, Edit (forward edited) and Reject (with a reason);
+  - agent turns with trigger, outcome and duration, expandable to steps and full output; their artifact refs open through the D307 seam (`open-artifact.ts`, today the artifact content view);
+  - system lines at their level.
+- **Composer:**
+  - it previews who a message reaches with the server's own parser — a removed recipient travels as `exclude`;
+  - send is blocked on any parse error, with the closest handles shown;
+  - `@all` shows whom it reaches and whom it skips, and refuses interrupt;
+  - `@` autocompletes from the roster, and there is a queue/interrupt choice;
+  - with no live run the message starts one, with itself as the goal and `stayOpen` (D312, D323);
+  - an ended run's composer is read-only.
+- **Team panel:**
+  - per node: state, activity, tokens in and out, cost and share of the budget;
+  - per run: totals (cached input included), cost, and the budget with set or remove;
+  - per turn: usage;
+  - every estimate carries `est.`; an unknown cost is "—", and a reported one says "reported".
+- **Entry points:** a "Domain" link on the run bar (the current run), "Open in Domain" on an agent or model node's menu (its lens), and "Open in Domain" on a run's page.
+- **The mock engine** (`mocks/handlers-domain.ts`) serves the same endpoints for the web tests and the browser mock mode.
+
+**End to end:** `tests/acceptance/domain/domain.e2e.ts` uses Playwright against the real engine and the production web build, with `mock-script` agents. Playwright's `testMatch` now includes `domain/`.
+
+**Implementation details worth knowing** (not new decisions):
+- The composer's button is **Start team run**, because the top bar already has a Start run.
+- `node.token` carries no node id, so the stream resolves it from the turn's `node.state`.
+- **Test-first gaps.** The three entry-point tests were written after the code; renaming both labels fails both entry tests. Earlier in this phase, the pricing loader's tests had the same gap, mutation-checked the same way.
+- **The full Playwright run** of every round's e2e plus Domain's, with `--retries=0` (the config allows one retry), passed 92 tests.
+  - Round 1 "NFR-USE-02 … keyboard only" failed once there, then passed 2 of 2 on its own.
+  - The Domain spec passed 2 of 2, then 4 of 4 with `--repeat-each=2`.
+  - Acceptance tests are not part of `pnpm -r test` (that package has no `test` script, by design). Run Domain's with `cd tests/acceptance && npx playwright test domain.e2e`.
+
+**Gate 5 evidence:**
+
+| Gate item | Test |
+|---|---|
+| SSE reconnect produces no duplicates | engine `domain-stream.test.ts` "a reconnect with Last-Event-ID resumes after it: nothing missed, nothing twice" (folds both streams into exactly `GET /chat`); SDK `client-domain.test.ts` "reconnects from the last id it saw"; e2e: after a reload the page shows exactly as many messages as `GET /chat` serves |
+| Unknown handles are blocked in the composer | `Composer.test.tsx` "blocks a handle nobody has, and offers the closest"; e2e `@nobody` |
+| Estimated numbers always carry the marker | `TeamPanel.test.tsx`: nodes, totals, cost and turns; "—" for no price |
+| Everything is clickable end to end with the fake provider | `domain.e2e.ts`: (1) a run started from the composer, the FLAG and the revision, message a node and watch the delivery reach DONE, the lens, the blocked handle, a reload, End then read-only; (2) manual routing, a held envelope approved by clicking |
+| The preview, exclude, send blocked on parse errors, End → read-only | `Composer.test.tsx` (8); `DomainPage.test.tsx` "End ends the run, and the conversation becomes read-only" |
+| Page | `DomainPage.test.tsx` (11): every message type, delivery, from → to; expand steps; artifacts; held edit and reject; send; lens; End; past run read-only from pages; first message starts a run; entry points |
+| Stream and page (server) | `domain-stream.test.ts` (5): paging, lens, 400/404, backfill then live with tokens and usage, reconnect |
+| `mock-script` | `mock.test.ts` (+5) |
+
+**One more D307 fix in this phase.** D307 builds artifact refs "from output media Parts and from the file paths in CLI activity", but only media parts had been done. Writing the falsification checklist exposed the gap.
+- Now a file a CLI wrote — Claude Code `Write`/`Edit`/`MultiEdit`/`NotebookEdit`, Gemini `write_file`/`replace`, Codex `file_change` — is one of its turn's artifact refs.
+- A read, or a failed write, is not.
+- Test: `project-chat.test.ts` "D307: the files a CLI wrote are the turn artifact refs …".
+
+**Gate 5 run** (`pnpm build`, `pnpm typecheck`, `pnpm lint`: exit 0; `pnpm -r --workspace-concurrency=1 --no-bail test`: exit 0, first run; engine re-run after the D307 fix, 1691):
+
+| Package | Tests |
+|---|---|
+| contracts | 1167 |
+| engine | 1691 (1685 at Gate 4; +6) |
+| sdk | 145 (+10) |
+| ui | 316 |
+| web | 902 (+34) |
+| context | 52 |
+| guardrails | 357 |
+| providers | 446 + 1 skipped + 3 todo (+5) |
+| storage-local | 303 |
+| tools | 190 + 1 skipped |
+| server | 164 |
+| acceptance (Playwright, run separately) | `domain.e2e.ts`: 2 of 2, and 4 of 4 repeated |
+
+**Deliberate changes to existing tests**, per D315: `mock.test.ts` "lists exactly the models §2.6 tabulates" now ends with `mock-script`.
+
+## Finish (2026-10-10)
+
+**Per phase:**
+
+| Phase | Commit | Done | Not done | Gate evidence |
+|---|---|---|---|---|
+| 0 Pre-flight | e3138fa | P1–P7 answered with evidence (`docs/domain-preflight.md`); decisions D303–D327; defect D-093 | — | docs; baseline run |
+| 1 Projection core | 2785cdf | event types; the addressing parser; `projectChat`, `filterForNode`, `projectUsage`; `scripts/replay-transcript.ts` | — (the engine projection was written before its tests; mutation-checked) | "Phase 1"; replay of real run `01M48JE9J9F6VEPF2T9Q4NTYXR`; what Track shows that the transcript lacks |
+| 2 Human → node | e86808f | messages, routing, privacy, `@all`, queue and interrupt, park/End/restart, prompt sections | — | "Gate 2" table |
+| 3 Node → node | a732df2 | envelope blocks, the Brain's router, loop guard, manual routing, QUERY/WAITING, restart rebuild | — | "Gate 3" table |
+| 4 Usage, cost, budget | 79290c1 | live Claude Code capture; usage parsers and the estimate; `ace.pricing.json`; the budget | Codex and Gemini are not captured (not installed), so they are estimated-only | "Gate 4" tables, including provider → source |
+| 5 Domain surface | (this commit) | chat pages and SSE; SDK; `mock-script`; the web page, composer and team panel; entry points; e2e | the visual pass (out of scope); an artifact opens its content view, not the Code surface at a commit (D307: `commit` is null until checkpoints, and Forge is unmerged) | "Gate 5" table |
+
+**DECISION NEEDED still open:** none.
+
+**Owner's calls listed under "Later":**
+- Claude Code's reported cost vs. its token count.
+- Debate.
+
+**Defect still open:** D-093, the CLI environment is not scrubbed. It was confirmed by the Phase 4 capture.
+
+**The falsification test:** `docs/domain-falsification-test.md`.
 
 ## Open decisions
 

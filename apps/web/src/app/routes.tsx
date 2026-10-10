@@ -1,5 +1,6 @@
 import type { RouteObject } from 'react-router-dom';
 
+import { DomainPage } from '../domain/DomainPage';
 import { HelpPage } from '../help/HelpPage';
 import { KnowledgeBasePage } from '../knowledge/KnowledgeBasePage';
 import { KnowledgeListPage } from '../knowledge/KnowledgeListPage';
@@ -41,6 +42,9 @@ export const routes: RouteObject[] = [
           { path: 'forge', element: <ForgePage /> },
         ],
       },
+      // Domain (D303): the run as its team's conversation, full screen with its own team panel —
+      // beside the workflow layout, not inside its chat column. ?run= and ?node= pick run and lens.
+      { path: 'projects/:projectId/workflows/:workflowId/domain', element: <DomainPage /> },
       {
         path: 'projects/:projectId/workflows/:workflowId/timeline',
         element: <TimelinePage />,

@@ -37,6 +37,7 @@ import {
   type DragEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react';
+import { useInRouterContext, useNavigate, useParams } from 'react-router-dom';
 
 import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
@@ -154,6 +155,21 @@ function isEditable(target: EventTarget | null): boolean {
   return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
 }
 
+/** D303: a node's lens in Domain, opened from the board. */
+function OpenInDomainItem({ workflowId, nodeId }: { workflowId: string; nodeId: string }) {
+  const navigate = useNavigate();
+  const { projectId = '' } = useParams();
+  return (
+    <ContextMenuItem
+      onSelect={() =>
+        navigate(`/projects/${projectId}/workflows/${workflowId}/domain?node=${nodeId}`)
+      }
+    >
+      Open in Domain
+    </ContextMenuItem>
+  );
+}
+
 function CanvasInner({
   workflowId,
   nodes,
@@ -170,6 +186,8 @@ function CanvasInner({
   const editor = useGraphEditor(workflowId, sync);
   const { canUndo, canRedo } = useHistoryDepth(workflowId);
   const [menuTarget, setMenuTarget] = useState<MenuTarget>();
+  /** A bare Canvas (its tests) has no router; Domain's entry needs one. */
+  const inRouter = useInRouterContext();
   const flow = useReactFlow<AceFlowNode>();
   const setSelection = useSelectionStore((s) => s.setSelection);
   const selectedNodeIds = useSelectionStore((s) => s.nodeIds);
@@ -1112,6 +1130,11 @@ function CanvasInner({
           <ContextMenuItem onSelect={() => setSelection([menuTarget.nodeId], [])}>
             {readOnly ? 'Inspect' : 'Configure'}
           </ContextMenuItem>
+          {inRouter &&
+            nodes.some(
+              (node) =>
+                node.id === menuTarget.nodeId && (node.kind === 'agent' || node.kind === 'model'),
+            ) && <OpenInDomainItem workflowId={workflowId} nodeId={menuTarget.nodeId} />}
           {!readOnly && (
             <>
               <ContextMenuSeparator />

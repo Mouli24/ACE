@@ -1,5 +1,7 @@
 export * from './errors.js';
 export * from './client.js';
+export * from './domain.js';
+export * from './sse-parse.js';
 export * from './socket.js';
 export * from './run-view.js';
 export * from './upload.js';

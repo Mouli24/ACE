@@ -115,6 +115,51 @@ export function artifactRefs(parts: readonly Part[]): ArtifactRef[] {
   );
 }
 
+/**
+ * D307: the file-writing tools of the coding CLIs, as their activity is named (`cli_` + snake case):
+ * Claude Code's Write, Edit, MultiEdit and NotebookEdit, Gemini's write_file and replace, and
+ * Codex's file_change. A turn that ran one of them produced that file.
+ */
+const CLI_FILE_WRITES: ReadonlySet<string> = new Set([
+  'cli_write',
+  'cli_edit',
+  'cli_multi_edit',
+  'cli_notebook_edit',
+  'cli_write_file',
+  'cli_replace',
+  'cli_file_change',
+]);
+
+/** The paths a CLI file write names: `file_path` / `notebook_path`, or Codex's `changes[].path`. */
+export function writtenPaths(toolName: string, args: unknown): string[] {
+  if (!CLI_FILE_WRITES.has(toolName) || typeof args !== 'object' || args === null) return [];
+  const record = args as Record<string, unknown>;
+  const direct = [record['file_path'], record['notebook_path']].filter(
+    (value): value is string => typeof value === 'string' && value !== '',
+  );
+  const changes = Array.isArray(record['changes'])
+    ? (record['changes'] as unknown[]).flatMap((change) => {
+        const path = (change as { path?: unknown } | null)?.path;
+        return typeof path === 'string' && path !== '' ? [path] : [];
+      })
+    : [];
+  return [...direct, ...changes];
+}
+
+/** Refs joined, each path once, the first kept. */
+function mergeRefs(
+  current: readonly ArtifactRef[] | undefined,
+  more: readonly ArtifactRef[],
+): ArtifactRef[] {
+  const merged = [...(current ?? [])];
+  for (const ref of more) {
+    if (!merged.some((each) => each.path === ref.path && each.artifactId === ref.artifactId)) {
+      merged.push(ref);
+    }
+  }
+  return merged;
+}
+
 const OUTCOME_BY_STATE: Partial<Record<NodeState, TurnOutcome>> = {
   RUNNING: 'RUNNING',
   WAITING: 'WAITING',
@@ -399,6 +444,22 @@ export function createDomainProjection(context: DomainContext): DomainProjection
         at: toolCall.at,
       };
       updateTurn(nodeRunId, (turn) => ({ steps: [...turn.steps, step] }), ops);
+      // D307: a file the CLI wrote is one of the turn's artifacts.
+      const written =
+        toolCall.status === 'ok'
+          ? writtenPaths(toolCall.toolName, toolCall.args).map((path): ArtifactRef => ({
+              path,
+              bytes: null,
+              commit: null,
+            }))
+          : [];
+      if (written.length > 0) {
+        update(
+          turnMessageId(nodeRunId),
+          (current) => ({ ...current, artifacts: mergeRefs(current.artifacts, written) }),
+          ops,
+        );
+      }
     },
 
     'node.output': (payload, ops) => {
@@ -427,7 +488,7 @@ export function createDomainProjection(context: DomainContext): DomainProjection
           ...(message.textSource === 'summary'
             ? {}
             : { text: autoExcerpt(output.output), textSource: 'auto' as const }),
-          ...(artifacts.length === 0 ? {} : { artifacts }),
+          ...(artifacts.length === 0 ? {} : { artifacts: mergeRefs(message.artifacts, artifacts) }),
         }),
         ops,
       );
