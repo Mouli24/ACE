@@ -107,6 +107,25 @@ describe('D299 FR-GIT-003 FR-GIT-004 Forge’s files through the real engine', (
     expect(git.json.error.code).toBe('protected_path');
   });
 
+  it('never reads or lists .git by name, as it is never listed (review minor 6)', async () => {
+    mkdirSync(join(folder, '.git'), { recursive: true });
+    writeFileSync(join(folder, '.git', 'config'), '[remote "origin"]\n\turl = https://t@x/r.git\n');
+
+    const content = await api<{ error: { code: string } }>(
+      'GET',
+      `/projects/${projectId}/files/content?path=${encodeURIComponent('.git/config')}`,
+    );
+    expect(content.status).toBe(403);
+    expect(content.json.error.code).toBe('protected_path');
+
+    const tree = await api<{ error: { code: string } }>(
+      'GET',
+      `/projects/${projectId}/files/tree?path=.git`,
+    );
+    expect(tree.status).toBe(403);
+    expect(tree.json.error.code).toBe('protected_path');
+  });
+
   it('streams files.changed to a project subscriber when a file changes on disk', async () => {
     const socket = new WebSocket(`${engine.wsUrl}?token=${engine.token}`);
     const frames: { type: string; payload: { changes?: { path: string }[] } }[] = [];

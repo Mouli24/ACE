@@ -2,13 +2,13 @@ import { resolve } from 'node:path';
 
 import { WorkspaceFsError } from '@ace/engine';
 
-import { protectedFolderIn } from '../project/paths.js';
+import { GIT_FOLDER, protectedFolderIn } from '../project/paths.js';
 import { resolveInsideSandbox } from '../sandbox/paths.js';
 
 export interface ToAbsoluteOptions {
   /** `''`, `.` and `./` name the project folder itself (a listing). */
   allowRoot?: boolean;
-  /** Refuse `.git` and `.ace` at any depth (D299). */
+  /** Refuse `.git` and `.ace` at any depth (D299). Without it, only `.git` is refused. */
   write?: boolean;
 }
 
@@ -50,6 +50,12 @@ export function toAbsolute(root: string, rel: string, options: ToAbsoluteOptions
         },
       );
     }
+  } else if (protectedFolderIn(base, resolution.path, GIT_FOLDER) !== undefined) {
+    // `.git` is never listed, so it is not read by name either (review minor 6): its config can
+    // hold a credential in a remote URL. `.ace` stays readable; only writes refuse it.
+    throw new WorkspaceFsError('protected_path', 'Forge does not read anything inside .git/.', {
+      folder: '.git',
+    });
   }
   return resolution.path;
 }
