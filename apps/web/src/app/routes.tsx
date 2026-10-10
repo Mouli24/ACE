@@ -7,6 +7,7 @@ import { OnboardingPage } from '../onboarding/OnboardingPage';
 import { UsagePage } from '../usage/UsagePage';
 import { ProjectPage } from '../projects/ProjectPage';
 import { ProjectsPage } from '../projects/ProjectsPage';
+import { ForgePage } from '../forge/ForgePage';
 import { GuardrailsPage } from '../guardrails/GuardrailsPage';
 import { ProvidersPage } from '../providers/ProvidersPage';
 import { ProjectRunsPage } from '../runs/ProjectRunsPage';
@@ -32,6 +33,7 @@ export const routes: RouteObject[] = [
       { path: 'projects', element: <ProjectsPage /> },
       { path: 'projects/:projectId', element: <ProjectPage /> },
       { path: 'projects/:projectId/workflows/:workflowId', element: <WorkflowPage /> },
+      { path: 'projects/:projectId/workflows/:workflowId/forge', element: <ForgePage /> },
       {
         path: 'projects/:projectId/workflows/:workflowId/timeline',
         element: <TimelinePage />,
