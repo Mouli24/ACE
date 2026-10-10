@@ -18,6 +18,7 @@ import { useProblemsStore } from '../forge/panel/problems-store';
 import { useQuickOpen } from '../forge/quick-open/quick-open-store';
 import { MockDb } from '../mocks/db';
 import { createHandlers } from '../mocks/handlers';
+import { createDomainHandlers, domainMock } from '../mocks/handlers-domain';
 import { createForgeHandlers } from '../mocks/handlers-forge';
 import { createRound2Handlers, stopScenario } from '../mocks/handlers-round2';
 import { createRound3Handlers } from '../mocks/handlers-round3';
@@ -30,6 +31,7 @@ import { asMonaco, createFakeMonaco } from './fake-monaco';
 export const db = new MockDb({ persist: false });
 /** Newest round first: a round 3 route wins over a round 2 stand-in for the same path. */
 export const server = setupServer(
+  ...createDomainHandlers(db),
   ...createForgeHandlers(db),
   ...createRound5Handlers(db),
   ...createRound4Handlers(db),
@@ -53,6 +55,7 @@ export function installMockServer(): void {
   beforeEach(() => {
     stopScenario();
     db.reset();
+    domainMock.reset();
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     resetGraphSyncRegistry();
     useSelectionStore.getState().clear();

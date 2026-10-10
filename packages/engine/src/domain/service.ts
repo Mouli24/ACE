@@ -1,13 +1,18 @@
 import {
+  DomainChatQuerySchema,
+  DomainStreamQuerySchema,
   EnvelopeSentPayloadSchema,
   PostRunMessageRequestSchema,
   PutRunBudgetRequestSchema,
   RouteEnvelopeRequestSchema,
+  DOMAIN_PAGE_DEFAULT,
   closestHandles,
   defaultRunDomainConfig,
   emptyPricingTable,
   parseAddressing,
   resolveAddressing,
+  type DomainChatPage,
+  type DomainMessage,
   type DomainUsageSnapshot,
   type HumanMention,
   type Id,
@@ -27,7 +32,10 @@ import type { Repository, Scope } from '../ports/index.js';
 import { assertRunAction, withAllowedActions } from '../runs/control/actions.js';
 import type { RunGateRegistry } from '../runs/control/gate.js';
 import { maskSecrets } from '../security/secret-patterns.js';
-import { domainContextFor } from './context.js';
+import { pumpChatStream, type ChatStreamWrite } from './chat-stream.js';
+import { domainContextFor, type DomainContext } from './context.js';
+import { filterForNode } from './project-chat.js';
+import { createDomainProjection, type DomainProjection } from './projection.js';
 import { projectUsage } from './project-usage.js';
 import type { DomainRegistry } from './registry.js';
 import type { EnvelopeDecision, HeldEnvelope, RunDomain } from './run-domain.js';
@@ -59,6 +67,17 @@ export interface DomainService {
   setBudget(runId: Id, request: PutRunBudgetRequest): Promise<DomainUsageSnapshot>;
   /** D303, D306: what the run used, per node and per turn, against its budget, priced. */
   usage(runId: Id): Promise<DomainUsageSnapshot>;
+  /** D314: one page of the conversation, forward from `after`; a lens with `node`. */
+  chat(runId: Id, query: unknown): Promise<DomainChatPage>;
+  /**
+   * D314: a stream of the conversation from `after` (or `Last-Event-ID`), checked before it opens
+   * — a bad query is a 400 and an unknown run a 404 — and then pumped until the client goes.
+   */
+  chatStream(
+    runId: Id,
+    query: unknown,
+    lastEventId?: string,
+  ): Promise<{ pump(write: ChatStreamWrite, signal: AbortSignal): Promise<void> }>;
   /** D310: decide what becomes of a held envelope. */
   routeEnvelope(
     runId: Id,
@@ -70,7 +89,7 @@ export interface DomainService {
 export interface DomainServiceDeps {
   repository: Pick<Repository, 'runs' | 'events' | 'providers'>;
   scope: Scope;
-  bus: Pick<EventBus, 'emit'>;
+  bus: Pick<EventBus, 'emit' | 'subscribe'>;
   domains: DomainRegistry;
   /** D305: End lifts a run BLOCKED mid-run, so its drive can wind down. Absent, nothing to lift. */
   gates?: Pick<RunGateRegistry, 'get'>;
@@ -111,6 +130,54 @@ export function createDomainService(deps: DomainServiceDeps): DomainService {
     if (run === null) throw notFound(`run ${runId}`);
     return run;
   }
+
+  /** Who is on the board, from the run's snapshot, with each provider's type for pricing. */
+  async function contextOf(run: Run): Promise<DomainContext> {
+    const providerTypes = new Map(
+      (await deps.repository.providers.list(deps.scope)).map((provider) => [
+        provider.id,
+        provider.type,
+      ]),
+    );
+    return domainContextFor(run.id, run.snapshot.nodes, providerTypes);
+  }
+
+  /**
+   * D314: each run's projection, kept and brought up to date from the log on each read rather than
+   * refolded from the start, the most recently read runs kept. Reads of one run take turns, so an
+   * event is never folded twice.
+   */
+  const projections = new Map<Id, { projection: DomainProjection; turn: Promise<unknown> }>();
+  const PROJECTIONS_KEPT = 32;
+  async function projectionOf(run: Run): Promise<DomainProjection> {
+    let entry = projections.get(run.id);
+    if (entry === undefined) {
+      entry = { projection: createDomainProjection(await contextOf(run)), turn: Promise.resolve() };
+      if (projections.size >= PROJECTIONS_KEPT) {
+        const [oldest] = projections.keys();
+        if (oldest !== undefined) projections.delete(oldest);
+      }
+    }
+    projections.delete(run.id);
+    projections.set(run.id, entry);
+    const { projection } = entry;
+    const caughtUp = entry.turn.then(async () => {
+      const events = await deps.repository.events.listAfter(deps.scope, projection.lastSeq(), {
+        runIds: [run.id],
+      });
+      for (const event of events) projection.apply(event);
+    });
+    entry.turn = caughtUp.catch(() => undefined);
+    await caughtUp;
+    return projection;
+  }
+
+  /** A cursor is `seq.index`; they compare as numbers, seq first. */
+  const isAfter = (message: DomainMessage, cursor: string): boolean => {
+    const [seq = 0, index = 0] = message.cursor.split('.').map(Number);
+    const [afterSeq = 0, afterIndex = 0] = cursor.split('.').map(Number);
+    return seq > afterSeq || (seq === afterSeq && index > afterIndex);
+  };
 
   /** The run's usage snapshot, from its whole log, priced by the table as it is now. */
   async function snapshotOf(run: Run): Promise<DomainUsageSnapshot> {
@@ -337,6 +404,47 @@ export function createDomainService(deps: DomainServiceDeps): DomainService {
       // D305: a run BLOCKED mid-run has a paused gate; its drive has to get past it to end.
       if (run.status === 'BLOCKED') deps.gates?.get(runId)?.resume();
       return withAllowedActions(await domain.finished());
+    },
+
+    async chat(runId, query) {
+      const parsed = DomainChatQuerySchema.safeParse(query);
+      if (!parsed.success) throw invalid('The page query is not valid.', parsed.error.issues);
+      const { node, after, limit = DOMAIN_PAGE_DEFAULT } = parsed.data;
+      const run = await load(runId);
+      const all = (await projectionOf(run)).messages();
+      const lens = node === undefined ? all : filterForNode(all, node);
+      const rest = after === undefined ? lens : lens.filter((message) => isAfter(message, after));
+      const messages = rest.slice(0, limit);
+      const last = messages.at(-1);
+      return {
+        messages,
+        ...(rest.length > messages.length && last !== undefined ? { nextCursor: last.cursor } : {}),
+      };
+    },
+
+    async chatStream(runId, query, lastEventId) {
+      const parsed = DomainStreamQuerySchema.safeParse({
+        ...(typeof query === 'object' && query !== null ? query : {}),
+        ...(lastEventId === undefined || lastEventId.trim() === '' ? {} : { after: lastEventId }),
+      });
+      if (!parsed.success) throw invalid('The stream query is not valid.', parsed.error.issues);
+      const { node, after = 0 } = parsed.data;
+      const run = await load(runId);
+      const context = await contextOf(run);
+      return {
+        pump: (write, signal) =>
+          pumpChatStream(
+            {
+              context,
+              events: () => deps.repository.events.listAfter(deps.scope, 0, { runIds: [run.id] }),
+              subscribe: (handler) => deps.bus.subscribe(handler),
+              pricing: () => deps.pricing?.() ?? emptyPricingTable(),
+            },
+            { after, ...(node === undefined ? {} : { node }) },
+            write,
+            signal,
+          ),
+      };
     },
 
     async usage(runId) {
