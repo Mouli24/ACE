@@ -318,6 +318,40 @@ describe('D303 projectChat — the steps of a turn', () => {
     ]);
     expect(steps[0]).toMatchObject({ status: 'ok', durationMs: 12 });
   });
+
+  it('D307: the files a CLI wrote are the turn artifact refs; reads and failed writes are not', () => {
+    let n = 0;
+    const call = (toolName: string, args: unknown, status = 'ok') => {
+      n += 1;
+      return {
+        ...toolCall(''),
+        toolCall: {
+          ...toolCall('').toolCall,
+          id: `01JBXQ8Z9KQ4R7N2VWXYZ0TCB${n}`,
+          toolName,
+          args,
+          status,
+        },
+      };
+    };
+    const log = new RunLog([agent(1, 'Writer')])
+      .started()
+      .state(1, 1, 'RUNNING')
+      .push('tool.call', call('cli_read', { file_path: 'brief.md' }))
+      .push('tool.call', call('cli_write', { file_path: 'src/tagline.md', content: 'Go.' }))
+      .push('tool.call', call('cli_edit', { file_path: 'src/tagline.md' }))
+      .push(
+        'tool.call',
+        call('cli_file_change', { changes: [{ path: 'src/a.ts', kind: 'update' }] }),
+      )
+      .push('tool.call', call('cli_write_file', { file_path: 'notes.txt' }, 'error'))
+      .output(1, 1, text('Wrote the tagline.'));
+    const turn = projectChat(log.events, log.context())[1];
+    expect(turn?.artifacts).toEqual([
+      { path: 'src/tagline.md', bytes: null, commit: null },
+      { path: 'src/a.ts', bytes: null, commit: null },
+    ]);
+  });
 });
 
 describe('D308 projectChat — a handle collision', () => {

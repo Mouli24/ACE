@@ -1,5 +1,19 @@
 import {
   API_BASE_PATH,
+  DomainChatPageSchema,
+  DomainUsageSnapshotSchema,
+  PostRunMessageRequestSchema,
+  PostRunMessageResponseSchema,
+  PutRunBudgetRequestSchema,
+  RouteEnvelopeRequestSchema,
+  RouteEnvelopeResponseSchema,
+  type DomainChatPage,
+  type DomainChatQuery,
+  type DomainUsageSnapshot,
+  type PostRunMessageRequest,
+  type PostRunMessageResponse,
+  type RouteEnvelopeRequest,
+  type RouteEnvelopeResponse,
   ApprovalDecisionRequestSchema,
   ApprovalRequestSchema,
   CreateGuardrailPolicyRequestSchema,
@@ -138,6 +152,7 @@ import {
 } from '@ace/contracts';
 import { z } from 'zod';
 
+import { openChatStream, type ChatStream, type StreamChatOptions } from './domain.js';
 import { AceApiError } from './errors.js';
 import { uploadArtifact, type UploadArtifactOptions } from './upload.js';
 
@@ -230,7 +245,7 @@ export function createAceClient(options: AceClientOptions) {
 
   /** One authenticated round trip; a fetch that throws becomes a `network` `AceApiError`. */
   async function send(
-    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
     path: string,
     init: { accept: string; contentType?: string; body?: BodyInit; signal?: AbortSignal },
     query?: Query,
@@ -276,7 +291,7 @@ export function createAceClient(options: AceClientOptions) {
   }
 
   async function request<T>(
-    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
     path: string,
     responseSchema: { parse(value: unknown): T },
     body?: { schema: z.ZodType; value: unknown },
@@ -431,6 +446,48 @@ export function createAceClient(options: AceClientOptions) {
     restartRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/restart`, RunSchema),
     /** D323: end a run started from Domain — in-flight turns stop, pending messages are dropped. */
     endRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/end`, RunSchema),
+
+    /* Domain (D303–D327) */
+
+    /** D314: one page of a run's conversation, forward from `after`; one node's lens with `node`. */
+    chatPage: (runId: Id, query: Partial<DomainChatQuery> = {}): Promise<DomainChatPage> =>
+      request('GET', `/runs/${runId}/chat`, DomainChatPageSchema, undefined, {
+        node: query.node,
+        after: query.after,
+        limit: query.limit,
+      }),
+    /** D314: the conversation live, over SSE, resuming after the last id it saw on a reconnect. */
+    streamChat: (runId: Id, streamOptions: StreamChatOptions): ChatStream =>
+      openChatStream(
+        { baseUrl: options.baseUrl, token: options.token, fetch: fetchImpl },
+        runId,
+        streamOptions,
+      ),
+    /** D324: a message to the team, a node, or `@all`; the server's reading of it is the authority. */
+    postRunMessage: (runId: Id, body: PostRunMessageRequest): Promise<PostRunMessageResponse> =>
+      request('POST', `/runs/${runId}/messages`, PostRunMessageResponseSchema, {
+        schema: PostRunMessageRequestSchema,
+        value: body,
+      }),
+    /** D310: approve, edit or reject an envelope the Brain's router held. */
+    routeEnvelope: (
+      runId: Id,
+      envelopeId: Id,
+      body: RouteEnvelopeRequest,
+    ): Promise<RouteEnvelopeResponse> =>
+      request('POST', `/runs/${runId}/envelopes/${envelopeId}/route`, RouteEnvelopeResponseSchema, {
+        schema: RouteEnvelopeRequestSchema,
+        value: body,
+      }),
+    /** D313: set, change or remove (`null`) the run's token budget. */
+    setRunBudget: (runId: Id, limit: number | null): Promise<DomainUsageSnapshot> =>
+      request('PUT', `/runs/${runId}/budget`, DomainUsageSnapshotSchema, {
+        schema: PutRunBudgetRequestSchema,
+        value: { limit },
+      }),
+    /** D303, D306: what the run used, per node and per turn, priced. */
+    runUsage: (runId: Id): Promise<DomainUsageSnapshot> =>
+      request('GET', `/runs/${runId}/usage`, DomainUsageSnapshotSchema),
 
     /* Retries and re-runs (round 3 §2.1, FR-ERR-003/004, FR-CTL-005) */
 

@@ -199,7 +199,8 @@ function corsLayer(deps: EngineDeps): MiddlewareHandler<{ Variables: EngineVaria
     },
     // PUT for Domain's budget (D313).
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization', 'x-request-id'],
+    // Last-Event-ID: Domain's stream resumes where it stopped (D314).
+    allowHeaders: ['Content-Type', 'Authorization', 'x-request-id', 'Last-Event-ID'],
     maxAge: 600,
   });
 }

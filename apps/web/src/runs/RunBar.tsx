@@ -13,7 +13,7 @@ import {
 } from '@ace/ui';
 import { Play } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
 
 import { useWorkflowGraph } from '../workflows/hooks';
@@ -187,6 +187,16 @@ export function RunBar({
         >
           <Play className="h-3.5 w-3.5 fill-current" aria-hidden /> Run
         </Button>
+      )}
+
+      {/* D303: the current run as the team's conversation. */}
+      {graph.data !== undefined && (
+        <Link
+          to={`/projects/${graph.data.workflow.projectId}/workflows/${workflowId}/domain${run.runId === undefined ? '' : `?run=${run.runId}`}`}
+          className="shrink-0 whitespace-nowrap font-machine text-[10.5px] uppercase tracking-[0.06em] underline"
+        >
+          Domain
+        </Link>
       )}
 
       <RunControls

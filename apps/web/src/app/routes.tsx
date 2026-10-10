@@ -1,5 +1,6 @@
 import type { RouteObject } from 'react-router-dom';
 
+import { DomainPage } from '../domain/DomainPage';
 import { HelpPage } from '../help/HelpPage';
 import { KnowledgeBasePage } from '../knowledge/KnowledgeBasePage';
 import { KnowledgeListPage } from '../knowledge/KnowledgeListPage';
@@ -32,6 +33,8 @@ export const routes: RouteObject[] = [
       { path: 'projects', element: <ProjectsPage /> },
       { path: 'projects/:projectId', element: <ProjectPage /> },
       { path: 'projects/:projectId/workflows/:workflowId', element: <WorkflowPage /> },
+      // Domain (D303): the run as its team's conversation; ?run= and ?node= pick the run and lens.
+      { path: 'projects/:projectId/workflows/:workflowId/domain', element: <DomainPage /> },
       {
         path: 'projects/:projectId/workflows/:workflowId/timeline',
         element: <TimelinePage />,

@@ -928,6 +928,16 @@ export const DomainChatQuerySchema = z.object({
 });
 export type DomainChatQuery = z.infer<typeof DomainChatQuerySchema>;
 
+/**
+ * `GET /runs/:runId/chat/stream?node=&after=` (D314). `after` is a seq — the last SSE id the
+ * client saw — and the `Last-Event-ID` header, when sent, takes its place.
+ */
+export const DomainStreamQuerySchema = z.object({
+  node: IdSchema.optional(),
+  after: z.coerce.number().int().min(0).optional(),
+});
+export type DomainStreamQuery = z.infer<typeof DomainStreamQuerySchema>;
+
 export const DomainChatPageSchema = z.strictObject({
   messages: z.array(DomainMessageSchema),
   nextCursor: DomainCursorSchema.optional(),

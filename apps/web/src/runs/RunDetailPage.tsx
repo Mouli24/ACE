@@ -117,6 +117,12 @@ export function RunDetailPage() {
         >
           open the Canvas
         </Link>
+        <Link
+          to={`/projects/${run.data.projectId}/workflows/${run.data.workflowId}/domain?run=${run.data.id}`}
+          className="font-machine text-xs underline"
+        >
+          Open in Domain
+        </Link>
       </header>
 
       {/* FR-EXE-003: a run refused at pre-flight is still a run, and its issues are the record. */}

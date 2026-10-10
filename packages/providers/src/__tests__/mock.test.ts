@@ -138,6 +138,8 @@ describe('TC-MOD-001 the mock lists every model of §2.6', () => {
       'mock-cite',
       'mock-memory',
       'mock-summary',
+      // D315: Domain's scriptable model.
+      'mock-script',
     ]);
   });
 
@@ -982,5 +984,93 @@ describe('§2.6 every mock call is recorded so "zero provider calls" is assertab
     await Promise.all([one, two]);
 
     expect(mock.maxConcurrent()).toBe(2);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* mock-script (D315)                                                          */
+/* -------------------------------------------------------------------------- */
+
+describe('D315 mock-script plays each node its [[turn N]] section', () => {
+  const SCRIPT = [
+    'Act as the Writer.',
+    '[[turn 1]]',
+    'Draft one.',
+    '[[turn 2]]',
+    'Draft two:',
+    '```ace-envelope',
+    '{"kind":"FLAG","to":["@review"],"summary":"Look again."}',
+    '```',
+    '[[turn 3]]',
+    'Final draft.',
+  ].join('\n');
+  const promptFor = (instructions: string, rest = ''): string =>
+    `## System\nbase\n\n## Instructions\n${instructions}\n\n## Input\n${rest}\n`;
+  const call = (
+    a: ReturnType<typeof adapter>,
+    runId: string,
+    prompt: string,
+    signal = new AbortController().signal,
+  ) =>
+    collect(a.generate({ modelId: 'mock-script', prompt, outputTypes: ['text'], runId }, signal), signal);
+
+  it('walks the sections turn by turn, keeps their lines, and repeats the last one', async () => {
+    const a = adapter();
+    const turns = [];
+    for (let n = 0; n < 4; n += 1) turns.push(textOf(await call(a, 'run-1', promptFor(SCRIPT))));
+    expect(turns[0]).toBe('Draft one.');
+    expect(turns[1]).toBe(
+      'Draft two:\n```ace-envelope\n{"kind":"FLAG","to":["@review"],"summary":"Look again."}\n```',
+    );
+    expect(turns[2]).toBe('Final draft.');
+    expect(turns[3]).toBe('Final draft.');
+    // Another run starts its script again.
+    expect(textOf(await call(a, 'run-2', promptFor(SCRIPT)))).toBe('Draft one.');
+  });
+
+  it('reports what it used, counted in words', async () => {
+    const chunks = await call(adapter(), 'run-1', promptFor(SCRIPT));
+    expect(usageOf(chunks)).toEqual({ type: 'usage', tokensIn: expect.any(Number), tokensOut: 2 });
+    expect(finishOf(chunks)).toEqual({ type: 'finish', reason: 'stop' });
+  });
+
+  it('answers the QUERY its prompt quotes, through {{query}}', async () => {
+    const script = '[[turn *]]\n```ace-envelope\n{"kind":"ANSWER","to":["@writer"],"summary":"2026.","inReplyTo":"{{query}}"}\n```';
+    const prompt = promptFor(script, '## Team messages\n[QUERY 01JBXQ8Z9KQ4R7N2VWXYZ0E001] from @writer: Which year?');
+    expect(textOf(await call(adapter(), 'run-1', prompt))).toContain(
+      '"inReplyTo":"01JBXQ8Z9KQ4R7N2VWXYZ0E001"',
+    );
+  });
+
+  it('[[hold]] writes what comes before it, then holds until the call is aborted', async () => {
+    const controller = new AbortController();
+    const seen: StreamChunk[] = [];
+    const stream = adapter().generate(
+      {
+        modelId: 'mock-script',
+        prompt: promptFor('[[turn 1]]\nThinking it over\n[[hold]]'),
+        outputTypes: ['text'],
+        runId: 'run-1',
+      },
+      controller.signal,
+    );
+    await (async () => {
+      for await (const chunk of stream) {
+        seen.push(chunk);
+        if (chunk.type === 'text') setTimeout(() => controller.abort(), 20);
+      }
+    })().catch(() => undefined);
+    expect(controller.signal.aborted).toBe(true);
+    expect(textOf(seen).trim()).toBe('Thinking it over');
+    expect(seen.some((c) => c.type === 'finish')).toBe(false);
+  });
+
+  it('a contract repair is the next call: the reason it was rejected never reads as script', async () => {
+    const a = adapter();
+    const repaired = `${SCRIPT}\n\nYour previous answer was rejected: bad\nAnswer again, satisfying the output contract exactly.`;
+    expect(textOf(await call(a, 'run-1', promptFor(SCRIPT)))).toBe('Draft one.');
+    expect(textOf(await call(a, 'run-1', promptFor(repaired)))).toBe(
+      'Draft two:\n```ace-envelope\n{"kind":"FLAG","to":["@review"],"summary":"Look again."}\n```',
+    );
   });
 });
