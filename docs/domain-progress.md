@@ -18,8 +18,8 @@ Domain is the team-chat view of a run. This file is the resume point: read it fi
 | Phase | State | Commit | Gate |
 |---|---|---|---|
 | 0 Pre-flight | done | e3138fa | docs only; baseline below |
-| 1 Projection core | done | (this commit) | green — see Phase 1 |
-| 2 Human → node | not started | — | — |
+| 1 Projection core | done | 2785cdf | green — see Phase 1 |
+| 2 Human → node | done | (this commit) | green — see Phase 2 |
 | 3 Node → node | not started | — | — |
 | 4 Usage, cost, budget | not started | — | — |
 | 5 Domain surface | not started | — | — |
@@ -159,6 +159,109 @@ Check — what Track shows that this transcript does not:
 5. **Fixed while replaying:**
    - CLI tool steps carried the whole result (a file's full text). A step is now one line of at most 120 characters, with a test.
    - The check counted never-started BLOCKED node runs as missing, though they are narrated as system lines.
+
+## Phase 2 — human → node
+
+**Done**
+
+- **The message endpoint.** `POST /runs/:runId/messages` (`engine/src/domain/{service,routes}.ts`).
+  - Parse and resolve use the shared contracts parser. Any refusal is a 400 `validation_failed` with `details.errors` (an `AddressingError[]`), and **zero events are written**.
+  - A run that has ended, or is closing, is a 409 `invalid_run_state`.
+  - A message is one `human.message` (final recipients in `mentions`) and one `instruction.state` PENDING per recipient. Both are written under the run's lock, so a message can never land after the drive has decided to close.
+- **Routing (D304, D324–D326).**
+  - Names and `@handles` reach only those nodes.
+  - `@all` reaches the nodes that haven't finished, rides their next or first turn, and never starts one.
+  - A message with no address goes to the Brain; with no Brain designated it is 400 `no_brain`.
+  - `exclude` subtracts matched recipients; an entry that wasn't a match is a 400.
+- **Per-run live state (`domain/run-domain.ts`, `domain/registry.ts`).**
+  - It holds the per-node queues and each turn's own `AbortController`.
+  - It provides the wake-up a parked drive waits on, `requestEnd`, and `close`, which DROPs everything still pending.
+  - It is rebuilt from the run's event log when a run is driven again, so pending messages survive a restart.
+- **Delivery (D309) in `runs/index.ts`.**
+  - A node with nothing in flight (COMPLETED, FAILED, STOPPED, BLOCKED) gets an `instruction` turn at once.
+  - An IDLE, READY or PAUSED node carries the message into its first dispatch.
+  - A busy node gets it on its next turn; automatic retries pick up what arrived meanwhile.
+  - A further turn is a new node run at the same iteration, attempt + 1 (attempts tracked per node and iteration, seeded from recorded rows).
+  - DELIVERED is emitted when the turn goes RUNNING, and DONE when it ends.
+- **Interrupt.**
+  - The turn's own abort fires with `{domain: 'interrupt', messageId}`.
+  - The executor keeps the streamed text as `partialOutput` and estimates usage (chars ÷ 4, `source: 'estimated'`).
+  - The drive records the row with the partial output, emits `node.interrupted` and then STOPPED, and hands nothing on. Nothing downstream is blocked and no chat turn is written.
+  - The cut-short turn's messages go back to PENDING and ride the next turn.
+- **Re-turns (D309).** A turn started by a message, or a node completing an iteration again, hands off a *fresh* envelope.
+  - It replaces that sender's earlier envelope, including merge arrivals.
+  - Its COMPLETED or BLOCKED successors run again; a successor busy at that moment runs again once its turn ends.
+  - Loop decisions are skipped for non-dispatch turns.
+- **Park, End, restart (D323).**
+  - A run started with `domain.stayOpen` parks when it has nothing in flight. The run stays RUNNING, and `run.parked {graph: complete|failed}` is said once per idle spell.
+  - **End** (`POST /runs/:runId/end`, run action `end`) cuts the turns in flight, DROPs what is pending, and ends the run COMPLETE when the graph's finish line is complete, else HALTED `failure`. A turn End cut short leaves its node's state as it was before the turn.
+  - **Engine restart:** `recoverAfterCrash({keepOpen})` re-opens such runs. Their in-flight turns end FAILED with code `crash` (`node.error` + `node.state`). `RunService.resumeOpenRun` drives them again from their rows and log, and they park at once.
+  - Board-started runs complete normally. A board run closes under the lock when idle, so a message after that is a 409.
+- **Goal and config (D312).**
+  - `StartRunRequest.goal` and `.domain` are stored on the run (new columns).
+  - `run.config` and the goal (as `human.message` with addressing `goal`) are recorded at start.
+  - With no inputs given, Input nodes get the goal. Restart copies both.
+- **Prompt (D311).** `## Team goal` and `## Human instructions` (`prompts/team.ts`) come after `## Instructions`, only when they have content. `DOMAIN_PROMPT_VERSION` joins the hash only then, so every existing prompt is byte-identical.
+- **Controls.**
+  - Stop DROPs pending messages before its `run.completed`.
+  - Rerun and retry on a RUNNING, PAUSED or parked run are a 409. This closes the double-drive hazard; it is a deliberate change to one round-3 test (`service.test.ts`), per D309.
+  - `allowedActions` carry `end` for runs that stay open.
+- **Graph (D304, D308).** `update_node` sets or clears (`null`) a handle. A batch is refused when its finished graph has a duplicate or reserved handle (`domainGraphIssues` in contracts) or a second Brain.
+- **Storage.** Migration `20261010T120000_domain`:
+  - `nodes.handle`, `node_runs.trigger`, `runs.blocked_reason/domain/goal`, and the index `events_run_idx`.
+  - `listActive` now includes a run BLOCKED mid-run with a reason.
+- **Gate 1 gap 1 fixed.** `run.completed` for a run BLOCKED at pre-flight carries `preflightIssues`, and the projection words them.
+
+**Implementation details worth knowing** (within D303/D323; not new decisions):
+
+- `run.parked` is a tenth Domain event. D323 needs the parked state to be visible in the conversation, and no event existed for it.
+- A plain dispatch's RUNNING frame carries no `trigger`, so existing frames are unchanged; the projection reads "absent" as `dispatch`.
+- The run harness's scripted model now declares JSON output, so a JSON-contract node can be scripted into a CONTRACT_VIOLATION.
+
+**Gate 2 evidence** (`engine/src/domain/__tests__/domain-delivery.test.ts`, 22 scenarios on the scripted provider; plus `domain-surface-p2.test.ts`, the storage round-trip and the server wiring test):
+
+| Gate item | Test |
+|---|---|
+| An idle node runs immediately | "a node that is not busy gets a turn now" (PENDING → DELIVERED → DONE) |
+| A busy node gets it on its next turn | "a busy node gets the instruction on its next turn, not the one already running" |
+| Interrupted → INTERRUPTED, never handed off | "an interrupted turn keeps its partial output, is INTERRUPTED and never handed off" |
+| Run end drops pending | "run end drops pending instructions" (DROPPED before `run.completed`) |
+| Fan-out to two nodes | "a fan-out to two nodes reaches both" |
+| CONTRACT_VIOLATION node gets a fresh turn | "an instruction to a node that ended in CONTRACT_VIOLATION starts a fresh turn" |
+| Instruction to A never in B's or the Brain's prompt | "an instruction to one node never appears in another node's prompt, or the Brain's" |
+| Unaddressed reaches the Brain only | "an unaddressed message reaches the Brain only" |
+| `exclude` removes; a non-match is 400 with zero events | two tests |
+| `@all` on a 3-node chain (running → next turn, pending → first turn, finished skipped) | "mid-run on a chain: …" |
+| `@all` all finished → 400 `all_finished`, zero events | yes |
+| `@all` + interrupt → 400, zero events | yes |
+| Domain run parks, RUNNING, zero calls while parked | "parks instead of completing …" |
+| Naming a finished node while parked → turn, successors re-run, parks again | yes |
+| End → COMPLETE, pending → DROPPED | yes |
+| Board run completes normally | yes |
+| Restart: parked run continues; in-flight → FAILED crash | "after an engine restart a parked run carries on …" |
+| HTTP: 201 / 400 with suggestions / 409 after End / 501 without Domain | `domain-surface-p2.test.ts` |
+| Real engine over HTTP (park → message → End) | `apps/server/src/__tests__/domain-wiring.test.ts` |
+
+**Gate 2 run** (`pnpm --filter "./packages/**" build`; `pnpm typecheck`: exit 0; `pnpm lint`: exit 0; `pnpm -r --workspace-concurrency=1 --no-bail test`):
+
+| Package | Tests |
+|---|---|
+| contracts | 1166 |
+| engine | 1632 (1599 at Gate 1; +33 Domain) |
+| sdk | 135 |
+| ui | 316 |
+| web | 868 |
+| context | 52 |
+| guardrails | 357 |
+| providers | 437 + 1 skipped + 3 todo |
+| storage-local | 303. On the first run, 7 older migration tests failed: they pin the exact list of migrations applied after theirs, and those lists now end with the Domain migration. Fixed by appending it; re-run 303/303. |
+| tools | 190 + 1 skipped |
+| server | 159 (+1, `domain-wiring.test.ts`) |
+
+**Deliberate changes to existing tests**, each following from a decision:
+- `service.test.ts` "leaves a run that is already RUNNING where it is" now asserts the D309 409.
+- The `lifecycle` and `crash-recovery-approvals` tests expect the new `reopened: []` in the recovery result.
+- The migration-list tests include the Domain migration.
 
 ## Open decisions
 

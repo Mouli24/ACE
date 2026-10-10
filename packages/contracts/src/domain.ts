@@ -8,6 +8,7 @@ import {
 } from './enums.js';
 import { PartSchema } from './envelope.js';
 import { IdSchema, TimestampSchema, type Id, type Node } from './graph.js';
+import type { ValidationIssue } from './validation.js';
 
 /**
  * Domain — the team-chat view of a run (D303–D327).
@@ -130,6 +131,56 @@ export function rosterFor(nodes: readonly Node[]): RosterEntry[] {
     kind: node.kind,
     brain: isBrainNode(node),
   }));
+}
+
+/** The graph-op refusals Domain adds (D304, D308): each a 400 `validation_failed` issue. */
+export const DOMAIN_GRAPH_ISSUE_CODES = [
+  'duplicate_handle',
+  'reserved_handle',
+  'more_than_one_brain',
+] as const;
+
+/**
+ * What a workflow's handles and Brain must satisfy (D304, D308): an explicit handle is unique and
+ * not reserved, and at most one Agent is the Brain. Pure, so the engine refuses the graph op and the
+ * Canvas can say why before it sends one.
+ */
+export function domainGraphIssues(nodes: readonly Node[]): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const seen = new Map<string, Id>();
+  for (const node of nodes) {
+    if (node.handle === undefined) continue;
+    if (isReservedHandle(node.handle)) {
+      issues.push({
+        severity: 'error',
+        code: 'reserved_handle',
+        message: `@${node.handle} is reserved — ${node.handle === 'brain' ? 'it is the Brain' : 'it addresses every node'}; choose another handle for "${node.name}".`,
+        nodeId: node.id,
+      });
+      continue;
+    }
+    const other = seen.get(node.handle);
+    if (other !== undefined) {
+      issues.push({
+        severity: 'error',
+        code: 'duplicate_handle',
+        message: `@${node.handle} is already another node's handle; each handle names one node.`,
+        nodeId: node.id,
+      });
+      continue;
+    }
+    seen.set(node.handle, node.id);
+  }
+  const brains = nodes.filter((node) => node.kind === 'agent' && node.config.brain === true);
+  for (const extra of brains.slice(1)) {
+    issues.push({
+      severity: 'error',
+      code: 'more_than_one_brain',
+      message: `Only one node can be the Brain; "${brains[0]?.name ?? ''}" already is.`,
+      nodeId: extra.id,
+    });
+  }
+  return issues;
 }
 
 /* -------------------------------------------------------------------------- */

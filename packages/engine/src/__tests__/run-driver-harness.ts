@@ -1,6 +1,10 @@
 import {
   AgentConfigSchema,
+  type DataType,
   type Edge,
+  type PostRunMessageRequest,
+  type PostRunMessageResponse,
+  type StartRunRequest,
   type Model,
   type Node,
   type NodeRun,
@@ -9,6 +13,12 @@ import {
   type Run,
 } from '@ace/contracts';
 
+import {
+  createDomainRegistry,
+  createDomainService,
+  type DomainRegistry,
+  type DomainService,
+} from '../domain/index.js';
 import { createEventBus, type EventBus } from '../events/index.js';
 import { newId } from '../ids.js';
 import { createLogger } from '../logging/index.js';
@@ -26,6 +36,8 @@ import {
   createRunControls,
   createRunGateRegistry,
   createRunService,
+  recoverAfterCrash,
+  type BegunRun,
   type RunControls,
   type RunGateRegistry,
   type RunService,
@@ -56,6 +68,8 @@ export interface Step {
   throws?: unknown;
   /** Yielded before anything else, so a call cut short has still spent something. */
   usageFirst?: { tokensIn: number; tokensOut: number };
+  /** Streamed before the hold, so a turn cut short has already written something (D309). */
+  partial?: string;
   /** Hold the stream open until this settles, or until the call's signal aborts. */
   hold?: Promise<void>;
   /**
@@ -87,6 +101,9 @@ export const httpError = (status: number, message = `HTTP ${status}`): Error =>
 export interface RunDriverHarness {
   repository: FakeRepository;
   bus: EventBus;
+  /** Domain (D303–D327): the live runs' conversations, and the human's way into them. */
+  domains: DomainRegistry;
+  domain: DomainService;
   events: EngineEvent[];
   gates: RunGateRegistry;
   providers: ProviderService;
@@ -98,13 +115,21 @@ export interface RunDriverHarness {
   scripts: Map<string, Step[]>;
   /** `generate()` calls per node name. */
   calls: (name: string) => number;
+  /** Every prompt a node name was sent, in order (system and prompt joined). */
+  prompts: (name: string) => string[];
+  /** Every `generate()` call, across nodes. */
+  totalCalls: () => number;
   /** Whether each call was handed an already-aborted signal, by node name. */
   abortedAtCall: (name: string) => boolean[];
   /** The runs whose pending approvals the run service rejected because the run ended (FR-GRD-013). */
   approvalsCancelledFor: string[];
 
   inputNode(name?: string): Node;
-  agentNode(name: string, execution?: Record<string, unknown>): Node;
+  agentNode(
+    name: string,
+    execution?: Record<string, unknown>,
+    extra?: { brain?: boolean; handle?: string; outputTypes?: DataType[] },
+  ): Node;
   outputNode(name?: string): Node;
   edge(from: Node, to: Node): Edge;
   seed(nodes: Node[], edges: Edge[]): Promise<void>;
@@ -118,16 +143,37 @@ export interface RunDriverHarness {
   /** Resolves once this node has emitted this state on this attempt. */
   waitForState(nodeId: string, status: NodeState, attempt?: number): Promise<void>;
   runRow(runId: string): Promise<Run>;
+
+  /* Domain */
+  /** `beginRun` on the seeded workflow; `{ domain: { stayOpen: true } }` is a run started from Domain. */
+  start(request?: StartRunRequest): Promise<BegunRun>;
+  /** `POST /runs/:runId/messages`. */
+  post(
+    runId: string,
+    text: string,
+    options?: Omit<PostRunMessageRequest, 'text'>,
+  ): Promise<PostRunMessageResponse>;
+  /** `POST /runs/:runId/end`. */
+  end(runId: string): Promise<Run>;
+  /** Payloads of every event of this type, in order. */
+  payloads<T = Record<string, unknown>>(type: string): T[];
+  /** Resolves once an event of this type has been emitted `count` times. */
+  waitForEvent(type: string, count?: number): Promise<void>;
+  /** FR-SYS-009 + D323: what an engine start does with runs a previous process left going. */
+  recover(): Promise<{ halted: string[]; reopened: string[] }>;
 }
 
 export async function createRunDriverHarness(
   options: {
+    /** Another harness's store: a second engine process over the same data (D323 restart). */
+    repository?: FakeRepository;
     providerConcurrency?: number;
     /** Runs when the run service rejects a run's pending approvals — a test can make it throw. */
     onCancelPending?: (runId: string) => void;
   } = {},
 ): Promise<RunDriverHarness> {
-  const repository = new FakeRepository();
+  const shared = options.repository !== undefined;
+  const repository = options.repository ?? new FakeRepository();
   const pubsub = new InProcessPubSubStub<EngineEvent>();
   const bus = createEventBus({ repository, scope, pubsub });
   const events: EngineEvent[] = [];
@@ -136,6 +182,7 @@ export async function createRunDriverHarness(
   const workflowId = newId();
   const scripts = new Map<string, Step[]>();
   const callCounts = new Map<string, number>();
+  const promptLog = new Map<string, string[]>();
   const abortedAt = new Map<string, boolean[]>();
 
   const provider: Provider = {
@@ -154,18 +201,21 @@ export async function createRunDriverHarness(
     modelId: 'scripted',
     displayName: 'Scripted',
     inputTypes: ['text'],
-    outputTypes: ['text'],
+    // JSON too, so a node with a JSON contract can be scripted into a CONTRACT_VIOLATION (D309).
+    outputTypes: ['text', 'json'],
     contextWindow: 200_000,
     supportsTools: false,
-    supportsJson: false,
+    supportsJson: true,
     available: true,
     source: 'discovered',
     lastCheckedAt: NOW,
     pricing: { inputPer1k: 0.001, outputPer1k: 0.002, priceTableVersion: 'mock-v1' },
   };
-  await repository.providers.create(scope, provider);
-  await repository.models.replaceForProvider(scope, PROVIDER_ID, [model]);
-  await repository.settings.update(scope, { dataDir: '/tmp/ace', concurrency: 20 });
+  if (!shared) {
+    await repository.providers.create(scope, provider);
+    await repository.models.replaceForProvider(scope, PROVIDER_ID, [model]);
+    await repository.settings.update(scope, { dataDir: '/tmp/ace', concurrency: 20 });
+  }
 
   /** Which node a call belongs to: every agent is instructed "Act as <name>." */
   const nameIn = (text: string): string => /Act as (\w+)\./.exec(text)?.[1] ?? 'unknown';
@@ -195,11 +245,16 @@ export async function createRunDriverHarness(
     generate(request, signal) {
       const name = nameIn(`${request.system ?? ''}\n${request.prompt}`);
       callCounts.set(name, (callCounts.get(name) ?? 0) + 1);
+      promptLog.set(name, [
+        ...(promptLog.get(name) ?? []),
+        `${request.system ?? ''}\n${request.prompt}`,
+      ]);
       abortedAt.set(name, [...(abortedAt.get(name) ?? []), signal.aborted]);
       const step = nextStep(name);
 
       return (async function* (): AsyncGenerator<StreamChunk> {
         if (step.usageFirst !== undefined) yield { type: 'usage', ...step.usageFirst };
+        if (step.partial !== undefined) yield { type: 'text', delta: step.partial };
         if (step.hold !== undefined) await holdOrAbort(step.hold, signal);
         else await Promise.resolve();
         if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
@@ -244,6 +299,7 @@ export async function createRunDriverHarness(
 
   const gates = createRunGateRegistry();
   const approvalsCancelledFor: string[] = [];
+  const domains = createDomainRegistry({ bus, repository, scope });
   const service = createRunService({
     gates,
     repository,
@@ -263,9 +319,11 @@ export async function createRunDriverHarness(
     runGated: async (providerId, fn) => (await providers.semaphoreFor(providerId)).run(fn),
     recordProviderStatus: (providerId, found) => providers.recordStatus(providerId, found),
     tokenBatchMs: 0,
+    domains,
   });
 
   const controls = createRunControls({
+    domains,
     ...controlStoresFor(repository, scope),
     bus,
     gates,
@@ -273,6 +331,8 @@ export async function createRunDriverHarness(
     drivePartialRun: (plan) => service.drivePartialRun(plan),
     envelopesFor: (run, nodeId) => service.envelopesFor(run, nodeId),
   });
+
+  const domain = createDomainService({ repository, scope, bus, domains });
 
   const port = (nodeId: string, dir: 'in' | 'out', multi = false) => ({
     id: `${nodeId}:${dir}:text`,
@@ -299,6 +359,8 @@ export async function createRunDriverHarness(
   return {
     repository,
     bus,
+    domains,
+    domain,
     events,
     gates,
     providers,
@@ -307,6 +369,8 @@ export async function createRunDriverHarness(
     workflowId,
     scripts,
     calls: (name) => callCounts.get(name) ?? 0,
+    prompts: (name) => promptLog.get(name) ?? [],
+    totalCalls: () => [...callCounts.values()].reduce((sum, count) => sum + count, 0),
     abortedAtCall: (name) => abortedAt.get(name) ?? [],
     approvalsCancelledFor,
 
@@ -324,13 +388,14 @@ export async function createRunDriverHarness(
       };
     },
 
-    agentNode(name, execution = {}) {
+    agentNode(name, execution = {}, extra = {}) {
       const id = newId();
       return {
         id,
         workflowId,
         kind: 'agent',
         name,
+        ...(extra.handle === undefined ? {} : { handle: extra.handle }),
         position: { x: 0, y: 0 },
         inputs: [port(id, 'in')],
         outputs: [port(id, 'out', true)],
@@ -339,8 +404,9 @@ export async function createRunDriverHarness(
           modelId: 'scripted',
           instructions: `Act as ${name}.`,
           inputTypes: ['text'],
-          outputTypes: ['text'],
+          outputTypes: extra.outputTypes ?? ['text'],
           execution: { retries: 0, ...execution },
+          ...(extra.brain === undefined ? {} : { brain: extra.brain }),
         }),
       };
     },
@@ -401,6 +467,28 @@ export async function createRunDriverHarness(
       const row = await repository.runs.get(scope, runId);
       if (row === null) throw new Error(`no run ${runId}`);
       return row;
+    },
+
+    start: (request = {}) => service.beginRun(workflowId, request),
+    post: (runId, text, options = {}) => domain.postMessage(runId, { text, ...options }),
+    end: (runId) => domain.end(runId),
+    payloads: <T,>(type: string) =>
+      events.filter((event) => event.type === type).map((event) => event.payload as T),
+    waitForEvent: (type, count = 1) =>
+      waitFor(
+        () => events.filter((event) => event.type === type).length >= count,
+        `${count} x ${type}`,
+      ),
+    async recover() {
+      const recovered = await recoverAfterCrash({
+        repository,
+        scope,
+        bus,
+        logger: createLogger({ level: 'silent', destination: { write: () => undefined } }),
+        keepOpen: (run) => run.domain?.stayOpen === true,
+      });
+      for (const run of recovered.reopened) await service.resumeOpenRun(run);
+      return { halted: recovered.runs, reopened: recovered.reopened.map((run) => run.id) };
     },
   };
 }

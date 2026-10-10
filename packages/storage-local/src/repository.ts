@@ -158,6 +158,7 @@ function toNode(row: NodeRow): Node {
     workflowId: row.workflowId,
     kind: row.kind,
     name: row.name,
+    ...(row.handle === null ? {} : { handle: row.handle }),
     position: { x: row.positionX, y: row.positionY },
     inputs: JSON.parse(row.inputs),
     outputs: JSON.parse(row.outputs),
@@ -700,6 +701,8 @@ export class SqliteRepository implements Repository {
         .set({
           kind: values.kind,
           name: values.name,
+          // D308: NULL when the node goes back to its default handle.
+          handle: values.handle ?? null,
           positionX: values.positionX,
           positionY: values.positionY,
           inputs: values.inputs,
@@ -892,6 +895,7 @@ export class SqliteRepository implements Repository {
       workflowId: node.workflowId,
       kind: node.kind,
       name: node.name,
+      handle: node.handle ?? null,
       positionX: node.position.x,
       positionY: node.position.y,
       inputs: toJsonColumn(node.inputs, `node(${node.id}).inputs`),

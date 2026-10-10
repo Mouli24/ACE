@@ -40,6 +40,8 @@ import {
   createModelSummariser,
   createPolicyService,
   createProviderService,
+  createDomainRegistry,
+  createDomainService,
   createRunControls,
   createRunGateRegistry,
   createRunService,
@@ -745,8 +747,17 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     return project === null || project.folderPath === '' ? undefined : project.folderPath;
   };
 
+  /*
+   * Domain (D303–D327): each live run's conversation — the messages waiting for a node's turn, the
+   * turn a message may cut short — and the human's way into it, `POST /runs/:runId/messages` and
+   * `/end`. The run service registers each drive's Domain here; the routes look it up.
+   */
+  const domains = createDomainRegistry({ bus, repository, scope: LOCAL_SCOPE });
+  const domainService = createDomainService({ repository, scope: LOCAL_SCOPE, bus, domains });
+
   const runs = createRunService({
     gates,
+    domains,
     repository,
     scope: LOCAL_SCOPE,
     bus,
@@ -791,6 +802,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     ...controlStoresFor(repository, LOCAL_SCOPE),
     bus,
     gates,
+    // D309: a Stop drops what was still waiting for a turn before it announces the end.
+    domains,
     // D-054: a Stop rejects a WAITING node's approval before it answers, so no card outlives the run.
     approvals,
     // A Stop announces the day's totals before its `run.completed`, as every ending does (FR-OBS-002).
@@ -885,15 +898,21 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     },
   };
 
-  /* FR-SYS-009: anything the store still believes is running died with the last process. */
-  await recoverAfterCrash({
+  /*
+   * FR-SYS-009: anything the store still believes is running died with the last process — except a
+   * run started from Domain, which stays open (D323): its turns that were in flight end FAILED
+   * `crash`, and it is driven again, parking at once when it has nothing to do.
+   */
+  const recovered = await recoverAfterCrash({
     repository,
     scope: LOCAL_SCOPE,
     bus,
     logger: logger.child({ subsystem: 'runs' }),
     // D-061: the approvals that process was waiting on can no longer be answered, so they go too.
     approvals,
+    keepOpen: (run) => run.domain?.stayOpen === true,
   });
+  for (const run of recovered.reopened) await runs.resumeOpenRun(run);
 
   /*
    * F7: a document the last process left mid-pipeline goes back to `pending` and is queued again —
@@ -987,6 +1006,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     selfOrigins,
     /* Round 3's three sub-routers (§2.5, D121). */
     controls,
+    /* Domain (D309, D323): messages to a run's nodes, and ending a run started from Domain. */
+    domain: domainService,
     guardrailPolicies,
     approvals,
     /* Round 4's routes (§2.4): artifacts, tools, MCP servers, timeline and direct chat. */

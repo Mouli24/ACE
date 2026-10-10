@@ -9,6 +9,7 @@ import {
   WorkflowExportSchema,
   derivePorts,
   isConnectionAllowed,
+  domainGraphIssues,
   nodeConfigPatchSchema,
   validateLoopConfig,
   type CursorQuery,
@@ -300,6 +301,11 @@ export function createGraphService(deps: GraphServiceDeps): GraphService {
           ]);
         }
 
+        // D304, D308: handles stay unique and unreserved, and at most one Agent is the Brain.
+        const domainIssues = domainGraphIssues([...nodeById.values()]);
+        const [firstIssue] = domainIssues;
+        if (firstIssue !== undefined) throw validationFailed(firstIssue.message, domainIssues);
+
         const version = workflow.version + 1;
         await tx.workflows.update(scope, workflowId, {
           version,
@@ -474,8 +480,12 @@ async function applyOp(op: GraphOp, ctx: OpContext): Promise<void> {
           ? {}
           : nodeConfigPatchSchema(current.kind).parse(op.patch.config);
 
+      // D308: a handle is set, or `null` takes the node back to its default (a slug of its name).
+      const { handle: _previousHandle, ...withoutHandle } = current;
+      const handle = op.patch.handle === undefined ? current.handle : (op.patch.handle ?? undefined);
       const merged = NodeSchema.parse({
-        ...current,
+        ...withoutHandle,
+        ...(handle === undefined ? {} : { handle }),
         ...(op.patch.name === undefined ? {} : { name: op.patch.name }),
         config: { ...current.config, ...configPatch },
       });

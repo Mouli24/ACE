@@ -173,10 +173,12 @@ export function createFakeStores(seed: { runs?: Run[]; nodeRuns?: NodeRun[] } = 
       const current = runRows.get(runId);
       if (current === undefined) return null;
 
-      const { pausedAt, ...rest } = patch;
+      const { pausedAt, blockedReason, ...rest } = patch;
       const next: Run = { ...current, ...rest };
       if (pausedAt === null) delete next.pausedAt;
       else if (pausedAt !== undefined) next.pausedAt = pausedAt;
+      if (blockedReason === null) delete next.blockedReason;
+      else if (blockedReason !== undefined) next.blockedReason = blockedReason;
 
       runRows.set(runId, next);
       return next;

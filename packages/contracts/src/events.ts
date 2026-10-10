@@ -34,6 +34,7 @@ import { KbDocumentStatusSchema } from './knowledge.js';
 import { MemoryOpSchema } from './memory.js';
 import { McpServerStatusSchema, ToolCallSchema } from './tools.js';
 import { DayTotalsSchema } from './usage.js';
+import { ValidationIssueSchema } from './validation.js';
 import { FilesChangedPayloadSchema } from './workspace.js';
 
 /**
@@ -95,6 +96,8 @@ export const RunCompletedPayloadSchema = z.strictObject({
   finalOutput: PartsByNodeIdSchema.optional(),
   /** Round 3: set only when `haltReason` is `budget_exceeded` (D80). */
   budgetHalt: BudgetHaltSchema.optional(),
+  /** D303: why a run was BLOCKED at pre-flight — the issues on its row, so Domain can say them. */
+  preflightIssues: z.array(ValidationIssueSchema).optional(),
 });
 export type RunCompletedPayload = z.infer<typeof RunCompletedPayloadSchema>;
 

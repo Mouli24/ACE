@@ -27,12 +27,29 @@ export interface LifecycleDeps {
    * HALTED run and an Approve moves the STOPPED node back to RUNNING. Absent, nothing is rejected.
    */
   approvals?: Pick<ApprovalService, 'cancelPending'>;
+  /**
+   * D323: a run started from Domain stays open, so a restart carries it on rather than halting it.
+   * Absent, every stranded run is halted `crash` as before.
+   */
+  keepOpen?: (run: Run) => boolean;
 }
 
 export interface RecoveryResult {
+  /** The runs halted `crash`. */
   runs: Id[];
+  /** The node runs a halt stopped, or a re-opened run's turns ended FAILED `crash`. */
   nodeRuns: Id[];
+  /** D323: runs kept open — the caller drives each again (`RunService.resumeOpenRun`). */
+  reopened: Run[];
 }
+
+/** What a turn the engine died in the middle of records (D323): it did not finish, and why. */
+const crashedTurn = {
+  kind: 'workflow' as const,
+  code: 'crash',
+  message: 'The engine stopped while this turn was running, so it did not finish.',
+  retryable: false,
+};
 
 /** Mark one run halted, and announce it so a watching client stops waiting. */
 async function halt(
@@ -83,9 +100,53 @@ async function halt(
 export async function recoverAfterCrash(deps: LifecycleDeps): Promise<RecoveryResult> {
   const endedAt = (deps.now ?? (() => new Date().toISOString()))();
   const stranded = await deps.repository.runs.listActive(deps.scope);
-  const result: RecoveryResult = { runs: [], nodeRuns: [] };
+  const result: RecoveryResult = { runs: [], nodeRuns: [], reopened: [] };
 
   for (const run of stranded) {
+    if (deps.keepOpen?.(run) === true) {
+      // D323: the run carries on; only the turns that were in flight are over — FAILED `crash`.
+      for (const nodeRun of await deps.repository.nodeRuns.listByRun(deps.scope, run.id)) {
+        if (nodeRun.status !== 'RUNNING' && nodeRun.status !== 'READY' && nodeRun.status !== 'WAITING') {
+          continue;
+        }
+        await deps.repository.nodeRuns.update(deps.scope, nodeRun.id, {
+          status: 'FAILED',
+          failureReason: 'RUN_FAILED',
+          error: crashedTurn,
+          endedAt,
+        });
+        await deps.bus.emit({
+          type: 'node.error',
+          workflowId: run.workflowId,
+          runId: run.id,
+          payload: {
+            runId: run.id,
+            nodeRunId: nodeRun.id,
+            nodeId: nodeRun.nodeId,
+            error: crashedTurn,
+            failureReason: 'RUN_FAILED',
+          },
+        });
+        await deps.bus.emit({
+          type: 'node.state',
+          workflowId: run.workflowId,
+          runId: run.id,
+          payload: {
+            runId: run.id,
+            nodeRunId: nodeRun.id,
+            nodeId: nodeRun.nodeId,
+            iteration: nodeRun.iteration,
+            attempt: nodeRun.attempt,
+            status: 'FAILED',
+            failureReason: 'RUN_FAILED',
+          },
+        });
+        result.nodeRuns.push(nodeRun.id);
+      }
+      result.reopened.push(run);
+      continue;
+    }
+
     await halt(deps, run, 'crash', endedAt);
     result.runs.push(run.id);
 
@@ -113,6 +174,13 @@ export async function recoverAfterCrash(deps: LifecycleDeps): Promise<RecoveryRe
       });
       result.nodeRuns.push(nodeRun.id);
     }
+  }
+
+  if (result.reopened.length > 0) {
+    deps.logger.warn(
+      { subsystem: 'runs', runs: result.reopened.length },
+      'carried on runs started from Domain that a previous process left open',
+    );
   }
 
   if (result.runs.length > 0) {

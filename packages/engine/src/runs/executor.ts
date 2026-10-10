@@ -40,7 +40,9 @@ import type {
 import { runRetrievalNode, withRetrieved } from '../knowledge/retrieval-node.js';
 import type { SearchService } from '../knowledge/search.js';
 import { extractMemoryOps, maskMemoryValue, withMemoryField } from '../memory/ops.js';
-import { assemblePrompt } from '../prompts/index.js';
+import { isTurnAbortReason } from '../domain/run-domain.js';
+import { estimateTokens } from '../envelopes/index.js';
+import { assemblePrompt, type TeamPromptInput } from '../prompts/index.js';
 import type { RunGate } from './control/gate.js';
 import { usageFor } from './cost.js';
 import {
@@ -113,6 +115,11 @@ export interface ExecuteNodeInput {
   context?: NodeContextHook;
   /** Round 5: an agent's long-term memory (§2.2, FR-MEM-002); absent, no `__memory` is read. */
   memory?: NodeMemoryHook;
+  /**
+   * D311: the run's goal and what the human said to this node, as `## Team goal` and
+   * `## Human instructions`. Agent and Model nodes only; absent, the prompt is unchanged.
+   */
+  team?: TeamPromptInput;
 }
 
 /**
@@ -233,6 +240,11 @@ export interface NodeExecutionOutcome {
    * delivered ones. Absent, the row keeps the envelopes it was delivered.
    */
   inputEnvelopes?: Envelope[];
+  /**
+   * D309: what a turn a human message cut short had already written. Kept on its row and in the
+   * log (`node.interrupted`), never handed off.
+   */
+  partialOutput?: Part[];
 }
 
 export interface NodeExecutorDeps {
@@ -598,6 +610,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       contract,
       iteration: input.iteration,
       ...(memoryOn ? { memoryInstructions: true } : {}),
+      ...(input.team === undefined ? {} : { team: input.team }),
     });
 
     /* Route. The router is pure over the catalog and never calls a provider (FR-RTR-006). */
@@ -1169,6 +1182,31 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       } catch (error) {
         tokens.stop();
         const nodeError = classifyError(error);
+
+        /*
+         * D309: a human message cut this turn short. What it had written is kept, never handed off,
+         * and what it spent is estimated (characters ÷ 4, D313) when the provider had not yet said.
+         */
+        if (input.signal.aborted && isTurnAbortReason(input.signal.reason)) {
+          const reported = tokensIn > 0 || tokensOut > 0;
+          const spent: Usage = reported
+            ? { ...usageNow(), source: 'reported' }
+            : {
+                tokensIn: estimateTokens(prompt.text),
+                tokensOut: estimateTokens(text),
+                costUsd: 0,
+                source: 'estimated',
+              };
+          return {
+            kind: 'done',
+            result: await fail(input, nodeError, spent, {
+              modelUsed,
+              prompt: recordedPrompt(),
+              ...(text === '' ? {} : { partialOutput: [{ type: 'text' as const, text }] }),
+            }),
+          };
+        }
+
         const usage = usageNow();
 
         // Only these two are worth another model; everything else stops here (FR-RTR-002).

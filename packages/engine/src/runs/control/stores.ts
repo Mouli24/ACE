@@ -1,5 +1,6 @@
 import type {
   ApprovalDecision,
+  BlockedReason,
   BudgetHalt,
   CursorQuery,
   FailureReason,
@@ -55,6 +56,10 @@ export interface ControlRunPatch {
   budgetHalt?: BudgetHalt;
   /** Set once, on the run a restart creates (FR-CTL-004). */
   restartedFromRunId?: Id;
+
+  /* Domain (D305). */
+  /** Why the run is BLOCKED mid-run; `null` clears it on a resume. */
+  blockedReason?: BlockedReason | null;
 }
 
 /** `NodeRunPatch` as the controls need it. */
