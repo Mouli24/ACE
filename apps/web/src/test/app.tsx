@@ -13,6 +13,7 @@ import { useEditorStore } from '../forge/editor/editor-store';
 import { resetModels, setMonaco } from '../forge/editor/models';
 import { useExplorerStore } from '../forge/explorer/explorer-store';
 import { useOutputStore } from '../forge/panel/output-store';
+import { useQuickOpen } from '../forge/quick-open/quick-open-store';
 import { MockDb } from '../mocks/db';
 import { createHandlers } from '../mocks/handlers';
 import { createForgeHandlers } from '../mocks/handlers-forge';
@@ -55,6 +56,7 @@ export function installMockServer(): void {
     useSelectionStore.getState().clear();
     usePanelsStore.setState(initialPanels, true);
     useExplorerStore.setState({ projects: {} });
+    useQuickOpen.setState({ open: false });
     useEditorStore.setState({ projects: {} });
     resetModels();
     setMonaco(asMonaco(createFakeMonaco()));
