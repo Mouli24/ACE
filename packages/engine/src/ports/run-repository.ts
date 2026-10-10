@@ -1,4 +1,5 @@
 import type {
+  BlockedReason,
   BudgetHalt,
   CliPermission,
   CursorQuery,
@@ -16,6 +17,7 @@ import type {
   ProviderState,
   Run,
   RunAction,
+  RunDomainConfig,
   RunState,
   Timestamp,
   Usage,
@@ -100,6 +102,10 @@ export interface RunPatch {
   budgetHalt?: BudgetHalt;
   /** Set on the run a restart created: same snapshot, same inputs (FR-CTL-004). */
   restartedFromRunId?: Id;
+  /** D305: why the run is BLOCKED mid-run; `null` clears it on resume. */
+  blockedReason?: BlockedReason | null;
+  /** D313: the run's Domain settings — its token budget can change mid-run. */
+  domain?: RunDomainConfig;
 }
 
 export interface RunRepository {
@@ -141,6 +147,8 @@ export interface NodeRunPatch {
    * this replaces them, so `GET /node-runs/:id` shows what the prompt was built from.
    */
   inputEnvelopes?: NodeRun['inputEnvelopes'];
+  /** D309: why the turn started. */
+  trigger?: NodeRun['trigger'];
 }
 /**
  * `verdicts` and `approvals` are deliberately absent: they are written through

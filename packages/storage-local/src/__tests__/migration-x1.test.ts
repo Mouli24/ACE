@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '../db.js';
 import {
   CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
+  DOMAIN_MIGRATION_ID,
   MIGRATIONS,
   X1_CLI_PROVIDERS_MIGRATION_ID,
 } from '../migrations.js';
@@ -52,6 +53,7 @@ describe('X1 migration: providers.cli_permission (D262)', () => {
     expect(after.appliedMigrations).toEqual([
       X1_CLI_PROVIDERS_MIGRATION_ID,
       CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
+      DOMAIN_MIGRATION_ID,
     ]);
     const columns = (
       after.sqlite.prepare('PRAGMA table_info(providers)').all() as { name: string }[]

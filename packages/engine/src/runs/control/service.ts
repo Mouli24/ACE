@@ -11,8 +11,9 @@ import {
 } from '@ace/contracts';
 
 import type { ApprovalService } from '../../approvals/index.js';
+import type { DomainRegistry } from '../../domain/registry.js';
 import type { EmittedEvent } from '../../events/index.js';
-import { notFound } from '../../gateway/errors.js';
+import { HttpError, notFound } from '../../gateway/errors.js';
 import { asDelivered } from '../../envelopes/index.js';
 import { newId } from '../../ids.js';
 import type { Logger } from '../../logging/index.js';
@@ -100,6 +101,12 @@ export interface RunControlsDeps {
    */
   usage?: Pick<UsageService, 'dayTotals'>;
 
+  /**
+   * Domain (D309): a Stop drops what is still waiting for a turn before it says the run has ended.
+   * Absent, a run has no messages to drop.
+   */
+  domains?: DomainRegistry;
+
   logger?: Logger;
   now?: () => string;
   nextId?: () => string;
@@ -146,18 +153,23 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
   /** Patch the run and always rewrite `allowedActions` from the status it ends up with (D76). */
   async function patchRun(run: Run, patch: Parameters<ControlRunStore['update']>[1]): Promise<Run> {
     const status = patch.status ?? run.status;
+    const blockedReason =
+      patch.blockedReason === null ? undefined : (patch.blockedReason ?? run.blockedReason);
     const updated = await deps.runs.update(run.id, {
       ...patch,
-      allowedActions: allowedRunActions(status),
+      // D305, D323: why it is blocked, and whether it stays open, decide its controls too.
+      allowedActions: allowedRunActions(status, { blockedReason, stayOpen: run.domain?.stayOpen }),
     });
     if (updated !== null) return withAllowedActions(updated);
 
     // A store that answered `null` has no row to return; the patch applied to what was read is
     // still the truth about the run. `pausedAt: null` means "clear it", so it is removed, not kept.
-    const { pausedAt, ...rest } = patch;
+    const { pausedAt, blockedReason: reason, ...rest } = patch;
     const fallback: Run = { ...run, ...rest, status };
     if (pausedAt === null) delete fallback.pausedAt;
     else if (pausedAt !== undefined) fallback.pausedAt = pausedAt;
+    if (reason === null) delete fallback.blockedReason;
+    else if (reason !== undefined) fallback.blockedReason = reason;
     return withAllowedActions(fallback);
   }
 
@@ -303,6 +315,16 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
 
       await moveNodeRuns(run, STOPPABLE, 'STOPPED', { endedAt: true });
 
+      // D309: what was still waiting for a turn never got one — DROPPED, before the end is said.
+      try {
+        await deps.domains?.get(runId)?.close();
+      } catch (error) {
+        deps.logger?.warn(
+          { subsystem: 'runs', runId, err: error },
+          'could not drop the pending messages of a stopped run',
+        );
+      }
+
       // A stopped run still spent what it spent (FR-ERR-007, TC-OBS-002): its totals are the sum of
       // its node runs, every attempt included, not the zeros it was created with. The scheduler's
       // own end-of-run write — the one that totals a run — is skipped on a stop, so it is taken here.
@@ -362,6 +384,9 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
         startedAt: now(),
         allowedActions: allowedRunActions('PREFLIGHT'),
         restartedFromRunId: source.id,
+        // D312: the same goal and Domain settings, so the restart is the same run again.
+        ...(source.domain === undefined ? {} : { domain: source.domain }),
+        ...(source.goal === undefined ? {} : { goal: source.goal }),
       });
 
       const started = await deps.driveRecordedRun(created);
@@ -374,6 +399,7 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
 
     async rerunNode(runId, nodeId) {
       const run = await load(runId);
+      assertNotLive(run, 'rerun');
       if (!run.snapshot.nodes.some((node) => node.id === nodeId)) {
         throw notFound(`node ${nodeId} in run ${runId}`);
       }
@@ -414,6 +440,7 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
       if (failed === null) throw notFound(`node run ${nodeRunId}`);
 
       const run = await load(failed.runId);
+      assertNotLive(run, 'retry');
       const rows = await deps.nodeRuns.listByRun(run.id);
 
       // FR-ERR-003: identical inputs. The envelopes the failed attempt was *delivered* are copied
@@ -456,6 +483,25 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
       return retry;
     },
   };
+
+  /**
+   * D309: a re-run or a retry of a run that is still going would start a second drive beside the
+   * first — two schedulers on one run. Refused (409); a node in a live run is addressed with a
+   * message instead, which takes a turn in the drive already running.
+   */
+  function assertNotLive(run: Run, what: 'rerun' | 'retry'): void {
+    const live =
+      run.status === 'RUNNING' ||
+      run.status === 'PAUSED' ||
+      (run.status === 'BLOCKED' && run.blockedReason !== undefined);
+    if (!live) return;
+    throw new HttpError(
+      'workflow',
+      'invalid_run_state',
+      `A run that is ${run.status} cannot ${what} a node — it is still going; send that node a message instead.`,
+      { runId: run.id, status: run.status, allowedActions: withAllowedActions(run).allowedActions },
+    );
+  }
 
   /**
    * D81: a retry or a re-run on a finished run puts it back to RUNNING on its own snapshot, and it

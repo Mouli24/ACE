@@ -176,6 +176,9 @@ async function build(): Promise<void> {
       }),
       // Round 3's three: the gateway never calls them — `RunControls` does — so a stub that throws
       // is the honest fake. A silent one would let a route reach them unnoticed.
+      resumeOpenRun: async () => {
+        throw new Error('not used');
+      },
       driveRecordedRun: async () => {
         throw new Error('the gateway must not drive a recorded run');
       },

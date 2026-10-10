@@ -163,7 +163,7 @@ describe('FR-SYS-009 FR-GRD-013 D-061 recovery rejects the approvals a dead proc
 
     const result = await recoverAfterCrash(h.deps);
 
-    expect(result).toEqual({ runs: [run.id], nodeRuns: [nodeRun.id] });
+    expect(result).toEqual({ runs: [run.id], nodeRuns: [nodeRun.id], reopened: [] });
     expect(await h.status(nodeRun.id)).toBe('STOPPED');
     expect(h.warnings).toContain('could not reject the approvals of a halted run');
   });
