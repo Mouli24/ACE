@@ -215,16 +215,21 @@ export function createClaudeCodeParser(now: () => number = Date.now): CliParser 
       if (result['is_error'] === true || result['subtype'] !== 'success' || apiError !== undefined) {
         throw new ProviderCallError(claudeResultError(result, apiError));
       }
+      // D313, from Claude Code 2.1.282's real output (fixtures/cli-output/claude_code-tiny.jsonl):
+      // `result.usage` holds the tokens — cache reads and writes are input too — and
+      // `result.total_cost_usd` the CLI's own cost.
       const usage = (result['usage'] ?? {}) as Record<string, unknown>;
       const cost = result['total_cost_usd'];
+      const cached = tokenCount(usage['cache_read_input_tokens']);
       return [
         {
           type: 'usage',
           tokensIn:
             tokenCount(usage['input_tokens']) +
-            tokenCount(usage['cache_read_input_tokens']) +
+            cached +
             tokenCount(usage['cache_creation_input_tokens']),
           tokensOut: tokenCount(usage['output_tokens']),
+          ...(cached > 0 ? { cachedTokensIn: cached } : {}),
           ...(typeof cost === 'number' ? { costUsd: cost } : {}),
         },
         { type: 'finish', reason: 'stop' },

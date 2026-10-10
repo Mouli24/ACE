@@ -54,14 +54,16 @@ describe('X1 Codex CLI flags', () => {
 });
 
 describe('X1 Codex CLI stream', () => {
-  it('turns messages into text, commands and edits into activity, and reports usage with no cost', () => {
+  it('turns messages into text, commands and edits into activity, and reports no usage (D313)', () => {
     const chunks = replay(RUN);
     expect(chunks.flatMap((c) => (c.type === 'text' ? [c.delta] : [])).join('')).toBe('I will add multiply.\n\nDone: tests pass.');
     expect(chunks.filter((c) => c.type === 'activity')).toEqual([
       { type: 'activity', tool: 'command', args: { command: 'node --test' }, status: 'ok', summary: '# pass 2 # fail 0', durationMs: 0 },
       { type: 'activity', tool: 'file_change', args: { changes: [{ path: 'src/math.js', kind: 'update' }] }, status: 'ok', summary: 'update src/math.js', durationMs: 0 },
     ]);
-    expect(chunks.at(-2)).toEqual({ type: 'usage', tokensIn: 1200, tokensOut: 90 });
+    // Codex is estimated-only until its real output is captured: no field name is trusted, so the
+    // executor estimates the turn (D313).
+    expect(chunks.some((c) => c.type === 'usage')).toBe(false);
     expect(chunks.at(-1)).toEqual({ type: 'finish', reason: 'stop' });
   });
 

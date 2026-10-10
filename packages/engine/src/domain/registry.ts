@@ -5,6 +5,8 @@ import {
   NodeOutputPayloadSchema,
   NodeStatePayloadSchema,
   RunBlockedPayloadSchema,
+  RunTokenBudgetPayloadSchema,
+  UsageUpdatedPayloadSchema,
   defaultRunDomainConfig,
   rosterFor,
   type EnvelopeRoutedPayload,
@@ -184,6 +186,35 @@ function restoreEnvelopes(
   }
 }
 
+/**
+ * D313, D323: the budget as the log left it. The limit is the run's own (`run.domain`, which a
+ * `PUT /budget` rewrites); what was used is the last running total; WARN and EXCEEDED count as said
+ * when the log says them after the latest SET, so a carried-on run neither repeats nor forgets one.
+ */
+function restoreBudget(domain: RunDomain, events: readonly EngineEvent[]): void {
+  let used = 0;
+  let warned = false;
+  let exceeded = false;
+  for (const event of events) {
+    if (event.type === 'usage.updated') {
+      const parsed = UsageUpdatedPayloadSchema.safeParse(event.payload);
+      if (parsed.success) used = parsed.data.totals.tokensIn + parsed.data.totals.tokensOut;
+    } else if (event.type === 'run.token_budget') {
+      const parsed = RunTokenBudgetPayloadSchema.safeParse(event.payload);
+      if (!parsed.success) continue;
+      if (parsed.data.level === 'SET') {
+        warned = false;
+        exceeded = false;
+      } else {
+        warned = true;
+        exceeded ||= parsed.data.level === 'EXCEEDED';
+      }
+    }
+  }
+  domain.noteUsed(used);
+  domain.noteBudget({ limit: domain.budget().limit, warned, exceeded });
+}
+
 export function createDomainRegistry(deps: DomainRegistryDeps): DomainRegistry {
   const live = new Map<Id, RunDomain>();
 
@@ -202,6 +233,7 @@ export function createDomainRegistry(deps: DomainRegistryDeps): DomainRegistry {
       if (events.length > 0) {
         const context = domainContextFor(run.id, run.snapshot.nodes);
         restoreEnvelopes(domain, context, events);
+        restoreBudget(domain, events);
         const projection = createDomainProjection(context);
         for (const event of events) projection.apply(event);
         const sent = new Map(

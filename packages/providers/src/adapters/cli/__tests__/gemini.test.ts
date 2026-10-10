@@ -60,13 +60,15 @@ describe('X1 Gemini CLI flags', () => {
 });
 
 describe('X1 Gemini CLI stream', () => {
-  it('streams assistant deltas, records tool use, reports usage with no cost', () => {
+  it('streams assistant deltas, records tool use, and reports no usage (D313)', () => {
     const chunks = replay(RUN);
     expect(chunks.flatMap((c) => (c.type === 'text' ? [c.delta] : [])).join('')).toBe('Reading the file.\n\nDone.');
     expect(chunks.filter((c) => c.type === 'activity')).toEqual([
       { type: 'activity', tool: 'read_file', args: { absolute_path: 'a.js' }, status: 'ok', summary: 'export const add', durationMs: 0 },
     ]);
-    expect(chunks.at(-2)).toEqual({ type: 'usage', tokensIn: 120, tokensOut: 20 });
+    // Gemini is estimated-only until its real output is captured (D313).
+    expect(chunks.some((c) => c.type === 'usage')).toBe(false);
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: 'stop' });
   });
 
   it('maps its exit codes: 41 is a sign-in failure, 55 an untrusted folder', () => {

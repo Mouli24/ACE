@@ -20,8 +20,8 @@ Domain is the team-chat view of a run. This file is the resume point: read it fi
 | 0 Pre-flight | done | e3138fa | docs only; baseline below |
 | 1 Projection core | done | 2785cdf | green — see Phase 1 |
 | 2 Human → node | done | e86808f | green — see Phase 2 |
-| 3 Node → node | done | (this commit) | green — see Phase 3 |
-| 4 Usage, cost, budget | not started | — | — |
+| 3 Node → node | done | a732df2 | green — see Phase 3 |
+| 4 Usage, cost, budget | done | (this commit) | green — see Phase 4 |
 | 5 Domain surface | not started | — | — |
 
 ## Phase 0 — pre-flight
@@ -351,10 +351,111 @@ Check — what Track shows that this transcript does not:
 
 The first full run had one failure: server `D-082 stores the real PNG/MP3/MP4/ZIP mock-media …`. Its FR-MM-004 guard found `"bytes":` in the event log, which came from the artifact refs the first cut put on `envelope.sent`. Fixed as described above, and the re-run was all green. No existing test was changed in this phase.
 
+## Phase 4 — usage, cost, budget
+
+**Step 1: real CLI output, captured.** `scripts/live/capture-usage.ts` was written and run (live; it never runs in `pnpm test`).
+
+How it runs each CLI: exactly as its adapter does. Same dialect arguments, stdin, environment, read-only preset and throwaway folder.
+
+What it saves: raw stdout, to `packages/providers/src/adapters/cli/__tests__/fixtures/cli-output/<type>-tiny.jsonl`, scrubbed before writing:
+- the home folder becomes `<HOME>`, the throwaway folder `<CWD>`, and the user name `<USER>`;
+- anything key-shaped is masked.
+
+The prompt was "Reply with exactly the word: ok".
+
+| CLI | Installed | Captured | Where its output reports usage |
+|---|---|---|---|
+| Claude Code 2.1.282 (`haiku`) | yes | `claude_code-tiny.jsonl`, 16 lines, exit 0 | The final `result` event: `usage.input_tokens` 10, `cache_read_input_tokens` 4,570, `cache_creation_input_tokens` 4,808, `output_tokens` 35, and `total_cost_usd` 0.011222. The same `usage` shape also rides `message_start`, each `assistant` message and `message_delta`. |
+| Codex CLI | no | skipped | unknown — never seen |
+| Gemini CLI | no | skipped | unknown — never seen |
+
+What the capture also showed:
+- **Two token counts, one cost.** Claude Code's `result.modelUsage` counts every model call of the session, including one the CLI makes on its own (909 uncached input and 48 output, against `usage`'s 10 and 35). `total_cost_usd` is that whole session's cost.
+  - ACE reads the tokens from `result.usage`, as it already did, so Track's numbers do not move (D313).
+  - So for Claude Code the reported cost covers a little more than the tokens shown. See "Later".
+- **D-093 evidence.** The CLI's `init` event says `entrypoint: "claude-vscode"`: it inherited the VS Code terminal's environment. It also lists the user's installed skills despite `--setting-sources ""`. Recorded against D-093, not fixed here.
+
+**Step 2: the usage parsers (D313).**
+- **Claude Code** reads `result.usage` and `total_cost_usd`, which the captured output confirms. It now also reports `cachedTokensIn`, the cache reads, only when there were any.
+- **Codex and Gemini** are estimated-only.
+  - Their parsers read no usage field, because none has been seen in real output, and yield no usage chunk.
+  - Codex's turn still completes on `turn.completed`.
+  - Their two "reports usage" tests were changed deliberately, per D313.
+- **The AI SDK adapters (HTTP providers)** report the SDK's `totalUsage` and its `inputTokenDetails.cacheReadTokens`. A stream with no usage at all yields no usage chunk instead of a reported 0.
+- **The port's usage chunk** gains `cachedTokensIn?`.
+- **The executor estimates** when a provider that answered reported nothing.
+  - Characters ÷ 4 on the prompt and on what it wrote, `source: 'estimated'`, on the node run, so Track and Domain agree.
+  - A provider-reported cost is marked `costSource: 'reported'`.
+- **`usage.updated` carries `turn`** for every agent or model turn: `{ nodeRunId, nodeId, providerType, modelId, usage }`, with the provider type from the provider row and the resolved model id when the provider names one.
+
+**Step 3: `ace.pricing.json` (D306), `apps/server/src/pricing.ts`.**
+- It ships empty: a data folder without the file gets `{ "models": [] }`.
+- It is re-read whenever its mtime changes, so an edit needs no restart.
+- A file that cannot be read, or doesn't match the shape, prices nothing and logs the reason once per version.
+- Domain uses it through `GET /runs/:runId/usage`. A turn's cost there is the provider's reported cost, else this table, else `null`.
+
+**Step 4: the budget (D7, D305, D313), `engine/src/domain/budget.ts` and the drive.**
+- Counts input + output, cached included.
+- `run.token_budget` WARN once at 80 % and EXCEEDED once at 100 %. A turn that jumps past both says EXCEEDED alone.
+- At 100 %: no new turn starts, turns in flight finish, and the run goes BLOCKED `BUDGET_EXCEEDED`.
+- `PUT /runs/:runId/budget { limit | null }` records `run.token_budget` SET and writes the run's `domain.tokenBudget`. A new limit's thresholds start fresh.
+  - Raising the limit above what was used, or removing it (`null`), resumes the run through the controls' resume.
+  - Lowering it under what was used blocks the run at once.
+- A plain resume while still over blocks again at once, calling nothing. End still ends a blocked run.
+- `GET /runs/:runId/usage` serves the usage snapshot, for an ended run too. CORS allows PUT.
+- After a restart, the limit, what was used and which thresholds were said come back from the run row and the log.
+
+**Implementation details worth knowing** (within D306/D313; not new decisions):
+- **Only what differs is written.** `source` is written only as `estimated`: absent means reported, which is what every usage before Domain was. `costSource` is written only as `reported`, and `cachedTokensIn` only when above 0. So no existing usage row or test changes shape.
+- **A call that failed before answering is not estimated.** There is nothing to count, so it keeps what the provider reported, if anything. The estimate is for a call that answered without saying what it used.
+- **Test-first gap.** The pricing loader's tests were written with the module rather than run red first. Mutation-checked instead: a loader that never re-reads fails two tests, and one that doesn't ship the file fails one.
+
+**Gate 4 evidence:**
+
+| Gate item | Test |
+|---|---|
+| Parsers green against the captured fixtures | `claude-code.test.ts` "reads the tokens, the cached input and the cost the CLI reported" (`cli-output/claude_code-tiny.jsonl`), "counts cache reads as cached input …"; `codex.test.ts` / `gemini.test.ts` "reports no usage (D313)"; `http-adapters.test.ts` "a stream that reports no usage …", "carries the cached prompt tokens …" |
+| The estimate fallback, and Track = Domain | `domain-usage.test.ts` "a provider that reports nothing: the turn is estimated …", "a reported turn keeps the provider's own numbers …" |
+| Reported → pricing file → null (D306) | `domain-usage.test.ts` "reported cost, a missing price shown as null, and an estimate once the price is added" |
+| Budget thresholds | `budget.test.ts` (5, pure); `domain-budget.test.ts` "warns once at 80 %", "at 100 % no new turn starts, the turn in flight finishes, and the run is BLOCKED", "raising the budget … resumes", "a resume while still over blocks again …", "lowering the budget … blocks a parked run, and End still ends it" |
+| HTTP | `domain-budget.test.ts` "200 with the usage snapshot; 400 a bad limit; 409 once the run has ended"; real engine: `domain-wiring.test.ts` "serves the usage snapshot, takes a budget, and ships an empty ace.pricing.json" |
+| Restart | `registry-restore.test.ts` "the limit the run had, what it has used, and which thresholds were said", "a limit set after the budget was exceeded starts fresh" |
+| The pricing file | `pricing.test.ts` (3) |
+
+**Provider → usage source:**
+
+| Provider type | Tokens | Cost in Domain |
+|---|---|---|
+| `claude_code` | **reported**: `result.usage`, verified against captured 2.1.282 output | **reported**: `total_cost_usd` |
+| `codex_cli` | **estimated-only** (not installed, never captured) | `ace.pricing.json` estimate, else — |
+| `gemini_cli` | **estimated-only** (not installed, never captured) | `ace.pricing.json` estimate, else — |
+| `anthropic`, `openai`, `google`, `openai_compatible`, `ollama` (AI SDK) | **reported** by the SDK's `totalUsage`; **estimated** when a stream carries none | `ace.pricing.json` estimate, else — (no reported cost) |
+| `mock` | **reported** (word counts) | `ace.pricing.json` estimate, else — |
+
+**Gate 4 run** (`pnpm build`, `pnpm typecheck`, `pnpm lint`: exit 0; `pnpm -r --workspace-concurrency=1 --no-bail test`: exit 0, first run):
+
+| Package | Tests |
+|---|---|
+| contracts | 1167 |
+| engine | 1685 (1669 at Gate 3; +16) |
+| sdk | 135 |
+| ui | 316 |
+| web | 868 |
+| context | 52 |
+| guardrails | 357 |
+| providers | 441 + 1 skipped + 3 todo (+4) |
+| storage-local | 303 |
+| tools | 190 + 1 skipped |
+| server | 164 (+4: `pricing.test.ts` 3, `domain-wiring.test.ts` +1) |
+
+**Deliberate changes to existing tests**, per D313: `codex.test.ts` and `gemini.test.ts` no longer expect a usage chunk, because both providers are estimated-only.
+
 ## Open decisions
 
 None. The five contradictions pre-flight found were settled by the owner on 2026-10-10: D304, D305, D306, D307, D308.
 
 ## Later (not in this build)
+
+- **Claude Code's cost covers a little more than its tokens.** `total_cost_usd` prices the whole session, which `result.modelUsage` counts: it includes a call the CLI makes on its own (909 uncached input tokens against `usage`'s 10 in the capture). ACE shows `usage` (D313: Track's numbers do not move) beside the reported cost. If the two should match, read the tokens from `modelUsage` instead. That is an owner's call, because Track's numbers would move.
 
 - **Debate** isn't implemented, and no debate fields are added. When it is built, its turns must be exempt from the loop guard, bounded by their own round limit instead, and grouped in Domain by debate id and round.

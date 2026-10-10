@@ -29,6 +29,7 @@ import {
 } from '@ace/contracts';
 
 import { countLoop, digestLine, routeEnvelope as routeByBrain } from '../domain/brain.js';
+import { budgetCrossing, isOverBudget } from '../domain/budget.js';
 import {
   envelopeBody,
   judgeEnvelopeBlocks,
@@ -629,6 +630,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const plannedRuns = new Map<Id, NodeRun>();
     /** The catalogue, read once: the cost point needs the price of the model a node would use. */
     const catalog = await repository.models.list(scope, {});
+    /** D313: each provider's type, so a turn's usage says which kind of provider spent it. */
+    const providerTypes = new Map(
+      (await repository.providers.list(scope)).map((provider) => [provider.id, provider.type]),
+    );
 
     /*
      * Domain (D309, D323). A node may take more turns than the graph gives it — a human message, a
@@ -1191,7 +1196,46 @@ export function createRunService(deps: RunServiceDeps): RunService {
      */
     function spentBy(nodeRun: NodeRun, usage: Usage): Usage {
       const summarised = summaryUsage.take(run.id, nodeRun.nodeId);
-      return summarised === undefined ? usage : sumUsage([usage, summarised]);
+      if (summarised === undefined) return usage;
+      // D313: the turn's own provenance survives the summary's spend being added to it.
+      const { source, costSource, cachedTokensIn } = usage;
+      return {
+        ...sumUsage([usage, summarised]),
+        ...(source === undefined ? {} : { source }),
+        ...(costSource === undefined ? {} : { costSource }),
+        ...(cachedTokensIn === undefined ? {} : { cachedTokensIn }),
+      };
+    }
+
+    /**
+     * D313: the run's use against its token budget — input + output, cached input included. A
+     * threshold crossed for the first time is said (`run.token_budget`); at the limit nothing new
+     * starts and the run goes BLOCKED `BUDGET_EXCEEDED` (D305). Answers whether it is over.
+     */
+    async function checkBudget(): Promise<boolean> {
+      if (domain === undefined) return false;
+      const total = sumUsage(usages);
+      const used = total.tokensIn + total.tokensOut;
+      domain.noteUsed(used);
+      const crossing = budgetCrossing(domain.budget(), used);
+      domain.noteBudget(crossing.state);
+      if (crossing.level !== undefined) {
+        await bus.emit({
+          type: 'run.token_budget',
+          workflowId: run.workflowId,
+          runId: run.id,
+          payload: { runId: run.id, limit: crossing.state.limit, used, level: crossing.level },
+        });
+      }
+      if (!isOverBudget(crossing.state, used)) return false;
+      // Already held, or ending: nothing more to block.
+      if (!gate.isPaused() && !domain.endRequested() && !signal.aborted) {
+        await blockRun(
+          'BUDGET_EXCEEDED',
+          `${used.toLocaleString('en-US')} of ${(crossing.state.limit ?? 0).toLocaleString('en-US')} tokens used. No new turn starts until the budget is raised or removed, or the run is ended.`,
+        );
+      }
+      return true;
     }
 
     /**
@@ -1251,12 +1295,32 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
       // Totals are the running sum of the node runs, so the number a client sees mid-run is the
       // same arithmetic as the number stored at the end (TC-OBS-002).
+      // D313: an agent's or model's turn says what it used, so Domain's totals are Track's.
+      const node = nodeById.get(nodeRun.nodeId);
+      const model = outcome.modelUsed;
+      const providerType = model === undefined ? undefined : providerTypes.get(model.providerId);
+      const turnModelId = model?.resolvedModelId ?? model?.modelId;
+      const turn =
+        node === undefined || (node.kind !== 'agent' && node.kind !== 'model')
+          ? undefined
+          : {
+              nodeRunId: nodeRun.id,
+              nodeId: nodeRun.nodeId,
+              ...(providerType === undefined ? {} : { providerType }),
+              ...(turnModelId === undefined ? {} : { modelId: turnModelId }),
+              usage,
+            };
       await bus.emit({
         type: 'usage.updated',
         workflowId: run.workflowId,
         runId: run.id,
-        payload: { runId: run.id, totals: sumUsage(usages) },
+        payload: {
+          runId: run.id,
+          totals: sumUsage(usages),
+          ...(turn === undefined ? {} : { turn }),
+        },
       });
+      await checkBudget();
     }
 
     /**
@@ -2574,6 +2638,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
       if (!(await gate.waitUntilDispatchable())) break;
       // D323: an End starts nothing new; the turns it cut short unwind, then the run ends.
       const ending = domain?.endRequested() === true;
+      // D313: over the budget nothing new starts — the run is BLOCKED until it is raised.
+      if (!ending && (await checkBudget())) continue;
       // D310: what the human decided about held envelopes is carried out first.
       if (domain !== undefined && !ending) {
         for (const decision of domain.takeDecisions()) await applyDecision(decision);
