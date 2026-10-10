@@ -40,6 +40,12 @@ export const X1_CLI_PROVIDERS_MIGRATION_ID = '20261006T120000_x1_cli_providers';
 export const CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID = '20261009T120000_chat_sessions_cli_models';
 
 /**
+ * Domain (D305, D308, D309, D312, D314): node handles, why a turn started, a run's goal and Domain
+ * settings, why it is blocked mid-run, and an index for reading one run's events in order.
+ */
+export const DOMAIN_MIGRATION_ID = '20261010T120000_domain';
+
+/**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
  * written.
@@ -571,6 +577,24 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE models ADD COLUMN description TEXT;
       ALTER TABLE models ADD COLUMN resolved_model_id TEXT;
       ALTER TABLE models ADD COLUMN unavailable_reason TEXT;
+    `,
+  },
+  {
+    id: DOMAIN_MIGRATION_ID,
+    up: `
+      -- D308: a node's Domain handle. NULL means the default, a slug of its name.
+      ALTER TABLE nodes ADD COLUMN handle TEXT;
+
+      -- D309: why a turn started (JSON TurnTrigger). NULL on every node run stored before.
+      ALTER TABLE node_runs ADD COLUMN trigger TEXT;
+
+      -- D305: why a run is BLOCKED mid-run. D312: its goal and Domain settings (JSON).
+      ALTER TABLE runs ADD COLUMN blocked_reason TEXT;
+      ALTER TABLE runs ADD COLUMN domain TEXT;
+      ALTER TABLE runs ADD COLUMN goal TEXT;
+
+      -- D314: one run's events in order, for Domain's chat page and stream.
+      CREATE INDEX IF NOT EXISTS events_run_idx ON events (workspace_id, run_id, seq);
     `,
   },
 ];

@@ -518,7 +518,11 @@ export class FakeRepository implements Repository {
       [...this.#for(scope).runs.values()]
         .filter(
           (run) =>
-            run.status === 'PREFLIGHT' || run.status === 'RUNNING' || run.status === 'PAUSED',
+            run.status === 'PREFLIGHT' ||
+            run.status === 'RUNNING' ||
+            run.status === 'PAUSED' ||
+            // D305: a run BLOCKED mid-run is still going; one blocked at pre-flight has ended.
+            (run.status === 'BLOCKED' && run.blockedReason !== undefined),
         )
         .sort((a, b) => a.id.localeCompare(b.id)),
     update: async (scope: Scope, id: Id, patch: RunPatch) => {
@@ -542,6 +546,10 @@ export class FakeRepository implements Repository {
       if (patch.restartedFromRunId !== undefined) {
         next.restartedFromRunId = patch.restartedFromRunId;
       }
+      // D305: `null` clears the reason on a resume, as the SQLite store writes NULL.
+      if (patch.blockedReason === null) delete next.blockedReason;
+      else if (patch.blockedReason !== undefined) next.blockedReason = patch.blockedReason;
+      if (patch.domain !== undefined) next.domain = patch.domain;
 
       this.#for(scope).runs.set(id, next);
       return next;
@@ -582,6 +590,7 @@ export class FakeRepository implements Repository {
       if (patch.droppedSources !== undefined) next.droppedSources = patch.droppedSources;
       if (patch.memoryOps !== undefined) next.memoryOps = patch.memoryOps;
       if (patch.inputEnvelopes !== undefined) next.inputEnvelopes = patch.inputEnvelopes;
+      if (patch.trigger !== undefined) next.trigger = patch.trigger;
 
       this.#for(scope).nodeRuns.set(id, next);
       return next;

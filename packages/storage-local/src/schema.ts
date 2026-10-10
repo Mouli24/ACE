@@ -60,6 +60,8 @@ export const nodes = sqliteTable(
     workflowId: text('workflow_id').notNull(),
     kind: text('kind').notNull(),
     name: text('name').notNull(),
+    /** D308: the node's Domain handle; NULL means the default, a slug of its name. */
+    handle: text('handle'),
     positionX: real('position_x').notNull(),
     positionY: real('position_y').notNull(),
     /** JSON — derived by `derivePorts`, stored so a read needs no recomputation. */
@@ -110,6 +112,8 @@ export const events = sqliteTable(
   (table) => [
     index('events_workflow_idx').on(table.workspaceId, table.workflowId, table.seq),
     index('events_seq_idx').on(table.workspaceId, table.seq),
+    // D314: one run's events, in order — what Domain's chat page and stream read.
+    index('events_run_idx').on(table.workspaceId, table.runId, table.seq),
   ],
 );
 
@@ -225,6 +229,12 @@ export const runs = sqliteTable(
     budgetHalt: text('budget_halt'),
     /** The run a restart copied its snapshot and inputs from (FR-CTL-004). */
     restartedFromRunId: text('restarted_from_run_id'),
+    /** D305: why the run is BLOCKED mid-run; NULL for every other state. */
+    blockedReason: text('blocked_reason'),
+    /** D312: JSON `RunDomainConfig`; NULL on runs from before Domain. */
+    domain: text('domain'),
+    /** D312: the goal the run was started with. */
+    goal: text('goal'),
   },
   (table) => [
     index('runs_workflow_idx').on(table.workspaceId, table.workflowId, table.id),
@@ -265,6 +275,8 @@ export const nodeRuns = sqliteTable(
     loopStop: text('loop_stop'),
     /** Set when Start from node reused an earlier node run instead of executing (FR-EXE-013). */
     reusedFromNodeRunId: text('reused_from_node_run_id'),
+    /** D309: JSON `TurnTrigger` — why this turn started. NULL on node runs stored before Domain. */
+    trigger: text('trigger'),
     /** JSON `NodeRunSource[]`: the chunks this node run's context used (round 5 §2.4, FR-RAG-007). */
     sources: text('sources'),
     /** JSON `NodeRunSource[]`: chunks found but dropped to fit the context budget (D233). */

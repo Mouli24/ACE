@@ -418,13 +418,16 @@ describe('TC-CTL-005 Re-run one node (FR-CTL-005, D81, D82)', () => {
     expect(h.partials[0]?.run.allowedActions).toEqual(['pause', 'stop']);
   });
 
-  it('leaves a run that is already RUNNING where it is', async () => {
+  it('D309: refuses a run that is still RUNNING (409) — a second drive beside the first', async () => {
     const run = makeRun({ snapshot, status: 'RUNNING' });
     const h = harness({ runs: [run] });
 
-    await h.controls.rerunNode(run.id, reviewer.id);
+    await expect(h.controls.rerunNode(run.id, reviewer.id)).rejects.toMatchObject({
+      status: 409,
+      code: 'invalid_run_state',
+    });
     expect(h.stores.runRows.get(run.id)?.status).toBe('RUNNING');
-    expect(h.stores.runPatches.filter((entry) => entry.patch.status !== undefined)).toEqual([]);
+    expect(h.stores.runPatches).toEqual([]);
   });
 
   it('D82: executes the run’s snapshot — a node absent from it is a 404', async () => {

@@ -9,6 +9,14 @@ import {
 } from '@ace/contracts';
 
 import { maskSecrets } from '../security/secret-patterns.js';
+import {
+  DOMAIN_PROMPT_VERSION,
+  hasTeamContent,
+  teamSections,
+  type TeamPromptInput,
+} from './team.js';
+
+export * from './team.js';
 
 /**
  * Prompt assembly (FR-PRM-001..005, Arch §12.5, round 2 §2.8).
@@ -192,6 +200,8 @@ export interface AssemblePromptInput {
   inputLabel?: string;
   /** Append the memory-operations block under `## Instructions` (the agent's `memory.enabled`). */
   memoryInstructions?: boolean;
+  /** D311: the run's goal and the human's instructions to this node, after `## Instructions`. */
+  team?: TeamPromptInput;
 }
 
 export interface AssembledPrompt {
@@ -216,6 +226,7 @@ export function promptVersion(
   instructions: string,
   contract: EnvelopeContract,
   memoryVersion?: string,
+  domainVersion?: string,
 ): string {
   const hash = createHash('sha256')
     .update(systemBaseVersion)
@@ -225,6 +236,8 @@ export function promptVersion(
     .update(stableJson(contract, 0));
   // Only a memory-enabled prompt carries this, so every other prompt keeps its existing version.
   if (memoryVersion !== undefined) hash.update('\u0000').update(memoryVersion);
+  // D311: likewise only a prompt with a Domain section — every other prompt's version is unchanged.
+  if (domainVersion !== undefined) hash.update('\u0001').update(domainVersion);
   return hash.digest('hex').slice(0, 12);
 }
 
@@ -303,6 +316,11 @@ export function assemblePrompt(input: AssemblePromptInput): AssembledPrompt {
   };
 
   const sections: [string, string][] = PROMPT_SECTIONS.map((header) => [header, bodies[header]]);
+  // D311: Domain's sections sit after the node's own instructions, and only when they have content.
+  const team = teamSections(input.team);
+  if (team.length > 0) {
+    sections.splice(PROMPT_SECTIONS.indexOf('## Instructions') + 1, 0, ...team);
+  }
   if (input.conversation !== undefined) {
     const afterContext = PROMPT_SECTIONS.indexOf('## Context') + 1;
     sections.splice(afterContext, 0, [CONVERSATION_SECTION, input.conversation.transcript]);
@@ -320,6 +338,7 @@ export function assemblePrompt(input: AssemblePromptInput): AssembledPrompt {
       input.instructions,
       input.contract,
       input.memoryInstructions === true ? MEMORY_PROMPT_VERSION : undefined,
+      hasTeamContent(input.team) ? DOMAIN_PROMPT_VERSION : undefined,
     ),
     system: SYSTEM_BASE_TEXT,
   };

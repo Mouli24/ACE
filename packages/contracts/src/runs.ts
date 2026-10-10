@@ -23,6 +23,7 @@ import {
   MESSAGE_TEXT_MAX,
   RunDomainConfigInputSchema,
   RunDomainConfigSchema,
+  TurnTriggerSchema,
   UsageSourceSchema,
   type BlockedReason,
 } from './domain.js';
@@ -188,6 +189,8 @@ export const RunSchema = z.object({
   blockedReason: BlockedReasonSchema.optional(),
   /** D312: the run's Domain settings. Absent on runs from before Domain. */
   domain: RunDomainConfigSchema.optional(),
+  /** D312: the goal the run was started with — its first message, read by every node. */
+  goal: z.string().optional(),
 });
 export type Run = z.infer<typeof RunSchema>;
 
@@ -270,6 +273,8 @@ export const NodeRunSchema = z.object({
    * the node run whose output it carries. Usage is zero, and nothing was called (FR-EXE-013, D83).
    */
   reusedFromNodeRunId: IdSchema.optional(),
+  /** D309: why this turn started — a dispatch, an envelope, or the human's instruction. */
+  trigger: TurnTriggerSchema.optional(),
   startedAt: TimestampSchema.optional(),
   endedAt: TimestampSchema.optional(),
   durationMs: z.number().int().min(0).optional(),
@@ -292,7 +297,8 @@ export const StartRunRequestSchema = z.object({
   /** D312: Domain settings. Omitted, a run is supervised, has no budget and ends as it always has. */
   domain: RunDomainConfigInputSchema.optional(),
 });
-export type StartRunRequest = z.infer<typeof StartRunRequestSchema>;
+/** What a caller may send: the Domain settings it leaves out take their defaults (D312). */
+export type StartRunRequest = z.input<typeof StartRunRequestSchema>;
 
 /* -------------------------------------------------------------------------- */
 /* Retries (round 3 §2.1, FR-ERR-003..005, Arch §28)                           */

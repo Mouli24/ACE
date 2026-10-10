@@ -13,3 +13,14 @@ export {
 } from './projection.js';
 export { filterForNode, projectChat } from './project-chat.js';
 export { projectUsage, usageSnapshot } from './project-usage.js';
+export {
+  TURN_NOW_STATES,
+  createRunDomain,
+  isTurnAbortReason,
+  type QueuedMessage,
+  type RunDomain,
+  type TurnAbortReason,
+} from './run-domain.js';
+export { createDomainRegistry, type DomainRegistry } from './registry.js';
+export { createDomainService, type DomainService } from './service.js';
+export { createDomainRoutes } from './routes.js';

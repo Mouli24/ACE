@@ -27,7 +27,7 @@ import type {
   RunRepository,
   Scope,
 } from '@ace/engine';
-import { and, asc, desc, eq, inArray, like, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, like, lt, or, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 
@@ -118,6 +118,10 @@ function toRun(row: RunRow): Run {
     ...(row.allowedActions === null ? {} : { allowedActions: JSON.parse(row.allowedActions) }),
     ...(row.budgetHalt === null ? {} : { budgetHalt: JSON.parse(row.budgetHalt) }),
     ...(row.restartedFromRunId === null ? {} : { restartedFromRunId: row.restartedFromRunId }),
+    // Domain (D305, D312). NULL on runs from before Domain, which stays absent.
+    ...(row.blockedReason === null ? {} : { blockedReason: row.blockedReason }),
+    ...(row.domain === null ? {} : { domain: JSON.parse(row.domain) }),
+    ...(row.goal === null ? {} : { goal: row.goal }),
   });
 }
 
@@ -142,6 +146,7 @@ function toNodeRun(row: NodeRunRow): NodeRun {
     ...(row.guardrailPolicy === null ? {} : { guardrailPolicy: JSON.parse(row.guardrailPolicy) }),
     ...(row.loopStop === null ? {} : { loopStop: row.loopStop }),
     ...(row.reusedFromNodeRunId === null ? {} : { reusedFromNodeRunId: row.reusedFromNodeRunId }),
+    ...(row.trigger === null ? {} : { trigger: JSON.parse(row.trigger) }),
     // Round 5 (§2.2, §2.4, D233). A node run written before round 5 reads NULL, which stays absent.
     ...(row.sources === null ? {} : { sources: JSON.parse(row.sources) }),
     ...(row.droppedSources === null ? {} : { droppedSources: JSON.parse(row.droppedSources) }),
@@ -380,6 +385,10 @@ export function createRunRepository(db: Db): RunRepository {
               ? null
               : toJsonColumn(run.budgetHalt, `run(${run.id}).budgetHalt`),
           restartedFromRunId: run.restartedFromRunId ?? null,
+          blockedReason: run.blockedReason ?? null,
+          domain:
+            run.domain === undefined ? null : toJsonColumn(run.domain, `run(${run.id}).domain`),
+          goal: run.goal ?? null,
         })
         .run();
       return run;
@@ -422,7 +431,14 @@ export function createRunRepository(db: Db): RunRepository {
         .select()
         .from(runs)
         .where(
-          and(eq(runs.workspaceId, scope.workspaceId), inArray(runs.status, ACTIVE_RUN_STATES)),
+          and(
+            eq(runs.workspaceId, scope.workspaceId),
+            // D305: a run BLOCKED mid-run is still going; one blocked at pre-flight has ended.
+            or(
+              inArray(runs.status, ACTIVE_RUN_STATES),
+              and(eq(runs.status, 'BLOCKED'), isNotNull(runs.blockedReason)),
+            ),
+          ),
         )
         .orderBy(asc(runs.id))
         .all()
@@ -456,6 +472,10 @@ export function createRunRepository(db: Db): RunRepository {
             ? undefined
             : toJsonColumn(patch.budgetHalt, `run(${id}).budgetHalt`),
         restartedFromRunId: patch.restartedFromRunId,
+        // `null` clears the reason on a resume (D305); `undefined` leaves it alone.
+        blockedReason: patch.blockedReason,
+        domain:
+          patch.domain === undefined ? undefined : toJsonColumn(patch.domain, `run(${id}).domain`),
       });
 
       if (Object.keys(values).length > 0) {
@@ -521,6 +541,8 @@ export function createNodeRunRepository(db: Db): NodeRunRepository {
               : toJsonColumn(nodeRun.guardrailPolicy, `${at}.guardrailPolicy`),
           loopStop: nodeRun.loopStop ?? null,
           reusedFromNodeRunId: nodeRun.reusedFromNodeRunId ?? null,
+          trigger:
+            nodeRun.trigger === undefined ? null : toJsonColumn(nodeRun.trigger, `${at}.trigger`),
           sources:
             nodeRun.sources === undefined ? null : toJsonColumn(nodeRun.sources, `${at}.sources`),
           droppedSources:
@@ -593,6 +615,8 @@ export function createNodeRunRepository(db: Db): NodeRunRepository {
         startedAt: patch.startedAt,
         endedAt: patch.endedAt,
         durationMs: patch.durationMs,
+        trigger:
+          patch.trigger === undefined ? undefined : toJsonColumn(patch.trigger, `${at}.trigger`),
       });
 
       if (Object.keys(values).length > 0) {

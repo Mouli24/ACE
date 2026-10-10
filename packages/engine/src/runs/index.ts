@@ -1,6 +1,7 @@
 import {
   allowedRunActions,
   DEFAULT_CONCURRENCY,
+  RunDomainConfigInputSchema,
   type BudgetHalt,
   type CursorQuery,
   type DayTotals,
@@ -19,9 +20,20 @@ import {
   type Run,
   type RunSummary,
   type StartRunRequest,
+  type TurnTrigger,
+  type TurnTriggerKind,
   type Usage,
   type ValidationIssue,
 } from '@ace/contracts';
+
+import type { DomainRegistry } from '../domain/registry.js';
+import {
+  TURN_NOW_STATES,
+  isTurnAbortReason,
+  type QueuedMessage,
+  type RunDomain,
+  type TurnAbortReason,
+} from '../domain/run-domain.js';
 
 import type { ApprovalService } from '../approvals/index.js';
 import type { BudgetService } from '../budgets/index.js';
@@ -146,6 +158,12 @@ export interface RunService {
    */
   envelopesFor(run: Run, nodeId: Id): Promise<Envelope[]>;
 
+  /**
+   * D323: drive a run started from Domain that a previous engine process left open. No pre-flight
+   * (it had one); its state is rebuilt from its rows and its log, and it parks again when idle.
+   */
+  resumeOpenRun(run: Run): Promise<Run>;
+
   /** Aborts every in-flight call and waits for the dispatch loops to unwind (FR-SYS-008). */
   shutdown(): Promise<void>;
   /** How many runs are still being driven by this process. */
@@ -236,6 +254,20 @@ export interface RunServiceDeps {
    * is logged and never fails the run.
    */
   recordNodeTurn?: (turn: NodeRunTurn) => Promise<void>;
+
+  /**
+   * Domain (D309, D323): each drive's live conversation — the messages waiting for a node's turn, the
+   * turn a message may cut short, and the wake-up a run started from Domain parks on. Absent, a run
+   * takes no messages and ends as it always has.
+   */
+  domains?: DomainRegistry;
+}
+
+/** Why one turn of a node started, and its own abort (D309). */
+interface TurnContext {
+  trigger: TurnTriggerKind;
+  /** Absent without Domain, or for a node that takes no turns (a merge, a transform). */
+  abort?: AbortController;
 }
 
 /** A ≤120-character description of what crossed an edge (FR-EXE-015, §2.4). */
@@ -347,6 +379,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
     nodeRun: NodeRun,
     status: NodeState,
     failureReason?: NodeRun['failureReason'],
+    /** D303: a turn's RUNNING frame says why it started; its last frame says how long it took. */
+    extra: { trigger?: TurnTrigger; durationMs?: number } = {},
   ): Promise<void> {
     await bus.emit({
       type: 'node.state',
@@ -360,6 +394,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
         attempt: nodeRun.attempt,
         status,
         ...(failureReason === undefined ? {} : { failureReason }),
+        ...(extra.trigger === undefined ? {} : { trigger: extra.trigger }),
+        ...(extra.durationMs === undefined ? {} : { durationMs: extra.durationMs }),
       },
     });
   }
@@ -521,11 +557,19 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
   /* ------------------------------------------------------------- the drive */
 
-  async function drive(run: Run, gate: RunGate, seed?: DriveSeed): Promise<Run> {
+  async function drive(
+    run: Run,
+    gate: RunGate,
+    seed?: DriveSeed,
+    /** Domain (D309, D323): this run's live conversation; absent, the run takes no messages. */
+    domain?: RunDomain,
+  ): Promise<Run> {
     const signal = gate.signal;
     const { nodes, edges } = run.snapshot;
     const settings = await repository.settings.get(scope);
     const limit = settings.concurrency > 0 ? settings.concurrency : DEFAULT_CONCURRENCY;
+    /** D323: started from Domain — when the graph has nothing left to do, the run parks. */
+    const stayOpen = run.domain?.stayOpen === true;
 
     const nodeById = new Map(nodes.map((node) => [node.id, node]));
     const states = new Map<Id, NodeState>(nodes.map((node) => [node.id, 'IDLE' as NodeState]));
@@ -555,6 +599,25 @@ export function createRunService(deps: RunServiceDeps): RunService {
     /** The catalogue, read once: the cost point needs the price of the model a node would use. */
     const catalog = await repository.models.list(scope, {});
 
+    /*
+     * Domain (D309, D323). A node may take more turns than the graph gives it — a human message, a
+     * re-run of what it feeds — and each is its own node run, at the same iteration, attempt + 1.
+     */
+    /** The highest attempt recorded per `node:iteration`, so a further turn never reuses one (D95). */
+    const lastAttempt = new Map<string, number>();
+    const attemptKey = (nodeId: Id, iteration: number): string => `${nodeId}:${iteration}`;
+    const nextAttemptFor = (nodeId: Id, iteration: number): number =>
+      (lastAttempt.get(attemptKey(nodeId, iteration)) ?? 0) + 1;
+    /** Nodes that completed an iteration in this drive: completing it again is a fresh HANDOFF. */
+    const completedIterations = new Set<string>();
+    /** The state a node was in before a turn an End cut short, so the end reads the graph as it was. */
+    const stateBeforeTurn = new Map<Id, NodeState>();
+    /** Successors handed a fresh envelope while busy: they run again once their turn is over. */
+    const staleSuccessors = new Set<Id>();
+    /** Each node run's own signal — the run's, or that and its turn's (D309). */
+    const turnSignals = new Map<Id, AbortSignal>();
+    domain?.attachStates(() => Object.fromEntries(states));
+
     /**
      * The policy this node is judged against (FR-GRD-002): the agent's override, else the project
      * default. Resolved once per node and remembered, so the node run's `guardrailPolicy` ref, the
@@ -580,8 +643,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
         nodeName: node.name,
         iteration: nodeRun.iteration,
         policy: policyByNode.get(node.id) ?? null,
-        // An approval wait at any point ends when the run is stopped or shut down (D-054).
-        signal,
+        // An approval wait at any point ends when the run is stopped or shut down (D-054) — or
+        // when a human message cuts the turn short (D309).
+        signal: turnSignals.get(nodeRun.id) ?? signal,
       };
     }
 
@@ -842,14 +906,23 @@ export function createRunService(deps: RunServiceDeps): RunService {
      * the READY rows (D110), so a row created after the flip is one it never sees — a retry that
      * falls due while the run is paused, say.
      */
-    async function beginNodeRun(node: Node, iteration: number, attempt = 1): Promise<NodeRun> {
+    async function beginNodeRun(
+      node: Node,
+      iteration: number,
+      attempt = 1,
+      /** D309: why this turn starts; absent for an ordinary dispatch that carries no message. */
+      trigger?: TurnTrigger,
+    ): Promise<NodeRun> {
       const aborted = signal.aborted;
+      const key = attemptKey(node.id, iteration);
+      lastAttempt.set(key, Math.max(lastAttempt.get(key) ?? 0, attempt));
       const nodeRun: NodeRun = {
         id: nextId(),
         runId: run.id,
         nodeId: node.id,
         iteration,
         attempt,
+        ...(trigger === undefined ? {} : { trigger }),
         status: aborted ? 'STOPPED' : gate.isPaused() ? 'PAUSED' : 'READY',
         ...(aborted ? { error: cancelledBeforeStart(), endedAt: now() } : {}),
         inputEnvelopes: envelopesFor.get(node.id) ?? [],
@@ -944,6 +1017,11 @@ export function createRunService(deps: RunServiceDeps): RunService {
       parts: Part[],
       iteration: number,
       only?: readonly Edge[],
+      /**
+       * D309: a node that completes the same iteration again hands off a *fresh* envelope, which
+       * replaces the one it sent before rather than joining it.
+       */
+      replace = false,
     ): Promise<void> {
       const outgoing =
         only ?? edges.filter((edge) => edge.from.nodeId === node.id && edge.kind === 'data');
@@ -958,10 +1036,16 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
         // Built before the list is read: another delivery may land while this one awaits.
         const envelope = await envelopeBetween(run, node, target, parts, iteration, { signal });
-        envelopesFor.set(targetId, [...(envelopesFor.get(targetId) ?? []), envelope]);
+        const kept = (envelopesFor.get(targetId) ?? []).filter(
+          (earlier) => !replace || earlier.fromNodeId !== node.id,
+        );
+        envelopesFor.set(targetId, [...kept, envelope]);
       }
 
       for (const edge of outgoing) {
+        if (replace && nodeById.get(edge.to.nodeId)?.kind === 'merge') {
+          mergeArrivals.clear(edge.to.nodeId, new Set([node.id]));
+        }
         // Recorded *before* the edge counts as delivered: `isMergeReady` reads `deliveredEdges`, so
         // a merge that became ready on this edge must already find its arrival in the log (§2.4).
         if (nodeById.get(edge.to.nodeId)?.kind === 'merge') {
@@ -1207,11 +1291,54 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
     }
 
+    /**
+     * The turn's own abort fired — a human message cut it short, or the run was ended — and not the
+     * run's (a Stop or a shutdown has its own path). Absent otherwise.
+     */
+    function turnCut(turn: TurnContext | undefined): TurnAbortReason | undefined {
+      const abort = turn?.abort;
+      if (abort === undefined || !abort.signal.aborted || signal.aborted) return undefined;
+      const reason: unknown = abort.signal.reason;
+      return isTurnAbortReason(reason) ? reason : undefined;
+    }
+
+    /** How long a node run took, start to end, when it started at all. */
+    function durationOf(nodeRun: NodeRun, endedAt: string): number | undefined {
+      const startedAt = startedAtByNodeRun.get(nodeRun.id);
+      return startedAt === undefined
+        ? undefined
+        : Math.max(0, Date.parse(endedAt) - Date.parse(startedAt));
+    }
+
+    /**
+     * D309, D323: a node that has finished a turn takes up the HANDOFF again — its successors that
+     * had completed run again on the fresh envelope, the ones a failure of it had BLOCKED are
+     * unblocked, and one still busy runs again once its turn is over.
+     */
+    function rearmSuccessors(node: Node): void {
+      const direct = new Set(
+        edges
+          .filter((edge) => edge.kind === 'data' && edge.from.nodeId === node.id)
+          .map((edge) => edge.to.nodeId),
+      );
+      for (const id of direct) {
+        const state = states.get(id);
+        if (state === 'COMPLETED' || state === 'BLOCKED') states.set(id, 'IDLE');
+        else if (state === 'RUNNING' || state === 'READY' || state === 'WAITING') {
+          staleSuccessors.add(id);
+        }
+      }
+      for (const id of downstreamOf(node.id, edges)) {
+        if (states.get(id) === 'BLOCKED') states.set(id, 'IDLE');
+      }
+    }
+
     async function finish(
       node: Node,
       nodeRun: NodeRun,
       outcome: NodeExecutionOutcome,
       endedAt: string = now(),
+      turn?: TurnContext,
     ): Promise<void> {
       if (stoppedByControl()) {
         await recordStopped(node, nodeRun, outcome);
@@ -1219,6 +1346,44 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
 
       const iteration = nodeRun.iteration;
+
+      /*
+       * D309, D323: a turn a human message cut short, or one an End stopped. What it wrote stays on
+       * its row (and, for an interrupt, in the log), but nothing flows on from it — no handoff, no
+       * loop decision, nothing blocked downstream — and no chat turn is written for it.
+       */
+      const cut = turnCut(turn);
+      if (cut !== undefined) {
+        await recordAttempt(nodeRun, { ...outcome, output: outcome.partialOutput ?? [] }, endedAt);
+        if (cut.domain === 'interrupt') {
+          await bus.emit({
+            type: 'node.interrupted',
+            workflowId: run.workflowId,
+            runId: run.id,
+            payload: {
+              runId: run.id,
+              nodeRunId: nodeRun.id,
+              nodeId: node.id,
+              messageId: cut.messageId,
+              partialOutput: outcome.partialOutput ?? [],
+            },
+          });
+          states.set(node.id, 'STOPPED');
+        } else {
+          // Ended: the graph is read as it stood before this turn began.
+          states.set(node.id, stateBeforeTurn.get(node.id) ?? 'STOPPED');
+        }
+        const took = durationOf(nodeRun, endedAt);
+        await emitNodeState(
+          run,
+          nodeRun,
+          'STOPPED',
+          undefined,
+          took === undefined ? {} : { durationMs: took },
+        );
+        return;
+      }
+
       await recordAttempt(nodeRun, outcome, endedAt);
 
       /*
@@ -1263,11 +1428,22 @@ export function createRunService(deps: RunServiceDeps): RunService {
         // and the outward deliveries held back while the loop ran are flushed from it (§2.4).
         if (body !== undefined) loops.remember(node.id, outcome.output);
 
+        /*
+         * D309: a turn a message or an envelope started, or a node completing an iteration it had
+         * already completed, hands off a fresh envelope — it replaces the earlier one, and what it
+         * feeds runs again on it. Loop decisions belong to the graph's own dispatches only.
+         */
+        const triggered = (turn?.trigger ?? 'dispatch') !== 'dispatch';
+        const again = completedIterations.has(attemptKey(node.id, iteration));
+        completedIterations.add(attemptKey(node.id, iteration));
+        const fresh = triggered || again;
+
         const { inside } = splitOutgoing(node.id, edges, body);
-        await deliver(node, outcome.output, iteration, inside);
+        await deliver(node, outcome.output, iteration, inside, fresh);
+        if (fresh) rearmSuccessors(node);
 
         /* Every loop this node is the source of decides now (FR-PAR-003..006, FR-GRD-009). */
-        for (const loopEdge of loops.loopEdgesFrom(node.id)) {
+        for (const loopEdge of triggered ? [] : loops.loopEdgesFrom(node.id)) {
           const decision = decideLoop({
             edge: loopEdge,
             edges,
@@ -1338,12 +1514,24 @@ export function createRunService(deps: RunServiceDeps): RunService {
       // A node run the Stop cut short was announced STOPPED by the control that stopped it; a second
       // STOPPED frame for it would be one node run ending twice (FR-CTL-003).
       if (!(status === 'STOPPED' && stoppedByControl())) {
-        await emitNodeState(run, nodeRun, status, failureReason);
+        const took = durationOf(nodeRun, endedAt);
+        await emitNodeState(
+          run,
+          nodeRun,
+          status,
+          failureReason,
+          took === undefined ? {} : { durationMs: took },
+        );
       }
 
       // BLOCKED means "an upstream failed" (FR-ERR-006), and a stop is not a failure (FR-ERR-007):
       // once the run is aborted nothing more is blocked — nor written after its `run.completed`.
       if (status !== 'COMPLETED' && !requeued && !signal.aborted) await blockDownstream(node);
+
+      // D309: handed a fresh envelope while it was busy, it runs again on it now.
+      if (status === 'COMPLETED' && !requeued && staleSuccessors.delete(node.id)) {
+        states.set(node.id, 'IDLE');
+      }
     }
 
     /** A wait the abort can cut short — a stop must not sit out a retry backoff (FR-CTL-003). */
@@ -1372,12 +1560,16 @@ export function createRunService(deps: RunServiceDeps): RunService {
      *
      * `execution.retries` is read off the **snapshot** node, never the live workflow (D82).
      */
-    async function dispatch(node: Node, iteration: number): Promise<void> {
+    async function dispatch(
+      node: Node,
+      iteration: number,
+      trigger: TurnTriggerKind = 'dispatch',
+    ): Promise<void> {
       // Which node run this dispatch is working on, so a throw can be pinned on the right row: a
       // row from an earlier iteration of the same node must not be the one that fails.
       nodeRunByNode.delete(node.id);
       try {
-        await runNode(node, iteration);
+        await runNode(node, iteration, trigger);
       } catch (error) {
         await failUnfinishable(node, nodeRunByNode.get(node.id), error);
       }
@@ -1476,170 +1668,255 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
     }
 
-    async function runNode(node: Node, iteration: number): Promise<void> {
+    async function runNode(
+      node: Node,
+      iteration: number,
+      trigger: TurnTriggerKind = 'dispatch',
+    ): Promise<void> {
       // `states` is the scheduler's own bookkeeping: dispatched, so never picked up twice. The node
       // run itself stays READY until it holds its provider slot (D66, FR-PRV-009).
       states.set(node.id, 'RUNNING');
 
-      const maxRetries =
-        node.kind === 'agent' || node.kind === 'model' ? node.config.execution.retries : 0;
+      /*
+       * D309: an agent's or model's turn has an abort of its own beside the run's, so a human message
+       * can cut this turn short without touching anything else the run is doing.
+       */
+      const turnAbort =
+        domain !== undefined && (node.kind === 'agent' || node.kind === 'model')
+          ? domain.beginTurn(node.id)
+          : undefined;
+      const turnSignal =
+        turnAbort === undefined ? signal : AbortSignal.any([signal, turnAbort.signal]);
+      const turn: TurnContext = {
+        trigger,
+        ...(turnAbort === undefined ? {} : { abort: turnAbort }),
+      };
+      /** The human messages this turn has delivered, across all of its attempts. */
+      const carried: QueuedMessage[] = [];
+      let lastNodeRunId: Id | undefined;
 
-      let attempt = plannedRuns.get(node.id)?.attempt ?? 1;
-      let contractRepairs = 0;
-      let repairReason: string | undefined;
+      /** What waits for this node that this turn has not delivered yet (D309, D326). */
+      const freshMessages = (): QueuedMessage[] => {
+        if (turnAbort === undefined || domain === undefined) return [];
+        const seen = new Set(carried.map((message) => message.messageId));
+        return domain.pending(node.id).filter((message) => !seen.has(message.messageId));
+      };
+      /** Why the attempt starts: absent for a plain dispatch that carries no message. */
+      const triggerFor = (incoming: readonly QueuedMessage[]): TurnTrigger | undefined => {
+        const ids = [...carried, ...incoming].map((message) => message.messageId);
+        if (trigger === 'dispatch' && ids.length === 0) return undefined;
+        return { kind: trigger, ...(ids.length === 0 ? {} : { messageIds: ids }) };
+      };
+      /** D311: the run's goal and the human's words to this node, for an agent or model. */
+      const teamFor = (messages: readonly QueuedMessage[]): Pick<ExecuteNodeInput, 'team'> => {
+        if (node.kind !== 'agent' && node.kind !== 'model') return {};
+        if (run.goal === undefined && messages.length === 0) return {};
+        return {
+          team: {
+            ...(run.goal === undefined ? {} : { goal: run.goal }),
+            ...(messages.length === 0
+              ? {}
+              : { humanInstructions: messages.map((message) => message.text) }),
+          },
+        };
+      };
 
-      await resolvePolicy(node);
-
-      // The row a control already created and already answered the client with, used once. A second
-      // row here would leave the client holding the id of a node run that never ran.
-      const planned = plannedRuns.get(node.id);
-      plannedRuns.delete(node.id);
-      let nodeRun = planned ?? (await beginNodeRun(node, iteration, attempt));
-      if (planned !== undefined) {
-        nodeRunByNode.set(node.id, planned);
-        await emitNodeState(run, planned, 'READY');
+      try {
+        await attempts();
+      } finally {
+        if (turnAbort !== undefined) domain?.endTurn(node.id, turnAbort);
+        // DONE when the turn ended; cut short, the messages wait for the next turn (D309).
+        if (domain !== undefined && carried.length > 0 && lastNodeRunId !== undefined) {
+          await domain.turnEnded(node.id, lastNodeRunId, carried, turnCut(turn) !== undefined);
+        }
       }
-      if (nodeRun.status === 'STOPPED') {
-        states.set(node.id, 'STOPPED');
-        return;
-      }
 
-      for (;;) {
-        if (!(await holdWhilePaused(nodeRun))) return;
+      async function attempts(): Promise<void> {
+        const maxRetries =
+          node.kind === 'agent' || node.kind === 'model' ? node.config.execution.retries : 0;
 
-        /*
-         * The cost point, *before* the call (§2.3, FR-GRD-008): `totals + maxTokens × price` would
-         * cross a cap, so the run halts before spending the money — which is the only version of a
-         * budget that is actually a budget. The node run exists but never starts, so it ends STOPPED
-         * rather than FAILED: nothing about it went wrong (BR-03, FR-ERR-007).
-         */
-        if (deps.budgets !== undefined) {
-          const projected = await deps.budgets.beforeDispatch({
-            target: targetFor(node, nodeRun),
-            projectId: run.projectId,
-            totals: sumUsage(usages),
-            node,
-            ...pricingFor(node),
-          });
+        let attempt = plannedRuns.get(node.id)?.attempt ?? nextAttemptFor(node.id, iteration);
+        let contractRepairs = 0;
+        let repairReason: string | undefined;
 
-          if (projected.halt !== undefined) {
-            budgetHalt ??= projected.halt;
-            const at = now();
-            await repository.nodeRuns.update(scope, nodeRun.id, { status: 'STOPPED', endedAt: at });
-            states.set(node.id, 'STOPPED');
-            await emitNodeState(run, nodeRun, 'STOPPED');
-            return;
-          }
+        await resolvePolicy(node);
+
+        // The row a control already created and already answered the client with, used once. A second
+        // row here would leave the client holding the id of a node run that never ran.
+        const planned = plannedRuns.get(node.id);
+        plannedRuns.delete(node.id);
+        let incoming = freshMessages();
+        let nodeRun =
+          planned ?? (await beginNodeRun(node, iteration, attempt, triggerFor(incoming)));
+        lastNodeRunId = nodeRun.id;
+        if (planned !== undefined) {
+          nodeRunByNode.set(node.id, planned);
+          await emitNodeState(run, planned, 'READY');
+        }
+        if (nodeRun.status === 'STOPPED') {
+          states.set(node.id, 'STOPPED');
+          return;
         }
 
-        let running = false;
-        /** When an agent's provider call ended, if it made one; else the node ends at finish. */
-        let endedAt: string | undefined;
-        const markRunning = async (): Promise<void> => {
-          // Aborted: the node is not starting, and RUNNING written now could land over the STOPPED
-          // the Stop already wrote (D111, D-063).
-          if (running || signal.aborted) return;
-          running = true;
-          const startedAt = now();
-          startedAtByNodeRun.set(nodeRun.id, startedAt);
-          await repository.nodeRuns.update(scope, nodeRun.id, { status: 'RUNNING', startedAt });
-          await emitNodeState(run, nodeRun, 'RUNNING');
-        };
+        for (;;) {
+          if (!(await holdWhilePaused(nodeRun))) return;
 
-        const outcome =
-          node.kind === 'merge'
-            ? await (async (): Promise<NodeExecutionOutcome> => {
-                // A merge calls no provider and costs nothing, so it starts the instant it is
-                // dispatched; its output is a function of what arrived (FR-PAR-002).
-                await markRunning();
-                // Aborted meanwhile: nothing is merged or announced (D-063).
-                if (signal.aborted) {
-                  return {
-                    status: 'STOPPED',
-                    output: [],
-                    usage: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
-                    error: cancelledBeforeStart(),
-                  };
-                }
-                return executeMergeNode(
-                  {
-                    runId: run.id,
-                    workflowId: run.workflowId,
-                    nodeRunId: nodeRun.id,
-                    node,
-                    edges,
-                    arrivals: mergeArrivals.arrivals(node.id),
-                  },
-                  { bus },
-                );
-              })()
-            : await executor.execute({
-                runId: run.id,
-                workflowId: run.workflowId,
-                nodeRunId: nodeRun.id,
-                node,
-                envelopes: envelopesFor.get(node.id) ?? [],
-                iteration,
-                attempt,
-                runInputs: run.inputs,
-                signal,
-                gate,
-                onStarted: markRunning,
-                onEnded: () => {
-                  endedAt = now();
-                },
-                ...guardrailsFor(node, nodeRun),
-                ...contextFor(node, nodeRun),
-                ...(repairReason === undefined ? {} : { repairReason }),
+          /*
+           * The cost point, *before* the call (§2.3, FR-GRD-008): `totals + maxTokens × price` would
+           * cross a cap, so the run halts before spending the money — which is the only version of a
+           * budget that is actually a budget. The node run exists but never starts, so it ends STOPPED
+           * rather than FAILED: nothing about it went wrong (BR-03, FR-ERR-007).
+           */
+          if (deps.budgets !== undefined) {
+            const projected = await deps.budgets.beforeDispatch({
+              target: targetFor(node, nodeRun),
+              projectId: run.projectId,
+              totals: sumUsage(usages),
+              node,
+              ...pricingFor(node),
+            });
+
+            if (projected.halt !== undefined) {
+              budgetHalt ??= projected.halt;
+              const at = now();
+              await repository.nodeRuns.update(scope, nodeRun.id, {
+                status: 'STOPPED',
+                endedAt: at,
               });
-
-        // A node that failed before it got a slot (no route, say) still passes through RUNNING, so
-        // every node run follows Arch §19.1: READY → RUNNING → a terminal state. One a stop caught
-        // before it started is the exception: it never ran, so it goes READY → STOPPED (D111).
-        if (outcome.status !== 'STOPPED') await markRunning();
-
-        if (outcome.error?.kind === 'auth') await markAuthFailed(node, outcome);
-
-        if (outcome.status === 'FAILED' && outcome.error !== undefined && !signal.aborted) {
-          const decision = autoRetryDecision({
-            error: outcome.error,
-            attempt,
-            maxRetries,
-            contractRepairs,
-          });
-
-          if (decision.retry) {
-            // The attempt that failed is a recorded attempt: its row is FAILED and its usage counts,
-            // it simply does not block anything or end the node (FR-ERR-003, FR-ERR-005).
-            await recordAttempt(nodeRun, outcome, endedAt ?? now());
-            await emitNodeState(run, nodeRun, 'FAILED', outcome.failureReason);
-
-            attempt = decision.nextAttempt;
-            if (decision.repairPrompt) {
-              contractRepairs += 1;
-              repairReason = outcome.error.message;
-            }
-
-            /*
-             * The next attempt exists, READY, *before* the wait (FR-ERR-005). The engine has already
-             * decided to try again, so the node is not finished — and a Stop during the backoff then
-             * finds a READY row to end STOPPED (D111), leaving the FAILED attempt as history rather
-             * than as the node's last word. A stopped run counts no failure (FR-ERR-007, TC-ERR-008).
-             */
-            nodeRun = await beginNodeRun(node, iteration, attempt);
-            if (nodeRun.status === 'STOPPED') {
               states.set(node.id, 'STOPPED');
+              await emitNodeState(run, nodeRun, 'STOPPED');
               return;
             }
-
-            // Cut short by a stop; a pause is `holdWhilePaused`'s, at the top of the next attempt.
-            await backoff(decision.delayMs);
-            continue;
           }
-        }
 
-        await finish(node, nodeRun, outcome, endedAt);
-        return;
+          let running = false;
+          /** When an agent's provider call ended, if it made one; else the node ends at finish. */
+          let endedAt: string | undefined;
+          const markRunning = async (): Promise<void> => {
+            // Aborted: the node is not starting, and RUNNING written now could land over the STOPPED
+            // the Stop already wrote (D111, D-063).
+            if (running || signal.aborted) return;
+            running = true;
+            const startedAt = now();
+            startedAtByNodeRun.set(nodeRun.id, startedAt);
+            await repository.nodeRuns.update(scope, nodeRun.id, { status: 'RUNNING', startedAt });
+            await emitNodeState(
+              run,
+              nodeRun,
+              'RUNNING',
+              undefined,
+              nodeRun.trigger === undefined ? {} : { trigger: nodeRun.trigger },
+            );
+            // D309: the messages in this attempt's prompt are DELIVERED the moment it starts.
+            if (domain !== undefined && incoming.length > 0) {
+              const delivering = incoming;
+              incoming = [];
+              carried.push(...delivering);
+              await domain.delivered(node.id, nodeRun.id, delivering);
+            }
+          };
+          const messagesForPrompt = [...carried, ...incoming];
+          turnSignals.set(nodeRun.id, turnSignal);
+
+          const outcome =
+            node.kind === 'merge'
+              ? await (async (): Promise<NodeExecutionOutcome> => {
+                  // A merge calls no provider and costs nothing, so it starts the instant it is
+                  // dispatched; its output is a function of what arrived (FR-PAR-002).
+                  await markRunning();
+                  // Aborted meanwhile: nothing is merged or announced (D-063).
+                  if (signal.aborted) {
+                    return {
+                      status: 'STOPPED',
+                      output: [],
+                      usage: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
+                      error: cancelledBeforeStart(),
+                    };
+                  }
+                  return executeMergeNode(
+                    {
+                      runId: run.id,
+                      workflowId: run.workflowId,
+                      nodeRunId: nodeRun.id,
+                      node,
+                      edges,
+                      arrivals: mergeArrivals.arrivals(node.id),
+                    },
+                    { bus },
+                  );
+                })()
+              : await executor.execute({
+                  runId: run.id,
+                  workflowId: run.workflowId,
+                  nodeRunId: nodeRun.id,
+                  node,
+                  envelopes: envelopesFor.get(node.id) ?? [],
+                  iteration,
+                  attempt,
+                  runInputs: run.inputs,
+                  signal: turnSignal,
+                  gate,
+                  onStarted: markRunning,
+                  onEnded: () => {
+                    endedAt = now();
+                  },
+                  ...guardrailsFor(node, nodeRun),
+                  ...contextFor(node, nodeRun),
+                  ...(repairReason === undefined ? {} : { repairReason }),
+                  ...teamFor(messagesForPrompt),
+                });
+
+          // A node that failed before it got a slot (no route, say) still passes through RUNNING, so
+          // every node run follows Arch §19.1: READY → RUNNING → a terminal state. One a stop caught
+          // before it started is the exception: it never ran, so it goes READY → STOPPED (D111).
+          if (outcome.status !== 'STOPPED') await markRunning();
+
+          if (outcome.error?.kind === 'auth') await markAuthFailed(node, outcome);
+
+          if (outcome.status === 'FAILED' && outcome.error !== undefined && !signal.aborted) {
+            const decision = autoRetryDecision({
+              error: outcome.error,
+              attempt,
+              maxRetries,
+              contractRepairs,
+            });
+
+            if (decision.retry) {
+              // The attempt that failed is a recorded attempt: its row is FAILED and its usage counts,
+              // it simply does not block anything or end the node (FR-ERR-003, FR-ERR-005).
+              await recordAttempt(nodeRun, outcome, endedAt ?? now());
+              await emitNodeState(run, nodeRun, 'FAILED', outcome.failureReason);
+
+              attempt = decision.nextAttempt;
+              if (decision.repairPrompt) {
+                contractRepairs += 1;
+                repairReason = outcome.error.message;
+              }
+
+              /*
+               * The next attempt exists, READY, *before* the wait (FR-ERR-005). The engine has already
+               * decided to try again, so the node is not finished — and a Stop during the backoff then
+               * finds a READY row to end STOPPED (D111), leaving the FAILED attempt as history rather
+               * than as the node's last word. A stopped run counts no failure (FR-ERR-007, TC-ERR-008).
+               */
+              // D309, D326: a message that arrived meanwhile — `@all` included — rides this retry.
+              incoming = freshMessages();
+              nodeRun = await beginNodeRun(node, iteration, attempt, triggerFor(incoming));
+              lastNodeRunId = nodeRun.id;
+              if (nodeRun.status === 'STOPPED') {
+                states.set(node.id, 'STOPPED');
+                return;
+              }
+
+              // Cut short by a stop; a pause is `holdWhilePaused`'s, at the top of the next attempt.
+              await backoff(decision.delayMs);
+              continue;
+            }
+          }
+
+          await finish(node, nodeRun, outcome, endedAt, turn);
+          return;
+        }
       }
     }
 
@@ -1667,7 +1944,14 @@ export function createRunService(deps: RunServiceDeps): RunService {
         iterations.set(row.nodeId, row.iteration);
       }
 
-      const recorded = latestByNode(await repository.nodeRuns.listByRun(scope, run.id));
+      const rows = await repository.nodeRuns.listByRun(scope, run.id);
+      // A further turn of any node takes the next attempt after every one already recorded (D95).
+      for (const row of rows) {
+        const key = attemptKey(row.nodeId, row.iteration);
+        lastAttempt.set(key, Math.max(lastAttempt.get(key) ?? 0, row.attempt));
+        if (row.status === 'COMPLETED') completedIterations.add(key);
+      }
+      const recorded = latestByNode(rows);
 
       for (const [nodeId, row] of recorded) {
         const node = nodeById.get(nodeId);
@@ -1723,39 +2007,6 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
     }
 
-    /* The loop of Arch §12.3: mark ready, dispatch up to the limit, wait, repeat. */
-    const inFlight = new Set<Promise<void>>();
-
-    // §2.3: once a cap has been crossed the run dispatches nothing further. What is already in
-    // flight is left to finish, exactly as a pause leaves it — a budget stops spending, it does not
-    // throw away money already spent.
-    while (!signal.aborted && budgetHalt === undefined) {
-      // FR-CTL-001/002: a paused gate simply does not resolve, so no new node starts while the run
-      // is paused and the ones already in flight are left to finish. `false` means it was aborted.
-      if (!(await gate.waitUntilDispatchable())) break;
-
-      const ready = nodes.filter(
-        (node) => states.get(node.id) === 'IDLE' && isReady(node, edges, deliveredEdges),
-      );
-
-      for (const node of ready) {
-        if (inFlight.size >= limit) break;
-        // Tracked on the gate as well as in `inFlight`, so `stop` can wait for the last in-flight
-        // node before it writes the run row (FR-CTL-003).
-        const release = gate.track(node.id);
-        const promise = dispatch(node, iterations.get(node.id) ?? 1).finally(() => {
-          release();
-          inFlight.delete(promise);
-        });
-        inFlight.add(promise);
-      }
-
-      if (inFlight.size === 0) break;
-      await Promise.race(inFlight);
-    }
-
-    await Promise.allSettled(inFlight);
-
     /*
      * FR-EXE-011: COMPLETE only when every Output node finished and nothing is still going. A
      * workflow with no Output node (goal-driven nodes, D285) finishes on the nodes nothing is
@@ -1768,8 +2019,115 @@ export function createRunService(deps: RunServiceDeps): RunService {
     );
     const finishLine =
       outputNodes.length > 0 ? outputNodes : nodes.filter((node) => !feeds.has(node.id));
-    const allOutputsDone =
+    const graphComplete = (): boolean =>
       finishLine.length > 0 && finishLine.every((node) => states.get(node.id) === 'COMPLETED');
+
+    /* The loop of Arch §12.3: mark ready, dispatch up to the limit, wait, repeat. */
+    const inFlight = new Set<Promise<void>>();
+    /** The nodes with a turn in flight, so a message never starts a second one (D309). */
+    const inFlightNodes = new Set<Id>();
+    const launch = (node: Node, trigger: TurnTriggerKind): void => {
+      inFlightNodes.add(node.id);
+      // Tracked on the gate as well as in `inFlight`, so `stop` can wait for the last in-flight
+      // node before it writes the run row (FR-CTL-003).
+      const release = gate.track(node.id);
+      const promise = dispatch(node, iterations.get(node.id) ?? 1, trigger).finally(() => {
+        release();
+        inFlight.delete(promise);
+        inFlightNodes.delete(node.id);
+      });
+      inFlight.add(promise);
+    };
+    /** Resolves when the run is stopped or shut down — a parked run waits on it too. */
+    const abortedOrNever = new Promise<void>((resolve) => {
+      if (signal.aborted) resolve();
+      else signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+    /** One wake-up at a time from the Domain: a message arrived, or the run is being ended. */
+    let wakeUp: Promise<void> | undefined;
+    const domainWake = (): Promise<void> =>
+      domain === undefined
+        ? new Promise<void>(() => undefined)
+        : (wakeUp ??= domain.changed().then(() => {
+            wakeUp = undefined;
+          }));
+    /** D323: `run.parked` is said once each time the run goes idle, not on every wake-up. */
+    let parked = false;
+    /** D309: a node with nothing in flight that a waiting message names gets a turn now. */
+    const wantsTurnNow = (nodeId: Id): boolean => {
+      const state = states.get(nodeId);
+      return !inFlightNodes.has(nodeId) && state !== undefined && TURN_NOW_STATES.has(state);
+    };
+
+    // §2.3: once a cap has been crossed the run dispatches nothing further. What is already in
+    // flight is left to finish, exactly as a pause leaves it — a budget stops spending, it does not
+    // throw away money already spent.
+    while (!signal.aborted && budgetHalt === undefined) {
+      // FR-CTL-001/002: a paused gate simply does not resolve, so no new node starts while the run
+      // is paused and the ones already in flight are left to finish. `false` means it was aborted.
+      if (!(await gate.waitUntilDispatchable())) break;
+      // D323: an End starts nothing new; the turns it cut short unwind, then the run ends.
+      const ending = domain?.endRequested() === true;
+
+      if (!ending) {
+        const ready = nodes.filter(
+          (node) => states.get(node.id) === 'IDLE' && isReady(node, edges, deliveredEdges),
+        );
+        for (const node of ready) {
+          if (inFlight.size >= limit) break;
+          launch(node, 'dispatch');
+        }
+
+        for (const nodeId of domain?.nodesWantingTurn() ?? []) {
+          if (inFlight.size >= limit) break;
+          const node = nodeById.get(nodeId);
+          if (node === undefined || !wantsTurnNow(nodeId)) continue;
+          stateBeforeTurn.set(nodeId, states.get(nodeId) ?? 'IDLE');
+          launch(node, 'instruction');
+        }
+      }
+
+      if (inFlight.size === 0) {
+        if (domain === undefined || ending) break;
+
+        if (stayOpen) {
+          // D323: started from Domain, the run parks — RUNNING, calling nothing — until a message
+          // names a node, the run is ended, or it is stopped.
+          if (!parked) {
+            parked = true;
+            await bus.emit({
+              type: 'run.parked',
+              workflowId: run.workflowId,
+              runId: run.id,
+              payload: { runId: run.id, graph: graphComplete() ? 'complete' : 'failed' },
+            });
+          }
+          await Promise.race([domainWake(), abortedOrNever]);
+          continue;
+        }
+
+        // A board run ends here, unless a message slipped in first: the lock decides which, and a
+        // message after it is refused rather than left waiting for a turn that never comes.
+        const closed = await domain.withLock(async () => {
+          if (domain.nodesWantingTurn().some(wantsTurnNow)) return false;
+          await domain.close();
+          return true;
+        });
+        if (closed) break;
+        continue;
+      }
+
+      parked = false;
+      await Promise.race([...inFlight, domainWake()]);
+    }
+
+    await Promise.allSettled(inFlight);
+
+    // D309: whatever is still PENDING was never delivered — DROPPED, before the run's end is said.
+    // A Stop says its own end, and drops them itself before it does (FR-CTL-003).
+    if (domain !== undefined && gate.abortCause() !== 'stopped') await domain.close();
+
+    const allOutputsDone = graphComplete();
     const stillBusy = [...states.values()].some((state) => BUSY_STATES.has(state));
 
     const complete = allOutputsDone && !stillBusy && !signal.aborted && budgetHalt === undefined;
@@ -1950,14 +2308,25 @@ export function createRunService(deps: RunServiceDeps): RunService {
   function startDriving(run: Run, seed?: DriveSeed): Promise<Run> {
     const gate = createRunGate(run.id);
     const unregister = deps.gates.register(gate);
+    let domain: RunDomain | undefined;
 
-    const done = drive(run, gate, seed)
+    const done = (async (): Promise<Run> => {
+      // Domain (D309, D323): the run's live conversation, with what its log says it still owes.
+      domain = await deps.domains?.open(run);
+      return drive(run, gate, seed, domain);
+    })()
       .catch(async (error: unknown) => {
         logger.error({ subsystem: 'runs', runId: run.id, err: error }, 'run failed');
+        await domain?.close().catch(() => undefined);
         return haltAfterThrow(run, gate);
+      })
+      .then((ended) => {
+        domain?.settle(ended);
+        return ended;
       })
       .finally(() => {
         unregister();
+        if (domain !== undefined) deps.domains?.release(domain);
         active.delete(run.id);
       });
 
@@ -2063,7 +2432,13 @@ export function createRunService(deps: RunServiceDeps): RunService {
         type: 'run.completed',
         workflowId,
         runId: run.id,
-        payload: { runId: run.id, status: 'BLOCKED', totals: withIssues.totals },
+        // D303: the issues travel with the ending, so the conversation can say why it never ran.
+        payload: {
+          runId: run.id,
+          status: 'BLOCKED',
+          totals: withIssues.totals,
+          preflightIssues: issues,
+        },
       });
 
       logger.info(
@@ -2076,7 +2451,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const running =
       (await repository.runs.update(scope, run.id, {
         status: 'RUNNING',
-        allowedActions: allowedRunActions('RUNNING'),
+        // D323: a run started from Domain can be ended from the start.
+        allowedActions: allowedRunActions('RUNNING', { stayOpen: run.domain?.stayOpen }),
         // A warning pre-flight raised is kept on the row: a run that started with a note is still
         // a run whose note the user should see (D79).
         ...(issues.length === 0 ? {} : { preflightIssues: issues }),
@@ -2089,6 +2465,31 @@ export function createRunService(deps: RunServiceDeps): RunService {
       payload: { run: toSummary(running) },
     });
 
+    // D312: a run that came with Domain settings records them, then its goal as the first message.
+    if (running.domain !== undefined) {
+      await bus.emit({
+        type: 'run.config',
+        workflowId,
+        runId: run.id,
+        payload: { runId: run.id, config: running.domain },
+      });
+    }
+    if (running.goal !== undefined) {
+      await bus.emit({
+        type: 'human.message',
+        workflowId,
+        runId: run.id,
+        payload: {
+          runId: run.id,
+          messageId: nextId(),
+          text: running.goal,
+          addressing: 'goal',
+          mentions: [],
+          deliveryMode: 'queue',
+        },
+      });
+    }
+
     return { run: running, done: startDriving(running, extra.seed) };
   }
 
@@ -2098,6 +2499,11 @@ export function createRunService(deps: RunServiceDeps): RunService {
       if (workflow === null) throw notFound(`workflow ${workflowId}`);
 
       const startedAt = now();
+      // D312: a goal and Domain settings, with their defaults, as the run will keep them.
+      const domainConfig =
+        request.domain === undefined ? undefined : RunDomainConfigInputSchema.parse(request.domain);
+      const goal =
+        request.goal?.trim() === '' ? undefined : maskSecrets(request.goal ?? '') || undefined;
 
       // BR-04: the snapshot and the run row are written together, so there is no instant at
       // which a run exists without the graph it is going to execute.
@@ -2107,6 +2513,16 @@ export function createRunService(deps: RunServiceDeps): RunService {
           tx.edges.listByWorkflow(scope, workflowId),
         ]);
 
+        // D312: with no inputs given, the goal is what every Input node hands on.
+        const inputs: Record<Id, Part[]> =
+          request.inputs !== undefined || goal === undefined
+            ? (request.inputs ?? {})
+            : Object.fromEntries(
+                nodes
+                  .filter((node) => node.kind === 'input')
+                  .map((node): [Id, Part[]] => [node.id, [{ type: 'text', text: goal }]]),
+              );
+
         const created: Run = {
           id: nextId(),
           workflowId,
@@ -2114,10 +2530,12 @@ export function createRunService(deps: RunServiceDeps): RunService {
           status: 'PREFLIGHT',
           allowedActions: allowedRunActions('PREFLIGHT'),
           snapshot: { version: workflow.version, nodes, edges },
-          inputs: request.inputs ?? {},
+          inputs,
           preflightIssues: [],
           totals: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
           startedAt,
+          ...(domainConfig === undefined ? {} : { domain: domainConfig }),
+          ...(goal === undefined ? {} : { goal }),
         };
 
         return tx.runs.create(scope, created);
@@ -2162,6 +2580,13 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
     async driveRecordedRun(run) {
       return (await begin(run)).run;
+    },
+
+    async resumeOpenRun(run) {
+      // D323: no pre-flight — the run had one; everything it recorded is seeded as it was, nothing is
+      // forced to run again, and with nothing to do it parks.
+      void startDriving(run, { nodeRuns: [], withDownstream: false });
+      return run;
     },
 
     async drivePartialRun(plan) {

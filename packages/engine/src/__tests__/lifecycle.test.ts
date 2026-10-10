@@ -133,7 +133,7 @@ describe('TC-SYS-010 a run the store still thinks is going did not survive the r
   });
 
   it('does nothing, quietly, on a clean start', async () => {
-    expect(await recoverAfterCrash(deps)).toEqual({ runs: [], nodeRuns: [] });
+    expect(await recoverAfterCrash(deps)).toEqual({ runs: [], nodeRuns: [], reopened: [] });
     expect(events).toEqual([]);
   });
 });

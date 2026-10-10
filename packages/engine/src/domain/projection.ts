@@ -765,7 +765,9 @@ export function createDomainProjection(context: DomainContext): DomainProjection
           ? 'Run COMPLETE.'
           : run.status === 'HALTED'
             ? `Run HALTED (${run.haltReason ?? 'failure'}).`
-            : 'Run BLOCKED at pre-flight.',
+            : run.preflightIssues === undefined || run.preflightIssues.length === 0
+              ? 'Run BLOCKED at pre-flight.'
+              : `Run BLOCKED at pre-flight: ${run.preflightIssues.map((issue) => issue.message).join(' ')}`,
         ops,
         { level: run.status === 'COMPLETE' ? 'info' : 'error' },
       );
