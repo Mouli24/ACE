@@ -54,6 +54,14 @@ describe('D299 one Monaco model per open file', () => {
     expect(dirty).toHaveBeenLastCalledWith(false);
   });
 
+  it('following the disk never reports dirty, so a preview stays a preview', () => {
+    const dirty = vi.fn();
+    ensureModel(P, 'a.ts', 'one', 'plaintext', dirty);
+    replaceContent(P, 'a.ts', 'theirs');
+    expect(dirty).not.toHaveBeenCalledWith(true);
+    expect(dirty).toHaveBeenLastCalledWith(false);
+  });
+
   it('a move carries the text and the unsaved state to the new path', () => {
     const model = ensureModel(P, 'src/a.ts', 'one', 'plaintext', () => undefined);
     model.setValue('edited');

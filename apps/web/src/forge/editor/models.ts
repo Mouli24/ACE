@@ -11,6 +11,8 @@ interface Entry {
   savedAlt: number;
   viewState: Monaco.editor.ICodeEditorViewState | null;
   onDirty: (dirty: boolean) => void;
+  /** True while `replaceContent` rewrites the text: that edit is the disk's, never the person's. */
+  syncing: boolean;
   listener: Monaco.IDisposable;
 }
 
@@ -65,9 +67,10 @@ export function ensureModel(
     savedAlt: model.getAlternativeVersionId(),
     viewState: null,
     onDirty,
-    listener: model.onDidChangeContent(() =>
-      entry.onDirty(model.getAlternativeVersionId() !== entry.savedAlt),
-    ),
+    syncing: false,
+    listener: model.onDidChangeContent(() => {
+      if (!entry.syncing) entry.onDirty(model.getAlternativeVersionId() !== entry.savedAlt);
+    }),
   };
   entries.set(key, entry);
   return model;
@@ -88,7 +91,14 @@ export function markSaved(projectId: string, path: string, alt?: number): void {
 export function replaceContent(projectId: string, path: string, content: string): void {
   const entry = entries.get(keyOf(projectId, path));
   if (entry === undefined) return;
-  if (entry.model.getValue() !== content) entry.model.setValue(content);
+  if (entry.model.getValue() !== content) {
+    entry.syncing = true;
+    try {
+      entry.model.setValue(content);
+    } finally {
+      entry.syncing = false;
+    }
+  }
   markSaved(projectId, path);
 }
 

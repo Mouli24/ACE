@@ -1,9 +1,14 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 
 import { RESIZE_HANDLE_X, RESIZE_HANDLE_Y } from '../app/layout/resize-handle';
 import { SHORTCUTS, useShortcuts } from '../app/shortcuts';
 import { useLayoutStore } from '../app/stores/layout';
+import { saveAll, saveFile } from './editor/actions';
+import { useCloseRequest } from './editor/CloseDialogs';
 import { EditorArea } from './editor/EditorArea';
+import { useEditorStore } from './editor/editor-store';
+import { useEditorSync } from './editor/useEditorSync';
 import { ActivityBar } from './layout/ActivityBar';
 import { SideBar } from './layout/SideBar';
 import { StatusBar } from './layout/StatusBar';
@@ -21,9 +26,29 @@ export function ForgeWorkbench({ projectId }: { projectId: string }) {
   const maximized = useLayoutStore((s) => s.panelMaximized);
   const toggleSidebar = useLayoutStore((s) => s.toggleSidebar);
   const togglePanel = useLayoutStore((s) => s.togglePanel);
+  const queryClient = useQueryClient();
+  const closeRequest = useCloseRequest(projectId);
+  useEditorSync(projectId);
+  const activePath = (): string | undefined =>
+    useEditorStore.getState().projects[projectId]?.active;
   useShortcuts([
     [SHORTCUTS.toggleSidebar, toggleSidebar],
     [SHORTCUTS.togglePanel, togglePanel],
+    [
+      SHORTCUTS.save,
+      () => {
+        const active = activePath();
+        if (active !== undefined) void saveFile(projectId, active, queryClient);
+      },
+    ],
+    [SHORTCUTS.saveAll, () => void saveAll(projectId, queryClient)],
+    [
+      SHORTCUTS.closeTab,
+      () => {
+        const active = activePath();
+        if (active !== undefined) closeRequest.request([active]);
+      },
+    ],
   ]);
   const showEditor = !(panelOpen && maximized);
 
@@ -76,6 +101,7 @@ export function ForgeWorkbench({ projectId }: { projectId: string }) {
           </Panel>
         </PanelGroup>
       </div>
+      {closeRequest.dialog}
       <StatusBar projectId={projectId} />
     </div>
   );

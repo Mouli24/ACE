@@ -11,13 +11,13 @@ import { useRef, type KeyboardEvent } from 'react';
 
 import { FileIcon } from '../explorer/FileIcon';
 import { nameOf, parentOf } from '../files/paths';
-import { closeFiles } from './actions';
+import { useCloseRequest } from './CloseDialogs';
 import { useEditorStore, useProjectEditor } from './editor-store';
 
 /** The editor's tabs (§6.2): a dirty dot, middle-click close, Close others / Close saved. */
 export function TabsBar({ projectId }: { projectId: string }) {
   const editor = useProjectEditor(projectId);
-  const close = (paths: readonly string[]): void => closeFiles(projectId, paths);
+  const { request: close, dialog } = useCloseRequest(projectId);
   const nameCount = new Map<string, number>();
   for (const tab of editor.tabs) nameCount.set(nameOf(tab), (nameCount.get(nameOf(tab)) ?? 0) + 1);
 
@@ -48,6 +48,7 @@ export function TabsBar({ projectId }: { projectId: string }) {
       aria-label="Open files"
       className="flex h-9 shrink-0 overflow-x-auto border-b border-border bg-panel"
     >
+      {dialog}
       {editor.tabs.map((path) => {
         const file = editor.files[path];
         if (file === undefined) return null;

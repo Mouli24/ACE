@@ -1,9 +1,10 @@
 import { AceApiError } from '@ace/sdk';
-import { Suspense, lazy } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 
 import { useFileContent } from '../files/hooks';
 import { isImagePath, nameOf } from '../files/paths';
-import { useProjectEditor } from './editor-store';
+import { ConflictBar, DeletedBar, SaveErrorBar } from './ConflictBar';
+import { useOpenFile, useProjectEditor } from './editor-store';
 import { EmptyEditor } from './EmptyEditor';
 import { FileNotice } from './FileNotice';
 import { ImagePreview } from './ImagePreview';
@@ -12,6 +13,9 @@ import { TabsBar } from './TabsBar';
 
 const EditorHost = lazy(() =>
   import('./EditorHost').then((module) => ({ default: module.EditorHost })),
+);
+const CompareView = lazy(() =>
+  import('./CompareView').then((module) => ({ default: module.CompareView })),
 );
 
 /** The editor area: tabs over the active file — text in Monaco, an image as a picture, the rest as a notice. */
@@ -36,6 +40,11 @@ export function EditorArea({ projectId }: { projectId: string }) {
 
 function TextFile({ projectId, path }: { projectId: string; path: string }) {
   const content = useFileContent(projectId, path);
+  const file = useOpenFile(projectId, path);
+  const [comparing, setComparing] = useState(false);
+  useEffect(() => {
+    if (file?.conflict === undefined) setComparing(false);
+  }, [file?.conflict]);
   const text = content.data?.kind === 'text' ? content.data : undefined;
   if (getModel(projectId, path) === undefined) {
     if (content.isPending)
@@ -56,9 +65,28 @@ function TextFile({ projectId, path }: { projectId: string; path: string }) {
   }
   return (
     <div className="flex h-full min-h-0 flex-col">
+      {file?.conflict !== undefined && (
+        <ConflictBar
+          projectId={projectId}
+          path={path}
+          conflict={file.conflict}
+          comparing={comparing}
+          onCompare={() => setComparing((value) => !value)}
+        />
+      )}
+      {file?.deletedOnDisk === true && file.conflict === undefined && (
+        <DeletedBar projectId={projectId} path={path} />
+      )}
+      {file?.error !== undefined && (
+        <SaveErrorBar projectId={projectId} path={path} message={file.error} />
+      )}
       <div className="min-h-0 flex-1">
         <Suspense fallback={<p className="p-4 text-[13px] text-fg-muted">Loading the editor…</p>}>
-          <EditorHost projectId={projectId} path={path} initial={text} />
+          {comparing ? (
+            <CompareView projectId={projectId} path={path} />
+          ) : (
+            <EditorHost projectId={projectId} path={path} initial={text} />
+          )}
         </Suspense>
       </div>
     </div>
