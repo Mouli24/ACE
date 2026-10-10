@@ -32,6 +32,10 @@ export function FileTree({ projectId, label, onOpen }: FileTreeProps) {
   const rowElements = useRef(new Map<string, HTMLDivElement>());
   const typed = useRef({ text: '', at: 0 });
 
+  // One current row for the tab stop and the keys alike: the selected row if visible, else the first.
+  const found = rows.findIndex((row) => row.entry.path === selected);
+  const index = found === -1 ? 0 : found;
+
   const focusRow = (path: string): void => {
     select(projectId, path);
     rowElements.current.get(path)?.focus();
@@ -43,7 +47,6 @@ export function FileTree({ projectId, label, onOpen }: FileTreeProps) {
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    const index = rows.findIndex((row) => row.entry.path === selected);
     const row = rows[index];
     const isOpen = row !== undefined && expanded.includes(row.entry.path);
     const go = (target: TreeRow | undefined) => {
@@ -118,7 +121,7 @@ export function FileTree({ projectId, label, onOpen }: FileTreeProps) {
         const { entry, depth } = row;
         const folder = entry.kind === 'folder';
         const isOpen = folder && expanded.includes(entry.path);
-        const isSelected = entry.path === selected || (selected === undefined && row === rows[0]);
+        const isCurrent = row === rows[index];
         const decoration = folder ? undefined : decorations.file(entry.path);
         const tone = folder ? decorations.folder(entry.path) : decoration?.tone;
         return (
@@ -132,7 +135,7 @@ export function FileTree({ projectId, label, onOpen }: FileTreeProps) {
             aria-level={depth + 1}
             aria-expanded={folder ? isOpen : undefined}
             aria-selected={entry.path === selected}
-            tabIndex={isSelected ? 0 : -1}
+            tabIndex={isCurrent ? 0 : -1}
             data-testid={`tree-item-${entry.path}`}
             title={entry.path}
             className={cn(
