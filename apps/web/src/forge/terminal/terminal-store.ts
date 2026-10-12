@@ -279,6 +279,8 @@ export const useTerminalStore = create<TerminalState>()((set) => ({
         const attached = append({ ...tab, processId }, early?.output ?? '');
         return early?.exit === undefined ? attached : finish(attached, exitLine(early.exit));
       });
+      // No such tab: the entry stays unowned, where the Processes list shows it.
+      if (change.projects === undefined) return {};
       return { ...change, unowned: without(state.unowned, processId) };
     }),
 

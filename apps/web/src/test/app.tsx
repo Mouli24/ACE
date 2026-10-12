@@ -6,6 +6,7 @@ import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 
 import { configureApi } from '../app/api';
 import { routes } from '../app/routes';
+import { startSocket, stopSocket } from '../app/socket';
 import { LAYOUT_STORAGE_KEY, useLayoutStore } from '../app/stores/layout';
 import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
@@ -18,6 +19,7 @@ import { useProblemsStore } from '../forge/panel/problems-store';
 import { useQuickOpen } from '../forge/quick-open/quick-open-store';
 import { useTerminalStore } from '../forge/terminal/terminal-store';
 import { MockDb } from '../mocks/db';
+import { createFakeWebSocket } from '../mocks/fake-socket';
 import { createHandlers } from '../mocks/handlers';
 import { createDomainHandlers, domainMock } from '../mocks/handlers-domain';
 import { createForgeHandlers } from '../mocks/handlers-forge';
@@ -104,4 +106,21 @@ export function renderApp(
 /** Render a component that needs the query client but no router. */
 export function renderWithQuery(ui: ReactElement): RenderResult {
   return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
+
+/**
+ * The fake engine socket for tests that need frames (process output, files.changed): started
+ * before each test against this file's mock database, stopped after. Call it after
+ * `installMockServer()`, so it uses that test's query client.
+ */
+export function installMockSocket(): void {
+  beforeEach(() => {
+    startSocket({
+      token: 'mock',
+      queryClient,
+      url: 'ws://mock.local/ws',
+      WebSocket: createFakeWebSocket(db) as unknown as typeof WebSocket,
+    });
+  });
+  afterEach(() => stopSocket());
 }
