@@ -341,3 +341,64 @@ describe('D299 an edit ended by a click elsewhere leaves focus there', () => {
     expect(screen.getByTestId('tree-item-journal.md')).toHaveAttribute('aria-selected', 'false');
   });
 });
+
+describe('D334 the file operations in the theme', () => {
+  it('New File and New Folder sit in the Explorer header beside the file count', async () => {
+    renderWithQuery(<ExplorerView projectId={projectId} />);
+    const count = await screen.findByTestId('explorer-count');
+    const header = count.parentElement!;
+    for (const name of ['New File', 'New Folder']) {
+      expect(within(header).getByRole('button', { name })).toHaveClass(
+        'h-[20px]',
+        'rounded-[5px]',
+        'hover:bg-[var(--hover)]',
+      );
+    }
+  });
+
+  it('a drop target wears the canvas’s selection box', async () => {
+    renderWithQuery(<ExplorerView projectId={projectId} />);
+    const file = await screen.findByTestId('tree-item-notes.md');
+    const folder = screen.getByTestId('tree-item-docs');
+    const dataTransfer = dragOf();
+    fireEvent.dragStart(file, { dataTransfer });
+    fireEvent.dragOver(folder, { dataTransfer });
+    expect(folder).toHaveClass('bg-[rgba(239,107,63,0.06)]', 'shadow-[inset_0_0_0_1.5px_#ef6b3f]');
+    fireEvent.dragLeave(folder, { dataTransfer });
+    expect(folder).not.toHaveClass('shadow-[inset_0_0_0_1.5px_#ef6b3f]');
+  });
+
+  it('the name field is the theme’s field in a 26px row, red with its problem under it', async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<ExplorerView projectId={projectId} />);
+    await screen.findByTestId('tree-item-notes.md');
+    await user.click(screen.getByRole('button', { name: 'New File' }));
+    const input = screen.getByRole('textbox', { name: 'New file name' });
+    expect(input).toHaveClass('h-[24px]', 'bg-[var(--surface)]', 'focus:border-[#ef6b3f]');
+    expect(input.parentElement).toHaveClass('h-[26px]');
+    await user.type(input, 'notes.md{Enter}');
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(await screen.findByRole('alert')).toHaveClass('text-[#c94c27]', 'bg-[var(--surface)]');
+  });
+
+  it('the menu is the theme’s menu, Delete in the error red', async () => {
+    renderWithQuery(<ExplorerView projectId={projectId} />);
+    fireEvent.contextMenu(await screen.findByTestId('tree-item-notes.md'));
+    expect(await screen.findByRole('menu')).toHaveClass('rounded-[10px]', 'bg-[var(--surface)]');
+    expect(screen.getByRole('menuitem', { name: /Delete/ })).toHaveClass('text-[#c94c27]');
+    expect(screen.getByRole('menuitem', { name: /Rename/ })).not.toHaveClass('text-[#c94c27]');
+  });
+
+  it('the delete confirm names the path in mono, with Cancel as the Close pill', async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<ExplorerView projectId={projectId} />);
+    await user.click(await screen.findByTestId('tree-item-docs'));
+    // a click selects the row, and focus is on it: Delete acts on it
+    await user.click(await screen.findByTestId('tree-item-docs/readme.md'));
+    await user.keyboard('{Delete}');
+    const dialog = await screen.findByRole('dialog', { name: 'Delete “readme.md”?' });
+    expect(within(dialog).getByText('docs/readme.md')).toHaveClass('font-machine');
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveClass('bg-[var(--soft)]');
+    expect(within(dialog).getByRole('button', { name: 'Delete' })).toHaveClass('text-[#c94c27]');
+  });
+});

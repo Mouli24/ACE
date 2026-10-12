@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
@@ -95,5 +95,26 @@ describe('D299 Ctrl/⌘+P opens any file by a few letters', () => {
     failing = false;
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(3));
+  });
+});
+
+describe('D328 quick open in the theme', () => {
+  it('is the modal shell with the theme’s field, the matches as menu rows in the orange wash', async () => {
+    const user = userEvent.setup();
+    const { path } = seed();
+    renderApp(path);
+    await screen.findByTestId('forge');
+    await user.keyboard('{Control>}p{/Control}');
+    const input = await screen.findByRole('combobox', { name: 'Go to file' });
+    expect(input).toHaveClass('h-[38px]', 'rounded-[9px]', 'focus:border-[#ef6b3f]');
+    expect(screen.getByRole('dialog')).toHaveClass('rounded-[18px]', 'top-[12%]');
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(3));
+    const [first, second] = screen.getAllByRole('option');
+    expect(first).toHaveAttribute('data-highlighted');
+    expect(first).toHaveClass('h-8', 'data-[highlighted]:bg-[rgba(239,107,63,0.12)]');
+    expect(second).not.toHaveAttribute('data-highlighted');
+    await user.keyboard('{ArrowDown}');
+    expect(screen.getAllByRole('option')[1]).toHaveAttribute('data-highlighted');
+    expect(within(screen.getAllByRole('option')[1]!).getByText('src')).toHaveClass('font-machine');
   });
 });

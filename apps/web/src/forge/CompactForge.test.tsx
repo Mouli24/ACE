@@ -89,3 +89,33 @@ describe('D299 FR-MOB-001 Forge on a phone is browse-only', () => {
     expect(await screen.findByLabelText('Editing README.md')).toHaveValue(edited);
   });
 });
+
+describe('D328 FR-MOB-002 the phone’s Forge in the theme', () => {
+  it('the read-only banner and the Explorer’s rows, then the file under mono crumbs with a 44px Back', async () => {
+    const user = userEvent.setup();
+    const project = db.createProject({ name: 'Shop' });
+    const workflow = db.createWorkflow(project.id, 'Main');
+    db.seedFiles(project.id, { 'docs/guide.md': '# Guide' });
+    renderApp(`/projects/${project.id}/workflows/${workflow.id}/forge`);
+
+    const forge = await screen.findByTestId('compact-forge');
+    expect(forge).toHaveClass('bg-[var(--panel)]');
+    expect(screen.getByRole('note')).toHaveClass('text-[11.5px]', 'text-[var(--muted)]');
+    await user.click(await screen.findByTestId('tree-item-docs'));
+    const file = await screen.findByTestId('tree-item-docs/guide.md');
+    expect(file).toHaveClass('h-[26px]', 'rounded-[6px]');
+    await user.click(file);
+
+    const page = await screen.findByTestId('compact-file');
+    expect(page).toHaveClass('bg-[var(--surface)]');
+    expect(screen.getByText('docs')).toHaveClass('text-[var(--muted)]');
+    expect(screen.getByText('guide.md')).toHaveClass('text-[var(--ink)]');
+    expect(screen.getByRole('button', { name: /Files/ }).parentElement).toHaveClass(
+      '[&_button]:min-h-11',
+    );
+    expect(await screen.findByLabelText('Contents of docs/guide.md')).toHaveClass(
+      'font-machine',
+      'leading-[20px]',
+    );
+  });
+});
