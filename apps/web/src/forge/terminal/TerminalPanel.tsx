@@ -22,7 +22,11 @@ export function TerminalPanel({ projectId }: { projectId: string }) {
           className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[12px] border border-[var(--line)] bg-[var(--surface)]"
         >
           {active !== undefined && (
-            <TerminalView key={active.id} projectId={projectId} tabId={active.id} />
+            <TerminalView
+              key={`${projectId}/${active.id}`}
+              projectId={projectId}
+              tabId={active.id}
+            />
           )}
         </div>
       </div>
