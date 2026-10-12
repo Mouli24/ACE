@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '../db.js';
 import {
   CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
-  DOMAIN_MIGRATION_ID,
+  FORGE_TERMINAL_MIGRATION_ID,
   MIGRATIONS,
 } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
@@ -56,7 +56,7 @@ describe('D285/D286 migration: chat turns from runs and failures, discovered mod
     const after = openDatabase({ path });
     expect(after.appliedMigrations).toEqual([
       CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
-      DOMAIN_MIGRATION_ID,
+      FORGE_TERMINAL_MIGRATION_ID,
     ]);
     expect(columnsOf(after.sqlite, 'chat_messages')).toEqual(
       expect.arrayContaining(['run_id', 'error', 'model_id']),
