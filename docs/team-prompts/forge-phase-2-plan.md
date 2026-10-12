@@ -44,7 +44,8 @@
 - §14: No PTY and shell state.
 
 **Repo:** `D:\ACE offcl\ACE`.
-- Work happens in the worktree `D:\ACE offcl\wt\forge2` on branch `feat/forge-phase-2`, cut from `feat/forge-phase-1` at fab26e4.
+- Work happens in the worktree `D:\ACE offcl\wt\forge2` on branch `feat/forge-phase-2`. It sits on `feat/forge-phase-1-rest` at 7d00cd2: `origin/main` plus the 17 Phase 1 commits PR #44 did not carry (its tree is identical to Phase 1's fab26e4). The plan's own commits sit on top.
+- The web tasks wait for the whole-app re-skin (`ui/ace-theme`, PR #46); see "Before the web tasks" under Task 0.
 - The person's own ACE is served from `D:\ACE offcl\wt\forge` on ports 4747 and 5173. **Never stop, restart or bind those ports.** Every server this plan starts uses another port.
 
 **Later phases** keep their own plans:
@@ -56,7 +57,7 @@
 Every Phase 1 constraint still applies. They are restated here, then Phase 2's own follow.
 
 **Branch and commits**
-- **One branch, `feat/forge-phase-2`.** Commits go in task order, contracts first (CLAUDE.md §3.4 rule 2). Nothing is pushed or opened as a PR without the user's word (Task 17).
+- **One branch, `feat/forge-phase-2`.** Commits go in task order, contracts first (CLAUDE.md §3.4 rule 2). Nothing is pushed or opened as a PR without the user's word (Task 19).
 - **Commit messages** are Conventional Commits ending in `[D301]` plus FR ids. Each ends with the trailer `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`.
   - `docs/ACE-FRS.md` has no terminal or process requirement; D301 is the authority. The FR ids that apply:
     - FR-GIT-008: confinement (the working folder, the scripts reader);
@@ -78,11 +79,22 @@ Every Phase 1 constraint still applies. They are restated here, then Phase 2's o
 
 **Tests and builds**
 - **`pnpm test` passes with zero env vars and no network.** Real-process tests in `@ace/tools` and `apps/server` run `process.execPath`, as `run-command.test.ts`'s `node()` helper does, never a tool from `PATH`.
-- **Workspace packages resolve to their `dist/`** on the engine side. After changing a package another package imports, run `pnpm --filter <that package> build` before testing the importer. The chain here is contracts → engine → tools / storage-local → server, and contracts → sdk.
-- **`apps/web` resolves `@ace/contracts` and `@ace/sdk` to their `src/`** (`vite.config.ts` aliases), so web tests need no build.
+- **Where tests read workspace packages.**
+  - **From `src/`, through vitest aliases (no build needed):**
+    - `packages/engine/vitest.config.ts`: `@ace/contracts`;
+    - `packages/tools`, `packages/storage-local` (and `context`, `guardrails`, `providers`): `@ace/contracts` and `@ace/engine`;
+    - `apps/server/vitest.config.ts`: `@ace/contracts`, `@ace/engine`, `@ace/providers` and `@ace/storage-local`;
+    - `apps/web` (`vite.config.ts`, which `vitest.config.ts` reuses): `@ace/contracts`, `@ace/sdk` and `@ace/ui`.
+  - **From `dist/` (build first):**
+    - the server's tests read `@ace/tools` from `dist`, so build tools (Tasks 4, 5) before the server's tests (Tasks 8, 9);
+    - the SDK's tests read `@ace/contracts` from `dist`, so build contracts (Task 2) before the SDK's tests (Tasks 9, 10).
+  - **`tsc`** (typecheck and build) reads every dependency's `dist` declarations. So each task still builds the package it changed before an importer's typecheck: contracts → engine → tools / storage-local → server, and contracts → sdk.
 - **Coverage gates** (NFR-MAIN-02): at least 80 % for engine-side packages, and at least 60 % for `apps/web`, `packages/ui` and `packages/sdk`.
 - **Focused runs** use `pnpm --filter <pkg> exec vitest run <file>`.
-- **e2e** runs on its own port: `ACE_E2E_PORT=5196`, never 5173 or 5174 (another worktree's Vite may hold 5174, and `reuseExistingServer` would test the wrong code).
+- **Waiting in tests.** Poll for what a test waits on (`vi.waitFor`, or a deadline loop for real processes) rather than sleeping a fixed time. Time bounds on a kill count from the moment `taskkill` or the group kill has started.
+- **e2e** runs on its own port, `ACE_E2E_PORT=5196`, after checking it is free; if it is busy, use 5197.
+  - 5174 (the Playwright default) is avoided because other worktrees use it, and `reuseExistingServer` would silently test their code.
+  - 4747 and 5173 are the person's own ACE: never.
 
 **Phase 1 values that still hold**
 - **Paths on the wire** are project-relative, use forward slashes, and never start with one. `''` is the root and names a folder only. Absolute paths never cross the API.
@@ -91,7 +103,7 @@ Every Phase 1 constraint still applies. They are restated here, then Phase 2's o
 - **Nothing reaches the DB or the event log** from Forge: `files.changed`, `process.output` and `process.exited` are transient. No file content, terminal output or environment value is ever persisted.
 - **Prettier:** run `npx prettier --write --config packages/config/prettier.config.js <files>` on the files you create or rewrite only.
 
-**Phase 2's decisions (D301 refinements).** Each is stated in the code comments and in Task 17's DECISIONS row.
+**Phase 2's decisions (D301 refinements).** Each is stated in the code comments and in Task 19's DECISIONS row.
 1. **Layering.**
    - The port is `packages/engine/src/ports/processes.ts`; the runner is `packages/tools/src/process/`; `apps/server` wires them.
    - Agents never get a tool for it.
@@ -104,24 +116,29 @@ Every Phase 1 constraint still applies. They are restated here, then Phase 2's o
    Stop reuses `killTree` from `tools/src/sandbox/runner.ts`, whose Windows `taskkill` gains `windowsHide: true` in Task 4.
 3. **Environment.** `scrubSecrets(env, platform)`, exported from `tools/src/sandbox/env.ts`:
    - it keeps every variable whose name does not match `SECRET_SHAPED` (`/KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|SESSION|AUTH|COOKIE/i`, now exported);
-   - it also keeps `SSH_AUTH_SOCK`, `SSH_AGENT_PID`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS` and `SESSIONNAME`, which match but are sockets and paths (git over ssh needs the agent), compared case-insensitively on Windows;
-   - it then sets `FORCE_COLOR=1`.
+   - it also keeps `SSH_AUTH_SOCK`, `SSH_AGENT_PID`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS` and `SESSIONNAME`, which match but are sockets and paths (git over ssh needs the agent);
+   - it always drops `ELECTRON_RUN_AS_NODE` (`SCRUB_DROP`), which an engine started from VS Code or Claude Code inherits and which would make any Electron app started in the terminal run as plain Node;
+   - names compare case-insensitively on Windows;
+   - it then sets `FORCE_COLOR=1` and `PYTHONUTF8=1` (Python writes UTF-8 to the pipe instead of the console code page).
 
-   `PATH` and `HOME` survive because they do not match. `ANTHROPIC_API_KEY` and `ACE_*TOKEN` are dropped because they do.
+   `PATH` and `HOME` survive because they do not match. `ANTHROPIC_API_KEY` and `ACE_*TOKEN` are dropped because they do. Only names are checked, never values: a credential inside a value (`DATABASE_URL=postgres://user:pass@…`) passes, and the guide says so.
 4. **Working folder.**
    - It is a project-relative path, confined with `toAbsolute(root, cwd, { allowRoot: true })` from `tools/src/workspace/resolve.ts`. So it refuses outside paths (`outside_project`) and `.git` (`protected_path`) exactly as a file read does.
    - The runner then checks the path is an existing folder, or refuses with `invalid_path`.
-5. **Start body.** `ProcessStartRequest` is a union. Either `{ command: string(1..8000), cwd?, label? }` or `{ script: string(1..200), cwd?, label? }`.
-   - A `script` names a root `package.json` script. The service runs `<pm> run <script>`, with the package manager from decision 9.
+   - The runner confines the folder exactly as it was sent. The engine and the mock then record it normalised, as the list shows it: forward slashes, no `.` or empty segments, no trailing slash, `''` for the root.
+5. **Start body.** `ProcessStartRequest` is a union. Either `{ command: string(1..8000), cwd?, label? }` or `{ script: string(1..200), label? }`.
+   - A `script` names a root `package.json` script. The service runs `<pm> run <script>` **in the project root, always**, with the package manager from decision 9. The script form has no `cwd`, and the schema is strict, so a `cwd` sent with a `script` answers 400. (npm, pnpm, yarn and bun use the nearest `package.json` above the working folder, so a sub-folder would run a script nobody checked.)
    - A script name with characters other than `[A-Za-z0-9_:.@/+-]` is refused `validation_failed` rather than handed to a shell.
 6. **Trust levels.** `Project.terminal?: 'on' | 'scripts' | 'off'`; absent means `on`.
    - `scripts` accepts only the `script` form; a `command` answers 403 `terminal_restricted`.
-   - `off` refuses a start with 403 `terminal_disabled`.
-   - Setting a project to `off` also stops its running processes (Task 8).
+   - `off` refuses a start with 403 `terminal_disabled`. A script start reads the trust level again after it has read `package.json`, just before it spawns, so an `off` that lands in between still refuses it.
+   - Setting a project to `off` also stops its running processes, after the update (Task 8).
+   - Deleting a project stops its running processes first, so none runs on unseen and unstoppable (Task 8).
    - `input`, `stop`, list and get always work, so a person can stop what runs.
 7. **Limits.**
    - At most **8** running processes per project; the 9th answers 409 `process_limit`.
    - Output is batched at **50 ms** with the engine's `createBatcher`.
+   - One `process.output` frame carries at most **65,536** characters (`PROCESS_FRAME_MAX_CHARS`). A batch larger than that goes out as several consecutive frames, in order, never splitting a surrogate pair. This bounds what the engine queues per send and what the browser writes at once.
    - The last **1,048,576** characters (UTF-16 code units, decoded with a UTF-8 `StringDecoder`) are kept per process. A cut never leaves half a surrogate pair at the front.
    - The last **20** finished processes per project are kept, in memory only. Nothing goes to the DB or the event log, and all of it is lost on an engine restart.
    - Every process stops on engine shutdown, next to `workspace.stopAll()` and before the database closes.
@@ -148,8 +165,9 @@ Every Phase 1 constraint still applies. They are restated here, then Phase 2's o
     - An unknown project or process answers 404 `not_found`.
     - `ProcessSummary = { id, projectId, label, command, cwd, status: 'running' | 'exited' | 'failed', exitCode: number | null, signal: string | null, startedAt, endedAt? }`.
     - `failed` means it never started (a spawn error). Its message, `Could not start: <reason>`, goes into the output on `stderr`, so the terminal tab shows it (§10).
+    - A process the person stopped reads `exitCode: null, signal: 'SIGKILL'`, status `exited`, **on every platform**: the runner records the stop, because `taskkill /F` would otherwise leave cmd.exe's exit code 1. A process that ends by itself keeps its real code and signal.
 11. **Frames.** Two transient frames on the `project` scope:
-    - `process.output { projectId, processId, stream: 'stdout' | 'stderr', data }`;
+    - `process.output { projectId, processId, stream: 'stdout' | 'stderr', data }`, with `data` at most 65,536 characters (decision 7);
     - `process.exited { projectId, processId, exitCode, signal, status: 'exited' | 'failed' }`.
 
     Both are added to `PROJECT_EVENT_FRAME_SCHEMAS`, `PROJECT_EVENT_TYPES` and `TRANSIENT_EVENT_TYPES`, and emitted through `bus.emitTransient`. The hub already routes them by `payload.projectId`. The hub's `onProjectWatch` stays the file watcher's: processes run whether or not anyone watches.
@@ -171,6 +189,8 @@ Every Phase 1 constraint still applies. They are restated here, then Phase 2's o
     - The built-ins are `cd <dir>` (checked through `GET /files/tree?path=`, so confined to the project), `cd` alone (prints the folder), `cd ..` (stops at the root), `cls` and `clear`. A `cd` chained with `&&`, `|`, `;`, `<` or `>` goes to the shell, so it does not persist (§14).
     - The prompt is `<cwd or ~> $ `.
     - Sessions live in a zustand store keyed by project: tabs, cwd, history, the attached process and a scrollback capped at **1,048,576** characters. The bottom panel unmounts when hidden, so on remount the view writes the stored scrollback back.
+    - The Terminal takes the keyboard focus only when the person asked for it: Ctrl+`, a click on the panel's Terminal tab or on a terminal tab, New terminal, a script button, Show in the Processes list, the status bar's count or the empty editor's Terminal button. Hiding and showing the panel with Ctrl+J, or coming back from Ideate, leaves the focus where it was; xterm focuses itself on a click.
+    - A script button never sends a `cwd` (decision 5).
     - Several tabs are allowed. Closing a tab whose process runs asks "Stop <label>?".
     - A Processes list shows running processes with Stop, and finished ones with their exit.
     - Script buttons in the terminal header run a script in a new tab.
@@ -181,24 +201,28 @@ Every Phase 1 constraint still applies. They are restated here, then Phase 2's o
 15. **Trust UI.** `ProjectPage` gets a **Terminal** select (On — any command / Scripts only / Off) next to the budget fields; `SelectField` moves from `settings/SettingsPage.tsx` to `settings/SettingFields.tsx`. With `scripts` or `off`, the Terminal header says so and links to the project page. With `off`, typing and New terminal are disabled. With `scripts`, a typed command prints the 403's message in the tab.
 16. **stdin line ending:** `\n` on every platform.
 17. **Unit tests mock xterm** with `FakeTerminal` (`apps/web/src/test/FakeTerminal.ts`), registered globally in `test/setup.tsx` beside `FakeEditorHost`. The real xterm runs in e2e only.
+18. **Known limitations, deferred.** Named in the guide's limits (Task 19) and in the D301 row:
+    - **No EOF (Ctrl+D).** stdin stays open while a process runs, so a program that reads until its input ends (`sort`, `cat` with no file) waits until the person stops it.
+    - **Background jobs are not tracked.** Something a command leaves running after its shell ends (`cmd &`, `start /b`) is outside the process's tree: it is not in the Processes list, and Stop cannot reach it.
 
 ## Review Focus
 
 1. **A command that never ends, or prints megabytes, or leaves grandchildren behind** (`npm run dev` → `vite`). Expect:
    - the engine keeps only the last 1,048,576 characters;
+   - no frame carries more than 65,536 characters, so neither the engine's send queue nor the browser takes a multi-megabyte frame;
    - a terminal tab keeps only the last 1,048,576 characters, so the browser stays responsive;
-   - Stop kills the whole tree, grandchildren included, within 2.5 s.
+   - Stop kills the whole tree, grandchildren included, within 2.5 s of the kill starting.
 
-   Pinned by Task 4's test "Stop kills the shell, its child and its grandchild within 2.5 s", Task 6's test "keeps only the last 1,048,576 characters, never half a character" and Task 12's test "a tab keeps only the last 1,048,576 characters".
+   Pinned by Task 4's test "Stop kills the shell, its child and its grandchild within 2.5 s", Task 6's tests "keeps only the last 1,048,576 characters, never half a character" and "a flood in one batch goes out as frames of at most 65,536 characters, in order", and Task 12's test "a tab keeps only the last 1,048,576 characters".
 2. **Windows quoting.** A command line with quotes, `&&`, `|` and an environment variable (`%VAR%` / `$VAR`), and a working folder with spaces and unicode, run exactly as the shell would run them. Pinned by Task 4's tests "runs a line as the shell would: quotes, &&, | and a variable" and "runs in a folder whose name has spaces and unicode".
 3. **The engine stops, or the socket reconnects, while processes run.** Expect:
-   - stopping the engine leaves no process behind;
+   - stopping the engine leaves no process behind, and neither does deleting a project;
    - after a reconnect the tab's output is the engine's copy, shown once, never doubled;
    - a process the engine no longer knows says so and gives the prompt back.
 
-   Pinned by Task 8's test "stopping the engine stops every process it started, grandchildren included" and Task 12's tests "a re-attach replaces the tab's output with the engine's copy, once" and "a process the engine no longer knows ends the tab's run with a note".
+   Pinned by Task 8's tests "stopping the engine stops every process it started, grandchildren included" and "deleting a project stops its processes first", and Task 13's tests "a re-attach replaces the tab's output with the engine's copy, once" and "a process the engine no longer knows ends the tab's run with a note".
 4. **Output split mid-character or mid-colour.** A process writes `é`, `✓`, `😀` and `\x1b[31m…\x1b[0m` in pieces that cut through a multibyte sequence. Expect the text unmangled, with no `�`. Pinned by Task 4's test "never splits a character or an ANSI colour across chunks".
-5. **Secrets in the engine's environment.** `ANTHROPIC_API_KEY` or `ACE_SESSION_TOKEN` must never reach a terminal process; `SSH_AUTH_SOCK`, `PATH` and `HOME` must. Pinned by Task 4's tests "a process never sees a secret-shaped variable, but keeps SSH_AUTH_SOCK, PATH and HOME" and Task 4's `scrubSecrets` table.
+5. **Secrets in the engine's environment.** `ANTHROPIC_API_KEY` or `ACE_SESSION_TOKEN` must never reach a terminal process; `SSH_AUTH_SOCK`, `PATH` and `HOME` must; `ELECTRON_RUN_AS_NODE` must not. Pinned by Task 4's tests "a process never sees a secret-shaped variable, but keeps SSH_AUTH_SOCK, PATH and HOME" and Task 4's `scrubSecrets` table.
 
 ## File Map
 
@@ -206,7 +230,7 @@ Every Phase 1 constraint still applies. They are restated here, then Phase 2's o
 - Modify:
   - `graph.ts`: `TERMINAL_TRUST_LEVELS`, `TerminalTrustSchema`, `DEFAULT_TERMINAL_TRUST`, and `Project.terminal`;
   - `api.ts`: `UpdateProjectRequest.terminal`;
-  - `workspace.ts`: the process limits, the start union, input, summary, detail, scripts and the two frame payloads;
+  - `workspace.ts`: the process limits (`PROCESS_FRAME_MAX_CHARS` among them), the start union, input, summary, detail, scripts and the two frame payloads;
   - `errors.ts`: four `IDE_ERROR_CODES` and their statuses;
   - `events.ts`: `process.output` and `process.exited` as transient project frames;
   - `ws.ts`: `WS_CLOSE_FORBIDDEN_ORIGIN`.
@@ -214,7 +238,7 @@ Every Phase 1 constraint still applies. They are restated here, then Phase 2's o
 
 **Storage** (`packages/storage-local/src`)
 - Modify `migrations.ts` (`FORGE_TERMINAL_MIGRATION_ID`), `schema.ts` (`projects.terminal`) and `repository.ts` (`toProject`, `create`, `update`).
-- Tests: create `__tests__/migration-forge-terminal.test.ts`. In `migration-round-3`, `migration-round-4`, `migration-round-5`, `migration-x1` and `migration-chat-sessions`, add the new id to the expected chain.
+- Tests: create `__tests__/migration-forge-terminal.test.ts`. In `migration-round-3`, `migration-round-4`, `migration-round-5`, `migration-x1` and `migration-chat-sessions`, add the new id to the expected chain, and update `migration-round-5`'s "only … follow it" test.
 
 **Engine** (`packages/engine/src`)
 - Create:
@@ -225,15 +249,15 @@ Every Phase 1 constraint still applies. They are restated here, then Phase 2's o
 - Modify:
   - `ports/index.ts` and `ports/repository.ts`: the port, and `terminal` in the project patch;
   - `graph/index.ts`: `updateProject` takes `terminal`;
-  - `gateway/index.ts`: `isOriginAllowed`, `EngineDeps.processes`, the mount, and the widened `PATCH /projects/:id`;
+  - `gateway/index.ts`: `isOriginAllowed`, `EngineDeps.processes`, the mount, the widened `PATCH /projects/:id`, and `DELETE /projects/:id` stopping the project's processes first;
   - `index.ts`: the barrel;
   - `__tests__/fake-repository.ts`: `terminal` in `projects.update`.
 - Tests: create `processes/__tests__/fake-runner.ts`, `service.test.ts`, `routes.test.ts`, `terminal-off.test.ts` and `gateway/__tests__/origin.test.ts`; extend `__tests__/graph.test.ts` and `__tests__/events.test.ts`.
 
 **Tools** (`packages/tools/src`)
 - Create `process/runner.ts` (`createProcessRunner`, `resolveWorkingFolder`, `shellCommand`) and `process/scripts.ts` (`readProjectScripts`).
-- Modify `sandbox/env.ts` (`SECRET_SHAPED` exported, `SCRUB_KEEP`, `scrubSecrets`), `sandbox/runner.ts` (`windowsHide` on `taskkill`) and `index.ts`.
-- Tests: create `process/runner.test.ts`, `process/scripts.test.ts` and `sandbox/kill-tree.test.ts`; extend `sandbox/env.test.ts`.
+- Modify `sandbox/env.ts` (`SECRET_SHAPED` exported, `SCRUB_KEEP`, `SCRUB_DROP`, `scrubSecrets`), `sandbox/runner.ts` (`windowsHide` on `taskkill`) and `index.ts`.
+- Tests: create `process/runner.test.ts`, `process/scripts.test.ts`, `sandbox/kill-tree.test.ts` and (Task 6) `builtins/no-terminal-tool.test.ts`; extend `sandbox/env.test.ts`.
 
 **Server** (`apps/server/src`)
 - Modify `server.ts`: the process service, shutdown, the real-port `selfOrigins`, and the upgrade's Origin check.
@@ -249,7 +273,8 @@ Every Phase 1 constraint still applies. They are restated here, then Phase 2's o
 - Create `src/runs/SocketNotice.tsx` and its test; modify `src/runs/RunBar.tsx` (Task 9).
 - Mocks:
   - create `src/mocks/processes.ts` (`MockProcesses`) and `src/mocks/handlers-processes.ts`;
-  - modify `src/mocks/db.ts` (`terminal` on projects) and `src/mocks/browser.ts` (handlers and `__aceMock.setTerminal`).
+  - modify `src/mocks/db.ts` (`terminal` on projects) and `src/mocks/browser.ts` (handlers and `__aceMock.setTerminal`);
+  - the processes handlers also answer the projects `PATCH` (the update, then a stop on `off`) and see a project `DELETE` first (a stop), as the engine does.
 - Forge, new:
   - `src/forge/project-scope.ts`: `useProjectScope`, `retainProjectScope`;
   - `src/forge/terminal/`:
@@ -258,7 +283,8 @@ Every Phase 1 constraint still applies. They are restated here, then Phase 2's o
     - `line-discipline.ts`: `LineState`, `feed`, `promptFor`;
     - `builtins.ts`: `parseBuiltin`, `resolveCd`;
     - `process-events.ts`: `useProcessEvents`, `reattach`;
-    - `session.ts`: `typed`, `runScript`, `openProcessInTab`;
+    - `session.ts`: `typed`, `startInTab`, `enqueue`, `runScript`, `openProcessInTab`;
+    - `focus.ts`: `requestTerminalFocus`, `registerTerminalFocus`, `cancelTerminalFocus`, and (Task 16) `toggleTerminalFocused`;
     - `xterm-theme.ts`;
     - `TerminalView.tsx`, `TerminalPanel.tsx`, `TerminalTabs.tsx`, `ProcessesList.tsx`, `ScriptButtons.tsx`, `TrustNotice.tsx`.
 - Forge, modified:
@@ -293,7 +319,13 @@ git status --short
 git log --oneline -1
 ```
 
-Expected: a clean tree (this plan file may show as untracked until the controller commits it), and `fab26e4 docs: the guide says a save refuses a rename, move or delete; D299 lists every Phase 1 refinement [D299]` on `feat/forge-phase-2`.
+Expected: a clean tree, on `feat/forge-phase-2`. HEAD is the newest plan commit (`docs: Forge phase 2 plan — review fixes …`). Below it are the first plan commit 548e59d and then 7d00cd2 (`docs: the guide says a save refuses a rename, move or delete; D299 lists every Phase 1 refinement [D299]`), the tip of `feat/forge-phase-1-rest`. Check that with:
+
+```bash
+git merge-base --is-ancestor 7d00cd2 HEAD && echo "on feat/forge-phase-1-rest"
+```
+
+Expected: `on feat/forge-phase-1-rest`.
 
 - [ ] **Step 2: Install and build**
 
@@ -321,6 +353,16 @@ curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:4747/api/v1/health
 ```
 
 Expected: `401` if the person's ACE is running, or `000` if it is not. Either way, nothing in this plan binds 4747 or 5173.
+
+#### Before the web tasks
+
+The engine-side tasks (2–10: contracts, storage, runner, scripts, service, routes, server, the WebSocket Origin check, the SDK) do not depend on the web UI, and run as soon as Task 0 is green.
+
+The tasks that touch `apps/web` are 1 and 11–18, plus the guide in 19: mocks, the data layer, the terminal view, tabs, the trust UI and e2e. They run only after the whole-app re-skin (`ui/ace-theme`, PR #46) and the Phase 1 remainder (`feat/forge-phase-1-rest`) are combined into this branch's base. At that point, before the first web task, the controller:
+1. rebases or merges this branch onto the combined base;
+2. re-checks those tasks' anchors against the re-skinned files: `BottomPanel.tsx`, `StatusBar.tsx`, `EmptyEditor.tsx`, `ForgeWorkbench.tsx`, `ForgePage.tsx`, `RunBar.tsx`, `ProjectPage.tsx`, `SettingsPage.tsx` / `SettingFields.tsx`, `app/shortcuts.ts`, `app/stores/layout.ts`, `mocks/db.ts`, `mocks/browser.ts`, `test/setup.tsx`, `test/app.tsx`, `e2e/helpers.ts` and `docs/user-guide/forge.md`;
+3. updates a task's line anchors, class names or quoted text where the re-skin moved them, keeping the task's behaviour, names and tests;
+4. re-runs Task 0's baseline on the combined base.
 
 ---
 
@@ -393,6 +435,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
+
 ### Task 2: Contracts — processes, the trust level, four error codes, two frames and 4403
 
 **Files:**
@@ -412,23 +455,23 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - `Project.terminal?: TerminalTrust`.
 - Produces, from `api.ts`: `UpdateProjectRequest.terminal?: TerminalTrust`.
 - Produces, from `workspace.ts`:
-  - `PROCESS_COMMAND_MAX = 8_000`, `PROCESS_INPUT_MAX = 65_536`, `PROCESS_OUTPUT_MAX_CHARS = 1_048_576`, `PROCESS_RUNNING_MAX = 8`, `PROCESS_RECENT_MAX = 20`, `PROCESS_OUTPUT_BATCH_MS = 50`;
+  - `PROCESS_COMMAND_MAX = 8_000`, `PROCESS_INPUT_MAX = 65_536`, `PROCESS_OUTPUT_MAX_CHARS = 1_048_576`, `PROCESS_FRAME_MAX_CHARS = 65_536`, `PROCESS_RUNNING_MAX = 8`, `PROCESS_RECENT_MAX = 20`, `PROCESS_OUTPUT_BATCH_MS = 50`;
   - `PROCESS_STATUSES`, `ProcessStatusSchema`, `ProcessStatus` (`'running' | 'exited' | 'failed'`);
   - `PROCESS_STREAMS`, `ProcessStreamSchema`, `ProcessStream` (`'stdout' | 'stderr'`);
   - `PACKAGE_MANAGERS`, `PackageManagerSchema`, `PackageManager` (`'npm' | 'pnpm' | 'yarn' | 'bun'`);
-  - `ProcessStartRequestSchema` / `ProcessStartRequest` = `{ command, cwd?, label? } | { script, cwd?, label? }`;
+  - `ProcessStartRequestSchema` / `ProcessStartRequest` = `{ command, cwd?, label? } | { script, label? }`. The script form has no `cwd`: a script always runs in the project root (decision 5);
   - `ProcessStartResponseSchema` / `ProcessStartResponse` = `{ processId }`;
   - `ProcessInputRequestSchema` / `ProcessInputRequest` = `{ data }`;
   - `ProcessSummarySchema` / `ProcessSummary`, `ProcessDetailSchema` / `ProcessDetail`;
   - `ProjectScriptSchema` / `ProjectScript`, `ProjectScriptsSchema` / `ProjectScripts`;
-  - `ProcessOutputPayloadSchema` / `ProcessOutputPayload`, `ProcessExitedPayloadSchema` / `ProcessExitedPayload`.
+  - `ProcessOutputPayloadSchema` / `ProcessOutputPayload` (its `data` at most `PROCESS_FRAME_MAX_CHARS`), `ProcessExitedPayloadSchema` / `ProcessExitedPayload`.
 - Produces, from `errors.ts`: `terminal_disabled` 403, `terminal_restricted` 403, `process_limit` 409, `process_not_running` 409, appended to `IDE_ERROR_CODES`.
 - Produces, from `events.ts`: `process.output` and `process.exited` in `PROJECT_EVENT_FRAME_SCHEMAS`, `PROJECT_EVENT_TYPES` and `TRANSIENT_EVENT_TYPES`.
 - Produces, from `ws.ts`: `WS_CLOSE_FORBIDDEN_ORIGIN = 4403`.
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `packages/contracts/src/__tests__/workspace.test.ts`. First add these names to its import from `'../workspace.js'`: `PACKAGE_MANAGERS`, `PROCESS_COMMAND_MAX`, `PROCESS_INPUT_MAX`, `PROCESS_OUTPUT_BATCH_MS`, `PROCESS_OUTPUT_MAX_CHARS`, `PROCESS_RECENT_MAX`, `PROCESS_RUNNING_MAX`, `ProcessDetailSchema`, `ProcessExitedPayloadSchema`, `ProcessInputRequestSchema`, `ProcessOutputPayloadSchema`, `ProcessStartRequestSchema`, `ProcessStartResponseSchema`, `ProcessSummarySchema`, `ProjectScriptsSchema`. Then append:
+Append to `packages/contracts/src/__tests__/workspace.test.ts`. First add these names to its import from `'../workspace.js'`: `PACKAGE_MANAGERS`, `PROCESS_COMMAND_MAX`, `PROCESS_FRAME_MAX_CHARS`, `PROCESS_INPUT_MAX`, `PROCESS_OUTPUT_BATCH_MS`, `PROCESS_OUTPUT_MAX_CHARS`, `PROCESS_RECENT_MAX`, `PROCESS_RUNNING_MAX`, `ProcessDetailSchema`, `ProcessExitedPayloadSchema`, `ProcessInputRequestSchema`, `ProcessOutputPayloadSchema`, `ProcessStartRequestSchema`, `ProcessStartResponseSchema`, `ProcessSummarySchema`, `ProjectScriptsSchema`. Then append:
 
 ```ts
 describe('D301 the terminal’s processes contract (design §6.3)', () => {
@@ -448,6 +491,7 @@ describe('D301 the terminal’s processes contract (design §6.3)', () => {
     expect(PROCESS_COMMAND_MAX).toBe(8_000);
     expect(PROCESS_INPUT_MAX).toBe(65_536);
     expect(PROCESS_OUTPUT_MAX_CHARS).toBe(1_048_576);
+    expect(PROCESS_FRAME_MAX_CHARS).toBe(65_536);
     expect(PROCESS_RUNNING_MAX).toBe(8);
     expect(PROCESS_RECENT_MAX).toBe(20);
     expect(PROCESS_OUTPUT_BATCH_MS).toBe(50);
@@ -456,11 +500,18 @@ describe('D301 the terminal’s processes contract (design §6.3)', () => {
 
   it('starts either a typed command or a package.json script, never both', () => {
     const typed = { command: 'node -v', cwd: 'src', label: 'version' };
-    const script = { script: 'dev' };
+    const script = { script: 'dev', label: 'web' };
     expect(ProcessStartRequestSchema.parse(typed)).toEqual(typed);
     expect(ProcessStartRequestSchema.parse(script)).toEqual(script);
     expect(ProcessStartRequestSchema.safeParse({ command: 'a', script: 'dev' }).success).toBe(false);
     expect(ProcessStartRequestSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('runs a script in the project root only: a script with a cwd is refused', () => {
+    expect(ProcessStartRequestSchema.safeParse({ script: 'dev', cwd: 'packages/web' }).success).toBe(
+      false,
+    );
+    expect(ProcessStartRequestSchema.safeParse({ script: 'dev', cwd: '' }).success).toBe(false);
   });
 
   it('refuses an empty or blank command, and one over 8,000 characters', () => {
@@ -502,6 +553,13 @@ describe('D301 the terminal’s processes contract (design §6.3)', () => {
   it('streams output and an end, each naming the project and the process', () => {
     const output = { projectId: ID, processId: ID, stream: 'stderr', data: '\u001b[31mred\u001b[0m' };
     expect(ProcessOutputPayloadSchema.parse(output)).toEqual(output);
+    expect(
+      ProcessOutputPayloadSchema.safeParse({ ...output, data: 'x'.repeat(65_536) }).success,
+    ).toBe(true);
+    expect(
+      ProcessOutputPayloadSchema.safeParse({ ...output, data: 'x'.repeat(65_537) }).success,
+      'a bigger batch goes out as several frames',
+    ).toBe(false);
     const exited = { projectId: ID, processId: ID, exitCode: null, signal: 'SIGKILL', status: 'exited' };
     expect(ProcessExitedPayloadSchema.parse(exited)).toEqual(exited);
     expect(
@@ -570,7 +628,7 @@ to:
     expect([...PROJECT_EVENT_TYPES]).toEqual(['files.changed', 'process.output', 'process.exited']);
 ```
 
-In `packages/contracts/src/__tests__/ws.test.ts`, add `WS_CLOSE_FORBIDDEN_ORIGIN` to the import from `'../ws.js'`, and append inside `describe('FR-EXE-014 WebSocket client frames', …)`:
+In `packages/contracts/src/__tests__/ws.test.ts`, add `WS_CLOSE_FORBIDDEN_ORIGIN` to the import from `'../ws.js'`, and append inside `describe('FR-EXE-014 WebSocket server frames', …)` (it starts at line 97):
 
 ```ts
   it('carries process.output and process.exited on the project scope without a seq (D301)', () => {
@@ -651,6 +709,7 @@ In `packages/contracts/src/__tests__/index.test.ts`, add these rows to the `it.e
     ['workspace', 'ProcessOutputPayloadSchema'],
     ['workspace', 'ProcessExitedPayloadSchema'],
     ['workspace', 'PROCESS_OUTPUT_MAX_CHARS'],
+    ['workspace', 'PROCESS_FRAME_MAX_CHARS'],
     ['graph', 'TerminalTrustSchema'],
     ['ws', 'WS_CLOSE_FORBIDDEN_ORIGIN'],
 ```
@@ -731,6 +790,11 @@ export const PROCESS_RUNNING_MAX = 8;
 export const PROCESS_RECENT_MAX = 20;
 /** Output is collected this long before it goes out as `process.output` frames. */
 export const PROCESS_OUTPUT_BATCH_MS = 50;
+/**
+ * The most one `process.output` frame carries. A larger batch goes out as several frames, in
+ * order, so neither the engine's send queue nor the browser ever takes a multi-megabyte frame.
+ */
+export const PROCESS_FRAME_MAX_CHARS = 65_536;
 
 /** `failed` means it never started (a spawn error); its reason is in the output. */
 export const PROCESS_STATUSES = ['running', 'exited', 'failed'] as const;
@@ -748,9 +812,11 @@ export type PackageManager = z.infer<typeof PackageManagerSchema>;
 const ProcessLabelSchema = z.string().min(1).max(120);
 
 /**
- * `POST /projects/:id/processes`. Either the line a person typed, run through the platform shell,
- * or the name of a root package.json script, which the engine runs as `<pm> run <script>`. `cwd`
- * is project-relative and confined by the engine; the root when omitted.
+ * `POST /projects/:id/processes`. Either the line a person typed, run through the platform shell
+ * in `cwd` (project-relative and confined by the engine; the root when omitted), or the name of a
+ * root package.json script, which the engine runs as `<pm> run <script>` in the project root.
+ * The script form takes no `cwd`: a package manager reads the nearest package.json above its
+ * working folder, so a sub-folder would run a script nobody checked (D301).
  */
 export const ProcessStartRequestSchema = z.union([
   z.strictObject({
@@ -764,7 +830,6 @@ export const ProcessStartRequestSchema = z.union([
   }),
   z.strictObject({
     script: z.string().min(1).max(200),
-    cwd: ProjectPathSchema.optional(),
     label: ProcessLabelSchema.optional(),
   }),
 ]);
@@ -816,12 +881,15 @@ export const ProjectScriptsSchema = z.strictObject({
 });
 export type ProjectScripts = z.infer<typeof ProjectScriptsSchema>;
 
-/** The transient `process.output` frame on the `project` scope: one 50 ms batch of one stream. */
+/**
+ * The transient `process.output` frame on the `project` scope: one stream's part of a 50 ms batch,
+ * at most {@link PROCESS_FRAME_MAX_CHARS} characters.
+ */
 export const ProcessOutputPayloadSchema = z.strictObject({
   projectId: IdSchema,
   processId: IdSchema,
   stream: ProcessStreamSchema,
-  data: z.string(),
+  data: z.string().max(PROCESS_FRAME_MAX_CHARS),
 });
 export type ProcessOutputPayload = z.infer<typeof ProcessOutputPayloadSchema>;
 
@@ -962,7 +1030,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - `packages/engine/src/__tests__/fake-repository.ts:264-279` (`projects.update`).
 - Test:
   - create `packages/storage-local/src/__tests__/migration-forge-terminal.test.ts`;
-  - modify the expected migration chains in `migration-round-3.test.ts` (two lists), `migration-round-4.test.ts`, `migration-round-5.test.ts`, `migration-x1.test.ts` and `migration-chat-sessions.test.ts`;
+  - modify the expected migration chains in `migration-round-3.test.ts` (two lists), `migration-round-4.test.ts`, `migration-round-5.test.ts` (the chain, and the "only … follow it" test at lines 146-153), `migration-x1.test.ts` and `migration-chat-sessions.test.ts`;
   - extend `packages/engine/src/__tests__/graph.test.ts`.
 
 **Interfaces:**
@@ -1068,7 +1136,23 @@ describe('D301 migration: projects.terminal', () => {
 Then append `FORGE_TERMINAL_MIGRATION_ID` to every expected chain that lists the migrations after one under test, and import it from `'../migrations.js'` in each file:
 - `migration-round-3.test.ts`, both `toEqual([...])` lists (around lines 100 and 269): after `CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,` add `FORGE_TERMINAL_MIGRATION_ID,`.
 - `migration-round-4.test.ts` (around line 64): the same.
-- `migration-round-5.test.ts` (around line 105): the same.
+- `migration-round-5.test.ts` (around line 105): the same. In the same file, the test at lines 146-153 counts the migrations after round 5. Replace it with:
+
+  ```ts
+    it('sorts after every earlier migration, and only X1, chat-sessions and forge-terminal follow it', () => {
+      const ids = MIGRATIONS.map((migration) => migration.id);
+      expect(ids.indexOf(ROUND_5_MIGRATION_ID)).toBe(ids.length - 4);
+      expect(ids.slice(-3)).toEqual([
+        X1_CLI_PROVIDERS_MIGRATION_ID,
+        CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
+        FORGE_TERMINAL_MIGRATION_ID,
+      ]);
+      expect([...ids].sort()).toEqual(ids);
+      expect(ROUND_5_MIGRATION_ID).toBe('20261001T120000_round_5_knowledge_memory_usage');
+    });
+  ```
+
+  The seed-rollback test near line 280 uses `MIGRATIONS.at(-1)`, which is now the forge-terminal migration; it still passes, because `projects` exists before round 5.
 - `migration-x1.test.ts` (line 52): change the list to `[X1_CLI_PROVIDERS_MIGRATION_ID, CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID, FORGE_TERMINAL_MIGRATION_ID]`.
 - `migration-chat-sessions.test.ts` (line 53): change it to `[CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID, FORGE_TERMINAL_MIGRATION_ID]`.
 
@@ -1282,6 +1366,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
+
 ### Task 4: Engine port and tools runner — a supervised process on the platform shell
 
 **Files:**
@@ -1312,7 +1397,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
   Task 5 adds `scripts(root)` to `ProcessRunner`.
 - Produces, in `@ace/tools`:
-  - `SECRET_SHAPED: RegExp` (now exported), `SCRUB_KEEP: readonly string[]`, `scrubSecrets(env, platform?): Record<string, string>`;
+  - `SECRET_SHAPED: RegExp` (now exported), `SCRUB_KEEP: readonly string[]`, `SCRUB_DROP: readonly string[]` (`['ELECTRON_RUN_AS_NODE']`), `scrubSecrets(env, platform?): Record<string, string>` (sets `FORCE_COLOR=1` and `PYTHONUTF8=1`);
   - `ProcessRunnerOptions { platform?, env?, shell? }`;
   - `createProcessRunner(options?): ProcessRunner`;
   - `resolveWorkingFolder(root, cwd): string`, which throws `WorkspaceFsError` `outside_project` / `protected_path` / `invalid_path`;
@@ -1321,7 +1406,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - `start` throws a `WorkspaceFsError` for a refused working folder before anything is spawned;
   - otherwise the handlers are called in order: any number of `onOutput`, then exactly one of `onExit` or `onError`;
   - `onError` means it never started, and `pid` is `undefined` then;
-  - after `stop()`, `onExit` follows within 1.5 s even when the kill does not take, with `(null, 'SIGKILL')` if the shell never reported.
+  - after `stop()`, `onExit` follows within 1.5 s even when the kill does not take;
+  - a process ended by `stop()` reports `onExit(null, 'SIGKILL')` on every platform, whatever exit code the kill left (on Windows, `taskkill /F` leaves cmd.exe's code 1); a process that ends by itself reports its real code and signal.
 
 - [ ] **Step 1: Write the port**
 
@@ -1364,7 +1450,10 @@ export interface RunningProcess {
   readonly pid: number | undefined;
   /** Writes to stdin. Ignored once the process has ended. */
   write(data: string): void;
-  /** Kills the whole process tree. `onExit` follows within 1.5 s, even if the kill does not take. */
+  /**
+   * Kills the whole process tree. `onExit(null, 'SIGKILL')` follows within 1.5 s on every
+   * platform, even if the kill does not take.
+   */
   stop(): void;
 }
 
@@ -1388,7 +1477,7 @@ Expected: a clean build.
 
 - [ ] **Step 2: Write the failing tests**
 
-Append to `packages/tools/src/sandbox/env.test.ts`. Add `SCRUB_KEEP`, `SECRET_SHAPED` and `scrubSecrets` to its import from `'./env.js'`, then append:
+Append to `packages/tools/src/sandbox/env.test.ts`. Add `SCRUB_DROP`, `SCRUB_KEEP`, `SECRET_SHAPED` and `scrubSecrets` to its import from `'./env.js'`, then append:
 
 ```ts
 describe('D301 scrubSecrets — a terminal process gets the engine’s environment minus its secrets', () => {
@@ -1406,6 +1495,7 @@ describe('D301 scrubSecrets — a terminal process gets the engine’s environme
     XAUTHORITY: '/home/ada/.Xauthority',
     DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus',
     SESSIONNAME: 'Console',
+    ELECTRON_RUN_AS_NODE: '1',
     UNSET: undefined,
   };
 
@@ -1420,7 +1510,22 @@ describe('D301 scrubSecrets — a terminal process gets the engine’s environme
       DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus',
       SESSIONNAME: 'Console',
       FORCE_COLOR: '1',
+      PYTHONUTF8: '1',
     });
+  });
+
+  it('always drops ELECTRON_RUN_AS_NODE, which is no secret but turns any Electron app into Node', () => {
+    expect([...SCRUB_DROP]).toEqual(['ELECTRON_RUN_AS_NODE']);
+    expect(scrubSecrets({ ELECTRON_RUN_AS_NODE: '1' }, 'linux')).not.toHaveProperty(
+      'ELECTRON_RUN_AS_NODE',
+    );
+    expect(scrubSecrets({ Electron_Run_As_Node: '1' }, 'win32')).not.toHaveProperty(
+      'Electron_Run_As_Node',
+    );
+  });
+
+  it('asks Python for UTF-8 output, so the terminal does not get the console code page', () => {
+    expect(scrubSecrets({ PYTHONUTF8: '0' }, 'win32').PYTHONUTF8).toBe('1');
   });
 
   it('needs the exception list: each kept socket name but one matches the secret rule', () => {
@@ -1444,8 +1549,12 @@ describe('D301 scrubSecrets — a terminal process gets the engine’s environme
     expect(scrubSecrets({ SessionName: 'Console' }, 'win32')).toEqual({
       SessionName: 'Console',
       FORCE_COLOR: '1',
+      PYTHONUTF8: '1',
     });
-    expect(scrubSecrets({ SessionName: 'Console' }, 'linux')).toEqual({ FORCE_COLOR: '1' });
+    expect(scrubSecrets({ SessionName: 'Console' }, 'linux')).toEqual({
+      FORCE_COLOR: '1',
+      PYTHONUTF8: '1',
+    });
   });
 
   it('sets FORCE_COLOR=1 even over an inherited 0', () => {
@@ -1508,16 +1617,26 @@ import { createProcessRunner, shellCommand } from './runner.js';
 
 let root: string;
 let project: string;
-const stops: Array<() => void> = [];
+/** Every process a test started, so cleanup can end it before its folder is removed. */
+const live: Array<{ stop(): void; ended: Promise<void> }> = [];
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'ace-proc-'));
   project = join(root, 'demo project');
   mkdirSync(join(project, 'src'), { recursive: true });
 });
-afterEach(() => {
-  for (const stop of stops.splice(0)) stop();
-  rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+afterEach(async () => {
+  // Windows cannot remove a folder a live process runs in: end each one first (stop is a no-op
+  // for one that already ended), bounded by the runner's 1.5 s settle.
+  for (const run of live.splice(0)) {
+    run.stop();
+    await run.ended;
+  }
+  try {
+    rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+  } catch {
+    // Windows can hold a folder a moment after a process in it ends; the OS reclaims temp itself.
+  }
 });
 
 /** A `node -e` command line that survives both cmd.exe and /bin/sh. */
@@ -1560,15 +1679,16 @@ const runner = createProcessRunner();
 function start(command: string, cwd = '', using: ProcessRunner = runner) {
   const run = collect();
   const handle = using.start({ root: project, cwd, command }, run.handlers);
-  stops.push(() => handle.stop());
+  live.push({ stop: () => handle.stop(), ended: run.ended });
   return { ...run, handle };
 }
 
 /** The refusal code `start` throws for a working folder, or undefined when it starts. */
 function refusalFor(cwd: string): string | undefined {
   try {
-    const handle = runner.start({ root: project, cwd, command: node('1') }, collect().handlers);
-    stops.push(() => handle.stop());
+    const run = collect();
+    const handle = runner.start({ root: project, cwd, command: node('1') }, run.handlers);
+    live.push({ stop: () => handle.stop(), ended: run.ended });
   } catch (error) {
     return isWorkspaceFsError(error) ? error.code : 'not a WorkspaceFsError';
   }
@@ -1651,13 +1771,28 @@ describe('D301 the terminal’s process runner', () => {
     expect(isAlive(parent)).toBe(true);
     expect(isAlive(grandchild)).toBe(true);
 
-    const stoppedAt = Date.now();
+    // `stop()` starts the kill (taskkill, or the group kill) before it returns; the 2.5 s count
+    // from there.
+    run.handle.stop();
+    expect(await until(() => !isAlive(parent) && !isAlive(grandchild), 2_500)).toBe(true);
+    await run.ended;
+    expect(run.events.at(-1)).toEqual(['exit', null, 'SIGKILL']);
+  }, 20_000);
+
+  it('a stopped process reads as SIGKILL on every platform, never as the exit code the kill left', async () => {
+    const run = start(node("console.log('up'); setInterval(() => {}, 1000)"));
+    expect(await until(() => run.text().includes('up'), 10_000)).toBe(true);
     run.handle.stop();
     await run.ended;
-    expect(run.events.at(-1)?.[0]).toBe('exit');
-    expect(await until(() => !isAlive(parent) && !isAlive(grandchild), 2_500)).toBe(true);
-    expect(Date.now() - stoppedAt).toBeLessThan(2_500);
+    // On Windows taskkill /F leaves cmd.exe's exit code 1; the person asked for a stop, not a failure.
+    expect(run.events.at(-1)).toEqual(['exit', null, 'SIGKILL']);
   }, 20_000);
+
+  it('a process that ends by itself keeps its own exit code', async () => {
+    const run = start(node('process.exit(7)'));
+    await run.ended;
+    expect(run.events.at(-1)).toEqual(['exit', 7, null]);
+  });
 
   it('never splits a character or an ANSI colour across chunks', async () => {
     // é, ✓ and 😀 are 2, 3 and 4 bytes of UTF-8; each write ends inside one of them, and the
@@ -1678,13 +1813,14 @@ describe('D301 the terminal’s process runner', () => {
         ...process.env,
         ANTHROPIC_API_KEY: 'sk-ant-not-real',
         ACE_SESSION_TOKEN: 'not-real',
+        ELECTRON_RUN_AS_NODE: '1',
         SSH_AUTH_SOCK: '/tmp/agent.sock',
         HOME: '/home/ada',
       },
     });
     const run = start(
       node(
-        "console.log(JSON.stringify({ key: process.env.ANTHROPIC_API_KEY || null, token: process.env.ACE_SESSION_TOKEN || null, sock: process.env.SSH_AUTH_SOCK || null, home: process.env.HOME || null, path: (process.env.PATH || '').length > 0, color: process.env.FORCE_COLOR || null }))",
+        "console.log(JSON.stringify({ key: process.env.ANTHROPIC_API_KEY || null, token: process.env.ACE_SESSION_TOKEN || null, electron: process.env.ELECTRON_RUN_AS_NODE || null, sock: process.env.SSH_AUTH_SOCK || null, home: process.env.HOME || null, path: (process.env.PATH || '').length > 0, color: process.env.FORCE_COLOR || null, python: process.env.PYTHONUTF8 || null }))",
       ),
       '',
       scrubbing,
@@ -1693,10 +1829,12 @@ describe('D301 the terminal’s process runner', () => {
     expect(JSON.parse(run.text())).toEqual({
       key: null,
       token: null,
+      electron: null,
       sock: '/tmp/agent.sock',
       home: '/home/ada',
       path: true,
       color: '1',
+      python: '1',
     });
   });
 
@@ -1757,6 +1895,7 @@ describe('D301 the terminal’s process runner', () => {
     const broken = createProcessRunner({ shell: join(root, 'no-such-shell') });
     const run = start(node('1'), '', broken);
     await run.ended;
+    // A negative check: wait past the 300 ms exit drain, by when a stray onExit would have come.
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(run.events).toHaveLength(1);
     expect(run.events[0]?.[0]).toBe('error');
@@ -1776,7 +1915,7 @@ describe('D301 the terminal’s process runner', () => {
 - [ ] **Step 3: Run them to watch them fail**
 
 Run: `pnpm --filter @ace/tools exec vitest run src/process/runner.test.ts src/sandbox/env.test.ts src/sandbox/kill-tree.test.ts`
-Expected: FAIL. `./runner.js` does not exist, `scrubSecrets` and `SCRUB_KEEP` are not exported, and `killTree`'s options lack `windowsHide`.
+Expected: FAIL. `./runner.js` does not exist, `scrubSecrets`, `SCRUB_KEEP` and `SCRUB_DROP` are not exported, and `killTree`'s options lack `windowsHide`.
 
 - [ ] **Step 4: The environment and the kill**
 
@@ -1803,12 +1942,20 @@ export const SCRUB_KEEP: readonly string[] = [
 ];
 
 /**
+ * Names always dropped although they look like no secret. `ELECTRON_RUN_AS_NODE` is inherited by
+ * an engine started from VS Code or Claude Code, and would make any Electron app started in the
+ * terminal run as plain Node.
+ */
+export const SCRUB_DROP: readonly string[] = ['ELECTRON_RUN_AS_NODE'];
+
+/**
  * The environment a terminal process gets (D301, design §6.3): the engine's own, minus every name
  * that looks like a secret, so `ANTHROPIC_API_KEY` and the engine's `ACE_*TOKEN` never reach a
  * command a person typed. Unlike {@link sandboxEnv} this is a deny rule, not an allow-list: a
- * person's toolchain needs `PATH`, `HOME` and whatever else their shell set. Names compare
- * case-insensitively on Windows, as Windows reads them. `FORCE_COLOR=1` asks for colour, which the
- * terminal renders.
+ * person's toolchain needs `PATH`, `HOME` and whatever else their shell set. Only names are
+ * checked, never values. Names compare case-insensitively on Windows, as Windows reads them.
+ * `FORCE_COLOR=1` asks for colour, which the terminal renders; `PYTHONUTF8=1` makes Python write
+ * UTF-8 to the pipe rather than the console code page.
  */
 export function scrubSecrets(
   env: Record<string, string | undefined>,
@@ -1816,13 +1963,15 @@ export function scrubSecrets(
 ): Record<string, string> {
   const fold = (name: string): string => (platform === 'win32' ? name.toUpperCase() : name);
   const keep = new Set(SCRUB_KEEP.map(fold));
+  const drop = new Set(SCRUB_DROP.map(fold));
   const scrubbed: Record<string, string> = {};
   for (const [name, value] of Object.entries(env)) {
-    if (value === undefined) continue;
+    if (value === undefined || drop.has(fold(name))) continue;
     if (SECRET_SHAPED.test(name) && !keep.has(fold(name))) continue;
     scrubbed[name] = value;
   }
   scrubbed.FORCE_COLOR = '1';
+  scrubbed.PYTHONUTF8 = '1';
   return scrubbed;
 }
 ```
@@ -1977,10 +2126,17 @@ function supervise(
   };
   const timers: NodeJS.Timeout[] = [];
   let settled = false;
+  /** The person asked for a stop: the end reads SIGKILL on every platform (D301). */
+  let stopped = false;
 
   const say = (stream: ProcessStream, text: string): void => {
     if (!settled && text !== '') handlers.onOutput(stream, text);
   };
+
+  // taskkill /F leaves cmd.exe's exit code 1, and POSIX reports the signal; either way a stop is
+  // a stop, not a failure. A process that ended by itself keeps its own code and signal.
+  const ended = (code: number | null, signal: string | null): void =>
+    stopped ? handlers.onExit(null, 'SIGKILL') : handlers.onExit(code, signal);
 
   const finish = (report: () => void): void => {
     if (settled) return;
@@ -2004,9 +2160,9 @@ function supervise(
     if (child.pid === undefined) finish(() => handlers.onError(error));
   });
   child.on('exit', (code, signal) => {
-    timers.push(setTimeout(() => finish(() => handlers.onExit(code, signal)), EXIT_DRAIN_MS));
+    timers.push(setTimeout(() => finish(() => ended(code, signal)), EXIT_DRAIN_MS));
   });
-  child.on('close', (code, signal) => finish(() => handlers.onExit(code, signal)));
+  child.on('close', (code, signal) => finish(() => ended(code, signal)));
 
   return {
     pid: child.pid,
@@ -2015,9 +2171,10 @@ function supervise(
     },
     stop() {
       if (settled) return;
+      stopped = true;
       if (child.pid !== undefined) killTree(child.pid, platform);
       // A shell that outlives its kill must not leave the run open.
-      timers.push(setTimeout(() => finish(() => handlers.onExit(null, 'SIGKILL')), KILL_SETTLE_MS));
+      timers.push(setTimeout(() => finish(() => ended(null, 'SIGKILL')), KILL_SETTLE_MS));
     },
   };
 }
@@ -2033,7 +2190,7 @@ export * from './process/runner.js';
 - [ ] **Step 6: Run the tests**
 
 Run: `pnpm --filter @ace/tools exec vitest run src/process/runner.test.ts src/sandbox/env.test.ts src/sandbox/kill-tree.test.ts`
-Expected: PASS. The tree-kill test takes about a second; the whole file under 15 s.
+Expected: PASS. The two stop tests take about a second each; the whole file runs in under 20 s.
 
 If the tree-kill test fails on Windows because the grandchild survives, confirm with `tasklist /FI "PID eq <pid>"`. Fix the runner, never the test: the grandchild must die.
 
@@ -2107,7 +2264,13 @@ beforeEach(() => {
   project = join(root, 'demo project');
   mkdirSync(project);
 });
-afterEach(() => rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }));
+afterEach(() => {
+  try {
+    rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+  } catch {
+    // Windows can hold a folder a moment longer; the OS reclaims temp itself.
+  }
+});
 
 const put = (name: string, text: string) => writeFileSync(join(project, name), text);
 const manifest = (body: Record<string, unknown>) => put('package.json', JSON.stringify(body));
@@ -2354,6 +2517,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
+
 ### Task 6: Engine — `ProcessService`: trust, the limit, the kept output, the frames
 
 **Files:**
@@ -2361,7 +2525,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - `packages/engine/src/processes/errors.ts`;
   - `packages/engine/src/processes/service.ts`;
   - `packages/engine/src/processes/__tests__/fake-runner.ts`.
-- Test: create `packages/engine/src/processes/__tests__/service.test.ts`; extend `packages/engine/src/__tests__/events.test.ts`.
+- Test: create `packages/engine/src/processes/__tests__/service.test.ts` and `packages/tools/src/builtins/no-terminal-tool.test.ts`; extend `packages/engine/src/__tests__/events.test.ts`.
 
 **Interfaces:**
 - Consumes:
@@ -2389,17 +2553,25 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
     createProcessService(deps: {
       repository, scope, runner, bus, logger,
       maxRunning?: number /* 8 */, outputCapChars?: number /* 1_048_576 */,
-      keepRecent?: number /* 20 */, batchMs?: number /* 50 */, now?: () => string,
+      keepRecent?: number /* 20 */, batchMs?: number /* 50 */,
+      frameMaxChars?: number /* 65_536 */, now?: () => string,
     }): ProcessService
     tailOf(text: string, max: number): string
+    framesOf(data: string, max: number): string[]
+    normaliseCwd(cwd: string): string
     ```
 
   - Behaviour later tasks rely on:
+    - a script runs in the project root, always (`spec.cwd === ''`, `summary.cwd === ''`);
+    - a script start reads the trust level again after `runner.scripts()`, just before it spawns;
+    - a command's working folder goes to the runner exactly as sent, and is recorded normalised (`'src\\deep/'` lists as `'src/deep'`);
+    - each `process.output` frame carries at most 65,536 characters; a bigger batch goes out as several frames, in order, never splitting a surrogate pair;
     - `stop` of a finished process resolves; `input` to one rejects 409 `process_not_running`;
     - `stopProject` and `stopAll` resolve once every process they stopped has ended;
     - a spawn error records `Could not start: <reason>\r\n` on `stderr` and ends `failed`;
     - an unknown project or process is 404 `not_found`.
-  - from `__tests__/fake-runner.ts`: `fakeRunner(options?: { scripts?; refuse?; exitOnStop? }): FakeRunner`, where `FakeRunner = ProcessRunner & { started: FakeProcess[]; last(): FakeProcess }` and `FakeProcess = { spec; written: string[]; stops: number; print(text, stream?); exit(code, signal?); fail(message) }`. Tasks 7 and 8 reuse it.
+  - from `__tests__/fake-runner.ts`: `fakeRunner(options?: { scripts?; scriptsGate?; refuse?; exitOnStop? }): FakeRunner`, where `FakeRunner = ProcessRunner & { started: FakeProcess[]; scriptsAsked: number; last(): FakeProcess }` and `FakeProcess = { spec; written: string[]; stops: number; print(text, stream?); exit(code, signal?); fail(message) }`. Tasks 7 and 8 reuse it.
+  - A regression test in `@ace/tools` that no built-in tool's name matches `/process|terminal/` (D301: agents never get the terminal).
 
 - [ ] **Step 1: Write the test double**
 
@@ -2430,12 +2602,16 @@ export interface FakeProcess {
 
 export type FakeRunner = ProcessRunner & {
   readonly started: FakeProcess[];
+  /** How many times `scripts()` was called. */
+  readonly scriptsAsked: number;
   /** The newest process started. */
   last(): FakeProcess;
 };
 
 export interface FakeRunnerOptions {
   scripts?: ProjectScripts;
+  /** `scripts()` answers only once this settles: a test can change things meanwhile. */
+  scriptsGate?: Promise<void>;
   /** Refuse a start the way the real runner refuses a working folder: throw from `start`. */
   refuse?: (spec: ProcessSpec) => Error | undefined;
   /** A Stop ends the process on the next microtask, as a kill would. Default true. */
@@ -2445,8 +2621,12 @@ export interface FakeRunnerOptions {
 /** A `ProcessRunner` with no processes in it: every output and every end is the test's to play. */
 export function fakeRunner(options: FakeRunnerOptions = {}): FakeRunner {
   const started: FakeProcess[] = [];
+  let asked = 0;
   return {
     started,
+    get scriptsAsked() {
+      return asked;
+    },
     last() {
       const newest = started.at(-1);
       if (newest === undefined) throw new Error('the fake runner started nothing');
@@ -2486,7 +2666,11 @@ export function fakeRunner(options: FakeRunnerOptions = {}): FakeRunner {
         },
       };
     },
-    scripts: async () => options.scripts ?? { packageManager: 'npm', scripts: [] },
+    scripts: async () => {
+      asked += 1;
+      await options.scriptsGate;
+      return options.scripts ?? { packageManager: 'npm', scripts: [] };
+    },
   };
 }
 ```
@@ -2511,7 +2695,13 @@ import {
   isWorkspaceFsError,
   type EngineEvent,
 } from '../../ports/index.js';
-import { createProcessService, tailOf, type ProcessServiceDeps } from '../service.js';
+import {
+  createProcessService,
+  framesOf,
+  normaliseCwd,
+  tailOf,
+  type ProcessServiceDeps,
+} from '../service.js';
 import { fakeRunner, type FakeRunner } from './fake-runner.js';
 
 const FOLDER = 'D:/projects/demo';
@@ -2640,13 +2830,42 @@ describe('D301 a typed command runs as a supervised process', () => {
   });
 
   it('writes nothing to the event log, whatever it prints (design §7)', async () => {
-    const { project, runner, service, repository } = await harness();
+    const { project, runner, service, repository, payloads } = await harness();
     const before = await repository.events.currentSeq(LOCAL_SCOPE);
     await service.start(project.id, { command: 'echo token=abc' });
     runner.last().print('token=abc\n');
     runner.last().exit(0);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(() => expect(payloads('process.exited')).toHaveLength(1));
     expect(await repository.events.currentSeq(LOCAL_SCOPE)).toBe(before);
+  });
+
+  it('a flood in one batch goes out as frames of at most 65,536 characters, in order', async () => {
+    const { project, runner, service, payloads } = await harness({ deps: { batchMs: 10_000 } });
+    await service.start(project.id, { command: 'flood' });
+    // 😀 straddles the first frame's edge, so the cut must step back one code unit.
+    const flood = `${'a'.repeat(65_535)}😀${'b'.repeat(300_000)}`;
+    runner.last().print(flood);
+    runner.last().exit(0);
+
+    await vi.waitFor(() => expect(payloads('process.exited')).toHaveLength(1));
+    const frames = payloads('process.output') as Array<{ data: string }>;
+    expect(frames.length).toBeGreaterThan(1);
+    for (const frame of frames) {
+      expect(frame.data.length).toBeLessThanOrEqual(65_536);
+      expect(frame.data.charCodeAt(0) >= 0xdc00 && frame.data.charCodeAt(0) <= 0xdfff).toBe(false);
+    }
+    expect(frames.map((frame) => frame.data).join('')).toBe(flood);
+    expect(framesOf('abcde', 2)).toEqual(['ab', 'cd', 'e']);
+  });
+
+  it('runs a command in the folder it was given, and lists that folder normalised', async () => {
+    const { project, runner, service } = await harness();
+    const { processId } = await service.start(project.id, { command: 'ls', cwd: 'src\\deep/' });
+    expect(runner.last().spec.cwd).toBe('src\\deep/');
+    expect((await service.get(project.id, processId)).cwd).toBe('src/deep');
+    expect(normaliseCwd('./src//a/./')).toBe('src/a');
+    expect(normaliseCwd('src/deep/..')).toBe('src');
+    expect(normaliseCwd('.')).toBe('');
   });
 
   it('keeps only the last 1,048,576 characters, never half a character', async () => {
@@ -2807,6 +3026,31 @@ describe('D301 the project’s trust level governs a start, never a stop', () =>
     });
   });
 
+  it('runs a script in the project root, always (decision 5)', async () => {
+    const { project, runner, service } = await harness({ runner: fakeRunner({ scripts }) });
+    const { processId } = await service.start(project.id, { script: 'dev' });
+    expect(runner.last().spec).toEqual({ root: FOLDER, cwd: '', command: 'pnpm run dev' });
+    expect((await service.get(project.id, processId)).cwd).toBe('');
+  });
+
+  it('reads the trust level again after package.json: an off that lands meanwhile refuses the script', async () => {
+    let release: () => void = () => undefined;
+    const scriptsGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { project, repository, runner, service } = await harness({
+      runner: fakeRunner({ scripts, scriptsGate }),
+    });
+    const starting = refusal(service.start(project.id, { script: 'dev' }));
+    // The start has read the trust level (on) and now waits on package.json.
+    await vi.waitFor(() => expect(runner.scriptsAsked).toBe(1));
+    await repository.projects.update(LOCAL_SCOPE, project.id, { terminal: 'off', updatedAt: AT });
+    await service.stopProject(project.id);
+    release();
+    expect(await starting).toEqual({ code: 'terminal_disabled', status: 403 });
+    expect(runner.started).toEqual([]);
+  });
+
   it('a script package.json does not have is 404; a name a shell would split is refused before a shell sees it', async () => {
     const { project, runner, service } = await harness({ runner: fakeRunner({ scripts }) });
     expect(await refusal(service.start(project.id, { script: 'nope' }))).toEqual({
@@ -2920,10 +3164,32 @@ describe('D301 process frames ride the project scope', () => {
 });
 ```
 
+Create `packages/tools/src/builtins/no-terminal-tool.test.ts`, the regression pin for "agents never get the terminal" (D301 decision 1):
+
+```ts
+import { describe, expect, it } from 'vitest';
+
+import { ToolRegistry } from '../registry.js';
+import { registerBuiltinTools } from './factory.js';
+
+describe('D301 agents never get the terminal', () => {
+  it('registers no built-in tool for processes or the terminal', () => {
+    const registry = new ToolRegistry();
+    registerBuiltinTools(registry);
+    const names = registry.list().map((definition) => definition.name);
+    expect(names.length).toBeGreaterThan(0);
+    expect(names.filter((name) => /process|terminal/i.test(name))).toEqual([]);
+  });
+});
+```
+
 - [ ] **Step 3: Run them to watch them fail**
 
 Run: `pnpm --filter @ace/engine exec vitest run src/processes src/__tests__/events.test.ts`
 Expected: FAIL. `../service.js` does not exist. The new `events.test.ts` case already passes: the hub routes every `PROJECT_EVENT_TYPES` member since Task 2, and the case pins it.
+
+Run: `pnpm --filter @ace/tools exec vitest run src/builtins/no-terminal-tool.test.ts`
+Expected: PASS already. It is a regression pin: it fails the day someone registers a terminal tool for agents.
 
 - [ ] **Step 4: The refusals**
 
@@ -2991,6 +3257,7 @@ Create `packages/engine/src/processes/service.ts`:
 ```ts
 import {
   DEFAULT_TERMINAL_TRUST,
+  PROCESS_FRAME_MAX_CHARS,
   PROCESS_OUTPUT_BATCH_MS,
   PROCESS_OUTPUT_MAX_CHARS,
   PROCESS_RECENT_MAX,
@@ -3062,6 +3329,8 @@ export interface ProcessServiceDeps {
   keepRecent?: number;
   /** How long output collects before it goes out as frames. */
   batchMs?: number;
+  /** The most one `process.output` frame carries; a bigger batch goes out as several frames. */
+  frameMaxChars?: number;
   now?: () => string;
 }
 
@@ -3087,6 +3356,7 @@ interface Supervised {
 }
 
 const isLowSurrogate = (code: number): boolean => code >= 0xdc00 && code <= 0xdfff;
+const isHighSurrogate = (code: number): boolean => code >= 0xd800 && code <= 0xdbff;
 
 /** The last `max` UTF-16 code units of `text`, never starting with the second half of a pair. */
 export function tailOf(text: string, max: number): string {
@@ -3095,6 +3365,36 @@ export function tailOf(text: string, max: number): string {
   return isLowSurrogate(tail.charCodeAt(0)) ? tail.slice(1) : tail;
 }
 
+/** `data` in pieces of at most `max` code units, in order, never ending one inside a pair. */
+export function framesOf(data: string, max: number): string[] {
+  const frames: string[] = [];
+  let at = 0;
+  while (at < data.length) {
+    let end = Math.min(at + max, data.length);
+    if (end < data.length && end - 1 > at && isHighSurrogate(data.charCodeAt(end - 1))) end -= 1;
+    frames.push(data.slice(at, end));
+    at = end;
+  }
+  return frames;
+}
+
+/**
+ * A working folder as the list shows it (D301 decision 4): forward slashes, no `.` or empty
+ * segments, `..` folded into its parent, no trailing slash, `''` for the root. It is only a label:
+ * the runner confines the folder exactly as it was sent, and a refused one is never recorded, so
+ * this can never widen what is allowed.
+ */
+export function normaliseCwd(cwd: string): string {
+  const parts: string[] = [];
+  for (const segment of cwd.split(/[\\/]/)) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..' && parts.length > 0 && parts.at(-1) !== '..') parts.pop();
+    else parts.push(segment);
+  }
+  return parts.join('/');
+}
+
+/** A typed command's label: one line of it, at most 80 characters. The mock engine mirrors this. */
 const labelOf = (command: string): string => {
   const line = command.trim().replace(/\s+/g, ' ');
   return line.length <= LABEL_MAX ? line : `${line.slice(0, LABEL_MAX - 1)}…`;
@@ -3106,6 +3406,7 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
   const outputCap = deps.outputCapChars ?? PROCESS_OUTPUT_MAX_CHARS;
   const keepRecent = deps.keepRecent ?? PROCESS_RECENT_MAX;
   const batchMs = deps.batchMs ?? PROCESS_OUTPUT_BATCH_MS;
+  const frameMax = deps.frameMaxChars ?? PROCESS_FRAME_MAX_CHARS;
   const now = deps.now ?? (() => new Date().toISOString());
   const byProject = new Map<Id, Map<Id, Supervised>>();
   let starts = 0;
@@ -3137,14 +3438,20 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
     return record;
   }
 
+  /**
+   * One stream's run of a batch, as frames of at most `frameMax` characters, in order: a flood
+   * (`yes`, a verbose build) never becomes a multi-megabyte send the socket must buffer whole.
+   */
   function emitOutput(summary: ProcessSummary, chunk: Chunk): void {
-    const payload: ProcessOutputPayload = {
-      projectId: summary.projectId,
-      processId: summary.id,
-      stream: chunk.stream,
-      data: chunk.data,
-    };
-    void bus.emitTransient({ type: 'process.output', payload });
+    for (const data of framesOf(chunk.data, frameMax)) {
+      const payload: ProcessOutputPayload = {
+        projectId: summary.projectId,
+        processId: summary.id,
+        stream: chunk.stream,
+        data,
+      };
+      void bus.emitTransient({ type: 'process.output', payload });
+    }
   }
 
   /** One frame per run of one stream within a batch, so stdout and stderr keep their order. */
@@ -3226,18 +3533,26 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
 
       let command: string;
       let label: string;
+      // The folder exactly as sent: the runner confines it before anything spawns. A script has
+      // none: it runs in the project root, always, so its package.json is the one checked here.
+      let cwd: string;
       if ('script' in request) {
         const known = await runner.scripts(project.folderPath);
         if (!known.scripts.some((script) => script.name === request.script)) {
           throw notFound(`Script "${request.script}"`);
         }
         if (!SAFE_SCRIPT_NAME.test(request.script)) throw unsafeScriptName(request.script);
+        // package.json was read in the meantime: an off that landed then still refuses (D301).
+        const latest = await existing(projectId);
+        if ((latest.terminal ?? DEFAULT_TERMINAL_TRUST) === 'off') throw terminalDisabled();
         command = `${known.packageManager} run ${request.script}`;
         label = request.label ?? request.script;
+        cwd = '';
       } else {
         if (trust === 'scripts') throw terminalRestricted();
         command = request.command;
         label = request.label ?? labelOf(request.command);
+        cwd = request.cwd ?? '';
       }
 
       const records = recordsOf(projectId);
@@ -3249,7 +3564,7 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
         projectId,
         label,
         command,
-        cwd: request.cwd ?? '',
+        cwd: normaliseCwd(cwd),
         status: 'running',
         exitCode: null,
         signal: null,
@@ -3274,7 +3589,7 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
 
       try {
         record.handle = runner.start(
-          { root: project.folderPath, cwd: summary.cwd, command },
+          { root: project.folderPath, cwd, command },
           {
             onOutput(stream, chunk) {
               if (record.summary.status !== 'running') return;
@@ -3352,13 +3667,13 @@ Expected: PASS.
 
 - [ ] **Step 7: Full suite, typecheck, commit**
 
-Run: `pnpm --filter @ace/engine test && pnpm --filter @ace/engine typecheck`
+Run: `pnpm --filter @ace/engine test && pnpm --filter @ace/engine typecheck && pnpm --filter @ace/tools exec vitest run src/builtins`
 Expected: PASS.
 
 ```bash
-npx prettier --write --config packages/config/prettier.config.js packages/engine/src/processes packages/engine/src/__tests__/events.test.ts
-git add packages/engine
-git commit -m "feat(engine): the process service — trust levels, eight at a time, the last megabyte of output, transient frames [D301]
+npx prettier --write --config packages/config/prettier.config.js packages/engine/src/processes packages/engine/src/__tests__/events.test.ts packages/tools/src/builtins/no-terminal-tool.test.ts
+git add packages/engine packages/tools/src/builtins/no-terminal-tool.test.ts
+git commit -m "feat(engine): the process service — trust levels, eight at a time, the last megabyte of output, frames of at most 64K characters [D301]
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
@@ -3461,8 +3776,8 @@ describe('D301 the process routes (design §6.3)', () => {
     expect(listed.map((summary) => summary.id)).toEqual([processId]);
   });
 
-  it('refuses a body that names both a command and a script, or neither', async () => {
-    for (const body of [{ command: 'a', script: 'b' }, {}, { command: '' }]) {
+  it('refuses a body that names both a command and a script, or neither, or a script with a cwd', async () => {
+    for (const body of [{ command: 'a', script: 'b' }, {}, { command: '' }, { script: 'dev', cwd: 'web' }]) {
       const response = await send(app, 'POST', base(), body);
       expect(response.status).toBe(400);
       expect(await errorCode(response)).toBe('validation_failed');
@@ -3655,11 +3970,12 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
-### Task 8: Server — wiring, shutdown, "off" stops what runs, and a real-engine integration test
+
+### Task 8: Server — wiring, shutdown, "off" and a deleted project stop what runs, and a real-engine integration test
 
 **Files:**
 - Modify:
-  - `packages/engine/src/gateway/index.ts` (the `PATCH /projects/:id` route from Task 3);
+  - `packages/engine/src/gateway/index.ts` (the `PATCH /projects/:id` route from Task 3, and `DELETE /projects/:id` at lines 480-483);
   - `apps/server/src/server.ts:23-81` (imports), `:108-115` (imports), `:377-400` (the service), `:1005-1006` (the app's deps), `:1102` (shutdown).
 - Test: create `packages/engine/src/processes/__tests__/terminal-off.test.ts` and `apps/server/src/__tests__/processes.integration.test.ts`.
 
@@ -3669,6 +3985,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - from Tasks 4–7: `createProcessRunner()`, `createProcessService(...)`, `ProcessService.stopProject`, `ProcessService.stopAll`, `EngineDeps.processes`, `fakeRunner`.
 - Produces:
   - `PATCH /projects/:id` with `terminal: 'off'` awaits `deps.processes.stopProject(id)` after the update, so the answer comes once everything has stopped (D301 decision 6);
+  - `DELETE /projects/:id` awaits `deps.processes.stopProject(id)` before the delete, so no process of a deleted project runs on unseen (D301 decision 6);
   - the server's engine has a process service on the real runner, and `stop()` awaits `processes.stopAll()` after `workspace.stopAll()` and before the database closes (FR-SYS-008).
 
 - [ ] **Step 1: Write the failing gateway test**
@@ -3737,7 +4054,9 @@ async function harness(options: { withTerminal?: boolean } = {}) {
       headers: HEADERS,
       body: JSON.stringify(body),
     });
-  return { project, runner, processes, patch };
+  const remove = () =>
+    app.request(`/api/v1/projects/${project.id}`, { method: 'DELETE', headers: HEADERS });
+  return { project, runner, processes, patch, remove };
 }
 
 describe('D301 turning the terminal off stops what runs, now', () => {
@@ -3761,11 +4080,24 @@ describe('D301 turning the terminal off stops what runs, now', () => {
     expect(runner.last().stops).toBe(0);
   });
 
-  it('an engine built without the terminal still takes the PATCH (D121)', async () => {
-    const { patch } = await harness({ withTerminal: false });
+  it('an engine built without the terminal still takes the PATCH and the DELETE (D121)', async () => {
+    const { patch, remove } = await harness({ withTerminal: false });
     const response = await patch({ terminal: 'off' });
     expect(response.status).toBe(200);
     expect(((await response.json()) as Project).terminal).toBe('off');
+    expect((await remove()).status).toBe(204);
+  });
+});
+
+describe('D301 a deleted project leaves nothing running', () => {
+  it('deleting a project stops its processes first', async () => {
+    const { project, runner, processes, remove } = await harness();
+    const { processId } = await processes.start(project.id, { command: 'serve' });
+
+    expect((await remove()).status).toBe(204);
+
+    expect(runner.last().stops).toBe(1);
+    expect((await processes.get(project.id, processId)).status).toBe('exited');
   });
 });
 ```
@@ -3773,9 +4105,9 @@ describe('D301 turning the terminal off stops what runs, now', () => {
 - [ ] **Step 2: Run it to watch it fail**
 
 Run: `pnpm --filter @ace/engine exec vitest run src/processes/__tests__/terminal-off.test.ts`
-Expected: FAIL in the first test: `expected 0 to be 1`. The PATCH stores `off` but stops nothing.
+Expected: FAIL in "a PATCH to off stops…" and "deleting a project stops its processes first": `expected 0 to be 1`. Neither route stops anything yet.
 
-- [ ] **Step 3: Stop on off**
+- [ ] **Step 3: Stop on off, and before a delete**
 
 In `packages/engine/src/gateway/index.ts`, change the last line of the `PATCH /projects/:id` handler from:
 
@@ -3791,6 +4123,27 @@ to:
     // D301: off disables the terminal now, not only for new processes. Answered once all have ended.
     if (patch.terminal === 'off') await deps.processes?.stopProject(id);
     return c.json(updated);
+  });
+```
+
+and change the `DELETE /projects/:id` route (lines 480-483) from:
+
+```ts
+  api.delete('/projects/:id', async (c) => {
+    await deps.graph.deleteProject(c.req.param('id'));
+    return c.body(null, 204);
+  });
+```
+
+to:
+
+```ts
+  api.delete('/projects/:id', async (c) => {
+    const id = c.req.param('id');
+    // D301: a deleted project's processes would run on, unseen and unstoppable: they stop first.
+    await deps.processes?.stopProject(id);
+    await deps.graph.deleteProject(id);
+    return c.body(null, 204);
   });
 ```
 
@@ -3876,6 +4229,8 @@ async function watch(id: string): Promise<{ socket: WebSocket; frames: Frame[] }
     socket.on('error', reject);
   });
   socket.send(JSON.stringify({ type: 'subscribe', payload: { scope: 'project', id } }));
+  // The only fixed wait here: the protocol has no acknowledgement for a subscribe, so there is
+  // nothing to poll for. The hub applies it on receipt; this covers the loopback hop.
   await new Promise((resolve) => setTimeout(resolve, 100));
   return { socket, frames };
 }
@@ -3890,8 +4245,13 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // stop() ends every process first (this task's shutdown), so no process holds the folder.
   await engine.stop();
-  rmSync(dataDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+  try {
+    rmSync(dataDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+  } catch {
+    // Windows can hold a folder a moment after a process in it ends; the OS reclaims temp itself.
+  }
 });
 
 describe('D301 the terminal through the real engine', () => {
@@ -3938,20 +4298,25 @@ describe('D301 the terminal through the real engine', () => {
     }
   }, 30_000);
 
-  it('a long-running process stops through /stop in under 3 s', async () => {
+  it('a long-running process stops through /stop in under 3 s, and reads as SIGKILL', async () => {
     const started = await api<{ processId: string }>('POST', `/projects/${projectId}/processes`, {
-      command: node('setInterval(() => {}, 1000)'),
+      command: node("console.log('up'); setInterval(() => {}, 1000)"),
     });
     const { processId } = started.json;
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    expect(await statusOf(projectId, processId)).toBe('running');
+    const detail = () =>
+      api<{ status: string; output: string; exitCode: number | null; signal: string | null }>(
+        'GET',
+        `/projects/${projectId}/processes/${processId}`,
+      );
+    expect(await until(async () => (await detail()).json.output.includes('up'), 10_000)).toBe(true);
 
-    const stoppedAt = Date.now();
+    // The /stop answer comes once the kill has started; the 3 s count from there.
     expect((await api('POST', `/projects/${projectId}/processes/${processId}/stop`)).status).toBe(204);
     expect(await until(async () => (await statusOf(projectId, processId)) !== 'running', 3_000)).toBe(
       true,
     );
-    expect(Date.now() - stoppedAt).toBeLessThan(3_000);
+    // On every platform: taskkill's exit code 1 never reads as a failure (D301).
+    expect((await detail()).json).toMatchObject({ status: 'exited', exitCode: null, signal: 'SIGKILL' });
   }, 30_000);
 
   it('turning the terminal off stops what runs, and refuses a new start', async () => {
@@ -4020,8 +4385,33 @@ describe('D301 the terminal through the real engine', () => {
       expect(await until(() => !isAlive(parent) && !isAlive(grandchild), 3_000)).toBe(true);
     } finally {
       await second.stop();
-      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+      try {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+      } catch {
+        // Windows can hold a folder a moment after a process in it ends; the OS reclaims temp itself.
+      }
     }
+  }, 30_000);
+
+  it('deleting a project stops its processes first', async () => {
+    const id = await newProject(engine, join(dataDir, 'Doomed Project'));
+    const started = await api<{ processId: string }>('POST', `/projects/${id}/processes`, {
+      command: node("console.log('pid ' + process.pid); setInterval(() => {}, 1000)"),
+    });
+    let output = '';
+    expect(
+      await until(async () => {
+        output = (
+          await api<{ output: string }>('GET', `/projects/${id}/processes/${started.json.processId}`)
+        ).json.output;
+        return /pid \d+/.test(output);
+      }, 10_000),
+    ).toBe(true);
+    const pid = Number(/pid (\d+)/.exec(output)?.[1]);
+
+    expect((await api('DELETE', `/projects/${id}`)).status).toBe(204);
+
+    expect(await until(() => !isAlive(pid), 3_000)).toBe(true);
   }, 30_000);
 });
 ```
@@ -4076,7 +4466,7 @@ to:
 - [ ] **Step 7: Run the integration test**
 
 Run: `pnpm --filter @ace/server exec vitest run src/__tests__/processes.integration.test.ts`
-Expected: PASS, in under 30 s.
+Expected: PASS, in under 45 s.
 
 - [ ] **Step 8: Full suites, typecheck, commit**
 
@@ -4086,7 +4476,7 @@ Expected: PASS. If an unrelated server test fails, re-run it alone before report
 ```bash
 npx prettier --write --config packages/config/prettier.config.js apps/server/src/server.ts apps/server/src/__tests__/processes.integration.test.ts packages/engine/src/processes/__tests__/terminal-off.test.ts packages/engine/src/gateway/index.ts
 git add apps/server packages/engine
-git commit -m "feat(server): the terminal on the real engine — off stops what runs, shutdown stops every process tree [D301] [FR-SYS-008]
+git commit -m "feat(server): the terminal on the real engine — off and a project delete stop what runs, shutdown stops every process tree [D301] [FR-SYS-008]
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
@@ -4517,6 +4907,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
+
 ### Task 10: SDK — the six terminal methods
 
 **Files:**
@@ -4538,6 +4929,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 Create `packages/sdk/src/__tests__/processes.test.ts`:
 
 ```ts
+import type { ProcessStartRequest } from '@ace/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { createAceClient } from '../client.js';
@@ -4603,6 +4995,14 @@ describe('D301 the SDK’s terminal methods', () => {
   it('refuses a body the contract refuses, before anything leaves', async () => {
     const { client, seen } = clientAnswering(201, { processId: PROC });
     const error = await client.startProcess(PID, { command: '   ' }).catch((e: unknown) => e);
+    expect(AceApiError.is(error) && error.code).toBe('validation_failed');
+    expect(seen).toEqual([]);
+  });
+
+  it('refuses a script with a cwd: a script always runs in the project root (D301)', async () => {
+    const { client, seen } = clientAnswering(201, { processId: PROC });
+    const body = { script: 'dev', cwd: 'web' } as unknown as ProcessStartRequest;
+    const error = await client.startProcess(PID, body).catch((e: unknown) => e);
     expect(AceApiError.is(error) && error.code).toBe('validation_failed');
     expect(seen).toEqual([]);
   });
@@ -4748,7 +5148,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - `class MockProcesses(db: MockDb, options?: { tickMs?: number /* 500 */ })` with `start`, `input`, `stop`, `stopProject`, `list`, `get`, `scripts` and `reset`;
   - `MockProcessError(status, code, message, details?)`;
   - `MOCK_MESSAGES`: the engine's refusal messages, word for word (Task 6);
-  - `createProcessHandlers(db: MockDb, processes: MockProcesses): HttpHandler[]`;
+  - `createProcessHandlers(db: MockDb, processes: MockProcesses): HttpHandler[]`. Besides the process routes, it answers the projects `PATCH` itself, as the engine does: validate, update, then stop the project's processes when the patch turns the terminal off. It also sees a project `DELETE` first, stops the project's processes, and falls through to the projects handler, which deletes;
+  - the mock matches the engine on the details a person sees: a typed command's label is one line of it, at most 80 characters (the engine's `labelOf`); a working folder is recorded normalised; a script runs in the root (a `cwd` with a `script` is a 400 from the schema);
   - `MockDb.updateProject(id, patch: { name?, lastOpenedAt?, maxCostPerRunUsd?, terminal? })`;
   - `window.__aceMock.setTerminal(projectId, level: TerminalTrust)`;
   - from `test/app.tsx`: `export const processes: MockProcesses`, reset before every test.
@@ -4803,7 +5204,7 @@ beforeEach(async () => {
   const Socket = createFakeWebSocket(db);
   socket = new Socket('ws://mock/ws?token=t');
   socket.onmessage = (event) => frames.push(JSON.parse(String(event.data)) as ServerFrame);
-  await new Promise((resolve) => setTimeout(resolve, 5));
+  await vi.waitFor(() => expect(socket.readyState).toBe(1));
   socket.send(JSON.stringify({ type: 'subscribe', payload: { scope: 'project', id: projectId } }));
 });
 afterEach(() => {
@@ -4957,6 +5358,31 @@ describe('D301 the mock engine’s scripted processes', () => {
     expect(refused.json).toMatchObject({ error: { code: 'terminal_disabled' } });
   });
 
+  it('a PATCH the contract refuses changes nothing and stops nothing', async () => {
+    const id = await start({ command: 'serve' });
+    expect((await call('PATCH', '', { terminal: 'sometimes' })).status).toBe(400);
+    expect(processes.get(projectId, id).status).toBe('running');
+    expect(db.getProject(projectId)?.terminal).toBeUndefined();
+  });
+
+  it('deleting a project stops its processes first, as the engine does', async () => {
+    const id = await start({ command: 'serve' });
+    expect((await call('DELETE', '')).status).toBe(204);
+    await ended(id);
+    expect(exitOf(id)).toMatchObject({ exitCode: null, signal: 'SIGKILL' });
+    expect(db.getProject(projectId)).toBeUndefined();
+  });
+
+  it('labels and places a command as the engine does; a script never takes a cwd', async () => {
+    const long = `echo ${'x'.repeat(200)}`;
+    const id = await start({ command: `  ${long}  `, cwd: 'src/' });
+    expect((await call('GET', `/processes/${id}`)).json).toMatchObject({
+      label: `${long.slice(0, 79)}…`,
+      cwd: 'src',
+    });
+    expect((await call('POST', '/processes', { script: 'hello', cwd: 'src' })).status).toBe(400);
+  });
+
   it('refuses a ninth running process with 409 process_limit', async () => {
     for (let i = 0; i < 8; i += 1) await start({ command: 'serve' });
     const ninth = await call('POST', '/processes', { command: 'serve' });
@@ -5066,6 +5492,12 @@ export interface MockProcessesOptions {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+/** A typed command's label: one line of it, at most 80 characters, as the engine's `labelOf`. */
+const labelOf = (command: string): string => {
+  const line = command.trim().replace(/\s+/g, ' ');
+  return line.length <= 80 ? line : `${line.slice(0, 79)}…`;
+};
+
 export class MockProcesses {
   private readonly runs = new Map<string, Run>();
   private order = 0;
@@ -5118,6 +5550,7 @@ export class MockProcesses {
     }
     let command: string;
     let label: string;
+    let requested: string;
     if ('script' in request) {
       const known = this.scripts(projectId);
       if (!known.scripts.some((script) => script.name === request.script)) {
@@ -5125,19 +5558,22 @@ export class MockProcesses {
       }
       command = `${known.packageManager} run ${request.script}`;
       label = request.label ?? request.script;
+      // A script runs in the project root, always (D301 decision 5).
+      requested = '';
     } else {
       if (trust === 'scripts') {
         throw new MockProcessError(403, 'terminal_restricted', MOCK_MESSAGES.terminal_restricted);
       }
       command = request.command;
-      label = request.label ?? request.command.trim();
+      label = request.label ?? labelOf(request.command);
+      requested = request.cwd ?? '';
     }
     if (this.running(projectId).length >= PROCESS_RUNNING_MAX) {
       throw new MockProcessError(409, 'process_limit', MOCK_MESSAGES.process_limit, {
         max: PROCESS_RUNNING_MAX,
       });
     }
-    const cwd = this.checkCwd(projectId, request.cwd ?? '');
+    const cwd = this.checkCwd(projectId, requested);
     this.order += 1;
     const run: Run = {
       summary: {
@@ -5220,19 +5656,26 @@ export class MockProcesses {
     );
   }
 
-  /** The engine's confinement, in miniature (FR-GIT-008). */
+  /**
+   * The engine's confinement, in miniature (FR-GIT-008), answering the folder normalised as the
+   * engine lists it: forward slashes, no `.` or empty segments, no trailing slash, `''` for the root.
+   */
   private checkCwd(projectId: string, cwd: string): string {
-    const clean = cwd.split('\\').join('/').replace(/\/+$/, '');
-    if (clean === '' || clean === '.') return '';
+    const slashed = cwd.split('\\').join('/');
     const escapes =
-      clean.includes('\u0000') ||
-      clean.startsWith('/') ||
-      /^[A-Za-z]:/.test(clean) ||
-      clean.startsWith('~') ||
-      clean.split('/').includes('..');
+      slashed.includes('\u0000') ||
+      slashed.startsWith('/') ||
+      /^[A-Za-z]:/.test(slashed) ||
+      slashed.startsWith('~') ||
+      slashed.split('/').includes('..');
     if (escapes) {
       throw new MockProcessError(403, 'outside_project', 'That path is outside the project folder.');
     }
+    const clean = slashed
+      .split('/')
+      .filter((segment) => segment !== '' && segment !== '.')
+      .join('/');
+    if (clean === '') return '';
     if (clean.split('/').some((segment) => segment.toLowerCase() === '.git')) {
       throw new MockProcessError(403, 'protected_path', 'Forge does not read anything inside .git/.');
     }
@@ -5364,7 +5807,12 @@ export class MockProcesses {
 Create `apps/web/src/mocks/handlers-processes.ts`:
 
 ```ts
-import { ProcessInputRequestSchema, ProcessStartRequestSchema, aceError } from '@ace/contracts';
+import {
+  ProcessInputRequestSchema,
+  ProcessStartRequestSchema,
+  UpdateProjectRequestSchema,
+  aceError,
+} from '@ace/contracts';
 import { http, HttpResponse, type HttpHandler, type PathParams } from 'msw';
 
 import type { MockDb } from './db';
@@ -5372,7 +5820,7 @@ import { MockProcessError, type MockProcesses } from './processes';
 
 /**
  * Forge's terminal routes on the mock engine (D301, design §6.3), over a scripted `MockProcesses`.
- * Listed before the round handlers, so its PATCH hook sees a project update first.
+ * Listed before the round handlers, so it answers a project PATCH and sees a project DELETE first.
  */
 
 const API = '*/api/v1';
@@ -5411,14 +5859,24 @@ export function createProcessHandlers(db: MockDb, processes: MockProcesses): Htt
     fail(400, 'validation_failed', 'Request body is invalid.', issues);
 
   return [
-    // Not a terminal route: a PATCH that turns the terminal off stops what runs first, as the
-    // engine does (D301). It answers nothing, so the projects handler still applies the patch.
+    // The projects PATCH, answered here as the engine answers it (D301): validate, update, and
+    // then, when the patch turns the terminal off, stop what the project runs.
     http.patch(`${API}/projects/:id`, async ({ request, params }) => {
-      const patch = (await request
-        .clone()
-        .json()
-        .catch(() => undefined)) as { terminal?: unknown } | undefined;
-      if (patch?.terminal === 'off') processes.stopProject(String(params.id ?? ''));
+      if (!hasToken(request)) return fail(401, 'unauthorized', 'Missing or invalid session token.');
+      db.load();
+      const parsed = UpdateProjectRequestSchema.safeParse(await request.json().catch(() => undefined));
+      if (!parsed.success) return invalid(parsed.error.issues);
+      const projectId = String(params.id ?? '');
+      const project = db.updateProject(projectId, parsed.data);
+      if (project === undefined) return fail(404, 'not_found', 'Project not found.');
+      if (parsed.data.terminal === 'off') processes.stopProject(projectId);
+      return HttpResponse.json(project);
+    }),
+
+    // A project DELETE stops what the project runs first, as the engine does (D301). It answers
+    // nothing, so the projects handler that follows still checks the token and deletes.
+    http.delete(`${API}/projects/:id`, ({ request, params }) => {
+      if (hasToken(request)) processes.stopProject(String(params.id ?? ''));
       return undefined;
     }),
 
@@ -5577,27 +6035,25 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
-### Task 12: Web — the terminal's data layer: the shared project scope, the tab store, process frames and re-attach
+
+### Task 12: Web — the terminal's store and the shared project scope
 
 **Files:**
 - Create:
   - `apps/web/src/forge/project-scope.ts`;
   - `apps/web/src/forge/terminal/hooks.ts`;
-  - `apps/web/src/forge/terminal/line-discipline.ts` (the state a tab keeps; Task 13 adds `feed`);
-  - `apps/web/src/forge/terminal/terminal-store.ts`;
-  - `apps/web/src/forge/terminal/process-events.ts`.
+  - `apps/web/src/forge/terminal/line-discipline.ts` (the state a tab keeps; Task 14 adds `feed`);
+  - `apps/web/src/forge/terminal/terminal-store.ts`.
 - Modify:
   - `apps/web/src/forge/files/project-socket.ts:66-106` (`useProjectFiles` through `useProjectScope`);
-  - `apps/web/src/forge/ForgePage.tsx:5,11` (`useProcessEvents`);
-  - `apps/web/src/test/app.tsx` (`installMockSocket`, the store reset).
-- Test: create `apps/web/src/forge/project-scope.test.ts`, `apps/web/src/forge/terminal/terminal-store.test.ts`, `apps/web/src/forge/terminal/process-events.test.tsx`.
+  - `apps/web/src/test/app.tsx` (the store reset).
+- Test: create `apps/web/src/forge/project-scope.test.ts` and `apps/web/src/forge/terminal/terminal-store.test.ts`.
 
 **Interfaces:**
 - Consumes:
   - from Task 2: `PROCESS_OUTPUT_MAX_CHARS`, `ProcessSummary`;
-  - from Task 10: `api().getProcess`, `listProcesses`, `projectScripts`, `stopProcess`;
-  - from Task 11: `processes` (the mock runner) in `test/app.tsx`;
-  - existing: `getSocket()`, `startSocket`, `stopSocket`, `createFakeWebSocket`, `dropMockSockets`, `AceApiError`.
+  - from Task 10: `api().listProcesses`, `projectScripts`, `stopProcess`;
+  - existing: `getSocket()`, `AceSocket`.
 - Produces:
   - `forge/project-scope.ts`: `retainProjectScope(socket: AceSocket, projectId: string): () => void` and `useProjectScope(projectId: string | undefined): void`;
   - `forge/terminal/hooks.ts`:
@@ -5616,14 +6072,13 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
     - `scrollbackOf(tab)`, `exitLine(exit)`, `errorLine(message)`, `DROPPED_NOTE`, `LOST_NOTE`;
     - `useTerminalStore` with `newTab(projectId, { label?, cwd? }): string`, `closeTab`, `activate`, `rename`, `setLine`, `setCwd`, `write`, `clearScreen`, `idle`, `attach`, `output`, `exited`, `replaceLive`, `lost`, `reset`;
     - `useProjectTerminals(projectId)`, `tabOf(projectId, tabId)`, `ownerOf(projectId, processId)`;
-  - `forge/terminal/process-events.ts`: `reattach(projectId, queryClient): Promise<void>` and `useProcessEvents(projectId): void`;
-  - `test/app.tsx`: `installMockSocket()`, which starts the fake socket before each test and stops it after.
-- **Task boundary.** `line-discipline.ts` is created here with only the state a tab keeps, because the store holds it; Task 13 adds `feed` and its key table to the same file.
+  - `test/app.tsx` resets the terminal store before each test.
+- **Task boundary.** `line-discipline.ts` is created here with only the state a tab keeps, because the store holds it; Task 14 appends `feed` and its key table to the same file. Task 13 wires the process frames into this store.
 - **How a tab holds its text.**
   - `base` is everything shown before the attached process's output: prompts, echo, earlier runs.
-  - `live` is the attached process's output since it started, plus what was typed to it. A re-attach replaces `live` with the engine's copy.
+  - `live` is the attached process's output since it started, plus what was typed to it. A re-attach (Task 13) replaces `live` with the engine's copy.
   - `total` counts characters ever appended; `epoch` changes when text is replaced rather than appended (`clearScreen`, `replaceLive`).
-  - The view writes `total` deltas, and rewrites everything when `epoch` changes (Task 13).
+  - The view (Task 15) writes `total` deltas, and rewrites everything when `epoch` changes.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5854,139 +6309,10 @@ describe('D301 terminal tabs live outside the view, per project', () => {
 });
 ```
 
-Create `apps/web/src/forge/terminal/process-events.test.tsx`:
-
-```tsx
-import { QueryClientProvider } from '@tanstack/react-query';
-import { act, render } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
-
-import { getSocket } from '../../app/socket';
-import { dropMockSockets } from '../../mocks/fake-socket';
-import { db, installMockServer, installMockSocket, processes, queryClient } from '../../test/app';
-import { processKeys } from './hooks';
-import { busyLine } from './line-discipline';
-import { useProcessEvents } from './process-events';
-import { LOST_NOTE, scrollbackOf, useTerminalStore } from './terminal-store';
-
-installMockServer();
-installMockSocket();
-
-function Harness({ projectId }: { projectId: string }) {
-  useProcessEvents(projectId);
-  return null;
-}
-
-const mount = (projectId: string) =>
-  render(
-    <QueryClientProvider client={queryClient}>
-      <Harness projectId={projectId} />
-    </QueryClientProvider>,
-  );
-
-const store = () => useTerminalStore.getState();
-
-const shown = (projectId: string): string => {
-  const tab = store().projects[projectId]?.tabs[0];
-  return tab === undefined ? '' : scrollbackOf(tab);
-};
-
-/** A tab attached to a process, as a start from the tab would leave it. */
-function attachedTab(projectId: string, processId: string): string {
-  const tabId = store().newTab(projectId);
-  const tab = store().projects[projectId]?.tabs[0];
-  if (tab !== undefined) store().setLine(projectId, tabId, busyLine(tab.line));
-  store().attach(projectId, tabId, processId);
-  return tabId;
-}
-
-const socketOpen = () =>
-  vi.waitFor(() => expect(getSocket()?.status).toBe('open'), { timeout: 5_000 });
-
-describe('D301 process frames reach the tab that owns the process', () => {
-  it('folds the output and the end into the owning tab', async () => {
-    const projectId = db.createProject({ name: 'P' }).id;
-    mount(projectId);
-    await socketOpen();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const { processId } = processes.start(projectId, { command: 'echo hello' });
-    attachedTab(projectId, processId);
-    await vi.waitFor(() => expect(shown(projectId)).toBe('~ $ hello\n~ $ '));
-  });
-
-  it('keeps the output of a process no tab owns, for the Processes list', async () => {
-    const projectId = db.createProject({ name: 'P' }).id;
-    mount(projectId);
-    await socketOpen();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const { processId } = processes.start(projectId, { command: 'serve' });
-    await vi.waitFor(() =>
-      expect(store().unowned[processId]?.output).toContain('listening on 3000'),
-    );
-    processes.stop(projectId, processId);
-  });
-
-  it("a re-attach replaces the tab's output with the engine's copy, once", async () => {
-    const projectId = db.createProject({ name: 'P' }).id;
-    // It prints while nobody watches: as in Ideate, or with the socket down.
-    const { processId } = processes.start(projectId, { command: 'serve' });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    attachedTab(projectId, processId);
-    expect(shown(projectId)).toBe('~ $ ');
-
-    mount(projectId);
-    await vi.waitFor(() =>
-      expect(shown(projectId).startsWith('~ $ listening on 3000\n')).toBe(true),
-    );
-
-    // The engine went away and came back: hello re-attaches again, and nothing doubles.
-    act(() => dropMockSockets());
-    await vi.waitFor(() => expect(getSocket()?.status).toBe('reconnecting'));
-    await socketOpen();
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(shown(projectId).match(/listening on 3000/g)).toHaveLength(1);
-    processes.stop(projectId, processId);
-  });
-
-  it('a process that ended while nobody looked ends the tab’s run on re-attach', async () => {
-    const projectId = db.createProject({ name: 'P' }).id;
-    const { processId } = processes.start(projectId, { command: 'echo hello' });
-    await vi.waitFor(() => expect(processes.get(projectId, processId).status).toBe('exited'));
-    attachedTab(projectId, processId);
-
-    mount(projectId);
-    await vi.waitFor(() => expect(shown(projectId)).toBe('~ $ hello\n~ $ '));
-    expect(store().projects[projectId]?.tabs[0]?.processId).toBeUndefined();
-  });
-
-  it("a process the engine no longer knows ends the tab's run with a note", async () => {
-    const projectId = db.createProject({ name: 'P' }).id;
-    attachedTab(projectId, '01J9ZZZZZZZZZZZZZZZZZZZZZZ');
-
-    mount(projectId);
-    await vi.waitFor(() => expect(shown(projectId)).toBe(`~ $ \r\n${LOST_NOTE}~ $ `));
-    expect(store().projects[projectId]?.tabs[0]?.processId).toBeUndefined();
-  });
-
-  it('refreshes the scripts when package.json changes on disk', async () => {
-    const projectId = db.createProject({ name: 'P' }).id;
-    mount(projectId);
-    await socketOpen();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
-    act(() => db.writeFileExternally(projectId, 'package.json', '{"scripts":{"dev":"serve"}}'));
-    await vi.waitFor(() =>
-      expect(invalidate).toHaveBeenCalledWith({ queryKey: processKeys.scripts(projectId) }),
-    );
-    invalidate.mockRestore();
-  });
-});
-```
-
 - [ ] **Step 2: Run them to watch them fail**
 
-Run: `pnpm --filter @ace/web exec vitest run src/forge/project-scope.test.ts src/forge/terminal`
-Expected: FAIL. `./project-scope`, `./terminal-store`, `./line-discipline`, `./process-events` and `installMockSocket` do not exist.
+Run: `pnpm --filter @ace/web exec vitest run src/forge/project-scope.test.ts src/forge/terminal/terminal-store.test.ts`
+Expected: FAIL. `./project-scope`, `./terminal-store` and `./line-discipline` do not exist.
 
 - [ ] **Step 3: The shared project scope**
 
@@ -6499,7 +6825,214 @@ export function ownerOf(projectId: string, processId: string): TerminalTab | und
 }
 ```
 
-- [ ] **Step 6: Process frames and re-attach**
+- [ ] **Step 6: Reset the store between tests**
+
+In `apps/web/src/test/app.tsx`:
+1. Add `import { useTerminalStore } from '../forge/terminal/terminal-store';` beside the other forge store imports.
+2. In `installMockServer`'s `beforeEach`, after `useProblemsStore.setState({ byProject: {} });`, add:
+
+```ts
+    useTerminalStore.getState().reset();
+```
+
+- [ ] **Step 7: Run the tests**
+
+Run: `pnpm --filter @ace/web exec vitest run src/forge/project-scope.test.ts src/forge/terminal src/forge/files src/forge/ForgeWorkbench.test.tsx`
+Expected: PASS. The files tests still pass through the shared scope.
+
+- [ ] **Step 8: Full web suite, typecheck, lint, commit**
+
+Run: `pnpm --filter @ace/web test && pnpm --filter @ace/web typecheck && pnpm --filter @ace/web lint`
+Expected: PASS.
+
+```bash
+npx prettier --write --config packages/config/prettier.config.js apps/web/src/forge/project-scope.ts apps/web/src/forge/project-scope.test.ts apps/web/src/forge/terminal apps/web/src/forge/files/project-socket.ts apps/web/src/test/app.tsx
+git add apps/web/src
+git commit -m "feat(web): terminal tabs in a store outside the view, and one project subscription shared by files and processes [D301]
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 13: Web — process frames to their tab, and re-attach on entering Forge and on reconnect
+
+**Files:**
+- Create: `apps/web/src/forge/terminal/process-events.ts`
+- Modify:
+  - `apps/web/src/forge/ForgePage.tsx:5,11` (`useProcessEvents`);
+  - `apps/web/src/test/app.tsx` (`installMockSocket`).
+- Test: create `apps/web/src/forge/terminal/process-events.test.tsx`
+
+**Interfaces:**
+- Consumes:
+  - from Task 10: `api().getProcess`;
+  - from Task 11: `processes` (the mock runner) in `test/app.tsx`;
+  - from Task 12: `useProjectScope`, `processKeys`, `busyLine`, `useTerminalStore` (`output`, `exited`, `replaceLive`, `lost`), `ownerOf`, `scrollbackOf`, `DROPPED_NOTE`, `LOST_NOTE`;
+  - existing: `getSocket()`, `startSocket`, `stopSocket`, `createFakeWebSocket`, `dropMockSockets`, `AceApiError`.
+- Produces:
+  - `forge/terminal/process-events.ts`:
+    - `reattach(projectId, queryClient): Promise<void>`: for each tab that runs a process, the engine's kept output replaces the tab's copy; a process that ended meanwhile ends the tab's run; a 404 ends it with `LOST_NOTE`. A process no tab owns any more by the time its detail arrives is skipped, so two overlapping re-attaches leave nothing stale;
+    - `useProcessEvents(projectId): void`: holds the project scope, folds `process.output` and `process.exited` into the owning tab (or the unowned entries), refreshes the list, refreshes the scripts when `package.json` or a lockfile changes, and re-attaches on mount and on every `hello`;
+  - `ForgePage` mounts `useProcessEvents`;
+  - `test/app.tsx`: `installMockSocket()`, which starts the fake socket before each test and stops it after.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `apps/web/src/forge/terminal/process-events.test.tsx`:
+
+```tsx
+import { QueryClientProvider } from '@tanstack/react-query';
+import { act, render } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+
+import { getSocket } from '../../app/socket';
+import { dropMockSockets } from '../../mocks/fake-socket';
+import { db, installMockServer, installMockSocket, processes, queryClient } from '../../test/app';
+import { processKeys } from './hooks';
+import { busyLine } from './line-discipline';
+import { reattach, useProcessEvents } from './process-events';
+import { LOST_NOTE, scrollbackOf, useTerminalStore } from './terminal-store';
+
+installMockServer();
+installMockSocket();
+
+function Harness({ projectId }: { projectId: string }) {
+  useProcessEvents(projectId);
+  return null;
+}
+
+const mount = (projectId: string) =>
+  render(
+    <QueryClientProvider client={queryClient}>
+      <Harness projectId={projectId} />
+    </QueryClientProvider>,
+  );
+
+const store = () => useTerminalStore.getState();
+
+const shown = (projectId: string): string => {
+  const tab = store().projects[projectId]?.tabs[0];
+  return tab === undefined ? '' : scrollbackOf(tab);
+};
+
+/** A tab attached to a process, as a start from the tab would leave it. */
+function attachedTab(projectId: string, processId: string): string {
+  const tabId = store().newTab(projectId);
+  const tab = store().projects[projectId]?.tabs[0];
+  if (tab !== undefined) store().setLine(projectId, tabId, busyLine(tab.line));
+  store().attach(projectId, tabId, processId);
+  return tabId;
+}
+
+/**
+ * The socket is open. Its `onopen` reports `open` and re-sends every subscription in one
+ * synchronous step, so by the time this sees `open` the project scope is subscribed.
+ */
+const socketOpen = () =>
+  vi.waitFor(() => expect(getSocket()?.status).toBe('open'), { timeout: 5_000 });
+
+describe('D301 process frames reach the tab that owns the process', () => {
+  it('folds the output and the end into the owning tab', async () => {
+    const projectId = db.createProject({ name: 'P' }).id;
+    mount(projectId);
+    await socketOpen();
+    const { processId } = processes.start(projectId, { command: 'echo hello' });
+    attachedTab(projectId, processId);
+    await vi.waitFor(() => expect(shown(projectId)).toBe('~ $ hello\n~ $ '));
+  });
+
+  it('keeps the output of a process no tab owns, for the Processes list', async () => {
+    const projectId = db.createProject({ name: 'P' }).id;
+    mount(projectId);
+    await socketOpen();
+    const { processId } = processes.start(projectId, { command: 'serve' });
+    await vi.waitFor(() =>
+      expect(store().unowned[processId]?.output).toContain('listening on 3000'),
+    );
+    processes.stop(projectId, processId);
+  });
+
+  it("a re-attach replaces the tab's output with the engine's copy, once", async () => {
+    const projectId = db.createProject({ name: 'P' }).id;
+    // It prints while nobody watches: as in Ideate, or with the socket down.
+    const { processId } = processes.start(projectId, { command: 'serve' });
+    await vi.waitFor(() =>
+      expect(processes.get(projectId, processId).output).toContain('listening on 3000'),
+    );
+    attachedTab(projectId, processId);
+    expect(shown(projectId)).toBe('~ $ ');
+
+    mount(projectId);
+    await vi.waitFor(() =>
+      expect(shown(projectId).startsWith('~ $ listening on 3000\n')).toBe(true),
+    );
+
+    // The engine went away and came back: hello re-attaches again, and nothing doubles.
+    const before = store().projects[projectId]?.tabs[0]?.epoch ?? 0;
+    act(() => dropMockSockets());
+    await vi.waitFor(() => expect(getSocket()?.status).toBe('reconnecting'));
+    await socketOpen();
+    await vi.waitFor(() =>
+      expect(store().projects[projectId]?.tabs[0]?.epoch).toBeGreaterThan(before),
+    );
+    expect(shown(projectId).match(/listening on 3000/g)).toHaveLength(1);
+    processes.stop(projectId, processId);
+  });
+
+  it('a process that ended while nobody looked ends the tab’s run on re-attach', async () => {
+    const projectId = db.createProject({ name: 'P' }).id;
+    const { processId } = processes.start(projectId, { command: 'echo hello' });
+    await vi.waitFor(() => expect(processes.get(projectId, processId).status).toBe('exited'));
+    attachedTab(projectId, processId);
+
+    mount(projectId);
+    await vi.waitFor(() => expect(shown(projectId)).toBe('~ $ hello\n~ $ '));
+    expect(store().projects[projectId]?.tabs[0]?.processId).toBeUndefined();
+  });
+
+  it('two overlapping re-attaches of a finished process leave nothing stale behind', async () => {
+    const projectId = db.createProject({ name: 'P' }).id;
+    const { processId } = processes.start(projectId, { command: 'echo hello' });
+    await vi.waitFor(() => expect(processes.get(projectId, processId).status).toBe('exited'));
+    attachedTab(projectId, processId);
+
+    // On entering Forge and on hello, both at once: the second finds no owner and does nothing.
+    await Promise.all([reattach(projectId, queryClient), reattach(projectId, queryClient)]);
+
+    expect(shown(projectId)).toBe('~ $ hello\n~ $ ');
+    expect(store().unowned[processId]).toBeUndefined();
+  });
+
+  it("a process the engine no longer knows ends the tab's run with a note", async () => {
+    const projectId = db.createProject({ name: 'P' }).id;
+    attachedTab(projectId, '01J9ZZZZZZZZZZZZZZZZZZZZZZ');
+
+    mount(projectId);
+    await vi.waitFor(() => expect(shown(projectId)).toBe(`~ $ \r\n${LOST_NOTE}~ $ `));
+    expect(store().projects[projectId]?.tabs[0]?.processId).toBeUndefined();
+  });
+
+  it('refreshes the scripts when package.json changes on disk', async () => {
+    const projectId = db.createProject({ name: 'P' }).id;
+    mount(projectId);
+    await socketOpen();
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    act(() => db.writeFileExternally(projectId, 'package.json', '{"scripts":{"dev":"serve"}}'));
+    await vi.waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: processKeys.scripts(projectId) }),
+    );
+    invalidate.mockRestore();
+  });
+});
+```
+
+- [ ] **Step 2: Run them to watch them fail**
+
+Run: `pnpm --filter @ace/web exec vitest run src/forge/terminal/process-events.test.tsx`
+Expected: FAIL. `./process-events` and `installMockSocket` do not exist.
+
+- [ ] **Step 3: Process frames and re-attach**
 
 Create `apps/web/src/forge/terminal/process-events.ts`:
 
@@ -6512,7 +7045,7 @@ import { api } from '../../app/api';
 import { getSocket } from '../../app/socket';
 import { useProjectScope } from '../project-scope';
 import { processKeys } from './hooks';
-import { DROPPED_NOTE, useTerminalStore } from './terminal-store';
+import { DROPPED_NOTE, ownerOf, useTerminalStore } from './terminal-store';
 
 /** A change to one of these, in the project root, can change the scripts or their manager. */
 const SCRIPT_FILES = /^(package\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|package-lock\.json)$/;
@@ -6523,6 +7056,7 @@ const SCRIPT_FILES = /^(package\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|pac
  * the engine's kept copy replaces what the tab holds for the process instead, so it shows once and
  * never doubles. A process that ended meanwhile ends the tab's run; one the engine no longer knows
  * (it restarted) says so and gives the prompt back.
+ * A process that no tab owns any more by the time its detail arrives is left alone.
  *
  * Accepted edge: a batch the engine emits after taking its copy, but which arrives before the HTTP
  * answer, is replaced away at the seam. At worst one 50 ms batch is lost on a reconnect; nothing
@@ -6537,6 +7071,9 @@ export async function reattach(projectId: string, queryClient: QueryClient): Pro
       const store = useTerminalStore.getState();
       try {
         const detail = await api().getProcess(projectId, processId);
+        // Another re-attach (on mount and on hello, overlapping) may have ended this run already;
+        // touching it again would leave a stale unowned entry.
+        if (ownerOf(projectId, processId) === undefined) return;
         store.replaceLive(projectId, processId, (detail.truncated ? DROPPED_NOTE : '') + detail.output);
         if (detail.status !== 'running') {
           store.exited(projectId, processId, {
@@ -6598,6 +7135,8 @@ export function useProcessEvents(projectId: string): void {
 }
 ```
 
+- [ ] **Step 4: Mount it in Forge**
+
 In `apps/web/src/forge/ForgePage.tsx`, add `import { useProcessEvents } from './terminal/process-events';` after the `./files/project-socket` import, and after `useProjectFiles(projectId);` add:
 
 ```ts
@@ -6605,19 +7144,17 @@ In `apps/web/src/forge/ForgePage.tsx`, add `import { useProcessEvents } from './
   useProcessEvents(projectId);
 ```
 
-- [ ] **Step 7: The test harness**
+- [ ] **Step 5: The fake socket for tests**
 
 In `apps/web/src/test/app.tsx`:
 1. Add these imports:
 
 ```ts
 import { startSocket, stopSocket } from '../app/socket';
-import { useTerminalStore } from '../forge/terminal/terminal-store';
 import { createFakeWebSocket } from '../mocks/fake-socket';
 ```
 
-2. In `installMockServer`'s `beforeEach`, after `useProblemsStore.setState({ byProject: {} });`, add `useTerminalStore.getState().reset();`.
-3. Append:
+2. Append:
 
 ```ts
 /**
@@ -6638,67 +7175,54 @@ export function installMockSocket(): void {
 }
 ```
 
-- [ ] **Step 8: Run the tests**
+- [ ] **Step 6: Run the tests**
 
-Run: `pnpm --filter @ace/web exec vitest run src/forge/project-scope.test.ts src/forge/terminal src/forge/files src/forge/ForgeWorkbench.test.tsx`
+Run: `pnpm --filter @ace/web exec vitest run src/forge/terminal src/forge/files src/forge/ForgeWorkbench.test.tsx`
 Expected: PASS. The reconnect test waits for the SDK's 500 ms backoff, so the file takes about two seconds.
 
-- [ ] **Step 9: Full web suite, typecheck, lint, commit**
+- [ ] **Step 7: Full web suite, typecheck, lint, commit**
 
 Run: `pnpm --filter @ace/web test && pnpm --filter @ace/web typecheck && pnpm --filter @ace/web lint`
 Expected: PASS.
 
 ```bash
-npx prettier --write --config packages/config/prettier.config.js apps/web/src/forge/project-scope.ts apps/web/src/forge/project-scope.test.ts apps/web/src/forge/terminal apps/web/src/forge/files/project-socket.ts apps/web/src/forge/ForgePage.tsx apps/web/src/test/app.tsx
+npx prettier --write --config packages/config/prettier.config.js apps/web/src/forge/terminal/process-events.ts apps/web/src/forge/terminal/process-events.test.tsx apps/web/src/forge/ForgePage.tsx apps/web/src/test/app.tsx
 git add apps/web/src
-git commit -m "feat(web): terminal tabs in a store, process frames to their tab, re-attach on entering and on reconnect, one shared project scope [D301]
+git commit -m "feat(web): process frames reach their tab, and each tab re-attaches on entering Forge and on reconnect [D301]
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
-### Task 13: Web — the terminal view, the line discipline and the built-ins
+
+### Task 14: Web — the pure parts: xterm installed, its test double, the line discipline and the built-ins
 
 **Files:**
 - Modify:
   - `apps/web/package.json` (the four xterm packages, exact);
   - `apps/web/src/forge/terminal/line-discipline.ts` (append `feed` and its key table);
   - `apps/web/src/test/setup.tsx` (xterm mocked globally, after line 26);
-  - `apps/web/src/test/app.tsx` (reset the fakes before each test);
-  - `apps/web/src/app/stores/layout.ts:5` (`'terminal'`);
-  - `apps/web/src/forge/panel/BottomPanel.tsx:10-14` and `:61-64` (the Terminal tab, first).
+  - `apps/web/src/test/app.tsx` (reset the fakes before each test).
 - Create:
-  - `apps/web/src/forge/terminal/builtins.ts`;
-  - `apps/web/src/forge/terminal/session.ts`;
-  - `apps/web/src/forge/terminal/xterm-theme.ts`;
-  - `apps/web/src/forge/terminal/TerminalView.tsx`;
-  - `apps/web/src/forge/terminal/TerminalPanel.tsx`;
-  - `apps/web/src/test/FakeTerminal.ts`.
-- Test: create `apps/web/src/forge/terminal/line-discipline.test.ts`, `builtins.test.ts`, `TerminalPanel.test.tsx` and `apps/web/src/test/FakeTerminal.test.ts`.
+  - `apps/web/src/test/FakeTerminal.ts`;
+  - `apps/web/src/forge/terminal/builtins.ts`.
+- Test: create `apps/web/src/test/FakeTerminal.test.ts`, `apps/web/src/forge/terminal/line-discipline.test.ts` and `apps/web/src/forge/terminal/builtins.test.ts`.
 
 **Interfaces:**
 - Consumes:
-  - from Task 12: `LineState`, `initialLineState`, `settleLine`, `promptFor`, `useTerminalStore` and its actions, `tabOf`, `scrollbackOf`, `errorLine`, `processKeys`, `useProcessEvents`, `installMockSocket`;
-  - from Task 10: `api().startProcess`, `processInput`, `stopProcess`, `listFolder`;
-  - existing: `useResolvedTheme`, `IconAction`, `useLayoutStore`.
+  - from Task 12: `LineState`, `initialLineState`, `HISTORY_MAX`, and `useTerminalStore` (its reset is the anchor in `test/app.tsx`).
 - Produces:
   - in `line-discipline.ts`:
     - `type LineAction = { kind: 'run'; line } | { kind: 'input'; data } | { kind: 'stop' } | { kind: 'prompt' }`;
     - `interface LineStep { state: LineState; echo: string; actions: LineAction[] }`;
     - `feed(state: LineState, data: string): LineStep`, pure;
   - in `builtins.ts`: `type Builtin = { kind: 'cd'; arg: string | undefined } | { kind: 'clear' }`, `parseBuiltin(line): Builtin | undefined`, `resolveCd(cwd, arg): string`;
-  - in `session.ts`:
-    - `typed(projectId, tabId, data, queryClient): Promise<void>`, which settles when the actions this input caused have run;
-    - `startInTab(projectId, tabId, request: ProcessStartRequest, queryClient): Promise<void>`;
-    - `enqueue(projectId, tabId, work: () => Promise<void>): Promise<void>`;
-  - `terminalTheme(theme: 'dark' | 'light'): ITheme`;
-  - `TerminalView({ projectId, tabId })`, with the test ids `terminal-view` (its host) and, under `FakeTerminal`, `terminal-screen`;
-  - `TerminalPanel({ projectId })`, test id `terminal-panel`. On mount it opens a first tab when the project has none;
-  - `ForgePanelTab = 'terminal' | 'problems' | 'output'`; the panel's tabs read Terminal · Problems · Output;
-  - the test double:
-    - `FakeTerminal` (static `instances`, `latest()`; `options`, `written`, `disposed`, `type(data)`, `press(init): boolean`, `plain()`) and `screenText(stream)`;
+  - the test double, for every web task from here on:
+    - `FakeTerminal` (static `instances`, `latest()`; `options`, `written`, `disposed`, `focused`, `type(data)`, `press(init): boolean`, `plain()`) and `screenText(stream)`;
     - `FakeFitAddon`, `FakeWebLinksAddon`, `FakeSearchAddon` (static `instances`, `calls`, `cleared`);
-    - all registered in `setup.tsx` for every unit test.
+    - all registered in `setup.tsx` for every unit test, and reset in `test/app.tsx` before each one;
+  - `@xterm/xterm` 6.0.0, `@xterm/addon-fit` 0.11.0, `@xterm/addon-web-links` 0.12.0 and `@xterm/addon-search` 0.16.0 in `apps/web/package.json`.
+- Everything here is pure or a test double: no component changes, so this task is green on its own. Task 15 builds the view on it.
 
 **The line discipline's key table** (input as xterm's `onData` reports it):
 
@@ -7237,227 +7761,10 @@ describe('D301 the terminal’s built-ins: cd, cls and clear', () => {
 });
 ```
 
-Create `apps/web/src/forge/terminal/TerminalPanel.test.tsx`:
-
-```tsx
-import { act, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
-
-import { api } from '../../app/api';
-import { getSocket } from '../../app/socket';
-import { useLayoutStore } from '../../app/stores/layout';
-import {
-  db,
-  installMockServer,
-  installMockSocket,
-  processes,
-  renderApp,
-  renderWithQuery,
-} from '../../test/app';
-import { FakeSearchAddon, FakeTerminal } from '../../test/FakeTerminal';
-import { BottomPanel } from '../panel/BottomPanel';
-import { useProcessEvents } from './process-events';
-import { TerminalPanel } from './TerminalPanel';
-
-installMockServer();
-installMockSocket();
-
-vi.mock('../../canvas/Canvas', () => ({
-  Canvas: ({ workflowId }: { workflowId: string }) => <div data-testid="canvas">{workflowId}</div>,
-}));
-
-function Harness({ projectId }: { projectId: string }) {
-  useProcessEvents(projectId);
-  return <TerminalPanel projectId={projectId} />;
-}
-
-async function open(): Promise<string> {
-  const projectId = db.createProject({ name: 'Shop' }).id;
-  db.seedFiles(projectId, { 'src/app.ts': 'export {};\n', 'src/deep/x.ts': '' });
-  renderWithQuery(<Harness projectId={projectId} />);
-  await screen.findByTestId('terminal-screen');
-  await vi.waitFor(() => expect(getSocket()?.status).toBe('open'));
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  return projectId;
-}
-
-const term = () => FakeTerminal.latest();
-const shown = () => term().plain();
-const type = (data: string) => act(() => term().type(data));
-
-describe('D301 a terminal tab runs what is typed', () => {
-  it('shows a prompt at the project root', async () => {
-    await open();
-    expect(shown()).toBe('~ $ ');
-  });
-
-  it('typing echo hi and Enter starts it in the tab’s folder, shows its output and prompts again', async () => {
-    const start = vi.spyOn(api(), 'startProcess');
-    const projectId = await open();
-    type('echo hi');
-    expect(shown()).toBe('~ $ echo hi');
-    type('\r');
-    await waitFor(() => expect(shown()).toBe('~ $ echo hi\nhi\n~ $ '));
-    expect(start).toHaveBeenCalledWith(projectId, { command: 'echo hi', cwd: '' });
-    start.mockRestore();
-  });
-
-  it('what is typed while it runs goes to its stdin', async () => {
-    await open();
-    type('ask\r');
-    await waitFor(() => expect(shown()).toContain('name? '));
-    type('Ada\r');
-    await waitFor(() => expect(shown()).toBe('~ $ ask\nname? Ada\nhello Ada\n~ $ '));
-  });
-
-  it('Ctrl+C stops what runs, and the tab says how it ended', async () => {
-    const stop = vi.spyOn(api(), 'stopProcess');
-    await open();
-    type('serve\r');
-    await waitFor(() => expect(shown()).toContain('listening on 3000'));
-    type('\u0003');
-    await waitFor(() => expect(shown()).toMatch(/\^C\n\[stopped \(SIGKILL\)\]\n~ \$ $/));
-    expect(stop).toHaveBeenCalledTimes(1);
-    stop.mockRestore();
-  });
-
-  it('Ctrl+C with nothing running clears the line and asks nothing of the engine', async () => {
-    const start = vi.spyOn(api(), 'startProcess');
-    await open();
-    type('oops\u0003');
-    await waitFor(() => expect(shown()).toBe('~ $ oops^C\n~ $ '));
-    expect(start).not.toHaveBeenCalled();
-    start.mockRestore();
-  });
-
-  it('cd moves the prompt and the next command’s folder; cd .. stops at the root; a missing folder says why', async () => {
-    const start = vi.spyOn(api(), 'startProcess');
-    const projectId = await open();
-    type('cd src\r');
-    await waitFor(() => expect(shown().endsWith('\nsrc $ ')).toBe(true));
-    type('echo here\r');
-    await waitFor(() => expect(shown().endsWith('here\nsrc $ ')).toBe(true));
-    expect(start).toHaveBeenCalledWith(projectId, { command: 'echo here', cwd: 'src' });
-    type('cd\r');
-    await waitFor(() => expect(shown().endsWith('src $ cd\nsrc\nsrc $ ')).toBe(true));
-    type('cd ../..\r');
-    await waitFor(() => expect(shown().endsWith('src $ cd ../..\n~ $ ')).toBe(true));
-    type('cd nope\r');
-    await waitFor(() => expect(shown()).toContain('cd: nope: nope was not found.'));
-    expect(shown().endsWith('~ $ ')).toBe(true);
-    start.mockRestore();
-  });
-
-  it('cls clears the screen and leaves a prompt', async () => {
-    await open();
-    type('echo a\r');
-    await waitFor(() => expect(shown()).toContain('a\n~ $ '));
-    type('cls\r');
-    await waitFor(() => expect(shown()).toBe('~ $ '));
-  });
-
-  it('a refusal, and a process that never started, say so in the tab (design §10)', async () => {
-    const projectId = await open();
-    for (let i = 0; i < 8; i += 1) processes.start(projectId, { command: 'serve' });
-    type('echo nine\r');
-    await waitFor(() =>
-      expect(shown()).toContain('This project already runs 8 processes. Stop one before starting another.'),
-    );
-    expect(shown().endsWith('~ $ ')).toBe(true);
-
-    processes.stopProject(projectId);
-    type('broken\r');
-    await waitFor(() => expect(shown()).toContain('Could not start: spawn /bin/sh ENOENT'));
-    await waitFor(() => expect(shown()).toMatch(/\[could not start\]\n~ \$ $/));
-  });
-
-  it('Ctrl+F finds in the scrollback', async () => {
-    const user = userEvent.setup();
-    await open();
-    act(() => {
-      expect(term().press({ key: 'f', ctrlKey: true })).toBe(false);
-    });
-    const find = await screen.findByRole('textbox', { name: 'Find in terminal' });
-    await user.type(find, 'hello{Enter}');
-    await user.keyboard('{Shift>}{Enter}{/Shift}');
-    const search = FakeSearchAddon.instances.at(-1);
-    expect(search?.calls).toEqual([
-      ['next', 'hello'],
-      ['previous', 'hello'],
-    ]);
-    await user.keyboard('{Escape}');
-    expect(screen.queryByRole('textbox', { name: 'Find in terminal' })).toBeNull();
-    expect(search?.cleared).toBe(1);
-  });
-
-  it('copies with Ctrl+C only when text is selected, and lets the browser paste', async () => {
-    await open();
-    expect(term().press({ key: 'c', ctrlKey: true })).toBe(true);
-    expect(term().press({ key: 'v', ctrlKey: true })).toBe(false);
-  });
-});
-
-describe('D301 a terminal tab survives the panel and the mode (design §2.3, §11)', () => {
-  it('reads Terminal · Problems · Output in the panel', async () => {
-    const user = userEvent.setup();
-    const projectId = db.createProject({ name: 'Shop' }).id;
-    renderWithQuery(<BottomPanel projectId={projectId} />);
-    const tabs = within(screen.getByRole('tablist', { name: 'Panel views' })).getAllByRole('tab');
-    expect(tabs.map((tab) => tab.textContent)).toEqual(['Terminal', 'Problems', 'Output']);
-    await user.click(tabs[0] as HTMLElement);
-    expect(await screen.findByTestId('terminal-screen')).toBeInTheDocument();
-    expect(useLayoutStore.getState().panelTab).toBe('terminal');
-  });
-
-  it('keeps a half-typed line while the panel is hidden', async () => {
-    const user = userEvent.setup();
-    const project = db.createProject({ name: 'Shop' });
-    const workflow = db.createWorkflow(project.id, 'Main');
-    useLayoutStore.setState({ panelOpen: true, panelTab: 'terminal' });
-    renderApp(`/projects/${project.id}/workflows/${workflow.id}/forge`);
-    await screen.findByTestId('terminal-screen');
-    await vi.waitFor(() => expect(getSocket()?.status).toBe('open'));
-
-    type('ech');
-    await user.keyboard('{Control>}j{/Control}');
-    await user.keyboard('{Control>}j{/Control}');
-    await screen.findByTestId('terminal-screen');
-    type('o hi\r');
-    await waitFor(() => expect(shown()).toBe('~ $ echo hi\nhi\n~ $ '));
-  });
-
-  it('scrollback survives the panel being hidden and shown, and Ideate ↔ Forge', async () => {
-    const user = userEvent.setup();
-    const project = db.createProject({ name: 'Shop' });
-    const workflow = db.createWorkflow(project.id, 'Main');
-    useLayoutStore.setState({ panelOpen: true, panelTab: 'terminal' });
-    renderApp(`/projects/${project.id}/workflows/${workflow.id}/forge`);
-    await screen.findByTestId('terminal-screen');
-    await vi.waitFor(() => expect(getSocket()?.status).toBe('open'));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    type('echo kept\r');
-    await waitFor(() => expect(shown()).toBe('~ $ echo kept\nkept\n~ $ '));
-
-    await user.keyboard('{Control>}j{/Control}');
-    expect(screen.queryByTestId('terminal-screen')).toBeNull();
-    await user.keyboard('{Control>}j{/Control}');
-    await screen.findByTestId('terminal-screen');
-    expect(shown()).toBe('~ $ echo kept\nkept\n~ $ ');
-
-    await user.keyboard('{Control>}{Shift>}1{/Shift}{/Control}');
-    expect(await screen.findByTestId('canvas')).toBeInTheDocument();
-    await user.keyboard('{Control>}{Shift>}2{/Shift}{/Control}');
-    await screen.findByTestId('terminal-screen');
-    expect(shown()).toBe('~ $ echo kept\nkept\n~ $ ');
-  });
-});
-```
-
 - [ ] **Step 4: Run them to watch them fail**
 
-Run: `pnpm --filter @ace/web exec vitest run src/test/FakeTerminal.test.ts src/forge/terminal`
-Expected: `FakeTerminal.test.ts` passes (the double is written). The others FAIL: `feed`, `./builtins` and `./TerminalPanel` do not exist, and the panel has no Terminal tab.
+Run: `pnpm --filter @ace/web exec vitest run src/test/FakeTerminal.test.ts src/forge/terminal/line-discipline.test.ts src/forge/terminal/builtins.test.ts`
+Expected: `FakeTerminal.test.ts` passes (the double is written). The others FAIL: `feed` and `./builtins` do not exist.
 
 - [ ] **Step 5: The key table**
 
@@ -7713,7 +8020,439 @@ export function resolveCd(cwd: string, arg: string): string {
 }
 ```
 
-- [ ] **Step 7: The session**
+- [ ] **Step 7: Run the tests**
+
+Run: `pnpm --filter @ace/web exec vitest run src/test/FakeTerminal.test.ts src/forge/terminal`
+Expected: PASS.
+
+- [ ] **Step 8: Full web suite, typecheck, lint, commit**
+
+Run: `pnpm --filter @ace/web test && pnpm --filter @ace/web typecheck && pnpm --filter @ace/web lint`
+Expected: PASS. No component imports xterm yet, so the global mocks change nothing for existing tests.
+
+```bash
+npx prettier --write --config packages/config/prettier.config.js apps/web/src/forge/terminal/line-discipline.ts apps/web/src/forge/terminal/line-discipline.test.ts apps/web/src/forge/terminal/builtins.ts apps/web/src/forge/terminal/builtins.test.ts apps/web/src/test/FakeTerminal.ts apps/web/src/test/FakeTerminal.test.ts apps/web/src/test/setup.tsx apps/web/src/test/app.tsx
+git add apps/web pnpm-lock.yaml
+git commit -m "feat(web): the terminal's line discipline and cd/cls/clear, xterm pinned, and a FakeTerminal for unit tests [D301]
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 15: Web — the terminal view, the session and the panel's Terminal tab
+
+**Files:**
+- Create:
+  - `apps/web/src/forge/terminal/session.ts`;
+  - `apps/web/src/forge/terminal/focus.ts`;
+  - `apps/web/src/forge/terminal/xterm-theme.ts`;
+  - `apps/web/src/forge/terminal/TerminalView.tsx`;
+  - `apps/web/src/forge/terminal/TerminalPanel.tsx`.
+- Modify:
+  - `apps/web/src/app/stores/layout.ts:5` (`'terminal'`);
+  - `apps/web/src/forge/panel/BottomPanel.tsx:10-14`, `:36` and `:61-64` (the Terminal tab, first; a click on it asks for the focus);
+  - `apps/web/src/test/app.tsx` (a focus request never outlives its test).
+- Test: create `apps/web/src/forge/terminal/TerminalPanel.test.tsx` and `apps/web/src/forge/terminal/session.test.ts`.
+
+**Interfaces:**
+- Consumes:
+  - from Task 10: `api().startProcess`, `processInput`, `stopProcess`, `listFolder`;
+  - from Task 12: `useTerminalStore` and its actions, `useProjectTerminals`, `tabOf`, `scrollbackOf`, `errorLine`, `processKeys`, `busyLine`;
+  - from Task 13: `useProcessEvents`, `installMockSocket`;
+  - from Task 14: `feed`, `LineAction`, `parseBuiltin`, `resolveCd`, and `FakeTerminal` with its addons (registered for every unit test);
+  - existing: `useResolvedTheme`, `IconAction`, `useLayoutStore`.
+- Produces:
+  - in `session.ts`:
+    - `typed(projectId, tabId, data, queryClient): Promise<void>`, which settles when the actions this input caused have run;
+    - `startInTab(projectId, tabId, request: ProcessStartRequest, queryClient): Promise<void>`;
+    - `enqueue(projectId, tabId, work: () => Promise<void>): Promise<void>`. A step that throws prints `Terminal error: <message>` in the tab and, when no process is attached, gives the prompt back;
+  - in `focus.ts`:
+    - `requestTerminalFocus(): void`: the person asked for the Terminal; the terminal view on screen after this turn takes the focus;
+    - `registerTerminalFocus(focus: () => void): () => void`, for the view on screen;
+    - `cancelTerminalFocus(): void`, for tests;
+  - `terminalTheme(theme: 'dark' | 'light'): ITheme`;
+  - `TerminalView({ projectId, tabId })`, with the test ids `terminal-view` (its host) and, under `FakeTerminal`, `terminal-screen`. It never focuses itself on mount;
+  - `TerminalPanel({ projectId })`, test id `terminal-panel`. On mount it opens a first tab when the project has none;
+  - `ForgePanelTab = 'terminal' | 'problems' | 'output'`; the panel's tabs read Terminal · Problems · Output, and a click on Terminal asks for the focus.
+- The view writes each store change as it arrives. A `process.output` frame is at most 65,536 characters (Task 6), so an append is always a delta, written as is; the scrollback is rewritten in full only on a re-attach or a clear, when the tab's epoch changes.
+- Task 16 adds the tabs bar, the Processes list and the script buttons to `TerminalPanel`, and asks for the focus from Ctrl+`, New terminal, a terminal tab, Show, a script button, the status bar and the empty editor.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `apps/web/src/forge/terminal/TerminalPanel.test.tsx`:
+
+```tsx
+import { act, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
+
+import { api } from '../../app/api';
+import { getSocket } from '../../app/socket';
+import { useLayoutStore } from '../../app/stores/layout';
+import {
+  db,
+  installMockServer,
+  installMockSocket,
+  processes,
+  renderApp,
+  renderWithQuery,
+} from '../../test/app';
+import { FakeSearchAddon, FakeTerminal } from '../../test/FakeTerminal';
+import { BottomPanel } from '../panel/BottomPanel';
+import { requestTerminalFocus } from './focus';
+import { useProcessEvents } from './process-events';
+import { TerminalPanel } from './TerminalPanel';
+import { useTerminalStore } from './terminal-store';
+
+installMockServer();
+installMockSocket();
+
+vi.mock('../../canvas/Canvas', () => ({
+  Canvas: ({ workflowId }: { workflowId: string }) => <div data-testid="canvas">{workflowId}</div>,
+}));
+
+function Harness({ projectId }: { projectId: string }) {
+  useProcessEvents(projectId);
+  return <TerminalPanel projectId={projectId} />;
+}
+
+async function open(): Promise<string> {
+  const projectId = db.createProject({ name: 'Shop' }).id;
+  db.seedFiles(projectId, { 'src/app.ts': 'export {};\n', 'src/deep/x.ts': '' });
+  renderWithQuery(<Harness projectId={projectId} />);
+  await screen.findByTestId('terminal-screen');
+  await vi.waitFor(() => expect(getSocket()?.status).toBe('open'));
+  return projectId;
+}
+
+const term = () => FakeTerminal.latest();
+const shown = () => term().plain();
+const type = (data: string) => act(() => term().type(data));
+
+describe('D301 a terminal tab runs what is typed', () => {
+  it('shows a prompt at the project root', async () => {
+    await open();
+    expect(shown()).toBe('~ $ ');
+  });
+
+  it('typing echo hi and Enter starts it in the tab’s folder, shows its output and prompts again', async () => {
+    const start = vi.spyOn(api(), 'startProcess');
+    const projectId = await open();
+    type('echo hi');
+    expect(shown()).toBe('~ $ echo hi');
+    type('\r');
+    await waitFor(() => expect(shown()).toBe('~ $ echo hi\nhi\n~ $ '));
+    expect(start).toHaveBeenCalledWith(projectId, { command: 'echo hi', cwd: '' });
+    start.mockRestore();
+  });
+
+  it('what is typed while it runs goes to its stdin', async () => {
+    await open();
+    type('ask\r');
+    await waitFor(() => expect(shown()).toContain('name? '));
+    type('Ada\r');
+    await waitFor(() => expect(shown()).toBe('~ $ ask\nname? Ada\nhello Ada\n~ $ '));
+  });
+
+  it('Ctrl+C stops what runs, and the tab says how it ended', async () => {
+    const stop = vi.spyOn(api(), 'stopProcess');
+    await open();
+    type('serve\r');
+    await waitFor(() => expect(shown()).toContain('listening on 3000'));
+    type('\u0003');
+    await waitFor(() => expect(shown()).toMatch(/\^C\n\[stopped \(SIGKILL\)\]\n~ \$ $/));
+    expect(stop).toHaveBeenCalledTimes(1);
+    stop.mockRestore();
+  });
+
+  it('Ctrl+C with nothing running clears the line and asks nothing of the engine', async () => {
+    const start = vi.spyOn(api(), 'startProcess');
+    await open();
+    type('oops\u0003');
+    await waitFor(() => expect(shown()).toBe('~ $ oops^C\n~ $ '));
+    expect(start).not.toHaveBeenCalled();
+    start.mockRestore();
+  });
+
+  it('cd moves the prompt and the next command’s folder; cd .. stops at the root; a missing folder says why', async () => {
+    const start = vi.spyOn(api(), 'startProcess');
+    const projectId = await open();
+    type('cd src\r');
+    await waitFor(() => expect(shown().endsWith('\nsrc $ ')).toBe(true));
+    type('echo here\r');
+    await waitFor(() => expect(shown().endsWith('here\nsrc $ ')).toBe(true));
+    expect(start).toHaveBeenCalledWith(projectId, { command: 'echo here', cwd: 'src' });
+    type('cd\r');
+    await waitFor(() => expect(shown().endsWith('src $ cd\nsrc\nsrc $ ')).toBe(true));
+    type('cd ../..\r');
+    await waitFor(() => expect(shown().endsWith('src $ cd ../..\n~ $ ')).toBe(true));
+    type('cd nope\r');
+    await waitFor(() => expect(shown()).toContain('cd: nope: nope was not found.'));
+    expect(shown().endsWith('~ $ ')).toBe(true);
+    start.mockRestore();
+  });
+
+  it('cls clears the screen and leaves a prompt', async () => {
+    await open();
+    type('echo a\r');
+    await waitFor(() => expect(shown()).toContain('a\n~ $ '));
+    type('cls\r');
+    await waitFor(() => expect(shown()).toBe('~ $ '));
+  });
+
+  it('a refusal, and a process that never started, say so in the tab (design §10)', async () => {
+    const projectId = await open();
+    for (let i = 0; i < 8; i += 1) processes.start(projectId, { command: 'serve' });
+    type('echo nine\r');
+    await waitFor(() =>
+      expect(shown()).toContain('This project already runs 8 processes. Stop one before starting another.'),
+    );
+    expect(shown().endsWith('~ $ ')).toBe(true);
+
+    processes.stopProject(projectId);
+    type('broken\r');
+    await waitFor(() => expect(shown()).toContain('Could not start: spawn /bin/sh ENOENT'));
+    await waitFor(() => expect(shown()).toMatch(/\[could not start\]\n~ \$ $/));
+  });
+
+  it('Ctrl+F finds in the scrollback', async () => {
+    const user = userEvent.setup();
+    await open();
+    act(() => {
+      expect(term().press({ key: 'f', ctrlKey: true })).toBe(false);
+    });
+    const find = await screen.findByRole('textbox', { name: 'Find in terminal' });
+    await user.type(find, 'hello{Enter}');
+    await user.keyboard('{Shift>}{Enter}{/Shift}');
+    const search = FakeSearchAddon.instances.at(-1);
+    expect(search?.calls).toEqual([
+      ['next', 'hello'],
+      ['previous', 'hello'],
+    ]);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('textbox', { name: 'Find in terminal' })).toBeNull();
+    expect(search?.cleared).toBe(1);
+  });
+
+  it('copies with Ctrl+C only when text is selected, and lets the browser paste', async () => {
+    await open();
+    expect(term().press({ key: 'c', ctrlKey: true })).toBe(true);
+    expect(term().press({ key: 'v', ctrlKey: true })).toBe(false);
+  });
+});
+
+describe('D301 a terminal tab survives the panel and the mode (design §2.3, §11)', () => {
+  it('reads Terminal · Problems · Output in the panel', async () => {
+    const user = userEvent.setup();
+    const projectId = db.createProject({ name: 'Shop' }).id;
+    renderWithQuery(<BottomPanel projectId={projectId} />);
+    const tabs = within(screen.getByRole('tablist', { name: 'Panel views' })).getAllByRole('tab');
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['Terminal', 'Problems', 'Output']);
+    await user.click(tabs[0] as HTMLElement);
+    expect(await screen.findByTestId('terminal-screen')).toBeInTheDocument();
+    expect(useLayoutStore.getState().panelTab).toBe('terminal');
+  });
+
+  it('keeps a half-typed line while the panel is hidden', async () => {
+    const user = userEvent.setup();
+    const project = db.createProject({ name: 'Shop' });
+    const workflow = db.createWorkflow(project.id, 'Main');
+    useLayoutStore.setState({ panelOpen: true, panelTab: 'terminal' });
+    renderApp(`/projects/${project.id}/workflows/${workflow.id}/forge`);
+    await screen.findByTestId('terminal-screen');
+    await vi.waitFor(() => expect(getSocket()?.status).toBe('open'));
+
+    type('ech');
+    await user.keyboard('{Control>}j{/Control}');
+    await user.keyboard('{Control>}j{/Control}');
+    await screen.findByTestId('terminal-screen');
+    type('o hi\r');
+    await waitFor(() => expect(shown()).toBe('~ $ echo hi\nhi\n~ $ '));
+  });
+
+  it('scrollback survives the panel being hidden and shown, Ideate ↔ Forge, and a workflow-tab switch', async () => {
+    const user = userEvent.setup();
+    const project = db.createProject({ name: 'Shop' });
+    const workflow = db.createWorkflow(project.id, 'Main');
+    db.createWorkflow(project.id, 'Second');
+    useLayoutStore.setState({ panelOpen: true, panelTab: 'terminal' });
+    renderApp(`/projects/${project.id}/workflows/${workflow.id}/forge`);
+    await screen.findByTestId('terminal-screen');
+    await vi.waitFor(() => expect(getSocket()?.status).toBe('open'));
+    type('echo kept\r');
+    await waitFor(() => expect(shown()).toBe('~ $ echo kept\nkept\n~ $ '));
+
+    await user.keyboard('{Control>}j{/Control}');
+    expect(screen.queryByTestId('terminal-screen')).toBeNull();
+    await user.keyboard('{Control>}j{/Control}');
+    await screen.findByTestId('terminal-screen');
+    expect(shown()).toBe('~ $ echo kept\nkept\n~ $ ');
+
+    await user.keyboard('{Control>}{Shift>}1{/Shift}{/Control}');
+    expect(await screen.findByTestId('canvas')).toBeInTheDocument();
+    await user.keyboard('{Control>}{Shift>}2{/Shift}{/Control}');
+    await screen.findByTestId('terminal-screen');
+    expect(shown()).toBe('~ $ echo kept\nkept\n~ $ ');
+
+    // The store is keyed by project, so another workflow of the same project shows the same tab.
+    await user.click(await screen.findByRole('tab', { name: 'Second' }));
+    await waitFor(() => expect(shown()).toBe('~ $ echo kept\nkept\n~ $ '));
+  });
+});
+
+describe('D301 the Terminal takes the focus only when asked', () => {
+  it('a plain mount, and Ctrl+J hiding and showing the panel, leave the focus alone', async () => {
+    const user = userEvent.setup();
+    const project = db.createProject({ name: 'Shop' });
+    const workflow = db.createWorkflow(project.id, 'Main');
+    useLayoutStore.setState({ panelOpen: true, panelTab: 'terminal' });
+    renderApp(`/projects/${project.id}/workflows/${workflow.id}/forge`);
+    await screen.findByTestId('terminal-screen');
+    await vi.waitFor(() => expect(getSocket()?.status).toBe('open'));
+    expect(term().focused).toBe(0);
+
+    await user.keyboard('{Control>}j{/Control}');
+    await user.keyboard('{Control>}j{/Control}');
+    await screen.findByTestId('terminal-screen');
+    // A request would have focused it by the next macrotask; let one pass, then check.
+    await act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+    expect(term().focused).toBe(0);
+  });
+
+  it('a request (Ctrl+`, New terminal, a script button) focuses the view it opened, once', async () => {
+    const projectId = await open();
+    expect(term().focused).toBe(0);
+    const before = FakeTerminal.instances.length;
+    act(() => {
+      requestTerminalFocus();
+      useTerminalStore.getState().newTab(projectId);
+    });
+    expect(FakeTerminal.instances.length).toBe(before + 1);
+    await waitFor(() => expect(term().focused).toBe(1));
+
+    // The request is spent: going back to the first tab mounts a view that leaves the focus alone.
+    const first = useTerminalStore.getState().projects[projectId]?.tabs[0]?.id ?? '';
+    act(() => useTerminalStore.getState().activate(projectId, first));
+    expect(FakeTerminal.instances.length).toBe(before + 2);
+    await act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+    expect(term().focused).toBe(0);
+  });
+
+  it('a click on the panel’s Terminal tab focuses it', async () => {
+    const user = userEvent.setup();
+    const projectId = db.createProject({ name: 'Shop' }).id;
+    useLayoutStore.setState({ panelOpen: true, panelTab: 'problems' });
+    renderWithQuery(<BottomPanel projectId={projectId} />);
+    await user.click(screen.getByRole('tab', { name: 'Terminal' }));
+    await screen.findByTestId('terminal-screen');
+    await waitFor(() => expect(term().focused).toBe(1));
+  });
+});
+```
+
+Create `apps/web/src/forge/terminal/session.test.ts`:
+
+```ts
+import { describe, expect, it } from 'vitest';
+
+import { installMockServer } from '../../test/app';
+import { busyLine } from './line-discipline';
+import { enqueue } from './session';
+import { errorLine, scrollbackOf, tabOf, useTerminalStore } from './terminal-store';
+
+installMockServer();
+
+const P = 'project-1';
+
+/** A tab that has just started a run, as Enter leaves it: busy, nothing attached yet. */
+function runningTab(): string {
+  const store = useTerminalStore.getState();
+  const tabId = store.newTab(P);
+  const tab = tabOf(P, tabId);
+  if (tab !== undefined) store.setLine(P, tabId, busyLine(tab.line));
+  return tabId;
+}
+
+const shown = (tabId: string): string => {
+  const tab = tabOf(P, tabId);
+  return tab === undefined ? '' : scrollbackOf(tab);
+};
+
+describe('D301 a tab’s queue never fails silently', () => {
+  it('a step that throws prints an error line in the tab and gives the prompt back', async () => {
+    const tabId = runningTab();
+    await enqueue(P, tabId, () => Promise.reject(new Error('boom')));
+    expect(shown(tabId)).toBe(`~ $ ${errorLine('Terminal error: boom')}~ $ `);
+    expect(tabOf(P, tabId)?.line.busy).toBe(false);
+  });
+
+  it('a step that throws while a process runs prints the error and keeps the tab attached', async () => {
+    const tabId = runningTab();
+    useTerminalStore.getState().attach(P, tabId, 'proc-1');
+    await enqueue(P, tabId, () => Promise.reject(new Error('boom')));
+    expect(shown(tabId)).toBe(`~ $ ${errorLine('Terminal error: boom')}`);
+    expect(tabOf(P, tabId)?.processId).toBe('proc-1');
+  });
+
+  it('the steps after a failure still run', async () => {
+    const tabId = runningTab();
+    const ran: string[] = [];
+    void enqueue(P, tabId, () => Promise.reject(new Error('boom')));
+    await enqueue(P, tabId, async () => {
+      ran.push('next');
+    });
+    expect(ran).toEqual(['next']);
+  });
+});
+```
+
+- [ ] **Step 2: Run them to watch them fail**
+
+Run: `pnpm --filter @ace/web exec vitest run src/forge/terminal/TerminalPanel.test.tsx src/forge/terminal/session.test.ts`
+Expected: FAIL. `./session`, `./focus` and `./TerminalPanel` do not exist, and the panel has no Terminal tab.
+
+- [ ] **Step 3: The focus rule and the session**
+
+Create `apps/web/src/forge/terminal/focus.ts`:
+
+```ts
+/**
+ * The Terminal takes the keyboard focus only when the person asked for it (D301): Ctrl+`, a click
+ * on the panel's Terminal tab or on a terminal tab, New terminal, Show, a script button, the status
+ * bar's count, the empty editor's Terminal button. A remount alone (Ctrl+J, back from Ideate)
+ * never takes it, so the editor keeps the caret.
+ *
+ * A request is served after the current turn: by then React has mounted the view it opened (a new
+ * tab, a panel shown), and in development StrictMode's second mount is the one registered. If no
+ * view is on screen by then, the request lapses rather than waiting to surprise a later remount.
+ */
+
+let current: (() => void) | undefined;
+let timer: ReturnType<typeof setTimeout> | undefined;
+
+export function requestTerminalFocus(): void {
+  if (timer !== undefined) clearTimeout(timer);
+  timer = setTimeout(() => {
+    timer = undefined;
+    current?.();
+  }, 0);
+}
+
+/** The view on screen says how to focus it; the returned function takes that back. */
+export function registerTerminalFocus(focus: () => void): () => void {
+  current = focus;
+  return () => {
+    if (current === focus) current = undefined;
+  };
+}
+
+/** Tests: a request never outlives the test that made it. */
+export function cancelTerminalFocus(): void {
+  if (timer !== undefined) clearTimeout(timer);
+  timer = undefined;
+}
+```
 
 Create `apps/web/src/forge/terminal/session.ts`:
 
@@ -7737,10 +8476,20 @@ const queues = new Map<string, Promise<void>>();
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-/** Runs `work` after everything this tab was already doing. */
+/**
+ * Runs `work` after everything this tab was already doing. A refusal is printed where it happens
+ * (`startInTab`, `changeDirectory`); a step that still throws is a bug, so it is printed in the tab
+ * too, never swallowed, and a tab left waiting on a run that never attached gets its prompt back.
+ * The queue goes on either way.
+ */
 export function enqueue(projectId: string, tabId: string, work: () => Promise<void>): Promise<void> {
   const key = `${projectId}\u0000${tabId}`;
-  const next = (queues.get(key) ?? Promise.resolve()).then(work).catch(() => undefined);
+  const next = (queues.get(key) ?? Promise.resolve()).then(work).catch((error: unknown) => {
+    const store = useTerminalStore.getState();
+    store.write(projectId, tabId, errorLine(`Terminal error: ${messageOf(error)}`));
+    const tab = tabOf(projectId, tabId);
+    if (tab !== undefined && tab.processId === undefined && tab.line.busy) store.idle(projectId, tabId);
+  });
   queues.set(key, next);
   return next;
 }
@@ -7862,7 +8611,7 @@ export function typed(
 }
 ```
 
-- [ ] **Step 8: The theme, the view and the panel**
+- [ ] **Step 4: The theme, the view and the panel**
 
 Create `apps/web/src/forge/terminal/xterm-theme.ts`:
 
@@ -7920,6 +8669,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { useResolvedTheme } from '../../app/theme';
 import { IconAction } from '../layout/IconAction';
+import { registerTerminalFocus } from './focus';
 import { typed } from './session';
 import { scrollbackOf, tabOf, useTerminalStore } from './terminal-store';
 import { terminalTheme } from './xterm-theme';
@@ -7927,7 +8677,8 @@ import { terminalTheme } from './xterm-theme';
 /**
  * One terminal tab on screen (D301, design §6.3). xterm only renders: what is typed goes to the
  * line discipline (`typed`), and what the tab shows comes from the terminal store, so unmounting
- * (a hidden panel, Ideate) loses nothing — on mount the stored scrollback is written back.
+ * (a hidden panel, Ideate) loses nothing — on mount the stored scrollback is written back. It takes
+ * the keyboard focus only when the person asked for the Terminal (`focus.ts`), never on a remount.
  */
 export function TerminalView({ projectId, tabId }: { projectId: string; tabId: string }) {
   const host = useRef<HTMLDivElement>(null);
@@ -7963,7 +8714,9 @@ export function TerminalView({ projectId, tabId }: { projectId: string; tabId: s
     };
     refit();
 
-    // Write back what the tab holds, then follow it: appends as deltas, a replacement in full.
+    // Write back what the tab holds, then follow it. Each change is written as it arrives: a frame
+    // is at most 65,536 characters (PROCESS_FRAME_MAX_CHARS, Task 6), well under the 1,048,576 the
+    // tab keeps, so an append is always a delta. Only a re-attach or a clear (a new epoch) rewrites.
     const start = tabOf(projectId, tabId);
     let seen = { epoch: start?.epoch ?? 0, total: start?.total ?? 0 };
     if (start !== undefined) term.write(scrollbackOf(start));
@@ -8001,9 +8754,10 @@ export function TerminalView({ projectId, tabId }: { projectId: string; tabId: s
     observer.observe(element);
     terminal.current = term;
     finder.current = search;
-    term.focus();
+    const unregister = registerTerminalFocus(() => term.focus());
 
     return () => {
+      unregister();
       observer.disconnect();
       unsubscribe();
       input.dispose();
@@ -8080,7 +8834,7 @@ export function TerminalPanel({ projectId }: { projectId: string }) {
 }
 ```
 
-- [ ] **Step 9: The Terminal tab in the panel**
+- [ ] **Step 5: The Terminal tab in the panel**
 
 In `apps/web/src/app/stores/layout.ts`, change line 5 to:
 
@@ -8088,7 +8842,9 @@ In `apps/web/src/app/stores/layout.ts`, change line 5 to:
 export type ForgePanelTab = 'terminal' | 'problems' | 'output';
 ```
 
-In `apps/web/src/forge/panel/BottomPanel.tsx`, add `import { TerminalPanel } from '../terminal/TerminalPanel';`, and replace the `TABS` block (lines 10-14) with:
+In `apps/web/src/forge/panel/BottomPanel.tsx`:
+1. Add `import { requestTerminalFocus } from '../terminal/focus';` and `import { TerminalPanel } from '../terminal/TerminalPanel';`.
+2. Replace the `TABS` block (lines 10-14) with:
 
 ```ts
 /** Terminal · Problems · Output, as VS Code orders them (design §2.2). */
@@ -8099,32 +8855,49 @@ const TABS: ReadonlyArray<{ tab: ForgePanelTab; label: string }> = [
 ];
 ```
 
-and in the `tabpanel`, before `{panelTab === 'problems' && …}`, add:
+3. Replace the tab button's `onClick={() => showPanel(tab)}` (line 36) with:
+
+```tsx
+              onClick={() => {
+                // A click on Terminal is the person asking for it: it takes the focus (D301).
+                if (tab === 'terminal') requestTerminalFocus();
+                showPanel(tab);
+              }}
+```
+
+4. In the `tabpanel`, before `{panelTab === 'problems' && …}`, add:
 
 ```tsx
         {panelTab === 'terminal' && <TerminalPanel projectId={projectId} />}
 ```
 
-- [ ] **Step 10: Run the tests**
+In `apps/web/src/test/app.tsx`, add `import { cancelTerminalFocus } from '../forge/terminal/focus';` and, in `installMockServer`'s `beforeEach`, after `FakeSearchAddon.instances = [];` (Task 14):
+
+```ts
+    cancelTerminalFocus();
+```
+
+- [ ] **Step 6: Run the tests**
 
 Run: `pnpm --filter @ace/web exec vitest run src/test/FakeTerminal.test.ts src/forge/terminal src/forge/ForgeWorkbench.test.tsx src/forge/layout`
 Expected: PASS.
 
-- [ ] **Step 11: Full web suite, typecheck, lint, commit**
+- [ ] **Step 7: Full web suite, typecheck, lint, commit**
 
 Run: `pnpm --filter @ace/web test && pnpm --filter @ace/web typecheck && pnpm --filter @ace/web lint`
 Expected: PASS. If a Phase 1 test assumed Problems was the panel's first tab, it is wrong now (design §2.2): change its expectation, not the order.
 
 ```bash
-npx prettier --write --config packages/config/prettier.config.js apps/web/src/forge/terminal apps/web/src/test/FakeTerminal.ts apps/web/src/test/FakeTerminal.test.ts apps/web/src/test/setup.tsx apps/web/src/test/app.tsx apps/web/src/forge/panel/BottomPanel.tsx apps/web/src/app/stores/layout.ts
-git add apps/web pnpm-lock.yaml
-git commit -m "feat(web): the Terminal — xterm over a line discipline, cd/cls/clear, find, and scrollback that survives the panel and Ideate [D301]
+npx prettier --write --config packages/config/prettier.config.js apps/web/src/forge/terminal apps/web/src/test/app.tsx apps/web/src/forge/panel/BottomPanel.tsx apps/web/src/app/stores/layout.ts
+git add apps/web/src
+git commit -m "feat(web): the Terminal tab — xterm over the line discipline, find, focus only when asked, and scrollback that survives the panel and Ideate [D301]
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
-### Task 14: Web — several tabs, the Processes list, script buttons, the status bar's count and Ctrl+`
+
+### Task 16: Web — several tabs, the Processes list, script buttons, the status bar's count and Ctrl+`
 
 **Files:**
 - Create:
@@ -8133,11 +8906,12 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - `apps/web/src/forge/terminal/ScriptButtons.tsx`.
 - Modify:
   - `apps/web/src/forge/terminal/session.ts` (append `runScript` and `openProcessInTab`);
+  - `apps/web/src/forge/terminal/focus.ts` (append `toggleTerminalFocused`);
   - `apps/web/src/forge/terminal/TerminalPanel.tsx` (the header, the list, an empty state);
   - `apps/web/src/forge/layout/StatusBar.tsx:1-27` and `:55` (the running count);
   - `apps/web/src/app/shortcuts.ts:39-63` (`toggleTerminal` and the backquote label);
   - `apps/web/src/app/stores/layout.ts:7-24` and `:57-71` (`toggleTerminal`);
-  - `apps/web/src/forge/ForgeWorkbench.tsx:43-72` (the binding);
+  - `apps/web/src/forge/ForgeWorkbench.tsx:36-55` (the binding, in `useShortcuts`);
   - `apps/web/src/forge/editor/EmptyEditor.tsx` (the Terminal action and hint).
 - Test:
   - create `apps/web/src/forge/terminal/TerminalTabs.test.tsx`, `ProcessesList.test.tsx`, `ScriptButtons.test.tsx`;
@@ -8145,20 +8919,24 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes:
-  - from Task 12: `useProcessList`, `useProjectScripts`, `useStopProcess`, `runningCount`, `useProjectTerminals`, `useTerminalStore`, `TerminalTab`, `reattach`, `useProcessEvents`;
-  - from Task 13: `enqueue`, `startInTab`, `busyLine`, `TerminalView`, `TerminalPanel`, `FakeTerminal`;
+  - from Task 12: `useProcessList`, `useProjectScripts`, `useStopProcess`, `runningCount`, `processKeys`, `useProjectTerminals`, `useTerminalStore`, `TerminalTab`, `busyLine`;
+  - from Task 13: `reattach`, `useProcessEvents`, `installMockSocket`;
+  - from Task 14: `FakeTerminal`;
+  - from Task 15: `enqueue`, `startInTab`, `requestTerminalFocus`, `TerminalView`, `TerminalPanel`;
   - existing: `Dialog*` and `Button` from `@ace/ui`, `IconAction`, `useLayoutStore`.
 - Produces:
   - in `session.ts`:
-    - `runScript(projectId, name, packageManager: PackageManager, queryClient): Promise<void>`: a new tab named after the script, `<pm> run <name>` echoed, `{ script: name, cwd: '' }` started;
+    - `runScript(projectId, name, packageManager: PackageManager, queryClient): Promise<void>`: a new tab named after the script, `<pm> run <name>` echoed, `{ script: name }` started. It sends no `cwd`: a script always runs at the project root (decision 5);
     - `openProcessInTab(projectId, summary: ProcessSummary, queryClient): Promise<void>`;
+  - in `focus.ts`: `toggleTerminalFocused(): void`, which shows the Terminal and asks for the focus, or hides it;
+  - every way the person opens a terminal asks for the focus (`requestTerminalFocus`): Ctrl+`, a terminal tab, New terminal, Show, a script button, the status bar's count and the empty editor's Terminal button;
   - `TerminalTabs({ projectId, disabled? })`: a `tablist` named "Terminals", a "New terminal" button, double-click to rename, "Close <label>", and the "Stop <label>?" dialog;
   - `ProcessesList({ projectId })`: a `region` named "Processes"; rows have test id `process-<id>`; running rows have "Stop <label>", and "Show <label>" when no tab owns them;
   - `ScriptButtons({ projectId, disabled? })`: a `group` named "Scripts", one button per script, named by the script;
   - `SHORTCUTS.toggleTerminal = { code: 'Backquote', mod: true }`; `shortcutLabel` prints `` Ctrl+` ``;
   - `useLayoutStore().toggleTerminal()`;
   - a status-bar button named `<n> running` when n > 0.
-- Task 15 passes `disabled` to `TerminalTabs` and `ScriptButtons`, and adds the trust notice to `TerminalPanel`.
+- Task 17 passes `disabled` to `TerminalTabs` and `ScriptButtons`, and adds the trust notice to `TerminalPanel`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -8189,22 +8967,24 @@ async function open(): Promise<string> {
   renderWithQuery(<Harness projectId={projectId} />);
   await screen.findByTestId('terminal-screen');
   await vi.waitFor(() => expect(getSocket()?.status).toBe('open'));
-  await new Promise((resolve) => setTimeout(resolve, 20));
   return projectId;
 }
 
 const tabs = () => within(screen.getByRole('tablist', { name: 'Terminals' })).getAllByRole('tab');
 
 describe('D301 several terminal tabs', () => {
-  it('New terminal opens another tab at its prompt and makes it the one shown', async () => {
+  it('New terminal opens another tab at its prompt, shows it and focuses it', async () => {
     const user = userEvent.setup();
     await open();
+    expect(FakeTerminal.latest().focused).toBe(0);
     await user.click(screen.getByRole('button', { name: 'New terminal' }));
     expect(tabs().map((tab) => tab.textContent)).toEqual(['Terminal 1', 'Terminal 2']);
     expect(tabs()[1]).toHaveAttribute('aria-selected', 'true');
     expect(FakeTerminal.latest().plain()).toBe('~ $ ');
+    await waitFor(() => expect(FakeTerminal.latest().focused).toBe(1));
     await user.click(tabs()[0] as HTMLElement);
     expect(tabs()[0]).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(FakeTerminal.latest().focused).toBe(1));
   });
 
   it('renames a tab by double-clicking its name', async () => {
@@ -8275,7 +9055,6 @@ async function open(projectId: string) {
   renderWithQuery(<Harness projectId={projectId} />);
   await screen.findByTestId('terminal-screen');
   await vi.waitFor(() => expect(getSocket()?.status).toBe('open'));
-  await new Promise((resolve) => setTimeout(resolve, 20));
   return screen.getByRole('region', { name: 'Processes' });
 }
 
@@ -8331,8 +9110,9 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { getSocket } from '../../app/socket';
-import { db, installMockServer, installMockSocket, renderWithQuery } from '../../test/app';
+import { db, installMockServer, installMockSocket, queryClient, renderWithQuery } from '../../test/app';
 import { FakeTerminal } from '../../test/FakeTerminal';
+import { processKeys } from './hooks';
 import { useProcessEvents } from './process-events';
 import { TerminalPanel } from './TerminalPanel';
 
@@ -8369,19 +9149,23 @@ describe('D301 script buttons run the project’s own scripts', () => {
         '~ $ pnpm run hello\n\n> hello\n> echo hi from a script\n\nhi from a script\n~ $ ',
       ),
     );
+    expect(FakeTerminal.latest().focused).toBe(1);
   });
 
   it('shows no script buttons when package.json has no scripts', async () => {
     const projectId = db.createProject({ name: 'Shop' }).id;
     renderWithQuery(<Harness projectId={projectId} />);
     await screen.findByTestId('terminal-screen');
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The scripts have arrived (none): only now does "no group" mean something.
+    await waitFor(() =>
+      expect(queryClient.getQueryState(processKeys.scripts(projectId))?.status).toBe('success'),
+    );
     expect(screen.queryByRole('group', { name: 'Scripts' })).toBeNull();
   });
 });
 ```
 
-In `apps/web/src/forge/layout/StatusBar.test.tsx`, add `processes` to the import from `'../../test/app'`, and append inside the `describe`:
+In `apps/web/src/forge/layout/StatusBar.test.tsx`, change the first import to `import { act, screen, waitFor } from '@testing-library/react';`, add `processes` and `queryClient` to the import from `'../../test/app'`, add `import { processKeys } from '../terminal/hooks';`, and append inside the `describe`:
 
 ```tsx
   it('D301 counts the running processes, and a click opens the Terminal', async () => {
@@ -8398,7 +9182,10 @@ In `apps/web/src/forge/layout/StatusBar.test.tsx`, add `processes` to the import
   it('D301 says nothing about processes when none runs', async () => {
     const projectId = db.createProject({ name: 'P' }).id;
     renderWithQuery(<StatusBar projectId={projectId} />);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The list has arrived (empty): only now does "no count" mean something.
+    await waitFor(() =>
+      expect(queryClient.getQueryState(processKeys.list(projectId))?.status).toBe('success'),
+    );
     expect(screen.queryByRole('button', { name: /running$/ })).toBeNull();
   });
 ```
@@ -8430,26 +9217,30 @@ In `apps/web/src/app/stores/layout.test.ts`, append inside the `describe`:
   });
 ```
 
-In `apps/web/src/forge/ForgeWorkbench.test.tsx`, append inside the `describe`:
+In `apps/web/src/forge/ForgeWorkbench.test.tsx`, change the first import to `import { screen, waitFor, within } from '@testing-library/react';`, add `import { FakeTerminal } from '../test/FakeTerminal';`, and append inside the `describe`:
 
 ```tsx
-  it('D301 Ctrl+` opens the Terminal, and closes it again', async () => {
+  it('D301 Ctrl+` opens the Terminal focused, and closes it again', async () => {
     const user = userEvent.setup();
     renderApp(seed());
     await screen.findByTestId('forge');
-    await user.keyboard('{Control>}`{/Control}');
+    // user-event's key map has no backquote: a typed ` would arrive as code "Unknown" and match
+    // nothing. [Backquote] names the key by its code, which is what the shortcut matches.
+    await user.keyboard('{Control>}[Backquote]{/Control}');
     expect(await screen.findByTestId('terminal-panel')).toBeInTheDocument();
     expect(useLayoutStore.getState().panelTab).toBe('terminal');
-    await user.keyboard('{Control>}`{/Control}');
+    await waitFor(() => expect(FakeTerminal.latest().focused).toBe(1));
+    await user.keyboard('{Control>}[Backquote]{/Control}');
     expect(screen.queryByTestId('terminal-panel')).toBeNull();
   });
 
-  it('D301 the empty editor offers the Terminal with its key', async () => {
+  it('D301 the empty editor offers the Terminal with its key, and focuses it', async () => {
     const user = userEvent.setup();
     renderApp(seed());
     await screen.findByTestId('forge');
     await user.click(screen.getByRole('button', { name: /^Terminal/ }));
     expect(await screen.findByTestId('terminal-panel')).toBeInTheDocument();
+    await waitFor(() => expect(FakeTerminal.latest().focused).toBe(1));
   });
 ```
 
@@ -8480,9 +9271,8 @@ export function runScript(
   store.write(projectId, tabId, `${packageManager} run ${name}\r\n`);
   const tab = tabOf(projectId, tabId);
   if (tab !== undefined) store.setLine(projectId, tabId, busyLine(tab.line));
-  return enqueue(projectId, tabId, () =>
-    startInTab(projectId, tabId, { script: name, cwd: '' }, queryClient),
-  );
+  // No cwd: a script always runs at the project root (decision 5), whatever the tab's folder.
+  return enqueue(projectId, tabId, () => startInTab(projectId, tabId, { script: name }, queryClient));
 }
 
 /**
@@ -8523,6 +9313,7 @@ import { Plus, X } from 'lucide-react';
 import { useState } from 'react';
 
 import { IconAction } from '../layout/IconAction';
+import { requestTerminalFocus } from './focus';
 import { useStopProcess } from './hooks';
 import { useProjectTerminals, useTerminalStore, type TerminalTab } from './terminal-store';
 
@@ -8582,7 +9373,10 @@ export function TerminalTabs({ projectId, disabled = false }: { projectId: strin
                   role="tab"
                   aria-selected={active}
                   title="Double-click to rename"
-                  onClick={() => store().activate(projectId, tab.id)}
+                  onClick={() => {
+                    requestTerminalFocus();
+                    store().activate(projectId, tab.id);
+                  }}
                   onDoubleClick={() => setRenaming(tab.id)}
                   className="flex items-center gap-1"
                 >
@@ -8608,7 +9402,10 @@ export function TerminalTabs({ projectId, disabled = false }: { projectId: strin
         label="New terminal"
         Icon={Plus}
         disabled={disabled}
-        onClick={() => store().newTab(projectId)}
+        onClick={() => {
+          requestTerminalFocus();
+          store().newTab(projectId);
+        }}
       />
       {closing !== undefined && (
         <Dialog open onOpenChange={(open) => !open && setClosing(undefined)}>
@@ -8643,6 +9440,7 @@ Create `apps/web/src/forge/terminal/ProcessesList.tsx`:
 import type { ProcessSummary } from '@ace/contracts';
 import { useQueryClient } from '@tanstack/react-query';
 
+import { requestTerminalFocus } from './focus';
 import { useProcessList, useStopProcess } from './hooks';
 import { openProcessInTab } from './session';
 import { useProjectTerminals, useTerminalStore } from './terminal-store';
@@ -8712,7 +9510,10 @@ export function ProcessesList({ projectId }: { projectId: string }) {
                     <button
                       type="button"
                       aria-label={`Show ${summary.label}`}
-                      onClick={() => void openProcessInTab(projectId, summary, queryClient)}
+                      onClick={() => {
+                        requestTerminalFocus();
+                        void openProcessInTab(projectId, summary, queryClient);
+                      }}
                       className="font-machine text-[11px] text-fg-muted hover:text-fg"
                     >
                       Show
@@ -8745,6 +9546,7 @@ Create `apps/web/src/forge/terminal/ScriptButtons.tsx`:
 import { useQueryClient } from '@tanstack/react-query';
 import { Play } from 'lucide-react';
 
+import { requestTerminalFocus } from './focus';
 import { useProjectScripts } from './hooks';
 import { runScript } from './session';
 
@@ -8763,7 +9565,10 @@ export function ScriptButtons({ projectId, disabled = false }: { projectId: stri
           type="button"
           disabled={disabled}
           title={`${manager} run ${script.name}: ${script.command}`}
-          onClick={() => void runScript(projectId, script.name, manager, queryClient)}
+          onClick={() => {
+            requestTerminalFocus();
+            void runScript(projectId, script.name, manager, queryClient);
+          }}
           className="flex h-6 shrink-0 items-center gap-1 rounded border border-border px-1.5 font-machine text-[11px] text-fg-soft hover:border-fg-muted hover:text-fg disabled:opacity-40"
         >
           <Play className="h-3 w-3" aria-hidden />
@@ -8866,14 +9671,26 @@ and to the store's actions after `toggleMaximized: …,`:
         ),
 ```
 
-In `apps/web/src/forge/ForgeWorkbench.tsx`, after `const togglePanel = useLayoutStore((s) => s.togglePanel);` add `const toggleTerminal = useLayoutStore((s) => s.toggleTerminal);`, and in `useShortcuts([...])`, after `[SHORTCUTS.togglePanel, togglePanel],` add:
+In `apps/web/src/forge/terminal/focus.ts`, add `import { useLayoutStore } from '../../app/stores/layout';` at the top, and append:
 
 ```ts
-    [SHORTCUTS.toggleTerminal, toggleTerminal],
+
+/** Ctrl+` and the empty editor's Terminal button: show the Terminal and focus it, or hide it. */
+export function toggleTerminalFocused(): void {
+  const layout = useLayoutStore.getState();
+  if (!(layout.panelOpen && layout.panelTab === 'terminal')) requestTerminalFocus();
+  layout.toggleTerminal();
+}
+```
+
+In `apps/web/src/forge/ForgeWorkbench.tsx`, add `import { toggleTerminalFocused } from './terminal/focus';`, and in `useShortcuts([...])`, after `[SHORTCUTS.togglePanel, togglePanel],` add:
+
+```ts
+    [SHORTCUTS.toggleTerminal, toggleTerminalFocused],
 ```
 
 In `apps/web/src/forge/layout/StatusBar.tsx`:
-1. Change the lucide import to `import { AlertTriangle, GitBranch, PanelBottom, Play, XCircle } from 'lucide-react';` and add `import { runningCount, useProcessList } from '../terminal/hooks';`.
+1. Change the lucide import to `import { AlertTriangle, GitBranch, PanelBottom, Play, XCircle } from 'lucide-react';`, and add `import { requestTerminalFocus } from '../terminal/focus';` and `import { runningCount, useProcessList } from '../terminal/hooks';`.
 2. After `const textActive = …;` add `const running = runningCount(useProcessList(projectId).data);`.
 3. After the Problems `</button>` (line 55), add:
 
@@ -8882,7 +9699,10 @@ In `apps/web/src/forge/layout/StatusBar.tsx`:
         <button
           type="button"
           title="Running processes: open the Terminal"
-          onClick={() => showPanel('terminal')}
+          onClick={() => {
+            requestTerminalFocus();
+            showPanel('terminal');
+          }}
           className="flex items-center gap-1 hover:text-fg"
         >
           <Play className="h-3 w-3" aria-hidden />
@@ -8894,11 +9714,11 @@ In `apps/web/src/forge/layout/StatusBar.tsx`:
 In `apps/web/src/forge/editor/EmptyEditor.tsx`:
 1. Change the lucide import to `import { FilePlus, Search, SquareTerminal } from 'lucide-react';`.
 2. In `HINTS`, after the `togglePanel` row, add `{ label: 'Show or hide the terminal', shortcut: SHORTCUTS.toggleTerminal },`.
-3. In the component, after `const showQuickOpen = useQuickOpen((s) => s.show);` add `const toggleTerminal = useLayoutStore((s) => s.toggleTerminal);`.
+3. Add `import { toggleTerminalFocused } from '../terminal/focus';`.
 4. After the New file `<Button>`, add:
 
 ```tsx
-          <Button variant="secondary" size="sm" onClick={toggleTerminal}>
+          <Button variant="secondary" size="sm" onClick={toggleTerminalFocused}>
             <SquareTerminal className="h-3.5 w-3.5" aria-hidden /> Terminal{' '}
             <span className="font-machine text-fg-faint">{shortcutLabel(SHORTCUTS.toggleTerminal)}</span>
           </Button>
@@ -8923,7 +9743,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
-### Task 15: Web — the trust level: the project's Terminal setting and what the Terminal says
+
+### Task 17: Web — the trust level: the project's Terminal setting and what the Terminal says
 
 **Files:**
 - Create: `apps/web/src/forge/terminal/TrustNotice.tsx`
@@ -8938,14 +9759,16 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes:
   - from Task 2: `TerminalTrust`, `UpdateProjectRequest.terminal`;
-  - from Tasks 13–14: `TerminalPanel`, `TerminalView`, `TerminalTabs({ disabled })`, `ScriptButtons({ disabled })`, `FakeTerminal`;
+  - from Task 14: `FakeTerminal`;
+  - from Task 15: `TerminalView`;
+  - from Task 16: `TerminalPanel` as it lays out tabs, scripts and the Processes list, `TerminalTabs({ disabled })`, `ScriptButtons({ disabled })`;
   - existing: `useProject`, `useUpdateProject` (`projects/hooks.ts`), `SettingInput`.
 - Produces:
   - `SelectField<T extends string>({ id, label, hint?, testId, value, options, onChange, disabled })`, exported from `settings/SettingFields.tsx`;
   - the project page's select, test id `project-terminal`, with options `On — any command`, `Scripts only` and `Off`;
   - `TrustNotice({ projectId, trust })`, test id `terminal-trust-notice`, `null` for `on`;
   - `TerminalView({ projectId, tabId, disabled? })`: when disabled, xterm's `disableStdin` is set and nothing typed is acted on;
-  - with `off`, New terminal and the script buttons are disabled. With `scripts`, the script buttons stay enabled, and a typed command prints the engine's 403 message in the tab (Task 13's `startInTab` already prints a refusal).
+  - with `off`, New terminal and the script buttons are disabled. With `scripts`, the script buttons stay enabled, and a typed command prints the engine's 403 message in the tab (Task 15's `startInTab` already prints a refusal).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -9034,7 +9857,6 @@ async function open(trust: 'on' | 'scripts' | 'off'): Promise<string> {
   );
   await screen.findByTestId('terminal-screen');
   await vi.waitFor(() => expect(getSocket()?.status).toBe('open'));
-  await new Promise((resolve) => setTimeout(resolve, 20));
   return project.id;
 }
 
@@ -9325,7 +10147,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 16: Web e2e — the Terminal in a real browser, with the real xterm
+### Task 18: Web e2e — the Terminal in a real browser, with the real xterm
 
 **Files:**
 - Create: `apps/web/e2e/terminal.spec.ts`
@@ -9334,7 +10156,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes:
   - from Task 11: the mock's scripted commands and `window.__aceMock.setTerminal`;
-  - from Tasks 13–15: the test ids `terminal-view`, `terminal-panel` and `terminal-trust-notice`, the `Terminals` tablist, the `Scripts` group and the `Processes` region;
+  - from Tasks 15–17: the test ids `terminal-view`, `terminal-panel` and `terminal-trust-notice`, the `Terminals` tablist, the `Scripts` group and the `Processes` region;
   - existing: `freshApp`, `seedForge`, `forgeUrl`.
 - Produces: `terminalText(page)`, `openTerminal(page, seeded)` and `runLine(page, line)` in `e2e/helpers.ts`, and the spec.
 
@@ -9477,17 +10299,27 @@ test.describe('Forge terminal (D301)', () => {
 });
 ```
 
-- [ ] **Step 3: Run the spec**
+- [ ] **Step 3: Check the port is free, then run the spec**
+
+Playwright's `reuseExistingServer` would test whatever already listens on the port, so the run needs a port nobody uses. 5174 is avoided because other worktrees serve on it; 4747 and 5173 are the person's own ACE and are never used.
 
 Run (Git Bash, from the worktree root):
+
+```bash
+netstat -ano | grep ":5196 "
+```
+
+Expected: no output. If a line shows, 5196 is taken: check 5197 the same way and use it in place of 5196 here and in Step 4. If both are taken, stop and report.
 
 ```bash
 ACE_E2E_PORT=5196 pnpm --filter @ace/web exec playwright test e2e/terminal.spec.ts
 ```
 
-Expected: 8 passed. The port keeps this run off the person's 5173 and another worktree's 5174. If xterm's DOM differs from `.xterm-rows`, read the real DOM with `--debug` and fix the helper, not the assertions.
+Expected: 8 passed. If xterm's DOM differs from `.xterm-rows`, read the real DOM with `--debug` and fix the helper, not the assertions.
 
 - [ ] **Step 4: The whole e2e suite**
+
+On the port Step 3 found free:
 
 ```bash
 ACE_E2E_PORT=5196 pnpm --filter @ace/web test:e2e
@@ -9506,7 +10338,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
-### Task 17: Docs, the gates, a live check on an isolated real engine, and the hand-off
+
+### Task 19: Docs, the gates, a live check on an isolated real engine, and the hand-off
 
 **Files:**
 - Modify: `docs/DECISIONS.md` (the D301 row), `docs/user-guide/forge.md` (the layout line, a Terminal section, the limits), `CLAUDE.md` §9 (a Feature Log row)
@@ -9517,10 +10350,10 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 - [ ] **Step 1: Refine the D301 row**
 
-In `docs/DECISIONS.md`, replace the D301 row (line 230) with this row. Put the output of `date +%F` in place of `DATE`:
+In `docs/DECISIONS.md`, replace the D301 row (line 230) with this row. The date column keeps 2026-10-10, when D301 was decided; put the output of `date +%F` in place of `DATE` in the text, where it says when it was refined:
 
 ```markdown
-| D301 | The terminal runs a person's commands as supervised processes | A process runs through the platform shell (`cmd.exe /d /s /c`, `/bin/sh -c`) with stdin open, in a working folder confined like a file read (`.git` refused), with the engine's environment minus anything secret-shaped (`SSH_AUTH_SOCK`, `SSH_AGENT_PID`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS` and `SESSIONNAME` kept; `FORCE_COLOR=1`). Output streams as transient `process.output` frames batched at 50 ms and ends with a transient `process.exited`; the last 1,048,576 characters per process and the last 20 finished processes per project are kept in memory only; at most 8 run per project; Stop kills the whole tree; every process stops on shutdown before the database closes. A per-project trust level governs a start: `on` (the default), `scripts` (only the root package.json scripts, run as `<pm> run <name>` with the manager from `packageManager`, then the lockfiles, else npm) or `off` (and turning it off stops what runs); input, stop, list and get always work. Agents never use it. No PTY in v1. Phase 2 refinements: the start body is `{ command }` or `{ script }`; `GET /processes/:procId` answers the kept output, which a terminal tab re-fetches on entering Forge and on every reconnect; new codes `terminal_disabled`, `terminal_restricted` (403), `process_limit`, `process_not_running` (409); the WebSocket upgrade checks Origin with REST's allow-list and closes a foreign page with 4403, and `selfOrigins` use the real port; the web terminal is xterm (`@xterm/xterm` 6.0.0 with the fit, web-links and search addons) over the app's own line discipline (echo, editing, ↑/↓ history of 100, Ctrl+C), with `cd`/`cls`/`clear` built in, several tabs, a Processes list, script buttons, a running count in the status bar and Ctrl+`. | design §6.3, §7; FR-GIT-008, FR-SYS-003, FR-SYS-008 | DATE | Arhant (Claude) |
+| D301 | The terminal runs a person's commands as supervised processes | A process runs through the platform shell (`cmd.exe /d /s /c`, `/bin/sh -c`) with stdin open, in a working folder confined like a file read (`.git` refused), with the engine's environment minus anything secret-shaped by name (`SSH_AUTH_SOCK`, `SSH_AGENT_PID`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS` and `SESSIONNAME` kept; `ELECTRON_RUN_AS_NODE` always dropped; `FORCE_COLOR=1` and `PYTHONUTF8=1` set). Output streams as transient `process.output` frames batched at 50 ms, at most 65,536 characters each, and ends with a transient `process.exited`; the last 1,048,576 characters per process and the last 20 finished processes per project are kept in memory only; at most 8 run per project; Stop kills the whole tree, and a stopped process reads `signal: SIGKILL` on every platform; every process stops on shutdown before the database closes, and a project's processes stop before the project is deleted. A per-project trust level governs a start: `on` (the default), `scripts` (only the root package.json scripts, run as `<pm> run <name>` in the project root with the manager from `packageManager`, then the lockfiles, else npm; the trust level is read again just before the spawn) or `off` (and turning it off stops what runs); input, stop, list and get always work. Agents never use it. No PTY in v1; no EOF (Ctrl+D), and background jobs that outlive their shell are not tracked. Phase 2 refinements, refined DATE: the start body is `{ command, cwd?, label? }` or `{ script, label? }` (a script takes no `cwd`); a working folder is listed normalised; `GET /processes/:procId` answers the kept output, which a terminal tab re-fetches on entering Forge and on every reconnect; new codes `terminal_disabled`, `terminal_restricted` (403), `process_limit`, `process_not_running` (409); the WebSocket upgrade checks Origin with REST's allow-list and closes a foreign page with 4403, and `selfOrigins` use the real port; the web terminal is xterm (`@xterm/xterm` 6.0.0 with the fit, web-links and search addons) over the app's own line discipline (echo, editing, ↑/↓ history of 100, Ctrl+C), with `cd`/`cls`/`clear` built in, several tabs, a Processes list, script buttons, a running count in the status bar and Ctrl+`; it takes the keyboard focus only when the person asks for it. | design §6.3, §7; FR-GIT-008, FR-SYS-003, FR-SYS-008 | 2026-10-10 | Arhant (Claude) |
 ```
 
 - [ ] **Step 2: The user guide**
@@ -9568,9 +10401,14 @@ Each project chooses how far it trusts its terminal, on the project page under *
 - **Scripts only:** only the project's own `package.json` scripts.
 - **Off:** nothing runs, and turning it off stops what runs.
 
-Commands get your environment minus anything that looks like a secret: API keys, tokens and
-passwords never reach them, while `PATH`, `HOME` and your ssh agent do. Agents never use the
-terminal.
+Commands get your environment minus anything whose **name** looks like a secret: API keys,
+tokens and passwords never reach them, while `PATH`, `HOME` and your ssh agent do. Only names are
+checked, never values: a password inside a value, such as `DATABASE_URL=postgres://user:pass@…`,
+does reach your commands. Agents never use the terminal.
+
+On Windows, Node and Python print accented letters and symbols correctly. `cmd`'s own commands
+(`echo`, `dir`) and some older tools write the console's code page instead; if they show `�`,
+run `chcp 65001` in the tab first, on the same line: `chcp 65001 > nul && dir`.
 ```
 
 Under `## Limits in this version`, append:
@@ -9581,6 +10419,10 @@ Under `## Limits in this version`, append:
 - A tab keeps its `cd`, but nothing else carries from one command to the next (`set`, `export`, an
   activated virtualenv). Chain them on one line instead: `venv\Scripts\activate && python app.py`.
 - Processes live in the engine's memory: restarting the engine ends every command.
+- There is no end-of-input key (Ctrl+D): a program that reads until its input ends (`sort` or
+  `cat` with no file) waits until you stop it with Ctrl+C.
+- Background jobs are not tracked: something a command leaves running after it ends (`cmd &`,
+  `start /b`) is not in Processes, and Stop cannot reach it. Run servers in a tab's foreground.
 ```
 
 - [ ] **Step 3: Run every gate and record the real output**
@@ -9593,17 +10435,23 @@ pnpm test
 pnpm --filter @ace/web test:coverage
 pnpm --filter @ace/tools test:coverage
 pnpm --filter @ace/engine test:coverage
+netstat -ano | grep ":5196 "
+```
+
+Expected: everything green, and no output from `netstat`. If 5196 is taken, check 5197 the same way and use it below (Task 18, Step 3). Then:
+
+```bash
 ACE_E2E_PORT=5196 pnpm test:e2e
 ```
 
-Expected: everything green.
+Expected: every spec passes.
 - Coverage is at least 80 % for tools and engine, and at least 60 % for web.
 - Paste the real summaries, with the counts per package, into the ledger and the Feature Log row's notes. Never claim green without them (CLAUDE.md §7).
 - A Windows flake already known (TC-EXE-007 in `run.spec.ts`; the providers' EPERM on temp-dir cleanup) is reported as such, with the rerun's result.
 
 - [ ] **Step 4: The live check on an isolated real engine**
 
-The person's own ACE runs from `D:\ACE offcl\wt\forge` on 4747 and 5173. **Leave it alone.** This check uses its own data folder and ports 47491 (engine), 5197 (web) and 47592 (a test server).
+The person's own ACE runs from `D:\ACE offcl\wt\forge` on 4747 and 5173. **Leave it alone.** This check uses its own data folder and ports 47491 (engine), 5198 (web) and 47592 (a test server); 5196 and 5197 stay free for e2e.
 
 Start the engine with a fake secret in its environment, so check 8 can look for it. Run each `&` line as a background command:
 
@@ -9614,17 +10462,17 @@ ANTHROPIC_API_KEY=sk-ant-live-check-not-real ACE_PORT=47491 ACE_DATA_DIR="$(cygp
   pnpm --filter @ace/server exec tsx src/main.ts > "$LIVE/engine.log" 2>&1 &
 until grep -q 'ACE engine ready' "$LIVE/engine.log"; do sleep 1; done
 TOKEN="$(cat "$LIVE/session-token")"
-VITE_ACE_URL=http://127.0.0.1:47491 pnpm --filter @ace/web exec vite --port 5197 --strictPort --host 127.0.0.1 \
+VITE_ACE_URL=http://127.0.0.1:47491 pnpm --filter @ace/web exec vite --port 5198 --strictPort --host 127.0.0.1 \
   > "$LIVE/web.log" 2>&1 &
 curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"allowedOrigins":["http://127.0.0.1:5197","http://localhost:5197"]}' \
+  -d '{"allowedOrigins":["http://127.0.0.1:5198","http://localhost:5198"]}' \
   http://127.0.0.1:47491/api/v1/settings > /dev/null
 ```
 
 Make a project folder with a script and a small server:
 
 ```bash
-mkdir -p "$LIVE/proj/src"
+mkdir -p "$LIVE/proj/src" "$LIVE/proj/ü"
 cat > "$LIVE/proj/package.json" <<'JSON'
 { "name": "live", "scripts": { "hello": "node -e \"console.log('hi from npm')\"", "dev": "node server.js" } }
 JSON
@@ -9638,7 +10486,7 @@ PROJECT="$(curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: a
   http://127.0.0.1:47491/api/v1/projects | node -e "process.stdin.on('data',d=>console.log(JSON.parse(d).id))")"
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"name":"Main"}' \
   "http://127.0.0.1:47491/api/v1/projects/$PROJECT/workflows"
-echo "open: http://127.0.0.1:5197/?token=$TOKEN"
+echo "open: http://127.0.0.1:5198/?token=$TOKEN"
 ```
 
 Open the printed URL in Playwright's Chromium (Claude in Chrome cannot load local dev servers here), open the project's workflow, switch to Forge and press Ctrl+`. Then check:
@@ -9657,13 +10505,14 @@ Open the printed URL in Playwright's Chromium (Claude in Chrome cannot load loca
 
    It prints `4403`.
 8. With the terminal **On** again, `node -e "console.log(process.env.ANTHROPIC_API_KEY || 'absent')"` prints `absent`.
+9. `echo café` prints `café`, and `dir` (Windows) or `ls` lists the folder `ü` by its name, with no `�`. If cmd's own `echo` or `dir` shows `�`, run `chcp 65001 > nul && dir` and record whether that fixes it: the guide says so (Step 2). `python -c "print('café')"`, if Python is installed, prints `café` without it (`PYTHONUTF8=1`).
 
 Record each result in the ledger and the Feature Log notes. Anything that fails live is a bug: fix it test-first on this branch.
 
 Then stop only what this check started, by the ports it bound (PowerShell, because Git Bash mangles `taskkill`'s `/T`):
 
 ```powershell
-Get-NetTCPConnection -LocalPort 47491,5197,47592 -State Listen -ErrorAction SilentlyContinue |
+Get-NetTCPConnection -LocalPort 47491,5198,47592 -State Listen -ErrorAction SilentlyContinue |
   Select-Object -ExpandProperty OwningProcess -Unique |
   ForEach-Object { taskkill /PID $_ /T /F }
 ```
@@ -9674,7 +10523,7 @@ Expected: the person's ACE on 4747 and 5173 still answers (`curl -s -o /dev/null
 
 In `CLAUDE.md` §9, append after the `IDE | F1` row, matching the table's columns. Fill the notes from Steps 3 and 4:
 
-`| IDE | F2 | Forge phase 2 — the Terminal: supervised processes, trust levels, xterm tabs, Processes list, script buttons, WS Origin check | Arhant | feat/forge-phase-2 | IN REVIEW | — | DATE | — | Gates (Step 3, real counts per package, coverage) · live check 8 items (Step 4) · deviations: the Phase 2 refinements of D301 |`
+`| IDE | F2 | Forge phase 2 — the Terminal: supervised processes, trust levels, xterm tabs, Processes list, script buttons, WS Origin check | Arhant | feat/forge-phase-2 | IN REVIEW | — | DATE | — | Gates (Step 3, real counts per package, coverage) · live check 9 items (Step 4) · deviations: the Phase 2 refinements of D301 |`
 
 - [ ] **Step 6: Commit the docs**
 
@@ -9693,68 +10542,144 @@ Use superpowers:finishing-a-development-branch. Pushing, opening a PR, or mergin
 
 ## Plan self-review
 
+Re-run after the review fixes (`phase-2-plan-review.md`, `plan-fix-rulings.md`): Tasks 12 and 13 were split into 12–15, so the plan runs Tasks 0–19.
+
+**0. The tasks**
+
+| Task | What it delivers | Commit |
+|---|---|---|
+| 0 | Worktree check (on `feat/forge-phase-1-rest` at 7d00cd2), install, build, baseline; "Before the web tasks" | none |
+| 1 | Monaco stops flagging implicit `any` (Phase 1's N1) | `fix(web)` |
+| 2 | Contracts: trust levels, the start union (a script takes no `cwd`), the frame cap, summaries, frames, codes, 4403 | `feat(contracts)` |
+| 3 | Storage and the project update: `projects.terminal`, its migration, the earlier migration tests' chains, and PATCH | `feat(storage-local,engine)` |
+| 4 | Engine port and the tools runner: spawn, scrubbed env (`SCRUB_DROP`, `PYTHONUTF8`), tree kill, a stop reads SIGKILL | `feat(tools)` |
+| 5 | The scripts reader | `feat(tools)` |
+| 6 | `ProcessService`: trust (re-read before a script spawns), limits, frames of at most 65,536, normalised `cwd`, no agent tool | `feat(engine)` |
+| 7 | Process routes | `feat(engine)` |
+| 8 | Server wiring; PATCH off and DELETE stop processes; the real-engine integration test | `feat(server)` |
+| 9 | The WebSocket Origin check, the SDK's `forbidden_origin` and the run bar's notice | `feat(server)` |
+| 10 | SDK process methods | `feat(sdk)` |
+| 11 | Web mocks aligned with the engine (PATCH, DELETE, `labelOf`, normalised `cwd`, script at the root) | `feat(web)` |
+| 12 | The terminal store and the shared project scope | `feat(web)` |
+| 13 | Process frames to their tab; re-attach on entering Forge and on reconnect, skipping a process no tab owns | `feat(web)` |
+| 14 | The pure parts: xterm pinned, `FakeTerminal`, the line discipline, the built-ins | `feat(web)` |
+| 15 | The terminal view, the session (`enqueue` never silent) and the panel's Terminal tab; focus only when asked | `feat(web)` |
+| 16 | Several tabs, the Processes list, script buttons, the status bar's count and Ctrl+` | `feat(web)` |
+| 17 | The trust level in the project page and the Terminal | `feat(web)` |
+| 18 | e2e with the real xterm, on a port checked free | `test(web)` |
+| 19 | Docs, the gates, a live check on an isolated engine, the hand-off | `docs` |
+
+Each task from 1 to 18 writes its failing tests first, runs them red, implements, runs them green, runs its package's whole suite, typecheck and lint, and commits. Each one is green on its own: 12 adds no UI, 13 only a hook in `ForgePage`, 14 no component, and 15 the first view.
+
 **1. Spec coverage**
 
 | Spec line | Task |
 |---|---|
-| §6.3 `POST /` `{ command, cwd?, label? }` → `{ processId }` (refined to `{ command } \| { script }`) | 2, 6, 7 |
+| §6.3 `POST /` `{ command, cwd?, label? }` → `{ processId }` (refined to `{ command, cwd?, label? }` or `{ script, label? }`) | 2, 6, 7 |
 | §6.3 `POST /:procId/input` `{ data }` | 2, 6, 7, 10 |
-| §6.3 `POST /:procId/stop`: tree kill, `taskkill /T /F` / the process group | 4 (tree-kill test), 6, 7 |
+| §6.3 `POST /:procId/stop`: tree kill, `taskkill /T /F` / the process group | 4 (tree-kill and SIGKILL tests), 6, 7, 8 |
 | §6.3 `GET /`: running and recent, label, command, status, exit code, times | 2, 6, 7 |
 | §6.3 `GET /scripts`: package.json scripts and their package manager | 5, 6, 7 |
 | §6.3 the platform shell | 4 |
-| §6.3 a working folder confined to the project, no TTY | 4 (confinement tests); 17 (no PTY in the guide) |
-| §6.3 the environment minus secrets, `PATH`/`HOME` kept, `FORCE_COLOR=1` | 4 |
-| §6.3 output as transient `process.output`, batched at 50 ms; the last 1 MB kept for late subscribers | 2, 6 (batching, cap), 7 and 12 (`GET /:procId`, re-attach) |
+| §6.3 a working folder confined to the project, no TTY | 4 (confinement tests), 6 (normalised `cwd`); 19 (no PTY in the guide) |
+| §6.3 the environment minus secrets, `PATH`/`HOME` kept, `FORCE_COLOR=1` | 4 (plus `ELECTRON_RUN_AS_NODE` dropped and `PYTHONUTF8=1`) |
+| §6.3 output as transient `process.output`, batched at 50 ms; the last 1 MB kept for late subscribers | 2, 6 (batching, frame cap, kept cap), 7 and 13 (`GET /:procId`, re-attach) |
 | §6.3 `process.exited` when it finishes | 2, 6, 8 (real socket) |
 | §6.3 at most 8 at once per project; everything stops at shutdown | 6, 8 |
-| §6.3 trust levels `on` / `scripts` / `off` | 2, 3, 6, 8, 15 |
-| §6.3 agents never use the service | Global Constraints and decision 1: no tool, no registry entry |
-| §6.3 web: xterm with fit; ANSI colour, links and find | 13 |
-| §6.3 a tab is a line-mode session with its own folder and history | 12, 13 |
-| §6.3 a typed line starts a process; lines go to stdin while it runs; Ctrl+C stops it | 13 |
-| §6.3 `cd` built in and confined; `cls` / `clear` | 13 |
-| §6.3 several tabs; a Processes list with Stop | 14 |
-| §6.3 script buttons run a script in a new tab | 14 |
-| §2.2 the status bar's running count opens the Terminal; Ctrl+` (the terminal); the empty editor's Toggle terminal; Terminal · Problems · Output | 13, 14 |
-| §2.3 terminal sessions per project, with their scrollback, survive switching | 12, 13 |
+| §6.3 trust levels `on` / `scripts` / `off` | 2, 3, 6, 8, 11, 17 |
+| §6.3 agents never use the service | decision 1; 6 ("registers no built-in tool for processes or the terminal") |
+| §6.3 web: xterm with fit; ANSI colour, links and find | 14 (dependencies, `FakeTerminal`), 15 (view, find) |
+| §6.3 a tab is a line-mode session with its own folder and history | 12, 14, 15 |
+| §6.3 a typed line starts a process; lines go to stdin while it runs; Ctrl+C stops it | 14 (line discipline), 15 (tab tests) |
+| §6.3 `cd` built in and confined; `cls` / `clear` | 14 (built-ins), 15 (tab tests) |
+| §6.3 several tabs; a Processes list with Stop | 16 |
+| §6.3 script buttons run a script in a new tab | 16 (at the project root, no `cwd`) |
+| §2.2 the status bar's running count opens the Terminal; Ctrl+`; the empty editor's Terminal button; Terminal · Problems · Output | 15 (panel tabs), 16 |
+| §2.3 terminal sessions per project, with their scrollback, survive switching | 12, 15 (panel, Ideate ↔ Forge, a workflow-tab switch) |
 | §7 every new route behind the token, Origin and request-id middleware | 7 (mounted on `api`) |
 | §7 the WebSocket upgrade checks Origin against the REST allow-list | 9 |
 | §7 terminal processes: scrubbed env, confined folder, capped output, limit, tree kill | 4, 6 |
 | §7 nothing reaches the database or event log | 6 (zero events), 8 (`currentSeq` unchanged) |
 | §8 process start, input and stop; summary; scripts; `process.output` / `process.exited` frames; `Project.terminal` | 2 |
 | §8 storage: the project column | 3 |
-| §9 `tools/process/`, `engine/processes/`, server wiring and the WS Origin check, SDK methods, the web terminal, the xterm dependencies | 4–5, 6–7, 8–9, 10, 12–15, 13 |
-| §10 a process that fails to start says so in its terminal tab | 6 (`Could not start` on stderr, `failed`), 11 (`broken`), 13 (tab test) |
+| §9 `tools/process/`, `engine/processes/`, server wiring and the WS Origin check, SDK methods, the web terminal, the xterm dependencies | 4–5, 6–7, 8–9, 10, 12–16, 14 |
+| §10 a process that fails to start says so in its terminal tab | 6 (`Could not start` on stderr, `failed`), 11 (`broken`), 15 (tab test) |
 | §11 tools: process runner — streaming, stdin, tree kill, env scrubbing; the limit | 4, 6 |
 | §11 engine: process routes and errors | 7 |
 | §11 server integration: terminal streaming and stop; WS Origin refusal | 8, 9 |
-| §11 web unit: a terminal's scrollback survives Ideate ↔ Forge | 13 |
-| §11 web e2e: a terminal run | 16 |
-| §12 item 2: process service and runner, the `project` scope, the xterm terminal with `cd`, scripts, the Processes view, trust levels, the WS Origin check | 2–16 |
-| §14 no PTY; shell state does not carry, chaining in one line works | 13 (a chained `cd` goes to the shell), 17 (the guide) |
+| §11 web unit: a terminal's scrollback survives Ideate ↔ Forge and a workflow-tab switch | 15 |
+| §11 web e2e: a terminal run | 18 |
+| §12 item 2: process service and runner, the `project` scope, the xterm terminal with `cd`, scripts, the Processes view, trust levels, the WS Origin check | 2–18 |
+| §14 no PTY; shell state does not carry, chaining in one line works | 14 (a chained `cd` goes to the shell), 19 (the guide) |
 
 No spec line is left without a task. The phone layout (§2.1, no terminal at ≤ 640 px) needs no change: `CompactForge` renders no bottom panel.
 
-**2. Placeholder scan.** No "TBD", "TODO", "implement later", "similar to Task N", or step without its code. Two values are filled at run time by command, not by guess: `DATE` (`date +%F`) and the gate counts, which Task 17 pastes from the real output. Every modified file names its anchor lines or quotes the text it replaces.
+**The review's rulings, where each landed**
+
+| Ruling | Where |
+|---|---|
+| I1 migration-round-5's tail | Task 3, its step with the new assertions (`ids.length - 4`, `slice(-3)`) |
+| I2 the backquote with user-event | Task 16's Ctrl+` test types `{Control>}[Backquote]{/Control}`; no other unit test types a backquote (e2e presses `Control+Backquote`) |
+| I3 a script runs at the root | decision 5; Tasks 2 (schema and test), 6 (service test), 10 (SDK test), 11 (mock test), 16 (`runScript` sends `{ script }`) |
+| I4 a stop reads SIGKILL | decision 10; Task 4 (both tests), Task 8 (integration assertion) |
+| I5 the frame cap | decisions 7 and 11; Task 2 (`PROCESS_FRAME_MAX_CHARS`), Task 6 (flood test), Task 15 (the view writes frames as deltas) |
+| I6 delete stops processes | decision 6; Task 8 (route and integration tests), Task 11 (mock test) |
+| I7 the e2e port | Global Constraints; Task 18, Step 3 (free-port check, 5197 fallback); Task 19, Step 3 |
+| I8 the split | Tasks 12–15, renumbered to 0–19 with every cross-reference |
+| Minor 1 Task 0's base | Task 0, Step 1 |
+| Minor 2 cleanup | Tasks 4 and 8: every started handle ends before `rmSync`, which is wrapped |
+| Minor 3 timing | Global Constraints ("Waiting in tests"); fixed sleeps replaced by polling throughout |
+| Minor 4 trust re-read | decision 6; Task 6 (fake runner with `scriptsGate`) |
+| Minor 5 ownerless re-attach | Task 13 (`reattach` skips; the overlapping re-attach test) |
+| Minor 6 `enqueue` | Task 15 (`session.test.ts`) |
+| Minor 7 focus | decision 14; Task 15 (`focus.ts`, the focus tests), Task 16 (every opener asks; tests) |
+| Minors 8 and 9 deferred | decision 18; Task 19's guide limits and the D301 row |
+| Minor 10 Windows encoding | decision 3 (`PYTHONUTF8`); Task 4 (test line); Task 19 (live item 9, the guide's `chcp 65001`) |
+| Minor 11 environment | decision 3 (`SCRUB_DROP`); Task 4 (test); Task 19 (the guide: names, not values) |
+| Minor 12 workflow-tab switch | Task 15's scrollback test |
+| Minor 13 no agent tool | Task 6 (`builtins/no-terminal-tool.test.ts`) |
+| Minor 14 the frame parse test | Task 2 (under the server-frames `describe`) |
+| Minor 15 D301's date | Task 19, Step 1 |
+| Minor 16 `busyLine` | Task 16's Interfaces: from Task 12, where `line-discipline.ts` is created (the ruling's "12b" would be Task 13, which only consumes it) |
+| Minor 17 mock alignment | Task 11 (PATCH order, `labelOf`, normalised `cwd`); decision 4 |
+| Minor 18 test resolution | Global Constraints ("Tests and builds") |
+| Re-skin | "Before the web tasks", under Task 0 |
+
+**2. Placeholder scan.** No "TBD", "TODO", "implement later", "similar to Task N", or step without its code. Two values are filled at run time by command, not by guess: `DATE` (`date +%F`) and the gate counts, which Task 19 pastes from the real output. Every modified file names its anchor lines or quotes the text it replaces; the web tasks' anchors are re-checked after the re-skin ("Before the web tasks").
+
+Fixed waits left in tests, each with its reason in a comment:
+- Task 4: the spawn-failure test waits 400 ms past the drain to show that no `onExit` follows `onError`. It proves an absence, so there is nothing to poll for.
+- Task 8: the integration test's `watch()` waits 100 ms after sending a subscribe, because the protocol has no acknowledgement for one.
+- Task 15: two focus tests let one `setTimeout(0)` pass before asserting that nothing took the focus. That is ordering, not timing: the focus request is itself a `setTimeout(0)`, queued earlier.
+
+Not fixed waits: the 50 ms poll interval inside the deadline loops (`until` in Tasks 4 and 8), and Task 6's one macrotask yield in the hub test, which lets frames already emitted reach the sockets before it checks that the engine-only socket got none.
 
 **3. Names and types across tasks**
 - Port: `ProcessSpec`, `ProcessHandlers`, `RunningProcess`, `ProcessRunner { start, scripts }` (Tasks 4–5). Used unchanged by the fake (6), the service (6) and the server (8).
-- Service: `createProcessService` and `ProcessService { start, input, stop, list, get, scripts, stopProject, stopAll }` (6). The routes (7), the gateway's PATCH (8) and the server (8) use these names.
-- Tools: `createProcessRunner`, `readProjectScripts`, `scrubSecrets`, `SECRET_SHAPED`, `SCRUB_KEEP` (4–5).
-- SDK: `startProcess`, `processInput`, `stopProcess`, `listProcesses`, `getProcess`, `projectScripts` (10). The web uses exactly these (12–15).
-- Web: `useTerminalStore` (actions `newTab`, `closeTab`, `activate`, `rename`, `setLine`, `setCwd`, `write`, `clearScreen`, `idle`, `attach`, `output`, `exited`, `replaceLive`, `lost`, `reset`) and `LineState`, `busyLine`, `promptFor`, `feed` (12–13). `processKeys` and the hooks (12), `reattach` and `useProcessEvents` (12), `typed`, `startInTab`, `enqueue` (13), `runScript` and `openProcessInTab` (14).
-- Mocks: `MockProcesses`, `createProcessHandlers`, `MOCK_MESSAGES`, `installMockSocket` (11–12), `FakeTerminal` and the three fake addons (13).
-- The refusal messages are the same text in the engine (6), the mock (11) and the tests (10, 15).
+- Service: `createProcessService`, `normaliseCwd` and `ProcessService { start, input, stop, list, get, scripts, stopProject, stopAll }` (6). The routes (7), the gateway's PATCH and DELETE (8) and the server (8) use these names.
+- Tools: `createProcessRunner`, `readProjectScripts`, `scrubSecrets`, `SECRET_SHAPED`, `SCRUB_KEEP`, `SCRUB_DROP` (4–5).
+- Contracts: `ProcessStartRequest`, `PROCESS_FRAME_MAX_CHARS`, `PROCESS_OUTPUT_MAX_CHARS`, `WS_CLOSE_FORBIDDEN_ORIGIN` (2), used by 6, 9, 10, 11.
+- SDK: `startProcess`, `processInput`, `stopProcess`, `listProcesses`, `getProcess`, `projectScripts` (10). The web uses exactly these (12–17).
+- Web:
+  - `useProjectScope`, `processKeys` and the hooks, `useTerminalStore` (actions `newTab`, `closeTab`, `activate`, `rename`, `setLine`, `setCwd`, `write`, `clearScreen`, `idle`, `attach`, `output`, `exited`, `replaceLive`, `lost`, `reset`), `LineState`, `busyLine`, `promptFor` (12);
+  - `reattach`, `useProcessEvents`, `installMockSocket` (13);
+  - `feed`, `LineAction`, `parseBuiltin`, `resolveCd`, `FakeTerminal` and the three fake addons (14);
+  - `typed`, `startInTab`, `enqueue`, `requestTerminalFocus`, `registerTerminalFocus`, `cancelTerminalFocus`, `TerminalView`, `TerminalPanel` (15);
+  - `runScript`, `openProcessInTab`, `toggleTerminalFocused`, `TerminalTabs`, `ProcessesList`, `ScriptButtons` (16);
+  - `TrustNotice`, `SelectField` (17).
+- Mocks: `MockProcesses`, `createProcessHandlers`, `MOCK_MESSAGES` (11).
+- The refusal messages are the same text in the engine (6), the mock (11) and the tests (10, 17).
 
 **4. Review Focus pins**
 
 | Line | Pinned by |
 |---|---|
-| 1. Megabytes, never ending, grandchildren | Task 4 "Stop kills the shell, its child and its grandchild within 2.5 s"; Task 6 "keeps only the last 1,048,576 characters, never half a character"; Task 12 "a tab keeps only the last 1,048,576 characters" |
+| 1. Megabytes, never ending, grandchildren | Task 4 "Stop kills the shell, its child and its grandchild within 2.5 s"; Task 6 "keeps only the last 1,048,576 characters, never half a character" and "a flood in one batch goes out as frames of at most 65,536 characters, in order"; Task 12 "a tab keeps only the last 1,048,576 characters" |
 | 2. Windows quoting | Task 4 "runs a line as the shell would: quotes, &&, \| and a variable" and "runs in a folder whose name has spaces and unicode" |
-| 3. Engine stop and reconnect | Task 8 "stopping the engine stops every process it started, grandchildren included"; Task 12 "a re-attach replaces the tab's output with the engine's copy, once" and "a process the engine no longer knows ends the tab's run with a note" |
-| 4. Split UTF-8 and ANSI | Task 4 "never splits a character or an ANSI colour across chunks" |
-| 5. Secrets | Task 4 "a process never sees a secret-shaped variable, but keeps SSH_AUTH_SOCK, PATH and HOME" and the `scrubSecrets` table in `env.test.ts`; live check 8 in Task 17 |
+| 3. Engine stop, project delete and reconnect | Task 8 "stopping the engine stops every process it started, grandchildren included" and "deleting a project stops its processes first"; Task 13 "a re-attach replaces the tab's output with the engine's copy, once" and "a process the engine no longer knows ends the tab's run with a note" |
+| 4. Split UTF-8 and ANSI | Task 4 "never splits a character or an ANSI colour across chunks"; Task 19's live item 9 for cmd's own output |
+| 5. Secrets | Task 4 "a process never sees a secret-shaped variable, but keeps SSH_AUTH_SOCK, PATH and HOME", "always drops ELECTRON_RUN_AS_NODE…" and the `scrubSecrets` table in `env.test.ts`; live check 8 in Task 19 |
 
 **Known edge, accepted and named in the code:** a re-attach replaces the tab's copy with the engine's. A batch emitted after the engine took that copy, but arriving before the HTTP answer, is lost from view at the seam. A 50 ms batch is lost on a reconnect; nothing is ever doubled.
+
+**Known limitations, deferred (decision 18, and the guide):** no EOF (Ctrl+D), so a program that reads stdin until it ends must be stopped; background jobs that outlive their shell (`cmd &`, `start /b`) are not tracked.
