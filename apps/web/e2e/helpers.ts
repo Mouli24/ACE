@@ -297,3 +297,25 @@ export async function typeAtEnd(page: Page, text: string): Promise<void> {
   await page.keyboard.press('Control+End');
   await page.keyboard.type(text);
 }
+
+/** Forge's terminal (D301): the real xterm's rows, as text — only the rows on screen, never the scrollback. */
+export const terminalText = (page: Page): Locator =>
+  page.locator('[data-testid="terminal-view"] .xterm-rows');
+
+/** Forge with the Terminal open, focused, at its prompt. */
+export async function openTerminal(page: Page, seeded: Seeded): Promise<void> {
+  await page.goto(forgeUrl(seeded));
+  await expect(page.getByTestId('forge')).toBeVisible();
+  await page.keyboard.press('Control+Backquote');
+  await expect(terminalText(page)).toContainText('~ $');
+  // The default panel shows six rows; maximised, a whole run stays on screen (.xterm-rows is the
+  // viewport only). Ctrl+J and Ctrl+` leave maximised, so a test that hides the panel starts small.
+  await page.getByRole('button', { name: 'Maximize panel' }).click();
+  await page.getByTestId('terminal-view').click();
+}
+
+/** Types a line into the focused terminal and presses Enter, as a person would. */
+export async function runLine(page: Page, line: string): Promise<void> {
+  await page.keyboard.type(line);
+  await page.keyboard.press('Enter');
+}
