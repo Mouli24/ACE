@@ -26,7 +26,16 @@ const FIND_FIELD =
  * written back. It takes the keyboard focus only when the person asked for the Terminal
  * (`focus.ts`), never on a remount.
  */
-export function TerminalView({ projectId, tabId }: { projectId: string; tabId: string }) {
+export function TerminalView({
+  projectId,
+  tabId,
+  disabled = false,
+}: {
+  projectId: string;
+  tabId: string;
+  /** The project's terminal is off: nothing typed is acted on (D301). */
+  disabled?: boolean;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal>();
   const finder = useRef<SearchAddon>();
@@ -37,6 +46,8 @@ export function TerminalView({ projectId, tabId }: { projectId: string; tabId: s
   themeAtMount.current = theme;
   const [finding, setFinding] = useState(false);
   const [query, setQuery] = useState('');
+  const locked = useRef(disabled);
+  locked.current = disabled;
 
   useEffect(() => {
     const element = host.current;
@@ -103,7 +114,9 @@ export function TerminalView({ projectId, tabId }: { projectId: string; tabId: s
       seen = { epoch: tab.epoch, total: tab.total };
     });
 
-    const input = term.onData((data) => void typed(projectId, tabId, data, queryClient));
+    const input = term.onData((data) => {
+      if (!locked.current) void typed(projectId, tabId, data, queryClient);
+    });
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true;
       const mod = event.ctrlKey || event.metaKey;
@@ -140,6 +153,10 @@ export function TerminalView({ projectId, tabId }: { projectId: string; tabId: s
   useEffect(() => {
     if (terminal.current !== undefined) terminal.current.options.theme = terminalTheme(theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (terminal.current !== undefined) terminal.current.options.disableStdin = disabled;
+  }, [disabled]);
 
   const find = (direction: 'next' | 'previous'): void => {
     if (query === '') return;
