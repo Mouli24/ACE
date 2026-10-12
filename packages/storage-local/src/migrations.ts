@@ -39,6 +39,9 @@ export const X1_CLI_PROVIDERS_MIGRATION_ID = '20261006T120000_x1_cli_providers';
  */
 export const CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID = '20261009T120000_chat_sessions_cli_models';
 
+/** D301: a project's terminal trust level. Named so a test can apply the chain before it. */
+export const FORGE_TERMINAL_MIGRATION_ID = '20261010T120000_forge_terminal_trust';
+
 /**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
@@ -571,6 +574,14 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE models ADD COLUMN description TEXT;
       ALTER TABLE models ADD COLUMN resolved_model_id TEXT;
       ALTER TABLE models ADD COLUMN unavailable_reason TEXT;
+    `,
+  },
+  {
+    id: FORGE_TERMINAL_MIGRATION_ID,
+    up: `
+      -- D301: how far the project trusts its terminal: 'on', 'scripts' or 'off'. NULL reads as
+      -- 'on' (absent in the contract), so no row needs a backfill.
+      ALTER TABLE projects ADD COLUMN terminal TEXT;
     `,
   },
 ];
