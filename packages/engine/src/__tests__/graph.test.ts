@@ -127,6 +127,21 @@ describe('TC-PRJ-003 Delete project', () => {
 
     expect(renamed.name).toBe('Renamed');
   });
+
+  it('D301 stores the terminal trust level a PATCH sets, and refuses one it does not know', async () => {
+    const project = await createProject(h.app, projectFolder());
+
+    const scripts = ProjectSchema.parse(
+      await body(await patch(h.app, `/api/v1/projects/${project.id}`, { terminal: 'scripts' })),
+    );
+    expect(scripts.terminal).toBe('scripts');
+    const read = ProjectSchema.parse(await body(await get(h.app, `/api/v1/projects/${project.id}`)));
+    expect(read.terminal).toBe('scripts');
+
+    const refused = await patch(h.app, `/api/v1/projects/${project.id}`, { terminal: 'sometimes' });
+    expect(refused.status).toBe(400);
+    expect(ApiErrorSchema.parse(await body(refused)).error.code).toBe('validation_failed');
+  });
 });
 
 describe('TC-PRJ-004 Reopen last project', () => {

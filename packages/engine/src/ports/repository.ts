@@ -14,6 +14,7 @@ import type {
   Project,
   Settings,
   SettingsPatch,
+  TerminalTrust,
   Timestamp,
   ToolCall,
   Workflow,
@@ -103,6 +104,8 @@ export interface ProjectRepository {
       lastOpenedAt?: Timestamp;
       /** Round 3 §2.3: the per-run cost cap. `null` removes it, `undefined` leaves it (D72). */
       maxCostPerRunUsd?: number | null;
+      /** D301: the terminal trust level; `undefined` leaves it. */
+      terminal?: TerminalTrust;
       updatedAt: Timestamp;
     },
   ): Promise<Project | null>;

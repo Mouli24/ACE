@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { defaultGuardrailChecks, type GuardrailCheck } from '@ace/contracts';
+import { defaultGuardrailChecks, type GuardrailCheck, type Project } from '@ace/contracts';
 import { newId } from '@ace/engine';
 import type BetterSqlite3 from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -14,7 +14,7 @@ import {
   X1_CLI_PROVIDERS_MIGRATION_ID,
   type Migration,
   CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
-  DOMAIN_MIGRATION_ID,
+  FORGE_TERMINAL_MIGRATION_ID,
 } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
 import { makeProject, scope } from './fixtures.js';
@@ -58,6 +58,22 @@ afterEach(() => {
     // a lingering handle on Windows; the OS reclaims the temp directory anyway
   }
 });
+
+/**
+ * Creates a project on a database that predates the forge-terminal migration. The repository now
+ * writes `projects.terminal` on create, so the column is added for the insert and dropped again,
+ * which leaves the database as an install of that age really was (and the later migration free to
+ * add it).
+ */
+async function createProjectBeforeTerminal(
+  repository: SqliteRepository,
+  sqlite: BetterSqlite3.Database,
+  project: Project,
+): Promise<void> {
+  sqlite.exec('ALTER TABLE projects ADD COLUMN terminal TEXT');
+  await repository.projects.create(scope, project);
+  sqlite.exec('ALTER TABLE projects DROP COLUMN terminal');
+}
 
 function tableNames(sqlite: BetterSqlite3.Database): string[] {
   return (
@@ -107,7 +123,7 @@ describe('Arch §15.3 migration applies on a round-4 database and is recorded', 
       ROUND_5_MIGRATION_ID,
       X1_CLI_PROVIDERS_MIGRATION_ID,
       CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
-      DOMAIN_MIGRATION_ID,
+      FORGE_TERMINAL_MIGRATION_ID,
     ]);
     for (const table of NEW_TABLES) expect(tableNames(after.sqlite)).toContain(table);
     expect(columnsOf(after.sqlite, 'node_runs')).toEqual(
@@ -125,7 +141,11 @@ describe('Arch §15.3 migration applies on a round-4 database and is recorded', 
   it('keeps every row written before it, and reads them through the repository', async () => {
     const before = openDatabase({ path, migrations: BEFORE_ROUND_5 });
     const project = makeProject();
-    await new SqliteRepository(before.db, before.sqlite).projects.create(scope, project);
+    await createProjectBeforeTerminal(
+      new SqliteRepository(before.db, before.sqlite),
+      before.sqlite,
+      project,
+    );
     before.sqlite.close();
 
     const after = openDatabase({ path });
@@ -145,13 +165,13 @@ describe('Arch §15.3 migration applies on a round-4 database and is recorded', 
     again.sqlite.close();
   });
 
-  it('sorts after every earlier migration, and only X1, the chat-sessions and Domain ones follow it', () => {
+  it('sorts after every earlier migration, and only X1, chat-sessions and forge-terminal follow it', () => {
     const ids = MIGRATIONS.map((migration) => migration.id);
     expect(ids.indexOf(ROUND_5_MIGRATION_ID)).toBe(ids.length - 4);
     expect(ids.slice(-3)).toEqual([
       X1_CLI_PROVIDERS_MIGRATION_ID,
       CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
-      DOMAIN_MIGRATION_ID,
+      FORGE_TERMINAL_MIGRATION_ID,
     ]);
     expect([...ids].sort()).toEqual(ids);
     expect(ROUND_5_MIGRATION_ID).toBe('20261001T120000_round_5_knowledge_memory_usage');
@@ -163,7 +183,7 @@ describe('FR-GRD-004 DN-2 the context-check seed writes version+1 only for polic
     const before = openDatabase({ path, migrations: BEFORE_ROUND_5 });
     const repository = new SqliteRepository(before.db, before.sqlite);
     const project = makeProject();
-    await repository.projects.create(scope, project);
+    await createProjectBeforeTerminal(repository, before.sqlite, project);
     const policy = await repository.guardrailPolicies.getProjectDefault(scope, project.id);
     if (policy === null) throw new Error('the project has no default policy');
     // A round 4 install wrote its default policy without the context point.
@@ -219,7 +239,7 @@ describe('FR-GRD-004 DN-2 the context-check seed writes version+1 only for polic
     const before = openDatabase({ path, migrations: BEFORE_ROUND_5 });
     const repository = new SqliteRepository(before.db, before.sqlite);
     const project = makeProject();
-    await repository.projects.create(scope, project);
+    await createProjectBeforeTerminal(repository, before.sqlite, project);
     const policy = await repository.guardrailPolicies.getProjectDefault(scope, project.id);
     if (policy === null) throw new Error('the project has no default policy');
     const withOneContextCheck = [
@@ -242,7 +262,7 @@ describe('FR-GRD-004 DN-2 the context-check seed writes version+1 only for polic
     const before = openDatabase({ path, migrations: BEFORE_ROUND_5 });
     const repository = new SqliteRepository(before.db, before.sqlite);
     const project = makeProject();
-    await repository.projects.create(scope, project);
+    await createProjectBeforeTerminal(repository, before.sqlite, project);
     const custom = {
       id: newId(),
       projectId: project.id,

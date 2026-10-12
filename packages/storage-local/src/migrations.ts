@@ -39,11 +39,8 @@ export const X1_CLI_PROVIDERS_MIGRATION_ID = '20261006T120000_x1_cli_providers';
  */
 export const CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID = '20261009T120000_chat_sessions_cli_models';
 
-/**
- * Domain (D305, D308, D309, D312, D314): node handles, why a turn started, a run's goal and Domain
- * settings, why it is blocked mid-run, and an index for reading one run's events in order.
- */
-export const DOMAIN_MIGRATION_ID = '20261010T120000_domain';
+/** D301: a project's terminal trust level. Named so a test can apply the chain before it. */
+export const FORGE_TERMINAL_MIGRATION_ID = '20261010T120000_forge_terminal_trust';
 
 /**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
@@ -580,21 +577,11 @@ export const MIGRATIONS: readonly Migration[] = [
     `,
   },
   {
-    id: DOMAIN_MIGRATION_ID,
+    id: FORGE_TERMINAL_MIGRATION_ID,
     up: `
-      -- D308: a node's Domain handle. NULL means the default, a slug of its name.
-      ALTER TABLE nodes ADD COLUMN handle TEXT;
-
-      -- D309: why a turn started (JSON TurnTrigger). NULL on every node run stored before.
-      ALTER TABLE node_runs ADD COLUMN trigger TEXT;
-
-      -- D305: why a run is BLOCKED mid-run. D312: its goal and Domain settings (JSON).
-      ALTER TABLE runs ADD COLUMN blocked_reason TEXT;
-      ALTER TABLE runs ADD COLUMN domain TEXT;
-      ALTER TABLE runs ADD COLUMN goal TEXT;
-
-      -- D314: one run's events in order, for Domain's chat page and stream.
-      CREATE INDEX IF NOT EXISTS events_run_idx ON events (workspace_id, run_id, seq);
+      -- D301: how far the project trusts its terminal: 'on', 'scripts' or 'off'. NULL reads as
+      -- 'on' (absent in the contract), so no row needs a backfill.
+      ALTER TABLE projects ADD COLUMN terminal TEXT;
     `,
   },
 ];
