@@ -63,6 +63,28 @@ const left = (n: number): string => (n > 0 ? `\u001b[${n}D` : '');
 const right = (n: number): string => (n > 0 ? `\u001b[${n}C` : '');
 const ERASE_TO_END = '\u001b[K';
 
+/*
+ * Editing steps by code point, so a surrogate pair (an emoji) is never split; `cursor` stays a
+ * UTF-16 index into `line`, always on a character boundary, and the echo moves one column per code
+ * point. Wide (CJK, emoji) cells that take two columns are out of scope: that needs wcwidth and is
+ * cosmetic (the cursor may sit a column off after one).
+ */
+const columns = (text: string): number => Array.from(text).length;
+const isHigh = (code: number): boolean => code >= 0xd800 && code <= 0xdbff;
+const isLow = (code: number): boolean => code >= 0xdc00 && code <= 0xdfff;
+/** The index of the character boundary before `index`. */
+function boundaryBefore(text: string, index: number): number {
+  if (index >= 2 && isLow(text.charCodeAt(index - 1)) && isHigh(text.charCodeAt(index - 2))) return index - 2;
+  return Math.max(0, index - 1);
+}
+/** The index of the character boundary after `index`. */
+function boundaryAfter(text: string, index: number): number {
+  if (index + 1 < text.length && isHigh(text.charCodeAt(index)) && isLow(text.charCodeAt(index + 1))) {
+    return index + 2;
+  }
+  return Math.min(text.length, index + 1);
+}
+
 /** The key a CSI or SS3 sequence names, by its final character and parameters. */
 function keyOfSequence(final: string, params: string): Key | undefined {
   switch (final) {
@@ -160,7 +182,7 @@ export function feed(state: LineState, data: string): LineStep {
     switch (key.kind) {
       case 'text': {
         const rest = s.line.slice(s.cursor);
-        echo += key.text + rest + left(rest.length);
+        echo += key.text + rest + left(columns(rest));
         s = {
           ...s,
           line: s.line.slice(0, s.cursor) + key.text + rest,
@@ -171,35 +193,36 @@ export function feed(state: LineState, data: string): LineStep {
       case 'backspace': {
         if (s.cursor === 0) break;
         const rest = s.line.slice(s.cursor);
-        echo += `\b${rest} ${left(rest.length + 1)}`;
-        s = { ...s, line: s.line.slice(0, s.cursor - 1) + rest, cursor: s.cursor - 1 };
+        const start = boundaryBefore(s.line, s.cursor);
+        echo += `\b${rest} ${left(columns(rest) + 1)}`;
+        s = { ...s, line: s.line.slice(0, start) + rest, cursor: start };
         break;
       }
       case 'delete': {
         if (s.cursor === s.line.length) break;
-        const rest = s.line.slice(s.cursor + 1);
-        echo += `${rest} ${left(rest.length + 1)}`;
+        const rest = s.line.slice(boundaryAfter(s.line, s.cursor));
+        echo += `${rest} ${left(columns(rest) + 1)}`;
         s = { ...s, line: s.line.slice(0, s.cursor) + rest };
         break;
       }
       case 'left':
         if (s.cursor > 0) {
           echo += left(1);
-          s = { ...s, cursor: s.cursor - 1 };
+          s = { ...s, cursor: boundaryBefore(s.line, s.cursor) };
         }
         break;
       case 'right':
         if (s.cursor < s.line.length) {
           echo += right(1);
-          s = { ...s, cursor: s.cursor + 1 };
+          s = { ...s, cursor: boundaryAfter(s.line, s.cursor) };
         }
         break;
       case 'home':
-        echo += left(s.cursor);
+        echo += left(columns(s.line.slice(0, s.cursor)));
         s = { ...s, cursor: 0 };
         break;
       case 'end':
-        echo += right(s.line.length - s.cursor);
+        echo += right(columns(s.line.slice(s.cursor)));
         s = { ...s, cursor: s.line.length };
         break;
       case 'up':
@@ -208,7 +231,7 @@ export function feed(state: LineState, data: string): LineStep {
         if (recall < 0 || recall > s.history.length) break;
         const draft = s.recall === s.history.length ? s.line : s.draft;
         const next = recall === s.history.length ? draft : (s.history[recall] ?? '');
-        echo += left(s.cursor) + next + ERASE_TO_END;
+        echo += left(columns(s.line.slice(0, s.cursor))) + next + ERASE_TO_END;
         s = { ...s, line: next, cursor: next.length, recall, draft };
         break;
       }

@@ -176,4 +176,40 @@ describe('D301 the line discipline: keys to echo and actions', () => {
     expect(current.history[0]).toBe('cmd 5');
     expect(current.history.at(-1)).toBe(`cmd ${HISTORY_MAX + 4}`);
   });
+
+  describe('a surrogate pair is one character', () => {
+    it('Backspace removes a whole emoji, leaving no lone surrogate', () => {
+      let current = feed(state(), 'a\u{1F600}b').state;
+      expect(current).toMatchObject({ line: 'a\u{1F600}b', cursor: 4 });
+      const first = feed(current, '\u007f');
+      expect(first.echo).toBe('\b \u001b[1D');
+      current = feed(first.state, '\u007f').state;
+      expect(current).toMatchObject({ line: 'a', cursor: 1 });
+    });
+
+    it('← across an emoji lands before it, and moves one column; → lands after it', () => {
+      const from = state({ line: 'a\u{1F600}b', cursor: 3 });
+      const back = feed(from, '\u001b[D');
+      expect(back.state.cursor).toBe(1);
+      expect(back.echo).toBe('\u001b[1D');
+      const forward = feed(back.state, '\u001b[C');
+      expect(forward.state.cursor).toBe(3);
+      expect(forward.echo).toBe('\u001b[1C');
+    });
+
+    it('Delete removes a whole emoji', () => {
+      const step = feed(state({ line: 'a\u{1F600}b', cursor: 1 }), '\u001b[3~');
+      expect(step.state).toMatchObject({ line: 'ab', cursor: 1 });
+      expect(step.echo).toBe('b \u001b[2D');
+    });
+
+    it('Home steps back one column per character', () => {
+      expect(feed(state({ line: 'a\u{1F600}b', cursor: 4 }), '\u001b[H').echo).toBe('\u001b[3D');
+    });
+
+    it('Enter after a paste containing an emoji sends it intact', () => {
+      const step = feed(state(), 'say \u{1F600}\r');
+      expect(step.actions).toEqual([{ kind: 'run', line: 'say \u{1F600}' }]);
+    });
+  });
 });
