@@ -7,7 +7,7 @@ import { EMPTY_EDITOR, useEditorStore, type OpenFile } from '../../forge/editor/
 import type { WorkflowMode } from '../../forge/mode';
 import type * as RunHooks from '../../runs/hooks';
 import { useRunStore } from '../../runs/run-store';
-import { db, installMockServer, renderWithQuery } from '../../test/app';
+import { db, installMockServer, processes, renderWithQuery } from '../../test/app';
 import { useWorkspaceStatus } from '../stores/workspace-status';
 import { WorkspaceFooter } from './WorkspaceFooter';
 
@@ -241,5 +241,33 @@ describe('D330 the workspace footer', () => {
     expect(footer()).not.toHaveTextContent(/complete/i);
     act(() => useRunStore.setState({ workflowId: 'OTHER', status: 'RUNNING' }));
     expect(footer()).not.toHaveAttribute('data-run-status');
+  });
+
+  it('D301 in Forge, ▶ N running follows the problem counts while a process runs', async () => {
+    const project = db.createProject({ name: 'Shop Floor' });
+    const workflow = db.createWorkflow(project.id, 'Main');
+    processes.start(project.id, { command: 'serve' });
+    renderWithQuery(
+      <MemoryRouter>
+        <WorkspaceFooter projectId={project.id} workflowId={workflow.id} mode="forge" />
+      </MemoryRouter>,
+    );
+    const running = await within(footer()).findByRole('button', { name: '1 running' });
+    expect(within(footer()).getByTestId('footer-problems').nextElementSibling).toBe(running);
+    processes.stopProject(project.id);
+  });
+
+  it('D301 has no running count outside Forge', async () => {
+    const project = db.createProject({ name: 'Shop Floor' });
+    const workflow = db.createWorkflow(project.id, 'Main');
+    processes.start(project.id, { command: 'serve' });
+    renderWithQuery(
+      <MemoryRouter>
+        <WorkspaceFooter projectId={project.id} workflowId={workflow.id} mode="ideate" />
+      </MemoryRouter>,
+    );
+    await screen.findByTestId('project-slug');
+    expect(screen.queryByTestId('footer-running')).toBeNull();
+    processes.stopProject(project.id);
   });
 });

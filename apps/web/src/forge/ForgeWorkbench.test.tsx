@@ -6,6 +6,7 @@ import { useLayoutStore } from '../app/stores/layout';
 import { mockVersion } from '../mocks/files';
 import { useRunStore } from '../runs/run-store';
 import { db, installMockServer, renderApp } from '../test/app';
+import { FakeTerminal } from '../test/FakeTerminal';
 import { openFile } from './editor/actions';
 import { useEditorStore } from './editor/editor-store';
 
@@ -124,5 +125,32 @@ describe('D334 FR-GIT-003 Forge in the theme’s code view', () => {
     await user.click(run);
     await waitFor(() => expect(db.listRuns(workflowId)).toHaveLength(1));
     expect(useRunStore.getState().workflowId).toBe(workflowId);
+  });
+
+  it('D301 Ctrl+` opens the Terminal pill focused, and closes it again', async () => {
+    const user = userEvent.setup();
+    renderApp(seed());
+    await screen.findByTestId('forge');
+    // user-event's key map has no backquote: a typed ` would arrive as code "Unknown" and match
+    // nothing. [Backquote] names the key by its code, which is what the shortcut matches.
+    await user.keyboard('{Control>}[Backquote]{/Control}');
+    expect(await screen.findByTestId('terminal-panel')).toBeInTheDocument();
+    expect(useLayoutStore.getState().panelTab).toBe('terminal');
+    expect(screen.getByRole('tab', { name: 'Terminal' })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(FakeTerminal.latest().focused).toBe(1));
+    await user.keyboard('{Control>}[Backquote]{/Control}');
+    expect(screen.queryByTestId('terminal-panel')).toBeNull();
+  });
+
+  it('D301 the empty editor offers the Terminal as a third pill with its key, and focuses it', async () => {
+    const user = userEvent.setup();
+    renderApp(seed());
+    await screen.findByTestId('forge');
+    const pill = screen.getByRole('button', { name: /^Terminal/ });
+    expect(pill).toHaveTextContent('Terminal Ctrl+`');
+    expect(pill).toHaveClass('rounded-full');
+    await user.click(pill);
+    expect(await screen.findByTestId('terminal-panel')).toBeInTheDocument();
+    await waitFor(() => expect(FakeTerminal.latest().focused).toBe(1));
   });
 });

@@ -2,19 +2,25 @@ import { Fragment } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
 import { useLayoutStore } from '../../app/stores/layout';
+import { nodeStatusLook } from '../../theme/format';
 import { useEditorStatus } from '../editor/editor-status';
 import { useEditorStore } from '../editor/editor-store';
 import { languageLabel } from '../editor/languages';
 import { useProblemsStore, type Problem } from '../panel/problems-store';
+import { requestTerminalFocus } from '../terminal/focus';
+import { runningCount, useProcessList } from '../terminal/hooks';
 
 const NONE: Problem[] = [];
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 /*
- * Forge's status bar (D299, design §2.2) is two pieces of the workspace footer since D330/D334, in
- * the footer's type: the problem counts after the project slug, the open file's facts first on the
- * right, as the theme's `footExtra`.
+ * Forge's status bar (D299, design §2.2) is pieces of the workspace footer since D330/D334, in the
+ * footer's type: the problem counts and the running processes (D301) after the project slug, the
+ * open file's facts first on the right, as the theme's `footExtra`.
  */
+
+/** The Stage cards' RUNNING colour (`#ef6b3f`), for the ▶ of the running count. */
+const RUNNING = nodeStatusLook('RUNNING').color;
 
 /**
  * The errors and warnings in the open files; a click opens Problems. Mono, muted like the slug; a
@@ -50,6 +56,34 @@ export function ProblemsCount({ projectId }: { projectId: string }) {
         </span>
         {warnings}
       </span>
+    </button>
+  );
+}
+
+/**
+ * `▶ N running` while the project runs processes (D301), right after the problem counts and in
+ * their type; a click opens the Terminal and gives it the focus. Nothing while none runs.
+ */
+export function RunningCount({ projectId }: { projectId: string }) {
+  const running = runningCount(useProcessList(projectId).data);
+  const showPanel = useLayoutStore((s) => s.showPanel);
+  if (running === 0) return null;
+  return (
+    <button
+      type="button"
+      data-testid="footer-running"
+      aria-label={`${running} running`}
+      title="Running processes: open the Terminal"
+      onClick={() => {
+        requestTerminalFocus();
+        showPanel('terminal');
+      }}
+      className="flex shrink-0 cursor-pointer items-center gap-[4px] rounded-[4px] border-none bg-transparent px-[2px] font-machine text-[10px] text-[var(--muted)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+    >
+      <span aria-hidden style={{ color: RUNNING }}>
+        ▶
+      </span>
+      {running} running
     </button>
   );
 }

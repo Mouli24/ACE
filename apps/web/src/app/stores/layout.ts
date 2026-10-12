@@ -25,6 +25,8 @@ interface LayoutState {
   showPanel(tab: ForgePanelTab): void;
   closePanel(): void;
   toggleMaximized(): void;
+  /** Ctrl+`: the Terminal shows; when it is what shows, the panel hides (D301). */
+  toggleTerminal(): void;
 }
 
 export const LAYOUT_STORAGE_KEY = 'ace.layout';
@@ -67,6 +69,12 @@ export const useLayoutStore = create<LayoutState>()(
       showPanel: (panelTab) => set({ panelTab, panelOpen: true }),
       closePanel: () => set({ panelOpen: false, panelMaximized: false }),
       toggleMaximized: () => set((s) => ({ panelMaximized: !s.panelMaximized, panelOpen: true })),
+      toggleTerminal: () =>
+        set((s) =>
+          s.panelOpen && s.panelTab === 'terminal'
+            ? { panelOpen: false, panelMaximized: false }
+            : { panelOpen: true, panelTab: 'terminal' },
+        ),
     }),
     {
       name: LAYOUT_STORAGE_KEY,
