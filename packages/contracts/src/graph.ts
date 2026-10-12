@@ -38,6 +38,16 @@ export const NodeNameSchema = z.string().min(1).max(80);
  */
 export const BudgetUsdSchema = z.number().positive();
 
+/**
+ * D301: how far a project trusts its terminal (design §6.3). `on` runs any command a person types
+ * and the project's scripts; `scripts` runs only the root package.json scripts; `off` runs nothing.
+ * Absent reads as `on`, so a project stored before Forge needs no backfill.
+ */
+export const TERMINAL_TRUST_LEVELS = ['on', 'scripts', 'off'] as const;
+export const TerminalTrustSchema = z.enum(TERMINAL_TRUST_LEVELS);
+export type TerminalTrust = z.infer<typeof TerminalTrustSchema>;
+export const DEFAULT_TERMINAL_TRUST: TerminalTrust = 'on';
+
 export const ProjectSchema = z.object({
   id: IdSchema,
   name: EntityNameSchema,
@@ -45,6 +55,8 @@ export const ProjectSchema = z.object({
   lastOpenedAt: TimestampSchema.optional(),
   /** A run that would cost more halts `budget_exceeded` (round 3 §2.3, FR-GRD-008). */
   maxCostPerRunUsd: BudgetUsdSchema.nullable().optional(),
+  /** D301: absent is `on`. */
+  terminal: TerminalTrustSchema.optional(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 });

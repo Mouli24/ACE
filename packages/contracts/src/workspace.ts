@@ -173,3 +173,132 @@ export type FilesChangedPayload = z.infer<typeof FilesChangedPayloadSchema>;
 /** `details` of a 409 `file_changed`: what is on disk now, `null` when the file is gone. */
 export const FileChangedDetailsSchema = z.object({ currentVersion: FileVersionSchema.nullable() });
 export type FileChangedDetails = z.infer<typeof FileChangedDetailsSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* Processes: Forge's terminal (D301, design §6.3)                             */
+/* -------------------------------------------------------------------------- */
+
+/** The longest command line a start takes: the same bound as `run_command`. */
+export const PROCESS_COMMAND_MAX = 8_000;
+/** The most one `POST /input` writes to a process's stdin, in characters. */
+export const PROCESS_INPUT_MAX = 65_536;
+/** How much of a process's output the engine keeps, and a terminal tab shows, in UTF-16 code units. */
+export const PROCESS_OUTPUT_MAX_CHARS = 1_048_576;
+/** How many processes may run at once in one project; the next start answers 409 `process_limit`. */
+export const PROCESS_RUNNING_MAX = 8;
+/** How many finished processes per project the engine remembers, in memory only. */
+export const PROCESS_RECENT_MAX = 20;
+/** Output is collected this long before it goes out as `process.output` frames. */
+export const PROCESS_OUTPUT_BATCH_MS = 50;
+/**
+ * The most one `process.output` frame carries. A larger batch goes out as several frames, in
+ * order, so neither the engine's send queue nor the browser ever takes a multi-megabyte frame.
+ */
+export const PROCESS_FRAME_MAX_CHARS = 65_536;
+
+/** `failed` means it never started (a spawn error); its reason is in the output. */
+export const PROCESS_STATUSES = ['running', 'exited', 'failed'] as const;
+export const ProcessStatusSchema = z.enum(PROCESS_STATUSES);
+export type ProcessStatus = z.infer<typeof ProcessStatusSchema>;
+
+export const PROCESS_STREAMS = ['stdout', 'stderr'] as const;
+export const ProcessStreamSchema = z.enum(PROCESS_STREAMS);
+export type ProcessStream = z.infer<typeof ProcessStreamSchema>;
+
+export const PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn', 'bun'] as const;
+export const PackageManagerSchema = z.enum(PACKAGE_MANAGERS);
+export type PackageManager = z.infer<typeof PackageManagerSchema>;
+
+const ProcessLabelSchema = z.string().min(1).max(120);
+
+/**
+ * `POST /projects/:id/processes`. Either the line a person typed, run through the platform shell
+ * in `cwd` (project-relative and confined by the engine; the root when omitted), or the name of a
+ * root package.json script, which the engine runs as `<pm> run <script>` in the project root.
+ * The script form takes no `cwd`: a package manager reads the nearest package.json above its
+ * working folder, so a sub-folder would run a script nobody checked (D301).
+ */
+export const ProcessStartRequestSchema = z.union([
+  z.strictObject({
+    command: z
+      .string()
+      .min(1)
+      .max(PROCESS_COMMAND_MAX)
+      .regex(/\S/, 'A command needs a character that is not a space.'),
+    cwd: ProjectPathSchema.optional(),
+    label: ProcessLabelSchema.optional(),
+  }),
+  z.strictObject({
+    script: z.string().min(1).max(200),
+    label: ProcessLabelSchema.optional(),
+  }),
+]);
+export type ProcessStartRequest = z.infer<typeof ProcessStartRequestSchema>;
+
+export const ProcessStartResponseSchema = z.strictObject({ processId: IdSchema });
+export type ProcessStartResponse = z.infer<typeof ProcessStartResponseSchema>;
+
+/** `POST /projects/:id/processes/:procId/input`: written to stdin as given; a line ends in `\n`. */
+export const ProcessInputRequestSchema = z.strictObject({
+  data: z.string().max(PROCESS_INPUT_MAX),
+});
+export type ProcessInputRequest = z.infer<typeof ProcessInputRequestSchema>;
+
+/** One row of `GET /projects/:id/processes`. No pid crosses the wire. */
+export const ProcessSummarySchema = z.strictObject({
+  id: IdSchema,
+  projectId: IdSchema,
+  label: z.string(),
+  command: z.string(),
+  cwd: ProjectPathSchema,
+  status: ProcessStatusSchema,
+  exitCode: z.number().int().nullable(),
+  signal: z.string().nullable(),
+  startedAt: TimestampSchema,
+  endedAt: TimestampSchema.optional(),
+});
+export type ProcessSummary = z.infer<typeof ProcessSummarySchema>;
+
+/**
+ * `GET /projects/:id/processes/:procId`: the summary plus the output the engine kept — the last
+ * {@link PROCESS_OUTPUT_MAX_CHARS} characters — for a terminal tab that re-attaches (design §6.3).
+ */
+export const ProcessDetailSchema = z.strictObject({
+  ...ProcessSummarySchema.shape,
+  output: z.string(),
+  /** Earlier output was dropped to keep the last {@link PROCESS_OUTPUT_MAX_CHARS} characters. */
+  truncated: z.boolean(),
+});
+export type ProcessDetail = z.infer<typeof ProcessDetailSchema>;
+
+export const ProjectScriptSchema = z.strictObject({ name: z.string(), command: z.string() });
+export type ProjectScript = z.infer<typeof ProjectScriptSchema>;
+
+/** `GET /projects/:id/processes/scripts`: the root package.json scripts, in file order. */
+export const ProjectScriptsSchema = z.strictObject({
+  packageManager: PackageManagerSchema,
+  scripts: z.array(ProjectScriptSchema),
+});
+export type ProjectScripts = z.infer<typeof ProjectScriptsSchema>;
+
+/**
+ * The transient `process.output` frame on the `project` scope: one stream's part of a 50 ms batch,
+ * at most {@link PROCESS_FRAME_MAX_CHARS} characters.
+ */
+export const ProcessOutputPayloadSchema = z.strictObject({
+  projectId: IdSchema,
+  processId: IdSchema,
+  stream: ProcessStreamSchema,
+  data: z.string().max(PROCESS_FRAME_MAX_CHARS),
+});
+export type ProcessOutputPayload = z.infer<typeof ProcessOutputPayloadSchema>;
+
+/** The transient `process.exited` frame: the process ended, or never started (`failed`). */
+export const ProcessExitedPayloadSchema = z.strictObject({
+  projectId: IdSchema,
+  processId: IdSchema,
+  exitCode: z.number().int().nullable(),
+  signal: z.string().nullable(),
+  status: z.enum(['exited', 'failed']),
+});
+export type ProcessExitedPayload = z.infer<typeof ProcessExitedPayloadSchema>;

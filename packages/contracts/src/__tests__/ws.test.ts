@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  WS_CLOSE_FORBIDDEN_ORIGIN,
   WS_CLOSE_UNAUTHORIZED,
   WS_PATH,
   ServerFrameSchema,
@@ -95,6 +96,28 @@ describe('FR-EXE-014 WebSocket client frames', () => {
 });
 
 describe('FR-EXE-014 WebSocket server frames', () => {
+  it('carries process.output and process.exited on the project scope without a seq (D301)', () => {
+    const output = {
+      type: 'process.output',
+      payload: { projectId: WORKFLOW_ID, processId: WORKFLOW_ID, stream: 'stdout', data: 'hi\n' },
+    };
+    const exited = {
+      type: 'process.exited',
+      payload: {
+        projectId: WORKFLOW_ID,
+        processId: WORKFLOW_ID,
+        exitCode: 0,
+        signal: null,
+        status: 'exited',
+      },
+    };
+    expect(ServerFrameSchema.parse(output)).toEqual(output);
+    expect(ServerFrameSchema.parse(exited)).toEqual(exited);
+    expect(ServerFrameSchema.safeParse({ ...output, seq: 4 }).success, 'transient: no seq').toBe(
+      false,
+    );
+  });
+
   it('sends hello with the current global seq and no frame-level seq', () => {
     const frame = { type: 'hello', payload: { seq: 12 } };
 
@@ -132,6 +155,10 @@ describe('FR-EXE-014 WebSocket server frames', () => {
 });
 
 describe('FR-SYS-002 WebSocket auth', () => {
+  it('closes a socket from an origin not on the allow-list with 4403 (FR-SYS-003, D301)', () => {
+    expect(WS_CLOSE_FORBIDDEN_ORIGIN).toBe(4403);
+  });
+
   it('closes a wrong or missing token with 4401', () => {
     expect(WS_CLOSE_UNAUTHORIZED).toBe(4401);
   });

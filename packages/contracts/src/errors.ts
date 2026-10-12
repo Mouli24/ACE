@@ -52,9 +52,12 @@ export const ROUND_4_ERROR_CODES = [
 ] as const;
 
 /**
- * Codes Forge's file API adds (D299, design §6.1): a save on a stale base (409, with the disk's
+ * Codes Forge adds. The file API (D299, design §6.1): a save on a stale base (409, with the disk's
  * version in `details`), a create or move onto an existing path (409), a save over the editable
- * size (413), a path outside the project folder (403) and a write into `.git`/`.ace` (403).
+ * size (413), a path outside the project folder (403) and a write into `.git`/`.ace` (403). The
+ * terminal (D301, §6.3): a start the project's trust level refuses (403 `terminal_disabled` when
+ * it is off, 403 `terminal_restricted` for a typed command when only scripts may run), a ninth
+ * running process (409) and input to a process that has finished (409).
  */
 export const IDE_ERROR_CODES = [
   'file_changed',
@@ -62,6 +65,10 @@ export const IDE_ERROR_CODES = [
   'file_too_large',
   'outside_project',
   'protected_path',
+  'terminal_disabled',
+  'terminal_restricted',
+  'process_limit',
+  'process_not_running',
 ] as const;
 
 export const ERROR_CODES = [
@@ -96,6 +103,10 @@ export const ERROR_CODE_HTTP_STATUS: Readonly<Record<ErrorCode, number>> = {
   file_too_large: 413,
   outside_project: 403,
   protected_path: 403,
+  terminal_disabled: 403,
+  terminal_restricted: 403,
+  process_limit: 409,
+  process_not_running: 409,
 };
 
 /** `details` shapes §2.3 names explicitly. */
