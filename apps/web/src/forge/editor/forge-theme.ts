@@ -11,7 +11,7 @@ import { BAND_D, BAND_L, PAL_D, PAL_L } from '../../theme/constants';
 
 type Palette = typeof PAL_L;
 
-interface Look {
+export interface Look {
   pal: Palette;
   /** `--surface`: the code area's background. */
   surface: string;
@@ -50,10 +50,13 @@ const DARK: Look = {
   band: BAND_D,
 };
 
+/** The code view's two looks, for every widget coloured from the theme: Monaco here, xterm (D301). */
+export const FORGE_LOOKS: Readonly<Record<'light' | 'dark', Look>> = { light: LIGHT, dark: DARK };
+
 /** The theme's orange: the cursor, the focus ring and find matches. */
-const ACCENT = '#ef6b3f';
-const DANGER = '#c94c27';
-const DONE = '#2f9e63';
+export const ACCENT = '#ef6b3f';
+export const DANGER = '#c94c27';
+export const DONE = '#2f9e63';
 
 /** Monaco wants rule colours without the `#`. */
 const hex = (colour: string): string => colour.replace(/^#/, '');

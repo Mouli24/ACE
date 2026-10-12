@@ -1,8 +1,14 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 
-/** Forge's bottom panel views: Problems (D299 §6.4). The Output view left with D334; Phase 2 adds the Terminal. */
-export type ForgePanelTab = 'problems';
+/**
+ * Forge's bottom panel views (D334 as amended 2026-10-13): the Terminal (D301) and Problems. The
+ * Output view stays removed. On first open the panel shows Problems; after that Ctrl+J toggles it
+ * on the view used last (remembered, as VS Code does), and Ctrl+` on the Terminal.
+ */
+export type ForgePanelTab = 'terminal' | 'problems';
+
+const PANEL_TABS: readonly ForgePanelTab[] = ['terminal', 'problems'];
 
 interface LayoutState {
   /** The chat column in Ideate and Forge, and Domain's Team aside: the header's Split (D330). */
@@ -71,6 +77,15 @@ export const useLayoutStore = create<LayoutState>()(
         panelOpen: s.panelOpen,
         panelTab: s.panelTab,
       }),
+      // A view this build does not have — Phase 1's 'output' — would open a blank panel with no
+      // tab selected; it reads as Problems instead.
+      merge: (stored, current) => {
+        const saved = (stored ?? {}) as Partial<LayoutState>;
+        const panelTab = PANEL_TABS.includes(saved.panelTab as ForgePanelTab)
+          ? (saved.panelTab as ForgePanelTab)
+          : current.panelTab;
+        return { ...current, ...saved, panelTab };
+      },
     },
   ),
 );
