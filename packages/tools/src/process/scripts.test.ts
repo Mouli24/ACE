@@ -5,7 +5,12 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createProcessRunner } from './runner.js';
-import { LOCKFILES, readProjectScripts } from './scripts.js';
+import {
+  LOCKFILES,
+  PACKAGE_JSON_MAX_BYTES,
+  SAFE_SCRIPT_NAME,
+  readProjectScripts,
+} from './scripts.js';
 
 /** A file symlink needs a privilege on Windows; without it the link test is skipped. */
 const canFileSymlink = ((): boolean => {
@@ -133,6 +138,37 @@ describe('D301 the project’s own scripts (design §6.3)', () => {
       expect(await readProjectScripts(project)).toEqual({ packageManager: 'npm', scripts: [] });
     },
   );
+
+  it('keeps only script names a shell cannot read as code', async () => {
+    const kept = ['build:web', 'test:e2e', 'lint-fix', '@scope/x', 'pre_commit'];
+    const dropped = [
+      'x & del *',
+      'a" & calc & "',
+      '%PATH%',
+      'a|b',
+      'a>b',
+      'a^b',
+      'a b',
+      '(x)',
+      '!x',
+    ];
+    const scripts = Object.fromEntries([...kept, ...dropped].map((name) => [name, 'echo']));
+    put(
+      'package.json',
+      JSON.stringify({ scripts }).replace('{"build:web"', '{"__proto__":"echo","build:web"'),
+    );
+    const listed = (await readProjectScripts(project)).scripts.map((script) => script.name);
+    expect(listed).toEqual(kept);
+    expect(SAFE_SCRIPT_NAME.test('a'.repeat(200))).toBe(true);
+    expect(SAFE_SCRIPT_NAME.test('a'.repeat(201))).toBe(false);
+  });
+
+  it('never reads a package.json over 1 MiB, and takes the manager from the lockfile', async () => {
+    const filler = ' '.repeat(PACKAGE_JSON_MAX_BYTES);
+    put('package.json', `{"packageManager":"yarn@4","scripts":{"dev":"vite"}}${filler}`);
+    put('pnpm-lock.yaml', '');
+    expect(await readProjectScripts(project)).toEqual({ packageManager: 'pnpm', scripts: [] });
+  });
 
   it('is what the runner answers for scripts(root)', async () => {
     manifest({ scripts: { dev: 'vite' } });
