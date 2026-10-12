@@ -22,6 +22,7 @@ import {
   type Node,
   type Project,
   type Settings,
+  type TerminalTrust,
   type Model,
   type NodeRun,
   type FileChange,
@@ -280,7 +281,13 @@ export class MockDb {
 
   updateProject(
     id: string,
-    patch: { name?: string; lastOpenedAt?: string; maxCostPerRunUsd?: number | null },
+    patch: {
+      name?: string;
+      lastOpenedAt?: string;
+      maxCostPerRunUsd?: number | null;
+      /** D301: the terminal trust level; the PATCH handler passes it through. */
+      terminal?: TerminalTrust;
+    },
   ): Project | undefined {
     const project = this.getProject(id);
     if (!project) return undefined;
