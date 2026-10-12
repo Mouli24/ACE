@@ -1,101 +1,99 @@
 import type { NodeState, ProviderState, ProviderType } from '@ace/contracts';
 
 /**
- * ACE design tokens (Arch §10.1 design system, CLAUDE.md §2): the Night (dark) and Paper (light) themes over a dotted Canvas, one accent
- * colour per provider, one status-ring colour per NodeState, serif for human text and monospace
- * for machine text. Night and Paper are the POC Theme V2 palettes (D241 added the light theme; theme-v2
- * restyled both). `theme.css` mirrors these values as Tailwind `@theme` variables; the contrast
- * test in `__tests__/tokens.test.ts` keeps every pair at WCAG AA (NFR-USE-02).
+ * ACE design tokens (Arch §10.1 design system, CLAUDE.md §2), in the Ace UI theme's palette (D328):
+ * warm neutrals, ink and muted text, the orange accent `#ef6b3f`, Plus Jakarta Sans for human text
+ * and JetBrains Mono for machine text. `theme.css` defines the theme's own variables (`--canvas`,
+ * `--ink`, `--line`, …) with these values and points the kit's semantic slots (`--color-card`, …)
+ * at them; the contrast test in `__tests__/tokens.test.ts` records what each pair measures.
+ *
+ * Light is the default theme; `tokens.color` keeps the dark set at the top level (its historical
+ * place) with the light set under `tokens.color.light`.
  */
 
+/** Provider colours: the theme's provider ink per look (`th().ink`), dark. Custom reads as ink. */
 export const PROVIDER_ACCENT: Readonly<Record<ProviderType, string>> = {
-  anthropic: '#e8734a',
-  google: '#ec4899',
-  openai: '#2dd4bf',
-  openai_compatible: '#a78bfa',
-  ollama: '#e8e8ea',
-  mock: '#9a99a3',
-  claude_code: '#f2a37f',
-  codex_cli: '#7dd3fc',
-  gemini_cli: '#f9a8d4',
+  anthropic: '#c2603f',
+  google: '#8fb0ff',
+  openai: '#2fe08a',
+  openai_compatible: '#f2eee9',
+  ollama: '#f2eee9',
+  mock: '#f2eee9',
+  claude_code: '#c2603f',
+  codex_cli: '#2fe08a',
+  gemini_cli: '#8fb0ff',
 };
 
+/** Node-state colours from the theme: done green, running accent, waiting violet, failed red. */
 export const STATUS_RING: Readonly<Record<NodeState, string>> = {
-  IDLE: '#7c7c84',
-  READY: '#93a8ff',
-  RUNNING: '#5cc8ff',
-  WAITING: '#f5c542',
-  COMPLETED: '#34d399',
-  PAUSED: '#c8b56a',
-  STOPPED: '#b8b5ae',
-  BLOCKED: '#f59e0b',
-  FAILED: '#f0563f',
+  IDLE: '#a39d97',
+  READY: '#1f97a3',
+  RUNNING: '#e8572e',
+  WAITING: '#7a62d6',
+  COMPLETED: '#2f9e63',
+  PAUSED: '#a39d97',
+  STOPPED: '#a39d97',
+  BLOCKED: '#c94c27',
+  FAILED: '#c94c27',
 };
 
 /**
  * One colour per `ProviderState` (round 2 §5 step 2). A provider's state is about reachability, so
- * the scale is deliberately not the node-state scale: CONNECTED is green, the three fault states
- * are warm, and UNKNOWN/CHECKING stay neutral so an unchecked provider never reads as broken.
+ * the scale is deliberately not the node-state scale: CONNECTED is green, the fault states are
+ * warm, and UNKNOWN stays neutral so an unchecked provider never reads as broken.
  */
 export const PROVIDER_STATUS: Readonly<Record<ProviderState, string>> = {
-  UNKNOWN: '#8f8c95',
-  CHECKING: '#93a8ff',
-  CONNECTED: '#34d399',
-  AUTH_FAILED: '#f0563f',
-  UNREACHABLE: '#f59e0b',
-  RATE_LIMITED: '#f5c542',
+  UNKNOWN: '#a39d97',
+  CHECKING: '#1f97a3',
+  CONNECTED: '#2f9e63',
+  AUTH_FAILED: '#c94c27',
+  UNREACHABLE: '#e8572e',
+  RATE_LIMITED: '#7a62d6',
 };
 
-/*
- * The light theme (D241, FR-SYS-005). The same semantic slots as the dark set below, stepped for a
- * light surface (Paper): text ≥ 4.5:1, and every provider, status and provider-status colour is
- * ≥ 4.5:1 on the card, panel and canvas in BOTH themes, because they double as text (JsonTree's
- * string/number colours, badges, StatusChip labels; NFR-USE-02). The Paper values are the design's
- * hues stepped darker until they pass; Night keeps the design's values except IDLE, which is
- * nudged lighter. `theme.css` applies these under `:root[data-theme="light"]`.
- */
+/** The light theme's values for the same slots. */
 export const LIGHT_PROVIDER_ACCENT: Readonly<Record<ProviderType, string>> = {
-  anthropic: '#b04c27',
-  google: '#c22d74',
-  openai: '#0b786a',
-  openai_compatible: '#7446d8',
-  ollama: '#3a3a40',
-  mock: '#6b6972',
-  claude_code: '#94401c',
-  codex_cli: '#0b6380',
-  gemini_cli: '#a3245f',
+  anthropic: '#c2603f',
+  google: '#1d4fe0',
+  openai: '#0a8048',
+  openai_compatible: '#1f1d1b',
+  ollama: '#1f1d1b',
+  mock: '#1f1d1b',
+  claude_code: '#c2603f',
+  codex_cli: '#0a8048',
+  gemini_cli: '#1d4fe0',
 };
 
 export const LIGHT_STATUS_RING: Readonly<Record<NodeState, string>> = {
-  IDLE: '#6b6970',
-  READY: '#3b5bdb',
-  RUNNING: '#0970a8',
-  WAITING: '#886509',
-  COMPLETED: '#117954',
-  PAUSED: '#7b6924',
-  STOPPED: '#6b6972',
-  BLOCKED: '#a15800',
-  FAILED: '#c13a27',
+  IDLE: '#6f6a65',
+  READY: '#1f97a3',
+  RUNNING: '#e8572e',
+  WAITING: '#7a62d6',
+  COMPLETED: '#2f9e63',
+  PAUSED: '#6f6a65',
+  STOPPED: '#6f6a65',
+  BLOCKED: '#c94c27',
+  FAILED: '#c94c27',
 };
 
 export const LIGHT_PROVIDER_STATUS: Readonly<Record<ProviderState, string>> = {
-  UNKNOWN: '#6b6972',
-  CHECKING: '#3b5bdb',
-  CONNECTED: '#117954',
-  AUTH_FAILED: '#c13a27',
-  UNREACHABLE: '#a15800',
-  RATE_LIMITED: '#886509',
+  UNKNOWN: '#6f6a65',
+  CHECKING: '#1f97a3',
+  CONNECTED: '#2f9e63',
+  AUTH_FAILED: '#c94c27',
+  UNREACHABLE: '#e8572e',
+  RATE_LIMITED: '#7a62d6',
 };
 
 /**
  * Categorical series colours for charts (FR-OBS-004), in fixed order — a series keeps its slot,
- * never its rank. Each theme has its own step of the same eight hues, every one ≥ 3:1 against that
- * theme's panel (WCAG 1.4.11). `theme.css` exposes them as `--color-chart-1..8`; components use
- * {@link chartSeriesColor} so the swap happens in CSS.
+ * never its rank. All eight are theme hues (the agent colours, then the Home tints) and each is
+ * ≥ 3:1 against both themes' panel (WCAG 1.4.11). `theme.css` exposes them as
+ * `--color-chart-1..8`; components use {@link chartSeriesColor}.
  */
 export const CHART_SERIES_COLORS = {
-  dark: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#2f9e2f', '#9085e9', '#e66767'],
-  light: ['#2a78d6', '#d4531f', '#0f8a5f', '#b07800', '#c2457a', '#008300', '#4a3aa7', '#d63b3a'],
+  dark: ['#e8572e', '#7a62d6', '#1f97a3', '#2f9e63', '#5b7fe0', '#d94a6b', '#b27408', '#6c55c8'],
+  light: ['#e8572e', '#7a62d6', '#1f97a3', '#2f9e63', '#5b7fe0', '#d94a6b', '#b27408', '#6c55c8'],
 } as const satisfies Record<'dark' | 'light', readonly string[]>;
 
 /** The CSS colour for series slot `index` (0-based), following the active theme. */
@@ -129,22 +127,26 @@ export interface ThemeColors {
   providerStatus: Readonly<Record<ProviderState, string>>;
 }
 
+/**
+ * Light (the default): the workspace set of `Ace Canvas.dc.html`. `canvasDot` is `--dot`
+ * (rgba(80,70,60,0.16)) composited over the canvas, so it can be measured.
+ */
 const lightColor: Readonly<ThemeColors> = {
-  canvas: '#f3f1ec',
-  canvasDot: '#d6d2c9',
-  panel: '#eeebe5',
-  card: '#fbfaf7',
-  sunken: '#e9e5de',
-  border: '#dcd8d0',
-  borderStrong: '#c4c0b8',
-  fg: '#1b1a1e',
-  fgSoft: '#46444c',
-  fgMuted: '#66646d',
-  fgFaint: '#6b696f',
-  accent: '#1b1a1e',
-  accentFg: '#fbfaf7',
-  danger: '#c13a27',
-  selection: '#7446d8',
+  canvas: '#f4f0ec',
+  canvasDot: '#dad5d0',
+  panel: '#faf7f4',
+  card: '#ffffff',
+  sunken: '#f4f0ec',
+  border: '#e6e0da',
+  borderStrong: '#cfc9c3',
+  fg: '#1f1d1b',
+  fgSoft: '#6f6a65',
+  fgMuted: '#6f6a65',
+  fgFaint: '#6f6a65',
+  accent: '#1f1d1b',
+  accentFg: '#f4f0ec',
+  danger: '#c94c27',
+  selection: '#ef6b3f',
   provider: LIGHT_PROVIDER_ACCENT,
   status: LIGHT_STATUS_RING,
   providerStatus: LIGHT_PROVIDER_STATUS,
@@ -152,33 +154,34 @@ const lightColor: Readonly<ThemeColors> = {
 
 export const tokens = {
   color: {
-    canvas: '#0a0a0b',
-    canvasDot: '#1f1f23',
-    panel: '#0e0e10',
-    card: '#111113',
-    sunken: '#08080a',
-    border: '#232327',
-    borderStrong: '#34343a',
-    fg: '#f6f5f2',
-    fgSoft: '#b8b5ae',
-    fgMuted: '#8f8c95',
-    fgFaint: '#7d7c82',
-    accent: '#f6f5f2',
-    accentFg: '#0a0a0b',
-    danger: '#f0563f',
-    selection: '#c4b5fd',
+    canvas: '#0d0c0b',
+    /** `--dot` (rgba(255,255,255,0.07)) composited over the dark canvas. */
+    canvasDot: '#1e1d1c',
+    panel: '#121110',
+    card: '#181615',
+    sunken: '#0d0c0b',
+    border: '#2a2725',
+    borderStrong: '#4a4541',
+    fg: '#f2eee9',
+    fgSoft: '#a39d97',
+    fgMuted: '#a39d97',
+    fgFaint: '#a39d97',
+    accent: '#f2eee9',
+    accentFg: '#0d0c0b',
+    danger: '#c94c27',
+    selection: '#ef6b3f',
     provider: PROVIDER_ACCENT,
     status: STATUS_RING,
     providerStatus: PROVIDER_STATUS,
-    /** The light theme's values for the same slots (D241). */
+    /** The light theme's values for the same slots (the default theme). */
     light: lightColor,
   },
   font: {
-    human: '"Newsreader Variable", "Newsreader", "Iowan Old Style", Georgia, serif',
-    machine: '"JetBrains Mono Variable", "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace',
+    human: "'Plus Jakarta Sans', system-ui, sans-serif",
+    machine: "'JetBrains Mono', monospace",
   },
-  radius: { card: '14px', field: '10px', chip: '999px' },
-  canvas: { dotGap: 20, dotSize: 1.1 },
+  radius: { card: '12px', field: '9px', chip: '999px' },
+  canvas: { dotGap: 16, dotSize: 1 },
 } as const;
 
 export type Tokens = typeof tokens;

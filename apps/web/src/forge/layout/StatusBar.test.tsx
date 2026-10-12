@@ -7,11 +7,11 @@ import { db, installMockServer, renderWithQuery } from '../../test/app';
 import { useEditorStore } from '../editor/editor-store';
 import { useEditorStatus } from '../editor/editor-status';
 import { useProblemsStore } from '../panel/problems-store';
-import { StatusBar } from './StatusBar';
+import { CursorInfo, ProblemsCount } from './StatusBar';
 
 installMockServer();
 
-describe('D299 the status bar', () => {
+describe('D299 the status bar, in the workspace footer since D330', () => {
   it('counts errors and warnings, and a click opens Problems', async () => {
     const user = userEvent.setup();
     const projectId = db.createProject({ name: 'P' }).id;
@@ -47,7 +47,7 @@ describe('D299 the status bar', () => {
         },
       }),
     );
-    renderWithQuery(<StatusBar projectId={projectId} />);
+    renderWithQuery(<ProblemsCount projectId={projectId} />);
     await user.click(screen.getByRole('button', { name: '2 errors, 1 warning' }));
     expect(useLayoutStore.getState()).toMatchObject({ panelOpen: true, panelTab: 'problems' });
   });
@@ -56,7 +56,9 @@ describe('D299 the status bar', () => {
     const projectId = db.createProject({ name: 'P' }).id;
     act(() => {
       useEditorStore.getState().open(projectId, 'a.ts');
+      // the editor reports the text file it shows (D330): the facts are about that file
       useEditorStatus.setState({
+        path: 'a.ts',
         line: 12,
         column: 4,
         indentation: 'Spaces: 2',
@@ -65,7 +67,7 @@ describe('D299 the status bar', () => {
         language: 'typescript',
       });
     });
-    renderWithQuery(<StatusBar projectId={projectId} />);
+    renderWithQuery(<CursorInfo projectId={projectId} />);
     for (const text of ['Ln 12, Col 4', 'Spaces: 2', 'UTF-8 with BOM', 'CRLF', 'TypeScript']) {
       expect(screen.getByText(text)).toBeInTheDocument();
     }

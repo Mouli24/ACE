@@ -1,5 +1,4 @@
 import type { CliPermission, CliProviderType, ProviderState, ProviderType } from '@ace/contracts';
-import { PROVIDER_ACCENT, PROVIDER_STATUS } from '@ace/ui';
 
 export { PROVIDER_STATE_LABEL } from '@ace/ui';
 
@@ -27,8 +26,13 @@ export const NEEDS_BASE_URL: ReadonlySet<ProviderType> = new Set<ProviderType>([
   'ollama',
 ]);
 
-export const providerAccent = (type: ProviderType): string => PROVIDER_ACCENT[type];
-export const providerStatusColor = (state: ProviderState): string => PROVIDER_STATUS[state];
+/**
+ * A provider's accent and a provider state's colour, as the theme's CSS variables (D328), so they
+ * follow light and dark instead of fixing the dark theme's hex.
+ */
+export const providerAccent = (type: ProviderType): string => `var(--color-provider-${type})`;
+export const providerStatusColor = (state: ProviderState): string =>
+  `var(--color-provider-status-${state})`;
 
 /** D262's three presets, as the dialogs name them. */
 export const CLI_PERMISSION_LABEL: Readonly<Record<CliPermission, string>> = {
@@ -49,12 +53,15 @@ export const CLI_PERMISSION_HINT: Readonly<Record<CliPermission, string>> = {
  * two, inside its own sandbox (review I8). On native Windows that sandbox needs a one-time setup.
  */
 const CODEX_PERMISSION_HINT: Readonly<Partial<Record<CliPermission, string>>> = {
-  read_only: 'Reads the project folder and runs commands inside Codex’s read-only sandbox. Never edits a file.',
+  read_only:
+    'Reads the project folder and runs commands inside Codex’s read-only sandbox. Never edits a file.',
   edit_files:
     'Edits files in the project folder and runs commands inside Codex’s workspace sandbox. On Windows, set the sandbox up once: run codex, then /setup-default-sandbox.',
 };
 
 /** What a preset lets this CLI do, as the permission field spells it out. */
 export function cliPermissionHint(type: CliProviderType, level: CliPermission): string {
-  return (type === 'codex_cli' ? CODEX_PERMISSION_HINT[level] : undefined) ?? CLI_PERMISSION_HINT[level];
+  return (
+    (type === 'codex_cli' ? CODEX_PERMISSION_HINT[level] : undefined) ?? CLI_PERMISSION_HINT[level]
+  );
 }

@@ -29,10 +29,19 @@ import { ToolCallsTab } from './ToolCallsTab';
 
 const money = (value: number) => `$${value.toFixed(6)}`;
 
+/** The theme's empty state: one muted 13px line (D328). */
+const EMPTY = 'm-0 py-3 text-center text-[13px] text-[var(--muted)]';
+/** The theme's inner box: radius 10, soft fill, hairline. */
+const INNER_BOX =
+  'flex flex-col gap-1 rounded-[10px] border border-[var(--line)] bg-[var(--soft)] px-3 py-[10px] text-[12px]';
+
 /**
  * The inspector (FR-EXE-010, FR-PRM-004/005). It reads node runs from the engine rather than from
  * the live overlay: the overlay is what is happening, this is the record of what happened — every
  * field here is one the engine persisted, including the exact prompt text.
+ *
+ * In the theme (D328): the node name at 18px / 700, the state as a mono chip, the run figures as
+ * Domain's token tiles, sections under mono small-caps labels, and inner boxes on `--soft`.
  */
 export function Inspector({ workflowId }: { workflowId: string }) {
   const focusedNodeId = useSelectionStore((s) => s.focusedNodeId);
@@ -63,20 +72,18 @@ export function Inspector({ workflowId }: { workflowId: string }) {
   return (
     <section
       aria-label="Node run inspector"
-      className="flex h-full flex-col gap-3 overflow-y-auto"
+      className="flex h-full flex-col gap-4 overflow-y-auto text-[var(--ink)]"
       data-testid="inspector"
     >
-      {runId === undefined && runs.isLoading && (
-        <p className="text-sm text-fg-muted">Loading runs…</p>
-      )}
+      {runId === undefined && runs.isLoading && <p className={EMPTY}>Loading runs…</p>}
       {runId === undefined && !runs.isLoading && (
-        <p className="text-sm text-fg-muted">Start a run to inspect it.</p>
+        <p className={EMPTY}>Start a run to inspect it.</p>
       )}
       {runId !== undefined && focusedNodeId === undefined && (
-        <p className="text-sm text-fg-muted">Select a node to see what its run did.</p>
+        <p className={EMPTY}>Select a node to see what its run did.</p>
       )}
       {runId !== undefined && focusedNodeId !== undefined && forNode.length === 0 && (
-        <p className="text-sm text-fg-muted">This node has not run yet.</p>
+        <p className={EMPTY}>This node has not run yet.</p>
       )}
 
       {nodeRun && focusedNodeId !== undefined && (
@@ -91,12 +98,12 @@ export function Inspector({ workflowId }: { workflowId: string }) {
           )}
 
           <header className="flex flex-wrap items-center gap-2">
-            <h2 className="mr-auto font-human text-[21px] font-semibold leading-tight">
+            <h2 className="m-0 mr-auto min-w-0 truncate text-[18px] font-bold tracking-[-0.01em]">
               {nodeName}
             </h2>
             <StatusRing state={nodeRun.status} showLabel />
             {nodeRun.failureReason && (
-              <Badge data-testid="inspector-failure-reason" className="border-danger text-danger">
+              <Badge variant="danger" data-testid="inspector-failure-reason">
                 {nodeRun.failureReason}
               </Badge>
             )}
@@ -116,7 +123,7 @@ export function Inspector({ workflowId }: { workflowId: string }) {
               // FR-EXE-013: a new run that reuses everything upstream rather than calling it again.
               onStartFromNode={() => start.mutate({ startFromNodeId: focusedNodeId })}
             />
-            <span className="font-machine text-[10px] text-fg-muted" title={nodeRun.id}>
+            <span className="font-machine text-[10px] text-[var(--muted)]" title={nodeRun.id}>
               {nodeRun.id.slice(-6)}
             </span>
           </header>
@@ -127,21 +134,25 @@ export function Inspector({ workflowId }: { workflowId: string }) {
             <div
               role="alert"
               data-testid="inspector-error"
-              className="flex flex-col gap-1 rounded-field border border-danger/50 bg-card p-3 text-xs"
+              className="flex flex-col gap-1 rounded-[10px] border border-[rgba(201,76,39,0.35)] bg-[var(--surface)] px-3 py-[10px] text-[12px]"
             >
-              <p className="font-machine">
+              <p className="m-0 font-machine text-[11px] text-[#c94c27]">
                 {nodeRun.error.kind} · {nodeRun.error.code}
               </p>
-              <p className="text-fg-muted">{nodeRun.error.message}</p>
+              <p className="m-0 text-[var(--ink)]">{nodeRun.error.message}</p>
               {nodeRun.error.providerId && (
-                <p className="font-machine text-fg-muted">provider {nodeRun.error.providerId}</p>
+                <p className="m-0 font-machine text-[10.5px] text-[var(--muted)]">
+                  provider {nodeRun.error.providerId}
+                </p>
               )}
             </div>
           )}
 
           <Section title="Inputs">
             {nodeRun.inputEnvelopes.length === 0 ? (
-              <p className="text-xs text-fg-muted">No envelope — this node started the run.</p>
+              <p className="m-0 text-[12px] text-[var(--muted)]">
+                No envelope — this node started the run.
+              </p>
             ) : (
               nodeRun.inputEnvelopes.map((envelope) => (
                 <EnvelopeView key={envelope.id} envelope={envelope} />
@@ -157,7 +168,10 @@ export function Inspector({ workflowId }: { workflowId: string }) {
            */}
           <Section title="Verdicts">
             {nodeRun.guardrailPolicy && (
-              <p className="font-machine text-[10px] text-fg-muted" data-testid="inspector-policy">
+              <p
+                className="m-0 font-machine text-[10.5px] text-[var(--muted)]"
+                data-testid="inspector-policy"
+              >
                 policy {nodeRun.guardrailPolicy.id.slice(-6)} · version{' '}
                 {nodeRun.guardrailPolicy.version}
               </p>
@@ -171,20 +185,25 @@ export function Inspector({ workflowId }: { workflowId: string }) {
 
           {nodeRun.approvals !== undefined && nodeRun.approvals.length > 0 && (
             <Section title="Approvals">
-              <ul className="flex flex-col gap-1" data-testid="inspector-approvals">
+              <ul
+                className="m-0 flex list-none flex-col gap-[6px] p-0"
+                data-testid="inspector-approvals"
+              >
                 {nodeRun.approvals.map((decision) => (
                   <li
                     key={decision.requestId}
                     data-testid={`approval-decision-${decision.requestId}`}
                     data-decision={decision.decision}
-                    className="flex flex-col gap-0.5 rounded-field border border-border bg-card p-2 text-xs"
+                    className={INNER_BOX}
                   >
-                    <span className="font-machine">
+                    <span
+                      className={`font-machine text-[11px] ${decision.decision === 'approve' ? 'text-[#2f9e63]' : 'text-[#c94c27]'}`}
+                    >
                       {decision.decision === 'approve' ? 'approved' : 'rejected'} ·{' '}
                       {new Date(decision.decidedAt).toLocaleTimeString()}
                     </span>
                     {decision.note !== undefined && (
-                      <span className="text-fg-muted">{decision.note}</span>
+                      <span className="text-[var(--muted)]">{decision.note}</span>
                     )}
                   </li>
                 ))}
@@ -196,7 +215,7 @@ export function Inspector({ workflowId }: { workflowId: string }) {
 
           <Section title="Output">
             {nodeRun.output === undefined ? (
-              <p className="text-xs text-fg-muted">Nothing recorded.</p>
+              <p className="m-0 text-[12px] text-[var(--muted)]">Nothing recorded.</p>
             ) : (
               <div data-testid="inspector-output" className="flex flex-col gap-2">
                 {nodeRun.output.map((part, index) => (
@@ -208,10 +227,18 @@ export function Inspector({ workflowId }: { workflowId: string }) {
 
           {nodeRun.prompt && (
             <Section title="Prompt">
-              <p className="font-machine text-xs" data-testid="prompt-version">
+              <p
+                className="m-0 font-machine text-[11px] text-[var(--muted)]"
+                data-testid="prompt-version"
+              >
                 version {nodeRun.prompt.version}
               </p>
-              <Button variant="secondary" size="sm" onClick={() => setPromptOpen(true)}>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="self-start"
+                onClick={() => setPromptOpen(true)}
+              >
                 View prompt
               </Button>
             </Section>
@@ -221,7 +248,7 @@ export function Inspector({ workflowId }: { workflowId: string }) {
 
           {nodeRun.prompt && promptOpen && (
             <Dialog open onOpenChange={setPromptOpen}>
-              <DialogContent className="max-w-3xl">
+              <DialogContent className="max-w-[760px]">
                 <DialogHeader>
                   <DialogTitle>Prompt as sent</DialogTitle>
                   <DialogDescription>
@@ -259,22 +286,23 @@ function Facts({ nodeRun }: { nodeRun: NodeRun }) {
         {stats.map(([label, value]) => (
           <div
             key={label}
-            className="flex min-w-0 flex-col gap-0.5 rounded-field border border-border bg-card px-3 py-2"
+            className="flex min-w-0 flex-col rounded-[9px] border border-[var(--line)] bg-[var(--surface)] px-[10px] py-[9px]"
           >
-            <span className="font-machine text-[9px] uppercase tracking-[0.2em] text-fg-faint">
-              {label}
-            </span>
-            <span className="truncate font-machine text-[13px] text-fg" title={value}>
+            <span className="text-[10.5px] text-[var(--muted)]">{label}</span>
+            <span
+              className="mt-[3px] truncate font-machine text-[13px] font-medium text-[var(--ink)]"
+              title={value}
+            >
               {value}
             </span>
           </div>
         ))}
       </div>
-      <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+      <dl className="m-0 grid grid-cols-2 gap-x-4 gap-y-1 text-[12px]">
         {rows.map(([label, value]) => (
           <div key={label} className="flex justify-between gap-2">
-            <dt className="text-fg-muted">{label}</dt>
-            <dd className="truncate font-machine" title={value}>
+            <dt className="text-[var(--muted)]">{label}</dt>
+            <dd className="m-0 truncate font-machine text-[11.5px]" title={value}>
               {value}
             </dd>
           </div>
@@ -287,17 +315,14 @@ function Facts({ nodeRun }: { nodeRun: NodeRun }) {
 /** BR-02/BR-13: what the node was handed, how much of a budget it had, and how trusted it was. */
 function EnvelopeView({ envelope }: { envelope: Envelope }) {
   return (
-    <div
-      className="flex flex-col gap-1 rounded-field border border-border bg-card p-2 text-xs"
-      data-testid={`envelope-${envelope.id}`}
-    >
-      <p className="font-machine text-[10px] text-fg-muted">
+    <div className={INNER_BOX} data-testid={`envelope-${envelope.id}`}>
+      <p className="m-0 font-machine text-[10.5px] text-[var(--muted)]">
         from {envelope.fromNodeId.slice(-6)} · iteration {envelope.iteration} ·{' '}
         <span data-testid="envelope-trust">{envelope.context.trust}</span> · budget{' '}
         {envelope.context.budgetTokens} tokens
       </p>
       {envelope.context.summary && (
-        <p className="text-fg-muted" data-testid="envelope-summary">
+        <p className="m-0 text-[var(--muted)]" data-testid="envelope-summary">
           {envelope.context.summary}
         </p>
       )}
@@ -327,8 +352,8 @@ function PartView({ part }: { part: Part }) {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="flex flex-col gap-1.5">
-      <h3 className="font-machine text-[9px] font-normal uppercase tracking-[0.2em] text-fg-faint">
+    <section className="flex flex-col gap-[7px]">
+      <h3 className="m-0 font-machine text-[9.5px] font-medium uppercase tracking-[0.1em] text-[var(--muted)]">
         {title}
       </h3>
       {children}

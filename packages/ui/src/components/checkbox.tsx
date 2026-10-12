@@ -1,9 +1,9 @@
 import * as CheckboxPrimitive from '@radix-ui/react-checkbox';
-import { Check } from 'lucide-react';
 import { forwardRef, type ComponentPropsWithoutRef, type ElementRef } from 'react';
 
 import { cn } from '../lib/cn.js';
 
+/** A checkbox in the Ace UI theme's colours (D328): hairline box, orange when checked. */
 export const Checkbox = forwardRef<
   ElementRef<typeof CheckboxPrimitive.Root>,
   ComponentPropsWithoutRef<typeof CheckboxPrimitive.Root>
@@ -11,13 +11,13 @@ export const Checkbox = forwardRef<
   <CheckboxPrimitive.Root
     ref={ref}
     className={cn(
-      'peer h-4 w-4 shrink-0 rounded-sm border border-border bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-accent data-[state=checked]:text-accent-fg',
+      'peer grid h-4 w-4 shrink-0 cursor-pointer place-items-center rounded-[4px] border border-[var(--iconLine)] bg-[var(--surface)] outline-none focus-visible:shadow-[0_0_0_2px_rgba(239,107,63,0.35)] disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-[#ef6b3f] data-[state=checked]:bg-[#ef6b3f] data-[state=checked]:text-[#fff]',
       className,
     )}
     {...props}
   >
-    <CheckboxPrimitive.Indicator className="flex items-center justify-center text-current">
-      <Check className="h-3 w-3" />
+    <CheckboxPrimitive.Indicator className="text-[10px] leading-none font-bold">
+      ✓
     </CheckboxPrimitive.Indicator>
   </CheckboxPrimitive.Root>
 ));

@@ -1,18 +1,12 @@
 import type { Node } from '@ace/contracts';
 import { act, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 
-import { useSelectionStore } from '../app/stores/selection';
-import { createNode } from '../nodes/factory';
 import { useRunStore } from '../runs/run-store';
-import { db, installMockServer, renderApp } from '../test/app';
+import { db, installMockServer } from '../test/app';
 import { peekGraphSync } from '../workflows/sync-registry';
+import { openNodeSettings } from './settings-harness';
 
 installMockServer();
-
-vi.mock('../canvas/Canvas', () => ({
-  Canvas: ({ workflowId }: { workflowId: string }) => <div data-testid="canvas">{workflowId}</div>,
-}));
 
 vi.mock('./monaco-loader', () => ({
   MonacoEditor: ({ 'aria-label': label }: { 'aria-label'?: string }) => (
@@ -20,20 +14,11 @@ vi.mock('./monaco-loader', () => ({
   ),
 }));
 
+/** An Agent on the Canvas, a mock provider on the engine, and the node settings modal open (D333). */
 async function openAgent(configure: (node: Node) => void = () => undefined) {
-  const project = db.createProject({ name: 'P' });
-  const workflow = db.createWorkflow(project.id, 'F');
   const provider = db.createProvider({ type: 'mock', name: 'Mock' });
-  const node = createNode('agent', workflow.id, { x: 0, y: 0 });
-  configure(node);
-  db.commitGraph(workflow.id, [node], []);
-  renderApp(`/projects/${project.id}/workflows/${workflow.id}`);
-  await screen.findByTestId('canvas');
-  // the config panel lives in the sheet, closed until the top bar opens it
-  await userEvent.click(screen.getByTestId('sheet-toggle'));
-  act(() => useSelectionStore.getState().setSelection([node.id], []));
-  const panel = await screen.findByRole('complementary', { name: /node configuration/i });
-  return { project, workflow, provider, node, panel, user: userEvent.setup() };
+  const opened = await openNodeSettings('agent', configure);
+  return { ...opened, provider };
 }
 
 const savedConfig = (workflowId: string, nodeId: string) =>
@@ -50,7 +35,7 @@ describe('TC-NODE-003 the model picker only offers models that fit the node', ()
     });
 
     await user.click(within(panel).getByLabelText('Provider'));
-    await user.click(await screen.findByRole('option', { name: /Mock · Mock/ }));
+    await user.click(await screen.findByRole('option', { name: 'Mock' }));
     await waitFor(() => expect(savedConfig('', '')).toBeUndefined());
 
     await user.click(within(panel).getByLabelText('Model'));
@@ -75,7 +60,7 @@ describe('TC-NODE-004 choosing a model saves it and the card follows', () => {
     const { user, panel, workflow, node, provider } = await openAgent();
 
     await user.click(within(panel).getByLabelText('Provider'));
-    await user.click(await screen.findByRole('option', { name: /Mock · Mock/ }));
+    await user.click(await screen.findByRole('option', { name: 'Mock' }));
     await user.click(within(panel).getByLabelText('Model'));
     await user.click(await screen.findByRole('option', { name: /^Mock text$/ }));
 
@@ -95,7 +80,7 @@ describe('FR-RTR-001/002 the fallback list is ordered and editable', () => {
     });
 
     await user.click(within(panel).getByLabelText('Provider'));
-    await user.click(await screen.findByRole('option', { name: /Mock · Mock/ }));
+    await user.click(await screen.findByRole('option', { name: 'Mock' }));
 
     expect(within(panel).queryByTestId('fallback-models')).not.toBeInTheDocument();
 

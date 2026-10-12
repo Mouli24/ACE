@@ -1,7 +1,9 @@
-import { Label } from '@ace/ui';
-import { Suspense, lazy, useEffect, useId, useState } from 'react';
+import type * as Monaco from 'monaco-editor';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 
 import { useResolvedTheme } from '../app/theme';
+import { applyForgeTheme } from '../forge/editor/forge-theme';
+import { ERROR_CLASS, Field, HELP_CLASS } from './fields';
 
 /** Monaco is several MB; it loads (from the bundle, not a CDN) only when an agent panel is open. */
 const MonacoEditor = lazy(() =>
@@ -24,9 +26,16 @@ export function JsonSchemaEditor({
   value: Record<string, unknown> | undefined;
   onCommit: (schema: Record<string, unknown> | undefined) => void;
 }) {
-  const id = useId();
-  /* FR-SYS-005: Monaco has its own palette, so it is told which theme is on screen. */
-  const editorTheme = useResolvedTheme() === 'light' ? 'vs' : 'vs-dark';
+  /*
+   * FR-SYS-005: Monaco has one palette for every editor on the page, so this editor wears Forge's
+   * (the app's own theme) rather than setting Monaco's stock vs / vs-dark over it.
+   */
+  const theme = useResolvedTheme();
+  const monacoRef = useRef<typeof Monaco | undefined>(undefined);
+  useEffect(() => {
+    if (monacoRef.current !== undefined) applyForgeTheme(monacoRef.current, theme);
+  }, [theme]);
+
   const [text, setText] = useState(() => stringify(value));
   const [error, setError] = useState<string>();
   useEffect(() => {
@@ -58,31 +67,36 @@ export function JsonSchemaEditor({
   };
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <Label htmlFor={id}>Output contract (JSON schema)</Label>
+    <Field label="Output contract (JSON schema)">
       <div
-        className="overflow-hidden rounded-md border border-border"
+        className="overflow-hidden rounded-[9px] border border-[var(--line)] bg-[var(--canvas)]"
         data-testid="json-schema-editor"
       >
         <Suspense
           fallback={
-            <div className="h-40 bg-canvas p-2 font-machine text-xs text-fg-muted">
-              loading editor…
+            <div className="flex h-40 items-center justify-center text-[13px] text-[var(--muted)]">
+              Loading editor…
             </div>
           }
         >
           <MonacoEditor
             height="10rem"
             language="json"
-            theme={editorTheme}
+            // the name `applyForgeTheme` defines, so creating the editor never sets a stock theme
+            theme={theme === 'dark' ? 'ace-dark' : 'ace-light'}
             value={text}
             onChange={onChange}
+            beforeMount={(monaco) => {
+              monacoRef.current = monaco;
+              applyForgeTheme(monaco, theme);
+            }}
+            onMount={(_editor, monaco) => applyForgeTheme(monaco, theme)}
             aria-label="JSON schema"
             options={{
               minimap: { enabled: false },
               lineNumbers: 'off',
               fontSize: 12,
-              fontFamily: 'JetBrains Mono, Menlo, Consolas, monospace',
+              fontFamily: "'JetBrains Mono', monospace",
               scrollBeyondLastLine: false,
               wordWrap: 'on',
               ariaLabel: 'JSON schema',
@@ -91,12 +105,12 @@ export function JsonSchemaEditor({
         </Suspense>
       </div>
       {error ? (
-        <p role="alert" className="text-xs text-danger">
+        <p role="alert" className={ERROR_CLASS}>
           {error}
         </p>
       ) : (
-        <p className="text-xs text-fg-muted">Leave empty for free-form output.</p>
+        <p className={HELP_CLASS}>Leave empty for free-form output.</p>
       )}
-    </div>
+    </Field>
   );
 }

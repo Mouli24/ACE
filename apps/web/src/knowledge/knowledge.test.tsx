@@ -82,11 +82,15 @@ describe('TC-RAG-001 Create a knowledge base (FR-RAG-001)', () => {
 
     const dialog = await screen.findByRole('dialog');
     await user.type(within(dialog).getByLabelText('Name'), 'Team handbook');
-    // the mock embedder is preselected once the catalogue is in
+    // the mock embedder is preselected once the catalogue is in (theme dropdowns, D328)
     await waitFor(() =>
-      expect(within(dialog).getByLabelText('Embedding model')).toHaveValue('mock-embed'),
+      expect(within(dialog).getByRole('combobox', { name: 'Embedding model' })).toHaveTextContent(
+        '(mock-embed)',
+      ),
     );
-    expect(within(dialog).getByLabelText('Embedding provider')).toHaveValue(provider.id);
+    expect(within(dialog).getByRole('combobox', { name: 'Embedding provider' })).toHaveTextContent(
+      provider.name,
+    );
     expect(within(dialog).getByLabelText('Chunk size (tokens)')).toHaveValue(700);
     expect(within(dialog).getByLabelText('Overlap (tokens)')).toHaveValue(90);
 
@@ -121,7 +125,9 @@ describe('TC-RAG-001 Create a knowledge base (FR-RAG-001)', () => {
     const dialog = await screen.findByRole('dialog');
     await user.type(within(dialog).getByLabelText('Name'), 'Bad chunks');
     await waitFor(() =>
-      expect(within(dialog).getByLabelText('Embedding model')).toHaveValue('mock-embed'),
+      expect(within(dialog).getByRole('combobox', { name: 'Embedding model' })).toHaveTextContent(
+        '(mock-embed)',
+      ),
     );
     const size = within(dialog).getByLabelText('Chunk size (tokens)');
     const overlap = within(dialog).getByLabelText('Overlap (tokens)');
@@ -271,7 +277,9 @@ async function searchFor(
   const kInput = within(panel).getByLabelText('Results (k)');
   await user.clear(kInput);
   await user.type(kInput, String(k));
-  await user.selectOptions(within(panel).getByLabelText('Mode'), mode);
+  // The mode is the theme's dropdown (D328): open it, then pick the option that starts with it.
+  await user.click(within(panel).getByRole('combobox', { name: 'Mode' }));
+  await user.click(await screen.findByRole('option', { name: new RegExp(`^${mode}`, 'i') }));
   await user.click(within(panel).getByRole('button', { name: /search/i }));
 }
 
@@ -373,7 +381,8 @@ describe('FR-RAG-009 Base settings, reindex and delete', () => {
     const { router } = renderApp(`/knowledge/${knowledgeBaseId}`);
     await screen.findByTestId('kb-meta');
 
-    await user.click(screen.getByRole('button', { name: /settings/i }));
+    // exactly "Settings": the app's settings gear (D338) is the "Settings menu"
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
     let dialog = await screen.findByRole('dialog');
     const name = within(dialog).getByLabelText('Name');
     await user.clear(name);

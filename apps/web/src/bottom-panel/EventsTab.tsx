@@ -23,6 +23,9 @@ import { haltReasonText, money } from '../runs/controls/HaltReason';
  *
  * Nothing here interprets a payload beyond wording it. In particular a verdict's `redactedTypes`
  * are printed as type names because that is all a verdict carries — never a value (FR-GRD-014).
+ *
+ * In the theme (D328): the theme dropdown for the node filter, and one mono 11px row per event with
+ * a hairline under it — seq and time muted, the type in ink, the sentence in its tone.
  */
 
 /** Every persisted run frame: `node.token` is transient, carries no `seq`, and is not an event. */
@@ -102,11 +105,11 @@ export function eventNodeIds(
   }
 }
 
-/** The text colour of an event row: the node's state colour for state changes, danger for errors. */
+/** The text colour of an event row: the node's state colour for state changes, red for errors. */
 function eventTone(event: PersistedRunEvent): string {
   if (event.type === 'node.state') return `var(--color-status-${event.payload.status})`;
-  if (event.type === 'node.error') return 'var(--color-danger)';
-  return 'var(--color-fg-muted)';
+  if (event.type === 'node.error') return '#c94c27';
+  return 'var(--muted)';
 }
 
 /** One line per event, in words. The type is shown beside it, so this never repeats the type. */
@@ -179,7 +182,9 @@ export function describeEvent(event: PersistedRunEvent, nameOf: (nodeId: Id) => 
     case 'human.message': {
       const { mentions, text } = event.payload;
       const to =
-        mentions.length === 0 ? 'every node (the goal)' : mentions.map((each) => `@${each.handle}`).join(', ');
+        mentions.length === 0
+          ? 'every node (the goal)'
+          : mentions.map((each) => `@${each.handle}`).join(', ');
       return `you → ${to}: ${text}`;
     }
     case 'instruction.state':
@@ -196,7 +201,8 @@ export function describeEvent(event: PersistedRunEvent, nameOf: (nodeId: Id) => 
       return `${nameOf(event.payload.nodeId)}'s turn was interrupted by a new message`;
     case 'run.token_budget': {
       const { level, used, limit } = event.payload;
-      if (level === 'SET') return limit === null ? 'token budget removed' : `token budget set to ${limit}`;
+      if (level === 'SET')
+        return limit === null ? 'token budget removed' : `token budget set to ${limit}`;
       return `token budget ${level === 'WARN' ? 'at 80%' : 'exceeded'}: ${used} of ${limit ?? '?'}`;
     }
     case 'run.config': {
@@ -279,19 +285,22 @@ export function EventsTab({ entries, nodes = [], onShowNode }: EventsTabProps) {
             ))}
           </SelectContent>
         </Select>
-        <span className="font-machine text-xs text-fg-muted" data-testid="events-count">
+        <span className="text-[12px] text-[var(--muted)]" data-testid="events-count">
           {rows.length} event{rows.length === 1 ? '' : 's'}
         </span>
       </div>
 
       {rows.length === 0 ? (
-        <p className="font-human text-sm text-fg-muted">
+        <p className="m-0 py-3 text-center text-[13px] text-[var(--muted)]">
           {ordered.length === 0
             ? 'No events yet. Start a run and everything it does appears here.'
             : 'No events for this node.'}
         </p>
       ) : (
-        <ol className="flex flex-col font-machine text-[11px]" data-testid="events-list">
+        <ol
+          className="m-0 flex list-none flex-col p-0 font-machine text-[11px]"
+          data-testid="events-list"
+        >
           {rows.map((entry) => {
             const nodeIds = eventNodeIds(entry.event, nodeIdByNodeRunId);
             const first = nodeIds[0];
@@ -301,20 +310,22 @@ export function EventsTab({ entries, nodes = [], onShowNode }: EventsTabProps) {
                 data-testid={`event-${entry.event.seq}`}
                 data-type={entry.event.type}
                 {...(first === undefined ? {} : { 'data-node-id': first })}
-                className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5 border-b border-border py-[5px]"
+                className="flex flex-wrap items-baseline gap-x-[10px] gap-y-0.5 border-b border-[var(--line)] py-[6px]"
               >
-                <span className="text-fg-faint">#{entry.event.seq}</span>
+                <span className="text-[var(--muted)]">#{entry.event.seq}</span>
                 {entry.at !== undefined && (
-                  <span className="text-fg-faint">{new Date(entry.at).toLocaleTimeString()}</span>
+                  <span className="text-[var(--muted)]">
+                    {new Date(entry.at).toLocaleTimeString()}
+                  </span>
                 )}
-                <span className="text-fg-soft">{entry.event.type}</span>
+                <span className="text-[var(--ink)]">{entry.event.type}</span>
                 <span className="flex-1" style={{ color: eventTone(entry.event) }}>
                   {describeEvent(entry.event, nameOf)}
                 </span>
                 {first !== undefined && onShowNode && (
                   <button
                     type="button"
-                    className="font-machine text-xs text-accent underline-offset-2 hover:underline"
+                    className="cursor-pointer border-none bg-transparent p-0 font-human text-[11.5px] font-semibold text-[#e8623a] outline-none hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
                     onClick={() => onShowNode(first)}
                   >
                     show node

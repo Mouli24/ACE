@@ -14,14 +14,21 @@ import { VerdictList } from '../guardrails/VerdictList';
  * occurred since a tool call holds no request id of its own.
  */
 
-/** Amber/red/green by outcome — the tool point's own verdict wording carries the detail. */
+/**
+ * Green/red/accent by outcome — the tool point's own verdict wording carries the detail. Each is a
+ * theme status colour, shown as its mono chip on itself at 12% (`colour + '1f'`, D328).
+ */
 const STATUS_COLOR: Readonly<Record<ToolCallStatus, string>> = {
-  ok: 'var(--color-status-COMPLETED)',
-  error: 'var(--color-status-FAILED)',
-  blocked: 'var(--color-status-BLOCKED)',
-  rejected: 'var(--color-status-FAILED)',
-  timeout: 'var(--color-status-WAITING)',
+  ok: '#2f9e63',
+  error: '#c94c27',
+  blocked: '#c94c27',
+  rejected: '#c94c27',
+  timeout: '#e8572e',
 };
+
+/** The theme's small-caps label: JetBrains Mono 9.5px, 0.1em, muted, 500. */
+const LABEL =
+  'font-machine text-[9.5px] font-medium uppercase tracking-[0.1em] text-[var(--muted)]';
 
 export interface ToolCallsTabProps {
   toolCalls: readonly ToolCall[];
@@ -45,18 +52,16 @@ export function ToolCallsTab({ toolCalls, approvals = [] }: ToolCallsTabProps) {
     <section
       aria-label="Tool calls"
       data-testid="inspector-tool-calls"
-      className="flex flex-col gap-1.5"
+      className="flex flex-col gap-[7px]"
     >
-      <h3 className="font-human text-xs font-semibold uppercase tracking-wide text-fg-muted">
-        Tool calls
-      </h3>
+      <h3 className={`m-0 ${LABEL}`}>Tool calls</h3>
 
       {toolCalls.length === 0 ? (
-        <p data-testid="tool-calls-empty" className="text-xs text-fg-muted">
+        <p data-testid="tool-calls-empty" className="m-0 text-[12px] text-[var(--muted)]">
           No tools called.
         </p>
       ) : (
-        <ul className="flex flex-col gap-2">
+        <ul className="m-0 flex list-none flex-col gap-[6px] p-0">
           {toolCalls.map((call) => (
             <ToolCallRow key={call.id} call={call} decision={decisionFor(call)} />
           ))}
@@ -71,40 +76,52 @@ function ToolCallRow({ call, decision }: { call: ToolCall; decision?: ApprovalDe
     <li
       data-testid={`tool-call-${call.id}`}
       data-status={call.status}
-      className="flex flex-col gap-1.5 rounded-card border border-border bg-card p-2 text-xs"
+      className="flex flex-col gap-2 rounded-[10px] border border-[var(--line)] bg-[var(--soft)] px-3 py-[10px] text-[12px]"
     >
       <div className="flex items-center justify-between gap-2">
-        <span data-testid={`tool-call-name-${call.id}`} className="truncate font-machine">
+        <span
+          data-testid={`tool-call-name-${call.id}`}
+          className="truncate font-machine text-[12px] font-medium"
+        >
           {call.toolName}
         </span>
         <span className="flex items-center gap-2">
           <span
             data-testid={`tool-call-status-${call.id}`}
             data-status={call.status}
-            className="rounded-chip border px-2 py-0.5 font-machine text-[10px] leading-4"
-            style={{ borderColor: STATUS_COLOR[call.status], color: STATUS_COLOR[call.status] }}
+            className="rounded-[4px] px-[6px] py-[2px] font-machine text-[8.5px] font-medium uppercase leading-[1.4] tracking-[0.08em]"
+            style={{
+              color: STATUS_COLOR[call.status],
+              background: `${STATUS_COLOR[call.status]}1f`,
+            }}
           >
             {call.status}
           </span>
-          <span data-testid={`tool-call-duration-${call.id}`} className="font-machine text-fg-muted">
+          <span
+            data-testid={`tool-call-duration-${call.id}`}
+            className="font-machine text-[10.5px] text-[var(--muted)]"
+          >
             {call.durationMs} ms
           </span>
         </span>
       </div>
 
-      <div className="flex flex-col gap-0.5">
-        <span className="text-[10px] uppercase tracking-wide text-fg-muted">args</span>
+      <div className="flex flex-col gap-1">
+        <span className={LABEL}>args</span>
         <pre
           data-testid={`tool-call-args-${call.id}`}
-          className="overflow-auto rounded border border-border bg-canvas p-2 font-machine text-[11px]"
+          className="m-0 overflow-auto rounded-[8px] border border-[var(--line)] bg-[var(--canvas)] px-[10px] py-[8px] font-machine text-[11px]"
         >
           {argsText(call.args)}
         </pre>
       </div>
 
-      <div className="flex flex-col gap-0.5">
-        <span className="text-[10px] uppercase tracking-wide text-fg-muted">result</span>
-        <p data-testid={`tool-call-result-${call.id}`} className="whitespace-pre-wrap font-human">
+      <div className="flex flex-col gap-1">
+        <span className={LABEL}>result</span>
+        <p
+          data-testid={`tool-call-result-${call.id}`}
+          className="m-0 whitespace-pre-wrap text-[12.5px] leading-[1.5]"
+        >
           {call.resultSummary === '' ? '—' : call.resultSummary}
         </p>
       </div>
@@ -119,12 +136,12 @@ function ToolCallRow({ call, decision }: { call: ToolCall; decision?: ApprovalDe
         <p
           data-testid={`tool-call-approval-${call.id}`}
           data-decision={decision.decision}
-          className="flex flex-wrap items-center gap-1 rounded border border-border bg-canvas p-1.5 font-machine text-[11px]"
+          className="m-0 flex flex-wrap items-center gap-1 rounded-[8px] border border-[var(--line)] bg-[var(--canvas)] px-[10px] py-[6px] font-machine text-[11px]"
         >
           {decision.decision === 'approve' ? 'approved' : 'rejected'} ·{' '}
           {new Date(decision.decidedAt).toLocaleTimeString()}
           {decision.note !== undefined && (
-            <span className="text-fg-muted">— {decision.note}</span>
+            <span className="text-[var(--muted)]">— {decision.note}</span>
           )}
         </p>
       )}

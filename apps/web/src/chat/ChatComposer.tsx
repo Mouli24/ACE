@@ -1,35 +1,41 @@
 import type { Artifact, Part } from '@ace/contracts';
-import { Button } from '@ace/ui';
-import { formatBytes } from '@ace/ui';
-import { Paperclip, SendHorizontal, X } from 'lucide-react';
-import { useRef, useState, type ReactNode } from 'react';
+import { cn, formatBytes, MENU_CONTENT_CLASS, MENU_ITEM_CLASS, MENU_LABEL_CLASS } from '@ace/ui';
+import { useRef, useState } from 'react';
 
 import { api } from '../app/api';
+import { Avatar } from '../theme/primitives';
 import { insertMention, mentionMatches, parseMention, type Mentionable } from './mentions';
 import { partForArtifact } from './parts';
 
 /** A node the composer can `@mention`, with what the picker shows beside its name. */
 export interface MentionTarget extends Mentionable {
-  kind: string;
-  /** The provider dot's colour; undefined draws the mock colour. */
-  providerType?: string | undefined;
+  /** The node's handle, without the `@`. */
+  handle: string;
+  /** The agent avatar's initial and colour (`agentsOf`), so the picker matches the tabs. */
+  letter: string;
+  color: string;
 }
 
+/** The theme's composer placeholder (D335). */
+export const TEAM_PLACEHOLDER = 'Message the team… @ to tag an agent, / for commands';
+
+const FOCUS = 'focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+
 /**
- * The chat composer (FR-CHAT-004/007). Text plus attachments; Enter sends, Shift+Enter breaks a
- * line, so the whole thing is reachable from the keyboard alone (NFR-USE-03).
+ * The chat composer (FR-CHAT-004/007), as the theme's Team chat composer (D335): a surface card
+ * with a two-row textarea, ⌁ Attach and ↑ Send. Enter sends, Shift+Enter breaks a line, so the
+ * whole thing is reachable from the keyboard alone (NFR-USE-03).
  *
  * `@` opens a picker over the nodes that can chat; choosing one completes the mention and points
  * the chat at that node. A message that opens with `@<node>` is sent to that node — the mention is
  * stripped, it is an address, not part of the message — and anything else goes to the node the
  * chat is already talking to. With no such node and no mention there is nobody to send to, so the
- * send stays disabled and the placeholder says how to pick one.
+ * send stays disabled.
  */
 export function ChatComposer({
   onSend,
   disabled,
-  placeholder = 'Message this agent…',
-  above,
+  placeholder = TEAM_PLACEHOLDER,
   mentionables = [],
   onMention,
   hasTarget = true,
@@ -38,8 +44,6 @@ export function ChatComposer({
   onSend: (content: Part[], mentioned: string | undefined) => void;
   disabled: boolean;
   placeholder?: string;
-  /** Rendered inside the footer, above the input box (the column's mention chips). */
-  above?: ReactNode;
   mentionables?: readonly MentionTarget[];
   /** A node was picked from the `@` picker. */
   onMention?: (nodeId: string) => void;
@@ -100,7 +104,7 @@ export function ChatComposer({
 
   return (
     <div
-      className="relative flex flex-col gap-2 border-t border-border px-3.5 pb-3.5 pt-3"
+      className="relative flex flex-col gap-[10px] px-[14px] pb-[14px] pt-[12px]"
       data-testid="chat-composer"
     >
       {pickerOpen && (
@@ -108,11 +112,12 @@ export function ChatComposer({
           role="listbox"
           aria-label="Nodes"
           data-testid="chat-mention-picker"
-          className="absolute bottom-[calc(100%-4px)] left-3.5 right-3.5 z-10 flex flex-col rounded-xl border border-border-strong bg-panel p-1 shadow-lg"
+          className={cn(
+            MENU_CONTENT_CLASS,
+            'absolute bottom-[calc(100%-4px)] left-[14px] right-[14px] z-10',
+          )}
         >
-          <span className="px-2.5 pb-1 pt-1.5 font-machine text-[9px] uppercase tracking-[0.2em] text-fg-faint">
-            Nodes
-          </span>
+          <span className={MENU_LABEL_CLASS}>Nodes</span>
           {matches.map((node, index) => (
             <button
               key={node.id}
@@ -120,44 +125,50 @@ export function ChatComposer({
               role="option"
               aria-selected={index === active}
               data-testid={`chat-mention-option-${node.id}`}
+              data-highlighted={index === active ? '' : undefined}
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => pick(node)}
-              className={`flex h-[34px] items-center gap-[9px] rounded-lg px-2.5 text-left hover:bg-card ${
-                index === active ? 'bg-card' : ''
-              }`}
+              className={cn(MENU_ITEM_CLASS, 'text-left hover:bg-[rgba(239,107,63,0.12)]')}
             >
-              <span
-                aria-hidden
-                className="h-[7px] w-[7px] shrink-0 rounded-full"
-                style={{ background: `var(--color-provider-${node.providerType ?? 'mock'})` }}
+              <Avatar
+                letter={node.letter}
+                color={node.color}
+                size={16}
+                fontSize={8}
+                className="font-semibold"
               />
-              <span className="text-[14.5px]">{node.name}</span>
-              <span className="ml-auto font-machine text-[10px] text-fg-faint">{node.kind}</span>
+              <span className="min-w-0 truncate">{node.name}</span>
+              <span className="ml-auto font-machine text-[9px] text-[var(--muted)]">
+                @{node.handle}
+              </span>
             </button>
           ))}
         </div>
       )}
-      {above}
+
       {attachments.length > 0 && (
-        <ul className="flex flex-wrap gap-1" data-testid="chat-attachments">
+        <ul className="flex flex-wrap gap-[6px]" data-testid="chat-attachments">
           {attachments.map((artifact) => (
             <li
               key={artifact.id}
-              className="flex items-center gap-1 rounded-chip border border-border bg-card px-2 py-0.5 text-[11px]"
+              className="flex h-[24px] max-w-full items-center gap-[6px] rounded-full border border-[var(--line)] bg-[var(--chip)] pl-[9px] pr-[6px] text-[11px] text-[var(--ink)]"
             >
               <span className="max-w-[10rem] truncate font-machine" title={artifact.name}>
                 {artifact.name}
               </span>
-              <span className="text-fg-muted">{formatBytes(artifact.size)}</span>
+              <span className="shrink-0 text-[var(--muted)]">{formatBytes(artifact.size)}</span>
               <button
                 type="button"
                 aria-label={`Remove ${artifact.name}`}
                 onClick={() =>
                   setAttachments((current) => current.filter((each) => each.id !== artifact.id))
                 }
-                className="text-fg-muted hover:text-danger"
+                className={cn(
+                  FOCUS,
+                  'flex h-[16px] w-[16px] shrink-0 cursor-pointer items-center justify-center rounded-full text-[9px] text-[var(--muted)] hover:text-[#c94c27]',
+                )}
               >
-                <X className="h-3 w-3" aria-hidden />
+                ✕
               </button>
             </li>
           ))}
@@ -165,31 +176,12 @@ export function ChatComposer({
       )}
 
       {uploadError !== undefined && (
-        <p role="alert" data-testid="chat-upload-error" className="text-[11px] text-danger">
+        <p role="alert" data-testid="chat-upload-error" className="text-[11px] text-[#c94c27]">
           {uploadError}
         </p>
       )}
 
-      <div className="flex items-end gap-2 rounded-[14px] border border-border bg-card py-1.5 pl-3 pr-1.5 focus-within:ring-2 focus-within:ring-accent">
-        <input
-          ref={fileInput}
-          type="file"
-          multiple
-          className="sr-only"
-          aria-label="Attach a file"
-          data-testid="chat-file-input"
-          onChange={(event) => void onFiles(event.target.files)}
-        />
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label="Attach a file"
-          disabled={disabled || uploading || !hasTarget}
-          onClick={() => fileInput.current?.click()}
-        >
-          <Paperclip className="h-4 w-4" aria-hidden />
-        </Button>
+      <div className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] px-[10px] pb-[8px] pt-[10px] focus-within:border-[#ef6b3f]">
         <textarea
           value={text}
           onChange={(event) => {
@@ -225,23 +217,53 @@ export function ChatComposer({
               submit();
             }
           }}
-          rows={1}
+          rows={2}
           disabled={disabled}
           placeholder={placeholder}
           aria-label="Message this agent"
           data-testid="chat-input"
-          className="max-h-32 min-h-9 flex-1 resize-none border-0 bg-transparent px-0 py-1 font-human text-[14.5px] leading-[1.45] text-fg placeholder:text-fg-faint focus-visible:outline-none"
+          className="block w-full resize-none border-none bg-transparent p-0 text-[12.5px] leading-[1.45] text-[var(--ink)] outline-none placeholder:text-[var(--muted)]"
         />
-        <button
-          type="button"
-          aria-label="Send message"
-          data-testid="chat-send"
-          disabled={!canSend}
-          onClick={submit}
-          className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full bg-accent text-accent-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg disabled:opacity-40"
-        >
-          <SendHorizontal className="h-3.5 w-3.5" aria-hidden />
-        </button>
+        <div className="mt-1 flex items-center gap-[6px]">
+          <span className="flex-1" />
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            className="sr-only"
+            aria-label="Attach a file"
+            data-testid="chat-file-input"
+            onChange={(event) => void onFiles(event.target.files)}
+          />
+          <button
+            type="button"
+            title="Attach"
+            aria-label="Attach a file"
+            disabled={disabled || uploading || !hasTarget}
+            onClick={() => fileInput.current?.click()}
+            className={cn(
+              FOCUS,
+              'h-[30px] w-[30px] shrink-0 cursor-pointer rounded-[8px] border border-[var(--line)] bg-transparent text-[13px] text-[var(--ink)] disabled:cursor-default',
+            )}
+          >
+            ⌁
+          </button>
+          <button
+            type="button"
+            title="Send"
+            aria-label="Send message"
+            data-testid="chat-send"
+            disabled={!canSend}
+            onClick={submit}
+            style={{ background: canSend ? '#ef6b3f' : 'var(--sendOff)' }}
+            className={cn(
+              FOCUS,
+              'h-[30px] w-[30px] shrink-0 cursor-pointer rounded-[8px] border-none text-[14px] font-bold text-[#fff] disabled:cursor-default',
+            )}
+          >
+            ↑
+          </button>
+        </div>
       </div>
     </div>
   );

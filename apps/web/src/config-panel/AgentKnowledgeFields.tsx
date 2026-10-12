@@ -1,10 +1,12 @@
 import type { AgentConfig, Id } from '@ace/contracts';
-import { Checkbox, Label } from '@ace/ui';
+import { Checkbox, FIELD_LABEL_CLASS } from '@ace/ui';
 import { Link } from 'react-router-dom';
 
 import { useKnowledgeBases } from '../nodes/retrieval/hooks';
+import { ERROR_CLASS, HELP_CLASS } from './fields';
 
-const legendClass = 'mb-1 font-machine text-[10px] uppercase tracking-wider text-fg-muted';
+/** A titled group in the node settings modal: the theme's mono label over its rows. */
+const GROUP_CLASS = 'flex min-w-0 flex-col gap-[7px]';
 
 /**
  * The Agent's long-term memory switch (FR-MEM-001). On, the prompt gains the memory instructions and
@@ -19,18 +21,27 @@ export function AgentMemoryField({
   onChange: (memory: AgentConfig['memory']) => void;
 }) {
   return (
-    <fieldset className="flex flex-col gap-2" data-testid="agent-memory">
-      <legend className={legendClass}>Memory</legend>
-      <div className="flex items-start gap-2">
+    <fieldset className={GROUP_CLASS} data-testid="agent-memory">
+      <legend className="sr-only">Memory</legend>
+      <span aria-hidden className={FIELD_LABEL_CLASS}>
+        Memory
+      </span>
+      <div className="flex items-start gap-2.5 rounded-[9px] border border-[var(--line)] px-3 py-2.5">
         <Checkbox
           id="agent-memory-enabled"
           data-testid="agent-memory-enabled"
+          className="mt-px"
           checked={memory.enabled}
           onCheckedChange={(checked) => onChange({ ...memory, enabled: checked === true })}
         />
-        <div className="flex flex-col gap-0.5">
-          <Label htmlFor="agent-memory-enabled">Remember facts between runs</Label>
-          <p className="text-xs text-fg-muted">
+        <div className="flex min-w-0 flex-col gap-px">
+          <label
+            htmlFor="agent-memory-enabled"
+            className="cursor-pointer text-[12.5px] font-semibold text-[var(--ink)]"
+          >
+            Remember facts between runs
+          </label>
+          <p className="text-[10.5px] text-[var(--muted)]">
             Saved facts are untrusted context on the next run. See and delete them in the Memory
             tab.
           </p>
@@ -64,40 +75,48 @@ export function AgentKnowledgeBasesField({
     );
 
   return (
-    <fieldset className="flex flex-col gap-2" data-testid="agent-knowledge-bases">
-      <legend className={legendClass}>Knowledge bases</legend>
+    <fieldset className={GROUP_CLASS} data-testid="agent-knowledge-bases">
+      <legend className="sr-only">Knowledge bases</legend>
+      <span aria-hidden className={FIELD_LABEL_CLASS}>
+        Knowledge bases
+      </span>
       {bases.isPending && projectId !== undefined && (
-        <p className="text-xs text-fg-muted">Loading knowledge bases…</p>
+        <p className={HELP_CLASS}>Loading knowledge bases…</p>
       )}
       {bases.isError && (
-        <p role="alert" className="text-xs text-danger">
+        <p role="alert" className={ERROR_CLASS}>
           Could not load knowledge bases: {bases.error.message}
         </p>
       )}
       {bases.data !== undefined && bases.data.length === 0 && (
-        <p className="text-xs text-fg-muted" data-testid="agent-kb-empty">
+        <p className={HELP_CLASS} data-testid="agent-kb-empty">
           No knowledge bases in this project yet.{' '}
           {projectId !== undefined && (
-            <Link className="text-accent underline" to={`/projects/${projectId}/knowledge`}>
-              Create one
-            </Link>
+            <Link to={`/projects/${projectId}/knowledge`}>Create one</Link>
           )}
         </p>
       )}
-      <div className="flex flex-col gap-1.5" role="group" aria-label="Attached knowledge bases">
+      <div className="flex flex-col gap-1" role="group" aria-label="Attached knowledge bases">
         {bases.data?.map((base) => {
           const boxId = `agent-kb-${base.id}`;
           return (
-            <div key={base.id} className="flex items-center gap-2" data-testid={boxId}>
+            <div
+              key={base.id}
+              className="flex h-[38px] items-center gap-2.5 rounded-[9px] border border-[var(--line)] px-3"
+              data-testid={boxId}
+            >
               <Checkbox
                 id={boxId}
                 checked={value.includes(base.id)}
                 onCheckedChange={(checked) => toggle(base.id, checked === true)}
               />
-              <label htmlFor={boxId} className="font-human text-sm text-fg">
+              <label
+                htmlFor={boxId}
+                className="min-w-0 flex-1 cursor-pointer truncate text-[12.5px] text-[var(--ink)]"
+              >
                 {base.name}
               </label>
-              <span className="ml-auto font-machine text-[10px] text-fg-muted">
+              <span className="shrink-0 font-machine text-[10px] text-[var(--muted)]">
                 {base.documentCount} docs
               </span>
             </div>
@@ -107,11 +126,15 @@ export function AgentKnowledgeBasesField({
           <div
             key={id}
             role="alert"
-            className="flex items-center gap-2 text-xs text-danger"
+            className={`flex items-center gap-2 ${ERROR_CLASS}`}
             data-testid={`agent-kb-missing-${id}`}
           >
             <span>A deleted knowledge base is still attached.</span>
-            <button type="button" className="ml-auto underline" onClick={() => toggle(id, false)}>
+            <button
+              type="button"
+              className="ml-auto cursor-pointer border-none bg-transparent p-0 text-[11.5px] font-semibold text-[#c94c27] outline-none focus-visible:underline"
+              onClick={() => toggle(id, false)}
+            >
               Remove
             </button>
           </div>

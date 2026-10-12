@@ -137,13 +137,22 @@ async function open(page: Page, path: string): Promise<void> {
   await page.goto(`${path}${path.includes('?') ? '&' : '?'}token=${engine().token}`);
 }
 
-const messages = (page: Page) => page.getByTestId('domain-message');
+/** Domain's conversation column: the footer has a message count of its own (D330). */
+const domain = (page: Page) => page.getByRole('region', { name: 'Domain', exact: true });
+const messages = (page: Page) => domain(page).getByTestId('domain-message');
 const message = (page: Page, text: string) => messages(page).filter({ hasText: text });
 /** A FLAG's summary is also its sender's turn text (D327): an envelope is found by its type. */
 const envelope = (page: Page, text: string) =>
-  page.locator('[data-testid="domain-message"][data-type="envelope"]').filter({ hasText: text });
+  domain(page)
+    .locator('[data-testid="domain-message"][data-type="envelope"]')
+    .filter({ hasText: text });
 const said = (page: Page, text: string) =>
-  page.locator('[data-testid="domain-message"][data-type="agent"]').filter({ hasText: text });
+  domain(page)
+    .locator('[data-testid="domain-message"][data-type="agent"]')
+    .filter({ hasText: text });
+/** A lens is a filter pill named for its node, in the header's Lenses (D336). */
+const lens = (page: Page, name: string) =>
+  page.getByRole('navigation', { name: 'Lenses' }).getByRole('button', { name, exact: true });
 
 test.describe('Domain end to end on mock-script agents', () => {
   test('a run started from Domain: flag, revise, message a node, lens, blocked handle, reload, End', async ({
@@ -166,35 +175,43 @@ test.describe('Domain end to end on mock-script agents', () => {
     const runId = new URL(page.url()).searchParams.get('run') ?? '';
     await expect.poll(async () => (await api<Run>(`/runs/${runId}`)).status).toBe('RUNNING');
 
-    // An agent message expands to its steps and output.
+    // An agent message expands to its steps and output ("What it did", D336).
     const draft = said(page, 'Draft: Go further.').first();
-    await draft.getByText('Steps and output').click();
-    await expect(draft.locator('details')).toHaveAttribute('open', '');
+    const whatItDid = draft.getByRole('button', { name: /What it did/ });
+    await whatItDid.click();
+    await expect(whatItDid).toHaveAttribute('aria-expanded', 'true');
 
     // A handle nobody has cannot be sent (D324).
     const box = page.getByRole('textbox', { name: 'Message' });
     await box.fill('@nobody hello');
-    await expect(page.getByRole('alert')).toContainText('@nobody');
-    await expect(page.getByRole('button', { name: 'Send' })).toBeDisabled();
+    const composer = page.getByRole('form', { name: 'Composer' });
+    await expect(composer.getByRole('alert')).toContainText('@nobody');
+    await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled();
 
     // Message the Writer by name: it takes a turn, and the delivery reaches DONE (D309).
     await box.fill('Writer, make it shorter');
     await expect(page.getByTestId('composer-reaches')).toContainText('@writer');
-    await page.getByRole('button', { name: 'Send' }).click();
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
     const sent = message(page, 'Writer, make it shorter');
     await expect(sent.getByTestId('delivery-writer')).toContainText('DONE');
     await expect(said(page, 'Draft three: Further.').first()).toBeVisible();
 
-    // The team panel has each node's numbers; the mock reports its usage, so no estimate here.
-    await expect(page.getByTestId('team-node-writer')).toContainText('in');
+    // The team panel has each node's state and numbers — tokens, input / output (D336); the mock
+    // reports its usage, so no estimate here.
+    const writerCard = page.getByTestId('team-node-writer');
+    await expect(writerCard.getByTestId('team-node-state')).toHaveText(
+      /^(Done|Working|Waiting|Failed|Blocked|Stopped)$/u,
+    );
+    await expect(writerCard).toContainText(/Tokens\s*[\d.]+[kM]?\s*[\d.]+[kM]? \/ [\d.]+[kM]?/u);
     await expect(page.getByTestId('team-totals')).toBeVisible();
 
-    // A lens is the Review's view only (D5).
-    await page.getByRole('button', { name: '@review', exact: true }).click();
+    // A lens is the Review's view only (D5). (By the node's name in the Lenses: "@review" is the
+    // composer's mention chip now.)
+    await lens(page, 'Review').click();
     await expect(page).toHaveURL(new RegExp(`node=${ids['Review']}`));
     await expect(message(page, 'Write a tagline for ACE')).toHaveCount(0);
     await expect(envelope(page, 'The hook is weak.')).toHaveCount(1);
-    await page.getByRole('button', { name: 'All', exact: true }).click();
+    await lens(page, 'All').click();
 
     // A reload replays the stream from the start: every message exactly once (D314).
     // The page shows exactly the server's conversation — no message missing, none twice.
@@ -206,9 +223,12 @@ test.describe('Domain end to end on mock-script agents', () => {
     await expect(messages(page)).toHaveCount(served);
 
     // End: COMPLETE, and the conversation is read-only (D323) — but the composer still writes: a
-    // message now starts a new run.
-    await page.getByRole('button', { name: 'End run' }).click();
-    await expect(page.getByText(/read-only/iu)).toBeVisible();
+    // message now starts a new run. End run is in the run pill's menu (D336).
+    await domain(page)
+      .getByRole('button', { name: /^Run ·/u })
+      .click();
+    await page.getByRole('menuitem', { name: 'End run' }).click();
+    await expect(domain(page).getByText(/read-only/iu)).toBeVisible();
     await expect(box).toBeEnabled();
     await expect(page.getByRole('button', { name: 'Start team run' })).toBeVisible();
     await expect.poll(async () => (await api<Run>(`/runs/${runId}`)).status).toBe('COMPLETE');

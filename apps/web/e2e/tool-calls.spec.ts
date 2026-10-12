@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import { nodeCard } from './helpers';
-import { inspect, openRound3, runStatus, startRun } from './round3';
+import { clickStartRun, expectRunStatus, inspect, openRound3 } from './round3';
 
 /**
  * The inspector's "Tool calls" tab, "View prompt" untrusted highlighting, and the approval card's
@@ -35,7 +35,7 @@ test.describe('Tool calls & untrusted prompt (TC-TOOL-010, TC-PRM-002)', () => {
     const seeded = await openRound3(page, 'chain', 'tool-loop', { text: 'echo this' });
     const [writer] = seeded.agentIds as [string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
     await expect(nodeCard(page, writer)).toHaveAttribute('data-state', 'COMPLETED', {
       timeout: 20_000,
     });
@@ -65,12 +65,14 @@ test.describe('Tool calls & untrusted prompt (TC-TOOL-010, TC-PRM-002)', () => {
     const seeded = await openRound3(page, 'chain', 'destructive-approval');
     const [writer] = seeded.agentIds as [string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
 
     // The card is anchored to the waiting node and names the destructive tool and its path.
     const card = approvalOn(page, writer);
     await expect(card).toBeVisible({ timeout: 15_000 });
-    const preview = page.getByTestId(`node-approval-${writer}`).getByTestId('approval-tool-preview');
+    const preview = page
+      .getByTestId(`node-approval-${writer}`)
+      .getByTestId('approval-tool-preview');
     await expect(preview).toBeVisible();
     await expect(preview.getByTestId('approval-tool-name')).toHaveText('sandbox_delete');
     await expect(preview.getByTestId('approval-tool-args')).toContainText('notes.txt');
@@ -79,7 +81,7 @@ test.describe('Tool calls & untrusted prompt (TC-TOOL-010, TC-PRM-002)', () => {
     await expect(nodeCard(page, writer)).toHaveAttribute('data-state', 'COMPLETED', {
       timeout: 20_000,
     });
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE');
+    await expectRunStatus(page, 'COMPLETE');
 
     // The call is on the record, and the approval it waited for is linked to it.
     const region = await openToolCalls(page, writer);
@@ -99,7 +101,7 @@ test.describe('Tool calls & untrusted prompt (TC-TOOL-010, TC-PRM-002)', () => {
     const seeded = await openRound3(page, 'chain', 'tool-loop', { text: 'echo this' });
     const [writer] = seeded.agentIds as [string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
     await expect(nodeCard(page, writer)).toHaveAttribute('data-state', 'COMPLETED', {
       timeout: 20_000,
     });

@@ -1,5 +1,4 @@
 import { Button } from '@ace/ui';
-import { ArrowLeft } from 'lucide-react';
 import { useState } from 'react';
 
 import { FileNotice } from './editor/FileNotice';
@@ -68,7 +67,7 @@ function CompactFile({
     <div data-testid="compact-file" className="flex h-full min-h-0 flex-col bg-canvas">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2">
         <Button variant="ghost" size="sm" onClick={onBack}>
-          <ArrowLeft className="h-4 w-4" aria-hidden /> Files
+          <span aria-hidden>←</span> Files
         </Button>
         <span className="truncate font-machine text-[12px] text-fg-soft">{path}</span>
       </div>

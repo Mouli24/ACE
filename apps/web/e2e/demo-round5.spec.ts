@@ -13,7 +13,8 @@ import {
   type KbFixture,
 } from '../src/mocks/knowledge-fixtures';
 import {
-  addFromDialog,
+  closeSettings,
+  closeSheet,
   dragBy,
   flowNode,
   nodeCard,
@@ -21,8 +22,9 @@ import {
   port,
   selectInSheet,
   serverGraph,
+  settingsDialog,
 } from './helpers';
-import { inspect, runStatus, startRun } from './round3';
+import { inspect } from './round3';
 
 /**
  * Round 5 §1, the demo script, walked end to end in one browser against the MSW mock engine — one
@@ -57,8 +59,32 @@ const filePayload = (fixture: KbFixture) => ({
   buffer: Buffer.from(fixture.bytes()),
 });
 
+/** The node settings modal's configuration region (D333: was the sheet's Configure tab). */
 const configPanel = (page: Page): Locator =>
-  page.getByRole('complementary', { name: 'Node configuration' });
+  settingsDialog(page).getByRole('region', { name: 'Node configuration' });
+
+/** The run's state rides on the workspace footer now that the header has no run chip (D330). */
+const runStatus = (page: Page): Locator => page.getByRole('contentinfo');
+
+/** Open one entry of the workspace "…" menu (D331: what the old top bar and run bar held). */
+async function workspaceMenu(page: Page, testId: string): Promise<void> {
+  await closeSettings(page);
+  await page.getByTestId('workspace-menu').click();
+  await page.getByTestId(testId).click();
+}
+
+/** Desktop: Start run from the workspace "…" menu (D331). */
+const startRun = (page: Page): Promise<void> => workspaceMenu(page, 'menu-start-run');
+
+/**
+ * Phones keep the compact bar's run bar (D330). `exact`, because its "Restart" contains "start"
+ * (D-031); the button shows "Run", its accessible name is "Start run" (D259).
+ */
+const phoneStartRun = (page: Page): Locator =>
+  page.getByTestId('run-bar').getByRole('button', { name: 'Start run', exact: true });
+
+/** A spot on the empty Canvas: left of the fitted cards, below the breadcrumb (D331). */
+const EMPTY_CANVAS = { x: 20, y: 80 } as const;
 
 const docRow = (page: Page, name: string): Locator =>
   page.locator('[data-testid^="kb-doc-"]').filter({ hasText: name }).first();
@@ -74,11 +100,25 @@ async function apiGet<T>(page: Page, path: string): Promise<T> {
   }, path);
 }
 
-async function runSearch(page: Page, query: string, mode = 'hybrid', k = 5): Promise<void> {
+/** The Mode dropdown's option for each search mode (a theme Select, D328, not a native select). */
+const MODE_OPTION = {
+  hybrid: 'Hybrid (vector + keyword)',
+  vector: 'Vector only',
+  keyword: 'Keyword only',
+} as const;
+
+async function runSearch(
+  page: Page,
+  query: string,
+  mode: keyof typeof MODE_OPTION = 'hybrid',
+  k = 5,
+): Promise<void> {
   const panel = page.getByRole('search');
   await panel.getByLabel('Query').fill(query);
   await panel.getByLabel('Results (k)').fill(String(k));
-  await panel.getByLabel('Mode').selectOption(mode);
+  await panel.getByRole('combobox', { name: 'Mode' }).click();
+  await page.getByRole('option', { name: MODE_OPTION[mode] }).click();
+  await expect(panel.getByRole('combobox', { name: 'Mode' })).toContainText(MODE_OPTION[mode]);
   await panel.getByRole('button', { name: /search/i }).click();
 }
 
@@ -126,7 +166,7 @@ async function runIdsOf(page: Page, workflowId: string): Promise<string[]> {
 /** Press Start and wait for the engine's next run of this workflow to reach COMPLETE. */
 async function runToComplete(page: Page, workflowId: string): Promise<string> {
   const before = (await runIdsOf(page, workflowId)).length;
-  await startRun(page).click();
+  await startRun(page);
   await expect.poll(async () => (await runIdsOf(page, workflowId)).length).toBe(before + 1);
   const runId = (await runIdsOf(page, workflowId))[0]!;
   await expect
@@ -140,7 +180,9 @@ async function runToComplete(page: Page, workflowId: string): Promise<string> {
       { timeout: 30_000 },
     )
     .toBe('COMPLETE');
-  await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE', { timeout: 10_000 });
+  await expect(runStatus(page)).toHaveAttribute('data-run-status', 'COMPLETE', {
+    timeout: 10_000,
+  });
   return runId;
 }
 
@@ -201,11 +243,13 @@ async function shownSources(page: Page) {
 async function keyConnect(page: Page, from: [string, string], to: [string, string]): Promise<void> {
   await port(page, from[0], 'out', from[1]).focus();
   await page.keyboard.press('Enter');
+  // armed once the Canvas has re-rendered with it, which is what the next Enter reads
+  await expect(port(page, from[0], 'out', from[1])).toHaveAttribute('data-armed', 'true');
   await port(page, to[0], 'in', to[1]).focus();
   await page.keyboard.press('Enter');
 }
 
-/** Open a node's Configure tab from its card (the V2 sheet). */
+/** Open a node's settings modal from its card (D333: was the V2 sheet's Configure tab). */
 async function configure(page: Page, nodeId: string): Promise<Locator> {
   await selectInSheet(page, nodeId, 'Configure');
   const panel = configPanel(page);
@@ -289,7 +333,9 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
     projectId = project!;
     workflowId = workflow!;
     await expect(page.getByTestId('canvas')).toBeVisible();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE', { timeout: 20_000 });
+    await expect(runStatus(page)).toHaveAttribute('data-run-status', 'COMPLETE', {
+      timeout: 20_000,
+    });
     await expect(page.getByTestId('project-name')).toHaveText('Docs helper');
 
     const graph = await serverGraph(page, workflowId);
@@ -319,7 +365,10 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
     await page.getByRole('button', { name: 'New knowledge base' }).click();
     const dialog = page.getByRole('dialog');
     await dialog.getByLabel('Name').fill(KB_NAME);
-    await expect(dialog.getByLabel('Embedding model')).toHaveValue('mock-embed');
+    // the theme's Select shows the model as "Name (id)" (D328)
+    await expect(dialog.getByRole('combobox', { name: 'Embedding model' })).toContainText(
+      '(mock-embed)',
+    );
     await dialog.getByRole('button', { name: 'Create' }).click();
     await expect(page).toHaveURL(/\/knowledge\/[0-9A-Z]+$/);
     await expect(page.getByTestId('kb-name')).toHaveText(KB_NAME);
@@ -377,7 +426,7 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
     // The template already has a Retrieval node feeding the Answerer's json port — §1's "add a
     // Retrieval node explicitly"; here it is pointed at the new base through its own panel.
     const retrieval = await configure(page, retrievalId);
-    await expect(retrieval).toContainText('Retrieval node');
+    await expect(retrieval.getByTestId('retrieval-panel')).toBeVisible();
     await retrieval.getByLabel('Knowledge base').click();
     await page.getByRole('option', { name: KB_NAME }).click();
     await expect
@@ -427,10 +476,20 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
     /*
      * The Answerer reads json (the Retrieval node's hits) and `mock-memory` reads text only, so the
      * config panel refuses that model for it. The memory half of §1 is walked on a second agent
-     * added to the same workflow from the New node dialog, reading the same question.
+     * added to the same workflow, reading the same question. The New node dialog is gone (D332): the
+     * empty Canvas's menu "Add Agent" adds one unconnected, as the dialog did ("Add node" would link
+     * it after the Answerer).
      */
     const before = (await serverGraph(page, workflowId)).nodes.map((n) => n.id);
-    await addFromDialog(page, 'agent');
+    await closeSheet(page);
+    const canvas = (await page.getByTestId('canvas').boundingBox())!;
+    await page.mouse.click(canvas.x + EMPTY_CANVAS.x, canvas.y + EMPTY_CANVAS.y, {
+      button: 'right',
+    });
+    await page
+      .getByTestId('pane-context-menu')
+      .getByRole('menuitem', { name: 'Add Agent' })
+      .click();
     await expect
       .poll(async () => (await serverGraph(page, workflowId)).nodes.length)
       .toBe(before.length + 1);
@@ -438,7 +497,7 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
       (n) => !before.includes(n.id),
     )!.id;
 
-    // the new card is selected; the sheet was left on the Inspector, so open Configure
+    // its settings, from its card
     const panel = await configure(page, memoryAgentId);
     await panel.getByRole('combobox', { name: 'Provider' }).click();
     await page.getByRole('option', { name: 'Mock' }).click();
@@ -451,6 +510,8 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
         return { modelId: config?.['modelId'], memory: config?.['memory'] };
       })
       .toEqual({ modelId: 'mock-memory', memory: { enabled: true } });
+    // the modal covers the Canvas and keeps its keys (F, Enter on a port) from reaching it
+    await closeSettings(page);
 
     await page.keyboard.press('f');
     await page.waitForTimeout(400);
@@ -569,7 +630,7 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
   });
 
   test('Usage screen: provider, model and day each equal GET /usage, and match the runs (TC-OBS-004)', async () => {
-    await page.getByRole('link', { name: 'Usage', exact: true }).click();
+    await workspaceMenu(page, 'menu-usage');
     await expect(page.getByRole('heading', { name: 'Usage' })).toBeVisible();
 
     const DAY_MS = 86_400_000;
@@ -685,10 +746,7 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
 
   test('Canvas: 10 edits, undo ×10 and redo ×10 equal the engine; auto-arrange; menus (TC-CAN-007/008/010, FR-CAN-011)', async () => {
     await openWorkflowPage(page, projectId, workflowId);
-    await page
-      .getByTestId('canvas')
-      .locator('.react-flow__pane')
-      .click({ position: { x: 20, y: 20 } });
+    await page.getByTestId('canvas').locator('.react-flow__pane').click({ position: EMPTY_CANVAS });
     await page.keyboard.press('f');
     await page.waitForTimeout(400);
     await quiet(page, workflowId);
@@ -710,18 +768,17 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
       await dragBy(page, nodeCard(page, id), dx, dy);
       await expect.poll(() => snapshot(page, workflowId)).not.toEqual(before);
     }
-    // the tenth edit: Ctrl+D
+    // the tenth edit: Ctrl+D — a click selects the card and opens its settings (D332), which keep
+    // the Canvas's keys until they are closed
     const count = start.nodes.length;
     await nodeCard(page, memoryAgentId).click();
+    await closeSettings(page);
     await page.keyboard.press(`${MOD}+d`);
     await expect.poll(async () => (await snapshot(page, workflowId)).nodes.length).toBe(count + 1);
     await quiet(page, workflowId);
     const end = await snapshot(page, workflowId);
 
-    await page
-      .getByTestId('canvas')
-      .locator('.react-flow__pane')
-      .click({ position: { x: 20, y: 20 } });
+    await page.getByTestId('canvas').locator('.react-flow__pane').click({ position: EMPTY_CANVAS });
     for (let i = 0; i < 10; i += 1) {
       await page.keyboard.press(`${MOD}+z`);
       await page.waitForTimeout(150);
@@ -735,9 +792,16 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
     await expect.poll(() => snapshot(page, workflowId)).toEqual(end);
     await expect(page.locator('.react-flow__node')).toHaveCount(count + 1);
 
-    // auto-arrange: one batch, no two cards overlapping
+    // auto-arrange (the empty Canvas's menu, D332): one batch, no two cards overlapping
     const version = (await serverGraph(page, workflowId)).version;
-    await page.getByRole('button', { name: 'Auto-arrange' }).click();
+    const canvasBox = (await page.getByTestId('canvas').boundingBox())!;
+    await page.mouse.click(canvasBox.x + EMPTY_CANVAS.x, canvasBox.y + EMPTY_CANVAS.y, {
+      button: 'right',
+    });
+    await page
+      .getByTestId('pane-context-menu')
+      .getByRole('menuitem', { name: 'Auto-arrange' })
+      .click();
     await expect
       .poll(async () => (await serverGraph(page, workflowId)).version)
       .toBeGreaterThan(version);
@@ -762,14 +826,15 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
     await nodeCard(page, answererId).click({ button: 'right' });
     const nodeMenu = page.getByTestId('node-context-menu');
     await expect(nodeMenu).toBeVisible();
-    for (const name of [/Duplicate/, /Copy/, /Configure/, /Delete/]) {
+    // "Configure" is "Settings" now: it opens the node settings modal (D333)
+    for (const name of [/Duplicate/, /Copy/, /Settings/, /Delete/]) {
       await expect(nodeMenu.getByRole('menuitem', { name })).toBeVisible();
     }
     await page.keyboard.press('Escape');
     await expect(nodeMenu).toHaveCount(0);
 
     const box = (await page.getByTestId('canvas').boundingBox())!;
-    await page.mouse.click(box.x + 30, box.y + 30, { button: 'right' });
+    await page.mouse.click(box.x + EMPTY_CANVAS.x, box.y + EMPTY_CANVAS.y, { button: 'right' });
     const paneMenu = page.getByTestId('pane-context-menu');
     await expect(paneMenu).toBeVisible();
     for (const name of [/Paste/, /Add Agent/, /Select all/, /Auto-arrange/, /Fit view/]) {
@@ -777,12 +842,16 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
     }
     await page.keyboard.press('Escape');
 
-    await page
-      .locator('.react-flow__edge')
-      .first()
-      .locator('path')
-      .first()
-      .click({ force: true, button: 'right' });
+    // a connection is right-clicked on its path (`edge-<id>`; its label takes no pointer, D332)
+    const connection = (await serverGraph(page, workflowId)).edges.find(
+      (e) => e.from.nodeId === retrievalId && e.to.nodeId === answererId,
+    )!;
+    const connectionPath = page.getByTestId(`edge-${connection.id}`);
+    await expect(
+      connectionPath,
+      'React Flow drew the connection it can be clicked on',
+    ).toBeAttached();
+    await connectionPath.click({ force: true, button: 'right' });
     const edgeMenu = page.getByRole('menu', { name: 'Connection actions' });
     await expect(edgeMenu).toBeVisible();
     await expect(edgeMenu.getByRole('menuitem', { name: 'Delete connection' })).toBeVisible();
@@ -799,7 +868,7 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
       /Editing is available on a larger screen/,
     );
     await expect(page.getByTestId('canvas')).toHaveAttribute('data-readonly', 'true');
-    // nothing to add nodes with: no New node button (V2's palette is its dialog)
+    // nothing to add nodes with: no "Add node" pill (and no palette)
     await expect(page.getByTestId('new-node-button')).toHaveCount(0);
     await expect(page.getByTestId('palette-agent')).toHaveCount(0);
     await expectNoHorizontalScroll(page, 'Canvas');
@@ -839,7 +908,7 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
     await page.reload();
     await expect(page.getByTestId('compact-workflow')).toBeVisible();
     const before = (await runIdsOf(page, workflowId)).length;
-    await startRun(page).click();
+    await phoneStartRun(page).click();
     await expect(page.getByTestId('approvals-badge')).toHaveAttribute('data-count', '1', {
       timeout: 15_000,
     });
@@ -877,7 +946,7 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
     await expect(page.getByTestId('compact-workflow')).toHaveCount(0);
     await expect(page.getByTestId('new-node-button')).toBeVisible();
 
-    await page.getByRole('link', { name: 'Settings', exact: true }).click();
+    await workspaceMenu(page, 'menu-settings');
     const concurrency = page.getByTestId('settings-concurrency');
     await expect(concurrency).toBeEnabled();
     await expect(concurrency).toHaveValue('20');

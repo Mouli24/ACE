@@ -7,10 +7,16 @@ import {
 } from 'react';
 
 import { cn } from '../lib/cn.js';
+import {
+  MENU_CONTENT_CLASS,
+  MENU_ITEM_CLASS,
+  MENU_LABEL_CLASS,
+  MENU_SEPARATOR_CLASS,
+} from './dropdown-menu.js';
 
 /**
  * Right-click menus (FR-CAN-011: the Canvas's node and pane menus). Radix handles the pointer and
- * keyboard (Shift+F10 / the context-menu key), focus and dismissal; styled like `DropdownMenu`.
+ * keyboard (Shift+F10 / the context-menu key), focus and dismissal; styled as the theme's menu.
  */
 
 export const ContextMenu = ContextMenuPrimitive.Root;
@@ -24,10 +30,7 @@ export const ContextMenuContent = forwardRef<
   <ContextMenuPrimitive.Portal>
     <ContextMenuPrimitive.Content
       ref={ref}
-      className={cn(
-        'z-50 min-w-[10rem] overflow-hidden rounded-md border border-border bg-panel p-1 text-fg shadow-md',
-        className,
-      )}
+      className={cn(MENU_CONTENT_CLASS, className)}
       {...props}
     />
   </ContextMenuPrimitive.Portal>
@@ -40,15 +43,19 @@ export const ContextMenuItem = forwardRef<
 >(({ className, destructive, ...props }, ref) => (
   <ContextMenuPrimitive.Item
     ref={ref}
-    className={cn(
-      'relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none transition-colors focus:bg-border/60 data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
-      destructive && 'text-danger',
-      className,
-    )}
+    className={cn(MENU_ITEM_CLASS, destructive && 'text-[#c94c27]', className)}
     {...props}
   />
 ));
 ContextMenuItem.displayName = 'ContextMenuItem';
+
+export const ContextMenuLabel = forwardRef<
+  ElementRef<typeof ContextMenuPrimitive.Label>,
+  ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Label>
+>(({ className, ...props }, ref) => (
+  <ContextMenuPrimitive.Label ref={ref} className={cn(MENU_LABEL_CLASS, className)} {...props} />
+));
+ContextMenuLabel.displayName = 'ContextMenuLabel';
 
 export const ContextMenuSeparator = forwardRef<
   ElementRef<typeof ContextMenuPrimitive.Separator>,
@@ -56,7 +63,7 @@ export const ContextMenuSeparator = forwardRef<
 >(({ className, ...props }, ref) => (
   <ContextMenuPrimitive.Separator
     ref={ref}
-    className={cn('-mx-1 my-1 h-px bg-border', className)}
+    className={cn(MENU_SEPARATOR_CLASS, className)}
     {...props}
   />
 ));
@@ -66,7 +73,7 @@ ContextMenuSeparator.displayName = 'ContextMenuSeparator';
 export function ContextMenuShortcut({ className, ...props }: HTMLAttributes<HTMLSpanElement>) {
   return (
     <span
-      className={cn('ml-auto pl-4 font-machine text-[11px] tracking-wide text-fg-muted', className)}
+      className={cn('ml-auto pl-4 font-machine text-[10px] text-[var(--muted)]', className)}
       {...props}
     />
   );

@@ -1,7 +1,7 @@
-import { ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 
 import { cn } from '../lib/cn.js';
+import { SYNTAX_PALETTE_CLASS } from './code-block.js';
 
 /**
  * A `json` part as a collapsible tree (FR-MM-006, round 4 §5 item 3).
@@ -10,6 +10,10 @@ import { cn } from '../lib/cn.js';
  * focus management of its own — with the root open and everything below it collapsed, so a large
  * value opens small and expands on demand. Primitives render inline in a colour per JSON type.
  * Everything wraps, so a long string does not push the panel past 380 px (NFR-USE-03).
+ *
+ * In the theme (D328): JetBrains Mono 12px on the canvas colour, radius 8, the ▸ / ▾ carets of its
+ * explorer, and its syntax palette — strings `str`, numbers `num`, booleans `kw`, null `com`, keys
+ * `fn` — light or dark via {@link SYNTAX_PALETTE_CLASS}.
  */
 
 export interface JsonTreeProps {
@@ -20,17 +24,24 @@ export interface JsonTreeProps {
 }
 
 function typeColor(value: unknown): string {
-  if (typeof value === 'string') return 'text-[var(--color-status-COMPLETED)]';
-  if (typeof value === 'number') return 'text-[var(--color-status-WAITING)]';
-  if (typeof value === 'boolean') return 'text-accent';
-  return 'text-fg-muted';
+  if (typeof value === 'string') return 'text-[var(--syn-str)]';
+  if (typeof value === 'number') return 'text-[var(--syn-num)]';
+  if (typeof value === 'boolean') return 'text-[var(--syn-kw)]';
+  return 'text-[var(--syn-com)]';
 }
 
 function Primitive({ value }: { value: unknown }) {
   const text =
-    typeof value === 'string' ? JSON.stringify(value) : value === undefined ? 'undefined' : String(value);
+    typeof value === 'string'
+      ? JSON.stringify(value)
+      : value === undefined
+        ? 'undefined'
+        : String(value);
   return (
-    <span className={cn('break-all font-machine text-xs', typeColor(value))} data-testid="json-primitive">
+    <span
+      className={cn('break-all font-machine text-[12px]', typeColor(value))}
+      data-testid="json-primitive"
+    >
       {text}
     </span>
   );
@@ -50,12 +61,12 @@ function Node({ name, value, depth, defaultExpandedDepth }: NodeProps) {
 
   const label =
     name === undefined ? null : (
-      <span className="font-machine text-xs text-fg-muted">{name}: </span>
+      <span className="font-machine text-[12px] text-[var(--syn-fn)]">{name}: </span>
     );
 
   if (!isObject) {
     return (
-      <div className="py-0.5 pl-4" style={{ marginLeft: depth === 0 ? 0 : undefined }}>
+      <div className="py-px pl-[14px]">
         {label}
         <Primitive value={value} />
       </div>
@@ -75,15 +86,14 @@ function Node({ name, value, depth, defaultExpandedDepth }: NodeProps) {
       onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
       data-testid="json-node"
     >
-      <summary className="flex cursor-pointer list-none items-center gap-1 py-0.5 hover:bg-border/40">
-        <ChevronRight
-          className={cn('h-3 w-3 shrink-0 text-fg-muted transition-transform', open && 'rotate-90')}
-          aria-hidden
-        />
+      <summary className="flex cursor-pointer list-none items-center gap-1 rounded-[4px] py-px outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] [&::-webkit-details-marker]:hidden">
+        <span aria-hidden className="w-[10px] shrink-0 text-[10px] text-[var(--muted)]">
+          {open ? '▾' : '▸'}
+        </span>
         {label}
-        <span className="font-machine text-xs text-fg-muted">{summary}</span>
+        <span className="font-machine text-[12px] text-[var(--muted)]">{summary}</span>
       </summary>
-      <div className="border-l border-border pl-3">
+      <div className="ml-[4px] border-l border-[var(--line)] pl-[10px]">
         {entries.map(([key, child]) => (
           <Node
             key={key}
@@ -102,7 +112,11 @@ export function JsonTree({ value, defaultExpandedDepth = 1, className }: JsonTre
   return (
     <div
       data-testid="json-tree"
-      className={cn('overflow-x-auto rounded border border-border bg-canvas p-2 text-fg', className)}
+      className={cn(
+        'overflow-x-auto rounded-[8px] border border-[var(--line)] bg-[var(--canvas)] px-3 py-[10px] font-machine text-[12px] leading-[1.55] text-[var(--ink)]',
+        SYNTAX_PALETTE_CLASS,
+        className,
+      )}
     >
       <Node value={value} depth={0} defaultExpandedDepth={defaultExpandedDepth} />
     </div>

@@ -1,14 +1,17 @@
 import type { AddressingError, DeliveryMode, Id, NodeState, RosterEntry } from '@ace/contracts';
-import { Button } from '@ace/ui';
+import { cn, MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from '@ace/ui';
 import { useRef, useState, type KeyboardEvent } from 'react';
 
+import { Avatar } from '../theme/primitives';
+import { lookOf, type DomainLooks } from './looks';
 import { previewMessage } from './preview';
 
 /**
- * The composer (D3, D4, D324–D326). It previews who a message reaches with the server's own
- * parser, lets the human take a recipient off (sent as `exclude`), refuses to send what the server
- * would refuse, autocompletes `@handles`, and picks queue or interrupt. With no live run, the
- * message starts one, with itself as the goal (D312). An ended run is read-only (D5).
+ * The composer (D3, D4, D324–D326) in the theme's Domain card (D336). It previews who a message
+ * reaches with the server's own parser, lets the human take a recipient off (sent as `exclude`),
+ * refuses to send what the server would refuse, autocompletes `@handles`, offers a mention chip per
+ * agent, and picks queue or interrupt. Enter sends, Shift+Enter breaks a line. With no live run,
+ * the message starts one, with itself as the goal (D312). An ended run is read-only (D5).
  */
 
 export interface ComposerSend {
@@ -20,6 +23,8 @@ export interface ComposerSend {
 export interface ComposerProps {
   roster: readonly RosterEntry[];
   states: Readonly<Record<Id, NodeState>>;
+  /** Each agent's colour and letter, for the mention chips (D328). */
+  looks?: DomainLooks;
   /** A live run takes messages; without one, the message starts a run. */
   live: boolean;
   /** The run shown has ended: its conversation is read-only, and a message starts a new run. */
@@ -47,9 +52,14 @@ function partialAt(text: string, caret: number): { start: number; partial: strin
   return { start: caret - (match[2]?.length ?? 0) - 1, partial: (match[2] ?? '').toLowerCase() };
 }
 
+const NOTE = 'text-[11.5px] text-[var(--muted)]';
+const CHIP =
+  'flex h-[22px] items-center gap-1 rounded-full border border-[var(--line)] px-2 font-machine text-[10.5px] text-[var(--ink)]';
+
 export function Composer({
   roster,
   states,
+  looks,
   live,
   ended = false,
   readOnly = false,
@@ -80,13 +90,26 @@ export function Composer({
           handle.startsWith(at.partial),
         );
 
+  const place = (next: string, position: number): void => {
+    setText(next);
+    setCaret(position);
+    const element = box.current;
+    if (element === null) return;
+    element.focus();
+    // After React writes the value, so the caret lands where the handle ends.
+    requestAnimationFrame(() => element.setSelectionRange(position, position));
+  };
+
   const complete = (handle: string): void => {
     if (at === undefined) return;
     const next = `${text.slice(0, at.start)}@${handle} ${text.slice(caret)}`;
-    const position = at.start + handle.length + 2;
-    setText(next);
-    setCaret(position);
-    box.current?.focus();
+    place(next, at.start + handle.length + 2);
+  };
+
+  /** A mention chip appends the agent's handle, with a space before it when needed (D336). */
+  const mention = (handle: string): void => {
+    const next = `${text !== '' && !/\s$/u.test(text) ? `${text} ` : text}@${handle} `;
+    place(next, next.length);
   };
 
   const canSend = !readOnly && !busy && (live ? preview.canSend : text.trim() !== '');
@@ -115,7 +138,8 @@ export function Composer({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+    // D336: Enter sends, Shift+Enter breaks the line; an IME composition keeps its Enter.
+    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       void submit();
     }
@@ -123,132 +147,181 @@ export function Composer({
 
   const errors = live ? preview.errors.map(describe) : [];
   if (failure !== undefined) errors.push(failure);
+  const writable = !readOnly;
 
   return (
     <form
       aria-label="Composer"
-      className="flex flex-col gap-2 border-t border-border p-3"
+      className="relative border-t border-[var(--line)] px-6 pb-[18px] pt-[14px]"
       onSubmit={(event) => {
         event.preventDefault();
         void submit();
       }}
     >
-      {readOnly && (
-        <p className="text-xs text-fg-muted">This run has ended — its conversation is read-only.</p>
-      )}
-      <textarea
-        ref={box}
-        aria-label="Message"
-        className="min-h-[64px] w-full rounded border border-border bg-transparent p-2 text-sm"
-        placeholder={
-          live
-            ? 'Write to the team — name a node, or @handle it. Unaddressed goes to the Brain.'
-            : 'Write a goal to start a run.'
-        }
-        value={text}
-        disabled={readOnly}
-        onChange={(event) => {
-          setText(event.target.value);
-          setCaret(event.target.selectionStart);
-        }}
-        onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
-        onKeyDown={onKeyDown}
-      />
+      <div className="mx-auto max-w-[860px] rounded-[14px] border border-[var(--line)] bg-[var(--surface)] pb-[10px] pl-4 pr-3 pt-3 has-[textarea:focus-visible]:border-[#ef6b3f]">
+        <textarea
+          ref={box}
+          aria-label="Message"
+          rows={2}
+          className="block w-full resize-none border-none bg-transparent text-[14px] leading-[1.5] text-[var(--ink)] outline-none placeholder:text-[var(--muted)] disabled:cursor-not-allowed"
+          placeholder="Message the team… @ to tag an agent, / for commands"
+          value={text}
+          disabled={readOnly}
+          onChange={(event) => {
+            setText(event.target.value);
+            setCaret(event.target.selectionStart);
+          }}
+          onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
+          onKeyDown={onKeyDown}
+        />
 
-      {options.length > 0 && (
-        <ul role="listbox" aria-label="Handles" className="flex flex-wrap gap-1 text-xs">
-          {options.map((handle) => (
-            <li
-              key={handle}
-              role="option"
-              aria-selected={false}
-              className="cursor-pointer rounded border border-border px-1"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => complete(handle)}
+        <div className="flex flex-col gap-1.5 empty:hidden">
+          {options.length > 0 && (
+            <ul
+              role="listbox"
+              aria-label="Handles"
+              className={cn(MENU_CONTENT_CLASS, 'mt-1.5 w-fit min-w-[160px]')}
             >
-              @{handle}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {live && !readOnly && preview.canSend && (
-        <div data-testid="composer-reaches" className="flex flex-wrap items-center gap-1 text-xs">
-          <span className="text-fg-muted">
-            {preview.addressing === 'unaddressed' ? 'Goes to the Brain:' : 'Reaches:'}
-          </span>
-          {preview.reaches.map((entry) => (
-            <span
-              key={entry.nodeId}
-              data-testid="recipient"
-              data-handle={entry.handle}
-              className="inline-flex items-center gap-1 rounded border border-border px-1"
-            >
-              @{entry.handle}
-              {preview.addressing !== 'unaddressed' && (
-                <button
-                  type="button"
-                  aria-label={`Remove @${entry.handle}`}
-                  onClick={() => setExclude([...kept, entry.nodeId])}
+              {options.map((handle) => (
+                <li
+                  key={handle}
+                  role="option"
+                  aria-selected={false}
+                  className={cn(
+                    MENU_ITEM_CLASS,
+                    'font-machine text-[11.5px] hover:bg-[rgba(239,107,63,0.12)]',
+                  )}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => complete(handle)}
                 >
-                  ×
-                </button>
-              )}
-            </span>
-          ))}
-        </div>
-      )}
-      {live && !readOnly && preview.skips.length > 0 && (
-        <div data-testid="composer-skips" className="text-xs text-fg-muted">
-          Skips (finished): {preview.skips.map((entry) => `@${entry.handle}`).join(', ')}
-        </div>
-      )}
-      {!live && !readOnly && (
-        <p className="text-xs text-fg-muted">
-          {ended
-            ? 'This run has ended — its conversation is read-only. Sending starts a new run, with your message as its goal.'
-            : 'No run is going: this starts one, with your message as its goal.'}
-        </p>
-      )}
-      {errors.length > 0 && (
-        <div role="alert" className="text-xs text-danger">
-          {errors.map((each) => (
-            <p key={each}>{each}</p>
-          ))}
-        </div>
-      )}
+                  @{handle}
+                </li>
+              ))}
+            </ul>
+          )}
 
-      {!readOnly && (
-        <div className="flex items-center gap-3">
-          {live && (
-            <fieldset className="flex items-center gap-2 text-xs">
+          {live && writable && preview.canSend && (
+            <div
+              data-testid="composer-reaches"
+              className="mt-1.5 flex flex-wrap items-center gap-1.5"
+            >
+              <span className={NOTE}>
+                {preview.addressing === 'unaddressed' ? 'Goes to the Brain:' : 'Reaches:'}
+              </span>
+              {preview.reaches.map((entry) => (
+                <span
+                  key={entry.nodeId}
+                  data-testid="recipient"
+                  data-handle={entry.handle}
+                  className={CHIP}
+                >
+                  @{entry.handle}
+                  {preview.addressing !== 'unaddressed' && (
+                    <button
+                      type="button"
+                      aria-label={`Remove @${entry.handle}`}
+                      className="-mr-1 flex h-4 w-4 cursor-pointer items-center justify-center rounded-full border-none bg-transparent text-[9px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                      onClick={() => setExclude([...kept, entry.nodeId])}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </span>
+              ))}
+            </div>
+          )}
+          {live && writable && preview.skips.length > 0 && (
+            <div data-testid="composer-skips" className={NOTE}>
+              Skips (finished): {preview.skips.map((entry) => `@${entry.handle}`).join(', ')}
+            </div>
+          )}
+          {live && writable && (
+            <fieldset className="mt-1.5 flex items-center gap-3">
               <legend className="sr-only">Delivery</legend>
-              <label className="flex items-center gap-1">
-                <input
-                  type="radio"
-                  name="delivery"
-                  checked={mode === 'queue'}
-                  onChange={() => setMode('queue')}
-                />
-                Queue
-              </label>
-              <label className="flex items-center gap-1">
-                <input
-                  type="radio"
-                  name="delivery"
-                  checked={mode === 'interrupt'}
-                  onChange={() => setMode('interrupt')}
-                />
-                Interrupt
-              </label>
+              {(['queue', 'interrupt'] as const).map((each) => (
+                <label
+                  key={each}
+                  className={cn(NOTE, 'flex cursor-pointer items-center gap-1.5', {
+                    'text-[var(--ink)]': mode === each,
+                  })}
+                >
+                  <input
+                    type="radio"
+                    name="delivery"
+                    className="m-0 h-3 w-3 cursor-pointer accent-[#ef6b3f]"
+                    checked={mode === each}
+                    onChange={() => setMode(each)}
+                  />
+                  {each === 'queue' ? 'Queue' : 'Interrupt'}
+                </label>
+              ))}
             </fieldset>
           )}
-          <div className="flex-1" />
-          <Button type="submit" size="sm" disabled={!canSend}>
-            {live ? 'Send' : 'Start team run'}
-          </Button>
+          {readOnly && (
+            <p className={cn(NOTE, 'mt-1.5')}>
+              This run has ended — its conversation is read-only.
+            </p>
+          )}
+          {!live && writable && (
+            <p className={cn(NOTE, 'mt-1.5')}>
+              {ended
+                ? 'This run has ended — its conversation is read-only. Sending starts a new run, with your message as its goal.'
+                : 'No run is going: this starts one, with your message as its goal.'}
+            </p>
+          )}
+          {errors.length > 0 && (
+            <div role="alert" className="mt-1.5 text-[11.5px] text-[#c94c27]">
+              {errors.map((each) => (
+                <p key={each}>{each}</p>
+              ))}
+            </div>
+          )}
         </div>
-      )}
+
+        {writable && (
+          <div className="mt-1.5 flex items-center gap-2">
+            <div className="flex flex-1 flex-wrap items-center gap-1.5">
+              {live &&
+                roster.map((entry, index) => {
+                  const look = lookOf(looks, entry.nodeId, entry.name, index);
+                  return (
+                    <button
+                      key={entry.nodeId}
+                      type="button"
+                      className="flex h-[26px] cursor-pointer items-center gap-[5px] rounded-full border border-[var(--line)] bg-transparent pl-1 pr-[9px] font-machine text-[10.5px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                      onClick={() => mention(entry.handle)}
+                    >
+                      <Avatar
+                        letter={look.letter}
+                        color={look.color}
+                        size={16}
+                        fontSize={8}
+                        className="font-human"
+                      />
+                      @{entry.handle}
+                    </button>
+                  );
+                })}
+              {!live && (
+                <span className="ml-1 whitespace-nowrap text-[11.5px] text-[var(--muted)]">
+                  Enter starts a team run
+                </span>
+              )}
+            </div>
+            <button
+              type="submit"
+              aria-label={live ? 'Send' : 'Start team run'}
+              disabled={!canSend}
+              className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-[9px] border-none text-[16px] font-bold text-[#fff] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-not-allowed"
+              style={{
+                background: text.trim() !== '' && canSend ? '#ef6b3f' : 'var(--sendOff)',
+              }}
+            >
+              ↑
+            </button>
+          </div>
+        )}
+      </div>
     </form>
   );
 }

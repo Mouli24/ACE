@@ -42,10 +42,8 @@ test.describe('Uploads onto the Input node (M4 §2, FR-MM-001/007)', () => {
       size: 16,
     });
 
-    // The card shows one attachment, and the engine (mock) has one id on the node config.
-    await expect(page.getByTestId(`input-attachment-count-${input}`)).toHaveText(
-      /1 file attached/i,
-    );
+    // The card's meta line shows one attachment ("INPUT · 1 FILE", D332), and the engine (mock) has one id on the node config.
+    await expect(page.getByTestId(`input-attachment-count-${input}`)).toHaveText('1 FILE');
     await expect
       .poll(async () => (await artifactIdsOf(page, seeded.workflowId, input)).length)
       .toBe(1);
@@ -57,17 +55,13 @@ test.describe('Uploads onto the Input node (M4 §2, FR-MM-001/007)', () => {
       type: 'image/png',
       size: 16,
     });
-    await expect(page.getByTestId(`input-attachment-count-${input}`)).toHaveText(
-      /1 file attached/i,
-    );
+    await expect(page.getByTestId(`input-attachment-count-${input}`)).toHaveText('1 FILE');
     const ids = await artifactIdsOf(page, seeded.workflowId, input);
     expect(ids).toEqual([first]);
 
     // It survives a reload (it is on the node config, not in the page).
     await page.reload();
-    await expect(page.getByTestId(`input-attachment-count-${input}`)).toHaveText(
-      /1 file attached/i,
-    );
+    await expect(page.getByTestId(`input-attachment-count-${input}`)).toHaveText('1 FILE');
   });
 
   test('TC-MM-001: an oversized file is refused inline with the limit', async ({ page }) => {

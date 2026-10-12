@@ -482,19 +482,68 @@ export async function enginePolicies(page: Page, projectId: string) {
 /* The run controls (FR-CTL-006)                                               */
 /* -------------------------------------------------------------------------- */
 
+/*
+ * Where a run is started, read and controlled depends on the width (D330, D331): on desktop the
+ * workspace "…" menu starts and controls it and the footer carries its state as `data-run-status`;
+ * at phone width (≤ 640 px) the compact bar keeps the run bar (`run-bar`, `run-status`,
+ * `run-controls`). The helpers below that do not say which one ask the viewport.
+ */
+const isPhone = (page: Page): boolean => (page.viewportSize()?.width ?? Infinity) <= 640;
+
+/** The workspace "…" menu's content (the menu that holds "Workflow panel"). */
+export const workspaceMenu = (page: Page): Locator =>
+  page.getByRole('menu').filter({ has: page.getByTestId('menu-sheet') });
+
+/** Open the workspace "…" menu, unless it is open already. */
+export async function openWorkspaceMenu(page: Page): Promise<Locator> {
+  const menu = workspaceMenu(page);
+  if (!(await menu.isVisible())) await page.getByTestId('workspace-menu').click();
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
+/** Close the workspace "…" menu if it is open: it is modal, so nothing else takes a click under it. */
+export async function closeWorkspaceMenu(page: Page): Promise<void> {
+  const menu = workspaceMenu(page);
+  if (await menu.isVisible()) await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+}
+
 export interface ControlState {
-  /** `data-allowed`: what the component read out of `run.allowedActions`. */
+  /** What the screen read out of `run.allowedActions`: the controls it offers. */
   allowed: string[];
-  /** The buttons a person can actually press. */
+  /** The controls a person can actually press. */
   enabled: string[];
 }
 
 /**
- * Every control the toolbar renders, with no list of actions written here: the actions are read off
- * the buttons themselves, so this cannot drift from `RUN_ACTIONS` and cannot quietly stop checking a
- * button that was added.
+ * Every run control the workspace menu offers, with no list of actions written here: the actions
+ * are read off the items themselves (`menu-run-<action>`; "Run details" is a link, not a control),
+ * so this cannot drift from `RUN_ACTIONS` and cannot quietly stop checking a control that was added.
+ * The menu renders a control only when `run.allowedActions` names it, so what it shows is what is
+ * allowed; an item it shows but disables is allowed and not pressable.
  */
 export async function controlState(page: Page): Promise<ControlState> {
+  const menu = await openWorkspaceMenu(page);
+  const items = menu.locator('[data-testid^="menu-run-"]:not([data-testid="menu-run-details"])');
+  const count = await items.count();
+  const allowed: string[] = [];
+  const enabled: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const item = items.nth(i);
+    const action = ((await item.getAttribute('data-testid')) ?? '').replace('menu-run-', '');
+    allowed.push(action);
+    if ((await item.getAttribute('aria-disabled')) !== 'true') enabled.push(action);
+  }
+  await closeWorkspaceMenu(page);
+  return { allowed: allowed.sort(), enabled: enabled.sort() };
+}
+
+/**
+ * The same read on the Run details page, which keeps the toolbar (`run-controls`): every control is
+ * drawn there, `data-allowed` saying whether the engine allows it.
+ */
+export async function runPageControlState(page: Page): Promise<ControlState> {
   const buttons = page.getByTestId('run-controls').locator('[data-testid^="run-action-"]');
   await expect(buttons.first()).toBeVisible();
   const count = await buttons.count();
@@ -509,8 +558,12 @@ export async function controlState(page: Page): Promise<ControlState> {
   return { allowed: allowed.sort(), enabled: enabled.sort() };
 }
 
-export const runAction = (page: Page, action: string): Locator =>
-  page.getByTestId('run-controls').getByTestId(`run-action-${action}`);
+/** Press one run control in the workspace menu (Pause, Resume, Restart, End; Stop… asks first). */
+export async function runAction(page: Page, action: string): Promise<void> {
+  const menu = await openWorkspaceMenu(page);
+  await menu.getByTestId(`menu-run-${action}`).click();
+  await expect(menu).toHaveCount(0);
+}
 
 /**
  * A control is only meaningful while the engine still allows it, and a run does not wait for a test.
@@ -527,28 +580,66 @@ export async function stillAllows(page: Page, workflowId: string, action: string
 }
 
 /**
- * `exact`, because the run bar's own "Restart" contains "start" (D-031). The V2 button shows
- * "Run"; its accessible name is "Start run" (D259).
+ * The phone run bar's Start button (≤ 640 px; desktop has no run bar — use `clickStartRun`).
+ * `exact`, because the run bar's own "Restart" contains "start" (D-031). The button shows "Run";
+ * its accessible name is "Start run" (D259).
  */
 export const startRun = (page: Page): Locator =>
   page.getByTestId('run-bar').getByRole('button', { name: 'Start run', exact: true });
 
+/** The phone run bar's state chip (≤ 640 px; desktop reads the footer — use `expectRunStatus`). */
 export const runStatus = (page: Page): Locator => page.getByTestId('run-status');
 
-/** Stop asks first; this answers the dialog (FR-CTL-003). */
+/** Start the run: the workspace menu's "Start run" on desktop, the run bar's at phone width. */
+export async function clickStartRun(page: Page): Promise<void> {
+  if (isPhone(page)) {
+    await startRun(page).click();
+    return;
+  }
+  const menu = await openWorkspaceMenu(page);
+  await menu.getByTestId('menu-start-run').click();
+  await expect(menu).toHaveCount(0);
+}
+
+/** The workspace footer, which carries the run's state as `data-run-status` (D330). */
+export const runFooter = (page: Page): Locator =>
+  page.getByRole('contentinfo').filter({ has: page.getByTestId('footer-mode') });
+
+/** The run is in `status`: the footer's `data-run-status` on desktop, the run bar's chip on phones. */
+export async function expectRunStatus(
+  page: Page,
+  status: string,
+  options: { timeout?: number } = {},
+): Promise<void> {
+  if (isPhone(page)) {
+    await expect(runStatus(page)).toHaveAttribute('data-status', status, options);
+  } else {
+    await expect(runFooter(page)).toHaveAttribute('data-run-status', status, options);
+  }
+}
+
+/** Stop asks first; this answers the dialog (FR-CTL-003). The workspace menu's "Stop…" opens it. */
 export async function stopRun(page: Page): Promise<void> {
-  await runAction(page, 'stop').click();
+  await runAction(page, 'stop');
   const confirm = page.getByTestId('stop-confirm');
   await expect(confirm).toBeVisible();
   await confirm.getByTestId('stop-confirm-stop').click();
 }
 
-/** Open one of the bottom pane's tabs (Validation · Events · Errors; V2 names carry a count). */
+/**
+ * Open one of the bottom panel's tabs (Validation · Events · Errors · Timeline; names carry a
+ * count). The panel is hidden until the workspace menu's "Problems & events" opens it (D332).
+ */
 export async function openBottomTab(
   page: Page,
-  name: 'Validation' | 'Events' | 'Errors',
+  name: 'Validation' | 'Events' | 'Errors' | 'Timeline',
 ): Promise<void> {
-  await page.getByRole('tab', { name }).click();
+  const tab = page.getByTestId('bottom-section').getByRole('tab', { name });
+  if (!(await tab.isVisible())) {
+    const menu = await openWorkspaceMenu(page);
+    await menu.getByTestId('menu-problems').click();
+  }
+  await tab.click();
 }
 
 /** Select a node and open the inspector on it (the V2 sheet's Inspector tab). */

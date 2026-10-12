@@ -2,6 +2,7 @@ import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { startSocket, stopSocket } from '../app/socket';
+import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
 import { createFakeWebSocket } from '../mocks/fake-socket';
 import { seedMemory } from '../mocks/seeds-round5';
@@ -41,7 +42,8 @@ async function openMemory(options: { enabled?: boolean; focus?: 'agent' | 'input
   const focus = options.focus === 'input' ? input : agent;
   act(() => useSelectionStore.getState().setSelection([focus.id], []));
   // the sheet over the Canvas holds this tab; it is closed until the top bar opens it
-  await user.click(screen.getByTestId('sheet-toggle'));
+  // the workspace menu's "Workflow panel" opens the sheet (D331)
+  act(() => usePanelsStore.getState().openSheet());
   await user.click(screen.getByRole('tab', { name: 'Memory' }));
   return { agent, input, user };
 }

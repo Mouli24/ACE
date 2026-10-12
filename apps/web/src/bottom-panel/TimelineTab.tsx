@@ -1,6 +1,5 @@
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
-import { Maximize2 } from 'lucide-react';
 
 import { TimelinePanel } from '../timeline/TimelinePanel';
 import type { TimelineFilter } from '../timeline/timeline-messages';
@@ -12,7 +11,8 @@ import type { TimelineFilter } from '../timeline/timeline-messages';
  * composer.
  *
  * The tab keeps its filter in local state; the full page keeps the same filter in the URL so a
- * filtered timeline is linkable (FR-CHAT-002). A corner link opens that page.
+ * filtered timeline is linkable (FR-CHAT-002). A corner link — the theme's ⛶ and link colour —
+ * opens that page.
  */
 export function TimelineTab({ workflowId, projectId }: { workflowId: string; projectId?: string }) {
   const [filter, setFilter] = useState<TimelineFilter>({});
@@ -23,10 +23,10 @@ export function TimelineTab({ workflowId, projectId }: { workflowId: string; pro
         <div className="flex items-center justify-end px-3 pt-2">
           <Link
             to={`/projects/${projectId}/workflows/${workflowId}/timeline`}
-            className="inline-flex items-center gap-1 font-machine text-xs text-accent underline-offset-2 hover:underline"
+            className="inline-flex items-center gap-[5px] rounded-[4px] text-[11.5px] font-semibold text-[#e8623a] outline-none hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
             data-testid="timeline-open-full"
           >
-            <Maximize2 className="h-3.5 w-3.5" aria-hidden />
+            <span aria-hidden>⛶</span>
             open full timeline
           </Link>
         </div>

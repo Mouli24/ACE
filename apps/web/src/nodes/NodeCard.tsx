@@ -1,159 +1,113 @@
-import type { FailureReason, ModelUsed, Node, NodeState, Port, ProviderType } from '@ace/contracts';
-import { Badge, StatusChip, cn } from '@ace/ui';
-import { Handle, Position, type NodeProps, type Node as FlowNode } from '@xyflow/react';
+import type {
+  DataType,
+  FailureReason,
+  ModelUsed,
+  Node,
+  NodeState,
+  Port,
+  ProviderType,
+} from '@ace/contracts';
+import { DEFAULT_SEARCH_MODE } from '@ace/contracts';
 import {
-  BookOpen,
-  Bot,
-  Cpu,
-  Flag,
-  GitMerge,
-  Lock,
-  TextCursorInput,
-  Trash2,
-  Wand2,
-  type LucideIcon,
-} from 'lucide-react';
-import { memo, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
+  Handle,
+  Position,
+  useStore,
+  useUpdateNodeInternals,
+  type NodeProps,
+  type Node as FlowNode,
+} from '@xyflow/react';
+import {
+  createContext,
+  memo,
+  useContext,
+  useEffect,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 
 import { InputDropZone } from '../artifacts/InputDropZone';
-import { usePanelsStore } from '../app/stores/panels';
-import { useSelectionStore } from '../app/stores/selection';
-import { useCanvasApi } from '../canvas/canvas-api';
 import { findBlockingNodeId } from '../errors/blocked';
-import { NodeApproval, NodeErrorCard, NodeRunActions } from '../runs/NodeRunAttachments';
+import { NodeApproval, NodeErrorCard, UnderCard } from '../runs/NodeRunAttachments';
 import { useNodeOverlay, useRunStore } from '../runs/run-store';
+import { th, themeProviderOf } from '../theme/constants';
+import { nodeStatusLook } from '../theme/format';
 import { useWorkflowGraph } from '../workflows/hooks';
-import { DEFAULT_SEARCH_MODE } from '@ace/contracts';
 
-import type { CanvasNodeKind } from './factory';
+import { DOC_W, STAGE_W, isStageKind, portAnchor } from './anchors';
 import { NodePreflightIssues } from './NodePreflightIssues';
 import { useKnowledgeBaseName, useWorkflowProjectId } from './retrieval/hooks';
-
-export const KIND_ICON: Record<CanvasNodeKind, LucideIcon> = {
-  input: TextCursorInput,
-  agent: Bot,
-  model: Cpu,
-  output: Flag,
-  merge: GitMerge,
-  transform: Wand2,
-  retrieval: BookOpen,
-};
 
 /** React Flow node payload: the contract node plus what the Canvas knows about it. */
 export type FlowNodeData = {
   node: Node;
   connectedPortIds: Set<string>;
-  /** The node's provider type, for the accent border (FR-NODE-010). */
+  /** The node's provider type, for the stage card's orb and border (FR-NODE-010). */
   provider?: ProviderType;
+  /** The provider record's name, for the stage card's sub line. */
+  providerName?: string;
   /** Set when the node's provider is gone (FR-PRV-005). */
   providerMissing?: boolean;
+  /** Agent/Model: its 1-based place among the workflow's stages (`agentsOf` order). */
+  stage?: number;
+  /** Other kinds: the stages this node's output feeds, for "Attached to Stage n". */
+  feeds?: readonly number[];
+  /** Output: the data types arriving on its connected inputs. */
+  receives?: readonly DataType[];
   /** Keyboard connect (NFR-USE-02): the output port armed with Enter, if any. */
   armedPortId: string | undefined;
   onPortKey: (port: Port, direction: 'in' | 'out', nodeId: string) => void;
 };
 export type AceFlowNode = FlowNode<FlowNodeData, 'ace'>;
 
+/** Whether the Canvas is drawn dark: the stage orbs and badges take the theme's dark look. */
+export const CanvasDarkContext = createContext(false);
+
 export interface NodeCardViewProps {
   node: Node;
-  /** Drives the glow and the status chip; from the run overlay's `node.state` frames (FR-EXE-009). */
+  /** The status row, from the run overlay's `node.state` frames (FR-EXE-009). */
   state: NodeState;
   selected: boolean;
   connectedPortIds: Set<string>;
-  /** Provider accent, fixed per provider type and never moved by state (FR-NODE-010). */
+  /** Provider look, fixed per provider type and never moved by state (FR-NODE-010). */
   provider?: ProviderType;
+  providerName?: string;
+  stage?: number;
+  feeds?: readonly number[];
+  receives?: readonly DataType[];
+  dark?: boolean;
   armedPortId?: string;
   onPortKey?: (port: Port, direction: 'in' | 'out') => void;
-  /** The node's run actions, when a run has reached it — a slot so this view stays pure. */
-  actions?: ReactNode;
-  /** The selected-node toolbar, drawn above the card — a slot for the same reason. */
-  toolbar?: ReactNode;
-  /**
-   * Static port dots instead of React Flow handles, for a card drawn outside a flow (the New node
-   * dialog's preview): nothing to connect to, and no React Flow store to register with.
-   */
-  preview?: boolean;
-  /** What the router actually used, so a fallback is visible on the card (FR-RTR-006). */
-  modelUsed?: ModelUsed;
-  /** The node names a provider the engine no longer has (FR-PRV-005). */
-  providerMissing?: boolean;
-  /** Why the node failed, so the card says which kind of failure it was (FR-ERR-002, BR-03). */
-  failureReason?: FailureReason;
-  /** The upstream node that stopped the run, on a BLOCKED card (FR-ERR-006). */
-  blockedByName?: string;
   /** A Retrieval node's base, by name, once the project's bases have loaded (FR-RAG-006). */
   knowledgeBaseName?: string;
 }
 
-/** Each failure reason in the words a person reads; the enum value stays the contract's (BR-03). */
-const FAILURE_TEXT: Readonly<Record<FailureReason, string>> = {
-  RUN_FAILED: 'failed',
-  CONTRACT_VIOLATION: 'output did not match the contract',
-  GUARDRAIL_VIOLATION: 'blocked by a guardrail',
-  BLOCKED: 'never ran',
-};
+/** The card's 1px border: handles are placed inside it, anchors are measured from outside it. */
+const BORDER = 1;
 
-const isModelKind = (node: Node): boolean => node.kind === 'agent' || node.kind === 'model';
-
-/** What the chip under the name says (FR-NODE-005): the model, or the one setting that matters. */
-function chipLabel(node: Node, knowledgeBaseName: string | undefined): string {
-  switch (node.kind) {
-    case 'agent':
-    case 'model':
-      return node.config.modelId ?? 'no model';
-    case 'input': {
-      const files = node.config.artifactIds.length;
-      return files === 0 ? 'text' : `text · ${files} ${files === 1 ? 'file' : 'files'}`;
-    }
-    case 'merge':
-      return `mode · ${node.config.mode}`;
-    case 'transform':
-      return node.config.op;
-    case 'output':
-      return 'final result';
-    case 'retrieval':
-      return node.config.knowledgeBaseId === undefined
-        ? 'no knowledge base'
-        : (knowledgeBaseName ?? 'knowledge base');
-    default:
-      return node.kind;
-  }
-}
-
-/** The body text of a node with no content of its own to show, in the node's own terms. */
-function placeholder(node: Node): string | undefined {
-  if (isModelKind(node)) return 'no goal yet — Edit to give it one';
-  if (node.kind === 'merge') {
-    return node.config.mode === 'any' ? 'waits for the first input' : 'waits for every input';
-  }
-  if (node.kind === 'transform') return 'same result every time — no model';
-  return undefined;
-}
-
-const ITALIC = 'font-human text-[13px] italic text-fg-muted';
-const MONO = 'font-machine text-[10.5px] text-fg-soft';
-
-/** The port dot, connected (filled with the accent) or open; a card-coloured halo lifts it off the edge. */
-const portDotStyle = (connected: boolean): CSSProperties => ({
-  borderColor: connected ? 'var(--accent-color)' : 'var(--color-fg-muted)',
-  backgroundColor: connected ? 'var(--accent-color)' : 'var(--color-card)',
-  boxShadow: '0 0 0 3px var(--color-card)',
-});
-
-function PortRow({
+/**
+ * One port's React Flow handle (D332): invisible, a 12px hit area centred on the theme's anchor,
+ * a `#ef6b3f` ring when focused from the keyboard or armed for a keyboard connect (NFR-USE-02).
+ */
+function PortHandle({
   port,
   direction,
+  index,
+  count,
+  kind,
   connected,
   armed,
-  preview,
   onKey,
 }: {
   port: Port;
   direction: 'in' | 'out';
+  index: number;
+  count: number;
+  kind: Node['kind'];
   connected: boolean;
   armed: boolean;
-  preview: boolean;
   onKey?: (port: Port, direction: 'in' | 'out') => void;
 }) {
+  const anchor = portAnchor(kind, direction, index, count);
   const label = `${port.dataType} ${direction === 'in' ? 'input' : 'output'} “${port.name}”${
     port.multi ? ', accepts many' : ''
   }`;
@@ -164,399 +118,399 @@ function PortRow({
       onKey?.(port, direction);
     }
   };
-  const side = direction === 'in' ? '-left-5' : '-right-5';
-  const dot = preview ? (
-    <span
-      aria-hidden
-      data-testid={`port-dot-${port.id}`}
-      className={cn('absolute top-[5px] h-3 w-3 rounded-full border-2', side)}
-      style={portDotStyle(connected)}
-    />
-  ) : (
+  return (
     <Handle
       id={port.id}
       type={direction === 'in' ? 'target' : 'source'}
       position={direction === 'in' ? Position.Left : Position.Right}
-      className={cn(
-        '!absolute !top-[5px] !h-3 !w-3 !transform-none !rounded-full !border-2 !transition-colors',
-        direction === 'in' ? '!-left-5' : '!-right-5',
-        armed && '!ring-2 !ring-accent',
-        'focus-visible:!outline-none focus-visible:!ring-2 focus-visible:!ring-accent',
-      )}
-      style={portDotStyle(connected)}
+      className="ace-port"
+      style={{
+        left: anchor.x - BORDER,
+        top: anchor.y - BORDER,
+        right: 'auto',
+        transform: 'translate(-50%, -50%)',
+      }}
       tabIndex={0}
       role="button"
       aria-label={label}
-      title={label}
       data-testid={`port-${port.id}`}
       data-connected={connected ? 'true' : 'false'}
       data-datatype={port.dataType}
+      data-armed={armed ? 'true' : 'false'}
       onKeyDown={onKeyDown}
     />
   );
-  // Type-derived ports are named after their type (D18), so the type is only spelled out when it
-  // says something the name does not.
-  const type =
-    port.name === port.dataType ? null : <span className="text-fg-faint">{port.dataType}</span>;
+}
+
+function PortHandles({
+  node,
+  connectedPortIds,
+  armedPortId,
+  onPortKey,
+}: Pick<NodeCardViewProps, 'node' | 'connectedPortIds' | 'armedPortId' | 'onPortKey'>) {
+  const side = (ports: readonly Port[], direction: 'in' | 'out') =>
+    ports.map((port, index) => (
+      <PortHandle
+        key={port.id}
+        port={port}
+        direction={direction}
+        index={index}
+        count={ports.length}
+        kind={node.kind}
+        connected={connectedPortIds.has(port.id)}
+        armed={armedPortId === port.id}
+        {...(onPortKey === undefined ? {} : { onKey: onPortKey })}
+      />
+    ));
   return (
-    <div
-      data-port-row
-      className="relative flex h-[22px] items-center gap-1.5 font-machine text-[10px] text-fg-muted"
-    >
-      {direction === 'in' ? (
-        <>
-          {dot}
-          {port.name}
-          {type}
-        </>
-      ) : (
-        <>
-          {type}
-          {port.name}
-          {dot}
-        </>
-      )}
-    </div>
+    <>
+      {side(node.inputs, 'in')}
+      {side(node.outputs, 'out')}
+    </>
   );
 }
 
-/** What a goal-driven node is asked to achieve (D285). */
-function goalOf(node: Node): string {
-  if (node.kind === 'agent') return node.config.instructions.trim();
-  if (node.kind === 'model') return (node.config.systemPrompt ?? '').trim();
-  return '';
+/** What the stage card's sub line says: the provider record and the model, or what is missing. */
+function stageSub(node: Node, providerName: string | undefined): string {
+  const modelId = node.kind === 'agent' || node.kind === 'model' ? node.config.modelId : undefined;
+  return `${providerName ?? 'no provider'} · ${modelId ?? 'no model'}`;
 }
 
 /**
- * What the card's body box says. First match wins: a state that needs explaining (stopped, blocked,
- * failed, waiting) beats the node's own content, and the content beats the placeholder.
- *
- * D285: a card shows what a node *is* — its goal, its settings — never what went into it or came
- * out of it. A run's answers, as they stream and once they settle, are read in the node's chat
- * session; the card only says where the node is (`running — answer in Chat`).
+ * The theme's Stage card (D332) for Agent and Model nodes: 210 × 280, the provider's orb and
+ * border, `STAGE n · NAME`, the provider and model, and the live status.
  */
-function CardBody({
-  node,
-  state,
-  failureReason,
-  blockedByName,
-}: Pick<NodeCardViewProps, 'node' | 'state' | 'failureReason' | 'blockedByName'>) {
-  /*
-   * BLOCKED is greyed and locked because nothing went wrong here — the run never reached this node
-   * (FR-ERR-006). STOPPED gets no fault styling at all: a cancellation the operator asked for must
-   * not read as a fault (FR-ERR-007), so only FAILED is ever tinted with the danger colour.
-   */
-  if (state === 'STOPPED') {
-    return (
-      <p className={ITALIC} data-testid={`stopped-note-card-${node.id}`}>
-        stopped — not a failure
-      </p>
-    );
-  }
-  if (state === 'BLOCKED') {
-    return (
-      <p className={ITALIC} data-testid={`blocked-by-${node.id}`}>
-        {blockedByName === undefined ? 'blocked upstream' : `blocked by ${blockedByName}`}
-      </p>
-    );
-  }
-  if (state === 'FAILED' && failureReason !== undefined) {
-    return (
-      <p className="font-machine text-[10.5px] text-danger">
-        <span aria-hidden>⚠ </span>
-        <span data-testid={`failure-${node.id}`} data-reason={failureReason}>
-          {FAILURE_TEXT[failureReason]}
-        </span>
-      </p>
-    );
-  }
-  if (state === 'WAITING') return <p className={ITALIC}>waiting on your approval…</p>;
-  if (isModelKind(node)) {
-    const goal = goalOf(node);
-    return (
-      <>
-        {state === 'RUNNING' && (
-          <p className={cn(ITALIC, 'animate-pulse')} data-testid={`running-note-${node.id}`}>
-            running — answer in Chat
-          </p>
-        )}
-        {goal === '' ? (
-          state === 'RUNNING' ? null : (
-            <p className={ITALIC}>{placeholder(node)}</p>
-          )
-        ) : (
-          <p
-            className={cn('line-clamp-3 whitespace-pre-wrap break-words', MONO)}
-            data-testid={`node-goal-${node.id}`}
-            title={goal}
-          >
-            {goal}
-          </p>
-        )}
-      </>
-    );
-  }
-  if (node.kind === 'output') {
-    return <p className={ITALIC}>the final result — read it in Inspect</p>;
-  }
-  if (node.kind === 'input') {
-    return <p className={ITALIC}>{node.config.text ? 'start text set' : 'no start text yet'}</p>;
-  }
-  if (node.kind === 'retrieval') {
-    return (
-      <p className={MONO} data-testid={`retrieval-summary-${node.id}`}>
-        <span data-testid={`retrieval-k-${node.id}`}>k {node.config.k}</span>
-        {' · '}
-        <span data-testid={`retrieval-mode-${node.id}`}>
-          {node.config.mode ?? DEFAULT_SEARCH_MODE}
-        </span>
-      </p>
-    );
-  }
-  const idle = placeholder(node);
-  return idle === undefined ? null : <p className={ITALIC}>{idle}</p>;
-}
-
-/**
- * The node card (FR-NODE-005/006/010/012). Pure view: everything it shows comes from the contract
- * node and the props, so it renders the same inside React Flow and in a component test.
- *
- * The look lives in `.ace-node` (theme.css): `--accent-color` tints the fill, border and glow, and
- * `data-state` sets how brightly it glows (BLOCKED greys itself). The accent is the provider's CSS
- * variable, never a hex value, so the Paper theme recolours it.
- */
-export function NodeCardView({
-  node,
-  state,
-  selected,
-  connectedPortIds,
-  provider,
-  armedPortId,
-  onPortKey,
-  modelUsed,
-  providerMissing,
-  failureReason,
-  blockedByName,
-  knowledgeBaseName,
-  actions,
-  toolbar,
-  preview = false,
-}: NodeCardViewProps) {
-  const Icon = KIND_ICON[node.kind as CanvasNodeKind] ?? Bot;
-  const isBlocked = state === 'BLOCKED';
-  const style =
-    provider === undefined
-      ? undefined
-      : ({ '--accent-color': `var(--color-provider-${provider})` } as CSSProperties);
-  const tileStyle: CSSProperties = {
-    borderColor: 'color-mix(in oklab, var(--accent-color) 40%, var(--color-border))',
-    backgroundColor: 'color-mix(in oklab, var(--accent-color) 14%, transparent)',
-    ...(provider === undefined ? {} : { color: 'var(--accent-color)' }),
-  };
-  const isRetrieval = node.kind === 'retrieval';
-  const knowledgeBaseId = node.kind === 'retrieval' ? node.config.knowledgeBaseId : undefined;
-  const noBase = isRetrieval && knowledgeBaseId === undefined;
-
+function StageCard(props: NodeCardViewProps) {
+  const { node, state, selected, provider, providerName, stage, dark = false } = props;
+  const look = th(themeProviderOf(provider), dark);
+  const ring = look.w ? '#bdb6ae' : look.c;
+  const status = nodeStatusLook(state);
+  const name = node.name || 'Untitled';
+  const n = stage ?? '';
   return (
     <div
+      data-node-card
       data-testid={`node-card-${node.id}`}
       data-kind={node.kind}
       data-state={state}
       data-selected={selected ? 'true' : 'false'}
-      style={style}
-      className="ace-node relative w-[220px] select-none px-3.5 py-3 text-fg"
+      data-provider={provider ?? 'none'}
+      className="relative h-[280px] w-[210px] cursor-move rounded-[10px] bg-[var(--frame)] text-[var(--ink)]"
+      style={{
+        border: `1px solid ${selected ? ring : look.w ? 'var(--frameLine)' : `rgba(${look.glow},0.38)`}`,
+        boxShadow: selected
+          ? `0 0 0 2px ${ring}, 0 12px 40px -16px rgba(${look.glow},0.55)`
+          : 'none',
+      }}
     >
-      {toolbar}
-      <header className="flex h-[30px] items-center gap-[9px]">
-        <span
-          className={cn(
-            'grid h-[26px] w-[26px] shrink-0 place-items-center rounded-[8px] border',
-            provider === undefined && 'text-fg-soft',
-          )}
-          style={tileStyle}
-        >
-          {isBlocked ? (
-            <Lock
-              className="h-[15px] w-[15px]"
-              strokeWidth={1.8}
-              aria-label="blocked"
-              data-testid={`blocked-lock-${node.id}`}
-            />
-          ) : (
-            <Icon className="h-[15px] w-[15px]" strokeWidth={1.8} aria-hidden />
-          )}
-        </span>
-        <span className="min-w-0 flex-1 truncate font-human text-[16.5px] font-semibold leading-[1.1]">
-          {node.name}
-        </span>
-        <span className="font-machine text-[9px] uppercase tracking-[0.14em] text-fg-faint">
-          {node.kind}
-        </span>
-        {actions}
-      </header>
-      <div className="mt-1.5 flex h-[22px] items-center justify-between gap-1.5">
-        <Badge
-          data-testid={`node-chip-${node.id}`}
-          className={cn(
-            'min-w-0 max-w-[128px] overflow-hidden whitespace-nowrap',
-            noBase && 'border-dashed',
-          )}
-        >
-          {isModelKind(node) && provider !== undefined && (
-            <span
-              aria-hidden
-              data-provider-dot
-              className="h-1.5 w-1.5 shrink-0 rounded-full"
-              style={{ backgroundColor: 'var(--accent-color)' }}
-            />
-          )}
-          <span
-            className="truncate"
-            {...(isRetrieval ? { 'data-testid': `retrieval-kb-${node.id}` } : {})}
-            {...(knowledgeBaseId === undefined ? {} : { title: knowledgeBaseId })}
-          >
-            {chipLabel(node, knowledgeBaseName)}
-          </span>
-        </Badge>
-        <StatusChip state={state} className="shrink-0" />
-      </div>
-      {providerMissing && (
-        <p
-          data-testid={`provider-missing-${node.id}`}
-          className="mt-1.5 font-machine text-[10px] text-danger"
-          title="This node's provider was removed; choose another before running."
-        >
-          provider missing
-        </p>
-      )}
-      {/* FR-RTR-006: what actually answered, and whether the router had to fall back. */}
-      {modelUsed && (
-        <p
-          className="mt-1.5 truncate font-machine text-[10px] text-fg-muted"
-          data-testid={`used-model-${node.id}`}
-        >
-          used: {modelUsed.modelId}
-          {modelUsed.viaFallback ? ' (fallback)' : ''}
-        </p>
-      )}
       <div
-        data-testid={`node-body-${node.id}`}
-        className="mt-2 h-16 overflow-hidden rounded-[9px] border border-border bg-sunken px-2.5 py-2 leading-normal"
+        data-testid={`stage-label-${node.id}`}
+        className="absolute left-[12px] top-[-9px] whitespace-nowrap rounded-[4px] bg-[var(--canvas)] px-[7px] py-[2px] font-machine text-[9px] font-medium tracking-[0.1em] text-[#7a62d6]"
       >
-        <CardBody
-          node={node}
-          state={state}
-          {...(failureReason === undefined ? {} : { failureReason })}
-          {...(blockedByName === undefined ? {} : { blockedByName })}
+        STAGE {n} · {name.toUpperCase()}
+      </div>
+      <div className="absolute right-[-9px] top-[-9px] flex h-[20px] w-[20px] items-center justify-center rounded-full border border-[var(--frameLine)] bg-[var(--surface)] text-[10px] font-semibold">
+        {n}
+      </div>
+      <div
+        data-testid={`stage-orb-${node.id}`}
+        className="absolute left-[77px] top-[90px] flex h-[56px] w-[56px] items-center justify-center rounded-full"
+        style={{ background: look.orb, boxShadow: look.ring }}
+      >
+        <img
+          src={look.logo}
+          alt=""
+          className="h-[26px] w-[26px]"
+          style={{ filter: look.logoFilter }}
         />
       </div>
-      <div className="mt-2 flex justify-between">
-        <div className="flex flex-col">
-          {node.inputs.map((port) => (
-            <PortRow
-              key={port.id}
-              port={port}
-              direction="in"
-              connected={connectedPortIds.has(port.id)}
-              armed={armedPortId === port.id}
-              preview={preview}
-              {...(onPortKey === undefined ? {} : { onKey: onPortKey })}
-            />
-          ))}
-        </div>
-        <div className="flex flex-col items-end">
-          {node.outputs.map((port) => (
-            <PortRow
-              key={port.id}
-              port={port}
-              direction="out"
-              connected={connectedPortIds.has(port.id)}
-              armed={armedPortId === port.id}
-              preview={preview}
-              {...(onPortKey === undefined ? {} : { onKey: onPortKey })}
-            />
-          ))}
+      <div
+        className="absolute left-[74px] top-[86px] flex h-[16px] w-[16px] items-center justify-center rounded-full text-[9px] font-bold text-[#fff] shadow-[0_0_0_2px_var(--canvas)]"
+        style={{ background: look.badge }}
+      >
+        {n}
+      </div>
+      <div className="absolute left-[127px] top-[88px] text-[8px] tracking-[-1px] text-[var(--muted)]">
+        ⋮⋮
+      </div>
+      <div className="absolute left-0 right-0 top-[158px] text-center">
+        <div className="text-[12px] font-semibold tracking-[-0.01em] text-[var(--ink)]">{name}</div>
+        <div
+          data-testid={`stage-sub-${node.id}`}
+          className="mt-[3px] font-machine text-[9.5px] text-[var(--muted)]"
+        >
+          {stageSub(node, providerName)}
         </div>
       </div>
+      <div
+        data-testid="status-chip"
+        data-state={state}
+        className="absolute bottom-[12px] left-[12px] right-[12px] flex items-center gap-[6px] text-[10px] text-[var(--muted)]"
+      >
+        <span
+          aria-hidden
+          className="h-[6px] w-[6px] rounded-full"
+          style={{ background: status.color }}
+        />
+        {status.label}
+      </div>
+      <PortHandles {...props} />
     </div>
   );
 }
 
-const TOOL =
-  'h-[26px] rounded-chip px-3 font-machine text-[10.5px] transition-colors hover:bg-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection';
+const upper = (value: string): string => value.replace(/_/g, ' ').toUpperCase();
+
+/** A description excerpt: one paragraph of real text, cut where the card would run long. */
+function excerpt(text: string | undefined): string | undefined {
+  const flat = text?.replace(/\s+/g, ' ').trim();
+  if (!flat) return undefined;
+  return flat.length > 120 ? `${flat.slice(0, 119).trimEnd()}…` : flat;
+}
+
+/** The document card's mono meta line, `KIND · detail`, from the node's real config. */
+function DocMeta({ node, receives }: { node: Node; receives: readonly DataType[] }) {
+  switch (node.kind) {
+    case 'input': {
+      const files = node.config.artifactIds.length;
+      if (files === 0) return <>INPUT · {node.config.outputTypes.map(upper).join(' · ')}</>;
+      return (
+        <>
+          INPUT ·{' '}
+          <span data-testid={`input-attachment-count-${node.id}`}>
+            {files} {files === 1 ? 'FILE' : 'FILES'}
+          </span>
+        </>
+      );
+    }
+    case 'output':
+      return <>{['OUTPUT', ...receives.map(upper)].join(' · ')}</>;
+    case 'merge':
+      return <>MERGE · {upper(node.config.mode)}</>;
+    case 'transform':
+      return <>TRANSFORM · {upper(node.config.op)}</>;
+    case 'retrieval':
+      return (
+        <span data-testid={`retrieval-summary-${node.id}`}>
+          RETRIEVAL · <span data-testid={`retrieval-k-${node.id}`}>K {node.config.k}</span> ·{' '}
+          <span data-testid={`retrieval-mode-${node.id}`}>
+            {upper(node.config.mode ?? DEFAULT_SEARCH_MODE)}
+          </span>
+        </span>
+      );
+    default:
+      return <>{upper(node.kind)}</>;
+  }
+}
+
+/** The document card's description: a real excerpt of what the node holds, or nothing. */
+function docDescription(node: Node, knowledgeBaseName: string | undefined): ReactNode {
+  switch (node.kind) {
+    case 'input':
+      return excerpt(node.config.text);
+    case 'transform':
+      if (node.config.op === 'template') return excerpt(node.config.template);
+      if (node.config.op === 'extract_json_field') return excerpt(node.config.path);
+      return undefined;
+    case 'retrieval':
+      return (
+        <span data-testid={`retrieval-kb-${node.id}`}>
+          {node.config.knowledgeBaseId === undefined
+            ? 'no knowledge base'
+            : (knowledgeBaseName ?? 'knowledge base')}
+        </span>
+      );
+    default:
+      return undefined;
+  }
+}
 
 /**
- * The selected node's toolbar (FR-CAN-003): Edit and Inspect open the sheet on that tab, `@ Chat`
- * points the Chat column at the node (Agent/Model only, FR-CHAT-004), the trash deletes it.
- *
- * Mounted only on the selected card, so only that card subscribes to the selection count — a
- * boolean, so it re-renders when the selection goes from one node to several and not otherwise
- * (NFR-PERF-01). The actions read their stores at click time and subscribe to nothing.
+ * The theme's Document card (D332) for every kind that is not a stage: the name, `KIND · detail`,
+ * an excerpt of what it holds, and "Attached to Stage n" when its output feeds a stage.
  */
-function NodeToolbar({ node }: { node: Node }) {
-  const single = useSelectionStore((s) => s.nodeIds.length === 1);
-  const readOnly = useCanvasApi((s) => s.api?.readOnly === true);
-  if (!single || readOnly) return null;
+function DocCard(props: NodeCardViewProps) {
+  const { node, state, selected, feeds = [], receives = [], knowledgeBaseName } = props;
+  const description = docDescription(node, knowledgeBaseName);
+  const attached =
+    feeds.length === 0
+      ? undefined
+      : feeds.length === 1
+        ? `Attached to Stage ${feeds[0]}`
+        : `Attached to Stages ${feeds.join(', ')}`;
   return (
     <div
-      data-testid={`node-toolbar-${node.id}`}
-      // `nodrag nopan`: a press here is a click, never the start of a node drag or a pan.
-      className="nodrag nopan absolute -top-11 left-1/2 flex -translate-x-1/2 items-center gap-0.5 whitespace-nowrap rounded-chip border border-border-strong bg-panel p-[3px] shadow-[var(--ace-ground)]"
-      onPointerDown={(event) => event.stopPropagation()}
-      // a double-click on Inspect or @ Chat must not reach the node's double-click (→ Configure)
-      onDoubleClick={(event) => event.stopPropagation()}
+      data-node-card
+      data-testid={`node-card-${node.id}`}
+      data-kind={node.kind}
+      data-state={state}
+      data-selected={selected ? 'true' : 'false'}
+      className="relative w-[200px] cursor-move rounded-[8px] bg-[var(--surface)] px-[14px] pb-[10px] pt-[14px] text-[var(--ink)] shadow-[0_10px_30px_-14px_rgba(40,25,15,0.35)]"
+      style={{ border: `1px solid ${selected ? '#ef6b3f' : 'var(--line)'}` }}
     >
-      <button
-        type="button"
-        data-testid="node-toolbar-edit"
-        className={cn(TOOL, 'text-fg')}
-        onClick={() => usePanelsStore.getState().openSheet('configure')}
+      <div className="text-[13px] font-bold leading-[1.25] tracking-[-0.01em]">{node.name}</div>
+      <div
+        data-testid={`node-meta-${node.id}`}
+        className="mt-[4px] font-machine text-[9px] text-[var(--muted)]"
       >
-        Edit
-      </button>
-      <button
-        type="button"
-        data-testid="node-toolbar-inspect"
-        className={cn(TOOL, 'text-fg-soft hover:text-fg')}
-        onClick={() => usePanelsStore.getState().openSheet('inspect')}
-      >
-        Inspect
-      </button>
-      {isModelKind(node) && (
-        <button
-          type="button"
-          data-testid="node-toolbar-chat"
-          className={cn(TOOL, 'text-fg-soft hover:text-fg')}
-          onClick={() => usePanelsStore.getState().chatWith(node.id)}
+        <DocMeta node={node} receives={receives} />
+      </div>
+      {description !== undefined && (
+        <div
+          data-testid={`node-description-${node.id}`}
+          className="mt-[10px] text-[10px] leading-[1.45] text-[var(--muted)] [text-wrap:pretty]"
         >
-          @ Chat
-        </button>
+          {description}
+        </div>
       )}
-      <span aria-hidden className="h-3.5 w-px bg-border" />
-      <button
-        type="button"
-        data-testid="node-toolbar-delete"
-        aria-label="Delete node"
-        title="Delete node"
-        className="grid h-[26px] w-[26px] place-items-center rounded-chip text-fg-muted transition-colors hover:bg-border hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
-        onClick={() => useCanvasApi.getState().api?.deleteNodes([node.id])}
-      >
-        <Trash2 className="h-[13px] w-[13px]" aria-hidden />
-      </button>
+      {attached !== undefined && (
+        <>
+          <div className="mb-[8px] mt-[10px] h-px bg-[var(--line)]" />
+          <div
+            data-testid={`node-attached-${node.id}`}
+            className="text-center text-[9.5px] font-semibold"
+          >
+            {attached}
+          </div>
+        </>
+      )}
+      <PortHandles {...props} />
     </div>
   );
+}
+
+/**
+ * The node card (FR-NODE-005/006/010/012): a Stage card for Agent and Model, a Document card for
+ * every other kind (D332). Pure view: everything it shows comes from the contract node and the
+ * props, so it renders the same inside React Flow and in a component test.
+ */
+export function NodeCardView(props: NodeCardViewProps) {
+  return isStageKind(props.node.kind) ? <StageCard {...props} /> : <DocCard {...props} />;
+}
+
+/** Each failure reason in the words a person reads; the enum value stays the contract's (BR-03). */
+const FAILURE_TEXT: Readonly<Record<FailureReason, string>> = {
+  RUN_FAILED: 'failed',
+  CONTRACT_VIOLATION: 'output did not match the contract',
+  GUARDRAIL_VIOLATION: 'blocked by a guardrail',
+  BLOCKED: 'never ran',
+};
+
+export interface NodeCardNotesProps {
+  node: Node;
+  state: NodeState;
+  /** What the router actually used, so a fallback is visible (FR-RTR-006). */
+  modelUsed?: ModelUsed;
+  /** The node names a provider the engine no longer has (FR-PRV-005). */
+  providerMissing?: boolean;
+  /** Why the node failed, so it says which kind of failure it was (FR-ERR-002, BR-03). */
+  failureReason?: FailureReason;
+  /** The upstream node that stopped the run, on a BLOCKED node (FR-ERR-006). */
+  blockedByName?: string;
+}
+
+const NOTE = 'text-[10px] leading-[1.45] text-[var(--muted)]';
+
+/**
+ * What the card has no room for (D332), as small muted lines under it: why it failed, what blocked
+ * it, a missing provider, the model that actually answered when it was not the configured one,
+ * and where a running node's answer is read (D285: the chat, never the card).
+ */
+export function NodeCardNotes({
+  node,
+  state,
+  modelUsed,
+  providerMissing,
+  failureReason,
+  blockedByName,
+}: NodeCardNotesProps) {
+  const configuredModel =
+    node.kind === 'agent' || node.kind === 'model' ? node.config.modelId : undefined;
+  const showUsed =
+    modelUsed !== undefined && (modelUsed.viaFallback || modelUsed.modelId !== configuredModel);
+  const lines: ReactNode[] = [];
+  if (state === 'RUNNING' && isStageKind(node.kind)) {
+    lines.push(
+      <p key="running" className={NOTE} data-testid={`running-note-${node.id}`}>
+        running — answer in Chat
+      </p>,
+    );
+  }
+  if (state === 'BLOCKED') {
+    lines.push(
+      <p key="blocked" className={NOTE} data-testid={`blocked-by-${node.id}`}>
+        {blockedByName === undefined ? 'blocked upstream' : `blocked by ${blockedByName}`}
+      </p>,
+    );
+  }
+  if (state === 'FAILED' && failureReason !== undefined) {
+    lines.push(
+      <p key="failed" className={NOTE}>
+        <span data-testid={`failure-${node.id}`} data-reason={failureReason}>
+          {FAILURE_TEXT[failureReason]}
+        </span>
+      </p>,
+    );
+  }
+  if (providerMissing) {
+    lines.push(
+      <p key="provider" className={NOTE} data-testid={`provider-missing-${node.id}`}>
+        provider missing
+      </p>,
+    );
+  }
+  if (showUsed) {
+    lines.push(
+      <p key="used" className={`${NOTE} truncate`} data-testid={`used-model-${node.id}`}>
+        used: {modelUsed.modelId}
+        {modelUsed.viaFallback ? ' (fallback)' : ''}
+      </p>,
+    );
+  }
+  if (lines.length === 0) return null;
+  return (
+    <div data-testid={`node-notes-${node.id}`} className="flex flex-col px-[2px]">
+      {lines}
+    </div>
+  );
+}
+
+/**
+ * React Flow takes a node's handle positions from its first measure, and a node array that reaches
+ * it without `measured` just after that measure (the Canvas's selection merge, a refetch) wipes
+ * them. It measures again only when the card's size changes, so until then it draws none of the
+ * node's edges and no connection starts or ends on it. When a measured node has lost them, measure
+ * it again.
+ */
+function useHandlePositionsKept(id: string): void {
+  const lost = useStore((state) => {
+    const node = state.nodeLookup.get(id);
+    return Boolean(
+      node &&
+      !node.hidden &&
+      node.measured.width &&
+      node.measured.height &&
+      !node.internals.handleBounds,
+    );
+  });
+  const updateNodeInternals = useUpdateNodeInternals();
+  useEffect(() => {
+    if (lost) updateNodeInternals(id);
+  }, [lost, id, updateNodeInternals]);
 }
 
 /**
  * The React Flow wrapper: memoised so a pan or an unrelated edit never re-renders it (NFR-PERF-01).
  * The live overlay is read here rather than passed through `data`, so one node's token does not
- * rebuild the whole node array (NFR-PERF-04).
+ * rebuild the whole node array (NFR-PERF-04). What hangs under the card — the notes, the failure,
+ * the approval and the pre-flight issues — sits in one column below it, the card's width.
  */
 export const FlowNodeCard = memo(function FlowNodeCard({
+  id,
   data,
   selected,
-  dragging,
 }: NodeProps<AceFlowNode>) {
+  useHandlePositionsKept(id);
   const node = data.node;
   const overlay = useNodeOverlay(node.id);
   const blockedByName = useBlockedByName(node, overlay.state === 'BLOCKED');
@@ -565,6 +519,7 @@ export const FlowNodeCard = memo(function FlowNodeCard({
     projectId,
     node.kind === 'retrieval' ? node.config.knowledgeBaseId : undefined,
   );
+  const dark = useContext(CanvasDarkContext);
   const card = (
     <NodeCardView
       node={node}
@@ -573,18 +528,18 @@ export const FlowNodeCard = memo(function FlowNodeCard({
       connectedPortIds={data.connectedPortIds}
       armedPortId={data.armedPortId}
       onPortKey={(port, direction) => data.onPortKey(port, direction, node.id)}
-      actions={<NodeRunActions node={node} />}
-      {...(selected && !dragging ? { toolbar: <NodeToolbar node={node} /> } : {})}
-      {...(overlay.modelUsed === undefined ? {} : { modelUsed: overlay.modelUsed })}
-      {...(overlay.failureReason === undefined ? {} : { failureReason: overlay.failureReason })}
-      {...(blockedByName === undefined ? {} : { blockedByName })}
-      {...(knowledgeBaseName === undefined ? {} : { knowledgeBaseName })}
-      {...(data.providerMissing ? { providerMissing: true } : {})}
+      dark={dark}
       {...(data.provider === undefined ? {} : { provider: data.provider })}
+      {...(data.providerName === undefined ? {} : { providerName: data.providerName })}
+      {...(data.stage === undefined ? {} : { stage: data.stage })}
+      {...(data.feeds === undefined ? {} : { feeds: data.feeds })}
+      {...(data.receives === undefined ? {} : { receives: data.receives })}
+      {...(knowledgeBaseName === undefined ? {} : { knowledgeBaseName })}
     />
   );
+  const width = isStageKind(node.kind) ? STAGE_W : DOC_W;
   return (
-    <div className="flex flex-col items-start">
+    <div className="relative" style={{ width }}>
       {/* An Input node's card is itself a file drop target (FR-MM-007); other kinds render as-is. */}
       {node.kind === 'input' ? (
         <InputDropZone nodeId={node.id} workflowId={node.workflowId} config={node.config}>
@@ -593,10 +548,19 @@ export const FlowNodeCard = memo(function FlowNodeCard({
       ) : (
         card
       )}
-      {/* Anchored to the node, because each is about this node and nothing else (§5 items 3, 4). */}
-      <NodeErrorCard node={node} />
-      <NodeApproval node={node} />
-      <NodePreflightIssues node={node} />
+      <UnderCard width={width}>
+        <NodeCardNotes
+          node={node}
+          state={overlay.state}
+          {...(overlay.modelUsed === undefined ? {} : { modelUsed: overlay.modelUsed })}
+          {...(overlay.failureReason === undefined ? {} : { failureReason: overlay.failureReason })}
+          {...(blockedByName === undefined ? {} : { blockedByName })}
+          {...(data.providerMissing ? { providerMissing: true } : {})}
+        />
+        <NodeErrorCard node={node} />
+        <NodeApproval node={node} />
+        <NodePreflightIssues node={node} />
+      </UnderCard>
     </div>
   );
 });

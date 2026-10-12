@@ -1,10 +1,9 @@
-import type { AgentConfig } from '@ace/contracts';
-import { Button, Checkbox, Input, Label, ToolPermissionBadges } from '@ace/ui';
-import { TriangleAlert, X } from 'lucide-react';
+import type { AgentConfig, ToolPermissions } from '@ace/contracts';
+import { Button, Checkbox, FIELD_LABEL_CLASS, Input } from '@ace/ui';
 import { useMemo, useState, type KeyboardEvent } from 'react';
 
 import { useTools } from '../library/tools-hooks';
-import { Field, NumberField } from './fields';
+import { ERROR_CLASS, Field, HELP_CLASS, NumberField } from './fields';
 import type { NumberRange } from './validation';
 
 /**
@@ -15,7 +14,9 @@ import type { NumberRange } from './validation';
  * same code pre-flight raises for it (validation.ts), so a removed MCP server's tool is visible
  * rather than silent.
  *
- * Every edit patches the whole `tools` object at once, the way the other Agent fields patch theirs.
+ * In the node settings modal the tools a skill groups are toggled by the skill (D333), so they are
+ * left out of this list (`exclude`). Every edit patches the whole `tools` object at once, the way
+ * the other Agent fields patch theirs.
  */
 
 /** `AgentConfig.tools`: `{ enabled, maxToolCalls, allowedDomains }`. */
@@ -37,12 +38,39 @@ export function isValidHost(value: string): boolean {
   return HOST_REGEX.test(host);
 }
 
+/** The theme's mono chip (8.5px, 0.08em), neutral or in the destructive ink. */
+const CHIP_CLASS =
+  'shrink-0 rounded-[4px] px-1.5 py-0.5 font-machine text-[8.5px] font-medium uppercase tracking-[0.08em]';
+
+/** What a tool may touch, as the three facts the registry states (FR-TOOL-001). */
+function PermissionChips({ permissions }: { permissions: ToolPermissions }) {
+  const { network, fsPaths, destructive } = permissions;
+  return (
+    <span className="flex flex-wrap items-center gap-1" data-testid="tool-permission-badges">
+      {network && (
+        <span className={`${CHIP_CLASS} bg-[var(--hover)] text-[var(--muted)]`}>network</span>
+      )}
+      {fsPaths.map((path) => (
+        <span key={path} className={`${CHIP_CLASS} bg-[var(--hover)] text-[var(--muted)]`}>
+          {path}
+        </span>
+      ))}
+      {destructive && (
+        <span className={`${CHIP_CLASS} bg-[#c94c271f] text-[#c94c27]`}>destructive</span>
+      )}
+    </span>
+  );
+}
+
 export function AgentToolsSection({
   tools,
   onChange,
+  exclude = [],
 }: {
   tools: ToolsConfig;
   onChange: (tools: ToolsConfig) => void;
+  /** Registry tools not listed here because something else toggles them (the modal's skills). */
+  exclude?: readonly string[];
 }) {
   const registry = useTools();
 
@@ -52,81 +80,80 @@ export function AgentToolsSection({
   );
   /** Enabled names the registry no longer offers (FR-TOOL-002, `tool_not_registered`). */
   const missing = tools.enabled.filter((name) => !registryNames.has(name));
+  const listed = (registry.data ?? []).filter((tool) => !exclude.includes(tool.name));
 
   const toggle = (name: string, on: boolean) => {
-    const enabled = on
-      ? [...tools.enabled, name]
-      : tools.enabled.filter((each) => each !== name);
+    const enabled = on ? [...tools.enabled, name] : tools.enabled.filter((each) => each !== name);
     onChange({ ...tools, enabled });
   };
 
   return (
-    <fieldset className="flex flex-col gap-3" data-testid="agent-tools-section">
-      <legend className="mb-1 font-machine text-[10px] uppercase tracking-wider text-fg-muted">
-        Tools
-      </legend>
+    <fieldset className="flex min-w-0 flex-col gap-5" data-testid="agent-tools-section">
+      <legend className="sr-only">Tools</legend>
 
-      {registry.isPending && <p className="text-xs text-fg-muted">Loading tools…</p>}
-      {registry.isError && (
-        <p role="alert" className="text-xs text-danger">
-          Could not load tools: {registry.error.message}
-        </p>
-      )}
+      <div className="flex flex-col gap-[7px]">
+        <span aria-hidden className={FIELD_LABEL_CLASS}>
+          {exclude.length > 0 ? 'Other tools' : 'Tools'}
+        </span>
 
-      {registry.data && registry.data.length === 0 && (
-        <p className="text-xs text-fg-muted">No tools registered.</p>
-      )}
+        {registry.isPending && <p className={HELP_CLASS}>Loading tools…</p>}
+        {registry.isError && (
+          <p role="alert" className={ERROR_CLASS}>
+            Could not load tools: {registry.error.message}
+          </p>
+        )}
+        {registry.data && registry.data.length === 0 && (
+          <p className={HELP_CLASS}>No tools registered.</p>
+        )}
 
-      <div className="flex flex-col gap-2" role="group" aria-label="Enabled tools">
-        {registry.data?.map((tool) => {
-          const boxId = `tool-${tool.name}`;
-          const enabled = tools.enabled.includes(tool.name);
-          return (
-            <div
-              key={tool.name}
-              data-testid={`agent-tool-${tool.name}`}
-              className="flex flex-col gap-1 rounded-md border border-border bg-panel px-3 py-2"
-            >
-              <div className="flex items-start gap-2">
-                <Checkbox
-                  id={boxId}
-                  checked={enabled}
-                  onCheckedChange={(checked) => toggle(tool.name, checked === true)}
-                />
-                <div className="min-w-0 flex-1">
-                  <label htmlFor={boxId} className="font-machine text-xs text-fg">
+        <div
+          className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-2"
+          role="group"
+          aria-label="Enabled tools"
+        >
+          {listed.map((tool) => {
+            const boxId = `tool-${tool.name}`;
+            const enabled = tools.enabled.includes(tool.name);
+            return (
+              <div
+                key={tool.name}
+                data-testid={`agent-tool-${tool.name}`}
+                className="flex min-w-0 flex-col gap-1.5 rounded-[9px] border border-[var(--line)] px-3 py-2.5"
+              >
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id={boxId}
+                    checked={enabled}
+                    onCheckedChange={(checked) => toggle(tool.name, checked === true)}
+                  />
+                  <label
+                    htmlFor={boxId}
+                    className="min-w-0 flex-1 cursor-pointer truncate font-machine text-[12px] text-[var(--ink)]"
+                  >
                     {tool.name}
                   </label>
-                  <ToolPermissionBadges className="mt-1" permissions={tool.permissions} />
                 </div>
+                <PermissionChips permissions={tool.permissions} />
+                {enabled && tool.permissions.destructive && (
+                  <p data-testid={`tool-destructive-warning-${tool.name}`} className={ERROR_CLASS}>
+                    Destructive — each call waits for your approval (FR-GRD-006).
+                  </p>
+                )}
               </div>
-              {enabled && tool.permissions.destructive && (
-                <p
-                  data-testid={`tool-destructive-warning-${tool.name}`}
-                  className="flex items-center gap-1 font-human text-[11px] text-danger"
-                >
-                  <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden />
-                  Destructive — each call waits for your approval (FR-GRD-006).
-                </p>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {missing.length > 0 && (
-        <div
-          role="alert"
-          data-testid="tools-not-registered"
-          className="rounded-md border border-danger/60 bg-danger/10 px-3 py-2 text-xs text-danger"
-        >
-          <p className="font-machine">tool_not_registered</p>
-          <p className="mt-0.5 font-human">
-            No longer in the registry (a removed MCP server?): {missing.join(', ')}. Disable to clear
-            the pre-flight error.
-          </p>
+            );
+          })}
         </div>
-      )}
+
+        {missing.length > 0 && (
+          <div role="alert" data-testid="tools-not-registered" className={ERROR_CLASS}>
+            <p className="font-machine">tool_not_registered</p>
+            <p>
+              No longer in the registry (a removed MCP server?): {missing.join(', ')}. Disable to
+              clear the pre-flight error.
+            </p>
+          </div>
+        )}
+      </div>
 
       <NumberField
         label="Max tool calls"
@@ -184,51 +211,49 @@ function AllowedDomainsEditor({
   return (
     <Field
       label="Allowed domains"
-      error={error}
-      hint="Hosts network tools may reach; an empty list allows nothing (FR-TOOL-006)."
+      htmlFor="allowed-domain-input"
+      {...(error === undefined
+        ? { hint: 'Hosts network tools may reach; an empty list allows nothing (FR-TOOL-006).' }
+        : { error })}
     >
-      <div className="flex flex-col gap-2">
-        {domains.length > 0 && (
-          <ul className="flex flex-wrap gap-1.5" data-testid="allowed-domains">
-            {domains.map((host) => (
-              <li
-                key={host}
-                data-testid={`allowed-domain-${host}`}
-                className="inline-flex items-center gap-1 rounded-chip border border-border bg-canvas px-2 py-0.5 font-machine text-[11px] text-fg"
+      {domains.length > 0 && (
+        <ul className="flex flex-wrap gap-1.5" data-testid="allowed-domains">
+          {domains.map((host) => (
+            <li
+              key={host}
+              data-testid={`allowed-domain-${host}`}
+              className="inline-flex items-center gap-1.5 rounded-[4px] bg-[var(--hover)] py-0.5 pl-1.5 pr-1 font-machine text-[11px] text-[var(--ink)]"
+            >
+              {host}
+              <button
+                type="button"
+                aria-label={`Remove ${host}`}
+                className="cursor-pointer border-none bg-transparent p-0 text-[10px] text-[var(--muted)] outline-none hover:text-[#c94c27] focus-visible:text-[#c94c27]"
+                onClick={() => onChange(domains.filter((each) => each !== host))}
               >
-                {host}
-                <button
-                  type="button"
-                  aria-label={`Remove ${host}`}
-                  className="text-fg-muted hover:text-danger"
-                  onClick={() => onChange(domains.filter((each) => each !== host))}
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <div className="flex items-center gap-2">
-          <Label htmlFor="allowed-domain-input" className="sr-only">
-            Add domain
-          </Label>
-          <Input
-            id="allowed-domain-input"
-            value={draft}
-            onChange={(event) => {
-              setDraft(event.target.value);
-              if (error) setError(undefined);
-            }}
-            onKeyDown={onKeyDown}
-            placeholder="example.com"
-            className="font-machine"
-            aria-invalid={error ? true : undefined}
-          />
-          <Button type="button" variant="secondary" size="sm" onClick={add}>
-            Add
-          </Button>
-        </div>
+                <span aria-hidden>✕</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex items-center gap-2">
+        <Input
+          id="allowed-domain-input"
+          value={draft}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            if (error) setError(undefined);
+          }}
+          onKeyDown={onKeyDown}
+          placeholder="example.com"
+          spellCheck={false}
+          className="font-machine text-[12px]"
+          aria-invalid={error ? true : undefined}
+        />
+        <Button type="button" variant="secondary" size="lg" onClick={add}>
+          Add
+        </Button>
       </div>
     </Field>
   );

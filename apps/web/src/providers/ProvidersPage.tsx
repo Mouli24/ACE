@@ -11,13 +11,14 @@ import {
   TabsList,
   TabsTrigger,
 } from '@ace/ui';
-import { MoreHorizontal, Plug, Plus } from 'lucide-react';
 import { useState } from 'react';
 
+import { clockTime } from '../theme/format';
 import { ModelsTab } from './ModelsTab';
 import { AddProviderDialog, DeleteProviderDialog, EditProviderDialog } from './ProviderDialogs';
+import { ProviderMark } from './ProviderMark';
 import { useCheckProvider, useProviderDetect, useProviders } from './hooks';
-import { CLI_PERMISSION_LABEL, PROVIDER_TYPE_LABEL, providerAccent } from './provider-meta';
+import { CLI_PERMISSION_LABEL, PROVIDER_TYPE_LABEL } from './provider-meta';
 
 type DialogState =
   | { kind: 'add' }
@@ -28,7 +29,8 @@ type DialogState =
 /**
  * `/providers` (round 2 §5 steps 2 and 4): the provider list and the model catalog, side by side
  * as two tabs. Nothing here ever holds a key — a provider's row says only whether one is stored
- * (FR-PRV-002).
+ * (FR-PRV-002). An uncovered screen in the Ace UI theme (D328): page title, theme cards with the
+ * provider's orb, segmented tabs.
  */
 export function ProvidersPage() {
   const providers = useProviders();
@@ -39,59 +41,61 @@ export function ProvidersPage() {
   const ollamaAlreadyAdded = providers.data?.some((provider) => provider.type === 'ollama');
 
   return (
-    <main className="mx-auto flex h-full w-full max-w-5xl flex-col gap-6 overflow-y-auto px-4 py-10">
-      <header className="flex items-center justify-between">
-        <h1 className="font-human text-2xl font-semibold">Providers &amp; models</h1>
-        <Button onClick={() => setDialog({ kind: 'add' })}>
-          <Plus className="h-4 w-4" /> Add provider
-        </Button>
-      </header>
+    <main className="h-full overflow-y-auto">
+      <div className="mx-auto flex w-full max-w-[960px] flex-col gap-6 px-6 py-8">
+        <header className="flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-[20px] font-bold tracking-[-0.01em]">Providers &amp; models</h1>
+          <Button onClick={() => setDialog({ kind: 'add' })}>Add provider</Button>
+        </header>
 
-      {/* FR-PRV-007: a local Ollama found on its default address is offered, not added silently. */}
-      {ollama?.detected && !ollamaAlreadyAdded && (
-        <div
-          data-testid="ollama-detected"
-          className="flex items-center gap-3 rounded-card border border-border bg-card px-4 py-3 text-sm"
-        >
-          <Plug className="h-4 w-4 text-fg-muted" />
-          <span className="flex-1">
-            Ollama detected at <span className="font-machine">{ollama.baseUrl}</span>
-          </span>
-          <Button variant="secondary" size="sm" onClick={() => setDialog({ kind: 'add' })}>
-            Add it
-          </Button>
-        </div>
-      )}
+        {/* FR-PRV-007: a local Ollama found on its default address is offered, not added silently. */}
+        {ollama?.detected && !ollamaAlreadyAdded && (
+          <div
+            data-testid="ollama-detected"
+            className="flex flex-wrap items-center gap-3 rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-3"
+          >
+            <ProviderMark type="ollama" />
+            <span className="min-w-0 flex-1 text-[13px]">
+              Ollama detected at <span className="font-machine text-[12px]">{ollama.baseUrl}</span>
+            </span>
+            <Button variant="secondary" size="sm" onClick={() => setDialog({ kind: 'add' })}>
+              Add it
+            </Button>
+          </div>
+        )}
 
-      <Tabs defaultValue="providers" className="flex min-h-0 flex-col gap-4">
-        <TabsList>
-          <TabsTrigger value="providers">Providers</TabsTrigger>
-          <TabsTrigger value="models">Models</TabsTrigger>
-        </TabsList>
+        <Tabs defaultValue="providers" className="flex min-h-0 flex-col gap-4">
+          <TabsList className="self-start">
+            <TabsTrigger value="providers">Providers</TabsTrigger>
+            <TabsTrigger value="models">Models</TabsTrigger>
+          </TabsList>
 
-        <TabsContent value="providers" className="flex flex-col gap-2">
-          {providers.isPending && <p className="text-fg-muted">Loading providers…</p>}
-          {providers.isError && (
-            <p role="alert" className="text-danger">
-              Could not load providers: {providers.error.message}
-            </p>
-          )}
-          {providers.data?.length === 0 && (
-            <p className="rounded-card border border-dashed border-border p-8 text-center text-fg-muted">
-              No providers yet. Add one — the mock provider needs no key and runs offline.
-            </p>
-          )}
-          <ul className="flex flex-col gap-2">
-            {providers.data?.map((provider) => (
-              <ProviderRow key={provider.id} provider={provider} onAction={setDialog} />
-            ))}
-          </ul>
-        </TabsContent>
+          <TabsContent value="providers" className="flex flex-col gap-[10px]">
+            {providers.isPending && (
+              <p className="text-[13px] text-[var(--muted)]">Loading providers…</p>
+            )}
+            {providers.isError && (
+              <p role="alert" className="text-[12px] text-[#c94c27]">
+                Could not load providers: {providers.error.message}
+              </p>
+            )}
+            {providers.data?.length === 0 && (
+              <p className="py-10 text-center text-[13px] text-[var(--muted)]">
+                No providers yet. Add one — the mock provider needs no key and runs offline.
+              </p>
+            )}
+            <ul className="flex flex-col gap-[10px]">
+              {providers.data?.map((provider) => (
+                <ProviderRow key={provider.id} provider={provider} onAction={setDialog} />
+              ))}
+            </ul>
+          </TabsContent>
 
-        <TabsContent value="models">
-          <ModelsTab providers={providers.data ?? []} />
-        </TabsContent>
-      </Tabs>
+          <TabsContent value="models">
+            <ModelsTab providers={providers.data ?? []} />
+          </TabsContent>
+        </Tabs>
+      </div>
 
       {dialog?.kind === 'add' && (
         <AddProviderDialog
@@ -109,6 +113,7 @@ export function ProvidersPage() {
   );
 }
 
+/** One provider as a theme card (the Team aside's agent card): orb, name, mono details, actions. */
 function ProviderRow({
   provider,
   onAction,
@@ -121,26 +126,35 @@ function ProviderRow({
   return (
     <li
       data-testid={`provider-row-${provider.id}`}
-      className="flex items-center gap-3 rounded-card border border-border bg-panel px-4 py-3"
-      style={{ borderLeft: `3px solid ${providerAccent(provider.type)}` }}
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-3"
     >
+      <ProviderMark type={provider.type} />
       <div className="min-w-0 flex-1">
-        <p className="truncate font-human text-base" data-testid={`provider-name-${provider.id}`}>
+        <p
+          className="truncate text-[13.5px] font-bold"
+          data-testid={`provider-name-${provider.id}`}
+        >
           {provider.name}
         </p>
-        <p className="font-machine text-xs text-fg-muted">
+        <p className="mt-px truncate font-machine text-[10px] text-[var(--muted)]">
           {PROVIDER_TYPE_LABEL[provider.type]}
           {provider.baseUrl ? ` · ${provider.baseUrl}` : ''} · {provider.concurrency} concurrent
         </p>
       </div>
 
       {isCliProviderType(provider.type) ? (
-        <span className="font-machine text-xs" data-testid={`provider-permission-${provider.id}`}>
+        <span
+          className="font-machine text-[10px] text-[var(--muted)]"
+          data-testid={`provider-permission-${provider.id}`}
+        >
           permission: {CLI_PERMISSION_LABEL[provider.cliPermission ?? DEFAULT_CLI_PERMISSION]}
         </span>
       ) : (
         /* FR-PRV-002: whether a key exists, never the key. */
-        <span className="font-machine text-xs" data-testid={`provider-key-set-${provider.id}`}>
+        <span
+          className="font-machine text-[10px] text-[var(--muted)]"
+          data-testid={`provider-key-set-${provider.id}`}
+        >
           key set: {provider.keySet ? 'yes' : 'no'}
         </span>
       )}
@@ -153,10 +167,8 @@ function ProviderRow({
         {...(provider.lastCheckedAt === undefined ? {} : { lastCheckedAt: provider.lastCheckedAt })}
       />
 
-      <span className="w-32 text-right font-machine text-xs text-fg-muted">
-        {provider.lastCheckedAt
-          ? `checked ${new Date(provider.lastCheckedAt).toLocaleTimeString()}`
-          : 'never checked'}
+      <span className="font-machine text-[10px] text-[var(--muted)]">
+        {provider.lastCheckedAt ? `checked ${clockTime(provider.lastCheckedAt)}` : 'never checked'}
       </span>
 
       <Button
@@ -170,18 +182,19 @@ function ProviderRow({
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon" aria-label={`Actions for ${provider.name}`}>
-            <MoreHorizontal className="h-4 w-4" />
-          </Button>
+          <button
+            type="button"
+            aria-label={`Actions for ${provider.name}`}
+            className="h-6 cursor-pointer rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[11px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f]"
+          >
+            …
+          </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem onSelect={() => onAction({ kind: 'edit', provider })}>
             Edit
           </DropdownMenuItem>
-          <DropdownMenuItem
-            className="text-danger"
-            onSelect={() => onAction({ kind: 'delete', provider })}
-          >
+          <DropdownMenuItem destructive onSelect={() => onAction({ kind: 'delete', provider })}>
             Remove
           </DropdownMenuItem>
         </DropdownMenuContent>

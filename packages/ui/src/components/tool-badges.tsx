@@ -1,5 +1,4 @@
 import type { McpServerStatus, ToolPermissions } from '@ace/contracts';
-import { FolderOpen, Globe, Server, TriangleAlert } from 'lucide-react';
 import type { HTMLAttributes } from 'react';
 
 import { cn } from '../lib/cn.js';
@@ -10,6 +9,9 @@ import { cn } from '../lib/cn.js';
  * section and the inspector all show the same three facts about a tool: does it reach the network,
  * which folders can it touch, and is it destructive. Destructive is the one that carries a warning
  * colour, because it is the one that makes a call wait for approval (FR-GRD-006, BR-14).
+ *
+ * In the theme (D328) the badges are its mono chips — 8.5px, 0.08em, radius 4, a colour on itself at
+ * 12% (`colour + '1f'`) — and the server chip is its "live" pill with a 6px dot.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -17,9 +19,12 @@ import { cn } from '../lib/cn.js';
 /* -------------------------------------------------------------------------- */
 
 const badgeBase =
-  'inline-flex items-center gap-1 rounded-chip border px-2 py-0.5 font-machine text-[10px] leading-4';
+  'inline-flex items-center gap-1 rounded-[4px] px-[6px] py-[2px] font-machine text-[8.5px] font-medium uppercase leading-[1.4] tracking-[0.08em]';
 
-export interface ToolPermissionBadgesProps extends Omit<HTMLAttributes<HTMLSpanElement>, 'children'> {
+export interface ToolPermissionBadgesProps extends Omit<
+  HTMLAttributes<HTMLSpanElement>,
+  'children'
+> {
   permissions: ToolPermissions;
   /** Show a neutral "sandboxed" badge when a tool has no network, no paths and is not destructive. */
   showNone?: boolean;
@@ -38,16 +43,15 @@ export function ToolPermissionBadges({
   return (
     <span
       data-testid="tool-permission-badges"
-      className={cn('inline-flex flex-wrap items-center gap-1', className)}
+      className={cn('inline-flex flex-wrap items-center gap-[5px]', className)}
       {...props}
     >
       {network && (
         <span
           data-testid="perm-network"
           title="Reaches the network"
-          className={cn(badgeBase, 'border-border bg-canvas text-[var(--color-status-READY)]')}
+          className={cn(badgeBase, 'bg-[#1f97a31f] text-[#1f97a3]')}
         >
-          <Globe className="h-3 w-3 shrink-0" aria-hidden />
           network
         </span>
       )}
@@ -56,9 +60,8 @@ export function ToolPermissionBadges({
           key={path}
           data-testid="perm-fs"
           title={`Reads/writes ${path}`}
-          className={cn(badgeBase, 'border-border bg-canvas text-fg-muted')}
+          className={cn(badgeBase, 'bg-[var(--hover)] normal-case text-[var(--muted)]')}
         >
-          <FolderOpen className="h-3 w-3 shrink-0" aria-hidden />
           <span className="max-w-[10rem] truncate">{path}</span>
         </span>
       ))}
@@ -66,9 +69,8 @@ export function ToolPermissionBadges({
         <span
           data-testid="perm-destructive"
           title="Destructive — a call waits for your approval"
-          className={cn(badgeBase, 'border-danger/60 bg-danger/10 text-danger')}
+          className={cn(badgeBase, 'bg-[#c94c271f] text-[#c94c27]')}
         >
-          <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden />
           destructive
         </span>
       )}
@@ -76,7 +78,7 @@ export function ToolPermissionBadges({
         <span
           data-testid="perm-none"
           title="No network, no file access, not destructive"
-          className={cn(badgeBase, 'border-border bg-canvas text-fg-muted')}
+          className={cn(badgeBase, 'bg-[var(--hover)] text-[var(--muted)]')}
         >
           sandboxed
         </span>
@@ -98,7 +100,10 @@ export const MCP_STATUS_META: Readonly<
   unreachable: { label: 'unreachable', color: 'var(--color-provider-status-UNREACHABLE)' },
 };
 
-export interface McpServerStatusChipProps extends Omit<HTMLAttributes<HTMLSpanElement>, 'children'> {
+export interface McpServerStatusChipProps extends Omit<
+  HTMLAttributes<HTMLSpanElement>,
+  'children'
+> {
   name: string;
   status: McpServerStatus;
   /** Tools this server contributed at its last check. */
@@ -120,22 +125,24 @@ export function McpServerStatusChip({
       data-status={status}
       title={`${name}: ${meta.label}`}
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-chip border border-border bg-canvas px-2 py-0.5',
-        'font-machine text-[11px] leading-4 text-fg-muted',
+        'inline-flex h-[24px] items-center gap-[5px] rounded-full border border-[var(--line)] px-[9px]',
+        'font-machine text-[10px] text-[var(--muted)]',
         className,
       )}
       {...props}
     >
-      <Server className="h-3 w-3 shrink-0" aria-hidden style={{ color: meta.color }} />
-      <span className="max-w-[10rem] truncate">{name}</span>
       <span
         aria-hidden
-        className={cn('h-2 w-2 shrink-0 rounded-full', meta.pulse && 'animate-pulse')}
+        className={cn(
+          'h-[6px] w-[6px] shrink-0 rounded-full',
+          meta.pulse && 'motion-safe:animate-[livePulse_2s_ease-in-out_infinite]',
+        )}
         style={{ backgroundColor: meta.color }}
       />
+      <span className="max-w-[10rem] truncate text-[var(--ink)]">{name}</span>
       <span>{meta.label}</span>
       {toolCount !== undefined && (
-        <span data-testid={`mcp-toolcount-${name}`} className="text-fg-muted">
+        <span data-testid={`mcp-toolcount-${name}`}>
           · {toolCount} {toolCount === 1 ? 'tool' : 'tools'}
         </span>
       )}

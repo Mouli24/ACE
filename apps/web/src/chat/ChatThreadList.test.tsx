@@ -22,6 +22,14 @@ describe('FR-CHAT-004 thread list: new, select and delete', () => {
       expect(screen.getByTestId(`chat-thread-${threadId}`)).toHaveAttribute('data-active', 'true'),
     );
     expect(screen.getByTestId(`chat-thread-${threadId}`)).toHaveTextContent('first conversation');
+    // the theme's pills: the open thread has the ink border on the surface, like an active tab
+    expect(screen.getByTestId(`chat-thread-${threadId}`).closest('li')?.className).toContain(
+      'border-[var(--ink)]',
+    );
+    expect(screen.getByTestId('chat-new-thread')).toHaveTextContent('New chat');
+    expect(screen.getByTestId(`chat-delete-${threadId}`)).toHaveAccessibleName(
+      'Delete chat first conversation',
+    );
   });
 
   it('New chat clears the active thread and empties the conversation', async () => {
@@ -39,10 +47,15 @@ describe('FR-CHAT-004 thread list: new, select and delete', () => {
 
     await user.click(screen.getByTestId('chat-new-thread'));
     await waitFor(() =>
-      expect(screen.getByTestId('chat-conversation')).not.toHaveTextContent('You said: hello there'),
+      expect(screen.getByTestId('chat-conversation')).not.toHaveTextContent(
+        'You said: hello there',
+      ),
     );
     const threadId = db.chatThreadsOf(node.id)[0]!.id;
     expect(screen.getByTestId(`chat-thread-${threadId}`)).toHaveAttribute('data-active', 'false');
+    expect(screen.getByTestId(`chat-thread-${threadId}`).closest('li')?.className).toContain(
+      'border-[var(--line)]',
+    );
   });
 
   it('deletes a thread', async () => {

@@ -1,20 +1,4 @@
 import '@testing-library/jest-dom/vitest';
-import type { ReactNode } from 'react';
-
-/**
- * react-resizable-panels hit-tests its resize handles against element rects, which are all 0×0
- * in jsdom, so every pointerdown on the page is captured as a drag start and menus never open.
- * The panes are layout only; Playwright covers them in a real browser.
- */
-vi.mock('react-resizable-panels', () => {
-  type Props = { children?: ReactNode; className?: string; id?: string; 'data-testid'?: string };
-  const Box = ({ children, className, id, 'data-testid': testId }: Props) => (
-    <div className={className} id={id} data-testid={testId}>
-      {children}
-    </div>
-  );
-  return { Panel: Box, PanelGroup: Box, PanelResizeHandle: () => <div role="separator" /> };
-});
 
 // Forge's Monaco host is a lazy chunk that needs a browser; every test gets the textarea stand-in.
 vi.mock('../forge/editor/CompareView', () => ({

@@ -248,11 +248,8 @@ for (const theme of ['dark', 'light'] as const) {
     page,
   }) => {
     await seedUsage(page, 7);
-    await page.evaluate((t) => {
-      const db = window.__aceMock!.db;
-      db.load();
-      db.patchSettings({ theme: t });
-    }, theme);
+    // the theme on screen is the browser's `ace-theme` choice, not the engine's setting (D329)
+    await page.evaluate((t) => localStorage.setItem('ace-theme', t), theme);
     await page.goto('/usage');
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
 

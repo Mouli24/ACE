@@ -2,15 +2,19 @@ import { expect, test } from '@playwright/test';
 
 import { nodeCard } from './helpers';
 import {
+  clickStartRun,
+  closeWorkspaceMenu,
   controlState,
   engineNodeRuns,
   engineRun,
   engineRunCount,
+  expectRunStatus,
+  inspect,
   lastEventSeq,
   openRound3,
+  openWorkspaceMenu,
   runAction,
-  runStatus,
-  startRun,
+  runPageControlState,
   stillAllows,
   stopRun,
 } from './round3';
@@ -20,12 +24,15 @@ import {
  *
  * `runs/control-wiring.test.tsx` already drives the toolbar at component level with the Canvas mocked
  * away, so these tests deliberately go where that one cannot: a real browser, a real React Flow
- * canvas with node cards and the node-anchored run menu, and a real navigation when a restart opens
- * the run it created.
+ * canvas with node cards and the inspector's node run menu, and a real navigation when a restart
+ * opens the run it created.
  *
- * The rule TC-CTL-006 exists to protect is that the four buttons follow `run.allowedActions` and
- * nothing else, so every assertion below compares the toolbar with what the mock engine recorded on
- * the run rather than with a second table written here.
+ * On desktop the run controls are the workspace "…" menu's Run section (D331), which offers a
+ * control only when `run.allowedActions` names it; the Run details page keeps the toolbar.
+ *
+ * The rule TC-CTL-006 exists to protect is that the controls follow `run.allowedActions` and
+ * nothing else, so every assertion below compares the controls with what the mock engine recorded
+ * on the run rather than with a second table written here.
  */
 test.describe('Run controls (FR-CTL-001..004, FR-CTL-006)', () => {
   test('TC-CTL-006: in every run state only the actions the engine allows are enabled', async ({
@@ -33,47 +40,50 @@ test.describe('Run controls (FR-CTL-001..004, FR-CTL-006)', () => {
   }) => {
     const seeded = await openRound3(page, 'chain', 'slow-stream');
 
-    // Before a run there is no `allowedActions` at all, and the toolbar says so instead of guessing.
-    await expect(page.getByTestId('run-controls-unknown')).toBeVisible();
+    // Before a run there is no `allowedActions` at all, and the menu offers Start run and no
+    // control instead of guessing.
+    const menu = await openWorkspaceMenu(page);
+    await expect(menu.getByTestId('menu-start-run')).toBeVisible();
+    await closeWorkspaceMenu(page);
     expect(await controlState(page)).toEqual({ allowed: [], enabled: [] });
 
-    /** The toolbar against the engine's own answer, whatever state the run has reached. */
+    /** The controls against the engine's own answer, whatever state the run has reached. */
     const agree = async (expectedStatus: string) => {
       const run = await engineRun(page, seeded.workflowId);
       expect(run?.status).toBe(expectedStatus);
       const allowed = [...(run?.allowedActions ?? [])].sort();
       expect(allowed.length).toBeGreaterThan(0);
-      // Neither list is written here: one comes from the engine, the other off the buttons.
+      // Neither list is written here: one comes from the engine, the other off the menu items.
       expect(await controlState(page)).toEqual({ allowed, enabled: allowed });
     };
 
     /** Each leg reads `allowedActions` off the engine first, so a race says so (`round3.ts`). */
     const allows = (action: string) => stillAllows(page, seeded.workflowId, action);
 
-    await startRun(page).click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'RUNNING', { timeout: 20_000 });
+    await clickStartRun(page);
+    await expectRunStatus(page, 'RUNNING', { timeout: 20_000 });
     await agree('RUNNING');
 
     await allows('pause');
-    await runAction(page, 'pause').click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'PAUSED', { timeout: 20_000 });
+    await runAction(page, 'pause');
+    await expectRunStatus(page, 'PAUSED', { timeout: 20_000 });
     await agree('PAUSED');
 
     await allows('resume');
-    await runAction(page, 'resume').click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'RUNNING', { timeout: 20_000 });
+    await runAction(page, 'resume');
+    await expectRunStatus(page, 'RUNNING', { timeout: 20_000 });
     await agree('RUNNING');
 
     await allows('stop');
     await stopRun(page);
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'HALTED', { timeout: 20_000 });
+    await expectRunStatus(page, 'HALTED', { timeout: 20_000 });
     await agree('HALTED');
   });
 
   test('TC-CTL-006: a COMPLETE run offers restart alone', async ({ page }) => {
     const seeded = await openRound3(page, 'chain', 'linear-complete');
-    await startRun(page).click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE', { timeout: 20_000 });
+    await clickStartRun(page);
+    await expectRunStatus(page, 'COMPLETE', { timeout: 20_000 });
 
     const run = await engineRun(page, seeded.workflowId);
     const allowed = [...(run?.allowedActions ?? [])].sort();
@@ -87,13 +97,13 @@ test.describe('Run controls (FR-CTL-001..004, FR-CTL-006)', () => {
     const seeded = await openRound3(page, 'chain', 'slow-stream');
     const [writer, editor] = seeded.agentIds as [string, string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
     await expect(nodeCard(page, writer)).toHaveAttribute('data-state', 'RUNNING', {
       timeout: 10_000,
     });
 
-    await runAction(page, 'pause').click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'PAUSED', { timeout: 10_000 });
+    await runAction(page, 'pause');
+    await expectRunStatus(page, 'PAUSED', { timeout: 10_000 });
 
     /*
      * FR-CTL-001: no new dispatch. A paused run emits nothing, so its event log stops moving — the
@@ -113,8 +123,8 @@ test.describe('Run controls (FR-CTL-001..004, FR-CTL-006)', () => {
     expect(startedEditor).toHaveLength(0);
     await expect(nodeCard(page, editor)).not.toHaveAttribute('data-state', 'RUNNING');
 
-    await runAction(page, 'resume').click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE', { timeout: 30_000 });
+    await runAction(page, 'resume');
+    await expectRunStatus(page, 'COMPLETE', { timeout: 30_000 });
     await expect(nodeCard(page, editor)).toHaveAttribute('data-state', 'COMPLETED');
     // D285: the result is no longer printed on the Output card; the run itself carries it
     const finalOutput = await page.evaluate(
@@ -137,20 +147,20 @@ test.describe('Run controls (FR-CTL-001..004, FR-CTL-006)', () => {
     const seeded = await openRound3(page, 'chain', 'slow-stream');
     const [writer] = seeded.agentIds as [string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
     await expect(nodeCard(page, writer)).toHaveAttribute('data-state', 'RUNNING', {
       timeout: 10_000,
     });
 
     // The confirmation is not optional: a cancel leaves the run running.
-    await runAction(page, 'stop').click();
+    await runAction(page, 'stop');
     await expect(page.getByTestId('stop-confirm')).toBeVisible();
     await page.getByRole('button', { name: 'Keep running' }).click();
     await expect(page.getByTestId('stop-confirm')).toBeHidden();
     expect((await engineRun(page, seeded.workflowId))?.status).toBe('RUNNING');
 
     await stopRun(page);
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'HALTED', { timeout: 10_000 });
+    await expectRunStatus(page, 'HALTED', { timeout: 10_000 });
 
     const run = await engineRun(page, seeded.workflowId);
     expect(run?.haltReason).toBe('stopped');
@@ -167,13 +177,13 @@ test.describe('Run controls (FR-CTL-001..004, FR-CTL-006)', () => {
 
   test('TC-CTL-004: Restart opens a new run with a new id', async ({ page }) => {
     const seeded = await openRound3(page, 'chain', 'linear-complete');
-    await startRun(page).click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE', { timeout: 20_000 });
+    await clickStartRun(page);
+    await expectRunStatus(page, 'COMPLETE', { timeout: 20_000 });
 
     const first = (await engineRun(page, seeded.workflowId))!;
     expect(await engineRunCount(page, seeded.workflowId)).toBe(1);
 
-    await runAction(page, 'restart').click();
+    await runAction(page, 'restart');
 
     // The restart answers with a *new* run, and the new run is the one the operator is shown.
     await expect(page).toHaveURL(/\/runs\/[^/]+$/, { timeout: 10_000 });
@@ -192,11 +202,12 @@ test.describe('Run controls (FR-CTL-001..004, FR-CTL-006)', () => {
     const seeded = await openRound3(page, 'chain', 'linear-complete');
     const [writer] = seeded.agentIds as [string];
 
-    await startRun(page).click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE', { timeout: 20_000 });
+    await clickStartRun(page);
+    await expectRunStatus(page, 'COMPLETE', { timeout: 20_000 });
 
-    // The menu is on the node card itself, not only in the inspector.
-    await nodeCard(page, writer).getByTestId(`node-actions-${writer}`).click();
+    // The node's own run menu sits in the inspector's header, on the node it acts on (D332).
+    const inspector = await inspect(page, writer);
+    await inspector.getByTestId(`node-actions-${writer}`).click();
 
     // A COMPLETED node has nothing to retry (FR-ERR-003 needs a failure), but it can be re-run.
     await expect(page.getByTestId(`node-action-retry-${writer}`)).toHaveAttribute(
@@ -234,14 +245,14 @@ test.describe('Run controls (FR-CTL-001..004, FR-CTL-006)', () => {
 
   test('FR-CTL-006: the run page offers the same controls the engine allows', async ({ page }) => {
     const seeded = await openRound3(page, 'chain', 'linear-complete');
-    await startRun(page).click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE', { timeout: 20_000 });
+    await clickStartRun(page);
+    await expectRunStatus(page, 'COMPLETE', { timeout: 20_000 });
 
     const run = (await engineRun(page, seeded.workflowId))!;
     await page.goto(`/runs/${run.id}`);
     await expect(page.getByTestId('run-detail-status')).toHaveAttribute('data-status', 'COMPLETE');
 
     const allowed = [...run.allowedActions].sort();
-    expect(await controlState(page)).toEqual({ allowed, enabled: allowed });
+    expect(await runPageControlState(page)).toEqual({ allowed, enabled: allowed });
   });
 });

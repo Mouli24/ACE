@@ -125,7 +125,9 @@ test.describe('Connections (FR-CON-001..006)', () => {
     const edges = page.locator('.react-flow__edge');
     await expect(edges).toHaveCount(2);
     const [first, second] = (await serverGraph(page, seeded.workflowId)).edges.map((e) => e.id);
-    await page.getByTestId(`edge-label-${first}`).click();
+    // an edge is selected on its hit band: its look and label are drawn above the nodes and take
+    // no pointer (D332)
+    await page.getByTestId(`edge-${first}`).click();
     await expect(page.locator('.react-flow__edge.selected')).toHaveCount(1);
     await page.keyboard.press('Delete');
     await expect(edges).toHaveCount(1);
@@ -133,7 +135,7 @@ test.describe('Connections (FR-CON-001..006)', () => {
       .poll(async () => (await serverGraph(page, seeded.workflowId)).edges.length)
       .toBe(1);
 
-    await page.getByTestId(`edge-label-${second}`).click({ button: 'right' });
+    await page.getByTestId(`edge-${second}`).click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Delete connection' }).click();
     await expect(edges).toHaveCount(0);
     await expect

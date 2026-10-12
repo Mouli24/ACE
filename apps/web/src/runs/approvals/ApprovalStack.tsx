@@ -1,6 +1,5 @@
 import { TOOL_NAME_REGEX, type ApprovalRequest } from '@ace/contracts';
 import { ApprovalCard } from '@ace/ui';
-import { TriangleAlert } from 'lucide-react';
 import { useState } from 'react';
 
 import { TOUCH_TARGETS } from '../../responsive/touch';
@@ -100,26 +99,29 @@ function destructiveTool(request: ApprovalRequest): { toolName: string; args: st
   return { toolName, args: space === -1 ? '' : preview.slice(space + 1).trim() };
 }
 
+/** The theme's red card: a surface card, radius 12, its header strip in `#c94c27` at 10% (D328). */
 function DestructiveToolPreview({ toolName, args }: { toolName: string; args: string }) {
   return (
     <div
       data-testid="approval-tool-preview"
-      className="flex flex-col gap-1 rounded-card border border-danger/60 bg-danger/10 p-2 text-xs"
+      className="flex flex-col overflow-hidden rounded-[12px] border border-[rgba(201,76,39,0.35)] bg-[var(--surface)] pb-[12px] text-[12.5px] text-[var(--ink)]"
     >
-      <p className="flex items-center gap-1.5 font-machine text-danger">
-        <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        <span className="text-[10px] uppercase tracking-wide">destructive tool call</span>
+      <p className="m-0 flex items-center gap-2 border-b border-[rgba(201,76,39,0.25)] bg-[rgba(201,76,39,0.10)] px-[14px] py-[8px]">
+        <span aria-hidden className="h-[7px] w-[7px] shrink-0 rounded-full bg-[#c94c27]" />
+        <span className="font-machine text-[9.5px] font-medium uppercase tracking-[0.1em] text-[#c94c27]">
+          destructive tool call
+        </span>
       </p>
-      <p>
-        <span className="text-fg-muted">tool </span>
-        <span data-testid="approval-tool-name" className="font-machine">
+      <p className="m-0 px-[14px] pt-[10px]">
+        <span className="text-[var(--muted)]">tool </span>
+        <span data-testid="approval-tool-name" className="font-machine text-[12px]">
           {toolName}
         </span>
       </p>
       {args !== '' && (
         <pre
           data-testid="approval-tool-args"
-          className="overflow-auto rounded border border-border bg-canvas p-1.5 font-machine text-[11px] text-fg-muted"
+          className="mx-[14px] mt-[8px] overflow-auto rounded-[8px] border border-[var(--line)] bg-[var(--soft)] px-[10px] py-[8px] font-machine text-[11px] text-[var(--muted)]"
         >
           {args}
         </pre>

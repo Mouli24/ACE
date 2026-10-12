@@ -1,13 +1,13 @@
 import type { Part, Provider, Template, TemplateId } from '@ace/contracts';
 import { Button, Input, Label, Textarea, cn } from '@ace/ui';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 import { api } from '../app/api';
 import { getSocket } from '../app/socket';
 import { HelpLink } from '../help/HelpLink';
+import { ProviderMark } from '../providers/ProviderMark';
 import { useCreateProvider, useProviderDetect, useProviders } from '../providers/hooks';
 import { useRunEvents } from '../runs/hooks';
 import { useRunStore } from '../runs/run-store';
@@ -32,6 +32,13 @@ const STEPS: ReadonlyArray<{ step: WizardStep; label: string }> = [
 const message = (error: unknown) =>
   error instanceof Error ? error.message : 'Something went wrong. Try again.';
 
+/* The theme's vocabulary (D328). */
+const BODY = 'text-[13px] text-[var(--muted)]';
+const ERROR = 'text-[12px] text-[#c94c27]';
+/** The theme's connection-type card: radius 10, a 1.5px border that turns ink when chosen. */
+const CHOICE_CARD =
+  'flex items-start gap-[10px] rounded-[10px] border-[1.5px] bg-[var(--surface)] p-3 text-left text-[var(--ink)]';
+
 /**
  * `/onboarding` — the first-run wizard (FR-ONB-001/002/003, Arch §33.1 steps 1–3, TC-ONB-001):
  * add a provider (the Mock one in one click), pick one of the four templates, then create the
@@ -42,6 +49,9 @@ const message = (error: unknown) =>
  * - **Skippable:** "Skip setup" marks onboarding done and opens the project list.
  * - **Resumable:** the step and the choices so far live in `sessionStorage` (wizard-state.ts).
  * - **Sets `settings.onboardingCompleted`** when the project is created or the wizard is skipped.
+ *
+ * An uncovered screen in the Ace UI theme (D328): the steps are a segmented row, the choices are
+ * connection-type cards.
  */
 export function OnboardingPage() {
   const navigate = useNavigate();
@@ -78,103 +88,101 @@ export function OnboardingPage() {
   const current = STEPS.find((s) => s.step === state.step) ?? STEPS[0]!;
 
   return (
-    <main
-      data-testid="onboarding-page"
-      data-step={state.step}
-      className="mx-auto flex h-full w-full max-w-3xl flex-col gap-6 overflow-y-auto p-4 sm:p-6"
-    >
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex flex-col gap-1">
-          <h1 className="font-human text-2xl font-semibold">Welcome to ACE</h1>
-          <p className="font-human text-sm text-fg-muted">
-            Three steps to your first completed run. Nothing here needs an API key.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <HelpLink page="getting-started">Getting started</HelpLink>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => void skip()}
-            disabled={patchSettings.isPending}
-            data-testid="onboarding-skip"
-          >
-            Skip setup
-          </Button>
-        </div>
-      </header>
-
-      <ol
-        aria-label="Setup progress"
-        className="flex flex-wrap gap-2"
-        data-testid="onboarding-steps"
-      >
-        {STEPS.map(({ step, label }) => {
-          const done = step < state.step;
-          const active = step === state.step;
-          return (
-            <li
-              key={step}
-              aria-current={active ? 'step' : undefined}
-              data-testid={`onboarding-step-${step}`}
-              data-state={done ? 'done' : active ? 'current' : 'todo'}
-              className={cn(
-                'flex items-center gap-2 rounded-chip border px-3 py-1 font-human text-xs',
-                active ? 'border-accent text-fg' : 'border-border text-fg-muted',
-              )}
+    <main data-testid="onboarding-page" data-step={state.step} className="h-full overflow-y-auto">
+      <div className="mx-auto flex w-full max-w-[960px] flex-col gap-6 px-6 py-8">
+        <header className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex flex-col gap-1">
+            <h1 className="text-[20px] font-bold tracking-[-0.01em]">Welcome to ACE</h1>
+            <p className={BODY}>
+              Three steps to your first completed run. Nothing here needs an API key.
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <HelpLink page="getting-started">Getting started</HelpLink>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void skip()}
+              disabled={patchSettings.isPending}
+              data-testid="onboarding-skip"
             >
-              <span
-                aria-hidden="true"
+              Skip setup
+            </Button>
+          </div>
+        </header>
+
+        {/* The theme's segmented control: a soft track, the current step filled with ink. */}
+        <ol
+          aria-label="Setup progress"
+          className="flex flex-wrap gap-[2px] self-start rounded-[16px] border sm:rounded-full border-[var(--line)] bg-[var(--soft)] p-[3px]"
+          data-testid="onboarding-steps"
+        >
+          {STEPS.map(({ step, label }) => {
+            const done = step < state.step;
+            const active = step === state.step;
+            return (
+              <li
+                key={step}
+                aria-current={active ? 'step' : undefined}
+                data-testid={`onboarding-step-${step}`}
+                data-state={done ? 'done' : active ? 'current' : 'todo'}
                 className={cn(
-                  'flex h-5 w-5 items-center justify-center rounded-full border font-machine text-[10px]',
-                  done ? 'border-accent bg-accent text-canvas' : 'border-current',
+                  'flex h-[26px] items-center gap-[6px] whitespace-nowrap rounded-full border px-4 text-[12px] font-semibold',
+                  active
+                    ? 'border-[var(--seg)] bg-[var(--seg)] text-[var(--segInk)]'
+                    : 'border-transparent bg-transparent text-[var(--muted)]',
                 )}
               >
-                {done ? <Check className="h-3 w-3" /> : step}
-              </span>
-              <span>
-                <span className="sr-only">
-                  Step {step} of {STEPS.length}
-                  {done ? ', done' : ''}:{' '}
+                <span
+                  aria-hidden="true"
+                  className={cn('font-machine text-[10px]', done && 'text-[#2f9e63]')}
+                >
+                  {done ? '✓' : step}
                 </span>
-                {label}
-              </span>
-            </li>
-          );
-        })}
-      </ol>
+                <span>
+                  <span className="sr-only">
+                    Step {step} of {STEPS.length}
+                    {done ? ', done' : ''}:{' '}
+                  </span>
+                  {label}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
 
-      <section aria-labelledby="onboarding-step-heading" className="flex flex-col gap-4">
-        <h2
-          id="onboarding-step-heading"
-          ref={headingRef}
-          tabIndex={-1}
-          className="font-human text-lg font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-        >
-          {current.label}
-        </h2>
+        <section aria-labelledby="onboarding-step-heading" className="flex flex-col gap-4">
+          <h2
+            id="onboarding-step-heading"
+            ref={headingRef}
+            tabIndex={-1}
+            className="self-start rounded-[4px] text-[14px] font-bold outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+          >
+            {current.label}
+          </h2>
 
-        {state.step === 1 && (
-          <ProviderStep onDone={(providerId) => update({ providerId, step: 2 })} />
-        )}
-        {state.step === 2 && (
-          <TemplateStep
-            selected={state.templateId}
-            onSelect={(templateId) => update({ templateId })}
-            onBack={() => update({ step: 1 })}
-            onNext={() => update({ step: 3 })}
-          />
-        )}
-        {state.step === 3 && state.templateId !== undefined && (
-          <CreateStep
-            templateId={state.templateId}
-            projectName={state.projectName}
-            question={state.question ?? TEMPLATE_QUESTIONS[state.templateId]}
-            onChange={update}
-            onBack={() => update({ step: 2 })}
-          />
-        )}
-      </section>
+          {state.step === 1 && (
+            <ProviderStep onDone={(providerId) => update({ providerId, step: 2 })} />
+          )}
+          {state.step === 2 && (
+            <TemplateStep
+              selected={state.templateId}
+              onSelect={(templateId) => update({ templateId })}
+              onBack={() => update({ step: 1 })}
+              onNext={() => update({ step: 3 })}
+            />
+          )}
+          {state.step === 3 && state.templateId !== undefined && (
+            <CreateStep
+              templateId={state.templateId}
+              projectName={state.projectName}
+              question={state.question ?? TEMPLATE_QUESTIONS[state.templateId]}
+              onChange={update}
+              onBack={() => update({ step: 2 })}
+            />
+          )}
+        </section>
+      </div>
     </main>
   );
 }
@@ -205,30 +213,38 @@ function ProviderStep({ onDone }: { onDone: (providerId: string) => void }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <p className="font-human text-sm text-fg-muted">
+      <p className={BODY}>
         A provider is where models come from. The Mock provider answers on your machine, with no key
         and no network, so it is the quickest way to see a run finish.
       </p>
 
-      <Button
-        size="lg"
-        className="h-auto justify-start whitespace-normal py-3 text-left"
+      <button
+        type="button"
+        className={cn(
+          CHOICE_CARD,
+          'cursor-pointer border-[var(--line)] outline-none hover:border-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-not-allowed disabled:opacity-50',
+        )}
         onClick={() => void chooseMock()}
         disabled={create.isPending || providers.isPending}
         data-testid="onboarding-use-mock"
       >
-        {mock
-          ? 'Use the built-in Mock provider (already added — no key, works offline)'
-          : 'Use the built-in Mock provider (no key, works offline)'}
-      </Button>
+        <ProviderMark type="mock" />
+        <span className="flex min-w-0 flex-1 flex-col gap-[2px]">
+          <span className="text-[12.5px] font-semibold">Use the built-in Mock provider</span>
+          <span className="text-[10.5px] leading-[1.4] text-[var(--muted)]">
+            {mock ? '(already added — no key, works offline)' : '(no key, works offline)'}
+          </span>
+        </span>
+      </button>
 
       {ollama?.detected && !ollamaAdded && (
         <div
           data-testid="onboarding-ollama"
-          className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-panel p-3"
+          className="flex flex-wrap items-center gap-3 rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-3"
         >
-          <p className="font-human text-sm">
-            Ollama is running at <span className="font-machine">{ollama.baseUrl}</span>.
+          <ProviderMark type="ollama" />
+          <p className="min-w-0 flex-1 text-[13px]">
+            Ollama is running at <span className="font-machine text-[12px]">{ollama.baseUrl}</span>.
           </p>
           <Button
             variant="secondary"
@@ -244,11 +260,17 @@ function ProviderStep({ onDone }: { onDone: (providerId: string) => void }) {
 
       {others.length > 0 && (
         <div className="flex flex-col gap-2" data-testid="onboarding-existing-providers">
-          <p className="font-human text-sm text-fg-muted">Or continue with one you already have:</p>
+          <p className={BODY}>Or continue with one you already have:</p>
           <ul className="flex flex-wrap gap-2">
             {others.map((provider: Provider) => (
               <li key={provider.id}>
-                <Button variant="secondary" size="sm" onClick={() => onDone(provider.id)}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="pl-[5px]"
+                  onClick={() => onDone(provider.id)}
+                >
+                  <ProviderMark type={provider.type} />
                   Continue with {provider.name}
                 </Button>
               </li>
@@ -257,11 +279,11 @@ function ProviderStep({ onDone }: { onDone: (providerId: string) => void }) {
         </div>
       )}
 
-      <p className="font-human text-sm text-fg-muted">
+      <p className={BODY}>
         Have an API key for Anthropic, Google or OpenAI?{' '}
         <Link
           to="/providers"
-          className="text-accent underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="rounded-[4px] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
           data-testid="onboarding-keyed-provider"
         >
           Add a provider with a key
@@ -270,7 +292,7 @@ function ProviderStep({ onDone }: { onDone: (providerId: string) => void }) {
       </p>
 
       {create.isError && (
-        <p role="alert" className="font-human text-sm text-danger">
+        <p role="alert" className={ERROR}>
           {message(create.error)}
         </p>
       )}
@@ -303,18 +325,16 @@ function TemplateStep({
   return (
     <form onSubmit={submit} className="flex flex-col gap-4">
       {templates.isError && (
-        <p role="alert" className="font-human text-sm text-danger">
+        <p role="alert" className={ERROR}>
           {message(templates.error)}
         </p>
       )}
-      {templates.isPending && (
-        <p className="font-human text-sm text-fg-muted">Loading templates…</p>
-      )}
+      {templates.isPending && <p className={BODY}>Loading templates…</p>}
 
       <div
         role="radiogroup"
         aria-label="Templates"
-        className="grid gap-3 sm:grid-cols-2"
+        className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-2"
         data-testid="onboarding-templates"
       >
         {(templates.data ?? []).map((template: Template) => (
@@ -353,9 +373,9 @@ function TemplateCard({
       data-testid={`template-card-${template.id}`}
       data-checked={checked}
       className={cn(
-        'flex cursor-pointer gap-3 rounded-md border bg-panel p-3 transition-colors',
-        'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent',
-        checked ? 'border-accent' : 'border-border hover:border-fg-muted',
+        CHOICE_CARD,
+        'cursor-pointer has-[:focus-visible]:shadow-[0_0_0_2px_#ef6b3f]',
+        checked ? 'border-[var(--ink)]' : 'border-[var(--line)]',
       )}
     >
       {/* A native radio: arrow keys move between cards and Space selects, with no custom keys. */}
@@ -369,16 +389,31 @@ function TemplateCard({
         className="sr-only"
       />
       <TemplateThumbnail id={template.id} />
-      <span className="flex min-w-0 flex-col gap-1">
-        <span className="font-human text-sm font-semibold">{template.name}</span>
-        <span id={descriptionId} className="font-human text-xs text-fg-muted">
+      <span className="flex min-w-0 flex-1 flex-col gap-[2px]">
+        <span className="text-[12.5px] font-semibold">{template.name}</span>
+        <span id={descriptionId} className="text-[10.5px] leading-[1.4] text-[var(--muted)]">
           {template.description}
         </span>
         {template.requires.knowledgeBase && (
-          <span className="font-machine text-[10px] uppercase tracking-wider text-fg-muted">
+          <span className="mt-1 self-start rounded-[4px] bg-[rgba(239,107,63,0.12)] px-[6px] py-[2px] font-machine text-[8.5px] font-medium uppercase tracking-[0.08em] text-[#e8572e]">
             includes a sample knowledge base
           </span>
         )}
+      </span>
+      {/* The theme's radio dot: a 15px ring, a 7px ink dot when chosen. */}
+      <span
+        aria-hidden
+        className={cn(
+          'flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-full border-[1.5px]',
+          checked ? 'border-[var(--ink)]' : 'border-[var(--line)]',
+        )}
+      >
+        <span
+          className={cn(
+            'h-[7px] w-[7px] rounded-full',
+            checked ? 'bg-[var(--ink)]' : 'bg-transparent',
+          )}
+        />
       </span>
     </label>
   );
@@ -455,11 +490,11 @@ function CreateStep({
 
   return (
     <form onSubmit={(event) => void confirm(event)} className="flex flex-col gap-4">
-      <p className="font-human text-sm text-fg-muted">
+      <p className={BODY}>
         Nothing is created until you confirm. ACE then opens the Canvas and starts the first run
         with your question.
       </p>
-      <div className="flex flex-col gap-1.5">
+      <div className="flex max-w-[480px] flex-col gap-[7px]">
         <Label htmlFor="onboarding-project-name">Project name</Label>
         <Input
           id="onboarding-project-name"
@@ -469,7 +504,7 @@ function CreateStep({
           required
         />
       </div>
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-[7px]">
         <Label htmlFor="onboarding-question">First question</Label>
         <Textarea
           id="onboarding-question"
@@ -481,7 +516,7 @@ function CreateStep({
       </div>
 
       {error && (
-        <p role="alert" className="font-human text-sm text-danger" data-testid="onboarding-error">
+        <p role="alert" className={ERROR} data-testid="onboarding-error">
           {error}
         </p>
       )}
@@ -508,7 +543,7 @@ function StepActions({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Button type="button" variant="ghost" onClick={onBack} disabled={disabled}>
+      <Button type="button" variant="secondary" onClick={onBack} disabled={disabled}>
         Back
       </Button>
       {children}

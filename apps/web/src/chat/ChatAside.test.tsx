@@ -1,13 +1,17 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import type { ChatMessage } from '@ace/contracts';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { api } from '../app/api';
 import { getSocket } from '../app/socket';
+import { useLayoutStore } from '../app/stores/layout';
 import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
+import { useWorkspaceStatus } from '../app/stores/workspace-status';
 import { setChatScenario } from '../mocks/handlers-round4';
 import { createNode } from '../nodes/factory';
 import { ChatAside } from './ChatAside';
+import { useChatSessions } from './session-store';
 import { db, installChatMockServer, queryClient, renderChat, seedAgentNode } from './test-support';
 
 installChatMockServer();
@@ -33,8 +37,15 @@ describe('FR-CHAT-004 the Chat column', () => {
     const { workflowId, node } = seedAgentNode();
     useSelectionStore.getState().clear();
     renderChat(<ChatAside workflowId={workflowId} />);
-    expect(await screen.findByTestId(`chat-mention-${node.id}`)).toHaveTextContent('@Writer');
-    expect(screen.getByText(/Select an Agent node on the Canvas, or mention one/)).toBeInTheDocument();
+    // the theme's tab: avatar initial, the node's name and its handle
+    const tab = await screen.findByTestId(`chat-mention-${node.id}`);
+    expect(tab).toHaveTextContent('Writer');
+    expect(tab).toHaveTextContent('@writer');
+    expect(tab).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('heading', { name: 'Team chat' })).toBeInTheDocument();
+    expect(
+      screen.getByText(/Select an Agent node on the Canvas, or mention one/),
+    ).toBeInTheDocument();
     expect(screen.queryByTestId('chat-conversation')).toBeNull();
     // nobody to send to yet
     expect(screen.getByTestId('chat-send')).toBeDisabled();
@@ -47,7 +58,11 @@ describe('FR-CHAT-004 the Chat column', () => {
 
     useSelectionStore.getState().setSelection([critic.id], []);
     await waitFor(() => expect(conversation()).toHaveAttribute('data-node-id', critic.id));
-    expect(screen.getByTestId('chat-target')).toHaveTextContent('Critic');
+    expect(screen.getByTestId(`chat-mention-${critic.id}`)).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId(`chat-mention-${writer.id}`)).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
 
     useSelectionStore.getState().setSelection([writer.id], []);
     await waitFor(() => expect(conversation()).toHaveAttribute('data-node-id', writer.id));
@@ -60,8 +75,15 @@ describe('FR-CHAT-004 the Chat column', () => {
     await user.click(await screen.findByTestId(`chat-mention-${writer.id}`));
     expect(await screen.findByTestId('chat-conversation')).toBeInTheDocument();
     expect(usePanelsStore.getState().chatNodeId).toBe(writer.id);
-    expect(screen.getByTestId('chat-input')).toHaveAttribute('placeholder', 'Message @Writer');
-    expect(screen.getByTestId(`chat-mention-${writer.id}`).className).toContain('border-border-strong');
+    // the active tab: ink border on the surface (D335)
+    const tab = screen.getByTestId(`chat-mention-${writer.id}`);
+    expect(tab).toHaveAttribute('aria-pressed', 'true');
+    expect(tab.className).toContain('border-[var(--ink)]');
+    expect(tab.className).toContain('bg-[var(--surface)]');
+    expect(screen.getByTestId('chat-input')).toHaveAttribute(
+      'placeholder',
+      'Message the team… @ to tag an agent, / for commands',
+    );
   });
 
   it('gives a Merge node no chip', async () => {
@@ -104,10 +126,11 @@ describe('FR-CHAT-004 @mentions', () => {
     useSelectionStore.getState().clear();
     renderChat(<ChatAside workflowId={workflowId} />);
     await screen.findByTestId(`chat-mention-${node.id}`);
-    const input = screen.getByPlaceholderText('Message a node — type @ to pick one');
+    const input = screen.getByTestId('chat-input');
     await user.type(input, '@Dr');
     const picker = await screen.findByTestId('chat-mention-picker');
     expect(picker).toHaveTextContent('Draft');
+    expect(picker).toHaveTextContent('@draft');
     await user.keyboard('{Enter}');
     expect(usePanelsStore.getState().chatNodeId).toBe(node.id);
     expect(await screen.findByTestId('chat-conversation')).toBeInTheDocument();
@@ -265,7 +288,216 @@ describe('D285 each node keeps its own session', () => {
     const badges = await screen.findAllByTestId('chat-run-badge', {}, { timeout: 5000 });
     expect(badges.length).toBeGreaterThan(0);
     const turns = within(conversation());
-    expect(turns.getAllByTestId('chat-turn-user')[0]).toHaveTextContent('Write a haiku about rain.');
+    expect(turns.getAllByTestId('chat-turn-user')[0]).toHaveTextContent(
+      'Write a haiku about rain.',
+    );
     expect(turns.getAllByTestId('chat-turn-agent').length).toBeGreaterThan(0);
+  });
+});
+
+describe('D335 the theme’s Team chat header', () => {
+  it('shows Live only while the socket is open', async () => {
+    const { workflowId } = seedAgentNode();
+    renderChat(<ChatAside workflowId={workflowId} />);
+    await waitFor(() => expect(getSocket()?.status).toBe('open'));
+    expect(await screen.findByTestId('chat-live')).toHaveTextContent('Live');
+
+    act(() => getSocket()?.close());
+    await waitFor(() => expect(screen.queryByTestId('chat-live')).toBeNull());
+  });
+
+  it('✕ closes the chat column', async () => {
+    const user = userEvent.setup();
+    const { workflowId } = seedAgentNode();
+    renderChat(<ChatAside workflowId={workflowId} />);
+    expect(useLayoutStore.getState().chatOpen).toBe(true);
+    await user.click(screen.getByRole('button', { name: 'Close chat' }));
+    expect(useLayoutStore.getState().chatOpen).toBe(false);
+  });
+
+  it('has no Pin, Voice, "Actions +" or team-run hint (no such features)', async () => {
+    const { workflowId, node } = seedAgentNode();
+    renderChat(<ChatAside workflowId={workflowId} />);
+    await screen.findByTestId(`chat-mention-${node.id}`);
+    const aside = screen.getByTestId('chat-aside');
+    expect(within(aside).queryByTitle('Pin')).toBeNull();
+    expect(within(aside).queryByTitle('Voice')).toBeNull();
+    expect(within(aside).queryByText(/^Actions/)).toBeNull();
+    expect(within(aside).queryByText('Enter starts a team run')).toBeNull();
+    // the two composer buttons that stay
+    expect(within(aside).getByRole('button', { name: 'Attach a file' })).toBeInTheDocument();
+    expect(within(aside).getByRole('button', { name: 'Send message' })).toBeInTheDocument();
+  });
+});
+
+describe('D335 the tabs: one per agent or model node, the rest under More', () => {
+  function seedFive() {
+    const { workflowId, node: first } = seedAgentNode({ name: 'Alpha' });
+    const rest = ['Bravo', 'Charlie', 'Delta', 'Echo'].map(
+      (name) => seedAgentNode({ name, workflowId }).node,
+    );
+    useSelectionStore.getState().clear();
+    return { workflowId, nodes: [first, ...rest] };
+  }
+
+  it('draws the first three as tabs and counts the rest on More', async () => {
+    const { workflowId, nodes } = seedFive();
+    renderChat(<ChatAside workflowId={workflowId} />);
+    await screen.findByTestId(`chat-mention-${nodes[0]!.id}`);
+    expect(screen.getByTestId(`chat-mention-${nodes[1]!.id}`)).toBeInTheDocument();
+    expect(screen.getByTestId(`chat-mention-${nodes[2]!.id}`)).toBeInTheDocument();
+    expect(screen.queryByTestId(`chat-mention-${nodes[3]!.id}`)).toBeNull();
+    expect(screen.queryByTestId(`chat-mention-${nodes[4]!.id}`)).toBeNull();
+    const more = screen.getByTestId('chat-mention-more');
+    expect(more).toHaveTextContent('More');
+    expect(more).toHaveTextContent('2');
+    // no Team chat tab: the aside has no team-level chat
+    expect(within(screen.getByTestId('chat-mentions')).queryByText('Team chat')).toBeNull();
+  });
+
+  it('More opens a menu with the rest; picking one opens its session', async () => {
+    const user = userEvent.setup();
+    const { workflowId, nodes } = seedFive();
+    renderChat(<ChatAside workflowId={workflowId} />);
+    await user.click(await screen.findByTestId('chat-mention-more'));
+
+    const menu = await screen.findByTestId('chat-mention-more-menu');
+    expect(within(menu).getByTestId(`chat-mention-${nodes[3]!.id}`)).toHaveTextContent('Delta');
+    expect(within(menu).getByTestId(`chat-mention-${nodes[4]!.id}`)).toHaveTextContent('@echo');
+    await user.click(within(menu).getByTestId(`chat-mention-${nodes[4]!.id}`));
+
+    expect(usePanelsStore.getState().chatNodeId).toBe(nodes[4]!.id);
+    expect(useSelectionStore.getState().focusedNodeId).toBe(nodes[4]!.id);
+    await waitFor(() => expect(conversation()).toHaveAttribute('data-node-id', nodes[4]!.id));
+    // the node in focus is under More, so More reads as the active tab
+    expect(screen.getByTestId('chat-mention-more').className).toContain('border-[var(--ink)]');
+  });
+});
+
+const THREAD = '01THREAD000000000000000000';
+const userTurn = (text: string): ChatMessage => ({
+  id: '01USERTURN0000000000000000',
+  threadId: THREAD,
+  role: 'user',
+  content: [{ type: 'text', text }],
+  verdicts: [],
+  at: new Date().toISOString(),
+});
+
+/** The engine took a message for this node: its reply is owed on `THREAD`. */
+const owe = (nodeId: string, text: string) =>
+  act(() =>
+    useChatSessions.getState().update(nodeId, (session) => ({
+      ...session,
+      threadId: THREAD,
+      pending: { threadId: THREAD, userMessage: userTurn(text) },
+    })),
+  );
+
+describe('D335 the theme’s message rows', () => {
+  it('names each turn, and a reply’s meta line carries "Send to Forge →" into Forge', async () => {
+    const user = userEvent.setup();
+    const { workflowId } = seedAgentNode();
+    const { workflow } = await api().getWorkflow(workflowId);
+    renderChat(<ChatAside workflowId={workflowId} />);
+    await waitFor(() => expect(conversation()).toBeInTheDocument());
+
+    await say(user, 'hello');
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-turn-agent')).toHaveTextContent('You said: hello'),
+    );
+    const agentTurn = screen.getByTestId('chat-turn-agent');
+    const userTurnRow = screen.getByTestId('chat-turn-user');
+    expect(userTurnRow).toHaveTextContent(/^YYou/);
+    expect(agentTurn).toHaveTextContent(/^✳Writer/);
+    // the real usage the engine recorded, in the theme's short form
+    expect(within(agentTurn).getByTestId('chat-usage')).toHaveTextContent(/^8 in · \d+ out$/);
+    // a user turn has no meta line
+    expect(within(userTurnRow).queryByTestId('chat-send-to-forge')).toBeNull();
+
+    await user.click(within(agentTurn).getByRole('button', { name: 'Send to Forge →' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        `/projects/${workflow.projectId}/workflows/${workflowId}/forge`,
+      ),
+    );
+  });
+
+  it('draws a Markdown list as the theme’s bullet rows', async () => {
+    const { workflowId, node } = seedAgentNode();
+    renderChat(<ChatAside workflowId={workflowId} />);
+    await waitFor(() => expect(conversation()).toHaveAttribute('data-node-id', node.id));
+    owe(node.id, 'list it');
+    act(() => useChatSessions.getState().appendToken(THREAD, 'Plan:\n\n- one\n- two'));
+
+    const items = within(await screen.findByTestId('chat-streaming')).getAllByRole('listitem');
+    // the theme's orange bullet before each item…
+    expect(items.map((item) => item.textContent)).toEqual(['•one', '•two']);
+    expect(within(items[0]!).getByText('•').className).toContain('text-[#ef6b3f]');
+    // …in the aside's 12.5px / 1.4 list type, under 13px / 1.5 text
+    const markdown = items[0]!.closest('[data-testid="markdown"]');
+    expect(markdown?.className).toContain('[&_ul>li]:text-[12.5px]');
+    expect(markdown?.className).toContain('[&_ul>li]:leading-[1.4]');
+    expect(markdown?.className).toContain('text-[13px]');
+    expect(markdown?.className).toContain('leading-[1.5]');
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+  });
+});
+
+describe('D335 "{name} is typing…" follows the real stream only', () => {
+  it('shows while a reply is owed, stays under the streamed text, and goes when it settles', async () => {
+    const { workflowId, node } = seedAgentNode();
+    renderChat(<ChatAside workflowId={workflowId} />);
+    await waitFor(() => expect(conversation()).toHaveAttribute('data-node-id', node.id));
+    expect(screen.queryByText(/is typing…/)).toBeNull();
+
+    // the engine took the message; no token yet
+    owe(node.id, 'hi');
+    expect(await screen.findByTestId('chat-thinking')).toHaveTextContent('Writer is typing…');
+    expect(screen.queryByTestId('chat-streaming')).toBeNull();
+
+    // the first token: the growing reply has its own row, typing goes on under it
+    act(() => useChatSessions.getState().appendToken(THREAD, 'Hel'));
+    expect(screen.getByTestId('chat-streaming')).toHaveTextContent('Hel');
+    expect(screen.queryByTestId('chat-thinking')).toBeNull();
+    expect(screen.getByTestId('chat-typing')).toHaveTextContent('Writer is typing…');
+
+    act(() => useChatSessions.getState().settleThread(THREAD));
+    expect(screen.queryByTestId('chat-streaming')).toBeNull();
+    expect(screen.queryByText(/is typing…/)).toBeNull();
+  });
+});
+
+describe('D330 the footer’s message count', () => {
+  it('publishes the open session’s count, and null with no target or once the column goes', async () => {
+    const user = userEvent.setup();
+    const { workflowId, writer, critic } = seedTwo();
+    const view = renderChat(<ChatAside workflowId={workflowId} />);
+    await screen.findByTestId(`chat-mention-${writer.id}`);
+    expect(useWorkspaceStatus.getState().messageCount).toBeNull();
+
+    useSelectionStore.getState().setSelection([writer.id], []);
+    await waitFor(() => expect(conversation()).toHaveAttribute('data-node-id', writer.id));
+    await waitFor(() => expect(useWorkspaceStatus.getState().messageCount).toBe(0));
+    await say(user, 'count me');
+    await waitFor(() => expect(conversation()).toHaveTextContent('You said: count me'));
+    await waitFor(() => expect(useWorkspaceStatus.getState().messageCount).toBe(2));
+
+    // another node's session has its own count
+    useSelectionStore.getState().setSelection([critic.id], []);
+    await waitFor(() => expect(conversation()).toHaveAttribute('data-node-id', critic.id));
+    await waitFor(() => expect(useWorkspaceStatus.getState().messageCount).toBe(0));
+
+    // no target: nothing to count
+    act(() => {
+      useSelectionStore.getState().clear();
+      usePanelsStore.getState().chatWith(undefined);
+    });
+    await waitFor(() => expect(useWorkspaceStatus.getState().messageCount).toBeNull());
+
+    useSelectionStore.getState().setSelection([writer.id], []);
+    await waitFor(() => expect(useWorkspaceStatus.getState().messageCount).toBe(2));
+    view.unmount();
+    expect(useWorkspaceStatus.getState().messageCount).toBeNull();
   });
 });

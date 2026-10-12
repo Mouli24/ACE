@@ -1,8 +1,9 @@
 import { LOOP_ON_MAX, type LoopConfig } from '@ace/contracts';
 import { Input } from '@ace/ui';
-import { useEffect, useId, useState, type KeyboardEvent } from 'react';
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 
-import { Field, SelectField } from '../../config-panel/fields';
+import { FIELD_GRID_CLASS, Field, SelectField } from '../../config-panel/fields';
+import { useDebouncedCommit } from '../../config-panel/pending-edits';
 import {
   exitValueKind,
   loopFieldErrors,
@@ -20,14 +21,17 @@ const blurOnEnter = (event: KeyboardEvent<HTMLInputElement>) => {
   if (event.key === 'Enter') (event.target as HTMLInputElement).blur();
 };
 
+/** Paths and exit values are machine text: the theme sets them in JetBrains Mono 12px. */
+const MONO_INPUT_CLASS = 'font-machine text-[12px]';
+
 /**
  * The loop edge editor (FR-CON-007, TC-CON-007): max iterations, the exit condition, and what to do
  * when the maximum is reached.
  *
  * Every field is refused inline by the contract's own rules — 0 and 51 iterations both carry the
  * contract's reason — and a refused draft commits nothing, so an out-of-range loop never reaches
- * the engine as a graph-op. A field is committed on blur or Enter, one graph-op per edit rather
- * than one per keystroke, which is how the config panel's fields behave.
+ * the engine as a graph-op. As in the node settings modal (D333), a field saves as you type
+ * (debounced), on blur or Enter, and when the modal closes.
  */
 export function LoopConfigFields({
   value,
@@ -43,22 +47,44 @@ export function LoopConfigFields({
   const equalsId = useId();
 
   const [draft, setDraft] = useState<LoopDraft>(() => toLoopDraft(value));
-  useEffect(() => setDraft(toLoopDraft(value)), [value]);
-
-  const errors = loopFieldErrors(draft);
+  /** The loop this editor last saved or was given, so its own save coming back is not a reset. */
+  const saved = useRef(JSON.stringify(value));
 
   /** Commit the whole draft, or nothing at all while any field is refused (TC-CON-007). */
   const commit = (next: LoopDraft) => {
     const config = toLoopConfig(next);
     if (config === undefined) return;
-    if (JSON.stringify(config) === JSON.stringify(value)) return;
+    const json = JSON.stringify(config);
+    if (json === saved.current) return;
+    saved.current = json;
     onCommit(config);
   };
+  const debounced = useDebouncedCommit<LoopDraft>(commit);
 
-  const edit = (patch: Partial<LoopDraft>) => setDraft((current) => ({ ...current, ...patch }));
+  useEffect(() => {
+    const json = JSON.stringify(value);
+    if (json === saved.current) return;
+    saved.current = json;
+    debounced.cancel();
+    setDraft(toLoopDraft(value));
+  }, [value, debounced]);
+
+  const errors = loopFieldErrors(draft);
+
+  const edit = (patch: Partial<LoopDraft>) => {
+    const next = { ...draft, ...patch };
+    setDraft(next);
+    if (toLoopConfig(next) === undefined) debounced.cancel();
+    else debounced.schedule(next);
+  };
+
+  const blur = () => {
+    debounced.cancel();
+    commit(draft);
+  };
 
   return (
-    <div className="flex flex-col gap-3" data-testid="loop-config-fields">
+    <div className={FIELD_GRID_CLASS} data-testid="loop-config-fields">
       <Field
         label="Max iterations"
         htmlFor={maxId}
@@ -75,11 +101,23 @@ export function LoopConfigFields({
           disabled={disabled}
           aria-invalid={errors.maxIterations === undefined ? undefined : true}
           onChange={(event) => edit({ maxIterations: event.target.value })}
-          onBlur={() => commit(draft)}
+          onBlur={blur}
           onKeyDown={blurOnEnter}
-          className="font-machine"
+          className={MONO_INPUT_CLASS}
         />
       </Field>
+
+      <SelectField
+        label="At the maximum"
+        value={draft.onMax}
+        options={LOOP_ON_MAX.map((onMax) => ({ value: onMax, label: ON_MAX_LABEL[onMax] }))}
+        onChange={(onMax) => {
+          debounced.cancel();
+          setDraft({ ...draft, onMax });
+          commit({ ...draft, onMax });
+        }}
+        disabled={disabled}
+      />
 
       <Field
         label="Exit when path"
@@ -93,11 +131,12 @@ export function LoopConfigFields({
           value={draft.path}
           disabled={disabled}
           placeholder="verdict"
+          spellCheck={false}
           aria-invalid={errors.path === undefined ? undefined : true}
           onChange={(event) => edit({ path: event.target.value })}
-          onBlur={() => commit(draft)}
+          onBlur={blur}
           onKeyDown={blurOnEnter}
-          className="font-machine"
+          className={MONO_INPUT_CLASS}
         />
       </Field>
 
@@ -113,24 +152,14 @@ export function LoopConfigFields({
           value={draft.equals}
           disabled={disabled}
           placeholder="approved"
+          spellCheck={false}
           aria-invalid={errors.equals === undefined ? undefined : true}
           onChange={(event) => edit({ equals: event.target.value })}
-          onBlur={() => commit(draft)}
+          onBlur={blur}
           onKeyDown={blurOnEnter}
-          className="font-machine"
+          className={MONO_INPUT_CLASS}
         />
       </Field>
-
-      <SelectField
-        label="At the maximum"
-        value={draft.onMax}
-        options={LOOP_ON_MAX.map((onMax) => ({ value: onMax, label: ON_MAX_LABEL[onMax] }))}
-        onChange={(onMax) => {
-          edit({ onMax });
-          commit({ ...draft, onMax });
-        }}
-        disabled={disabled}
-      />
     </div>
   );
 }

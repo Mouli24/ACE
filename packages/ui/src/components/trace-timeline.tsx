@@ -1,33 +1,27 @@
 import type { TraceEntry, TraceEntryKind } from '@ace/contracts';
-import {
-  Activity,
-  ChevronRight,
-  Cpu,
-  Hand,
-  Repeat,
-  ShieldCheck,
-  Wrench,
-  type LucideIcon,
-} from 'lucide-react';
 import { useId, useState } from 'react';
 
 import { cn } from '../lib/cn.js';
 import { JsonTree } from './json-tree.js';
 
 /**
- * A run's trace as an ordered vertical timeline (FR-OBS-001, TC-OBS-001). Entries render in the
- * order given — the engine sends ascending `seq` — each with an icon for its kind, its label, the
- * time since the run started and, where it spans time, its duration. The detail (the event payload)
- * is behind a disclosure button, so a long trace opens compact and is keyboard-operable.
+ * A run's trace as an ordered list (FR-OBS-001, TC-OBS-001). Entries render in the order given —
+ * the engine sends ascending `seq` — each with a glyph for its kind, its label, the time since the
+ * run started and, where it spans time, its duration. The detail (the event payload) is behind a
+ * disclosure button, so a long trace opens compact and is keyboard-operable.
+ *
+ * In the theme (D328) this is Domain's "What it did" list: one soft box, radius 10, rows 12.5px with
+ * a hairline between them, an 18px round marker and the duration in mono on the right.
  */
 
-export const TRACE_KIND_ICON: Readonly<Record<TraceEntryKind, LucideIcon>> = {
-  node_run: Cpu,
-  tool_call: Wrench,
-  verdict: ShieldCheck,
-  approval: Hand,
-  loop: Repeat,
-  run_event: Activity,
+/** One text glyph per trace kind, in the theme's vocabulary. */
+export const TRACE_KIND_ICON: Readonly<Record<TraceEntryKind, string>> = {
+  node_run: '●',
+  tool_call: '⌁',
+  verdict: '✦',
+  approval: '✋',
+  loop: '↺',
+  run_event: '▶',
 };
 
 export const TRACE_KIND_LABEL: Readonly<Record<TraceEntryKind, string>> = {
@@ -74,50 +68,59 @@ function TraceRow({
 }) {
   const [open, setOpen] = useState(initialOpen);
   const detailId = useId();
-  const Icon = TRACE_KIND_ICON[entry.kind];
   const hasDetail = entry.detail !== undefined && entry.detail !== null;
 
   return (
-    <li className="relative pl-8" data-testid={`trace-entry-${entry.seq}`} data-kind={entry.kind}>
-      <span
-        aria-hidden
-        className="absolute left-0 top-1.5 flex size-6 items-center justify-center rounded-full border border-border bg-card text-fg-muted"
-      >
-        <Icon className="size-3.5" />
-      </span>
+    <li
+      className="border-t border-[var(--line)] first:border-t-0"
+      data-testid={`trace-entry-${entry.seq}`}
+      data-kind={entry.kind}
+    >
       <button
         type="button"
-        className="flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-border/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-default disabled:hover:bg-transparent"
+        className="flex w-full min-w-0 cursor-pointer items-center gap-[10px] border-none bg-transparent px-3 py-[9px] text-left text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f] disabled:cursor-default disabled:hover:bg-transparent"
         aria-expanded={hasDetail ? open : undefined}
         aria-controls={hasDetail ? detailId : undefined}
         disabled={!hasDetail}
         onClick={() => setOpen((v) => !v)}
       >
-        <ChevronRight
+        <span
           aria-hidden
-          className={cn(
-            'mt-0.5 size-3.5 shrink-0 text-fg-muted transition-transform',
-            open && 'rotate-90',
-            !hasDetail && 'invisible',
-          )}
-        />
-        <span className="flex min-w-0 flex-1 flex-col">
-          <span className="break-words text-sm text-fg">{entry.label}</span>
-          <span className="flex flex-wrap gap-x-2 font-machine text-[11px] text-fg-muted">
+          className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-[var(--hover)] text-[9px] text-[var(--muted)]"
+        >
+          {TRACE_KIND_ICON[entry.kind]}
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col gap-px">
+          <span className="break-words text-[12.5px]">{entry.label}</span>
+          <span className="flex flex-wrap gap-x-2 font-machine text-[10.5px] text-[var(--muted)]">
             <span className="sr-only">{TRACE_KIND_LABEL[entry.kind]}, </span>
             <span>#{entry.seq}</span>
             <time dateTime={entry.at} title={entry.at}>
               {relative(entry.at, base)}
             </time>
-            {entry.durationMs !== undefined ? (
-              <span data-testid="trace-duration">took {formatDurationMs(entry.durationMs)}</span>
-            ) : null}
             {entry.nodeId ? <span className="truncate">{entry.nodeId}</span> : null}
           </span>
         </span>
+        {entry.durationMs !== undefined ? (
+          <span
+            data-testid="trace-duration"
+            className="shrink-0 font-machine text-[10.5px] text-[var(--muted)]"
+          >
+            took {formatDurationMs(entry.durationMs)}
+          </span>
+        ) : null}
+        <span
+          aria-hidden
+          className={cn(
+            'w-[10px] shrink-0 text-[10px] text-[var(--muted)]',
+            !hasDetail && 'invisible',
+          )}
+        >
+          {open ? '▾' : '▸'}
+        </span>
       </button>
       {hasDetail && open ? (
-        <div id={detailId} className="ml-7 mt-1 rounded-md border border-border bg-canvas p-2">
+        <div id={detailId} className="px-3 pb-[10px]">
           <JsonTree value={entry.detail} />
         </div>
       ) : null}
@@ -133,7 +136,10 @@ export function TraceTimeline({
 }: TraceTimelineProps) {
   if (entries.length === 0) {
     return (
-      <p className={cn('text-sm text-fg-muted', className)} data-testid="trace-empty">
+      <p
+        className={cn('py-3 text-center text-[13px] text-[var(--muted)]', className)}
+        data-testid="trace-empty"
+      >
         No trace entries yet.
       </p>
     );
@@ -143,7 +149,7 @@ export function TraceTimeline({
   return (
     <ol
       className={cn(
-        'relative flex flex-col gap-1 before:absolute before:bottom-2 before:left-3 before:top-2 before:w-px before:bg-border',
+        'm-0 flex list-none flex-col overflow-hidden rounded-[10px] border border-[var(--line)] bg-[var(--soft)] p-0',
         className,
       )}
       aria-label="Run trace"

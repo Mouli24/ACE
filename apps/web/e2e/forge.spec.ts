@@ -145,7 +145,11 @@ test.describe('Forge (D299, FR-GIT-003, FR-GIT-004)', () => {
     );
     await page.goto(forgeUrl(seeded));
     await page.getByTestId('tree-item-src').click();
-    await expect(page.getByTestId('tree-item-src/app.ts').getByTitle('Modified')).toHaveText('M');
+    // the theme's row marks are CSS content (D334), so a row's text stays its name
+    await expect(page.getByTestId('tree-item-src/app.ts').getByTitle('Modified')).toHaveAttribute(
+      'data-glyph',
+      'M',
+    );
   });
 
   test('Problems lists a TypeScript error from the real language service, and a click reveals it', async ({

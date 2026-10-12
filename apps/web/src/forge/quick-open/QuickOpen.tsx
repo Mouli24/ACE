@@ -1,9 +1,9 @@
 import { Button, Dialog, DialogContent, DialogTitle, Input, cn } from '@ace/ui';
 import { useEffect, useMemo, useState } from 'react';
 
+import { fileIconColor } from '../../theme/constants';
 import { openFile } from '../editor/actions';
 import { useProjectEditor } from '../editor/editor-store';
-import { FileIcon } from '../explorer/FileIcon';
 import { useFileList } from '../files/hooks';
 import { nameOf, parentOf } from '../files/paths';
 import { rankPaths } from './fuzzy';
@@ -92,7 +92,11 @@ export function QuickOpen({ projectId }: { projectId: string }) {
                 i === index ? 'bg-selection/20 text-fg' : 'text-fg-soft',
               )}
             >
-              <FileIcon path={path} />
+              <span
+                aria-hidden
+                className="h-[7px] w-[7px] shrink-0 rounded-full"
+                style={{ background: fileIconColor(path) }}
+              />
               <span className="truncate">{nameOf(path)}</span>
               <span className="truncate text-[11px] text-fg-faint">{parentOf(path)}</span>
             </li>

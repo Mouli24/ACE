@@ -2,8 +2,10 @@ import { useQueryClient } from '@tanstack/react-query';
 import type * as Monaco from 'monaco-editor';
 import { useEffect, useRef } from 'react';
 
+import { useResolvedTheme } from '../../app/theme';
 import { monaco } from '../../config-panel/monaco-loader';
 import { fileContentQuery } from '../files/hooks';
+import { applyForgeTheme } from './forge-theme';
 import { languageOf } from './languages';
 import { getModel } from './models';
 
@@ -11,6 +13,11 @@ import { getModel } from './models';
 export function CompareView({ projectId, path }: { projectId: string; path: string }) {
   const container = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
+  const theme = useResolvedTheme();
+
+  // the editor host is not mounted while comparing, so the theme follows the toggle from here
+  useEffect(() => applyForgeTheme(monaco, theme), [theme]);
+
   useEffect(() => {
     const element = container.current;
     const buffer = getModel(projectId, path);
@@ -29,7 +36,18 @@ export function CompareView({ projectId, path }: { projectId: string; path: stri
           automaticLayout: true,
           originalEditable: false,
           renderSideBySide: true,
+          fontFamily: "'JetBrains Mono', monospace",
           fontSize: 13,
+          lineHeight: 20,
+          minimap: { enabled: false },
+          padding: { top: 12 },
+          folding: false,
+          renderLineHighlight: 'all',
+          overviewRulerLanes: 0,
+          overviewRulerBorder: false,
+          renderOverviewRuler: false,
+          scrollBeyondLastLine: false,
+          scrollbar: { useShadows: false },
         });
         diff.setModel({ original, modified: buffer });
       },
@@ -41,5 +59,7 @@ export function CompareView({ projectId, path }: { projectId: string; path: stri
       original?.dispose();
     };
   }, [projectId, path, queryClient]);
-  return <div ref={container} className="h-full w-full" data-testid="compare-view" />;
+  return (
+    <div ref={container} className="h-full w-full bg-[var(--surface)]" data-testid="compare-view" />
+  );
 }

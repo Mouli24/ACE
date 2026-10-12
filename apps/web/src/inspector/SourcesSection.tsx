@@ -72,7 +72,7 @@ function SourceItem({
       data-testid={testId}
       data-chunk-id={source.chunkId}
       data-score={source.score}
-      className="flex flex-col gap-1 rounded-card border border-border bg-card p-2 text-xs"
+      className="flex flex-col gap-[6px] rounded-[10px] border border-[var(--line)] bg-[var(--soft)] px-3 py-[10px] text-[12px]"
     >
       <div className="flex flex-wrap items-center gap-2">
         {knowledgeBaseId === undefined ? (
@@ -82,17 +82,21 @@ function SourceItem({
             to={chunkHref(knowledgeBaseId, source)}
             data-testid="source-link"
             title="Open the document at this chunk"
+            className="rounded-full outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
           >
             {chip}
           </Link>
         )}
-        <span className="font-machine text-[10px] text-fg-muted" data-testid="source-chunk-id">
+        <span
+          className="font-machine text-[10px] text-[var(--muted)]"
+          data-testid="source-chunk-id"
+        >
           {source.chunkId}
         </span>
       </div>
       {detail?.text !== undefined && (
         <p
-          className="line-clamp-4 whitespace-pre-wrap font-human text-fg"
+          className="m-0 line-clamp-4 whitespace-pre-wrap text-[12.5px] leading-[1.5] text-[var(--ink)]"
           data-testid="source-text"
         >
           {detail.text}
@@ -107,6 +111,8 @@ function SourceItem({
  * score, source and text, best first, each linking to its document at that chunk; then, collapsed,
  * the chunks the search found but the context budget had no room for (`droppedSources`). Nothing is
  * rendered for a node run that retrieved nothing.
+ *
+ * In the theme (D328): a mono small-caps label, each chunk an inner box on `--soft`, radius 10.
  */
 export function SourcesSection({ nodeRun }: { nodeRun: NodeRun }) {
   const sources = nodeRun.sources ?? [];
@@ -119,14 +125,14 @@ export function SourcesSection({ nodeRun }: { nodeRun: NodeRun }) {
   const details = chunkDetails(nodeRun);
 
   return (
-    <section className="flex flex-col gap-1.5" data-testid="inspector-sources">
-      <h3 className="font-human text-xs font-semibold uppercase tracking-wide text-fg-muted">
+    <section className="flex flex-col gap-[7px]" data-testid="inspector-sources">
+      <h3 className="m-0 font-machine text-[9.5px] font-medium uppercase tracking-[0.1em] text-[var(--muted)]">
         Sources
       </h3>
       {sources.length === 0 ? (
-        <p className="text-xs text-fg-muted">No chunk fitted the context budget.</p>
+        <p className="m-0 text-[12px] text-[var(--muted)]">No chunk fitted the context budget.</p>
       ) : (
-        <ol className="flex flex-col gap-1.5" data-testid="sources-list">
+        <ol className="m-0 flex list-none flex-col gap-[6px] p-0" data-testid="sources-list">
           {sources.map((source) => (
             <SourceItem
               key={source.chunkId}
@@ -139,11 +145,11 @@ export function SourcesSection({ nodeRun }: { nodeRun: NodeRun }) {
         </ol>
       )}
       {dropped.length > 0 && (
-        <details data-testid="dropped-sources" className="text-xs">
-          <summary className="cursor-pointer text-fg-muted">
+        <details data-testid="dropped-sources" className="text-[12px]">
+          <summary className="cursor-pointer rounded-[4px] text-[var(--muted)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]">
             Dropped to fit budget ({dropped.length})
           </summary>
-          <ol className="mt-1.5 flex flex-col gap-1.5">
+          <ol className="m-0 mt-[6px] flex list-none flex-col gap-[6px] p-0">
             {dropped.map((source) => (
               <SourceItem
                 key={source.chunkId}

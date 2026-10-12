@@ -1,4 +1,4 @@
-import type { FileEntry } from '@ace/contracts';
+import type { FileEntryKind } from '@ace/contracts';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -9,7 +9,6 @@ import {
   cn,
 } from '@ace/ui';
 import { AceApiError } from '@ace/sdk';
-import { ChevronRight, Folder, FolderOpen } from 'lucide-react';
 import {
   useEffect,
   useMemo,
@@ -21,17 +20,24 @@ import {
 } from 'react';
 
 import { useProject } from '../../projects/hooks';
+import { fileIconColor } from '../../theme/constants';
+import type { AgentLook } from '../../theme/agents';
 import { filesMoved, filesRemoved, openFile } from '../editor/actions';
-import { useEditorStore } from '../editor/editor-store';
-import { useCreateEntry, useDeleteEntry, useMoveEntry, useRepoStatus } from '../files/hooks';
+import { useEditorStore, useProjectEditor } from '../editor/editor-store';
+import {
+  useCreateEntry,
+  useDeleteEntry,
+  useFileList,
+  useMoveEntry,
+  useRepoStatus,
+} from '../files/hooks';
 import { isWithin, joinPath, nameOf, parentOf } from '../files/paths';
 import { buildDecorations, TONE_COLOR } from './decorations';
 import { DeleteDialog, MoveDialog } from './EntryDialogs';
 import { useExplorerStore, useProjectExplorer } from './explorer-store';
-import { FileIcon } from './FileIcon';
 import { InlineName } from './InlineName';
 import { nameProblem } from './names';
-import { useTreeRows, type TreeRow } from './useTreeRows';
+import { useTreeRows } from './useTreeRows';
 
 const SAVING = 'Wait for the save to finish.';
 const DRAG_TYPE = 'application/x-ace-path';
@@ -40,23 +46,53 @@ const messageOf = (error: unknown): string =>
 
 export interface FileTreeProps {
   projectId: string;
+  /** The tree's accessible name. */
   label: string;
+  /** A single click previews; a double click or Enter pins (§6.2's preview tab). */
   onOpen(path: string, options: { preview: boolean }): void;
+  /** Non-empty: a flat list of the project's files whose path contains it (theme filter). */
+  filter?: string;
+  /** Path → the agent writing that file now, from the run (D334). */
+  live?: ReadonlyMap<string, AgentLook>;
   /** False on a phone: browse only (FR-MOB-001). */
   editable?: boolean;
 }
 
+/** One visible row, from the folder tree or from the filtered file list. */
+interface Row {
+  path: string;
+  name: string;
+  folder: boolean;
+  ignored: boolean;
+  /** 0 for the root's entries, and for every filtered row. */
+  depth: number;
+}
+
+const NO_AGENTS: ReadonlyMap<string, AgentLook> = new Map();
+
 /**
- * The project folder as an ARIA tree (FR-GIT-003): lazy, folders first, ignored entries dimmed, git
- * decorations, keyboard navigation — and, when editable, VS Code's operations: inline create and
- * rename (F2), delete (Delete) after a confirm, move by drag after a confirm, all from a context
- * menu too. Open tabs follow every rename and move.
+ * The project folder as an ARIA tree (FR-GIT-003) in the theme's Explorer rows (D334): lazy (a
+ * folder lists when it opens), folders first, ignored entries dimmed, the open file marked, unsaved
+ * files dotted, git changes marked, a pulsing badge while an agent writes a file, keyboard
+ * navigation with one roving tab stop. With a filter it lists the matching files flat, each by its
+ * full path. When editable, VS Code's operations (D299): inline create and rename (F2), delete
+ * (Delete) after a confirm, move by drag after a confirm, all from a context menu too. Open tabs
+ * follow every rename and move.
  */
-export function FileTree({ projectId, label, onOpen, editable = true }: FileTreeProps) {
-  const { rows, loading, error } = useTreeRows(projectId);
+export function FileTree({
+  projectId,
+  label,
+  onOpen,
+  filter = '',
+  live = NO_AGENTS,
+  editable = true,
+}: FileTreeProps) {
+  const tree = useTreeRows(projectId);
+  const list = useFileList(projectId, filter !== '');
   const { expanded, selected, editing: storedEditing } = useProjectExplorer(projectId);
   // A name field left open at desktop width must not show on a phone; it resumes when the window widens.
   const editing = editable ? storedEditing : undefined;
+  const editor = useProjectEditor(projectId);
   const store = useExplorerStore;
   const status = useRepoStatus(projectId);
   const project = useProject(projectId);
@@ -69,9 +105,9 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
   const typed = useRef({ text: '', at: 0 });
   const dragging = useRef<string | undefined>(undefined);
   const [dropTarget, setDropTarget] = useState<string | undefined>();
-  const [menuTarget, setMenuTarget] = useState<FileEntry | undefined>();
+  const [menuTarget, setMenuTarget] = useState<Row | undefined>();
   const [pendingMove, setPendingMove] = useState<{ from: string; folder: string } | undefined>();
-  const [pendingDelete, setPendingDelete] = useState<FileEntry | undefined>();
+  const [pendingDelete, setPendingDelete] = useState<Row | undefined>();
   /** The row to focus once it renders: a path, or none for the current row (never `avoid`). */
   const focusRequest = useRef<{ path?: string; avoid?: string } | undefined>(undefined);
   const requestFocus = (path?: string, avoid?: string): void => {
@@ -82,8 +118,27 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
     focusRequest.current ??= { path };
   };
 
+  const query = filter.trim().toLowerCase();
+  const rows = useMemo<Row[]>(
+    () =>
+      query === ''
+        ? tree.rows.map(({ entry, depth }) => ({
+            path: entry.path,
+            name: entry.name,
+            folder: entry.kind === 'folder',
+            ignored: entry.ignored,
+            depth,
+          }))
+        : (list.data?.files ?? [])
+            .filter((path) => path.toLowerCase().includes(query))
+            .map((path) => ({ path, name: path, folder: false, ignored: false, depth: 0 })),
+    [query, tree.rows, list.data],
+  );
+  const loading = query === '' ? tree.loading : list.isPending;
+  const error = query === '' ? tree.error : list.error;
+
   // One current row for the tab stop and the keys alike: the selected row if visible, else the first.
-  const found = rows.findIndex((row) => row.entry.path === selected);
+  const found = rows.findIndex((row) => row.path === selected);
   const index = found === -1 ? 0 : found;
 
   useEffect(() => {
@@ -99,9 +154,9 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
     }
     const path =
       request.path ??
-      (rows[index]?.entry.path !== request.avoid
-        ? rows[index]?.entry.path
-        : rows.find((row) => row.entry.path !== request.avoid)?.entry.path);
+      (rows[index]?.path !== request.avoid
+        ? rows[index]?.path
+        : rows.find((row) => row.path !== request.avoid)?.path);
     if (path === undefined) {
       if (request.path === undefined) focusRequest.current = undefined;
       return;
@@ -118,25 +173,26 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
       (file) => file.saving && isWithin(file.path, path),
     );
 
+  /** A folder's entries by name, from the folder tree (a filtered list shows files only). */
   const siblingsOf = (folder: string, except?: string): string[] =>
-    rows
+    tree.rows
       .filter((row) => parentOf(row.entry.path) === folder && row.entry.path !== except)
       .map((row) => row.entry.name);
-  const folderFor = (entry: FileEntry | undefined): string =>
-    entry === undefined ? '' : entry.kind === 'folder' ? entry.path : parentOf(entry.path);
+  const folderFor = (row: Row | undefined): string =>
+    row === undefined ? '' : row.folder ? row.path : parentOf(row.path);
 
   const focusRow = (path: string): void => {
     store.getState().select(projectId, path);
     rowElements.current.get(path)?.focus();
   };
-  const activate = (row: TreeRow, preview: boolean): void => {
-    if (row.entry.kind === 'folder') store.getState().toggle(projectId, row.entry.path);
-    else onOpen(row.entry.path, { preview });
+  const activate = (row: Row, preview: boolean): void => {
+    if (row.folder) store.getState().toggle(projectId, row.path);
+    else onOpen(row.path, { preview });
   };
 
   const commitCreate = async (
     parent: string,
-    kind: FileEntry['kind'],
+    kind: FileEntryKind,
     name: string,
     wantFocus: boolean,
   ): Promise<string | undefined> => {
@@ -183,9 +239,9 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     const row = rows[index];
-    const isOpen = row !== undefined && expanded.includes(row.entry.path);
-    const go = (target: TreeRow | undefined) => {
-      if (target) focusRow(target.entry.path);
+    const isOpen = row !== undefined && expanded.includes(row.path);
+    const go = (target: Row | undefined) => {
+      if (target) focusRow(target.path);
     };
     switch (event.key) {
       case 'ArrowDown':
@@ -201,15 +257,14 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
         go(rows[rows.length - 1]);
         break;
       case 'ArrowRight':
-        if (row?.entry.kind !== 'folder') return;
-        if (!isOpen) store.getState().toggle(projectId, row.entry.path);
+        if (row?.folder !== true) return;
+        if (!isOpen) store.getState().toggle(projectId, row.path);
         else go(rows[index + 1]?.depth === row.depth + 1 ? rows[index + 1] : undefined);
         break;
       case 'ArrowLeft':
         if (row === undefined) return;
-        if (row.entry.kind === 'folder' && isOpen)
-          store.getState().toggle(projectId, row.entry.path);
-        else go(rows.find((candidate) => candidate.entry.path === parentOf(row.entry.path)));
+        if (row.folder && isOpen) store.getState().toggle(projectId, row.path);
+        else go(rows.find((candidate) => candidate.path === parentOf(row.path)));
         break;
       case 'Enter':
         if (row) activate(row, false);
@@ -219,11 +274,11 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
         break;
       case 'F2':
         if (!editable || row === undefined) return;
-        store.getState().startRename(projectId, row.entry.path);
+        store.getState().startRename(projectId, row.path);
         break;
       case 'Delete':
         if (!editable || row === undefined) return;
-        setPendingDelete(row.entry);
+        setPendingDelete(row);
         break;
       default: {
         if (event.key.length !== 1 || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -236,11 +291,7 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
           at: now,
         };
         const after = [...rows.slice(index + 1), ...rows.slice(0, index + 1)];
-        go(
-          after.find((candidate) =>
-            candidate.entry.name.toLowerCase().startsWith(typed.current.text),
-          ),
-        );
+        go(after.find((candidate) => candidate.name.toLowerCase().startsWith(typed.current.text)));
         break;
       }
     }
@@ -298,148 +349,175 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
     );
   };
 
+  const area = 'flex min-h-0 flex-1 flex-col gap-[1px] overflow-y-auto px-[6px] pb-[10px]';
+  const note = 'px-[8px] py-[4px] text-[12px] text-[var(--muted)]';
+
   if (error) {
     return (
-      <p role="alert" className="px-3 py-2 text-[12px] text-danger">
-        Couldn’t read the project folder: {messageOf(error)}
-      </p>
+      <div className={area}>
+        <p role="alert" className={cn(note, 'text-[#c94c27]')}>
+          Couldn’t read the project folder: {messageOf(error)}
+        </p>
+      </div>
     );
   }
-  if (loading) return <p className="px-3 py-2 text-[12px] text-fg-muted">Reading the folder…</p>;
+  if (loading) {
+    return (
+      <div className={area}>
+        <p className={note}>{query === '' ? 'Reading the folder…' : 'Listing the files…'}</p>
+      </div>
+    );
+  }
 
   const rendered: ReactNode[] = [];
-  if (editing?.mode === 'create' && editing.parent === '') rendered.push(inputRow(0));
+  // a filtered list has no folder rows to open a field under, so a new entry's field leads it
+  if (editing?.mode === 'create' && (editing.parent === '' || query !== ''))
+    rendered.push(inputRow(0));
   for (const row of rows) {
-    const { entry, depth } = row;
-    const folder = entry.kind === 'folder';
-    const isOpen = folder && expanded.includes(entry.path);
-    const isCurrent = row === rows[index];
-    const decoration = folder ? undefined : decorations.file(entry.path);
-    const tone = folder ? decorations.folder(entry.path) : decoration?.tone;
-    const renaming = editing?.mode === 'rename' && editing.path === entry.path;
+    const { path, name, folder, depth } = row;
+    const isOpen = folder && expanded.includes(path);
+    const active = !folder && editor.active === path;
+    const dirty = !folder && editor.files[path]?.dirty === true;
+    const agent = folder ? undefined : live.get(path);
+    const decoration = folder ? undefined : decorations.file(path);
+    const tone = folder ? decorations.folder(path) : decoration?.tone;
+    const renaming = editing?.mode === 'rename' && editing.path === path;
     rendered.push(
       renaming ? (
         <InlineName
-          key={entry.path}
-          label={`Rename ${entry.name}`}
-          initial={entry.name}
+          key={path}
+          label={`Rename ${nameOf(path)}`}
+          initial={nameOf(path)}
           depth={depth}
-          problemOf={(name) =>
-            nameProblem(name, siblingsOf(parentOf(entry.path), entry.path), { allowSlash: false })
+          problemOf={(next) =>
+            nameProblem(next, siblingsOf(parentOf(path), path), { allowSlash: false })
           }
-          onCommit={(name, wantFocus) =>
-            commitMove(entry.path, joinPath(parentOf(entry.path), name), wantFocus)
+          onCommit={(next, wantFocus) =>
+            commitMove(path, joinPath(parentOf(path), next), wantFocus)
           }
           onCancel={(wantFocus) => {
-            if (wantFocus) requestFocus(entry.path);
+            if (wantFocus) requestFocus(path);
             store.getState().stopEditing(projectId);
           }}
         />
       ) : (
         <div
-          key={entry.path}
+          key={path}
           ref={(element) => {
-            if (element) rowElements.current.set(entry.path, element);
-            else rowElements.current.delete(entry.path);
+            if (element) rowElements.current.set(path, element);
+            else rowElements.current.delete(path);
           }}
           role="treeitem"
           aria-level={depth + 1}
           aria-expanded={folder ? isOpen : undefined}
-          aria-selected={entry.path === selected}
-          tabIndex={isCurrent ? 0 : -1}
-          data-testid={`tree-item-${entry.path}`}
-          title={entry.path}
+          aria-selected={path === selected}
+          tabIndex={row === rows[index] ? 0 : -1}
+          data-testid={`tree-item-${path}`}
+          title={path}
           draggable={editable}
           onDragStart={(event) => {
-            dragging.current = entry.path;
-            event.dataTransfer.setData(DRAG_TYPE, entry.path);
+            dragging.current = path;
+            event.dataTransfer.setData(DRAG_TYPE, path);
             event.dataTransfer.effectAllowed = 'move';
           }}
           onDragEnd={() => {
             dragging.current = undefined;
             setDropTarget(undefined);
           }}
-          {...(editable ? dragTargetProps(folder ? entry.path : parentOf(entry.path), true) : {})}
-          onContextMenu={() => store.getState().select(projectId, entry.path)}
+          {...(editable ? dragTargetProps(folder ? path : parentOf(path), true) : {})}
+          onContextMenu={() => store.getState().select(projectId, path)}
           className={cn(
-            'flex h-[22px] cursor-pointer select-none items-center gap-1 pr-2 font-machine text-[12px] outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent',
-            entry.path === selected ? 'bg-selection/20 text-fg' : 'text-fg-soft hover:bg-card',
-            dropTarget === entry.path && 'bg-selection/30 ring-1 ring-inset ring-accent',
-            entry.ignored && 'opacity-50',
+            'flex h-[26px] w-full shrink-0 cursor-pointer select-none items-center gap-[7px] rounded-[6px] pr-[8px] text-left text-[12.5px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]',
+            active ? 'bg-[var(--hover)]' : 'bg-transparent',
+            folder || active ? 'font-semibold' : 'font-medium',
+            dropTarget === path && 'bg-selection/30 ring-1 ring-inset ring-accent',
+            row.ignored && 'opacity-50',
           )}
-          style={{ paddingLeft: 8 + depth * 12 }}
+          style={{ paddingLeft: 8 + depth * 14 }}
           onClick={() => {
-            store.getState().select(projectId, entry.path);
+            store.getState().select(projectId, path);
             activate(row, true);
           }}
           onDoubleClick={() => {
-            if (!folder) onOpen(entry.path, { preview: false });
+            if (!folder) onOpen(path, { preview: false });
           }}
         >
-          {folder ? (
-            <ChevronRight
-              className={cn(
-                'h-3.5 w-3.5 shrink-0 text-fg-muted transition-transform',
-                isOpen && 'rotate-90',
-              )}
-              aria-hidden
-            />
-          ) : (
-            <span className="w-3.5 shrink-0" />
-          )}
-          {folder ? (
-            isOpen ? (
-              <FolderOpen className="h-3.5 w-3.5 shrink-0 text-fg-muted" aria-hidden />
-            ) : (
-              <Folder className="h-3.5 w-3.5 shrink-0 text-fg-muted" aria-hidden />
-            )
-          ) : (
-            <FileIcon path={entry.path} />
-          )}
+          {/* The glyphs are CSS content, so a row's text is exactly its name. */}
+          <span
+            aria-hidden
+            data-glyph={folder ? (isOpen ? '▾' : '▸') : ''}
+            className="w-[9px] shrink-0 text-[9px] text-[var(--muted)] after:content-[attr(data-glyph)]"
+          />
+          <span
+            aria-hidden
+            className={cn('h-[8px] w-[8px] shrink-0', folder ? 'rounded-[2px]' : 'rounded-full')}
+            style={{ background: folder ? 'var(--iconLine)' : fileIconColor(path) }}
+          />
           <span
             className="min-w-0 flex-1 truncate"
             style={tone ? { color: TONE_COLOR[tone] } : undefined}
           >
-            {entry.name}
+            {name}
           </span>
           {decoration && (
             <span
-              className="pl-2 text-[10px] font-semibold"
-              style={{ color: TONE_COLOR[decoration.tone] }}
+              data-testid={`tree-git-${path}`}
+              data-glyph={decoration.letter}
               title={decoration.title}
-            >
-              {decoration.letter}
-            </span>
+              className="shrink-0 font-machine text-[9.5px] font-medium after:content-[attr(data-glyph)]"
+              style={{ color: TONE_COLOR[decoration.tone] }}
+            />
+          )}
+          {dirty && (
+            <span
+              aria-hidden
+              data-testid={`tree-dirty-${path}`}
+              className="h-[6px] w-[6px] shrink-0 rounded-full bg-[#ef6b3f]"
+            />
+          )}
+          {agent && (
+            <span
+              data-testid={`tree-agent-${path}`}
+              data-glyph={agent.letter}
+              title={`${agent.name} is editing`}
+              className="flex h-[16px] w-[16px] shrink-0 items-center justify-center rounded-full text-[8px] font-bold text-[#fff] after:content-[attr(data-glyph)]"
+              style={{ background: agent.color, animation: 'livePulse 2s ease-in-out infinite' }}
+            />
           )}
         </div>
       ),
     );
-    if (editing?.mode === 'create' && folder && editing.parent === entry.path && isOpen)
+    if (
+      editing?.mode === 'create' &&
+      query === '' &&
+      folder &&
+      editing.parent === path &&
+      isOpen
+    )
       rendered.push(inputRow(depth + 1));
   }
 
   const folderPath = project.data?.folderPath ?? '';
   const separator = folderPath.includes('\\') ? '\\' : '/';
   const target = menuTarget;
-  const tree = (
+  const treeView = (
     <div
       ref={treeElement}
       role="tree"
       aria-label={label}
-      className={cn('min-h-full py-1 outline-none', dropTarget === '' && 'bg-selection/10')}
+      className={cn(area, 'outline-none', dropTarget === '' && 'bg-selection/10')}
       onKeyDown={onKeyDown}
       onContextMenu={(event) => {
         // The menu acts on the row under the pointer, or on the project folder anywhere else — the
         // empty note and a name field included — never on a row right-clicked earlier (review
         // minor 1). The name field keeps the browser's own menu: it never reaches this handler.
-        const row = (event.target as Element).closest('[role="treeitem"]');
-        const hit = rows.find((candidate) => rowElements.current.get(candidate.entry.path) === row);
-        setMenuTarget(hit?.entry);
+        const element = (event.target as Element).closest('[role="treeitem"]');
+        setMenuTarget(rows.find((candidate) => rowElements.current.get(candidate.path) === element));
       }}
       {...(editable ? dragTargetProps('', false) : {})}
     >
       {rows.length === 0 && editing === undefined && (
-        <p className="px-3 py-2 text-[12px] text-fg-muted">This folder is empty.</p>
+        <p className={note}>{query === '' ? 'This folder is empty.' : 'No files match.'}</p>
       )}
       {rendered}
     </div>
@@ -449,7 +527,7 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
     <>
       {editable ? (
         <ContextMenu modal={false}>
-          <ContextMenuTrigger asChild>{tree}</ContextMenuTrigger>
+          <ContextMenuTrigger asChild>{treeView}</ContextMenuTrigger>
           <ContextMenuContent
             className="w-56"
             onCloseAutoFocus={(event) => {
@@ -497,12 +575,12 @@ export function FileTree({ projectId, label, onOpen, editable = true }: FileTree
           </ContextMenuContent>
         </ContextMenu>
       ) : (
-        tree
+        treeView
       )}
       {pendingDelete !== undefined && (
         <DeleteDialog
           path={pendingDelete.path}
-          isFolder={pendingDelete.kind === 'folder'}
+          isFolder={pendingDelete.folder}
           onConfirm={() => commitDelete(pendingDelete.path)}
           onClose={() => {
             requestFocusUnlessAsked(pendingDelete.path);

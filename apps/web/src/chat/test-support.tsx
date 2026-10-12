@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, type RenderResult } from '@testing-library/react';
 import { setupServer } from 'msw/node';
 import type { ReactElement } from 'react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 
 import { configureApi } from '../app/api';
 import { startSocket, stopSocket } from '../app/socket';
@@ -13,7 +14,9 @@ import { createHandlers } from '../mocks/handlers';
 import { createRound2Handlers, stopScenario } from '../mocks/handlers-round2';
 import { createRound3Handlers } from '../mocks/handlers-round3';
 import { createRound4Handlers, setChatScenario } from '../mocks/handlers-round4';
+import { useLayoutStore } from '../app/stores/layout';
 import { usePanelsStore } from '../app/stores/panels';
+import { useWorkspaceStatus } from '../app/stores/workspace-status';
 import { createNode } from '../nodes/factory';
 import { resetGraphSyncRegistry } from '../workflows/sync-registry';
 import { useChatSessions } from './session-store';
@@ -49,6 +52,8 @@ export function installChatMockServer(): void {
     // Sessions outlive components on purpose (D285); between tests they must not.
     useChatSessions.getState().reset();
     usePanelsStore.getState().chatWith(undefined);
+    useLayoutStore.setState({ chatOpen: true });
+    useWorkspaceStatus.getState().setMessageCount(null);
     startSocket({
       token: 'mock',
       queryClient,
@@ -100,6 +105,19 @@ export function seedAgentNode(
   return { workflowId, node };
 }
 
+/** The router's current path, so a test can see where a link or button navigated. */
+function LocationProbe() {
+  return <output data-testid="location">{useLocation().pathname}</output>;
+}
+
+/** Render inside a router (the aside's "Send to Forge →" navigates) with the location probe. */
 export function renderChat(ui: ReactElement): RenderResult {
-  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        {ui}
+        <LocationProbe />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
 }

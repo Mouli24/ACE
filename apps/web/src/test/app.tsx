@@ -9,10 +9,10 @@ import { routes } from '../app/routes';
 import { LAYOUT_STORAGE_KEY, useLayoutStore } from '../app/stores/layout';
 import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
+import { useEditorStatus } from '../forge/editor/editor-status';
 import { useEditorStore } from '../forge/editor/editor-store';
 import { resetModels, setMonaco } from '../forge/editor/models';
 import { useExplorerStore } from '../forge/explorer/explorer-store';
-import { useEditorStatus } from '../forge/editor/editor-status';
 import { useOutputStore } from '../forge/panel/output-store';
 import { useProblemsStore } from '../forge/panel/problems-store';
 import { useQuickOpen } from '../forge/quick-open/quick-open-store';
@@ -69,14 +69,8 @@ export function installMockServer(): void {
     useLayoutStore.setState(initialLayout, true);
     useOutputStore.setState({ lines: {} });
     useProblemsStore.setState({ byProject: {} });
-    useEditorStatus.setState({
-      line: 1,
-      column: 1,
-      language: 'plaintext',
-      eol: 'LF',
-      indentation: 'Spaces: 2',
-      bom: false,
-    });
+    // no text file shown (D330's `path`), and the position, file facts and language as at start
+    useEditorStatus.getState().clear();
   });
   afterEach(() => server.resetHandlers());
   afterAll(() => server.close());

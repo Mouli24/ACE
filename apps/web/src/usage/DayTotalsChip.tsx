@@ -7,13 +7,13 @@ import { useUsage, usageQueryKey, usageRootKey } from './hooks';
 import { useSocketFrames } from './live';
 
 /**
- * Today's tokens and cost across every run, in the top bar (FR-OBS-002). "Today" is the UTC day,
- * the one the daily budget and `usage.updated`'s day totals count (D234).
+ * Today's tokens and cost across every run, in the phone header's menu (FR-OBS-002, FR-MOB-001);
+ * wider screens reach `/usage` from the workspace menu (D330). "Today" is the UTC day, the one the
+ * daily budget and `usage.updated`'s day totals count (D234).
  *
  * Read from `GET /usage` grouped by day from midnight UTC; when a run completes the engine's
  * `usage.updated` carries the day totals (§2.8, D233) and they are written straight into the cache,
- * and `run.completed` refetches in case that frame was not seen. The chip hides below `lg`, where
- * the top bar has no room; the usage icon beside it still links to `/usage`.
+ * and `run.completed` refetches in case that frame was not seen.
  */
 export function DayTotalsChip() {
   const queryClient = useQueryClient();
@@ -47,7 +47,7 @@ export function DayTotalsChip() {
       data-cost={String(costUsd)}
       aria-label={`Today: ${formatTokens(tokens)} tokens, ${formatUsd(costUsd)}. Open usage`}
       title={`Today (UTC): ${formatTokens(tokensIn)} in · ${formatTokens(tokensOut)} out · ${formatUsd(costUsd)}`}
-      className="hidden shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-border px-2 py-0.5 font-machine text-[11px] text-fg-muted hover:text-fg lg:inline-flex"
+      className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-[var(--line)] px-2 py-0.5 font-machine text-[11px] text-[var(--muted)] no-underline hover:text-[var(--ink)]"
     >
       Today: {formatCompact(tokens)} tok · {formatUsd(costUsd)}
     </Link>

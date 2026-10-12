@@ -1,10 +1,23 @@
-import type { Node, Part } from '@ace/contracts';
+import { rosterFor, slugHandle, type Node, type Part } from '@ace/contracts';
+import {
+  cn,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@ace/ui';
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { forwardRef, useEffect, type ComponentPropsWithoutRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 
+import { useLayoutStore } from '../app/stores/layout';
 import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
-import { useProviders } from '../providers/hooks';
+import { useWorkspaceStatus } from '../app/stores/workspace-status';
+import { workflowPath } from '../forge/mode';
+import { useSocketStatus } from '../runs/hooks';
+import { agentsOf, type AgentLook } from '../theme/agents';
+import { Avatar, Dot } from '../theme/primitives';
 import { useWorkflowGraph } from '../workflows/hooks';
 import { ChatComposer, type MentionTarget } from './ChatComposer';
 import { ChatConversation } from './ChatConversation';
@@ -14,40 +27,76 @@ import { sendToNode, useChatSocket, useThreadConversation } from './useChat';
 
 const isChatNode = (node: Node): boolean => node.kind === 'agent' || node.kind === 'model';
 
-/** The provider dot: a CSS variable so Night and Paper each use their own colour. */
-function Dot({ providerType }: { providerType: string | undefined }) {
+/** Tabs drawn before the rest go under "More" (the theme's tabs row). */
+const VISIBLE_TABS = 3;
+
+const FOCUS = 'focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+
+/** A theme chat tab: 30px pill, ink border and surface when active (D335). */
+const tabClass = (active: boolean) =>
+  cn(
+    FOCUS,
+    'flex h-[30px] max-w-full cursor-pointer items-center gap-[6px] whitespace-nowrap rounded-full border px-[10px] text-[11px] font-semibold text-[var(--ink)]',
+    active ? 'border-[var(--ink)] bg-[var(--surface)]' : 'border-[var(--line)] bg-transparent',
+  );
+
+/** The tab's 16px avatar: white 8px initial on the colour (font weight from the tab, as drawn). */
+function TabAvatar({ letter, color }: { letter: string; color: string }) {
+  return <Avatar letter={letter} color={color} size={16} fontSize={8} className="font-semibold" />;
+}
+
+/** The tab's mono 9px muted sub-label. */
+function TabSub({ children }: { children: string }) {
   return (
-    <span
-      aria-hidden
-      className="h-[7px] w-[7px] shrink-0 rounded-full"
-      style={{ background: `var(--color-provider-${providerType ?? 'mock'})` }}
-    />
+    <span className="font-machine text-[9px] font-normal text-[var(--muted)]">{children}</span>
   );
 }
 
+/** "More": the overflow tab, a menu trigger, so it forwards Radix's ref and props. */
+const MoreTab = forwardRef<
+  HTMLButtonElement,
+  ComponentPropsWithoutRef<'button'> & { active: boolean; count: number }
+>(({ active, count, ...props }, ref) => (
+  <button
+    ref={ref}
+    type="button"
+    data-testid="chat-mention-more"
+    className={tabClass(active)}
+    {...props}
+  >
+    <TabAvatar letter="+" color="#7a62d6" />
+    More
+    <TabSub>{String(count)}</TabSub>
+  </button>
+));
+MoreTab.displayName = 'MoreTab';
+
 /**
- * The permanent 340 px Chat column (FR-CHAT-004..008, D285) — where every node's conversation and
- * every model response is read. Each Agent or Model node has a session of its own: its direct chat
- * and the goal and result of each run of it. The column shows one node's session at a time; it
- * follows the node selected on the Canvas, an `@mention` chip, or an `@Name …` typed in the
- * composer, and switching back finds the session exactly as it was left. The compact layout keeps
- * `ChatPanel` (FR-MOB-003).
+ * The permanent 340 px Chat column (FR-CHAT-004..008, D285), in the theme's Team chat aside
+ * (D335) — where every node's conversation and every model response is read. Each Agent or Model
+ * node has a session of its own: its direct chat and the goal and result of each run of it. The
+ * column shows one node's session at a time; it follows the node selected on the Canvas, a tab,
+ * or an `@Name …` typed in the composer, and switching back finds the session exactly as it was
+ * left. "Live" shows only while the socket is open. The compact layout keeps `ChatPanel`
+ * (FR-MOB-003).
  */
 export function ChatAside({ workflowId }: { workflowId: string }) {
   const chatNodeId = usePanelsStore((s) => s.chatNodeId);
   const chatWith = usePanelsStore((s) => s.chatWith);
+  const toggleChat = useLayoutStore((s) => s.toggleChat);
   const focusedNodeId = useSelectionStore((s) => s.focusedNodeId);
   const graph = useWorkflowGraph(workflowId);
-  const providers = useProviders();
+  const live = useSocketStatus() === 'open';
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const nodes = graph.data?.nodes;
   const chatNodes = (nodes ?? []).filter(isChatNode);
   const target = chatNodes.find((each) => each.id === chatNodeId);
-  const providerType = (node: Node) => {
-    const providerId = 'providerId' in node.config ? node.config.providerId : undefined;
-    return providers.data?.find((each) => each.id === providerId)?.type;
-  };
+  const agents = agentsOf(nodes ?? []);
+  const handles = new Map(rosterFor(nodes ?? []).map((entry) => [entry.nodeId, entry.handle]));
+  const handleOf = (agent: AgentLook) => handles.get(agent.nodeId) ?? slugHandle(agent.name);
+  const projectId = graph.data?.workflow.projectId;
 
   // The chat follows the Canvas: selecting an Agent or Model node opens its session (D285).
   const focusedCanChat = chatNodes.some((each) => each.id === focusedNodeId);
@@ -62,14 +111,22 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
       chatWith(undefined);
   }, [nodes, chatNodeId, target, chatWith]);
 
+  // The footer's message count (D330): nothing to count without a target, or once the column goes.
+  const hasTarget = target !== undefined;
+  useEffect(() => {
+    if (!hasTarget) useWorkspaceStatus.getState().setMessageCount(null);
+  }, [hasTarget]);
+  useEffect(() => () => useWorkspaceStatus.getState().setMessageCount(null), []);
+
   // One socket link for every session, so a reply owed to a node off screen still arrives.
   useChatSocket(target?.id);
 
-  const mentionables: MentionTarget[] = chatNodes.map((node) => ({
-    id: node.id,
-    name: node.name,
-    kind: node.kind,
-    providerType: providerType(node),
+  const mentionables: MentionTarget[] = agents.map((agent) => ({
+    id: agent.nodeId,
+    name: agent.name,
+    handle: handleOf(agent),
+    letter: agent.letter,
+    color: agent.color,
   }));
 
   /**
@@ -92,22 +149,60 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
     if (content.length > 0) void sendToNode(queryClient, nodeId, content);
   };
 
-  const chips = (
-    <div className="flex flex-wrap gap-[5px]" data-testid="chat-mentions">
-      {chatNodes.map((node) => (
+  const sendToForge =
+    projectId === undefined
+      ? undefined
+      : () => navigate(workflowPath(projectId, workflowId, 'forge'));
+
+  const shown = agents.slice(0, VISIBLE_TABS);
+  const overflow = agents.slice(VISIBLE_TABS);
+
+  const tabs = (
+    <div
+      className="flex flex-wrap gap-[6px] border-b border-[var(--line)] px-[14px] pb-[12px]"
+      data-testid="chat-mentions"
+    >
+      {shown.map((agent) => (
         <button
-          key={node.id}
+          key={agent.nodeId}
           type="button"
-          data-testid={`chat-mention-${node.id}`}
-          aria-pressed={node.id === chatNodeId}
-          onClick={() => openSession(node.id)}
-          className={`inline-flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full border px-[9px] font-machine text-[10.5px] hover:border-border-strong hover:text-fg ${
-            node.id === chatNodeId ? 'border-border-strong text-fg' : 'border-border text-fg-soft'
-          }`}
+          data-testid={`chat-mention-${agent.nodeId}`}
+          aria-pressed={agent.nodeId === chatNodeId}
+          onClick={() => openSession(agent.nodeId)}
+          className={tabClass(agent.nodeId === chatNodeId)}
         >
-          <Dot providerType={providerType(node)} />@{node.name}
+          <TabAvatar letter={agent.letter} color={agent.color} />
+          <span className="min-w-0 truncate">{agent.name}</span>
+          <TabSub>{`@${handleOf(agent)}`}</TabSub>
         </button>
       ))}
+      {overflow.length > 0 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <MoreTab
+              active={overflow.some((agent) => agent.nodeId === chatNodeId)}
+              count={overflow.length}
+            />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" data-testid="chat-mention-more-menu">
+            {overflow.map((agent) => (
+              <DropdownMenuItem
+                key={agent.nodeId}
+                data-testid={`chat-mention-${agent.nodeId}`}
+                data-active={agent.nodeId === chatNodeId ? 'true' : 'false'}
+                onSelect={() => openSession(agent.nodeId)}
+                className={cn(agent.nodeId === chatNodeId && 'bg-[var(--hover)] font-semibold')}
+              >
+                <TabAvatar letter={agent.letter} color={agent.color} />
+                <span className="min-w-0 truncate">{agent.name}</span>
+                <span className="ml-auto pl-2">
+                  <TabSub>{`@${handleOf(agent)}`}</TabSub>
+                </span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
     </div>
   );
 
@@ -121,13 +216,9 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
     <ChatComposer
       onSend={send}
       disabled={sending}
-      placeholder={
-        target === undefined ? 'Message a node — type @ to pick one' : `Message @${target.name}`
-      }
-      above={chips}
       mentionables={mentionables}
       onMention={openSession}
-      hasTarget={target !== undefined}
+      hasTarget={hasTarget}
     />
   );
 
@@ -135,41 +226,59 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
     <aside
       aria-label="Chat"
       data-testid="chat-aside"
-      className="flex h-full min-h-0 min-w-0 flex-col border-l border-border bg-panel"
+      className="relative z-[4] flex h-full min-h-0 w-[340px] shrink-0 flex-col border-l border-[var(--line)] bg-[var(--panel)] text-[var(--ink)]"
     >
-      <div className="flex items-baseline justify-between gap-2.5 border-b border-border px-[18px] pb-3 pt-4">
-        <h2 className="min-w-0 truncate text-[19px] font-semibold">
-          Chat
-          {target !== undefined && (
-            <span data-testid="chat-target" className="font-normal text-fg-soft">
-              {' '}
-              · {target.name}
-            </span>
+      <div className="flex items-center gap-2 px-[14px] pb-[10px] pt-[14px]">
+        <h2 className="text-[14px] font-bold tracking-[-0.01em]">Team chat</h2>
+        {live && (
+          <span
+            data-testid="chat-live"
+            className="flex items-center gap-1 text-[10px] font-semibold text-[#2f9e63]"
+          >
+            <Dot color="#2f9e63" size={6} pulse="livePulse 2s ease-in-out infinite" />
+            Live
+          </span>
+        )}
+        <div className="flex-1" />
+        <button
+          type="button"
+          title="Close"
+          aria-label="Close chat"
+          data-testid="chat-close"
+          onClick={toggleChat}
+          className={cn(
+            FOCUS,
+            'h-7 w-7 shrink-0 cursor-pointer rounded-[7px] border border-[var(--line)] bg-transparent text-[12px] text-[var(--ink)]',
           )}
-        </h2>
-        <span className="shrink-0 font-machine text-[9.5px] tracking-[0.06em] text-fg-faint">
-          @ a node to talk to it
-        </span>
+        >
+          ✕
+        </button>
       </div>
 
+      {tabs}
+
       {target === undefined ? (
-        <div className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-[18px] py-4">
-          <div className="max-w-[92%] self-start rounded-[14px_14px_14px_4px] border border-border bg-canvas px-[13px] py-[9px] text-[14.5px] text-fg-soft">
+        <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-[14px] py-[16px]">
+          <p className="text-center text-[13px] text-[var(--muted)]">
             Select an Agent node on the Canvas, or mention one, to see its conversation and its
             results.
-          </div>
+          </p>
         </div>
       ) : (
         // Keyed by node id: each session renders from its own state in the session store.
-        <TargetChat key={target.id} node={target} />
+        <TargetChat key={target.id} node={target} onSendToForge={sendToForge} />
       )}
       {composer}
     </aside>
   );
 }
 
-function TargetChat({ node }: { node: Node }) {
+function TargetChat({ node, onSendToForge }: { node: Node; onSendToForge?: () => void }) {
   const convo = useThreadConversation(node.id);
+  const count = convo.messages.length;
+  useEffect(() => {
+    useWorkspaceStatus.getState().setMessageCount(count);
+  }, [count]);
   return (
     <>
       <ChatThreadList
@@ -179,7 +288,7 @@ function TargetChat({ node }: { node: Node }) {
         onSelect={convo.selectThread}
         onNew={convo.newThread}
       />
-      <ChatConversation node={node} convo={convo} />
+      <ChatConversation node={node} convo={convo} onSendToForge={onSendToForge} />
     </>
   );
 }

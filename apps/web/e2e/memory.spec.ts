@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
-import { freshApp, nodeCard, openSheet, serverGraph } from './helpers';
-import { inspect, startRun } from './round3';
+import { closeSettings, freshApp, nodeCard, openSheet, serverGraph } from './helpers';
+import { inspect } from './round3';
 
 /**
  * Round 5 §5 item 4 (FR-MEM-001, FR-MEM-004; TC-MEM-002): turn memory on for a `mock-memory` agent,
@@ -27,9 +27,16 @@ async function seed(page: Page) {
   return seeded;
 }
 
+/** Start a run from the workspace "…" menu (D331: the run bar left the desktop header). */
+async function startRun(page: Page): Promise<void> {
+  await closeSettings(page);
+  await page.getByTestId('workspace-menu').click();
+  await page.getByTestId('menu-start-run').click();
+}
+
 /** Start a run and wait for the agent to finish it. */
 async function runOnce(page: Page, agentId: string, runsBefore: number) {
-  await startRun(page).click();
+  await startRun(page);
   await expect
     .poll(
       () =>
@@ -64,7 +71,7 @@ test.describe('Agent memory (FR-MEM-001, FR-MEM-004)', () => {
   }) => {
     const seeded = await seed(page);
 
-    // FR-MEM-001: the toggle in the Agent's config
+    // FR-MEM-001: the toggle in the Agent's settings (a click on the card opens them, D332)
     await nodeCard(page, seeded.agentId).click();
     await openSheet(page, 'Configure');
     await page.getByLabel('Remember facts between runs').click();

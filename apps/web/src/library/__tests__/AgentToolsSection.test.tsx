@@ -67,6 +67,23 @@ describe('TC-TOOL-002 tools are enabled per agent and the enabled set is what pe
   });
 });
 
+describe('D333 the node settings modal toggles skill tools elsewhere', () => {
+  it('leaves excluded tools out of the list, but still reports them when unregistered', async () => {
+    renderTools(
+      <AgentToolsSection
+        tools={baseTools({ enabled: ['ghost_tool'] })}
+        exclude={['web_search', 'web_fetch']}
+        onChange={vi.fn()}
+      />,
+    );
+    await screen.findByRole('checkbox', { name: 'echo' });
+    expect(screen.queryByRole('checkbox', { name: 'web_search' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'web_fetch' })).not.toBeInTheDocument();
+    expect(screen.getByText('Other tools')).toBeInTheDocument();
+    expect(screen.getByTestId('tools-not-registered')).toHaveTextContent('ghost_tool');
+  });
+});
+
 describe('FR-TOOL-006 the call limit and the allowed-domains list', () => {
   it('commits a new max tool calls', async () => {
     const user = userEvent.setup();
@@ -79,6 +96,18 @@ describe('FR-TOOL-006 the call limit and the allowed-domains list', () => {
     await user.tab();
 
     await waitFor(() => expect(lastCall(onChange).maxToolCalls).toBe(5));
+  });
+
+  it('saves max tool calls as it is typed, after a pause (D333)', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderTools(<AgentToolsSection tools={baseTools()} onChange={onChange} />);
+
+    const input = await screen.findByLabelText('Max tool calls');
+    await user.clear(input);
+    await user.type(input, '7');
+    expect(input).toHaveFocus();
+    await waitFor(() => expect(lastCall(onChange).maxToolCalls).toBe(7));
   });
 
   it('adds a valid host and refuses one with a scheme', async () => {
@@ -100,7 +129,10 @@ describe('FR-TOOL-006 the call limit and the allowed-domains list', () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     renderTools(
-      <AgentToolsSection tools={baseTools({ allowedDomains: ['a.example.com'] })} onChange={onChange} />,
+      <AgentToolsSection
+        tools={baseTools({ allowedDomains: ['a.example.com'] })}
+        onChange={onChange}
+      />,
     );
 
     await user.click(await screen.findByRole('button', { name: 'Remove a.example.com' }));
@@ -113,8 +145,7 @@ describe('isValidHost', () => {
     'accepts %s',
     (host) => expect(isValidHost(host)).toBe(true),
   );
-  it.each(['https://example.com', 'example.com/path', 'has space', '', ' '])(
-    'rejects %s',
-    (host) => expect(isValidHost(host)).toBe(false),
+  it.each(['https://example.com', 'example.com/path', 'has space', '', ' '])('rejects %s', (host) =>
+    expect(isValidHost(host)).toBe(false),
   );
 });

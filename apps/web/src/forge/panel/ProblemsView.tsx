@@ -1,21 +1,30 @@
-import { AlertTriangle, Info, XCircle } from 'lucide-react';
-
+import { fileIconColor } from '../../theme/constants';
 import { openFile } from '../editor/actions';
 import { useEditorStore } from '../editor/editor-store';
-import { FileIcon } from '../explorer/FileIcon';
 import { nameOf, parentOf } from '../files/paths';
 import { useProblemsStore, type Problem, type ProblemSeverity } from './problems-store';
 
 const NONE: Problem[] = [];
 const ICON: Record<ProblemSeverity, JSX.Element> = {
-  error: <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-danger" aria-label="Error" />,
-  warning: (
-    <AlertTriangle
-      className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-status-WAITING)]"
-      aria-label="Warning"
-    />
+  error: (
+    <span role="img" aria-label="Error" className="mt-0.5 w-3.5 shrink-0 text-center text-danger">
+      ✕
+    </span>
   ),
-  info: <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-fg-muted" aria-label="Info" />,
+  warning: (
+    <span
+      role="img"
+      aria-label="Warning"
+      className="mt-0.5 w-3.5 shrink-0 text-center text-[var(--color-status-WAITING)]"
+    >
+      !
+    </span>
+  ),
+  info: (
+    <span role="img" aria-label="Info" className="mt-0.5 w-3.5 shrink-0 text-center text-fg-muted">
+      i
+    </span>
+  ),
 };
 
 export function ProblemsView({ projectId }: { projectId: string }) {
@@ -38,7 +47,7 @@ export function ProblemsView({ projectId }: { projectId: string }) {
       {[...groups].map(([path, list]) => (
         <section key={path} aria-label={path}>
           <div className="flex items-center gap-1.5 px-3 py-0.5 text-fg-soft">
-            <FileIcon path={path} />
+            <span aria-hidden className="h-[7px] w-[7px] shrink-0 rounded-full" style={{ background: fileIconColor(path) }} />
             <span>{nameOf(path)}</span>
             <span className="text-fg-faint">{parentOf(path)}</span>
             <span className="ml-1 rounded-chip bg-card px-1.5 text-[10px]">{list.length}</span>
