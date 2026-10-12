@@ -39,6 +39,11 @@ export function configureLanguageDefaults(
       esModuleInterop: true,
       resolveJsonModule: true,
       strict: true,
+      // N1: a parameter typed by a module Monaco has not loaded reads as implicit any (7006,
+      // 7031), and `this` in a callback passed to such an API reads as implicit any (2683).
+      // Strict stays on for everything else; cross-file types arrive in Phase 4.
+      noImplicitAny: false,
+      noImplicitThis: false,
       skipLibCheck: true,
     });
     const diagnostics = defaults.getDiagnosticsOptions();

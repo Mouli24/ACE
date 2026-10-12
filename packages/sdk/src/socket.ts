@@ -1,5 +1,6 @@
 import {
   ServerFrameSchema,
+  WS_CLOSE_FORBIDDEN_ORIGIN,
   WS_CLOSE_UNAUTHORIZED,
   isPersistedFrame,
   type ServerFrame,
@@ -18,12 +19,19 @@ import {
  *   from transient `node.token`.
  * - Every server frame with a `seq` at or below `lastSeq` is dropped, so a replay never delivers
  *   a frame twice; every accepted frame advances `lastSeq`.
- * - A drop (any close but our own or 4401) schedules a reconnect with exponential backoff; once
+ * - A drop (any close but our own, 4401 or 4403) schedules a reconnect with exponential backoff; once
  *   open it re-sends every active subscription, then `resume { afterSeq: lastSeq }`.
  */
 
 export type AceSocketStatus =
-  'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed' | 'unauthorized';
+  | 'idle'
+  | 'connecting'
+  | 'open'
+  | 'reconnecting'
+  | 'closed'
+  | 'unauthorized'
+  /** 4403: this page's origin is not on the engine's allow-list (FR-SYS-003, D301). */
+  | 'forbidden_origin';
 
 export type ServerFrameType = ServerFrame['type'];
 export type ServerFrameOf<T extends ServerFrameType> = Extract<ServerFrame, { type: T }>;
@@ -163,6 +171,11 @@ export function createAceSocket(options: AceSocketOptions): AceSocket {
       }
       if (event.code === WS_CLOSE_UNAUTHORIZED) {
         setStatus('unauthorized');
+        return;
+      }
+      if (event.code === WS_CLOSE_FORBIDDEN_ORIGIN) {
+        // Retrying cannot change the page's origin; say so instead.
+        setStatus('forbidden_origin');
         return;
       }
       scheduleReconnect();

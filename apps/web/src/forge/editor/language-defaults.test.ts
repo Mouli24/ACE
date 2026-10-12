@@ -72,4 +72,20 @@ describe('review I3: Monaco’s language defaults for real projects', () => {
       trailingCommas: 'ignore',
     });
   });
+
+  it('N1: keeps strict on but does not report implicit any, which only means "that module is not loaded"', () => {
+    const fake = createFakeMonaco();
+    configureLanguageDefaults(asMonaco(fake));
+
+    for (const defaults of [
+      fake.typescript.typescriptDefaults,
+      fake.typescript.javascriptDefaults,
+    ]) {
+      expect(defaults.getCompilerOptions()).toMatchObject({
+        strict: true,
+        noImplicitAny: false,
+        noImplicitThis: false,
+      });
+    }
+  });
 });

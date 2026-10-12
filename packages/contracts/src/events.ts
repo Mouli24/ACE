@@ -35,7 +35,11 @@ import { MemoryOpSchema } from './memory.js';
 import { McpServerStatusSchema, ToolCallSchema } from './tools.js';
 import { DayTotalsSchema } from './usage.js';
 import { ValidationIssueSchema } from './validation.js';
-import { FilesChangedPayloadSchema } from './workspace.js';
+import {
+  FilesChangedPayloadSchema,
+  ProcessExitedPayloadSchema,
+  ProcessOutputPayloadSchema,
+} from './workspace.js';
 
 /**
  * The event log and the events that ride the WebSocket (round 2 §2.4, round 3 §2.6,
@@ -363,11 +367,14 @@ export const ENGINE_EVENT_FRAME_SCHEMAS = [
 ] as const;
 
 /**
- * Forge's frames (D299). They ride the `project` scope and are never persisted: a file watcher's
- * burst is worth sending to a client that is looking and worth nothing in the log.
+ * Forge's frames (D299, D301). They ride the `project` scope and are never persisted: a watcher's
+ * burst and a process's output are worth sending to a client that is looking and worth nothing in
+ * the log — and terminal output must never reach it (design §7).
  */
 export const PROJECT_EVENT_FRAME_SCHEMAS = [
   transientFrame('files.changed', FilesChangedPayloadSchema),
+  transientFrame('process.output', ProcessOutputPayloadSchema),
+  transientFrame('process.exited', ProcessExitedPayloadSchema),
 ] as const;
 
 /** Server → client, run scope (round 2 §2.4, round 3 §2.6, round 4 §2.5). */
@@ -430,11 +437,17 @@ export const ENGINE_EVENT_TYPES = [
 ] as const;
 export type EngineEventType = (typeof ENGINE_EVENT_TYPES)[number];
 
-export const PROJECT_EVENT_TYPES = ['files.changed'] as const;
+export const PROJECT_EVENT_TYPES = ['files.changed', 'process.output', 'process.exited'] as const;
 export type ProjectEventType = (typeof PROJECT_EVENT_TYPES)[number];
 
-/** Not persisted, no `seq`, never replayed by `resume` (§2.4, round 4 §2.5, D299). */
-export const TRANSIENT_EVENT_TYPES = ['node.token', 'chat.token', 'files.changed'] as const;
+/** Not persisted, no `seq`, never replayed by `resume` (§2.4, round 4 §2.5, D299, D301). */
+export const TRANSIENT_EVENT_TYPES = [
+  'node.token',
+  'chat.token',
+  'files.changed',
+  'process.output',
+  'process.exited',
+] as const;
 export type TransientEventType = (typeof TRANSIENT_EVENT_TYPES)[number];
 
 export type PersistedRunEventType = Exclude<RunEventType, TransientEventType>;

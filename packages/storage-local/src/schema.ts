@@ -31,6 +31,8 @@ export const projects = sqliteTable(
     lastOpenedAt: text('last_opened_at'),
     /** Round 3 §2.3: the per-run cost cap, null when the project has none (FR-GRD-008). */
     maxCostPerRunUsd: real('max_cost_per_run_usd'),
+    /** D301: the terminal trust level, null when the project has none (it reads as `on`). */
+    terminal: text('terminal'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },

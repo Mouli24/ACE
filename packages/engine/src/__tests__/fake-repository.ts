@@ -33,6 +33,7 @@ import {
   type Run,
   type Settings,
   type SettingsPatch,
+  type TerminalTrust,
   type Timestamp,
   type ToolCall,
   type Usage,
@@ -264,7 +265,12 @@ export class FakeRepository implements Repository {
     update: async (
       scope: Scope,
       id: Id,
-      patch: { name?: string; lastOpenedAt?: Timestamp; updatedAt: Timestamp },
+      patch: {
+        name?: string;
+        lastOpenedAt?: Timestamp;
+        terminal?: TerminalTrust;
+        updatedAt: Timestamp;
+      },
     ) => {
       const current = this.#for(scope).projects.get(id);
       if (current === undefined) return null;
@@ -272,6 +278,7 @@ export class FakeRepository implements Repository {
         ...current,
         ...(patch.name === undefined ? {} : { name: patch.name }),
         ...(patch.lastOpenedAt === undefined ? {} : { lastOpenedAt: patch.lastOpenedAt }),
+        ...(patch.terminal === undefined ? {} : { terminal: patch.terminal }),
         updatedAt: patch.updatedAt,
       };
       this.#for(scope).projects.set(id, next);

@@ -4,6 +4,7 @@ import type { Server } from 'node:http';
 import { join } from 'node:path';
 
 import {
+  WS_CLOSE_FORBIDDEN_ORIGIN,
   WS_PATH,
   type Artifact,
   type GuardrailCheck,
@@ -39,6 +40,7 @@ import {
   createMemoryService,
   createModelSummariser,
   createPolicyService,
+  createProcessService,
   createProviderService,
   createDomainRegistry,
   createDomainService,
@@ -55,6 +57,7 @@ import {
   createWsHub,
   guardrailStoreFor,
   haltActiveRuns,
+  isOriginAllowed,
   loadEngineConfig,
   logDirectory,
   logFileName,
@@ -113,6 +116,7 @@ import {
   ToolRegistry,
   cannedResultsAt,
   createFsProjectFiles,
+  createProcessRunner,
   registerBuiltinTools,
 } from '@ace/tools';
 import { WebSocketServer } from 'ws';
@@ -386,6 +390,14 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     files: createFsProjectFiles(),
     bus,
     logger: logger.child({ subsystem: 'workspace' }),
+  });
+  // Forge's terminal (D301): a person's commands as supervised processes. Agents never get it.
+  const processes = createProcessService({
+    repository,
+    scope: LOCAL_SCOPE,
+    runner: createProcessRunner(),
+    bus,
+    logger: logger.child({ subsystem: 'processes' }),
   });
   const hub = createWsHub({
     bus,
@@ -1006,7 +1018,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     },
   });
 
-  const selfOrigins = [`http://${BIND_HOST}:${port}`, `http://localhost:${port}`];
+  // Filled once the server is bound: with `port: 0` the configured port is not the real one
+  // (D301). The gateway reads this array on every request, so filling it in place is enough.
+  const selfOrigins: string[] = [];
   const app = createEngineApp({
     repository,
     auth,
@@ -1039,6 +1053,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     backup,
     /* IDE (D299): Forge's project files. */
     workspace,
+    /* IDE (D301): Forge's terminal. */
+    processes,
   });
 
   /* -------------------------------------------------------------------- http */
@@ -1051,11 +1067,14 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
 
   const bound = server.address() as { port: number; address: string };
   const actualPort = bound.port;
+  selfOrigins.push(`http://${BIND_HOST}:${actualPort}`, `http://localhost:${actualPort}`);
   const url = `http://${BIND_HOST}:${actualPort}`;
 
   /* --------------------------------------------------------------- websocket */
 
   const wss = new WebSocketServer({ noServer: true });
+
+  const originDeps = { repository, scope: LOCAL_SCOPE, selfOrigins };
 
   server.on('upgrade', (request, socket, head) => {
     const requestUrl = new URL(request.url ?? '/', url);
@@ -1063,20 +1082,33 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
       socket.destroy();
       return;
     }
+    const origin = request.headers.origin;
 
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      void hub.handleConnection(
-        {
-          send: (data) => ws.send(data),
-          close: (code, reason) => ws.close(code, reason),
-          on: (event, handler) => {
-            if (event === 'message') ws.on('message', (data) => handler(String(data)));
-            else ws.on('close', () => handler(''));
-          },
-        },
-        requestUrl.searchParams.get('token') ?? undefined,
-      );
-    });
+    isOriginAllowed(originDeps, origin).then(
+      (allowed) => {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          if (!allowed) {
+            // design §7: the same allow-list as REST. Completed, then closed rather than
+            // destroyed, so the client learns why and does not retry (FR-SYS-003).
+            logger.warn({ subsystem: 'ws', origin }, 'refused a WebSocket from a foreign origin');
+            ws.close(WS_CLOSE_FORBIDDEN_ORIGIN, 'forbidden origin');
+            return;
+          }
+          void hub.handleConnection(
+            {
+              send: (data) => ws.send(data),
+              close: (code, reason) => ws.close(code, reason),
+              on: (event, handler) => {
+                if (event === 'message') ws.on('message', (data) => handler(String(data)));
+                else ws.on('close', () => handler(''));
+              },
+            },
+            requestUrl.searchParams.get('token') ?? undefined,
+          );
+        });
+      },
+      () => socket.destroy(),
+    );
   });
 
   // Deliberately no banner here. Announcing readiness belongs to the caller, because the caller is
@@ -1120,21 +1152,26 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     clearInterval(sweepTimer);
     await sweeping;
     // The document in flight finishes before the database closes; the rest are re-queued at start (F7).
-    await ingestion.stop();
-    await runs.shutdown();
-    await haltActiveRuns({
-      repository,
-      scope: LOCAL_SCOPE,
-      bus,
-      logger: logger.child({ subsystem: 'runs' }),
-      approvals,
-    });
+    try {
+      await ingestion.stop();
+      await runs.shutdown();
+      await haltActiveRuns({
+        repository,
+        scope: LOCAL_SCOPE,
+        bus,
+        logger: logger.child({ subsystem: 'runs' }),
+        approvals,
+      });
 
-    // Round 4: stop deriving timeline rows and close every MCP connection before the DB closes.
-    timeline.unsubscribe();
-    await mcpManager.closeAll();
-
-    workspace.stopAll();
+      // Round 4: stop deriving timeline rows and close every MCP connection before the DB closes.
+      timeline.unsubscribe();
+      await mcpManager.closeAll();
+    } finally {
+      // FR-SYS-008, D301: every terminal process stops, its whole tree with it, before the
+      // database closes; none outlives the engine, even if an earlier step above rejected.
+      workspace.stopAll();
+      await processes.stopAll();
+    }
     hub.closeAll();
     wss.close();
     // `server.close()` stops accepting, then waits for every open connection to end. Node closes

@@ -6,6 +6,7 @@ import type { WorkflowMode } from '../../forge/mode';
 import { useProject } from '../../projects/hooks';
 import { useSocketStatus } from '../../runs/hooks';
 import { useRunStore } from '../../runs/run-store';
+import { SocketNotice } from '../../runs/SocketNotice';
 import { fmt } from '../../theme/constants';
 import { useWorkspaceStatus, type WorkspaceTokens } from '../stores/workspace-status';
 import { SettingsMenu } from './SettingsMenu';
@@ -80,9 +81,13 @@ export function WorkspaceFooter({
   );
 }
 
-/** The live socket: open is Connected; connecting or reconnecting says so; anything else is down. */
+/**
+ * The live socket: open is Connected; connecting or reconnecting says so; a 4403 (D301) says this
+ * page's address may not connect, as an alert, since no retry fixes it; anything else is down.
+ */
 function Connection() {
   const status = useSocketStatus();
+  if (status === 'forbidden_origin') return <SocketNotice status={status} />;
   const reconnecting = status === 'connecting' || status === 'reconnecting';
   const look =
     status === 'open'

@@ -5,6 +5,7 @@ import {
   NodeSchema,
   SettingsSchema,
   THREAD_EVENT_TYPES,
+  TerminalTrustSchema,
   type CursorQuery,
   type Edge,
   type Id,
@@ -13,6 +14,7 @@ import {
   type Project,
   type Settings,
   type SettingsPatch,
+  type TerminalTrust,
   type Timestamp,
   type Workflow,
 } from '@ace/contracts';
@@ -126,7 +128,14 @@ type NodeRow = typeof nodes.$inferSelect;
 type EdgeRow = typeof edges.$inferSelect;
 type EventRow = typeof events.$inferSelect;
 
+/** D301: NULL, or anything the contract does not name, reads as no trust level — `on`. */
+function terminalOf(value: string | null): TerminalTrust | undefined {
+  const parsed = TerminalTrustSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
 function toProject(row: ProjectRow): Project {
+  const terminal = terminalOf(row.terminal);
   return {
     id: row.id,
     name: row.name,
@@ -134,6 +143,7 @@ function toProject(row: ProjectRow): Project {
     ...(row.lastOpenedAt === null ? {} : { lastOpenedAt: row.lastOpenedAt }),
     // A cap that was never set and one that was removed read the same: no cap (D72).
     ...(row.maxCostPerRunUsd === null ? {} : { maxCostPerRunUsd: row.maxCostPerRunUsd }),
+    ...(terminal === undefined ? {} : { terminal }),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -499,6 +509,7 @@ export class SqliteRepository implements Repository {
             folderPath: project.folderPath,
             lastOpenedAt: project.lastOpenedAt ?? null,
             maxCostPerRunUsd: project.maxCostPerRunUsd ?? null,
+            terminal: project.terminal ?? null,
             createdAt: project.createdAt,
             updatedAt: project.updatedAt,
           })
@@ -544,6 +555,7 @@ export class SqliteRepository implements Repository {
         name?: string;
         lastOpenedAt?: Timestamp;
         maxCostPerRunUsd?: number | null;
+        terminal?: TerminalTrust;
         updatedAt: Timestamp;
       },
     ) => {
@@ -556,6 +568,7 @@ export class SqliteRepository implements Repository {
           ...(patch.maxCostPerRunUsd === undefined
             ? {}
             : { maxCostPerRunUsd: patch.maxCostPerRunUsd }),
+          ...(patch.terminal === undefined ? {} : { terminal: patch.terminal }),
           updatedAt: patch.updatedAt,
         })
         .where(and(eq(projects.workspaceId, scope.workspaceId), eq(projects.id, id)))

@@ -113,13 +113,18 @@ describe('FR-SYS-006 round 1 error codes', () => {
     ]);
   });
 
-  it('adds the five codes Forge’s file API names (D299, design §6.1)', () => {
+  it('adds the codes Forge’s file API names (D299, §6.1) and the terminal’s (D301, §6.3)', () => {
     expect([...IDE_ERROR_CODES]).toEqual([
       'file_changed',
       'exists',
       'file_too_large',
       'outside_project',
       'protected_path',
+      'terminal_disabled',
+      'terminal_restricted',
+      'process_limit',
+      'process_not_running',
+      'engine_stopping',
     ]);
   });
 
@@ -145,6 +150,11 @@ describe('FR-SYS-006 round 1 error codes', () => {
       file_too_large: 413,
       outside_project: 403,
       protected_path: 403,
+      terminal_disabled: 403,
+      terminal_restricted: 403,
+      process_limit: 409,
+      process_not_running: 409,
+      engine_stopping: 503,
     });
   });
 });

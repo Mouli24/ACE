@@ -41,7 +41,11 @@ export function killTree(pid: number, platform: NodeJS.Platform): void {
   try {
     if (platform === 'win32') {
       // Windows has no process groups we can signal; taskkill /T ends the child and its descendants.
-      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' }).on('error', () => undefined);
+      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], {
+        stdio: 'ignore',
+        // No console window flashes up for the kill (D301), as the providers' copy already does.
+        windowsHide: true,
+      }).on('error', () => undefined);
     } else {
       // The child is spawned `detached`, so it leads its own group and `-pid` reaches everything it
       // started — the point of killing a runaway that itself spawned children.

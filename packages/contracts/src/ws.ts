@@ -24,6 +24,13 @@ export const WS_PATH = '/ws';
 export const WS_CLOSE_UNAUTHORIZED = 4401;
 
 /**
+ * Close code for a socket opened from an origin not on the allow-list (FR-SYS-003, design §7).
+ * The upgrade completes and is closed at once, so the client learns why instead of seeing a
+ * failed connection; the SDK does not reconnect after it.
+ */
+export const WS_CLOSE_FORBIDDEN_ORIGIN = 4403;
+
+/**
  * What a client may subscribe to. Round 4 §2.5 adds `thread`: a direct chat streams on its own
  * subscription, so an open chat panel receives `chat.token` and `chat.message` without the run
  * traffic of the workflow it belongs to — and a chat touches no run at all (FR-CHAT-005).

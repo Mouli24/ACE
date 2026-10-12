@@ -46,6 +46,13 @@ export const CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID = '20261009T120000_chat_sessi
 export const DOMAIN_MIGRATION_ID = '20261010T120000_domain';
 
 /**
+ * D301: a project's terminal trust level. Named so a test can apply the chain before it. Its id is
+ * dated after Domain's so it sorts, and applies, last: Domain's migration may already be on a real
+ * database, and this one never was.
+ */
+export const FORGE_TERMINAL_MIGRATION_ID = '20261013T120000_forge_terminal_trust';
+
+/**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
  * written.
@@ -595,6 +602,14 @@ export const MIGRATIONS: readonly Migration[] = [
 
       -- D314: one run's events in order, for Domain's chat page and stream.
       CREATE INDEX IF NOT EXISTS events_run_idx ON events (workspace_id, run_id, seq);
+    `,
+  },
+  {
+    id: FORGE_TERMINAL_MIGRATION_ID,
+    up: `
+      -- D301: how far the project trusts its terminal: 'on', 'scripts' or 'off'. NULL reads as
+      -- 'on' (absent in the contract), so no row needs a backfill.
+      ALTER TABLE projects ADD COLUMN terminal TEXT;
     `,
   },
 ];

@@ -5,6 +5,7 @@ import {
   EdgeSchema,
   EntityNameSchema,
   NodeSchema,
+  TerminalTrustSchema,
   WorkflowSchema,
 } from './graph.js';
 import { ValidationIssueSchema } from './validation.js';
@@ -72,6 +73,8 @@ export const UpdateProjectRequestSchema = z.object({
   name: EntityNameSchema.optional(),
   /** Round 3 §2.3: the run cost cap; `null` removes it (D72). */
   maxCostPerRunUsd: BudgetUsdSchema.nullable().optional(),
+  /** D301: the terminal trust level. `off` also stops what runs (the gateway's PATCH route). */
+  terminal: TerminalTrustSchema.optional(),
 });
 export type UpdateProjectRequest = z.infer<typeof UpdateProjectRequestSchema>;
 
