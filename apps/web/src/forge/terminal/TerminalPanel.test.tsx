@@ -1,5 +1,6 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from '../../app/api';
@@ -303,5 +304,51 @@ describe('D301 the Terminal takes the focus only when asked', () => {
     await user.click(screen.getByRole('tab', { name: 'Terminal' }));
     await screen.findByTestId('terminal-screen');
     await waitFor(() => expect(term().focused).toBe(1));
+  });
+});
+
+describe('D301 rewrites reset inside the write stream, and typed-ahead input waits its turn', () => {
+  it('a rewrite is one write that starts with ESC c, and never calls reset()', async () => {
+    const projectId = await open();
+    const reset = vi.spyOn(term(), 'reset');
+    const write = vi.spyOn(term(), 'write');
+    act(() => {
+      useTerminalStore.getState().output(projectId, 'nope', 'x');
+    });
+    type('echo a\r');
+    await waitFor(() => expect(shown()).toBe('~ $ echo a\na\n~ $ '));
+    write.mockClear();
+    type('cls\r');
+    await waitFor(() => expect(shown()).toBe('~ $ '));
+    const rewrites = write.mock.calls.filter(([data]) => String(data).startsWith('\u001bc'));
+    expect(rewrites.length).toBeGreaterThan(0);
+    expect(reset).not.toHaveBeenCalled();
+  });
+
+  it('input typed ahead, before the start has returned, reaches the process', async () => {
+    await open();
+    type('ask\r');
+    type('Ada\r');
+    await waitFor(() => expect(shown()).toContain('hello Ada'));
+  });
+
+  it('after a theme switch, the view of another project (same tab id) wears the current theme', async () => {
+    const first = db.createProject({ name: 'Shop' }).id;
+    const second = db.createProject({ name: 'Other' }).id;
+    let pick: (id: string) => void = () => undefined;
+    function Switch() {
+      const [id, setId] = useState(first);
+      pick = setId;
+      return <Harness projectId={id} />;
+    }
+    useTerminalStore.getState().newTab(second);
+    renderWithQuery(<Switch />);
+    await screen.findByTestId('terminal-screen');
+    act(() => setThemeMode('dark'));
+    await waitFor(() => expect(term().options['theme']).toEqual(terminalTheme('dark')));
+    act(() => pick(second));
+    await waitFor(() => expect(useTerminalStore.getState().projects[second]).toBeDefined());
+    await waitFor(() => expect(term().options['theme']).toEqual(terminalTheme('dark')));
+    expect(FakeTerminal.instances.length).toBeGreaterThan(1);
   });
 });

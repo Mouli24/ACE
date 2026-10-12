@@ -47,3 +47,10 @@ describe('the FakeTerminal double shows what a person would see', () => {
     expect([term.cols, term.rows]).toEqual([100, 30]);
   });
 });
+
+describe('D301 ESC c (RIS) in the write stream', () => {
+  it('clears the whole screen, in order with what was written before it', () => {
+    expect(screenText('a\u001bcb')).toBe('b');
+    expect(screenText('one\r\ntwo\u001bcthree')).toBe('three');
+  });
+});

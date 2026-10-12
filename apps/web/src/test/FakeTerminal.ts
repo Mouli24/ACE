@@ -43,6 +43,15 @@ export function screenText(stream: string): string {
   };
   for (let i = 0; i < stream.length; i += 1) {
     const ch = stream.charAt(i);
+    if (ch === '\u001b' && stream.charAt(i + 1) === 'c') {
+      // RIS: a full reset, in order with the writes around it.
+      lines.length = 0;
+      lines.push([]);
+      row = 0;
+      col = 0;
+      i += 1;
+      continue;
+    }
     if (ch === '\u001b') {
       // eslint-disable-next-line no-control-regex -- escape sequences are exactly what is parsed
       const match = /^\u001b\[([0-9;?]*)([A-Za-z~])/.exec(stream.slice(i));
