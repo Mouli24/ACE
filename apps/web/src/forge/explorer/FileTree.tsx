@@ -41,6 +41,8 @@ import { useTreeRows } from './useTreeRows';
 
 const SAVING = 'Wait for the save to finish.';
 const DRAG_TYPE = 'application/x-ace-path';
+/** Where a drop would land: the canvas's selection box, its orange wash and 1.5px line (D332). */
+const DROP_TARGET = 'bg-[rgba(239,107,63,0.06)] shadow-[inset_0_0_0_1.5px_#ef6b3f]';
 const messageOf = (error: unknown): string =>
   AceApiError.is(error) || error instanceof Error ? error.message : String(error);
 
@@ -339,6 +341,7 @@ export function FileTree({
         label={kind === 'folder' ? 'New folder name' : 'New file name'}
         initial=""
         depth={depth}
+        folder={kind === 'folder'}
         problemOf={(name) => nameProblem(name, siblingsOf(parent), { allowSlash: true })}
         onCommit={(name, wantFocus) => commitCreate(parent, kind, name, wantFocus)}
         onCancel={(wantFocus) => {
@@ -389,6 +392,7 @@ export function FileTree({
           label={`Rename ${nameOf(path)}`}
           initial={nameOf(path)}
           depth={depth}
+          folder={folder}
           problemOf={(next) =>
             nameProblem(next, siblingsOf(parentOf(path), path), { allowSlash: false })
           }
@@ -430,7 +434,7 @@ export function FileTree({
             'flex h-[26px] w-full shrink-0 cursor-pointer select-none items-center gap-[7px] rounded-[6px] pr-[8px] text-left text-[12.5px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]',
             active ? 'bg-[var(--hover)]' : 'bg-transparent',
             folder || active ? 'font-semibold' : 'font-medium',
-            dropTarget === path && 'bg-selection/30 ring-1 ring-inset ring-accent',
+            dropTarget === path && DROP_TARGET,
             row.ignored && 'opacity-50',
           )}
           style={{ paddingLeft: 8 + depth * 14 }}
@@ -487,13 +491,7 @@ export function FileTree({
         </div>
       ),
     );
-    if (
-      editing?.mode === 'create' &&
-      query === '' &&
-      folder &&
-      editing.parent === path &&
-      isOpen
-    )
+    if (editing?.mode === 'create' && query === '' && folder && editing.parent === path && isOpen)
       rendered.push(inputRow(depth + 1));
   }
 
@@ -505,14 +503,16 @@ export function FileTree({
       ref={treeElement}
       role="tree"
       aria-label={label}
-      className={cn(area, 'outline-none', dropTarget === '' && 'bg-selection/10')}
+      className={cn(area, 'outline-none', dropTarget === '' && DROP_TARGET)}
       onKeyDown={onKeyDown}
       onContextMenu={(event) => {
         // The menu acts on the row under the pointer, or on the project folder anywhere else — the
         // empty note and a name field included — never on a row right-clicked earlier (review
         // minor 1). The name field keeps the browser's own menu: it never reaches this handler.
         const element = (event.target as Element).closest('[role="treeitem"]');
-        setMenuTarget(rows.find((candidate) => rowElements.current.get(candidate.path) === element));
+        setMenuTarget(
+          rows.find((candidate) => rowElements.current.get(candidate.path) === element),
+        );
       }}
       {...(editable ? dragTargetProps('', false) : {})}
     >
@@ -529,7 +529,6 @@ export function FileTree({
         <ContextMenu modal={false}>
           <ContextMenuTrigger asChild>{treeView}</ContextMenuTrigger>
           <ContextMenuContent
-            className="w-56"
             onCloseAutoFocus={(event) => {
               // a name field opened from the menu keeps the focus; the menu must not take it back
               if (store.getState().projects[projectId]?.editing !== undefined)
@@ -554,7 +553,7 @@ export function FileTree({
                 >
                   Rename <ContextMenuShortcut>F2</ContextMenuShortcut>
                 </ContextMenuItem>
-                <ContextMenuItem className="text-danger" onSelect={() => setPendingDelete(target)}>
+                <ContextMenuItem destructive onSelect={() => setPendingDelete(target)}>
                   Delete <ContextMenuShortcut>Del</ContextMenuShortcut>
                 </ContextMenuItem>
                 <ContextMenuSeparator />

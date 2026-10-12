@@ -7,7 +7,8 @@ import { useQuickOpen } from '../quick-open/quick-open-store';
 
 /**
  * The theme's code view with no file open (D334): one muted line, centred — and under it the real
- * actions, with their keys (D299, design §2.2): go to a file, or make a new one in the Explorer.
+ * actions (D299, design §2.2) as the theme's Close pills: go to a file, its key in mono, or make a
+ * new one in the Explorer.
  */
 export function EmptyEditor({ projectId }: { projectId: string }) {
   const showQuickOpen = useQuickOpen((s) => s.show);
@@ -16,12 +17,14 @@ export function EmptyEditor({ projectId }: { projectId: string }) {
     useExplorerStore.getState().startCreate(projectId, '', 'file');
   };
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-4">
+    <div className="flex flex-1 flex-col items-center justify-center gap-[14px]">
       <p className="text-[13px] text-[var(--muted)]">Open a file from the explorer</p>
-      <div className="flex justify-center gap-2">
+      <div className="flex items-center gap-[8px]">
         <Button variant="secondary" size="sm" onClick={showQuickOpen}>
           Go to file{' '}
-          <span className="font-machine text-fg-faint">{shortcutLabel(SHORTCUTS.quickOpen)}</span>
+          <span className="font-machine text-[10px] font-medium text-[var(--muted)]">
+            {shortcutLabel(SHORTCUTS.quickOpen)}
+          </span>
         </Button>
         <Button variant="secondary" size="sm" onClick={newFile}>
           New file

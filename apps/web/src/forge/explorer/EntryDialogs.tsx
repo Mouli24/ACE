@@ -9,12 +9,17 @@ import {
 } from '@ace/ui';
 import { useState } from 'react';
 
-import { nameOf } from '../files/paths';
+import { joinPath, nameOf } from '../files/paths';
 
-/** A confirm with an error line for the engine's refusal; the action resolves to that refusal or undefined. */
+/**
+ * A confirm with an error line for the engine's refusal; the action resolves to that refusal or
+ * undefined. The theme's modal shell (D328), as Forge's unsaved-changes dialog wears it: the paths
+ * in mono, the refusal in the error red, Cancel as the Close pill.
+ */
 function ConfirmDialog({
   title,
   description,
+  detail,
   action,
   destructive,
   onConfirm,
@@ -22,6 +27,8 @@ function ConfirmDialog({
 }: {
   title: string;
   description: string;
+  /** The project-relative path or paths the action touches. */
+  detail: string;
   action: string;
   destructive: boolean;
   onConfirm(): Promise<string | undefined>;
@@ -41,13 +48,14 @@ function ConfirmDialog({
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
+        <p className="break-all font-machine text-[11px] text-[var(--muted)]">{detail}</p>
         {problem !== undefined && (
-          <p role="alert" className="text-sm text-danger">
+          <p role="alert" className="text-[12px] text-[#c94c27]">
             {problem}
           </p>
         )}
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose}>
             Cancel
           </Button>
           <Button
@@ -85,6 +93,7 @@ export function DeleteDialog({
     <ConfirmDialog
       title={`Delete “${nameOf(path)}”?`}
       description={`${isFolder ? 'The folder and everything in it are' : 'The file is'} removed from disk. This cannot be undone. Open files with unsaved changes are closed without saving.`}
+      detail={isFolder ? `${path}/` : path}
       action="Delete"
       destructive
       onConfirm={onConfirm}
@@ -109,6 +118,7 @@ export function MoveDialog({
     <ConfirmDialog
       title={`Move “${nameOf(from)}” into ${where}?`}
       description="Open files follow it."
+      detail={`${from} → ${joinPath(folder, nameOf(from))}`}
       action="Move"
       destructive={false}
       onConfirm={onConfirm}

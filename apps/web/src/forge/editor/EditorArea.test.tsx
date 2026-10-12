@@ -2,7 +2,10 @@ import { act, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { useLayoutStore } from '../../app/stores/layout';
 import { db, installMockServer, renderWithQuery } from '../../test/app';
+import { useExplorerStore } from '../explorer/explorer-store';
+import { useQuickOpen } from '../quick-open/quick-open-store';
 import { openFile } from './actions';
 import { EditorArea } from './EditorArea';
 import { useEditorStore } from './editor-store';
@@ -173,5 +176,29 @@ describe('D334 the theme’s code column', () => {
     expect(close.className).not.toMatch(/\bhidden\b/);
     act(() => close.focus());
     expect(close).toHaveFocus();
+  });
+});
+
+describe('D299 D334 the empty code column’s actions', () => {
+  it('offers Go to file (with its key in mono) and New file as the theme’s Close pills', async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<EditorArea projectId={projectId} />);
+    const goTo = screen.getByRole('button', { name: /Go to file/ });
+    const newFile = screen.getByRole('button', { name: 'New file' });
+    for (const button of [goTo, newFile]) {
+      expect(button).toHaveClass('h-[30px]', 'rounded-full', 'bg-[var(--soft)]');
+    }
+    expect(within(goTo).getByText(/P$/)).toHaveClass('font-machine', 'text-[var(--muted)]');
+
+    await user.click(goTo);
+    expect(useQuickOpen.getState().open).toBe(true);
+    act(() => useQuickOpen.getState().hide());
+    await user.click(newFile);
+    expect(useExplorerStore.getState().projects[projectId]?.editing).toEqual({
+      mode: 'create',
+      parent: '',
+      kind: 'file',
+    });
+    expect(useLayoutStore.getState().sidebarOpen).toBe(true);
   });
 });

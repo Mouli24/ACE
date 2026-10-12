@@ -11,11 +11,15 @@ const NONE: Problem[] = [];
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 /*
- * Forge's status bar (D299, design §2.2) lives in the workspace footer since D330/D334: the
- * problem counts beside the project, the active file's facts on the right.
+ * Forge's status bar (D299, design §2.2) is two pieces of the workspace footer since D330/D334, in
+ * the footer's type: the problem counts after the project slug, the open file's facts first on the
+ * right, as the theme's `footExtra`.
  */
 
-/** The errors and warnings in the open files; a click opens Problems. */
+/**
+ * The errors and warnings in the open files; a click opens Problems. Mono, muted like the slug; a
+ * mark takes the Validation tab's colour (✕ red, ! accent) while its count is not zero.
+ */
 export function ProblemsCount({ projectId }: { projectId: string }) {
   const problems = useProblemsStore((s) => s.byProject[projectId] ?? NONE);
   const showPanel = useLayoutStore((s) => s.showPanel);
@@ -24,17 +28,26 @@ export function ProblemsCount({ projectId }: { projectId: string }) {
   return (
     <button
       type="button"
+      data-testid="footer-problems"
       aria-label={`${plural(errors, 'error')}, ${plural(warnings, 'warning')}`}
       title="Problems"
       onClick={() => showPanel('problems')}
-      className="flex items-center gap-2 hover:text-fg"
+      className="flex shrink-0 cursor-pointer items-center gap-[8px] rounded-[4px] border-none bg-transparent px-[2px] font-machine text-[10px] text-[var(--muted)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
     >
-      <span className="flex items-center gap-1">
-        <span aria-hidden>✕</span>
+      <span className="flex items-center gap-[4px]">
+        <span aria-hidden style={errors > 0 ? { color: '#c94c27' } : undefined}>
+          ✕
+        </span>
         {errors}
       </span>
-      <span className="flex items-center gap-1">
-        <span aria-hidden>!</span>
+      <span className="flex items-center gap-[4px]">
+        <span
+          aria-hidden
+          className="font-bold"
+          style={warnings > 0 ? { color: '#e8572e' } : undefined}
+        >
+          !
+        </span>
         {warnings}
       </span>
     </button>
