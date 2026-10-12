@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-import { db, installMockServer, renderApp } from '../test/app';
+import { db, installMockServer, processes, renderApp } from '../test/app';
 
 installMockServer();
 
@@ -78,5 +78,48 @@ describe('ProjectPage in the Ace UI theme (D328)', () => {
     await user.type(cap, '0.5{Enter}');
     await waitFor(() => expect(db.getProject(project.id)?.maxCostPerRunUsd).toBe(0.5));
     expect(within(fields).queryByTestId('daily-budget')).not.toBeInTheDocument();
+  });
+});
+
+describe('D301 a project says how far it trusts its terminal', () => {
+  async function terminalSelect() {
+    const select = await screen.findByTestId('project-terminal');
+    await waitFor(() => expect(select).toBeEnabled());
+    return select;
+  }
+
+  it('reads On by default, as the theme’s dropdown in its own card, and saves Scripts only', async () => {
+    const user = userEvent.setup();
+    const project = db.createProject({ name: 'Shop' });
+    renderApp(`/projects/${project.id}`);
+    const select = await terminalSelect();
+    expect(select).toHaveTextContent('On — any command');
+    expect(select).toHaveClass('h-[38px]', 'rounded-[9px]', 'bg-[var(--canvas)]');
+    expect(screen.getByTestId('project-terminal-card')).toHaveClass(
+      'rounded-[12px]',
+      'border-[var(--line)]',
+      'bg-[var(--surface)]',
+    );
+
+    await user.click(select);
+    await user.click(await screen.findByRole('option', { name: 'Scripts only' }));
+    await waitFor(() => expect(db.getProject(project.id)?.terminal).toBe('scripts'));
+    expect(select).toHaveTextContent('Scripts only');
+  });
+
+  it('Off stops what runs in the project', async () => {
+    const user = userEvent.setup();
+    const project = db.createProject({ name: 'Shop' });
+    const { processId } = processes.start(project.id, { command: 'serve' });
+    renderApp(`/projects/${project.id}`);
+    const select = await terminalSelect();
+
+    await user.click(select);
+    await user.click(await screen.findByRole('option', { name: 'Off' }));
+    await waitFor(() => expect(db.getProject(project.id)?.terminal).toBe('off'));
+    expect(processes.get(project.id, processId)).toMatchObject({
+      status: 'exited',
+      signal: 'SIGKILL',
+    });
   });
 });

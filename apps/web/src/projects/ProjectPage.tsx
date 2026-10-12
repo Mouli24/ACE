@@ -1,13 +1,22 @@
+import type { TerminalTrust } from '@ace/contracts';
 import { Button } from '@ace/ui';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { BudgetFields } from '../settings/BudgetFields';
+import { SelectField } from '../settings/SettingFields';
 import { ago } from '../theme/format';
 import { useWorkflowImport } from '../workflows/ImportWorkflowButton';
 import { CreateWorkflowDialog } from '../workflows/WorkflowDialogs';
 import { useWorkflows } from '../workflows/hooks';
 import { useProject, useUpdateProject } from './hooks';
+
+/** D301: how far this project trusts Forge's terminal. */
+const TERMINAL_OPTIONS: ReadonlyArray<{ value: TerminalTrust; label: string }> = [
+  { value: 'on', label: 'On — any command' },
+  { value: 'scripts', label: 'Scripts only' },
+  { value: 'off', label: 'Off' },
+];
 
 /**
  * `/projects/:projectId` — the project with its workflows; pick one to open the Canvas. An uncovered
@@ -123,6 +132,23 @@ export function ProjectPage() {
             onSaveMaxCostPerRun={(maxCostPerRunUsd) =>
               updateProject.mutate({ id: projectId, maxCostPerRunUsd })
             }
+            disabled={!project.data}
+          />
+        </div>
+
+        {/* D301: Forge's terminal, in its own theme card. Off disables it now: what runs is stopped. */}
+        <div
+          data-testid="project-terminal-card"
+          className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4"
+        >
+          <SelectField<TerminalTrust>
+            id="project-terminal"
+            label="Terminal"
+            hint="On runs any command typed in Forge's terminal. Scripts only runs this project's package.json scripts. Off turns the terminal off and stops what runs."
+            testId="project-terminal"
+            value={project.data?.terminal ?? 'on'}
+            options={TERMINAL_OPTIONS}
+            onChange={(terminal) => updateProject.mutate({ id: projectId, terminal })}
             disabled={!project.data}
           />
         </div>
