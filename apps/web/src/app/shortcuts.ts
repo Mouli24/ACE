@@ -49,15 +49,20 @@ export const SHORTCUTS = {
   /** Forge's bottom panel (Problems): D299, back with the panel after D334. */
   togglePanel: { code: 'KeyJ', mod: true },
   closeTab: { code: 'KeyW', alt: true },
+  /** D301: shows or hides the Terminal. Not a browser key, so it is safe to bind. */
+  toggleTerminal: { code: 'Backquote', mod: true },
 } as const satisfies Record<string, Shortcut>;
 
 const isMac = (): boolean =>
   typeof navigator !== 'undefined' &&
   /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
+/** Keys whose `code` is not what a person reads on the key. */
+const KEY_LABELS: Readonly<Record<string, string>> = { Backquote: '`' };
+
 /** "Ctrl+Shift+2" on Windows, "⌘⇧2" on a Mac — for titles and the empty editor's hints. */
 export function shortcutLabel(shortcut: Shortcut): string {
-  const key = shortcut.code.replace(/^Key|^Digit/, '');
+  const key = KEY_LABELS[shortcut.code] ?? shortcut.code.replace(/^Key|^Digit/, '');
   if (isMac())
     return `${shortcut.mod ? '⌘' : ''}${shortcut.alt ? '⌥' : ''}${shortcut.shift ? '⇧' : ''}${key}`;
   return [shortcut.mod && 'Ctrl', shortcut.alt && 'Alt', shortcut.shift && 'Shift', key]

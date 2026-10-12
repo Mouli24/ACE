@@ -1,3 +1,5 @@
+import { useLayoutStore } from '../../app/stores/layout';
+
 /**
  * The Terminal takes the keyboard focus only when the person asked for it (D301): Ctrl+`, a click
  * on the panel's Terminal pill or on a terminal tab, New terminal, Show, a script button, the
@@ -28,8 +30,15 @@ export function registerTerminalFocus(focus: () => void): () => void {
   };
 }
 
-/** Tests: a request never outlives the test that made it. */
+/** Drops a pending request: a rename that keeps the caret, and tests (a request never outlives its test). */
 export function cancelTerminalFocus(): void {
   if (timer !== undefined) clearTimeout(timer);
   timer = undefined;
+}
+
+/** Ctrl+` and the empty editor's Terminal pill: show the Terminal and focus it, or hide it. */
+export function toggleTerminalFocused(): void {
+  const layout = useLayoutStore.getState();
+  if (!(layout.panelOpen && layout.panelTab === 'terminal')) requestTerminalFocus();
+  layout.toggleTerminal();
 }

@@ -1,10 +1,11 @@
-import type { ProcessStartRequest } from '@ace/contracts';
+import type { PackageManager, ProcessStartRequest, ProcessSummary } from '@ace/contracts';
 import type { QueryClient } from '@tanstack/react-query';
 
 import { api } from '../../app/api';
 import { parseBuiltin, resolveCd } from './builtins';
 import { processKeys } from './hooks';
-import { feed, type LineAction } from './line-discipline';
+import { busyLine, feed, type LineAction } from './line-discipline';
+import { reattach } from './process-events';
 import { errorLine, tabOf, useTerminalStore } from './terminal-store';
 
 /**
@@ -168,4 +169,39 @@ export function typed(
     last = enqueue(projectId, tabId, () => perform(projectId, tabId, action, queryClient));
   }
   return last;
+}
+
+/** A script button (D301): the script runs in a new tab named after it, as `<pm> run <name>`. */
+export function runScript(
+  projectId: string,
+  name: string,
+  packageManager: PackageManager,
+  queryClient: QueryClient,
+): Promise<void> {
+  const store = useTerminalStore.getState();
+  const tabId = store.newTab(projectId, { label: name });
+  store.write(projectId, tabId, `${packageManager} run ${name}\r\n`);
+  const tab = tabOf(projectId, tabId);
+  if (tab !== undefined) store.setLine(projectId, tabId, busyLine(tab.line));
+  // No cwd: a script always runs at the project root (decision 5), whatever the tab's folder.
+  return enqueue(projectId, tabId, () => startInTab(projectId, tabId, { script: name }, queryClient));
+}
+
+/**
+ * A process no tab owns — started from another browser tab, or before a reload — opens in a new
+ * tab with what the engine kept of its output, and takes typing from then on.
+ */
+export async function openProcessInTab(
+  projectId: string,
+  summary: ProcessSummary,
+  queryClient: QueryClient,
+): Promise<void> {
+  const store = useTerminalStore.getState();
+  const tabId = store.newTab(projectId, { label: summary.label, cwd: summary.cwd });
+  store.write(projectId, tabId, `${summary.command}\r\n`);
+  const tab = tabOf(projectId, tabId);
+  if (tab !== undefined) store.setLine(projectId, tabId, busyLine(tab.line));
+  store.attach(projectId, tabId, summary.id);
+  // Only this tab: the others keep what they show.
+  await reattach(projectId, queryClient, summary.id);
 }

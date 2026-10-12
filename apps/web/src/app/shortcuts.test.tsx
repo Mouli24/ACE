@@ -80,4 +80,13 @@ describe('D299 Forge’s keyboard shortcuts', () => {
     expect(event.defaultPrevented).toBe(true);
     expect(editorSaw).not.toHaveBeenCalled();
   });
+
+  it('D301 Ctrl+` and ⌘+` toggle the terminal, labelled with the backquote itself', () => {
+    const backquote = (init: KeyboardEventInit) =>
+      new KeyboardEvent('keydown', { code: 'Backquote', key: '`', ...init });
+    expect(matches(backquote({ ctrlKey: true }), SHORTCUTS.toggleTerminal)).toBe(true);
+    expect(matches(backquote({ metaKey: true }), SHORTCUTS.toggleTerminal)).toBe(true);
+    expect(matches(backquote({}), SHORTCUTS.toggleTerminal)).toBe(false);
+    expect(shortcutLabel(SHORTCUTS.toggleTerminal)).toBe('Ctrl+`');
+  });
 });

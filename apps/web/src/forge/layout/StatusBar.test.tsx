@@ -1,13 +1,14 @@
-import { act, screen } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
 import { useLayoutStore } from '../../app/stores/layout';
-import { db, installMockServer, renderWithQuery } from '../../test/app';
+import { db, installMockServer, processes, queryClient, renderWithQuery } from '../../test/app';
 import { useEditorStore } from '../editor/editor-store';
 import { useEditorStatus } from '../editor/editor-status';
 import { useProblemsStore } from '../panel/problems-store';
-import { CursorInfo, ProblemsCount } from './StatusBar';
+import { processKeys } from '../terminal/hooks';
+import { CursorInfo, ProblemsCount, RunningCount } from './StatusBar';
 
 installMockServer();
 
@@ -112,5 +113,29 @@ describe('D330 D334 the status bar’s pieces in the footer’s type', () => {
     expect(screen.getByTestId('footer-cursor')).toHaveTextContent(
       /^Ln 3, Col 9 · Spaces: 2 · UTF-8 · LF · Markdown$/,
     );
+  });
+
+  it('D301 counts the running processes as ▶ N running, in the counts’ type; a click opens the Terminal', async () => {
+    const user = userEvent.setup();
+    const projectId = db.createProject({ name: 'P' }).id;
+    processes.start(projectId, { command: 'serve' });
+    processes.start(projectId, { command: 'serve' });
+    renderWithQuery(<RunningCount projectId={projectId} />);
+    const count = await screen.findByRole('button', { name: '2 running' });
+    expect(count).toHaveClass('font-machine', 'text-[10px]', 'text-[var(--muted)]');
+    expect(screen.getByText('▶')).toHaveStyle({ color: '#ef6b3f' });
+    await user.click(count);
+    expect(useLayoutStore.getState()).toMatchObject({ panelOpen: true, panelTab: 'terminal' });
+    processes.stopProject(projectId);
+  });
+
+  it('D301 says nothing about processes when none runs', async () => {
+    const projectId = db.createProject({ name: 'P' }).id;
+    renderWithQuery(<RunningCount projectId={projectId} />);
+    // The list has arrived (empty): only now does "no count" mean something.
+    await waitFor(() =>
+      expect(queryClient.getQueryState(processKeys.list(projectId))?.status).toBe('success'),
+    );
+    expect(screen.queryByTestId('footer-running')).toBeNull();
   });
 });
