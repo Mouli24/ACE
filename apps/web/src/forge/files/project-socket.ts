@@ -1,9 +1,9 @@
 import type { FilesChangedPayload } from '@ace/contracts';
-import type { AceSocket } from '@ace/sdk';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 
 import { getSocket } from '../../app/socket';
+import { useProjectScope } from '../project-scope';
 import { fileKeys } from './keys';
 import { isWithin, parentOf } from './paths';
 
@@ -63,28 +63,20 @@ export function applyFilesChanged(queryClient: QueryClient, payload: FilesChange
   if (listChanged) void queryClient.invalidateQueries({ queryKey: fileKeys.list(projectId) });
 }
 
-/** Per socket, so a restarted socket (tests) starts from zero. */
-const watchers = new WeakMap<AceSocket, Map<string, number>>();
-
 /**
- * While mounted: subscribe to the project's scope — the engine watches its folder meanwhile — and
- * fold each `files.changed` into the cache. Mounting also refreshes every file query of the
- * project, and so does a reconnect (`hello`): frames missed while away are never replayed,
- * because they are transient.
+ * While mounted: hold the project's scope — the engine watches its folder meanwhile — and fold
+ * each `files.changed` into the cache. Mounting also refreshes every file query of the project,
+ * and so does a reconnect (`hello`): frames missed while away are never replayed, because they
+ * are transient. The subscription is shared with the terminal (`useProjectScope`, D301).
  */
 export function useProjectFiles(projectId: string | undefined): void {
   const queryClient = useQueryClient();
+  useProjectScope(projectId);
   useEffect(() => {
-    const socket = getSocket();
     if (!projectId) return;
     void queryClient.invalidateQueries({ queryKey: fileKeys.all(projectId) });
+    const socket = getSocket();
     if (!socket) return;
-    const payload = { scope: 'project' as const, id: projectId };
-    const counts = watchers.get(socket) ?? new Map<string, number>();
-    watchers.set(socket, counts);
-    const count = counts.get(projectId) ?? 0;
-    counts.set(projectId, count + 1);
-    if (count === 0) socket.subscribe(payload);
     const offChanged = socket.on('files.changed', (frame) => {
       if (frame.projectId === projectId) applyFilesChanged(queryClient, frame);
     });
@@ -94,13 +86,6 @@ export function useProjectFiles(projectId: string | undefined): void {
     return () => {
       offChanged();
       offHello();
-      const left = (counts.get(projectId) ?? 1) - 1;
-      if (left > 0) {
-        counts.set(projectId, left);
-        return;
-      }
-      counts.delete(projectId);
-      socket.unsubscribe(payload);
     };
   }, [projectId, queryClient]);
 }

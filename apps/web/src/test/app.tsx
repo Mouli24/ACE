@@ -16,6 +16,7 @@ import { useExplorerStore } from '../forge/explorer/explorer-store';
 import { useOutputStore } from '../forge/panel/output-store';
 import { useProblemsStore } from '../forge/panel/problems-store';
 import { useQuickOpen } from '../forge/quick-open/quick-open-store';
+import { useTerminalStore } from '../forge/terminal/terminal-store';
 import { MockDb } from '../mocks/db';
 import { createHandlers } from '../mocks/handlers';
 import { createDomainHandlers, domainMock } from '../mocks/handlers-domain';
@@ -76,6 +77,7 @@ export function installMockServer(): void {
     useLayoutStore.setState(initialLayout, true);
     useOutputStore.setState({ lines: {} });
     useProblemsStore.setState({ byProject: {} });
+    useTerminalStore.getState().reset();
     // no text file shown (D330's `path`), and the position, file facts and language as at start
     useEditorStatus.getState().clear();
   });
