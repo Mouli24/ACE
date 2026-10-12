@@ -17,6 +17,7 @@ import { useExplorerStore } from '../forge/explorer/explorer-store';
 import { useOutputStore } from '../forge/panel/output-store';
 import { useProblemsStore } from '../forge/panel/problems-store';
 import { useQuickOpen } from '../forge/quick-open/quick-open-store';
+import { cancelTerminalFocus } from '../forge/terminal/focus';
 import { useTerminalStore } from '../forge/terminal/terminal-store';
 import { MockDb } from '../mocks/db';
 import { createFakeWebSocket } from '../mocks/fake-socket';
@@ -83,6 +84,7 @@ export function installMockServer(): void {
     useTerminalStore.getState().reset();
     FakeTerminal.instances = [];
     FakeSearchAddon.instances = [];
+    cancelTerminalFocus();
     // no text file shown (D330's `path`), and the position, file facts and language as at start
     useEditorStatus.getState().clear();
   });

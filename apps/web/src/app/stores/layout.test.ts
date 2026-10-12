@@ -37,4 +37,19 @@ describe('D299 D330 the workspace layout is the person’s choice, and is rememb
     useLayoutStore.getState().closePanel();
     expect(useLayoutStore.getState()).toMatchObject({ panelOpen: false, panelMaximized: false });
   });
+
+  it('D301 a stored view this build does not have (Phase 1’s Output) opens as Problems', async () => {
+    localStorage.setItem(
+      LAYOUT_STORAGE_KEY,
+      JSON.stringify({ state: { panelOpen: true, panelTab: 'output' }, version: 0 }),
+    );
+    await useLayoutStore.persist.rehydrate();
+    expect(useLayoutStore.getState()).toMatchObject({ panelOpen: true, panelTab: 'problems' });
+    localStorage.setItem(
+      LAYOUT_STORAGE_KEY,
+      JSON.stringify({ state: { panelOpen: true, panelTab: 'terminal' }, version: 0 }),
+    );
+    await useLayoutStore.persist.rehydrate();
+    expect(useLayoutStore.getState().panelTab).toBe('terminal');
+  });
 });
