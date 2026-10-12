@@ -124,6 +124,7 @@ describe('FR-SYS-006 round 1 error codes', () => {
       'terminal_restricted',
       'process_limit',
       'process_not_running',
+      'engine_stopping',
     ]);
   });
 
@@ -153,6 +154,7 @@ describe('FR-SYS-006 round 1 error codes', () => {
       terminal_restricted: 403,
       process_limit: 409,
       process_not_running: 409,
+      engine_stopping: 503,
     });
   });
 });

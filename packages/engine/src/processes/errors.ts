@@ -50,3 +50,13 @@ export const unsafeScriptName = (name: string): HttpError =>
     { script: name },
     false,
   );
+
+/** The engine is shutting down (FR-SYS-008): nothing new starts while the last ones are killed. */
+export const engineStopping = (): HttpError =>
+  new HttpError(
+    'workflow',
+    'engine_stopping',
+    'The engine is shutting down; the command was not started.',
+    undefined,
+    false,
+  );
