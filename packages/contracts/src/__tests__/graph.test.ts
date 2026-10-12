@@ -16,7 +16,10 @@ import {
   LoopConfigSchema,
   LoopStopReasonSchema,
   NodeSchema,
+  DEFAULT_TERMINAL_TRUST,
   ProjectSchema,
+  TERMINAL_TRUST_LEVELS,
+  TerminalTrustSchema,
   REVIEW_CONTRACT_SCHEMA,
   REVIEW_VERDICTS,
   RetrievalConfigSchema,
@@ -100,6 +103,25 @@ describe('FR-PRJ-001 Project entity', () => {
 
   it('accepts a name of exactly 120 chars', () => {
     expect(ProjectSchema.safeParse({ ...project, name: 'x'.repeat(120) }).success).toBe(true);
+  });
+});
+
+describe('D301 a project says how far it trusts its terminal', () => {
+  const project = {
+    id: PROJECT_ID,
+    name: 'Demo',
+    folderPath: 'D:/projects/demo',
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+
+  it('is on, scripts or off; absent reads as on', () => {
+    expect([...TERMINAL_TRUST_LEVELS]).toEqual(['on', 'scripts', 'off']);
+    expect(DEFAULT_TERMINAL_TRUST).toBe('on');
+    expect(ProjectSchema.parse(project).terminal).toBeUndefined();
+    expect(ProjectSchema.parse({ ...project, terminal: 'scripts' }).terminal).toBe('scripts');
+    expect(ProjectSchema.safeParse({ ...project, terminal: 'sometimes' }).success).toBe(false);
+    expect(TerminalTrustSchema.safeParse(null).success).toBe(false);
   });
 });
 

@@ -5,21 +5,8 @@ import {
   HaltReasonSchema,
   NodeStateSchema,
   ProviderStateSchema,
-  ProviderTypeSchema,
 } from './enums.js';
 import { ChatMessageSchema, MessageSchema } from './chat.js';
-import {
-  EnvelopeRoutedPayloadSchema,
-  EnvelopeSentPayloadSchema,
-  HumanMessagePayloadSchema,
-  InstructionStatePayloadSchema,
-  NodeInterruptedPayloadSchema,
-  RunBlockedPayloadSchema,
-  RunConfigPayloadSchema,
-  RunParkedPayloadSchema,
-  RunTokenBudgetPayloadSchema,
-  TurnTriggerSchema,
-} from './domain.js';
 import { PartSchema } from './envelope.js';
 import { IdSchema, LoopStopReasonSchema, TimestampSchema } from './graph.js';
 import { ApprovalDecisionSchema, ApprovalRequestSchema, VerdictSchema } from './guardrails.js';
@@ -34,8 +21,11 @@ import { KbDocumentStatusSchema } from './knowledge.js';
 import { MemoryOpSchema } from './memory.js';
 import { McpServerStatusSchema, ToolCallSchema } from './tools.js';
 import { DayTotalsSchema } from './usage.js';
-import { ValidationIssueSchema } from './validation.js';
-import { FilesChangedPayloadSchema } from './workspace.js';
+import {
+  FilesChangedPayloadSchema,
+  ProcessExitedPayloadSchema,
+  ProcessOutputPayloadSchema,
+} from './workspace.js';
 
 /**
  * The event log and the events that ride the WebSocket (round 2 §2.4, round 3 §2.6,
@@ -96,8 +86,6 @@ export const RunCompletedPayloadSchema = z.strictObject({
   finalOutput: PartsByNodeIdSchema.optional(),
   /** Round 3: set only when `haltReason` is `budget_exceeded` (D80). */
   budgetHalt: BudgetHaltSchema.optional(),
-  /** D303: why a run was BLOCKED at pre-flight — the issues on its row, so Domain can say them. */
-  preflightIssues: z.array(ValidationIssueSchema).optional(),
 });
 export type RunCompletedPayload = z.infer<typeof RunCompletedPayloadSchema>;
 
@@ -109,10 +97,6 @@ export const NodeStatePayloadSchema = z.strictObject({
   attempt: z.number().int().min(1),
   status: NodeStateSchema,
   failureReason: FailureReasonSchema.optional(),
-  /** D303 TURN_STARTED: on the RUNNING frame that starts a turn, why it started (D309). */
-  trigger: TurnTriggerSchema.optional(),
-  /** D303 TURN_ENDED: on a terminal frame, the node run's duration — the number on its row. */
-  durationMs: z.number().int().min(0).optional(),
 });
 export type NodeStatePayload = z.infer<typeof NodeStatePayloadSchema>;
 
@@ -150,20 +134,8 @@ export const EdgeTransferPayloadSchema = z.strictObject({
   toNodeId: IdSchema,
   iteration: z.number().int().min(1),
   summary: z.string().max(EDGE_TRANSFER_SUMMARY_MAX),
-  /** D303: the team envelope (`envelope.sent`) this transfer delivered, once it was forwarded. */
-  envelopeId: IdSchema.optional(),
 });
 export type EdgeTransferPayload = z.infer<typeof EdgeTransferPayloadSchema>;
-
-/** D313 USAGE: the one turn whose usage a `usage.updated` adds to the run's totals. */
-export const UsageTurnSchema = z.strictObject({
-  nodeRunId: IdSchema,
-  nodeId: IdSchema,
-  providerType: ProviderTypeSchema.optional(),
-  modelId: z.string().min(1).optional(),
-  usage: UsageSchema,
-});
-export type UsageTurn = z.infer<typeof UsageTurnSchema>;
 
 /**
  * A run's running totals. From round 5 the one emitted when a run completes also carries the day's
@@ -173,8 +145,6 @@ export const UsageUpdatedPayloadSchema = z.strictObject({
   runId: IdSchema,
   totals: UsageSchema,
   dayTotals: DayTotalsSchema.optional(),
-  /** D313: the turn this update added, so Domain's per-turn usage sums to Track's totals. */
-  turn: UsageTurnSchema.optional(),
 });
 export type UsageUpdatedPayload = z.infer<typeof UsageUpdatedPayloadSchema>;
 
@@ -333,16 +303,6 @@ export const RUN_EVENT_FRAME_SCHEMAS = [
   persistedFrame('loop.iteration', LoopIterationPayloadSchema),
   persistedFrame('tool.call', ToolCallPayloadSchema),
   persistedFrame('message.created', MessageCreatedPayloadSchema),
-  /* Domain (D303) — all persisted: the conversation is a projection of these. */
-  persistedFrame('human.message', HumanMessagePayloadSchema),
-  persistedFrame('instruction.state', InstructionStatePayloadSchema),
-  persistedFrame('envelope.sent', EnvelopeSentPayloadSchema),
-  persistedFrame('envelope.routed', EnvelopeRoutedPayloadSchema),
-  persistedFrame('node.interrupted', NodeInterruptedPayloadSchema),
-  persistedFrame('run.token_budget', RunTokenBudgetPayloadSchema),
-  persistedFrame('run.config', RunConfigPayloadSchema),
-  persistedFrame('run.blocked', RunBlockedPayloadSchema),
-  persistedFrame('run.parked', RunParkedPayloadSchema),
 ] as const;
 
 /**
@@ -363,11 +323,14 @@ export const ENGINE_EVENT_FRAME_SCHEMAS = [
 ] as const;
 
 /**
- * Forge's frames (D299). They ride the `project` scope and are never persisted: a file watcher's
- * burst is worth sending to a client that is looking and worth nothing in the log.
+ * Forge's frames (D299, D301). They ride the `project` scope and are never persisted: a watcher's
+ * burst and a process's output are worth sending to a client that is looking and worth nothing in
+ * the log — and terminal output must never reach it (design §7).
  */
 export const PROJECT_EVENT_FRAME_SCHEMAS = [
   transientFrame('files.changed', FilesChangedPayloadSchema),
+  transientFrame('process.output', ProcessOutputPayloadSchema),
+  transientFrame('process.exited', ProcessExitedPayloadSchema),
 ] as const;
 
 /** Server → client, run scope (round 2 §2.4, round 3 §2.6, round 4 §2.5). */
@@ -407,15 +370,6 @@ export const RUN_EVENT_TYPES = [
   'loop.iteration',
   'tool.call',
   'message.created',
-  'human.message',
-  'instruction.state',
-  'envelope.sent',
-  'envelope.routed',
-  'node.interrupted',
-  'run.token_budget',
-  'run.config',
-  'run.blocked',
-  'run.parked',
 ] as const;
 export type RunEventType = (typeof RUN_EVENT_TYPES)[number];
 
@@ -430,11 +384,17 @@ export const ENGINE_EVENT_TYPES = [
 ] as const;
 export type EngineEventType = (typeof ENGINE_EVENT_TYPES)[number];
 
-export const PROJECT_EVENT_TYPES = ['files.changed'] as const;
+export const PROJECT_EVENT_TYPES = ['files.changed', 'process.output', 'process.exited'] as const;
 export type ProjectEventType = (typeof PROJECT_EVENT_TYPES)[number];
 
-/** Not persisted, no `seq`, never replayed by `resume` (§2.4, round 4 §2.5, D299). */
-export const TRANSIENT_EVENT_TYPES = ['node.token', 'chat.token', 'files.changed'] as const;
+/** Not persisted, no `seq`, never replayed by `resume` (§2.4, round 4 §2.5, D299, D301). */
+export const TRANSIENT_EVENT_TYPES = [
+  'node.token',
+  'chat.token',
+  'files.changed',
+  'process.output',
+  'process.exited',
+] as const;
 export type TransientEventType = (typeof TRANSIENT_EVENT_TYPES)[number];
 
 export type PersistedRunEventType = Exclude<RunEventType, TransientEventType>;
