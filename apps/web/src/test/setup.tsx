@@ -9,6 +9,18 @@ vi.mock('../forge/editor/EditorHost', async () => ({
   EditorHost: (await import('./FakeEditorHost')).FakeEditorHost,
 }));
 
+// Forge's terminal (D301): xterm needs a browser's canvas; every test gets FakeTerminal.
+vi.mock('@xterm/xterm', async () => ({ Terminal: (await import('./FakeTerminal')).FakeTerminal }));
+vi.mock('@xterm/addon-fit', async () => ({
+  FitAddon: (await import('./FakeTerminal')).FakeFitAddon,
+}));
+vi.mock('@xterm/addon-web-links', async () => ({
+  WebLinksAddon: (await import('./FakeTerminal')).FakeWebLinksAddon,
+}));
+vi.mock('@xterm/addon-search', async () => ({
+  SearchAddon: (await import('./FakeTerminal')).FakeSearchAddon,
+}));
+
 /* jsdom has neither; React Flow and Radix need both to exist. */
 class ResizeObserverStub {
   observe(): void {}
