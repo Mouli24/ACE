@@ -23,14 +23,14 @@
   - a zustand store of terminal tabs per project (scrollback, cwd, history, the attached process), outside the components, so it survives Ideate ↔ Forge and a hidden panel;
   - a pure line discipline (local echo, editing, history, Enter, Ctrl+C);
   - the `cd` / `cls` / `clear` built-ins;
-  - an xterm.js view that only renders;
-  - tabs, the Processes list, script buttons, a status-bar count and Ctrl+`.
+  - an xterm.js view that only renders, coloured from the Ace theme's palettes as Monaco is;
+  - the first of the bottom panel's Terminal · Problems tabs (D334 as amended), with terminal tabs, the Processes list, script buttons, a running count in the workspace footer and Ctrl+`.
 - **Mock engine.** MSW gets a scripted process runner, so unit and e2e tests run with zero env vars.
 
 **Tech Stack:**
 - Language and runtime: TypeScript ESM, Node 20+ (24 here).
 - Engine side: Hono 4.13, Zod 4.6, `node:child_process` and `node:string_decoder` (in `@ace/tools` only). No new engine-side dependency.
-- Web: React 18, zustand 5, TanStack Query 5, react-resizable-panels 3.0.6, lucide-react. New: `@xterm/xterm` 6.0.0, `@xterm/addon-fit` 0.11.0, `@xterm/addon-web-links` 0.12.0, `@xterm/addon-search` 0.16.0 (all released 2025-12-22; checked with `pnpm view <pkg> time --json` on 2026-10-10).
+- Web: React 18, zustand 5, TanStack Query 5, the Ace UI kit (`@ace/ui`: the theme's tokens and components over Radix; no icon library, the theme draws glyphs). New: `@xterm/xterm` 6.0.0, `@xterm/addon-fit` 0.11.0, `@xterm/addon-web-links` 0.12.0, `@xterm/addon-search` 0.16.0 (all released 2025-12-22; checked with `pnpm view <pkg> time --json` on 2026-10-10).
 - Testing: MSW 2.15, Vitest 5, Testing Library, Playwright 1.56, `ws` 8 for real-socket integration tests.
 
 **Spec:** `docs/team-prompts/ide-workspace-design.md`. Read it first. This phase implements:
@@ -44,8 +44,14 @@
 - §14: No PTY and shell state.
 
 **Repo:** `D:\ACE offcl\ACE`.
-- Work happens in the worktree `D:\ACE offcl\wt\forge2` on branch `feat/forge-phase-2`. It sits on `feat/forge-phase-1-rest` at 7d00cd2: `origin/main` plus the 17 Phase 1 commits PR #44 did not carry (its tree is identical to Phase 1's fab26e4). The plan's own commits sit on top.
-- The web tasks wait for the whole-app re-skin (`ui/ace-theme`, PR #46); see "Before the web tasks" under Task 0.
+- Work happens in the worktree `D:\ACE offcl\wt\forge2`.
+- **Tasks 0–10** (the engine side) were built on branch `feat/forge-phase-2`. That branch sits on `feat/forge-phase-1-rest` at 7d00cd2: `origin/main` plus the 17 Phase 1 commits PR #44 did not carry (its tree is identical to Phase 1's fab26e4). It is kept as the fallback.
+- **Tasks 11–19** (the web side and the docs) run on branch `feat/forge-phase-2-ui`, which is built in three steps:
+  1. `feat/forge-reskin` at 3f7abcc: the whole-app Ace theme re-skin (D328–D338, PR #46) combined with the Phase 1 remainder, with D334 amended on 2026-10-13;
+  2. `feat/forge-phase-2` merged in (9102290);
+  3. a lint fix (5770845).
+
+  Their steps were revised against that code; see "Before the web tasks" under Task 0.
 - The person's own ACE is served from `D:\ACE offcl\wt\forge` on ports 4747 and 5173. **Never stop, restart or bind those ports.** Every server this plan starts uses another port.
 
 **Later phases** keep their own plans:
@@ -57,7 +63,7 @@
 Every Phase 1 constraint still applies. They are restated here, then Phase 2's own follow.
 
 **Branch and commits**
-- **One branch, `feat/forge-phase-2`.** Commits go in task order, contracts first (CLAUDE.md §3.4 rule 2). Nothing is pushed or opened as a PR without the user's word (Task 19).
+- **One branch at a time.** Tasks 1–10 committed on `feat/forge-phase-2`; Tasks 11–19 commit on `feat/forge-phase-2-ui` (see Repo). Commits go in task order, contracts first (CLAUDE.md §3.4 rule 2). Nothing is pushed or opened as a PR without the user's word (Task 19).
 - **Commit messages** are Conventional Commits ending in `[D301]` plus FR ids. Each ends with the trailer `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`.
   - `docs/ACE-FRS.md` has no terminal or process requirement; D301 is the authority. The FR ids that apply:
     - FR-GIT-008: confinement (the working folder, the scripts reader);
@@ -174,13 +180,14 @@ Every Phase 1 constraint still applies. They are restated here, then Phase 2's o
 12. **The WebSocket Origin check** (§7).
     - `isOriginAllowed(deps, origin): Promise<boolean>` is extracted from the gateway's `originGuard` and `corsLayer`, which keep using it. A missing or empty Origin is allowed, as in REST.
     - The server's upgrade handler finishes the upgrade, then closes a refused socket at once with `WS_CLOSE_FORBIDDEN_ORIGIN = 4403` (new in contracts), so the client sees a reason.
-    - The SDK stops reconnecting on 4403, as on 4401, and reports the status `forbidden_origin`. The run bar shows it.
+    - The SDK stops reconnecting on 4403, as on 4401, and reports the status `forbidden_origin`. The run bar showed it; since the integration onto the re-skin, which removed the run bar from the header (D330), the footer's connection indicator shows it.
     - `selfOrigins` uses the port the server actually bound, not the configured one (`port: 0` made them `:0`).
 13. **Error codes**, added to `IDE_ERROR_CODES` and the status map:
     - `terminal_disabled` 403;
     - `terminal_restricted` 403;
     - `process_limit` 409;
-    - `process_not_running` 409.
+    - `process_not_running` 409;
+    - `engine_stopping` 503 (added by Task 6's review: nothing starts while the engine shuts down). The mock engine answers it too (Task 11).
 
     `not_found`, `invalid_path`, `outside_project`, `protected_path` and `validation_failed` are reused.
 14. **The web terminal.**
@@ -189,16 +196,24 @@ Every Phase 1 constraint still applies. They are restated here, then Phase 2's o
     - The built-ins are `cd <dir>` (checked through `GET /files/tree?path=`, so confined to the project), `cd` alone (prints the folder), `cd ..` (stops at the root), `cls` and `clear`. A `cd` chained with `&&`, `|`, `;`, `<` or `>` goes to the shell, so it does not persist (§14).
     - The prompt is `<cwd or ~> $ `.
     - Sessions live in a zustand store keyed by project: tabs, cwd, history, the attached process and a scrollback capped at **1,048,576** characters. The bottom panel unmounts when hidden, so on remount the view writes the stored scrollback back.
-    - The Terminal takes the keyboard focus only when the person asked for it: Ctrl+`, a click on the panel's Terminal tab or on a terminal tab, New terminal, a script button, Show in the Processes list, the status bar's count or the empty editor's Terminal button. Hiding and showing the panel with Ctrl+J, or coming back from Ideate, leaves the focus where it was; xterm focuses itself on a click.
+    - The Terminal takes the keyboard focus only when the person asked for it: Ctrl+`, a click on the panel's Terminal tab or on a terminal tab, New terminal, a script button, Show in the Processes list, the footer's running count or the empty editor's Terminal button. Hiding and showing the panel with Ctrl+J, or coming back from Ideate, leaves the focus where it was; xterm focuses itself on a click.
     - A script button never sends a `cwd` (decision 5).
     - Several tabs are allowed. Closing a tab whose process runs asks "Stop <label>?".
     - A Processes list shows running processes with Stop, and finished ones with their exit.
-    - Script buttons in the terminal header run a script in a new tab.
-    - The status bar shows `▶ N running` when N > 0, which opens the Terminal.
+    - Script buttons in the terminal's tab strip run a script in a new tab.
+    - The workspace footer (D330) shows `▶ N running` when N > 0, right after the problem counts and in their type; a click opens the Terminal. Forge's own status bar left with D334; its pieces live in `forge/layout/StatusBar.tsx` and render in the footer.
     - **Ctrl+`** shows or hides the Terminal: `SHORTCUTS.toggleTerminal = { code: 'Backquote', mod: true }`. `shortcutLabel` prints `` ` `` for `Backquote`.
-    - `ForgePanelTab` gains `'terminal'`, and the tabs read **Terminal · Problems · Output**.
+    - `ForgePanelTab` becomes `'terminal' | 'problems'`, and the bottom panel's pill tabs read **Terminal · Problems** (D334 as amended 2026-10-13: the panel is hidden until opened by Ctrl+`, Ctrl+J or the footer's counts; Output, the activity bar and Open editors stay removed). Problems stays the default view, so Ctrl+J opens what it opened before.
     - The `project` socket subscription is shared through `useProjectScope(projectId)`, so files and processes never cut each other's feed.
-15. **Trust UI.** `ProjectPage` gets a **Terminal** select (On — any command / Scripts only / Off) next to the budget fields; `SelectField` moves from `settings/SettingsPage.tsx` to `settings/SettingFields.tsx`. With `scripts` or `off`, the Terminal header says so and links to the project page. With `off`, typing and New terminal are disabled. With `scripts`, a typed command prints the 403's message in the tab.
+    - **The look (D328).** Every new piece reuses a pattern and the tokens the re-skin already has, and adds no colour:
+      - the terminal sits in Problems' surface card;
+      - the terminal tabs are the editor's tab strip;
+      - the Processes list is carded as Problems is;
+      - the script buttons are the kit's secondary pills;
+      - the running count is the footer's mono type.
+
+      xterm's `ITheme` comes from the same light and dark looks and syntax palettes (`PAL_L` / `PAL_D`) that `forge-theme.ts` gives Monaco. There is no icon library: the glyphs are the theme's.
+15. **Trust UI.** `ProjectPage` gets a **Terminal** select (On — any command / Scripts only / Off) in its own theme card under the budget card. `SelectField` moves from `settings/SettingsPage.tsx` to `settings/SettingFields.tsx`, unchanged (the theme's dropdown in a `SettingField`). With `scripts` or `off`, the Terminal says so in the theme's help line above its card and links to the project page. With `off`, typing and New terminal are disabled. With `scripts`, a typed command prints the 403's message in the tab.
 16. **stdin line ending:** `\n` on every platform.
 17. **Unit tests mock xterm** with `FakeTerminal` (`apps/web/src/test/FakeTerminal.ts`), registered globally in `test/setup.tsx` beside `FakeEditorHost`. The real xterm runs in e2e only.
 18. **Known limitations, deferred.** Named in the guide's limits (Task 19) and in the D301 row:
@@ -270,10 +285,10 @@ Every Phase 1 constraint still applies. They are restated here, then Phase 2's o
 **Web** (`apps/web`)
 - `package.json`: the four xterm packages, pinned exactly.
 - Modify `src/forge/editor/language-defaults.ts` (`noImplicitAny: false`) and its test (Task 1).
-- Create `src/runs/SocketNotice.tsx` and its test; modify `src/runs/RunBar.tsx` (Task 9).
-- Mocks:
-  - create `src/mocks/processes.ts` (`MockProcesses`) and `src/mocks/handlers-processes.ts`;
-  - modify `src/mocks/db.ts` (`terminal` on projects) and `src/mocks/browser.ts` (handlers and `__aceMock.setTerminal`);
+- Create `src/runs/SocketNotice.tsx` and its test (Task 9). Since the integration onto the re-skin it renders in the footer's connection indicator (`src/app/layout/WorkspaceFooter.tsx`), not in `RunBar.tsx`.
+- Mocks (Task 11):
+  - create `src/mocks/processes.ts` (`MockProcesses`, with `stopAll` for `engine_stopping`) and `src/mocks/handlers-processes.ts`, with `handlers-processes.test.ts`;
+  - modify `src/mocks/db.ts` (`terminal` on projects) and `src/mocks/browser.ts` (the handlers first, before Domain's; `__aceMock.setTerminal`);
   - the processes handlers also answer the projects `PATCH` (the update, then a stop on `off`) and see a project `DELETE` first (a stop), as the engine does.
 - Forge, new:
   - `src/forge/project-scope.ts`: `useProjectScope`, `retainProjectScope`;
@@ -285,25 +300,30 @@ Every Phase 1 constraint still applies. They are restated here, then Phase 2's o
     - `process-events.ts`: `useProcessEvents`, `reattach`;
     - `session.ts`: `typed`, `startInTab`, `enqueue`, `runScript`, `openProcessInTab`;
     - `focus.ts`: `requestTerminalFocus`, `registerTerminalFocus`, `cancelTerminalFocus`, and (Task 16) `toggleTerminalFocused`;
-    - `xterm-theme.ts`;
-    - `TerminalView.tsx`, `TerminalPanel.tsx`, `TerminalTabs.tsx`, `ProcessesList.tsx`, `ScriptButtons.tsx`, `TrustNotice.tsx`.
+    - `xterm-theme.ts`: `terminalTheme`, from the theme's looks and palettes (Task 15);
+    - `TerminalView.tsx`, `TerminalPanel.tsx` (Task 15); `TerminalTabs.tsx`, `ProcessesList.tsx`, `ScriptButtons.tsx` (Task 16); `TrustNotice.tsx` (Task 17).
 - Forge, modified:
-  - `src/forge/files/project-socket.ts`: through `useProjectScope`;
-  - `src/forge/ForgePage.tsx`: `useProcessEvents`;
-  - `src/forge/ForgeWorkbench.tsx`: Ctrl+`;
-  - `src/forge/panel/BottomPanel.tsx`: the Terminal tab;
-  - `src/forge/layout/StatusBar.tsx`: the running count;
-  - `src/forge/editor/EmptyEditor.tsx`: Toggle terminal;
-  - `src/app/stores/layout.ts`: `'terminal'`, `toggleTerminal`;
-  - `src/app/shortcuts.ts`: `toggleTerminal` and the `` ` `` label.
-- Settings and projects: modify `src/settings/SettingFields.tsx` (gains `SelectField`), `src/settings/SettingsPage.tsx` (loses it) and `src/projects/ProjectPage.tsx` (the Terminal select).
+  - `src/forge/files/project-socket.ts`: through `useProjectScope` (Task 12);
+  - `src/forge/ForgePage.tsx`: `useProcessEvents` (Task 13);
+  - `src/forge/editor/forge-theme.ts`: exports `Look`, `FORGE_LOOKS`, `ACCENT`, `DANGER`, `DONE` for xterm (Task 15);
+  - `src/forge/panel/BottomPanel.tsx`: the Terminal pill first of Terminal · Problems, and its content (Task 15);
+  - `src/forge/ForgeWorkbench.tsx`: Ctrl+` (Task 16);
+  - `src/forge/layout/StatusBar.tsx`: `RunningCount` beside `ProblemsCount` (Task 16);
+  - `src/forge/editor/EmptyEditor.tsx`: the Terminal pill (Task 16).
+- App, modified:
+  - `src/app/stores/layout.ts`: `ForgePanelTab = 'terminal' | 'problems'` (Task 15), `toggleTerminal` (Task 16);
+  - `src/app/shortcuts.ts`: `toggleTerminal` and the `` ` `` label (Task 16);
+  - `src/app/layout/WorkspaceFooter.tsx`: `RunningCount` after the problem counts, in Forge (Task 16).
+- Settings and projects (Task 17): modify `src/settings/SettingFields.tsx` (gains `SelectField`), `src/settings/SettingsPage.tsx` (loses it) and `src/projects/ProjectPage.tsx` (the Terminal card).
 - Tests:
-  - create `src/test/FakeTerminal.ts`;
-  - modify `src/test/setup.tsx` (xterm mocked globally) and `src/test/app.tsx` (process handlers, `installMockSocket`, store resets);
-  - create the `*.test.ts(x)` files named in each task, `e2e/terminal.spec.ts`, and extend `e2e/helpers.ts`.
+  - create `src/test/FakeTerminal.ts` (Task 14);
+  - modify `src/test/setup.tsx` (xterm mocked globally) and `src/test/app.tsx` (process handlers, `installMockSocket`, store and focus resets);
+  - create the `*.test.ts(x)` files named in each task, among them `src/forge/terminal/xterm-theme.test.ts` (Task 15);
+  - extend `src/forge/layout/StatusBar.test.tsx`, `src/app/layout/WorkspaceFooter.test.tsx`, `src/app/shortcuts.test.tsx`, `src/app/stores/layout.test.ts`, `src/forge/ForgeWorkbench.test.tsx` (Task 16) and `src/projects/ProjectPage.test.tsx` (Task 17);
+  - create `e2e/terminal.spec.ts` and extend `e2e/helpers.ts` (Task 18).
 
-**Docs**
-- Modify `docs/DECISIONS.md` (the D301 row), `docs/user-guide/forge.md` (a Terminal section) and `CLAUDE.md` §9 (a Feature Log row `IDE | F2`).
+**Docs** (Task 19)
+- Modify `docs/DECISIONS.md` (the D301 row, in place between D300 and D302), `docs/user-guide/forge.md` (the layout line, a Terminal section, the limits) and `CLAUDE.md` §9 (a Feature Log row `IDE | F2`).
 
 ---
 
@@ -358,11 +378,13 @@ Expected: `401` if the person's ACE is running, or `000` if it is not. Either wa
 
 The engine-side tasks (2–10: contracts, storage, runner, scripts, service, routes, server, the WebSocket Origin check, the SDK) do not depend on the web UI, and run as soon as Task 0 is green.
 
-The tasks that touch `apps/web` are 1 and 11–18, plus the guide in 19: mocks, the data layer, the terminal view, tabs, the trust UI and e2e. They run only after the whole-app re-skin (`ui/ace-theme`, PR #46) and the Phase 1 remainder (`feat/forge-phase-1-rest`) are combined into this branch's base. At that point, before the first web task, the controller:
-1. rebases or merges this branch onto the combined base;
-2. re-checks those tasks' anchors against the re-skinned files: `BottomPanel.tsx`, `StatusBar.tsx`, `EmptyEditor.tsx`, `ForgeWorkbench.tsx`, `ForgePage.tsx`, `RunBar.tsx`, `ProjectPage.tsx`, `SettingsPage.tsx` / `SettingFields.tsx`, `app/shortcuts.ts`, `app/stores/layout.ts`, `mocks/db.ts`, `mocks/browser.ts`, `test/setup.tsx`, `test/app.tsx`, `e2e/helpers.ts` and `docs/user-guide/forge.md`;
-3. updates a task's line anchors, class names or quoted text where the re-skin moved them, keeping the task's behaviour, names and tests;
-4. re-runs Task 0's baseline on the combined base.
+The tasks that touch `apps/web` are 1 and 11–18, plus the guide in 19: mocks, the data layer, the terminal view, tabs, the trust UI and e2e. They run only after the whole-app re-skin (`ui/ace-theme`, PR #46) and the Phase 1 remainder (`feat/forge-phase-1-rest`) are combined into this branch's base. **This is done (2026-10-13).**
+1. The base is `feat/forge-reskin` at 3f7abcc: the re-skin plus the Phase 1 remainder, with D334 amended by the owner. Forge keeps a bottom panel with Terminal · Problems pill tabs, hidden until opened (Ctrl+`, Ctrl+J or the footer counts). Output, the activity bar, Open editors and Forge's status bar stay removed. The Explorer keeps git's letters.
+2. `feat/forge-phase-2` (Tasks 0–10) was merged onto it as `feat/forge-phase-2-ui`: 9102290, then the lint fix 5770845. All gates were green, e2e 168/168 on 5196. Task 9's 4403 notice moved into the footer's connection indicator, because the re-skin removed the run bar from the header.
+3. Tasks 11–19 were revised against that code (this revision of the plan). Each web task now names:
+   - its anchors on the re-skinned files: `BottomPanel.tsx` (the kit's pill), `StatusBar.tsx` (the footer's pieces), `WorkspaceFooter.tsx`, `EmptyEditor.tsx`, `ForgeWorkbench.tsx`, `ForgePage.tsx`, `ProjectPage.tsx` and its existing test, `SettingsPage.tsx` / `SettingFields.tsx`, `forge-theme.ts`, `app/shortcuts.ts`, `app/stores/layout.ts`, `mocks/db.ts`, `mocks/browser.ts` (Domain's handlers now come first), `test/setup.tsx`, `test/app.tsx`, `e2e/helpers.ts` and `docs/user-guide/forge.md`;
+   - the theme pattern each new piece reuses (the self-review's theme table).
+4. Before Task 11, the controller re-runs Task 0's Steps 2–4 on `feat/forge-phase-2-ui` and records the counts. If an anchor no longer matches, it updates the anchor and keeps the task's behaviour, names and tests.
 
 ---
 
@@ -5134,22 +5156,29 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ### Task 11: Web mocks — a scripted process runner on the mock engine
 
+The mock layer is the same on the re-skinned base as before it, with one change: the Domain feature's handlers now come first in `browser.ts` and `test/app.tsx`. The process handlers go in front of them, because they answer the projects `PATCH` and see a project `DELETE` first.
+
 **Files:**
 - Create: `apps/web/src/mocks/processes.ts`, `apps/web/src/mocks/handlers-processes.ts`
 - Modify:
   - `apps/web/src/mocks/db.ts:1-33` (import) and `:281-290` (`updateProject` takes `terminal`);
-  - `apps/web/src/mocks/browser.ts` (the handlers, `reset`, and `__aceMock.setTerminal`);
-  - `apps/web/src/test/app.tsx` (the handlers and `processes.reset()`).
+  - `apps/web/src/mocks/browser.ts:1` (import), `:17` (handler imports), `:149` (the `__aceMock` type), `:187-191` (`startMocks`), `:210` (`reset`) and `:397-400` (`setTerminal` after `setRepoStatus`);
+  - `apps/web/src/test/app.tsx:22` (imports), `:31-41` (the server) and `:57-58` (`processes.reset()`).
 - Test: create `apps/web/src/mocks/handlers-processes.test.ts`
 
 **Interfaces:**
-- Consumes (Task 2): the process schemas, `PROCESS_*` limits, `PACKAGE_MANAGERS`, `TerminalTrust`, and the frames' shapes; the existing `MockDb.emit`, `filesOf`, `getProject`, `updateProject`.
+- Consumes (Task 2): the process schemas, `PROCESS_*` limits, `PACKAGE_MANAGERS`, `TerminalTrust`, `ERROR_CODE_HTTP_STATUS` (with `engine_stopping` 503), and the frames' shapes; the existing `MockDb.emit`, `filesOf`, `getProject`, `updateProject`.
 - Produces:
-  - `class MockProcesses(db: MockDb, options?: { tickMs?: number /* 500 */ })` with `start`, `input`, `stop`, `stopProject`, `list`, `get`, `scripts` and `reset`;
+  - `class MockProcesses(db: MockDb, options?: { tickMs?: number /* 500 */ })` with `start`, `input`, `stop`, `stopProject`, `stopAll`, `list`, `get`, `scripts` and `reset`. `stopAll` is the engine's shutdown: it stops what runs, and every later start answers 503 `engine_stopping` until `reset`;
   - `MockProcessError(status, code, message, details?)`;
-  - `MOCK_MESSAGES`: the engine's refusal messages, word for word (Task 6);
+  - `MOCK_MESSAGES`: the engine's refusal messages, word for word, `engine_stopping` included (`packages/engine/src/processes/errors.ts`). A test reads that file as text and checks each one;
   - `createProcessHandlers(db: MockDb, processes: MockProcesses): HttpHandler[]`. Besides the process routes, it answers the projects `PATCH` itself, as the engine does: validate, update, then stop the project's processes when the patch turns the terminal off. It also sees a project `DELETE` first, stops the project's processes, and falls through to the projects handler, which deletes;
-  - the mock matches the engine on the details a person sees: a typed command's label is one line of it, at most 80 characters (the engine's `labelOf`); a working folder is recorded normalised; a script runs in the root (a `cwd` with a `script` is a 400 from the schema);
+  - the mock matches the engine on the details a person sees:
+    - a typed command's label is one line of it, at most 80 characters (the engine's `labelOf`);
+    - a working folder is recorded normalised (`..` folded into its parent, as `normaliseCwd`), and one that climbs above the root is `outside_project`;
+    - a script runs in the root (a `cwd` with a `script` is a 400 from the schema);
+    - a script name a shell would read as code, and `__proto__`, are never offered (the tools reader's `SAFE_SCRIPT_NAME`);
+    - the checks run in the engine's order: off, the script or the `scripts` trust, shutting down, the limit, the folder;
   - `MockDb.updateProject(id, patch: { name?, lastOpenedAt?, maxCostPerRunUsd?, terminal? })`;
   - `window.__aceMock.setTerminal(projectId, level: TerminalTrust)`;
   - from `test/app.tsx`: `export const processes: MockProcesses`, reset before every test.
@@ -5171,10 +5200,12 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 Create `apps/web/src/mocks/handlers-processes.test.ts`:
 
 ```ts
-import type { ServerFrame } from '@ace/contracts';
+import { PROCESS_RUNNING_MAX, type ServerFrame } from '@ace/contracts';
 import { setupServer } from 'msw/node';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The engine's refusals as text, so the mock's copy can never drift from them (D301).
+import engineErrors from '../../../../packages/engine/src/processes/errors.ts?raw';
 import { MockDb } from './db';
 import { createFakeWebSocket, type FakeWebSocketInstance } from './fake-socket';
 import { createHandlers } from './handlers';
@@ -5337,6 +5368,17 @@ describe('D301 the mock engine’s scripted processes', () => {
     expect((await call('GET', '/processes/scripts')).json).toMatchObject({ packageManager: 'yarn' });
   });
 
+  it('never offers a script whose name a shell would read as code, nor __proto__, as the engine’s reader', async () => {
+    db.seedFiles(projectId, {
+      'package.json': '{"scripts":{"ok":"echo ok","x & del *":"echo bad","__proto__":"echo proto"}}',
+    });
+    expect((await call('GET', '/processes/scripts')).json).toEqual({
+      packageManager: 'npm',
+      scripts: [{ name: 'ok', command: 'echo ok' }],
+    });
+    expect((await call('POST', '/processes', { script: 'x & del *' })).status).toBe(404);
+  });
+
   it('scripts trust refuses a typed command with the engine’s words, and still runs a script', async () => {
     db.updateProject(projectId, { terminal: 'scripts' });
     const refused = await call('POST', '/processes', { command: 'echo hi' });
@@ -5373,6 +5415,37 @@ describe('D301 the mock engine’s scripted processes', () => {
     expect(db.getProject(projectId)).toBeUndefined();
   });
 
+  it('once the engine is stopping, what ran is stopped and a start is 503 engine_stopping in its words', async () => {
+    const id = await start({ command: 'serve' });
+    processes.stopAll();
+    await ended(id);
+    expect(exitOf(id)).toMatchObject({ exitCode: null, signal: 'SIGKILL' });
+    const refused = await call('POST', '/processes', { command: 'echo late' });
+    expect(refused.status).toBe(503);
+    expect(refused.json).toMatchObject({
+      error: { kind: 'workflow', code: 'engine_stopping', message: MOCK_MESSAGES.engine_stopping },
+    });
+    // A reset is an engine restart: it starts again.
+    processes.reset();
+    await start({ command: 'echo again' });
+  });
+
+  it('refuses in the engine’s own words, engine_stopping included (processes/errors.ts)', () => {
+    expect(Object.keys(MOCK_MESSAGES).sort()).toEqual([
+      'engine_stopping',
+      'process_limit',
+      'process_not_running',
+      'terminal_disabled',
+      'terminal_restricted',
+    ]);
+    for (const [code, message] of Object.entries(MOCK_MESSAGES)) {
+      // The engine's source writes the limit as a template; the mock's copy has it filled in.
+      const source =
+        code === 'process_limit' ? message.replace(String(PROCESS_RUNNING_MAX), '${max}') : message;
+      expect(engineErrors, code).toContain(source);
+    }
+  });
+
   it('labels and places a command as the engine does; a script never takes a cwd', async () => {
     const long = `echo ${'x'.repeat(200)}`;
     const id = await start({ command: `  ${long}  `, cwd: 'src/' });
@@ -5390,12 +5463,17 @@ describe('D301 the mock engine’s scripted processes', () => {
     expect(ninth.json).toMatchObject({ error: { code: 'process_limit' } });
   });
 
-  it('confines the working folder as the engine does', async () => {
+  it('confines the working folder as the engine does, and records it folded', async () => {
     expect((await call('POST', '/processes', { command: 'echo', cwd: '..' })).json).toMatchObject({
+      error: { code: 'outside_project' },
+    });
+    expect((await call('POST', '/processes', { command: 'echo', cwd: 'src/../..' })).json).toMatchObject({
       error: { code: 'outside_project' },
     });
     expect((await call('POST', '/processes', { command: 'echo', cwd: 'missing' })).status).toBe(400);
     expect((await call('POST', '/processes', { command: 'echo', cwd: 'src' })).status).toBe(201);
+    const folded = await start({ command: 'echo', cwd: 'src/./deep/..' });
+    expect((await call('GET', `/processes/${folded}`)).json).toMatchObject({ cwd: 'src' });
   });
 
   it('lists running first, then finished, newest first; an unknown process is 404', async () => {
@@ -5462,6 +5540,7 @@ export const MOCK_MESSAGES = {
     "This project runs only its own package.json scripts in the terminal. Pick a script, or allow every command in the project's settings.",
   process_limit: `This project already runs ${PROCESS_RUNNING_MAX} processes. Stop one before starting another.`,
   process_not_running: 'That process has finished, so it reads no more input.',
+  engine_stopping: 'The engine is shutting down; the command was not started.',
 } as const;
 
 const LOCKFILES: ReadonlyArray<readonly [file: string, manager: PackageManager]> = [
@@ -5471,6 +5550,9 @@ const LOCKFILES: ReadonlyArray<readonly [file: string, manager: PackageManager]>
   ['bun.lockb', 'bun'],
   ['package-lock.json', 'npm'],
 ];
+
+/** A script name every shell reads as one word: the tools reader's `SAFE_SCRIPT_NAME`. */
+const SAFE_SCRIPT_NAME = /^[\w@][\w:.@/+-]{0,199}$/;
 
 interface Run {
   summary: ProcessSummary;
@@ -5498,9 +5580,14 @@ const labelOf = (command: string): string => {
   return line.length <= 80 ? line : `${line.slice(0, 79)}…`;
 };
 
+const outside = (): MockProcessError =>
+  new MockProcessError(403, 'outside_project', 'That path is outside the project folder.');
+
 export class MockProcesses {
   private readonly runs = new Map<string, Run>();
   private order = 0;
+  /** Set by `stopAll`, as the engine's shutdown sets it: nothing starts until `reset`. */
+  private closed = false;
   private readonly tickMs: number;
 
   constructor(
@@ -5510,10 +5597,11 @@ export class MockProcesses {
     this.tickMs = options.tickMs ?? 500;
   }
 
-  /** Forget every process and cancel every timer (tests, `__aceMock.reset`). */
+  /** Forget every process, cancel every timer and open again (tests, `__aceMock.reset`). */
   reset(): void {
     for (const run of this.runs.values()) this.clearTimers(run);
     this.runs.clear();
+    this.closed = false;
   }
 
   scripts(projectId: string): ProjectScripts {
@@ -5529,7 +5617,10 @@ export class MockProcesses {
     const scripts: ProjectScript[] = [];
     if (isRecord(manifest) && isRecord(manifest['scripts'])) {
       for (const [name, command] of Object.entries(manifest['scripts'])) {
-        if (typeof command === 'string') scripts.push({ name, command });
+        // As the engine's reader: a name a shell would read as code, and __proto__, are never offered.
+        if (typeof command === 'string' && SAFE_SCRIPT_NAME.test(name) && name !== '__proto__') {
+          scripts.push({ name, command });
+        }
       }
     }
     const field = isRecord(manifest) ? manifest['packageManager'] : undefined;
@@ -5541,6 +5632,7 @@ export class MockProcesses {
     return { packageManager: named ?? locked ?? 'npm', scripts };
   }
 
+  /** The engine's checks, in the engine's order: off, the form, shutting down, the limit, the folder. */
   start(projectId: string, request: ProcessStartRequest): { processId: string } {
     const project = this.db.getProject(projectId);
     if (project === undefined) throw new MockProcessError(404, 'not_found', 'Project not found.');
@@ -5567,6 +5659,9 @@ export class MockProcesses {
       command = request.command;
       label = request.label ?? labelOf(request.command);
       requested = request.cwd ?? '';
+    }
+    if (this.closed) {
+      throw new MockProcessError(503, 'engine_stopping', MOCK_MESSAGES.engine_stopping);
     }
     if (this.running(projectId).length >= PROCESS_RUNNING_MAX) {
       throw new MockProcessError(409, 'process_limit', MOCK_MESSAGES.process_limit, {
@@ -5626,6 +5721,14 @@ export class MockProcesses {
     for (const run of this.running(projectId)) this.end(run, 'exited', null, 'SIGKILL');
   }
 
+  /** The engine shutting down (FR-SYS-008): every process stops, and nothing starts again. */
+  stopAll(): void {
+    this.closed = true;
+    for (const run of [...this.runs.values()]) {
+      if (run.summary.status === 'running') this.end(run, 'exited', null, 'SIGKILL');
+    }
+  }
+
   list(projectId: string): ProcessSummary[] {
     return [...this.runs.values()]
       .filter((run) => run.summary.projectId === projectId)
@@ -5657,26 +5760,33 @@ export class MockProcesses {
   }
 
   /**
-   * The engine's confinement, in miniature (FR-GIT-008), answering the folder normalised as the
-   * engine lists it: forward slashes, no `.` or empty segments, no trailing slash, `''` for the root.
+   * The engine's confinement, in miniature (FR-GIT-008), answering the folder as the engine's
+   * `normaliseCwd` records it: forward slashes, no `.` or empty segments, `..` folded into its
+   * parent, no trailing slash, `''` for the root. A `..` that climbs above the root is outside.
    */
   private checkCwd(projectId: string, cwd: string): string {
     const slashed = cwd.split('\\').join('/');
-    const escapes =
+    if (
       slashed.includes('\u0000') ||
       slashed.startsWith('/') ||
       /^[A-Za-z]:/.test(slashed) ||
-      slashed.startsWith('~') ||
-      slashed.split('/').includes('..');
-    if (escapes) {
-      throw new MockProcessError(403, 'outside_project', 'That path is outside the project folder.');
+      slashed.startsWith('~')
+    ) {
+      throw outside();
     }
-    const clean = slashed
-      .split('/')
-      .filter((segment) => segment !== '' && segment !== '.')
-      .join('/');
+    const parts: string[] = [];
+    for (const segment of slashed.split('/')) {
+      if (segment === '' || segment === '.') continue;
+      if (segment === '..') {
+        if (parts.length === 0) throw outside();
+        parts.pop();
+      } else {
+        parts.push(segment);
+      }
+    }
+    const clean = parts.join('/');
     if (clean === '') return '';
-    if (clean.split('/').some((segment) => segment.toLowerCase() === '.git')) {
+    if (parts.some((segment) => segment.toLowerCase() === '.git')) {
       throw new MockProcessError(403, 'protected_path', 'Forge does not read anything inside .git/.');
     }
     if (this.db.filesOf(projectId)[clean]?.kind !== 'folder') {
@@ -5820,7 +5930,7 @@ import { MockProcessError, type MockProcesses } from './processes';
 
 /**
  * Forge's terminal routes on the mock engine (D301, design §6.3), over a scripted `MockProcesses`.
- * Listed before the round handlers, so it answers a project PATCH and sees a project DELETE first.
+ * Listed before every other handler, so it answers a project PATCH and sees a project DELETE first.
  */
 
 const API = '*/api/v1';
@@ -5830,9 +5940,14 @@ type Ctx = { request: Request; params: PathParams };
 const hasToken = (request: Request): boolean =>
   /^Bearer\s+\S+$/.test(request.headers.get('authorization') ?? '');
 
+/** The engine's kinds: a state the request met (404, 409, 503) is `workflow`, a refusal `invalid_config`. */
 function fail(status: number, code: string, message: string, details?: unknown): Response {
   const kind =
-    status === 401 ? 'auth' : code === 'not_found' || status === 409 ? 'workflow' : 'invalid_config';
+    status === 401
+      ? 'auth'
+      : code === 'not_found' || status === 409 || status === 503
+        ? 'workflow'
+        : 'invalid_config';
   return HttpResponse.json(aceError(kind, code, message, { details, retryable: false }), { status });
 }
 
@@ -5930,7 +6045,7 @@ export function createProcessHandlers(db: MockDb, processes: MockProcesses): Htt
 
 - [ ] **Step 5: The mock database, the browser hooks and the test harness**
 
-In `apps/web/src/mocks/db.ts`, add `type TerminalTrust,` to the import from `'@ace/contracts'` (after `type Settings,`), and change `updateProject`'s signature (line 281) to:
+In `apps/web/src/mocks/db.ts`, add `type TerminalTrust,` to the import from `'@ace/contracts'` (after `type Settings,`, line 24), and change `updateProject`'s signature (lines 281-284) to:
 
 ```ts
   updateProject(
@@ -5946,27 +6061,38 @@ In `apps/web/src/mocks/db.ts`, add `type TerminalTrust,` to the import from `'@a
 ```
 
 In `apps/web/src/mocks/browser.ts`:
-1. Change the first import to `import { derivePorts, type GuardrailCheckType, type RepoFileStatus, type TerminalTrust } from '@ace/contracts';`.
-2. After `import { createForgeHandlers } from './handlers-forge';` add:
+1. Change the first line to:
+
+```ts
+import {
+  derivePorts,
+  type GuardrailCheckType,
+  type RepoFileStatus,
+  type TerminalTrust,
+} from '@ace/contracts';
+```
+
+2. After `import { createForgeHandlers } from './handlers-forge';` (line 17) add:
 
 ```ts
 import { createProcessHandlers } from './handlers-processes';
 import { MockProcesses } from './processes';
 ```
 
-3. In the `__aceMock` type, after `setRepoStatus(…): void;`, add:
+3. In the `__aceMock` type, after `setRepoStatus(projectId: string, files: Array<{ path: string; status: RepoFileStatus }>): void;` (line 149), add:
 
 ```ts
       /** Forge's terminal (D301): set a project's trust level; `off` stops what runs, as a PATCH does. */
       setTerminal(projectId: string, level: TerminalTrust): void;
 ```
 
-4. In `startMocks`, change:
+4. In `startMocks` (lines 187-191), change:
 
 ```ts
   const db = new MockDb({ persist: true });
   restoreScenario();
   const worker = setupWorker(
+    ...createDomainHandlers(db),
     ...createForgeHandlers(db),
 ```
 
@@ -5978,12 +6104,14 @@ to:
   const processes = new MockProcesses(db);
   restoreScenario();
   const worker = setupWorker(
+    // First: it answers a project PATCH and sees a project DELETE before the others (D301).
     ...createProcessHandlers(db, processes),
+    ...createDomainHandlers(db),
     ...createForgeHandlers(db),
 ```
 
-5. In `reset()`, after `db.reset();`, add `processes.reset();`.
-6. After the `setRepoStatus(projectId, files) { … },` member, add:
+5. In `reset()`, after `db.reset();` (line 210), add `processes.reset();`.
+6. After the `setRepoStatus(projectId, files) { … },` member (lines 397-400), add:
 
 ```ts
     setTerminal(projectId, level) {
@@ -5994,14 +6122,8 @@ to:
 ```
 
 In `apps/web/src/test/app.tsx`:
-1. After `import { createForgeHandlers } from '../mocks/handlers-forge';` add:
-
-```ts
-import { createProcessHandlers } from '../mocks/handlers-processes';
-import { MockProcesses } from '../mocks/processes';
-```
-
-2. Change the server to:
+1. After `import { createForgeHandlers } from '../mocks/handlers-forge';` (line 22) add `import { createProcessHandlers } from '../mocks/handlers-processes';`, and after `import { createRound5Handlers } from '../mocks/handlers-round5';` add `import { MockProcesses } from '../mocks/processes';`.
+2. Change the database and the server (lines 31-41) to:
 
 ```ts
 export const db = new MockDb({ persist: false });
@@ -6009,34 +6131,40 @@ export const db = new MockDb({ persist: false });
 export const processes = new MockProcesses(db);
 /** Newest round first: a round 3 route wins over a round 2 stand-in for the same path. */
 export const server = setupServer(
+  // First: it answers a project PATCH and sees a project DELETE before the others (D301).
   ...createProcessHandlers(db, processes),
+  ...createDomainHandlers(db),
   ...createForgeHandlers(db),
 ```
 
 (the rest of the list unchanged).
-3. In `beforeEach`, after `db.reset();`, add `processes.reset();`.
+3. In `installMockServer`'s `beforeEach`, after `domainMock.reset();` (line 58), add `processes.reset();`.
 
 - [ ] **Step 6: Run the tests**
 
 Run: `pnpm --filter @ace/web exec vitest run src/mocks/handlers-processes.test.ts src/mocks/handlers-forge.test.ts src/mocks/handlers.test.ts`
 Expected: PASS.
 
-- [ ] **Step 7: Full web suite, typecheck, commit**
+- [ ] **Step 7: Full web suite, typecheck, lint, commit**
 
-Run: `pnpm --filter @ace/web test && pnpm --filter @ace/web typecheck`
-Expected: PASS.
+Run: `pnpm --filter @ace/web test && pnpm --filter @ace/web typecheck && pnpm --filter @ace/web lint`
+Expected: PASS. `typecheck` accepts the `?raw` import through `vite/client`'s `*?raw` module, which the Help page's guide already relies on.
 
 ```bash
-npx prettier --write --config packages/config/prettier.config.js apps/web/src/mocks/processes.ts apps/web/src/mocks/handlers-processes.ts apps/web/src/mocks/handlers-processes.test.ts apps/web/src/mocks/db.ts apps/web/src/mocks/browser.ts apps/web/src/test/app.tsx
+npx prettier --write --config packages/config/prettier.config.js apps/web/src/mocks/processes.ts apps/web/src/mocks/handlers-processes.ts apps/web/src/mocks/handlers-processes.test.ts apps/web/src/mocks/db.ts apps/web/src/test/app.tsx
 git add apps/web/src/mocks apps/web/src/test/app.tsx
 git commit -m "feat(web): the mock engine runs scripted terminal processes, reads package.json scripts and honours the trust level [D301]
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
+`db.ts` and `test/app.tsx` were Prettier-clean on the re-skinned base, so Prettier only formats this task's lines in them. `browser.ts` was not, so it is left out (Prettier would rewrite lines this task does not touch); its edits above are already in Prettier's shape.
+
 ---
 
 ### Task 12: Web — the terminal's store and the shared project scope
+
+The re-skin left `project-socket.ts` and the test harness's store resets as they were, so this task's code is unchanged; only `test/app.tsx`'s anchor moved.
 
 **Files:**
 - Create:
@@ -6046,7 +6174,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - `apps/web/src/forge/terminal/terminal-store.ts`.
 - Modify:
   - `apps/web/src/forge/files/project-socket.ts:66-106` (`useProjectFiles` through `useProjectScope`);
-  - `apps/web/src/test/app.tsx` (the store reset).
+  - `apps/web/src/test/app.tsx` (an import and the store reset; quoted anchors, because Task 11 moved its lines).
 - Test: create `apps/web/src/forge/project-scope.test.ts` and `apps/web/src/forge/terminal/terminal-store.test.ts`.
 
 **Interfaces:**
@@ -6828,7 +6956,7 @@ export function ownerOf(projectId: string, processId: string): TerminalTab | und
 - [ ] **Step 6: Reset the store between tests**
 
 In `apps/web/src/test/app.tsx`:
-1. Add `import { useTerminalStore } from '../forge/terminal/terminal-store';` beside the other forge store imports.
+1. After `import { useQuickOpen } from '../forge/quick-open/quick-open-store';`, add `import { useTerminalStore } from '../forge/terminal/terminal-store';`.
 2. In `installMockServer`'s `beforeEach`, after `useProblemsStore.setState({ byProject: {} });`, add:
 
 ```ts
@@ -6857,6 +6985,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ### Task 13: Web — process frames to their tab, and re-attach on entering Forge and on reconnect
 
+`ForgePage.tsx` is the same on the re-skinned base (it still mounts `useProjectFiles` and picks `CompactForge` or `ForgeWorkbench`), so this task's code is unchanged. On a phone the hook runs too: frames still reach the store, and the Terminal shows them on a wider screen.
+
 **Files:**
 - Create: `apps/web/src/forge/terminal/process-events.ts`
 - Modify:
@@ -6875,7 +7005,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
     - `reattach(projectId, queryClient): Promise<void>`: for each tab that runs a process, the engine's kept output replaces the tab's copy; a process that ended meanwhile ends the tab's run; a 404 ends it with `LOST_NOTE`. A process no tab owns any more by the time its detail arrives is skipped, so two overlapping re-attaches leave nothing stale;
     - `useProcessEvents(projectId): void`: holds the project scope, folds `process.output` and `process.exited` into the owning tab (or the unowned entries), refreshes the list, refreshes the scripts when `package.json` or a lockfile changes, and re-attaches on mount and on every `hello`;
   - `ForgePage` mounts `useProcessEvents`;
-  - `test/app.tsx`: `installMockSocket()`, which starts the fake socket before each test and stops it after.
+  - `test/app.tsx`: `installMockSocket()`, which starts the fake socket before each test and stops it after;
+  - the list invalidations here also keep the footer's running count fresh (Task 16): it reads the same `processKeys.list` query.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -7147,13 +7278,7 @@ In `apps/web/src/forge/ForgePage.tsx`, add `import { useProcessEvents } from './
 - [ ] **Step 5: The fake socket for tests**
 
 In `apps/web/src/test/app.tsx`:
-1. Add these imports:
-
-```ts
-import { startSocket, stopSocket } from '../app/socket';
-import { createFakeWebSocket } from '../mocks/fake-socket';
-```
-
+1. After `import { routes } from '../app/routes';` add `import { startSocket, stopSocket } from '../app/socket';`, and after `import { MockDb } from '../mocks/db';` add `import { createFakeWebSocket } from '../mocks/fake-socket';`.
 2. Append:
 
 ```ts
@@ -7197,11 +7322,13 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ### Task 14: Web — the pure parts: xterm installed, its test double, the line discipline and the built-ins
 
+Nothing here draws, so the re-skin changes only `setup.tsx`'s anchor. The view and its theme come in Task 15.
+
 **Files:**
 - Modify:
   - `apps/web/package.json` (the four xterm packages, exact);
   - `apps/web/src/forge/terminal/line-discipline.ts` (append `feed` and its key table);
-  - `apps/web/src/test/setup.tsx` (xterm mocked globally, after line 26);
+  - `apps/web/src/test/setup.tsx:8-10` (xterm mocked globally, after the `EditorHost` mock);
   - `apps/web/src/test/app.tsx` (reset the fakes before each test).
 - Create:
   - `apps/web/src/test/FakeTerminal.ts`;
@@ -7486,7 +7613,7 @@ export class FakeSearchAddon {
 }
 ```
 
-In `apps/web/src/test/setup.tsx`, after the `EditorHost` mock (line 26), add:
+In `apps/web/src/test/setup.tsx`, after the `EditorHost` mock (lines 8-10, `vi.mock('../forge/editor/EditorHost', …)`), add:
 
 ```tsx
 // Forge's terminal (D301): xterm needs a browser's canvas; every test gets FakeTerminal.
@@ -7502,7 +7629,7 @@ vi.mock('@xterm/addon-search', async () => ({
 }));
 ```
 
-In `apps/web/src/test/app.tsx`, add `import { FakeSearchAddon, FakeTerminal } from './FakeTerminal';` and, in `installMockServer`'s `beforeEach`, after `useTerminalStore.getState().reset();`:
+In `apps/web/src/test/app.tsx`, after `import { asMonaco, createFakeMonaco } from './fake-monaco';` add `import { FakeSearchAddon, FakeTerminal } from './FakeTerminal';` and, in `installMockServer`'s `beforeEach`, after `useTerminalStore.getState().reset();` (Task 12):
 
 ```ts
     FakeTerminal.instances = [];
@@ -8042,6 +8169,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ### Task 15: Web — the terminal view, the session and the panel's Terminal tab
 
+The re-skinned bottom panel is the canvas's (D332): the kit's segmented pill (`Tabs` from `@ace/ui`, Radix underneath), Problems only, hidden until opened. D334's amendment of 2026-10-13 puts the Terminal back in it, first: **Terminal · Problems**, with no Output. The terminal sits in a surface card, as Problems shows a file. xterm is coloured from the theme's palettes, the way `forge-theme.ts` colours Monaco. The kit has no icon library, so the find box uses the theme's glyphs.
+
 **Files:**
 - Create:
   - `apps/web/src/forge/terminal/session.ts`;
@@ -8050,18 +8179,20 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - `apps/web/src/forge/terminal/TerminalView.tsx`;
   - `apps/web/src/forge/terminal/TerminalPanel.tsx`.
 - Modify:
-  - `apps/web/src/app/stores/layout.ts:5` (`'terminal'`);
-  - `apps/web/src/forge/panel/BottomPanel.tsx:10-14`, `:36` and `:61-64` (the Terminal tab, first; a click on it asks for the focus);
+  - `apps/web/src/forge/editor/forge-theme.ts:14`, `:51` and `:54-56` (export the looks and the three accents);
+  - `apps/web/src/app/stores/layout.ts:4-5` (`ForgePanelTab`);
+  - `apps/web/src/forge/panel/BottomPanel.tsx` (rewritten: the Terminal pill first, a click on it asks for the focus, its content);
   - `apps/web/src/test/app.tsx` (a focus request never outlives its test).
-- Test: create `apps/web/src/forge/terminal/TerminalPanel.test.tsx` and `apps/web/src/forge/terminal/session.test.ts`.
+- Test: create `apps/web/src/forge/terminal/TerminalPanel.test.tsx`, `apps/web/src/forge/terminal/session.test.ts` and `apps/web/src/forge/terminal/xterm-theme.test.ts`. The existing `apps/web/src/forge/panel/BottomPanel.test.tsx` must still pass unchanged: Problems stays the default view.
 
 **Interfaces:**
 - Consumes:
-  - from Task 10: `api().startProcess`, `processInput`, `stopProcess`, `listFolder`;
+  - from Task 10: `api().startProcess`, `processInput`, `stopProcess`; existing `listFolder`;
+  - from Task 11: `processes` and `MOCK_MESSAGES` (`engine_stopping` among them);
   - from Task 12: `useTerminalStore` and its actions, `useProjectTerminals`, `tabOf`, `scrollbackOf`, `errorLine`, `processKeys`, `busyLine`;
   - from Task 13: `useProcessEvents`, `installMockSocket`;
   - from Task 14: `feed`, `LineAction`, `parseBuiltin`, `resolveCd`, and `FakeTerminal` with its addons (registered for every unit test);
-  - existing: `useResolvedTheme`, `IconAction`, `useLayoutStore`.
+  - existing: `useResolvedTheme` (`app/theme.ts`), `setThemeMode` (`theme/mode.ts`), `PAL_L`, `PAL_D`, `T` and `AGENT_COLORS` (`theme/constants.ts`), `Button` and `Tabs*` from `@ace/ui`, `useLayoutStore`.
 - Produces:
   - in `session.ts`:
     - `typed(projectId, tabId, data, queryClient): Promise<void>`, which settles when the actions this input caused have run;
@@ -8071,25 +8202,90 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
     - `requestTerminalFocus(): void`: the person asked for the Terminal; the terminal view on screen after this turn takes the focus;
     - `registerTerminalFocus(focus: () => void): () => void`, for the view on screen;
     - `cancelTerminalFocus(): void`, for tests;
-  - `terminalTheme(theme: 'dark' | 'light'): ITheme`;
+  - in `forge/editor/forge-theme.ts`: `export interface Look`, `FORGE_LOOKS: Readonly<Record<'light' | 'dark', Look>>`, and `ACCENT` (`#ef6b3f`), `DANGER` (`#c94c27`), `DONE` (`#2f9e63`). Monaco's themes are unchanged;
+  - `terminalTheme(theme: 'light' | 'dark'): ITheme`, every colour one the theme already has;
   - `TerminalView({ projectId, tabId })`, with the test ids `terminal-view` (its host) and, under `FakeTerminal`, `terminal-screen`. It never focuses itself on mount;
-  - `TerminalPanel({ projectId })`, test id `terminal-panel`. On mount it opens a first tab when the project has none;
-  - `ForgePanelTab = 'terminal' | 'problems' | 'output'`; the panel's tabs read Terminal · Problems · Output, and a click on Terminal asks for the focus.
+  - `TerminalPanel({ projectId })`, test ids `terminal-panel` and `terminal-card` (the surface card). On mount it opens a first tab when the project has none;
+  - `ForgePanelTab = 'terminal' | 'problems'`; the panel's pill reads Terminal · Problems, and a click on Terminal asks for the focus.
 - The view writes each store change as it arrives. A `process.output` frame is at most 65,536 characters (Task 6), so an append is always a delta, written as is; the scrollback is rewritten in full only on a re-attach or a clear, when the tab's epoch changes.
-- Task 16 adds the tabs bar, the Processes list and the script buttons to `TerminalPanel`, and asks for the focus from Ctrl+`, New terminal, a terminal tab, Show, a script button, the status bar and the empty editor.
+- Task 16 adds the tab strip, the Processes list and the script buttons to `TerminalPanel`, and asks for the focus from Ctrl+`, New terminal, a terminal tab, Show, a script button, the footer's running count and the empty editor.
 
 - [ ] **Step 1: Write the failing tests**
+
+Create `apps/web/src/forge/terminal/xterm-theme.test.ts`:
+
+```ts
+import { describe, expect, it } from 'vitest';
+
+import { AGENT_COLORS, PAL_D, PAL_L, T } from '../../theme/constants';
+import { ACCENT, DANGER, DONE, FORGE_LOOKS } from '../editor/forge-theme';
+import { terminalTheme } from './xterm-theme';
+
+/** Every colour the theme already has: the code view's two looks, the palettes, accents and tints. */
+const THEME_COLOURS = new Set<string>([
+  ...[FORGE_LOOKS.light, FORGE_LOOKS.dark].flatMap((look) =>
+    Object.values(look).filter((value): value is string => typeof value === 'string'),
+  ),
+  ...Object.values(PAL_L),
+  ...Object.values(PAL_D),
+  ACCENT,
+  DANGER,
+  DONE,
+  ...AGENT_COLORS,
+  ...Object.values(T).map(([, accent]) => accent),
+]);
+
+describe('D301 D334 xterm in the theme’s colours, as Monaco is', () => {
+  it('light: the code view’s surface and ink, the #ef6b3f cursor, the light syntax palette', () => {
+    expect(terminalTheme('light')).toMatchObject({
+      background: '#ffffff',
+      foreground: '#1f1d1b',
+      cursor: '#ef6b3f',
+      selectionBackground: '#ece7e2',
+      red: '#c94c27',
+      green: PAL_L.str,
+      yellow: PAL_L.type,
+      magenta: PAL_L.kw,
+      cyan: PAL_L.fn,
+      brightBlack: '#6f6a65',
+    });
+  });
+
+  it('dark: the dark surface and ink, the dark syntax palette', () => {
+    expect(terminalTheme('dark')).toMatchObject({
+      background: '#181615',
+      foreground: '#f2eee9',
+      cursor: '#ef6b3f',
+      selectionBackground: '#24211f',
+      green: PAL_D.str,
+      yellow: PAL_D.type,
+      magenta: PAL_D.kw,
+      cyan: PAL_D.fn,
+      brightBlack: '#a39d97',
+    });
+  });
+
+  it('invents no colour: every value, light and dark, is one the theme already has', () => {
+    for (const theme of ['light', 'dark'] as const) {
+      for (const [slot, colour] of Object.entries(terminalTheme(theme))) {
+        expect(THEME_COLOURS.has(String(colour)), `${theme} ${slot} ${String(colour)}`).toBe(true);
+      }
+    }
+  });
+});
+```
 
 Create `apps/web/src/forge/terminal/TerminalPanel.test.tsx`:
 
 ```tsx
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from '../../app/api';
 import { getSocket } from '../../app/socket';
 import { useLayoutStore } from '../../app/stores/layout';
+import { MOCK_MESSAGES } from '../../mocks/processes';
 import {
   db,
   installMockServer,
@@ -8099,14 +8295,17 @@ import {
   renderWithQuery,
 } from '../../test/app';
 import { FakeSearchAddon, FakeTerminal } from '../../test/FakeTerminal';
+import { setThemeMode } from '../../theme/mode';
 import { BottomPanel } from '../panel/BottomPanel';
 import { requestTerminalFocus } from './focus';
 import { useProcessEvents } from './process-events';
 import { TerminalPanel } from './TerminalPanel';
 import { useTerminalStore } from './terminal-store';
+import { terminalTheme } from './xterm-theme';
 
 installMockServer();
 installMockSocket();
+afterEach(() => setThemeMode('light'));
 
 vi.mock('../../canvas/Canvas', () => ({
   Canvas: ({ workflowId }: { workflowId: string }) => <div data-testid="canvas">{workflowId}</div>,
@@ -8201,7 +8400,7 @@ describe('D301 a terminal tab runs what is typed', () => {
     await waitFor(() => expect(shown()).toBe('~ $ '));
   });
 
-  it('a refusal, and a process that never started, say so in the tab (design §10)', async () => {
+  it('a refusal, a process that never started and an engine shutting down say so in the tab (design §10)', async () => {
     const projectId = await open();
     for (let i = 0; i < 8; i += 1) processes.start(projectId, { command: 'serve' });
     type('echo nine\r');
@@ -8214,6 +8413,12 @@ describe('D301 a terminal tab runs what is typed', () => {
     type('broken\r');
     await waitFor(() => expect(shown()).toContain('Could not start: spawn /bin/sh ENOENT'));
     await waitFor(() => expect(shown()).toMatch(/\[could not start\]\n~ \$ $/));
+
+    // 503 engine_stopping, in the engine's words (Task 6's ruling; the mock's stopAll).
+    processes.stopAll();
+    type('echo late\r');
+    await waitFor(() => expect(shown()).toContain(MOCK_MESSAGES.engine_stopping));
+    expect(shown().endsWith('~ $ ')).toBe(true);
   });
 
   it('Ctrl+F finds in the scrollback', async () => {
@@ -8242,18 +8447,37 @@ describe('D301 a terminal tab runs what is typed', () => {
   });
 });
 
-describe('D301 a terminal tab survives the panel and the mode (design §2.3, §11)', () => {
-  it('reads Terminal · Problems · Output in the panel', async () => {
+describe('D301 D334 the Terminal in the theme', () => {
+  it('sits in a surface card, in JetBrains Mono, coloured from the theme’s palettes, light and dark', async () => {
+    await open();
+    expect(screen.getByTestId('terminal-card')).toHaveClass(
+      'rounded-[12px]',
+      'border-[var(--line)]',
+      'bg-[var(--surface)]',
+    );
+    expect(term().options['fontFamily']).toBe("'JetBrains Mono', monospace");
+    expect(term().options['theme']).toEqual(terminalTheme('light'));
+    act(() => setThemeMode('dark'));
+    await waitFor(() => expect(term().options['theme']).toEqual(terminalTheme('dark')));
+  });
+
+  it('reads Terminal · Problems in the panel’s pill, and Terminal shows the terminal', async () => {
     const user = userEvent.setup();
     const projectId = db.createProject({ name: 'Shop' }).id;
+    useLayoutStore.setState({ panelOpen: true, panelTab: 'problems' });
     renderWithQuery(<BottomPanel projectId={projectId} />);
-    const tabs = within(screen.getByRole('tablist', { name: 'Panel views' })).getAllByRole('tab');
-    expect(tabs.map((tab) => tab.textContent)).toEqual(['Terminal', 'Problems', 'Output']);
+    const pill = screen.getByRole('tablist', { name: 'Panel views' });
+    expect(pill).toHaveClass('rounded-full', 'bg-[var(--soft)]');
+    const tabs = within(pill).getAllByRole('tab');
+    expect(tabs.map((tab) => tab.textContent?.trim())).toEqual(['Terminal', 'Problems']);
     await user.click(tabs[0] as HTMLElement);
     expect(await screen.findByTestId('terminal-screen')).toBeInTheDocument();
     expect(useLayoutStore.getState().panelTab).toBe('terminal');
+    expect(tabs[0]).toHaveAttribute('aria-selected', 'true');
   });
+});
 
+describe('D301 a terminal tab survives the panel and the mode (design §2.3, §11)', () => {
   it('keeps a half-typed line while the panel is hidden', async () => {
     const user = userEvent.setup();
     const project = db.createProject({ name: 'Shop' });
@@ -8271,13 +8495,13 @@ describe('D301 a terminal tab survives the panel and the mode (design §2.3, §1
     await waitFor(() => expect(shown()).toBe('~ $ echo hi\nhi\n~ $ '));
   });
 
-  it('scrollback survives the panel being hidden and shown, Ideate ↔ Forge, and a workflow-tab switch', async () => {
+  it('scrollback survives the panel being hidden and shown, Ideate ↔ Forge, and a switch to another workflow', async () => {
     const user = userEvent.setup();
     const project = db.createProject({ name: 'Shop' });
     const workflow = db.createWorkflow(project.id, 'Main');
-    db.createWorkflow(project.id, 'Second');
+    const second = db.createWorkflow(project.id, 'Second');
     useLayoutStore.setState({ panelOpen: true, panelTab: 'terminal' });
-    renderApp(`/projects/${project.id}/workflows/${workflow.id}/forge`);
+    const { router } = renderApp(`/projects/${project.id}/workflows/${workflow.id}/forge`);
     await screen.findByTestId('terminal-screen');
     await vi.waitFor(() => expect(getSocket()?.status).toBe('open'));
     type('echo kept\r');
@@ -8295,9 +8519,17 @@ describe('D301 a terminal tab survives the panel and the mode (design §2.3, §1
     await screen.findByTestId('terminal-screen');
     expect(shown()).toBe('~ $ echo kept\nkept\n~ $ ');
 
-    // The store is keyed by project, so another workflow of the same project shows the same tab.
-    await user.click(await screen.findByRole('tab', { name: 'Second' }));
-    await waitFor(() => expect(shown()).toBe('~ $ echo kept\nkept\n~ $ '));
+    // Another workflow of the project, picked from the workspace menu (D331; the header's
+    // workflow tabs left with D330). The store is keyed by project, so its Forge shows the tab.
+    await user.click(await screen.findByTestId('workspace-menu'));
+    await user.click(await screen.findByTestId(`menu-workflow-${second.id}`));
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(
+        `/projects/${project.id}/workflows/${second.id}/forge`,
+      ),
+    );
+    await screen.findByTestId('terminal-screen');
+    expect(shown()).toBe('~ $ echo kept\nkept\n~ $ ');
   });
 });
 
@@ -8339,7 +8571,7 @@ describe('D301 the Terminal takes the focus only when asked', () => {
     expect(term().focused).toBe(0);
   });
 
-  it('a click on the panel’s Terminal tab focuses it', async () => {
+  it('a click on the panel’s Terminal pill focuses it', async () => {
     const user = userEvent.setup();
     const projectId = db.createProject({ name: 'Shop' }).id;
     useLayoutStore.setState({ panelOpen: true, panelTab: 'problems' });
@@ -8409,8 +8641,8 @@ describe('D301 a tab’s queue never fails silently', () => {
 
 - [ ] **Step 2: Run them to watch them fail**
 
-Run: `pnpm --filter @ace/web exec vitest run src/forge/terminal/TerminalPanel.test.tsx src/forge/terminal/session.test.ts`
-Expected: FAIL. `./session`, `./focus` and `./TerminalPanel` do not exist, and the panel has no Terminal tab.
+Run: `pnpm --filter @ace/web exec vitest run src/forge/terminal/TerminalPanel.test.tsx src/forge/terminal/session.test.ts src/forge/terminal/xterm-theme.test.ts`
+Expected: FAIL. `./session`, `./focus`, `./xterm-theme` and `./TerminalPanel` do not exist, `forge-theme.ts` exports no `FORGE_LOOKS`, and the panel has no Terminal pill.
 
 - [ ] **Step 3: The focus rule and the session**
 
@@ -8419,9 +8651,9 @@ Create `apps/web/src/forge/terminal/focus.ts`:
 ```ts
 /**
  * The Terminal takes the keyboard focus only when the person asked for it (D301): Ctrl+`, a click
- * on the panel's Terminal tab or on a terminal tab, New terminal, Show, a script button, the status
- * bar's count, the empty editor's Terminal button. A remount alone (Ctrl+J, back from Ideate)
- * never takes it, so the editor keeps the caret.
+ * on the panel's Terminal pill or on a terminal tab, New terminal, Show, a script button, the
+ * footer's running count, the empty editor's Terminal button. A remount alone (Ctrl+J, back from
+ * Ideate) never takes it, so the editor keeps the caret.
  *
  * A request is served after the current turn: by then React has mounted the view it opened (a new
  * tab, a panel shown), and in development StrictMode's second mount is the one registered. If no
@@ -8611,74 +8843,104 @@ export function typed(
 }
 ```
 
-- [ ] **Step 4: The theme, the view and the panel**
+- [ ] **Step 4: The theme's colours for xterm**
+
+In `apps/web/src/forge/editor/forge-theme.ts`:
+1. Change `interface Look {` (line 14) to `export interface Look {`.
+2. After the `DARK` look (it ends at line 51), add:
+
+```ts
+
+/** The code view's two looks, for every widget coloured from the theme: Monaco here, xterm (D301). */
+export const FORGE_LOOKS: Readonly<Record<'light' | 'dark', Look>> = { light: LIGHT, dark: DARK };
+```
+
+3. Export the three accents (lines 54-56):
+
+```ts
+export const ACCENT = '#ef6b3f';
+export const DANGER = '#c94c27';
+export const DONE = '#2f9e63';
+```
 
 Create `apps/web/src/forge/terminal/xterm-theme.ts`:
 
 ```ts
 import type { ITheme } from '@xterm/xterm';
 
-const HEX = /^#[0-9a-f]{6}([0-9a-f]{2})?$/i;
+import { AGENT_COLORS, T } from '../../theme/constants';
+import { ACCENT, DANGER, DONE, FORGE_LOOKS } from '../editor/forge-theme';
 
-const token = (name: string, fallback: string): string => {
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return HEX.test(value) ? value : fallback;
-};
-
-/** Night and Paper for xterm, from `@ace/ui`'s tokens, as the editor's themes are (design §6.2). */
-export function terminalTheme(theme: 'dark' | 'light'): ITheme {
-  const light = theme === 'light';
-  const background = token('--color-panel', light ? '#fbfaf7' : '#0e0e10');
-  const foreground = token('--color-fg', light ? '#1b1a1e' : '#f6f5f2');
-  const muted = token('--color-fg-faint', light ? '#8d8a93' : '#7d7c82');
-  const selection = token('--color-selection', light ? '#7c6fd6' : '#c4b5fd');
-  const danger = token('--color-danger', '#f0563f');
+/**
+ * xterm in the theme's code view (D301, D334), coloured the way `forge-theme.ts` colours Monaco:
+ * the surface, ink, muted and hover of the light or dark look, the `#ef6b3f` cursor, and the ANSI
+ * colours from the theme's syntax palette (`PAL_L` / `PAL_D`), its accents and its tints. No colour
+ * here is new: `xterm-theme.test.ts` checks every value against the theme's own.
+ */
+export function terminalTheme(theme: 'light' | 'dark'): ITheme {
+  const look = FORGE_LOOKS[theme];
+  const { pal } = look;
+  const dark = theme === 'dark';
   return {
-    background,
-    foreground,
-    cursor: foreground,
-    cursorAccent: background,
-    selectionBackground: `${selection.slice(0, 7)}55`,
-    black: light ? '#1b1a1e' : '#232327',
-    brightBlack: muted,
-    red: danger,
-    brightRed: danger,
-    green: light ? '#1f7a4d' : '#5fd29a',
-    yellow: light ? '#8a6a00' : '#e8c35a',
-    blue: light ? '#2a5bd7' : '#7aa2f7',
-    magenta: light ? '#8e44ad' : '#c792ea',
-    cyan: light ? '#127a8a' : '#6fd3e0',
-    white: light ? '#46444c' : '#d8d6d0',
-    brightWhite: foreground,
+    background: look.surface,
+    foreground: look.ink,
+    cursor: ACCENT,
+    cursorAccent: look.surface,
+    // Monaco's selection; xterm blends an opaque selection colour over the text itself.
+    selectionBackground: look.hover,
+    // Black must stay readable on the dark surface; white on the light one.
+    black: dark ? look.iconLine : look.ink,
+    brightBlack: look.muted,
+    red: DANGER,
+    brightRed: ACCENT,
+    green: pal.str,
+    brightGreen: DONE,
+    yellow: pal.type,
+    brightYellow: T.amber[1],
+    blue: T.blue[1],
+    brightBlue: T.blue[1],
+    magenta: pal.kw,
+    brightMagenta: AGENT_COLORS[1],
+    cyan: pal.fn,
+    brightCyan: AGENT_COLORS[2],
+    white: dark ? look.ink : look.muted,
+    brightWhite: look.ink,
   };
 }
 ```
+
+- [ ] **Step 5: The view and the panel**
 
 Create `apps/web/src/forge/terminal/TerminalView.tsx`:
 
 ```tsx
 import '@xterm/xterm/css/xterm.css';
 
+import { Button } from '@ace/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
-import { ChevronDown, ChevronUp, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { useResolvedTheme } from '../../app/theme';
-import { IconAction } from '../layout/IconAction';
 import { registerTerminalFocus } from './focus';
 import { typed } from './session';
 import { scrollbackOf, tabOf, useTerminalStore } from './terminal-store';
 import { terminalTheme } from './xterm-theme';
 
+/** The Explorer's filter field (D334), a size down: the find box. */
+const FIND_FIELD =
+  'h-[26px] w-48 rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-[10px] font-machine text-[11px] text-[var(--ink)] outline-none focus:border-[#ef6b3f]';
+
 /**
- * One terminal tab on screen (D301, design §6.3). xterm only renders: what is typed goes to the
- * line discipline (`typed`), and what the tab shows comes from the terminal store, so unmounting
- * (a hidden panel, Ideate) loses nothing — on mount the stored scrollback is written back. It takes
- * the keyboard focus only when the person asked for the Terminal (`focus.ts`), never on a remount.
+ * One terminal tab on screen (D301, design §6.3), in the theme's code view (D334): JetBrains Mono
+ * on the surface, coloured from the theme's palettes as Monaco is. xterm only renders: what is
+ * typed goes to the line discipline (`typed`), and what the tab shows comes from the terminal
+ * store, so unmounting (a hidden panel, Ideate) loses nothing — on mount the stored scrollback is
+ * written back. It takes the keyboard focus only when the person asked for the Terminal
+ * (`focus.ts`), never on a remount.
  */
 export function TerminalView({ projectId, tabId }: { projectId: string; tabId: string }) {
   const host = useRef<HTMLDivElement>(null);
@@ -8686,6 +8948,8 @@ export function TerminalView({ projectId, tabId }: { projectId: string; tabId: s
   const finder = useRef<SearchAddon>();
   const queryClient = useQueryClient();
   const theme = useResolvedTheme();
+  /** The theme at mount, so the first frame is already in the right colours. */
+  const themeAtMount = useRef(theme);
   const [finding, setFinding] = useState(false);
   const [query, setQuery] = useState('');
 
@@ -8695,9 +8959,12 @@ export function TerminalView({ projectId, tabId }: { projectId: string; tabId: s
     const term = new Terminal({
       convertEol: true,
       cursorBlink: true,
-      fontFamily: '"JetBrains Mono Variable", ui-monospace, monospace',
+      // The code view's mono (D334), a size down for the panel.
+      fontFamily: "'JetBrains Mono', monospace",
       fontSize: 12,
+      lineHeight: 1.25,
       scrollback: 10_000,
+      theme: terminalTheme(themeAtMount.current),
     });
     const fit = new FitAddon();
     const search = new SearchAddon();
@@ -8783,26 +9050,36 @@ export function TerminalView({ projectId, tabId }: { projectId: string; tabId: s
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       {finding && (
-        <div role="search" className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1">
+        <div
+          role="search"
+          className="flex shrink-0 items-center gap-[4px] border-b border-[var(--line)] px-[10px] py-[4px]"
+        >
           <input
             aria-label="Find in terminal"
             autoFocus
+            spellCheck={false}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter') find(event.shiftKey ? 'previous' : 'next');
               if (event.key === 'Escape') closeFind();
             }}
-            className="h-6 w-48 rounded border border-border bg-canvas px-2 font-machine text-[12px] text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+            className={FIND_FIELD}
           />
-          <IconAction label="Previous match" Icon={ChevronUp} onClick={() => find('previous')} />
-          <IconAction label="Next match" Icon={ChevronDown} onClick={() => find('next')} />
-          <IconAction label="Close find" Icon={X} onClick={closeFind} />
+          <Button variant="ghost" size="icon" aria-label="Previous match" title="Previous match" onClick={() => find('previous')}>
+            <span aria-hidden>↑</span>
+          </Button>
+          <Button variant="ghost" size="icon" aria-label="Next match" title="Next match" onClick={() => find('next')}>
+            <span aria-hidden>↓</span>
+          </Button>
+          <Button variant="ghost" size="icon" aria-label="Close find" title="Close find" onClick={closeFind}>
+            <span aria-hidden>✕</span>
+          </Button>
         </div>
       )}
-      <div ref={host} data-testid="terminal-view" className="min-h-0 flex-1 px-2 py-1" />
+      <div ref={host} data-testid="terminal-view" className="min-h-0 flex-1 px-[12px] pb-[4px] pt-[8px]" />
     </div>
   );
 }
@@ -8816,7 +9093,10 @@ import { useEffect } from 'react';
 import { TerminalView } from './TerminalView';
 import { useProjectTerminals, useTerminalStore } from './terminal-store';
 
-/** The bottom panel's Terminal view (D301): the active tab. Opening it with none opens one. */
+/**
+ * The bottom panel's Terminal view (D301), in the theme (D334): the active tab in a surface card,
+ * as Problems shows a file. Opening it with no tab opens one.
+ */
 export function TerminalPanel({ projectId }: { projectId: string }) {
   const terminals = useProjectTerminals(projectId);
   useEffect(() => {
@@ -8825,79 +9105,193 @@ export function TerminalPanel({ projectId }: { projectId: string }) {
   }, [projectId]);
   const active = terminals.tabs.find((tab) => tab.id === terminals.active) ?? terminals.tabs[0];
   return (
-    <div data-testid="terminal-panel" className="flex h-full min-h-0 flex-col">
-      {active !== undefined && (
-        <TerminalView key={active.id} projectId={projectId} tabId={active.id} />
-      )}
+    <div data-testid="terminal-panel" className="flex min-h-0 flex-1 flex-col gap-[8px]">
+      <div className="flex min-h-0 flex-1 gap-[10px]">
+        <div
+          data-testid="terminal-card"
+          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[12px] border border-[var(--line)] bg-[var(--surface)]"
+        >
+          {active !== undefined && (
+            <TerminalView key={active.id} projectId={projectId} tabId={active.id} />
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 ```
 
-- [ ] **Step 5: The Terminal tab in the panel**
+- [ ] **Step 6: The Terminal pill in the panel**
 
-In `apps/web/src/app/stores/layout.ts`, change line 5 to:
+In `apps/web/src/app/stores/layout.ts`, replace lines 4-5:
 
 ```ts
-export type ForgePanelTab = 'terminal' | 'problems' | 'output';
+/** Forge's bottom panel views: Problems (D299 §6.4). The Output view left with D334; Phase 2 adds the Terminal. */
+export type ForgePanelTab = 'problems';
 ```
 
-In `apps/web/src/forge/panel/BottomPanel.tsx`:
-1. Add `import { requestTerminalFocus } from '../terminal/focus';` and `import { TerminalPanel } from '../terminal/TerminalPanel';`.
-2. Replace the `TABS` block (lines 10-14) with:
+with:
 
 ```ts
-/** Terminal · Problems · Output, as VS Code orders them (design §2.2). */
+/**
+ * Forge's bottom panel views (D334 as amended 2026-10-13): the Terminal (D301) and Problems. The
+ * Output view stays removed. Problems stays the default, so Ctrl+J opens what it opened before.
+ */
+export type ForgePanelTab = 'terminal' | 'problems';
+```
+
+Replace `apps/web/src/forge/panel/BottomPanel.tsx` with:
+
+```tsx
+import { Badge, Tabs, TabsContent, TabsList, TabsTrigger, cn } from '@ace/ui';
+
+import { useLayoutStore, type ForgePanelTab } from '../../app/stores/layout';
+import { requestTerminalFocus } from '../terminal/focus';
+import { TerminalPanel } from '../terminal/TerminalPanel';
+import { ProblemsView } from './ProblemsView';
+import { useProblemsStore, type Problem } from './problems-store';
+
+const NONE: Problem[] = [];
+
+/**
+ * Terminal · Problems (D334 as amended 2026-10-13): the Terminal (D301) first, as VS Code orders
+ * them. The Output view left with D334; its warnings reach the toaster.
+ */
 const TABS: ReadonlyArray<{ tab: ForgePanelTab; label: string }> = [
   { tab: 'terminal', label: 'Terminal' },
   { tab: 'problems', label: 'Problems' },
-  { tab: 'output', label: 'Output' },
 ];
+
+/**
+ * A click (or Enter) on the Terminal pill is the person asking for the Terminal, so it takes the
+ * focus (D301). Arrowing along the pill only shows it.
+ */
+const onPick = (tab: ForgePanelTab): (() => void) | undefined =>
+  tab === 'terminal' ? () => requestTerminalFocus() : undefined;
+
+/** The canvas bottom panel's 28px square (D328), for maximize and close. */
+const SQUARE =
+  'grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border border-[var(--line)] bg-transparent text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+
+/**
+ * Forge's bottom panel (D299, D334 as amended), under the code column while the person has it open
+ * (Ctrl/⌘+J, Ctrl+`, or the footer's counts), 232px tall or maximized over the editor. In the theme
+ * it is the canvas's bottom panel (D332): the kit's segmented pill for the views, the problem count
+ * as a mono chip — red while there are errors — the theme's ⛶ (pressed while maximized) and 28px ✕.
+ */
+export function BottomPanel({ projectId }: { projectId: string }) {
+  const problems = useProblemsStore((s) => s.byProject[projectId] ?? NONE);
+  const errors = problems.some((problem) => problem.severity === 'error');
+  const panelTab = useLayoutStore((s) => s.panelTab);
+  const showPanel = useLayoutStore((s) => s.showPanel);
+  const closePanel = useLayoutStore((s) => s.closePanel);
+  const maximized = useLayoutStore((s) => s.panelMaximized);
+  const toggleMaximized = useLayoutStore((s) => s.toggleMaximized);
+  return (
+    <section
+      aria-label="Panel"
+      data-testid="forge-panel"
+      className={cn(
+        'flex min-h-0 flex-col border-t border-[var(--line)] bg-[var(--panel)] text-[var(--ink)]',
+        maximized ? 'flex-1' : 'h-[232px] shrink-0',
+      )}
+    >
+      <Tabs
+        value={panelTab}
+        onValueChange={(value) => showPanel(value as ForgePanelTab)}
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        <div className="flex h-11 shrink-0 items-center gap-2 px-[14px]">
+          <TabsList aria-label="Panel views">
+            {TABS.map(({ tab, label }) => (
+              <TabsTrigger
+                key={tab}
+                value={tab}
+                onClick={onPick(tab)}
+                className="flex-none gap-[6px] px-[14px]"
+              >
+                {label}{' '}
+                {tab === 'problems' && problems.length > 0 && (
+                  <Badge data-testid="problems-count" variant={errors ? 'danger' : 'default'}>
+                    {problems.length}
+                  </Badge>
+                )}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          <div className="flex-1" />
+          <button
+            type="button"
+            aria-label={maximized ? 'Restore panel size' : 'Maximize panel'}
+            title={maximized ? 'Restore panel size' : 'Maximize panel'}
+            onClick={toggleMaximized}
+            className={cn(SQUARE, 'text-[13px]')}
+            style={maximized ? { background: 'var(--hover)', color: '#ef6b3f' } : undefined}
+          >
+            <span aria-hidden>⛶</span>
+          </button>
+          <button
+            type="button"
+            aria-label="Close panel"
+            title="Close panel"
+            onClick={closePanel}
+            className={cn(SQUARE, 'text-[12px]')}
+          >
+            <span aria-hidden>✕</span>
+          </button>
+        </div>
+        {/* `flex` only while active: Radix hides the inactive content with `hidden`. */}
+        <TabsContent
+          value="terminal"
+          className="min-h-0 flex-1 flex-col px-[16px] pb-[14px] data-[state=active]:flex"
+        >
+          <TerminalPanel projectId={projectId} />
+        </TabsContent>
+        <TabsContent value="problems" className="min-h-0 flex-1 overflow-auto px-[16px] pb-[14px]">
+          <ProblemsView projectId={projectId} />
+        </TabsContent>
+      </Tabs>
+    </section>
+  );
+}
 ```
 
-3. Replace the tab button's `onClick={() => showPanel(tab)}` (line 36) with:
-
-```tsx
-              onClick={() => {
-                // A click on Terminal is the person asking for it: it takes the focus (D301).
-                if (tab === 'terminal') requestTerminalFocus();
-                showPanel(tab);
-              }}
-```
-
-4. In the `tabpanel`, before `{panelTab === 'problems' && …}`, add:
-
-```tsx
-        {panelTab === 'terminal' && <TerminalPanel projectId={projectId} />}
-```
-
-In `apps/web/src/test/app.tsx`, add `import { cancelTerminalFocus } from '../forge/terminal/focus';` and, in `installMockServer`'s `beforeEach`, after `FakeSearchAddon.instances = [];` (Task 14):
+In `apps/web/src/test/app.tsx`, after `import { useProblemsStore } from '../forge/panel/problems-store';` add `import { cancelTerminalFocus } from '../forge/terminal/focus';`, and in `installMockServer`'s `beforeEach`, after `FakeSearchAddon.instances = [];` (Task 14), add:
 
 ```ts
     cancelTerminalFocus();
 ```
 
-- [ ] **Step 6: Run the tests**
+- [ ] **Step 7: Run the tests**
 
-Run: `pnpm --filter @ace/web exec vitest run src/test/FakeTerminal.test.ts src/forge/terminal src/forge/ForgeWorkbench.test.tsx src/forge/layout`
-Expected: PASS.
+Run: `pnpm --filter @ace/web exec vitest run src/test/FakeTerminal.test.ts src/forge/terminal src/forge/panel src/forge/ForgeWorkbench.test.tsx src/forge/layout src/forge/editor`
+Expected: PASS. `BottomPanel.test.tsx` passes unchanged: Problems is still the view the panel opens on.
 
-- [ ] **Step 7: Full web suite, typecheck, lint, commit**
+- [ ] **Step 8: Full web suite, typecheck, lint, commit**
 
 Run: `pnpm --filter @ace/web test && pnpm --filter @ace/web typecheck && pnpm --filter @ace/web lint`
-Expected: PASS. If a Phase 1 test assumed Problems was the panel's first tab, it is wrong now (design §2.2): change its expectation, not the order.
+Expected: PASS.
 
 ```bash
-npx prettier --write --config packages/config/prettier.config.js apps/web/src/forge/terminal apps/web/src/test/app.tsx apps/web/src/forge/panel/BottomPanel.tsx apps/web/src/app/stores/layout.ts
+npx prettier --write --config packages/config/prettier.config.js apps/web/src/forge/terminal apps/web/src/forge/editor/forge-theme.ts apps/web/src/forge/panel/BottomPanel.tsx apps/web/src/app/stores/layout.ts apps/web/src/test/app.tsx
 git add apps/web/src
-git commit -m "feat(web): the Terminal tab — xterm over the line discipline, find, focus only when asked, and scrollback that survives the panel and Ideate [D301]
+git commit -m "feat(web): the Terminal tab — xterm in the theme's colours over the line discipline, find, focus only when asked, and scrollback that survives the panel and Ideate [D301]
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 16: Web — several tabs, the Processes list, script buttons, the status bar's count and Ctrl+`
+### Task 16: Web — several tabs, the Processes list, script buttons, the footer's running count and Ctrl+`
+
+Every new piece wears a pattern the re-skin already has:
+- **The terminal tabs** are the editor's tab strip (`TabsBar`, D334): 12px medium labels, hairlines between tabs, the active tab on the surface with the orange top edge, the 20px × close button, and a 6px dot in the Stage cards' RUNNING colour while its process runs.
+- **The Processes list** is carded as Problems is: an `EXPLORER`-style mono heading, then one surface card with hairline rows.
+- **The script buttons** are the kit's secondary pills.
+- **The running count** is the footer's: Forge's old status bar left with D334, and its pieces live in `forge/layout/StatusBar.tsx` and render in the workspace footer (D330). So `▶ N running` sits right after the problem counts, in their mono type.
+- **The empty editor** gains a third Close pill, Terminal, with its key in mono.
+
+There is no icon library, so the glyphs are the theme's: `+`, `×`, `▶`.
 
 **Files:**
 - Create:
@@ -8907,35 +9301,37 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Modify:
   - `apps/web/src/forge/terminal/session.ts` (append `runScript` and `openProcessInTab`);
   - `apps/web/src/forge/terminal/focus.ts` (append `toggleTerminalFocused`);
-  - `apps/web/src/forge/terminal/TerminalPanel.tsx` (the header, the list, an empty state);
-  - `apps/web/src/forge/layout/StatusBar.tsx:1-27` and `:55` (the running count);
-  - `apps/web/src/app/shortcuts.ts:39-63` (`toggleTerminal` and the backquote label);
-  - `apps/web/src/app/stores/layout.ts:7-24` and `:57-71` (`toggleTerminal`);
-  - `apps/web/src/forge/ForgeWorkbench.tsx:36-55` (the binding, in `useShortcuts`);
-  - `apps/web/src/forge/editor/EmptyEditor.tsx` (the Terminal action and hint).
+  - `apps/web/src/forge/terminal/TerminalPanel.tsx` (rewritten: the strip, the list, an empty state);
+  - `apps/web/src/forge/layout/StatusBar.tsx:1-17` (imports and the comment) and after `ProblemsCount` (`:55`): `RunningCount`;
+  - `apps/web/src/app/layout/WorkspaceFooter.tsx:4` (import), `:20-25` (comment) and `:60-67` (the count after the problem counts);
+  - `apps/web/src/app/shortcuts.ts:49-66` (`toggleTerminal` and the backquote label);
+  - `apps/web/src/app/stores/layout.ts` (`toggleTerminal`; quoted anchors, because Task 15 moved its lines);
+  - `apps/web/src/forge/ForgeWorkbench.tsx:1-22` (import and comment) and `:42-44` (the binding, in `useShortcuts`);
+  - `apps/web/src/forge/editor/EmptyEditor.tsx` (rewritten: the Terminal pill).
 - Test:
   - create `apps/web/src/forge/terminal/TerminalTabs.test.tsx`, `ProcessesList.test.tsx`, `ScriptButtons.test.tsx`;
-  - extend `apps/web/src/forge/layout/StatusBar.test.tsx`, `apps/web/src/app/shortcuts.test.tsx`, `apps/web/src/app/stores/layout.test.ts`, `apps/web/src/forge/ForgeWorkbench.test.tsx`.
+  - extend `apps/web/src/forge/layout/StatusBar.test.tsx`, `apps/web/src/app/layout/WorkspaceFooter.test.tsx`, `apps/web/src/app/shortcuts.test.tsx`, `apps/web/src/app/stores/layout.test.ts`, `apps/web/src/forge/ForgeWorkbench.test.tsx`.
 
 **Interfaces:**
 - Consumes:
+  - from Task 11: `processes`;
   - from Task 12: `useProcessList`, `useProjectScripts`, `useStopProcess`, `runningCount`, `processKeys`, `useProjectTerminals`, `useTerminalStore`, `TerminalTab`, `busyLine`;
   - from Task 13: `reattach`, `useProcessEvents`, `installMockSocket`;
   - from Task 14: `FakeTerminal`;
-  - from Task 15: `enqueue`, `startInTab`, `requestTerminalFocus`, `TerminalView`, `TerminalPanel`;
-  - existing: `Dialog*` and `Button` from `@ace/ui`, `IconAction`, `useLayoutStore`.
+  - from Task 15: `enqueue`, `startInTab`, `requestTerminalFocus`, `cancelTerminalFocus`, `TerminalView`, `TerminalPanel` (test ids `terminal-panel`, `terminal-card`);
+  - existing: `Button` and `Dialog*` from `@ace/ui`, `nodeStatusLook` (`theme/format.ts`), `ProblemsCount` and `CursorInfo` (`forge/layout/StatusBar.tsx`), `WorkspaceFooter`, `useLayoutStore`.
 - Produces:
   - in `session.ts`:
     - `runScript(projectId, name, packageManager: PackageManager, queryClient): Promise<void>`: a new tab named after the script, `<pm> run <name>` echoed, `{ script: name }` started. It sends no `cwd`: a script always runs at the project root (decision 5);
     - `openProcessInTab(projectId, summary: ProcessSummary, queryClient): Promise<void>`;
   - in `focus.ts`: `toggleTerminalFocused(): void`, which shows the Terminal and asks for the focus, or hides it;
-  - every way the person opens a terminal asks for the focus (`requestTerminalFocus`): Ctrl+`, a terminal tab, New terminal, Show, a script button, the status bar's count and the empty editor's Terminal button;
+  - every way the person opens a terminal asks for the focus (`requestTerminalFocus`): Ctrl+`, a terminal tab, New terminal, Show, a script button, the footer's running count and the empty editor's Terminal pill. A double-click to rename drops a pending request (`cancelTerminalFocus`), so the rename box keeps the caret;
   - `TerminalTabs({ projectId, disabled? })`: a `tablist` named "Terminals", a "New terminal" button, double-click to rename, "Close <label>", and the "Stop <label>?" dialog;
   - `ProcessesList({ projectId })`: a `region` named "Processes"; rows have test id `process-<id>`; running rows have "Stop <label>", and "Show <label>" when no tab owns them;
-  - `ScriptButtons({ projectId, disabled? })`: a `group` named "Scripts", one button per script, named by the script;
+  - `ScriptButtons({ projectId, disabled? })`: a `group` named "Scripts", one pill per script, named by the script;
   - `SHORTCUTS.toggleTerminal = { code: 'Backquote', mod: true }`; `shortcutLabel` prints `` Ctrl+` ``;
   - `useLayoutStore().toggleTerminal()`;
-  - a status-bar button named `<n> running` when n > 0.
+  - `RunningCount({ projectId })` in `forge/layout/StatusBar.tsx`: a footer button named `<n> running`, test id `footer-running`, when n > 0. `WorkspaceFooter` renders it in Forge, right after `ProblemsCount`.
 - Task 17 passes `disabled` to `TerminalTabs` and `ScriptButtons`, and adds the trust notice to `TerminalPanel`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -8985,6 +9381,16 @@ describe('D301 several terminal tabs', () => {
     await user.click(tabs()[0] as HTMLElement);
     expect(tabs()[0]).toHaveAttribute('aria-selected', 'true');
     await waitFor(() => expect(FakeTerminal.latest().focused).toBe(1));
+  });
+
+  it('is drawn as the editor’s tab strip: the active tab on the surface with the orange top edge', async () => {
+    const user = userEvent.setup();
+    await open();
+    await user.click(screen.getByRole('button', { name: 'New terminal' }));
+    const [first, second] = tabs();
+    expect(second?.parentElement).toHaveClass('bg-[var(--surface)]', 'shadow-[inset_0_2px_0_#ef6b3f]');
+    expect(first?.parentElement).toHaveClass('text-[var(--muted)]');
+    expect(first?.parentElement).not.toHaveClass('shadow-[inset_0_2px_0_#ef6b3f]');
   });
 
   it('renames a tab by double-clicking its name', async () => {
@@ -9059,7 +9465,7 @@ async function open(projectId: string) {
 }
 
 describe('D301 the Processes list', () => {
-  it('lists running processes with Stop, and finished ones with how they ended', async () => {
+  it('lists running processes with Stop, and finished ones with how they ended, in one surface card', async () => {
     const user = userEvent.setup();
     const projectId = db.createProject({ name: 'Shop' }).id;
     const done = processes.start(projectId, { command: 'echo a' }).processId;
@@ -9069,6 +9475,11 @@ describe('D301 the Processes list', () => {
 
     const list = await open(projectId);
     await within(list).findByText('dev server');
+    expect(within(list).getByRole('list')).toHaveClass(
+      'rounded-[12px]',
+      'border-[var(--line)]',
+      'bg-[var(--surface)]',
+    );
     expect(within(list).getByTestId(`process-${done}`)).toHaveTextContent('exit 0');
     expect(within(list).getByTestId(`process-${failed}`)).toHaveTextContent('exit 1');
 
@@ -9138,10 +9549,13 @@ describe('D301 script buttons run the project’s own scripts', () => {
     await vi.waitFor(() => expect(getSocket()?.status).toBe('open'));
 
     const scripts = await screen.findByRole('group', { name: 'Scripts' });
-    expect(within(scripts).getAllByRole('button').map((button) => button.textContent)).toEqual([
-      'hello',
-      'dev',
-    ]);
+    const buttons = within(scripts).getAllByRole('button');
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0]).toHaveAccessibleName('hello');
+    expect(buttons[1]).toHaveAccessibleName('dev');
+    // the kit's secondary pill (D328)
+    expect(buttons[0]).toHaveClass('rounded-full', 'bg-[var(--soft)]');
+
     await user.click(within(scripts).getByRole('button', { name: 'hello' }));
     expect(await screen.findByRole('tab', { name: 'hello' })).toHaveAttribute('aria-selected', 'true');
     await waitFor(() =>
@@ -9165,32 +9579,72 @@ describe('D301 script buttons run the project’s own scripts', () => {
 });
 ```
 
-In `apps/web/src/forge/layout/StatusBar.test.tsx`, change the first import to `import { act, screen, waitFor } from '@testing-library/react';`, add `processes` and `queryClient` to the import from `'../../test/app'`, add `import { processKeys } from '../terminal/hooks';`, and append inside the `describe`:
+In `apps/web/src/forge/layout/StatusBar.test.tsx`:
+1. Change the first import to `import { act, screen, waitFor } from '@testing-library/react';`.
+2. Change `import { db, installMockServer, renderWithQuery } from '../../test/app';` to `import { db, installMockServer, processes, queryClient, renderWithQuery } from '../../test/app';`.
+3. After `import { useProblemsStore } from '../panel/problems-store';` add `import { processKeys } from '../terminal/hooks';`.
+4. Change `import { CursorInfo, ProblemsCount } from './StatusBar';` to `import { CursorInfo, ProblemsCount, RunningCount } from './StatusBar';`.
+5. Append inside `describe('D330 D334 the status bar’s pieces in the footer’s type', …)`:
 
 ```tsx
-  it('D301 counts the running processes, and a click opens the Terminal', async () => {
+  it('D301 counts the running processes as ▶ N running, in the counts’ type; a click opens the Terminal', async () => {
     const user = userEvent.setup();
     const projectId = db.createProject({ name: 'P' }).id;
     processes.start(projectId, { command: 'serve' });
     processes.start(projectId, { command: 'serve' });
-    renderWithQuery(<StatusBar projectId={projectId} />);
-    await user.click(await screen.findByRole('button', { name: '2 running' }));
+    renderWithQuery(<RunningCount projectId={projectId} />);
+    const count = await screen.findByRole('button', { name: '2 running' });
+    expect(count).toHaveClass('font-machine', 'text-[10px]', 'text-[var(--muted)]');
+    expect(screen.getByText('▶')).toHaveStyle({ color: '#ef6b3f' });
+    await user.click(count);
     expect(useLayoutStore.getState()).toMatchObject({ panelOpen: true, panelTab: 'terminal' });
     processes.stopProject(projectId);
   });
 
   it('D301 says nothing about processes when none runs', async () => {
     const projectId = db.createProject({ name: 'P' }).id;
-    renderWithQuery(<StatusBar projectId={projectId} />);
+    renderWithQuery(<RunningCount projectId={projectId} />);
     // The list has arrived (empty): only now does "no count" mean something.
     await waitFor(() =>
       expect(queryClient.getQueryState(processKeys.list(projectId))?.status).toBe('success'),
     );
-    expect(screen.queryByRole('button', { name: /running$/ })).toBeNull();
+    expect(screen.queryByTestId('footer-running')).toBeNull();
   });
 ```
 
-In `apps/web/src/app/shortcuts.test.tsx`, append inside the `describe`:
+In `apps/web/src/app/layout/WorkspaceFooter.test.tsx`, change `import { db, installMockServer, renderWithQuery } from '../../test/app';` to `import { db, installMockServer, processes, renderWithQuery } from '../../test/app';`, and append inside `describe('D330 the workspace footer', …)`:
+
+```tsx
+  it('D301 in Forge, ▶ N running follows the problem counts while a process runs', async () => {
+    const project = db.createProject({ name: 'Shop Floor' });
+    const workflow = db.createWorkflow(project.id, 'Main');
+    processes.start(project.id, { command: 'serve' });
+    renderWithQuery(
+      <MemoryRouter>
+        <WorkspaceFooter projectId={project.id} workflowId={workflow.id} mode="forge" />
+      </MemoryRouter>,
+    );
+    const running = await within(footer()).findByRole('button', { name: '1 running' });
+    expect(within(footer()).getByTestId('footer-problems').nextElementSibling).toBe(running);
+    processes.stopProject(project.id);
+  });
+
+  it('D301 has no running count outside Forge', async () => {
+    const project = db.createProject({ name: 'Shop Floor' });
+    const workflow = db.createWorkflow(project.id, 'Main');
+    processes.start(project.id, { command: 'serve' });
+    renderWithQuery(
+      <MemoryRouter>
+        <WorkspaceFooter projectId={project.id} workflowId={workflow.id} mode="ideate" />
+      </MemoryRouter>,
+    );
+    await screen.findByTestId('project-slug');
+    expect(screen.queryByTestId('footer-running')).toBeNull();
+    processes.stopProject(project.id);
+  });
+```
+
+In `apps/web/src/app/shortcuts.test.tsx`, append inside `describe('D299 Forge’s keyboard shortcuts', …)`:
 
 ```tsx
   it('D301 Ctrl+` and ⌘+` toggle the terminal, labelled with the backquote itself', () => {
@@ -9217,10 +9671,10 @@ In `apps/web/src/app/stores/layout.test.ts`, append inside the `describe`:
   });
 ```
 
-In `apps/web/src/forge/ForgeWorkbench.test.tsx`, change the first import to `import { screen, waitFor, within } from '@testing-library/react';`, add `import { FakeTerminal } from '../test/FakeTerminal';`, and append inside the `describe`:
+In `apps/web/src/forge/ForgeWorkbench.test.tsx`, after `import { db, installMockServer, renderApp } from '../test/app';` add `import { FakeTerminal } from '../test/FakeTerminal';`, and append inside `describe('D334 FR-GIT-003 Forge in the theme’s code view', …)`:
 
 ```tsx
-  it('D301 Ctrl+` opens the Terminal focused, and closes it again', async () => {
+  it('D301 Ctrl+` opens the Terminal pill focused, and closes it again', async () => {
     const user = userEvent.setup();
     renderApp(seed());
     await screen.findByTestId('forge');
@@ -9229,16 +9683,20 @@ In `apps/web/src/forge/ForgeWorkbench.test.tsx`, change the first import to `imp
     await user.keyboard('{Control>}[Backquote]{/Control}');
     expect(await screen.findByTestId('terminal-panel')).toBeInTheDocument();
     expect(useLayoutStore.getState().panelTab).toBe('terminal');
+    expect(screen.getByRole('tab', { name: 'Terminal' })).toHaveAttribute('aria-selected', 'true');
     await waitFor(() => expect(FakeTerminal.latest().focused).toBe(1));
     await user.keyboard('{Control>}[Backquote]{/Control}');
     expect(screen.queryByTestId('terminal-panel')).toBeNull();
   });
 
-  it('D301 the empty editor offers the Terminal with its key, and focuses it', async () => {
+  it('D301 the empty editor offers the Terminal as a third pill with its key, and focuses it', async () => {
     const user = userEvent.setup();
     renderApp(seed());
     await screen.findByTestId('forge');
-    await user.click(screen.getByRole('button', { name: /^Terminal/ }));
+    const pill = screen.getByRole('button', { name: /^Terminal/ });
+    expect(pill).toHaveTextContent('Terminal Ctrl+`');
+    expect(pill).toHaveClass('rounded-full');
+    await user.click(pill);
     expect(await screen.findByTestId('terminal-panel')).toBeInTheDocument();
     await waitFor(() => expect(FakeTerminal.latest().focused).toBe(1));
   });
@@ -9247,7 +9705,7 @@ In `apps/web/src/forge/ForgeWorkbench.test.tsx`, change the first import to `imp
 - [ ] **Step 2: Run them to watch them fail**
 
 Run: `pnpm --filter @ace/web exec vitest run src/forge/terminal src/forge/layout src/app src/forge/ForgeWorkbench.test.tsx`
-Expected: FAIL. There is no tab list, Processes list or script group; `toggleTerminal` is undefined; the status bar has no running count.
+Expected: FAIL. There is no tab list, Processes list or script group; `toggleTerminal` is undefined; `RunningCount` does not exist.
 
 - [ ] **Step 3: Scripts and processes in tabs**
 
@@ -9309,17 +9767,24 @@ import {
   DialogTitle,
   cn,
 } from '@ace/ui';
-import { Plus, X } from 'lucide-react';
 import { useState } from 'react';
 
-import { IconAction } from '../layout/IconAction';
-import { requestTerminalFocus } from './focus';
+import { nodeStatusLook } from '../../theme/format';
+import { cancelTerminalFocus, requestTerminalFocus } from './focus';
 import { useStopProcess } from './hooks';
 import { useProjectTerminals, useTerminalStore, type TerminalTab } from './terminal-store';
 
+/** The editor tab strip's 20px close button (D334): × on a tab, + after the last one. */
+const SMALL_BUTTON =
+  'h-[20px] w-[20px] shrink-0 cursor-pointer rounded-[5px] border-none bg-transparent leading-none text-[var(--muted)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-not-allowed disabled:opacity-45';
+
+/** The Stage cards' RUNNING colour, for the dot on a tab whose process runs. */
+const RUNNING = nodeStatusLook('RUNNING').color;
+
 /**
- * The Terminal's tabs (D301): each a line-mode session with its own folder and history. A dot
- * marks one that runs a process; closing it asks first, because closing stops it.
+ * The Terminal's tabs (D301), drawn as the editor's tab strip (D334): the active one on the surface
+ * with the orange top edge, a dot while its process runs, × to close — asking first while it runs,
+ * because closing stops it — double-click to rename, and + for another.
  */
 export function TerminalTabs({ projectId, disabled = false }: { projectId: string; disabled?: boolean }) {
   const terminals = useProjectTerminals(projectId);
@@ -9343,29 +9808,33 @@ export function TerminalTabs({ projectId, disabled = false }: { projectId: strin
   };
 
   return (
-    <div className="flex min-w-0 items-center gap-1">
-      <div role="tablist" aria-label="Terminals" className="flex min-w-0 items-center gap-1 overflow-x-auto">
+    <div className="flex min-w-0 flex-1 items-stretch">
+      <div role="tablist" aria-label="Terminals" className="flex min-w-0 items-stretch overflow-x-auto">
         {terminals.tabs.map((tab) => {
           const active = tab.id === terminals.active;
           return (
             <div
               key={tab.id}
+              role="presentation"
               className={cn(
-                'flex h-6 shrink-0 items-center gap-1 rounded px-1.5 font-machine text-[11px]',
-                active ? 'bg-card text-fg' : 'text-fg-muted hover:text-fg',
+                'flex shrink-0 items-center gap-[6px] whitespace-nowrap border-r border-[var(--line)] pr-[6px] text-[12px] font-medium',
+                active
+                  ? 'bg-[var(--surface)] text-[var(--ink)] shadow-[inset_0_2px_0_#ef6b3f]'
+                  : 'bg-transparent text-[var(--muted)]',
               )}
             >
               {renaming === tab.id ? (
                 <input
                   aria-label={`Rename ${tab.label}`}
                   autoFocus
+                  spellCheck={false}
                   defaultValue={tab.label}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') commitRename(tab.id, event.currentTarget.value);
                     if (event.key === 'Escape') setRenaming(undefined);
                   }}
                   onBlur={(event) => commitRename(tab.id, event.currentTarget.value)}
-                  className="h-5 w-28 rounded border border-border bg-canvas px-1 text-fg focus-visible:outline-none"
+                  className="ml-[8px] h-[22px] w-28 rounded-[6px] border border-[var(--line)] bg-[var(--surface)] px-[6px] text-[12px] text-[var(--ink)] outline-none focus:border-[#ef6b3f]"
                 />
               ) : (
                 <button
@@ -9377,11 +9846,19 @@ export function TerminalTabs({ projectId, disabled = false }: { projectId: strin
                     requestTerminalFocus();
                     store().activate(projectId, tab.id);
                   }}
-                  onDoubleClick={() => setRenaming(tab.id)}
-                  className="flex items-center gap-1"
+                  onDoubleClick={() => {
+                    // The rename box keeps the caret: the click's focus request is dropped.
+                    cancelTerminalFocus();
+                    setRenaming(tab.id);
+                  }}
+                  className="flex h-full cursor-pointer items-center gap-[6px] border-none bg-transparent pl-[12px] outline-none focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]"
                 >
                   {tab.processId !== undefined && (
-                    <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-accent" />
+                    <span
+                      aria-hidden
+                      className="h-[6px] w-[6px] shrink-0 rounded-full"
+                      style={{ background: RUNNING }}
+                    />
                   )}
                   {tab.label}
                 </button>
@@ -9389,24 +9866,29 @@ export function TerminalTabs({ projectId, disabled = false }: { projectId: strin
               <button
                 type="button"
                 aria-label={`Close ${tab.label}`}
+                title={`Close ${tab.label}`}
                 onClick={() => close(tab)}
-                className="opacity-60 hover:opacity-100"
+                className={cn(SMALL_BUTTON, 'text-[12px]')}
               >
-                <X className="h-3 w-3" aria-hidden />
+                <span aria-hidden>×</span>
               </button>
             </div>
           );
         })}
       </div>
-      <IconAction
-        label="New terminal"
-        Icon={Plus}
+      <button
+        type="button"
+        aria-label="New terminal"
+        title="New terminal"
         disabled={disabled}
         onClick={() => {
           requestTerminalFocus();
           store().newTab(projectId);
         }}
-      />
+        className={cn(SMALL_BUTTON, 'mx-[6px] self-center text-[14px]')}
+      >
+        <span aria-hidden>+</span>
+      </button>
       {closing !== undefined && (
         <Dialog open onOpenChange={(open) => !open && setClosing(undefined)}>
           <DialogContent>
@@ -9417,7 +9899,7 @@ export function TerminalTabs({ projectId, disabled = false }: { projectId: strin
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
-              <Button variant="ghost" onClick={() => setClosing(undefined)}>
+              <Button variant="secondary" onClick={() => setClosing(undefined)}>
                 Cancel
               </Button>
               <Button variant="destructive" onClick={() => void stopAndClose(closing)}>
@@ -9432,14 +9914,18 @@ export function TerminalTabs({ projectId, disabled = false }: { projectId: strin
 }
 ```
 
+In `apps/web/src/forge/terminal/focus.ts`, change `cancelTerminalFocus`'s comment to `/** Drops a pending request: a rename that keeps the caret, and tests (a request never outlives its test). */`.
+
 - [ ] **Step 5: The Processes list and the script buttons**
 
 Create `apps/web/src/forge/terminal/ProcessesList.tsx`:
 
 ```tsx
 import type { ProcessSummary } from '@ace/contracts';
+import { cn } from '@ace/ui';
 import { useQueryClient } from '@tanstack/react-query';
 
+import { nodeStatusLook } from '../../theme/format';
 import { requestTerminalFocus } from './focus';
 import { useProcessList, useStopProcess } from './hooks';
 import { openProcessInTab } from './session';
@@ -9447,6 +9933,10 @@ import { useProjectTerminals, useTerminalStore } from './terminal-store';
 
 // eslint-disable-next-line no-control-regex -- colour escapes are exactly what is removed
 const ANSI = /\u001b\[[0-9;?]*[A-Za-z]/g;
+
+/** A row's quiet action, in the footer's mono: Show, and Stop in the theme's red. */
+const ROW_ACTION =
+  'shrink-0 cursor-pointer rounded-[5px] border-none bg-transparent px-[5px] py-[2px] font-machine text-[10px] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
 
 /** The last line a process printed, plain, for its row. */
 function lastLine(output: string | undefined): string | undefined {
@@ -9460,8 +9950,17 @@ function endingOf(summary: ProcessSummary): string {
   return `exit ${summary.exitCode ?? '?'}`;
 }
 
+/** A process's dot in the Stage cards' colours: running, done, stopped, failed. */
+function dotOf(summary: ProcessSummary): string {
+  if (summary.status === 'running') return nodeStatusLook('RUNNING').color;
+  if (summary.status === 'failed') return nodeStatusLook('FAILED').color;
+  if (summary.signal !== null) return nodeStatusLook('STOPPED').color;
+  return nodeStatusLook(summary.exitCode === 0 ? 'COMPLETED' : 'FAILED').color;
+}
+
 /**
- * Running processes with Stop, and recent ones with how they ended (D301, design §6.3). A running
+ * Running processes with Stop, and recent ones with how they ended (D301, design §6.3), carded as
+ * Problems is (D334): a mono heading, then one surface card with a hairline between rows. A running
  * one no tab owns — a dev server started from another browser tab, or before a reload — shows its
  * latest line and opens in a tab with Show.
  */
@@ -9474,67 +9973,74 @@ export function ProcessesList({ projectId }: { projectId: string }) {
   const items = list.data ?? [];
 
   return (
-    <section aria-label="Processes" className="flex w-60 shrink-0 flex-col border-l border-border">
-      <h3 className="shrink-0 px-2 py-1 font-machine text-[10.5px] uppercase tracking-[0.1em] text-fg-muted">
-        Processes
+    <section aria-label="Processes" className="flex min-h-0 w-[240px] shrink-0 flex-col gap-[6px]">
+      <h3 className="m-0 font-machine text-[10px] font-normal tracking-[0.1em] text-[var(--muted)]">
+        PROCESSES
       </h3>
-      <ul className="min-h-0 flex-1 overflow-auto px-1 pb-1">
-        {list.isSuccess && items.length === 0 && (
-          <li className="px-1 text-[12px] text-fg-muted">Nothing has run yet.</li>
-        )}
-        {items.map((summary) => {
-          const running = summary.status === 'running';
-          const owned = tabs.some((tab) => tab.processId === summary.id);
-          const preview = running && !owned ? lastLine(unowned[summary.id]?.output) : undefined;
-          return (
-            <li
-              key={summary.id}
-              data-testid={`process-${summary.id}`}
-              className="flex items-center gap-1 rounded px-1 py-0.5 text-[12px] hover:bg-card"
-            >
-              <span
-                aria-hidden
-                className={running ? 'h-1.5 w-1.5 shrink-0 rounded-full bg-accent' : 'h-1.5 w-1.5 shrink-0'}
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-fg" title={summary.command}>
-                  {summary.label}
+      {list.isSuccess && items.length === 0 && (
+        <p className="m-0 text-[12px] text-[var(--muted)]">Nothing has run yet.</p>
+      )}
+      {items.length > 0 && (
+        <ul className="m-0 flex min-h-0 list-none flex-col overflow-auto rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-0">
+          {items.map((summary) => {
+            const running = summary.status === 'running';
+            const owned = tabs.some((tab) => tab.processId === summary.id);
+            const preview = running && !owned ? lastLine(unowned[summary.id]?.output) : undefined;
+            return (
+              <li
+                key={summary.id}
+                data-testid={`process-${summary.id}`}
+                className="flex min-h-[32px] items-center gap-[8px] border-t border-[var(--line)] px-[10px] py-[5px] text-[12px] first:border-t-0"
+              >
+                <span
+                  aria-hidden
+                  className="h-[6px] w-[6px] shrink-0 rounded-full"
+                  style={{ background: dotOf(summary) }}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[var(--ink)]" title={summary.command}>
+                    {summary.label}
+                  </span>
+                  {preview !== undefined && (
+                    <span className="block truncate font-machine text-[9.5px] text-[var(--muted)]">
+                      {preview}
+                    </span>
+                  )}
                 </span>
-                {preview !== undefined && (
-                  <span className="block truncate font-machine text-[11px] text-fg-muted">{preview}</span>
-                )}
-              </span>
-              {running ? (
-                <>
-                  {!owned && (
+                {running ? (
+                  <>
+                    {!owned && (
+                      <button
+                        type="button"
+                        aria-label={`Show ${summary.label}`}
+                        onClick={() => {
+                          requestTerminalFocus();
+                          void openProcessInTab(projectId, summary, queryClient);
+                        }}
+                        className={cn(ROW_ACTION, 'text-[var(--muted)] hover:text-[var(--ink)]')}
+                      >
+                        Show
+                      </button>
+                    )}
                     <button
                       type="button"
-                      aria-label={`Show ${summary.label}`}
-                      onClick={() => {
-                        requestTerminalFocus();
-                        void openProcessInTab(projectId, summary, queryClient);
-                      }}
-                      className="font-machine text-[11px] text-fg-muted hover:text-fg"
+                      aria-label={`Stop ${summary.label}`}
+                      onClick={() => stop.mutate(summary.id)}
+                      className={cn(ROW_ACTION, 'text-[#c94c27]')}
                     >
-                      Show
+                      Stop
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    aria-label={`Stop ${summary.label}`}
-                    onClick={() => stop.mutate(summary.id)}
-                    className="font-machine text-[11px] text-danger hover:underline"
-                  >
-                    Stop
-                  </button>
-                </>
-              ) : (
-                <span className="shrink-0 font-machine text-[11px] text-fg-faint">{endingOf(summary)}</span>
-              )}
-            </li>
-          );
-        })}
-      </ul>
+                  </>
+                ) : (
+                  <span className="shrink-0 font-machine text-[9.5px] text-[var(--muted)]">
+                    {endingOf(summary)}
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </section>
   );
 }
@@ -9543,14 +10049,17 @@ export function ProcessesList({ projectId }: { projectId: string }) {
 Create `apps/web/src/forge/terminal/ScriptButtons.tsx`:
 
 ```tsx
+import { Button } from '@ace/ui';
 import { useQueryClient } from '@tanstack/react-query';
-import { Play } from 'lucide-react';
 
 import { requestTerminalFocus } from './focus';
 import { useProjectScripts } from './hooks';
 import { runScript } from './session';
 
-/** The project's own scripts, one button each; a click runs it in a new tab (D301, design §6.3). */
+/**
+ * The project's own scripts (D301, design §6.3), one of the kit's secondary pills each (D328) at the
+ * end of the terminal's tab strip; a click runs the script in a new tab.
+ */
 export function ScriptButtons({ projectId, disabled = false }: { projectId: string; disabled?: boolean }) {
   const scripts = useProjectScripts(projectId);
   const queryClient = useQueryClient();
@@ -9558,22 +10067,29 @@ export function ScriptButtons({ projectId, disabled = false }: { projectId: stri
   const list = scripts.data?.scripts ?? [];
   if (list.length === 0) return null;
   return (
-    <div role="group" aria-label="Scripts" className="flex min-w-0 items-center gap-1 overflow-x-auto">
+    <div
+      role="group"
+      aria-label="Scripts"
+      className="flex min-w-0 max-w-[55%] items-center gap-[6px] overflow-x-auto px-[8px]"
+    >
       {list.map((script) => (
-        <button
+        <Button
           key={script.name}
-          type="button"
+          variant="secondary"
+          size="sm"
           disabled={disabled}
           title={`${manager} run ${script.name}: ${script.command}`}
           onClick={() => {
             requestTerminalFocus();
             void runScript(projectId, script.name, manager, queryClient);
           }}
-          className="flex h-6 shrink-0 items-center gap-1 rounded border border-border px-1.5 font-machine text-[11px] text-fg-soft hover:border-fg-muted hover:text-fg disabled:opacity-40"
+          className="h-[22px] shrink-0 gap-[5px] px-[10px] font-machine text-[10.5px] font-medium"
         >
-          <Play className="h-3 w-3" aria-hidden />
+          <span aria-hidden className="text-[8px] text-[#ef6b3f]">
+            ▶
+          </span>
           {script.name}
-        </button>
+        </Button>
       ))}
     </div>
   );
@@ -9594,8 +10110,10 @@ import { TerminalView } from './TerminalView';
 import { useProjectTerminals, useTerminalStore } from './terminal-store';
 
 /**
- * The bottom panel's Terminal view (D301, design §6.3): the tabs and the project's script buttons
- * above, the active tab, and the Processes list beside it. Opening it with no tab opens one.
+ * The bottom panel's Terminal view (D301, design §6.3) in the theme's code view (D334): a surface
+ * card topped by the editor's tab strip — the terminal tabs, + and the project's script pills —
+ * over the active tab, and the Processes list beside it, carded as Problems is. Opening it with no
+ * tab opens one.
  */
 export function TerminalPanel({ projectId }: { projectId: string }) {
   const terminals = useProjectTerminals(projectId);
@@ -9606,18 +10124,20 @@ export function TerminalPanel({ projectId }: { projectId: string }) {
   const active = terminals.tabs.find((tab) => tab.id === terminals.active) ?? terminals.tabs[0];
 
   return (
-    <div data-testid="terminal-panel" className="flex h-full min-h-0 flex-col">
-      <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border px-2">
-        <TerminalTabs projectId={projectId} />
-        <div className="flex-1" />
-        <ScriptButtons projectId={projectId} />
-      </div>
-      <div className="flex min-h-0 flex-1">
-        <div className="min-h-0 min-w-0 flex-1">
+    <div data-testid="terminal-panel" className="flex min-h-0 flex-1 flex-col gap-[8px]">
+      <div className="flex min-h-0 flex-1 gap-[10px]">
+        <div
+          data-testid="terminal-card"
+          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[12px] border border-[var(--line)] bg-[var(--surface)]"
+        >
+          <div className="flex h-[32px] shrink-0 items-stretch border-b border-[var(--line)] bg-[var(--panel)]">
+            <TerminalTabs projectId={projectId} />
+            <ScriptButtons projectId={projectId} />
+          </div>
           {active !== undefined ? (
             <TerminalView key={active.id} projectId={projectId} tabId={active.id} />
           ) : (
-            <p className="p-3 text-[12px] text-fg-muted">No terminal open.</p>
+            <p className="m-0 p-[12px] text-[12px] text-[var(--muted)]">No terminal open.</p>
           )}
         </div>
         <ProcessesList projectId={projectId} />
@@ -9627,16 +10147,16 @@ export function TerminalPanel({ projectId }: { projectId: string }) {
 }
 ```
 
-- [ ] **Step 7: The key, the store, the workbench, the status bar and the empty editor**
+- [ ] **Step 7: The key, the store, the workbench, the footer and the empty editor**
 
-In `apps/web/src/app/shortcuts.ts`, add to `SHORTCUTS` after `closeTab`:
+In `apps/web/src/app/shortcuts.ts`, add to `SHORTCUTS` after `closeTab: { code: 'KeyW', alt: true },`:
 
 ```ts
   /** D301: shows or hides the Terminal. Not a browser key, so it is safe to bind. */
   toggleTerminal: { code: 'Backquote', mod: true },
 ```
 
-and replace `shortcutLabel` with:
+and replace `shortcutLabel` (lines 58-66 of the base file) with:
 
 ```ts
 /** Keys whose `code` is not what a person reads on the key. */
@@ -9660,7 +10180,7 @@ In `apps/web/src/app/stores/layout.ts`, add to `LayoutState` after `toggleMaximi
   toggleTerminal(): void;
 ```
 
-and to the store's actions after `toggleMaximized: …,`:
+and to the store's actions after `toggleMaximized: () => set((s) => ({ panelMaximized: !s.panelMaximized, panelOpen: true })),`:
 
 ```ts
       toggleTerminal: () =>
@@ -9671,11 +10191,11 @@ and to the store's actions after `toggleMaximized: …,`:
         ),
 ```
 
-In `apps/web/src/forge/terminal/focus.ts`, add `import { useLayoutStore } from '../../app/stores/layout';` at the top, and append:
+In `apps/web/src/forge/terminal/focus.ts`, add `import { useLayoutStore } from '../../app/stores/layout';` as the first line, followed by a blank line, and append:
 
 ```ts
 
-/** Ctrl+` and the empty editor's Terminal button: show the Terminal and focus it, or hide it. */
+/** Ctrl+` and the empty editor's Terminal pill: show the Terminal and focus it, or hide it. */
 export function toggleTerminalFocused(): void {
   const layout = useLayoutStore.getState();
   if (!(layout.panelOpen && layout.panelTab === 'terminal')) requestTerminalFocus();
@@ -9683,50 +10203,146 @@ export function toggleTerminalFocused(): void {
 }
 ```
 
-In `apps/web/src/forge/ForgeWorkbench.tsx`, add `import { toggleTerminalFocused } from './terminal/focus';`, and in `useShortcuts([...])`, after `[SHORTCUTS.togglePanel, togglePanel],` add:
+In `apps/web/src/forge/ForgeWorkbench.tsx`:
+1. After `import { useQuickOpen } from './quick-open/quick-open-store';` add `import { toggleTerminalFocused } from './terminal/focus';`.
+2. Replace the doc comment (lines 16-22) with:
+
+```ts
+/**
+ * Forge in the Ace UI theme's code view (D334, after D299): a fixed 248px Explorer beside the code
+ * column (tabs, path bar, editor), and under the code column the bottom panel with the Terminal and
+ * Problems while the person has it open (Ctrl/⌘+J, Ctrl+` for the Terminal, or the footer's counts;
+ * maximizable). Ctrl/⌘+B hides the Explorer, Ctrl/⌘+P opens any file; saving, Save all and closing
+ * a tab keep their keys. The chat aside and the footer are the workspace layout's, not Forge's.
+ */
+```
+
+3. In `useShortcuts([...])`, after `[SHORTCUTS.togglePanel, togglePanel],` add:
 
 ```ts
     [SHORTCUTS.toggleTerminal, toggleTerminalFocused],
 ```
 
 In `apps/web/src/forge/layout/StatusBar.tsx`:
-1. Change the lucide import to `import { AlertTriangle, GitBranch, PanelBottom, Play, XCircle } from 'lucide-react';`, and add `import { requestTerminalFocus } from '../terminal/focus';` and `import { runningCount, useProcessList } from '../terminal/hooks';`.
-2. After `const textActive = …;` add `const running = runningCount(useProcessList(projectId).data);`.
-3. After the Problems `</button>` (line 55), add:
+1. After `import { useLayoutStore } from '../../app/stores/layout';` add `import { nodeStatusLook } from '../../theme/format';`, and after `import { useProblemsStore, type Problem } from '../panel/problems-store';` add:
 
-```tsx
-      {running > 0 && (
-        <button
-          type="button"
-          title="Running processes: open the Terminal"
-          onClick={() => {
-            requestTerminalFocus();
-            showPanel('terminal');
-          }}
-          className="flex items-center gap-1 hover:text-fg"
-        >
-          <Play className="h-3 w-3" aria-hidden />
-          {`${running} running`}
-        </button>
-      )}
+```ts
+import { requestTerminalFocus } from '../terminal/focus';
+import { runningCount, useProcessList } from '../terminal/hooks';
 ```
 
-In `apps/web/src/forge/editor/EmptyEditor.tsx`:
-1. Change the lucide import to `import { FilePlus, Search, SquareTerminal } from 'lucide-react';`.
-2. In `HINTS`, after the `togglePanel` row, add `{ label: 'Show or hide the terminal', shortcut: SHORTCUTS.toggleTerminal },`.
-3. Add `import { toggleTerminalFocused } from '../terminal/focus';`.
-4. After the New file `<Button>`, add:
+2. Replace the comment block (lines 13-17) with:
+
+```ts
+/*
+ * Forge's status bar (D299, design §2.2) is pieces of the workspace footer since D330/D334, in the
+ * footer's type: the problem counts and the running processes (D301) after the project slug, the
+ * open file's facts first on the right, as the theme's `footExtra`.
+ */
+
+/** The Stage cards' RUNNING colour (`#ef6b3f`), for the ▶ of the running count. */
+const RUNNING = nodeStatusLook('RUNNING').color;
+```
+
+3. After `ProblemsCount` (it ends at line 55 of the base file, before this step's imports), add:
 
 ```tsx
-          <Button variant="secondary" size="sm" onClick={toggleTerminalFocused}>
-            <SquareTerminal className="h-3.5 w-3.5" aria-hidden /> Terminal{' '}
-            <span className="font-machine text-fg-faint">{shortcutLabel(SHORTCUTS.toggleTerminal)}</span>
-          </Button>
+
+/**
+ * `▶ N running` while the project runs processes (D301), right after the problem counts and in
+ * their type; a click opens the Terminal and gives it the focus. Nothing while none runs.
+ */
+export function RunningCount({ projectId }: { projectId: string }) {
+  const running = runningCount(useProcessList(projectId).data);
+  const showPanel = useLayoutStore((s) => s.showPanel);
+  if (running === 0) return null;
+  return (
+    <button
+      type="button"
+      data-testid="footer-running"
+      aria-label={`${running} running`}
+      title="Running processes: open the Terminal"
+      onClick={() => {
+        requestTerminalFocus();
+        showPanel('terminal');
+      }}
+      className="flex shrink-0 cursor-pointer items-center gap-[4px] rounded-[4px] border-none bg-transparent px-[2px] font-machine text-[10px] text-[var(--muted)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+    >
+      <span aria-hidden style={{ color: RUNNING }}>
+        ▶
+      </span>
+      {running} running
+    </button>
+  );
+}
+```
+
+In `apps/web/src/app/layout/WorkspaceFooter.tsx`:
+1. Change line 4 to `import { CursorInfo, ProblemsCount, RunningCount } from '../../forge/layout/StatusBar';`.
+2. Replace the doc comment (lines 20-25) with:
+
+```ts
+/**
+ * The workspace footer of `Ace Canvas.dc.html` (D330), every value real: the settings gear (D338),
+ * the engine connection (FR-EXE-014) and the project slug; in Forge the problem counts, the running
+ * processes (D301) and the cursor, file facts, language and unsaved state (Forge's status bar,
+ * D299); the mode; the open conversation's message count; the tokens in view, "—" without data.
+ */
+```
+
+3. After `<ProblemsCount projectId={projectId} />` (line 65) add:
+
+```tsx
+            <RunningCount projectId={projectId} />
+```
+
+Replace `apps/web/src/forge/editor/EmptyEditor.tsx` with:
+
+```tsx
+import { Button } from '@ace/ui';
+
+import { SHORTCUTS, shortcutLabel } from '../../app/shortcuts';
+import { useLayoutStore } from '../../app/stores/layout';
+import { useExplorerStore } from '../explorer/explorer-store';
+import { useQuickOpen } from '../quick-open/quick-open-store';
+import { toggleTerminalFocused } from '../terminal/focus';
+
+/** A pill's key, in mono. */
+const KEY_HINT = 'font-machine text-[10px] font-medium text-[var(--muted)]';
+
+/**
+ * The theme's code view with no file open (D334): one muted line, centred — and under it the real
+ * actions (D299, design §2.2) as the theme's Close pills: go to a file, its key in mono; make a new
+ * one in the Explorer; or open the Terminal (D301), its key in mono.
+ */
+export function EmptyEditor({ projectId }: { projectId: string }) {
+  const showQuickOpen = useQuickOpen((s) => s.show);
+  const newFile = (): void => {
+    useLayoutStore.setState({ sidebarOpen: true });
+    useExplorerStore.getState().startCreate(projectId, '', 'file');
+  };
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-[14px]">
+      <p className="text-[13px] text-[var(--muted)]">Open a file from the explorer</p>
+      <div className="flex items-center gap-[8px]">
+        <Button variant="secondary" size="sm" onClick={showQuickOpen}>
+          Go to file <span className={KEY_HINT}>{shortcutLabel(SHORTCUTS.quickOpen)}</span>
+        </Button>
+        <Button variant="secondary" size="sm" onClick={newFile}>
+          New file
+        </Button>
+        <Button variant="secondary" size="sm" onClick={toggleTerminalFocused}>
+          Terminal <span className={KEY_HINT}>{shortcutLabel(SHORTCUTS.toggleTerminal)}</span>
+        </Button>
+      </div>
+    </div>
+  );
+}
 ```
 
 - [ ] **Step 8: Run the tests**
 
-Run: `pnpm --filter @ace/web exec vitest run src/forge/terminal src/forge/layout src/app src/forge/ForgeWorkbench.test.tsx src/forge/editor`
+Run: `pnpm --filter @ace/web exec vitest run src/forge/terminal src/forge/layout src/app src/forge/ForgeWorkbench.test.tsx src/forge/editor src/forge/panel`
 Expected: PASS.
 
 - [ ] **Step 9: Full web suite, typecheck, lint, commit**
@@ -9735,9 +10351,9 @@ Run: `pnpm --filter @ace/web test && pnpm --filter @ace/web typecheck && pnpm --
 Expected: PASS.
 
 ```bash
-npx prettier --write --config packages/config/prettier.config.js apps/web/src/forge/terminal apps/web/src/forge/layout/StatusBar.tsx apps/web/src/forge/layout/StatusBar.test.tsx apps/web/src/app/shortcuts.ts apps/web/src/app/shortcuts.test.tsx apps/web/src/app/stores/layout.ts apps/web/src/app/stores/layout.test.ts apps/web/src/forge/ForgeWorkbench.tsx apps/web/src/forge/ForgeWorkbench.test.tsx apps/web/src/forge/editor/EmptyEditor.tsx
+npx prettier --write --config packages/config/prettier.config.js apps/web/src/forge/terminal apps/web/src/forge/layout/StatusBar.tsx apps/web/src/forge/layout/StatusBar.test.tsx apps/web/src/app/layout/WorkspaceFooter.tsx apps/web/src/app/layout/WorkspaceFooter.test.tsx apps/web/src/app/shortcuts.ts apps/web/src/app/shortcuts.test.tsx apps/web/src/app/stores/layout.ts apps/web/src/app/stores/layout.test.ts apps/web/src/forge/ForgeWorkbench.tsx apps/web/src/forge/ForgeWorkbench.test.tsx apps/web/src/forge/editor/EmptyEditor.tsx
 git add apps/web/src
-git commit -m "feat(web): terminal tabs, the Processes list with Stop, script buttons, a running count in the status bar and Ctrl+\` [D301]
+git commit -m "feat(web): terminal tabs, the Processes list with Stop, script buttons, a running count in the footer and Ctrl+\` [D301]
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
@@ -9746,56 +10362,58 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ### Task 17: Web — the trust level: the project's Terminal setting and what the Terminal says
 
+The re-skinned `ProjectPage` (D328) is a column of theme cards: the workflows, then the per-run budget in a surface card. The Terminal select gets its own card under the budget, in the same style. `SelectField` on the re-skinned Settings page is already the theme's dropdown inside a `SettingField` (the small-caps label, the help line); it moves to `SettingFields.tsx` unchanged. The Terminal's notice is a help line in the theme's type, and its link is the theme's accent link.
+
 **Files:**
 - Create: `apps/web/src/forge/terminal/TrustNotice.tsx`
 - Modify:
-  - `apps/web/src/settings/SettingFields.tsx` (gains `SelectField`);
-  - `apps/web/src/settings/SettingsPage.tsx:9-21` (imports) and `:89-131` (`SelectField` moves out);
-  - `apps/web/src/projects/ProjectPage.tsx:1-10` (imports) and `:68-78` (the Terminal select after the budget);
-  - `apps/web/src/forge/terminal/TerminalPanel.tsx` (the notice; `off` disables);
+  - `apps/web/src/settings/SettingFields.tsx:1` (the kit import) and the end of the file (`SelectField`, moved);
+  - `apps/web/src/settings/SettingsPage.tsx:8-17` (the kit import), `:28` (the local import) and `:100-142` (`SelectField` moves out);
+  - `apps/web/src/projects/ProjectPage.tsx:1-10` (imports), above the component (the options), and after the budget card (`:117-128`): the Terminal card;
+  - `apps/web/src/forge/terminal/TerminalPanel.tsx` (rewritten: the notice; `off` disables);
   - `apps/web/src/forge/terminal/TerminalView.tsx` (`disabled`).
-- Test: create `apps/web/src/projects/ProjectPage.test.tsx` and `apps/web/src/forge/terminal/TerminalTrust.test.tsx`; the existing `apps/web/src/settings/SettingsPage.test.tsx` must still pass unchanged.
+- Test: extend `apps/web/src/projects/ProjectPage.test.tsx` (it exists on the re-skinned base); create `apps/web/src/forge/terminal/TerminalTrust.test.tsx`. The existing `apps/web/src/settings/SettingsPage.test.tsx` must still pass unchanged.
 
 **Interfaces:**
 - Consumes:
   - from Task 2: `TerminalTrust`, `UpdateProjectRequest.terminal`;
+  - from Task 11: `processes`, `db.updateProject(id, { terminal })`;
   - from Task 14: `FakeTerminal`;
   - from Task 15: `TerminalView`;
-  - from Task 16: `TerminalPanel` as it lays out tabs, scripts and the Processes list, `TerminalTabs({ disabled })`, `ScriptButtons({ disabled })`;
-  - existing: `useProject`, `useUpdateProject` (`projects/hooks.ts`), `SettingInput`.
+  - from Task 16: `TerminalPanel` as it lays out the strip, the scripts and the Processes list, `TerminalTabs({ disabled })`, `ScriptButtons({ disabled })`;
+  - existing: `useProject`, `useUpdateProject` (`projects/hooks.ts`), `SettingField` (`settings/SettingFields.tsx`).
 - Produces:
   - `SelectField<T extends string>({ id, label, hint?, testId, value, options, onChange, disabled })`, exported from `settings/SettingFields.tsx`;
-  - the project page's select, test id `project-terminal`, with options `On — any command`, `Scripts only` and `Off`;
+  - the project page's select, test id `project-terminal`, in a card with test id `project-terminal-card`, with the options `On — any command`, `Scripts only` and `Off`;
   - `TrustNotice({ projectId, trust })`, test id `terminal-trust-notice`, `null` for `on`;
   - `TerminalView({ projectId, tabId, disabled? })`: when disabled, xterm's `disableStdin` is set and nothing typed is acted on;
   - with `off`, New terminal and the script buttons are disabled. With `scripts`, the script buttons stay enabled, and a typed command prints the engine's 403 message in the tab (Task 15's `startInTab` already prints a refusal).
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `apps/web/src/projects/ProjectPage.test.tsx`:
+In `apps/web/src/projects/ProjectPage.test.tsx`, change `import { db, installMockServer, renderApp } from '../test/app';` to `import { db, installMockServer, processes, renderApp } from '../test/app';`, and append after the existing `describe`:
 
 ```tsx
-import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
-
-import { db, installMockServer, processes, renderApp } from '../test/app';
-
-installMockServer();
-
-async function terminalSelect() {
-  const select = await screen.findByTestId('project-terminal');
-  await waitFor(() => expect(select).toBeEnabled());
-  return select;
-}
 
 describe('D301 a project says how far it trusts its terminal', () => {
-  it('reads On by default, and saves Scripts only', async () => {
+  async function terminalSelect() {
+    const select = await screen.findByTestId('project-terminal');
+    await waitFor(() => expect(select).toBeEnabled());
+    return select;
+  }
+
+  it('reads On by default, as the theme’s dropdown in its own card, and saves Scripts only', async () => {
     const user = userEvent.setup();
     const project = db.createProject({ name: 'Shop' });
     renderApp(`/projects/${project.id}`);
     const select = await terminalSelect();
     expect(select).toHaveTextContent('On — any command');
+    expect(select).toHaveClass('h-[38px]', 'rounded-[9px]', 'bg-[var(--canvas)]');
+    expect(screen.getByTestId('project-terminal-card')).toHaveClass(
+      'rounded-[12px]',
+      'border-[var(--line)]',
+      'bg-[var(--surface)]',
+    );
 
     await user.click(select);
     await user.click(await screen.findByRole('option', { name: 'Scripts only' }));
@@ -9864,12 +10482,13 @@ const scriptButton = async (name: string) =>
   within(await screen.findByRole('group', { name: 'Scripts' })).findByRole('button', { name });
 
 describe('D301 the Terminal follows the project’s trust level', () => {
-  it('off: says so with a link to the project, and neither typing, New terminal nor a script does anything', async () => {
+  it('off: says so in a help line with a link to the project, and neither typing, New terminal nor a script does anything', async () => {
     const start = vi.spyOn(api(), 'startProcess');
     const projectId = await open('off');
 
     const notice = await screen.findByTestId('terminal-trust-notice');
     expect(notice).toHaveTextContent('The terminal is off for this project.');
+    expect(notice).toHaveClass('text-[11px]', 'text-[var(--muted)]');
     expect(within(notice).getByRole('link')).toHaveAttribute('href', `/projects/${projectId}`);
     await waitFor(() => expect(FakeTerminal.latest().options['disableStdin']).toBe(true));
 
@@ -9914,11 +10533,11 @@ describe('D301 the Terminal follows the project’s trust level', () => {
 - [ ] **Step 2: Run them to watch them fail**
 
 Run: `pnpm --filter @ace/web exec vitest run src/projects/ProjectPage.test.tsx src/forge/terminal/TerminalTrust.test.tsx`
-Expected: FAIL. There is no `project-terminal` select and no `terminal-trust-notice`, and typing with the terminal off still echoes.
+Expected: FAIL. There is no `project-terminal` select and no `terminal-trust-notice`, and typing with the terminal off still echoes. The page's five earlier tests still pass.
 
 - [ ] **Step 3: Move `SelectField`**
 
-In `apps/web/src/settings/SettingFields.tsx`, change the `@ace/ui` import to:
+In `apps/web/src/settings/SettingFields.tsx`, change line 1 (`import { Input, Label } from '@ace/ui';`) to:
 
 ```ts
 import {
@@ -9932,13 +10551,13 @@ import {
 } from '@ace/ui';
 ```
 
-and append the `SelectField` function, moved verbatim from `SettingsPage.tsx` (lines 89-131) with `export` and a comment:
+and append the `SelectField` function, moved verbatim from `SettingsPage.tsx` (lines 100-142) with `export` and a comment:
 
 ```tsx
 
 /**
- * One choice from a fixed list, saved as it changes (FR-SYS-005). Shared by the settings screen
- * and the project page (D301's Terminal trust level).
+ * One choice from a fixed list in the theme's dropdown (D328), saved as it changes (FR-SYS-005).
+ * Shared by the settings screen and the project page (D301's Terminal trust level).
  */
 export function SelectField<T extends string>({
   id,
@@ -9960,8 +10579,7 @@ export function SelectField<T extends string>({
   disabled: boolean;
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <Label htmlFor={id}>{label}</Label>
+    <SettingField label={label} htmlFor={id} {...(hint === undefined ? {} : { hint })}>
       <Select
         value={value}
         onValueChange={(next) => {
@@ -9970,7 +10588,7 @@ export function SelectField<T extends string>({
         }}
         disabled={disabled}
       >
-        <SelectTrigger id={id} className="w-full sm:w-64" data-testid={testId}>
+        <SelectTrigger id={id} data-testid={testId}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -9981,27 +10599,33 @@ export function SelectField<T extends string>({
           ))}
         </SelectContent>
       </Select>
-      {hint && <p className="text-xs text-fg-muted">{hint}</p>}
-    </div>
+    </SettingField>
   );
 }
 ```
 
-In `apps/web/src/settings/SettingsPage.tsx`, delete the local `function SelectField…` (lines 89-131), remove `Select, SelectContent, SelectItem, SelectTrigger, SelectValue,` from the `@ace/ui` import (`Label` and `Input` stay: the data folder and the MCP checkbox use them), and change the local import to:
+In `apps/web/src/settings/SettingsPage.tsx`:
+1. Change the kit import (lines 8-17) to:
 
 ```ts
-import { SelectField, SettingInput, type DraftRead } from './SettingFields';
+import { Input, ProviderStatusChip, toast } from '@ace/ui';
 ```
 
-- [ ] **Step 4: The project page's select**
-
-In `apps/web/src/projects/ProjectPage.tsx`, add:
+(`Input` stays: the data folder uses it.)
+2. Change the local import (line 28) to:
 
 ```ts
-import type { TerminalTrust } from '@ace/contracts';
+import { HELP_CLASS, SelectField, SettingField, SettingInput, type DraftRead } from './SettingFields';
 ```
 
-as the first import, and `import { SelectField } from '../settings/SettingFields';` after the `BudgetFields` import. Above the component, add:
+3. Delete the local `function SelectField<T extends string>(…) { … }` (lines 100-142) and the blank line after it.
+
+- [ ] **Step 4: The project page's Terminal card**
+
+In `apps/web/src/projects/ProjectPage.tsx`:
+1. Add `import type { TerminalTrust } from '@ace/contracts';` as the first line.
+2. After `import { BudgetFields } from '../settings/BudgetFields';` add `import { SelectField } from '../settings/SettingFields';`.
+3. Above `export function ProjectPage()`'s doc comment, add:
 
 ```ts
 /** D301: how far this project trusts Forge's terminal. */
@@ -10012,20 +10636,26 @@ const TERMINAL_OPTIONS: ReadonlyArray<{ value: TerminalTrust; label: string }> =
 ];
 ```
 
-and after the `<BudgetFields … />` element, add:
+4. After the budget card — the `<div className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4">` that holds `<BudgetFields … />` and closes at line 128 — add:
 
 ```tsx
-      {/* D301: Forge's terminal. Off disables it now: what runs is stopped. */}
-      <SelectField<TerminalTrust>
-        id="project-terminal"
-        label="Terminal"
-        hint="On runs any command typed in Forge's terminal. Scripts only runs this project's package.json scripts. Off turns the terminal off and stops what runs."
-        testId="project-terminal"
-        value={project.data?.terminal ?? 'on'}
-        options={TERMINAL_OPTIONS}
-        onChange={(terminal) => updateProject.mutate({ id: projectId, terminal })}
-        disabled={!project.data}
-      />
+
+        {/* D301: Forge's terminal, in its own theme card. Off disables it now: what runs is stopped. */}
+        <div
+          data-testid="project-terminal-card"
+          className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4"
+        >
+          <SelectField<TerminalTrust>
+            id="project-terminal"
+            label="Terminal"
+            hint="On runs any command typed in Forge's terminal. Scripts only runs this project's package.json scripts. Off turns the terminal off and stops what runs."
+            testId="project-terminal"
+            value={project.data?.terminal ?? 'on'}
+            options={TERMINAL_OPTIONS}
+            onChange={(terminal) => updateProject.mutate({ id: projectId, terminal })}
+            disabled={!project.data}
+          />
+        </div>
 ```
 
 - [ ] **Step 5: The notice, and off in the Terminal**
@@ -10036,20 +10666,23 @@ Create `apps/web/src/forge/terminal/TrustNotice.tsx`:
 import type { TerminalTrust } from '@ace/contracts';
 import { Link } from 'react-router-dom';
 
-/** With `scripts` or `off`, the Terminal says so, and where to change it (D301). */
+/**
+ * With `scripts` or `off`, the Terminal says so above its card, in the theme's help line (D328),
+ * and where to change it: the theme's accent link to the project page (D301).
+ */
 export function TrustNotice({ projectId, trust }: { projectId: string; trust: TerminalTrust }) {
   if (trust === 'on') return null;
   return (
     <p
       role="status"
       data-testid="terminal-trust-notice"
-      className="shrink-0 border-b border-border px-3 py-1 text-[12px] text-fg-muted"
+      className="m-0 shrink-0 text-[11px] leading-[1.45] text-[var(--muted)]"
     >
       {trust === 'off'
         ? 'The terminal is off for this project.'
         : 'This project runs only its own package.json scripts here.'}{' '}
-      <Link to={`/projects/${projectId}`} className="underline hover:text-fg">
-        Change it in the project’s settings
+      <Link to={`/projects/${projectId}`} className="font-semibold">
+        Change it on the project page
       </Link>
     </p>
   );
@@ -10095,42 +10728,65 @@ export function TerminalView({
   }, [disabled]);
 ```
 
-In `apps/web/src/forge/terminal/TerminalPanel.tsx`:
-1. Add `import { useProject } from '../../projects/hooks';` and `import { TrustNotice } from './TrustNotice';`.
-2. After `const terminals = useProjectTerminals(projectId);` add:
+Replace `apps/web/src/forge/terminal/TerminalPanel.tsx` with:
 
 ```tsx
+import { useEffect } from 'react';
+
+import { useProject } from '../../projects/hooks';
+import { ProcessesList } from './ProcessesList';
+import { ScriptButtons } from './ScriptButtons';
+import { TerminalTabs } from './TerminalTabs';
+import { TerminalView } from './TerminalView';
+import { TrustNotice } from './TrustNotice';
+import { useProjectTerminals, useTerminalStore } from './terminal-store';
+
+/**
+ * The bottom panel's Terminal view (D301, design §6.3) in the theme's code view (D334): the trust
+ * notice when the project limits its terminal, then a surface card topped by the editor's tab
+ * strip — the terminal tabs, + and the project's script pills — over the active tab, and the
+ * Processes list beside it, carded as Problems is. Opening it with no tab opens one. With the
+ * terminal off, typing, + and the scripts do nothing; Stop and the list still work.
+ */
+export function TerminalPanel({ projectId }: { projectId: string }) {
+  const terminals = useProjectTerminals(projectId);
   const trust = useProject(projectId).data?.terminal ?? 'on';
   const off = trust === 'off';
-```
+  useEffect(() => {
+    const store = useTerminalStore.getState();
+    if ((store.projects[projectId]?.tabs.length ?? 0) === 0) store.newTab(projectId);
+  }, [projectId]);
+  const active = terminals.tabs.find((tab) => tab.id === terminals.active) ?? terminals.tabs[0];
 
-3. Make the returned tree start with the notice and pass `disabled`:
-
-```tsx
-    <div data-testid="terminal-panel" className="flex h-full min-h-0 flex-col">
+  return (
+    <div data-testid="terminal-panel" className="flex min-h-0 flex-1 flex-col gap-[8px]">
       <TrustNotice projectId={projectId} trust={trust} />
-      <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border px-2">
-        <TerminalTabs projectId={projectId} disabled={off} />
-        <div className="flex-1" />
-        <ScriptButtons projectId={projectId} disabled={off} />
-      </div>
-      <div className="flex min-h-0 flex-1">
-        <div className="min-h-0 min-w-0 flex-1">
+      <div className="flex min-h-0 flex-1 gap-[10px]">
+        <div
+          data-testid="terminal-card"
+          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[12px] border border-[var(--line)] bg-[var(--surface)]"
+        >
+          <div className="flex h-[32px] shrink-0 items-stretch border-b border-[var(--line)] bg-[var(--panel)]">
+            <TerminalTabs projectId={projectId} disabled={off} />
+            <ScriptButtons projectId={projectId} disabled={off} />
+          </div>
           {active !== undefined ? (
             <TerminalView key={active.id} projectId={projectId} tabId={active.id} disabled={off} />
           ) : (
-            <p className="p-3 text-[12px] text-fg-muted">No terminal open.</p>
+            <p className="m-0 p-[12px] text-[12px] text-[var(--muted)]">No terminal open.</p>
           )}
         </div>
         <ProcessesList projectId={projectId} />
       </div>
     </div>
+  );
+}
 ```
 
 - [ ] **Step 6: Run the tests**
 
 Run: `pnpm --filter @ace/web exec vitest run src/projects src/settings src/forge/terminal`
-Expected: PASS, the settings tests included.
+Expected: PASS, the settings tests included, unchanged.
 
 - [ ] **Step 7: Full web suite, typecheck, lint, commit**
 
@@ -10149,6 +10805,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ### Task 18: Web e2e — the Terminal in a real browser, with the real xterm
 
+On the re-skinned app, the Terminal opens in Forge's bottom panel as the first of the **Terminal · Problems** pills (D334 as amended). The running count is in the workspace footer, the `contentinfo` landmark (D330). The rest of the flow is the same as before the re-skin. The e2e helpers `freshApp`, `seedForge` and `forgeUrl` are unchanged on the re-skinned base.
+
 **Files:**
 - Create: `apps/web/e2e/terminal.spec.ts`
 - Modify: `apps/web/e2e/helpers.ts` (append the terminal helpers)
@@ -10156,7 +10814,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes:
   - from Task 11: the mock's scripted commands and `window.__aceMock.setTerminal`;
-  - from Tasks 15–17: the test ids `terminal-view`, `terminal-panel` and `terminal-trust-notice`, the `Terminals` tablist, the `Scripts` group and the `Processes` region;
+  - from Tasks 15–17: the test ids `terminal-view`, `terminal-panel` and `terminal-trust-notice`, the `Panel views` pill, the `Terminals` tablist, the `Scripts` group, the `Processes` region and the footer's `<n> running` button;
   - existing: `freshApp`, `seedForge`, `forgeUrl`.
 - Produces: `terminalText(page)`, `openTerminal(page, seeded)` and `runLine(page, line)` in `e2e/helpers.ts`, and the spec.
 
@@ -10218,19 +10876,27 @@ test.describe('Forge terminal (D301)', () => {
     await expect(terminalText(page)).toContainText('~ $ echo hello');
   });
 
-  test('a dev server streams until Ctrl+C stops it, and the Processes list shows it ended', async ({
+  test('a dev server streams, the footer counts it and opens it, Ctrl+C stops it, and Processes shows it ended', async ({
     page,
   }) => {
     await openTerminal(page, await seedForge(page, FILES));
     await runLine(page, 'serve');
     await expect(terminalText(page)).toContainText('listening on 3000');
     await expect(terminalText(page)).toContainText('GET / 200 (2)', { timeout: 5_000 });
-    await expect(page.getByRole('button', { name: '1 running' })).toBeVisible();
+    const running = page.getByRole('contentinfo').getByRole('button', { name: '1 running' });
+    await expect(running).toBeVisible();
 
+    // Hidden with Ctrl+J, the footer's count brings the Terminal back (D334 as amended).
+    await page.keyboard.press('Control+KeyJ');
+    await expect(page.getByTestId('terminal-panel')).toHaveCount(0);
+    await running.click();
+    await expect(page.getByTestId('terminal-panel')).toBeVisible();
+
+    await page.getByTestId('terminal-view').click();
     await page.keyboard.press('Control+C');
     await expect(terminalText(page)).toContainText('[stopped (SIGKILL)]');
     await expect(page.getByRole('region', { name: 'Processes' }).getByText('stopped')).toBeVisible();
-    await expect(page.getByRole('button', { name: /running$/ })).toHaveCount(0);
+    await expect(page.getByRole('contentinfo').getByRole('button', { name: /running$/ })).toHaveCount(0);
   });
 
   test('a line prompt reads what is typed', async ({ page }) => {
@@ -10288,9 +10954,14 @@ test.describe('Forge terminal (D301)', () => {
     await expect(page.getByRole('button', { name: 'New terminal' })).toBeDisabled();
   });
 
-  test('Ctrl+` shows and hides the Terminal, even with focus in it', async ({ page }) => {
+  test('Ctrl+` shows and hides the Terminal, the first of the panel’s two pills, even with focus in it', async ({
+    page,
+  }) => {
     await openTerminal(page, await seedForge(page, FILES));
     await expect(page.getByTestId('terminal-panel')).toBeVisible();
+    const pills = page.getByRole('tablist', { name: 'Panel views' }).getByRole('tab');
+    await expect(pills).toHaveText(['Terminal', 'Problems']);
+    await expect(pills.first()).toHaveAttribute('aria-selected', 'true');
     await page.keyboard.press('Control+Backquote');
     await expect(page.getByTestId('terminal-panel')).toHaveCount(0);
     await page.keyboard.press('Control+Backquote');
@@ -10325,14 +10996,14 @@ On the port Step 3 found free:
 ACE_E2E_PORT=5196 pnpm --filter @ace/web test:e2e
 ```
 
-Expected: every spec passes. A known flake (Phase 1's TC-EXE-007 in `run.spec.ts`) is reported with its rerun's result, never silently retried.
+Expected: every spec passes; the integration run on this base was 168/168, so 176 with this spec. Known flakes (`forge.spec` "Keep mine wins on save", the Canvas TC-NFR-001 perf drag on a busy machine, Phase 1's TC-EXE-007 in `run.spec.ts`) are reported with their rerun's result, never silently retried.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 npx prettier --write --config packages/config/prettier.config.js apps/web/e2e/terminal.spec.ts apps/web/e2e/helpers.ts
 git add apps/web/e2e
-git commit -m "test(web): e2e for the Terminal with the real xterm — run, stream, stop, prompts, cd, scripts, trust and Ctrl+\` [D301]
+git commit -m "test(web): e2e for the Terminal with the real xterm — run, stream, stop, prompts, cd, scripts, trust, the footer's count and Ctrl+\` [D301]
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
@@ -10340,6 +11011,13 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ---
 
 ### Task 19: Docs, the gates, a live check on an isolated real engine, and the hand-off
+
+The re-skin changes three things here:
+- the guide's wording: the panel is Terminal · Problems, and the running count is in the footer;
+- the live check's ports, and how it reaches Forge and the project page;
+- where the D301 row sits.
+
+The gates and the hand-off are unchanged.
 
 **Files:**
 - Modify: `docs/DECISIONS.md` (the D301 row), `docs/user-guide/forge.md` (the layout line, a Terminal section, the limits), `CLAUDE.md` §9 (a Feature Log row)
@@ -10350,25 +11028,31 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 - [ ] **Step 1: Refine the D301 row**
 
-In `docs/DECISIONS.md`, replace the D301 row (line 230) with this row. The date column keeps 2026-10-10, when D301 was decided; put the output of `date +%F` in place of `DATE` in the text, where it says when it was refined:
+In `docs/DECISIONS.md`, replace the row that starts `| D301 |` with this row. Find it with `grep -n '^| D301 |' docs/DECISIONS.md`, which prints exactly one line: 230 on the re-skinned base.
+- **It stays where it is**, between D300 and D302. Rows are kept in number order, so it does not move after the re-skin's D328–D338, and none of those rows is edited.
+- **D334 already carries the 2026-10-13 amendment** (Terminal · Problems, hidden until opened, opened by Ctrl+`, Ctrl+J or the footer counts). The D301 row points at it rather than repeating it.
+- **The date column keeps 2026-10-10**, when D301 was decided. Put the output of `date +%F` in place of `DATE` in the text, where it says when it was refined:
 
 ```markdown
-| D301 | The terminal runs a person's commands as supervised processes | A process runs through the platform shell (`cmd.exe /d /s /c`, `/bin/sh -c`) with stdin open, in a working folder confined like a file read (`.git` refused), with the engine's environment minus anything secret-shaped by name (`SSH_AUTH_SOCK`, `SSH_AGENT_PID`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS` and `SESSIONNAME` kept; `ELECTRON_RUN_AS_NODE` always dropped; `FORCE_COLOR=1` and `PYTHONUTF8=1` set). Output streams as transient `process.output` frames batched at 50 ms, at most 65,536 characters each, and ends with a transient `process.exited`; the last 1,048,576 characters per process and the last 20 finished processes per project are kept in memory only; at most 8 run per project; Stop kills the whole tree, and a stopped process reads `signal: SIGKILL` on every platform; every process stops on shutdown before the database closes, and a project's processes stop before the project is deleted. A per-project trust level governs a start: `on` (the default), `scripts` (only the root package.json scripts, run as `<pm> run <name>` in the project root with the manager from `packageManager`, then the lockfiles, else npm; the trust level is read again just before the spawn) or `off` (and turning it off stops what runs); input, stop, list and get always work. Agents never use it. No PTY in v1; no EOF (Ctrl+D), and background jobs that outlive their shell are not tracked. Phase 2 refinements, refined DATE: the start body is `{ command, cwd?, label? }` or `{ script, label? }` (a script takes no `cwd`); a working folder is listed normalised; `GET /processes/:procId` answers the kept output, which a terminal tab re-fetches on entering Forge and on every reconnect; new codes `terminal_disabled`, `terminal_restricted` (403), `process_limit`, `process_not_running` (409); the WebSocket upgrade checks Origin with REST's allow-list and closes a foreign page with 4403, and `selfOrigins` use the real port; the web terminal is xterm (`@xterm/xterm` 6.0.0 with the fit, web-links and search addons) over the app's own line discipline (echo, editing, ↑/↓ history of 100, Ctrl+C), with `cd`/`cls`/`clear` built in, several tabs, a Processes list, script buttons, a running count in the status bar and Ctrl+`; it takes the keyboard focus only when the person asks for it. | design §6.3, §7; FR-GIT-008, FR-SYS-003, FR-SYS-008 | 2026-10-10 | Arhant (Claude) |
+| D301 | The terminal runs a person's commands as supervised processes | A process runs through the platform shell (`cmd.exe /d /s /c`, `/bin/sh -c`) with stdin open, in a working folder confined like a file read (`.git` refused), with the engine's environment minus anything secret-shaped by name (`SSH_AUTH_SOCK`, `SSH_AGENT_PID`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS` and `SESSIONNAME` kept; `ELECTRON_RUN_AS_NODE` always dropped; `FORCE_COLOR=1` and `PYTHONUTF8=1` set). Output streams as transient `process.output` frames batched at 50 ms, at most 65,536 characters each, and ends with a transient `process.exited`; the last 1,048,576 characters per process and the last 20 finished processes per project are kept in memory only; at most 8 run per project; Stop kills the whole tree, and a stopped process reads `signal: SIGKILL` on every platform; every process stops on shutdown before the database closes, and a project's processes stop before the project is deleted. A per-project trust level governs a start: `on` (the default), `scripts` (only the root package.json scripts, run as `<pm> run <name>` in the project root with the manager from `packageManager`, then the lockfiles, else npm; the trust level is read again just before the spawn) or `off` (and turning it off stops what runs); input, stop, list and get always work. Agents never use it. No PTY in v1; no EOF (Ctrl+D), and background jobs that outlive their shell are not tracked. Phase 2 refinements, refined DATE: the start body is `{ command, cwd?, label? }` or `{ script, label? }` (a script takes no `cwd`); a working folder is listed normalised; `GET /processes/:procId` answers the kept output, which a terminal tab re-fetches on entering Forge and on every reconnect; new codes `terminal_disabled`, `terminal_restricted` (403), `process_limit`, `process_not_running` (409) and `engine_stopping` (503: nothing starts while the engine shuts down); the WebSocket upgrade checks Origin with REST's allow-list and closes a foreign page with 4403, which the footer's connection indicator reports, and `selfOrigins` use the real port; the web terminal is xterm (`@xterm/xterm` 6.0.0 with the fit, web-links and search addons), coloured from the theme's palettes as Monaco is (D328), over the app's own line discipline (echo, editing, ↑/↓ history of 100, Ctrl+C), with `cd`/`cls`/`clear` built in; it is the first of Forge's Terminal · Problems tabs (D334 as amended 2026-10-13), with several terminal tabs drawn as the editor's tab strip, a Processes list, script buttons, a `▶ N running` count in the workspace footer next to the problem counts (D330) and Ctrl+`; it takes the keyboard focus only when the person asks for it. | design §6.3, §7; FR-GIT-008, FR-SYS-003, FR-SYS-008; D334 | 2026-10-10 | Arhant (Claude) |
 ```
 
 - [ ] **Step 2: The user guide**
 
-In `docs/user-guide/forge.md`, under `## The layout`, replace:
+In `docs/user-guide/forge.md`, under `## The layout`, replace (lines 15-16 on the re-skinned base):
 
 ```markdown
-- **Bottom:** Problems and Output. **Ctrl+J** shows or hides the panel. Your choice is remembered.
+- **Bottom:** Problems. **Ctrl+J** shows or hides the panel, and the error and warning counts in
+  the footer open it. Your choice is remembered. Warnings about saves and conflicts appear as notices.
 ```
 
 with:
 
 ```markdown
-- **Bottom:** the Terminal, Problems and Output. **Ctrl+J** shows or hides the panel, **Ctrl+`**
-  the Terminal. Your choice is remembered.
+- **Bottom:** the Terminal and Problems, as two tabs. **Ctrl+J** shows or hides the panel and
+  **Ctrl+`** the Terminal; the footer's error and warning counts open Problems, and its
+  **▶ running** count the Terminal. Your choice is remembered. Warnings about saves and conflicts
+  appear as notices.
 ```
 
 Insert this section before `## Keys the browser keeps`:
@@ -10376,8 +11060,8 @@ Insert this section before `## Keys the browser keeps`:
 ```markdown
 ## The terminal
 
-**Ctrl+`** opens the Terminal; so do the status bar's **▶ running** count and **Terminal** in an
-empty editor. Type a command and press **Enter**: it runs in the project folder through your
+**Ctrl+`** opens the Terminal, the first tab of the bottom panel; so do the footer's **▶ running**
+count and **Terminal** in an empty editor. Type a command and press **Enter**: it runs in the project folder through your
 system's shell (`cmd.exe` on Windows, `/bin/sh` elsewhere), and its output streams in, colours
 and links included.
 
@@ -10387,19 +11071,22 @@ and links included.
   `cd ..` stops at the project folder; `cd` alone prints where you are. **`cls`** or **`clear`**
   clears the tab.
 - **↑ / ↓** bring back earlier commands. **Ctrl+F** finds text in the tab.
-- **Several tabs:** **+** opens another; double-click a tab to rename it. Closing a tab whose
-  command still runs asks before it stops it.
-- **Scripts:** the buttons above the terminal run the project's `package.json` scripts, each in its
-  own tab, with the package manager the project uses (pnpm, yarn, bun or npm).
+- **Several tabs:** **+**, after the last tab, opens another; double-click a tab to rename it.
+  Closing a tab whose command still runs asks before it stops it.
+- **Scripts:** the **▶** buttons at the end of the tab row run the project's `package.json` scripts,
+  each in its own tab, with the package manager the project uses (pnpm, yarn, bun or npm).
 - **Processes**, beside the terminal, lists what runs, with **Stop**, and what ran, with how it
   ended. A command started from another browser tab shows there too; **Show** opens it in a tab.
 - Up to 8 commands run at once in a project. A tab keeps the last 1 MB of output.
 
-Each project chooses how far it trusts its terminal, on the project page under **Terminal**:
+Each project chooses how far it trusts its terminal, on the project page (the **…** menu →
+**Project page**) under **Terminal**:
 
 - **On — any command:** what you type, and the scripts.
 - **Scripts only:** only the project's own `package.json` scripts.
 - **Off:** nothing runs, and turning it off stops what runs.
+
+With **Scripts only** or **Off**, the Terminal says so above its tabs, with a link to that setting.
 
 Commands get your environment minus anything whose **name** looks like a secret: API keys,
 tokens and passwords never reach them, while `PATH`, `HOME` and your ssh agent do. Only names are
@@ -10451,22 +11138,33 @@ Expected: every spec passes.
 
 - [ ] **Step 4: The live check on an isolated real engine**
 
-The person's own ACE runs from `D:\ACE offcl\wt\forge` on 4747 and 5173. **Leave it alone.** This check uses its own data folder and ports 47491 (engine), 5198 (web) and 47592 (a test server); 5196 and 5197 stay free for e2e.
+The person's own ACE runs from `D:\ACE offcl\wt\forge` on 4747 and 5173. **Leave it alone.** This check uses its own data folder and three ports of its own:
+- 47481 for the engine;
+- 5198 for the web;
+- 47582 for a test server.
+
+The earlier draft's 47491 and 47592 are taken on this base: `tests/acceptance/helpers/crash-check.ts` binds 47491, and the server's CLI tests bind 47592. 5196 and 5197 stay free for e2e. Check the three ports are free first:
+
+```bash
+netstat -ano | grep -E ":(47481|5198|47582) "
+```
+
+Expected: no output. If one shows, pick the next free port above it, check it the same way, and use it everywhere below.
 
 Start the engine with a fake secret in its environment, so check 8 can look for it. Run each `&` line as a background command:
 
 ```bash
 cd "D:/ACE offcl/wt/forge2"
 LIVE="$(mktemp -d)"; echo "$LIVE"
-ANTHROPIC_API_KEY=sk-ant-live-check-not-real ACE_PORT=47491 ACE_DATA_DIR="$(cygpath -w "$LIVE")" \
+ANTHROPIC_API_KEY=sk-ant-live-check-not-real ACE_PORT=47481 ACE_DATA_DIR="$(cygpath -w "$LIVE")" \
   pnpm --filter @ace/server exec tsx src/main.ts > "$LIVE/engine.log" 2>&1 &
 until grep -q 'ACE engine ready' "$LIVE/engine.log"; do sleep 1; done
 TOKEN="$(cat "$LIVE/session-token")"
-VITE_ACE_URL=http://127.0.0.1:47491 pnpm --filter @ace/web exec vite --port 5198 --strictPort --host 127.0.0.1 \
+VITE_ACE_URL=http://127.0.0.1:47481 pnpm --filter @ace/web exec vite --port 5198 --strictPort --host 127.0.0.1 \
   > "$LIVE/web.log" 2>&1 &
 curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -d '{"allowedOrigins":["http://127.0.0.1:5198","http://localhost:5198"]}' \
-  http://127.0.0.1:47491/api/v1/settings > /dev/null
+  http://127.0.0.1:47481/api/v1/settings > /dev/null
 ```
 
 Make a project folder with a script and a small server:
@@ -10479,28 +11177,28 @@ JSON
 cat > "$LIVE/proj/server.js" <<'JS'
 require('http')
   .createServer((req, res) => { console.log('GET ' + req.url); res.end('ok'); })
-  .listen(47592, () => console.log('listening on 47592'));
+  .listen(47582, () => console.log('listening on 47582'));
 JS
 PROJECT="$(curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -d "{\"name\":\"Live\",\"folderPath\":$(node -e "console.log(JSON.stringify(process.argv[1]))" "$(cygpath -w "$LIVE/proj")")}" \
-  http://127.0.0.1:47491/api/v1/projects | node -e "process.stdin.on('data',d=>console.log(JSON.parse(d).id))")"
+  http://127.0.0.1:47481/api/v1/projects | node -e "process.stdin.on('data',d=>console.log(JSON.parse(d).id))")"
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"name":"Main"}' \
-  "http://127.0.0.1:47491/api/v1/projects/$PROJECT/workflows"
+  "http://127.0.0.1:47481/api/v1/projects/$PROJECT/workflows"
 echo "open: http://127.0.0.1:5198/?token=$TOKEN"
 ```
 
-Open the printed URL in Playwright's Chromium (Claude in Chrome cannot load local dev servers here), open the project's workflow, switch to Forge and press Ctrl+`. Then check:
+Open the printed URL in Playwright's Chromium (Claude in Chrome cannot load local dev servers here). On Home, open the project **Live** and its workflow **Main**, switch to Forge with the header's **Forge** pill (or Ctrl+Shift+2), and press Ctrl+`: the bottom panel opens on its **Terminal** tab. Then check:
 
 1. `node -v` prints the real Node version.
 2. `npm run hello` prints `hi from npm`; the **hello** script button does the same in a new tab.
-3. The **dev** button prints `listening on 47592`. `curl -s http://127.0.0.1:47592/` answers `ok`, and the tab shows `GET /`. **Stop** in the Processes list ends it. Within 3 s, `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:47592/` answers `000`: the tree is gone (npm, then node) and the port is free.
+3. The **dev** button prints `listening on 47582`. `curl -s http://127.0.0.1:47582/` answers `ok`, and the tab shows `GET /`. While it runs, the footer reads **▶ 1 running**. **Stop** in the Processes list ends it, and the count goes. Within 3 s, `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:47582/` answers `000`: the tree is gone (npm, then node) and the port is free.
 4. `cd src` changes the prompt to `src $`, and `node -e "console.log(process.cwd())"` prints a path ending in `proj\src`.
 5. `node -e "require('readline').createInterface({input:process.stdin}).question('name? ',n=>{console.log('hello '+n);process.exit(0)})"`, then `Ada`: it prints `hello Ada`.
-6. Start **dev** again, then on the project page set **Terminal** to **Off**: within 3 s the port answers `000`. Back in Forge the notice shows, and typing does nothing.
+6. Start **dev** again, then on the project page (the **…** menu → **Project page**) set **Terminal** to **Off**: within 3 s the port answers `000`. Back in Forge the notice shows, and typing does nothing.
 7. A foreign page's socket is refused:
 
    ```bash
-   pnpm --filter @ace/server exec node -e "const W=require('ws');const s=new W('ws://127.0.0.1:47491/ws?token=$TOKEN',{origin:'https://evil.example'});s.on('close',(c)=>{console.log(c);process.exit(0)})"
+   pnpm --filter @ace/server exec node -e "const W=require('ws');const s=new W('ws://127.0.0.1:47481/ws?token=$TOKEN',{origin:'https://evil.example'});s.on('close',(c)=>{console.log(c);process.exit(0)})"
    ```
 
    It prints `4403`.
@@ -10512,7 +11210,7 @@ Record each result in the ledger and the Feature Log notes. Anything that fails 
 Then stop only what this check started, by the ports it bound (PowerShell, because Git Bash mangles `taskkill`'s `/T`):
 
 ```powershell
-Get-NetTCPConnection -LocalPort 47491,5198,47592 -State Listen -ErrorAction SilentlyContinue |
+Get-NetTCPConnection -LocalPort 47481,5198,47582 -State Listen -ErrorAction SilentlyContinue |
   Select-Object -ExpandProperty OwningProcess -Unique |
   ForEach-Object { taskkill /PID $_ /T /F }
 ```
@@ -10523,7 +11221,7 @@ Expected: the person's ACE on 4747 and 5173 still answers (`curl -s -o /dev/null
 
 In `CLAUDE.md` §9, append after the `IDE | F1` row, matching the table's columns. Fill the notes from Steps 3 and 4:
 
-`| IDE | F2 | Forge phase 2 — the Terminal: supervised processes, trust levels, xterm tabs, Processes list, script buttons, WS Origin check | Arhant | feat/forge-phase-2 | IN REVIEW | — | DATE | — | Gates (Step 3, real counts per package, coverage) · live check 9 items (Step 4) · deviations: the Phase 2 refinements of D301 |`
+`| IDE | F2 | Forge phase 2 — the Terminal: supervised processes, trust levels, the Terminal · Problems panel, xterm tabs, Processes list, script buttons, the footer's running count, WS Origin check | Arhant | feat/forge-phase-2-ui | IN REVIEW | — | DATE | — | Gates (Step 3, real counts per package, coverage) · live check 9 items (Step 4) · deviations: the Phase 2 refinements of D301 |`
 
 - [ ] **Step 6: Commit the docs**
 
@@ -10542,34 +11240,42 @@ Use superpowers:finishing-a-development-branch. Pushing, opening a PR, or mergin
 
 ## Plan self-review
 
-Re-run after the review fixes (`phase-2-plan-review.md`, `plan-fix-rulings.md`): Tasks 12 and 13 were split into 12–15, so the plan runs Tasks 0–19.
+This section has been re-run twice:
+- after the review fixes (`phase-2-plan-review.md`, `plan-fix-rulings.md`), when Tasks 12 and 13 were split into 12–15, so the plan runs Tasks 0–19;
+- again on 2026-10-13, after Tasks 0–10 were merged onto the Ace theme re-skin (`feat/forge-phase-2-ui`, 5770845).
+
+The second time, the web Tasks 11–19 were rewritten against the re-skinned code: D328–D338, with D334 as amended 2026-10-13. Their behaviour, names and tests are kept. What moved is where things sit and how they look.
 
 **0. The tasks**
 
 | Task | What it delivers | Commit |
 |---|---|---|
-| 0 | Worktree check (on `feat/forge-phase-1-rest` at 7d00cd2), install, build, baseline; "Before the web tasks" | none |
+| 0 | Worktree check, install, build, baseline; "Before the web tasks" (done: the re-skinned base) | none |
 | 1 | Monaco stops flagging implicit `any` (Phase 1's N1) | `fix(web)` |
 | 2 | Contracts: trust levels, the start union (a script takes no `cwd`), the frame cap, summaries, frames, codes, 4403 | `feat(contracts)` |
 | 3 | Storage and the project update: `projects.terminal`, its migration, the earlier migration tests' chains, and PATCH | `feat(storage-local,engine)` |
 | 4 | Engine port and the tools runner: spawn, scrubbed env (`SCRUB_DROP`, `PYTHONUTF8`), tree kill, a stop reads SIGKILL | `feat(tools)` |
 | 5 | The scripts reader | `feat(tools)` |
-| 6 | `ProcessService`: trust (re-read before a script spawns), limits, frames of at most 65,536, normalised `cwd`, no agent tool | `feat(engine)` |
+| 6 | `ProcessService`: trust (re-read before a script spawns), limits, frames of at most 65,536, normalised `cwd`, `engine_stopping`, no agent tool | `feat(engine)` |
 | 7 | Process routes | `feat(engine)` |
 | 8 | Server wiring; PATCH off and DELETE stop processes; the real-engine integration test | `feat(server)` |
-| 9 | The WebSocket Origin check, the SDK's `forbidden_origin` and the run bar's notice | `feat(server)` |
+| 9 | The WebSocket Origin check, the SDK's `forbidden_origin` and its notice (in the footer's connection indicator since the integration) | `feat(server)` |
 | 10 | SDK process methods | `feat(sdk)` |
-| 11 | Web mocks aligned with the engine (PATCH, DELETE, `labelOf`, normalised `cwd`, script at the root) | `feat(web)` |
+| 11 | Web mocks aligned with the engine: PATCH, DELETE, `labelOf`, a folded `cwd`, a script at the root, the engine's check order, the reader's safe names, `stopAll` and `engine_stopping`, the messages checked against the engine's source | `feat(web)` |
 | 12 | The terminal store and the shared project scope | `feat(web)` |
 | 13 | Process frames to their tab; re-attach on entering Forge and on reconnect, skipping a process no tab owns | `feat(web)` |
 | 14 | The pure parts: xterm pinned, `FakeTerminal`, the line discipline, the built-ins | `feat(web)` |
-| 15 | The terminal view, the session (`enqueue` never silent) and the panel's Terminal tab; focus only when asked | `feat(web)` |
-| 16 | Several tabs, the Processes list, script buttons, the status bar's count and Ctrl+` | `feat(web)` |
-| 17 | The trust level in the project page and the Terminal | `feat(web)` |
-| 18 | e2e with the real xterm, on a port checked free | `test(web)` |
-| 19 | Docs, the gates, a live check on an isolated engine, the hand-off | `docs` |
+| 15 | The terminal view in a surface card, xterm coloured from the theme's palettes, the session (`enqueue` never silent), and the panel's Terminal pill first of Terminal · Problems; focus only when asked | `feat(web)` |
+| 16 | Several tabs as the editor's tab strip, the Processes list carded as Problems, script pills, `▶ N running` in the footer next to the problem counts, the empty editor's Terminal pill and Ctrl+` | `feat(web)` |
+| 17 | The trust level in its own card on the project page, and the Terminal's help-line notice | `feat(web)` |
+| 18 | e2e with the real xterm, the footer's count and the panel's pills, on a port checked free | `test(web)` |
+| 19 | Docs (the guide's panel and footer wording, the D301 row in place), the gates, a live check on its own free ports, the hand-off | `docs` |
 
-Each task from 1 to 18 writes its failing tests first, runs them red, implements, runs them green, runs its package's whole suite, typecheck and lint, and commits. Each one is green on its own: 12 adds no UI, 13 only a hook in `ForgePage`, 14 no component, and 15 the first view.
+Each task from 1 to 18 follows the same cycle: it writes its failing tests first and runs them red; it implements and runs them green; it runs its package's whole suite, typecheck and lint; and it commits. Each one is green on its own:
+- 12 adds no UI;
+- 13 adds only a hook in `ForgePage`;
+- 14 adds no component;
+- 15 adds the first view.
 
 **1. Spec coverage**
 
@@ -10585,17 +11291,17 @@ Each task from 1 to 18 writes its failing tests first, runs them red, implements
 | §6.3 the environment minus secrets, `PATH`/`HOME` kept, `FORCE_COLOR=1` | 4 (plus `ELECTRON_RUN_AS_NODE` dropped and `PYTHONUTF8=1`) |
 | §6.3 output as transient `process.output`, batched at 50 ms; the last 1 MB kept for late subscribers | 2, 6 (batching, frame cap, kept cap), 7 and 13 (`GET /:procId`, re-attach) |
 | §6.3 `process.exited` when it finishes | 2, 6, 8 (real socket) |
-| §6.3 at most 8 at once per project; everything stops at shutdown | 6, 8 |
+| §6.3 at most 8 at once per project; everything stops at shutdown | 6, 8; 11 and 15 (`engine_stopping` reaches the tab) |
 | §6.3 trust levels `on` / `scripts` / `off` | 2, 3, 6, 8, 11, 17 |
 | §6.3 agents never use the service | decision 1; 6 ("registers no built-in tool for processes or the terminal") |
-| §6.3 web: xterm with fit; ANSI colour, links and find | 14 (dependencies, `FakeTerminal`), 15 (view, find) |
+| §6.3 web: xterm with fit; ANSI colour, links and find | 14 (dependencies, `FakeTerminal`), 15 (view, find, the theme's ANSI colours) |
 | §6.3 a tab is a line-mode session with its own folder and history | 12, 14, 15 |
 | §6.3 a typed line starts a process; lines go to stdin while it runs; Ctrl+C stops it | 14 (line discipline), 15 (tab tests) |
 | §6.3 `cd` built in and confined; `cls` / `clear` | 14 (built-ins), 15 (tab tests) |
 | §6.3 several tabs; a Processes list with Stop | 16 |
 | §6.3 script buttons run a script in a new tab | 16 (at the project root, no `cwd`) |
-| §2.2 the status bar's running count opens the Terminal; Ctrl+`; the empty editor's Terminal button; Terminal · Problems · Output | 15 (panel tabs), 16 |
-| §2.3 terminal sessions per project, with their scrollback, survive switching | 12, 15 (panel, Ideate ↔ Forge, a workflow-tab switch) |
+| §2.2 the running count opens the Terminal (the footer's since D330/D334); Ctrl+`; the empty editor's Terminal; the panel's tabs (Terminal · Problems since D334's amendment; no Output) | 15 (the pill), 16 (the footer, Ctrl+`, the empty editor), 18 (e2e) |
+| §2.3 terminal sessions per project, with their scrollback, survive switching | 12, 15 (panel, Ideate ↔ Forge, another workflow through the workspace menu) |
 | §7 every new route behind the token, Origin and request-id middleware | 7 (mounted on `api`) |
 | §7 the WebSocket upgrade checks Origin against the REST allow-list | 9 |
 | §7 terminal processes: scrubbed env, confined folder, capped output, limit, tree kill | 4, 6 |
@@ -10607,18 +11313,38 @@ Each task from 1 to 18 writes its failing tests first, runs them red, implements
 | §11 tools: process runner — streaming, stdin, tree kill, env scrubbing; the limit | 4, 6 |
 | §11 engine: process routes and errors | 7 |
 | §11 server integration: terminal streaming and stop; WS Origin refusal | 8, 9 |
-| §11 web unit: a terminal's scrollback survives Ideate ↔ Forge and a workflow-tab switch | 15 |
+| §11 web unit: a terminal's scrollback survives Ideate ↔ Forge and a workflow switch | 15 |
 | §11 web e2e: a terminal run | 18 |
 | §12 item 2: process service and runner, the `project` scope, the xterm terminal with `cd`, scripts, the Processes view, trust levels, the WS Origin check | 2–18 |
 | §14 no PTY; shell state does not carry, chaining in one line works | 14 (a chained `cd` goes to the shell), 19 (the guide) |
+| D328 every new screen in the theme's patterns and tokens, no new colour; xterm from the palettes, as Monaco | 15 (`xterm-theme.test.ts`, the card), 16 (strip, card, pills, the footer's type), 17 (the dropdown card, the help line) |
 
-No spec line is left without a task. The phone layout (§2.1, no terminal at ≤ 640 px) needs no change: `CompactForge` renders no bottom panel.
+No spec line is left without a task. The phone layout (§2.1, no terminal at ≤ 640 px) needs no change: `CompactForge` renders no bottom panel, and the shell draws no footer at phone width (D330).
+
+**The theme, piece by piece (D328, D334)**
+
+| New piece | The re-skin's pattern it reuses | Pinned by |
+|---|---|---|
+| Terminal pill | the bottom panel's `Tabs` pill (D332), first of Terminal · Problems | Task 15 "reads Terminal · Problems in the panel’s pill…", Task 18 |
+| Terminal card | Problems' file card: `rounded-[12px]`, `border-[var(--line)]`, `bg-[var(--surface)]` | Task 15 "sits in a surface card…" |
+| xterm colours and font | `forge-theme.ts`'s looks and `PAL_L` / `PAL_D`, the `#ef6b3f` cursor, JetBrains Mono | Task 15 `xterm-theme.test.ts` (every value is a theme colour) and the light/dark test |
+| Find box | the Explorer's filter field; the kit's ghost icon buttons with ↑ ↓ ✕ | Task 15 "Ctrl+F finds in the scrollback" |
+| Terminal tabs | the editor's `TabsBar`: surface and orange top edge when active, 20px × | Task 16 "is drawn as the editor’s tab strip…" |
+| Running dot, process dots | the Stage cards' status colours (`nodeStatusLook`) | Task 16 (`RunningCount`'s ▶ colour test) |
+| Processes list | the Explorer's mono heading; Problems' surface card with hairline rows | Task 16 "…in one surface card" |
+| Script buttons | the kit's secondary pill (`Button variant="secondary"`) | Task 16 "runs a script in a new tab…" |
+| Running count | the footer's `ProblemsCount`: mono 10px, muted, right after the problem counts | Task 16 (`StatusBar.test.tsx`, `WorkspaceFooter.test.tsx`) |
+| Empty editor's Terminal | the empty editor's Close pills with the key in mono | Task 16 "the empty editor offers the Terminal as a third pill…" |
+| Trust select | Settings' `SelectField` (the kit dropdown in a `SettingField`) in a ProjectPage theme card | Task 17 "reads On by default, as the theme’s dropdown in its own card…" |
+| Trust notice | the theme's help line (11px / 1.45, muted) and accent link | Task 17 "off: says so in a help line…" |
+
+Every class uses a token (`var(--…)`) or a hex the theme already uses (`#ef6b3f`, `#c94c27`). No icon library is added: the glyphs (`+`, `×`, `▶`, `↑`, `↓`, `✕`) are the theme's.
 
 **The review's rulings, where each landed**
 
 | Ruling | Where |
 |---|---|
-| I1 migration-round-5's tail | Task 3, its step with the new assertions (`ids.length - 4`, `slice(-3)`) |
+| I1 migration-round-5's tail | Task 3, its step with the new assertions (since the integration: `ids.length - 5`, `slice(-4)`, with Domain's migration) |
 | I2 the backquote with user-event | Task 16's Ctrl+` test types `{Control>}[Backquote]{/Control}`; no other unit test types a backquote (e2e presses `Control+Backquote`) |
 | I3 a script runs at the root | decision 5; Tasks 2 (schema and test), 6 (service test), 10 (SDK test), 11 (mock test), 16 (`runScript` sends `{ script }`) |
 | I4 a stop reads SIGKILL | decision 10; Task 4 (both tests), Task 8 (integration assertion) |
@@ -10632,20 +11358,23 @@ No spec line is left without a task. The phone layout (§2.1, no terminal at ≤
 | Minor 4 trust re-read | decision 6; Task 6 (fake runner with `scriptsGate`) |
 | Minor 5 ownerless re-attach | Task 13 (`reattach` skips; the overlapping re-attach test) |
 | Minor 6 `enqueue` | Task 15 (`session.test.ts`) |
-| Minor 7 focus | decision 14; Task 15 (`focus.ts`, the focus tests), Task 16 (every opener asks; tests) |
+| Minor 7 focus | decision 14; Task 15 (`focus.ts`, the focus tests), Task 16 (every opener asks, the footer's count included; a rename drops a pending request) |
 | Minors 8 and 9 deferred | decision 18; Task 19's guide limits and the D301 row |
 | Minor 10 Windows encoding | decision 3 (`PYTHONUTF8`); Task 4 (test line); Task 19 (live item 9, the guide's `chcp 65001`) |
 | Minor 11 environment | decision 3 (`SCRUB_DROP`); Task 4 (test); Task 19 (the guide: names, not values) |
-| Minor 12 workflow-tab switch | Task 15's scrollback test |
+| Minor 12 workflow switch | Task 15's scrollback test, through the workspace menu: the header's workflow tabs left with D330 |
 | Minor 13 no agent tool | Task 6 (`builtins/no-terminal-tool.test.ts`) |
 | Minor 14 the frame parse test | Task 2 (under the server-frames `describe`) |
 | Minor 15 D301's date | Task 19, Step 1 |
 | Minor 16 `busyLine` | Task 16's Interfaces: from Task 12, where `line-discipline.ts` is created (the ruling's "12b" would be Task 13, which only consumes it) |
-| Minor 17 mock alignment | Task 11 (PATCH order, `labelOf`, normalised `cwd`); decision 4 |
+| Minor 17 mock alignment | Task 11: PATCH order, `labelOf`, a normalised and folded `cwd`, the engine's check order, the reader's safe names; decision 4 |
 | Minor 18 test resolution | Global Constraints ("Tests and builds") |
-| Re-skin | "Before the web tasks", under Task 0 |
+| T6 carry: `engine_stopping` in the mock | decision 13; Task 11 (`stopAll`, the 503 test, the messages read from the engine's source), Task 15 (the tab prints it) |
+| Re-skin | "Before the web tasks", under Task 0 (done); Tasks 11–19 revised against `feat/forge-phase-2-ui` |
 
-**2. Placeholder scan.** No "TBD", "TODO", "implement later", "similar to Task N", or step without its code. Two values are filled at run time by command, not by guess: `DATE` (`date +%F`) and the gate counts, which Task 19 pastes from the real output. Every modified file names its anchor lines or quotes the text it replaces; the web tasks' anchors are re-checked after the re-skin ("Before the web tasks").
+**2. Placeholder scan.** No "TBD", "TODO", "implement later", "similar to Task N", or step without its code. Two values are filled at run time by command, not by guess: `DATE` (`date +%F`) and the gate counts, which Task 19 pastes from the real output.
+
+Every modified file names its anchor lines or quotes the text it replaces. The web tasks' anchors were re-read on `feat/forge-phase-2-ui` at 5770845. Where an earlier task of this plan moves a file's lines (`test/app.tsx`, `layout.ts`), the later task quotes text instead of a line number. Files that were Prettier-clean on that base go through Prettier with the task's other files. `mocks/browser.ts` was not clean, so it is edited by hand in Prettier's shape and left out of the Prettier run.
 
 Fixed waits left in tests, each with its reason in a comment:
 - Task 4: the spawn-failure test waits 400 ms past the drain to show that no `onExit` follows `onError`. It proves an absence, so there is nothing to poll for.
@@ -10656,19 +11385,20 @@ Not fixed waits: the 50 ms poll interval inside the deadline loops (`until` in T
 
 **3. Names and types across tasks**
 - Port: `ProcessSpec`, `ProcessHandlers`, `RunningProcess`, `ProcessRunner { start, scripts }` (Tasks 4–5). Used unchanged by the fake (6), the service (6) and the server (8).
-- Service: `createProcessService`, `normaliseCwd` and `ProcessService { start, input, stop, list, get, scripts, stopProject, stopAll }` (6). The routes (7), the gateway's PATCH and DELETE (8) and the server (8) use these names.
-- Tools: `createProcessRunner`, `readProjectScripts`, `scrubSecrets`, `SECRET_SHAPED`, `SCRUB_KEEP`, `SCRUB_DROP` (4–5).
-- Contracts: `ProcessStartRequest`, `PROCESS_FRAME_MAX_CHARS`, `PROCESS_OUTPUT_MAX_CHARS`, `WS_CLOSE_FORBIDDEN_ORIGIN` (2), used by 6, 9, 10, 11.
+- Service: `createProcessService`, `normaliseCwd` and `ProcessService { start, input, stop, list, get, scripts, stopProject, stopAll, forgetProject }` (6). The routes (7), the gateway's PATCH and DELETE (8) and the server (8) use these names.
+- Tools: `createProcessRunner`, `readProjectScripts`, `scrubSecrets`, `SECRET_SHAPED`, `SCRUB_KEEP`, `SCRUB_DROP`, `SAFE_SCRIPT_NAME` (4–5).
+- Contracts: `ProcessStartRequest`, `ProcessSummary`, `ProcessDetail`, `ProjectScripts`, `TerminalTrust`, `PROCESS_FRAME_MAX_CHARS`, `PROCESS_OUTPUT_MAX_CHARS`, `PROCESS_RUNNING_MAX`, `WS_CLOSE_FORBIDDEN_ORIGIN`, and the codes up to `engine_stopping` (2, 6), used by 6, 9, 10, 11.
 - SDK: `startProcess`, `processInput`, `stopProcess`, `listProcesses`, `getProcess`, `projectScripts` (10). The web uses exactly these (12–17).
 - Web:
-  - `useProjectScope`, `processKeys` and the hooks, `useTerminalStore` (actions `newTab`, `closeTab`, `activate`, `rename`, `setLine`, `setCwd`, `write`, `clearScreen`, `idle`, `attach`, `output`, `exited`, `replaceLive`, `lost`, `reset`), `LineState`, `busyLine`, `promptFor` (12);
+  - `useProjectScope`, `processKeys` and the hooks, `runningCount`, `useTerminalStore` (actions `newTab`, `closeTab`, `activate`, `rename`, `setLine`, `setCwd`, `write`, `clearScreen`, `idle`, `attach`, `output`, `exited`, `replaceLive`, `lost`, `reset`), `LineState`, `busyLine`, `promptFor` (12);
   - `reattach`, `useProcessEvents`, `installMockSocket` (13);
   - `feed`, `LineAction`, `parseBuiltin`, `resolveCd`, `FakeTerminal` and the three fake addons (14);
-  - `typed`, `startInTab`, `enqueue`, `requestTerminalFocus`, `registerTerminalFocus`, `cancelTerminalFocus`, `TerminalView`, `TerminalPanel` (15);
-  - `runScript`, `openProcessInTab`, `toggleTerminalFocused`, `TerminalTabs`, `ProcessesList`, `ScriptButtons` (16);
+  - `typed`, `startInTab`, `enqueue`, `requestTerminalFocus`, `registerTerminalFocus`, `cancelTerminalFocus`, `FORGE_LOOKS`, `Look`, `ACCENT`, `DANGER`, `DONE` (exported from `forge-theme.ts`), `terminalTheme`, `TerminalView`, `TerminalPanel`, `ForgePanelTab = 'terminal' | 'problems'` (15);
+  - `runScript`, `openProcessInTab`, `toggleTerminalFocused`, `TerminalTabs`, `ProcessesList`, `ScriptButtons`, `RunningCount`, `SHORTCUTS.toggleTerminal`, `toggleTerminal` (16);
   - `TrustNotice`, `SelectField` (17).
-- Mocks: `MockProcesses`, `createProcessHandlers`, `MOCK_MESSAGES` (11).
-- The refusal messages are the same text in the engine (6), the mock (11) and the tests (10, 17).
+- Test ids: `terminal-view`, `terminal-screen` (15); `terminal-panel`, `terminal-card` (15–17); `process-<id>`, `footer-running` (16); `project-terminal`, `project-terminal-card`, `terminal-trust-notice` (17). Roles and names: the `Panel views` pill, the `Terminals` tablist, the `Scripts` group, the `Processes` region, `New terminal`, `Close <label>`, `Stop <label>`, `Show <label>`, `<n> running`.
+- Mocks: `MockProcesses` (with `stopAll`), `createProcessHandlers`, `MOCK_MESSAGES` (11).
+- The refusal messages are the same text in the engine (6), the mock (11, checked against the engine's source) and the tests (10, 15, 17).
 
 **4. Review Focus pins**
 
@@ -10679,6 +11409,8 @@ Not fixed waits: the 50 ms poll interval inside the deadline loops (`until` in T
 | 3. Engine stop, project delete and reconnect | Task 8 "stopping the engine stops every process it started, grandchildren included" and "deleting a project stops its processes first"; Task 13 "a re-attach replaces the tab's output with the engine's copy, once" and "a process the engine no longer knows ends the tab's run with a note" |
 | 4. Split UTF-8 and ANSI | Task 4 "never splits a character or an ANSI colour across chunks"; Task 19's live item 9 for cmd's own output |
 | 5. Secrets | Task 4 "a process never sees a secret-shaped variable, but keeps SSH_AUTH_SOCK, PATH and HOME", "always drops ELECTRON_RUN_AS_NODE…" and the `scrubSecrets` table in `env.test.ts`; live check 8 in Task 19 |
+
+The re-skin revision kept every pinned test and its name; none of them moved.
 
 **Known edge, accepted and named in the code:** a re-attach replaces the tab's copy with the engine's. A batch emitted after the engine took that copy, but arriving before the HTTP answer, is lost from view at the seam. A 50 ms batch is lost on a reconnect; nothing is ever doubled.
 
