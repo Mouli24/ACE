@@ -39,6 +39,7 @@ import {
   createMemoryService,
   createModelSummariser,
   createPolicyService,
+  createProcessService,
   createProviderService,
   createDomainRegistry,
   createDomainService,
@@ -113,6 +114,7 @@ import {
   ToolRegistry,
   cannedResultsAt,
   createFsProjectFiles,
+  createProcessRunner,
   registerBuiltinTools,
 } from '@ace/tools';
 import { WebSocketServer } from 'ws';
@@ -386,6 +388,14 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     files: createFsProjectFiles(),
     bus,
     logger: logger.child({ subsystem: 'workspace' }),
+  });
+  // Forge's terminal (D301): a person's commands as supervised processes. Agents never get it.
+  const processes = createProcessService({
+    repository,
+    scope: LOCAL_SCOPE,
+    runner: createProcessRunner(),
+    bus,
+    logger: logger.child({ subsystem: 'processes' }),
   });
   const hub = createWsHub({
     bus,
@@ -1039,6 +1049,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     backup,
     /* IDE (D299): Forge's project files. */
     workspace,
+    /* IDE (D301): Forge's terminal. */
+    processes,
   });
 
   /* -------------------------------------------------------------------- http */
@@ -1135,6 +1147,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     await mcpManager.closeAll();
 
     workspace.stopAll();
+    // FR-SYS-008, D301: every terminal process stops, its whole tree with it, before the
+    // database closes; none outlives the engine.
+    await processes.stopAll();
     hub.closeAll();
     wss.close();
     // `server.close()` stops accepting, then waits for every open connection to end. Node closes
