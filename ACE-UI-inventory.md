@@ -153,7 +153,7 @@ Other node kinds (input, model, merge, transform, retrieval, output) and loop ed
 | Open editors section (+ Save all) | Remove | Ctrl+Alt+S kept. Tabs cover open files. |
 | Refresh / Collapse buttons | Remove | The file watcher refreshes. |
 | `FileTree` rows | Restyle | 26px rows: ▸/▾ caret, folder square, extension dot, active row, dirty dot. Live-agent badge from run `tool.call` writes by a RUNNING node. Keyboard kept. |
-| Git M/A/U/D/R letters and tints | Remove | Logic (`decorations.ts`) stays. |
+| Git M/A/U/D/R letters and tints | Keep | Kept per the D334 amendment of 2026-10-13: small themed glyphs beside the dirty dots and agent badge. Logic (`decorations.ts`) stays. |
 | *(new)* Filter input | Restyle | Filters `useFileList` paths. |
 | `TabsBar` (tabs, close / dirty, keyboard, middle-click) | Restyle | Theme tabs. Preview italic and deleted strike-through are kept (real states). |
 | Tab context menu (Close, Close others, Close saved, Copy path) | Uncovered | Kept, theme menu style. |
