@@ -25,3 +25,4 @@ export * from './sandbox.js';
 export * from './search-backend.js';
 export * from './auth.js';
 export * from './workspace.js';
+export * from './processes.js';
