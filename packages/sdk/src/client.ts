@@ -109,6 +109,18 @@ import {
   type RepoStatus,
   type SaveFileRequest,
   type SaveFileResult,
+  // Forge (D301): the terminal's processes
+  ProcessDetailSchema,
+  ProcessInputRequestSchema,
+  ProcessStartRequestSchema,
+  ProcessStartResponseSchema,
+  ProcessSummarySchema,
+  ProjectScriptsSchema,
+  type ProcessDetail,
+  type ProcessStartRequest,
+  type ProcessStartResponse,
+  type ProcessSummary,
+  type ProjectScripts,
   // Round 4 §2.4 (artifacts, tools, MCP servers, timeline messages, direct chat)
   ArtifactSchema,
   ToolListResponseSchema,
@@ -215,6 +227,8 @@ const WorkflowPageSchema = pageSchema(WorkflowSchema);
 const NoContentSchema = { parse: (): undefined => undefined };
 /** `GET /nodes/:id/chat/threads` answers a bare array, the way §2.4 writes it (D78). */
 const ChatThreadListSchema = z.array(ChatThreadSchema);
+/** `GET /projects/:id/processes` answers a bare array, running first (D301). */
+const ProcessSummaryListSchema = z.array(ProcessSummarySchema);
 
 /*
  * Round 5 §2.9. Bases and documents answer `{ items }` (D64); memory, trace and templates answer a
@@ -817,6 +831,29 @@ export function createAceClient(options: AceClientOptions) {
       request('GET', `/projects/${projectId}/files/list`, FileListSchema),
     repoStatus: (projectId: Id): Promise<RepoStatus> =>
       request('GET', `/projects/${projectId}/files/status`, RepoStatusSchema),
+
+    /* IDE — Forge's terminal (D301, design §6.3) */
+    startProcess: (projectId: Id, body: ProcessStartRequest): Promise<ProcessStartResponse> =>
+      request('POST', `/projects/${projectId}/processes`, ProcessStartResponseSchema, {
+        schema: ProcessStartRequestSchema,
+        value: body,
+      }),
+    /** Writes `data` to the process's stdin as given; a line ends in `\n` on every platform. */
+    processInput: (projectId: Id, processId: Id, data: string): Promise<void> =>
+      request('POST', `/projects/${projectId}/processes/${processId}/input`, NoContentSchema, {
+        schema: ProcessInputRequestSchema,
+        value: { data },
+      }),
+    /** Kills the whole process tree; stopping a finished process is a 204 too. */
+    stopProcess: (projectId: Id, processId: Id): Promise<void> =>
+      request('POST', `/projects/${projectId}/processes/${processId}/stop`, NoContentSchema),
+    listProcesses: (projectId: Id): Promise<ProcessSummary[]> =>
+      request('GET', `/projects/${projectId}/processes`, ProcessSummaryListSchema),
+    /** The summary and the kept output, for a terminal tab that re-attaches. */
+    getProcess: (projectId: Id, processId: Id): Promise<ProcessDetail> =>
+      request('GET', `/projects/${projectId}/processes/${processId}`, ProcessDetailSchema),
+    projectScripts: (projectId: Id): Promise<ProjectScripts> =>
+      request('GET', `/projects/${projectId}/processes/scripts`, ProjectScriptsSchema),
   };
 }
 
