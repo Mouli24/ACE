@@ -40,3 +40,8 @@ export * from './backup/index.js';
 /* IDE (D299): Forge's project files. */
 export * from './workspace/service.js';
 export * from './workspace/routes.js';
+
+/* IDE (D301): Forge's terminal. */
+export * from './processes/service.js';
+export * from './processes/routes.js';
+export * from './processes/errors.js';
