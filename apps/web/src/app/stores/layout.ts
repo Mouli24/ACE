@@ -1,13 +1,24 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 
+/** Forge's bottom panel views: Problems (D299 §6.4). The Output view left with D334; Phase 2 adds the Terminal. */
+export type ForgePanelTab = 'problems';
+
 interface LayoutState {
   /** The chat column in Ideate and Forge, and Domain's Team aside: the header's Split (D330). */
   chatOpen: boolean;
   /** Forge's Explorer (Ctrl/⌘+B hides it). */
   sidebarOpen: boolean;
+  /** Forge's bottom panel: the person's choice, closed until first opened (Ctrl/⌘+J, D299). */
+  panelOpen: boolean;
+  panelTab: ForgePanelTab;
+  panelMaximized: boolean;
   toggleChat(): void;
   toggleSidebar(): void;
+  togglePanel(): void;
+  showPanel(tab: ForgePanelTab): void;
+  closePanel(): void;
+  toggleMaximized(): void;
 }
 
 export const LAYOUT_STORAGE_KEY = 'ace.layout';
@@ -37,13 +48,29 @@ export const useLayoutStore = create<LayoutState>()(
     (set) => ({
       chatOpen: true,
       sidebarOpen: true,
+      panelOpen: false,
+      panelTab: 'problems',
+      panelMaximized: false,
       toggleChat: () => set((s) => ({ chatOpen: !s.chatOpen })),
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
+      togglePanel: () =>
+        set((s) => ({
+          panelOpen: !s.panelOpen,
+          panelMaximized: s.panelOpen ? false : s.panelMaximized,
+        })),
+      showPanel: (panelTab) => set({ panelTab, panelOpen: true }),
+      closePanel: () => set({ panelOpen: false, panelMaximized: false }),
+      toggleMaximized: () => set((s) => ({ panelMaximized: !s.panelMaximized, panelOpen: true })),
     }),
     {
       name: LAYOUT_STORAGE_KEY,
       storage: createJSONStorage(storage),
-      partialize: (s) => ({ chatOpen: s.chatOpen, sidebarOpen: s.sidebarOpen }),
+      partialize: (s) => ({
+        chatOpen: s.chatOpen,
+        sidebarOpen: s.sidebarOpen,
+        panelOpen: s.panelOpen,
+        panelTab: s.panelTab,
+      }),
     },
   ),
 );

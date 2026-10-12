@@ -1,11 +1,14 @@
 import { toast } from '@ace/ui';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { db, installMockServer, queryClient, renderApp } from '../../test/app';
+import { mockVersion } from '../../mocks/files';
+import { db, installMockServer, queryClient, renderApp, server } from '../../test/app';
+import { fileKeys } from '../files/keys';
 import { applyFilesChanged } from '../files/project-socket';
-import { openFile } from './actions';
+import { openFile, saveFile } from './actions';
 import { useEditorStore } from './editor-store';
 
 installMockServer();
@@ -92,6 +95,83 @@ describe('D299 §5.4 the disk changes under an open file', () => {
     await user.keyboard('{Control>}s{/Control}');
     await waitFor(() => expect(db.filesOf(projectId)['a.ts']?.content).toBe('one'));
     expect(useEditorStore.getState().projects[projectId]?.files['a.ts']?.deletedOnDisk).toBe(false);
+  });
+});
+
+describe('review I2: a save’s cache write never loses to an older read', () => {
+  /** The next content read answers late, with the text from before the save. */
+  function slowStaleRead(): { served: () => boolean } {
+    let served = false;
+    server.use(
+      http.get(
+        '*/api/v1/projects/:id/files/content',
+        async () => {
+          await new Promise((resolve) => setTimeout(resolve, 80));
+          served = true;
+          return HttpResponse.json({
+            kind: 'text',
+            path: 'a.ts',
+            content: 'one',
+            version: mockVersion('one'),
+            eol: 'lf',
+            bom: false,
+            size: 3,
+          });
+        },
+        { once: true },
+      ),
+    );
+    return { served: () => served };
+  }
+
+  /** Save while a refetch that started before the save is still in flight, then let both settle. */
+  async function saveDuringRefetch(user: ReturnType<typeof userEvent.setup>) {
+    renderApp(path);
+    await screen.findByTestId('forge');
+    act(() => openFile(projectId, 'a.ts'));
+    const editor = await screen.findByLabelText('Editing a.ts');
+    await user.type(editor, '!');
+    const read = slowStaleRead();
+    act(() => {
+      void queryClient.invalidateQueries({ queryKey: fileKeys.content(projectId, 'a.ts') });
+    });
+    expect(await act(() => saveFile(projectId, 'a.ts', queryClient))).toBe(true);
+    expect(read.served()).toBe(false);
+    return { editor, read };
+  }
+
+  async function settled(read: { served: () => boolean }) {
+    await waitFor(() => expect(read.served()).toBe(true));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+  }
+
+  it('a clean buffer keeps the saved text, and so does the cache', async () => {
+    const user = userEvent.setup();
+    const { editor, read } = await saveDuringRefetch(user);
+    await settled(read);
+
+    expect(editor).toHaveValue('one!');
+    expect(queryClient.getQueryData(fileKeys.content(projectId, 'a.ts'))).toMatchObject({
+      content: 'one!',
+      version: mockVersion('one!'),
+    });
+    expect(screen.queryByTestId('conflict-bar')).toBeNull();
+    expect(useEditorStore.getState().projects[projectId]?.files['a.ts']).toMatchObject({
+      dirty: false,
+      baseVersion: mockVersion('one!'),
+    });
+  });
+
+  it('typing after the save raises no phantom conflict', async () => {
+    const user = userEvent.setup();
+    const { editor, read } = await saveDuringRefetch(user);
+    await user.type(editor, '?');
+    await settled(read);
+
+    expect(editor).toHaveValue('one!?');
+    expect(screen.queryByTestId('conflict-bar')).toBeNull();
+    expect(conflictOf()).toBeUndefined();
   });
 });
 

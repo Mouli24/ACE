@@ -253,3 +253,47 @@ export async function dragConnect(page: Page, from: Locator, to: Locator): Promi
   }
   await page.mouse.up();
 }
+
+/** Forge (D299): a project with a workflow and files on its (mock) disk. */
+export async function seedForge(page: Page, files: Record<string, string>): Promise<Seeded> {
+  const seeded = await seedGraph(page, ['agent'], {
+    projectName: 'Shop',
+    workflowName: 'Main',
+    withModel: true,
+  });
+  await page.evaluate(({ projectId, files }) => window.__aceMock!.seedFiles(projectId, files), {
+    projectId: seeded.projectId,
+    files,
+  });
+  return seeded;
+}
+
+export const forgeUrl = (seeded: Seeded): string =>
+  `/projects/${seeded.projectId}/workflows/${seeded.workflowId}/forge`;
+
+/** What the mock engine's disk holds - the truth for every "saved" assertion. */
+export async function diskFile(
+  page: Page,
+  projectId: string,
+  path: string,
+): Promise<string | undefined> {
+  return page.evaluate(
+    ({ projectId, path }) => {
+      const db = window.__aceMock!.db;
+      db.load();
+      return db.filesOf(projectId)[path]?.content;
+    },
+    { projectId, path },
+  );
+}
+
+/** The real Monaco editor in the workbench. */
+export const monacoEditor = (page: Page): Locator =>
+  page.locator('[data-testid="monaco-host"] .monaco-editor').first();
+
+/** Type at the end of the active file, as a person would. */
+export async function typeAtEnd(page: Page, text: string): Promise<void> {
+  await monacoEditor(page).locator('.view-lines').click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type(text);
+}

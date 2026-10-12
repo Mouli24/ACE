@@ -9,11 +9,16 @@ import { EditorArea } from './editor/EditorArea';
 import { useEditorStore } from './editor/editor-store';
 import { useEditorSync } from './editor/useEditorSync';
 import { ExplorerView } from './explorer/ExplorerView';
+import { BottomPanel } from './panel/BottomPanel';
+import { QuickOpen } from './quick-open/QuickOpen';
+import { useQuickOpen } from './quick-open/quick-open-store';
 
 /**
  * Forge in the Ace UI theme's code view (D334, after D299): a fixed 248px Explorer beside the code
- * column (tabs, path bar, editor). Ctrl/⌘+B hides the Explorer; saving, Save all and closing a tab
- * keep their keys. The chat aside and the footer are the workspace layout's, not Forge's.
+ * column (tabs, path bar, editor), and under the code column the bottom panel with Problems while
+ * the person has it open (Ctrl/⌘+J, or the footer's problem counts; maximizable). Ctrl/⌘+B hides
+ * the Explorer, Ctrl/⌘+P opens any file; saving, Save all and closing a tab keep their keys. The
+ * chat aside and the footer are the workspace layout's, not Forge's.
  */
 export function ForgeWorkbench({
   projectId,
@@ -25,6 +30,9 @@ export function ForgeWorkbench({
 }) {
   const explorerOpen = useLayoutStore((s) => s.sidebarOpen);
   const toggleExplorer = useLayoutStore((s) => s.toggleSidebar);
+  const panelOpen = useLayoutStore((s) => s.panelOpen);
+  const maximized = useLayoutStore((s) => s.panelMaximized);
+  const togglePanel = useLayoutStore((s) => s.togglePanel);
   const queryClient = useQueryClient();
   const closeRequest = useCloseRequest(projectId);
   const attribution = useForgeAttribution(projectId, workflowId);
@@ -33,6 +41,8 @@ export function ForgeWorkbench({
     useEditorStore.getState().projects[projectId]?.active;
   useShortcuts([
     [SHORTCUTS.toggleSidebar, toggleExplorer],
+    [SHORTCUTS.togglePanel, togglePanel],
+    [SHORTCUTS.quickOpen, () => useQuickOpen.getState().show()],
     [
       SHORTCUTS.save,
       () => {
@@ -49,12 +59,19 @@ export function ForgeWorkbench({
       },
     ],
   ]);
+  const showEditor = !(panelOpen && maximized);
 
   return (
     <div data-testid="forge" className="flex h-full min-h-0 min-w-0 flex-1">
       {explorerOpen && <ExplorerView projectId={projectId} live={attribution.live} />}
-      <EditorArea projectId={projectId} workflowId={workflowId} attribution={attribution} />
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {showEditor && (
+          <EditorArea projectId={projectId} workflowId={workflowId} attribution={attribution} />
+        )}
+        {panelOpen && <BottomPanel projectId={projectId} />}
+      </div>
       {closeRequest.dialog}
+      <QuickOpen projectId={projectId} />
     </div>
   );
 }

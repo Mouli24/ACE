@@ -54,7 +54,7 @@ export function EditorArea({
     >
       <TabsBar projectId={projectId} />
       {active === undefined ? (
-        <EmptyEditor />
+        <EmptyEditor projectId={projectId} />
       ) : (
         <>
           <PathBar projectId={projectId} workflowId={workflowId} path={active} touch={touch} />

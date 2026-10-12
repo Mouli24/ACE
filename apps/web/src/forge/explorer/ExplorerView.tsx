@@ -1,10 +1,14 @@
+import { cn } from '@ace/ui';
 import { useState } from 'react';
 
 import { useProject } from '../../projects/hooks';
 import type { AgentLook } from '../../theme/agents';
 import { openFile } from '../editor/actions';
 import { useFileList } from '../files/hooks';
+import { parentOf } from '../files/paths';
+import { useExplorerStore, useProjectExplorer } from './explorer-store';
 import { FileTree } from './FileTree';
+import { useTreeRows } from './useTreeRows';
 
 /** "{n} files" from the project's file list; `n+` when the engine cut the list short. */
 function fileCount(list: { files: readonly string[]; truncated: boolean } | undefined): string {
@@ -13,8 +17,9 @@ function fileCount(list: { files: readonly string[]; truncated: boolean } | unde
 }
 
 /**
- * The theme's Explorer (D334): a fixed 248px column — "EXPLORER" and the file count, the tree, and
- * the filter at the bottom. The file watcher keeps it fresh, so it has no refresh or collapse.
+ * The theme's Explorer (D334): a fixed 248px column — "EXPLORER", the file count and New File /
+ * New Folder (D299, created where the selection is, as in VS Code), the tree, and the filter at the
+ * bottom. The file watcher keeps it fresh, so it has no refresh or collapse.
  */
 export function ExplorerView({
   projectId,
@@ -27,6 +32,16 @@ export function ExplorerView({
   const project = useProject(projectId);
   const list = useFileList(projectId, true);
   const [filter, setFilter] = useState('');
+  const startCreate = useExplorerStore((s) => s.startCreate);
+  const selected = useProjectExplorer(projectId).selected;
+  const selectedRow = useTreeRows(projectId).rows.find((row) => row.entry.path === selected);
+  /** Where a new entry goes, as in VS Code: the selected folder, the selected file's folder, or the root. */
+  const folderOfSelection = (): string =>
+    selectedRow === undefined
+      ? ''
+      : selectedRow.entry.kind === 'folder'
+        ? selectedRow.entry.path
+        : parentOf(selectedRow.entry.path);
   const name = project.data?.name ?? 'Project';
   const count = fileCount(list.data);
   return (
@@ -47,6 +62,18 @@ export function ExplorerView({
             {count}
           </span>
         )}
+        <div className="-my-[4px] -mr-[6px] flex items-center">
+          <CreateButton
+            label="New File"
+            folder={false}
+            onClick={() => startCreate(projectId, folderOfSelection(), 'file')}
+          />
+          <CreateButton
+            label="New Folder"
+            folder
+            onClick={() => startCreate(projectId, folderOfSelection(), 'folder')}
+          />
+        </div>
       </div>
       <FileTree
         projectId={projectId}
@@ -67,5 +94,38 @@ export function ExplorerView({
         />
       </div>
     </nav>
+  );
+}
+
+/**
+ * A 20px header button in the tab strip's close-button style: "+" beside the tree's own mark for
+ * what it makes — a file's dot or a folder's square.
+ */
+function CreateButton({
+  label,
+  folder,
+  onClick,
+}: {
+  label: string;
+  folder: boolean;
+  onClick(): void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className="flex h-[20px] shrink-0 cursor-pointer items-center gap-[3px] rounded-[5px] border-none bg-transparent px-[5px] text-[12px] leading-none text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]"
+    >
+      <span aria-hidden>+</span>
+      <span
+        aria-hidden
+        className={cn(
+          'h-[7px] w-[7px] shrink-0 bg-[var(--iconLine)]',
+          folder ? 'rounded-[2px]' : 'rounded-full',
+        )}
+      />
+    </button>
   );
 }

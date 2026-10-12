@@ -44,7 +44,7 @@ describe('FR-GIT-003 the Explorer tree', () => {
     expect(screen.getByTestId('tree-item-node_modules')).toHaveClass('opacity-50');
   });
 
-  it('expands a folder on click, showing its children one level deeper, without git letters (D334)', async () => {
+  it('expands a folder on click, showing its children one level deeper, with git marks (D299) as CSS glyphs (D334)', async () => {
     const user = userEvent.setup();
     const projectId = seed();
     renderWithQuery(<FileTree projectId={projectId} label="Files" onOpen={vi.fn()} />);
@@ -52,8 +52,9 @@ describe('FR-GIT-003 the Explorer tree', () => {
     const app = await screen.findByTestId('tree-item-src/app.ts');
     expect(app).toHaveAttribute('aria-level', '2');
     expect(screen.getByTestId('tree-item-src')).toHaveAttribute('aria-expanded', 'true');
-    // the repo says src/app.ts is modified; the theme's rows carry no git letters or tints
+    // the repo says src/app.ts is modified: an M, drawn as CSS content so a row's text stays its name
     expect(app).toHaveTextContent(/^app\.ts$/);
+    expect(within(app).getByTitle('Modified')).toHaveAttribute('data-glyph', 'M');
     expect(screen.getByTestId('tree-item-src')).toHaveTextContent(/^src$/);
   });
 

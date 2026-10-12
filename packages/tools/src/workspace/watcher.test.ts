@@ -5,7 +5,29 @@ import { join } from 'node:path';
 import type { FileChangeBatch } from '@ace/engine';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as IgnoreRulesModule from './ignore-rules.js';
 import { watchProject } from './watcher.js';
+
+/** Names whose ignore check throws, as `ignore` does for an all-dots path such as `...` on POSIX. */
+const hostile = vi.hoisted(() => ({ names: undefined as RegExp | undefined }));
+vi.mock('./ignore-rules.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof IgnoreRulesModule>();
+  return {
+    ...actual,
+    createIgnoreRules: (root: string) => {
+      const rules = actual.createIgnoreRules(root);
+      return {
+        ...rules,
+        isIgnored: (rel: string, isFolder: boolean) => {
+          if (hostile.names?.test(rel) === true) {
+            throw new RangeError(`path should be a \`path.relative()\`d string, but got "${rel}"`);
+          }
+          return rules.isIgnored(rel, isFolder);
+        },
+      };
+    },
+  };
+});
 
 let root: string;
 let stop: () => void = () => undefined;
@@ -134,6 +156,63 @@ describe('D299 the project watcher', () => {
     for (let i = 0; i < 8; i += 1) writeFileSync(join(root, `f${i}.txt`), 'x');
     await vi.waitFor(() => expect(seen.batches).toContainEqual({ changes: [], resync: true }), {
       timeout: 4000,
+    });
+  });
+
+  describe('review minor 5: a throw never takes the engine down', () => {
+    const escaped: unknown[] = [];
+    const record = (error: unknown): void => {
+      escaped.push(error);
+    };
+    beforeEach(() => {
+      escaped.length = 0;
+      process.on('uncaughtException', record);
+      process.on('unhandledRejection', record);
+    });
+    afterEach(() => {
+      hostile.names = undefined;
+      process.off('uncaughtException', record);
+      process.off('unhandledRejection', record);
+    });
+
+    it('a name the ignore rules throw on counts as not ignored, and other events still arrive', async () => {
+      hostile.names = /^boom/;
+      const seen = collect();
+      await settle();
+      writeFileSync(join(root, 'boom.txt'), 'x');
+      // a folder is checked again when the burst is sent
+      mkdirSync(join(root, 'boom-dir'));
+      writeFileSync(join(root, 'marker.txt'), 'x');
+
+      await vi.waitFor(
+        () =>
+          expect(seen.changes().map((c) => c.path)).toEqual(
+            expect.arrayContaining(['boom.txt', 'boom-dir', 'marker.txt']),
+          ),
+        { timeout: 4000 },
+      );
+      expect(seen.errors).toEqual([]);
+      expect(escaped).toEqual([]);
+    });
+
+    it('a burst that fails to send reaches onError, not an unhandled rejection', async () => {
+      const errors: Error[] = [];
+      stop = watchProject(
+        root,
+        () => {
+          throw new Error('the announcement failed');
+        },
+        (error) => errors.push(error),
+        { debounceMs: 50 },
+      );
+      await settle();
+      writeFileSync(join(root, 'a.txt'), 'x');
+
+      await vi.waitFor(
+        () => expect(errors.map((error) => error.message)).toEqual(['the announcement failed']),
+        { timeout: 4000 },
+      );
+      expect(escaped).toEqual([]);
     });
   });
 

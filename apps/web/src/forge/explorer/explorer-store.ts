@@ -1,14 +1,20 @@
+import type { FileEntryKind } from '@ace/contracts';
 import { create } from 'zustand';
 
 import { isWithin, movedPath, parentOf } from '../files/paths';
+
+/** The tree row being typed into: a new entry under `parent`, or a rename. */
+export type Editing =
+  { mode: 'create'; parent: string; kind: FileEntryKind } | { mode: 'rename'; path: string };
 
 export interface ProjectExplorer {
   /** Expanded folders; the tree walks these, so a folder's children load only once it is open. */
   expanded: string[];
   selected: string | undefined;
+  editing: Editing | undefined;
 }
 
-const EMPTY: ProjectExplorer = { expanded: [], selected: undefined };
+const EMPTY: ProjectExplorer = { expanded: [], selected: undefined, editing: undefined };
 
 interface ExplorerState {
   projects: Record<string, ProjectExplorer>;
@@ -22,6 +28,9 @@ interface ExplorerState {
   moved(projectId: string, from: string, to: string): void;
   /** A file or folder is gone: forget what was expanded or selected inside it. */
   removed(projectId: string, path: string): void;
+  startCreate(projectId: string, parent: string, kind: FileEntryKind): void;
+  startRename(projectId: string, path: string): void;
+  stopEditing(projectId: string): void;
 }
 
 const lineage = (path: string): string[] => {
@@ -56,6 +65,7 @@ export const useExplorerStore = create<ExplorerState>()((set) => {
     select: (projectId, selected) => update(projectId, (c) => ({ ...c, selected })),
     moved: (projectId, from, to) =>
       update(projectId, (c) => ({
+        ...c,
         expanded: c.expanded.map((p) => (isWithin(p, from) ? movedPath(p, from, to) : p)),
         selected:
           c.selected !== undefined && isWithin(c.selected, from)
@@ -64,9 +74,22 @@ export const useExplorerStore = create<ExplorerState>()((set) => {
       })),
     removed: (projectId, path) =>
       update(projectId, (c) => ({
+        ...c,
         expanded: c.expanded.filter((p) => !isWithin(p, path)),
         selected: c.selected !== undefined && isWithin(c.selected, path) ? undefined : c.selected,
       })),
+    startCreate: (projectId, parent, kind) =>
+      update(projectId, (c) => {
+        const missing = parent === '' ? [] : lineage(parent).filter((p) => !c.expanded.includes(p));
+        return {
+          ...c,
+          expanded: [...c.expanded, ...missing],
+          editing: { mode: 'create', parent, kind },
+        };
+      }),
+    startRename: (projectId, path) =>
+      update(projectId, (c) => ({ ...c, selected: path, editing: { mode: 'rename', path } })),
+    stopEditing: (projectId) => update(projectId, (c) => ({ ...c, editing: undefined })),
   };
 });
 

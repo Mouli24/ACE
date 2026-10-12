@@ -154,7 +154,7 @@ describe('D330 the workspace footer', () => {
     expect(screen.getByTestId('footer-messages')).toHaveTextContent('0 messages');
   });
 
-  describe('Forge’s cursor line', () => {
+  describe('Forge’s cursor line and file facts', () => {
     const file = (path: string, dirty: boolean): OpenFile => ({
       path,
       baseVersion: 'v1',
@@ -183,12 +183,14 @@ describe('D330 the workspace footer', () => {
       });
     }
 
-    it('reads Ln, Col · language · unsaved while the editor shows a text file', () => {
+    it('reads Ln, Col · indentation · encoding · line endings · language · unsaved while the editor shows a text file (D299)', () => {
       const { project } = renderFooter('forge');
       act(() => useEditorStatus.setState({ line: 3, column: 7, language: 'typescript' }));
       openFile(project.id, 'src/app.ts', true, 'src/app.ts');
       const cursor = screen.getByTestId('footer-cursor');
-      expect(cursor).toHaveTextContent('Ln 3, Col 7 · TypeScript · unsaved');
+      expect(cursor).toHaveTextContent(
+        'Ln 3, Col 7 · Spaces: 2 · UTF-8 · LF · TypeScript · unsaved',
+      );
       // first in the right-hand group, before the mode
       const right = within(footer()).getByTestId('footer-mode').parentElement!;
       expect(right.firstElementChild).toBe(cursor);
@@ -199,7 +201,9 @@ describe('D330 the workspace footer', () => {
       const { project } = renderFooter('forge');
       act(() => useEditorStatus.setState({ line: 1, column: 1, language: 'markdown' }));
       openFile(project.id, 'README.md', false, 'README.md');
-      expect(screen.getByTestId('footer-cursor')).toHaveTextContent(/^Ln 1, Col 1 · Markdown$/);
+      expect(screen.getByTestId('footer-cursor')).toHaveTextContent(
+        /^Ln 1, Col 1 · Spaces: 2 · UTF-8 · LF · Markdown$/,
+      );
     });
 
     it('is absent while the editor shows no text file (none open, an image, a notice)', () => {

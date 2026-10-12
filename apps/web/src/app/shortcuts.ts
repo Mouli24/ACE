@@ -46,6 +46,8 @@ export const SHORTCUTS = {
   saveAll: { code: 'KeyS', mod: true, alt: true },
   quickOpen: { code: 'KeyP', mod: true },
   toggleSidebar: { code: 'KeyB', mod: true },
+  /** Forge's bottom panel (Problems): D299, back with the panel after D334. */
+  togglePanel: { code: 'KeyJ', mod: true },
   closeTab: { code: 'KeyW', alt: true },
 } as const satisfies Record<string, Shortcut>;
 

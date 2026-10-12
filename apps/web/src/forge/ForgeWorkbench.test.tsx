@@ -3,9 +3,11 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { useLayoutStore } from '../app/stores/layout';
+import { mockVersion } from '../mocks/files';
 import { useRunStore } from '../runs/run-store';
 import { db, installMockServer, renderApp } from '../test/app';
 import { openFile } from './editor/actions';
+import { useEditorStore } from './editor/editor-store';
 
 installMockServer();
 beforeEach(() => useRunStore.getState().reset());
@@ -34,7 +36,8 @@ describe('D334 FR-GIT-003 Forge in the theme’s code view', () => {
     expect(within(forge).getByRole('region', { name: 'Editor' })).toBeInTheDocument();
     expect(within(forge).getByRole('tablist', { name: 'Open files' })).toBeInTheDocument();
     expect(within(forge).getByText('Open a file from the explorer')).toBeInTheDocument();
-    // the activity bar, Open editors, the Output panel and the status bar are gone
+    // the activity bar, Open editors, the Output panel and the status bar are gone; the bottom
+    // panel (Problems) stays closed until asked for
     expect(within(forge).queryByRole('navigation', { name: 'Forge views' })).toBeNull();
     expect(within(forge).queryByRole('region', { name: 'Open editors' })).toBeNull();
     expect(within(forge).queryByRole('region', { name: 'Panel' })).toBeNull();
@@ -42,7 +45,7 @@ describe('D334 FR-GIT-003 Forge in the theme’s code view', () => {
     expect(within(forge).queryByTestId('path-bar')).toBeNull();
   });
 
-  it('hides and shows the Explorer with Ctrl+B, and remembers; Ctrl+J opens no panel', async () => {
+  it('hides and shows the Explorer with Ctrl+B, and remembers; Ctrl+J shows and hides the Problems panel (D299)', async () => {
     const user = userEvent.setup();
     renderApp(seed());
     await screen.findByRole('tree', { name: 'Files of Shop' });
@@ -54,7 +57,53 @@ describe('D334 FR-GIT-003 Forge in the theme’s code view', () => {
     expect(await screen.findByRole('tree', { name: 'Files of Shop' })).toBeInTheDocument();
 
     await user.keyboard('{Control>}j{/Control}');
+    const panel = screen.getByRole('region', { name: 'Panel' });
+    expect(within(panel).getByText('No problems in the open files.')).toBeInTheDocument();
+    expect(useLayoutStore.getState()).toMatchObject({ panelOpen: true, panelTab: 'problems' });
+    await user.keyboard('{Control>}j{/Control}');
     expect(screen.queryByRole('region', { name: 'Panel' })).toBeNull();
+    await user.keyboard('{Control>}j{/Control}');
+    await user.click(screen.getByRole('button', { name: 'Close panel' }));
+    expect(screen.queryByRole('region', { name: 'Panel' })).toBeNull();
+  });
+
+  it('maximizes the panel over the code column, and restores it', async () => {
+    const user = userEvent.setup();
+    renderApp(seed());
+    await screen.findByTestId('forge');
+    await user.keyboard('{Control>}j{/Control}');
+    await user.click(screen.getByRole('button', { name: 'Maximize panel' }));
+    expect(screen.queryByRole('region', { name: 'Editor' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Restore panel size' }));
+    expect(screen.getByRole('region', { name: 'Editor' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Panel' })).toBeInTheDocument();
+  });
+
+  it('review I1: Save all (Ctrl+Alt+S; the Open editors button left with D334) writes only an unsaved buffer that is not in conflict', async () => {
+    const user = userEvent.setup();
+    renderApp(seed());
+    await screen.findByTestId('forge');
+    // a clean tab whose file was deleted on disk: Save all never brings it back
+    act(() => openFile(projectId, 'src/app.ts', { preview: false }));
+    await screen.findByLabelText('Editing src/app.ts');
+    act(() => {
+      db.deleteFileExternally(projectId, 'src/app.ts');
+      useEditorStore.getState().markDeletedOnDisk(projectId, 'src/app.ts');
+    });
+    // an unsaved buffer in conflict: the conflict bar's to resolve, not Save all's
+    act(() => openFile(projectId, 'README.md', { preview: false }));
+    await user.type(await screen.findByLabelText('Editing README.md'), '!');
+    act(() => useEditorStore.getState().conflicted(projectId, 'README.md', 'changed'));
+
+    await user.keyboard('{Control>}{Alt>}s{/Alt}{/Control}');
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(db.filesOf(projectId)['src/app.ts']).toBeUndefined();
+    expect(db.filesOf(projectId)['README.md']?.content).toBe('# Shop');
+
+    act(() => useEditorStore.getState().resolved(projectId, 'README.md', mockVersion('# Shop')));
+    await user.keyboard('{Control>}{Alt>}s{/Alt}{/Control}');
+    await waitFor(() => expect(db.filesOf(projectId)['README.md']?.content).toBe('# Shop!'));
+    expect(db.filesOf(projectId)['src/app.ts']).toBeUndefined();
   });
 
   it('opens a file under the path bar, whose ▶ Run pipeline starts this workflow’s run', async () => {

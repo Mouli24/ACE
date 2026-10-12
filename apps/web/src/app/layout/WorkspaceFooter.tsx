@@ -1,9 +1,7 @@
 import { slugHandle } from '@ace/contracts';
 import { useShallow } from 'zustand/react/shallow';
 
-import { useEditorStatus } from '../../forge/editor/editor-status';
-import { useEditorStore } from '../../forge/editor/editor-store';
-import { languageLabel } from '../../forge/editor/languages';
+import { CursorInfo, ProblemsCount } from '../../forge/layout/StatusBar';
 import type { WorkflowMode } from '../../forge/mode';
 import { useProject } from '../../projects/hooks';
 import { useSocketStatus } from '../../runs/hooks';
@@ -20,9 +18,9 @@ const MODE_LABEL: Readonly<Record<WorkflowMode, string>> = {
 
 /**
  * The workspace footer of `Ace Canvas.dc.html` (D330), every value real: the settings gear (D338),
- * the engine connection (FR-EXE-014) and the project slug; in Forge the cursor, language and
- * unsaved state; the mode; the open conversation's message count; the tokens in view, "—" without
- * data.
+ * the engine connection (FR-EXE-014) and the project slug; in Forge the problem counts and the
+ * cursor, file facts, language and unsaved state (Forge's status bar, D299); the mode; the open
+ * conversation's message count; the tokens in view, "—" without data.
  */
 export function WorkspaceFooter({
   projectId,
@@ -56,6 +54,14 @@ export function WorkspaceFooter({
             <span data-testid="project-slug" title={project.data.name} className="font-machine">
               {slugHandle(project.data.name)}
             </span>
+          </>
+        )}
+        {mode === 'forge' && (
+          <>
+            <span aria-hidden className="opacity-50">
+              |
+            </span>
+            <ProblemsCount projectId={projectId} />
           </>
         )}
       </div>
@@ -115,28 +121,4 @@ function useFooterTokens(workflowId: string, mode: WorkflowMode): WorkspaceToken
     ),
   );
   return mode === 'domain' ? published : run;
-}
-
-/**
- * `Ln, Col · Language · unsaved` while Forge's editor shows a text file (theme `footExtra`). The
- * editor reports that file as `path`, null for none, an image, a notice or a comparison.
- */
-function CursorInfo({ projectId }: { projectId: string }) {
-  const { path, line, column, language } = useEditorStatus(
-    useShallow((store) => ({
-      path: store.path,
-      line: store.line,
-      column: store.column,
-      language: store.language,
-    })),
-  );
-  const dirty = useEditorStore((store) =>
-    path === null ? false : (store.projects[projectId]?.files[path]?.dirty ?? false),
-  );
-  if (path === null) return null;
-  return (
-    <span data-testid="footer-cursor">
-      {`Ln ${line}, Col ${column} · ${languageLabel(language)}${dirty ? ' · unsaved' : ''}`}
-    </span>
-  );
 }

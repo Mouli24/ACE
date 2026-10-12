@@ -2,11 +2,19 @@ import { aceError } from '@ace/contracts';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { mockVersion } from '../../mocks/files';
+import { mockVersion, moveEntry } from '../../mocks/files';
 import { db, installMockServer, queryClient, server } from '../../test/app';
 import { useOutputStore } from '../panel/output-store';
-import { dirtyHandler, keepMine, openFile, saveFile, takeTheirs } from './actions';
-import { useEditorStore } from './editor-store';
+import {
+  dirtyHandler,
+  filesMoved,
+  keepMine,
+  openFile,
+  saveAll,
+  saveFile,
+  takeTheirs,
+} from './actions';
+import { needsSaveAll, useEditorStore } from './editor-store';
 import { ensureModel, getModel, replaceContent } from './models';
 
 installMockServer();
@@ -90,6 +98,97 @@ describe('D299 FR-GIT-004 saving', () => {
     expect(await saveFile(projectId, 'a.ts', queryClient)).toBe(false);
     expect(file()).toMatchObject({ dirty: true, error: 'The engine hit an unexpected error.' });
     expect(output()).toContain('error: Could not save a.ts: The engine hit an unexpected error.');
+  });
+});
+
+describe('review minor 2: a save that started during a move of the same file', () => {
+  it('leaves the moved tab able to save again, still unsaved', async () => {
+    const model = openOnDisk('one');
+    model.setValue('two');
+    db.setLatency(30);
+    const saving = saveFile(projectId, 'a.ts', queryClient);
+    expect(file()?.saving).toBe(true);
+    // the move lands on disk and in the tabs before the save's answer
+    moveEntry(db.filesOf(projectId), 'a.ts', 'b.ts');
+    filesMoved(projectId, 'a.ts', 'b.ts');
+    await saving;
+    db.setLatency(0);
+
+    const moved = () => useEditorStore.getState().projects[projectId]?.files['b.ts'];
+    expect(moved()).toMatchObject({ saving: false, dirty: true, error: undefined });
+    expect(await saveFile(projectId, 'b.ts', queryClient)).toBe(true);
+    expect(db.filesOf(projectId)['b.ts']?.content).toBe('two');
+  });
+
+  it('a move clears a failed save’s message and the saving flag, never the unsaved mark', () => {
+    const store = useEditorStore.getState();
+    for (const path of ['src/a.ts', 'src/b.ts', 'other.ts', 'failed.ts']) {
+      store.open(projectId, path);
+      store.setDirty(projectId, path, true);
+    }
+    store.saveStarted(projectId, 'src/a.ts');
+    store.saveFailed(projectId, 'src/b.ts', 'disk full');
+    store.saveStarted(projectId, 'other.ts');
+    store.saveFailed(projectId, 'failed.ts', 'disk full');
+    store.renamed(projectId, 'src', 'lib');
+    const files = useEditorStore.getState().projects[projectId]?.files;
+    expect(files?.['lib/a.ts']).toMatchObject({ saving: false, dirty: true, error: undefined });
+    expect(files?.['lib/b.ts']).toMatchObject({ saving: false, dirty: true, error: undefined });
+    // files outside the move keep their own state
+    expect(files?.['other.ts']).toMatchObject({ saving: true });
+    expect(files?.['failed.ts']).toMatchObject({ error: 'disk full' });
+  });
+});
+
+describe('review I1: Save all', () => {
+  it('saves only the unsaved buffer; a clean tab deleted on disk stays deleted', async () => {
+    db.seedFiles(projectId, { 'gone.ts': 'old', 'b.ts': 'one' });
+    for (const [path, content] of [
+      ['gone.ts', 'old'],
+      ['b.ts', 'one'],
+    ] as const) {
+      openFile(projectId, path);
+      ensureModel(projectId, path, content, 'typescript', dirtyHandler(projectId, path));
+      useEditorStore.getState().loaded(projectId, path, mockVersion(content), false);
+    }
+    db.deleteFileExternally(projectId, 'gone.ts');
+    useEditorStore.getState().markDeletedOnDisk(projectId, 'gone.ts');
+    getModel(projectId, 'b.ts')?.setValue('two');
+
+    await saveAll(projectId, queryClient);
+
+    expect(db.filesOf(projectId)['gone.ts']).toBeUndefined();
+    expect(db.filesOf(projectId)['b.ts']?.content).toBe('two');
+    expect(useEditorStore.getState().projects[projectId]?.files['gone.ts']).toMatchObject({
+      deletedOnDisk: true,
+      dirty: false,
+    });
+  });
+
+  it('leaves a buffer in conflict alone', async () => {
+    const model = openOnDisk('one');
+    model.setValue('mine');
+    useEditorStore.getState().conflicted(projectId, 'a.ts', 'changed');
+    await saveAll(projectId, queryClient);
+    expect(disk()).toBe('one');
+    expect(output().some((line) => line.startsWith('warn:'))).toBe(false);
+  });
+
+  it('wants saving only for an unsaved buffer that is not in conflict', () => {
+    const base = {
+      path: 'a.ts',
+      baseVersion: 'v',
+      bom: false,
+      dirty: false,
+      saving: false,
+      conflict: undefined,
+      deletedOnDisk: false,
+      error: undefined,
+    };
+    expect(needsSaveAll(base)).toBe(false);
+    expect(needsSaveAll({ ...base, deletedOnDisk: true, baseVersion: null })).toBe(false);
+    expect(needsSaveAll({ ...base, dirty: true })).toBe(true);
+    expect(needsSaveAll({ ...base, dirty: true, conflict: 'changed' })).toBe(false);
   });
 });
 
