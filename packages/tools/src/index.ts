@@ -14,6 +14,7 @@ export * from './project/paths.js';
 export * from './workspace/project-files.js';
 /* D301: the terminal's supervised processes. */
 export * from './process/runner.js';
+export * from './process/scripts.js';
 
 export * from './search/backends.js';
 
