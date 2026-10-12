@@ -60,6 +60,8 @@ interface Run {
   output: string;
   truncated: boolean;
   order: number;
+  /** Set when it ends; the recent-20 list is pruned by it, as the engine's is. */
+  finishOrder: number;
   timers: Array<ReturnType<typeof setTimeout>>;
   /** What `ask` does with the next line typed to it. */
   onLine: ((line: string) => void) | undefined;
@@ -87,6 +89,7 @@ const outside = (): MockProcessError =>
 export class MockProcesses {
   private readonly runs = new Map<string, Run>();
   private order = 0;
+  private finishes = 0;
   /** Set by `stopAll`, as the engine's shutdown sets it: nothing starts until `reset`. */
   private closed = false;
   private readonly tickMs: number;
@@ -188,6 +191,7 @@ export class MockProcesses {
       output: '',
       truncated: false,
       order: this.order,
+      finishOrder: 0,
       timers: [],
       onLine: undefined,
       partial: '',
@@ -222,6 +226,15 @@ export class MockProcesses {
 
   stopProject(projectId: string): void {
     for (const run of this.running(projectId)) this.end(run, 'exited', null, 'SIGKILL');
+  }
+
+  /** A deleted project's records go, with their timers (the engine's `forgetProject`). */
+  forgetProject(projectId: string): void {
+    for (const [id, run] of [...this.runs]) {
+      if (run.summary.projectId !== projectId) continue;
+      this.clearTimers(run);
+      this.runs.delete(id);
+    }
   }
 
   /** The engine shutting down (FR-SYS-008): every process stops, and nothing starts again. */
@@ -391,6 +404,8 @@ export class MockProcesses {
     if (run.summary.status !== 'running') return;
     this.clearTimers(run);
     run.onLine = undefined;
+    this.finishes += 1;
+    run.finishOrder = this.finishes;
     Object.assign(run.summary, { status, exitCode, signal, endedAt: new Date().toISOString() });
     const { projectId, id: processId } = run.summary;
     this.db.emit({
@@ -402,7 +417,8 @@ export class MockProcesses {
     });
     const finished = [...this.runs.values()]
       .filter((each) => each.summary.projectId === projectId && each.summary.status !== 'running')
-      .sort((a, b) => a.order - b.order);
+
+      .sort((a, b) => a.finishOrder - b.finishOrder);
     for (const old of finished.slice(0, Math.max(0, finished.length - PROCESS_RECENT_MAX))) {
       this.runs.delete(old.summary.id);
     }

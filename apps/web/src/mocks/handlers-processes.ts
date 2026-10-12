@@ -75,10 +75,15 @@ export function createProcessHandlers(db: MockDb, processes: MockProcesses): Htt
       return HttpResponse.json(project);
     }),
 
-    // A project DELETE stops what the project runs first, as the engine does (D301). It answers
-    // nothing, so the projects handler that follows still checks the token and deletes.
+    // A project DELETE stops what the project runs first, then forgets its records, as the engine
+    // does (D301); the mock has no in-flight race. It answers nothing, so the projects handler
+    // that follows still checks the token and deletes.
     http.delete(`${API}/projects/:id`, ({ request, params }) => {
-      if (hasToken(request)) processes.stopProject(String(params.id ?? ''));
+      if (hasToken(request)) {
+        const projectId = String(params.id ?? '');
+        processes.stopProject(projectId);
+        processes.forgetProject(projectId);
+      }
       return undefined;
     }),
 
