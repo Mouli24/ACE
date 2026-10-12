@@ -3,9 +3,17 @@
  * real without a browser's canvas. What is written shows as plain text in a
  * `<pre data-testid="terminal-screen">`, and a test types with `FakeTerminal.latest().type(data)`,
  * exactly as xterm's `onData` reports keys. The real xterm runs in e2e.
+ *
+ * `clear()` mimics xterm 6: the buffer is emptied but the current (last) line stays as the new
+ * first line, so a prompt survives `cls`.
  */
 
 type Listener<T> = (value: T) => void;
+
+interface KeyEvent {
+  key: string;
+  domEvent: KeyboardEvent;
+}
 
 interface Disposable {
   dispose(): void;
@@ -90,6 +98,8 @@ export class FakeTerminal {
   readonly addons: Addon[] = [];
   private screen: HTMLPreElement | undefined;
   private readonly dataListeners = new Set<Listener<string>>();
+  private readonly keyListeners = new Set<Listener<KeyEvent>>();
+  private readonly resizeListeners = new Set<Listener<{ cols: number; rows: number }>>();
 
   constructor(options: Record<string, unknown> = {}) {
     this.options = { ...options };
@@ -115,7 +125,7 @@ export class FakeTerminal {
   }
 
   clear(): void {
-    this.written = '';
+    this.written = this.plain().split('\n').at(-1) ?? '';
     this.render();
   }
 
@@ -131,6 +141,7 @@ export class FakeTerminal {
   resize(cols: number, rows: number): void {
     this.cols = cols;
     this.rows = rows;
+    for (const listener of [...this.resizeListeners]) listener({ cols, rows });
   }
 
   hasSelection(): boolean {
@@ -146,8 +157,14 @@ export class FakeTerminal {
     return { dispose: () => this.dataListeners.delete(listener) };
   }
 
-  onResize(): Disposable {
-    return { dispose: () => undefined };
+  onKey(listener: Listener<KeyEvent>): Disposable {
+    this.keyListeners.add(listener);
+    return { dispose: () => this.keyListeners.delete(listener) };
+  }
+
+  onResize(listener: Listener<{ cols: number; rows: number }>): Disposable {
+    this.resizeListeners.add(listener);
+    return { dispose: () => this.resizeListeners.delete(listener) };
   }
 
   attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void {
@@ -162,6 +179,8 @@ export class FakeTerminal {
   dispose(): void {
     this.disposed = true;
     this.dataListeners.clear();
+    this.keyListeners.clear();
+    this.resizeListeners.clear();
     for (const addon of this.addons) addon.dispose();
     this.screen?.remove();
   }
@@ -171,11 +190,19 @@ export class FakeTerminal {
     // Like xterm, a terminal with stdin disabled reports nothing typed.
     if (this.options['disableStdin'] === true) return;
     for (const listener of [...this.dataListeners]) listener(data);
+    this.fireKey(data, new KeyboardEvent('keydown', { key: data }));
   }
 
   /** Test: a key as the custom key handler sees it; answers whether xterm would handle it. */
   press(init: KeyboardEventInit): boolean {
-    return this.keyHandler?.(new KeyboardEvent('keydown', init)) ?? true;
+    const event = new KeyboardEvent('keydown', init);
+    const handled = this.keyHandler?.(event) ?? true;
+    if (handled) this.fireKey(init.key ?? '', event);
+    return handled;
+  }
+
+  private fireKey(key: string, domEvent: KeyboardEvent): void {
+    for (const listener of [...this.keyListeners]) listener({ key, domEvent });
   }
 
   /** Test: the screen as a person reads it. */
