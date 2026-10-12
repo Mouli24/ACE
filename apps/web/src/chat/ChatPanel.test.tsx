@@ -20,6 +20,11 @@ describe('FR-CHAT-004 the Chat tab gates on the node type', () => {
     const workflow = db.createWorkflow(project.id, 'F');
     renderChat(<ChatPanel workflowId={workflow.id} />);
     expect(screen.getByTestId('chat-panel')).toHaveTextContent(/select an agent or model node/i);
+    // the theme's empty state: one muted 13px line
+    expect(screen.getByText(/select an agent or model node/i)).toHaveClass(
+      'text-[13px]',
+      'text-[var(--muted)]',
+    );
   });
 
   it('refuses a non-agent node', async () => {
@@ -55,13 +60,16 @@ describe('TC-CHAT-006 a chat reply streams then settles', () => {
     await user.click(screen.getByTestId('chat-send'));
 
     // the user turn echoes immediately
-    await waitFor(() =>
-      expect(screen.getByTestId('chat-conversation')).toHaveTextContent('hello'),
-    );
+    await waitFor(() => expect(screen.getByTestId('chat-conversation')).toHaveTextContent('hello'));
     // the agent reply arrives and stays
     await waitFor(() =>
       expect(screen.getByTestId('chat-conversation')).toHaveTextContent('You said: hello'),
     );
+    // the phone tab wears the aside's rows, but Forge is the column's: no "Send to Forge →" here
+    expect(await screen.findByTestId('chat-turn-agent')).toHaveTextContent(/^✳Writer/);
+    expect(await screen.findByTestId('chat-usage')).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-send-to-forge')).toBeNull();
+    expect(screen.getByTestId('chat-input')).toHaveAttribute('placeholder', 'Message this agent…');
   });
 
   it('sends from the keyboard alone (Enter)', async () => {
@@ -181,11 +189,17 @@ describe('FR-CHAT-005 chat never reads or writes run records', () => {
     server.use(
       http.all('*/runs*', ({ request }) => {
         hits.push(request.url);
-        return HttpResponse.json({ error: { kind: 'workflow', code: 'x', message: 'x', retryable: false } }, { status: 500 });
+        return HttpResponse.json(
+          { error: { kind: 'workflow', code: 'x', message: 'x', retryable: false } },
+          { status: 500 },
+        );
       }),
       http.all('*/node-runs*', ({ request }) => {
         hits.push(request.url);
-        return HttpResponse.json({ error: { kind: 'workflow', code: 'x', message: 'x', retryable: false } }, { status: 500 });
+        return HttpResponse.json(
+          { error: { kind: 'workflow', code: 'x', message: 'x', retryable: false } },
+          { status: 500 },
+        );
       }),
     );
 

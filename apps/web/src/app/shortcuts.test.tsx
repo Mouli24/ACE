@@ -29,11 +29,11 @@ describe('D299 Forge’s keyboard shortcuts', () => {
     ).toBe(true);
   });
 
-  it('follows the typed letter, so Dvorak’s Ctrl+C is never togglePanel', () => {
-    const dvorakC = new KeyboardEvent('keydown', { code: 'KeyJ', key: 'c', ctrlKey: true });
-    const dvorakJ = new KeyboardEvent('keydown', { code: 'KeyC', key: 'j', ctrlKey: true });
-    expect(matches(dvorakC, SHORTCUTS.togglePanel)).toBe(false);
-    expect(matches(dvorakJ, SHORTCUTS.togglePanel)).toBe(true);
+  it('follows the typed letter, so Dvorak’s Ctrl+O is never save', () => {
+    const dvorakO = new KeyboardEvent('keydown', { code: 'KeyS', key: 'o', ctrlKey: true });
+    const dvorakS = new KeyboardEvent('keydown', { code: 'KeyO', key: 's', ctrlKey: true });
+    expect(matches(dvorakO, SHORTCUTS.save)).toBe(false);
+    expect(matches(dvorakS, SHORTCUTS.save)).toBe(true);
   });
 
   it('falls back to the key’s place when the layout types no Latin letter', () => {

@@ -1,5 +1,4 @@
 import type { Node } from '@ace/contracts';
-import { TriangleAlert } from 'lucide-react';
 
 import { useRun } from '../runs/hooks';
 import { useRunStore } from '../runs/run-store';
@@ -9,6 +8,7 @@ import { useRunStore } from '../runs/run-store';
  * pre-flight, the engine reports each issue with the node it names — this shows the ones that name
  * this node, so `incompatible_model` for a media input reads on the node itself, with the model name
  * the engine put in the message. The global banner still lists every issue; this is the local echo.
+ * Drawn as the theme's document card, each issue led by the Blocked status dot.
  */
 export function NodePreflightIssues({ node }: { node: Node }) {
   const runId = useRunStore((store) =>
@@ -26,15 +26,18 @@ export function NodePreflightIssues({ node }: { node: Node }) {
     <div
       role="alert"
       data-testid={`node-preflight-${node.id}`}
-      className="mt-1 flex max-w-[240px] flex-col gap-1 rounded-card border border-[var(--color-status-BLOCKED)]/70 bg-panel/95 px-2 py-1.5 shadow"
+      className="flex w-full flex-col gap-[4px] rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-[10px] py-[8px] shadow-[0_10px_30px_-14px_rgba(40,25,15,0.35)]"
     >
       {issues.map((issue, index) => (
         <p
           key={`${issue.code}-${index}`}
           data-code={issue.code}
-          className="flex items-start gap-1 font-human text-[11px] text-fg"
+          className="flex items-start gap-[6px] text-[10px] leading-[1.45] text-[var(--ink)]"
         >
-          <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0 text-status-BLOCKED" aria-hidden />
+          <span
+            aria-hidden
+            className="mt-[4px] h-[6px] w-[6px] shrink-0 rounded-full bg-[#c94c27]"
+          />
           <span>{issue.message}</span>
         </p>
       ))}

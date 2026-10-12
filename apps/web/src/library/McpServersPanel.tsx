@@ -8,6 +8,7 @@ import {
 import { AceApiError } from '@ace/sdk';
 import {
   Button,
+  DIALOG_CLOSE_CLASS,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -23,16 +24,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@ace/ui';
-import { Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 
-import { useCheckMcpServer, useCreateMcpServer, useDeleteMcpServer, useMcpServers } from './tools-hooks';
+import {
+  useCheckMcpServer,
+  useCreateMcpServer,
+  useDeleteMcpServer,
+  useMcpServers,
+} from './tools-hooks';
 
 /**
  * The MCP servers panel (round 4 §5 item 6, FR-TOOL-007, D16): connect a server over stdio (a
  * command + arguments) or http (a URL), see its liveness and tool count, re-check it, and remove it.
  * A connected server's tools appear in the registry table above; removing it takes them back out.
- * `mcp.status` keeps the chip current without a reload (wired by the page).
+ * `mcp.status` keeps the chip current without a reload (wired by the page). Theme cards (D328).
  */
 export function McpServersPanel() {
   const servers = useMcpServers();
@@ -42,30 +47,32 @@ export function McpServersPanel() {
     <section className="flex flex-col gap-3" data-testid="mcp-servers-panel">
       <header className="flex items-center justify-between">
         <div>
-          <h2 className="font-human text-lg font-semibold">MCP servers</h2>
-          <p className="font-human text-xs text-fg-muted">
+          <h2 className="text-[14px] font-bold">MCP servers</h2>
+          <p className="mt-0.5 text-[11px] leading-[1.45] text-[var(--muted)]">
             Connected servers contribute their tools to the registry (FR-TOOL-007).
           </p>
         </div>
         <Button size="sm" onClick={() => setAdding(true)}>
-          <Plus className="h-4 w-4" /> Add server
+          Add server
         </Button>
       </header>
 
-      {servers.isPending && <p className="text-fg-muted">Loading servers…</p>}
+      {servers.isPending && <p className="text-[13px] text-[var(--muted)]">Loading servers…</p>}
       {servers.isError && (
-        <p role="alert" className="text-danger">
+        <p role="alert" className="text-[12px] text-[#c94c27]">
           Could not load MCP servers: {servers.error.message}
         </p>
       )}
       {servers.data?.length === 0 && (
-        <p className="rounded-card border border-dashed border-border p-6 text-center text-fg-muted">
+        <p className="py-8 text-center text-[13px] text-[var(--muted)]">
           No MCP servers connected.
         </p>
       )}
 
-      <ul className="flex flex-col gap-2">
-        {servers.data?.map((server) => <McpServerRow key={server.id} server={server} />)}
+      <ul className="flex flex-col gap-[10px]">
+        {servers.data?.map((server) => (
+          <McpServerRow key={server.id} server={server} />
+        ))}
       </ul>
 
       {adding && <AddMcpServerDialog onClose={() => setAdding(false)} />}
@@ -81,7 +88,7 @@ function McpServerRow({ server }: { server: McpServer }) {
   return (
     <li
       data-testid={`mcp-server-row-${server.id}`}
-      className="flex items-center gap-3 rounded-card border border-border bg-panel px-4 py-3"
+      className="flex items-center gap-3 rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-3"
     >
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
@@ -92,12 +99,12 @@ function McpServerRow({ server }: { server: McpServer }) {
             toolCount={server.toolCount}
           />
         </div>
-        <p className="mt-1 truncate font-machine text-xs text-fg-muted">
+        <p className="mt-1 truncate font-machine text-[10px] text-[var(--muted)]">
           {server.transport}
           {address ? ` · ${address}` : ''}
         </p>
         {server.error && (
-          <p role="alert" className="mt-1 font-human text-xs text-danger">
+          <p role="alert" className="mt-1 text-[11px] leading-[1.45] text-[#c94c27]">
             {server.error}
           </p>
         )}
@@ -110,18 +117,18 @@ function McpServerRow({ server }: { server: McpServer }) {
         onClick={() => check.mutate(server.id)}
         data-testid={`mcp-server-check-${server.id}`}
       >
-        <RefreshCw className="h-4 w-4" /> Check
+        <span aria-hidden>↺</span> Check
       </Button>
-      <Button
-        variant="ghost"
-        size="icon"
+      <button
+        type="button"
+        className={`${DIALOG_CLOSE_CLASS} text-[#c94c27] disabled:cursor-not-allowed disabled:opacity-50`}
         aria-label={`Remove ${server.name}`}
         disabled={remove.isPending}
         onClick={() => remove.mutate(server.id)}
         data-testid={`mcp-server-remove-${server.id}`}
       >
-        <Trash2 className="h-4 w-4 text-danger" />
-      </Button>
+        <span aria-hidden>✕</span>
+      </button>
     </li>
   );
 }
@@ -170,7 +177,7 @@ function AddMcpServerDialog({ onClose }: { onClose: () => void }) {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-[7px]">
             <Label htmlFor="mcp-name">Name</Label>
             <Input
               id="mcp-name"
@@ -181,9 +188,12 @@ function AddMcpServerDialog({ onClose }: { onClose: () => void }) {
             />
           </div>
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-[7px]">
             <Label htmlFor="mcp-transport">Transport</Label>
-            <Select value={transport} onValueChange={(value) => setTransport(value as McpTransport)}>
+            <Select
+              value={transport}
+              onValueChange={(value) => setTransport(value as McpTransport)}
+            >
               <SelectTrigger id="mcp-transport" aria-label="Transport">
                 <SelectValue />
               </SelectTrigger>
@@ -199,43 +209,45 @@ function AddMcpServerDialog({ onClose }: { onClose: () => void }) {
 
           {transport === 'stdio' ? (
             <>
-              <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col gap-[7px]">
                 <Label htmlFor="mcp-command">Command</Label>
                 <Input
                   id="mcp-command"
                   value={command}
                   onChange={(event) => setCommand(event.target.value)}
                   placeholder="node"
-                  className="font-machine"
+                  className="font-machine text-[12px]"
                 />
               </div>
-              <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col gap-[7px]">
                 <Label htmlFor="mcp-args">Arguments</Label>
                 <Input
                   id="mcp-args"
                   value={args}
                   onChange={(event) => setArgs(event.target.value)}
                   placeholder="server.js --stdio"
-                  className="font-machine"
+                  className="font-machine text-[12px]"
                 />
-                <p className="text-xs text-fg-muted">Space-separated; optional.</p>
+                <p className="text-[11px] leading-[1.45] text-[var(--muted)]">
+                  Space-separated; optional.
+                </p>
               </div>
             </>
           ) : (
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-[7px]">
               <Label htmlFor="mcp-url">URL</Label>
               <Input
                 id="mcp-url"
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
                 placeholder="http://127.0.0.1:8000/mcp"
-                className="font-machine"
+                className="font-machine text-[12px]"
               />
             </div>
           )}
 
           {create.isError && (
-            <p role="alert" className="text-sm text-danger">
+            <p role="alert" className="text-[12px] text-[#c94c27]">
               {AceApiError.is(create.error)
                 ? create.error.message
                 : 'Could not add the MCP server.'}

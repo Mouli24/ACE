@@ -14,9 +14,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  cn,
 } from '@ace/ui';
-import { CirclePause, CircleStop, Play, RotateCcw, type LucideIcon } from 'lucide-react';
 import { useState } from 'react';
 
 import { HaltReasonNote } from './HaltReason';
@@ -32,6 +30,10 @@ import { HaltReasonNote } from './HaltReason';
  *
  * Stop asks first — it cancels provider calls in flight and cannot be undone. Restart answers with
  * a *new* run (FR-CTL-004), which is the run the operator is then shown.
+ *
+ * In the theme (D328) each control is a labelled pill — the modal's Close pill (30px, soft, hairline,
+ * 12px / 600), Stop in the destructive red while it is allowed — and a control the engine did not
+ * allow is the same pill dimmed.
  */
 
 /** The run the engine answered with. A restart answers with a new run id (FR-CTL-004). */
@@ -51,12 +53,12 @@ export type RunActionHandler = (
   action: RunAction,
 ) => Promise<RunActionResult | void> | RunActionResult | void;
 
-const ACTION_META: Readonly<Record<RunAction, { label: string; Icon: LucideIcon }>> = {
-  pause: { label: 'Pause', Icon: CirclePause },
-  resume: { label: 'Resume', Icon: Play },
-  stop: { label: 'Stop', Icon: CircleStop },
-  restart: { label: 'Restart', Icon: RotateCcw },
-  end: { label: 'End', Icon: CircleStop },
+const ACTION_META: Readonly<Record<RunAction, { label: string }>> = {
+  pause: { label: 'Pause' },
+  resume: { label: 'Resume' },
+  stop: { label: 'Stop' },
+  restart: { label: 'Restart' },
+  end: { label: 'End' },
 };
 
 export interface RunControlsProps {
@@ -124,24 +126,15 @@ export function RunControls({
       data-testid="run-controls"
       data-status={status}
     >
-      <div className="flex items-center gap-0.5 rounded-chip border border-border bg-card p-[3px]">
+      <div className="flex flex-wrap items-center gap-[6px]">
         {RUN_ACTIONS.map((action) => {
           const meta = ACTION_META[action];
           const enabled = allowed.has(action) && pending === undefined && !busy;
           return (
             <Button
               key={action}
-              size="icon"
-              variant="ghost"
-              aria-label={meta.label}
-              className={cn(
-                'h-7 w-7 rounded-chip',
-                enabled
-                  ? action === 'stop'
-                    ? 'text-danger'
-                    : 'text-fg-soft'
-                  : 'text-fg-faint opacity-45',
-              )}
+              size="sm"
+              variant={enabled && action === 'stop' ? 'destructive' : 'secondary'}
               data-testid={`run-action-${action}`}
               data-allowed={allowed.has(action) ? 'true' : 'false'}
               disabled={!enabled}
@@ -152,7 +145,7 @@ export function RunControls({
                   : `${meta.label} is not available while the run is ${status ?? 'not started'}`
               }
             >
-              <meta.Icon className="h-3.5 w-3.5" aria-hidden />
+              {meta.label}
             </Button>
           );
         })}
@@ -164,7 +157,7 @@ export function RunControls({
               there (still read out) and a "?" carries them as its title. */}
           <span
             data-testid="run-controls-unknown"
-            className="max-w-[11rem] font-machine text-[10px] leading-tight text-fg-muted min-[641px]:max-xl:sr-only"
+            className="max-w-[11rem] text-[11px] leading-[1.45] text-[var(--muted)] min-[641px]:max-xl:sr-only"
             title="FR-CTL-006: the controls follow run.allowedActions, and this run carries none."
           >
             {UNKNOWN_ACTIONS}
@@ -172,7 +165,7 @@ export function RunControls({
           <span
             aria-hidden="true"
             title={UNKNOWN_ACTIONS}
-            className="hidden h-5 w-5 cursor-help place-items-center rounded-full border border-border font-machine text-[10px] text-fg-muted min-[641px]:max-xl:inline-grid"
+            className="hidden h-[22px] w-[22px] cursor-help place-items-center rounded-full border border-[var(--line)] font-machine text-[10px] text-[var(--muted)] min-[641px]:max-xl:inline-grid"
           >
             ?
           </span>
@@ -189,11 +182,11 @@ export function RunControls({
 
       {restartedRunId !== undefined && (
         <span className="flex items-center gap-2" data-testid="run-restarted">
-          <span className="font-human text-xs text-fg-muted">Restarted as a new run.</span>
+          <span className="text-[12px] text-[var(--muted)]">Restarted as a new run.</span>
           {onOpenRun && (
             <button
               type="button"
-              className="font-machine text-xs text-accent underline-offset-2 hover:underline"
+              className="cursor-pointer border-none bg-transparent p-0 text-[12px] font-semibold text-[#e8623a] outline-none hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
               onClick={() => onOpenRun(restartedRunId)}
             >
               open the new run
@@ -214,7 +207,7 @@ export function RunControls({
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter>
-                <Button variant="ghost" onClick={() => setConfirmStop(false)}>
+                <Button variant="secondary" onClick={() => setConfirmStop(false)}>
                   Keep running
                 </Button>
                 <Button

@@ -22,14 +22,21 @@ describe('freeSlotNear (FR-CAN-002: a node from the palette must be visible and 
   });
 
   it('keeps every node inside the visible area while there is room', () => {
+    // room for a 5 × 3 grid of slots (the theme's 210 × 280 stage frames, D332)
+    const roomy: VisibleArea = {
+      x: 0,
+      y: 0,
+      width: NODE_SLOT.width * 5,
+      height: NODE_SLOT.height * 3,
+    };
     const placed: Array<{ position: { x: number; y: number } }> = [];
     for (let i = 0; i < 8; i += 1) {
-      const slot = freeSlotNear(placed, { x: 600, y: 350 }, visible);
+      const slot = freeSlotNear(placed, { x: roomy.width / 2, y: roomy.height / 2 }, roomy);
       placed.push({ position: slot });
-      expect(slot.x).toBeGreaterThanOrEqual(visible.x);
-      expect(slot.x).toBeLessThanOrEqual(visible.x + visible.width);
-      expect(slot.y).toBeGreaterThanOrEqual(visible.y);
-      expect(slot.y).toBeLessThanOrEqual(visible.y + visible.height);
+      expect(slot.x).toBeGreaterThanOrEqual(roomy.x);
+      expect(slot.x).toBeLessThanOrEqual(roomy.x + roomy.width);
+      expect(slot.y).toBeGreaterThanOrEqual(roomy.y);
+      expect(slot.y).toBeLessThanOrEqual(roomy.y + roomy.height);
     }
     const keys = new Set(placed.map((n) => `${n.position.x}:${n.position.y}`));
     expect(keys.size).toBe(placed.length);

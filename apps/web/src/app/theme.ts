@@ -1,21 +1,20 @@
-import { DEFAULT_THEME } from '@ace/contracts';
-import { applyTheme, type ResolvedTheme } from '@ace/ui';
+import type { ResolvedTheme } from '@ace/ui';
 import { useEffect, useSyncExternalStore } from 'react';
 
-import { useSettings } from '../settings/hooks';
+import { initThemeMode } from '../theme/mode';
 
 /**
- * FR-SYS-005, D241: the engine persists `Settings.theme`; this applies it. Until settings load (or
- * if they fail) the default theme stands, so the first paint is never unthemed.
+ * FR-SYS-005, D329: the theme on screen is the `ace-theme` choice in localStorage (default light),
+ * which the header toggles and the Settings page write. `main.tsx` applies it before the first
+ * render; this re-applies it when the shell mounts, so a route rendered without that boot step
+ * (tests, a host without `main.tsx`) is still themed.
  */
 export function useApplyTheme(): void {
-  const settings = useSettings();
-  const theme = settings.data?.theme ?? DEFAULT_THEME;
-  useEffect(() => applyTheme(theme), [theme]);
+  useEffect(() => initThemeMode(), []);
 }
 
 function readResolved(): ResolvedTheme {
-  return document.documentElement.dataset['theme'] === 'light' ? 'light' : 'dark';
+  return document.documentElement.dataset['theme'] === 'dark' ? 'dark' : 'light';
 }
 
 function subscribe(onChange: () => void): () => void {
@@ -29,5 +28,5 @@ function subscribe(onChange: () => void): () => void {
  * rather than reading CSS variables (Monaco).
  */
 export function useResolvedTheme(): ResolvedTheme {
-  return useSyncExternalStore(subscribe, readResolved, () => 'dark');
+  return useSyncExternalStore(subscribe, readResolved, () => 'light');
 }

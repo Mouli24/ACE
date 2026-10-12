@@ -4,6 +4,9 @@ import { cn } from '../lib/cn.js';
  * A progress bar (ingest progress, FR-RAG-002; onboarding steps, FR-ONB-002). `value` undefined is
  * indeterminate: no `aria-valuenow`, and a third-width bar that pulses only when motion is allowed
  * (`motion-safe:`, NFR-USE-02).
+ *
+ * In the theme (D328) it is the token bar of Domain's agent cards: a 4px track in `--hover`, radius
+ * 2, filled in the accent `#ef6b3f` (red `#c94c27` for `danger`), easing its width over .6s.
  */
 
 export interface ProgressBarProps {
@@ -39,20 +42,23 @@ export function ProgressBar({
         aria-valuemax={safeMax}
         aria-valuenow={clamped}
         aria-valuetext={percent === undefined ? 'In progress' : `${percent}%`}
-        className="relative h-1.5 flex-1 overflow-hidden rounded-chip bg-border"
+        className="relative h-[4px] flex-1 overflow-hidden rounded-[2px] bg-[var(--hover)]"
         data-testid="progress-bar"
       >
         <div
           className={cn(
-            'h-full rounded-chip transition-[width]',
-            tone === 'danger' ? 'bg-danger' : 'bg-accent',
-            percent === undefined && 'w-1/3 motion-safe:animate-pulse',
+            'h-full rounded-[2px] transition-[width] duration-[600ms] ease-[ease]',
+            tone === 'danger' ? 'bg-[#c94c27]' : 'bg-[#ef6b3f]',
+            percent === undefined &&
+              'w-1/3 motion-safe:animate-[livePulse_1.4s_ease-in-out_infinite]',
           )}
           style={percent === undefined ? undefined : { width: `${percent}%` }}
         />
       </div>
       {showValue && percent !== undefined ? (
-        <span className="w-9 text-right font-machine text-[11px] text-fg-muted">{percent}%</span>
+        <span className="w-9 text-right font-machine text-[10px] text-[var(--muted)]">
+          {percent}%
+        </span>
       ) : null}
     </div>
   );

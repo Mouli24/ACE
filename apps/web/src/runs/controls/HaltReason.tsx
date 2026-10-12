@@ -1,5 +1,4 @@
 import type { BudgetHalt, HaltReason } from '@ace/contracts';
-import { OctagonX } from 'lucide-react';
 
 /**
  * Why a run HALTED, in words (round 3 §5 item 3, FR-GRD-008, NFR-USE-03). The enum stays the
@@ -78,7 +77,11 @@ export interface HaltReasonNoteProps {
   className?: string;
 }
 
-/** The halt in words, with the next step under it (FR-GRD-008, NFR-USE-03). */
+/**
+ * The halt in words, with the next step under it (FR-GRD-008, NFR-USE-03): the theme's status dot in
+ * the neutral STOPPED colour — a halt is not painted as a fault — the sentence at 13px, the advice
+ * as the theme's 11px help line.
+ */
 export function HaltReasonNote({ reason, budgetHalt, hideAdvice, className }: HaltReasonNoteProps) {
   return (
     <div
@@ -86,11 +89,19 @@ export function HaltReasonNote({ reason, budgetHalt, hideAdvice, className }: Ha
       data-reason={reason}
       className={['flex items-start gap-2', className].filter(Boolean).join(' ')}
     >
-      <OctagonX className="mt-0.5 h-4 w-4 shrink-0 text-status-STOPPED" aria-hidden />
-      <div className="flex flex-col gap-0.5">
-        <p className="font-human text-sm">Run halted — {haltReasonText(reason, budgetHalt)}</p>
+      <span
+        aria-hidden
+        className="mt-[6px] h-[7px] w-[7px] shrink-0 rounded-full bg-[var(--color-status-STOPPED)]"
+      />
+      <div className="flex flex-col gap-[2px]">
+        <p className="m-0 text-[13px] text-[var(--ink)]">
+          Run halted — {haltReasonText(reason, budgetHalt)}
+        </p>
         {!hideAdvice && (
-          <p className="font-human text-xs text-fg-muted" data-testid="halt-reason-advice">
+          <p
+            className="m-0 text-[11px] leading-[1.45] text-[var(--muted)]"
+            data-testid="halt-reason-advice"
+          >
             {haltReasonAdvice(reason, budgetHalt)}
           </p>
         )}

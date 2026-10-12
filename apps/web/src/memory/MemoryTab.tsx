@@ -8,7 +8,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@ace/ui';
-import { Trash2 } from 'lucide-react';
 import { useState } from 'react';
 
 import { useSelectionStore } from '../app/stores/selection';
@@ -30,7 +29,13 @@ type Pending = { kind: 'one'; entry: MemoryEntry } | { kind: 'all' };
  * long-term memory as a table — key, value, created, last used — with delete-one and clear-all, each
  * behind a confirmation, and live updates from `memory.updated`. Memory belongs to Agent nodes; any
  * other selection, or an agent with memory off, says why there is nothing to show.
+ *
+ * In the theme (D328): the agent's name at 18px / 700, the theme's empty-state line, and the facts
+ * as a table card — mono small-caps heads, 12.5px rows with a hairline, a 28px ✕ to delete.
  */
+
+/** The theme's empty state: one muted 13px centred line. */
+const EMPTY = 'm-0 py-3 text-center text-[13px] text-[var(--muted)]';
 export function MemoryTab({ workflowId }: { workflowId: Id }) {
   const focusedNodeId = useSelectionStore((s) => s.focusedNodeId);
   const graph = useWorkflowGraph(workflowId);
@@ -38,14 +43,14 @@ export function MemoryTab({ workflowId }: { workflowId: Id }) {
 
   if (node === undefined) {
     return (
-      <p className="text-sm text-fg-muted" data-testid="memory-tab-empty-selection">
+      <p className={EMPTY} data-testid="memory-tab-empty-selection">
         Select an agent to see its memory.
       </p>
     );
   }
   if (node.kind !== 'agent') {
     return (
-      <p className="text-sm text-fg-muted" data-testid="memory-tab-not-agent">
+      <p className={EMPTY} data-testid="memory-tab-not-agent">
         Memory is kept by Agent nodes. {node.name} is a {node.kind} node.
       </p>
     );
@@ -71,13 +76,15 @@ function AgentMemory({ node }: { node: Extract<Node, { kind: 'agent' }> }) {
 
   return (
     <section
-      className="flex flex-col gap-3"
+      className="flex flex-col gap-3 text-[var(--ink)]"
       aria-label={`Memory of ${node.name}`}
       data-testid="memory-tab"
       data-node-id={node.id}
     >
       <header className="flex items-center gap-2">
-        <h2 className="font-human text-[21px] font-semibold leading-tight">{node.name} — memory</h2>
+        <h2 className="m-0 min-w-0 truncate text-[18px] font-bold tracking-[-0.01em]">
+          {node.name} — memory
+        </h2>
         {entries.length > 0 && (
           <Button
             variant="destructive"
@@ -94,28 +101,28 @@ function AgentMemory({ node }: { node: Extract<Node, { kind: 'agent' }> }) {
       {!enabled && (
         <p
           role="status"
-          className="rounded-field border border-border bg-card px-3 py-2 text-xs text-fg-muted"
+          className="m-0 rounded-[10px] border border-[var(--line)] bg-[var(--soft)] px-3 py-[10px] text-[11px] leading-[1.45] text-[var(--muted)]"
           data-testid="memory-disabled"
         >
           Memory is off for this agent, so nothing new is saved or used. Turn on “Remember facts
-          between runs” under Configure.
+          between runs” in the node’s settings.
         </p>
       )}
 
-      {memory.isPending && <p className="text-xs text-fg-muted">Loading memory…</p>}
+      {memory.isPending && <p className={EMPTY}>Loading memory…</p>}
       {memory.isError && (
-        <p role="alert" className="text-xs text-danger">
+        <p role="alert" className="m-0 text-[12px] text-[#c94c27]">
           Could not load memory: {memory.error.message}
         </p>
       )}
       {(remove.isError || clear.isError) && (
-        <p role="alert" className="text-xs text-danger">
+        <p role="alert" className="m-0 text-[12px] text-[#c94c27]">
           Could not delete: {(remove.error ?? clear.error)?.message}
         </p>
       )}
 
       {memory.data !== undefined && entries.length === 0 && (
-        <p className="text-sm text-fg-muted" data-testid="memory-empty">
+        <p className={EMPTY} data-testid="memory-empty">
           {enabled
             ? 'Nothing remembered yet. Facts this agent saves during a run appear here.'
             : 'Nothing remembered.'}
@@ -124,16 +131,16 @@ function AgentMemory({ node }: { node: Extract<Node, { kind: 'agent' }> }) {
 
       {entries.length > 0 && (
         <table
-          className="w-full table-fixed rounded-field border border-border bg-card text-left text-xs"
+          className="w-full table-fixed border-separate border-spacing-0 overflow-hidden rounded-[12px] border border-[var(--line)] bg-[var(--surface)] text-left text-[12.5px]"
           data-testid="memory-table"
         >
-          <thead className="font-machine text-[9px] uppercase tracking-[0.2em] text-fg-faint">
-            <tr>
-              <th className="w-1/5 pb-1 font-normal">Key</th>
-              <th className="pb-1 font-normal">Value</th>
-              <th className="w-1/5 pb-1 font-normal">Created</th>
-              <th className="w-1/5 pb-1 font-normal">Last used</th>
-              <th className="w-8 pb-1">
+          <thead className="font-machine text-[9.5px] uppercase tracking-[0.1em] text-[var(--muted)]">
+            <tr className="h-[32px]">
+              <th className="w-1/5 pl-[14px] pr-2 font-medium">Key</th>
+              <th className="pr-2 font-medium">Value</th>
+              <th className="w-1/5 pr-2 font-medium">Created</th>
+              <th className="w-1/5 pr-2 font-medium">Last used</th>
+              <th className="w-11">
                 <span className="sr-only">Delete</span>
               </th>
             </tr>
@@ -142,30 +149,41 @@ function AgentMemory({ node }: { node: Extract<Node, { kind: 'agent' }> }) {
             {entries.map((entry) => (
               <tr
                 key={entry.id}
-                className="border-t border-border align-top"
+                className="h-[36px] align-middle"
                 data-testid={`memory-entry-${entry.key}`}
                 data-entry-id={entry.id}
               >
-                <td className="truncate py-1.5 pr-2 font-machine" title={entry.key}>
+                <td
+                  className="truncate border-t border-[var(--line)] py-[7px] pl-[14px] pr-2 font-machine text-[11.5px]"
+                  title={entry.key}
+                >
                   {entry.key}
                 </td>
-                <td className="break-words py-1.5 pr-2" data-testid="memory-value">
+                <td
+                  className="break-words border-t border-[var(--line)] py-[7px] pr-2"
+                  data-testid="memory-value"
+                >
                   {entry.value}
                 </td>
-                <td className="py-1.5 pr-2 text-fg-muted">{when(entry.createdAt)}</td>
-                <td className="py-1.5 pr-2 text-fg-muted" data-testid="memory-last-used">
+                <td className="border-t border-[var(--line)] py-[7px] pr-2 text-[11.5px] text-[var(--muted)]">
+                  {when(entry.createdAt)}
+                </td>
+                <td
+                  className="border-t border-[var(--line)] py-[7px] pr-2 text-[11.5px] text-[var(--muted)]"
+                  data-testid="memory-last-used"
+                >
                   {when(entry.lastUsedAt)}
                 </td>
-                <td className="py-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
+                <td className="border-t border-[var(--line)] py-1 pr-2">
+                  <button
+                    type="button"
                     aria-label={`Delete ${entry.key}`}
                     data-testid={`memory-delete-${entry.key}`}
                     onClick={() => setPending({ kind: 'one', entry })}
+                    className="grid h-7 w-7 cursor-pointer place-items-center rounded-[7px] border border-[var(--line)] bg-transparent text-[12px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
                   >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                    <span aria-hidden>✕</span>
+                  </button>
                 </td>
               </tr>
             ))}

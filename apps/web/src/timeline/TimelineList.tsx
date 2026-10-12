@@ -17,6 +17,8 @@ export interface TimelineRow {
   message: Message;
   nodeName?: string;
   provider?: ProviderType;
+  /** The agent's theme colour (by graph order), for its dot. */
+  color?: string;
 }
 
 export interface TimelineListProps {
@@ -31,7 +33,10 @@ export interface TimelineListProps {
 export function TimelineList({ rows, contentUrl, emptyLabel, className }: TimelineListProps) {
   if (rows.length === 0) {
     return (
-      <p className="p-4 font-human text-sm text-fg-muted" data-testid="timeline-empty">
+      <p
+        className="m-0 p-4 text-center text-[13px] text-[var(--muted)]"
+        data-testid="timeline-empty"
+      >
         {emptyLabel ?? 'No messages yet. Run the workflow or send a message and it appears here.'}
       </p>
     );
@@ -40,9 +45,11 @@ export function TimelineList({ rows, contentUrl, emptyLabel, className }: Timeli
   return (
     <ol
       data-testid="timeline-list"
-      className={['flex flex-col gap-3 p-3', className].filter(Boolean).join(' ')}
+      className={['m-0 flex list-none flex-col gap-[14px] p-3', className]
+        .filter(Boolean)
+        .join(' ')}
     >
-      {rows.map(({ message, nodeName, provider }) => (
+      {rows.map(({ message, nodeName, provider, color }) => (
         <li
           key={message.id}
           data-testid={`timeline-message-${message.id}`}
@@ -60,6 +67,7 @@ export function TimelineList({ rows, contentUrl, emptyLabel, className }: Timeli
             {...(contentUrl === undefined ? {} : { contentUrl })}
             {...(nodeName === undefined ? {} : { nodeName })}
             {...(provider === undefined ? {} : { provider })}
+            {...(color === undefined ? {} : { color })}
             meta={new Date(message.at).toLocaleTimeString()}
           />
         </li>

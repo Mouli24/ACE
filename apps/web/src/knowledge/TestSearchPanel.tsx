@@ -9,11 +9,21 @@ import {
   type SearchMode,
 } from '@ace/contracts';
 import type { SearchRequestBody } from '@ace/sdk';
-import { Button, Input, Label, SourceChip, formatScore } from '@ace/ui';
-import { Search } from 'lucide-react';
+import {
+  Button,
+  Input,
+  Label,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  SourceChip,
+  formatScore,
+} from '@ace/ui';
 import { useMemo, useState, type FormEvent } from 'react';
 
-import { FieldError, fieldErrors, selectClass, toNumber, type FieldErrors } from './fields';
+import { FieldError, fieldErrors, toNumber, type FieldErrors } from './fields';
 import { highlightSegments, queryTerms } from './format';
 import { useKbSearch } from './hooks';
 
@@ -26,10 +36,13 @@ const MODE_LABEL: Record<SearchMode, string> = {
 /** A hit's text with the query's terms wrapped in `<mark>` (FR-RAG-008). */
 function HighlightedText({ text, terms }: { text: string; terms: readonly string[] }) {
   return (
-    <p className="whitespace-pre-wrap break-words font-human text-sm">
+    <p className="whitespace-pre-wrap break-words text-[12.5px] leading-[1.55]">
       {highlightSegments(text, terms).map((segment, index) =>
         segment.match ? (
-          <mark key={index} className="rounded-sm bg-accent/30 px-0.5 text-fg">
+          <mark
+            key={index}
+            className="rounded-[3px] bg-[rgba(239,107,63,0.18)] px-0.5 text-[var(--ink)]"
+          >
             {segment.text}
           </mark>
         ) : (
@@ -43,7 +56,8 @@ function HighlightedText({ text, terms }: { text: string; terms: readonly string
 /**
  * Test search (FR-RAG-008): try a query against the base before attaching it — query, k (1–20),
  * mode — and see each hit's score, source, which index found it (`via`) and where it matched. The
- * search lives under the base's query key, so deleting a document or a reindex re-runs it.
+ * search lives under the base's query key, so deleting a document or a reindex re-runs it. A theme
+ * card with theme fields and the theme's dropdown for the mode (D328).
  */
 export function TestSearchPanel({ kbId }: { kbId: Id }) {
   const [query, setQuery] = useState('');
@@ -69,12 +83,15 @@ export function TestSearchPanel({ kbId }: { kbId: Id }) {
   const hits = search.data?.hits ?? [];
 
   return (
-    <section aria-labelledby="kb-search-heading" className="flex min-w-0 flex-col gap-3">
-      <h2 id="kb-search-heading" className="font-human text-lg font-semibold">
+    <section
+      aria-labelledby="kb-search-heading"
+      className="flex min-w-0 flex-col gap-4 self-start rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4"
+    >
+      <h2 id="kb-search-heading" className="text-[14px] font-bold">
         Test search
       </h2>
-      <form onSubmit={submit} noValidate className="flex flex-col gap-3" role="search">
-        <div className="flex flex-col gap-1.5">
+      <form onSubmit={submit} noValidate className="flex flex-col gap-4" role="search">
+        <div className="flex flex-col gap-[7px]">
           <Label htmlFor="kb-search-query">Query</Label>
           <Input
             id="kb-search-query"
@@ -88,8 +105,8 @@ export function TestSearchPanel({ kbId }: { kbId: Id }) {
             message={errors['query'] && 'Type something to search for.'}
           />
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="flex min-w-0 flex-col gap-1.5">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-5">
+          <div className="flex min-w-0 flex-col gap-[7px]">
             <Label htmlFor="kb-search-k">Results (k)</Label>
             <Input
               id="kb-search-k"
@@ -97,6 +114,7 @@ export function TestSearchPanel({ kbId }: { kbId: Id }) {
               inputMode="numeric"
               min={SEARCH_K_MIN}
               max={SEARCH_K_MAX}
+              className="font-machine text-[12px]"
               value={k}
               aria-invalid={errors['k'] ? true : undefined}
               onChange={(event) => setK(event.target.value)}
@@ -106,40 +124,42 @@ export function TestSearchPanel({ kbId }: { kbId: Id }) {
               message={errors['k'] && `k must be between ${SEARCH_K_MIN} and ${SEARCH_K_MAX}.`}
             />
           </div>
-          <div className="flex min-w-0 flex-col gap-1.5">
+          <div className="flex min-w-0 flex-col gap-[7px]">
             <Label htmlFor="kb-search-mode">Mode</Label>
-            <select
-              id="kb-search-mode"
-              className={selectClass}
-              value={mode}
-              onChange={(event) => setMode(event.target.value as SearchMode)}
-            >
-              {SEARCH_MODES.map((option) => (
-                <option key={option} value={option}>
-                  {MODE_LABEL[option]}
-                </option>
-              ))}
-            </select>
+            <Select value={mode} onValueChange={(value) => setMode(value as SearchMode)}>
+              <SelectTrigger id="kb-search-mode" aria-label="Mode">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {SEARCH_MODES.map((option) => (
+                  <SelectItem key={option} value={option}>
+                    {MODE_LABEL[option]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </div>
         <Button type="submit" className="self-start" disabled={search.isFetching}>
-          <Search className="h-4 w-4" aria-hidden /> Search
+          Search
         </Button>
       </form>
 
       {search.isError && (
-        <p role="alert" className="text-sm text-danger">
+        <p role="alert" className="text-[12px] text-[#c94c27]">
           Search failed: {search.error.message}
         </p>
       )}
       {search.data && (
-        <p className="font-machine text-[11px] text-fg-muted" data-testid="kb-search-summary">
+        <p className="font-machine text-[10px] text-[var(--muted)]" data-testid="kb-search-summary">
           {hits.length} {hits.length === 1 ? 'result' : 'results'} in{' '}
           {Math.round(search.data.tookMs)} ms
         </p>
       )}
       {search.data && hits.length === 0 && (
-        <p className="text-sm text-fg-muted">Nothing matched. Try other words or another mode.</p>
+        <p className="py-6 text-center text-[13px] text-[var(--muted)]">
+          Nothing matched. Try other words or another mode.
+        </p>
       )}
       {hits.length > 0 && (
         <ol aria-label="Search results" className="flex flex-col gap-2">
@@ -148,12 +168,12 @@ export function TestSearchPanel({ kbId }: { kbId: Id }) {
               key={hit.chunkId}
               data-testid={`kb-search-hit-${hit.chunkId}`}
               data-document-id={hit.documentId}
-              className="flex min-w-0 flex-col gap-2 rounded-card border border-border bg-panel px-3 py-2"
+              className="flex min-w-0 flex-col gap-2 rounded-[10px] border border-[var(--line)] bg-[var(--soft)] px-[10px] py-2"
             >
               <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <span className="font-machine text-[11px] text-fg-muted">#{index + 1}</span>
+                <span className="font-machine text-[10px] text-[var(--muted)]">#{index + 1}</span>
                 <span
-                  className="font-machine text-xs"
+                  className="font-machine text-[11px] font-medium"
                   data-testid="kb-hit-score"
                   aria-label={`Score ${formatScore(hit.score)}`}
                 >

@@ -1,4 +1,5 @@
 import type { Node } from '@ace/contracts';
+import type { ReactNode } from 'react';
 
 import { useSelectionStore } from '../app/stores/selection';
 import { useWorkflowGraph } from '../workflows/hooks';
@@ -7,10 +8,24 @@ import { ChatConversation } from './ChatConversation';
 import { ChatThreadList } from './ChatThreadList';
 import { useChatSocket, useThreadConversation } from './useChat';
 
+/** The theme's empty state: one muted 13px line, centred (D328). */
+function Empty({ children }: { children: ReactNode }) {
+  return (
+    <section
+      aria-label="Direct chat"
+      data-testid="chat-panel"
+      className="flex h-full items-center justify-center bg-[var(--panel)] p-4"
+    >
+      <p className="text-center text-[13px] text-[var(--muted)]">{children}</p>
+    </section>
+  );
+}
+
 /**
  * The "Chat" tab of the phone layout (FR-CHAT-004..008, FR-MOB-003). It shows the session of the
  * one focused Agent or Model node — the same session the desktop Chat column shows (D285): its
- * direct chat and the goal and result of each run of it.
+ * direct chat and the goal and result of each run of it. The theme does not draw a phone layout,
+ * so it wears the aside's rows and composer on the panel colour (D335).
  *
  * It mirrors `Inspector`: given the open workflow it reads the focused node from the selection store,
  * so the tab wires in exactly as the Inspector does.
@@ -23,21 +38,11 @@ export function ChatPanel({ workflowId }: { workflowId: string }) {
   useChatSocket(canChat ? node.id : undefined);
 
   if (focusedNodeId === undefined || node === undefined) {
-    return (
-      <section aria-label="Direct chat" data-testid="chat-panel" className="p-4">
-        <p className="text-sm text-fg-muted">Select an Agent or Model node to chat with it.</p>
-      </section>
-    );
+    return <Empty>Select an Agent or Model node to chat with it.</Empty>;
   }
 
   if (!canChat) {
-    return (
-      <section aria-label="Direct chat" data-testid="chat-panel" className="p-4">
-        <p className="text-sm text-fg-muted">
-          Direct chat is available on Agent and Model nodes (FR-CHAT-004).
-        </p>
-      </section>
-    );
+    return <Empty>Direct chat is available on Agent and Model nodes (FR-CHAT-004).</Empty>;
   }
 
   return <ChatForNode key={node.id} node={node} />;
@@ -47,7 +52,11 @@ function ChatForNode({ node }: { node: Node }) {
   const convo = useThreadConversation(node.id);
 
   return (
-    <section aria-label="Direct chat" data-testid="chat-panel" className="flex h-full flex-col">
+    <section
+      aria-label="Direct chat"
+      data-testid="chat-panel"
+      className="flex h-full flex-col bg-[var(--panel)] text-[var(--ink)]"
+    >
       <ChatThreadList
         nodeId={node.id}
         threads={convo.threads}
@@ -64,6 +73,7 @@ function ChatForNode({ node }: { node: Node }) {
               if (content.length > 0) convo.send(content);
             }}
             disabled={convo.sending}
+            placeholder="Message this agent…"
           />
         }
       />

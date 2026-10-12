@@ -17,7 +17,8 @@ const DOT_BELOW_2XL =
   'max-2xl:gap-0 max-2xl:border-transparent max-2xl:bg-transparent max-2xl:px-0.5 max-2xl:[&>span+span]:sr-only';
 
 /**
- * Provider status in the top bar (FR-PRV-004, TC-PRV-005). It reads the same providers query the
+ * Provider status in the phone header's menu (FR-PRV-004, TC-PRV-005); wider screens see it on
+ * the Providers page (D330). It reads the same providers query the
  * screen does, and that query is patched by `provider.status` frames, so a status change shows here
  * without a reload and without this component subscribing to anything itself.
  */
@@ -29,7 +30,7 @@ export function ProviderStatusBar() {
     return (
       <Link
         to="/providers"
-        className="shrink-0 rounded-chip border border-dashed border-border-strong px-2.5 py-1 font-machine text-[10.5px] text-fg-muted hover:text-fg"
+        className="shrink-0 rounded-full border border-dashed border-[var(--iconLine)] px-2.5 py-1 font-machine text-[10.5px] text-[var(--muted)] no-underline hover:text-[var(--ink)]"
       >
         no providers
       </Link>
@@ -42,7 +43,7 @@ export function ProviderStatusBar() {
   return (
     <Link
       to="/providers"
-      className="flex shrink-0 items-center gap-1 rounded-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent xl:gap-1.5"
+      className="flex shrink-0 items-center gap-1 rounded-full text-[var(--ink)] no-underline hover:text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f] xl:gap-1.5"
       aria-label="Providers"
       data-testid="provider-status-bar"
     >
@@ -59,7 +60,9 @@ export function ProviderStatusBar() {
             : { lastCheckedAt: provider.lastCheckedAt })}
         />
       ))}
-      {hidden > 0 && <span className="font-machine text-[10.5px] text-fg-muted">+{hidden}</span>}
+      {hidden > 0 && (
+        <span className="font-machine text-[10.5px] text-[var(--muted)]">+{hidden}</span>
+      )}
     </Link>
   );
 }

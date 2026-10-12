@@ -22,7 +22,8 @@ async function cleanProfile(page: Page) {
   });
 }
 
-const runStatus = (page: Page) => page.getByTestId('run-status');
+/** The run's state rides on the workspace footer now that the header has no run chip (D330). */
+const runStatus = (page: Page) => page.getByRole('contentinfo');
 
 test.describe('TC-ONB-001 clean profile → wizard → completed run', () => {
   test('/ opens the wizard; Mock → RAG Q&A → run COMPLETE with no key', async ({ page }) => {
@@ -39,7 +40,9 @@ test.describe('TC-ONB-001 clean profile → wizard → completed run', () => {
 
     await expect(page).toHaveURL(/\/projects\/\w+\/workflows\/\w+$/);
     await expect(page.getByTestId('canvas')).toBeVisible();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE', { timeout: 20_000 });
+    await expect(runStatus(page)).toHaveAttribute('data-run-status', 'COMPLETE', {
+      timeout: 20_000,
+    });
     await expect(page.getByTestId('project-name')).toHaveText('Docs helper');
 
     const providers = await page.evaluate(() => {
@@ -65,7 +68,7 @@ test.describe('TC-ONB-002 each template reaches COMPLETE from the wizard', () =>
       await page.getByTestId('onboarding-next').click();
       await page.getByRole('button', { name: 'Create project and run' }).click();
       await expect(page).toHaveURL(/\/workflows\/\w+$/);
-      await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE', {
+      await expect(runStatus(page)).toHaveAttribute('data-run-status', 'COMPLETE', {
         timeout: 20_000,
       });
     });
@@ -144,7 +147,7 @@ test('keyboard only: Tab, Enter, Space and arrows reach a completed run', async 
   await tabTo(page, 'onboarding-create');
   await page.keyboard.press('Space');
   await expect(page).toHaveURL(/\/workflows\/\w+$/);
-  await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE', { timeout: 20_000 });
+  await expect(runStatus(page)).toHaveAttribute('data-run-status', 'COMPLETE', { timeout: 20_000 });
 });
 
 test('FR-ONB-003 every guide page renders from the help index', async ({ page }) => {

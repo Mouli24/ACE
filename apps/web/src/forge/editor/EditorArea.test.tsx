@@ -127,3 +127,51 @@ describe('D299 the tabs work from the keyboard', () => {
     expect(screen.getByRole('button', { name: 'Close app.ts' })).toBeInTheDocument();
   });
 });
+
+describe('D334 the theme’s code column', () => {
+  it('with no file open: the tabs strip and one muted line, no path bar', () => {
+    renderWithQuery(<EditorArea projectId={projectId} />);
+    expect(screen.getByRole('tablist', { name: 'Open files' })).toHaveClass(
+      'h-[36px]',
+      'bg-[var(--panel)]',
+      'overflow-x-auto',
+    );
+    expect(screen.getByText('Open a file from the explorer')).toHaveClass(
+      'text-[13px]',
+      'text-[var(--muted)]',
+    );
+    expect(screen.queryByTestId('path-bar')).toBeNull();
+  });
+
+  it('the active tab has the orange top edge; an unsaved one shows ● instead of ×', async () => {
+    renderWithQuery(<EditorArea projectId={projectId} />);
+    act(() => {
+      openFile(projectId, 'src/app.ts');
+      openFile(projectId, 'src/index.ts');
+      useEditorStore.getState().setDirty(projectId, 'src/app.ts', true);
+    });
+    const active = (await screen.findByTestId('tab-src/index.ts')).parentElement;
+    expect(active).toHaveClass('shadow-[inset_0_2px_0_#ef6b3f]', 'bg-[var(--surface)]');
+    expect(screen.getByTestId('tab-src/app.ts').parentElement).toHaveClass('text-[var(--muted)]');
+    expect(screen.getByTestId('dirty-src/app.ts')).toHaveTextContent('●');
+    expect(screen.getByRole('button', { name: 'Close index.ts' })).toHaveTextContent('×');
+    expect(await screen.findByTestId('path-bar')).toBeInTheDocument();
+  });
+
+  // What the Explorer's "Open editors" section did, the tabs do now (D334).
+  it('a tab activates its file on click; a dirty tab’s close button is shown and focusable', async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<EditorArea projectId={projectId} />);
+    act(() => {
+      openFile(projectId, 'src/app.ts');
+      openFile(projectId, 'src/index.ts');
+      useEditorStore.getState().setDirty(projectId, 'src/app.ts', true);
+    });
+    await user.click(await screen.findByRole('tab', { name: /app\.ts.*unsaved/i }));
+    expect(useEditorStore.getState().projects[projectId]?.active).toBe('src/app.ts');
+    const close = screen.getByRole('button', { name: 'Close app.ts' });
+    expect(close.className).not.toMatch(/\bhidden\b/);
+    act(() => close.focus());
+    expect(close).toHaveFocus();
+  });
+});

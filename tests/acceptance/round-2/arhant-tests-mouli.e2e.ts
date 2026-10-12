@@ -195,41 +195,65 @@ async function clickPoint(target: Locator): Promise<{ x: number; y: number }> {
 }
 
 /**
- * Select a node by clicking its header. Fit to view first, and aim at the header rather than the
- * card: the port handles and the React Flow pane both sit over a card and swallow the click.
- *
- * Call this *before* starting a run where possible. A card grows once it carries streamed text and
- * a "used:" line, and a grown card can end up under its neighbour at fit-to-view zoom — then the
- * neighbour swallows the click and the failure looks like a selection bug rather than a layout one.
+ * Select a node by clicking its card — which also opens its settings modal (D333). Fit to view
+ * first, and aim at a point the card itself receives: the port handles and the React Flow pane both
+ * sit over a card and swallow the click.
  */
 async function selectCard(page: Page, nodeId: string): Promise<void> {
-  // the V2 sheet, when open, covers the right of the Canvas
+  // the settings modal and the sheet, when open, cover the Canvas
   await closeSheet(page);
   await page.getByRole('button', { name: 'Fit to view' }).click();
   await page.waitForTimeout(400);
   await card(page, nodeId).click({ position: await clickPoint(card(page, nodeId)) });
   await expect(card(page, nodeId)).toHaveAttribute('data-selected', 'true');
 }
-const startButton = (page: Page): Locator =>
-  // `exact`, because round 3 put Restart in the same bar and "Start" is a substring of it. The V2
-  // button shows "Run"; its accessible name is "Start run" (D259).
-  page.getByTestId('run-bar').getByRole('button', { name: 'Start run', exact: true });
 
 /*
- * POC Theme V2 layout (D259): Configure, Inspector and Runs are tabs of a floating sheet that starts
- * closed and covers the right of the Canvas while open.
+ * Ace UI layout (D330–D333): a click on a card opens its settings modal (the old sheet's Configure
+ * tab), which covers the Canvas until it is closed; Inspector, Runs and Memory are tabs of a
+ * floating sheet opened from the workspace "…" menu, where the run is started too.
  */
-async function openSheet(
-  page: Page,
-  tab: 'Configure' | 'Inspector' | 'Runs' | 'Memory',
-): Promise<void> {
-  if (!(await page.getByRole('tab', { name: tab }).isVisible()))
-    await page.getByTestId('sheet-toggle').click();
+
+/** The node settings modal, when open, and its configuration region. */
+const settingsDialog = (page: Page): Locator =>
+  page.getByRole('dialog').filter({ has: page.getByTestId('config-panel') });
+const configPanel = (page: Page): Locator =>
+  settingsDialog(page).getByRole('region', { name: 'Node configuration' });
+
+/** Close the node settings modal if it is open (Done commits whatever is still waiting). */
+async function closeSettings(page: Page): Promise<void> {
+  const dialog = settingsDialog(page);
+  if (await dialog.isVisible()) await dialog.getByRole('button', { name: 'Done' }).click();
+  await expect(dialog).toHaveCount(0);
+}
+
+/**
+ * Start a run from the workspace "…" menu (D331). "Start run" is there only while no run is going
+ * and enabled once the last start has settled, so the menu is reopened until it is.
+ */
+async function startRun(page: Page, timeout = 15_000): Promise<void> {
+  await closeSettings(page);
+  const item = page.getByTestId('menu-start-run');
+  await expect(async () => {
+    if (await page.getByRole('menu').isVisible()) await page.keyboard.press('Escape');
+    await page.getByTestId('workspace-menu').click();
+    await expect(item).toBeEnabled({ timeout: 1_000 });
+  }).toPass({ timeout });
+  await item.click();
+}
+
+async function openSheet(page: Page, tab: 'Inspector' | 'Runs' | 'Memory'): Promise<void> {
+  await closeSettings(page);
+  if (!(await page.getByRole('tab', { name: tab }).isVisible())) {
+    await page.getByTestId('workspace-menu').click();
+    await page.getByTestId('menu-sheet').click();
+  }
   await page.getByRole('tab', { name: tab }).click();
 }
 
 async function closeSheet(page: Page): Promise<void> {
-  const close = page.getByRole('button', { name: 'Close panel' });
+  await closeSettings(page);
+  const close = page.getByTestId('workflow-sheet').getByRole('button', { name: 'Close panel' });
   if (await close.isVisible()) await close.click();
   await expect(page.getByTestId('workflow-sheet')).toHaveCount(0);
 }
@@ -432,11 +456,12 @@ test.describe('Config panel (FR-NODE-003/004/005)', () => {
     const agent = nodeOf(graph, 'agent');
 
     await openCanvas(page, projectId, workflowId);
+    // the click opens the node's settings modal (D333)
     await selectCard(page, agent.id);
-    await openSheet(page, 'Configure');
-    const panel = page.getByRole('complementary', { name: 'Node configuration' });
+    const panel = configPanel(page);
 
-    await panel.getByLabel('Model').click();
+    // `exact`: "Model provider" is the provider field's label
+    await panel.getByLabel('Model', { exact: true }).click();
     // mock-text cannot take an image, and says which type it lacks.
     await expect(page.getByRole('option', { name: /Mock text — no image input/ })).toHaveAttribute(
       'aria-disabled',
@@ -463,21 +488,20 @@ test.describe('Config panel (FR-NODE-003/004/005)', () => {
     const { projectId, workflowId, graph } = await importFixture('slow.json');
     const agent = nodeOf(graph, 'agent');
     await openCanvas(page, projectId, workflowId);
-    // Selected before Start: the panel is open when the run begins, which is the case FR-NODE-009
-    // is about, and the card is still small enough to click.
-    await selectCard(page, agent.id);
-    await openSheet(page, 'Configure');
-
-    await startButton(page).click();
+    await startRun(page);
     await expect(card(page, agent.id)).toHaveAttribute('data-state', 'RUNNING', {
       timeout: 20_000,
     });
 
-    const panel = page.getByRole('complementary', { name: 'Node configuration' });
+    // FR-NODE-009: the node's settings, opened while the run is going, say an edit waits for the
+    // next run. (The settings are a modal now (D333): the "…" menu that starts a run cannot be
+    // reached while they are open, so they are opened once the run has begun.)
+    await selectCard(page, agent.id);
+    const panel = configPanel(page);
     await expect(panel.getByTestId('applies-next-run')).toBeVisible();
 
-    // D285: an Agent's instructions are its Goal
-    const instructions = panel.getByLabel('Goal');
+    // D285, D333: an Agent's instructions are its System prompt
+    const instructions = panel.getByLabel('System prompt');
     await instructions.fill('Edited while the run was going.');
     await instructions.blur();
 
@@ -494,7 +518,7 @@ test.describe('Config panel (FR-NODE-003/004/005)', () => {
     expect(prompted.prompt?.text).not.toContain('Edited while the run was going');
 
     // …while the next run does use it.
-    await startButton(page).click();
+    await startRun(page);
     const next = await engineSays(
       () => latestRun(workflowId),
       (r) => r.id !== run.id && (r.status === 'COMPLETE' || r.status === 'HALTED'),
@@ -524,7 +548,7 @@ test.describe('Live run (FR-EXE-001/003/007/008/009/015)', () => {
     const input = nodeOf(graph, 'input');
     await openCanvas(page, projectId, workflowId);
 
-    await startButton(page).click();
+    await startRun(page);
     const dialog = page.getByTestId('run-input-dialog');
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole('button', { name: 'Start run' })).toBeDisabled();
@@ -557,20 +581,19 @@ test.describe('Live run (FR-EXE-001/003/007/008/009/015)', () => {
     await openCanvas(page, projectId, workflowId);
 
     await expect(card(page, agent.id)).toHaveAttribute('data-state', 'IDLE');
-    await startButton(page).click();
+    await startRun(page);
 
-    // FR-EXE-009: the ring carries a label per state, not just a colour.
+    // FR-EXE-009: the status row carries a word per state, not just a colour (D332).
     await expect(card(page, agent.id)).toHaveAttribute('data-state', 'RUNNING', {
       timeout: 20_000,
     });
-    await expect(card(page, agent.id).getByTestId('status-chip')).toHaveAttribute(
-      'aria-label',
-      'running',
-    );
+    const status = card(page, agent.id).getByTestId('status-chip');
+    await expect(status).toHaveAttribute('data-state', 'RUNNING');
+    await expect(status).toHaveText('Running');
 
     // TC-EXE-007: the text grows while the node is still running — in the node's chat; the card
-    // only says it is running (D285).
-    await expect(card(page, agent.id).getByTestId(`running-note-${agent.id}`)).toBeVisible();
+    // only says it is running (D285), in the note under it (D332).
+    await expect(page.getByTestId(`running-note-${agent.id}`)).toBeVisible();
     await page.getByTestId(`chat-mention-${agent.id}`).click();
     const streamed = page.getByTestId('chat-run-live');
     await expect(streamed).toBeVisible();
@@ -608,7 +631,7 @@ test.describe('Live run (FR-EXE-001/003/007/008/009/015)', () => {
     const agent = nodeOf(graph, 'agent');
     await openCanvas(page, projectId, workflowId);
 
-    await startButton(page).click();
+    await startRun(page);
     await expect(page.getByTestId(`used-model-${agent.id}`)).toContainText('(fallback)', {
       timeout: 40_000,
     });
@@ -631,7 +654,7 @@ test.describe('Live run (FR-EXE-001/003/007/008/009/015)', () => {
     const agent = nodeOf(graph, 'agent');
     await openCanvas(page, projectId, workflowId);
 
-    await startButton(page).click();
+    await startRun(page);
 
     const panel = page.getByTestId('preflight-issues');
     await expect(panel).toBeVisible({ timeout: 20_000 });
@@ -661,9 +684,10 @@ test.describe('Inspector and history (FR-EXE-010/012, FR-PRM-005)', () => {
     const { projectId, workflowId, graph } = await importFixture('linear-mock.json');
     const agent = nodeOf(graph, 'agent');
     await openCanvas(page, projectId, workflowId);
+    // selected before the run (the click opens its settings; Start closes them first)
     await selectCard(page, agent.id);
 
-    await startButton(page).click();
+    await startRun(page);
     const run = await engineSays(
       () => latestRun(workflowId),
       (r) => r.status === 'COMPLETE',
@@ -697,8 +721,8 @@ test.describe('Inspector and history (FR-EXE-010/012, FR-PRM-005)', () => {
     await openCanvas(page, projectId, workflowId);
 
     for (let i = 0; i < 3; i += 1) {
-      await expect(startButton(page)).toBeEnabled({ timeout: 40_000 });
-      await startButton(page).click();
+      // "Start run" is offered again (and enabled) once the last run has ended
+      await startRun(page, 40_000);
       await engineSays(
         () => api<{ items: RunSummary[] }>(`/workflows/${workflowId}/runs`),
         (p) => p.items.filter((r) => r.status === 'COMPLETE').length === i + 1,
@@ -738,7 +762,7 @@ test.describe('Inspector and history (FR-EXE-010/012, FR-PRM-005)', () => {
     });
 
     await openCanvas(page, projectId, workflowId);
-    await startButton(page).click();
+    await startRun(page);
     await expect(card(page, agent.id)).toHaveAttribute('data-state', 'RUNNING', {
       timeout: 20_000,
     });

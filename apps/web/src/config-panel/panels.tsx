@@ -12,23 +12,25 @@ import {
   type TransformConfig,
 } from '@ace/contracts';
 import { Button } from '@ace/ui';
+import type { ReactNode } from 'react';
 
 import { PolicyPicker } from '../guardrails/PolicyPicker';
 import { useWorkflowProjectId } from '../nodes/retrieval/hooks';
-import { AgentKnowledgeBasesField, AgentMemoryField } from './AgentKnowledgeFields';
-import { AgentToolsSection } from './AgentToolsSection';
-import { RetrievalPanel } from './RetrievalPanel';
-import { InputAttachments } from './InputAttachments';
 import { MergeModeField } from '../nodes/merge/MergeModeField';
 import { MergeSlots, type MergeSlot } from '../nodes/merge/MergeSlots';
 import { useRunStore } from '../runs/run-store';
 import { useWorkflowGraph } from '../workflows/hooks';
+import { AgentKnowledgeBasesField, AgentMemoryField } from './AgentKnowledgeFields';
+import { AgentToolsSection } from './AgentToolsSection';
+import { InputAttachments } from './InputAttachments';
 import { JsonSchemaEditor } from './JsonSchemaEditor';
 import { FallbackModels, ProviderAndModel } from './ProviderAndModel';
+import { RetrievalPanel } from './RetrievalPanel';
+import { SkillsField, useSkills } from './SkillsField';
 import {
   DataTypeGroup,
+  FIELD_GRID_CLASS,
   Field,
-  LaterField,
   NumberField,
   SelectField,
   TextAreaField,
@@ -36,7 +38,13 @@ import {
 } from './fields';
 import { BUDGET_RANGE, EXECUTION_RANGES } from './validation';
 
-/** A config patch for the node being edited; ConfigPanel completes it to the whole config (D-001). */
+/*
+ * Each node kind's settings in the node settings modal (D333). The Agent's follow the theme's
+ * modal top to bottom — provider and model, persona name, system prompt, skills — and then the
+ * settings the theme has no slot for, in its field styles. The other kinds keep their own fields.
+ */
+
+/** A config patch for the node being edited; the modal completes it to the whole config (D-001). */
 export type PatchConfig<C> = (patch: Partial<C>) => void;
 
 /** D12: only fixed and fallback are offered in v1. */
@@ -44,20 +52,44 @@ const ROUTING_OPTIONS = ROUTING_POLICIES.filter((p) => p === 'fixed' || p === 'f
   (p) => ({ value: p, label: p }),
 );
 
+/** The node's name (`update_node {name}`): trimmed, never empty, at most 80 characters. */
+function NameField({
+  label,
+  placeholder,
+  value,
+  onCommit,
+}: {
+  label: string;
+  placeholder: string;
+  value: string;
+  onCommit: (name: string) => void;
+}) {
+  return (
+    <TextField
+      label={label}
+      value={value}
+      maxLength={80}
+      placeholder={placeholder}
+      normalize={(draft) => draft.trim() || undefined}
+      onCommit={onCommit}
+    />
+  );
+}
+
 function ExecutionFields({
   execution,
   onChange,
+  children,
 }: {
   execution: AgentConfig['execution'];
   onChange: (execution: AgentConfig['execution']) => void;
+  /** More numbers that sit in the same grid (the Agent's context budget). */
+  children?: ReactNode;
 }) {
   const set = (key: keyof AgentConfig['execution']) => (value: number) =>
     onChange({ ...execution, [key]: value });
   return (
-    <fieldset className="flex flex-col gap-3">
-      <legend className="mb-1 font-machine text-[10px] uppercase tracking-wider text-fg-muted">
-        Execution
-      </legend>
+    <div className={FIELD_GRID_CLASS} data-testid="execution-fields">
       <NumberField
         label="Temperature"
         value={execution.temperature}
@@ -82,20 +114,27 @@ function ExecutionFields({
         range={EXECUTION_RANGES.retries}
         onCommit={set('retries')}
       />
-    </fieldset>
+      {children}
+    </div>
   );
 }
 
 export function AgentPanel({
+  node,
   config,
   patch,
+  rename,
   projectId,
 }: {
+  node: Node;
   config: AgentConfig;
   patch: PatchConfig<AgentConfig>;
+  rename: (name: string) => void;
   /** The project whose guardrail policies this node may override with (FR-GRD-002). */
   projectId?: Id;
 }) {
+  const skills = useSkills();
+  const skillTools = skills.flatMap((skill) => skill.tools);
   const reviewContract = JSON.stringify(REVIEW_CONTRACT_SCHEMA);
   const usesReviewContract = JSON.stringify(config.outputContract?.jsonSchema) === reviewContract;
   return (
@@ -107,82 +146,87 @@ export function AgentPanel({
         outputTypes={config.outputTypes}
         onChange={patch}
       />
+      <NameField
+        label="Persona name"
+        placeholder="Name this agent"
+        value={node.name}
+        onCommit={rename}
+      />
       {/*
-       * D285: the node's objective. It is what a run of the node is asked to achieve and the
-       * standing instruction of every chat with it; its answers are read in the Chat column.
+       * D285, D333: the node's objective, in the theme's System prompt box. It is what a run of the
+       * node is asked to achieve and the standing instruction of every chat with it.
        */}
       <TextAreaField
-        label="Goal"
+        label="System prompt"
         value={config.instructions}
         onCommit={(instructions) => patch({ instructions })}
-        rows={6}
-        placeholder="What should this model achieve? e.g. Write a launch tweet for the product brief."
+        rows={8}
       />
-      <SelectField
-        label="Routing policy"
-        value={config.routing.policy}
-        options={ROUTING_OPTIONS}
-        onChange={(policy) => patch({ routing: { ...config.routing, policy } })}
-      />
-      <FallbackModels
-        policy={config.routing.policy}
-        providerId={config.providerId}
-        fallbackModelIds={config.routing.fallbackModelIds}
-        onChange={(fallbackModelIds) => patch({ routing: { ...config.routing, fallbackModelIds } })}
-      />
+      <SkillsField skills={skills} tools={config.tools} onChange={(tools) => patch({ tools })} />
+
+      <div className="flex min-w-0 flex-col gap-5">
+        <SelectField
+          label="Routing policy"
+          value={config.routing.policy}
+          options={ROUTING_OPTIONS}
+          onChange={(policy) => patch({ routing: { ...config.routing, policy } })}
+        />
+        <FallbackModels
+          policy={config.routing.policy}
+          providerId={config.providerId}
+          fallbackModelIds={config.routing.fallbackModelIds}
+          onChange={(fallbackModelIds) =>
+            patch({ routing: { ...config.routing, fallbackModelIds } })
+          }
+        />
+      </div>
+
       {/*
-       * D285: no input/output type pickers — a node takes text and answers in text, so there are
-       * no JSON, video or other typed ports to wire. A structured-output contract stays available
-       * for the review loop, out of the way.
+       * D285: no input/output type pickers — a node takes text and answers in text. A structured
+       * output contract stays available for the review loop.
        */}
-      <details className="flex flex-col gap-3" data-testid="agent-advanced-output">
-        <summary className="cursor-pointer font-machine text-[10px] uppercase tracking-wider text-fg-muted">
-          Structured output (advanced)
-        </summary>
-        <div className="mt-3 flex flex-col gap-3">
-          <JsonSchemaEditor
-            value={config.outputContract?.jsonSchema}
-            onCommit={(jsonSchema) => patch({ outputContract: jsonSchema ? { jsonSchema } : {} })}
-          />
-          {/*
-           * The contract a Review→Fix loop needs, in one press (§5 item 8): score, verdict and
-           * issues, exactly as the contract defines them — so the loop's exit condition can read
-           * `verdict` and the output is checked like any other (FR-PAR-004, FR-PAR-007).
-           */}
-          <Button
-            variant="secondary"
-            size="sm"
-            data-testid="use-review-contract"
-            disabled={usesReviewContract}
-            title={
-              usesReviewContract
-                ? 'This agent already outputs the standard review contract.'
-                : 'Fill the output contract with score, verdict and issues.'
-            }
-            onClick={() =>
-              patch({
-                outputContract: {
-                  jsonSchema: JSON.parse(reviewContract) as Record<string, unknown>,
-                },
-              })
-            }
-          >
-            Use standard review contract
-          </Button>
-        </div>
-      </details>
-      <ExecutionFields
-        execution={config.execution}
-        onChange={(execution) => patch({ execution })}
+      <div className="flex min-w-0 flex-col gap-[7px]" data-testid="agent-advanced-output">
+        <JsonSchemaEditor
+          value={config.outputContract?.jsonSchema}
+          onCommit={(jsonSchema) => patch({ outputContract: jsonSchema ? { jsonSchema } : {} })}
+        />
+        {/*
+         * The contract a Review→Fix loop needs, in one press (§5 item 8): score, verdict and
+         * issues, exactly as the contract defines them — so the loop's exit condition can read
+         * `verdict` and the output is checked like any other (FR-PAR-004, FR-PAR-007).
+         */}
+        <Button
+          variant="secondary"
+          size="sm"
+          className="self-start"
+          data-testid="use-review-contract"
+          disabled={usesReviewContract}
+          onClick={() =>
+            patch({
+              outputContract: {
+                jsonSchema: JSON.parse(reviewContract) as Record<string, unknown>,
+              },
+            })
+          }
+        >
+          Use standard review contract
+        </Button>
+      </div>
+
+      <ExecutionFields execution={config.execution} onChange={(execution) => patch({ execution })}>
+        <NumberField
+          label="Context budget (tokens)"
+          value={config.contextPolicy.budgetTokens}
+          range={BUDGET_RANGE}
+          onCommit={(budgetTokens) => patch({ contextPolicy: { budgetTokens } })}
+        />
+      </ExecutionFields>
+
+      <AgentToolsSection
+        tools={config.tools}
+        exclude={skillTools}
+        onChange={(tools) => patch({ tools })}
       />
-      <NumberField
-        label="Context budget (tokens)"
-        value={config.contextPolicy.budgetTokens}
-        range={BUDGET_RANGE}
-        onCommit={(budgetTokens) => patch({ contextPolicy: { budgetTokens } })}
-      />
-      <AgentToolsSection tools={config.tools} onChange={(tools) => patch({ tools })} />
-      <LaterField label="Skills" round="Round 6+" testId="skills" />
       <AgentMemoryField memory={config.memory} onChange={(memory) => patch({ memory })} />
       <PolicyPicker
         projectId={projectId}
@@ -199,11 +243,15 @@ export function AgentPanel({
 }
 
 export function ModelPanel({
+  node,
   config,
   patch,
+  rename,
 }: {
+  node: Node;
   config: ModelConfig;
   patch: PatchConfig<ModelConfig>;
+  rename: (name: string) => void;
 }) {
   return (
     <>
@@ -214,22 +262,30 @@ export function ModelPanel({
         outputTypes={config.outputTypes}
         onChange={patch}
       />
+      <NameField
+        label="Persona name"
+        placeholder="Name this agent"
+        value={node.name}
+        onCommit={rename}
+      />
       <TextAreaField
         label="System prompt"
         value={config.systemPrompt ?? ''}
         onCommit={(systemPrompt) => patch({ systemPrompt })}
-        rows={6}
+        rows={8}
       />
-      <DataTypeGroup
-        label="Input types"
-        value={config.inputTypes}
-        onChange={(inputTypes) => patch({ inputTypes })}
-      />
-      <DataTypeGroup
-        label="Output types"
-        value={config.outputTypes}
-        onChange={(outputTypes) => patch({ outputTypes })}
-      />
+      <div className={FIELD_GRID_CLASS}>
+        <DataTypeGroup
+          label="Input types"
+          value={config.inputTypes}
+          onChange={(inputTypes) => patch({ inputTypes })}
+        />
+        <DataTypeGroup
+          label="Output types"
+          value={config.outputTypes}
+          onChange={(outputTypes) => patch({ outputTypes })}
+        />
+      </div>
       <ExecutionFields
         execution={config.execution}
         onChange={(execution) => patch({ execution })}
@@ -366,25 +422,29 @@ export function TransformPanel({
   );
 }
 
+/** The theme's empty-state line: 13px, muted, centred. */
+const EMPTY_LINE_CLASS = 'py-2 text-center text-[13px] text-[var(--muted)]';
+
 export function OutputPanel() {
   return (
     <Field label="Output">
-      <p className="rounded-md border border-dashed border-border p-3 font-human text-sm italic text-fg-muted">
-        final result appears here after a run
-      </p>
+      <p className={EMPTY_LINE_CLASS}>Final result appears here after a run</p>
     </Field>
   );
 }
 
-/** Dispatch on kind so `config` narrows; kinds from later rounds get a note. */
+/** Dispatch on kind so `config` narrows. The name sits where the theme puts the persona name. */
 export function KindPanel({
   node,
   patch,
+  rename,
   workflowId,
   projectId,
 }: {
   node: Node;
   patch: (patch: Partial<Node['config']>) => void;
+  /** Saves the node's name (`update_node {name}`). */
+  rename: (name: string) => void;
   workflowId: string;
   /** The node's project, for the guardrail policy picker (FR-GRD-002). */
   projectId?: Id;
@@ -392,48 +452,84 @@ export function KindPanel({
   // the route names the project on the Canvas; the workflow itself names it everywhere else
   const workflowProjectId = useWorkflowProjectId(workflowId);
   const project = projectId ?? workflowProjectId;
+  const name = (
+    <NameField label="Name" placeholder="Name this node" value={node.name} onCommit={rename} />
+  );
   switch (node.kind) {
     case 'agent':
       return (
         <AgentPanel
+          node={node}
           config={node.config}
           patch={patch as PatchConfig<AgentConfig>}
+          rename={rename}
           {...(project === undefined ? {} : { projectId: project })}
         />
       );
     case 'model':
-      return <ModelPanel config={node.config} patch={patch as PatchConfig<ModelConfig>} />;
+      return (
+        <ModelPanel
+          node={node}
+          config={node.config}
+          patch={patch as PatchConfig<ModelConfig>}
+          rename={rename}
+        />
+      );
     case 'input':
       return (
-        <InputPanel
-          config={node.config}
-          patch={patch as PatchConfig<InputConfig>}
-          workflowId={workflowId}
-          nodeId={node.id}
-        />
+        <>
+          {name}
+          <InputPanel
+            config={node.config}
+            patch={patch as PatchConfig<InputConfig>}
+            workflowId={workflowId}
+            nodeId={node.id}
+          />
+        </>
       );
     case 'merge':
       return (
-        <MergePanel
-          node={node}
-          config={node.config}
-          patch={patch as PatchConfig<MergeConfig>}
-          workflowId={workflowId}
-        />
+        <>
+          {name}
+          <MergePanel
+            node={node}
+            config={node.config}
+            patch={patch as PatchConfig<MergeConfig>}
+            workflowId={workflowId}
+          />
+        </>
       );
     case 'transform':
-      return <TransformPanel config={node.config} patch={patch as PatchConfig<TransformConfig>} />;
+      return (
+        <>
+          {name}
+          <TransformPanel config={node.config} patch={patch as PatchConfig<TransformConfig>} />
+        </>
+      );
     case 'output':
-      return <OutputPanel />;
+      return (
+        <>
+          {name}
+          <OutputPanel />
+        </>
+      );
     case 'retrieval':
       return (
-        <RetrievalPanel
-          config={node.config}
-          patch={patch as PatchConfig<RetrievalConfig>}
-          projectId={project}
-        />
+        <>
+          {name}
+          <RetrievalPanel
+            config={node.config}
+            patch={patch as PatchConfig<RetrievalConfig>}
+            projectId={project}
+          />
+        </>
       );
     default:
-      return <p className="text-sm text-fg-muted">This node kind arrives in a later round.</p>;
+      return (
+        <>
+          {name}
+          <p className={EMPTY_LINE_CLASS}>This node kind arrives in a later round.</p>
+        </>
+      );
   }
 }

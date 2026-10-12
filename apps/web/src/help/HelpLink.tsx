@@ -1,15 +1,16 @@
-import { CircleHelp } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
-/** A link into the bundled user guide (FR-ONB-003); `page` is a `docs/user-guide` file name. */
+/**
+ * A link into the bundled user guide (FR-ONB-003); `page` is a `docs/user-guide` file name. In the
+ * theme's help-text style (11px, muted), ink on hover (D328).
+ */
 export function HelpLink({ page, children }: { page: string; children: string }) {
   return (
     <Link
       to={`/help/${page}`}
       data-testid={`help-link-${page}`}
-      className="inline-flex items-center gap-1 rounded-sm font-human text-xs text-fg-muted underline-offset-2 hover:text-fg hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      className="inline-flex items-center rounded-[4px] text-[11px] font-semibold text-[var(--muted)] underline-offset-2 outline-none hover:text-[var(--ink)] hover:underline focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
     >
-      <CircleHelp aria-hidden className="h-3.5 w-3.5" />
       {children}
     </Link>
   );

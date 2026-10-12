@@ -1,14 +1,46 @@
-import { Input } from '@ace/ui';
-import { useEffect, useId, useState, type KeyboardEvent } from 'react';
-
-import { Field } from '../config-panel/fields';
+import { Input, Label } from '@ace/ui';
+import { useEffect, useId, useState, type KeyboardEvent, type ReactNode } from 'react';
 
 /** What a draft reads as: a value the contract accepts, nothing to save, or why not. */
 export type DraftRead<T> = { value: T } | { skip: true } | { error: string };
 
+/** The theme's help line under a field (D328): 11px / 1.45, muted. */
+export const HELP_CLASS = 'text-[11px] leading-[1.45] text-[var(--muted)]';
+
 const blurOnEnter = (event: KeyboardEvent<HTMLInputElement>) => {
   if (event.key === 'Enter') (event.target as HTMLInputElement).blur();
 };
+
+/**
+ * One field in the Ace UI theme's layout (D328): the small-caps label, the control 7px below it,
+ * then either the help line or the error in the theme's red.
+ */
+export function SettingField({
+  label,
+  htmlFor,
+  error,
+  hint,
+  children,
+}: {
+  label: string;
+  htmlFor?: string;
+  error?: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-[7px]">
+      <Label htmlFor={htmlFor}>{label}</Label>
+      {children}
+      {error && (
+        <p role="alert" className="text-[11px] leading-[1.45] text-[#c94c27]">
+          {error}
+        </p>
+      )}
+      {hint && !error && <p className={HELP_CLASS}>{hint}</p>}
+    </div>
+  );
+}
 
 /**
  * One settings box committed on blur or Enter (FR-SYS-005). `read` checks the draft against the
@@ -62,7 +94,7 @@ export function SettingInput<T>({
   };
 
   return (
-    <Field label={label} htmlFor={id} {...(error === undefined ? { hint } : { error })}>
+    <SettingField label={label} htmlFor={id} {...(error === undefined ? { hint } : { error })}>
       <Input
         id={id}
         type={numeric ? 'number' : 'text'}
@@ -79,8 +111,8 @@ export function SettingInput<T>({
         }}
         onBlur={commit}
         onKeyDown={blurOnEnter}
-        className="font-machine"
+        className="font-machine text-[12px]"
       />
-    </Field>
+    </SettingField>
   );
 }

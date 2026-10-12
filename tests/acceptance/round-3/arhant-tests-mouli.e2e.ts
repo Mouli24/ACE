@@ -209,40 +209,110 @@ async function openRunPage(page: Page, runId: string): Promise<void> {
 
 const card = (page: Page, nodeId: string): Locator => page.getByTestId(`node-card-${nodeId}`);
 
-const startButton = (page: Page): Locator =>
-  // `exact`, or this also matches the run bar's "Restart" (D-031). The V2 button shows "Run"; its
-  // accessible name is "Start run" (D259).
-  page.getByTestId('run-bar').getByRole('button', { name: 'Start run', exact: true });
-
 /*
- * POC Theme V2 layout (D259): Configure, Inspector and Runs are tabs of a floating sheet that starts
- * closed and covers the right of the Canvas while open.
+ * The Ace UI workspace (D330–D333). These are local helpers, mirroring `apps/web/e2e/helpers.ts`
+ * and `apps/web/e2e/round3.ts`, which this package cannot import:
+ *
+ *  - the run is started and controlled from the canvas breadcrumb's "…" workspace menu
+ *    (`menu-start-run`, `menu-run-<action>`, `menu-approvals`); only phones (≤ 640 px) keep the
+ *    run bar and the approvals badge;
+ *  - the run's state is the workspace footer's `data-run-status`;
+ *  - a click on a card selects it and opens its settings modal (the old sheet's Configure tab);
+ *  - Inspector, Runs and Memory are tabs of a floating sheet opened from the workspace menu's
+ *    "Workflow panel" or a node menu's "Inspect";
+ *  - the bottom panel (Validation · Events · Errors · Timeline) is hidden until the workspace
+ *    menu's "Problems & events" opens it.
  */
-async function openSheet(
-  page: Page,
-  tab: 'Configure' | 'Inspector' | 'Runs' | 'Memory',
-): Promise<void> {
-  if (!(await page.getByRole('tab', { name: tab }).isVisible()))
-    await page.getByTestId('sheet-toggle').click();
-  await page.getByRole('tab', { name: tab }).click();
+
+const isPhone = (page: Page): boolean => (page.viewportSize()?.width ?? Infinity) <= 640;
+
+/** The node settings modal, when open (D333). */
+const settingsDialog = (page: Page): Locator =>
+  page.getByRole('dialog').filter({ has: page.getByTestId('config-panel') });
+
+/** Close the node settings modal if it is open (Done commits what is still waiting). */
+async function closeSettings(page: Page): Promise<void> {
+  const dialog = settingsDialog(page);
+  if (await dialog.isVisible()) await dialog.getByRole('button', { name: 'Done' }).click();
+  await expect(dialog).toHaveCount(0);
 }
 
+/** The workspace "…" menu's content: the menu that holds "Workflow panel" (D331). */
+const workspaceMenu = (page: Page): Locator =>
+  page.getByRole('menu').filter({ has: page.getByTestId('menu-sheet') });
+
+/** Open the workspace menu, unless it is open already. The settings modal would cover it. */
+async function openWorkspaceMenu(page: Page): Promise<Locator> {
+  await closeSettings(page);
+  const menu = workspaceMenu(page);
+  if (!(await menu.isVisible())) await page.getByTestId('workspace-menu').click();
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
+/** Close the workspace menu if it is open: it is modal, so nothing else takes a click under it. */
+async function closeWorkspaceMenu(page: Page): Promise<void> {
+  const menu = workspaceMenu(page);
+  if (await menu.isVisible()) await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+}
+
+/**
+ * Start the run: the workspace menu's "Start run" on desktop (D331); at phone width the run bar's
+ * button — `exact`, or it also matches the run bar's "Restart" (D-031); it shows "Run" and its
+ * accessible name is "Start run" (D259).
+ */
+async function startRun(page: Page): Promise<void> {
+  if (isPhone(page)) {
+    await page
+      .getByTestId('run-bar')
+      .getByRole('button', { name: 'Start run', exact: true })
+      .click();
+    return;
+  }
+  const menu = await openWorkspaceMenu(page);
+  await menu.getByTestId('menu-start-run').click();
+  await expect(menu).toHaveCount(0);
+}
+
+/** Press one run control in the workspace menu (Pause, Resume, Restart, End; Stop… asks first). */
+async function runAction(page: Page, action: RunAction): Promise<void> {
+  const menu = await openWorkspaceMenu(page);
+  await menu.getByTestId(`menu-run-${action}`).click();
+  await expect(menu).toHaveCount(0);
+}
+
+/** The workspace footer, which carries the run's state as `data-run-status` (D330). */
+const runFooter = (page: Page): Locator => page.getByRole('contentinfo');
+
+/** Show one tab of the workflow sheet, opening the sheet from the workspace menu when it is shut. */
+async function openSheet(page: Page, tab: 'Inspector' | 'Runs' | 'Memory'): Promise<void> {
+  await closeSettings(page);
+  const sheet = page.getByTestId('workflow-sheet');
+  if (!(await sheet.isVisible())) {
+    const menu = await openWorkspaceMenu(page);
+    await menu.getByTestId('menu-sheet').click();
+    await expect(menu).toHaveCount(0);
+  }
+  await sheet.getByRole('tab', { name: tab }).click();
+}
+
+/** Close the settings modal and the workflow sheet: both cover the Canvas while open. */
 async function closeSheet(page: Page): Promise<void> {
-  const close = page.getByRole('button', { name: 'Close panel' });
+  await closeSettings(page);
+  const close = page.getByTestId('workflow-sheet').getByRole('button', { name: 'Close panel' });
   if (await close.isVisible()) await close.click();
   await expect(page.getByTestId('workflow-sheet')).toHaveCount(0);
 }
 
+/** The Run details page keeps the toolbar (`run-controls`, `run-action-*`, `data-allowed`). */
 const runControls = (page: Page): Locator => page.getByTestId('run-controls');
-const runAction = (page: Page, action: RunAction): Locator =>
-  runControls(page).getByTestId(`run-action-${action}`);
 
 /**
- * Where to click a card so the card itself receives the click: near the top of its header, a
- * quarter of the way in (D-089), unless something sits over that point. In the V2 layout the halt
- * note is a pill centred at the top of the Canvas (D259), and after Fit to view it can cover the
- * top row of card headers; then the first point of the header, or failing that of the card's body,
- * that the card receives — never a control inside it.
+ * Where to click a card so the card itself receives the click: near its top, a quarter of the way
+ * in (D-089), unless something sits over that point. The halt note is a pill centred at the top of
+ * the Canvas (D259), and after Fit to view it can cover the top row of cards; then the first point
+ * of the card, top to bottom, that the card receives — never a control inside it.
  */
 async function clickPoint(target: Locator): Promise<{ x: number; y: number }> {
   // read once the card has stopped moving: Fit to view animates the viewport
@@ -285,25 +355,39 @@ async function clickPoint(target: Locator): Promise<{ x: number; y: number }> {
 }
 
 /**
- * Fit the view, then click inside the card's header — offset from its centre, because the port
- * handles sit at the vertical middle of both edges and a loop edge's glyph can sit over a card's
- * middle. Round 2 learned the rest of this the hard way: a card grows once it is carrying streamed
- * text, an error card or an approval, and a grown card can end up under its neighbour at
- * fit-to-view zoom. So the selection is deliberately **not** forced — Playwright waits for the card
- * to be the element that receives the click rather than dispatching into whatever is on top — and
- * the tests below select a node *before* starting the run wherever the assertion allows it.
+ * Fit the view, then click the card at a point it receives. The selection is deliberately **not**
+ * forced — Playwright waits for the card to be the element that receives the click rather than
+ * dispatching into whatever is on top — and the tests below select a node *before* starting the run
+ * wherever the assertion allows it. A click on a card also opens its settings modal (D332), which
+ * covers the Canvas; `keepSettings` leaves it open for a test that reads the node's settings.
  */
-async function selectNode(page: Page, nodeId: string): Promise<void> {
-  // the V2 sheet, when open, covers the right of the Canvas
+async function clickCard(page: Page, nodeId: string): Promise<Locator> {
+  // the sheet, when open, covers the right of the Canvas, and the modal covers all of it
   await closeSheet(page);
   await page.getByRole('button', { name: 'Fit to view' }).click();
   await page.waitForTimeout(300);
   const target = card(page, nodeId);
   await target.scrollIntoViewIfNeeded();
-  // Fit to view can zoom a card narrower than 60 px, and a fixed offset then lands on the header's
-  // run-actions button (D-089); click a quarter of the way in, whatever the zoom.
+  // Fit to view can zoom a card narrow; click a quarter of the way in, whatever the zoom (D-089).
   await target.click({ position: await clickPoint(target) });
   await expect(target).toHaveAttribute('data-selected', 'true');
+  await expect(settingsDialog(page)).toBeVisible();
+  return target;
+}
+
+/** Select a node on the Canvas; its settings modal, which the click opens, is closed again. */
+async function selectNode(page: Page, nodeId: string): Promise<void> {
+  const target = await clickCard(page, nodeId);
+  await closeSettings(page);
+  await expect(target).toHaveAttribute('data-selected', 'true');
+}
+
+/** Open a node's settings modal (the old sheet's Configure tab) and return its configuration. */
+async function configureNode(page: Page, nodeId: string): Promise<Locator> {
+  await clickCard(page, nodeId);
+  const panel = settingsDialog(page).getByRole('region', { name: 'Node configuration' });
+  await expect(panel).toBeVisible();
+  return panel;
 }
 
 /** The Inspector tab on a node that is already selected. */
@@ -314,13 +398,111 @@ async function openInspectorTab(page: Page): Promise<Locator> {
   return inspector;
 }
 
+/** Select a node and inspect it: the node menu's "Inspect" (right-click the card). */
 async function openInspector(page: Page, nodeId: string): Promise<Locator> {
-  await selectNode(page, nodeId);
+  await closeSheet(page);
+  await page.getByRole('button', { name: 'Fit to view' }).click();
+  await page.waitForTimeout(300);
+  const target = card(page, nodeId);
+  await target.click({ button: 'right', position: await clickPoint(target) });
+  await page.getByRole('menuitem', { name: 'Inspect' }).click();
+  await expect(target).toHaveAttribute('data-selected', 'true');
   return openInspectorTab(page);
 }
 
-const openBottomTab = async (page: Page, name: 'Validation' | 'Events' | 'Errors'): Promise<void> =>
-  page.getByRole('tab', { name }).click();
+/**
+ * Open one of the bottom panel's tabs (names carry a count). The panel is hidden until the
+ * workspace menu's "Problems & events" opens it (D332).
+ */
+async function openBottomTab(page: Page, name: 'Validation' | 'Events' | 'Errors'): Promise<void> {
+  const tab = page.getByTestId('bottom-section').getByRole('tab', { name });
+  if (!(await tab.isVisible())) {
+    const menu = await openWorkspaceMenu(page);
+    await menu.getByTestId('menu-problems').click();
+    await expect(menu).toHaveCount(0);
+  }
+  await tab.click();
+}
+
+const overlaps = (
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+): boolean =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+/**
+ * Bring something that hangs under a card (an approval, D332) wholly onto the visible Canvas: Fit
+ * to view sizes the view to the cards, not to what hangs under them, so zoom out until it is inside
+ * the Canvas and clear of the minimap and the toolbar.
+ */
+async function showOnCanvas(page: Page, target: Locator): Promise<void> {
+  await closeSheet(page);
+  await page.getByRole('button', { name: 'Fit to view' }).click();
+  await page.waitForTimeout(300);
+  for (let step = 0; step < 8; step += 1) {
+    const [box, canvas, minimap, toolbar] = await Promise.all([
+      target.boundingBox(),
+      page.getByTestId('canvas').boundingBox(),
+      page.getByTestId('canvas-minimap').boundingBox(),
+      page.getByTestId('canvas-toolbar').boundingBox(),
+    ]);
+    const inside =
+      box !== null &&
+      canvas !== null &&
+      box.x >= canvas.x &&
+      box.y >= canvas.y &&
+      box.x + box.width <= canvas.x + canvas.width &&
+      box.y + box.height <= canvas.y + canvas.height;
+    const covered = [minimap, toolbar].some(
+      (over) => box !== null && over !== null && overlaps(box, over),
+    );
+    if (inside && !covered) return;
+    await page.getByRole('button', { name: 'Zoom out' }).click();
+    await page.waitForTimeout(300);
+  }
+  throw new Error('the target is still off the visible Canvas after zooming out');
+}
+
+/**
+ * Open a loop edge's settings in the modal (D333): right-click the edge, "Loop settings". A loop
+ * edge is an invisible band along its curve and runs partly under the cards, so the right-click
+ * goes to a point of the curve that the edge itself receives.
+ */
+async function openLoopSettings(page: Page, edgeId: string): Promise<Locator> {
+  await closeSheet(page);
+  await page.getByRole('button', { name: 'Fit to view' }).click();
+  await page.waitForTimeout(300);
+  let point: { x: number; y: number } | null = null;
+  for (let step = 0; step < 4 && point === null; step += 1) {
+    point = await page.getByTestId(`loop-edge-${edgeId}`).evaluate((group) => {
+      const wrapper = group.closest('.react-flow__edge') ?? group;
+      for (const path of Array.from(group.querySelectorAll('path'))) {
+        const total = path.getTotalLength();
+        const matrix = path.getScreenCTM();
+        if (matrix === null || total === 0) continue;
+        for (let i = 1; i < 60; i += 1) {
+          const at = path.getPointAtLength((total * i) / 60);
+          const x = matrix.a * at.x + matrix.c * at.y + matrix.e;
+          const y = matrix.b * at.x + matrix.d * at.y + matrix.f;
+          const hit = document.elementFromPoint(x, y);
+          if (hit !== null && wrapper.contains(hit)) return { x, y };
+        }
+      }
+      return null;
+    });
+    if (point === null) {
+      await page.getByRole('button', { name: 'Zoom out' }).click();
+      await page.waitForTimeout(300);
+    }
+  }
+  expect(point, 'some point of the loop edge receives a click').not.toBeNull();
+  const { x, y } = point as { x: number; y: number };
+  await page.mouse.click(x, y, { button: 'right' });
+  await page.getByRole('menuitem', { name: 'Loop settings' }).click();
+  const editor = settingsDialog(page).getByTestId('loop-edge-editor');
+  await expect(editor).toBeVisible();
+  return editor;
+}
 
 /** Poll the engine until it agrees with what the page is showing. */
 async function engineSays<T>(
@@ -382,34 +564,53 @@ const settledRun = (workflowId: string, timeout = 60_000): Promise<RunSummary> =
 /* -------------------------------------------------------------------------- */
 
 interface ControlState {
-  /** `data-allowed`: what the toolbar read out of `run.allowedActions`. */
+  /** What the screen read out of `run.allowedActions`: the controls it offers. */
   allowed: string[];
-  /** The buttons a person can actually press. */
+  /** The controls a person can actually press. */
   enabled: string[];
 }
 
 /**
- * Every control the toolbar rendered, with **no list of actions written here**: the actions are read
- * off the buttons themselves, so this cannot drift from the contract's `RUN_ACTIONS` and cannot
- * quietly stop checking a button that was added.
+ * Every control the screen rendered, with **no list of actions written here**: the actions are read
+ * off the controls themselves, so this cannot drift from the contract's `RUN_ACTIONS` and cannot
+ * quietly stop checking a control that was added.
+ *
+ * The Run details page keeps the toolbar: every control is drawn, `data-allowed` saying whether the
+ * engine allows it. On the Canvas the controls are the workspace menu's `menu-run-<action>` items
+ * (D331), drawn only when `run.allowedActions` names them — so what the menu offers is what it read
+ * as allowed, and an item it offers but disables is allowed and not pressable. ("Run details" is a
+ * link in the same section, not a control.)
  */
 async function controlState(page: Page): Promise<ControlState> {
-  const buttons = runControls(page).locator('[data-testid^="run-action-"]');
-  await expect(buttons.first()).toBeVisible();
-  const count = await buttons.count();
   const allowed: string[] = [];
   const enabled: string[] = [];
-  for (let index = 0; index < count; index += 1) {
-    const button = buttons.nth(index);
-    const action = ((await button.getAttribute('data-testid')) ?? '').replace('run-action-', '');
-    if ((await button.getAttribute('data-allowed')) === 'true') allowed.push(action);
-    if (await button.isEnabled()) enabled.push(action);
+  if (await runControls(page).isVisible()) {
+    const buttons = runControls(page).locator('[data-testid^="run-action-"]');
+    await expect(buttons.first()).toBeVisible();
+    const count = await buttons.count();
+    for (let index = 0; index < count; index += 1) {
+      const button = buttons.nth(index);
+      const action = ((await button.getAttribute('data-testid')) ?? '').replace('run-action-', '');
+      if ((await button.getAttribute('data-allowed')) === 'true') allowed.push(action);
+      if (await button.isEnabled()) enabled.push(action);
+    }
+    return { allowed: allowed.sort(), enabled: enabled.sort() };
   }
+  const menu = await openWorkspaceMenu(page);
+  const items = menu.locator('[data-testid^="menu-run-"]:not([data-testid="menu-run-details"])');
+  const count = await items.count();
+  for (let index = 0; index < count; index += 1) {
+    const item = items.nth(index);
+    const action = ((await item.getAttribute('data-testid')) ?? '').replace('menu-run-', '');
+    allowed.push(action);
+    if ((await item.getAttribute('aria-disabled')) !== 'true') enabled.push(action);
+  }
+  await closeWorkspaceMenu(page);
   return { allowed: allowed.sort(), enabled: enabled.sort() };
 }
 
 /**
- * TC-CTL-006, as one comparison: the buttons a person can press are exactly the actions the engine
+ * TC-CTL-006, as one comparison: the controls a person can press are exactly the actions the engine
  * published for this run, and nothing else. The expectation is never a table in this file — it is
  * `run.allowedActions` as `GET /runs/:id` answered it, read in the same breath as the DOM.
  */
@@ -424,7 +625,11 @@ async function expectControlsMatchEngine(
     (run) => run.status === status,
     `the engine reports ${status}`,
   );
-  await expect(runControls(page)).toHaveAttribute('data-status', status);
+  if (await runControls(page).isVisible()) {
+    await expect(runControls(page)).toHaveAttribute('data-status', status);
+  } else {
+    await expect(runFooter(page)).toHaveAttribute('data-run-status', status);
+  }
 
   const run = await api<Run>(`/runs/${runId}`);
   expect(run.status, `the run is still ${status} while the toolbar is read`).toBe(status);
@@ -467,7 +672,7 @@ test.describe('Run controls (FR-CTL-001..006)', () => {
     // RUNNING and PAUSED, live on the Canvas, where the socket is what moves the toolbar.
     const slow = await importFixture('budget-cap.json');
     await openCanvas(page, slow.projectId, slow.workflowId);
-    await startButton(page).click();
+    await startRun(page);
 
     const live = await engineSays(
       () => latestRun(slow.workflowId),
@@ -477,12 +682,12 @@ test.describe('Run controls (FR-CTL-001..006)', () => {
     await expectControlsMatchEngine(page, live.id, 'RUNNING');
     seen.push('RUNNING');
 
-    await runAction(page, 'pause').click();
+    await runAction(page, 'pause');
     await expectControlsMatchEngine(page, live.id, 'PAUSED');
     seen.push('PAUSED');
 
     // HALTED: stop asks first, and the confirmation is part of the control (FR-CTL-003).
-    await runAction(page, 'stop').click();
+    await runAction(page, 'stop');
     await expect(page.getByTestId('stop-confirm')).toBeVisible();
     await page.getByTestId('stop-confirm-stop').click();
     const halted = await engineSays(
@@ -497,7 +702,7 @@ test.describe('Run controls (FR-CTL-001..006)', () => {
     // COMPLETE: a run that finishes on its own.
     const linear = await importFixture('review-fix.json');
     await openCanvas(page, linear.projectId, linear.workflowId);
-    await startButton(page).click();
+    await startRun(page);
     const complete = await engineSays(
       () => latestRun(linear.workflowId),
       (run) => run.status === 'COMPLETE',
@@ -517,7 +722,7 @@ test.describe('Run controls (FR-CTL-001..006)', () => {
       },
     });
     await openCanvas(page, broken.projectId, broken.workflowId);
-    await startButton(page).click();
+    await startRun(page);
     const blocked = await engineSays(
       () => latestRun(broken.workflowId),
       (run) => run.status === 'BLOCKED',
@@ -547,20 +752,21 @@ test.describe('Run controls (FR-CTL-001..006)', () => {
     const editor = byName('Editor');
 
     await openCanvas(page, projectId, workflowId);
-    await startButton(page).click();
+    await startRun(page);
 
     await expect(card(page, drafter.id)).toHaveAttribute('data-state', 'RUNNING', {
       timeout: 30_000,
     });
     const run = await latestRun(workflowId);
 
-    await runAction(page, 'pause').click();
+    await runAction(page, 'pause');
     await engineSays(
       () => api<Run>(`/runs/${run.id}`),
       (paused) => paused.status === 'PAUSED',
       'the engine paused the run',
     );
-    await expect(page.getByTestId('run-status')).toHaveAttribute('data-status', 'PAUSED');
+    // the run's state on screen: the workspace footer's (D330)
+    await expect(runFooter(page)).toHaveAttribute('data-run-status', 'PAUSED');
 
     /*
      * FR-CTL-001's real claim: a paused run dispatches nothing more. The Drafter that was already in
@@ -581,7 +787,7 @@ test.describe('Run controls (FR-CTL-001..006)', () => {
     await expect(card(page, editor.id)).toHaveAttribute('data-state', 'IDLE');
 
     // TC-CTL-002: Resume, and the run finishes on its own.
-    await runAction(page, 'resume').click();
+    await runAction(page, 'resume');
     const done = await engineSays(
       () => api<Run>(`/runs/${run.id}`),
       (resumed) => resumed.status === 'COMPLETE',
@@ -603,13 +809,13 @@ test.describe('Run controls (FR-CTL-001..006)', () => {
     const drafter = byName('Drafter');
 
     await openCanvas(page, projectId, workflowId);
-    await startButton(page).click();
+    await startRun(page);
     await expect(card(page, drafter.id)).toHaveAttribute('data-state', 'RUNNING', {
       timeout: 30_000,
     });
     const first = await latestRun(workflowId);
 
-    await runAction(page, 'stop').click();
+    await runAction(page, 'stop');
     const confirm = page.getByTestId('stop-confirm');
     await expect(confirm).toBeVisible();
     await page.getByTestId('stop-confirm-stop').click();
@@ -627,7 +833,7 @@ test.describe('Run controls (FR-CTL-001..006)', () => {
     await expect(page.getByTestId('halt-reason-advice')).toContainText('Nothing failed');
 
     // TC-CTL-004: Restart answers with a *new* run, and that is the run the operator is shown.
-    await runAction(page, 'restart').click();
+    await runAction(page, 'restart');
     /*
      * `RunSummary` carries no `restartedFromRunId`, so the history says only that a second run
      * exists; which run it was restarted from is read from the record itself.
@@ -664,7 +870,7 @@ test.describe('Errors (FR-ERR-002/006/007)', () => {
     const gatekeeper = byName('Gatekeeper');
 
     await openCanvas(page, projectId, workflowId);
-    await startButton(page).click();
+    await startRun(page);
 
     const run = await settledRun(workflowId);
     const failed = await nodeRunFor(run.id, gatekeeper.id);
@@ -709,7 +915,7 @@ test.describe('Errors (FR-ERR-002/006/007)', () => {
     const gatekeeper = byName('Gatekeeper');
 
     await openCanvas(page, projectId, workflowId);
-    await startButton(page).click();
+    await startRun(page);
     const run = await settledRun(workflowId);
     const failed = await nodeRunFor(run.id, gatekeeper.id);
     expect(failed.error?.providerId, 'FR-ERR-002: the error names the provider').toBeDefined();
@@ -727,7 +933,7 @@ test.describe('Errors (FR-ERR-002/006/007)', () => {
     const downstream = byName('Downstream');
 
     await openCanvas(page, projectId, workflowId);
-    await startButton(page).click();
+    await startRun(page);
     const run = await settledRun(workflowId);
 
     const blocked = await nodeRunFor(run.id, downstream.id);
@@ -745,10 +951,13 @@ test.describe('Errors (FR-ERR-002/006/007)', () => {
       'workflow',
     );
 
-    // The card is greyed, locked and says what blocked it — never tinted as a fault.
+    // The card is greyed, locked and says what blocked it — never tinted as a fault. (The lock
+    // glyph went with the re-skin: the card's status row reads Blocked, D332.)
     const downstreamCard = card(page, downstream.id);
     await expect(downstreamCard).toHaveAttribute('data-state', 'BLOCKED', { timeout: 30_000 });
-    await expect(page.getByTestId(`blocked-lock-${downstream.id}`)).toBeVisible();
+    const blockedChip = downstreamCard.getByTestId('status-chip');
+    await expect(blockedChip).toHaveAttribute('data-state', 'BLOCKED');
+    await expect(blockedChip).toHaveText('Blocked');
     await expect(page.getByTestId(`blocked-by-${downstream.id}`)).toContainText(gatekeeper.name);
     await expect(page.getByTestId(`failure-${downstream.id}`)).toHaveCount(0);
 
@@ -768,13 +977,13 @@ test.describe('Errors (FR-ERR-002/006/007)', () => {
     const drafter = byName('Drafter');
 
     await openCanvas(page, projectId, workflowId);
-    await startButton(page).click();
+    await startRun(page);
     await expect(card(page, drafter.id)).toHaveAttribute('data-state', 'RUNNING', {
       timeout: 30_000,
     });
     const run = await latestRun(workflowId);
 
-    await runAction(page, 'stop').click();
+    await runAction(page, 'stop');
     await expect(page.getByTestId('stop-confirm')).toBeVisible();
     await page.getByTestId('stop-confirm-stop').click();
     await engineSays(
@@ -828,15 +1037,15 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     const writer = byName('Writer');
 
     await openCanvas(page, projectId, workflowId);
-    await startButton(page).click();
+    await startRun(page);
 
-    // The WAITING state, labelled rather than only coloured (FR-EXE-009; the V2 card's status chip).
+    // The WAITING state, labelled rather than only coloured (FR-EXE-009): the card's status row
+    // prints the word beside the dot (D332).
     const writerCard = card(page, writer.id);
     await expect(writerCard).toHaveAttribute('data-state', 'WAITING', { timeout: 40_000 });
-    await expect(writerCard.getByTestId('status-chip').first()).toHaveAttribute(
-      'aria-label',
-      'waiting',
-    );
+    const waitingChip = writerCard.getByTestId('status-chip').first();
+    await expect(waitingChip).toHaveAttribute('data-state', 'WAITING');
+    await expect(waitingChip).toHaveText('Waiting');
 
     const run = await latestRun(workflowId);
     const pending = await engineSays(
@@ -854,8 +1063,12 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     await expect(cardForRequest).toHaveAttribute('data-check', request.checkType);
     await expect(cardForRequest).toContainText(writer.name);
     await expect(cardForRequest.getByTestId('approval-reason')).toHaveText(request.reason);
-    await expect(page.getByTestId('approvals-badge')).toHaveAttribute('data-count', '1');
+    // What is waiting is counted where the run is controlled: the workspace menu (D331).
+    const menu = await openWorkspaceMenu(page);
+    await expect(menu.getByTestId('menu-approvals')).toHaveText('Approvals (1)…');
+    await closeWorkspaceMenu(page);
 
+    await showOnCanvas(page, cardForRequest);
     await cardForRequest.getByRole('button', { name: /^Approve/ }).click();
 
     const done = await engineSays(
@@ -887,7 +1100,7 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     const writer = byName('Writer');
 
     await openCanvas(page, projectId, workflowId);
-    await startButton(page).click();
+    await startRun(page);
     const writerCard = card(page, writer.id);
     await expect(writerCard).toHaveAttribute('data-state', 'WAITING', { timeout: 40_000 });
 
@@ -899,10 +1112,9 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     );
     const request = pending[0] as ApprovalRequest;
 
-    await page
-      .getByTestId(`approval-card-${request.nodeRunId}`)
-      .getByRole('button', { name: /^Reject/ })
-      .click();
+    const approvalCard = page.getByTestId(`approval-card-${request.nodeRunId}`);
+    await showOnCanvas(page, approvalCard);
+    await approvalCard.getByRole('button', { name: /^Reject/ }).click();
 
     const writerRun = await engineSays(
       () => nodeRunFor(run.id, writer.id),
@@ -933,7 +1145,7 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     const writer = byName('Writer');
 
     await openCanvas(page, projectId, workflowId);
-    await startButton(page).click();
+    await startRun(page);
     await expect(card(page, writer.id)).toHaveAttribute('data-state', 'WAITING', {
       timeout: 40_000,
     });
@@ -1046,8 +1258,14 @@ test.describe('Guardrail policies (FR-GRD-001/002/011, TC-GRD-001/016)', () => {
       await select.click();
       const options = page.getByRole('option');
       // Every one of the five is offered, in the contract's order, with `ask_user` read out in words.
-      await expect(options).toHaveText(['pass', 'warn', 'redact', 'ask user', 'block']);
-      await options.filter({ hasText: new RegExp(`^${labels[action]}$`) }).click();
+      // Read as names: the kit's Select marks the chosen option with an aria-hidden "✓" (D328), so
+      // the option's text is "✓warn" while what it says is "warn".
+      const offered = ['pass', 'warn', 'redact', 'ask user', 'block'];
+      await expect(options).toHaveCount(offered.length);
+      for (const [at, name] of offered.entries()) {
+        await expect(options.nth(at)).toHaveAccessibleName(name);
+      }
+      await page.getByRole('option', { name: labels[action], exact: true }).click();
       await expect(select).toContainText(labels[action]);
     }
 
@@ -1126,7 +1344,7 @@ test.describe('Guardrail policies (FR-GRD-001/002/011, TC-GRD-001/016)', () => {
 
     const writerOnDefault = onDefault.byName('Writer');
     await openCanvas(page, onDefault.projectId, onDefault.workflowId);
-    await startButton(page).click();
+    await startRun(page);
     const warned = await settledRun(onDefault.workflowId);
     expect(warned.status, 'a warning lets the run finish').toBe('COMPLETE');
     const warnedRun = await nodeRunFor(warned.id, writerOnDefault.id);
@@ -1159,15 +1377,15 @@ test.describe('Guardrail policies (FR-GRD-001/002/011, TC-GRD-001/016)', () => {
     ).toBe(blocking.policy.id);
 
     await openCanvas(page, blocking.projectId, blocking.workflowId);
-    // The picker shows the override the node actually carries, with its version (FR-GRD-002).
-    await selectNode(page, writer.id);
-    await openSheet(page, 'Configure');
-    const picker = page.getByTestId('config-panel').getByLabel('Guardrail policy');
+    // The picker shows the override the node actually carries, with its version (FR-GRD-002), in
+    // the node's settings modal (D333).
+    const settings = await configureNode(page, writer.id);
+    const picker = settings.getByLabel('Guardrail policy');
     await expect(picker).toContainText(
       `${blocking.policy.name} · version ${blocking.policy.version}`,
     );
 
-    await startButton(page).click();
+    await startRun(page);
     const blocked = await settledRun(blocking.workflowId);
     const blockedRun = await nodeRunFor(blocked.id, writer.id);
     expect(blockedRun.status, 'the override blocks where the default only warned').toBe('FAILED');
@@ -1211,7 +1429,7 @@ test.describe('Guardrail policies (FR-GRD-001/002/011, TC-GRD-001/016)', () => {
     const input = redacting.byName('Input');
 
     await openCanvas(page, redacting.projectId, redacting.workflowId);
-    await startButton(page).click();
+    await startRun(page);
     const dialog = page.getByTestId('run-input-dialog');
     await expect(dialog).toBeVisible();
     await dialog.getByLabel(input.name).fill(`Send the handover to ${address} when it is ready.`);
@@ -1280,13 +1498,8 @@ test.describe('Loops (FR-CON-007, FR-PAR-005/006)', () => {
     };
 
     await openCanvas(page, projectId, workflowId);
-    await page.getByRole('button', { name: 'Fit to view' }).click();
-    await page.getByTestId(`loop-edge-${edgeId}`).locator('path').first().click({ force: true });
-    // the selected edge's settings are on the V2 sheet's Configure tab (D259)
-    await openSheet(page, 'Configure');
-
-    const editor = page.getByTestId('loop-edge-editor');
-    await expect(editor).toBeVisible();
+    // a loop edge's settings open in the settings modal from its menu's "Loop settings" (D333)
+    const editor = await openLoopSettings(page, edgeId);
     const maxIterations = editor.getByLabel('Max iterations');
     await expect(maxIterations).toHaveValue('3');
 
@@ -1312,12 +1525,8 @@ test.describe('Loops (FR-CON-007, FR-PAR-005/006)', () => {
 
     // And it survives a reload, because it is the engine that holds it (BR-01).
     await openCanvas(page, projectId, workflowId);
-    await page.getByRole('button', { name: 'Fit to view' }).click();
-    await page.getByTestId(`loop-edge-${edgeId}`).locator('path').first().click({ force: true });
-    await openSheet(page, 'Configure');
-    await expect(page.getByTestId('loop-edge-editor').getByLabel('Max iterations')).toHaveValue(
-      '3',
-    );
+    const reloaded = await openLoopSettings(page, edgeId);
+    await expect(reloaded.getByLabel('Max iterations')).toHaveValue('3');
   });
 
   test('TC-PAR-006: the iteration selector lists every iteration of a Review→Fix loop with distinct outputs', async ({
@@ -1329,7 +1538,7 @@ test.describe('Loops (FR-CON-007, FR-PAR-005/006)', () => {
     await openCanvas(page, projectId, workflowId);
     // Selected before the run: three iterations of streamed text grow this card past its neighbour.
     await selectNode(page, writer.id);
-    await startButton(page).click();
+    await startRun(page);
 
     const run = await settledRun(workflowId, 90_000);
     expect(run.status).toBe('COMPLETE');
@@ -1387,7 +1596,7 @@ test.describe('Budgets (FR-GRD-008)', () => {
 
     const { workflowId } = await importFixture('budget-cap.json', { projectId });
     await openCanvas(page, projectId, workflowId);
-    await startButton(page).click();
+    await startRun(page);
 
     const summary = await engineSays(
       () => latestRun(workflowId),

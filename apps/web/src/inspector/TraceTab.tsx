@@ -25,6 +25,9 @@ export const traceQueryKey = (runId: Id) => ['trace', runId] as const;
  * TC-OBS-001). Entries render exactly in the order the engine sends them — ascending `seq`, the
  * event log's own order — and are never re-sorted here. While the run is live the trace is
  * refetched on its frames and polled modestly; a finished run's trace cannot change.
+ *
+ * In the theme (D328): a mono small-caps heading with the count beside it, "live" as the theme's
+ * live pill, and the scope switch as a small Close pill.
  */
 export function TraceTab({ runId, nodeId }: { runId: Id; nodeId?: Id }) {
   const queryClient = useQueryClient();
@@ -63,28 +66,38 @@ export function TraceTab({ runId, nodeId }: { runId: Id; nodeId?: Id }) {
       <div className="flex flex-wrap items-center gap-2">
         <Heading
           id={`trace-heading-${runId}`}
-          className="font-human text-xs font-semibold uppercase tracking-wide text-fg-muted"
+          className="m-0 font-machine text-[9.5px] font-medium uppercase tracking-[0.1em] text-[var(--muted)]"
         >
           Trace
         </Heading>
         {trace.data && (
-          <span className="font-machine text-[11px] text-fg-muted" data-testid="trace-count">
+          <span
+            className="font-machine text-[10.5px] text-[var(--muted)]"
+            data-testid="trace-count"
+          >
             {narrowed
               ? `${entries.length} of ${all.length} entries`
               : `${all.length} ${all.length === 1 ? 'entry' : 'entries'}`}
           </span>
         )}
         {live && (
-          <span className="font-machine text-[11px] text-fg-muted" data-testid="trace-live">
+          <span
+            className="flex h-[24px] items-center gap-[5px] rounded-full border border-[var(--line)] px-[9px] font-machine text-[10px] text-[#2f9e63]"
+            data-testid="trace-live"
+          >
+            <span
+              aria-hidden
+              className="h-[6px] w-[6px] rounded-full bg-[#2f9e63] motion-safe:animate-[livePulse_2s_ease-in-out_infinite]"
+            />
             live
           </span>
         )}
         {nodeId !== undefined && (
           <Button
             type="button"
-            variant="ghost"
+            variant="secondary"
             size="sm"
-            className="ml-auto h-6 px-2 text-xs"
+            className="ml-auto h-[26px] px-[11px] text-[11px]"
             aria-pressed={wholeRun}
             data-testid="trace-scope-toggle"
             onClick={() => setWholeRun((value) => !value)}
@@ -95,9 +108,9 @@ export function TraceTab({ runId, nodeId }: { runId: Id; nodeId?: Id }) {
       </div>
 
       {trace.isPending ? (
-        <p className="text-sm text-fg-muted">Loading trace…</p>
+        <p className="m-0 py-3 text-center text-[13px] text-[var(--muted)]">Loading trace…</p>
       ) : trace.isError ? (
-        <p role="alert" className="text-sm text-[var(--color-status-FAILED)]">
+        <p role="alert" className="m-0 text-[13px] text-[#c94c27]">
           Could not load the trace: {trace.error.message}
         </p>
       ) : (

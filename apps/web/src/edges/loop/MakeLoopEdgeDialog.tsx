@@ -1,13 +1,5 @@
 import type { Edge, LoopConfig } from '@ace/contracts';
-import {
-  Button,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@ace/ui';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@ace/ui';
 import { useState } from 'react';
 
 import { LoopConfigFields } from './LoopConfigFields';
@@ -36,8 +28,13 @@ export interface LoopEdgeCandidate {
   replacesEdgeId?: string;
 }
 
+/** The theme's footer pills: Close (soft, hairline) and Done (ink on canvas), 34px. */
+const PILL_CLASS =
+  'h-[34px] cursor-pointer rounded-full px-[22px] text-[13px] font-semibold outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+
 /**
- * Turning a drawn arrow into the graph's one legal cycle (FR-CON-007, TC-CON-007).
+ * Turning a drawn arrow into the graph's one legal cycle (FR-CON-007, TC-CON-007), in the node
+ * settings modal's shell (D328): a header with the title, the loop fields, and a footer.
  *
  * The numbers are the editor's, so 0 and 51 iterations are refused inline by the contract's own rule
  * and the Create button stays off until the draft is one the engine would accept — a loop edge never
@@ -55,27 +52,42 @@ export function MakeLoopEdgeDialog({
   const [loop, setLoop] = useState<LoopConfig>(DEFAULT_LOOP_CONFIG);
   return (
     <Dialog open onOpenChange={(open) => !open && onCancel()}>
-      <DialogContent>
-        <div className="flex flex-col gap-4" data-testid="make-loop-edge">
-          <DialogHeader>
+      <DialogContent
+        hideClose
+        data-cfg="1"
+        className="flex w-[560px] max-w-[calc(100vw-48px)] flex-col gap-0 overflow-hidden p-0"
+      >
+        <div className="flex min-h-0 flex-col" data-testid="make-loop-edge">
+          <header className="flex flex-col gap-1 border-b border-[var(--line)] px-5 pb-4 pt-[18px]">
             <DialogTitle>Make this a loop edge?</DialogTitle>
             <DialogDescription>
               {candidate.fromNodeName} would send its output back to {candidate.toNodeName}, and
               everything between them would run again until the exit condition matches. This is the
               only kind of cycle a workflow may have.
             </DialogDescription>
-          </DialogHeader>
+          </header>
 
-          <LoopConfigFields value={loop} onCommit={setLoop} />
+          <div className="min-h-0 overflow-y-auto p-5">
+            <LoopConfigFields value={loop} onCommit={setLoop} />
+          </div>
 
-          <DialogFooter>
-            <Button variant="ghost" onClick={onCancel}>
+          <footer className="flex items-center justify-end gap-2.5 border-t border-[var(--line)] px-5 py-3">
+            <button
+              type="button"
+              className={`${PILL_CLASS} border border-[var(--line)] bg-[var(--soft)] text-[var(--ink)] hover:bg-[var(--hover)]`}
+              onClick={onCancel}
+            >
               Cancel
-            </Button>
-            <Button data-testid="make-loop-edge-create" onClick={() => onCreate(loop)}>
+            </button>
+            <button
+              type="button"
+              data-testid="make-loop-edge-create"
+              className={`${PILL_CLASS} border-none bg-[var(--ink)] text-[var(--canvas)]`}
+              onClick={() => onCreate(loop)}
+            >
               Create loop edge
-            </Button>
-          </DialogFooter>
+            </button>
+          </footer>
         </div>
       </DialogContent>
     </Dialog>

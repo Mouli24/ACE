@@ -5,10 +5,11 @@ import {
   type Node,
   type RunState,
 } from '@ace/contracts';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { startSocket, stopSocket } from '../app/socket';
+import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
 import { newId } from '../lib/ulid';
 import { createFakeWebSocket } from '../mocks/fake-socket';
@@ -28,12 +29,34 @@ import { useRunStore } from './run-store';
 
 installMockServer();
 
-// The desktop top bar no longer carries the halt note; WorkflowPage mounts it over the Canvas
-// (CanvasHaltNote beside the Canvas in its wrapper), so a plain stand-in Canvas is enough here and
-// these tests see the note where it now lives.
-vi.mock('../canvas/Canvas', () => ({
-  Canvas: ({ workflowId }: { workflowId: string }) => <div data-testid="canvas">{workflowId}</div>,
-}));
+/*
+ * The desktop header no longer carries the run bar or the approvals badge (D330): a run is started,
+ * controlled and answered from the canvas "…" menu, which lives in the real Canvas. With the Canvas
+ * stood in for, the stand-in mounts `RunBar` and `ApprovalsBadge` — the same controls, hooks and
+ * store the compact header uses — so the wiring is still driven end to end. WorkflowPage still
+ * mounts the halt note over the Canvas, so the halt shows there and in the run bar.
+ */
+vi.mock('../canvas/Canvas', async () => {
+  const { RunBar } = await import('../runs/RunBar');
+  const { ApprovalsBadge } = await import('../runs/approvals/ApprovalsBadge');
+  const { useRunStore: useStore } = await import('../runs/run-store');
+  function Badge() {
+    const runId = useStore((store) => store.runId);
+    return <ApprovalsBadge runId={runId} />;
+  }
+  return {
+    Canvas: ({ workflowId }: { workflowId: string }) => (
+      <>
+        <div data-testid="canvas">{workflowId}</div>
+        <RunBar workflowId={workflowId} />
+        <Badge />
+      </>
+    ),
+  };
+});
+
+// The bottom panel is hidden until the workspace menu opens it (D332); these tests use its tabs.
+beforeEach(() => usePanelsStore.setState({ bottomOpen: true }));
 
 afterEach(() => {
   stopSocket();
@@ -218,7 +241,10 @@ describe('TC-CTL-006 the run controls follow allowedActions and nothing else', (
       () => expect(screen.getByTestId('run-status')).toHaveAttribute('data-status', 'HALTED'),
       { timeout: 5_000 },
     );
-    expect(await screen.findByTestId('halt-reason')).toHaveTextContent('stopped by you');
+    // the run bar and the note over the Canvas say the same words
+    for (const halt of await screen.findAllByTestId('halt-reason')) {
+      expect(halt).toHaveTextContent('stopped by you');
+    }
   });
 });
 
@@ -236,11 +262,12 @@ describe('FR-GRD-008 a budget halt says which cap tripped', () => {
       () => expect(screen.getByTestId('run-status')).toHaveAttribute('data-status', 'HALTED'),
       { timeout: 5_000 },
     );
-    const halt = await screen.findByTestId('halt-reason');
-    expect(halt).toHaveTextContent(/budget exceeded/i);
-    // NFR-USE-03: both numbers, so the operator knows which cap to raise and by how much.
-    expect(halt).toHaveTextContent(/\$\d/);
-    expect(halt).toHaveTextContent(/cap/i);
+    for (const halt of await screen.findAllByTestId('halt-reason')) {
+      expect(halt).toHaveTextContent(/budget exceeded/i);
+      // NFR-USE-03: both numbers, so the operator knows which cap to raise and by how much.
+      expect(halt).toHaveTextContent(/\$\d/);
+      expect(halt).toHaveTextContent(/cap/i);
+    }
   });
 });
 
@@ -388,7 +415,8 @@ describe('TC-PAR-006 the inspector lists every iteration of a loop', () => {
 
     useSelectionStore.getState().setSelection([agent.id], []);
     // the sheet over the Canvas holds this tab; it is closed until the top bar opens it
-    await user.click(screen.getByTestId('sheet-toggle'));
+    // the workspace menu's "Workflow panel" opens the sheet (D331)
+    act(() => usePanelsStore.getState().openSheet());
     await user.click(screen.getByRole('tab', { name: 'Inspector' }));
 
     const selector = await screen.findByTestId('iteration-selector', undefined, { timeout: 5_000 });

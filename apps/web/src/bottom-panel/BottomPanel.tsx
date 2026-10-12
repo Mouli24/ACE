@@ -1,5 +1,4 @@
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@ace/ui';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { Badge, Tabs, TabsContent, TabsList, TabsTrigger } from '@ace/ui';
 import { useMemo } from 'react';
 
 import { usePanelsStore, type BottomTab } from '../app/stores/panels';
@@ -13,7 +12,13 @@ import { EventsTab } from './EventsTab';
 import { TimelineTab } from './TimelineTab';
 import { ValidationTab } from './ValidationTab';
 
-/** Bottom pane (Arch §33.1 step 5): Validation, Events, Errors and the round-4 Timeline. */
+/**
+ * Bottom pane (Arch §33.1 step 5): Validation, Events, Errors and the round-4 Timeline.
+ *
+ * Hidden until the workspace menu's "Problems & events" opens it (D332), so the header has no
+ * collapse toggle: the tabs are the kit's segmented pill, counts are mono chips, and the theme's
+ * 28px ✕ closes the panel (D328).
+ */
 export function BottomPanel({ workflowId }: { workflowId: string }) {
   const tab = usePanelsStore((s) => s.bottomTab);
   const setTab = usePanelsStore((s) => s.setBottomTab);
@@ -84,56 +89,48 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
     <Tabs
       value={tab}
       onValueChange={(v) => setTab(v as BottomTab)}
-      className="flex h-full flex-col bg-panel"
+      className="flex h-full flex-col bg-[var(--panel)] text-[var(--ink)]"
     >
-      <div className="flex h-10 shrink-0 items-center gap-0.5 px-2.5">
-        <TabsList className="flex h-10 items-center gap-0.5 rounded-none border-0 bg-transparent p-0">
+      <div className="flex h-11 shrink-0 items-center gap-2 px-[14px]">
+        <TabsList>
           {labels.map(([value, label]) => (
-            <TabsTrigger
-              key={value}
-              value={value}
-              className="h-7 flex-none gap-[7px] rounded-chip px-3 font-machine text-[10.5px] data-[state=active]:bg-card data-[state=active]:text-fg data-[state=active]:shadow-[inset_0_0_0_1px_var(--color-border)]"
-            >
+            <TabsTrigger key={value} value={value} className="flex-none gap-[6px] px-[14px]">
               {label}{' '}
               {counts[value] > 0 && (
-                <span
+                <Badge
                   data-testid={`bottom-count-${value}`}
-                  className={
-                    value === 'errors'
-                      ? 'rounded-chip bg-danger/20 px-1.5 py-px text-[9px] text-danger'
-                      : 'rounded-chip bg-border px-1.5 py-px text-[9px] text-fg-soft'
-                  }
+                  variant={value === 'errors' ? 'danger' : 'default'}
                 >
                   {counts[value]}
-                </span>
+                </Badge>
               )}
             </TabsTrigger>
           ))}
         </TabsList>
         <div className="flex-1" />
-        <button
-          type="button"
-          aria-label="Toggle panel"
-          data-testid="bottom-toggle"
-          aria-expanded={open}
-          onClick={toggle}
-          className="grid h-7 w-7 place-items-center rounded-chip text-fg-muted hover:bg-border hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
-        >
-          {open ? (
-            <ChevronDown className="h-3.5 w-3.5" aria-hidden />
-          ) : (
-            <ChevronUp className="h-3.5 w-3.5" aria-hidden />
-          )}
-        </button>
+        {open && (
+          <button
+            type="button"
+            aria-label="Close problems & events"
+            data-testid="bottom-toggle"
+            onClick={toggle}
+            className="grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border border-[var(--line)] bg-transparent text-[12px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+          >
+            <span aria-hidden>✕</span>
+          </button>
+        )}
       </div>
 
       {open && (
         <>
-          <TabsContent value="validation" className="min-h-0 flex-1 overflow-auto px-[18px] pb-3.5">
+          <TabsContent
+            value="validation"
+            className="min-h-0 flex-1 overflow-auto px-[16px] pb-[14px]"
+          >
             <ValidationTab workflowId={workflowId} />
           </TabsContent>
 
-          <TabsContent value="events" className="min-h-0 flex-1 overflow-auto px-[18px] pb-3.5">
+          <TabsContent value="events" className="min-h-0 flex-1 overflow-auto px-[16px] pb-[14px]">
             <EventsTab
               entries={events}
               nodes={nodes}
@@ -141,7 +138,7 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
             />
           </TabsContent>
 
-          <TabsContent value="errors" className="min-h-0 flex-1 overflow-auto px-[18px] pb-3.5">
+          <TabsContent value="errors" className="min-h-0 flex-1 overflow-auto px-[16px] pb-[14px]">
             <ErrorsTab
               nodes={nodes}
               edges={edges}
@@ -157,7 +154,10 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
             />
           </TabsContent>
 
-          <TabsContent value="timeline" className="min-h-0 flex-1 overflow-hidden px-[18px] pb-3.5">
+          <TabsContent
+            value="timeline"
+            className="min-h-0 flex-1 overflow-hidden px-[16px] pb-[14px]"
+          >
             {/* the project comes from the graph, so the "open full timeline" link renders (D-072) */}
             <TimelineTab
               workflowId={workflowId}

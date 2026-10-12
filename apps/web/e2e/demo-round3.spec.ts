@@ -3,17 +3,19 @@ import { expect, test } from '@playwright/test';
 import { nodeCard } from './helpers';
 import {
   NODE_NAMES,
+  clickStartRun,
+  closeWorkspaceMenu,
   controlState,
   engineNodeRuns,
   engineRun,
   enginePolicies,
+  expectRunStatus,
   inspect,
   openBottomTab,
   openRound3,
+  openWorkspaceMenu,
   runAction,
-  runStatus,
   setRunCostCap,
-  startRun,
   stillAllows,
   stopRun,
 } from './round3';
@@ -42,13 +44,13 @@ test.describe('Round 3 §1 — the operator can control, understand and constrai
     // The Review → Fix loop is on the Canvas before anything runs, with its maximum on show.
     await expect(page.getByTestId(`loop-edge-${loopEdgeId}`)).toHaveAttribute('data-kind', 'loop');
 
-    await startRun(page).click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'RUNNING', { timeout: 10_000 });
+    await clickStartRun(page);
+    await expectRunStatus(page, 'RUNNING', { timeout: 10_000 });
 
     // Pause and resume, each offered only because the engine said so (FR-CTL-006).
     await stillAllows(page, seeded.workflowId, 'pause');
-    await runAction(page, 'pause').click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'PAUSED', { timeout: 10_000 });
+    await runAction(page, 'pause');
+    await expectRunStatus(page, 'PAUSED', { timeout: 10_000 });
     const paused = await engineRun(page, seeded.workflowId);
     expect(await controlState(page)).toEqual({
       allowed: [...paused!.allowedActions].sort(),
@@ -56,8 +58,8 @@ test.describe('Round 3 §1 — the operator can control, understand and constrai
     });
 
     await stillAllows(page, seeded.workflowId, 'resume');
-    await runAction(page, 'resume').click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE', { timeout: 30_000 });
+    await runAction(page, 'resume');
+    await expectRunStatus(page, 'COMPLETE', { timeout: 30_000 });
 
     // Three iterations, each recorded and each tellable apart (FR-PAR-005).
     const inspector = await inspect(page, writer);
@@ -69,12 +71,12 @@ test.describe('Round 3 §1 — the operator can control, understand and constrai
     const seeded = await openRound3(page, 'chain', 'slow-stream');
     const [writer] = seeded.agentIds as [string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
     await expect(nodeCard(page, writer)).toHaveAttribute('data-state', 'RUNNING', {
       timeout: 10_000,
     });
     await stopRun(page);
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'HALTED', { timeout: 10_000 });
+    await expectRunStatus(page, 'HALTED', { timeout: 10_000 });
     await expect(page.getByTestId('workflow-page').getByTestId('halt-reason')).toContainText(
       'stopped by you',
     );
@@ -86,7 +88,7 @@ test.describe('Round 3 §1 — the operator can control, understand and constrai
 
     // And it can be started again from the ending it reached (FR-CTL-004).
     const first = (await engineRun(page, seeded.workflowId))!;
-    await runAction(page, 'restart').click();
+    await runAction(page, 'restart');
     await expect(page).toHaveURL(/\/runs\/[^/]+$/, { timeout: 10_000 });
     expect(page.url().split('/runs/')[1]).not.toBe(first.id);
   });
@@ -97,7 +99,7 @@ test.describe('Round 3 §1 — the operator can control, understand and constrai
     const seeded = await openRound3(page, 'chain', 'blocked-downstream');
     const [writer, editor] = seeded.agentIds as [string, string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
     await expect(nodeCard(page, writer)).toHaveAttribute('data-state', 'FAILED', {
       timeout: 15_000,
     });
@@ -117,8 +119,10 @@ test.describe('Round 3 §1 — the operator can control, understand and constrai
       `blocked by ${NODE_NAMES.first}`,
     );
 
-    // Retry is offered on the failed node, and is the engine's call to make (FR-ERR-003).
-    await nodeCard(page, writer).getByTestId(`node-actions-${writer}`).click();
+    // Retry is offered on the failed node, and is the engine's call to make (FR-ERR-003). The
+    // node's run menu is in the inspector's header (D332).
+    const inspector = await inspect(page, writer);
+    await inspector.getByTestId(`node-actions-${writer}`).click();
     await expect(page.getByTestId(`node-action-retry-${writer}`)).not.toHaveAttribute(
       'aria-disabled',
       'true',
@@ -132,7 +136,7 @@ test.describe('Round 3 §1 — the operator can control, understand and constrai
     const seeded = await openRound3(page, 'chain', 'waiting-approval');
     const [writer] = seeded.agentIds as [string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
 
     // WAITING, with the question anchored to the node that is asking (FR-GRD-013).
     await expect(nodeCard(page, writer)).toHaveAttribute('data-state', 'WAITING', {
@@ -142,10 +146,12 @@ test.describe('Round 3 §1 — the operator can control, understand and constrai
       .getByTestId(`node-approval-${writer}`)
       .locator('[data-testid^="approval-card-"]');
     await expect(approval).toBeVisible();
-    await expect(page.getByTestId('approvals-badge')).toHaveAttribute('data-count', '1');
+    const menu = await openWorkspaceMenu(page);
+    await expect(menu.getByTestId('menu-approvals')).toHaveText('Approvals (1)…');
+    await closeWorkspaceMenu(page);
     await approval.getByRole('button', { name: /^Approve/ }).click();
 
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE', { timeout: 25_000 });
+    await expectRunStatus(page, 'COMPLETE', { timeout: 25_000 });
 
     // The verdicts that led to the question are on the record, values never among them (FR-GRD-014).
     const inspector = await inspect(page, writer);
@@ -171,8 +177,8 @@ test.describe('Round 3 §1 — the operator can control, understand and constrai
     await page.reload();
     await expect(page.getByTestId('canvas')).toBeVisible();
 
-    await startRun(page).click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'HALTED', { timeout: 20_000 });
+    await clickStartRun(page);
+    await expectRunStatus(page, 'HALTED', { timeout: 20_000 });
     await expect(page.getByTestId('workflow-page').getByTestId('halt-reason')).toContainText(
       'budget exceeded: $0.012 > $0.01 cap',
     );

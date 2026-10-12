@@ -7,6 +7,7 @@ import { getSocket, startSocket, stopSocket } from '../app/socket';
 import { newId } from '../lib/ulid';
 import { createFakeWebSocket } from '../mocks/fake-socket';
 import { seedUsage } from '../mocks/seeds-round5';
+import { installMatchMedia, uninstallMatchMedia } from '../responsive/test-support';
 import { db, installMockServer, queryClient, renderApp } from '../test/app';
 import { formatCompact, formatUsd, startOfUtcDay, utcDate } from './format';
 
@@ -59,7 +60,17 @@ function addFailure(seeded: ReturnType<typeof seedUsage>) {
   });
 }
 
-describe('FR-OBS-002 day totals in the top bar', () => {
+/** At phone width the day's totals sit at the top of the header's menu (D330). */
+async function openPhoneMenu(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByTestId('topbar-menu'));
+}
+
+describe('FR-OBS-002 day totals in the phone header’s menu', () => {
+  beforeEach(() => {
+    installMatchMedia(true);
+  });
+  afterEach(() => uninstallMatchMedia());
+
   it('shows today’s tokens and cost from GET /usage, and links to /usage', async () => {
     seedUsage(db, 4);
     const expected = await api().getUsage({
@@ -71,6 +82,7 @@ describe('FR-OBS-002 day totals in the top bar', () => {
 
     const user = userEvent.setup();
     const { router } = renderApp('/settings');
+    await openPhoneMenu(user);
     const chip = await screen.findByTestId('day-totals-chip');
     expect(chip).toHaveTextContent(
       `Today: ${formatCompact(tokens)} tok · ${formatUsd(expected.totals.costUsd)}`,
@@ -84,7 +96,9 @@ describe('FR-OBS-002 day totals in the top bar', () => {
   it('takes the day totals a completed run’s usage.updated carries', async () => {
     const seeded = seedUsage(db, 1);
     openSocket(seeded.workflowId);
+    const user = userEvent.setup();
     renderApp('/settings');
+    await openPhoneMenu(user);
     await screen.findByTestId('day-totals-chip');
 
     act(() => {

@@ -28,18 +28,18 @@ export function ConfirmDialog({
 }) {
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-md">
+      <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-[440px]">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         {error && (
-          <p role="alert" className="text-sm text-danger">
+          <p role="alert" className="text-[12px] text-[#c94c27]">
             {error.message}
           </p>
         )}
         <DialogFooter>
-          <Button type="button" variant="ghost" onClick={onClose}>
+          <Button type="button" variant="secondary" onClick={onClose}>
             Cancel
           </Button>
           <Button type="button" variant="destructive" disabled={pending} onClick={onConfirm}>

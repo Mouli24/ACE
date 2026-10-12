@@ -6,9 +6,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { Composer } from './Composer';
 
 /*
- * Domain Gate 5, the composer (D3, D4, D324–D326): it previews who a message reaches, lets the
- * human remove a recipient, refuses to send what the server would refuse, autocompletes handles,
- * picks queue or interrupt, and — with no live run — starts one with the message as its goal.
+ * Domain Gate 5, the composer (D3, D4, D324–D326, D336): it previews who a message reaches, lets
+ * the human remove a recipient, refuses to send what the server would refuse, autocompletes
+ * handles, appends one from a mention chip, picks queue or interrupt, sends on Enter, and — with
+ * no live run — starts one with the message as its goal.
  */
 
 const WF = '01ARZ3NDEKTSV4RRFFQ69G5FAW';
@@ -38,10 +39,10 @@ const roster = rosterFor([
 function setup(props: Partial<Parameters<typeof Composer>[0]> = {}) {
   const onSend = vi.fn(async () => undefined);
   const onStart = vi.fn(async () => undefined);
-  render(
+  const { unmount } = render(
     <Composer roster={roster} states={{}} live onSend={onSend} onStart={onStart} {...props} />,
   );
-  return { onSend, onStart, box: screen.getByRole('textbox', { name: 'Message' }) };
+  return { onSend, onStart, unmount, box: screen.getByRole('textbox', { name: 'Message' }) };
 }
 
 const reaches = () =>
@@ -81,8 +82,65 @@ describe('Domain composer', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('@nvoa');
     expect(screen.getByRole('alert')).toHaveTextContent('@nova');
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
-    await user.keyboard('{Control>}{Enter}{/Control}');
+    await user.keyboard('{Enter}');
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('Enter sends; Shift+Enter breaks the line (D336)', async () => {
+    const user = userEvent.setup();
+    const { onSend, box } = setup();
+    await user.type(box, 'Nova, first line{Shift>}{Enter}{/Shift}second line');
+    expect(onSend).not.toHaveBeenCalled();
+    expect(box).toHaveValue('Nova, first line\nsecond line');
+    await user.keyboard('{Enter}');
+    expect(onSend).toHaveBeenCalledWith({
+      text: 'Nova, first line\nsecond line',
+      deliveryMode: 'queue',
+    });
+    expect(box).toHaveValue('');
+  });
+
+  it('a mention chip per agent appends its handle, with a space when needed', async () => {
+    const user = userEvent.setup();
+    const { box } = setup();
+    expect(
+      ['@nova', '@iris', '@theo', '@brain'].map((name) => screen.getByRole('button', { name })),
+    ).toHaveLength(4);
+    await user.click(screen.getByRole('button', { name: '@theo' }));
+    expect(box).toHaveValue('@theo ');
+    await user.type(box, 'and');
+    await user.click(screen.getByRole('button', { name: '@iris' }));
+    expect(box).toHaveValue('@theo and @iris ');
+    expect(reaches()).toEqual(['theo', 'iris']);
+  });
+
+  it('the send button names what it does: Send when live, Start team run otherwise', () => {
+    const { unmount } = render(
+      <Composer roster={roster} states={{}} live onSend={vi.fn()} onStart={vi.fn()} />,
+    );
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveTextContent('↑');
+    unmount();
+    render(
+      <Composer roster={roster} states={{}} live={false} onSend={vi.fn()} onStart={vi.fn()} />,
+    );
+    expect(screen.getByRole('button', { name: 'Start team run' })).toHaveTextContent('↑');
+  });
+
+  it('"Enter starts a team run" shows only when Enter does start one', () => {
+    const { unmount } = setup();
+    expect(screen.queryByText('Enter starts a team run')).not.toBeInTheDocument();
+    unmount();
+    setup({ live: false });
+    expect(screen.getByText('Enter starts a team run')).toBeInTheDocument();
+    // No live run: a handle means nothing yet, so no mention chips either.
+    expect(screen.queryByRole('button', { name: '@nova' })).not.toBeInTheDocument();
+  });
+
+  it('with no live run, Enter starts one with the message as its goal', async () => {
+    const user = userEvent.setup();
+    const { onStart, box } = setup({ live: false });
+    await user.type(box, 'Write a tagline{Enter}');
+    expect(onStart).toHaveBeenCalledWith('Write a tagline');
   });
 
   it('@all says whom it reaches and whom it skips, and refuses to interrupt', async () => {

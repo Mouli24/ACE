@@ -5,7 +5,7 @@ import { ForgeWorkbench } from './ForgeWorkbench';
 
 /** The Forge route element (D299). The project's folder is watched while it is mounted. */
 export function ForgePage() {
-  const { projectId = '' } = useParams();
+  const { projectId = '', workflowId } = useParams();
   useProjectFiles(projectId);
-  return <ForgeWorkbench projectId={projectId} />;
+  return <ForgeWorkbench projectId={projectId} workflowId={workflowId} />;
 }

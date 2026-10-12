@@ -32,6 +32,11 @@ afterEach(() => {
 });
 
 const step = () => screen.getByTestId('onboarding-page').getAttribute('data-step');
+/**
+ * The run's state on the Canvas: the workspace footer carries it as `data-run-status` now that the
+ * header has no run chip (D330).
+ */
+const runStatus = () => screen.queryByRole('contentinfo')?.getAttribute('data-run-status');
 
 async function chooseMock(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByTestId('onboarding-use-mock'));
@@ -73,10 +78,7 @@ describe('TC-ONB-001 a new user reaches a completed run with no key', () => {
     await waitFor(() =>
       expect(router.state.location.pathname).toMatch(/^\/projects\/\w+\/workflows\/\w+$/),
     );
-    await waitFor(
-      () => expect(screen.getByTestId('run-status')).toHaveAttribute('data-status', 'COMPLETE'),
-      { timeout: 8_000 },
-    );
+    await waitFor(() => expect(runStatus()).toBe('COMPLETE'), { timeout: 8_000 });
 
     const project = db.listProjects()[0]!;
     expect(project.name).toBe('Docs helper');
@@ -100,10 +102,7 @@ describe('TC-ONB-002 (UI) every template instantiates from the wizard and comple
     await chooseTemplate(user, TEMPLATE_NAMES[id]);
     await user.click(screen.getByRole('button', { name: 'Create project and run' }));
     await waitFor(() => expect(router.state.location.pathname).toMatch(/\/workflows\//));
-    await waitFor(
-      () => expect(screen.getByTestId('run-status')).toHaveAttribute('data-status', 'COMPLETE'),
-      { timeout: 8_000 },
-    );
+    await waitFor(() => expect(runStatus()).toBe('COMPLETE'), { timeout: 8_000 });
     expect(db.listProjects()).toHaveLength(1);
   });
 });

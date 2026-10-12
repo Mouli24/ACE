@@ -27,6 +27,17 @@ describe('D299 Ideate and Forge, one click apart', () => {
     expect(screen.getByTestId('chat-aside')).toBeInTheDocument();
   });
 
+  it('lays the chat column beside the main area as a fixed aside, not a resizable pane (D330)', async () => {
+    renderApp(seed().ideate);
+    await screen.findByTestId('canvas');
+    const column = screen.getByTestId('chat-column');
+    expect(column).toHaveClass('flex', 'shrink-0');
+    const main = column.previousElementSibling as HTMLElement;
+    expect(main).toHaveClass('flex', 'min-w-0', 'flex-1');
+    expect(main).toContainElement(screen.getByTestId('canvas'));
+    expect(screen.queryByRole('separator')).toBeNull();
+  });
+
   it('switches to Forge and back by button, keeping the very same chat column mounted', async () => {
     const user = userEvent.setup();
     const { router } = renderApp(seed().ideate);
@@ -53,29 +64,19 @@ describe('D299 Ideate and Forge, one click apart', () => {
     await user.keyboard('{Control>}{Alt>}b{/Alt}{/Control}');
     expect(screen.queryByTestId('chat-aside')).toBeNull();
     expect(useLayoutStore.getState().chatOpen).toBe(false);
+    expect(screen.getByTestId('chat-toggle')).toHaveAttribute('aria-pressed', 'false');
   });
 
-  it('keeps the mode when another workflow’s tab is chosen', async () => {
-    const user = userEvent.setup();
-    const { project, second, ideate } = seed();
-    const { router } = renderApp(`${ideate}/forge`);
-    await screen.findByTestId('forge');
-    await user.click(await screen.findByRole('tab', { name: 'Second' }));
-    await waitFor(() =>
-      expect(router.state.location.pathname).toBe(
-        `/projects/${project.id}/workflows/${second.id}/forge`,
-      ),
-    );
-  });
-
-  it('shows New node and the workflow panel toggle in Ideate only', async () => {
+  it('Split shows in all three modes: CHAT in Ideate and Forge, TEAM in Domain', async () => {
     const user = userEvent.setup();
     renderApp(seed().ideate);
-    expect(await screen.findByTestId('new-node-button')).toBeInTheDocument();
+    expect(await screen.findByTestId('chat-toggle')).toHaveAccessibleName('CHAT Split');
     await user.click(screen.getByRole('radio', { name: /Forge/ }));
     await screen.findByTestId('forge');
-    expect(screen.queryByTestId('new-node-button')).toBeNull();
-    expect(screen.queryByTestId('sheet-toggle')).toBeNull();
+    expect(screen.getByTestId('chat-toggle')).toHaveAccessibleName('CHAT Split');
+    await user.click(screen.getByRole('radio', { name: /Domain/ }));
+    await screen.findByTestId('domain-page');
+    expect(screen.getByTestId('chat-toggle')).toHaveAccessibleName('TEAM Split');
   });
 
   it('says so when the workflow does not exist', async () => {
@@ -84,16 +85,14 @@ describe('D299 Ideate and Forge, one click apart', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Workflow not found.');
   });
 
-  it('offers the switch on the timeline with neither mode checked, and Ideate leads back', async () => {
+  it('the timeline is outside the workspace: Home’s header, no switch, and a way back to the Canvas', async () => {
     const user = userEvent.setup();
     const { project, main, ideate } = seed();
     const { router } = renderApp(`${ideate}/timeline`);
-    expect(await screen.findByTestId('mode-switch')).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: /Ideate/ })).toHaveAttribute('aria-checked', 'false');
-    expect(screen.getByRole('radio', { name: /Forge/ })).toHaveAttribute('aria-checked', 'false');
+    expect(await screen.findByTestId('section-label')).toHaveTextContent('TIMELINE');
+    expect(screen.queryByTestId('mode-switch')).toBeNull();
     expect(screen.queryByTestId('chat-toggle')).toBeNull();
-    expect(screen.queryByTestId('new-node-button')).toBeNull();
-    await user.click(screen.getByRole('radio', { name: /Ideate/ }));
+    await user.click(screen.getByRole('link', { name: 'open the Canvas' }));
     await waitFor(() =>
       expect(router.state.location.pathname).toBe(`/projects/${project.id}/workflows/${main.id}`),
     );

@@ -1,52 +1,71 @@
-import { useQueryClient } from '@tanstack/react-query';
-import { ChevronsDownUp, RefreshCw } from 'lucide-react';
+import { useState } from 'react';
 
 import { useProject } from '../../projects/hooks';
+import type { AgentLook } from '../../theme/agents';
 import { openFile } from '../editor/actions';
-import { fileKeys } from '../files/keys';
-import { IconAction } from '../layout/IconAction';
-import { useExplorerStore } from './explorer-store';
+import { useFileList } from '../files/hooks';
 import { FileTree } from './FileTree';
-import { OpenEditors } from './OpenEditors';
 
-/** The Explorer view (design §6.4). Open editors sit above; Task 16 the create buttons. */
-export function ExplorerView({ projectId }: { projectId: string }) {
+/** "{n} files" from the project's file list; `n+` when the engine cut the list short. */
+function fileCount(list: { files: readonly string[]; truncated: boolean } | undefined): string {
+  if (list === undefined) return '';
+  return `${list.files.length}${list.truncated ? '+' : ''} files`;
+}
+
+/**
+ * The theme's Explorer (D334): a fixed 248px column — "EXPLORER" and the file count, the tree, and
+ * the filter at the bottom. The file watcher keeps it fresh, so it has no refresh or collapse.
+ */
+export function ExplorerView({
+  projectId,
+  live,
+}: {
+  projectId: string;
+  /** Path → the agent writing it now (D334). */
+  live?: ReadonlyMap<string, AgentLook>;
+}) {
   const project = useProject(projectId);
-  const queryClient = useQueryClient();
-  const collapseAll = useExplorerStore((s) => s.collapseAll);
+  const list = useFileList(projectId, true);
+  const [filter, setFilter] = useState('');
   const name = project.data?.name ?? 'Project';
+  const count = fileCount(list.data);
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="flex h-9 shrink-0 items-center px-3 font-machine text-[10.5px] uppercase tracking-[0.12em] text-fg-muted">
-        Explorer
-      </header>
-      <OpenEditors projectId={projectId} />
-      <section aria-label={name} className="flex min-h-0 flex-1 flex-col">
-        <div className="flex h-7 shrink-0 items-center gap-0.5 px-2">
-          <h3 className="min-w-0 flex-1 truncate font-machine text-[11px] font-semibold uppercase tracking-[0.06em] text-fg-soft">
-            {name}
-          </h3>
-          <IconAction
-            label="Refresh Explorer"
-            Icon={RefreshCw}
-            onClick={() =>
-              void queryClient.invalidateQueries({ queryKey: fileKeys.all(projectId) })
-            }
-          />
-          <IconAction
-            label="Collapse folders"
-            Icon={ChevronsDownUp}
-            onClick={() => collapseAll(projectId)}
-          />
-        </div>
-        <div className="min-h-0 flex-1 overflow-auto">
-          <FileTree
-            projectId={projectId}
-            label={`Files of ${name}`}
-            onOpen={(path, options) => openFile(projectId, path, options)}
-          />
-        </div>
-      </section>
-    </div>
+    <nav
+      aria-label="Explorer"
+      className="flex w-[248px] shrink-0 flex-col border-r border-[var(--line)] bg-[var(--panel)]"
+    >
+      <div className="flex items-center gap-[8px] px-[14px] pb-[8px] pt-[12px]">
+        <span className="font-machine text-[10px] tracking-[0.1em] text-[var(--muted)]">
+          EXPLORER
+        </span>
+        <div className="flex-1" />
+        {count !== '' && (
+          <span
+            data-testid="explorer-count"
+            className="whitespace-nowrap text-[10.5px] text-[var(--muted)]"
+          >
+            {count}
+          </span>
+        )}
+      </div>
+      <FileTree
+        projectId={projectId}
+        label={`Files of ${name}`}
+        filter={filter}
+        live={live}
+        onOpen={(path, options) => openFile(projectId, path, options)}
+      />
+      <div className="border-t border-[var(--line)] p-[10px]">
+        <input
+          type="text"
+          value={filter}
+          onChange={(event) => setFilter(event.target.value)}
+          placeholder="Filter files…"
+          aria-label="Filter files"
+          spellCheck={false}
+          className="h-[30px] w-full rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-[10px] text-[12px] [font-family:inherit] text-[var(--ink)] outline-none focus:border-[#ef6b3f]"
+        />
+      </div>
+    </nav>
   );
 }

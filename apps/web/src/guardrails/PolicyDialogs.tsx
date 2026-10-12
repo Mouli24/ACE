@@ -31,7 +31,7 @@ function affectedNodeIds(error: unknown): string[] | undefined {
 function ErrorLine({ error }: { error: Error | null }) {
   if (!error) return null;
   return (
-    <p role="alert" className="text-sm text-danger">
+    <p role="alert" className="text-[12px] text-[#c94c27]">
       {error.message}
     </p>
   );
@@ -79,7 +79,7 @@ export function NewPolicyDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-[7px]">
             <Label htmlFor="new-policy-name">Name</Label>
             <Input
               id="new-policy-name"
@@ -94,7 +94,7 @@ export function NewPolicyDialog({
 
           <ErrorLine error={create.error} />
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={onClose}>
+            <Button type="button" variant="secondary" onClick={onClose}>
               Cancel
             </Button>
             <Button type="submit" disabled={!name.trim() || create.isPending}>
@@ -138,17 +138,17 @@ export function DeletePolicyDialog({
           <div
             role="alert"
             data-testid="policy-in-use"
-            className="flex flex-col gap-2 rounded-card border border-border bg-card p-3 text-sm"
+            className="flex flex-col gap-2 rounded-[10px] border border-[var(--line)] bg-[var(--soft)] px-3 py-[10px] text-[12px]"
           >
             <p>{remove.error?.message}</p>
             {inUse.length > 0 && (
-              <ul className="flex flex-col gap-1 font-machine text-xs text-fg-muted">
+              <ul className="flex flex-col gap-1 font-machine text-[11px] text-[var(--muted)]">
                 {inUse.map((nodeId) => (
                   <li key={nodeId}>{nodeId}</li>
                 ))}
               </ul>
             )}
-            <p className="text-fg-muted">
+            <p className="text-[var(--muted)]">
               Deleting it anyway leaves those agents on the project default.
             </p>
           </div>
@@ -156,7 +156,7 @@ export function DeletePolicyDialog({
         {inUse === undefined && <ErrorLine error={remove.error} />}
 
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose}>
             Cancel
           </Button>
           <Button

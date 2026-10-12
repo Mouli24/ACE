@@ -1,5 +1,4 @@
 import type { Part } from '@ace/contracts';
-import { Download, File as FileIcon, ZoomIn, ZoomOut } from 'lucide-react';
 import { useState } from 'react';
 
 import { cn } from '../lib/cn.js';
@@ -14,12 +13,25 @@ import { Markdown } from './markdown.js';
  * a file's bytes are never in hand here — a Part is a reference (`artifactId`), and the caller
  * passes `contentUrl` to turn that reference into a URL the browser can load or download. That keeps
  * the token and the SDK on the web side and the pixels on this side.
+ *
+ * Styled in the Ace UI theme (D328): media sit in radius-10 frames on the canvas colour, a file is
+ * the theme's output card (an extension dot like the Forge explorer's, the name, mono meta and a
+ * "Download →" chip), and the zoom toggle uses the theme's + / − glyphs.
  */
 
 /** Turns an artifact id into a loadable/downloadable URL (the SDK's `artifactContentUrl`). */
 export type ContentUrl = (artifactId: string) => string;
 
 type MediaPart = Extract<Part, { artifactId: string }>;
+
+/** The Forge explorer's file dot colour, by extension (the theme's `icon()`). */
+function fileDotColor(name: string): string {
+  const ext = name.split('.').pop() ?? '';
+  const byExt: Readonly<Record<string, string>> = { ts: '#1f97a3', md: '#ef6b3f', json: '#f2c14e' };
+  return byExt[ext] ?? 'var(--iconLine)';
+}
+
+const FOCUS = 'outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
 
 export interface PartRendererProps {
   part: Part;
@@ -43,27 +55,35 @@ export interface ImagePartViewProps {
 export function ImagePartView({ part, contentUrl, className }: ImagePartViewProps) {
   const [zoomed, setZoomed] = useState(false);
   return (
-    <figure data-testid="image-part" className={cn('flex flex-col gap-1', className)}>
+    <figure data-testid="image-part" className={cn('m-0 flex flex-col gap-[6px]', className)}>
       <button
         type="button"
         onClick={() => setZoomed((value) => !value)}
         aria-label={zoomed ? 'Zoom out' : 'Zoom in'}
         aria-pressed={zoomed}
-        className="group relative max-w-full overflow-auto rounded border border-border bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        className={cn(
+          'group relative max-w-full cursor-pointer overflow-auto rounded-[10px] border border-[var(--line)] bg-[var(--canvas)] p-0',
+          FOCUS,
+        )}
       >
         <img
           src={contentUrl(part.artifactId)}
           alt={part.name}
           className={cn(
-            'block h-auto rounded',
+            'block h-auto rounded-[9px]',
             zoomed ? 'max-w-none cursor-zoom-out' : 'max-w-full cursor-zoom-in',
           )}
         />
-        <span className="pointer-events-none absolute right-1 top-1 rounded bg-canvas/80 p-1 text-fg-muted">
-          {zoomed ? <ZoomOut className="h-3 w-3" aria-hidden /> : <ZoomIn className="h-3 w-3" aria-hidden />}
+        <span
+          aria-hidden
+          className="pointer-events-none absolute right-[6px] top-[6px] grid h-[22px] w-[22px] place-items-center rounded-[7px] border border-[var(--line)] bg-[var(--surface)] text-[12px] leading-none text-[var(--ink)]"
+        >
+          {zoomed ? '−' : '+'}
         </span>
       </button>
-      <figcaption className="truncate font-machine text-[10px] text-fg-muted">{part.name}</figcaption>
+      <figcaption className="truncate font-machine text-[10px] text-[var(--muted)]">
+        {part.name}
+      </figcaption>
     </figure>
   );
 }
@@ -82,7 +102,10 @@ export interface MediaPartViewProps {
 export function MediaPartView({ part, kind, contentUrl, className }: MediaPartViewProps) {
   const src = contentUrl(part.artifactId);
   return (
-    <div data-testid={`${kind}-part`} className={cn('flex max-w-full flex-col gap-1', className)}>
+    <div
+      data-testid={`${kind}-part`}
+      className={cn('flex max-w-full flex-col gap-[6px]', className)}
+    >
       {kind === 'audio' ? (
         <audio data-testid="audio-el" controls preload="metadata" src={src} className="w-full">
           <track kind="captions" />
@@ -93,12 +116,12 @@ export function MediaPartView({ part, kind, contentUrl, className }: MediaPartVi
           controls
           preload="metadata"
           src={src}
-          className="max-h-80 w-full rounded border border-border bg-black"
+          className="max-h-80 w-full rounded-[10px] border border-[var(--line)] bg-[var(--canvas)]"
         >
           <track kind="captions" />
         </video>
       )}
-      <span className="truncate font-machine text-[10px] text-fg-muted">{part.name}</span>
+      <span className="truncate font-machine text-[10px] text-[var(--muted)]">{part.name}</span>
     </div>
   );
 }
@@ -122,27 +145,37 @@ export function FileDownloadCard({ part, contentUrl, hash, className }: FileDown
       href={contentUrl(part.artifactId)}
       download={part.name}
       className={cn(
-        'flex w-full max-w-sm items-center gap-3 rounded-card border border-border bg-card p-3 no-underline hover:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent',
+        'group flex w-full max-w-sm items-center gap-[10px] rounded-[12px] border border-[var(--line)] bg-[var(--surface)] px-[14px] py-[11px] text-[var(--ink)] no-underline hover:border-[var(--iconLine)] hover:text-[var(--ink)]',
+        FOCUS,
         className,
       )}
     >
-      <FileIcon className="h-6 w-6 shrink-0 text-fg-muted" aria-hidden />
+      <span
+        aria-hidden
+        className="h-[8px] w-[8px] shrink-0 rounded-full"
+        style={{ background: fileDotColor(part.name) }}
+      />
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-human text-sm text-fg">{part.name}</span>
-        <span className="block truncate font-machine text-[10px] text-fg-muted">
+        <span className="block truncate text-[13px] font-semibold">{part.name}</span>
+        <span className="block truncate font-machine text-[11px] text-[var(--muted)]">
           {formatBytes(part.size)} · {part.mime}
         </span>
         {hash !== undefined && (
           <span
             data-testid="file-hash"
-            className="block truncate font-machine text-[10px] text-fg-muted"
+            className="block truncate font-machine text-[10px] text-[var(--muted)]"
             title={hash}
           >
             sha256 {hash.slice(0, 12)}…
           </span>
         )}
       </span>
-      <Download className="h-4 w-4 shrink-0 text-fg-muted" aria-hidden />
+      <span
+        aria-hidden
+        className="flex h-[28px] shrink-0 items-center rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-[12px] text-[12px] font-semibold text-[var(--ink)] group-hover:bg-[var(--hover)]"
+      >
+        Download →
+      </span>
     </a>
   );
 }
@@ -181,7 +214,12 @@ export function PartRenderer({ part, contentUrl, hash, className }: PartRenderer
     case 'file':
     default:
       return contentUrl ? (
-        <FileDownloadCard part={part as MediaPart} contentUrl={contentUrl} hash={hash} className={className} />
+        <FileDownloadCard
+          part={part as MediaPart}
+          contentUrl={contentUrl}
+          hash={hash}
+          className={className}
+        />
       ) : (
         <MissingUrl part={part as MediaPart} className={className} />
       );
@@ -193,9 +231,16 @@ function MissingUrl({ part, className }: { part: MediaPart; className?: string }
   return (
     <span
       data-testid="part-missing-url"
-      className={cn('inline-flex items-center gap-1 font-machine text-[10px] text-fg-muted', className)}
+      className={cn(
+        'inline-flex items-center gap-[6px] font-machine text-[10px] text-[var(--muted)]',
+        className,
+      )}
     >
-      <FileIcon className="h-3 w-3" aria-hidden />
+      <span
+        aria-hidden
+        className="h-[7px] w-[7px] shrink-0 rounded-full"
+        style={{ background: fileDotColor(part.name) }}
+      />
       {part.name} ({formatBytes(part.size)})
     </span>
   );

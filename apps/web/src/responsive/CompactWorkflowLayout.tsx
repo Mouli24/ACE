@@ -17,6 +17,7 @@ const TABS = ['Canvas', 'Runs', 'Inspector', 'Chat', 'Memory'] as const;
  * the selected node's output, chat, and memory. No palette, no config panel, no resize handles.
  *
  * `canvas` is passed in rather than built here so the page that owns the Canvas decides its props.
+ * The tabs are the kit's segmented pill (D328), kept 44px tall for touch (FR-MOB-002).
  */
 export function CompactWorkflowLayout({
   workflowId,
@@ -28,7 +29,7 @@ export function CompactWorkflowLayout({
   return (
     <Tabs
       defaultValue="Canvas"
-      className="flex h-full min-w-0 flex-col"
+      className="flex h-full min-w-0 flex-col bg-[var(--canvas)] text-[var(--ink)]"
       data-testid="compact-workflow"
     >
       <TabsList className="m-2 flex shrink-0 overflow-x-auto">

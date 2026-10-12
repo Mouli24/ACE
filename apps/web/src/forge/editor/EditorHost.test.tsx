@@ -3,6 +3,8 @@ import { render } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { asMonaco, createFakeMonaco, type FakeMonaco } from '../../test/fake-monaco';
+import type { FileTouch } from '../attribution';
+import { useEditorStatus } from './editor-status';
 import type * as EditorHostTypes from './EditorHost';
 import { ensureModel, resetModels, setMonaco, viewStateOf } from './models';
 
@@ -25,6 +27,9 @@ const INITIAL: TextFileContent = {
 };
 const P = '01J9ZZZZZZZZZZZZZZZZZZZZZZ';
 let fake: FakeMonaco;
+/** Every decoration list the editors were given, newest last. */
+let painted: Array<Array<{ range: unknown; options: { glyphMarginClassName?: string } }>>;
+let options: Array<Record<string, unknown>>;
 
 type EditorHostModule = typeof EditorHostTypes;
 
@@ -36,6 +41,31 @@ async function realHost() {
 beforeEach(() => {
   resetModels();
   fake = createFakeMonaco();
+  painted = [];
+  options = [];
+  // The shared fake has no decorations or ranges; the agent bars need both.
+  const create = fake.editor.create;
+  Object.assign(fake.editor, {
+    create: (_element: unknown, given: Record<string, unknown>) => {
+      options.push(given);
+      return Object.assign(create(), {
+        createDecorationsCollection: () => ({
+          set: (list: (typeof painted)[number]) => painted.push(list),
+          clear: () => painted.push([]),
+        }),
+      });
+    },
+  });
+  Object.assign(fake, {
+    Range: class {
+      constructor(
+        readonly startLineNumber: number,
+        readonly startColumn: number,
+        readonly endLineNumber: number,
+        readonly endColumn: number,
+      ) {}
+    },
+  });
   hoisted.current = fake;
   setMonaco(asMonaco(fake));
 });
@@ -63,6 +93,51 @@ describe('D299 the real editor host keeps each file’s place', () => {
     fake.editors[0]!.line = 7;
     view.rerender(<EditorHost projectId={P} path="b.ts" initial={undefined} />);
     expect(viewStateOf(P, 'a.ts')).toEqual({ line: 7 });
+    view.unmount();
+  });
+});
+
+describe('D334 the editor in the theme’s code view', () => {
+  it('uses the theme’s type and gutter, without a minimap or folding', async () => {
+    const EditorHost = await realHost();
+    render(<EditorHost projectId={P} path="a.ts" initial={INITIAL} />).unmount();
+    expect(options[0]).toMatchObject({
+      fontFamily: "'JetBrains Mono', monospace",
+      fontSize: 13,
+      lineHeight: 20,
+      minimap: { enabled: false },
+      padding: { top: 12 },
+      glyphMargin: true,
+      folding: false,
+      renderLineHighlight: 'all',
+    });
+  });
+
+  it('tells the footer which text file it shows, and that it shows none once unmounted', async () => {
+    const EditorHost = await realHost();
+    const view = render(<EditorHost projectId={P} path="a.ts" initial={INITIAL} />);
+    expect(useEditorStatus.getState().path).toBe('a.ts');
+    view.unmount();
+    expect(useEditorStatus.getState().path).toBeNull();
+  });
+
+  it('draws the agent’s bar beside the lines its last write covers', async () => {
+    const EditorHost = await realHost();
+    ensureModel(P, 'c.ts', 'one\ntwo\nthree\n', 'typescript', () => undefined);
+    const touch: FileTouch = {
+      agent: { nodeId: 'n2', name: 'Writer', letter: 'W', color: '#7a62d6', index: 1 },
+      at: '2026-10-10T10:00:00.000Z',
+      edit: ['two\nthree'],
+    };
+    const view = render(<EditorHost projectId={P} path="c.ts" initial={undefined} touch={touch} />);
+    expect(painted.at(-1)).toEqual([
+      {
+        range: { startLineNumber: 2, startColumn: 1, endLineNumber: 3, endColumn: 1 },
+        options: { isWholeLine: true, glyphMarginClassName: 'forge-agent-bar forge-agent-1' },
+      },
+    ]);
+    view.rerender(<EditorHost projectId={P} path="c.ts" initial={undefined} />);
+    expect(painted.at(-1)).toEqual([]);
     view.unmount();
   });
 });

@@ -75,14 +75,14 @@ function UnsavedDialog({
           <DialogDescription>Your changes are lost if you don’t save them.</DialogDescription>
         </DialogHeader>
         {dirty.length > 1 && (
-          <ul className="font-machine text-[12px] text-fg-soft">
+          <ul className="font-machine text-[11px] text-[var(--muted)]">
             {dirty.map((path) => (
               <li key={path}>{path}</li>
             ))}
           </ul>
         )}
         <DialogFooter>
-          <Button variant="ghost" onClick={onDone}>
+          <Button variant="secondary" onClick={onDone}>
             Cancel
           </Button>
           <Button

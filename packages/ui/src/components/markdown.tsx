@@ -39,7 +39,10 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
       nodes.push(<strong key={key}>{match[2]}</strong>);
     } else if (match[4] !== undefined) {
       nodes.push(
-        <code key={key} className="rounded bg-canvas px-1 py-0.5 font-machine text-[0.85em]">
+        <code
+          key={key}
+          className="rounded-[4px] bg-[var(--hover)] px-[5px] py-px font-machine text-[0.88em] text-[var(--ink)]"
+        >
           {match[4]}
         </code>,
       );
@@ -56,7 +59,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
             href={href}
             target="_blank"
             rel="noreferrer noopener"
-            className="text-accent underline underline-offset-2 hover:opacity-80"
+            className="text-[#e8623a] underline underline-offset-2 hover:text-[#c94c27]"
           >
             {match[10]}
           </a>,
@@ -168,13 +171,14 @@ function parseBlocks(src: string): Block[] {
   return blocks;
 }
 
+/** The theme's type scale: 16 / 14.5 / 13.5 / 13 at 700, then its mono small-caps label. */
 const HEADING_CLASS: Readonly<Record<number, string>> = {
-  1: 'text-lg font-semibold',
-  2: 'text-base font-semibold',
-  3: 'text-sm font-semibold',
-  4: 'text-sm font-semibold',
-  5: 'text-xs font-semibold uppercase tracking-wide',
-  6: 'text-xs font-semibold uppercase tracking-wide',
+  1: 'text-[16px] font-bold tracking-[-0.01em]',
+  2: 'text-[14.5px] font-bold tracking-[-0.01em]',
+  3: 'text-[13.5px] font-bold',
+  4: 'text-[13px] font-bold',
+  5: 'font-machine text-[9.5px] font-medium uppercase tracking-[0.1em] text-[var(--muted)]',
+  6: 'font-machine text-[9.5px] font-medium uppercase tracking-[0.1em] text-[var(--muted)]',
 };
 
 /** Text with paragraph soft-breaks preserved as `<br>`. */
@@ -183,7 +187,11 @@ function withBreaks(text: string, keyPrefix: string): ReactNode[] {
   const out: ReactNode[] = [];
   parts.forEach((part, index) => {
     if (index > 0) out.push(<br key={`${keyPrefix}-br${index}`} />);
-    out.push(<Fragment key={`${keyPrefix}-t${index}`}>{renderInline(part, `${keyPrefix}-${index}`)}</Fragment>);
+    out.push(
+      <Fragment key={`${keyPrefix}-t${index}`}>
+        {renderInline(part, `${keyPrefix}-${index}`)}
+      </Fragment>,
+    );
   });
   return out;
 }
@@ -194,7 +202,10 @@ export function Markdown({ text, className }: MarkdownProps) {
   return (
     <div
       data-testid="markdown"
-      className={cn('space-y-2 break-words font-human text-sm leading-relaxed text-fg', className)}
+      className={cn(
+        'space-y-2 break-words font-human text-[13px] leading-[1.55] text-[var(--ink)]',
+        className,
+      )}
     >
       {blocks.map((block, index) => {
         const key = `b${index}`;
@@ -211,7 +222,7 @@ export function Markdown({ text, className }: MarkdownProps) {
             return (
               <pre
                 key={key}
-                className="overflow-x-auto rounded border border-border bg-canvas p-2 font-machine text-xs text-fg"
+                className="overflow-x-auto rounded-[8px] border border-[var(--line)] bg-[var(--canvas)] px-3 py-[10px] font-machine text-[12px] leading-[1.55] text-[var(--ink)]"
               >
                 <code>{block.text}</code>
               </pre>
@@ -220,29 +231,37 @@ export function Markdown({ text, className }: MarkdownProps) {
             return (
               <blockquote
                 key={key}
-                className="border-l-2 border-border pl-3 italic text-fg-muted"
+                className="border-l-2 border-[var(--line)] pl-3 text-[var(--muted)]"
               >
                 {withBreaks(block.text, key)}
               </blockquote>
             );
           case 'ul':
             return (
-              <ul key={key} className="list-disc space-y-1 pl-5">
+              <ul key={key} className="flex list-none flex-col gap-[6px] p-0">
                 {block.items.map((item, j) => (
-                  <li key={`${key}-${j}`}>{renderInline(item, `${key}-${j}`)}</li>
+                  <li key={`${key}-${j}`} className="flex gap-2">
+                    <span aria-hidden className="text-[#ef6b3f]">
+                      •
+                    </span>
+                    <span className="min-w-0">{renderInline(item, `${key}-${j}`)}</span>
+                  </li>
                 ))}
               </ul>
             );
           case 'ol':
             return (
-              <ol key={key} className="list-decimal space-y-1 pl-5">
+              <ol
+                key={key}
+                className="list-decimal space-y-[6px] pl-5 marker:font-machine marker:text-[11px] marker:text-[var(--muted)]"
+              >
                 {block.items.map((item, j) => (
                   <li key={`${key}-${j}`}>{renderInline(item, `${key}-${j}`)}</li>
                 ))}
               </ol>
             );
           case 'hr':
-            return <hr key={key} className="border-border" />;
+            return <hr key={key} className="border-0 border-t border-[var(--line)]" />;
           case 'p':
           default:
             return (

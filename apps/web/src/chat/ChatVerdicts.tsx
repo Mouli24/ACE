@@ -1,6 +1,14 @@
 import type { ChatVerdict } from '@ace/contracts';
 import { GUARDRAIL_ACTION_LABEL } from '@ace/ui';
-import { ShieldX } from 'lucide-react';
+
+/**
+ * The card a guardrail or a failure note sits in, in the theme's tokens (D335): the surface
+ * card with the theme's line, a 11px `#c94c27` heading and 12px ink body.
+ */
+export const CHAT_NOTE_CLASS =
+  'rounded-[12px] border border-[var(--line)] bg-[var(--surface)] px-[12px] py-[10px] text-[12px] leading-[1.45] text-[var(--ink)]';
+export const CHAT_NOTE_HEAD_CLASS =
+  'mb-1 flex flex-wrap items-center gap-[6px] text-[11px] font-semibold text-[#c94c27]';
 
 /**
  * The verdicts on a refused chat input or a blocked reply (FR-CHAT-008). A `ChatVerdict` is a
@@ -11,21 +19,21 @@ import { ShieldX } from 'lucide-react';
 export function ChatVerdicts({ verdicts }: { verdicts: readonly ChatVerdict[] }) {
   if (verdicts.length === 0) return null;
   return (
-    <ul data-testid="chat-verdicts" className="mt-1 flex flex-col gap-1">
+    <ul data-testid="chat-verdicts" className="mt-1 flex flex-col gap-[6px]">
       {verdicts.map((verdict) => (
         <li
           key={verdict.id}
           data-testid={`chat-verdict-${verdict.id}`}
           data-action={verdict.action}
           data-point={verdict.point}
-          className="flex flex-col gap-0.5 rounded-chip border border-danger/50 bg-danger/5 px-2 py-1 text-[11px]"
+          className="flex flex-col gap-[2px] rounded-[9px] border border-[var(--line)] bg-[var(--canvas)] px-[10px] py-[6px] text-[11px] leading-[1.4]"
         >
-          <span className="font-machine text-danger">
+          <span className="font-machine text-[#c94c27]">
             {GUARDRAIL_ACTION_LABEL[verdict.action]} · {verdict.checkType} · {verdict.point}
           </span>
-          <span className="text-fg">{verdict.reason}</span>
+          <span className="text-[12px] text-[var(--ink)]">{verdict.reason}</span>
           {verdict.redactedTypes !== undefined && verdict.redactedTypes.length > 0 && (
-            <span className="font-machine text-fg-muted">
+            <span className="font-machine text-[var(--muted)]">
               removed {verdict.redactedTypes.join(', ')}
             </span>
           )}
@@ -44,15 +52,8 @@ export function ChatRefusalCard({
   verdicts: readonly ChatVerdict[];
 }) {
   return (
-    <div
-      role="alert"
-      data-testid="chat-refusal"
-      className="rounded-card border border-danger/60 bg-danger/10 p-3 text-sm text-fg"
-    >
-      <div className="mb-1 flex items-center gap-1.5 font-machine text-[11px] text-danger">
-        <ShieldX className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        refused by guardrail
-      </div>
+    <div role="alert" data-testid="chat-refusal" className={CHAT_NOTE_CLASS}>
+      <div className={CHAT_NOTE_HEAD_CLASS}>refused by guardrail</div>
       <p>{message}</p>
       <ChatVerdicts verdicts={verdicts} />
     </div>

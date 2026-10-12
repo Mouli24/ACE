@@ -63,7 +63,7 @@ const cursorOf = (message: DomainMessage): [number, number] => {
 };
 
 /** The messages in cursor order: `seq`, then the place among the messages one event made. */
-export function orderedMessages(state: ConversationState): DomainMessage[] {
+export function orderedMessages(state: Pick<ConversationState, 'byId'>): DomainMessage[] {
   return [...state.byId.values()].sort((a, b) => {
     const [aSeq, aIndex] = cursorOf(a);
     const [bSeq, bIndex] = cursorOf(b);

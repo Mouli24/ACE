@@ -38,9 +38,13 @@ export function ImagePreview({ projectId, path }: { projectId: string; path: str
       />
     );
   if (state.url === undefined)
-    return <p className="p-4 text-[13px] text-fg-muted">Loading {nameOf(path)}…</p>;
+    return (
+      <div className="flex h-full items-center justify-center text-[13px] text-[var(--muted)]">
+        Loading {nameOf(path)}…
+      </div>
+    );
   return (
-    <div className="grid h-full place-items-center overflow-auto p-6">
+    <div className="grid h-full place-items-center overflow-auto bg-[var(--surface)] p-[24px]">
       <img src={state.url} alt={nameOf(path)} className="max-h-full max-w-full object-contain" />
     </div>
   );
