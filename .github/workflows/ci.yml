@@ -48,8 +48,14 @@ jobs:
       - name: Coverage thresholds
         run: pnpm -r --if-present test:coverage
 
+      # `apps/web`'s `vite build` bundles Monaco since Forge (D299) and peaks near 2.5 GB of heap,
+      # past Node's default limit on this runner (~2 GB). It then passed or died by luck: on 1b87e74
+      # two of the three Build steps passed and acceptance's ran out of memory (D-094). Every Build
+      # step gets the same headroom.
       - name: Build
         run: pnpm build
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
   # Required, never `continue-on-error`; skipped with a message only while the owning package is absent.
   e2e:
@@ -72,8 +78,11 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # Both suites run against built packages, as they did when they followed `verify`'s Build.
+      # NODE_OPTIONS: see `verify`'s Build (D-094).
       - name: Build
         run: pnpm build
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
       - name: End-to-end (apps/web)
         run: |
@@ -117,8 +126,11 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # Both suites run against built packages, as they did when they followed `verify`'s Build.
+      # NODE_OPTIONS: see `verify`'s Build (D-094).
       - name: Build
         run: pnpm build
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
       # The acceptance Playwright pass needs a browser. In the single job it borrowed the one the e2e
       # step installed (`apps/web` `test:e2e` runs `playwright install chromium`); on its own it must
