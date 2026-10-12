@@ -81,7 +81,11 @@ describe('review I3: Monaco’s language defaults for real projects', () => {
       fake.typescript.typescriptDefaults,
       fake.typescript.javascriptDefaults,
     ]) {
-      expect(defaults.getCompilerOptions()).toMatchObject({ strict: true, noImplicitAny: false });
+      expect(defaults.getCompilerOptions()).toMatchObject({
+        strict: true,
+        noImplicitAny: false,
+        noImplicitThis: false,
+      });
     }
   });
 });
