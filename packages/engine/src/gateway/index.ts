@@ -483,11 +483,19 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     ) {
       return c.json(await deps.graph.getProject(id));
     }
-    return c.json(await deps.graph.updateProject(id, patch));
+    const updated = await deps.graph.updateProject(id, patch);
+    // D301: off disables the terminal now, not only for new processes. Answered once all have ended.
+    if (patch.terminal === 'off') await deps.processes?.stopProject(id);
+    return c.json(updated);
   });
 
   api.delete('/projects/:id', async (c) => {
-    await deps.graph.deleteProject(c.req.param('id'));
+    const id = c.req.param('id');
+    // D301: a deleted project's processes would run on, unseen and unstoppable: they stop first.
+    await deps.processes?.stopProject(id);
+    await deps.graph.deleteProject(id);
+    // Release the records (up to ~40 MB of output) only after the stop and the delete.
+    deps.processes?.forgetProject(id);
     return c.body(null, 204);
   });
 
