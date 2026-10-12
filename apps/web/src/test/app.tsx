@@ -31,6 +31,7 @@ import { createRound5Handlers } from '../mocks/handlers-round5';
 import { MockProcesses } from '../mocks/processes';
 import { resetGraphSyncRegistry } from '../workflows/sync-registry';
 import { asMonaco, createFakeMonaco } from './fake-monaco';
+import { FakeSearchAddon, FakeTerminal } from './FakeTerminal';
 
 /** One mock engine per test file; `installMockServer()` wires the lifecycle hooks. */
 export const db = new MockDb({ persist: false });
@@ -80,6 +81,8 @@ export function installMockServer(): void {
     useOutputStore.setState({ lines: {} });
     useProblemsStore.setState({ byProject: {} });
     useTerminalStore.getState().reset();
+    FakeTerminal.instances = [];
+    FakeSearchAddon.instances = [];
     // no text file shown (D330's `path`), and the position, file facts and language as at start
     useEditorStatus.getState().clear();
   });
