@@ -25,6 +25,7 @@ import type { Logger } from '../logging/index.js';
 import type { ProcessRunner, Repository, RunningProcess, Scope } from '../ports/index.js';
 import {
   processLimit,
+  engineStopping,
   processNotRunning,
   terminalDisabled,
   terminalRestricted,
@@ -54,6 +55,11 @@ export interface ProcessService {
   scripts(projectId: Id): Promise<ProjectScripts>;
   /** Stops every running process of the project; resolves when each has ended. */
   stopProject(projectId: Id): Promise<void>;
+  /**
+   * Releases a deleted project's records. Call it only after `stopProject` resolved:
+   * the kept output of up to 20 finished processes would otherwise stay until the engine restarts.
+   */
+  forgetProject(projectId: Id): void;
   /** Shutdown (FR-SYS-008): stops every running process; resolves when each has ended. */
   stopAll(): Promise<void>;
 }
@@ -94,6 +100,8 @@ interface Supervised {
   summary: ProcessSummary;
   /** Start order: "newest first" even when two start in the same millisecond. */
   order: number;
+  /** Set when it ends; the recent list drops the lowest first. */
+  finishOrder: number;
   output: string;
   truncated: boolean;
   handle: RunningProcess | undefined;
@@ -157,6 +165,16 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
   const now = deps.now ?? (() => new Date().toISOString());
   const byProject = new Map<Id, Map<Id, Supervised>>();
   let starts = 0;
+  let finishes = 0;
+  /** Set by `stopAll`: nothing starts again, because the engine is going away (FR-SYS-008). */
+  let closed = false;
+  /**
+   * Per project, bumped first by `stopProject`. A start captures it on entry and checks it again
+   * just before it spawns, so a start that was waiting on package.json while its project was
+   * switched off or deleted does not spawn after the stop.
+   */
+  const epochs = new Map<Id, number>();
+  const epochOf = (projectId: Id): number => epochs.get(projectId) ?? 0;
 
   function recordsOf(projectId: Id): Map<Id, Supervised> {
     let records = byProject.get(projectId);
@@ -229,7 +247,8 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
     const records = recordsOf(projectId);
     const finished = [...records.values()]
       .filter((record) => record.summary.status !== 'running')
-      .sort((a, b) => a.order - b.order);
+
+      .sort((a, b) => a.finishOrder - b.finishOrder);
     for (const old of finished.slice(0, Math.max(0, finished.length - keepRecent))) {
       records.delete(old.summary.id);
     }
@@ -244,6 +263,8 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
     if (record.summary.status !== 'running') return;
     // Whatever output is still batched goes out before the end does.
     record.batcher.stop();
+    finishes += 1;
+    record.finishOrder = finishes;
     record.summary.status = status;
     record.summary.exitCode = exitCode;
     record.summary.signal = signal;
@@ -274,6 +295,7 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
 
   return {
     async start(projectId, request) {
+      const epoch = epochOf(projectId);
       const project = await folderOf(projectId);
       const trust = project.terminal ?? DEFAULT_TERMINAL_TRUST;
       if (trust === 'off') throw terminalDisabled();
@@ -302,6 +324,13 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
         cwd = request.cwd ?? '';
       }
 
+      // The last synchronous section before the spawn: nothing awaits from here to `runner.start`.
+      if (closed) throw engineStopping();
+      // A stop of this project landed meanwhile (the terminal went off, or the project was
+      // deleted). A racing start on a deleted project reads "the terminal is off" rather than 404;
+      // that is acceptable.
+      if (epochOf(projectId) !== epoch) throw terminalDisabled();
+
       const records = recordsOf(projectId);
       const running = [...records.values()].filter((r) => r.summary.status === 'running').length;
       if (running >= maxRunning) throw processLimit(maxRunning);
@@ -325,6 +354,7 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
       const record: Supervised = {
         summary,
         order: starts,
+        finishOrder: 0,
         output: '',
         truncated: false,
         handle: undefined,
@@ -400,8 +430,19 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
 
     scripts: async (projectId) => runner.scripts((await folderOf(projectId)).folderPath),
 
-    stopProject: (projectId) => stopRunning(byProject.get(projectId)?.values() ?? []),
+    stopProject(projectId) {
+      epochs.set(projectId, epochOf(projectId) + 1);
+      return stopRunning(byProject.get(projectId)?.values() ?? []);
+    },
 
-    stopAll: () => stopRunning([...byProject.values()].flatMap((records) => [...records.values()])),
+    forgetProject(projectId) {
+      byProject.delete(projectId);
+      // The epoch stays (one number): dropping it would let a start still in flight match again.
+    },
+
+    stopAll() {
+      closed = true;
+      return stopRunning([...byProject.values()].flatMap((records) => [...records.values()]));
+    },
   };
 }

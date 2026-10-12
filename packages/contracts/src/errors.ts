@@ -69,6 +69,7 @@ export const IDE_ERROR_CODES = [
   'terminal_restricted',
   'process_limit',
   'process_not_running',
+  'engine_stopping',
 ] as const;
 
 export const ERROR_CODES = [
@@ -107,6 +108,7 @@ export const ERROR_CODE_HTTP_STATUS: Readonly<Record<ErrorCode, number>> = {
   terminal_restricted: 403,
   process_limit: 409,
   process_not_running: 409,
+  engine_stopping: 503,
 };
 
 /** `details` shapes §2.3 names explicitly. */
