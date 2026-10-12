@@ -22,10 +22,21 @@ export const LOCKFILES: ReadonlyArray<readonly [file: string, manager: PackageMa
   ['package-lock.json', 'npm'],
 ];
 
+/**
+ * A script name the terminal may run as `<pm> run <name>` (D301). Task 6 hands the line to the
+ * platform shell, so a name with a metacharacter (`x & del *`) must never be offered or accepted.
+ */
+export const SAFE_SCRIPT_NAME = /^[\w@][\w:.@/+-]{0,199}$/;
+
+/** A larger package.json is not read: it would stall the engine, and no real one is that big. */
+export const PACKAGE_JSON_MAX_BYTES = 1_048_576;
+
 /** A file in the project root, read only when it resolves inside the project (FR-GIT-008). */
 async function rootText(root: string, name: string): Promise<string | undefined> {
   try {
-    return await readFile(toAbsolute(root, name), 'utf8');
+    const path = toAbsolute(root, name);
+    if ((await stat(path)).size > PACKAGE_JSON_MAX_BYTES) return undefined;
+    return await readFile(path, 'utf8');
   } catch {
     // Missing, a folder, unreadable, or a link out of the project: no answer, never an error.
     return undefined;
@@ -66,7 +77,10 @@ export async function readProjectScripts(root: string): Promise<ProjectScripts> 
   const scripts: ProjectScript[] = [];
   if (isRecord(manifest) && isRecord(manifest['scripts'])) {
     for (const [name, command] of Object.entries(manifest['scripts'])) {
-      if (typeof command === 'string') scripts.push({ name, command });
+      // `__proto__` is a legal own key in parsed JSON and a hazard for anyone who copies the list.
+      if (typeof command === 'string' && name !== '__proto__' && SAFE_SCRIPT_NAME.test(name)) {
+        scripts.push({ name, command });
+      }
     }
   }
   let packageManager = isRecord(manifest) ? managerNamed(manifest['packageManager']) : undefined;
