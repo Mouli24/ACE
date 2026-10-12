@@ -62,4 +62,25 @@ describe('D299 D330 the workspace layout is the person’s choice, and is rememb
     await useLayoutStore.persist.rehydrate();
     expect(useLayoutStore.getState().panelTab).toBe('problems');
   });
+
+  it('D301 Ctrl+` shows the Terminal, and hides the panel when the Terminal is what shows', () => {
+    useLayoutStore.getState().toggleTerminal();
+    expect(useLayoutStore.getState()).toMatchObject({ panelOpen: true, panelTab: 'terminal' });
+    useLayoutStore.getState().toggleTerminal();
+    expect(useLayoutStore.getState().panelOpen).toBe(false);
+    useLayoutStore.getState().showPanel('problems');
+    useLayoutStore.getState().toggleTerminal();
+    expect(useLayoutStore.getState()).toMatchObject({ panelOpen: true, panelTab: 'terminal' });
+  });
+
+  it('D301 Ctrl+J shows Problems on first open, then the view used last, as VS Code does', () => {
+    useLayoutStore.getState().togglePanel();
+    expect(useLayoutStore.getState()).toMatchObject({ panelOpen: true, panelTab: 'problems' });
+    useLayoutStore.getState().togglePanel();
+    useLayoutStore.getState().toggleTerminal();
+    useLayoutStore.getState().togglePanel();
+    expect(useLayoutStore.getState().panelOpen).toBe(false);
+    useLayoutStore.getState().togglePanel();
+    expect(useLayoutStore.getState()).toMatchObject({ panelOpen: true, panelTab: 'terminal' });
+  });
 });

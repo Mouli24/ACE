@@ -1,7 +1,7 @@
 import { slugHandle } from '@ace/contracts';
 import { useShallow } from 'zustand/react/shallow';
 
-import { CursorInfo, ProblemsCount } from '../../forge/layout/StatusBar';
+import { CursorInfo, ProblemsCount, RunningCount } from '../../forge/layout/StatusBar';
 import type { WorkflowMode } from '../../forge/mode';
 import { useProject } from '../../projects/hooks';
 import { useSocketStatus } from '../../runs/hooks';
@@ -19,9 +19,9 @@ const MODE_LABEL: Readonly<Record<WorkflowMode, string>> = {
 
 /**
  * The workspace footer of `Ace Canvas.dc.html` (D330), every value real: the settings gear (D338),
- * the engine connection (FR-EXE-014) and the project slug; in Forge the problem counts and the
- * cursor, file facts, language and unsaved state (Forge's status bar, D299); the mode; the open
- * conversation's message count; the tokens in view, "—" without data.
+ * the engine connection (FR-EXE-014) and the project slug; in Forge the problem counts, the running
+ * processes (D301) and the cursor, file facts, language and unsaved state (Forge's status bar,
+ * D299); the mode; the open conversation's message count; the tokens in view, "—" without data.
  */
 export function WorkspaceFooter({
   projectId,
@@ -63,6 +63,7 @@ export function WorkspaceFooter({
               |
             </span>
             <ProblemsCount projectId={projectId} />
+            <RunningCount projectId={projectId} />
           </>
         )}
       </div>

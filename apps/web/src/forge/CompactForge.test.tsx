@@ -88,6 +88,18 @@ describe('D299 FR-MOB-001 Forge on a phone is browse-only', () => {
     expect(await screen.findByTestId('dirty-README.md')).toBeInTheDocument();
     expect(await screen.findByLabelText('Editing README.md')).toHaveValue(edited);
   });
+
+  it('D301 has no terminal on a phone: Ctrl+` opens nothing', async () => {
+    const user = userEvent.setup();
+    const project = db.createProject({ name: 'Shop' });
+    const workflow = db.createWorkflow(project.id, 'Main');
+    db.seedFiles(project.id, { 'README.md': '# Shop' });
+    renderApp(`/projects/${project.id}/workflows/${workflow.id}/forge`);
+    expect(await screen.findByTestId('compact-forge')).toBeInTheDocument();
+    await user.keyboard('{Control>}[Backquote]{/Control}');
+    expect(screen.queryByTestId('terminal-panel')).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Panel' })).toBeNull();
+  });
 });
 
 describe('D328 FR-MOB-002 the phone’s Forge in the theme', () => {
