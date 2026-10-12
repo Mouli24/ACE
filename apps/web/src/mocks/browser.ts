@@ -1,4 +1,9 @@
-import { derivePorts, type GuardrailCheckType, type RepoFileStatus } from '@ace/contracts';
+import {
+  derivePorts,
+  type GuardrailCheckType,
+  type RepoFileStatus,
+  type TerminalTrust,
+} from '@ace/contracts';
 import { setupWorker } from 'msw/browser';
 
 import { MockDb } from './db';
@@ -15,6 +20,8 @@ import {
   type ChatScenario,
 } from './handlers-round4';
 import { createForgeHandlers } from './handlers-forge';
+import { createProcessHandlers } from './handlers-processes';
+import { MockProcesses } from './processes';
 import { createRound5Handlers } from './handlers-round5';
 import { failNextIngest, setIngestPace } from './knowledge';
 import {
@@ -147,6 +154,8 @@ declare global {
       deleteFileExternally(projectId: string, path: string): void;
       /** Forge: what the Explorer's git decorations read. */
       setRepoStatus(projectId: string, files: Array<{ path: string; status: RepoFileStatus }>): void;
+      /** Forge's terminal (D301): set a project's trust level; `off` stops what runs, as a PATCH does. */
+      setTerminal(projectId: string, level: TerminalTrust): void;
     };
   }
 }
@@ -185,8 +194,12 @@ function restoreScenario(): void {
 
 export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
   const db = new MockDb({ persist: true });
+  // In memory, like the engine's: a reload is an engine restart (D301).
+  const processes = new MockProcesses(db);
   restoreScenario();
   const worker = setupWorker(
+    // First: it answers a project PATCH and sees a project DELETE before the others (D301).
+    ...createProcessHandlers(db, processes),
     ...createDomainHandlers(db),
     ...createForgeHandlers(db),
     ...createRound5Handlers(db),
@@ -208,6 +221,7 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
     },
     reset() {
       db.reset();
+      processes.reset();
       try {
         localStorage.removeItem(SCENARIO_KEY);
         localStorage.removeItem(PACE_KEY);
@@ -397,6 +411,11 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
     setRepoStatus(projectId, files) {
       db.load();
       db.setRepoStatus(projectId, { repo: true, branch: 'main', files, truncated: false });
+    },
+    setTerminal(projectId, level) {
+      db.load();
+      db.updateProject(projectId, { terminal: level });
+      if (level === 'off') processes.stopProject(projectId);
     },
     connect(workflowId, fromNodeId, fromPort, toNodeId, toPort) {
       db.load();

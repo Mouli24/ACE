@@ -20,17 +20,23 @@ import { MockDb } from '../mocks/db';
 import { createHandlers } from '../mocks/handlers';
 import { createDomainHandlers, domainMock } from '../mocks/handlers-domain';
 import { createForgeHandlers } from '../mocks/handlers-forge';
+import { createProcessHandlers } from '../mocks/handlers-processes';
 import { createRound2Handlers, stopScenario } from '../mocks/handlers-round2';
 import { createRound3Handlers } from '../mocks/handlers-round3';
 import { createRound4Handlers } from '../mocks/handlers-round4';
 import { createRound5Handlers } from '../mocks/handlers-round5';
+import { MockProcesses } from '../mocks/processes';
 import { resetGraphSyncRegistry } from '../workflows/sync-registry';
 import { asMonaco, createFakeMonaco } from './fake-monaco';
 
 /** One mock engine per test file; `installMockServer()` wires the lifecycle hooks. */
 export const db = new MockDb({ persist: false });
+/** The mock engine's terminal processes (D301); reset before every test. */
+export const processes = new MockProcesses(db);
 /** Newest round first: a round 3 route wins over a round 2 stand-in for the same path. */
 export const server = setupServer(
+  // First: it answers a project PATCH and sees a project DELETE before the others (D301).
+  ...createProcessHandlers(db, processes),
   ...createDomainHandlers(db),
   ...createForgeHandlers(db),
   ...createRound5Handlers(db),
@@ -56,6 +62,7 @@ export function installMockServer(): void {
     stopScenario();
     db.reset();
     domainMock.reset();
+    processes.reset();
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     resetGraphSyncRegistry();
     useSelectionStore.getState().clear();
