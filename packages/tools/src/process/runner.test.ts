@@ -6,7 +6,7 @@ import type { ProcessStream } from '@ace/contracts';
 import { isWorkspaceFsError, type ProcessHandlers, type ProcessRunner } from '@ace/engine';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createProcessRunner, shellCommand } from './runner.js';
+import { createProcessRunner, resolveWorkingFolder, shellCommand } from './runner.js';
 
 let root: string;
 let project: string;
@@ -307,5 +307,48 @@ describe('D301 the terminal’s process runner', () => {
     await run.ended;
     expect(() => run.handle.write('late\n')).not.toThrow();
     expect(() => run.handle.stop()).not.toThrow();
+  });
+});
+
+describe('D301 a network folder on Windows (cmd.exe would run in the Windows folder)', () => {
+  const message =
+    "the terminal can't run in a network folder on Windows — map it to a drive letter";
+
+  it('refuses a UNC project folder with invalid_path, before anything is spawned', () => {
+    for (const unc of [
+      '\\\\server\\share\\proj',
+      '\\\\wsl$\\Ubuntu\\home\\ada',
+      '\\\\wsl.localhost\\Ubuntu\\x',
+    ]) {
+      let thrown: unknown;
+      try {
+        resolveWorkingFolder(unc, '', 'win32');
+      } catch (error) {
+        thrown = error;
+      }
+      expect(isWorkspaceFsError(thrown) && thrown.code).toBe('invalid_path');
+      expect((thrown as Error).message).toBe(message);
+    }
+  });
+
+  it('start() throws it for a faked UNC root and starts nothing', () => {
+    const started: string[] = [];
+    const win = createProcessRunner({ platform: 'win32', shell: join(root, 'never-spawned') });
+    expect(() =>
+      win.start(
+        { root: '\\\\server\\share\\proj', cwd: '', command: 'dir' },
+        {
+          onOutput: () => started.push('o'),
+          onExit: () => started.push('x'),
+          onError: () => started.push('e'),
+        },
+      ),
+    ).toThrow(message);
+    expect(started).toEqual([]);
+  });
+
+  it('leaves POSIX and drive-letter paths alone', () => {
+    expect(resolveWorkingFolder(project, '', 'win32')).toBeTruthy();
+    expect(resolveWorkingFolder(project, '', 'linux')).toBeTruthy();
   });
 });
