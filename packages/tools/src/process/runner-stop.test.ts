@@ -2,9 +2,12 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import type * as ChildProcessModule from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type * as SandboxRunnerModule from '../sandbox/runner.js';
 
 const probes = vi.hoisted(() => ({
   kills: [] as number[],
@@ -12,7 +15,7 @@ const probes = vi.hoisted(() => ({
 }));
 
 vi.mock('../sandbox/runner.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../sandbox/runner.js')>();
+  const actual = await importOriginal<typeof SandboxRunnerModule>();
   return {
     ...actual,
     killTree: (pid: number, platform: NodeJS.Platform) => {
@@ -23,7 +26,7 @@ vi.mock('../sandbox/runner.js', async (importOriginal) => {
 });
 
 vi.mock('node:child_process', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:child_process')>();
+  const actual = await importOriginal<typeof ChildProcessModule>();
   return {
     ...actual,
     spawn: (...args: Parameters<typeof actual.spawn>) => {

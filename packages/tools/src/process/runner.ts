@@ -61,7 +61,7 @@ export function resolveWorkingFolder(
   if (platform === 'win32' && isNetworkPath(root)) throw networkFolderRefusal(cwd);
   const absolute = toAbsolute(root, cwd, { allowRoot: true });
   if (platform === 'win32' && isNetworkPath(absolute)) throw networkFolderRefusal(cwd);
-  let isFolder = false;
+  let isFolder: boolean;
   try {
     isFolder = statSync(absolute).isDirectory();
   } catch {
