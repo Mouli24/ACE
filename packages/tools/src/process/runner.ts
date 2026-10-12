@@ -37,12 +37,29 @@ export interface ProcessRunnerOptions {
   shell?: string;
 }
 
+const isNetworkPath = (path: string): boolean => path.startsWith('\\\\') || path.startsWith('//');
+
+const networkFolderRefusal = (cwd: string): WorkspaceFsError =>
+  new WorkspaceFsError(
+    'invalid_path',
+    "the terminal can't run in a network folder on Windows — map it to a drive letter",
+    { path: cwd },
+  );
+
 /**
  * Where a process runs (FR-GIT-008, D301 decision 4): confined exactly as a file read is — `..`,
  * absolute and drive paths, links out and `.git` are refused — and an existing folder.
  */
-export function resolveWorkingFolder(root: string, cwd: string): string {
+export function resolveWorkingFolder(
+  root: string,
+  cwd: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  // cmd.exe cannot use a UNC current directory: it prints "UNC paths are not supported" and runs
+  // the line in C:\Windows, where a `del` or `git clean` would hit the wrong folder.
+  if (platform === 'win32' && isNetworkPath(root)) throw networkFolderRefusal(cwd);
   const absolute = toAbsolute(root, cwd, { allowRoot: true });
+  if (platform === 'win32' && isNetworkPath(absolute)) throw networkFolderRefusal(cwd);
   let isFolder = false;
   try {
     isFolder = statSync(absolute).isDirectory();
@@ -102,7 +119,7 @@ export function createProcessRunner(options: ProcessRunnerOptions = {}): Process
   const platform = options.platform ?? process.platform;
   return {
     start(spec, handlers) {
-      const cwd = resolveWorkingFolder(spec.root, spec.cwd);
+      const cwd = resolveWorkingFolder(spec.root, spec.cwd, platform);
       const source = options.env ?? process.env;
       const env = scrubSecrets({ ...source, ...(spec.env ?? {}) }, platform);
       const [shell, argv] = shellCommand(spec.command, platform, source, options.shell);
@@ -133,6 +150,8 @@ function supervise(
   let settled = false;
   /** The person asked for a stop: the end reads SIGKILL on every platform (D301). */
   let stopped = false;
+  /** The shell itself has ended: its pid may already belong to someone else. */
+  let exited = false;
 
   const say = (stream: ProcessStream, text: string): void => {
     if (!settled && text !== '') handlers.onOutput(stream, text);
@@ -160,11 +179,16 @@ function supervise(
   child.stderr.on('data', (chunk: Buffer) => say('stderr', decoders.stderr.write(chunk)));
   // EPIPE once the process is gone: input to a finished process is dropped, never thrown.
   child.stdin.on('error', () => undefined);
+  // A stream error is never uncaught (it would take the engine, and every process, down); the
+  // exit still reports.
+  child.stdout.on('error', () => undefined);
+  child.stderr.on('error', () => undefined);
   child.on('error', (error) => {
     // Only a spawn failure means "never started"; any later error is followed by exit or close.
     if (child.pid === undefined) finish(() => handlers.onError(error));
   });
   child.on('exit', (code, signal) => {
+    exited = true;
     timers.push(setTimeout(() => finish(() => ended(code, signal)), EXIT_DRAIN_MS));
   });
   child.on('close', (code, signal) => finish(() => ended(code, signal)));
@@ -175,7 +199,8 @@ function supervise(
       if (!settled && child.stdin.writable) child.stdin.write(data);
     },
     stop() {
-      if (settled) return;
+      // Once the shell has ended, a kill could hit a reused pid and would relabel its real exit.
+      if (settled || exited || stopped) return;
       stopped = true;
       if (child.pid !== undefined) killTree(child.pid, platform);
       // A shell that outlives its kill must not leave the run open.
