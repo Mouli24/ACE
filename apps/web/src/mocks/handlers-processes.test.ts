@@ -225,6 +225,30 @@ describe('D301 the mock engine’s scripted processes', () => {
     expect(db.getProject(projectId)).toBeUndefined();
   });
 
+  it('forgets a deleted project’s processes, finished ones included', async () => {
+    const done = await start({ command: 'echo a' });
+    await ended(done);
+    await start({ command: 'serve' });
+    expect((await call('DELETE', '')).status).toBe(204);
+    expect(processes.list(projectId)).toEqual([]);
+    expect(() => processes.get(projectId, done)).toThrow();
+  });
+
+  it('keeps the last 20 that finished, by finish order, not start order', async () => {
+    const first = await start({ command: 'serve' });
+    const others: string[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      const id = await start({ command: `echo ${i}` });
+      await ended(id);
+      others.push(id);
+    }
+    expect((await call('POST', `/processes/${first}/stop`)).status).toBe(204);
+    await ended(first);
+    expect(processes.get(projectId, first).status).toBe('exited');
+    expect(() => processes.get(projectId, others[0] ?? '')).toThrow();
+    expect(processes.list(projectId)).toHaveLength(20);
+  });
+
   it('once the engine is stopping, what ran is stopped and a start is 503 engine_stopping in its words', async () => {
     const id = await start({ command: 'serve' });
     processes.stopAll();
