@@ -467,3 +467,83 @@ describe('D301 stopping everything', () => {
     await expect(service.stopAll()).resolves.toBeUndefined();
   });
 });
+
+describe('D301 fences: nothing starts once the engine or its project is stopping', () => {
+  const scripts = { packageManager: 'npm' as const, scripts: [{ name: 'dev', command: 'vite' }] };
+  const gated = () => {
+    let release: () => void = () => undefined;
+    const scriptsGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { release: () => release(), runner: fakeRunner({ scripts, scriptsGate }) };
+  };
+
+  it('a script start waiting on package.json is refused engine_stopping once stopAll ran', async () => {
+    const { release, runner } = gated();
+    const { project, service } = await harness({ runner });
+    const starting = refusal(service.start(project.id, { script: 'dev' }));
+    await vi.waitFor(() => expect(runner.scriptsAsked).toBe(1));
+    await service.stopAll();
+    release();
+    expect(await starting).toEqual({ code: 'engine_stopping', status: 503 });
+    expect(runner.started).toEqual([]);
+  });
+
+  it('a command start after stopAll is refused engine_stopping', async () => {
+    const { project, runner, service } = await harness();
+    await service.stopAll();
+    expect(await refusal(service.start(project.id, { command: 'x' }))).toEqual({
+      code: 'engine_stopping',
+      status: 503,
+    });
+    expect(runner.started).toEqual([]);
+  });
+
+  it('a script start waiting on package.json is refused terminal_disabled once stopProject ran', async () => {
+    const { release, runner } = gated();
+    const { project, service } = await harness({ runner });
+    const starting = refusal(service.start(project.id, { script: 'dev' }));
+    await vi.waitFor(() => expect(runner.scriptsAsked).toBe(1));
+    await service.stopProject(project.id);
+    release();
+    expect(await starting).toEqual({ code: 'terminal_disabled', status: 403 });
+    expect(runner.started).toEqual([]);
+  });
+});
+
+describe('D301 the recent list keeps what finished last', () => {
+  it('a long-running process that ends after 20 short jobs is kept; the first short job is evicted', async () => {
+    const { project, runner, service } = await harness();
+    const a = await service.start(project.id, { command: 'long' });
+    const longRun = runner.last();
+    const jobs: string[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      jobs.push((await service.start(project.id, { command: `job ${i}` })).processId);
+      runner.last().exit(0);
+    }
+    longRun.exit(1);
+    expect(await service.get(project.id, a.processId)).toMatchObject({
+      status: 'exited',
+      exitCode: 1,
+    });
+    expect(await refusal(service.get(project.id, jobs[0] ?? ''))).toEqual({
+      code: 'not_found',
+      status: 404,
+    });
+    expect((await service.get(project.id, jobs[1] ?? '')).status).toBe('exited');
+  });
+});
+
+describe('D301 a deleted project is forgotten', () => {
+  it('forgetProject releases the records once the project is stopped', async () => {
+    const { project, service } = await harness();
+    const { processId } = await service.start(project.id, { command: 'serve' });
+    await service.stopProject(project.id);
+    service.forgetProject(project.id);
+    expect(await service.list(project.id)).toEqual([]);
+    expect(await refusal(service.get(project.id, processId))).toEqual({
+      code: 'not_found',
+      status: 404,
+    });
+  });
+});
