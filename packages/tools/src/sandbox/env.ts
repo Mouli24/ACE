@@ -62,7 +62,7 @@ export const NETWORK_DENIED_MESSAGE = 'ACE sandbox: network access is denied';
  * second lock on the same door: the allow-list decides what is copied, and this decides what
  * cannot be copied whatever the allow-list says.
  */
-const SECRET_SHAPED = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|SESSION|AUTH|COOKIE/i;
+export const SECRET_SHAPED = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|SESSION|AUTH|COOKIE/i;
 
 export interface SandboxEnvOptions {
   /** Absolute path of the run's sandbox folder. Becomes `HOME`, `TMPDIR` and the cwd. */
@@ -164,4 +164,50 @@ export function sandboxEnv({
   }
 
   return env;
+}
+
+/**
+ * Names kept although some match {@link SECRET_SHAPED}: they hold sockets and paths, never a
+ * secret's value, and git over ssh needs the agent (D301 decision 3).
+ */
+export const SCRUB_KEEP: readonly string[] = [
+  'SSH_AUTH_SOCK',
+  'SSH_AGENT_PID',
+  'XAUTHORITY',
+  'DBUS_SESSION_BUS_ADDRESS',
+  'SESSIONNAME',
+];
+
+/**
+ * Names always dropped although they look like no secret. `ELECTRON_RUN_AS_NODE` is inherited by
+ * an engine started from VS Code or Claude Code, and would make any Electron app started in the
+ * terminal run as plain Node.
+ */
+export const SCRUB_DROP: readonly string[] = ['ELECTRON_RUN_AS_NODE'];
+
+/**
+ * The environment a terminal process gets (D301, design §6.3): the engine's own, minus every name
+ * that looks like a secret, so `ANTHROPIC_API_KEY` and the engine's `ACE_*TOKEN` never reach a
+ * command a person typed. Unlike {@link sandboxEnv} this is a deny rule, not an allow-list: a
+ * person's toolchain needs `PATH`, `HOME` and whatever else their shell set. Only names are
+ * checked, never values. Names compare case-insensitively on Windows, as Windows reads them.
+ * `FORCE_COLOR=1` asks for colour, which the terminal renders; `PYTHONUTF8=1` makes Python write
+ * UTF-8 to the pipe rather than the console code page.
+ */
+export function scrubSecrets(
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
+  const fold = (name: string): string => (platform === 'win32' ? name.toUpperCase() : name);
+  const keep = new Set(SCRUB_KEEP.map(fold));
+  const drop = new Set(SCRUB_DROP.map(fold));
+  const scrubbed: Record<string, string> = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (value === undefined || drop.has(fold(name))) continue;
+    if (SECRET_SHAPED.test(name) && !keep.has(fold(name))) continue;
+    scrubbed[name] = value;
+  }
+  scrubbed.FORCE_COLOR = '1';
+  scrubbed.PYTHONUTF8 = '1';
+  return scrubbed;
 }
