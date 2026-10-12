@@ -73,3 +73,44 @@ describe('D299 the status bar, in the workspace footer since D330', () => {
     }
   });
 });
+
+describe('D330 D334 the status bar’s pieces in the footer’s type', () => {
+  it('the counts are mono and muted, each mark in its Validation colour only while not zero', () => {
+    const projectId = db.createProject({ name: 'P' }).id;
+    renderWithQuery(<ProblemsCount projectId={projectId} />);
+    const button = screen.getByRole('button', { name: '0 errors, 0 warnings' });
+    expect(button).toHaveClass('font-machine', 'text-[10px]', 'text-[var(--muted)]');
+    expect(screen.getByText('✕')).not.toHaveStyle({ color: '#c94c27' });
+    act(() =>
+      useProblemsStore.setState({
+        byProject: {
+          [projectId]: [
+            {
+              path: 'a.ts',
+              line: 1,
+              column: 1,
+              severity: 'error',
+              message: 'x',
+              source: undefined,
+            },
+          ],
+        },
+      }),
+    );
+    expect(screen.getByRole('button', { name: '1 error, 0 warnings' })).toBeInTheDocument();
+    expect(screen.getByText('✕')).toHaveStyle({ color: '#c94c27' });
+    expect(screen.getByText('!')).not.toHaveStyle({ color: '#e8572e' });
+  });
+
+  it('the file facts are one line, joined by the theme’s middots', () => {
+    const projectId = db.createProject({ name: 'P' }).id;
+    act(() => {
+      useEditorStore.getState().open(projectId, 'a.ts');
+      useEditorStatus.setState({ path: 'a.ts', line: 3, column: 9, language: 'markdown' });
+    });
+    renderWithQuery(<CursorInfo projectId={projectId} />);
+    expect(screen.getByTestId('footer-cursor')).toHaveTextContent(
+      /^Ln 3, Col 9 · Spaces: 2 · UTF-8 · LF · Markdown$/,
+    );
+  });
+});
