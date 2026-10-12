@@ -13,6 +13,7 @@ import {
 import { scrubSecrets } from '../sandbox/env.js';
 import { killTree } from '../sandbox/runner.js';
 import { toAbsolute } from '../workspace/resolve.js';
+import { readProjectScripts } from './scripts.js';
 
 /**
  * The terminal's process runner (D301, design §6.3): one line a person typed, run through the
@@ -134,6 +135,7 @@ export function createProcessRunner(options: ProcessRunnerOptions = {}): Process
       }
       return supervise(child, handlers, platform);
     },
+    scripts: (root) => readProjectScripts(root),
   };
 }
 
