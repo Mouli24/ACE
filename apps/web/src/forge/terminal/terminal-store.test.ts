@@ -130,6 +130,12 @@ describe('D301 terminal tabs live outside the view, per project', () => {
     expect(tab().epoch).toBe(epoch + 1);
   });
 
+  it('attaching to a tab that does not exist keeps the unowned entry and its output', () => {
+    store().output(P, 'X', 'early\n');
+    store().attach(P, 'nope', 'X');
+    expect(store().unowned['X']?.output).toBe('early\n');
+  });
+
   it('clearScreen empties the tab and redraws; idle puts the prompt back', () => {
     store().newTab(P, { cwd: 'src' });
     store().write(P, 't1', 'old\r\n');
