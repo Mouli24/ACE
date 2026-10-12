@@ -1097,24 +1097,26 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     clearInterval(sweepTimer);
     await sweeping;
     // The document in flight finishes before the database closes; the rest are re-queued at start (F7).
-    await ingestion.stop();
-    await runs.shutdown();
-    await haltActiveRuns({
-      repository,
-      scope: LOCAL_SCOPE,
-      bus,
-      logger: logger.child({ subsystem: 'runs' }),
-      approvals,
-    });
+    try {
+      await ingestion.stop();
+      await runs.shutdown();
+      await haltActiveRuns({
+        repository,
+        scope: LOCAL_SCOPE,
+        bus,
+        logger: logger.child({ subsystem: 'runs' }),
+        approvals,
+      });
 
-    // Round 4: stop deriving timeline rows and close every MCP connection before the DB closes.
-    timeline.unsubscribe();
-    await mcpManager.closeAll();
-
-    workspace.stopAll();
-    // FR-SYS-008, D301: every terminal process stops, its whole tree with it, before the
-    // database closes; none outlives the engine.
-    await processes.stopAll();
+      // Round 4: stop deriving timeline rows and close every MCP connection before the DB closes.
+      timeline.unsubscribe();
+      await mcpManager.closeAll();
+    } finally {
+      // FR-SYS-008, D301: every terminal process stops, its whole tree with it, before the
+      // database closes; none outlives the engine, even if an earlier step above rejected.
+      workspace.stopAll();
+      await processes.stopAll();
+    }
     hub.closeAll();
     wss.close();
     // `server.close()` stops accepting, then waits for every open connection to end. Node closes
