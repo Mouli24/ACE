@@ -5,6 +5,11 @@ import type { CanvasNodeKind, NewNodeInit } from '../nodes/factory';
 export interface CanvasApi {
   addNode: (kind: CanvasNodeKind, init?: NewNodeInit) => unknown;
   deleteNodes: (nodeIds: string[]) => void;
+  /**
+   * D333: the node settings modal's "Remove node from canvas" — deletes the node and reconnects
+   * every incoming edge to every outgoing one the types allow, as one undo step.
+   */
+  removeNodeReconnecting?: (nodeId: string) => void;
   fitView: () => void;
   duplicateSelection: () => void;
   /** FR-CAN-008: left-to-right layout, one undo step. */
@@ -22,8 +27,8 @@ interface CanvasApiState {
 }
 
 /**
- * The Canvas publishes a few actions here so the New node dialog, the node toolbar and the sheet's
- * config panel can call them without a shared React parent holding React Flow state.
+ * The Canvas publishes a few actions here so the node settings modal and the workspace menu can
+ * call them without a shared React parent holding React Flow state.
  */
 export const useCanvasApi = create<CanvasApiState>((set) => ({
   api: undefined,

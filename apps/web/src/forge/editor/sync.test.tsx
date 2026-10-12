@@ -1,7 +1,8 @@
+import { toast } from '@ace/ui';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { mockVersion } from '../../mocks/files';
 import { db, installMockServer, queryClient, renderApp, server } from '../../test/app';
@@ -21,6 +22,7 @@ beforeEach(() => {
   path = `/projects/${project.id}/workflows/${workflow.id}/forge`;
   db.seedFiles(projectId, { 'a.ts': 'one' });
 });
+afterEach(() => vi.restoreAllMocks());
 
 /** What the watcher would send for an agent's write. */
 function agentWrites(content: string) {
@@ -52,6 +54,24 @@ describe('D299 §5.4 the disk changes under an open file', () => {
       'a.ts changed on disk while you were editing it.',
     );
     expect(editor).toHaveValue('two!');
+  });
+
+  it('D334 the warning reaches the toaster; the quiet reload does not', async () => {
+    const warning = vi.spyOn(toast, 'warning');
+    const user = userEvent.setup();
+    renderApp(path);
+    await screen.findByTestId('forge');
+    act(() => openFile(projectId, 'a.ts'));
+    const editor = await screen.findByLabelText('Editing a.ts');
+
+    agentWrites('two');
+    await waitFor(() => expect(editor).toHaveValue('two'));
+    expect(warning).not.toHaveBeenCalled();
+
+    await user.type(editor, '!');
+    agentWrites('three');
+    await screen.findByTestId('conflict-bar');
+    expect(warning).toHaveBeenCalledWith('a.ts changed on disk while you were editing it.');
   });
 
   it('a clean file deleted on disk is struck through, and saving brings it back', async () => {

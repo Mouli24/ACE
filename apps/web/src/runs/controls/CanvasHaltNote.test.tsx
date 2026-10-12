@@ -19,6 +19,13 @@ describe('CanvasHaltNote', () => {
     expect(pill).toHaveClass('w-max', 'max-w-[calc(100%-1.5rem)]', 'left-1/2', '-translate-x-1/2');
   });
 
+  it('sits below the Canvas chrome, so a long note never covers the "…" menu or Add node', () => {
+    useRunStore.setState({ workflowId: 'wf1', status: 'HALTED', haltReason: 'budget_exceeded' });
+    render(<CanvasHaltNote workflowId="wf1" />);
+    // breadcrumb: top 14 + 24; Add node: top 12 + 34 — the pill starts below both
+    expect(screen.getByTestId('halt-reason').parentElement).toHaveClass('top-[58px]');
+  });
+
   it('renders nothing for another workflow, a live run, or a halt without a reason', () => {
     useRunStore.setState({ workflowId: 'wf1', status: 'HALTED', haltReason: 'failure' });
     const { rerender } = render(<CanvasHaltNote workflowId="wf2" />);

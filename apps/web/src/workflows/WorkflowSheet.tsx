@@ -1,14 +1,12 @@
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@ace/ui';
-import { X } from 'lucide-react';
+import { DIALOG_CLOSE_CLASS, Tabs, TabsContent, TabsList, TabsTrigger } from '@ace/ui';
 
 import { usePanelsStore, type SheetTab } from '../app/stores/panels';
-import { ConfigPanel } from '../config-panel/ConfigPanel';
 import { Inspector } from '../inspector/Inspector';
 import { MemoryTab } from '../memory/MemoryTab';
 import { RunsList } from '../runs/RunsList';
 
+/** D332: the sheet keeps Inspector, Runs and Memory; node and loop-edge config is the modal's. */
 const TABS: ReadonlyArray<readonly [SheetTab, string]> = [
-  ['configure', 'Configure'],
   ['inspect', 'Inspector'],
   ['runs', 'Runs'],
   ['memory', 'Memory'],
@@ -16,25 +14,27 @@ const TABS: ReadonlyArray<readonly [SheetTab, string]> = [
 
 const isSheetTab = (value: string): value is SheetTab => TABS.some(([tab]) => tab === value);
 
-/** The sheet's element id: the top bar's panel toggle points `aria-controls` at it. */
+/** The sheet's element id: the control that opens it points `aria-controls` at it. */
 export const SHEET_ID = 'workflow-sheet';
 
 /**
- * The floating sheet over the Canvas (POC Theme V2): configure what a node will do (FR-NODE-002),
- * inspect what its run did (FR-EXE-010), the workflow's runs and the node's memory. Opened by the
- * node toolbar, a double-click on a node or the top bar's panel toggle; it shows whatever node is
- * selected, so selecting another node — or deleting this one — just changes what it shows.
+ * The floating sheet over the Canvas (D332): inspect what a node's run did (FR-EXE-010), the
+ * workflow's runs and the node's memory, in the theme's panel and segmented tabs. Opened from the
+ * workspace menu ("Workflow panel") or a node's "Inspect"; it shows whatever node is selected, so
+ * selecting another node — or deleting this one — just changes what it shows. Opened without a
+ * tab (or on the old Configure tab, which the node settings modal replaced) it shows the Inspector.
  */
 export function WorkflowSheet({ workflowId }: { workflowId: string }) {
   const open = usePanelsStore((s) => s.sheetOpen);
-  const tab = usePanelsStore((s) => s.sheetTab);
+  const stored = usePanelsStore((s) => s.sheetTab);
   const setTab = usePanelsStore((s) => s.setSheetTab);
   const close = usePanelsStore((s) => s.closeSheet);
   if (!open) return null;
+  const tab = isSheetTab(stored) ? stored : 'inspect';
 
   // Closing unmounts the sheet and the focused Close button with it; rather than drop focus to
-  // <body>, hand it to the control that opens the sheet (the top bar's panel toggle).
-  const closeToToggle = () => {
+  // <body>, hand it to the control that opens the sheet, when there is one.
+  const closeToOpener = () => {
     document.querySelector<HTMLElement>(`[aria-controls="${SHEET_ID}"]`)?.focus();
     close();
   };
@@ -45,14 +45,14 @@ export function WorkflowSheet({ workflowId }: { workflowId: string }) {
       role="region"
       aria-label="Workflow panel"
       data-testid="workflow-sheet"
-      className="absolute bottom-3 right-3 top-3 z-20 flex w-[min(372px,calc(100%-24px))] flex-col rounded-[16px] border border-border-strong bg-panel shadow-[0_24px_60px_-20px_#000000b0,var(--ace-ground)]"
+      className="absolute bottom-[12px] right-[12px] top-[58px] z-20 flex w-[min(372px,calc(100%-24px))] flex-col rounded-[12px] border border-[var(--line)] bg-[var(--surface)] text-[var(--ink)] shadow-[0_18px_40px_-16px_rgba(30,20,10,0.45)]"
     >
       <Tabs
         value={tab}
         onValueChange={(value) => isSheetTab(value) && setTab(value)}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <div className="flex shrink-0 items-center gap-2 px-2.5 pb-1 pt-2.5">
+        <div className="flex shrink-0 items-center gap-[8px] px-[12px] pb-[6px] pt-[12px]">
           <TabsList className="flex flex-1">
             {TABS.map(([value, label]) => (
               <TabsTrigger key={value} value={value}>
@@ -63,20 +63,16 @@ export function WorkflowSheet({ workflowId }: { workflowId: string }) {
           <button
             type="button"
             aria-label="Close panel"
-            title="Close"
-            onClick={closeToToggle}
-            className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full text-fg-muted transition-colors hover:bg-border hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
+            onClick={closeToOpener}
+            className={DIALOG_CLOSE_CLASS}
           >
-            <X className="h-[13px] w-[13px]" strokeWidth={2.4} aria-hidden />
+            <span aria-hidden>✕</span>
           </button>
         </div>
         <div
           data-testid="workflow-sheet-body"
           className="min-h-0 flex-1 overflow-y-auto px-[18px] pb-[18px] pt-1.5"
         >
-          <TabsContent value="configure">
-            <ConfigPanel workflowId={workflowId} />
-          </TabsContent>
           <TabsContent value="inspect">
             <Inspector workflowId={workflowId} />
           </TabsContent>

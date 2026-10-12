@@ -12,13 +12,7 @@ import { getGraphSync } from './sync-registry';
 
 installMockServer();
 
-vi.mock('../config-panel/monaco-loader', () => ({
-  MonacoEditor: ({ 'aria-label': label }: { 'aria-label'?: string }) => (
-    <textarea aria-label={label ?? 'JSON schema'} data-testid="monaco" />
-  ),
-}));
-
-beforeEach(() => usePanelsStore.setState({ sheetOpen: false, sheetTab: 'configure' }));
+beforeEach(() => usePanelsStore.setState({ sheetOpen: false, sheetTab: 'inspect' }));
 
 function seed() {
   const project = db.createProject({ name: 'P' });
@@ -48,7 +42,7 @@ const open = (tab?: Parameters<ReturnType<typeof usePanelsStore.getState>['openS
   act(() => usePanelsStore.getState().openSheet(tab));
 const select = (ids: string[]) => act(() => useSelectionStore.getState().setSelection(ids, []));
 
-describe('FR-NODE-002 / FR-EXE-010 the floating sheet over the Canvas', () => {
+describe('D332 / FR-EXE-010 the floating sheet over the Canvas', () => {
   it('renders nothing while closed', () => {
     const { project, workflow } = seed();
     renderSheet(project.id, workflow.id);
@@ -56,72 +50,82 @@ describe('FR-NODE-002 / FR-EXE-010 the floating sheet over the Canvas', () => {
     expect(screen.queryByRole('tablist')).toBeNull();
   });
 
-  it('openSheet("inspect") opens it on the Inspector tab; its tabs are Configure · Inspector · Runs · Memory', async () => {
+  it('openSheet("inspect") opens it on the Inspector; its tabs are Inspector · Runs · Memory', async () => {
     const { project, workflow } = seed();
     renderSheet(project.id, workflow.id);
     open('inspect');
 
     const sheet = await screen.findByTestId('workflow-sheet');
-    expect(sheet).toHaveClass('absolute', 'right-3', 'top-3', 'bottom-3', 'z-20', 'bg-panel');
-    // a landmark named as the top bar's toggle is, with the id that toggle points at
+    // the theme's panel: surface, a --line border, radius 12, the menu shadow
+    expect(sheet).toHaveClass(
+      'absolute',
+      'z-20',
+      'rounded-[12px]',
+      'border-[var(--line)]',
+      'bg-[var(--surface)]',
+      'shadow-[0_18px_40px_-16px_rgba(30,20,10,0.45)]',
+    );
+    // a landmark named as the control that opens it, with the id that control points at
     expect(screen.getByRole('region', { name: 'Workflow panel' })).toBe(sheet);
     expect(sheet).toHaveAttribute('id', SHEET_ID);
+    // D332: the Configure tab gave way to the node settings modal
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
-      'Configure',
       'Inspector',
       'Runs',
       'Memory',
     ]);
+    expect(screen.queryByRole('tab', { name: 'Configure' })).toBeNull();
     expect(screen.getByRole('tab', { name: 'Inspector' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('region', { name: 'Node run inspector' })).toBeInTheDocument();
+  });
+
+  it('opened with no tab of its own (or the old Configure) it shows the Inspector', async () => {
+    const { project, workflow } = seed();
+    renderSheet(project.id, workflow.id);
+    open();
+    expect(await screen.findByRole('tab', { name: 'Inspector' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     expect(screen.getByRole('region', { name: 'Node run inspector' })).toBeInTheDocument();
   });
 
   it('a tab click moves sheetTab', async () => {
     const { project, workflow } = seed();
     renderSheet(project.id, workflow.id);
-    open('configure');
+    open('inspect');
     await userEvent.click(await screen.findByRole('tab', { name: 'Runs' }));
     expect(usePanelsStore.getState().sheetTab).toBe('runs');
     expect(screen.getByRole('tab', { name: 'Runs' })).toHaveAttribute('aria-selected', 'true');
-  });
-
-  it('follows the selection: selecting node B while open shows B’s config', async () => {
-    const { project, workflow, a, b } = seed();
-    renderSheet(project.id, workflow.id);
-    select([a.id]);
-    open('configure');
-    expect(await screen.findByLabelText('Name')).toHaveValue('Brief');
-
-    select([b.id]);
-    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('Shape'));
   });
 
   it('sheet survives its node being deleted (Review Focus 2)', async () => {
     const { project, workflow, a } = seed();
     renderSheet(project.id, workflow.id);
     select([a.id]);
-    open('configure');
-    expect(await screen.findByLabelText('Name')).toHaveValue('Brief');
+    open('inspect');
+    expect(await screen.findByRole('region', { name: 'Node run inspector' })).toBeInTheDocument();
 
     // the node goes from the graph while the selection still points at it
     act(() =>
       getGraphSync(workflow.id, queryClient).enqueue([{ op: 'delete_node', nodeId: a.id }]),
     );
 
-    expect(await screen.findByText(/Select a node to configure it\./)).toBeInTheDocument();
-    expect(screen.getByTestId('workflow-sheet')).toBeInTheDocument();
-    // and the other tabs render their own empty state for it rather than throwing
-    await userEvent.click(screen.getByRole('tab', { name: 'Inspector' }));
+    await waitFor(() => expect(screen.getByTestId('workflow-sheet')).toBeInTheDocument());
+    // every tab renders its own empty state for it rather than throwing
     expect(screen.getByRole('region', { name: 'Node run inspector' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('tab', { name: 'Memory' }));
     expect(screen.getByRole('tab', { name: 'Memory' })).toHaveAttribute('aria-selected', 'true');
+    await userEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    expect(screen.getByRole('tab', { name: 'Runs' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('insets its content once: the body’s 18 px, none of the contents’ own', async () => {
     const user = userEvent.setup();
     const { project, workflow, a } = seed();
     renderSheet(project.id, workflow.id);
-    open('configure');
+    select([a.id]);
+    open('inspect');
     expect(await screen.findByTestId('workflow-sheet-body')).toHaveClass(
       'px-[18px]',
       'pb-[18px]',
@@ -129,11 +133,6 @@ describe('FR-NODE-002 / FR-EXE-010 the floating sheet over the Canvas', () => {
     );
 
     const unpadded = (element: HTMLElement) => expect(element.className).not.toMatch(/(^|\s)p-\d/);
-    unpadded(screen.getByTestId('config-workflow'));
-    select([a.id]);
-    unpadded((await screen.findByLabelText('Name')).closest('[class*="gap-4"]') as HTMLElement);
-
-    await user.click(screen.getByRole('tab', { name: 'Inspector' }));
     unpadded(screen.getByTestId('inspector'));
     await user.click(screen.getByRole('tab', { name: 'Runs' }));
     unpadded(await screen.findByText(/No runs yet/));
@@ -141,11 +140,14 @@ describe('FR-NODE-002 / FR-EXE-010 the floating sheet over the Canvas', () => {
     unpadded(await screen.findByTestId('memory-tab-not-agent'));
   });
 
-  it('the close button (“Close panel”) calls closeSheet', async () => {
+  it('the 28px ✕ (“Close panel”) calls closeSheet', async () => {
     const { project, workflow } = seed();
     renderSheet(project.id, workflow.id);
     open('runs');
-    await userEvent.click(await screen.findByRole('button', { name: 'Close panel' }));
+    const close = await screen.findByRole('button', { name: 'Close panel' });
+    expect(close).toHaveClass('h-7', 'w-7');
+    expect(close).toHaveTextContent('✕');
+    await userEvent.click(close);
     expect(usePanelsStore.getState().sheetOpen).toBe(false);
     expect(screen.queryByTestId('workflow-sheet')).toBeNull();
   });

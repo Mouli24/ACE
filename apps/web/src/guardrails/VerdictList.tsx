@@ -9,12 +9,12 @@ import { VerdictBadge } from '@ace/ui';
  * A redaction shows the *types* removed and never the value (FR-GRD-014, TC-GRD-018): the contract
  * gives a `Verdict` no field to carry one, and nothing here renders anything but `redactedTypes`.
  * The context point's hidden-instruction sanitiser is the same: `strippedTypes` names the kinds it
- * took out, never the text (round 5 §2.3, FR-GRD-004).
+ * took out, never the text (round 5 §2.3, FR-GRD-004). Each verdict is a theme inner box (D328).
  */
 export function VerdictList({ verdicts }: { verdicts: readonly Verdict[] }) {
   if (verdicts.length === 0) {
     return (
-      <p data-testid="verdicts-empty" className="text-sm text-fg-muted">
+      <p data-testid="verdicts-empty" className="text-[13px] text-[var(--muted)]">
         No verdicts.
       </p>
     );
@@ -26,20 +26,24 @@ export function VerdictList({ verdicts }: { verdicts: readonly Verdict[] }) {
         <li
           key={verdict.id}
           data-testid={`verdict-row-${verdict.id}`}
-          className="flex flex-col gap-1 rounded-card border border-border bg-card px-3 py-2"
+          className="flex flex-col gap-1 rounded-[10px] border border-[var(--line)] bg-[var(--soft)] px-[10px] py-2"
         >
           <div className="flex flex-wrap items-center gap-2">
             <VerdictBadge verdict={verdict} />
             <span
               data-testid={`verdict-passed-${verdict.id}`}
-              className={verdict.passed ? 'text-xs text-fg-muted' : 'text-xs text-danger'}
+              className={
+                verdict.passed
+                  ? 'text-[11px] text-[var(--muted)]'
+                  : 'text-[11px] font-semibold text-[#c94c27]'
+              }
             >
               {verdict.passed ? 'passed' : 'did not pass'}
             </span>
           </div>
-          <p className="text-sm">{verdict.reason}</p>
+          <p className="text-[12.5px]">{verdict.reason}</p>
           {verdict.redactedTypes !== undefined && verdict.redactedTypes.length > 0 && (
-            <p className="font-machine text-xs text-fg-muted">
+            <p className="font-machine text-[10px] text-[var(--muted)]">
               types removed: {verdict.redactedTypes.join(', ')} — the values are not recorded
               (FR-GRD-014).
             </p>
@@ -47,7 +51,7 @@ export function VerdictList({ verdicts }: { verdicts: readonly Verdict[] }) {
           {verdict.strippedTypes !== undefined && verdict.strippedTypes.length > 0 && (
             <p
               data-testid={`verdict-stripped-${verdict.id}`}
-              className="font-machine text-xs text-fg-muted"
+              className="font-machine text-[10px] text-[var(--muted)]"
             >
               hidden instructions stripped: {verdict.strippedTypes.join(', ')} — the text is not
               recorded (FR-GRD-004).

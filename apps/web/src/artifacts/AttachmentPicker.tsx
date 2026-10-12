@@ -1,6 +1,5 @@
 import type { Artifact } from '@ace/contracts';
 import { Button, cn } from '@ace/ui';
-import { Paperclip, Upload, X } from 'lucide-react';
 import { useCallback, useId, useRef, useState, type DragEvent } from 'react';
 
 import { useArtifactUpload } from './useArtifactUpload';
@@ -19,9 +18,11 @@ export interface AttachmentPickerProps {
 }
 
 /**
- * A file picker with drag-and-drop, upload progress and an inline error (M4 §2, FR-MM-001/007).
- * Reusable on purpose: the Input node's attachments area and the chat composer (area E) both mount
- * it and only differ in `label`/`compact`. The upload itself lives in `useArtifactUpload`.
+ * A file picker with drag-and-drop, upload progress and an inline error (M4 §2, FR-MM-001/007), in
+ * the Ace UI theme (D328): a dashed drop region on the canvas colour, the theme's ⌁ attach glyph,
+ * an orange progress bar. Reusable on purpose: the Input node's attachments and the knowledge base's
+ * documents both mount it and only differ in `label`/`compact`. The upload itself lives in
+ * `useArtifactUpload`.
  */
 export function AttachmentPicker({
   onUploaded,
@@ -59,6 +60,7 @@ export function AttachmentPicker({
   );
 
   const busy = state.status === 'uploading';
+  const percent = Math.round((state.progress?.ratio ?? 0) * 100);
 
   const pickerButton = (
     <>
@@ -78,13 +80,13 @@ export function AttachmentPicker({
       <Button
         type="button"
         variant={compact ? 'ghost' : 'secondary'}
-        size="sm"
+        size={compact ? 'icon' : 'sm'}
         disabled={disabled || busy}
         aria-label={compact ? 'Attach a file' : undefined}
         data-testid={`${testId}-button`}
         onClick={() => inputRef.current?.click()}
       >
-        <Paperclip className="h-3.5 w-3.5" aria-hidden />
+        <span aria-hidden>⌁</span>
         {compact ? '' : 'Choose a file'}
       </Button>
     </>
@@ -103,13 +105,12 @@ export function AttachmentPicker({
           onDragLeave={() => setDragging(false)}
           onDrop={onDrop}
           className={cn(
-            'flex flex-col items-center gap-2 rounded-card border border-dashed border-border p-4 text-center',
-            dragging && 'border-accent bg-accent/10',
+            'flex flex-col items-center gap-2 rounded-[12px] border border-dashed border-[var(--line)] bg-[var(--canvas)] p-4 text-center',
+            dragging && 'border-[#ef6b3f] bg-[rgba(239,107,63,0.06)]',
             disabled && 'opacity-60',
           )}
         >
-          <Upload className="h-5 w-5 text-fg-muted" aria-hidden />
-          <label htmlFor={inputId} className="font-human text-xs text-fg-muted">
+          <label htmlFor={inputId} className="text-[11.5px] text-[var(--muted)]">
             {label}: drag a file here or
           </label>
           {pickerButton}
@@ -123,18 +124,18 @@ export function AttachmentPicker({
           aria-label={`Uploading ${state.fileName ?? 'file'}`}
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={Math.round((state.progress?.ratio ?? 0) * 100)}
+          aria-valuenow={percent}
           data-testid={`${testId}-progress`}
           className="flex flex-col gap-1"
         >
-          <div className="flex items-center justify-between font-machine text-[10px] text-fg-muted">
+          <div className="flex items-center justify-between gap-2 font-machine text-[10px] text-[var(--muted)]">
             <span className="truncate">{state.fileName}</span>
-            <span>{Math.round((state.progress?.ratio ?? 0) * 100)}%</span>
+            <span>{percent}%</span>
           </div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-border">
+          <div className="h-1 overflow-hidden rounded-full bg-[var(--line)]">
             <div
-              className="h-full rounded-full bg-accent transition-[width]"
-              style={{ width: `${Math.round((state.progress?.ratio ?? 0) * 100)}%` }}
+              className="h-full rounded-full bg-[#ef6b3f] transition-[width]"
+              style={{ width: `${percent}%` }}
             />
           </div>
         </div>
@@ -145,16 +146,16 @@ export function AttachmentPicker({
           role="alert"
           data-testid={`${testId}-error`}
           data-code={state.error.code}
-          className="flex items-start gap-2 rounded-md border border-danger/60 bg-danger/10 px-2 py-1.5 font-human text-xs text-danger"
+          className="flex items-start gap-2 text-[11px] leading-[1.45] text-[#c94c27]"
         >
           <span className="flex-1">{uploadErrorMessage(state.error)}</span>
           <button
             type="button"
             aria-label="Dismiss error"
-            className="shrink-0 text-danger"
+            className="shrink-0 cursor-pointer border-none bg-transparent p-0 text-[10px] text-[#c94c27] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
             onClick={reset}
           >
-            <X className="h-3.5 w-3.5" aria-hidden />
+            <span aria-hidden>✕</span>
           </button>
         </p>
       )}

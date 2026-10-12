@@ -62,6 +62,17 @@ describe('TimelineList (FR-CHAT-001 — six distinct styles)', () => {
     expect(li).toHaveAttribute('data-run-id', 'run-a');
   });
 
+  it("gives an agent's dot its theme colour when the row carries one (D328)", () => {
+    render(
+      <TimelineList
+        rows={[
+          row('m-agent', 'agent', { nodeName: 'Writer', provider: 'anthropic', color: '#7a62d6' }),
+        ]}
+      />,
+    );
+    expect(screen.getByTestId('message-agent-dot')).toHaveStyle({ background: '#7a62d6' });
+  });
+
   it('shows the empty label when there are no rows', () => {
     render(<TimelineList rows={[]} emptyLabel="nothing here" />);
     expect(screen.getByTestId('timeline-empty')).toHaveTextContent('nothing here');

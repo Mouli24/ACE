@@ -426,26 +426,98 @@ async function openCanvas(page: Page, projectId: string, workflowId: string): Pr
 
 const card = (page: Page, nodeId: string): Locator => page.getByTestId(`node-card-${nodeId}`);
 
-// The V2 button shows "Run"; its accessible name is "Start run" (D259).
-const startButton = (page: Page): Locator =>
-  page.getByTestId('run-bar').getByRole('button', { name: 'Start run', exact: true });
+/*
+ * The Ace UI workspace (D330–D335). These are local helpers, mirroring `apps/web/e2e/helpers.ts`
+ * and `apps/web/e2e/round3.ts`, which this package cannot import:
+ *
+ *  - the run is started from the canvas breadcrumb's "…" workspace menu (`menu-start-run`), which
+ *    also counts the approvals waiting (`menu-approvals`); only phones keep the run bar and badge;
+ *  - a click on a card selects it and opens its settings modal (the old sheet's Configure tab);
+ *  - Inspector, Runs and Memory are tabs of a floating sheet opened from the workspace menu's
+ *    "Workflow panel" or a node menu's "Inspect";
+ *  - the bottom panel (Validation · Events · Errors · Timeline) is hidden until the workspace
+ *    menu's "Problems & events" opens it;
+ *  - Chat is the permanent Team chat column (`chat-aside`), one tab per agent.
+ */
 
-/** Close the V2 sheet when it is open: it covers the right of the Canvas (D259). */
+const isPhone = (page: Page): boolean => (page.viewportSize()?.width ?? Infinity) <= 640;
+
+/** The node settings modal, when open (D333). */
+const settingsDialog = (page: Page): Locator =>
+  page.getByRole('dialog').filter({ has: page.getByTestId('config-panel') });
+
+/** Close the node settings modal if it is open (Done commits what is still waiting). */
+async function closeSettings(page: Page): Promise<void> {
+  const dialog = settingsDialog(page);
+  if (await dialog.isVisible()) await dialog.getByRole('button', { name: 'Done' }).click();
+  await expect(dialog).toHaveCount(0);
+}
+
+/** The workspace "…" menu's content: the menu that holds "Workflow panel" (D331). */
+const workspaceMenu = (page: Page): Locator =>
+  page.getByRole('menu').filter({ has: page.getByTestId('menu-sheet') });
+
+/** Open the workspace menu, unless it is open already. The settings modal would cover it. */
+async function openWorkspaceMenu(page: Page): Promise<Locator> {
+  await closeSettings(page);
+  const menu = workspaceMenu(page);
+  if (!(await menu.isVisible())) await page.getByTestId('workspace-menu').click();
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
+/** Close the workspace menu if it is open: it is modal, so nothing else takes a click under it. */
+async function closeWorkspaceMenu(page: Page): Promise<void> {
+  const menu = workspaceMenu(page);
+  if (await menu.isVisible()) await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+}
+
+/**
+ * Start the run: the workspace menu's "Start run" on desktop (D331); at phone width the run bar's
+ * button — it shows "Run" and its accessible name is "Start run" (D259).
+ */
+async function startRun(page: Page): Promise<void> {
+  if (isPhone(page)) {
+    await page
+      .getByTestId('run-bar')
+      .getByRole('button', { name: 'Start run', exact: true })
+      .click();
+    return;
+  }
+  const menu = await openWorkspaceMenu(page);
+  await menu.getByTestId('menu-start-run').click();
+  await expect(menu).toHaveCount(0);
+}
+
+/** Open the approvals waiting on the run (`approvals-list`): the workspace menu's "Approvals (N)…". */
+async function openApprovals(page: Page, count: number): Promise<Locator> {
+  const menu = await openWorkspaceMenu(page);
+  const item = menu.getByTestId('menu-approvals');
+  await expect(item).toHaveText(`Approvals (${count})…`);
+  await item.click();
+  const list = page.getByTestId('approvals-list');
+  await expect(list).toBeVisible();
+  return list;
+}
+
+/** Close the settings modal and the workflow sheet: both cover the Canvas while open. */
 async function closeSheet(page: Page): Promise<void> {
-  const close = page.getByRole('button', { name: 'Close panel' });
+  await closeSettings(page);
+  const close = page.getByTestId('workflow-sheet').getByRole('button', { name: 'Close panel' });
   if (await close.isVisible()) await close.click();
   await expect(page.getByTestId('workflow-sheet')).toHaveCount(0);
 }
 
+/** The node's configuration, inside its settings modal (D333; was the sheet's Configure tab). */
 const configPanel = (page: Page): Locator =>
-  page.getByRole('complementary', { name: 'Node configuration' });
+  settingsDialog(page).getByRole('region', { name: 'Node configuration' });
 
 /**
- * Where to click a card so the card itself receives the click: near the top of its header, a
- * quarter of the way in (D-089), unless something sits over that point. In the V2 layout the halt
- * note is a pill centred at the top of the Canvas (D259), and after Fit to view it can cover the
- * top row of card headers; then the first point of the header, or failing that of the card's body,
- * that the card receives — never a control inside it.
+ * Where to click a card so the card itself receives the click: near its top, a quarter of the way
+ * in (D-089), unless something sits over that point. The halt note is a pill centred at the top of
+ * the Canvas (D259), and after Fit to view it can cover the top row of cards; then the first point
+ * of the card, top to bottom, that the card receives — never a control inside it.
  */
 async function clickPoint(target: Locator): Promise<{ x: number; y: number }> {
   // read once the card has stopped moving: Fit to view animates the viewport
@@ -487,36 +559,105 @@ async function clickPoint(target: Locator): Promise<{ x: number; y: number }> {
   return point as { x: number; y: number };
 }
 
-/** Round 3's selection: fit, then click the card's header, never forced. */
-async function selectNode(page: Page, nodeId: string): Promise<void> {
+/**
+ * Round 3's selection: fit, then click the card, never forced. The click also opens the node's
+ * settings modal (D332), which covers the Canvas.
+ */
+async function clickCard(page: Page, nodeId: string): Promise<Locator> {
   await closeSheet(page);
   await page.getByRole('button', { name: 'Fit to view' }).click();
   await page.waitForTimeout(300);
   const target = card(page, nodeId);
   await target.scrollIntoViewIfNeeded();
-  // Fit to view can zoom a card narrower than 60 px; a fixed offset then lands on the header's
-  // run-actions button and opens its menu instead of selecting the node (D-089, CI only). Click
-  // the header a quarter of the way in, whatever the zoom.
+  // Fit to view can zoom a card narrow; click a quarter of the way in, whatever the zoom (D-089).
   await target.click({ position: await clickPoint(target) });
+  await expect(target).toHaveAttribute('data-selected', 'true');
+  await expect(settingsDialog(page)).toBeVisible();
+  return target;
+}
+
+/** Select a node on the Canvas; its settings modal, which the click opens, is closed again. */
+async function selectNode(page: Page, nodeId: string): Promise<void> {
+  const target = await clickCard(page, nodeId);
+  await closeSettings(page);
   await expect(target).toHaveAttribute('data-selected', 'true');
 }
 
-/**
- * The old right pane's tabs live in the V2 sheet (D259), which starts closed: open it first when it
- * is. Chat is no longer a tab — see `openChat`.
- */
-async function openRightTab(page: Page, name: 'Configure' | 'Inspector' | 'Runs'): Promise<void> {
-  const tab = page.getByRole('tab', { name, exact: true });
-  if (!(await tab.isVisible())) await page.getByTestId('sheet-toggle').click();
-  await tab.click();
+/** Open a node's settings modal (the old sheet's Configure tab) and return its configuration. */
+async function configureNode(page: Page, nodeId: string): Promise<Locator> {
+  await clickCard(page, nodeId);
+  const panel = configPanel(page);
+  await expect(panel).toBeVisible();
+  return panel;
 }
 
+/**
+ * Show one tab of the workflow sheet (D332) for the selected node, opening the sheet from the
+ * workspace menu's "Workflow panel" when it is shut. Chat is not a tab — see `openChat`.
+ */
+async function openSheet(page: Page, name: 'Inspector' | 'Runs' | 'Memory'): Promise<void> {
+  await closeSettings(page);
+  const sheet = page.getByTestId('workflow-sheet');
+  if (!(await sheet.isVisible())) {
+    const menu = await openWorkspaceMenu(page);
+    await menu.getByTestId('menu-sheet').click();
+    await expect(menu).toHaveCount(0);
+  }
+  await sheet.getByRole('tab', { name, exact: true }).click();
+}
+
+/** Select a node and inspect it: the node menu's "Inspect" (right-click the card). */
 async function openInspector(page: Page, nodeId: string): Promise<Locator> {
-  await selectNode(page, nodeId);
-  await openRightTab(page, 'Inspector');
+  await closeSheet(page);
+  await page.getByRole('button', { name: 'Fit to view' }).click();
+  await page.waitForTimeout(300);
+  const target = card(page, nodeId);
+  await target.click({ button: 'right', position: await clickPoint(target) });
+  await page.getByRole('menuitem', { name: 'Inspect' }).click();
+  await expect(target).toHaveAttribute('data-selected', 'true');
+  await openSheet(page, 'Inspector');
   const inspector = page.getByTestId('inspector');
   await expect(inspector).toBeVisible();
   return inspector;
+}
+
+const overlaps = (
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+): boolean =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+/**
+ * Bring something that hangs under a card (an approval, D332) wholly onto the visible Canvas: Fit
+ * to view sizes the view to the cards, not to what hangs under them, so zoom out until it is inside
+ * the Canvas and clear of the minimap and the toolbar.
+ */
+async function showOnCanvas(page: Page, target: Locator): Promise<void> {
+  await closeSheet(page);
+  await page.getByRole('button', { name: 'Fit to view' }).click();
+  await page.waitForTimeout(300);
+  for (let step = 0; step < 8; step += 1) {
+    const [box, canvas, minimap, toolbar] = await Promise.all([
+      target.boundingBox(),
+      page.getByTestId('canvas').boundingBox(),
+      page.getByTestId('canvas-minimap').boundingBox(),
+      page.getByTestId('canvas-toolbar').boundingBox(),
+    ]);
+    const inside =
+      box !== null &&
+      canvas !== null &&
+      box.x >= canvas.x &&
+      box.y >= canvas.y &&
+      box.x + box.width <= canvas.x + canvas.width &&
+      box.y + box.height <= canvas.y + canvas.height;
+    const covered = [minimap, toolbar].some(
+      (over) => box !== null && over !== null && overlaps(box, over),
+    );
+    if (inside && !covered) return;
+    await page.getByRole('button', { name: 'Zoom out' }).click();
+    await page.waitForTimeout(300);
+  }
+  throw new Error('the target is still off the visible Canvas after zooming out');
 }
 
 /** §5 item 7 calls it the inspector's "Tool calls" tab. */
@@ -528,8 +669,12 @@ async function openToolCalls(page: Page, inspector: Locator): Promise<Locator> {
   return list;
 }
 
-/** V2: Chat is a permanent column; the node's @mention chip points it at the node (D259). */
+/**
+ * Chat is the permanent Team chat column (D285, D335); the agent's tab points it at the node. The
+ * settings modal, when open, covers it.
+ */
 async function openChat(page: Page, nodeId: string): Promise<Locator> {
+  await closeSettings(page);
   const mention = page.getByTestId(`chat-mention-${nodeId}`);
   await mention.click();
   await expect(mention).toHaveAttribute('aria-pressed', 'true');
@@ -539,8 +684,18 @@ async function openChat(page: Page, nodeId: string): Promise<Locator> {
   return panel;
 }
 
+/**
+ * The bottom panel's Timeline tab. The panel is hidden until the workspace menu's "Problems &
+ * events" opens it (D332).
+ */
 async function openTimelineTab(page: Page): Promise<Locator> {
-  await page.getByRole('tab', { name: 'Timeline', exact: true }).click();
+  const tab = page.getByTestId('bottom-section').getByRole('tab', { name: 'Timeline' });
+  if (!(await tab.isVisible())) {
+    const menu = await openWorkspaceMenu(page);
+    await menu.getByTestId('menu-problems').click();
+    await expect(menu).toHaveCount(0);
+  }
+  await tab.click();
   const timeline = page.getByTestId('timeline-tab');
   await expect(timeline).toBeVisible();
   return timeline;
@@ -661,8 +816,7 @@ test.describe('Uploads (FR-MM-001/002/007)', () => {
     await expect(page.getByTestId(`input-attachment-count-${input.id}`)).toContainText('1');
 
     // The config panel's list shows exactly one entry, named and sized.
-    await selectNode(page, input.id);
-    await openRightTab(page, 'Configure');
+    await configureNode(page, input.id);
     const list = configPanel(page).getByTestId('input-attachment-list');
     await expect(list).toBeVisible();
     await expect(list.getByTestId(`attachment-${artifactId}`)).toHaveCount(1);
@@ -690,8 +844,7 @@ test.describe('Uploads (FR-MM-001/002/007)', () => {
       const settings = await api<{ maxUploadMb: number }>('/settings');
 
       await openCanvas(page, flow.projectId, flow.workflowId);
-      await selectNode(page, input.id);
-      await openRightTab(page, 'Configure');
+      await configureNode(page, input.id);
       const panel = configPanel(page);
       await expect(panel.getByTestId('input-attachments')).toBeVisible();
       await panel.getByTestId('input-attachment-picker-input').setInputFiles(oversized);
@@ -725,8 +878,7 @@ test.describe('Uploads (FR-MM-001/002/007)', () => {
     const input = flow.byName('Input');
 
     await openCanvas(page, flow.projectId, flow.workflowId);
-    await selectNode(page, input.id);
-    await openRightTab(page, 'Configure');
+    await configureNode(page, input.id);
     const panel = configPanel(page);
     await panel
       .getByTestId('input-attachment-picker-input')
@@ -775,7 +927,7 @@ async function mediaRunOnScreen(page: Page): Promise<MediaRunOnScreen> {
 
   await openCanvas(page, flow.projectId, flow.workflowId);
   await selectNode(page, media.id);
-  await startButton(page).click();
+  await startRun(page);
 
   const run = await settledRun(flow.workflowId);
   expect(run.status).toBe('COMPLETE');
@@ -786,7 +938,7 @@ async function mediaRunOnScreen(page: Page): Promise<MediaRunOnScreen> {
     return found as PartOf<T>;
   };
 
-  await openRightTab(page, 'Inspector');
+  await openSheet(page, 'Inspector');
   const output = page.getByTestId('inspector').getByTestId('inspector-output');
   await expect(output).toBeVisible();
   return {
@@ -952,7 +1104,7 @@ test.describe('Renderers and multimodal runs (FR-MM-003/005/006/009)', () => {
 
     await openCanvas(page, flow.projectId, flow.workflowId);
     await selectNode(page, vision.id);
-    await startButton(page).click();
+    await startRun(page);
 
     const run = await settledRun(flow.workflowId);
     expect(run.status).toBe('COMPLETE');
@@ -970,7 +1122,7 @@ test.describe('Renderers and multimodal runs (FR-MM-003/005/006/009)', () => {
     expect(writerRun.prompt?.text ?? '').toContain(png.name);
 
     // On screen: the Vision node's output, and the Writer's prompt as sent.
-    await openRightTab(page, 'Inspector');
+    await openSheet(page, 'Inspector');
     await expect(page.getByTestId('inspector').getByTestId('inspector-output')).toContainText(
       png.name,
     );
@@ -996,7 +1148,7 @@ test.describe('Renderers and multimodal runs (FR-MM-003/005/006/009)', () => {
 
     await openCanvas(page, flow.projectId, flow.workflowId);
     await expect(card(page, vision.id)).toContainText('mock-text');
-    await startButton(page).click();
+    await startRun(page);
 
     const blocked = await settledRun(flow.workflowId);
     expect(blocked.status).toBe('BLOCKED');
@@ -1052,7 +1204,7 @@ async function timelineWithAnError(page: Page): Promise<TimelineSetup> {
 
   await updateNodeConfig(flow.workflowId, assistant.id, { modelId: 'mock-401' });
   await openCanvas(page, flow.projectId, flow.workflowId);
-  await startButton(page).click();
+  await startRun(page);
   const failed = await settledRun(flow.workflowId, 60_000, ok.id);
   expect(failed.id).not.toBe(ok.id);
   expect(failed.status, 'the second run does not complete').not.toBe('COMPLETE');
@@ -1338,8 +1490,7 @@ test.describe('Timeline (FR-CHAT-001/002/003)', () => {
         hasText: 'hello',
       }),
     ).toBeVisible();
-    await selectNode(page, input.id);
-    await openRightTab(page, 'Configure');
+    await configureNode(page, input.id);
     // `getByLabel('Text')` also matched the Output types checkbox labelled "text" (first run).
     await expect(configPanel(page).getByRole('textbox', { name: 'Text' })).toHaveValue('hello');
   });
@@ -1488,7 +1639,7 @@ test.describe('Direct chat (FR-CHAT-004..008)', () => {
 
     await openCanvas(page, flow.projectId, flow.workflowId);
     await selectNode(page, assistant.id);
-    await startButton(page).click();
+    await startRun(page);
     const run = await settledRun(flow.workflowId);
     expect(run.status).toBe('COMPLETE');
 
@@ -1654,8 +1805,7 @@ test.describe('Tools (FR-TOOL-001/002/007/009/010)', () => {
     const echoer = flow.byName('Echoer');
 
     await openCanvas(page, flow.projectId, flow.workflowId);
-    await selectNode(page, echoer.id);
-    await openRightTab(page, 'Configure');
+    await configureNode(page, echoer.id);
     await expect(configPanel(page).getByTestId('agent-tools-section')).toBeVisible();
 
     // Enable → the engine has it → it survives a reload.
@@ -1666,12 +1816,11 @@ test.describe('Tools (FR-TOOL-001/002/007/009/010)', () => {
       'echo is enabled on the Echoer',
     );
     await openCanvas(page, flow.projectId, flow.workflowId);
-    await selectNode(page, echoer.id);
-    await openRightTab(page, 'Configure');
+    await configureNode(page, echoer.id);
     await expect(toolToggle(page, 'echo')).toBeChecked();
 
     // mock-tool calls echo once and answers with its result.
-    await startButton(page).click();
+    await startRun(page);
     const ok = await settledRun(flow.workflowId);
     expect(ok.status).toBe('COMPLETE');
     const okRun = await nodeRunFor(ok.id, echoer.id);
@@ -1681,14 +1830,16 @@ test.describe('Tools (FR-TOOL-001/002/007/009/010)', () => {
       timeout: 30_000,
     });
 
-    // Disable → persisted → the same fixture's run is refused at the tool point.
+    // Disable → persisted → the same fixture's run is refused at the tool point. (Starting the run
+    // closed the settings modal; the card opens it again.)
+    await configureNode(page, echoer.id);
     await setToolEnabled(page, 'echo', false);
     await engineSays(
       () => nodeConfig(flow.workflowId, echoer.id),
       (config) => config.tools?.enabled.includes('echo') === false,
       'echo is disabled on the Echoer',
     );
-    await startButton(page).click();
+    await startRun(page);
     const refused = await settledRun(flow.workflowId, 60_000, ok.id);
     const refusedRun = await nodeRunFor(refused.id, echoer.id);
     expect(refusedRun.status).toBe('FAILED');
@@ -1775,8 +1926,7 @@ test.describe('Tools (FR-TOOL-001/002/007/009/010)', () => {
     await api(`/mcp-servers/${server.id}`, { method: 'DELETE' });
 
     await openCanvas(page, flow.projectId, flow.workflowId);
-    await selectNode(page, connector.id);
-    await openRightTab(page, 'Configure');
+    await configureNode(page, connector.id);
     const flagged = configPanel(page).getByTestId('tools-not-registered');
     await expect(flagged).toBeVisible();
     await expect(flagged).toContainText('tool_not_registered');
@@ -1791,13 +1941,13 @@ test.describe('Tools (FR-TOOL-001/002/007/009/010)', () => {
 
     await openCanvas(page, flow.projectId, flow.workflowId);
     await selectNode(page, echoer.id);
-    await startButton(page).click();
+    await startRun(page);
     const run = await settledRun(flow.workflowId);
     expect(run.status).toBe('COMPLETE');
     const calls = (await nodeRunFor(run.id, echoer.id)).toolCalls;
     expect(calls.length).toBeGreaterThan(0);
 
-    await openRightTab(page, 'Inspector');
+    await openSheet(page, 'Inspector');
     const inspector = page.getByTestId('inspector');
     const list = await openToolCalls(page, inspector);
     for (const call of calls) {
@@ -1834,7 +1984,7 @@ test.describe('Tools (FR-TOOL-001/002/007/009/010)', () => {
 
     await openCanvas(page, flow.projectId, flow.workflowId);
     await selectNode(page, cleaner.id);
-    await startButton(page).click();
+    await startRun(page);
     await expect(card(page, cleaner.id)).toHaveAttribute('data-state', 'WAITING', {
       timeout: 40_000,
     });
@@ -1854,6 +2004,7 @@ test.describe('Tools (FR-TOOL-001/002/007/009/010)', () => {
     await expect(preview).toContainText('sandbox_delete');
     await expect(preview).toContainText('notes.txt');
 
+    await showOnCanvas(page, approval);
     await approval.getByRole('button', { name: /^Reject/ }).click();
     const failed = await engineSays(
       () => nodeRunFor(run.id, cleaner.id),
@@ -1895,14 +2046,17 @@ test.describe('Tools (FR-TOOL-001/002/007/009/010)', () => {
     const cleaner = flow.byName('Cleaner');
 
     await openCanvas(page, flow.projectId, flow.workflowId);
-    await startButton(page).click();
+    await startRun(page);
     await expect(page.getByTestId(`node-approval-${cleaner.id}`)).toBeVisible({ timeout: 40_000 });
 
     await openCanvas(page, flow.projectId, flow.workflowId);
     await expect(card(page, cleaner.id)).toHaveAttribute('data-state', 'WAITING', {
       timeout: 30_000,
     });
-    await expect(page.getByTestId('approvals-badge')).toHaveAttribute('data-count', '1');
+    // The engine's list still counts it: the workspace menu's "Approvals (1)…" (D331).
+    const menu = await openWorkspaceMenu(page);
+    await expect(menu.getByTestId('menu-approvals')).toHaveText('Approvals (1)…');
+    await closeWorkspaceMenu(page);
     // Bounded: the card is rebuilt with the node's state, or not at all.
     await expect(page.getByTestId(`node-approval-${cleaner.id}`)).toBeVisible({ timeout: 10_000 });
   });
@@ -1915,7 +2069,7 @@ test.describe('Tools (FR-TOOL-001/002/007/009/010)', () => {
 
     await openCanvas(page, flow.projectId, flow.workflowId);
     await selectNode(page, echoer.id);
-    await startButton(page).click();
+    await startRun(page);
     const run = await settledRun(flow.workflowId);
     expect(run.status).toBe('COMPLETE');
     const echoRun = await nodeRunFor(run.id, echoer.id);
@@ -1923,7 +2077,7 @@ test.describe('Tools (FR-TOOL-001/002/007/009/010)', () => {
       /UNTRUSTED TOOL RESULT/,
     );
 
-    await openRightTab(page, 'Inspector');
+    await openSheet(page, 'Inspector');
     await page.getByTestId('inspector').getByRole('button', { name: 'View prompt' }).click();
     const prompt = page.getByTestId('prompt-text');
     await expect(prompt).toBeVisible();
@@ -1984,12 +2138,12 @@ test.describe('§1 demo script (round 4 gate)', () => {
           'the PNG is attached',
         );
         await selectNode(page, visionAgent.id);
-        await startButton(page).click();
+        await startRun(page);
         const run = await settledRun(vision.workflowId);
         expect(run.status).toBe('COMPLETE');
         expect(textOf((await nodeRunFor(run.id, visionAgent.id)).output)).toContain('sample.png');
         expect((await nodeRunFor(run.id, writer.id)).status).toBe('COMPLETED');
-        await openRightTab(page, 'Inspector');
+        await openSheet(page, 'Inspector');
         await expect(page.getByTestId('inspector-output')).toContainText('sample.png');
       });
 
@@ -1999,9 +2153,9 @@ test.describe('§1 demo script (round 4 gate)', () => {
         const agent = media.byName('Media');
         await openCanvas(page, projectId, media.workflowId);
         await selectNode(page, agent.id);
-        await startButton(page).click();
+        await startRun(page);
         expect((await settledRun(media.workflowId)).status).toBe('COMPLETE');
-        await openRightTab(page, 'Inspector');
+        await openSheet(page, 'Inspector');
         const output = page.getByTestId('inspector-output');
         for (const testId of ['markdown', 'json-tree', 'code-block', 'image-part', 'file-card']) {
           await expect(output.getByTestId(testId).first()).toBeVisible();
@@ -2015,8 +2169,7 @@ test.describe('§1 demo script (round 4 gate)', () => {
         const tools = await importFixture('tools-echo.json', { projectId });
         const echoer = tools.byName('Echoer');
         await openCanvas(page, projectId, tools.workflowId);
-        await selectNode(page, echoer.id);
-        await openRightTab(page, 'Configure');
+        await configureNode(page, echoer.id);
         await setToolEnabled(page, 'code_sandbox', true);
         await engineSays(
           () => nodeConfig(tools.workflowId, echoer.id),
@@ -2025,12 +2178,12 @@ test.describe('§1 demo script (round 4 gate)', () => {
             config.tools.enabled.includes('code_sandbox'),
           'echo and code_sandbox are enabled',
         );
-        await startButton(page).click();
+        await startRun(page);
         const run = await settledRun(tools.workflowId);
         expect(run.status).toBe('COMPLETE');
         const calls = (await nodeRunFor(run.id, echoer.id)).toolCalls;
         expect(calls.length).toBeGreaterThan(0);
-        await openRightTab(page, 'Inspector');
+        await openSheet(page, 'Inspector');
         const list = await openToolCalls(page, page.getByTestId('inspector'));
         for (const call of calls) {
           await expect(list.getByTestId(`tool-call-name-${call.id}`)).toHaveText(call.toolName);
@@ -2054,7 +2207,7 @@ test.describe('§1 demo script (round 4 gate)', () => {
       await test.step('destructive call: Reject → GUARDRAIL_VIOLATION; Approve on a new run → continues', async () => {
         await openCanvas(page, projectId, destructive.workflowId);
         await selectNode(page, cleaner.id);
-        await startButton(page).click();
+        await startRun(page);
         await expect(card(page, cleaner.id)).toHaveAttribute('data-state', 'WAITING', {
           timeout: 40_000,
         });
@@ -2066,6 +2219,7 @@ test.describe('§1 demo script (round 4 gate)', () => {
         );
         const approval = page.getByTestId(`approval-card-${request?.nodeRunId as string}`).first();
         await expect(approval.getByTestId('approval-preview')).toContainText('notes.txt');
+        await showOnCanvas(page, approval);
         await approval.getByRole('button', { name: /^Reject/ }).click();
         const rejected = await engineSays(
           () => nodeRunFor(first.id, cleaner.id),
@@ -2099,13 +2253,12 @@ test.describe('§1 demo script (round 4 gate)', () => {
         /*
          * A run started from the composer lights the Canvas only after a reload (D-058, known), and
          * after a reload the card is no longer anchored to the WAITING node (D-074, tested on its
-         * own below). The top bar's badge lists it, so that is the way a person gets to it here.
+         * own below). The workspace menu's "Approvals (1)…" lists it (the top bar's badge until
+         * D331), so that is the way a person gets to it here.
          */
         await openCanvas(page, projectId, destructive.workflowId);
-        await page.getByTestId('approvals-badge').click();
-        const approveCard = page
-          .getByTestId('approvals-list')
-          .getByTestId(`approval-card-${again?.nodeRunId as string}`);
+        const approvals = await openApprovals(page, 1);
+        const approveCard = approvals.getByTestId(`approval-card-${again?.nodeRunId as string}`);
         await expect(approveCard.getByTestId('approval-preview')).toContainText('notes.txt');
         await approveCard.getByRole('button', { name: /^Approve/ }).click();
         const done = await engineSays(
@@ -2123,7 +2276,7 @@ test.describe('§1 demo script (round 4 gate)', () => {
         const fetcher = denied.byName('Fetcher');
         await openCanvas(page, projectId, denied.workflowId);
         await selectNode(page, fetcher.id);
-        await startButton(page).click();
+        await startRun(page);
         const run = await settledRun(denied.workflowId);
         const row = await nodeRunFor(run.id, fetcher.id);
         expect(row.failureReason).toBe('GUARDRAIL_VIOLATION');
@@ -2133,7 +2286,7 @@ test.describe('§1 demo script (round 4 gate)', () => {
           'data-reason',
           'GUARDRAIL_VIOLATION',
         );
-        await openRightTab(page, 'Inspector');
+        await openSheet(page, 'Inspector');
         const list = await openToolCalls(page, page.getByTestId('inspector'));
         await expect(list.getByTestId(`tool-call-status-${call?.id as string}`)).toHaveAttribute(
           'data-status',
@@ -2171,14 +2324,14 @@ test.describe('§1 demo script (round 4 gate)', () => {
         const connector = mcp.byName('Connector');
         await openCanvas(page, projectId, mcp.workflowId);
         await selectNode(page, connector.id);
-        await startButton(page).click();
+        await startRun(page);
         const run = await settledRun(mcp.workflowId);
         expect(run.status).toBe('COMPLETE');
         const row = await nodeRunFor(run.id, connector.id);
         expect(row.toolCalls.map((call) => [call.toolName, call.status])).toEqual([
           [ping?.name, 'ok'],
         ]);
-        await openRightTab(page, 'Inspector');
+        await openSheet(page, 'Inspector');
         const list = await openToolCalls(page, page.getByTestId('inspector'));
         await expect(list).toContainText(ping?.name as string);
       });

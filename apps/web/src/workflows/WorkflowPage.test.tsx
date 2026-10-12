@@ -11,7 +11,7 @@ installMockServer();
 
 const canvas = vi.hoisted(() => ({ addNode: vi.fn() }));
 
-// A stand-in Canvas that publishes the one action the page wires (New node → addNode).
+// A stand-in Canvas: the page's own layout is under test here, not the board (Canvas*.test).
 vi.mock('../canvas/Canvas', async () => {
   const { useEffect } = await import('react');
   const { useCanvasApi } = await import('../canvas/canvas-api');
@@ -41,10 +41,10 @@ beforeEach(() => {
   canvas.addNode.mockReset();
   usePanelsStore.setState({
     sheetOpen: false,
-    sheetTab: 'configure',
-    newNodeOpen: false,
-    bottomOpen: true,
+    sheetTab: 'inspect',
+    bottomOpen: false,
     chatNodeId: undefined,
+    settings: undefined,
   });
 });
 afterEach(() => {
@@ -57,18 +57,23 @@ function seed() {
   const workflow = db.createWorkflow(project.id, 'Launch post');
   const agent = createNode('agent', workflow.id, { x: 0, y: 0 });
   db.commitGraph(workflow.id, [agent], []);
-  return { project, workflow, path: `/projects/${project.id}/workflows/${workflow.id}` };
+  return {
+    project,
+    workflow,
+    agent,
+    path: `/projects/${project.id}/workflows/${workflow.id}`,
+  };
 }
 
-describe('FR-CAN-002 / FR-CHAT-004 the Canvas screen in the V2 layout', () => {
-  it('Canvas and bottom panel on the left, Chat as a column on the right, no palette', async () => {
+describe('D332 / FR-CHAT-004 the Ideate screen', () => {
+  it('the Canvas fills the page, Chat is a column beside it, and there is no palette', async () => {
     const { path } = seed();
     renderApp(path);
     const surface = await screen.findByTestId('canvas');
 
     const page = screen.getByTestId('workflow-page');
     // the Canvas sits in its own positioned box, so the sheet and the halt note float over it
-    expect(surface.parentElement).toHaveClass('relative', 'min-h-0');
+    expect(surface.parentElement).toHaveClass('relative', 'min-h-0', 'flex-1');
 
     // the chat column is the layout's (D299): beside the page, never inside it
     const column = screen.getByTestId('chat-column');
@@ -80,7 +85,7 @@ describe('FR-CAN-002 / FR-CHAT-004 the Canvas screen in the V2 layout', () => {
     expect(within(column).getAllByRole('complementary')).toHaveLength(1);
     // the column's left rule is drawn once, by the Chat aside itself
     expect(column).not.toHaveClass('border-l');
-    expect(chat).toHaveClass('border-l', 'border-border', 'bg-panel');
+    expect(chat).toHaveClass('border-l', 'border-[var(--line)]', 'bg-[var(--panel)]');
 
     expect(screen.queryByLabelText('Node palette')).toBeNull();
     expect(screen.queryByTestId('palette-agent')).toBeNull();
@@ -88,73 +93,58 @@ describe('FR-CAN-002 / FR-CHAT-004 the Canvas screen in the V2 layout', () => {
     expect(screen.queryByRole('tab', { name: 'Chat' })).toBeNull();
   });
 
-  it('the sheet is closed until the top bar’s panel toggle opens it', async () => {
+  it('the sheet is closed until opened, opens on the Inspector, and its ✕ closes it', async () => {
     const user = userEvent.setup();
     const { path } = seed();
     renderApp(path);
     await screen.findByTestId('canvas');
     expect(screen.queryByTestId('workflow-sheet')).toBeNull();
 
-    await user.click(screen.getByTestId('sheet-toggle'));
-    const sheet = await screen.findByTestId('workflow-sheet');
-    expect(within(sheet).getByRole('tab', { name: 'Configure' })).toHaveAttribute(
+    act(() => usePanelsStore.getState().openSheet());
+    const sheet = await screen.findByRole('region', { name: 'Workflow panel' });
+    expect(within(sheet).getByRole('tab', { name: 'Inspector' })).toHaveAttribute(
       'aria-selected',
       'true',
     );
-    await user.click(screen.getByTestId('sheet-toggle'));
-    expect(screen.queryByTestId('workflow-sheet')).toBeNull();
-  });
+    // D332: Configure gave way to the node settings modal
+    expect(within(sheet).queryByRole('tab', { name: 'Configure' })).toBeNull();
 
-  it('closing the sheet from its own Close button hands focus back to the panel toggle', async () => {
-    const user = userEvent.setup();
-    const { path } = seed();
-    renderApp(path);
-    await screen.findByTestId('canvas');
-    const toggle = screen.getByTestId('sheet-toggle');
-
-    await user.click(toggle);
-    const sheet = await screen.findByRole('region', { name: 'Workflow panel' });
-    // the toggle names what it opens
-    expect(toggle).toHaveAttribute('aria-controls', sheet.id);
-    expect(sheet.id).not.toBe('');
-
-    // keyboard-activate Close: focus must not fall to <body> when the sheet unmounts
     within(sheet).getByRole('button', { name: 'Close panel' }).focus();
     await user.keyboard('{Enter}');
     expect(screen.queryByTestId('workflow-sheet')).toBeNull();
-    expect(toggle).toHaveFocus();
   });
 
-  it('New node opens the dialog; adding a kind calls the Canvas’s addNode and closes it', async () => {
-    const user = userEvent.setup();
+  it('D333 the node settings modal opens on openSettings', async () => {
+    const { path, agent } = seed();
+    renderApp(path);
+    await screen.findByTestId('canvas');
+    expect(screen.queryByTestId('config-panel')).toBeNull();
+
+    act(() => usePanelsStore.getState().openSettings({ kind: 'node', id: agent.id }));
+    const panel = await screen.findByTestId('config-panel');
+    expect(panel.closest('[role="dialog"]')).not.toBeNull();
+  });
+
+  it('the New node dialog is gone: Add node is the Canvas’s own pill (D332)', async () => {
     const { path } = seed();
     renderApp(path);
     await screen.findByTestId('canvas');
-
-    await user.click(screen.getByTestId('new-node-button'));
-    const dialog = await screen.findByRole('dialog', { name: 'New node' });
-    expect(dialog).toHaveTextContent('Launch post');
-
-    // D285: the one node the Canvas offers is an Agent
-    await user.dblClick(within(dialog).getByTestId('palette-agent'));
-    expect(canvas.addNode).toHaveBeenCalledWith('agent', expect.any(Object));
-    expect(usePanelsStore.getState().newNodeOpen).toBe(false);
     expect(screen.queryByRole('dialog', { name: 'New node' })).toBeNull();
   });
 
-  it('the bottom panel collapses to its 40 px tab row and opens to 232 px', async () => {
-    const user = userEvent.setup();
+  it('the bottom panel is hidden until opened, then 232 px; there is no collapsed bar', async () => {
     const { path } = seed();
     renderApp(path);
     await screen.findByTestId('canvas');
+    expect(screen.queryByTestId('bottom-section')).toBeNull();
 
-    const section = screen.getByTestId('bottom-section');
+    act(() => usePanelsStore.getState().setBottomTab('events'));
+    const section = await screen.findByTestId('bottom-section');
     expect(section).toHaveStyle({ height: '232px' });
-    expect(section).toHaveClass('transition-[height]', 'duration-200');
-    await user.click(within(section).getByTestId('bottom-toggle'));
-    expect(section).toHaveStyle({ height: '40px' });
-    await user.click(within(section).getByTestId('bottom-toggle'));
-    expect(section).toHaveStyle({ height: '232px' });
+    expect(section).toHaveClass('border-[var(--line)]', 'bg-[var(--panel)]');
+
+    act(() => usePanelsStore.getState().toggleBottom());
+    expect(screen.queryByTestId('bottom-section')).toBeNull();
   });
 
   it('FR-GRD-008 the halt note floats over the Canvas', async () => {
@@ -166,15 +156,18 @@ describe('FR-CAN-002 / FR-CHAT-004 the Canvas screen in the V2 layout', () => {
     );
     const note = await screen.findByTestId('halt-reason');
     expect(surface.parentElement).toContainElement(note);
-    expect(screen.getByTestId('run-bar')).not.toContainElement(note);
   });
 });
 
 describe('FR-MOB-001 the phone layout mounts none of the desktop chrome', () => {
-  it('no sheet, no Chat column and no New node dialog, even with their flags set', async () => {
+  it('no sheet, no Chat column, no modal and no bottom panel, even with their flags set', async () => {
     installMatchMedia(true);
-    const { path } = seed();
-    usePanelsStore.setState({ sheetOpen: true, newNodeOpen: true });
+    const { path, agent } = seed();
+    usePanelsStore.setState({
+      sheetOpen: true,
+      bottomOpen: true,
+      settings: { kind: 'node', id: agent.id },
+    });
     renderApp(path);
     expect(await screen.findByTestId('compact-workflow')).toBeInTheDocument();
     await waitFor(() =>
@@ -183,6 +176,8 @@ describe('FR-MOB-001 the phone layout mounts none of the desktop chrome', () => 
     expect(screen.queryByTestId('workflow-sheet')).toBeNull();
     expect(screen.queryByTestId('chat-column')).toBeNull();
     expect(screen.queryByTestId('chat-aside')).toBeNull();
+    expect(screen.queryByTestId('config-panel')).toBeNull();
+    expect(screen.queryByTestId('bottom-section')).toBeNull();
     expect(screen.queryByRole('dialog', { name: 'New node' })).toBeNull();
   });
 });

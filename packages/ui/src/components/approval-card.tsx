@@ -1,9 +1,10 @@
 import { GUARDRAIL_ACTIONS, type ApprovalRequest, type GuardrailAction } from '@ace/contracts';
-import { ShieldAlert } from 'lucide-react';
 import { useEffect, type HTMLAttributes } from 'react';
 
 import { cn } from '../lib/cn.js';
 import { Button } from './button.js';
+import { INPUT_CLASS } from './input.js';
+import { FIELD_LABEL_CLASS } from './label.js';
 
 /**
  * Labels for the five guardrail actions (FR-GRD-011). `ask_user` reads "ask user" everywhere a
@@ -47,6 +48,10 @@ export interface ApprovalCardProps extends Omit<HTMLAttributes<HTMLElement>, 'ch
  *
  * `A` approves and `R` rejects while the card is mounted (FR-GRD-013's keyboard path). The layout is
  * a single column with wrapping buttons so it stays usable at 380 px (FR-MOB-002).
+ *
+ * The look is the theme's output card (D328) in its accent: a surface card, radius 12, whose header
+ * strip says "waiting on you" in `rgba(239,107,63,…)`; Approve is the Done pill, Reject the Close
+ * pill, and the preview sits in a soft box, radius 8.
  */
 export function ApprovalCard({
   request,
@@ -88,67 +93,77 @@ export function ApprovalCard({
       data-check={request.checkType}
       aria-label={`Approval needed for ${request.nodeName}`}
       className={cn(
-        'flex w-full max-w-sm flex-col gap-2.5 rounded-card border border-[color-mix(in_oklab,var(--color-status-WAITING)_60%,transparent)] bg-panel p-3.5 shadow-[0_0_0_4px_color-mix(in_oklab,var(--color-status-WAITING)_10%,transparent),0_18px_40px_-16px_#000000aa]',
+        'flex w-full max-w-sm flex-col overflow-hidden rounded-[12px] border border-[rgba(239,107,63,0.35)] bg-[var(--surface)] text-[var(--ink)]',
         className,
       )}
       {...props}
     >
-      <header className="flex items-center gap-2.5">
+      <header className="flex items-center gap-2 border-b border-[rgba(239,107,63,0.25)] bg-[rgba(239,107,63,0.10)] px-[14px] py-[10px]">
         <span
           aria-hidden
-          className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[8px] bg-[color-mix(in_oklab,var(--color-status-WAITING)_16%,transparent)] text-[var(--color-status-WAITING)]"
-        >
-          <ShieldAlert className="h-4 w-4" aria-hidden />
+          className={cn(
+            'h-[7px] w-[7px] shrink-0 rounded-full bg-[#ef6b3f]',
+            decided === undefined && 'motion-safe:animate-[livePulse_1.4s_ease-in-out_infinite]',
+          )}
+        />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-bold">{request.nodeName}</span>
+        <span className="shrink-0 rounded-[4px] bg-[rgba(239,107,63,0.12)] px-[6px] py-[2px] font-machine text-[8.5px] font-medium uppercase tracking-[0.08em] text-[#e8572e]">
+          waiting on you
         </span>
-        <div className="min-w-0">
-          <p className="truncate font-human text-[15px] font-semibold">{request.nodeName}</p>
-          <p className="font-machine text-[9.5px] text-fg-muted">
-            {request.point} · {request.checkType} · ask user
-          </p>
-        </div>
       </header>
 
-      <p className="text-[13.5px] text-fg-soft" data-testid="approval-reason">
-        {request.reason}
-      </p>
-
-      <pre
-        data-testid="approval-preview"
-        className="max-h-[76px] overflow-auto whitespace-pre-wrap rounded-[9px] border border-border bg-sunken px-2.5 py-2 font-machine text-[10.5px] text-fg-muted"
-      >
-        {request.preview}
-      </pre>
-
-      {decided === undefined ? (
-        <>
-          <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-fg-muted">
-            Note (optional)
-            <input
-              className="rounded-field border border-border bg-card px-2 py-1 font-human text-xs text-fg focus-visible:border-selection focus-visible:outline-none"
-              value={note ?? ''}
-              onChange={(event) => onNoteChange?.(event.target.value)}
-              aria-label="Decision note"
-            />
-          </label>
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" disabled={pending} onClick={onApprove}>
-              Approve <kbd className="ml-1 font-machine text-[10px] opacity-70">A</kbd>
-            </Button>
-            <Button size="sm" variant="destructive" disabled={pending} onClick={onReject}>
-              Reject <kbd className="ml-1 font-machine text-[10px] opacity-70">R</kbd>
-            </Button>
-          </div>
-        </>
-      ) : (
-        <p
-          role="status"
-          data-testid="approval-decision"
-          data-decision={decided}
-          className="font-machine text-xs"
-        >
-          {decided === 'approve' ? 'Approved — the node continues.' : 'Rejected — the node failed.'}
+      <div className="flex flex-col gap-[10px] px-[14px] py-[12px]">
+        <p className="font-machine text-[10.5px] text-[var(--muted)]">
+          {request.point} · {request.checkType} · ask user
         </p>
-      )}
+
+        <p className="text-[13px] leading-[1.5]" data-testid="approval-reason">
+          {request.reason}
+        </p>
+
+        <pre
+          data-testid="approval-preview"
+          className="max-h-[76px] overflow-auto whitespace-pre-wrap break-words rounded-[8px] border border-[var(--line)] bg-[var(--soft)] px-[10px] py-[8px] font-machine text-[11px] text-[var(--muted)]"
+        >
+          {request.preview}
+        </pre>
+
+        {decided === undefined ? (
+          <>
+            <label className="flex flex-col gap-[7px]">
+              <span className={FIELD_LABEL_CLASS}>Note (optional)</span>
+              <input
+                className={INPUT_CLASS}
+                value={note ?? ''}
+                onChange={(event) => onNoteChange?.(event.target.value)}
+                aria-label="Decision note"
+              />
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" disabled={pending} onClick={onApprove}>
+                Approve <kbd className="font-machine text-[10px] font-normal opacity-60">A</kbd>
+              </Button>
+              <Button size="sm" variant="secondary" disabled={pending} onClick={onReject}>
+                Reject <kbd className="font-machine text-[10px] font-normal opacity-60">R</kbd>
+              </Button>
+            </div>
+          </>
+        ) : (
+          <p
+            role="status"
+            data-testid="approval-decision"
+            data-decision={decided}
+            className={cn(
+              'text-[12px] font-semibold',
+              decided === 'approve' ? 'text-[#2f9e63]' : 'text-[#c94c27]',
+            )}
+          >
+            {decided === 'approve'
+              ? 'Approved — the node continues.'
+              : 'Rejected — the node failed.'}
+          </p>
+        )}
+      </div>
     </section>
   );
 }

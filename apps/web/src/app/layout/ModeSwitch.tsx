@@ -1,26 +1,19 @@
 import { cn } from '@ace/ui';
-import { Code2, MessagesSquare, Workflow, type LucideIcon } from 'lucide-react';
 import { useRef, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { useWorkflowMode, workflowPath, type WorkflowMode } from '../../forge/mode';
 import { SHORTCUTS, shortcutLabel } from '../shortcuts';
 
-const MODES: ReadonlyArray<{ mode: WorkflowMode; label: string; Icon: LucideIcon; keys: string }> =
-  [
-    { mode: 'ideate', label: 'Ideate', Icon: Workflow, keys: shortcutLabel(SHORTCUTS.ideate) },
-    { mode: 'forge', label: 'Forge', Icon: Code2, keys: shortcutLabel(SHORTCUTS.forge) },
-    {
-      mode: 'domain',
-      label: 'Domain',
-      Icon: MessagesSquare,
-      keys: shortcutLabel(SHORTCUTS.domain),
-    },
-  ];
+const MODES: ReadonlyArray<{ mode: WorkflowMode; label: string; keys: string }> = [
+  { mode: 'ideate', label: 'Ideate', keys: shortcutLabel(SHORTCUTS.ideate) },
+  { mode: 'forge', label: 'Forge', keys: shortcutLabel(SHORTCUTS.forge) },
+  { mode: 'domain', label: 'Domain', keys: shortcutLabel(SHORTCUTS.domain) },
+];
 
 /**
- * The top bar's `Ideate | Forge | Domain` switch (D299, D303): a radio group, and the arrow keys
- * move along it.
+ * The header's `Ideate | Forge | Domain` switch (D299, D303), as the theme's segmented pill
+ * (D330): a radio group, and the arrow keys move along it.
  */
 export function ModeSwitch({ projectId, workflowId }: { projectId: string; workflowId: string }) {
   const mode = useWorkflowMode();
@@ -45,9 +38,9 @@ export function ModeSwitch({ projectId, workflowId }: { projectId: string; workf
       aria-label="Mode"
       data-testid="mode-switch"
       onKeyDown={onKeyDown}
-      className="flex shrink-0 items-center gap-[3px] rounded-chip border border-border bg-card p-[3px]"
+      className="flex shrink-0 gap-[2px] rounded-full border border-[var(--line)] bg-[var(--soft)] p-[3px]"
     >
-      {MODES.map(({ mode: value, label, Icon, keys }, index) => (
+      {MODES.map(({ mode: value, label, keys }, index) => (
         <button
           key={value}
           ref={(element) => {
@@ -61,11 +54,12 @@ export function ModeSwitch({ projectId, workflowId }: { projectId: string; workf
           title={`${label} (${keys})`}
           onClick={() => go(value)}
           className={cn(
-            'flex h-[26px] items-center gap-1.5 rounded-chip px-3 font-machine text-[10.5px] uppercase tracking-[0.1em] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent',
-            mode === value ? 'bg-fg text-canvas' : 'text-fg-muted hover:text-fg',
+            'h-[26px] cursor-pointer rounded-full border px-4 text-[12px] font-semibold focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]',
+            mode === value
+              ? 'border-[var(--seg)] bg-[var(--seg)] text-[var(--segInk)]'
+              : 'border-transparent bg-transparent text-[var(--muted)]',
           )}
         >
-          <Icon className="h-3.5 w-3.5" aria-hidden />
           {label}
         </button>
       ))}

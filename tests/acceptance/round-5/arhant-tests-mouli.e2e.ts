@@ -517,26 +517,62 @@ async function openCanvas(page: Page, projectId: string, workflowId: string): Pr
 
 const card = (page: Page, nodeId: string): Locator => page.getByTestId(`node-card-${nodeId}`);
 
-// The V2 button shows "Run"; its accessible name is "Start run" (D259).
-const startButton = (page: Page): Locator =>
-  page.getByTestId('run-bar').getByRole('button', { name: 'Start run', exact: true });
+/*
+ * The Ace UI workspace (D330–D333): the run is started from the canvas breadcrumb's "…" menu, a
+ * click on a card opens that node's settings modal (the old sheet's Configure tab), and the floating
+ * sheet keeps Inspector · Runs · Memory, opened from the same menu or a card's "Inspect".
+ */
 
-/** Close the V2 sheet when it is open: it covers the right of the Canvas (D259). */
+/** The node settings modal, when open. */
+const settingsDialog = (page: Page): Locator =>
+  page.getByRole('dialog').filter({ has: page.getByTestId('config-panel') });
+
+/** Close the node settings modal if it is open: it covers the Canvas (Done commits what waits). */
+async function closeSettings(page: Page): Promise<void> {
+  const dialog = settingsDialog(page);
+  if (await dialog.isVisible()) await dialog.getByRole('button', { name: 'Done' }).click();
+  await expect(dialog).toHaveCount(0);
+}
+
+/** Start the workflow's run: the workspace "…" menu's "Start run" (D331, was the run bar). */
+async function startRun(page: Page): Promise<void> {
+  await closeSettings(page);
+  await page.getByTestId('workspace-menu').click();
+  await page.getByTestId('menu-start-run').click();
+}
+
+/** Close the sheet when it is open: it covers the right of the Canvas (D332). */
 async function closeSheet(page: Page): Promise<void> {
-  const close = page.getByRole('button', { name: 'Close panel' });
+  await closeSettings(page);
+  const close = page.getByTestId('workflow-sheet').getByRole('button', { name: 'Close panel' });
   if (await close.isVisible()) await close.click();
   await expect(page.getByTestId('workflow-sheet')).toHaveCount(0);
 }
 
+/** Open the empty Canvas's right-click menu (FR-CAN-011) on a bare point of the pane. */
+async function paneMenu(page: Page): Promise<Locator> {
+  await closeSheet(page);
+  const { x, y } = await emptyPanePoint(page);
+  await page.mouse.click(x, y, { button: 'right' });
+  const menu = page.getByRole('menu', { name: 'Canvas actions' });
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
+/** "Auto-arrange" (FR-CAN-008): the empty Canvas's right-click menu (D332, was a toolbar button). */
+async function autoArrange(page: Page): Promise<void> {
+  const menu = await paneMenu(page);
+  await menu.getByRole('menuitem', { name: 'Auto-arrange' }).click();
+}
+
 /**
- * Add a node from the palette — in the V2 layout the New node dialog (D259): open it, choose the
- * kind by its name in the "Node palette" list, add it. The dialog closes itself after the add.
+ * Add a bare Agent, as the palette did: the empty Canvas's right-click "Add Agent" (D332). The
+ * "Add node" pill would also link it to the last stage; this keeps one edit one added node.
  */
-async function addFromPalette(page: Page, name: RegExp): Promise<void> {
-  await page.getByTestId('new-node-button').click();
-  await page.getByLabel('Node palette').getByRole('button', { name }).click();
-  await page.getByTestId('new-node-add').click();
-  await expect(page.getByRole('dialog', { name: 'New node' })).toHaveCount(0);
+async function addAgentFromPaneMenu(page: Page): Promise<void> {
+  const menu = await paneMenu(page);
+  await menu.getByRole('menuitem', { name: 'Add Agent' }).click();
+  await expect(menu).toHaveCount(0);
 }
 
 async function fitView(page: Page): Promise<void> {
@@ -590,8 +626,11 @@ async function clickPoint(target: Locator): Promise<{ x: number; y: number }> {
   return point as { x: number; y: number };
 }
 
-/** Select a node by its card's header, never forced (round 4's selection). */
-async function selectNode(page: Page, nodeId: string): Promise<void> {
+/**
+ * Click a card by its header, never forced (round 4's selection). On the desktop the click selects
+ * the node and opens its settings modal (D333); on the phone's read-only Canvas it only selects.
+ */
+async function clickCard(page: Page, nodeId: string): Promise<void> {
   await closeSheet(page);
   await fitView(page);
   const target = card(page, nodeId);
@@ -602,12 +641,26 @@ async function selectNode(page: Page, nodeId: string): Promise<void> {
   await expect(target).toHaveAttribute('data-selected', 'true');
 }
 
-type PaneTab = 'Configure' | 'Inspector' | 'Runs' | 'Chat' | 'Memory' | 'Canvas';
+/** Select a node and leave the Canvas usable: the click's settings modal is closed again. */
+async function selectNode(page: Page, nodeId: string): Promise<void> {
+  await clickCard(page, nodeId);
+  await closeSettings(page);
+  await expect(card(page, nodeId)).toHaveAttribute('data-selected', 'true');
+}
+
+/** A node's settings (the old sheet's Configure tab): a click on its card opens the modal (D333). */
+async function openSettings(page: Page, nodeId: string): Promise<Locator> {
+  await clickCard(page, nodeId);
+  const dialog = settingsDialog(page);
+  await expect(dialog.getByRole('region', { name: 'Node configuration' })).toBeVisible();
+  return dialog;
+}
+
+type PaneTab = 'Inspector' | 'Runs' | 'Chat' | 'Memory' | 'Canvas';
 
 /**
- * A tab of the node pane (the desktop's floating sheet, or the phone layout's single pane), never a
- * workflow tab of the same name: `memory.json` imports a workflow called "Memory", whose tab sits in the top bar's
- * "Workflows" list beside the pane's own "Memory" tab.
+ * A tab of the node pane (the desktop's floating sheet, or the phone layout's single pane), never
+ * another tab of the same name: `memory.json` imports a workflow called "Memory".
  */
 function paneTab(page: Page, name: PaneTab): Locator {
   return page
@@ -618,16 +671,26 @@ function paneTab(page: Page, name: PaneTab): Locator {
 
 async function openRightTab(page: Page, name: PaneTab): Promise<void> {
   const tab = paneTab(page, name);
-  // Desktop (POC Theme V2, D259): Configure · Inspector · Runs · Memory are the floating sheet's
-  // tabs and the sheet starts closed. The phone layout's tabs are always on screen.
-  const toggle = page.getByTestId('sheet-toggle');
-  if (!(await tab.isVisible()) && (await toggle.isVisible())) await toggle.click();
+  // Desktop (D332): Inspector · Runs · Memory are the floating sheet's tabs and the sheet starts
+  // closed — the workspace "…" menu's "Workflow panel" opens it. The phone's tabs are always shown.
+  if (!(await tab.isVisible())) {
+    await closeSettings(page);
+    await page.getByTestId('workspace-menu').click();
+    await page.getByTestId('menu-sheet').click();
+  }
   await tab.click();
 }
 
+/** Select the node, then its card's "Inspect" opens the sheet on the Inspector (D332). */
 async function openInspector(page: Page, nodeId: string): Promise<Locator> {
   await selectNode(page, nodeId);
-  await openRightTab(page, 'Inspector');
+  const target = card(page, nodeId);
+  await target.click({ button: 'right', position: await clickPoint(target) });
+  await page
+    .getByRole('menu', { name: 'Node actions' })
+    .getByRole('menuitem', { name: 'Inspect' })
+    .click();
+  await paneTab(page, 'Inspector').click();
   const inspector = page.getByTestId('inspector');
   await expect(inspector).toBeVisible();
   return inspector;
@@ -703,7 +766,10 @@ async function expectRunCompleteOnCanvas(page: Page, timeout = 90_000): Promise<
   await expect(page).toHaveURL(new RegExp(`/projects/${ULID_PATH}/workflows/${ULID_PATH}`), {
     timeout: 30_000,
   });
-  await expect(page.getByTestId('run-bar')).toContainText(/run complete/i, { timeout });
+  // The header has no run chip any more: the workspace footer carries the run's state (D330).
+  await expect(page.getByRole('contentinfo')).toHaveAttribute('data-run-status', 'COMPLETE', {
+    timeout,
+  });
 }
 
 /** What the wizard made: the one project of that name, its workflow and its latest run. */
@@ -752,8 +818,21 @@ async function createKbThroughUi(
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
   await dialog.getByLabel('Name', { exact: true }).fill(name);
-  await dialog.getByLabel('Embedding provider').selectOption(providerId);
-  await dialog.getByLabel('Embedding model').selectOption(MOCK_EMBED);
+  // The embedder is picked with the theme's dropdowns (D328): a combobox, then its option by name.
+  const providers = await providerList();
+  const providerName = providers.find((provider) => provider.id === providerId)?.name;
+  expect(providerName, `provider ${providerId} is listed`).toBeDefined();
+  const sameName = providers.filter((provider) => provider.name === providerName);
+  await dialog.getByRole('combobox', { name: 'Embedding provider' }).click();
+  await page
+    .getByRole('option', { name: providerName as string, exact: true })
+    .nth(sameName.findIndex((provider) => provider.id === providerId))
+    .click();
+  await dialog.getByRole('combobox', { name: 'Embedding model' }).click();
+  await page
+    .getByRole('option', { name: new RegExp(`\\(${escapeRegExp(MOCK_EMBED)}\\)$`) })
+    .click();
+  await expect(dialog.getByRole('combobox', { name: 'Embedding model' })).toContainText(MOCK_EMBED);
   if (chunk !== undefined) {
     await dialog.getByLabel('Chunk size (tokens)').fill(String(chunk.size));
     await dialog.getByLabel('Overlap (tokens)').fill(String(chunk.overlap));
@@ -838,12 +917,25 @@ async function searchThroughUi(page: Page, query: string): Promise<Locator> {
   return page.getByRole('list', { name: 'Search results' });
 }
 
+/** The Test search "Mode" dropdown's option labels, by the API's `mode` they stand for. */
+const SEARCH_MODE_BY_LABEL: Record<string, string> = {
+  'Hybrid (vector + keyword)': 'hybrid',
+  'Vector only': 'vector',
+  'Keyword only': 'keyword',
+};
+
 /** What the panel is set to, so the API is asked the very same question. */
 async function searchSettings(page: Page): Promise<{ k: number; mode: string }> {
   const panel = page.getByRole('search');
+  // "Mode" is the theme's dropdown (D328): what it shows is the chosen option's label.
+  const shown = ((await panel.getByRole('combobox', { name: 'Mode' }).textContent()) ?? '')
+    .replace('▾', '')
+    .trim();
+  const mode = SEARCH_MODE_BY_LABEL[shown];
+  expect(mode, `the Mode dropdown shows a known mode ("${shown}")`).toBeDefined();
   return {
     k: Number(await panel.getByLabel('Results (k)').inputValue()),
-    mode: await panel.getByLabel('Mode').inputValue(),
+    mode: mode as string,
   };
 }
 
@@ -1523,16 +1615,15 @@ test.describe('TC-RAG-006/007 Sources listed for an attached KB and for a Retrie
     });
     const answerer = flow.byName('Answerer');
 
-    // Attach through the UI (FR-RAG-005): the "Knowledge bases" multi-select.
+    // Attach through the UI (FR-RAG-005): the "Knowledge bases" multi-select, in the node settings.
     await openCanvas(page, flow.projectId, flow.workflowId);
-    await selectNode(page, answerer.id);
-    await openRightTab(page, 'Configure');
-    await page
+    const settings = await openSettings(page, answerer.id);
+    await settings
       .getByRole('group', { name: 'Attached knowledge bases' })
       .getByRole('checkbox', { name: kb.name })
       .click();
     await expect(
-      page
+      settings
         .getByRole('group', { name: 'Attached knowledge bases' })
         .getByRole('checkbox', { name: kb.name }),
     ).toBeChecked();
@@ -1543,7 +1634,7 @@ test.describe('TC-RAG-006/007 Sources listed for an attached KB and for a Retrie
       'FR-RAG-005: the base is attached to the Answerer',
     );
 
-    await startButton(page).click();
+    await startRun(page);
     const run = await settledRun(flow.workflowId);
     expect(run.status).toBe('COMPLETE');
     const listed = await nodeRunFor(run.id, answerer.id);
@@ -1602,14 +1693,13 @@ test.describe('TC-RAG-006/007 Sources listed for an attached KB and for a Retrie
       'json',
     );
 
-    await selectNode(page, retrieval.id);
-    await openRightTab(page, 'Configure');
-    await page.getByRole('combobox', { name: 'Knowledge base' }).click();
+    const settings = await openSettings(page, retrieval.id);
+    await settings.getByRole('combobox', { name: 'Knowledge base' }).click();
     await page.getByRole('option', { name: kb.name, exact: true }).click();
-    const k = page.getByLabel('Results (k)');
+    const k = settings.getByLabel('Results (k)');
     await k.fill('3');
     await k.press('Tab');
-    await page.getByRole('combobox', { name: 'Search mode' }).click();
+    await settings.getByRole('combobox', { name: 'Search mode' }).click();
     await page.getByRole('option', { name: /hybrid/i }).click();
     await engineSays(
       async () =>
@@ -1619,7 +1709,7 @@ test.describe('TC-RAG-006/007 Sources listed for an attached KB and for a Retrie
       'FR-RAG-006: the Retrieval config is saved',
     );
 
-    await startButton(page).click();
+    await startRun(page);
     const run = await settledRun(flow.workflowId);
     expect(run.status).toBe('COMPLETE');
     const listed = await nodeRunFor(run.id, retrieval.id);
@@ -1645,14 +1735,16 @@ test.describe('TC-RAG-006/007 Sources listed for an attached KB and for a Retrie
     await openInspector(page, retrieval.id);
     await expectSourcesMatch(await sourcesOnScreen(page), sources);
 
-    // D285 amends FR-RAG-006's palette half: the New node dialog offers one kind, an Agent. A
-    // Retrieval node still loads, edits and runs (everything above), it is just no longer offered.
-    await page.getByTestId('new-node-button').click();
-    const palette = page.getByLabel('Node palette');
-    await expect(palette.getByTestId('palette-agent')).toBeVisible();
-    await expect(palette.getByRole('button', { name: /Retrieval/ })).toHaveCount(0);
+    // D285 amends FR-RAG-006's palette half: one kind, an Agent, is offered. A Retrieval node still
+    // loads, edits and runs (everything above), it is just no longer offered. The New node dialog
+    // is gone (D332): "Add node" adds an Agent directly, and the empty Canvas's right-click menu is
+    // where kinds are offered by name.
+    await expect(page.getByTestId('new-node-button')).toBeVisible();
+    const menu = await paneMenu(page);
+    await expect(menu.getByRole('menuitem', { name: 'Add Agent' })).toBeVisible();
+    await expect(menu.getByRole('menuitem', { name: /Retrieval/ })).toHaveCount(0);
     await page.keyboard.press('Escape');
-    await expect(page.getByRole('dialog', { name: 'New node' })).toHaveCount(0);
+    await expect(menu).toHaveCount(0);
   });
 });
 
@@ -1720,18 +1812,18 @@ test.describe('TC-MEM-002 Clear memory (FR-MEM-001/004)', () => {
       );
 
     await openCanvas(page, flow.projectId, flow.workflowId);
-    await selectNode(page, rememberer.id);
     // FR-MEM-001: the Agent config's memory toggle shows the node's setting.
-    await openRightTab(page, 'Configure');
-    await expect(page.getByLabel('Remember facts between runs')).toBeChecked();
+    const settings = await openSettings(page, rememberer.id);
+    await expect(settings.getByLabel('Remember facts between runs')).toBeChecked();
 
+    // The sheet's Memory tab shows the selected node's memory (the modal is closed first).
     await openRightTab(page, 'Memory');
     const tab = page.getByTestId('memory-tab');
     await expect(tab).toBeVisible();
     await expect(tab.locator('tbody tr')).toHaveCount(0);
 
     // Run 1 saves the fact; the open tab shows it without a reload (memory.updated).
-    await startButton(page).click();
+    await startRun(page);
     const run1 = await settledRun(flow.workflowId);
     expect(run1.status).toBe('COMPLETE');
     const saved = await engineSays(
@@ -1746,7 +1838,7 @@ test.describe('TC-MEM-002 Clear memory (FR-MEM-001/004)', () => {
     await expect(row).toContainText(entry.value);
 
     // Run 2: the envelope carries the remembered fact (§1).
-    await startButton(page).click();
+    await startRun(page);
     const run2 = await settledRun(flow.workflowId, run1.id);
     expect(run2.status).toBe('COMPLETE');
     expect(await memoryInEnvelope(run2.id)).toContainEqual({ key: entry.key, value: entry.value });
@@ -1758,7 +1850,7 @@ test.describe('TC-MEM-002 Clear memory (FR-MEM-001/004)', () => {
     await expect(tab.getByTestId(`memory-entry-${entry.key}`)).toHaveCount(0);
 
     // The next run's envelope has no memory section.
-    await startButton(page).click();
+    await startRun(page);
     const run3 = await settledRun(flow.workflowId, run2.id);
     expect(run3.status).toBe('COMPLETE');
     expect(
@@ -1772,7 +1864,7 @@ test.describe('TC-MEM-002 Clear memory (FR-MEM-001/004)', () => {
     await page.getByRole('dialog').getByRole('button', { name: 'Clear all' }).click();
     await engineSays(memoryOf, (entries) => entries.length === 0, 'the memory is cleared');
     await expect(tab.locator('tbody tr')).toHaveCount(0);
-    await startButton(page).click();
+    await startRun(page);
     const run4 = await settledRun(flow.workflowId, run3.id);
     expect(run4.status).toBe('COMPLETE');
     expect(await memoryInEnvelope(run4.id), 'TC-MEM-002: nothing injected after the clear').toEqual(
@@ -1880,7 +1972,7 @@ test.describe('TC-CAN-007/008/010 Auto-layout, undo/redo and shortcuts (FR-CAN-0
 
     await openCanvas(page, flow.projectId, flow.workflowId);
     const before = await graphOf(flow.workflowId);
-    await page.getByRole('button', { name: 'Auto-arrange' }).click();
+    await autoArrange(page);
     const laid = await landedGraph(flow.workflowId, before.workflow.version, 'the auto-layout');
 
     // Left to right along every edge, by the saved positions.
@@ -1946,7 +2038,7 @@ test.describe('TC-CAN-007/008/010 Auto-layout, undo/redo and shortcuts (FR-CAN-0
     };
     const addAgent = async (what: string): Promise<Node> => {
       const known = new Set(graph.nodes.map((node) => node.id));
-      await edit(what, () => addFromPalette(page, /^Agent\b/));
+      await edit(what, () => addAgentFromPaneMenu(page));
       const added = graph.nodes.find((node) => !known.has(node.id));
       expect(added, `${what} added a node`).toBeDefined();
       return added as Node;
@@ -1979,9 +2071,11 @@ test.describe('TC-CAN-007/008/010 Auto-layout, undo/redo and shortcuts (FR-CAN-0
     expect(states).toHaveLength(11);
     expect(new Set(states).size, 'every edit changed the graph').toBe(11);
 
-    // Undo ×10: each step lands on the state before the edit it undoes.
+    // Undo ×10 with Ctrl+Z (the toolbar's ↶ is "Undo move", position history only — D332): each
+    // step lands on the state before the edit it undoes.
+    await closeSettings(page);
     for (let step = 10; step >= 1; step -= 1) {
-      await page.getByRole('button', { name: 'Undo', exact: true }).click();
+      await page.keyboard.press('Control+z');
       await expect
         .poll(async () => normalised(await graphOf(flow.workflowId)), {
           message: `TC-CAN-008: undo of edit ${step} restores the server's state ${step - 1}`,
@@ -1989,9 +2083,9 @@ test.describe('TC-CAN-007/008/010 Auto-layout, undo/redo and shortcuts (FR-CAN-0
         })
         .toBe(states[step - 1]);
     }
-    // Redo ×10: forward again, in order.
+    // Redo ×10 with Ctrl+Y: forward again, in order.
     for (let step = 1; step <= 10; step += 1) {
-      await page.getByRole('button', { name: 'Redo', exact: true }).click();
+      await page.keyboard.press('Control+y');
       await expect
         .poll(async () => normalised(await graphOf(flow.workflowId)), {
           message: `TC-CAN-008: redo of edit ${step} restores the server's state ${step}`,
@@ -2193,7 +2287,7 @@ test.describe('TC-MOB-001/002 + FR-MOB-003 Phone layout at 380 px', () => {
     await openApp(page, `/projects/${flow.projectId}/workflows/${flow.workflowId}`);
     await expect(page.getByRole('note')).toContainText(/editing is available on a larger screen/i);
     for (const node of before.nodes) await expect(card(page, node.id)).toBeVisible();
-    // no palette: in the V2 layout, no New node button to open it from (D259)
+    // no palette: no "Add node" pill to add from (D332)
     await expect(page.getByTestId('new-node-button')).toHaveCount(0);
     await expect(page.getByLabel('Node palette')).toHaveCount(0);
     await expectNoHorizontalScroll(page, 'read-only canvas');
@@ -2204,7 +2298,11 @@ test.describe('TC-MOB-001/002 + FR-MOB-003 Phone layout at 380 px', () => {
       if (request.url().includes('/graph-ops')) writes.push(request.url());
     });
     await dragCardBy(page, agent.id, 0, 120);
-    await card(page, agent.id).click();
+    // on a 380 px Canvas the theme's minimap can sit over the card's centre: click where the card
+    // itself receives the click
+    const agentCard = card(page, agent.id);
+    await agentCard.click({ position: await clickPoint(agentCard) });
+    await expect(agentCard).toHaveAttribute('data-selected', 'true');
     await page.keyboard.press('Delete');
     await page
       .waitForRequest((request) => request.url().includes('/graph-ops'), { timeout: 3_000 })
@@ -2214,15 +2312,21 @@ test.describe('TC-MOB-001/002 + FR-MOB-003 Phone layout at 380 px', () => {
     expect(after.workflow.version).toBe(before.workflow.version);
     expect(normalised(after)).toBe(normalised(before));
 
-    // Pan/zoom: the wheel zooms the viewport.
+    // Pan/zoom: the theme's wheel (D332) zooms with Ctrl held (a plain wheel pans).
     const viewport = page.locator('.react-flow__viewport');
     const transform = await viewport.getAttribute('style');
     const point = await emptyPanePoint(page);
     await page.mouse.move(point.x, point.y);
-    await page.mouse.wheel(0, -400);
+    await page.keyboard.down('Control');
+    await page.mouse.wheel(0, -100);
+    await page.keyboard.up('Control');
     await expect
       .poll(() => viewport.getAttribute('style'), { message: 'the read-only Canvas still zooms' })
       .not.toBe(transform);
+    expect(
+      (await viewport.getAttribute('style'))?.match(/scale\(([^)]+)\)/)?.[1],
+      'the zoom changed',
+    ).not.toBe(transform?.match(/scale\(([^)]+)\)/)?.[1]);
   });
 });
 
@@ -2414,14 +2518,13 @@ test.describe('§1 demo script (round 5 gate)', () => {
         graph.nodes.find((node) => node.kind === 'agent' && node.name === 'Answerer') ??
         (graph.nodes.find((node) => node.kind === 'agent') as Node);
       await openCanvas(page, projectId, workflowId);
-      await selectNode(page, answerer.id);
-      await openRightTab(page, 'Configure');
-      await page
+      const settings = await openSettings(page, answerer.id);
+      await settings
         .getByRole('group', { name: 'Attached knowledge bases' })
         .getByRole('checkbox', { name: base.name })
         .click();
       await expect(
-        page
+        settings
           .getByRole('group', { name: 'Attached knowledge bases' })
           .getByRole('checkbox', { name: base.name }),
       ).toBeChecked();
@@ -2433,7 +2536,7 @@ test.describe('§1 demo script (round 5 gate)', () => {
         'the demo KB is attached',
       );
       const previous = await latestRun(workflowId);
-      await startButton(page).click();
+      await startRun(page);
       const run = await settledRun(workflowId, previous?.id);
       expect(run.status).toBe('COMPLETE');
       const nodeRun = await nodeRunFor(run.id, answerer.id);
@@ -2462,7 +2565,7 @@ test.describe('§1 demo script (round 5 gate)', () => {
       });
       const previous = await latestRun(workflowId);
       await openCanvas(page, projectId, workflowId);
-      await startButton(page).click();
+      await startRun(page);
       const run = await settledRun(workflowId, previous?.id);
       expect(run.status).toBe('COMPLETE');
       const nodeRun = await nodeRunFor(run.id, answerer.id);
@@ -2506,7 +2609,7 @@ test.describe('§1 demo script (round 5 gate)', () => {
     await test.step('Canvas: Auto-arrange, Ctrl+D then Undo, a right-click menu', async () => {
       await openCanvas(page, projectId, workflowId);
       let graph = await graphOf(workflowId);
-      await page.getByRole('button', { name: 'Auto-arrange' }).click();
+      await autoArrange(page);
       graph = await landedGraph(workflowId, graph.workflow.version, 'the auto-layout');
       const agent = graph.nodes.find((node) => node.kind === 'agent') as Node;
       const nodeCount = graph.nodes.length;
@@ -2514,10 +2617,12 @@ test.describe('§1 demo script (round 5 gate)', () => {
       await page.keyboard.press('Control+d');
       graph = await landedGraph(workflowId, graph.workflow.version, 'Ctrl+D');
       expect(graph.nodes, 'Ctrl+D made a copy').toHaveLength(nodeCount + 1);
-      await page.getByRole('button', { name: 'Undo', exact: true }).click();
+      // Undo is Ctrl+Z now (D332: the toolbar's ↶ only undoes moves).
+      await page.keyboard.press('Control+z');
       graph = await landedGraph(workflowId, graph.workflow.version, 'Undo');
       expect(graph.nodes, 'Undo took the copy away').toHaveLength(nodeCount);
-      await card(page, agent.id).click({ button: 'right', position: { x: 60, y: 6 } });
+      const target = card(page, agent.id);
+      await target.click({ button: 'right', position: await clickPoint(target) });
       await expect(page.getByRole('menu')).toBeVisible();
       await page.keyboard.press('Escape');
     });

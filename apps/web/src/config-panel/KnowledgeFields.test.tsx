@@ -1,18 +1,13 @@
 import type { Node } from '@ace/contracts';
-import { act, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { screen, waitFor, within } from '@testing-library/react';
 
-import { useSelectionStore } from '../app/stores/selection';
 import { seedKnowledgeBase } from '../mocks/seeds-round5';
 import { createNode, type CanvasNodeKind } from '../nodes/factory';
-import { db, installMockServer, renderApp } from '../test/app';
+import { db, installMockServer } from '../test/app';
 import { peekGraphSync } from '../workflows/sync-registry';
+import { mountSettings, renderSettings } from './settings-harness';
 
 installMockServer();
-
-vi.mock('../canvas/Canvas', () => ({
-  Canvas: ({ workflowId }: { workflowId: string }) => <div data-testid="canvas">{workflowId}</div>,
-}));
 
 vi.mock('./monaco-loader', () => ({
   MonacoEditor: () => <textarea aria-label="JSON schema" />,
@@ -35,16 +30,14 @@ function seed(kind: CanvasNodeKind) {
   };
 }
 
+/** The node settings modal open on that node (D333). */
 async function openPanel(kind: CanvasNodeKind) {
   const seeded = seed(kind);
-  renderApp(`/projects/${seeded.project.id}/workflows/${seeded.workflow.id}`);
-  await screen.findByTestId('canvas');
-  // the config panel lives in the sheet, closed until the top bar opens it
-  await userEvent.click(screen.getByTestId('sheet-toggle'));
-  await screen.findByText(/select a node/i);
-  act(() => useSelectionStore.getState().setSelection([seeded.node.id], []));
-  const panel = await screen.findByRole('complementary', { name: /node configuration/i });
-  return { ...seeded, panel, q: within(panel), user: userEvent.setup() };
+  const opened = await renderSettings(seeded.project, seeded.workflow, {
+    kind: 'node',
+    id: seeded.node.id,
+  });
+  return { ...seeded, ...opened };
 }
 
 const saved = (workflowId: string, id: string): Node =>
@@ -57,7 +50,8 @@ async function settled(workflowId: string) {
 describe('FR-RAG-006 / TC-RAG-007 Retrieval node config', () => {
   it('lists the project bases, and saves the base, k and mode through update_node', async () => {
     const { q, user, workflow, node, policiesId } = await openPanel('retrieval');
-    expect(q.getByText(/retrieval node/i)).toBeInTheDocument();
+    // the header's kind chip
+    expect(q.getByText('RETRIEVAL')).toBeInTheDocument();
 
     await user.click(q.getByLabelText('Knowledge base'));
     expect(await screen.findByRole('option', { name: 'Handbook' })).toBeInTheDocument();
@@ -101,11 +95,7 @@ describe('FR-RAG-006 / TC-RAG-007 Retrieval node config', () => {
     const workflow = db.createWorkflow(project.id, 'F');
     const node = createNode('retrieval', workflow.id, { x: 0, y: 0 });
     db.commitGraph(workflow.id, [node], []);
-    renderApp(`/projects/${project.id}/workflows/${workflow.id}`);
-    await screen.findByTestId('canvas');
-    // the config panel lives in the sheet, closed until the top bar opens it
-    await userEvent.click(screen.getByTestId('sheet-toggle'));
-    act(() => useSelectionStore.getState().setSelection([node.id], []));
+    mountSettings(project, workflow, { kind: 'node', id: node.id });
     expect(await screen.findByTestId('retrieval-no-bases')).toHaveTextContent(
       /no knowledge bases in this project/i,
     );
@@ -144,13 +134,9 @@ describe('FR-RAG-005 Agent "Knowledge bases" multi-select', () => {
     const ghost = '01ARZ3NDEKTSV4RRFFQ69G5FAZ';
     node.config = { ...node.config, knowledgeBaseIds: [ghost] } as typeof node.config;
     db.commitGraph(workflow.id, [node], []);
-    renderApp(`/projects/${project.id}/workflows/${workflow.id}`);
-    await screen.findByTestId('canvas');
-    // the config panel lives in the sheet, closed until the top bar opens it
-    await userEvent.click(screen.getByTestId('sheet-toggle'));
-    act(() => useSelectionStore.getState().setSelection([node.id], []));
+    const { user } = await renderSettings(project, workflow, { kind: 'node', id: node.id });
     const missing = await screen.findByTestId(`agent-kb-missing-${ghost}`);
-    await userEvent.setup().click(within(missing).getByRole('button', { name: 'Remove' }));
+    await user.click(within(missing).getByRole('button', { name: 'Remove' }));
     await settled(workflow.id);
     await waitFor(() => {
       const agent = saved(workflow.id, node.id);

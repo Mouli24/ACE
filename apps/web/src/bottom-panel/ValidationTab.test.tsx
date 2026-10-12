@@ -9,6 +9,9 @@ import { db, installMockServer, renderApp } from '../test/app';
 installMockServer();
 vi.mock('../canvas/Canvas', () => ({ Canvas: () => <div data-testid="canvas" /> }));
 
+// The panel is hidden until the workspace menu opens it (D332); these tests start with it open.
+beforeEach(() => act(() => usePanelsStore.setState({ bottomOpen: true, bottomTab: 'validation' })));
+
 describe('Bottom panel (round 1 §5 step 3, FR-WF-006)', () => {
   it('Validation lists issues with severity, code, message and a node link; later tabs say their round', async () => {
     const user = userEvent.setup();
@@ -20,10 +23,14 @@ describe('Bottom panel (round 1 §5 step 3, FR-WF-006)', () => {
     await screen.findByTestId('canvas');
 
     await user.click(screen.getByRole('button', { name: 'Validate' }));
-    const list = await screen.findByRole('list');
+    const list = await within(screen.getByRole('tabpanel', { name: 'Validation' })).findByRole(
+      'list',
+    );
     expect(within(list).getAllByLabelText('error').length).toBeGreaterThan(0);
-    // severity is a shape, not colour alone (WCAG 1.4.1)
-    expect(within(list).getAllByLabelText('error')[0]!.tagName.toLowerCase()).toBe('svg');
+    // severity is a shape, not colour alone (WCAG 1.4.1): the theme's ✕ glyph, as an image
+    const severity = within(list).getAllByLabelText('error')[0]!;
+    expect(severity).toHaveAttribute('role', 'img');
+    expect(severity).toHaveTextContent('✕');
     // D285: an Agent with nothing upstream starts from its goal — and this one has none yet
     expect(within(list).getByText('missing_input')).toBeInTheDocument();
     expect(within(list).queryByText('unconnected_required_input')).toBeNull();
@@ -80,7 +87,9 @@ describe('FR-MOD-005 the validation panel shows the model-catalogue issues', () 
     await screen.findByTestId('canvas');
 
     await user.click(screen.getByRole('button', { name: 'Validate' }));
-    const list = await screen.findByRole('list');
+    const list = await within(screen.getByRole('tabpanel', { name: 'Validation' })).findByRole(
+      'list',
+    );
 
     expect(within(list).getByText('provider_missing')).toBeInTheDocument();
     expect(within(list).getByText('unavailable_model')).toBeInTheDocument();

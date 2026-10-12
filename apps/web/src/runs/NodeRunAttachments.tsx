@@ -1,4 +1,5 @@
 import type { Node } from '@ace/contracts';
+import type { ReactNode } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
 import { ErrorCard } from '../errors/ErrorCard';
@@ -17,7 +18,27 @@ import { useRunStore } from './run-store';
  * from the overlay, so one node's frame never re-renders another's attachments.
  */
 
-/** Retry · Retry with downstream · Re-run · Start from this node, for the node's latest node run. */
+/**
+ * The column under a node card (D332): absolute, 8px below the card and the card's width, so what
+ * hangs off a node never moves the node or changes its measured size. `nodrag nopan`: a press on an
+ * approval or a Retry is a click, never the start of a node drag or a pan.
+ */
+export function UnderCard({ width, children }: { width: number; children: ReactNode }) {
+  return (
+    <div
+      data-under-card
+      className="nodrag nopan absolute left-0 top-[calc(100%+8px)] flex flex-col gap-[8px]"
+      style={{ width }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Retry · Retry with downstream · Re-run · Start from this node, for the node's latest node run.
+ * The node card has no room for it (D332); the Inspector's button row carries the same menu.
+ */
 export function NodeRunActions({ node }: { node: Node }) {
   const run = useRunStore(
     useShallow((store) => {
@@ -82,7 +103,7 @@ export function NodeErrorCard({ node }: { node: Node }) {
   )?.name;
 
   return (
-    <div className="mt-2 w-[280px]">
+    <div className="w-full">
       <ErrorCard
         nodeId={node.id}
         nodeName={node.name}
@@ -117,7 +138,7 @@ export function NodeApproval({ node }: { node: Node }) {
 
   if (requests.length === 0) return null;
   return (
-    <div className="mt-4 w-[240px]" data-testid={`node-approval-${node.id}`}>
+    <div className="w-full" data-testid={`node-approval-${node.id}`}>
       <ApprovalStack requests={requests} keyboard={total === 1} />
     </div>
   );

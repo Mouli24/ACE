@@ -1,5 +1,5 @@
 import type { LoopConfig } from '@ace/contracts';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { LoopConfigFields } from './LoopConfigFields';
@@ -102,6 +102,31 @@ describe('FR-CON-007 loop edge editor', () => {
     await user.click(screen.getByLabelText(/at the maximum/i));
     await user.click(await screen.findByRole('option', { name: /fail the node/i }));
     expect(onCommit).toHaveBeenCalledWith({ ...config, onMax: 'fail' });
+  });
+
+  it('saves as it is typed, after a pause, without a blur (D333)', async () => {
+    const { onCommit, user } = setup();
+    const path = screen.getByLabelText(/exit when path/i);
+    await user.clear(path);
+    await user.type(path, 'review.verdict');
+    expect(path).toHaveFocus();
+    await waitFor(() =>
+      expect(onCommit).toHaveBeenLastCalledWith({
+        ...config,
+        exitCondition: { path: 'review.verdict', equals: 'approved' },
+      }),
+    );
+  });
+
+  it('commits a pending edit when it unmounts (the modal closing)', async () => {
+    const onCommit = vi.fn();
+    const user = userEvent.setup();
+    const { unmount } = render(<LoopConfigFields value={config} onCommit={onCommit} />);
+    const max = screen.getByLabelText(/max iterations/i);
+    await user.clear(max);
+    await user.type(max, '7');
+    unmount();
+    expect(onCommit).toHaveBeenLastCalledWith({ ...config, maxIterations: 7 });
   });
 
   it('commits nothing when a field is edited back to what it already was', async () => {

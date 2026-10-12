@@ -1,19 +1,12 @@
 import type { DataType, Model, Provider, RoutingPolicy } from '@ace/contracts';
-import {
-  Button,
-  Label,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@ace/ui';
-import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, cn } from '@ace/ui';
 import { useId } from 'react';
 
+import { useResolvedTheme } from '../app/theme';
 import { useModels, useProviders } from '../providers/hooks';
-import { PROVIDER_TYPE_LABEL } from '../providers/provider-meta';
-import { Field } from './fields';
+import { th, themeProviderOf } from '../theme/constants';
+import { ProviderOrb } from '../theme/primitives';
+import { FIELD_GRID_CLASS, Field, HELP_CLASS } from './fields';
 
 /**
  * Why a model cannot be chosen for this node (FR-NODE-004, TC-NODE-003). It is listed, disabled,
@@ -40,9 +33,16 @@ export interface ProviderAndModelProps {
   onChange: (patch: { providerId?: string; modelId?: string }) => void;
 }
 
+/** A provider's 20px orb, as the theme's provider dropdown draws it beside each name. */
+function SmallOrb({ type }: { type: Provider['type'] }) {
+  const dark = useResolvedTheme() === 'dark';
+  return <ProviderOrb look={th(themeProviderOf(type), dark)} size={20} logo={11} />;
+}
+
 /**
- * Provider picker → model picker (FR-NODE-003/004/005). The model list is the engine's catalog
- * narrowed to this provider; a model that cannot serve the node's data types, or that the provider
+ * The modal's first row (FR-NODE-003/004/005, D333): Model provider → Model, side by side. The
+ * providers are the registry's records, each with its orb; the models are the engine's catalog
+ * narrowed to that provider. A model that cannot serve the node's data types, or that the provider
  * no longer offers, stays visible and disabled with its reason.
  */
 export function ProviderAndModel({
@@ -68,11 +68,13 @@ export function ProviderAndModel({
         : undefined;
 
   return (
-    <>
+    <div className={FIELD_GRID_CLASS}>
       <Field
-        label="Provider"
+        label="Model provider"
         htmlFor="config-provider"
-        hint={providerList.length === 0 ? 'add a provider on the Providers screen' : undefined}
+        {...(providerList.length === 0 && providers.isSuccess
+          ? { hint: 'add a provider on the Providers screen' }
+          : {})}
       >
         <Select
           value={providerId ?? ''}
@@ -80,26 +82,40 @@ export function ProviderAndModel({
           disabled={providerList.length === 0}
         >
           <SelectTrigger id="config-provider" aria-label="Provider">
-            <SelectValue placeholder="none" />
+            <SelectValue placeholder="none">
+              {chosen && (
+                <span className="flex min-w-0 items-center gap-[9px]">
+                  <SmallOrb type={chosen.type} />
+                  <span className="truncate">{chosen.name}</span>
+                </span>
+              )}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             {providerList.map((provider) => (
-              <SelectItem key={provider.id} value={provider.id}>
-                {provider.name} · {PROVIDER_TYPE_LABEL[provider.type]}
+              <SelectItem
+                key={provider.id}
+                value={provider.id}
+                icon={<SmallOrb type={provider.type} />}
+              >
+                {provider.name}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
+        {/* FR-PRV-005: the node keeps pointing at a provider the engine no longer has. */}
+        {providerId !== undefined && chosen === undefined && providers.isSuccess && (
+          <p role="alert" className={HELP_CLASS} data-testid="config-provider-missing">
+            This node’s provider was removed. Choose another before running.
+          </p>
+        )}
       </Field>
 
-      {/* FR-PRV-005: the node keeps pointing at a provider the engine no longer has. */}
-      {providerId !== undefined && chosen === undefined && providers.isSuccess && (
-        <p role="alert" className="px-0 text-xs text-danger" data-testid="config-provider-missing">
-          This node’s provider was removed. Choose another before running.
-        </p>
-      )}
-
-      <Field label="Model" htmlFor="config-model" hint={modelHint}>
+      <Field
+        label="Model"
+        htmlFor="config-model"
+        {...(modelHint === undefined ? {} : { hint: modelHint })}
+      >
         <Select
           value={modelId ?? ''}
           onValueChange={(value) => onChange({ modelId: value })}
@@ -126,28 +142,31 @@ export function ProviderAndModel({
             })}
           </SelectContent>
         </Select>
-      </Field>
-
-      {/* D286: what the chosen model really is — an alias resolved — in the provider's words */}
-      {picked !== undefined &&
-        (picked.resolvedModelId !== undefined || picked.description !== undefined) && (
-          <p className="text-xs text-fg-muted" data-testid="config-model-detail">
-            <span className="font-machine">{picked.modelId}</span>
-            {picked.resolvedModelId !== undefined && (
-              <span className="font-machine"> → {picked.resolvedModelId}</span>
-            )}
-            {picked.description !== undefined && <span> · {picked.description}</span>}
+        {/* D286: what the chosen model really is — an alias resolved — in the provider's words */}
+        {picked !== undefined &&
+          (picked.resolvedModelId !== undefined || picked.description !== undefined) && (
+            <p className={HELP_CLASS} data-testid="config-model-detail">
+              <span className="font-machine">{picked.modelId}</span>
+              {picked.resolvedModelId !== undefined && (
+                <span className="font-machine"> → {picked.resolvedModelId}</span>
+              )}
+              {picked.description !== undefined && <span> · {picked.description}</span>}
+            </p>
+          )}
+        {gone && (
+          <p role="alert" className={HELP_CLASS} data-testid="config-model-gone">
+            “{modelId}” is not in this provider’s model list any more. Choose another, or refresh
+            the provider’s models.
           </p>
         )}
-      {gone && (
-        <p role="alert" className="text-xs text-danger" data-testid="config-model-gone">
-          “{modelId}” is not in this provider’s model list any more. Choose another, or refresh the
-          provider’s models.
-        </p>
-      )}
-    </>
+      </Field>
+    </div>
   );
 }
+
+/** The theme's small square glyph button (28px, radius 7), for the fallback list's row actions. */
+const ROW_BUTTON_CLASS =
+  'grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border-none bg-transparent text-[12px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-not-allowed disabled:opacity-45';
 
 /**
  * The ordered fallback list (FR-RTR-002). Only meaningful under the `fallback` policy, and the
@@ -183,48 +202,51 @@ export function FallbackModels({
   };
 
   return (
-    <div className="flex flex-col gap-1.5" data-testid="fallback-models">
-      <Label htmlFor={id}>Fallback models, in order</Label>
-      <ol className="flex flex-col gap-1">
-        {fallbackModelIds.map((fallbackId, index) => (
-          <li key={fallbackId} className="flex items-center gap-1">
-            <span className="w-4 font-machine text-xs text-fg-muted">{index + 1}</span>
-            <span className="flex-1 truncate font-machine text-xs">{fallbackId}</span>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={`Move ${fallbackId} up`}
-              disabled={index === 0}
-              onClick={() => move(index, -1)}
-            >
-              <ArrowUp className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={`Move ${fallbackId} down`}
-              disabled={index === fallbackModelIds.length - 1}
-              onClick={() => move(index, 1)}
-            >
-              <ArrowDown className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={`Remove ${fallbackId}`}
-              onClick={() => onChange(fallbackModelIds.filter((value) => value !== fallbackId))}
-            >
-              <X className="h-3.5 w-3.5" />
-            </Button>
-          </li>
-        ))}
-      </ol>
-      {fallbackModelIds.length === 0 && (
-        <p className="text-xs text-fg-muted">
-          None yet — the router will only use the model above.
-        </p>
-      )}
-      <div className="flex items-center gap-2">
+    <Field label="Fallback models, in order" htmlFor={id}>
+      <div className="flex flex-col gap-2" data-testid="fallback-models">
+        {fallbackModelIds.length > 0 && (
+          <ol className="flex flex-col gap-1">
+            {fallbackModelIds.map((fallbackId, index) => (
+              <li
+                key={fallbackId}
+                className="flex h-[38px] items-center gap-2 rounded-[9px] border border-[var(--line)] pl-3 pr-1"
+              >
+                <span className="w-4 font-machine text-[11px] text-[var(--muted)]">
+                  {index + 1}
+                </span>
+                <span className="min-w-0 flex-1 truncate font-machine text-[12px] text-[var(--ink)]">
+                  {fallbackId}
+                </span>
+                <button
+                  type="button"
+                  className={ROW_BUTTON_CLASS}
+                  aria-label={`Move ${fallbackId} up`}
+                  disabled={index === 0}
+                  onClick={() => move(index, -1)}
+                >
+                  <span aria-hidden>↑</span>
+                </button>
+                <button
+                  type="button"
+                  className={ROW_BUTTON_CLASS}
+                  aria-label={`Move ${fallbackId} down`}
+                  disabled={index === fallbackModelIds.length - 1}
+                  onClick={() => move(index, 1)}
+                >
+                  <span aria-hidden>↓</span>
+                </button>
+                <button
+                  type="button"
+                  className={cn(ROW_BUTTON_CLASS, 'hover:text-[#c94c27]')}
+                  aria-label={`Remove ${fallbackId}`}
+                  onClick={() => onChange(fallbackModelIds.filter((value) => value !== fallbackId))}
+                >
+                  <span aria-hidden>✕</span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        )}
         <Select
           value=""
           onValueChange={(value) => onChange([...fallbackModelIds, value])}
@@ -243,9 +265,11 @@ export function FallbackModels({
             ))}
           </SelectContent>
         </Select>
-        <Plus className="h-4 w-4 shrink-0 text-fg-muted" aria-hidden />
+        {fallbackModelIds.length === 0 && (
+          <p className={HELP_CLASS}>None yet — the router will only use the model above.</p>
+        )}
       </div>
-    </div>
+    </Field>
   );
 }
 

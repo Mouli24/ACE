@@ -7,11 +7,11 @@ import { ForgeWorkbench } from './ForgeWorkbench';
 
 /** The Forge route element (D299). The project's folder is watched while it is mounted; a phone browses only. */
 export function ForgePage() {
-  const { projectId = '' } = useParams();
+  const { projectId = '', workflowId } = useParams();
   useProjectFiles(projectId);
   return useIsCompact() ? (
     <CompactForge projectId={projectId} />
   ) : (
-    <ForgeWorkbench projectId={projectId} />
+    <ForgeWorkbench projectId={projectId} workflowId={workflowId} />
   );
 }

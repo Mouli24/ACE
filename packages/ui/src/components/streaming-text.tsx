@@ -35,7 +35,7 @@ export function StreamingText({ text, nodeRunId, className, maxLines = 4 }: Stre
       aria-live="polite"
       style={{ maxHeight: `${maxLines * 1.1}rem` }}
       className={cn(
-        'overflow-y-auto whitespace-pre-wrap break-words font-machine text-[11px] leading-[1.1rem] text-fg-muted',
+        'overflow-y-auto whitespace-pre-wrap break-words font-machine text-[11px] leading-[1.1rem] text-[var(--muted)]',
         className,
       )}
     >

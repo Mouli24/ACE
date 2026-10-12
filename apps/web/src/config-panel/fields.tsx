@@ -1,6 +1,7 @@
 import { DATA_TYPES, type DataType } from '@ace/contracts';
 import {
   Checkbox,
+  FIELD_LABEL_CLASS,
   Input,
   Label,
   Select,
@@ -11,13 +12,32 @@ import {
   Textarea,
   cn,
 } from '@ace/ui';
-import { useEffect, useId, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useId, type KeyboardEvent, type ReactNode } from 'react';
 
+import { useAutosaveDraft } from './pending-edits';
 import { validateNumber, type NumberRange } from './validation';
 
-/** The V2 field label: tiny uppercase mono, faint. */
-export const FIELD_LABEL =
-  'font-machine text-[9px] font-normal uppercase tracking-[0.2em] text-fg-faint';
+/*
+ * The node settings modal's fields, in the Ace UI theme (D328, D333): a mono 9.5px label, 7px above
+ * a 38px control, with an 11px help line under it. Text and number fields save as you type
+ * (debounced), on blur, and when the modal closes; selects and checkboxes save at once.
+ */
+
+/** The theme's field label: JetBrains Mono 9.5px, 0.1em, muted, 500, uppercase. */
+export const FIELD_LABEL = FIELD_LABEL_CLASS;
+
+/** The theme's help line under a field: 11px / 1.45, muted. */
+export const HELP_CLASS = 'text-[11px] leading-[1.45] text-[var(--muted)] [text-wrap:pretty]';
+
+/** The same line when it reports a problem: the theme's destructive ink. */
+export const ERROR_CLASS = 'text-[11px] leading-[1.45] text-[#c94c27] [text-wrap:pretty]';
+
+/** The theme's paired-fields grid: as many 220px-or-wider columns as fit, gap 20px 16px. */
+export const FIELD_GRID_CLASS =
+  'grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-x-4 gap-y-5';
+
+/** Inputs the theme sets in JetBrains Mono (URLs, keys, model names, paths, numbers). */
+const MONO_INPUT_CLASS = 'font-machine text-[12px]';
 
 /** Label + control + optional inline error, the one layout every field uses. */
 export function Field({
@@ -25,31 +45,44 @@ export function Field({
   htmlFor,
   error,
   hint,
+  aside,
+  className,
   children,
 }: {
   label: string;
   htmlFor?: string;
   error?: string;
   hint?: string;
+  /** Shown at the right of the label row (the theme puts small chips there). */
+  aside?: ReactNode;
+  className?: string;
   children: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <Label className={FIELD_LABEL} htmlFor={htmlFor}>
-        {label}
-      </Label>
+    <div className={cn('flex min-w-0 flex-col gap-[7px]', className)}>
+      <div className="flex min-h-4 items-center justify-between gap-2">
+        <Label htmlFor={htmlFor}>{label}</Label>
+        {aside}
+      </div>
       {children}
       {error && (
-        <p role="alert" className="text-xs text-danger">
+        <p role="alert" className={ERROR_CLASS}>
           {error}
         </p>
       )}
-      {hint && !error && <p className="text-xs text-fg-muted">{hint}</p>}
+      {hint && !error && <p className={HELP_CLASS}>{hint}</p>}
     </div>
   );
 }
 
-/** Text committed on blur or Enter, so one graph-op per edit rather than one per keystroke. */
+const blurOnEnter = (event: KeyboardEvent<HTMLInputElement>) => {
+  if (event.key === 'Enter') (event.target as HTMLInputElement).blur();
+};
+
+/**
+ * A one-line text field that saves as you type. `normalize` turns the draft into what is saved,
+ * or `undefined` when it cannot be (the name field trims, and refuses an empty name).
+ */
 export function TextField({
   label,
   value,
@@ -57,6 +90,8 @@ export function TextField({
   mono,
   maxLength,
   placeholder,
+  hint,
+  normalize,
 }: {
   label: string;
   value: string;
@@ -64,32 +99,34 @@ export function TextField({
   mono?: boolean;
   maxLength?: number;
   placeholder?: string;
+  hint?: string;
+  normalize?: (draft: string) => string | undefined;
 }) {
   const id = useId();
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-  const commit = () => {
-    if (draft !== value) onCommit(draft);
-  };
-  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter') (event.target as HTMLInputElement).blur();
-  };
+  const field = useAutosaveDraft<string, string>({
+    value,
+    toDraft: (saved) => saved,
+    parse: normalize ?? ((draft) => draft),
+    onCommit,
+    revertInvalidOnBlur: true,
+  });
   return (
-    <Field label={label} htmlFor={id}>
+    <Field label={label} htmlFor={id} {...(hint === undefined ? {} : { hint })}>
       <Input
         id={id}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={onKeyDown}
+        value={field.draft}
+        onChange={(e) => field.change(e.target.value)}
+        onBlur={field.blur}
+        onKeyDown={blurOnEnter}
         maxLength={maxLength}
         placeholder={placeholder}
-        className={cn(mono && 'font-machine')}
+        className={cn(mono && MONO_INPUT_CLASS)}
       />
     </Field>
   );
 }
 
+/** A multi-line text field that saves as you type (the system prompt, a template, input text). */
 export function TextAreaField({
   label,
   value,
@@ -104,18 +141,21 @@ export function TextAreaField({
   placeholder?: string;
 }) {
   const id = useId();
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
+  const field = useAutosaveDraft<string, string>({
+    value,
+    toDraft: (saved) => saved,
+    parse: (draft) => draft,
+    onCommit,
+  });
   return (
     <Field label={label} htmlFor={id}>
       <Textarea
         id={id}
         rows={rows}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={() => draft !== value && onCommit(draft)}
+        value={field.draft}
+        onChange={(e) => field.change(e.target.value)}
+        onBlur={field.blur}
         placeholder={placeholder}
-        className="font-human"
       />
     </Field>
   );
@@ -139,19 +179,14 @@ export function NumberField({
   onCommit: (value: number) => void;
 }) {
   const id = useId();
-  const [draft, setDraft] = useState(String(value));
-  const [touched, setTouched] = useState(false);
-  useEffect(() => {
-    setDraft(String(value));
-    setTouched(false);
-  }, [value]);
-  const error = touched ? validateNumber(draft, range) : undefined;
-  const commit = () => {
-    setTouched(true);
-    if (validateNumber(draft, range)) return;
-    const next = Number(draft);
-    if (next !== value) onCommit(next);
-  };
+  const field = useAutosaveDraft<number, string>({
+    value,
+    toDraft: (saved) => String(saved),
+    parse: (draft) => (validateNumber(draft, range) === undefined ? Number(draft) : undefined),
+    onCommit,
+  });
+  // the draft is checked as it is typed; the saved value is always in range
+  const error = field.draft === String(value) ? undefined : validateNumber(field.draft, range);
   return (
     <Field label={label} htmlFor={id} error={error} hint={`${range.min} – ${range.max}`}>
       <Input
@@ -161,15 +196,12 @@ export function NumberField({
         step={step ?? (range.integer ? 1 : 0.1)}
         min={range.min}
         max={range.max}
-        value={draft}
+        value={field.draft}
         aria-invalid={error ? true : undefined}
-        onChange={(e) => {
-          setDraft(e.target.value);
-          setTouched(true);
-        }}
-        onBlur={commit}
-        onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-        className="font-machine"
+        onChange={(e) => field.change(e.target.value)}
+        onBlur={field.blur}
+        onKeyDown={blurOnEnter}
+        className={MONO_INPUT_CLASS}
       />
     </Field>
   );
@@ -194,7 +226,7 @@ export function SelectField<T extends string>({
 }) {
   const id = useId();
   return (
-    <Field label={label} htmlFor={id} hint={hint}>
+    <Field label={label} htmlFor={id} {...(hint === undefined ? {} : { hint })}>
       <Select value={value ?? ''} onValueChange={(v) => onChange(v as T)} disabled={disabled}>
         <SelectTrigger id={id} aria-label={label}>
           <SelectValue placeholder={placeholder} />
@@ -229,11 +261,13 @@ export function DataTypeGroup({
     onChange(DATA_TYPES.filter((t) => set.has(t)));
   };
   return (
-    <div role="group" aria-labelledby={id} className="flex flex-col gap-1.5">
-      <Label className={FIELD_LABEL} id={id}>
-        {label}
-      </Label>
-      <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+    <div role="group" aria-labelledby={id} className="flex min-w-0 flex-col gap-[7px]">
+      <div className="flex min-h-4 items-center">
+        <span id={id} className={FIELD_LABEL_CLASS}>
+          {label}
+        </span>
+      </div>
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(120px,1fr))] gap-x-4 gap-y-2">
         {DATA_TYPES.map((type) => {
           const boxId = `${id}-${type}`;
           return (
@@ -243,35 +277,16 @@ export function DataTypeGroup({
                 checked={value.includes(type)}
                 onCheckedChange={(checked) => toggle(type, checked === true)}
               />
-              <label htmlFor={boxId} className="font-machine text-xs text-fg">
+              <label
+                htmlFor={boxId}
+                className="cursor-pointer font-machine text-[12px] text-[var(--ink)]"
+              >
                 {type}
               </label>
             </div>
           );
         })}
       </div>
-    </div>
-  );
-}
-
-/** A field that exists in the contract but is wired in a later round: shown, disabled, dated. */
-export function LaterField({
-  label,
-  round,
-  testId,
-}: {
-  label: string;
-  round: string;
-  testId: string;
-}) {
-  const id = useId();
-  return (
-    <div data-testid={`later-${testId}`} className="flex flex-col gap-1.5 opacity-70">
-      <Label className={FIELD_LABEL} htmlFor={id}>
-        {label}
-      </Label>
-      <Input id={id} disabled value="" placeholder={`available in ${round}`} aria-disabled="true" />
-      <p className="text-xs text-fg-muted">available in {round}</p>
     </div>
   );
 }

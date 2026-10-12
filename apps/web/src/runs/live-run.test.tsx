@@ -3,6 +3,7 @@ import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { startSocket, stopSocket } from '../app/socket';
+import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
 import { createFakeWebSocket, dropMockSockets } from '../mocks/fake-socket';
 import { setScenario } from '../mocks/handlers-round2';
@@ -12,9 +13,23 @@ import { useRunStore } from './run-store';
 
 installMockServer();
 
-vi.mock('../canvas/Canvas', () => ({
-  Canvas: ({ workflowId }: { workflowId: string }) => <div data-testid="canvas">{workflowId}</div>,
-}));
+/*
+ * The desktop header no longer carries the run bar (D330): a run is started and controlled from the
+ * canvas "…" menu, which lives in the real Canvas. With the Canvas stood in for, the stand-in mounts
+ * `RunBar` — the same controls, hooks and store the compact header uses — so the wiring is still
+ * driven end to end.
+ */
+vi.mock('../canvas/Canvas', async () => {
+  const { RunBar } = await import('../runs/RunBar');
+  return {
+    Canvas: ({ workflowId }: { workflowId: string }) => (
+      <>
+        <div data-testid="canvas">{workflowId}</div>
+        <RunBar workflowId={workflowId} />
+      </>
+    ),
+  };
+});
 
 afterEach(() => {
   stopSocket();
@@ -88,7 +103,8 @@ describe('FR-EXE-001 Start runs the workflow and the top bar follows it', () => 
 
     // TC-EXE-011: the run is in the history, newest first.
     // the sheet over the Canvas holds this tab; it is closed until the top bar opens it
-    await user.click(screen.getByTestId('sheet-toggle'));
+    // the workspace menu's "Workflow panel" opens the sheet (D331)
+    act(() => usePanelsStore.getState().openSheet());
     await user.click(screen.getByRole('tab', { name: 'Runs' }));
     const table = await screen.findByTestId('runs-table');
     const rows = within(table).getAllByTestId(/^run-row-/);
@@ -241,7 +257,8 @@ describe('FR-EXE-010/012 a pane left open during the run catches up when it ends
     // the queries mounted while the run had nothing recorded yet and nothing invalidated them.
     act(() => useSelectionStore.getState().setSelection([agent.id], []));
     // the sheet over the Canvas holds this tab; it is closed until the top bar opens it
-    await user.click(screen.getByTestId('sheet-toggle'));
+    // the workspace menu's "Workflow panel" opens the sheet (D331)
+    act(() => usePanelsStore.getState().openSheet());
     await user.click(screen.getByRole('tab', { name: 'Inspector' }));
     expect(await screen.findByText(/start a run to inspect it/i)).toBeInTheDocument();
 

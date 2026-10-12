@@ -3,6 +3,11 @@ import { forwardRef, type ComponentPropsWithoutRef, type ElementRef } from 'reac
 
 import { cn } from '../lib/cn.js';
 
+/*
+ * The Ace UI theme's segmented pill (D328), as in its Ideate / Forge / Domain switch: a soft track
+ * with a hairline, 26px options, ink fill on the active one.
+ */
+
 export const Tabs = TabsPrimitive.Root;
 
 export const TabsList = forwardRef<
@@ -12,7 +17,7 @@ export const TabsList = forwardRef<
   <TabsPrimitive.List
     ref={ref}
     className={cn(
-      'inline-flex items-center gap-0.5 rounded-chip border border-border bg-card p-[3px] text-fg-muted',
+      'inline-flex items-center gap-[2px] rounded-full border border-[var(--line)] bg-[var(--soft)] p-[3px]',
       className,
     )}
     {...props}
@@ -27,7 +32,7 @@ export const TabsTrigger = forwardRef<
   <TabsPrimitive.Trigger
     ref={ref}
     className={cn(
-      'inline-flex h-[26px] flex-1 items-center justify-center whitespace-nowrap rounded-chip px-[13px] font-machine text-[10.5px] tracking-[0.04em] transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-fg data-[state=active]:text-canvas',
+      'inline-flex h-[26px] flex-1 cursor-pointer items-center justify-center whitespace-nowrap rounded-full border border-transparent bg-transparent px-4 text-[12px] font-semibold text-[var(--muted)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:pointer-events-none disabled:opacity-50 data-[state=active]:border-[var(--seg)] data-[state=active]:bg-[var(--seg)] data-[state=active]:text-[var(--segInk)]',
       className,
     )}
     {...props}
@@ -39,10 +44,6 @@ export const TabsContent = forwardRef<
   ElementRef<typeof TabsPrimitive.Content>,
   ComponentPropsWithoutRef<typeof TabsPrimitive.Content>
 >(({ className, ...props }, ref) => (
-  <TabsPrimitive.Content
-    ref={ref}
-    className={cn('focus-visible:outline-none', className)}
-    {...props}
-  />
+  <TabsPrimitive.Content ref={ref} className={cn('outline-none', className)} {...props} />
 ));
 TabsContent.displayName = 'TabsContent';

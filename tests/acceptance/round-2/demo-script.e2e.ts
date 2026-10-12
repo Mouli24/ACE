@@ -57,10 +57,38 @@ interface Graph {
 }
 
 const card = (page: Page, nodeId: string) => page.getByTestId(`node-card-${nodeId}`);
-// `exact`, because round 3 put Restart in the same bar and "Start" is a substring of it. The V2
-// button shows "Run"; its accessible name is "Start run" (D259).
-const start = (page: Page) =>
-  page.getByTestId('run-bar').getByRole('button', { name: 'Start run', exact: true });
+
+/*
+ * Ace UI layout (D330–D333): a click on a card opens its settings modal (the old sheet's Configure
+ * tab), which covers the Canvas until it is closed; the run starts from the workspace "…" menu,
+ * whose footer carries the run's state; Inspector is a tab of the floating sheet, opened from the
+ * "…" menu or a card's menu ("Inspect").
+ */
+const settingsDialog = (page: Page): Locator =>
+  page.getByRole('dialog').filter({ has: page.getByTestId('config-panel') });
+
+/** Close the node settings modal if it is open (Done commits whatever is still waiting). */
+async function closeSettings(page: Page): Promise<void> {
+  const dialog = settingsDialog(page);
+  if (await dialog.isVisible()) await dialog.getByRole('button', { name: 'Done' }).click();
+  await expect(dialog).toHaveCount(0);
+}
+
+/** Start a run from the workspace "…" menu (D331), once "Start run" is offered and enabled. */
+async function start(page: Page): Promise<void> {
+  await closeSettings(page);
+  const item = page.getByTestId('menu-start-run');
+  await expect(async () => {
+    if (await page.getByRole('menu').isVisible()) await page.keyboard.press('Escape');
+    await page.getByTestId('workspace-menu').click();
+    await expect(item).toBeEnabled({ timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
+  await item.click();
+}
+
+/** The workspace footer: it carries the run's state as `data-run-status` (D330). */
+const footer = (page: Page) =>
+  page.locator('footer').filter({ has: page.getByTestId('footer-mode') });
 
 /**
  * Where to click a card so the card itself receives the click: near the top of its header, a
@@ -109,13 +137,13 @@ async function clickPoint(target: Locator): Promise<{ x: number; y: number }> {
   return point as { x: number; y: number };
 }
 
-/** POC Theme V2 (D259): Configure and Inspector are tabs of a floating sheet that starts closed. */
-async function openSheet(
-  page: Page,
-  tab: 'Configure' | 'Inspector' | 'Runs' | 'Memory',
-): Promise<void> {
-  if (!(await page.getByRole('tab', { name: tab }).isVisible()))
-    await page.getByTestId('sheet-toggle').click();
+/** The workflow sheet (D331), from the workspace "…" menu; it shows the selected node. */
+async function openSheet(page: Page, tab: 'Inspector' | 'Runs' | 'Memory'): Promise<void> {
+  await closeSettings(page);
+  if (!(await page.getByRole('tab', { name: tab }).isVisible())) {
+    await page.getByTestId('workspace-menu').click();
+    await page.getByTestId('menu-sheet').click();
+  }
   await page.getByRole('tab', { name: tab }).click();
 }
 const nodeOf = (graph: Graph, kind: string) => graph.nodes.find((n) => n.kind === kind) as Node;
@@ -193,17 +221,18 @@ test.describe('Round 2 §1 demo script, through the UI', () => {
     await expect(page.getByTestId('canvas')).toBeVisible();
     await expect(card(page, agent.id)).toBeVisible();
 
-    // Pick `mock-text` in the config panel, as the script says.
+    // Pick `mock-text` in the config panel — the settings modal a click on the card opens (D333) —
+    // as the script says.
     await page.getByRole('button', { name: 'Fit to view' }).click();
     await card(page, agent.id).click({ position: await clickPoint(card(page, agent.id)) });
-    await openSheet(page, 'Configure');
-    const panel = page.getByRole('complementary', { name: 'Node configuration' });
-    await panel.getByLabel('Model').click();
+    const panel = settingsDialog(page).getByRole('region', { name: 'Node configuration' });
+    // `exact`: "Model provider" is the provider field's label
+    await panel.getByLabel('Model', { exact: true }).click();
     await page.getByRole('option', { name: /^Mock text$/ }).click();
     await expect(card(page, agent.id)).toContainText('mock-text');
 
     // Start → the input dialog, because the Input node has nothing to send.
-    await start(page).click();
+    await start(page);
     const inputDialog = page.getByTestId('run-input-dialog');
     await expect(inputDialog).toBeVisible();
     await inputDialog.getByLabel(input.name).fill('Summarise the quarterly brief for the board.');
@@ -219,7 +248,7 @@ test.describe('Round 2 §1 demo script, through the UI', () => {
     await expect(card(page, output.id)).toHaveAttribute('data-state', 'COMPLETED', {
       timeout: 40_000,
     });
-    await expect(page.getByTestId('run-status')).toHaveAttribute('data-status', 'COMPLETE');
+    await expect(footer(page)).toHaveAttribute('data-run-status', 'COMPLETE');
     // D285: the answer is read in the agent's chat, tagged with the run — not on the Output card
     await expect(page.getByTestId(`final-output-${output.id}`)).toHaveCount(0);
     await page.getByTestId(`chat-mention-${agent.id}`).click();
@@ -239,7 +268,7 @@ test.describe('Round 2 §1 demo script, through the UI', () => {
     const fallbackAgent = nodeOf(fallback, 'agent');
     await page.goto(`/projects/${project.id}/workflows/${fallback.workflow.id}?token=${token}`);
     await expect(card(page, fallbackAgent.id)).toBeVisible();
-    await start(page).click();
+    await start(page);
     await expect(page.getByTestId(`used-model-${fallbackAgent.id}`)).toContainText('(fallback)', {
       timeout: 40_000,
     });
@@ -249,13 +278,17 @@ test.describe('Round 2 §1 demo script, through the UI', () => {
     const badAgent = nodeOf(bad, 'agent');
     await page.goto(`/projects/${project.id}/workflows/${bad.workflow.id}?token=${token}`);
     await expect(card(page, badAgent.id)).toBeVisible();
-    await start(page).click();
+    await start(page);
     await expect(card(page, badAgent.id)).toHaveAttribute('data-state', 'FAILED', {
       timeout: 40_000,
     });
     await page.getByRole('button', { name: 'Fit to view' }).click();
-    // after the halt, the V2 halt note sits over the top of the Canvas: click where the card is
-    await card(page, badAgent.id).click({ position: await clickPoint(card(page, badAgent.id)) });
+    // inspect the failed card from its menu (D333): right-click where the card itself is
+    await card(page, badAgent.id).click({
+      button: 'right',
+      position: await clickPoint(card(page, badAgent.id)),
+    });
+    await page.getByRole('menuitem', { name: 'Inspect' }).click();
     await openSheet(page, 'Inspector');
     await expect(page.getByTestId('inspector-failure-reason')).toHaveText('CONTRACT_VIOLATION');
 
@@ -264,7 +297,7 @@ test.describe('Round 2 §1 demo script, through the UI', () => {
     const slowAgent = nodeOf(slow, 'agent');
     await page.goto(`/projects/${project.id}/workflows/${slow.workflow.id}?token=${token}`);
     await expect(card(page, slowAgent.id)).toBeVisible();
-    await start(page).click();
+    await start(page);
     await expect(card(page, slowAgent.id)).toHaveAttribute('data-state', 'RUNNING', {
       timeout: 20_000,
     });

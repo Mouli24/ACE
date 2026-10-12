@@ -1,18 +1,23 @@
 import type { DomainMessage, DomainUsageSnapshot, Run } from '@ace/contracts';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
+import { useLayoutStore } from '../app/stores/layout';
+import { useWorkspaceStatus } from '../app/stores/workspace-status';
+import { useEditorStore } from '../forge/editor/editor-store';
 import { newId } from '../lib/ulid';
 import { domainMock } from '../mocks/handlers-domain';
 import { createNode } from '../nodes/factory';
 import { db, installMockServer, renderApp, server } from '../test/app';
 
 /*
- * Domain Gate 5, the page (D3–D9, D307, D310, D323): the conversation renders every kind of
- * message, held envelopes can be approved, edited or rejected, the composer sends, lenses filter
- * by node, End makes the run read-only, past runs open read-only, and with no run the first
- * message starts one. Everything against the mock engine.
+ * Domain Gate 5, the page (D3–D9, D307, D310, D323), in the theme's team-chat view (D336): the
+ * conversation renders every kind of message, held envelopes can be approved, edited or rejected,
+ * the composer sends, the filter pills are the lenses, the run pill holds the runs, Run details and
+ * End (which makes the run read-only), past runs open read-only, output cards open in Forge, the
+ * "live" pill follows the stream, the Team aside follows Split, and with no run the first message
+ * starts one. Everything against the mock engine.
  */
 
 installMockServer();
@@ -67,7 +72,11 @@ function seedTeam(status: Run['status'] = 'RUNNING') {
         trigger: 'dispatch',
         iteration: 1,
         attempt: 1,
-        steps: [{ id: 's1', label: 'Read brief.md', status: 'ok', at: NOW }],
+        steps: [
+          { id: 's1', label: 'Read brief.md', status: 'ok', durationMs: 600, at: NOW },
+          { id: 's2', label: 'Write tagline.md', status: 'ok', durationMs: 900, at: NOW },
+          { id: 's3', label: 'Fetch a style guide', status: 'error', at: NOW },
+        ],
         durationMs: 1200,
         outcome: 'OK',
       },
@@ -194,19 +203,81 @@ describe('Domain page', () => {
     expect(screen.getByText(/80% of the token budget/)).toBeInTheDocument();
   });
 
-  it('an agent message expands to its steps and output; an artifact opens through the seam', async () => {
+  it('"What it did" expands to the steps with their durations, then the full output (D327)', async () => {
     const user = userEvent.setup();
     const team = seedTeam();
     renderApp(pathOf(team));
     const message = (await screen.findByText('Draft: Go further.')).closest(
       '[data-testid="domain-message"]',
     ) as HTMLElement;
-    expect(within(message).queryByText('Read brief.md')).not.toBeVisible();
-    await user.click(within(message).getByText('Steps and output'));
+    const toggle = within(message).getByRole('button', { name: /What it did/ });
+    // Three steps; the two that were timed took 1.5 s between them.
+    expect(toggle).toHaveTextContent('3 steps · 2s');
+    expect(toggle).toHaveTextContent('▸ show');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(within(message).queryByText('Read brief.md')).not.toBeInTheDocument();
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveTextContent('▾ hide');
     expect(within(message).getByText('Read brief.md')).toBeVisible();
+    expect(within(message).getByText('Read brief.md').closest('li')).toHaveTextContent('1s');
+    // A step that failed says so, with "—" for a duration nobody measured.
+    expect(within(message).getByText('Fetch a style guide').closest('li')).toHaveTextContent(
+      'error · —',
+    );
     expect(within(message).getByText('Draft: Go further. And then some.')).toBeVisible();
-    const link = within(message).getByRole('link', { name: /tagline\.md/ });
-    expect(link.getAttribute('href')).toContain(`/artifacts/${team.ARTIFACT}/content`);
+    await user.click(toggle);
+    expect(within(message).queryByText('Read brief.md')).not.toBeInTheDocument();
+  });
+
+  it('an output card opens a project file in Forge (D336)', async () => {
+    const user = userEvent.setup();
+    const team = seedTeam();
+    const { router } = renderApp(pathOf(team));
+    const message = (await screen.findByText('Draft: Go further.')).closest(
+      '[data-testid="domain-message"]',
+    ) as HTMLElement;
+    const card = within(message).getByTestId('domain-output');
+    expect(card).toHaveTextContent('tagline.md · 120 bytes');
+    await user.click(within(card).getByRole('button', { name: 'Open tagline.md' }));
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(
+        `/projects/${team.project.id}/workflows/${team.workflow.id}/forge`,
+      ),
+    );
+    expect(useEditorStore.getState().projects[team.project.id]?.files['tagline.md']).toBeDefined();
+  });
+
+  it('an output card outside the project opens the artifact through the D307 seam', async () => {
+    const team = seedTeam();
+    const ARTIFACT = newId();
+    domainMock.seed(team.run.id, [
+      {
+        id: `turn:${newId()}`,
+        runId: team.run.id,
+        cursor: '1.0',
+        author: { kind: 'node', nodeId: team.writer.id },
+        type: 'agent',
+        text: 'Saved it elsewhere.',
+        at: NOW,
+        artifacts: [
+          { path: '/elsewhere/notes.md', bytes: null, commit: null, artifactId: ARTIFACT },
+          { path: '/elsewhere/scratch.md', bytes: null, commit: null },
+        ],
+      },
+    ]);
+    renderApp(pathOf(team));
+    const message = (await screen.findByText('Saved it elsewhere.')).closest(
+      '[data-testid="domain-message"]',
+    ) as HTMLElement;
+    const link = within(message).getByRole('link', { name: 'Open notes.md' });
+    expect(link.getAttribute('href')).toContain(`/artifacts/${ARTIFACT}/content`);
+    expect(link).toHaveAttribute('target', '_blank');
+    // A path outside the project with no stored artifact has nowhere to open: no button.
+    const cards = within(message).getAllByTestId('domain-output');
+    expect(cards[1]).toHaveTextContent('scratch.md');
+    expect(within(cards[1]!).queryByRole('button')).not.toBeInTheDocument();
+    expect(within(cards[1]!).queryByRole('link')).not.toBeInTheDocument();
   });
 
   it('a held envelope can be approved, edited or rejected, and leaves HELD when decided', async () => {
@@ -269,12 +340,23 @@ describe('Domain page', () => {
     expect(within(sent).getByTestId('delivery-writer')).toHaveTextContent('PENDING');
   });
 
-  it("a lens shows one node's view, through ?node=", async () => {
+  it("a filter pill shows one node's view, through ?node=", async () => {
     const user = userEvent.setup();
     const team = seedTeam();
     const { router } = renderApp(pathOf(team));
     await screen.findByText('Draft: Go further.');
-    await user.click(screen.getByRole('button', { name: '@review' }));
+    const lenses = screen.getByRole('navigation', { name: 'Lenses' });
+    // "All", then one pill per agent: its avatar's initial and its name.
+    const pills = within(lenses)
+      .getAllByRole('button')
+      .map((pill) => pill.textContent);
+    expect(pills[0]).toBe('✳All');
+    expect(pills.slice(1).sort()).toEqual(['RReview', 'WWriter']);
+    expect(within(lenses).getByRole('button', { name: 'All' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await user.click(within(lenses).getByRole('button', { name: 'Review' }));
     await waitFor(() => expect(router.state.location.search).toContain(`node=${team.review.id}`));
     await waitFor(() => expect(screen.queryByText('Draft: Go further.')).not.toBeInTheDocument());
     expect(screen.getByText('The hook is weak.')).toBeInTheDocument();
@@ -283,8 +365,92 @@ describe('Domain page', () => {
         (request) => request.path.endsWith('/chat/stream') && request.query.node === team.review.id,
       ),
     ).toBe(true);
-    await user.click(screen.getByRole('button', { name: 'All' }));
+    expect(within(lenses).getByRole('button', { name: 'Review' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await user.click(within(lenses).getByRole('button', { name: 'All' }));
     expect(await screen.findByText('Draft: Go further.')).toBeInTheDocument();
+  });
+
+  it('the header counts the messages; the footer gets the count and the tokens', async () => {
+    const team = seedTeam();
+    const { unmount } = renderApp(pathOf(team));
+    await screen.findByText('Draft: Go further.');
+    expect(
+      within(screen.getByRole('region', { name: 'Domain' })).getByText('7 messages'),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(useWorkspaceStatus.getState().messageCount).toBe(7));
+    await waitFor(() =>
+      expect(useWorkspaceStatus.getState().tokens).toEqual({ in: 600, out: 200 }),
+    );
+    unmount();
+    expect(useWorkspaceStatus.getState().messageCount).toBeNull();
+    expect(useWorkspaceStatus.getState().tokens).toBeNull();
+  });
+
+  it('the "live" pill shows while the stream is open, and goes when the run ends', async () => {
+    const user = userEvent.setup();
+    const team = seedTeam();
+    renderApp(pathOf(team));
+    await screen.findByText('Draft: Go further.');
+    expect(await screen.findByTestId('domain-live')).toHaveTextContent('live');
+    await user.click(screen.getByRole('button', { name: /^Run ·/ }));
+    await user.click(await screen.findByRole('menuitem', { name: 'End run' }));
+    await waitFor(() => expect(screen.queryByTestId('domain-live')).not.toBeInTheDocument());
+  });
+
+  it('a run that has ended has no stream, so no "live" pill', async () => {
+    const team = seedTeam('COMPLETE');
+    renderApp(pathOf(team));
+    await screen.findByText('Draft: Go further.');
+    expect(screen.queryByTestId('domain-live')).not.toBeInTheDocument();
+  });
+
+  it('the run pill shows the run and its status, and offers Run details', async () => {
+    const user = userEvent.setup();
+    const team = seedTeam();
+    const { router } = renderApp(pathOf(team));
+    await screen.findByText('Draft: Go further.');
+    const pill = screen.getByRole('button', { name: /^Run ·/ });
+    expect(within(pill).getByTestId('domain-run-status')).toHaveTextContent('RUNNING');
+    await user.click(pill);
+    expect(await screen.findByRole('menuitem', { name: /^RUNNING/ })).toHaveTextContent('✓');
+    // A live run offers End, not New run.
+    expect(screen.getByRole('menuitem', { name: 'End run' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'New run' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('menuitem', { name: 'Run details' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/runs/${team.run.id}`));
+  });
+
+  it("an ended run's pill offers New run: a fresh goal, whatever ran before", async () => {
+    const user = userEvent.setup();
+    const team = seedTeam('COMPLETE');
+    const { router } = renderApp(pathOf(team));
+    await screen.findByText('Draft: Go further.');
+    await user.click(screen.getByRole('button', { name: /^Run ·/ }));
+    await screen.findByRole('menuitem', { name: 'Run details' });
+    expect(screen.queryByRole('menuitem', { name: 'End run' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('menuitem', { name: 'New run' }));
+    await waitFor(() => expect(router.state.location.search).toBe('?run=new'));
+    expect(await screen.findByText('This workflow has no runs yet.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New run' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start team run' })).toBeInTheDocument();
+  });
+
+  it('the Team aside follows Split, and its ✕ closes it', async () => {
+    const user = userEvent.setup();
+    const team = seedTeam();
+    renderApp(pathOf(team));
+    await screen.findByText('Draft: Go further.');
+    const aside = screen.getByRole('complementary', { name: 'Team' });
+    expect(aside).toHaveTextContent('2 agents · 1 working');
+    expect(within(aside).getByTestId('team-node-review')).toHaveTextContent('Working');
+    await user.click(within(aside).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('complementary', { name: 'Team' })).not.toBeInTheDocument();
+    expect(useLayoutStore.getState().chatOpen).toBe(false);
+    act(() => useLayoutStore.getState().toggleChat());
+    expect(screen.getByRole('complementary', { name: 'Team' })).toBeInTheDocument();
   });
 
   it('End ends the run: its conversation becomes read-only, and the composer starts a new one', async () => {
@@ -292,11 +458,16 @@ describe('Domain page', () => {
     const team = seedTeam();
     renderApp(pathOf(team));
     await screen.findByText('The hook is weak.');
-    await user.click(screen.getByRole('button', { name: 'End run' }));
+    await user.click(screen.getByRole('button', { name: /^Run ·/ }));
+    await user.click(await screen.findByRole('menuitem', { name: 'End run' }));
     await waitFor(() => expect(requestsTo('/end')).toHaveLength(1));
     expect(await screen.findByText(/read-only/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'End run' })).not.toBeInTheDocument();
+    // The run pill no longer offers End.
+    await user.click(screen.getByRole('button', { name: /^Run ·/ }));
+    await screen.findByRole('menuitem', { name: 'Run details' });
+    expect(screen.queryByRole('menuitem', { name: 'End run' })).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
     // You can still write: the message starts a new run, with itself as the goal.
     const box = screen.getByRole('textbox', { name: 'Message' });
     expect(box).toBeEnabled();
@@ -354,8 +525,8 @@ describe('Domain page', () => {
     ]);
     const { router } = renderApp(pathOf(team));
     await screen.findByText('Draft: Go further.');
-    await screen.findByRole('option', { name: /^COMPLETE/ });
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Run' }), past.id);
+    await user.click(screen.getByRole('button', { name: /^Run ·/ }));
+    await user.click(await screen.findByRole('menuitem', { name: /^COMPLETE/ }));
     expect(await screen.findByText('An older run.')).toBeInTheDocument();
     expect(router.state.location.search).toContain(`run=${past.id}`);
     expect(screen.getByText(/read-only/i)).toBeInTheDocument();

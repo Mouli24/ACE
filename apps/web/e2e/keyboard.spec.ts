@@ -1,10 +1,18 @@
 import { expect, test } from '@playwright/test';
 
-import { freshApp, openWorkflow, port, seedGraph, serverGraph, settled } from './helpers';
+import {
+  freshApp,
+  openWorkflow,
+  port,
+  seedGraph,
+  serverGraph,
+  settingsDialog,
+  settled,
+} from './helpers';
 
 /**
- * NFR-USE-02: the core path is possible without a mouse — add a node from the New node dialog, select
- * nodes, connect two ports and delete — using Tab, Enter and Delete only.
+ * NFR-USE-02: the core path is possible without a mouse — add a node with the Canvas's "Add node",
+ * select nodes, connect two ports and delete — using Tab, Enter, Escape and Delete only.
  */
 test.describe('Keyboard-only path (NFR-USE-02)', () => {
   test.beforeEach(async ({ page }) => freshApp(page));
@@ -14,29 +22,28 @@ test.describe('Keyboard-only path (NFR-USE-02)', () => {
     const [inp] = seeded.nodeIds as [string];
     await openWorkflow(page, seeded);
 
-    // add: Enter on New node opens the dialog; focus the Agent entry and press Enter
+    // add: Enter on "Add node" adds an Agent (the New node dialog is gone, D332)
     await page.getByTestId('new-node-button').focus();
     await page.keyboard.press('Enter');
-    await expect(page.getByRole('dialog', { name: 'New node' })).toBeVisible();
-    await page.getByTestId('palette-agent').focus();
-    await page.keyboard.press('Enter');
-    await expect(page.getByRole('dialog', { name: 'New node' })).toHaveCount(0);
     await expect(page.locator('.react-flow__node')).toHaveCount(2);
     await settled(page, seeded.workflowId, 2);
     const agent = (await serverGraph(page, seeded.workflowId)).nodes.find(
       (n) => n.kind === 'agent',
     )!;
-    // the new node is selected, so the panel toggle opens its config (Enter on the toggle)
-    await page.getByTestId('sheet-toggle').focus();
-    await page.keyboard.press('Enter');
-    await expect(page.getByRole('complementary', { name: 'Node configuration' })).toContainText(
-      'Agent node',
-    );
+    // the new node is selected and its settings open on their own — an Agent's (the old panel
+    // toggle's job); Escape closes them and hands the keyboard back to the Canvas
+    const settings = page.getByRole('dialog', { name: agent.name });
+    await expect(settings.getByRole('region', { name: 'Node configuration' })).toBeVisible();
+    await expect(settings).toContainText('AGENT');
+    await page.keyboard.press('Escape');
+    await expect(settingsDialog(page)).toHaveCount(0);
 
     // connect: Enter on the input's output port arms it, Enter on the agent's input port completes
     await port(page, inp, 'out', 'text').focus();
     await page.keyboard.press('Enter');
     await expect(page.getByText('armed', { exact: false }).first()).toBeVisible();
+    // the port shows it is armed once the Canvas has re-rendered with it (what the next Enter reads)
+    await expect(port(page, inp, 'out', 'text')).toHaveAttribute('data-armed', 'true');
     await port(page, agent.id, 'in', 'text').focus();
     await page.keyboard.press('Enter');
     await expect(page.locator('.react-flow__edge')).toHaveCount(1);
@@ -44,7 +51,7 @@ test.describe('Keyboard-only path (NFR-USE-02)', () => {
       .poll(async () => (await serverGraph(page, seeded.workflowId)).edges.length)
       .toBe(1);
 
-    // select: Tab from the palette lands on the first node card (React Flow nodes are focusable)
+    // select: a node card takes the focus (React Flow nodes are focusable) and Enter selects it
     await page.locator(`.react-flow__node[data-id="${agent.id}"]`).focus();
     await page.keyboard.press('Enter');
     await expect(page.locator(`.react-flow__node[data-id="${agent.id}"].selected`)).toHaveCount(1);
@@ -69,6 +76,8 @@ test.describe('Keyboard-only path (NFR-USE-02)', () => {
     await openWorkflow(page, seeded);
     await port(page, b, 'out', 'text').focus();
     await page.keyboard.press('Enter');
+    // armed once the Canvas has re-rendered with it, which is what the next Enter reads
+    await expect(port(page, b, 'out', 'text')).toHaveAttribute('data-armed', 'true');
     await port(page, a, 'in', 'text').focus();
     await page.keyboard.press('Enter');
     /*

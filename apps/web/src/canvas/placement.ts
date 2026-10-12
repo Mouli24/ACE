@@ -2,10 +2,11 @@ import type { Position } from '@ace/contracts';
 
 /**
  * The space one node card occupies on the Canvas, plus the gap that keeps two cards from
- * touching. A card is about 180 × 90 at zoom 1; the slot is larger so ports on neighbouring
- * cards stay separately clickable (FR-CAN-002, NFR-USE-01).
+ * touching. The largest card is the theme's 210 × 280 stage frame (D332), whose label chip and
+ * badge stand 9 px outside it; the slot leaves 50 px either way so ports on neighbouring cards stay
+ * separately clickable (FR-CAN-002, NFR-USE-01).
  */
-export const NODE_SLOT = { width: 260, height: 160 } as const;
+export const NODE_SLOT = { width: 260, height: 330 } as const;
 
 /** The visible part of the Canvas in flow coordinates. */
 export interface VisibleArea {

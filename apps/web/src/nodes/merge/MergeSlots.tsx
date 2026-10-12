@@ -1,6 +1,8 @@
 import type { Id, Timestamp } from '@ace/contracts';
 import { cn } from '@ace/ui';
 
+import { HELP_CLASS } from '../../config-panel/fields';
+
 import type { MergeMode } from './MergeModeField';
 
 /**
@@ -33,7 +35,7 @@ const ordinal = (position: number) => ORDINAL[position - 1] ?? `${position}th`;
 export function MergeSlots({ slots, mode }: { slots: readonly MergeSlot[]; mode: MergeMode }) {
   if (slots.length === 0) {
     return (
-      <p className="text-xs text-fg-muted" data-testid="merge-slots-empty">
+      <p className={HELP_CLASS} data-testid="merge-slots-empty">
         Nothing is connected to this merge yet.
       </p>
     );
@@ -45,7 +47,7 @@ export function MergeSlots({ slots, mode }: { slots: readonly MergeSlot[]; mode:
     .map((slot) => slot.portId);
 
   return (
-    <div className="flex flex-col gap-2" data-testid="merge-slots">
+    <div className="flex min-w-0 flex-col gap-[7px]" data-testid="merge-slots">
       <ul className="flex flex-col gap-1">
         {slots.map((slot) => {
           const position = arrivalOrder.indexOf(slot.portId) + 1;
@@ -56,26 +58,30 @@ export function MergeSlots({ slots, mode }: { slots: readonly MergeSlot[]; mode:
               key={slot.portId}
               data-testid={`merge-slot-${slot.portName}`}
               data-arrival={arrived ? String(position) : 'waiting'}
-              className="flex items-center justify-between gap-2 rounded-card border border-border px-2 py-1.5"
+              className="flex items-center justify-between gap-2.5 rounded-[9px] border border-[var(--line)] px-3 py-2.5"
             >
               <span className="flex min-w-0 flex-col">
-                <span className="truncate font-human text-xs text-fg">{slot.fromNodeName}</span>
-                <span className="font-machine text-[11px] text-fg-muted">{slot.portName}</span>
+                <span className="truncate text-[12.5px] font-semibold text-[var(--ink)]">
+                  {slot.fromNodeName}
+                </span>
+                <span className="font-machine text-[10.5px] text-[var(--muted)]">
+                  {slot.portName}
+                </span>
               </span>
               <span
                 className={cn(
                   'shrink-0 font-machine text-[11px]',
-                  arrived ? 'text-fg' : 'text-fg-muted',
+                  arrived ? 'text-[var(--ink)]' : 'text-[var(--muted)]',
                 )}
               >
                 {arrived ? `${ordinal(position)} to arrive` : 'waiting'}
-                {arrived && !feeds && <span className="text-fg-muted"> · recorded only</span>}
+                {arrived && !feeds && <span className="text-[var(--muted)]"> · recorded only</span>}
               </span>
             </li>
           );
         })}
       </ul>
-      <p className="text-xs text-fg-muted">
+      <p className={HELP_CLASS}>
         {mode === 'all'
           ? 'Waits for every input; the output lists them in port order.'
           : 'Continues on the first to arrive; the rest still run and are recorded.'}

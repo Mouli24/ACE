@@ -4,22 +4,30 @@ import { forwardRef, type ButtonHTMLAttributes } from 'react';
 
 import { cn } from '../lib/cn.js';
 
+/*
+ * The Ace UI theme's pill buttons (D328): `default` is the modal's Done pill (ink on canvas),
+ * `secondary` the Close pill (soft fill, hairline), `outline` the ink-bordered pill, `ghost` the
+ * toolbar's quiet button, `destructive` the "Remove node" red. Plus Jakarta Sans 600.
+ */
 export const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-chip font-machine text-[11px] tracking-[0.04em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection disabled:pointer-events-none disabled:opacity-45',
+  'inline-flex cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-full font-semibold outline-none transition-colors focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:pointer-events-none disabled:opacity-45',
   {
     variants: {
       variant: {
-        default: 'bg-accent text-accent-fg font-semibold hover:opacity-90',
-        secondary: 'border border-border bg-card text-fg hover:border-fg-muted',
-        ghost: 'text-fg-muted hover:bg-border hover:text-fg',
-        destructive: 'border border-danger/50 text-danger hover:bg-danger/10',
-        outline: 'border border-border-strong bg-transparent text-fg hover:border-fg-muted',
+        default: 'border-none bg-[var(--ink)] text-[var(--canvas)] hover:opacity-90',
+        secondary:
+          'border border-[var(--line)] bg-[var(--soft)] text-[var(--ink)] hover:bg-[var(--hover)]',
+        ghost: 'border-none bg-transparent text-[var(--ink)] hover:bg-[var(--hover)]',
+        destructive:
+          'border border-[var(--line)] bg-transparent text-[#c94c27] hover:bg-[var(--hover)]',
+        outline:
+          'border border-[var(--ink)] bg-transparent text-[var(--ink)] hover:bg-[var(--hover)]',
       },
       size: {
-        default: 'h-9 px-4',
-        sm: 'h-[30px] px-3.5',
-        lg: 'h-10 px-6',
-        icon: 'h-8 w-8',
+        default: 'h-[34px] px-[22px] text-[13px]',
+        sm: 'h-[30px] px-[14px] text-[12px]',
+        lg: 'h-[38px] px-6 text-[13px]',
+        icon: 'h-7 w-7 rounded-[7px] text-[12px]',
       },
     },
     defaultVariants: { variant: 'default', size: 'default' },

@@ -6,15 +6,17 @@ import {
   ContextMenuTrigger,
   cn,
 } from '@ace/ui';
-import { X } from 'lucide-react';
 import { useRef, type KeyboardEvent } from 'react';
 
-import { FileIcon } from '../explorer/FileIcon';
+import { fileIconColor } from '../../theme/constants';
 import { nameOf, parentOf } from '../files/paths';
 import { useCloseRequest } from './CloseDialogs';
 import { useEditorStore, useProjectEditor } from './editor-store';
 
-/** The editor's tabs (§6.2): a dirty dot, middle-click close, Close others / Close saved. */
+/**
+ * The editor's tabs in the theme's strip (§6.2, D334): an orange top edge on the active tab, ● in
+ * place of × while unsaved, middle-click close, and Close others / Close saved on right click.
+ */
 export function TabsBar({ projectId }: { projectId: string }) {
   const editor = useProjectEditor(projectId);
   const { request: close, dialog } = useCloseRequest(projectId);
@@ -46,7 +48,7 @@ export function TabsBar({ projectId }: { projectId: string }) {
     <div
       role="tablist"
       aria-label="Open files"
-      className="flex h-9 shrink-0 overflow-x-auto border-b border-border bg-panel"
+      className="flex h-[36px] shrink-0 items-stretch overflow-x-auto border-b border-[var(--line)] bg-[var(--panel)]"
     >
       {dialog}
       {editor.tabs.map((path) => {
@@ -59,8 +61,10 @@ export function TabsBar({ projectId }: { projectId: string }) {
               <div
                 role="presentation"
                 className={cn(
-                  'group flex h-full max-w-[16rem] shrink-0 items-center border-r border-border pr-1 font-machine text-[12px]',
-                  active ? 'bg-canvas text-fg' : 'text-fg-muted hover:text-fg',
+                  'flex shrink-0 items-center gap-[8px] whitespace-nowrap border-r border-[var(--line)] pr-[8px] text-[12px] font-medium',
+                  active
+                    ? 'bg-[var(--surface)] text-[var(--ink)] shadow-[inset_0_2px_0_#ef6b3f]'
+                    : 'bg-transparent text-[var(--muted)]',
                 )}
               >
                 <div
@@ -68,13 +72,12 @@ export function TabsBar({ projectId }: { projectId: string }) {
                   aria-selected={active}
                   tabIndex={active ? 0 : -1}
                   data-testid={`tab-${path}`}
-                  title={path}
                   ref={(element) => {
                     if (element === null) tabRefs.current.delete(path);
                     else tabRefs.current.set(path, element);
                   }}
                   className={cn(
-                    'flex h-full min-w-0 cursor-pointer items-center gap-1.5 pl-3 outline-offset-[-2px]',
+                    'flex h-full cursor-pointer items-center gap-[8px] pl-[14px] outline-none focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]',
                     editor.preview === path && 'italic',
                     file.deletedOnDisk && 'line-through',
                   )}
@@ -87,35 +90,37 @@ export function TabsBar({ projectId }: { projectId: string }) {
                     close([path]);
                   }}
                 >
-                  <FileIcon path={path} />
-                  <span className="truncate">{nameOf(path)}</span>
+                  <span
+                    aria-hidden
+                    className="h-[7px] w-[7px] shrink-0 rounded-full"
+                    style={{ background: fileIconColor(path) }}
+                  />
+                  {nameOf(path)}
                   {(nameCount.get(nameOf(path)) ?? 0) > 1 && (
-                    <span className="truncate text-[11px] text-fg-faint">
+                    <span className="text-[var(--muted)]">
                       {parentOf(path) === '' ? '/' : parentOf(path)}
                     </span>
                   )}
                   {file.dirty && <span className="sr-only"> (unsaved)</span>}
                 </div>
                 {/* A sibling of the tab, not inside it (a tab's children are presentational).
-                    Keyboard users close with Alt+W (Task 15). */}
+                    Keyboard users close with Alt+W. */}
                 <button
                   type="button"
                   tabIndex={-1}
                   aria-label={`Close ${nameOf(path)}`}
-                  className="ml-1 grid h-5 w-5 shrink-0 place-items-center rounded hover:bg-card"
+                  className="h-[20px] w-[20px] shrink-0 cursor-pointer rounded-[5px] border-none bg-transparent text-[12px] leading-none hover:bg-[var(--hover)]"
                   onClick={() => close([path])}
                 >
-                  {file.dirty && (
-                    <span
-                      data-testid={`dirty-${path}`}
-                      aria-hidden
-                      className="h-2 w-2 rounded-full bg-fg group-hover:hidden"
-                    />
+                  {file.dirty ? (
+                    <span aria-hidden data-testid={`dirty-${path}`} className="text-[#ef6b3f]">
+                      ●
+                    </span>
+                  ) : (
+                    <span aria-hidden className="text-[var(--muted)]">
+                      ×
+                    </span>
                   )}
-                  <X
-                    className={cn('h-3.5 w-3.5', file.dirty && 'hidden group-hover:block')}
-                    aria-hidden
-                  />
                 </button>
               </div>
             </ContextMenuTrigger>

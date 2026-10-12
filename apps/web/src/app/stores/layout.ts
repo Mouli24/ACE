@@ -1,22 +1,20 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 
-export type ForgeView = 'explorer';
-export type ForgePanelTab = 'problems' | 'output';
+/** Forge's bottom panel views: Problems (D299 §6.4). The Output view left with D334; Phase 2 adds the Terminal. */
+export type ForgePanelTab = 'problems';
 
 interface LayoutState {
-  /** The chat column, in Ideate and in Forge (D299). */
+  /** The chat column in Ideate and Forge, and Domain's Team aside: the header's Split (D330). */
   chatOpen: boolean;
+  /** Forge's Explorer (Ctrl/⌘+B hides it). */
   sidebarOpen: boolean;
-  sidebarView: ForgeView;
-  /** Forge's bottom panel: the person's choice, closed until first opened. */
+  /** Forge's bottom panel: the person's choice, closed until first opened (Ctrl/⌘+J, D299). */
   panelOpen: boolean;
   panelTab: ForgePanelTab;
   panelMaximized: boolean;
   toggleChat(): void;
   toggleSidebar(): void;
-  /** Activity bar: the active view's icon hides the side bar, another one shows that view. */
-  showView(view: ForgeView): void;
   togglePanel(): void;
   showPanel(tab: ForgePanelTab): void;
   closePanel(): void;
@@ -44,23 +42,17 @@ function storage(): StateStorage {
   }
 }
 
-/** Which panels are open and on which view, remembered in the browser (D299, design §2.2). */
+/** Which panels are open, remembered in the browser (D299, D330). */
 export const useLayoutStore = create<LayoutState>()(
   persist(
     (set) => ({
       chatOpen: true,
       sidebarOpen: true,
-      sidebarView: 'explorer',
       panelOpen: false,
       panelTab: 'problems',
       panelMaximized: false,
       toggleChat: () => set((s) => ({ chatOpen: !s.chatOpen })),
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
-      showView: (view) =>
-        set((s) => ({
-          sidebarView: view,
-          sidebarOpen: s.sidebarView === view ? !s.sidebarOpen : true,
-        })),
       togglePanel: () =>
         set((s) => ({
           panelOpen: !s.panelOpen,
@@ -76,7 +68,6 @@ export const useLayoutStore = create<LayoutState>()(
       partialize: (s) => ({
         chatOpen: s.chatOpen,
         sidebarOpen: s.sidebarOpen,
-        sidebarView: s.sidebarView,
         panelOpen: s.panelOpen,
         panelTab: s.panelTab,
       }),

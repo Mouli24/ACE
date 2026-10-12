@@ -3,12 +3,12 @@ import { expect, test, type Page } from '@playwright/test';
 import { nodeCard } from './helpers';
 import {
   NODE_NAMES,
+  clickStartRun,
   engineNodeRuns,
   engineRun,
+  expectRunStatus,
   openBottomTab,
   openRound3,
-  runStatus,
-  startRun,
   stopRun,
 } from './round3';
 
@@ -39,7 +39,7 @@ test.describe('Errors, BLOCKED and STOPPED (FR-ERR-002/006/007)', () => {
     const seeded = await openRound3(page, 'chain', 'blocked-downstream');
     const [writer] = seeded.agentIds as [string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
     await expect(nodeCard(page, writer)).toHaveAttribute('data-state', 'FAILED', {
       timeout: 15_000,
     });
@@ -73,25 +73,26 @@ test.describe('Errors, BLOCKED and STOPPED (FR-ERR-002/006/007)', () => {
     await expect(card).toContainText('not retried automatically');
   });
 
-  test('TC-ERR-007: the node after a failure is BLOCKED — greyed, locked and blamed on the right node — never FAILED', async ({
+  test('TC-ERR-007: the node after a failure is BLOCKED — shown as Blocked and blamed on the right node — never FAILED', async ({
     page,
   }) => {
     const seeded = await openRound3(page, 'chain', 'blocked-downstream');
     const [writer, editor] = seeded.agentIds as [string, string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
     await expect(nodeCard(page, editor)).toHaveAttribute('data-state', 'BLOCKED', {
       timeout: 15_000,
     });
 
-    const blocked = nodeCard(page, editor);
-    await expect(page.getByTestId(`blocked-lock-${editor}`)).toBeVisible();
+    // The Stage card's status row says Blocked (D332: the lock and the grey filter left with the
+    // old card), and the note under it names the node that failed.
+    const status = nodeCard(page, editor).getByTestId('status-chip');
+    await expect(status).toHaveAttribute('data-state', 'BLOCKED');
+    await expect(status).toHaveText('Blocked');
     await expect(page.getByTestId(`blocked-by-${editor}`)).toHaveText(
       `blocked by ${NODE_NAMES.first}`,
     );
-    // Greyed, and never wearing the failure line a FAILED node wears — nor an error card. The V2
-    // card greys itself in CSS (`.ace-node[data-state='BLOCKED']`), so the computed filter is read.
-    await expect(blocked).toHaveCSS('filter', 'grayscale(1)');
+    // Never wearing the failure line a FAILED node wears — nor an error card.
     await expect(page.getByTestId(`failure-${editor}`)).toHaveCount(0);
     await expect(onNode(page, editor)).toHaveCount(0);
 
@@ -122,12 +123,12 @@ test.describe('Errors, BLOCKED and STOPPED (FR-ERR-002/006/007)', () => {
     const seeded = await openRound3(page, 'chain', 'slow-stream');
     const [writer] = seeded.agentIds as [string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
     await expect(nodeCard(page, writer)).toHaveAttribute('data-state', 'RUNNING', {
       timeout: 10_000,
     });
     await stopRun(page);
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'HALTED', { timeout: 10_000 });
+    await expectRunStatus(page, 'HALTED', { timeout: 10_000 });
     await expect(nodeCard(page, writer)).toHaveAttribute('data-state', 'STOPPED');
 
     await openBottomTab(page, 'Errors');
@@ -142,11 +143,17 @@ test.describe('Errors, BLOCKED and STOPPED (FR-ERR-002/006/007)', () => {
     // No error card anywhere: a stop is not something that went wrong.
     await expect(page.getByTestId(`error-card-${writer}`)).toHaveCount(0);
 
-    // Never red: neither the node card nor the note carries the danger colour.
-    const danger = await page
-      .locator(':root')
-      .evaluate((el) => getComputedStyle(el).getPropertyValue('--color-danger').trim());
-    expect(danger).not.toBe('');
+    // Never red: neither the node card nor the note carries the danger colour. The browser resolves
+    // the token to `rgb(r, g, b)`; comparing its channels catches translucent tints too.
+    const danger = await page.evaluate(() => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--color-danger)';
+      document.body.append(probe);
+      const rgb = getComputedStyle(probe).color;
+      probe.remove();
+      return /rgba?\((\d+, \d+, \d+)/.exec(rgb)?.[1] ?? '';
+    });
+    expect(danger).toMatch(/^\d+, \d+, \d+$/);
     for (const locator of [nodeCard(page, writer), page.getByTestId(`stopped-note-${writer}`)]) {
       const colours = await locator.evaluate((el) =>
         [el, ...Array.from(el.querySelectorAll('*'))].map((node) => {
@@ -156,7 +163,11 @@ test.describe('Errors, BLOCKED and STOPPED (FR-ERR-002/006/007)', () => {
       );
       expect(colours.join(' ')).not.toContain(danger);
     }
-    await expect(page.getByTestId(`stopped-note-card-${writer}`)).toHaveText(
+    // The card's status row says Stopped (D332), and the Errors tab's note says what it means.
+    const status = nodeCard(page, writer).getByTestId('status-chip');
+    await expect(status).toHaveAttribute('data-state', 'STOPPED');
+    await expect(status).toHaveText('Stopped');
+    await expect(page.getByTestId(`stopped-note-${writer}`)).toContainText(
       'stopped — not a failure',
     );
   });
@@ -167,8 +178,8 @@ test.describe('Errors, BLOCKED and STOPPED (FR-ERR-002/006/007)', () => {
     const seeded = await openRound3(page, 'chain', 'retry-429');
     const [writer] = seeded.agentIds as [string];
 
-    await startRun(page).click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE', { timeout: 30_000 });
+    await clickStartRun(page);
+    await expectRunStatus(page, 'COMPLETE', { timeout: 30_000 });
 
     // Attempts 1 and 2 failed with the provider kind, attempt 3 completed (Arch §28).
     const run = (await engineRun(page, seeded.workflowId))!;
@@ -197,8 +208,8 @@ test.describe('Errors, BLOCKED and STOPPED (FR-ERR-002/006/007)', () => {
     page,
   }) => {
     const seeded = await openRound3(page, 'chain', 'linear-complete');
-    await startRun(page).click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE', { timeout: 20_000 });
+    await clickStartRun(page);
+    await expectRunStatus(page, 'COMPLETE', { timeout: 20_000 });
 
     await openBottomTab(page, 'Events');
     const list = page.getByTestId('events-list');

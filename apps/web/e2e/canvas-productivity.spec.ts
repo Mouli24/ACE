@@ -3,6 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 import {
   addFromDialog,
   clearOfMinimap,
+  closeSettings,
   connect,
   dragBy,
   dragConnect,
@@ -47,6 +48,22 @@ async function quiet(page: Page, workflowId: string) {
       { intervals: [300, 300, 300, 500, 500, 1000], timeout: 10_000 },
     )
     .toBe(true);
+}
+
+/**
+ * A point on the empty Canvas: its left edge, half-way down — clear of the breadcrumb (top left),
+ * the toolbar (bottom left), Add node (top right) and the minimap (bottom right). A fitted graph
+ * keeps 80 px from every side, so no card is there either.
+ */
+async function emptyCanvasPoint(page: Page): Promise<{ x: number; y: number }> {
+  const box = (await page.getByTestId('canvas').boundingBox())!;
+  return { x: box.x + 30, y: box.y + box.height / 2 };
+}
+
+/** Click the empty Canvas: it clears the selection and gives the Canvas the keyboard. */
+async function clickEmptyCanvas(page: Page): Promise<void> {
+  const at = await emptyCanvasPoint(page);
+  await page.mouse.click(at.x, at.y);
 }
 
 /** Put the mock's nodes wherever `positions` says (a scattered graph to auto-arrange). */
@@ -100,7 +117,13 @@ test.describe('Canvas productivity (round 5)', () => {
     await expect(page.locator('.react-flow__node')).toHaveCount(6);
     const before = (await serverGraph(page, seeded.workflowId)).version;
 
-    await page.getByRole('button', { name: 'Auto-arrange' }).click();
+    // Auto-arrange is on the empty Canvas's menu (the tools pill is gone, D332)
+    const empty = await emptyCanvasPoint(page);
+    await page.mouse.click(empty.x, empty.y, { button: 'right' });
+    await page
+      .getByTestId('pane-context-menu')
+      .getByRole('menuitem', { name: 'Auto-arrange' })
+      .click();
     await expect
       .poll(async () => (await serverGraph(page, seeded.workflowId)).version)
       .toBeGreaterThan(before);
@@ -167,7 +190,7 @@ test.describe('Canvas productivity (round 5)', () => {
 
     // 2. move
     // a one-node graph opened fully zoomed in, so fit both cards into the Canvas first — once the
-    // new card is in place and selected (V2: selecting no longer opens its config)
+    // new card is in place and selected (Add node opened its settings; `addFromDialog` closed them)
     await expect(flowNode(page, agent)).toHaveClass(/selected/);
     await page.keyboard.press('f');
     await page.waitForTimeout(400);
@@ -178,8 +201,8 @@ test.describe('Canvas productivity (round 5)', () => {
     await quiet(page, seeded.workflowId);
     states.push(await snapshot(page, seeded.workflowId));
 
-    // 3. connect — the V2 Canvas is shorter (fixed bottom panel), so the moved card can end up
-    // below its edge: fit again (a view change, not an edit) and keep the port clear of the minimap
+    // 3. connect — the moved card can end up below the Canvas's edge: fit again (a view change,
+    // not an edit) and keep the port clear of the minimap
     await page.keyboard.press('f');
     await page.waitForTimeout(400);
     await clearOfMinimap(page, port(page, agent, 'in', 'text'));
@@ -188,10 +211,7 @@ test.describe('Canvas productivity (round 5)', () => {
     await quiet(page, seeded.workflowId);
     states.push(await snapshot(page, seeded.workflowId));
 
-    await page
-      .getByTestId('canvas')
-      .locator('.react-flow__pane')
-      .click({ position: { x: 20, y: 20 } });
+    await clickEmptyCanvas(page);
 
     for (const expected of [states[2], states[1], states[0]]) {
       await page.keyboard.press(`${MOD}+z`);
@@ -238,6 +258,8 @@ test.describe('Canvas productivity (round 5)', () => {
     await expect.poll(async () => (await snapshot(page, seeded.workflowId)).edges.length).toBe(2);
     edits += 1;
     await nodeCard(page, out).click();
+    // the click opened its settings, which keep the keyboard: close them, the node stays selected
+    await closeSettings(page);
     await page.keyboard.press(`${MOD}+d`);
     await expect.poll(async () => (await snapshot(page, seeded.workflowId)).nodes.length).toBe(4);
     edits += 1;
@@ -245,10 +267,7 @@ test.describe('Canvas productivity (round 5)', () => {
     await quiet(page, seeded.workflowId);
     const end = await snapshot(page, seeded.workflowId);
 
-    await page
-      .getByTestId('canvas')
-      .locator('.react-flow__pane')
-      .click({ position: { x: 20, y: 20 } });
+    await clickEmptyCanvas(page);
     for (let i = 0; i < 10; i += 1) {
       await page.keyboard.press(`${MOD}+z`);
       await page.waitForTimeout(150);
@@ -279,23 +298,22 @@ test.describe('Canvas productivity (round 5)', () => {
     const [inp, agent] = seeded.nodeIds as [string, string, string];
     await openWorkflow(page, seeded);
 
-    // Delete
+    // Delete (a click opens the node's settings, which keep the keyboard: close them first)
     await nodeCard(page, agent).click();
+    await closeSettings(page);
     await page.keyboard.press('Delete');
     await settled(page, seeded.workflowId, 2);
 
     // Ctrl+D
     await nodeCard(page, inp).click();
+    await closeSettings(page);
     await page.keyboard.press(`${MOD}+d`);
     await settled(page, seeded.workflowId, 3);
     const kinds = (await serverGraph(page, seeded.workflowId)).nodes.map((n) => n.kind).sort();
     expect(kinds).toEqual(['input', 'input', 'output']);
 
     // Ctrl+A
-    await page
-      .getByTestId('canvas')
-      .locator('.react-flow__pane')
-      .click({ position: { x: 20, y: 20 } });
+    await clickEmptyCanvas(page);
     await expect(page.locator('.react-flow__node.selected')).toHaveCount(0);
     await page.keyboard.press(`${MOD}+a`);
     await expect(page.locator('.react-flow__node.selected')).toHaveCount(3);
@@ -329,16 +347,16 @@ test.describe('Canvas productivity (round 5)', () => {
     await nodeCard(page, agent).click({ button: 'right' });
     const nodeMenu = page.getByTestId('node-context-menu');
     await expect(nodeMenu).toBeVisible();
-    for (const name of [/Duplicate/, /Copy/, /Configure/, /Delete/]) {
+    // "Configure" is "Settings" now: it opens the node settings modal (D333)
+    for (const name of [/Duplicate/, /Copy/, /Settings/, /Delete/]) {
       await expect(nodeMenu.getByRole('menuitem', { name })).toBeVisible();
     }
     await nodeMenu.getByRole('menuitem', { name: /Duplicate/ }).click();
     await settled(page, seeded.workflowId, 3);
 
     // empty Canvas
-    const box = (await page.getByTestId('canvas').boundingBox())!;
-    // top-left: clear of the zoom controls (bottom-left), the minimap and the toolbar
-    await page.mouse.click(box.x + 30, box.y + 30, { button: 'right' });
+    const empty = await emptyCanvasPoint(page);
+    await page.mouse.click(empty.x, empty.y, { button: 'right' });
     const paneMenu = page.getByTestId('pane-context-menu');
     await expect(paneMenu).toBeVisible();
     for (const name of [/Paste/, /Add Agent/, /Select all/, /Auto-arrange/, /Fit view/]) {
@@ -347,13 +365,10 @@ test.describe('Canvas productivity (round 5)', () => {
     await paneMenu.getByRole('menuitem', { name: /Select all/ }).click();
     await expect(page.locator('.react-flow__node.selected')).toHaveCount(3);
 
-    // edge: the round 3 menu, unchanged
-    await page
-      .locator('.react-flow__edge')
-      .first()
-      .locator('path')
-      .first()
-      .click({ force: true, button: 'right' });
+    // edge: the round 3 menu, unchanged — on the edge's hit band (what is drawn of an edge sits
+    // above the nodes and takes no pointer, D332)
+    const [edge] = (await serverGraph(page, seeded.workflowId)).edges;
+    await page.getByTestId(`edge-${edge!.id}`).click({ button: 'right' });
     const edgeMenu = page.getByRole('menu', { name: 'Connection actions' });
     await expect(edgeMenu).toBeVisible();
     await expect(edgeMenu.getByRole('menuitem', { name: 'Make loop edge' })).toBeVisible();
@@ -390,20 +405,14 @@ test.describe('Canvas productivity (round 5)', () => {
     const source = await serverGraph(page, a.workflowId);
 
     await openWorkflow(page, a);
-    await page
-      .getByTestId('canvas')
-      .locator('.react-flow__pane')
-      .click({ position: { x: 20, y: 20 } });
+    await clickEmptyCanvas(page);
     await page.keyboard.press(`${MOD}+a`);
     await expect(page.locator('.react-flow__node.selected')).toHaveCount(2);
     await page.keyboard.press(`${MOD}+c`);
     await expect(page.getByText('Copied 2 nodes')).toBeVisible();
 
     await openWorkflow(page, b);
-    await page
-      .getByTestId('canvas')
-      .locator('.react-flow__pane')
-      .click({ position: { x: 20, y: 20 } });
+    await clickEmptyCanvas(page);
     await page.keyboard.press(`${MOD}+v`);
     await settled(page, b.workflowId, 3);
     await quiet(page, b.workflowId);

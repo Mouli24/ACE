@@ -1,10 +1,15 @@
 import type { TemplateId } from '@ace/contracts';
 
+import { agentColor } from '../theme/constants';
+
 /**
  * A small hand-drawn picture of each template's graph (FR-ONB-002 "preview thumbnail"). The shapes
  * follow what the templates build: a chain; a writer and reviewer with a loop back; two researchers
  * fanned into a merge; and a retrieval step feeding the answerer. Decorative — the card's text says
  * the same thing — so it is hidden from screen readers.
+ *
+ * Drawn in the Ace UI theme's colours (D328): the canvas behind, orange edges as on the canvas, plain
+ * steps on the surface colour and agent steps filled with the agent colours in order.
  */
 
 type Box = { x: number; y: number; accent?: boolean };
@@ -50,15 +55,22 @@ const SHAPES: Readonly<Record<TemplateId, { boxes: Box[]; lines: Line[]; loop?: 
   };
 })();
 
+/** Each box's fill: agent steps take the agent colours in order, the others the surface colour. */
+function fills(boxes: readonly Box[]): string[] {
+  let agents = 0;
+  return boxes.map((b) => (b.accent ? agentColor(agents++) : 'var(--surface)'));
+}
+
 export function TemplateThumbnail({ id }: { id: TemplateId }) {
   const shape = SHAPES[id];
+  const boxFills = fills(shape.boxes);
   return (
     <svg
       viewBox="0 0 128 64"
       aria-hidden="true"
       focusable="false"
       data-testid={`template-thumbnail-${id}`}
-      className="h-16 w-32 shrink-0 rounded-md border border-border bg-canvas"
+      className="h-16 w-32 shrink-0 rounded-[8px] border border-[var(--line)] bg-[var(--canvas)]"
     >
       {shape.lines.map(({ from, to }, index) => (
         <line
@@ -67,8 +79,7 @@ export function TemplateThumbnail({ id }: { id: TemplateId }) {
           y1={from.y + H / 2}
           x2={to.x}
           y2={to.y + H / 2}
-          stroke="currentColor"
-          strokeOpacity={0.5}
+          stroke="#ef6b3f"
           strokeWidth={1.5}
         />
       ))}
@@ -76,8 +87,7 @@ export function TemplateThumbnail({ id }: { id: TemplateId }) {
         <path
           d={`M ${shape.loop.from.x + W / 2} ${shape.loop.from.y + H} C ${shape.loop.from.x + W / 2} ${shape.loop.from.y + H + 16}, ${shape.loop.to.x + W / 2} ${shape.loop.to.y + H + 16}, ${shape.loop.to.x + W / 2} ${shape.loop.to.y + H}`}
           fill="none"
-          stroke="currentColor"
-          strokeOpacity={0.5}
+          stroke="#ef6b3f"
           strokeWidth={1.5}
           strokeDasharray="3 2"
         />
@@ -90,9 +100,8 @@ export function TemplateThumbnail({ id }: { id: TemplateId }) {
           width={W}
           height={H}
           rx={3}
-          className={b.accent ? 'fill-accent' : 'fill-card'}
-          stroke="currentColor"
-          strokeOpacity={0.6}
+          fill={boxFills[index]}
+          stroke={b.accent ? 'none' : 'var(--iconLine)'}
         />
       ))}
     </svg>

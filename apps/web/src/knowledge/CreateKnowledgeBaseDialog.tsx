@@ -17,19 +17,18 @@ import {
   DialogTitle,
   Input,
   Label,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from '@ace/ui';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 
+import { ProviderMark } from '../providers/ProviderMark';
 import { useModels, useProviders } from '../providers/hooks';
-import {
-  ChunkFields,
-  FieldError,
-  fieldErrors,
-  selectClass,
-  toNumber,
-  type FieldErrors,
-} from './fields';
+import { ChunkFields, FieldError, fieldErrors, toNumber, type FieldErrors } from './fields';
 import { useCreateKnowledgeBase } from './hooks';
 
 /**
@@ -56,7 +55,10 @@ export function defaultEmbedder(
   return { providerId: provider.id, modelId: model?.modelId ?? '' };
 }
 
-/** "New knowledge base": name, embedder, chunking (FR-RAG-001, TC-RAG-001). */
+/**
+ * "New knowledge base": name, embedder, chunking (FR-RAG-001, TC-RAG-001). The embedder is picked
+ * with the theme's dropdowns, the provider with its orb (D328).
+ */
 export function CreateKnowledgeBaseDialog({
   projectId,
   onClose,
@@ -92,6 +94,10 @@ export function CreateKnowledgeBaseDialog({
     }
   }, [providerId, providerList, modelList, listsReady]);
 
+  /*
+   * The dropdowns ignore an empty value: inside a form, Radix's hidden native select reports ""
+   * when the chosen value arrives before its option has rendered, which would undo the preselection.
+   */
   const chooseProvider = (id: Id) => {
     setProviderId(id);
     const models = modelList.filter((model) => model.providerId === id);
@@ -120,7 +126,7 @@ export function CreateKnowledgeBaseDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[90vh] max-w-[calc(100vw-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="max-h-[90vh] max-w-[calc(100vw-2rem)] overflow-y-auto sm:max-w-[560px]">
         <form onSubmit={submit} noValidate className="flex flex-col gap-4">
           <DialogHeader>
             <DialogTitle>New knowledge base</DialogTitle>
@@ -130,7 +136,7 @@ export function CreateKnowledgeBaseDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-[7px]">
             <Label htmlFor="kb-name">Name</Label>
             <Input
               id="kb-name"
@@ -145,57 +151,63 @@ export function CreateKnowledgeBaseDialog({
           </div>
 
           {noProviders ? (
-            <p role="alert" className="text-sm text-danger">
-              No providers yet.{' '}
-              <Link to="/providers" className="underline">
-                Add a provider
-              </Link>{' '}
-              (the built-in Mock provider works offline) to pick an embedding model.
+            <p role="alert" className="text-[12px] text-[#c94c27]">
+              No providers yet. <Link to="/providers">Add a provider</Link> (the built-in Mock
+              provider works offline) to pick an embedding model.
             </p>
           ) : (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="flex flex-col gap-1.5">
+            <div className="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-2">
+              <div className="flex min-w-0 flex-col gap-[7px]">
                 <Label htmlFor="kb-embedding-provider">Embedding provider</Label>
-                <select
-                  id="kb-embedding-provider"
-                  className={selectClass}
-                  value={providerId}
-                  aria-invalid={errors['embeddingProviderId'] ? true : undefined}
-                  onChange={(event) => chooseProvider(event.target.value)}
-                >
-                  <option value="" disabled>
-                    Choose a provider
-                  </option>
-                  {providerList.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.name}
-                    </option>
-                  ))}
-                </select>
+                <Select value={providerId} onValueChange={(id) => id && chooseProvider(id)}>
+                  <SelectTrigger
+                    id="kb-embedding-provider"
+                    aria-label="Embedding provider"
+                    aria-invalid={errors['embeddingProviderId'] ? true : undefined}
+                    className="aria-[invalid=true]:border-[#c94c27]"
+                  >
+                    <SelectValue placeholder="Choose a provider" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {providerList.map((provider) => (
+                      <SelectItem
+                        key={provider.id}
+                        value={provider.id}
+                        icon={<ProviderMark type={provider.type} />}
+                      >
+                        {provider.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <FieldError
                   id="kb-embedding-provider-error"
                   message={errors['embeddingProviderId'] && 'Choose an embedding provider.'}
                 />
               </div>
-              <div className="flex flex-col gap-1.5">
+              <div className="flex min-w-0 flex-col gap-[7px]">
                 <Label htmlFor="kb-embedding-model">Embedding model</Label>
-                <select
-                  id="kb-embedding-model"
-                  className={selectClass}
+                <Select
                   value={modelId}
+                  onValueChange={(id) => id && setModelId(id)}
                   disabled={providerId === ''}
-                  aria-invalid={errors['embeddingModelId'] ? true : undefined}
-                  onChange={(event) => setModelId(event.target.value)}
                 >
-                  <option value="" disabled>
-                    Choose a model
-                  </option>
-                  {providerModels.map((model) => (
-                    <option key={model.modelId} value={model.modelId}>
-                      {model.displayName} ({model.modelId})
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger
+                    id="kb-embedding-model"
+                    aria-label="Embedding model"
+                    aria-invalid={errors['embeddingModelId'] ? true : undefined}
+                    className="aria-[invalid=true]:border-[#c94c27]"
+                  >
+                    <SelectValue placeholder="Choose a model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {providerModels.map((model) => (
+                      <SelectItem key={model.modelId} value={model.modelId}>
+                        {model.displayName} ({model.modelId})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <FieldError
                   id="kb-embedding-model-error"
                   message={errors['embeddingModelId'] && 'Choose an embedding model.'}
@@ -214,12 +226,12 @@ export function CreateKnowledgeBaseDialog({
           />
 
           {create.error && (
-            <p role="alert" className="text-sm text-danger">
+            <p role="alert" className="text-[12px] text-[#c94c27]">
               {create.error.message}
             </p>
           )}
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={onClose}>
+            <Button type="button" variant="secondary" onClick={onClose}>
               Cancel
             </Button>
             <Button type="submit" disabled={create.isPending || noProviders}>

@@ -74,15 +74,17 @@ describe('D299 Ctrl/⌘+P opens any file by a few letters', () => {
   it('says when the file list failed, and Retry brings the files', async () => {
     const user = userEvent.setup();
     const { path } = seed();
+    // The Explorer lists the files too, for its count (D334), so the list fails until Retry —
+    // not just once, which the Explorer's own request would use up.
+    let failing = true;
     server.use(
-      http.get(
-        '*/api/v1/projects/:id/files/list',
-        () =>
-          HttpResponse.json(
-            { error: { code: 'internal', message: 'disk on fire' } },
-            { status: 500 },
-          ),
-        { once: true },
+      http.get('*/api/v1/projects/:id/files/list', () =>
+        failing
+          ? HttpResponse.json(
+              { error: { code: 'internal', message: 'disk on fire' } },
+              { status: 500 },
+            )
+          : undefined,
       ),
     );
     renderApp(path);
@@ -90,6 +92,7 @@ describe('D299 Ctrl/⌘+P opens any file by a few letters', () => {
     await user.keyboard('{Control>}p{/Control}');
     expect(await screen.findByText(/Could not list the project’s files/)).toBeInTheDocument();
     expect(screen.queryByText('No file matches.')).toBeNull();
+    failing = false;
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(3));
   });

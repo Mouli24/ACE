@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
 import { startSocket, stopSocket } from '../app/socket';
+import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
 import { createFakeWebSocket } from '../mocks/fake-socket';
 import { setScenario } from '../mocks/handlers-round2';
@@ -17,9 +18,23 @@ import { SourcesSection, chunkHref } from './SourcesSection';
 
 installMockServer();
 
-vi.mock('../canvas/Canvas', () => ({
-  Canvas: ({ workflowId }: { workflowId: string }) => <div data-testid="canvas">{workflowId}</div>,
-}));
+/*
+ * The desktop header no longer carries the run bar (D330): a run is started and controlled from the
+ * canvas "…" menu, which lives in the real Canvas. With the Canvas stood in for, the stand-in mounts
+ * `RunBar` — the same controls, hooks and store the compact header uses — so the wiring is still
+ * driven end to end.
+ */
+vi.mock('../canvas/Canvas', async () => {
+  const { RunBar } = await import('../runs/RunBar');
+  return {
+    Canvas: ({ workflowId }: { workflowId: string }) => (
+      <>
+        <div data-testid="canvas">{workflowId}</div>
+        <RunBar workflowId={workflowId} />
+      </>
+    ),
+  };
+});
 
 afterEach(() => {
   stopSocket();
@@ -108,7 +123,8 @@ async function runAndInspect(shape: 'attached' | 'retrieval-node') {
   );
   act(() => useSelectionStore.getState().setSelection([inspected.id], []));
   // the sheet over the Canvas holds this tab; it is closed until the top bar opens it
-  await user.click(screen.getByTestId('sheet-toggle'));
+  // the workspace menu's "Workflow panel" opens the sheet (D331)
+  act(() => usePanelsStore.getState().openSheet());
   await user.click(screen.getByRole('tab', { name: 'Inspector' }));
   const inspector = await screen.findByTestId('inspector');
   const recorded = () =>

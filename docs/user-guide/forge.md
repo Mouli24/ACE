@@ -6,14 +6,17 @@ code editor on the project folder). **Ctrl+Shift+1** and **Ctrl+Shift+2** do the
 
 ## The layout
 
-- **Left:** the Explorer — _Open editors_ (what you are editing) above the project's folder tree.
-  Changed files carry git's letters (**M**odified, **A**dded, **U**ntracked); ignored folders such as
-  `node_modules` are dimmed. **Ctrl+B** shows or hides it.
-- **Centre:** the editor. A single click previews a file (italic tab); a double click, or an edit, keeps it.
-- **Bottom:** Problems and Output. **Ctrl+J** shows or hides the panel. Your choice is remembered.
-- **Right:** the chat. **Ctrl+Alt+B** shows or hides it.
-
-Every panel can be resized by dragging its edge.
+- **Left:** the Explorer — the project's folder tree, its file count, and a filter at the bottom.
+  Changed files carry git's letters (**M**odified, **A**dded, **U**ntracked) and their folders are
+  tinted; an orange dot marks unsaved changes; ignored folders such as `node_modules` are dimmed.
+  **Ctrl+B** shows or hides it.
+- **Centre:** the editor, under its tabs and the file's path. A single click previews a file
+  (italic tab); a double click, or an edit, keeps it.
+- **Bottom:** Problems. **Ctrl+J** shows or hides the panel, and the error and warning counts in
+  the footer open it. Your choice is remembered. Warnings about saves and conflicts appear as notices.
+- **Footer:** where the cursor is, then the open file's indentation, encoding, line endings and
+  language.
+- **Right:** the chat. **Ctrl+Alt+B**, or **Split** in the header, shows or hides it.
 
 ## Files
 

@@ -84,19 +84,22 @@ export function ErrorsTab({
       />
 
       {nodeRuns.length === 0 && (
-        <p className="font-human text-sm text-fg-muted">
+        <p className="m-0 py-3 text-center text-[13px] text-[var(--muted)]">
           No node has run yet. Start a run and anything that goes wrong appears here.
         </p>
       )}
 
       {nodeRuns.length > 0 && failed.length === 0 && (
-        <p className="font-human text-sm text-fg-muted" data-testid="errors-tab-no-failures">
+        <p
+          className="m-0 py-3 text-center text-[13px] text-[var(--muted)]"
+          data-testid="errors-tab-no-failures"
+        >
           No failures in this run.
         </p>
       )}
 
       {failed.length > 0 && (
-        <ul className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-2.5">
+        <ul className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-[10px] p-0">
           {failed.map((nodeRun) => {
             const providerId = nodeRun.error?.providerId;
             const providerName = providerId === undefined ? undefined : providerNames?.[providerId];
@@ -110,7 +113,7 @@ export function ErrorsTab({
                    */
                   <p
                     data-testid={`error-without-detail-${nodeRun.nodeId}`}
-                    className="rounded-[12px] border border-danger/40 bg-card px-3 py-2.5 font-human text-sm"
+                    className="m-0 rounded-[12px] border border-[rgba(201,76,39,0.35)] bg-[var(--surface)] p-[14px] text-[13px] leading-[1.5] text-[var(--ink)]"
                   >
                     {nameOf(nodeRun.nodeId)} failed
                     {nodeRun.failureReason ? ` — ${nodeRun.failureReason}` : ''}. Waiting for the
@@ -144,7 +147,7 @@ export function ErrorsTab({
 
       {stopped.length > 0 && (
         <section className="flex flex-col gap-2" data-testid="errors-tab-stopped">
-          <h3 className="font-machine text-[10px] uppercase tracking-wide text-fg-muted">
+          <h3 className="m-0 font-machine text-[9.5px] font-medium uppercase tracking-[0.1em] text-[var(--muted)]">
             stopped · not failures
           </h3>
           {stopped.map((nodeRun) => (
@@ -159,7 +162,7 @@ export function ErrorsTab({
 
       {blocked.length > 0 && (
         <section className="flex flex-col gap-2" data-testid="errors-tab-blocked">
-          <h3 className="font-machine text-[10px] uppercase tracking-wide text-fg-muted">
+          <h3 className="m-0 font-machine text-[9.5px] font-medium uppercase tracking-[0.1em] text-[var(--muted)]">
             blocked · never reached
           </h3>
           {blocked.map((nodeRun) => {

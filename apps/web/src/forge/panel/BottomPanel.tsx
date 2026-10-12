@@ -1,16 +1,15 @@
 import { cn } from '@ace/ui';
-import { Maximize2, Minimize2, X } from 'lucide-react';
 
 import { useLayoutStore, type ForgePanelTab } from '../../app/stores/layout';
-import { IconAction } from '../layout/IconAction';
-import { OutputView } from './OutputView';
 import { ProblemsView } from './ProblemsView';
 import { useProblemsStore } from './problems-store';
 
-/** Phase 1: Problems (Task 18) and Output. The Terminal arrives in Phase 2 with its view. */
+/**
+ * Phase 1: Problems (Task 18). The Output view left with D334 (its warnings reach the toaster);
+ * the Terminal arrives in Phase 2 with its view.
+ */
 const TABS: ReadonlyArray<{ tab: ForgePanelTab; label: string }> = [
   { tab: 'problems', label: 'Problems' },
-  { tab: 'output', label: 'Output' },
 ];
 
 export function BottomPanel({ projectId }: { projectId: string }) {
@@ -23,7 +22,10 @@ export function BottomPanel({ projectId }: { projectId: string }) {
   return (
     <section
       aria-label="Panel"
-      className="flex h-full min-h-0 flex-col border-t border-border bg-panel"
+      className={cn(
+        'flex min-h-0 flex-col border-t border-border bg-panel',
+        maximized ? 'flex-1' : 'h-[232px] shrink-0',
+      )}
     >
       <div className="flex h-8 shrink-0 items-center gap-4 px-3">
         <div role="tablist" aria-label="Panel views" className="flex h-full items-center gap-4">
@@ -51,16 +53,27 @@ export function BottomPanel({ projectId }: { projectId: string }) {
           ))}
         </div>
         <div className="flex-1" />
-        <IconAction
-          label={maximized ? 'Restore panel size' : 'Maximize panel'}
-          Icon={maximized ? Minimize2 : Maximize2}
+        <button
+          type="button"
+          aria-label={maximized ? 'Restore panel size' : 'Maximize panel'}
+          title={maximized ? 'Restore panel size' : 'Maximize panel'}
           onClick={toggleMaximized}
-        />
-        <IconAction label="Close panel" Icon={X} onClick={closePanel} />
+          className="text-fg-muted hover:text-fg"
+        >
+          <span aria-hidden>⛶</span>
+        </button>
+        <button
+          type="button"
+          aria-label="Close panel"
+          title="Close panel"
+          onClick={closePanel}
+          className="text-fg-muted hover:text-fg"
+        >
+          <span aria-hidden>✕</span>
+        </button>
       </div>
       <div role="tabpanel" className="min-h-0 flex-1">
         {panelTab === 'problems' && <ProblemsView projectId={projectId} />}
-        {panelTab === 'output' && <OutputView projectId={projectId} />}
       </div>
     </section>
   );

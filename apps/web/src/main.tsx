@@ -1,6 +1,9 @@
-import '@fontsource-variable/newsreader';
-import '@fontsource-variable/newsreader/wght-italic.css';
-import '@fontsource-variable/jetbrains-mono';
+import '@fontsource/plus-jakarta-sans/400.css';
+import '@fontsource/plus-jakarta-sans/500.css';
+import '@fontsource/plus-jakarta-sans/600.css';
+import '@fontsource/plus-jakarta-sans/700.css';
+import '@fontsource/jetbrains-mono/400.css';
+import '@fontsource/jetbrains-mono/500.css';
 import './index.css';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -14,10 +17,12 @@ import { isMockMode } from './app/env';
 import { routes } from './app/routes';
 import { startSocket } from './app/socket';
 import { readSessionToken } from './app/token';
+import { initThemeMode } from './theme/mode';
 
 const MOCK_TOKEN = 'mock-session';
 
 async function boot(): Promise<void> {
+  initThemeMode();
   const root = createRoot(document.getElementById('root') as HTMLElement);
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },

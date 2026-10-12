@@ -3,6 +3,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { createNode } from '../nodes/factory';
+import { installMatchMedia, uninstallMatchMedia } from '../responsive/test-support';
 import { db, installMockServer, queryClient, renderApp } from '../test/app';
 import { PROVIDER_TYPE_LABEL } from './provider-meta';
 import { patchProviderStatus } from './status-patch';
@@ -160,7 +161,9 @@ describe('TC-PRV-004 each provider state is rendered with its own label', () => 
 });
 
 describe('TC-PRV-005 status changes live, without a reload', () => {
-  it('a provider.status frame updates the row and the top bar', async () => {
+  afterEach(() => uninstallMatchMedia());
+
+  it('a provider.status frame updates the row', async () => {
     const provider = db.createProvider({ type: 'mock', name: 'Mock' });
     renderApp('/providers');
 
@@ -176,10 +179,28 @@ describe('TC-PRV-005 status changes live, without a reload', () => {
     await waitFor(async () =>
       expect(await rowChip(provider.id)).toHaveAttribute('data-status', 'CONNECTED'),
     );
-    const bar = screen.getByTestId('provider-status-bar');
-    expect(within(bar).getByTestId(`provider-status-${provider.id}`)).toHaveAttribute(
-      'data-status',
-      'CONNECTED',
+  });
+
+  it('…and the provider status in the phone menu, where the header keeps it (D330)', async () => {
+    const user = userEvent.setup();
+    installMatchMedia(true);
+    const provider = db.createProvider({ type: 'mock', name: 'Mock' });
+    renderApp('/providers');
+    expect(await rowChip(provider.id)).toHaveAttribute('data-status', 'UNKNOWN');
+
+    await user.click(screen.getByTestId('topbar-menu'));
+    const bar = await screen.findByTestId('provider-status-bar');
+    patchProviderStatus(queryClient, {
+      providerId: provider.id,
+      status: 'CONNECTED',
+      message: 'ok',
+    });
+
+    await waitFor(() =>
+      expect(within(bar).getByTestId(`provider-status-${provider.id}`)).toHaveAttribute(
+        'data-status',
+        'CONNECTED',
+      ),
     );
   });
 });

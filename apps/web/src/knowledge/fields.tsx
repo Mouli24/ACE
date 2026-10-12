@@ -23,10 +23,14 @@ export function fieldErrors(error: ZodError): FieldErrors {
 export const toNumber = (value: string): number =>
   value.trim() === '' ? Number.NaN : Number(value);
 
+/** The theme's help line under a field (D328): 11px / 1.45, muted. */
+export const HELP = 'text-[11px] leading-[1.45] text-[var(--muted)]';
+
+/** A field's error, in the theme's red, under its control. */
 export function FieldError({ id, message }: { id: string; message: string | undefined }) {
   if (!message) return null;
   return (
-    <p id={id} role="alert" className="text-xs text-danger">
+    <p id={id} role="alert" className="text-[11px] leading-[1.45] text-[#c94c27]">
       {message}
     </p>
   );
@@ -54,8 +58,8 @@ export function ChunkFields({
   const sizeId = `${idPrefix}-chunk-size`;
   const overlapId = `${idPrefix}-chunk-overlap`;
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-      <div className="flex flex-col gap-1.5">
+    <div className="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-2">
+      <div className="flex flex-col gap-[7px]">
         <Label htmlFor={sizeId}>Chunk size (tokens)</Label>
         <Input
           id={sizeId}
@@ -63,17 +67,18 @@ export function ChunkFields({
           inputMode="numeric"
           min={CHUNK_SIZE_MIN}
           max={CHUNK_SIZE_MAX}
+          className="font-machine text-[12px]"
           value={chunkSize}
           aria-invalid={errors['chunkSize'] ? true : undefined}
           aria-describedby={errors['chunkSize'] ? `${sizeId}-error` : `${sizeId}-hint`}
           onChange={(event) => onChunkSize(event.target.value)}
         />
-        <p id={`${sizeId}-hint`} className="text-[11px] text-fg-muted">
+        <p id={`${sizeId}-hint`} className={HELP}>
           {CHUNK_SIZE_MIN}–{CHUNK_SIZE_MAX}
         </p>
         <FieldError id={`${sizeId}-error`} message={errors['chunkSize']} />
       </div>
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-[7px]">
         <Label htmlFor={overlapId}>Overlap (tokens)</Label>
         <Input
           id={overlapId}
@@ -81,12 +86,13 @@ export function ChunkFields({
           inputMode="numeric"
           min={CHUNK_OVERLAP_MIN}
           max={CHUNK_OVERLAP_MAX}
+          className="font-machine text-[12px]"
           value={chunkOverlap}
           aria-invalid={errors['chunkOverlap'] ? true : undefined}
           aria-describedby={errors['chunkOverlap'] ? `${overlapId}-error` : `${overlapId}-hint`}
           onChange={(event) => onChunkOverlap(event.target.value)}
         />
-        <p id={`${overlapId}-hint`} className="text-[11px] text-fg-muted">
+        <p id={`${overlapId}-hint`} className={HELP}>
           {CHUNK_OVERLAP_MIN}–{CHUNK_OVERLAP_MAX}, smaller than the chunk size
         </p>
         <FieldError id={`${overlapId}-error`} message={errors['chunkOverlap']} />
@@ -94,7 +100,3 @@ export function ChunkFields({
     </div>
   );
 }
-
-/** A native select styled like the other inputs: accessible and keyboard-usable as is. */
-export const selectClass =
-  'h-9 w-full min-w-0 rounded-md border border-border bg-canvas px-3 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50';

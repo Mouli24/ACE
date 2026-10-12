@@ -26,7 +26,7 @@ describe('shadcn base components', () => {
     const btn = screen.getByTestId('btn');
     expect(btn.tagName).toBe('BUTTON');
     expect(btn).toHaveTextContent('Delete');
-    expect(btn.className).toContain('bg-danger');
+    expect(btn.className).toContain('text-[#c94c27]');
   });
 
   it('Button asChild renders the child element instead', () => {

@@ -1,6 +1,5 @@
 import type { InputConfig } from '@ace/contracts';
 import { cn, formatBytes } from '@ace/ui';
-import { Paperclip, Upload, X } from 'lucide-react';
 import { useCallback, useState, type DragEvent, type ReactNode } from 'react';
 
 import { useArtifactUpload } from './useArtifactUpload';
@@ -23,11 +22,12 @@ function dragHasFiles(event: DragEvent): boolean {
 /**
  * Makes an Input node card a file drop target (M4 §2 item 1, FR-MM-007). A file dropped on the card
  * uploads and attaches to the node's `artifactIds`; a drag shows a "drop to attach" overlay, the
- * upload shows a small progress row, and a 413/415 shows inline (FR-MM-001). The attachment list and
- * picker live in the config panel — the card only needs to accept the drop and show what is going on.
+ * upload shows a small progress row, and a 413/415 shows inline (FR-MM-001). How many files are
+ * attached is the card's own meta line (`INPUT · 2 FILES`, D332); the attachment list and picker
+ * live in the node settings — the card only needs to accept the drop and show what is going on.
  */
 export function InputDropZone({ nodeId, workflowId, config, children }: InputDropZoneProps) {
-  const { add, artifactIds } = useInputArtifacts(workflowId, nodeId, config);
+  const { add } = useInputArtifacts(workflowId, nodeId, config);
   const { state, upload, reset } = useArtifactUpload();
   const [dragging, setDragging] = useState(false);
 
@@ -46,6 +46,7 @@ export function InputDropZone({ nodeId, workflowId, config, children }: InputDro
   );
 
   const busy = state.status === 'uploading';
+  const percent = Math.round((state.progress?.ratio ?? 0) * 100);
 
   return (
     <div
@@ -63,8 +64,8 @@ export function InputDropZone({ nodeId, workflowId, config, children }: InputDro
       }}
       onDrop={(event) => void onDrop(event)}
       className={cn(
-        'relative rounded-card',
-        dragging && 'outline-dashed outline-2 outline-offset-2 outline-accent',
+        'relative rounded-[8px]',
+        dragging && 'outline-dashed outline-[1.5px] outline-offset-2 outline-[#ef6b3f]',
       )}
     >
       {children}
@@ -72,45 +73,35 @@ export function InputDropZone({ nodeId, workflowId, config, children }: InputDro
       {dragging && (
         <div
           data-testid={`input-drop-overlay-${nodeId}`}
-          className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-1 rounded-card bg-accent/15 font-human text-xs text-fg"
+          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-[8px] bg-[rgba(239,107,63,0.12)] text-[12px] font-semibold text-[var(--ink)]"
         >
-          <Upload className="h-4 w-4" aria-hidden />
           Drop to attach
         </div>
       )}
 
-      {(busy || (state.status === 'error' && state.error) || artifactIds.length > 0) && (
-        <div className="mt-1 flex flex-col gap-1 px-1">
-          {artifactIds.length > 0 && !busy && state.status !== 'error' && (
-            <span
-              data-testid={`input-attachment-count-${nodeId}`}
-              className="flex items-center gap-1 font-machine text-[10px] text-fg-muted"
-            >
-              <Paperclip className="h-3 w-3" aria-hidden />
-              {artifactIds.length} file{artifactIds.length === 1 ? '' : 's'} attached
-            </span>
-          )}
+      {(busy || (state.status === 'error' && state.error)) && (
+        <div className="mt-[6px] flex flex-col gap-[4px]">
           {busy && (
             <div
               role="progressbar"
               aria-label={`Uploading ${state.fileName ?? 'file'}`}
               aria-valuemin={0}
               aria-valuemax={100}
-              aria-valuenow={Math.round((state.progress?.ratio ?? 0) * 100)}
+              aria-valuenow={percent}
               data-testid={`input-drop-progress-${nodeId}`}
-              className="flex flex-col gap-0.5"
+              className="flex flex-col gap-[3px]"
             >
-              <span className="flex items-center justify-between font-machine text-[10px] text-fg-muted">
+              <span className="flex items-center justify-between gap-[6px] font-machine text-[9px] text-[var(--muted)]">
                 <span className="truncate">
                   {state.fileName}
                   {state.progress ? ` · ${formatBytes(state.progress.loaded)}` : ''}
                 </span>
-                <span>{Math.round((state.progress?.ratio ?? 0) * 100)}%</span>
+                <span>{percent}%</span>
               </span>
-              <span className="block h-1 overflow-hidden rounded-full bg-border">
+              <span className="block h-[4px] overflow-hidden rounded-[2px] bg-[var(--line)]">
                 <span
-                  className="block h-full rounded-full bg-accent transition-[width]"
-                  style={{ width: `${Math.round((state.progress?.ratio ?? 0) * 100)}%` }}
+                  className="block h-full rounded-[2px] bg-[#ef6b3f] transition-[width]"
+                  style={{ width: `${percent}%` }}
                 />
               </span>
             </div>
@@ -120,16 +111,16 @@ export function InputDropZone({ nodeId, workflowId, config, children }: InputDro
               role="alert"
               data-testid={`input-drop-error-${nodeId}`}
               data-code={state.error.code}
-              className="flex items-start gap-1 rounded-md border border-danger/60 bg-danger/10 px-1.5 py-1 font-human text-[11px] text-danger"
+              className="flex items-start gap-[6px] rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-[8px] py-[6px] text-[10px] leading-[1.45] text-[#c94c27]"
             >
               <span className="flex-1">{uploadErrorMessage(state.error)}</span>
               <button
                 type="button"
                 aria-label="Dismiss upload error"
-                className="shrink-0 text-danger"
+                className="shrink-0 cursor-pointer border-none bg-transparent p-0 text-[10px] leading-none text-[var(--muted)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
                 onClick={reset}
               >
-                <X className="h-3 w-3" aria-hidden />
+                ✕
               </button>
             </p>
           )}

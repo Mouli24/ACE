@@ -70,10 +70,10 @@ describe('FR-CAN-011 ContextMenu', () => {
 
     fireEvent.contextMenu(screen.getByTestId('target'));
     const menu = await screen.findByRole('menu');
-    expect(menu).toHaveClass('bg-panel');
+    expect(menu).toHaveClass('bg-[var(--surface)]');
     expect(screen.getByRole('separator')).toBeInTheDocument();
     expect(screen.getByText('⌘D')).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveClass('text-danger');
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveClass('text-[#c94c27]');
 
     await userEvent.click(screen.getByRole('menuitem', { name: /Duplicate/ }));
     expect(onDuplicate).toHaveBeenCalledTimes(1);

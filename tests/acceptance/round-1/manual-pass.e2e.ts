@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 /**
  * The §8.1 manual pass — "ten minutes of abuse" — written down instead of described, so the next
@@ -128,22 +128,42 @@ async function openCanvas(page: Page, projectId: string, workflowId: string): Pr
 const canvasBox = (page: Page): Promise<{ width: number; height: number } | null> =>
   page.getByTestId('canvas').boundingBox();
 
-/** POC Theme V2 (D259): the palette is the New node dialog; this adds one node from it. */
-async function addFromDialog(page: Page, kind: string, name?: string): Promise<void> {
-  await page.getByTestId('new-node-button').click();
-  await page.getByTestId(`palette-${kind}`).click();
-  if (name) await page.getByLabel('Name').fill(name);
-  await page.getByTestId('new-node-add').click();
+/** The node settings modal (D333), when open: what the old sheet's Configure tab was. */
+const settingsDialog = (page: Page): Locator =>
+  page.getByRole('dialog').filter({ has: page.getByTestId('config-panel') });
+
+/** Close the node settings modal if it is open (Done commits whatever is still waiting). */
+async function closeSettings(page: Page): Promise<void> {
+  const dialog = settingsDialog(page);
+  if (await dialog.isVisible()) await dialog.getByRole('button', { name: 'Done' }).click();
+  await expect(dialog).toHaveCount(0);
 }
 
-/** POC Theme V2: Configure lives in a floating sheet that starts closed. */
-async function openSheet(
-  page: Page,
-  tab: 'Configure' | 'Inspector' | 'Runs' | 'Memory',
-): Promise<void> {
-  if (!(await page.getByRole('tab', { name: tab }).isVisible()))
-    await page.getByTestId('sheet-toggle').click();
+/**
+ * Ace UI (D332, D333): the Canvas's "Add node" pill adds one Agent, selects it and opens its
+ * settings modal, which covers the Canvas; this adds one and closes the modal again.
+ */
+async function addStage(page: Page): Promise<void> {
+  await closeSettings(page);
+  await page.getByTestId('new-node-button').click();
+  await expect(settingsDialog(page)).toBeVisible();
+  await closeSettings(page);
+}
+
+/** Ace UI (D331): the workflow sheet opens from the workspace "…" menu, on Inspector. */
+async function openSheet(page: Page, tab: 'Inspector' | 'Runs' | 'Memory'): Promise<void> {
+  if (!(await page.getByRole('tab', { name: tab }).isVisible())) {
+    await page.getByTestId('workspace-menu').click();
+    await page.getByTestId('menu-sheet').click();
+  }
   await page.getByRole('tab', { name: tab }).click();
+}
+
+/** Ace UI (D332): the bottom panel is hidden until "Problems & events" in the "…" menu opens it. */
+async function openProblems(page: Page): Promise<void> {
+  await page.getByTestId('workspace-menu').click();
+  await page.getByTestId('menu-problems').click();
+  await expect(page.getByTestId('bottom-toggle')).toBeVisible();
 }
 
 /**
@@ -174,9 +194,9 @@ test('§8.1 abuse — every pane dragged to its minimum, the Canvas stays usable
 }) => {
   const { projectId, workflowId } = await freshWorkflow('resize');
   await openCanvas(page, projectId, workflowId);
-  // D285: the dialog offers one node, an Agent
-  await addFromDialog(page, 'agent');
-  await addFromDialog(page, 'agent');
+  // D285, D332: "Add node" adds one kind, an Agent
+  await addStage(page);
+  await addStage(page);
   await expect
     .poll(async () => (await api<Graph>(`/workflows/${workflowId}`)).nodes.length)
     .toBe(2);
@@ -185,21 +205,23 @@ test('§8.1 abuse — every pane dragged to its minimum, the Canvas stays usable
   expect(before?.height ?? 0).toBeGreaterThan(0);
 
   /*
-   * The POC Theme V2 layout (D259) has no drag handles left: the bottom panel collapses to its
-   * header, the sheet floats over the Canvas, Chat is a fixed column. So every pane is pushed to its
-   * extreme the ways the layout allows — bottom panel open and collapsed, sheet open and closed,
-   * and the window at the narrowest and shortest desktop size — and, as before, D-004 (a Canvas
-   * that measured 0 px high) is what is checked after each step.
+   * The Ace UI layout (D330–D332) has no drag handles: the bottom panel is hidden until the "…"
+   * menu's "Problems & events" opens it, the sheet floats over the Canvas, Chat is a fixed column.
+   * So every pane is pushed to its extreme the ways the layout allows — bottom panel open and
+   * closed, sheet open and closed, and the window at the narrowest and shortest desktop size — and,
+   * as before, D-004 (a Canvas that measured 0 px high) is what is checked after each step.
    */
   expect(await page.locator('[data-panel-resize-handle-id]').count()).toBe(0);
-  const toggleBottom = page.getByRole('button', { name: 'Toggle panel' });
-  // (the bottom panel's toggle sits under an open sheet, so it is pressed with the sheet closed)
+  // (the bottom panel's close sits under an open sheet, so it is pressed with the sheet closed)
   const steps: Array<[string, () => Promise<void>]> = [
-    ['bottom panel collapsed', () => toggleBottom.click()],
-    ['sheet open over it', () => openSheet(page, 'Configure')],
+    ['bottom panel open', () => openProblems(page)],
+    ['sheet open over it', () => openSheet(page, 'Inspector')],
     ['narrowest, shortest desktop window', () => page.setViewportSize({ width: 641, height: 480 })],
-    ['sheet closed', () => page.getByRole('button', { name: 'Close panel' }).click()],
-    ['bottom panel open again', () => toggleBottom.click()],
+    [
+      'sheet closed',
+      () => page.getByTestId('workflow-sheet').getByRole('button', { name: 'Close panel' }).click(),
+    ],
+    ['bottom panel closed again', () => page.getByTestId('bottom-toggle').click()],
     ['back to 1280 × 720', () => page.setViewportSize({ width: 1280, height: 720 })],
   ];
   for (const [step, act] of steps) {
@@ -226,7 +248,7 @@ test('§8.1 abuse — 3,000 characters pasted into Instructions reach the engine
 }) => {
   const { projectId, workflowId } = await freshWorkflow('paste');
   await openCanvas(page, projectId, workflowId);
-  await addFromDialog(page, 'agent');
+  await addStage(page);
 
   await expect
     .poll(async () => (await api<Graph>(`/workflows/${workflowId}`)).nodes.length, {
@@ -238,9 +260,10 @@ test('§8.1 abuse — 3,000 characters pasted into Instructions reach the engine
   const agent = graph.nodes.find((node) => node.kind === 'agent');
   expect(agent, 'the agent card was created').toBeTruthy();
 
-  await page.locator(`.react-flow__node[data-id="${agent?.id}"]`).click();
-  await openSheet(page, 'Configure');
-  const instructions = page.getByLabel('Goal');
+  // a click on the card opens its settings modal (D333); D285: the instructions are its System prompt
+  await page.getByTestId(`node-card-${agent?.id}`).click();
+  await expect(settingsDialog(page)).toBeVisible();
+  const instructions = settingsDialog(page).getByLabel('System prompt');
   await expect(instructions).toBeVisible();
 
   // A real paste, not a typed 3,000 characters: the clipboard path is what a user takes.
@@ -275,7 +298,7 @@ test('§8.1 abuse — the engine is killed mid-drag; the app recovers when it co
 }) => {
   const { projectId, workflowId } = await freshWorkflow('kill-mid-drag');
   await openCanvas(page, projectId, workflowId);
-  await addFromDialog(page, 'agent');
+  await addStage(page);
   await expect
     .poll(async () => (await api<Graph>(`/workflows/${workflowId}`)).nodes.length)
     .toBe(1);
@@ -358,14 +381,14 @@ for (const zoom of [0.5, 2]) {
     expect(box?.width ?? 0, `canvas measurable at ${zoom * 100} %`).toBeGreaterThan(0);
     expect(box?.height ?? 0, `canvas measurable at ${zoom * 100} %`).toBeGreaterThan(0);
 
-    // the palette (V2: the New node dialog) is still reachable and still adds exactly one card
-    // (D-006 was a double add)
+    // the palette (Ace UI: the Canvas's "Add node" pill, D332) is still reachable and still adds
+    // exactly one card (D-006 was a double add)
     await expect(page.getByTestId('new-node-button')).toBeVisible();
     await page.getByTestId('new-node-button').click();
-    // D285: the one kind it offers is an Agent
-    await expect(page.getByTestId('palette-agent')).toBeVisible();
-    await page.getByTestId('palette-agent').click();
-    await page.getByTestId('new-node-add').click();
+    // D285: the one kind it adds is an Agent, whose settings open with it; Esc closes them
+    await expect(settingsDialog(page)).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(settingsDialog(page)).toHaveCount(0);
     await expect
       .poll(async () => (await api<Graph>(`/workflows/${workflowId}`)).nodes.length, {
         timeout: 10_000,

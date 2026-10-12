@@ -25,7 +25,7 @@ describe('FR-TOOL-001 tool permission badges', () => {
     render(<ToolPermissionBadges permissions={perms({ destructive: true })} />);
     const badge = screen.getByTestId('perm-destructive');
     expect(badge).toHaveTextContent('destructive');
-    expect(badge.className).toContain('text-danger');
+    expect(badge.className).toContain('text-[#c94c27]');
   });
 
   it('shows a neutral "sandboxed" badge when a tool has no permissions', () => {

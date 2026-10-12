@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 import {
   addFromDialog,
@@ -10,34 +10,65 @@ import {
   settled,
 } from './helpers';
 
+/*
+ * The workflow tabs live in the workspace "…" menu now (D331): one menuitemradio per workflow,
+ * `aria-checked` on the open one, then New workflow and the open workflow's Duplicate below them.
+ */
+
+async function openWorkspaceMenu(page: Page): Promise<void> {
+  await page.getByTestId('workspace-menu').click();
+}
+
+/** A workflow's entry in the open workspace menu (what its tab was). */
+const workflowItem = (page: Page, name: string): Locator =>
+  page.getByRole('menuitemradio', { name, exact: true });
+
+/** The workflow on screen is `name`: its menu entry is the checked one (its tab was selected). */
+async function expectOpenWorkflow(page: Page, name: string): Promise<void> {
+  await openWorkspaceMenu(page);
+  await expect(workflowItem(page, name)).toHaveAttribute('aria-checked', 'true');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('menu')).toHaveCount(0);
+}
+
+/** Switch workflows from the menu (what a click on its tab did). */
+async function switchTo(page: Page, name: string): Promise<void> {
+  await openWorkspaceMenu(page);
+  await workflowItem(page, name).click();
+}
+
 test.describe('Workflows (FR-WF-001..005)', () => {
   test.beforeEach(async ({ page }) => freshApp(page));
 
   test('TC-WF-001: new workflow opens as a tab with an empty Canvas', async ({ page }) => {
-    await page.getByRole('button', { name: 'New project' }).click();
+    // Home's Canvas card opens New project; Create opens the project's first workflow (D337)
+    await page.getByRole('button', { name: /^Canvas/ }).click();
     await page.getByRole('dialog').getByLabel('Name').fill('P');
     await page.getByRole('dialog').getByRole('button', { name: 'Create' }).click();
-    // `exact` matters now: the top bar's "no providers" link would also match a substring "P".
-    await page.getByRole('link', { name: 'P', exact: true }).click();
+    await expect(page).toHaveURL(/\/projects\/[0-9A-Z]{26}\/workflows\/[0-9A-Z]{26}$/);
+    // the project page (from the workspace menu) makes the next one
+    await openWorkspaceMenu(page);
+    await page.getByTestId('menu-project-page').click();
+    await expect(page).toHaveURL(/\/projects\/[0-9A-Z]{26}$/);
     await page.getByRole('button', { name: 'New workflow' }).click();
     await page.getByRole('dialog').getByLabel('Name').fill('Flow 1');
     await page.getByRole('dialog').getByRole('button', { name: 'Create' }).click();
     await expect(page).toHaveURL(/\/workflows\/[0-9A-Z]{26}$/);
-    await expect(page.getByRole('tab', { name: 'Flow 1' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
+    await expectOpenWorkflow(page, 'Flow 1');
     await expect(page.getByTestId('canvas')).toBeVisible();
     await expect(page.locator('.react-flow__node')).toHaveCount(0);
-    // the palette is the New node dialog, one click away in the top bar (D259)
-    await page.getByTestId('new-node-button').click();
-    await expect(page.getByLabel('Node palette')).toBeVisible();
-    await page.keyboard.press('Escape');
-    await expect(page.getByRole('dialog', { name: 'New node' })).toHaveCount(0);
+    // adding is one click away on the Canvas: "Add node" (the New node dialog is gone, D332)
+    await expect(page.getByTestId('new-node-button')).toBeVisible();
+    // the bottom panel starts hidden; the menu's "Problems & events" opens it on Validation (D332)
+    await openWorkspaceMenu(page);
+    await page.getByTestId('menu-problems').click();
     await expect(page.getByRole('tab', { name: 'Validation' })).toBeVisible();
-    // the workflow-level config is in the sheet, which starts closed
-    await openSheet(page, 'Configure');
-    await expect(page.getByText('Select a node to configure it.')).toBeVisible();
+    // the workflow sheet starts closed; its Configure tab is the node settings modal now (D333), so
+    // it opens on the Inspector, which has nothing to show for a new workflow yet
+    await expect(page.getByTestId('workflow-sheet')).toHaveCount(0);
+    await openSheet(page, 'Inspector');
+    await expect(page.getByTestId('workflow-sheet')).toBeVisible();
+    await expect(page.getByText('Start a run to inspect it.')).toBeVisible();
   });
 
   test('TC-WF-002: two workflows, switching tabs shows each graph', async ({ page }) => {
@@ -47,15 +78,17 @@ test.describe('Workflows (FR-WF-001..005)', () => {
     });
     // the second workflow is created through the UI
     await openWorkflow(page, a);
-    await page.getByRole('button', { name: 'Add workflow' }).click();
+    await openWorkspaceMenu(page);
+    await page.getByTestId('menu-new-workflow').click();
     await page.getByRole('dialog').getByLabel('Name').fill('Beta');
     await page.getByRole('dialog').getByRole('button', { name: 'Create' }).click();
-    await expect(page.getByRole('tab', { name: 'Beta' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expectOpenWorkflow(page, 'Beta');
     await expect(page.locator('.react-flow__node')).toHaveCount(0);
-    await page.getByRole('tab', { name: 'Alpha' }).click();
-    await expect(page.getByRole('tab', { name: 'Alpha' })).toHaveAttribute('aria-selected', 'true');
+    await switchTo(page, 'Alpha');
+    await expectOpenWorkflow(page, 'Alpha');
     await expect(page.locator('.react-flow__node')).toHaveCount(2);
-    await page.getByRole('tab', { name: 'Beta' }).click();
+    await switchTo(page, 'Beta');
     await expect(page.locator('.react-flow__node')).toHaveCount(0);
   });
 
@@ -68,12 +101,12 @@ test.describe('Workflows (FR-WF-001..005)', () => {
       window.__aceMock!.connect(workflowId, nodeIds[1]!, 'text', nodeIds[2]!, 'text');
     }, seeded);
     await openWorkflow(page, seeded);
-    await page.getByRole('button', { name: 'Workflow actions for Tri' }).click();
-    await page.getByRole('menuitem', { name: 'Duplicate' }).click();
-    await expect(page.getByRole('tab', { name: 'Tri (copy)' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
+    // the menu's "This workflow" section acts on the open workflow, Tri
+    await openWorkspaceMenu(page);
+    await expect(workflowItem(page, 'Tri')).toHaveAttribute('aria-checked', 'true');
+    await page.getByTestId('menu-duplicate-workflow').click();
+    await expect(page).not.toHaveURL(new RegExp(`/workflows/${seeded.workflowId}$`));
+    await expectOpenWorkflow(page, 'Tri (copy)');
     await expect(page.locator('.react-flow__node')).toHaveCount(3);
     await expect(page.locator('.react-flow__edge')).toHaveCount(2);
     const copyId = page.url().split('/').pop() as string;
@@ -134,7 +167,7 @@ test.describe('Workflows (FR-WF-001..005)', () => {
     await openWorkflow(page, seeded);
     const other = await context.newPage();
     await openWorkflow(other, seeded);
-    // D285: the dialog offers one node, an Agent
+    // D285, D332: the Canvas adds one kind of node, an Agent
     await addFromDialog(other, 'agent');
     await settled(other, seeded.workflowId, 2);
     await expect(page.locator('.react-flow__node')).toHaveCount(2);

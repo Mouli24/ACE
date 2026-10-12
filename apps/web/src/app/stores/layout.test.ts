@@ -8,8 +8,8 @@ beforeEach(() => {
   useLayoutStore.setState(initial, true);
 });
 
-describe('D299 the workbench layout is the person’s choice, and is remembered', () => {
-  it('starts with the chat and the side bar open and the bottom panel closed', () => {
+describe('D299 D330 the workspace layout is the person’s choice, and is remembered', () => {
+  it('starts with the chat (Split) and the Explorer open and Forge’s bottom panel closed', () => {
     expect(useLayoutStore.getState()).toMatchObject({
       chatOpen: true,
       sidebarOpen: true,
@@ -18,19 +18,18 @@ describe('D299 the workbench layout is the person’s choice, and is remembered'
   });
 
   it('remembers each choice in the browser', () => {
-    useLayoutStore.getState().togglePanel();
     useLayoutStore.getState().toggleChat();
+    useLayoutStore.getState().toggleSidebar();
+    useLayoutStore.getState().togglePanel();
     const saved = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) ?? '{}') as {
       state: Record<string, unknown>;
     };
-    expect(saved.state).toMatchObject({ panelOpen: true, chatOpen: false });
-  });
-
-  it('clicking the active view hides the side bar, as in VS Code', () => {
-    useLayoutStore.getState().showView('explorer');
-    expect(useLayoutStore.getState().sidebarOpen).toBe(false);
-    useLayoutStore.getState().showView('explorer');
-    expect(useLayoutStore.getState().sidebarOpen).toBe(true);
+    expect(saved.state).toEqual({
+      chatOpen: false,
+      sidebarOpen: false,
+      panelOpen: true,
+      panelTab: 'problems',
+    });
   });
 
   it('closing the panel also leaves maximized', () => {

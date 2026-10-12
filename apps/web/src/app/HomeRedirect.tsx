@@ -13,7 +13,7 @@ export function HomeRedirect() {
   const settings = useSettings();
   const projects = useProjects();
   if (settings.isPending || projects.isPending) {
-    return <p className="p-6 text-fg-muted">Opening ACE…</p>;
+    return <p className="p-6 text-center text-[13px] text-[var(--muted)]">Opening ACE…</p>;
   }
   const last = settings.data?.lastProjectId;
   if (last) return <Navigate to={`/projects/${last}`} replace />;

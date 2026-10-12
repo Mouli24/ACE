@@ -13,5 +13,11 @@ export function partForArtifact(artifact: Artifact): Part {
       : artifact.mime.startsWith('video/')
         ? 'video'
         : 'file';
-  return { type, artifactId: artifact.id, mime: artifact.mime, name: artifact.name, size: artifact.size };
+  return {
+    type,
+    artifactId: artifact.id,
+    mime: artifact.mime,
+    name: artifact.name,
+    size: artifact.size,
+  };
 }
