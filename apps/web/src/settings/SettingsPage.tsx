@@ -5,16 +5,7 @@ import {
   type SettingsPatch,
   type Theme,
 } from '@ace/contracts';
-import {
-  Input,
-  ProviderStatusChip,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-  toast,
-} from '@ace/ui';
+import { Input, ProviderStatusChip, toast } from '@ace/ui';
 import { useId, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -25,7 +16,7 @@ import { HealthMetricsPanel } from '../usage/HealthMetricsPanel';
 import { BackupSection } from './BackupSection';
 import { BudgetFields } from './BudgetFields';
 import { usePatchSettings, useSettings } from './hooks';
-import { HELP_CLASS, SettingField, SettingInput, type DraftRead } from './SettingFields';
+import { HELP_CLASS, SelectField, SettingField, SettingInput, type DraftRead } from './SettingFields';
 
 /** Each box is checked by the contract's own field schema (FR-SYS-005), never a copy of its bounds. */
 const fields = SettingsPatchSchema.shape;
@@ -94,50 +85,6 @@ function Section({
       <h2 className="text-[14px] font-bold">{title}</h2>
       {children}
     </section>
-  );
-}
-
-function SelectField<T extends string>({
-  id,
-  label,
-  hint,
-  testId,
-  value,
-  options,
-  onChange,
-  disabled,
-}: {
-  id: string;
-  label: string;
-  hint?: string;
-  testId: string;
-  value: T;
-  options: readonly { value: T; label: string }[];
-  onChange: (value: T) => void;
-  disabled: boolean;
-}) {
-  return (
-    <SettingField label={label} htmlFor={id} {...(hint === undefined ? {} : { hint })}>
-      <Select
-        value={value}
-        onValueChange={(next) => {
-          const option = options.find((candidate) => candidate.value === next);
-          if (option !== undefined && option.value !== value) onChange(option.value);
-        }}
-        disabled={disabled}
-      >
-        <SelectTrigger id={id} data-testid={testId}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((option) => (
-            <SelectItem key={option.value} value={option.value}>
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </SettingField>
   );
 }
 

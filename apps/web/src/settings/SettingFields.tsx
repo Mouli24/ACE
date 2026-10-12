@@ -1,4 +1,12 @@
-import { Input, Label } from '@ace/ui';
+import {
+  Input,
+  Label,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@ace/ui';
 import { useEffect, useId, useState, type KeyboardEvent, type ReactNode } from 'react';
 
 /** What a draft reads as: a value the contract accepts, nothing to save, or why not. */
@@ -113,6 +121,54 @@ export function SettingInput<T>({
         onKeyDown={blurOnEnter}
         className="font-machine text-[12px]"
       />
+    </SettingField>
+  );
+}
+
+/**
+ * One choice from a fixed list in the theme's dropdown (D328), saved as it changes (FR-SYS-005).
+ * Shared by the settings screen and the project page (D301's Terminal trust level).
+ */
+export function SelectField<T extends string>({
+  id,
+  label,
+  hint,
+  testId,
+  value,
+  options,
+  onChange,
+  disabled,
+}: {
+  id: string;
+  label: string;
+  hint?: string;
+  testId: string;
+  value: T;
+  options: readonly { value: T; label: string }[];
+  onChange: (value: T) => void;
+  disabled: boolean;
+}) {
+  return (
+    <SettingField label={label} htmlFor={id} {...(hint === undefined ? {} : { hint })}>
+      <Select
+        value={value}
+        onValueChange={(next) => {
+          const option = options.find((candidate) => candidate.value === next);
+          if (option !== undefined && option.value !== value) onChange(option.value);
+        }}
+        disabled={disabled}
+      >
+        <SelectTrigger id={id} data-testid={testId}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </SettingField>
   );
 }
