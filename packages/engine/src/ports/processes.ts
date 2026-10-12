@@ -1,4 +1,4 @@
-import type { ProcessStream } from '@ace/contracts';
+import type { ProcessStream, ProjectScripts } from '@ace/contracts';
 
 /**
  * What the terminal asks to run (D301, design §6.3). The engine names the folder and the line; the
@@ -45,4 +45,9 @@ export interface RunningProcess {
 export interface ProcessRunner {
   /** Throws a `WorkspaceFsError` for a refused `cwd`, before anything is spawned. */
   start(spec: ProcessSpec, handlers: ProcessHandlers): RunningProcess;
+  /**
+   * The root package.json's scripts and the package manager they run with (D301 decision 9). It
+   * never throws: no package.json, an unparsable one, or one linked from outside is an empty list.
+   */
+  scripts(root: string): Promise<ProjectScripts>;
 }
