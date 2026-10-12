@@ -210,11 +210,16 @@ export class MockProcesses {
       });
     }
     run.partial += data;
+    this.drain(run);
+  }
+
+  /** Lines wait in the pipe, as a real stdin buffers them, until the program reads one. */
+  private drain(run: Run): void {
     let newline = run.partial.indexOf('\n');
-    while (newline !== -1) {
+    while (newline !== -1 && run.onLine !== undefined) {
       const line = run.partial.slice(0, newline).replace(/\r$/, '');
       run.partial = run.partial.slice(newline + 1);
-      run.onLine?.(line);
+      run.onLine(line);
       newline = run.partial.indexOf('\n');
     }
   }
@@ -362,6 +367,7 @@ export class MockProcesses {
         this.print(run, `hello ${name}\n`);
         this.end(run, 'exited', 0, null);
       };
+      this.drain(run);
       return;
     }
     if (line === 'fail') {

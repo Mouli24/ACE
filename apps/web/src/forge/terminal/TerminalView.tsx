@@ -34,6 +34,7 @@ export function TerminalView({ projectId, tabId }: { projectId: string; tabId: s
   const theme = useResolvedTheme();
   /** The theme at mount, so the first frame is already in the right colours. */
   const themeAtMount = useRef(theme);
+  themeAtMount.current = theme;
   const [finding, setFinding] = useState(false);
   const [query, setQuery] = useState('');
 
@@ -94,8 +95,8 @@ export function TerminalView({ projectId, tabId }: { projectId: string; tabId: s
       const text = scrollbackOf(tab);
       const delta = tab.total - seen.total;
       if (tab.epoch !== seen.epoch || delta > text.length) {
-        term.reset();
-        term.write(text);
+        // ESC c (RIS) rides in the write stream: reset() would not wait for writes still queued.
+        term.write(`\u001bc${text}`);
       } else if (delta > 0) {
         term.write(text.slice(text.length - delta));
       }

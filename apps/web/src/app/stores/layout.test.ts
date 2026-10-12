@@ -52,4 +52,14 @@ describe('D299 D330 the workspace layout is the person’s choice, and is rememb
     await useLayoutStore.persist.rehydrate();
     expect(useLayoutStore.getState().panelTab).toBe('terminal');
   });
+
+  it('D301 an unknown stored view reads as Problems even when the panel was on the Terminal', async () => {
+    useLayoutStore.setState({ panelTab: 'terminal' });
+    localStorage.setItem(
+      LAYOUT_STORAGE_KEY,
+      JSON.stringify({ state: { panelOpen: true, panelTab: 'output' }, version: 0 }),
+    );
+    await useLayoutStore.persist.rehydrate();
+    expect(useLayoutStore.getState().panelTab).toBe('problems');
+  });
 });

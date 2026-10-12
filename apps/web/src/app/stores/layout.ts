@@ -83,7 +83,7 @@ export const useLayoutStore = create<LayoutState>()(
         const saved = (stored ?? {}) as Partial<LayoutState>;
         const panelTab = PANEL_TABS.includes(saved.panelTab as ForgePanelTab)
           ? (saved.panelTab as ForgePanelTab)
-          : current.panelTab;
+          : 'problems';
         return { ...current, ...saved, panelTab };
       },
     },
