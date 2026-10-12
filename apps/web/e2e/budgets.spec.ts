@@ -2,15 +2,15 @@ import { expect, test } from '@playwright/test';
 
 import { freshApp } from './helpers';
 import {
+  clickStartRun,
   engineDailyBudget,
   engineProject,
   engineRun,
+  expectRunStatus,
   openBottomTab,
   openRound3,
-  runStatus,
   seedShape,
   setRunCostCap,
-  startRun,
 } from './round3';
 
 /**
@@ -31,8 +31,8 @@ test.describe('Budgets (FR-GRD-008)', () => {
     await expect(page.getByTestId('canvas')).toBeVisible();
     expect((await engineProject(page, seeded.projectId))?.maxCostPerRunUsd).toBe(0.01);
 
-    await startRun(page).click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'HALTED', { timeout: 20_000 });
+    await clickStartRun(page);
+    await expectRunStatus(page, 'HALTED', { timeout: 20_000 });
 
     const run = await engineRun(page, seeded.workflowId);
     expect(run?.haltReason).toBe('budget_exceeded');

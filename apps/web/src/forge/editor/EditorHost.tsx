@@ -4,6 +4,8 @@ import { useEffect, useRef } from 'react';
 
 import { useResolvedTheme } from '../../app/theme';
 import { monaco } from '../../config-panel/monaco-loader';
+import { AGENT_COLORS } from '../../theme/constants';
+import { touchedLines, type FileTouch } from '../attribution';
 import { dirtyHandler } from './actions';
 import { useEditorStore } from './editor-store';
 import { useEditorStatus } from './editor-status';
@@ -18,16 +20,61 @@ export interface EditorHostProps {
   path: string;
   /** The disk's text, for a file that has no model yet. */
   initial: TextFileContent | undefined;
+  /** The run's latest write to this file, drawn as a bar in the agent's colour (D334). */
+  touch?: FileTouch | undefined;
 }
+
+/** The theme's code view in Monaco's options: JetBrains Mono 13/20, a ~60px gutter, no chrome. */
+const OPTIONS: Monaco.editor.IStandaloneEditorConstructionOptions = {
+  model: null,
+  automaticLayout: true,
+  fontFamily: "'JetBrains Mono', monospace",
+  fontSize: 13,
+  lineHeight: 20,
+  minimap: { enabled: false },
+  padding: { top: 12, bottom: 160 },
+  scrollBeyondLastLine: false,
+  // The glyph margin (20px at this line height) carries the agent bars at the theme's left:10px;
+  // three digits of numbers end at 44px and the text starts at 68px, as the theme's gutter does.
+  glyphMargin: true,
+  folding: false,
+  lineNumbersMinChars: 3,
+  lineDecorationsWidth: 24,
+  renderLineHighlight: 'all',
+  overviewRulerLanes: 0,
+  overviewRulerBorder: false,
+  hideCursorInOverviewRuler: true,
+  stickyScroll: { enabled: false },
+  guides: { indentation: false },
+  bracketPairColorization: { enabled: false },
+  scrollbar: { useShadows: false },
+  smoothScrolling: true,
+  renderWhitespace: 'selection',
+  fixedOverflowWidgets: true,
+  tabSize: 2,
+};
+
+/** One glyph class per agent colour: the bar is a 3px rounded stripe, inset 2px top and bottom. */
+const agentBarClass = (colour: string): string =>
+  `forge-agent-bar forge-agent-${Math.max(0, (AGENT_COLORS as readonly string[]).indexOf(colour))}`;
+
+const HOST_CSS = [
+  '.forge-editor .monaco-editor .line-numbers{font-size:11.5px}',
+  '.forge-editor .forge-agent-bar::before{content:"";position:absolute;left:10px;top:2px;bottom:2px;width:3px;border-radius:2px;background:var(--forge-agent)}',
+  ...AGENT_COLORS.map(
+    (colour, index) => `.forge-editor .forge-agent-${index}{--forge-agent:${colour}}`,
+  ),
+].join('\n');
 
 /**
  * The workbench's one Monaco editor (a lazy chunk). It shows the active file's model and remembers
  * each file's cursor, scroll and folding; the models live in the registry, so switching tabs or
  * modes loses nothing (§2.3).
  */
-export function EditorHost({ projectId, path, initial }: EditorHostProps) {
+export function EditorHost({ projectId, path, initial, touch }: EditorHostProps) {
   const container = useRef<HTMLDivElement>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const bars = useRef<Monaco.editor.IEditorDecorationsCollection | null>(null);
   /** The file whose model the editor shows now, so unmounting can save its place first. */
   const shown = useRef<{ projectId: string; path: string } | null>(null);
   const theme = useResolvedTheme();
@@ -37,21 +84,9 @@ export function EditorHost({ projectId, path, initial }: EditorHostProps) {
 
   useEffect(() => {
     if (container.current === null) return;
-    const editor = monaco.editor.create(container.current, {
-      model: null,
-      automaticLayout: true,
-      fontFamily: "'JetBrains Mono Variable', 'JetBrains Mono', Consolas, monospace",
-      fontSize: 13,
-      lineHeight: 20,
-      minimap: { enabled: true, renderCharacters: false },
-      scrollBeyondLastLine: false,
-      smoothScrolling: true,
-      renderWhitespace: 'selection',
-      bracketPairColorization: { enabled: true },
-      fixedOverflowWidgets: true,
-      tabSize: 2,
-    });
+    const editor = monaco.editor.create(container.current, OPTIONS);
     editorRef.current = editor;
+    bars.current = editor.createDecorationsCollection();
     const cursor = editor.onDidChangeCursorPosition((event) =>
       useEditorStatus.getState().setCursor(event.position.lineNumber, event.position.column),
     );
@@ -63,6 +98,9 @@ export function EditorHost({ projectId, path, initial }: EditorHostProps) {
       cursor.dispose();
       editor.dispose();
       editorRef.current = null;
+      bars.current = null;
+      // no text file in the editor: the footer hides its cursor line (D330)
+      useEditorStatus.getState().clear();
     };
   }, []);
 
@@ -84,6 +122,7 @@ export function EditorHost({ projectId, path, initial }: EditorHostProps) {
         : undefined);
     if (model === undefined) {
       shown.current = null;
+      useEditorStatus.getState().clear();
       return;
     }
     const file = useEditorStore.getState().projects[projectId]?.files[path];
@@ -94,7 +133,7 @@ export function EditorHost({ projectId, path, initial }: EditorHostProps) {
     const view = viewStateOf(projectId, path);
     if (view !== null) editor.restoreViewState(view);
     editor.focus();
-    useEditorStatus.getState().describe(model, file?.bom ?? initial?.bom ?? false);
+    useEditorStatus.getState().describe(path, model, file?.bom ?? initial?.bom ?? false);
     const position = editor.getPosition();
     if (position) useEditorStatus.getState().setCursor(position.lineNumber, position.column);
     return () => {
@@ -103,6 +142,35 @@ export function EditorHost({ projectId, path, initial }: EditorHostProps) {
     };
     // `initial` only seeds a new model (see above), so it is not a dependency.
   }, [projectId, path]);
+
+  // The agent's bar beside the lines its last write covers, kept in step with the buffer (D334).
+  useEffect(() => {
+    const model = editorRef.current?.getModel();
+    const collection = bars.current;
+    if (model === null || model === undefined || collection === null) return;
+    const paint = (): void => {
+      const lines = touch === undefined ? undefined : touchedLines(model.getValue(), touch.edit);
+      collection.set(
+        lines === undefined || touch === undefined
+          ? []
+          : [
+              {
+                range: new monaco.Range(lines.from, 1, lines.to, 1),
+                options: {
+                  isWholeLine: true,
+                  glyphMarginClassName: agentBarClass(touch.agent.color),
+                },
+              },
+            ],
+      );
+    };
+    paint();
+    const subscription = model.onDidChangeContent(paint);
+    return () => {
+      subscription.dispose();
+      collection.clear();
+    };
+  }, [projectId, path, touch]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -113,5 +181,10 @@ export function EditorHost({ projectId, path, initial }: EditorHostProps) {
     useEditorStore.getState().revealDone(projectId);
   }, [reveal, path, projectId]);
 
-  return <div ref={container} className="h-full w-full" data-testid="monaco-host" />;
+  return (
+    <div className="forge-editor h-full w-full">
+      <style>{HOST_CSS}</style>
+      <div ref={container} className="h-full w-full" data-testid="monaco-host" />
+    </div>
+  );
 }

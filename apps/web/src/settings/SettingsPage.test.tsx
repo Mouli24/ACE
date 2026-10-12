@@ -5,8 +5,17 @@ import { http, HttpResponse } from 'msw';
 
 import { backupZip, readBackup } from '../mocks/handlers-round5';
 import { db, installMockServer, renderApp, server } from '../test/app';
+import { THEME_KEY, setThemeMode } from '../theme/mode';
 
 installMockServer();
+
+// D329: the theme is this browser's `ace-theme`; every test starts from the default, light.
+beforeEach(() => {
+  localStorage.removeItem(THEME_KEY);
+  setThemeMode('light');
+  localStorage.removeItem(THEME_KEY);
+});
+afterAll(() => setThemeMode('light'));
 
 /**
  * The download's bytes. Which `Blob` arrives depends on where `fetch` comes from: Node's (CI, Linux)
@@ -113,14 +122,22 @@ describe('FR-SYS-005 Settings screen', () => {
   it('saves the theme, the Docker sandbox mode and the default provider from their selects', async () => {
     const user = userEvent.setup();
     const provider = db.createProvider({ type: 'mock', name: 'Mock' });
+    db.patchSettings({ theme: 'system' });
     renderApp('/settings');
 
+    // D329: the select shows this browser's choice (default Light), not the engine's value.
     const theme = await settled('settings-theme');
-    await waitFor(() => expect(theme).toHaveTextContent('dark'));
+    expect(theme).toHaveTextContent('Light');
     await user.click(theme);
-    await user.click(await screen.findByRole('option', { name: 'light' }));
-    await waitFor(() => expect(db.settings.theme).toBe('light'));
-    expect(theme).toHaveTextContent('light');
+    const options = await screen.findAllByRole('option');
+    // the theme's ✓ column marks the current one
+    expect(options.map((option) => option.textContent)).toEqual(['Dark', '✓Light', 'System']);
+    await user.click(screen.getByRole('option', { name: 'Dark' }));
+    // …applied at once and remembered in the browser, and still patched to the engine.
+    await waitFor(() => expect(document.documentElement).toHaveAttribute('data-theme', 'dark'));
+    expect(localStorage.getItem(THEME_KEY)).toBe('dark');
+    await waitFor(() => expect(db.settings.theme).toBe('dark'));
+    expect(theme).toHaveTextContent('Dark');
     expect(screen.queryByText(/render in a later round/)).not.toBeInTheDocument();
 
     const docker = await settled('settings-docker');
@@ -135,13 +152,16 @@ describe('FR-SYS-005 Settings screen', () => {
     await waitFor(() => expect(db.settings.defaultProviderId).toBe(provider.id));
   });
 
-  it('saves the MCP toggle and says telemetry is off without offering a toggle', async () => {
+  it('saves the MCP switch and says telemetry is off without offering a toggle', async () => {
     const user = userEvent.setup();
     renderApp('/settings');
     const mcp = await settled('settings-mcp');
-    expect(mcp).toHaveAttribute('data-state', 'checked');
+    expect(mcp).toHaveAttribute('role', 'switch');
+    expect(mcp).toHaveAccessibleName('Allow MCP servers');
+    expect(mcp).toHaveAttribute('aria-checked', 'true');
     await user.click(mcp);
     await waitFor(() => expect(db.settings.mcpEnabled).toBe(false));
+    await waitFor(() => expect(mcp).toHaveAttribute('aria-checked', 'false'));
 
     const privacy = screen.getByTestId('settings-privacy');
     expect(privacy).toHaveTextContent('Telemetry is off');

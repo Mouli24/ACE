@@ -61,18 +61,23 @@ test.describe('Settings (FR-SYS-005)', () => {
     expect(settings.searxngUrl).toBeUndefined();
   });
 
-  test('FR-SYS-005: switching the theme to light applies it to the page at once', async ({
+  /*
+   * Light is the default now (D329, `ace-theme` in localStorage), so choosing it would change
+   * nothing: the test picks Dark. The Settings select still patches `Settings.theme`.
+   */
+  test('FR-SYS-005: switching the theme to dark applies it to the page at once', async ({
     page,
   }) => {
     await freshApp(page);
     await openSettings(page);
-    await page.getByTestId('settings-theme').click();
-    await page.getByRole('option', { name: 'light' }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
-    await expect.poll(async () => (await engineSettings(page)).theme).toBe('light');
+    await page.getByTestId('settings-theme').click();
+    await page.getByRole('option', { name: 'Dark' }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await expect.poll(async () => (await engineSettings(page)).theme).toBe('dark');
 
     await page.reload();
-    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   });
 
   test('FR-SYS-005: usable at 380 px with no sideways scroll', async ({ page }) => {

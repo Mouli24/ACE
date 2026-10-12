@@ -46,7 +46,6 @@ export const SHORTCUTS = {
   saveAll: { code: 'KeyS', mod: true, alt: true },
   quickOpen: { code: 'KeyP', mod: true },
   toggleSidebar: { code: 'KeyB', mod: true },
-  togglePanel: { code: 'KeyJ', mod: true },
   closeTab: { code: 'KeyW', alt: true },
 } as const satisfies Record<string, Shortcut>;
 

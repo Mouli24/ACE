@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import { freshApp, nodeCard, openSheet } from './helpers';
+import { clickStartRun, expectRunStatus, inspect, openWorkspaceMenu } from './round3';
 
 // Type-only: brings `window.__aceMock` into scope.
 import type {} from '../src/mocks/browser';
@@ -33,31 +34,24 @@ async function openRunnable(
   return seeded;
 }
 
-/*
- * `exact` matters from round 3: the run bar now also holds Pause · Resume · Stop · Restart, and
- * "Restart" contains "start", so a substring match resolves to two buttons (D-031). The V2
- * button shows "Run"; its accessible name is "Start run" (D259).
- */
-const start = (page: Page) =>
-  page.getByTestId('run-bar').getByRole('button', { name: 'Start run', exact: true });
-
 test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
   test('TC-EXE-007 + TC-EXE-008: streamed text lands in the node’s chat, and the states are distinct', async ({
     page,
   }) => {
     const seeded = await openRunnable(page, 'slow-stream');
-    await start(page).click();
+    await clickStartRun(page);
 
     const card = nodeCard(page, seeded.agentId);
     // The status chip follows the node's own state machine (Arch §19.1).
     await expect(card).toHaveAttribute('data-state', 'RUNNING', { timeout: 10_000 });
     const ring = card.getByTestId('status-chip');
-    await expect(ring).toHaveAttribute('aria-label', 'running');
+    await expect(ring).toHaveAttribute('data-state', 'RUNNING');
+    await expect(ring).toHaveText('Running');
 
     // D285: the card says it is running and never prints the text; the text is read in the node's
-    // chat, which streams it live.
-    await expect(card.getByTestId(`running-note-${seeded.agentId}`)).toBeVisible();
-    await expect(card.getByTestId(`stream-${seeded.agentId}`)).toHaveCount(0);
+    // chat, which streams it live. The note hangs under the card (D332).
+    await expect(page.getByTestId(`running-note-${seeded.agentId}`)).toBeVisible();
+    await expect(page.getByTestId(`stream-${seeded.agentId}`)).toHaveCount(0);
     await page.getByTestId(`chat-mention-${seeded.agentId}`).click();
     const streamed = page.getByTestId('chat-run-live');
     await expect(streamed).toBeVisible();
@@ -68,7 +62,8 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
       .toBeGreaterThan(first.length);
 
     await expect(card).toHaveAttribute('data-state', 'COMPLETED', { timeout: 20_000 });
-    await expect(card.getByTestId('status-chip')).toHaveAttribute('aria-label', 'completed');
+    await expect(ring).toHaveAttribute('data-state', 'COMPLETED');
+    await expect(ring).toHaveText('Done');
     // …and once it settles, the run's result stays in the node's session
     await expect(page.getByTestId('chat-run-badge').first()).toBeVisible({ timeout: 10_000 });
   });
@@ -78,18 +73,19 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
     const agentEdge = page.getByTestId(`edge-${seeded.edgeIds[1]}`);
     await expect(agentEdge).toHaveAttribute('data-transferred', 'false');
 
-    await start(page).click();
+    await clickStartRun(page);
 
     await expect(agentEdge).toHaveAttribute('data-animating', 'true', { timeout: 15_000 });
     await expect(agentEdge.locator('title')).not.toHaveText('no data yet');
 
-    // The class has to name a real animation, and the highlight has to switch itself off again
-    // (D-018: it did neither — the keyframes did not exist and nothing re-rendered the edge).
-    const animation = await agentEdge
-      .locator('.ace-edge-flowing')
-      .first()
+    // The drawn line's class has to name a real animation, and the highlight has to switch itself
+    // off again (D-018: it did neither — the keyframes did not exist and nothing re-rendered the
+    // edge). The theme's line always flows (D332), with its `flow` keyframes.
+    const animation = await page
+      .getByTestId(`edge-line-${seeded.edgeIds[1]}`)
+      .locator('.ace-edge-flow')
       .evaluate((el) => getComputedStyle(el).animationName);
-    expect(animation).toBe('ace-edge-flow');
+    expect(animation).toBe('flow');
 
     await expect(agentEdge).toHaveAttribute('data-animating', 'false', { timeout: 10_000 });
     await expect(agentEdge).toHaveAttribute('data-transferred', 'true');
@@ -99,21 +95,25 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
     page,
   }) => {
     const seeded = await openRunnable(page, 'fallback-used');
-    await start(page).click();
+    await clickStartRun(page);
 
     await expect(page.getByTestId(`used-model-${seeded.agentId}`)).toHaveText(
       /used: mock-text-fallback \(fallback\)/,
       { timeout: 15_000 },
     );
-    await expect(page.getByTestId('run-status')).toHaveAttribute('data-status', 'COMPLETE', {
-      timeout: 15_000,
-    });
+    await expectRunStatus(page, 'COMPLETE', { timeout: 15_000 });
     // the Output card points to where its result is and never prints it (D285)…
     await expect(page.getByTestId(`final-output-${seeded.outputId}`)).toHaveCount(0);
     // …and the agent's chat holds the run's goal and answer
     await page.getByTestId(`chat-mention-${seeded.agentId}`).click();
     await expect(page.getByTestId('chat-run-badge').first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByTestId('run-totals')).toContainText('$');
+    // The footer carries the run's tokens (D330); its cost is on the Run details page.
+    await expect(page.getByTestId('footer-tokens')).toHaveText(
+      /^[\d.]+[kM]? in \/ [\d.]+[kM]? out$/,
+    );
+    const menu = await openWorkspaceMenu(page);
+    await menu.getByTestId('menu-run-details').click();
+    await expect(page.getByTestId('run-detail-totals')).toContainText('$');
   });
 
   test('TC-NODE-009: the provider accent does not change while the state does', async ({
@@ -121,13 +121,24 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
   }) => {
     const seeded = await openRunnable(page, 'slow-stream');
     const card = nodeCard(page, seeded.agentId);
+    // The Stage card's provider look (D332): its provider, its border and its orb.
     const accent = () =>
-      card.evaluate((el) => getComputedStyle(el).getPropertyValue('--accent-color').trim());
+      card.evaluate((el) => {
+        const orb = el.querySelector('[data-testid^="stage-orb-"]');
+        const orbStyle = orb === null ? undefined : getComputedStyle(orb);
+        return [
+          el.getAttribute('data-provider'),
+          getComputedStyle(el).borderTopColor,
+          orbStyle?.backgroundImage,
+          orbStyle?.backgroundColor,
+          orbStyle?.boxShadow,
+        ].join(' | ');
+      });
 
+    await expect(card).not.toHaveAttribute('data-provider', 'none');
     const before = await accent();
-    expect(before).not.toBe('');
 
-    await start(page).click();
+    await clickStartRun(page);
     await expect(card).toHaveAttribute('data-state', 'RUNNING', { timeout: 10_000 });
     expect(await accent()).toBe(before);
 
@@ -139,7 +150,7 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
     page,
   }) => {
     await openRunnable(page, 'preflight-blocked');
-    await start(page).click();
+    await clickStartRun(page);
 
     const panel = page.getByTestId('preflight-issues');
     await expect(panel).toBeVisible({ timeout: 10_000 });
@@ -156,7 +167,7 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
     page,
   }) => {
     const seeded = await openRunnable(page, 'slow-stream');
-    await start(page).click();
+    await clickStartRun(page);
 
     const card = nodeCard(page, seeded.agentId);
     await expect(card).toHaveAttribute('data-state', 'RUNNING', { timeout: 10_000 });
@@ -166,7 +177,7 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
 
     // The run finishes anyway: the SDK reconnects, resumes after its last seq and folds the rest.
     await expect(card).toHaveAttribute('data-state', 'COMPLETED', { timeout: 30_000 });
-    await expect(page.getByTestId('run-status')).toHaveAttribute('data-status', 'COMPLETE');
+    await expectRunStatus(page, 'COMPLETE');
     await expect(page.getByTestId('socket-reconnecting')).toBeHidden();
   });
 
@@ -174,15 +185,10 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
     page,
   }) => {
     const seeded = await openRunnable(page, 'linear-complete');
-    await start(page).click();
-    await expect(page.getByTestId('run-status')).toHaveAttribute('data-status', 'COMPLETE', {
-      timeout: 15_000,
-    });
+    await clickStartRun(page);
+    await expectRunStatus(page, 'COMPLETE', { timeout: 15_000 });
 
-    await nodeCard(page, seeded.agentId).click();
-    await openSheet(page, 'Inspector');
-
-    const inspector = page.getByTestId('inspector');
+    const inspector = await inspect(page, seeded.agentId);
     await expect(inspector.getByTestId('inspector-facts')).toContainText('mock-text');
     await expect(inspector.getByTestId('envelope-trust')).toBeVisible();
     await expect(inspector.getByTestId('prompt-version')).toContainText('version');
@@ -197,10 +203,8 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
     page,
   }) => {
     const seeded = await openRunnable(page, 'linear-complete');
-    await start(page).click();
-    await expect(page.getByTestId('run-status')).toHaveAttribute('data-status', 'COMPLETE', {
-      timeout: 15_000,
-    });
+    await clickStartRun(page);
+    await expectRunStatus(page, 'COMPLETE', { timeout: 15_000 });
 
     await openSheet(page, 'Runs');
     // the run history is a list of cards now, not table rows
@@ -219,12 +223,17 @@ test.describe('Round 2 live run (FR-EXE-001/008/009/015)', () => {
 });
 
 test.describe('Round 2 providers UI in a real browser (FR-PRV-004)', () => {
-  test('TC-PRV-005: a provider.status frame updates the top bar with no reload', async ({
+  test('TC-PRV-005: a provider.status frame updates the Providers page with no reload', async ({
     page,
   }) => {
     const seeded = await openRunnable(page, 'linear-complete');
+    // On desktop the provider status lives on the Providers page (D330), reached from the
+    // workspace menu without a reload.
+    const menu = await openWorkspaceMenu(page);
+    await menu.getByTestId('menu-providers').click();
+    await expect(page).toHaveURL(/\/providers$/);
     const chip = page
-      .getByTestId('provider-status-bar')
+      .getByTestId(`provider-row-${seeded.providerId}`)
       .getByTestId(`provider-status-${seeded.providerId}`);
     await expect(chip).toHaveAttribute('data-status', 'UNKNOWN');
 

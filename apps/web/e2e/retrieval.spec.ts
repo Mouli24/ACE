@@ -1,7 +1,16 @@
 import { expect, test, type Page } from '@playwright/test';
 
-import { freshApp, nodeCard, openSheet, port, serverGraph, settled } from './helpers';
-import { inspect, startRun } from './round3';
+import {
+  closeSettings,
+  freshApp,
+  nodeCard,
+  openSheet,
+  port,
+  serverGraph,
+  settingsDialog,
+  settled,
+} from './helpers';
+import { inspect } from './round3';
 
 /**
  * Round 5 §5 item 3 (FR-RAG-005, FR-RAG-006, FR-RAG-007; TC-RAG-006, TC-RAG-007): attach a knowledge
@@ -69,10 +78,19 @@ async function shownSources(page: Page) {
   return shown;
 }
 
+/** Start a run from the workspace "…" menu (D331: the run bar left the desktop header). */
+async function startRun(page: Page): Promise<void> {
+  await closeSettings(page);
+  await page.getByTestId('workspace-menu').click();
+  await page.getByTestId('menu-start-run').click();
+}
+
 /** Keyboard connect (NFR-USE-02): Enter on an output port arms it, Enter on an input completes. */
 async function keyConnect(page: Page, from: [string, string], to: [string, string]): Promise<void> {
   await port(page, from[0], 'out', from[1]).focus();
   await page.keyboard.press('Enter');
+  // armed once the Canvas has re-rendered with it, which is what the next Enter reads
+  await expect(port(page, from[0], 'out', from[1])).toHaveAttribute('data-armed', 'true');
   await port(page, to[0], 'in', to[1]).focus();
   await page.keyboard.press('Enter');
 }
@@ -97,7 +115,7 @@ test.describe('Retrieval and sources (FR-RAG-005/006/007)', () => {
       })
       .toEqual([seeded.knowledgeBaseId]);
 
-    await startRun(page).click();
+    await startRun(page);
     await expect(nodeCard(page, seeded.agentId)).toHaveAttribute('data-state', 'COMPLETED', {
       timeout: 20_000,
     });
@@ -146,15 +164,15 @@ test.describe('Retrieval and sources (FR-RAG-005/006/007)', () => {
     const retrieval = (await serverGraph(page, seeded.workflowId)).nodes.find(
       (n) => n.kind === 'retrieval',
     )!;
-    // selected, so the sheet's Configure tab shows it
+    // a click on the card selects it and opens its settings (D332)
     await nodeCard(page, retrieval.id).click();
     await expect(nodeCard(page, retrieval.id)).toBeVisible();
     await expect(page.getByTestId(`retrieval-kb-${retrieval.id}`)).toHaveText('no knowledge base');
 
-    // configure: base, k, mode — the new node is selected, so the sheet's Configure tab shows it
+    // configure: base, k, mode — in the node settings modal the click opened
     await openSheet(page, 'Configure');
-    const panel = page.getByRole('complementary', { name: 'Node configuration' });
-    await expect(panel).toContainText('Retrieval node');
+    const panel = settingsDialog(page).getByRole('region', { name: 'Node configuration' });
+    await expect(panel.getByTestId('retrieval-panel')).toBeVisible();
     await panel.getByLabel('Knowledge base').click();
     await page.getByRole('option', { name: 'Team handbook' }).click();
     const k = panel.getByLabel('Results (k)');
@@ -169,7 +187,9 @@ test.describe('Retrieval and sources (FR-RAG-005/006/007)', () => {
       })
       .toEqual({ knowledgeBaseId: seeded.knowledgeBaseId, k: 3, mode: 'hybrid' });
     await expect(page.getByTestId(`retrieval-kb-${retrieval.id}`)).toHaveText('Team handbook');
-    await expect(page.getByTestId(`retrieval-k-${retrieval.id}`)).toHaveText('k 3');
+    await expect(page.getByTestId(`retrieval-k-${retrieval.id}`)).toHaveText('K 3');
+    // the modal covers the Canvas; close it before reaching the ports
+    await closeSettings(page);
 
     // wire it: the question is its query; its json hits go to the Output
     await keyConnect(page, [seeded.inputId, 'text'], [retrieval.id, 'query']);
@@ -178,7 +198,7 @@ test.describe('Retrieval and sources (FR-RAG-005/006/007)', () => {
       .poll(async () => (await serverGraph(page, seeded.workflowId)).edges.length)
       .toBe(4);
 
-    await startRun(page).click();
+    await startRun(page);
     await expect(nodeCard(page, retrieval.id)).toHaveAttribute('data-state', 'COMPLETED', {
       timeout: 20_000,
     });

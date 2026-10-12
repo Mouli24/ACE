@@ -1,13 +1,11 @@
 import type { Id, NodeState } from '@ace/contracts';
 import {
-  Button,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@ace/ui';
-import { MoreHorizontal } from 'lucide-react';
 
 /**
  * The node-level controls (round 3 §5 item 2): Retry · Retry with downstream · Re-run this node ·
@@ -25,6 +23,8 @@ import { MoreHorizontal } from 'lucide-react';
  * them, so what is enabled follows the FRS: a retry needs a node run that failed (FR-ERR-003/004),
  * a re-run needs a node run to take the latest upstream outputs from (FR-CTL-005), and starting
  * from a node needs neither — it starts a new run (FR-EXE-013).
+ *
+ * The trigger is the theme's "…" pill (24px, hairline, soft, 11px) and the items are its menu (D328).
  */
 export interface NodeRunMenuProps {
   nodeId: Id;
@@ -58,14 +58,14 @@ export function NodeRunMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          size="sm"
-          variant="ghost"
+        <button
+          type="button"
           data-testid={`node-actions-${nodeId}`}
           aria-label={`Run actions for ${nodeName}`}
+          className="inline-flex h-[24px] cursor-pointer items-center rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[11px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
         >
-          <MoreHorizontal className="h-4 w-4" aria-hidden />
-        </Button>
+          <span aria-hidden>…</span>
+        </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         <DropdownMenuItem

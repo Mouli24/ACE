@@ -16,52 +16,82 @@ describe('FR-CHAT-001 the six message types read differently on sight', () => {
     }
   });
 
-  it('user messages are right-aligned', () => {
+  it('gives each of the six types its own look (D328 theme tokens)', () => {
+    const looks = new Set<string>();
+    for (const type of MESSAGE_TYPES) {
+      const { unmount } = render(<MessageBubble type={type} content={text} />);
+      looks.add(screen.getByTestId('message-bubble').className);
+      unmount();
+    }
+    expect(looks.size).toBe(MESSAGE_TYPES.length);
+  });
+
+  it('user messages are a surface card on the right', () => {
     const { container } = render(<MessageBubble type="user" content={text} />);
     expect(container.firstElementChild?.className).toContain('justify-end');
+    const bubble = screen.getByTestId('message-bubble');
+    expect(bubble).toHaveClass('bg-[var(--surface)]', 'border-[var(--line)]', 'rounded-[12px]');
   });
 
-  it('agent messages show the node name and carry the provider accent on the edge', () => {
-    render(<MessageBubble type="agent" content={text} nodeName="Writer" provider="anthropic" />);
+  it('agent messages sit on the left under the node name, with the provider dot by default', () => {
+    const { container } = render(
+      <MessageBubble type="agent" content={text} nodeName="Writer" provider="anthropic" />,
+    );
+    expect(container.firstElementChild?.className).toContain('items-start');
     expect(screen.getByText('Writer')).toBeInTheDocument();
+    expect(screen.getByTestId('message-agent-dot').getAttribute('style') ?? '').toContain(
+      '--color-provider-anthropic',
+    );
     const bubble = screen.getByTestId('message-bubble');
-    expect(bubble.getAttribute('style') ?? '').toContain('--color-provider-anthropic');
-    expect(bubble.className).toContain('rounded-[14px_14px_14px_4px]');
-    expect(bubble.className).toContain('text-fg-soft');
+    expect(bubble).toHaveClass('bg-[var(--soft)]', 'rounded-[12px]');
   });
 
-  it('user bubbles use the chat shape', () => {
-    render(<MessageBubble type="user" content={text} />);
-    const bubble = screen.getByTestId('message-bubble');
-    expect(bubble.className).toContain('rounded-[14px_14px_4px_14px]');
-    expect(bubble.className).toContain('border-border-strong');
+  it("an agent's own colour wins over its provider's", () => {
+    render(
+      <MessageBubble
+        type="agent"
+        content={text}
+        nodeName="Writer"
+        provider="anthropic"
+        color="#7a62d6"
+      />,
+    );
+    expect(screen.getByTestId('message-agent-dot')).toHaveStyle({ background: '#7a62d6' });
   });
 
-  it('output is highlighted and labelled as the final output', () => {
+  it('output is the green output card, labelled as the final output', () => {
     render(<MessageBubble type="output" content={text} />);
     const bubble = screen.getByTestId('message-bubble');
-    expect(bubble.className).toContain('border-accent/60');
+    expect(bubble).toHaveClass('border-[rgba(47,158,99,0.35)]');
     expect(screen.getByText(/final output/i)).toBeInTheDocument();
   });
 
   it('event and system are muted lines, system italic, not cards', () => {
     const { rerender } = render(<MessageBubble type="event" content={text} />);
-    expect(screen.getByTestId('message-bubble').className).toContain('text-fg-muted');
+    const event = screen.getByTestId('message-bubble');
+    expect(event).toHaveClass('text-[var(--muted)]');
+    expect(event.className).not.toMatch(/rounded|border/);
     rerender(<MessageBubble type="system" content={text} />);
-    expect(screen.getByTestId('message-bubble').className).toContain('italic');
+    expect(screen.getByTestId('message-bubble')).toHaveClass('italic');
   });
 
   it('error is a red alert card', () => {
     render(<MessageBubble type="error" content={[{ type: 'text', text: 'it broke' }]} />);
     const bubble = screen.getByTestId('message-bubble');
     expect(bubble).toHaveAttribute('role', 'alert');
-    expect(bubble.className).toContain('border-danger/60');
+    expect(bubble).toHaveClass('border-[rgba(201,76,39,0.35)]');
   });
 
   it('renders each part type through PartRenderer, and shows a meta line', () => {
     const content: Part[] = [
       { type: 'text', text: 'see file' },
-      { type: 'file', artifactId: '01ARZ3NDEKTSV4RRFFQ69G5FAV', mime: 'application/zip', name: 'a.zip', size: 4 },
+      {
+        type: 'file',
+        artifactId: '01ARZ3NDEKTSV4RRFFQ69G5FAV',
+        mime: 'application/zip',
+        name: 'a.zip',
+        size: 4,
+      },
     ];
     render(
       <MessageBubble
@@ -71,7 +101,10 @@ describe('FR-CHAT-001 the six message types read differently on sight', () => {
         meta={<span>12:00 · 30 tokens</span>}
       />,
     );
-    expect(screen.getByTestId('file-card')).toHaveAttribute('href', '/c/01ARZ3NDEKTSV4RRFFQ69G5FAV');
+    expect(screen.getByTestId('file-card')).toHaveAttribute(
+      'href',
+      '/c/01ARZ3NDEKTSV4RRFFQ69G5FAV',
+    );
     expect(screen.getByText(/30 tokens/)).toBeInTheDocument();
   });
 });

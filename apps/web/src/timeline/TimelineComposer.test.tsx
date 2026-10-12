@@ -44,6 +44,17 @@ describe('TimelineComposer (FR-CHAT-003)', () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  it('is the theme composer: the ↑ send keeps the name "Send to workflow" (D328)', async () => {
+    const user = userEvent.setup();
+    render(<TimelineComposer onSend={vi.fn()} />);
+    const send = screen.getByRole('button', { name: 'Send to workflow' });
+    expect(send).toBe(screen.getByTestId('timeline-send'));
+    expect(send).toHaveTextContent('↑');
+    expect(send.style.background).toBe('var(--sendOff)');
+    await user.type(screen.getByLabelText('Message to send to the workflow'), 'hi');
+    expect(send.style.background).toBe('rgb(239, 107, 63)');
+  });
+
   it('disables while a send is in flight', () => {
     render(<TimelineComposer onSend={vi.fn()} busy />);
     expect(screen.getByLabelText('Message to send to the workflow')).toBeDisabled();

@@ -58,13 +58,19 @@ export function RunSummary({ nodeRuns, haltReason, budgetHalt }: RunSummaryProps
       data-blocked={counts.BLOCKED}
       className="flex flex-col gap-2"
     >
-      <ul className="flex flex-wrap items-center gap-2">
+      {/* The theme's "live" pill per state: 24px, hairline, mono 10px, a 6px dot (D328). */}
+      <ul className="m-0 flex list-none flex-wrap items-center gap-[6px] p-0">
         {chips.map((chip) => (
           <li
             key={chip.state}
             data-testid={`run-summary-${chip.label}`}
-            className="rounded-chip border border-border bg-card px-2 py-0.5 font-machine text-xs text-fg-muted"
+            className="inline-flex h-[24px] items-center gap-[5px] rounded-full border border-[var(--line)] px-[9px] font-machine text-[10px] text-[var(--muted)]"
           >
+            <span
+              aria-hidden
+              className="h-[6px] w-[6px] shrink-0 rounded-full"
+              style={{ background: `var(--color-status-${chip.state})` }}
+            />
             {chip.count} {chip.label}
           </li>
         ))}

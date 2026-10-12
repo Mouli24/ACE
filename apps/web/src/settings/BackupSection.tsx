@@ -13,6 +13,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
 
 import { api } from '../app/api';
+import { HELP_CLASS } from './SettingFields';
 
 /** `ace-backup-YYYY-MM-DD.zip`, dated in the operator's own day (FR-SYS-012). */
 export function backupFilename(date: Date = new Date()): string {
@@ -42,7 +43,7 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
  * Backup and restore (FR-SYS-012, TC-SYS-014). Export downloads the engine's zip — database copy,
  * artifacts and settings, never a key. Import replaces the current data, so it asks first; the
  * engine backs the current data up before it restores. Afterwards every query is stale, so all of
- * them are invalidated rather than guessing which screens the restore touched.
+ * them are invalidated rather than guessing which screens the restore touched. A theme card (D328).
  */
 export function BackupSection() {
   const queryClient = useQueryClient();
@@ -68,15 +69,18 @@ export function BackupSection() {
   });
 
   return (
-    <section className="flex flex-col gap-3" data-testid="settings-backup">
-      <h2 className="font-human text-sm font-semibold">Backup</h2>
-      <p className="text-xs text-fg-muted">
+    <section
+      className="flex flex-col gap-3 rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4"
+      data-testid="settings-backup"
+    >
+      <h2 className="text-[14px] font-bold">Backup</h2>
+      <p className={HELP_CLASS}>
         A backup holds the database, the artifacts folder and these settings. API keys stay in the
         OS keychain and are never in it.
       </p>
       <div className="flex flex-wrap gap-2">
         <Button
-          variant="outline"
+          variant="secondary"
           data-testid="backup-export"
           disabled={exportBackup.isPending}
           onClick={() => exportBackup.mutate()}
@@ -84,7 +88,7 @@ export function BackupSection() {
           {exportBackup.isPending ? 'Exporting…' : 'Export backup'}
         </Button>
         <Button
-          variant="outline"
+          variant="secondary"
           data-testid="backup-import"
           disabled={importBackup.isPending}
           onClick={() => fileInput.current?.click()}
@@ -111,17 +115,17 @@ export function BackupSection() {
         />
       </div>
       {exportBackup.isError && (
-        <p role="alert" className="text-xs text-danger" data-testid="backup-export-error">
+        <p role="alert" className="text-[12px] text-[#c94c27]" data-testid="backup-export-error">
           Export failed: {messageOf(exportBackup.error)}
         </p>
       )}
       {importBackup.isError && (
-        <p role="alert" className="text-xs text-danger" data-testid="backup-import-error">
+        <p role="alert" className="text-[12px] text-[#c94c27]" data-testid="backup-import-error">
           Import failed: {messageOf(importBackup.error)}
         </p>
       )}
       {restored !== undefined && (
-        <p className="text-xs" data-testid="backup-restored" role="status">
+        <p className="text-[12px]" data-testid="backup-restored" role="status">
           Restored {plural(restored.projects, 'project')}, {plural(restored.runs, 'run')} and{' '}
           {plural(restored.artifacts, 'artifact')}.
         </p>
@@ -143,7 +147,7 @@ export function BackupSection() {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setPending(undefined)}>
+            <Button variant="secondary" onClick={() => setPending(undefined)}>
               Cancel
             </Button>
             <Button

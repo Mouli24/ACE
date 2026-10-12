@@ -8,8 +8,8 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  cn,
 } from '@ace/ui';
-import { Plus, ShieldCheck } from 'lucide-react';
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
@@ -27,6 +27,9 @@ import { useGuardrailPolicies, useSetDefaultGuardrailPolicy } from './hooks';
  * whose value is kept in `?projectId=` — a policy screen stays linkable, and the list below is
  * always the list of one project. A new project already has its default policy, created with it
  * (FR-GRD-018), so the list is never empty for a real project.
+ *
+ * An uncovered screen in the Ace UI theme (D328): the policies are selectable cards like the
+ * theme's connection-type cards (1.5px border, ink when chosen).
  */
 export function GuardrailsPage() {
   const projects = useProjects();
@@ -56,124 +59,146 @@ export function GuardrailsPage() {
   };
 
   return (
-    <main className="mx-auto flex h-full w-full max-w-5xl flex-col gap-6 overflow-y-auto px-4 py-10">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="font-human text-2xl font-semibold">Guardrail policies</h1>
-        <Button disabled={!projectId} onClick={() => setDialog({ kind: 'new' })}>
-          <Plus className="h-4 w-4" /> New policy
-        </Button>
-      </header>
+    <main className="h-full overflow-y-auto">
+      <div className="mx-auto flex w-full max-w-[960px] flex-col gap-6 px-6 py-8">
+        <header className="flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-[20px] font-bold tracking-[-0.01em]">Guardrail policies</h1>
+          <Button disabled={!projectId} onClick={() => setDialog({ kind: 'new' })}>
+            New policy
+          </Button>
+        </header>
 
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="guardrails-project">Project</Label>
-        <Select
-          value={projectId ?? ''}
-          onValueChange={pickProject}
-          disabled={!projects.data?.length}
-        >
-          <SelectTrigger id="guardrails-project" className="w-72" aria-label="Project">
-            <SelectValue placeholder="No projects yet" />
-          </SelectTrigger>
-          <SelectContent>
-            {(projects.data ?? []).map((project) => (
-              <SelectItem key={project.id} value={project.id}>
-                {project.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+        <div className="flex w-full max-w-[320px] flex-col gap-[7px]">
+          <Label htmlFor="guardrails-project">Project</Label>
+          <Select
+            value={projectId ?? ''}
+            onValueChange={pickProject}
+            disabled={!projects.data?.length}
+          >
+            <SelectTrigger id="guardrails-project" aria-label="Project">
+              <SelectValue placeholder="No projects yet" />
+            </SelectTrigger>
+            <SelectContent>
+              {(projects.data ?? []).map((project) => (
+                <SelectItem key={project.id} value={project.id}>
+                  {project.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
 
-      {projects.data?.length === 0 && (
-        <p className="rounded-card border border-dashed border-border p-8 text-center text-fg-muted">
-          No projects yet. A policy belongs to a project, so create one first.
-        </p>
-      )}
+        {projects.data?.length === 0 && (
+          <p className="py-10 text-center text-[13px] text-[var(--muted)]">
+            No projects yet. A policy belongs to a project, so create one first.
+          </p>
+        )}
 
-      {policies.isPending && projectId && <p className="text-fg-muted">Loading policies…</p>}
-      {policies.isError && (
-        <p role="alert" className="text-danger">
-          Could not load policies: {policies.error.message}
-        </p>
-      )}
+        {policies.isPending && projectId && (
+          <p className="text-[13px] text-[var(--muted)]">Loading policies…</p>
+        )}
+        {policies.isError && (
+          <p role="alert" className="text-[12px] text-[#c94c27]">
+            Could not load policies: {policies.error.message}
+          </p>
+        )}
 
-      {items.length > 0 && (
-        <ul data-testid="policy-list" className="flex flex-col gap-2">
-          {items.map((policy) => (
-            <li
-              key={policy.id}
-              data-testid={`policy-row-${policy.id}`}
-              aria-current={policy.id === selected?.id}
-              className={`flex flex-wrap items-center gap-3 rounded-card border bg-panel px-4 py-3 ${
-                policy.id === selected?.id ? 'border-accent' : 'border-border'
-              }`}
+        {items.length > 0 && (
+          <ul data-testid="policy-list" className="flex flex-col gap-2">
+            {items.map((policy) => {
+              const current = policy.id === selected?.id;
+              return (
+                <li
+                  key={policy.id}
+                  data-testid={`policy-row-${policy.id}`}
+                  aria-current={current}
+                  className={cn(
+                    'flex flex-wrap items-center gap-3 rounded-[10px] border-[1.5px] bg-[var(--surface)] p-3',
+                    current ? 'border-[var(--ink)]' : 'border-[var(--line)]',
+                  )}
+                >
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-[10px] rounded-[7px] text-left outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                    onClick={() => setChosenPolicyId(policy.id)}
+                  >
+                    {/* The theme's radio dot: a 15px ring, a 7px ink dot when chosen. */}
+                    <span
+                      aria-hidden
+                      className={cn(
+                        'flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-full border-[1.5px]',
+                        current ? 'border-[var(--ink)]' : 'border-[var(--line)]',
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'h-[7px] w-[7px] rounded-full',
+                          current ? 'bg-[var(--ink)]' : 'bg-transparent',
+                        )}
+                      />
+                    </span>
+                    <span
+                      className="truncate text-[13.5px] font-bold"
+                      data-testid={`policy-name-${policy.id}`}
+                    >
+                      {policy.name}
+                    </span>
+                    <span
+                      className="shrink-0 font-machine text-[10px] text-[var(--muted)]"
+                      data-testid={`policy-version-${policy.id}`}
+                    >
+                      version {policy.version}
+                    </span>
+                  </button>
+
+                  {/* FR-GRD-018: which policy a run uses when a node names none. */}
+                  {policy.isProjectDefault ? (
+                    <Badge variant="accent" data-testid={`policy-default-${policy.id}`}>
+                      default
+                    </Badge>
+                  ) : (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={setDefault.isPending}
+                      onClick={() => setDefault.mutate(policy.id)}
+                    >
+                      Set as project default
+                    </Button>
+                  )}
+
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => setDialog({ kind: 'delete', policy })}
+                  >
+                    Delete
+                  </Button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        {setDefault.error && (
+          <p role="alert" className="text-[12px] text-[#c94c27]">
+            {setDefault.error.message}
+          </p>
+        )}
+
+        {selected && (
+          <div className="flex flex-col gap-4">
+            <h2
+              className="text-[16px] font-semibold tracking-[-0.01em]"
+              data-testid="selected-policy-heading"
             >
-              <button
-                type="button"
-                className="min-w-0 flex-1 text-left"
-                onClick={() => setChosenPolicyId(policy.id)}
-              >
-                <span
-                  className="truncate font-human text-base"
-                  data-testid={`policy-name-${policy.id}`}
-                >
-                  {policy.name}
-                </span>
-                <span
-                  className="ml-2 font-machine text-xs text-fg-muted"
-                  data-testid={`policy-version-${policy.id}`}
-                >
-                  version {policy.version}
-                </span>
-              </button>
-
-              {/* FR-GRD-018: which policy a run uses when a node names none. */}
-              {policy.isProjectDefault ? (
-                <Badge variant="accent" data-testid={`policy-default-${policy.id}`}>
-                  default
-                </Badge>
-              ) : (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={setDefault.isPending}
-                  onClick={() => setDefault.mutate(policy.id)}
-                >
-                  Set as project default
-                </Button>
-              )}
-
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-danger"
-                onClick={() => setDialog({ kind: 'delete', policy })}
-              >
-                Delete
-              </Button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {setDefault.error && (
-        <p role="alert" className="text-sm text-danger">
-          {setDefault.error.message}
-        </p>
-      )}
-
-      {selected && (
-        <div className="flex flex-col gap-6">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-fg-muted" aria-hidden />
-            <h2 className="font-human text-lg font-semibold" data-testid="selected-policy-heading">
               {selected.name} · version {selected.version}
             </h2>
+            <PolicyEditor key={selected.id} policy={selected} />
+            <PolicyTestPanel key={`${selected.id}-test`} policy={selected} />
           </div>
-          <PolicyEditor key={selected.id} policy={selected} />
-          <PolicyTestPanel key={`${selected.id}-test`} policy={selected} />
-        </div>
-      )}
+        )}
+      </div>
 
       {dialog?.kind === 'new' && projectId && (
         <NewPolicyDialog

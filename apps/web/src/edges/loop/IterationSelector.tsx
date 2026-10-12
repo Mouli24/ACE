@@ -44,6 +44,9 @@ function byIteration(a: NodeRun, b: NodeRun): number {
  * fixture. Each row carries the iteration number, the node state and a short preview of that
  * iteration's output — which is what makes two rounds of a review loop tellable apart — and the
  * iteration that ended the loop says why it ended.
+ *
+ * In the theme (D328) the rows are its option cards: radius 10, a hairline, 1.5px `#ef6b3f` on the
+ * chosen one, the state glyph, a mono label and the preview in muted 12px.
  */
 export function IterationSelector({
   runs,
@@ -56,7 +59,7 @@ export function IterationSelector({
 }) {
   if (runs.length === 0) {
     return (
-      <p className="text-xs text-fg-muted" data-testid="iteration-selector-empty">
+      <p className="m-0 text-[12px] text-[var(--muted)]" data-testid="iteration-selector-empty">
         No iterations recorded.
       </p>
     );
@@ -67,10 +70,14 @@ export function IterationSelector({
 
   return (
     <div className="flex flex-col gap-2" data-testid="iteration-selector">
-      <p className="text-xs text-fg-muted">
+      <p className="m-0 font-machine text-[9.5px] font-medium uppercase tracking-[0.1em] text-[var(--muted)]">
         {count} {count === 1 ? 'iteration' : 'iterations'}
       </p>
-      <ul role="radiogroup" aria-label="Iterations" className="flex flex-col gap-1">
+      <ul
+        role="radiogroup"
+        aria-label="Iterations"
+        className="m-0 flex list-none flex-col gap-[6px] p-0"
+      >
         {ordered.map((run) => {
           const selected = run.id === selectedNodeRunId;
           return (
@@ -82,19 +89,25 @@ export function IterationSelector({
                 data-testid={`iteration-option-${run.iteration}${run.attempt > 1 ? `-attempt-${run.attempt}` : ''}`}
                 onClick={() => onSelect(run.id)}
                 className={cn(
-                  'flex w-full flex-col gap-0.5 rounded-card border px-2 py-1.5 text-left',
-                  selected ? 'border-accent bg-card' : 'border-border hover:bg-card',
+                  'flex w-full cursor-pointer flex-col gap-[3px] rounded-[10px] bg-[var(--surface)] px-3 py-[9px] text-left text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]',
+                  selected
+                    ? 'border-[1.5px] border-[#ef6b3f]'
+                    : 'border border-[var(--line)] hover:bg-[var(--hover)]',
                 )}
               >
-                <span className="flex items-center gap-2 font-machine text-xs">
+                <span className="flex items-center gap-2 font-machine text-[11.5px]">
                   <StatusRing state={run.status} />
                   <span>iteration {run.iteration}</span>
-                  {run.attempt > 1 && <span className="text-fg-muted">attempt {run.attempt}</span>}
+                  {run.attempt > 1 && (
+                    <span className="text-[var(--muted)]">attempt {run.attempt}</span>
+                  )}
                   {run.loopStop !== undefined && (
-                    <span className="text-fg-muted">{LOOP_STOP_LABEL[run.loopStop]}</span>
+                    <span className="text-[var(--muted)]">{LOOP_STOP_LABEL[run.loopStop]}</span>
                   )}
                 </span>
-                <span className="truncate text-xs text-fg-muted">{outputPreview(run.output)}</span>
+                <span className="truncate text-[12px] text-[var(--muted)]">
+                  {outputPreview(run.output)}
+                </span>
               </button>
             </li>
           );

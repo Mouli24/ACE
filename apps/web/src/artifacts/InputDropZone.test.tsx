@@ -1,8 +1,10 @@
 import type { Artifact, WorkflowGraphResponse } from '@ace/contracts';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { ReactFlowProvider } from '@xyflow/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { NodeCardView } from '../nodes/NodeCard';
 import { createNode } from '../nodes/factory';
 import { useWorkflowGraph } from '../workflows/hooks';
 import { queryKeys } from '../workflows/query-keys';
@@ -53,15 +55,17 @@ function seed(artifactIds: string[] = []) {
   return node;
 }
 
-/** Feeds the node's live config into the drop zone, as the node card does. */
+/** Feeds the node's live config into the drop zone around the real card, as the Canvas does. */
 function Harness({ nodeId }: { nodeId: string }) {
   const graph = useWorkflowGraph(WF);
   const node = graph.data?.nodes.find((n) => n.id === nodeId);
   if (!node || node.kind !== 'input') return null;
   return (
-    <InputDropZone workflowId={WF} nodeId={nodeId} config={node.config}>
-      <div data-testid="the-card">card</div>
-    </InputDropZone>
+    <ReactFlowProvider>
+      <InputDropZone workflowId={WF} nodeId={nodeId} config={node.config}>
+        <NodeCardView node={node} state="IDLE" selected={false} connectedPortIds={new Set()} />
+      </InputDropZone>
+    </ReactFlowProvider>
   );
 }
 
@@ -99,9 +103,11 @@ describe('InputDropZone (M4 §2 item 1, FR-MM-007)', () => {
 
     await waitFor(() => expect(cachedIds()).toEqual(['art-5']));
     expect(uploadArtifact).toHaveBeenCalledTimes(1);
+    // D332: the count is the card's own meta line, INPUT · 1 FILE
     expect(await screen.findByTestId(`input-attachment-count-${node.id}`)).toHaveTextContent(
-      /1 file attached/i,
+      '1 FILE',
     );
+    expect(screen.getByTestId(`node-meta-${node.id}`)).toHaveTextContent('INPUT · 1 FILE');
   });
 
   it('a file drag shows the "drop to attach" overlay, and leaving clears it', () => {

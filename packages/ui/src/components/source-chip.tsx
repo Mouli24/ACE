@@ -1,5 +1,4 @@
 import type { SearchVia } from '@ace/contracts';
-import { FileText } from 'lucide-react';
 
 import { cn } from '../lib/cn.js';
 
@@ -7,6 +6,9 @@ import { cn } from '../lib/cn.js';
  * One retrieval source behind an answer (FR-RAG-007): where the chunk came from, how well it
  * matched (0..1, two decimals) and, optionally, which index found it (`vector`, `keyword`, `both`).
  * A link when given `href`, a button when given `onOpen`, plain text otherwise.
+ *
+ * In the theme (D328) it is the handle pill — 22px, hairline, radius 999 — with the score in mono
+ * and the index as a mono chip.
  */
 
 export interface SourceChipProps {
@@ -25,25 +27,24 @@ export function formatScore(score: number): string {
 }
 
 const chipClass =
-  'inline-flex max-w-full items-center gap-1.5 rounded-chip border border-border bg-card px-2 py-0.5 text-xs text-fg';
+  'inline-flex h-[22px] max-w-full items-center gap-[6px] rounded-full border border-[var(--line)] bg-[var(--surface)] px-[8px] text-[11.5px] text-[var(--ink)] no-underline';
 const interactiveClass =
-  'hover:border-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';
+  'cursor-pointer outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
 
 export function SourceChip({ source, score, via, onOpen, href, className }: SourceChipProps) {
   const scoreText = score === undefined ? undefined : formatScore(score);
   const label = `Source ${source}${scoreText ? `, score ${scoreText}` : ''}${via ? `, via ${via}` : ''}`;
   const content = (
     <>
-      <FileText aria-hidden className="size-3 shrink-0 text-fg-muted" />
       <span className="truncate">{source}</span>
       {scoreText ? (
-        <span className="font-machine text-[11px] text-fg-muted" data-testid="source-score">
+        <span className="font-machine text-[10.5px] text-[var(--muted)]" data-testid="source-score">
           {scoreText}
         </span>
       ) : null}
       {via ? (
         <span
-          className="rounded-chip border border-border px-1.5 font-machine text-[10px] uppercase text-fg-muted"
+          className="rounded-[4px] bg-[var(--hover)] px-[6px] py-px font-machine text-[8.5px] font-medium uppercase tracking-[0.08em] text-[var(--muted)]"
           data-testid="source-via"
         >
           {via}

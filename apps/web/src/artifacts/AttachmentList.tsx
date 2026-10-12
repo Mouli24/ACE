@@ -1,6 +1,5 @@
 import type { Id } from '@ace/contracts';
 import { formatBytes } from '@ace/ui';
-import { Download, File as FileIcon, X } from 'lucide-react';
 
 import { api } from '../app/api';
 import { useArtifact } from './useArtifact';
@@ -12,6 +11,10 @@ export interface AttachmentListProps {
   'data-testid'?: string;
 }
 
+/** The theme's quiet square glyph button (28px, radius 7). */
+const ROW_BUTTON_CLASS =
+  'grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border-none bg-transparent text-[12px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+
 /** One attached artifact: name, size, type, a download link (FR-MM-009) and a remove control. */
 function AttachmentRow({ id, onRemove }: { id: Id; onRemove?: (id: Id) => void }) {
   const artifact = useArtifact(id);
@@ -19,15 +22,17 @@ function AttachmentRow({ id, onRemove }: { id: Id; onRemove?: (id: Id) => void }
   return (
     <li
       data-testid={`attachment-${id}`}
-      className="flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5"
+      className="flex items-center gap-2 rounded-[9px] border border-[var(--line)] bg-[var(--canvas)] py-1.5 pl-3 pr-1"
     >
-      <FileIcon className="h-3.5 w-3.5 shrink-0 text-fg-muted" aria-hidden />
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-human text-xs text-fg" title={artifact.data?.name}>
+        <span
+          className="block truncate text-[12.5px] text-[var(--ink)]"
+          title={artifact.data?.name}
+        >
           {artifact.data?.name ?? (artifact.isError ? 'unavailable' : 'loading…')}
         </span>
         {artifact.data && (
-          <span className="block font-machine text-[10px] text-fg-muted">
+          <span className="block font-machine text-[10px] text-[var(--muted)]">
             {formatBytes(artifact.data.size)} · {artifact.data.mime}
           </span>
         )}
@@ -38,9 +43,9 @@ function AttachmentRow({ id, onRemove }: { id: Id; onRemove?: (id: Id) => void }
           download={artifact.data.name}
           aria-label={`Download ${artifact.data.name}`}
           data-testid={`attachment-download-${id}`}
-          className="shrink-0 rounded p-1 text-fg-muted hover:text-fg"
+          className={`${ROW_BUTTON_CLASS} no-underline hover:text-[var(--ink)]`}
         >
-          <Download className="h-3.5 w-3.5" aria-hidden />
+          <span aria-hidden>↓</span>
         </a>
       )}
       {onRemove && (
@@ -48,10 +53,10 @@ function AttachmentRow({ id, onRemove }: { id: Id; onRemove?: (id: Id) => void }
           type="button"
           aria-label={`Remove ${artifact.data?.name ?? 'attachment'}`}
           data-testid={`attachment-remove-${id}`}
-          className="shrink-0 rounded p-1 text-fg-muted hover:text-danger"
+          className={`${ROW_BUTTON_CLASS} hover:text-[#c94c27]`}
           onClick={() => onRemove(id)}
         >
-          <X className="h-3.5 w-3.5" aria-hidden />
+          <span aria-hidden>✕</span>
         </button>
       )}
     </li>

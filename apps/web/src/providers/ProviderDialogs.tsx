@@ -33,6 +33,7 @@ import {
 import { useState, type FormEvent } from 'react';
 
 import { CliScanSection } from './CliScanSection';
+import { ProviderMark } from './ProviderMark';
 import { useCreateProvider, useDeleteProvider, useUpdateProvider } from './hooks';
 import {
   cliPermissionHint,
@@ -44,6 +45,12 @@ import {
 
 const concurrencyHint = `${PROVIDER_CONCURRENCY_MIN}–${PROVIDER_CONCURRENCY_MAX} calls in flight (FR-PRV-009)`;
 
+/* The theme's field vocabulary (D328): label over control, 7px apart; 11px muted help under it. */
+const FIELD = 'flex flex-col gap-[7px]';
+const HELP = 'text-[11px] leading-[1.45] text-[var(--muted)]';
+/** A mono value field (key, URL, number), as the theme's base URL and API key inputs. */
+const MONO = 'font-machine text-[12px]';
+
 /** What the engine put in the 409 body when a provider is still referenced (FR-PRV-005). */
 function affectedNodeIds(error: unknown): string[] | undefined {
   if (!AceApiError.is(error) || error.code !== 'provider_in_use') return undefined;
@@ -54,7 +61,7 @@ function affectedNodeIds(error: unknown): string[] | undefined {
 function ErrorLine({ error }: { error: Error | null }) {
   if (!error) return null;
   return (
-    <p role="alert" className="text-sm text-danger">
+    <p role="alert" className="text-[12px] text-[#c94c27]">
       {error.message}
     </p>
   );
@@ -73,7 +80,7 @@ function PermissionField({
   onChange: (next: CliPermission) => void;
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className={FIELD}>
       <Label htmlFor={id}>Permission</Label>
       <Select value={value} onValueChange={(next) => onChange(next as CliPermission)}>
         <SelectTrigger id={id} aria-label="Permission">
@@ -89,7 +96,11 @@ function PermissionField({
       </Select>
       <p
         data-testid="cli-permission-hint"
-        className={value === 'full_auto' ? 'text-xs text-danger' : 'text-xs text-fg-muted'}
+        className={
+          value === 'full_auto'
+            ? 'text-[11px] leading-[1.45] text-[#c94c27]'
+            : 'text-[11px] leading-[1.45] text-[var(--muted)]'
+        }
       >
         {cliPermissionHint(cliType, value)}
       </p>
@@ -171,15 +182,21 @@ export function AddProviderDialog({
 
           <CliScanSection onAdd={addFromScan} />
 
-          <div className="flex flex-col gap-1.5">
+          <div className={FIELD}>
             <Label htmlFor="provider-type">Type</Label>
             <Select value={type} onValueChange={(value) => pickType(value as ProviderType)}>
               <SelectTrigger id="provider-type" aria-label="Type">
-                <SelectValue />
+                {/* The theme's provider dropdown: the orb beside the chosen provider's name. */}
+                <SelectValue>
+                  <span className="flex min-w-0 items-center gap-[9px]">
+                    <ProviderMark type={type} />
+                    <span className="truncate">{PROVIDER_TYPE_LABEL[type]}</span>
+                  </span>
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {PROVIDER_TYPES.map((value) => (
-                  <SelectItem key={value} value={value}>
+                  <SelectItem key={value} value={value} icon={<ProviderMark type={value} />}>
                     {PROVIDER_TYPE_LABEL[value]}
                   </SelectItem>
                 ))}
@@ -187,7 +204,7 @@ export function AddProviderDialog({
             </Select>
           </div>
 
-          <div className="flex flex-col gap-1.5">
+          <div className={FIELD}>
             <Label htmlFor="provider-name">Name</Label>
             <Input
               id="provider-name"
@@ -209,12 +226,12 @@ export function AddProviderDialog({
           )}
 
           {needsKey && (
-            <div className="flex flex-col gap-1.5">
+            <div className={FIELD}>
               <Label htmlFor="provider-key">API key</Label>
               <Input
                 id="provider-key"
                 type="password"
-                className="font-machine"
+                className={MONO}
                 autoComplete="off"
                 value={apiKey}
                 onChange={(event) => setApiKey(event.target.value)}
@@ -225,22 +242,22 @@ export function AddProviderDialog({
 
           {needsBaseUrl && (
             <>
-              <div className="flex flex-col gap-1.5">
+              <div className={FIELD}>
                 <Label htmlFor="provider-base-url">Base URL</Label>
                 <Input
                   id="provider-base-url"
-                  className="font-machine"
+                  className={MONO}
                   value={baseUrl}
                   onChange={(event) => setBaseUrl(event.target.value)}
                   required
                 />
               </div>
-              <div className="flex flex-col gap-1.5">
+              <div className={FIELD}>
                 <Label htmlFor="provider-optional-key">API key (optional)</Label>
                 <Input
                   id="provider-optional-key"
                   type="password"
-                  className="font-machine"
+                  className={MONO}
                   autoComplete="off"
                   value={apiKey}
                   onChange={(event) => setApiKey(event.target.value)}
@@ -249,23 +266,23 @@ export function AddProviderDialog({
             </>
           )}
 
-          <div className="flex flex-col gap-1.5">
+          <div className={FIELD}>
             <Label htmlFor="provider-concurrency">Concurrency</Label>
             <Input
               id="provider-concurrency"
               type="number"
               min={PROVIDER_CONCURRENCY_MIN}
               max={PROVIDER_CONCURRENCY_MAX}
-              className="font-machine"
+              className={MONO}
               value={concurrency}
               onChange={(event) => setConcurrency(event.target.value)}
             />
-            <p className="text-xs text-fg-muted">{concurrencyHint}</p>
+            <p className={HELP}>{concurrencyHint}</p>
           </div>
 
           <ErrorLine error={create.error} />
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={onClose}>
+            <Button type="button" variant="secondary" onClick={onClose}>
               Cancel
             </Button>
             <Button type="submit" disabled={create.isPending}>
@@ -332,7 +349,7 @@ export function EditProviderDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="flex flex-col gap-1.5">
+          <div className={FIELD}>
             <Label htmlFor="edit-provider-name">Name</Label>
             <Input
               id="edit-provider-name"
@@ -354,11 +371,11 @@ export function EditProviderDialog({
           )}
 
           {NEEDS_BASE_URL.has(provider.type) && (
-            <div className="flex flex-col gap-1.5">
+            <div className={FIELD}>
               <Label htmlFor="edit-provider-base-url">Base URL</Label>
               <Input
                 id="edit-provider-base-url"
-                className="font-machine"
+                className={MONO}
                 value={baseUrl}
                 onChange={(event) => setBaseUrl(event.target.value)}
                 required
@@ -367,14 +384,14 @@ export function EditProviderDialog({
           )}
 
           {!isCli && (
-            <div className="flex flex-col gap-1.5">
+            <div className={FIELD}>
               <Label htmlFor="edit-provider-key">
                 {provider.keySet ? 'Rotate API key' : 'API key'}
               </Label>
               <Input
                 id="edit-provider-key"
                 type="password"
-                className="font-machine"
+                className={MONO}
                 autoComplete="off"
                 placeholder={provider.keySet ? 'unchanged' : 'none stored'}
                 value={apiKey}
@@ -383,23 +400,23 @@ export function EditProviderDialog({
             </div>
           )}
 
-          <div className="flex flex-col gap-1.5">
+          <div className={FIELD}>
             <Label htmlFor="edit-provider-concurrency">Concurrency</Label>
             <Input
               id="edit-provider-concurrency"
               type="number"
               min={PROVIDER_CONCURRENCY_MIN}
               max={PROVIDER_CONCURRENCY_MAX}
-              className="font-machine"
+              className={MONO}
               value={concurrency}
               onChange={(event) => setConcurrency(event.target.value)}
             />
-            <p className="text-xs text-fg-muted">{concurrencyHint}</p>
+            <p className={HELP}>{concurrencyHint}</p>
           </div>
 
           <ErrorLine error={update.error} />
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={onClose}>
+            <Button type="button" variant="secondary" onClick={onClose}>
               Cancel
             </Button>
             <Button type="submit" disabled={!name.trim() || update.isPending}>
@@ -442,17 +459,17 @@ export function DeleteProviderDialog({
           <div
             role="alert"
             data-testid="provider-in-use"
-            className="flex flex-col gap-2 rounded-card border border-border bg-card p-3 text-sm"
+            className="flex flex-col gap-2 rounded-[10px] border border-[var(--line)] bg-[var(--soft)] px-3 py-[10px] text-[12px]"
           >
             <p>{remove.error?.message}</p>
             {inUse.length > 0 && (
-              <ul className="flex flex-col gap-1 font-machine text-xs text-fg-muted">
+              <ul className="flex flex-col gap-1 font-machine text-[11px] text-[var(--muted)]">
                 {inUse.map((nodeId) => (
                   <li key={nodeId}>{nodeId}</li>
                 ))}
               </ul>
             )}
-            <p className="text-fg-muted">
+            <p className="text-[var(--muted)]">
               Removing it anyway marks those nodes “provider missing” until another provider is
               chosen.
             </p>
@@ -461,7 +478,7 @@ export function DeleteProviderDialog({
         {inUse === undefined && <ErrorLine error={remove.error} />}
 
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose}>
             Cancel
           </Button>
           <Button

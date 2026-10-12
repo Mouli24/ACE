@@ -1,11 +1,16 @@
 import { Button } from '@ace/ui';
-import { CircleX, TriangleAlert } from 'lucide-react';
 import { useMutation } from '@tanstack/react-query';
 
 import { api } from '../app/api';
 import { useSelectionStore } from '../app/stores/selection';
 
-/** FR-WF-006: run `/validate` and list every issue with severity, message and node reference. */
+/**
+ * FR-WF-006: run `/validate` and list every issue with severity, message and node reference.
+ *
+ * In the theme (D328): Validate is the Close pill; each issue is a 36px row in one surface card,
+ * hairlines between, with its severity as a ✕ (red) or ! (accent) glyph, the code in mono and
+ * "show node" in the link colour.
+ */
 export function ValidationTab({ workflowId }: { workflowId: string }) {
   const validate = useMutation({ mutationFn: () => api().validateWorkflow(workflowId) });
   const select = useSelectionStore((s) => s.setSelection);
@@ -23,39 +28,48 @@ export function ValidationTab({ workflowId }: { workflowId: string }) {
           Validate
         </Button>
         {issues && (
-          <span className="text-xs text-fg-muted">
+          <span className="text-[12px] text-[var(--muted)]">
             {issues.length === 0
               ? 'No issues.'
               : `${issues.length} issue${issues.length === 1 ? '' : 's'}`}
           </span>
         )}
         {validate.error && (
-          <span role="alert" className="text-xs text-danger">
+          <span role="alert" className="text-[12px] text-[#c94c27]">
             {validate.error.message}
           </span>
         )}
       </div>
       {issues && issues.length > 0 && (
-        <ul className="flex flex-col gap-1.5">
+        <ul className="m-0 flex list-none flex-col overflow-hidden rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-0">
           {issues.map((issue, index) => (
             <li
               key={`${issue.code}-${index}`}
-              className="flex items-center gap-2.5 rounded-field border border-border bg-card px-3 py-2.5 text-sm"
+              className="flex min-h-[36px] items-center gap-[10px] border-t border-[var(--line)] px-[14px] py-[7px] text-[12.5px] first:border-t-0"
             >
               {issue.severity === 'error' ? (
-                <CircleX className="h-3.5 w-3.5 shrink-0 text-danger" aria-label="error" />
+                <span
+                  role="img"
+                  aria-label="error"
+                  className="w-[12px] shrink-0 text-center text-[11px] text-[#c94c27]"
+                >
+                  ✕
+                </span>
               ) : (
-                <TriangleAlert
-                  className="h-3.5 w-3.5 shrink-0 text-status-WAITING"
+                <span
+                  role="img"
                   aria-label="warning"
-                />
+                  className="w-[12px] shrink-0 text-center text-[12px] font-bold text-[#e8572e]"
+                >
+                  !
+                </span>
               )}
-              <span className="flex-1">{issue.message}</span>
-              <span className="font-machine text-[9.5px] text-fg-faint">{issue.code}</span>
+              <span className="min-w-0 flex-1">{issue.message}</span>
+              <span className="font-machine text-[9.5px] text-[var(--muted)]">{issue.code}</span>
               {issue.nodeId && (
                 <button
                   type="button"
-                  className="font-machine text-xs text-accent underline-offset-2 hover:underline"
+                  className="shrink-0 cursor-pointer border-none bg-transparent p-0 text-[11.5px] font-semibold text-[#e8623a] outline-none hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
                   onClick={() => select([issue.nodeId as string], [])}
                 >
                   show node

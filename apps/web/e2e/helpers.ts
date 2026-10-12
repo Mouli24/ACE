@@ -20,7 +20,7 @@ export async function freshApp(page: Page): Promise<void> {
     sessionStorage.clear();
   });
   await page.goto('/projects');
-  await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'What would you like to make?' })).toBeVisible();
 }
 
 /** Create a project + workflow with one node per kind through the mock's test hook. */
@@ -95,57 +95,87 @@ export async function settled(
 }
 
 /*
- * POC Theme V2 layout (D259): the palette is the New node dialog, Configure/Inspector/Runs/Memory
- * live in a floating sheet that starts closed, and Chat is a permanent column.
+ * The Ace UI workspace (D330–D333): "Add node" on the Canvas adds an Agent and opens its settings
+ * modal; a click on a card opens that modal (the old sheet's Configure tab); Inspector, Runs and
+ * Memory live in a floating sheet opened from the node menu's "Inspect" or the workspace "…" menu.
  */
 
-/** Add a node from the New node dialog: open it, choose the kind, optionally name it, add it. */
-export async function addFromDialog(page: Page, kind: Kind, name?: string): Promise<void> {
-  await page.getByTestId('new-node-button').click();
-  await page.getByTestId(`palette-${kind}`).click();
-  if (name) await page.getByLabel('Name').fill(name);
-  await page.getByTestId('new-node-add').click();
+/** The node settings modal, when open. */
+export const settingsDialog = (page: Page): Locator =>
+  page.getByRole('dialog').filter({ has: page.getByTestId('config-panel') });
+
+/** Close the node settings modal if it is open (Done commits what is still waiting). */
+export async function closeSettings(page: Page): Promise<void> {
+  const dialog = settingsDialog(page);
+  if (await dialog.isVisible()) await dialog.getByRole('button', { name: 'Done' }).click();
+  await expect(dialog).toHaveCount(0);
 }
 
-/** Show one tab of the workflow sheet, opening the sheet first when it is closed. */
+/**
+ * Add an Agent with the Canvas's "Add node" pill: it lands after the last stage, linked to it, and
+ * its settings open; `name` is typed into Persona name, then the modal is closed. Only Agents can be
+ * added (FR-CAN-002, `PALETTE_NODE_KINDS`).
+ */
+export async function addFromDialog(page: Page, kind: Kind, name?: string): Promise<void> {
+  if (kind !== 'agent') throw new Error(`only an agent can be added from the Canvas, not ${kind}`);
+  await closeSettings(page);
+  await page.getByTestId('new-node-button').click();
+  const dialog = settingsDialog(page);
+  await expect(dialog).toBeVisible();
+  if (name) await dialog.getByLabel('Persona name').fill(name);
+  await closeSettings(page);
+}
+
+/**
+ * Show one tab of the workflow sheet for the selected node. "Configure" is the node settings modal
+ * now: it opens when the card is clicked, so this only checks it is there.
+ */
 export async function openSheet(
   page: Page,
   tab: 'Configure' | 'Inspector' | 'Runs' | 'Memory',
 ): Promise<void> {
-  if (!(await page.getByRole('tab', { name: tab }).isVisible()))
-    await page.getByTestId('sheet-toggle').click();
+  if (tab === 'Configure') {
+    await expect(settingsDialog(page)).toBeVisible();
+    return;
+  }
+  await closeSettings(page);
+  if (!(await page.getByRole('tab', { name: tab }).isVisible())) {
+    await page.getByTestId('workspace-menu').click();
+    await page.getByTestId('menu-sheet').click();
+  }
   await page.getByRole('tab', { name: tab }).click();
 }
 
-/** Close the workflow sheet when it is open (it covers the right of the Canvas and bottom panel). */
+/** Close the workflow sheet when it is open (it covers the right of the Canvas). */
 export async function closeSheet(page: Page): Promise<void> {
-  const close = page.getByRole('button', { name: 'Close panel' });
+  await closeSettings(page);
+  const close = page.getByTestId('workflow-sheet').getByRole('button', { name: 'Close panel' });
   if (await close.isVisible()) await close.click();
   await expect(page.getByTestId('workflow-sheet')).toHaveCount(0);
 }
 
 /**
- * Drag a kind out of the New node dialog onto the Canvas at client coordinates. Dispatched events:
- * the overlay goes `pointer-events: none` once the drag starts, which a mouse-driven `dragTo`
- * cannot get past, and the drop must land on the Canvas underneath.
+ * Drop a node kind onto the Canvas at client coordinates, as a palette drag would carry it. The
+ * New node dialog that was the drag's source is gone (D332); the Canvas still accepts the drop.
  */
 export async function dragKindToCanvas(
   page: Page,
   kind: Kind,
   at: { x: number; y: number },
 ): Promise<void> {
-  await page.getByTestId('new-node-button').click();
-  const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
-  await page.getByTestId(`palette-${kind}`).dispatchEvent('dragstart', { dataTransfer });
+  const dataTransfer = await page.evaluateHandle((k) => {
+    const transfer = new DataTransfer();
+    transfer.setData('application/x-ace-node-kind', k);
+    return transfer;
+  }, kind);
   const canvas = page.getByTestId('canvas');
   await canvas.dispatchEvent('dragover', { dataTransfer, clientX: at.x, clientY: at.y });
   await canvas.dispatchEvent('drop', { dataTransfer, clientX: at.x, clientY: at.y });
-  await page.getByTestId(`palette-${kind}`).dispatchEvent('dragend', { dataTransfer });
 }
 
 /**
- * Select one node and show it on a tab of the sheet. The sheet is closed first: open, it covers the
- * right of the Canvas, and the card may sit under it.
+ * Select one node and show it on a tab: "Configure" opens its settings modal (a click on the card),
+ * the others open the sheet through the node menu's "Inspect" and pick the tab.
  */
 export async function selectInSheet(
   page: Page,
@@ -153,14 +183,20 @@ export async function selectInSheet(
   tab: 'Configure' | 'Inspector' | 'Runs' | 'Memory',
 ): Promise<void> {
   await closeSheet(page);
-  await nodeCard(page, nodeId).click();
-  await openSheet(page, tab);
+  if (tab === 'Configure') {
+    await nodeCard(page, nodeId).click();
+    await expect(settingsDialog(page)).toBeVisible();
+    return;
+  }
+  await nodeCard(page, nodeId).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Inspect' }).click();
+  await page.getByRole('tab', { name: tab }).click();
 }
 
-/** Select one node and open the sheet on its Configure tab. */
+/** Open a node's settings modal and return its configuration region. */
 export async function configureNode(page: Page, nodeId: string): Promise<Locator> {
   await selectInSheet(page, nodeId, 'Configure');
-  const panel = page.getByRole('complementary', { name: 'Node configuration' });
+  const panel = settingsDialog(page).getByRole('region', { name: 'Node configuration' });
   await expect(panel).toBeVisible();
   return panel;
 }
@@ -172,12 +208,11 @@ const overlaps = (
   a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
 /**
- * Zoom out (the zoom pill's "Zoom out") until `target` no longer sits under the minimap in the
- * Canvas's bottom-right corner, so a real mouse press lands on it. At 1280×720 a fitted two-card
- * graph can put the second card's output port there.
+ * Zoom out (the toolbar's "Zoom out") until `target` no longer sits under the minimap in the
+ * Canvas's bottom-right corner, so a real mouse press lands on it.
  */
 export async function clearOfMinimap(page: Page, target: Locator): Promise<void> {
-  const minimap = page.locator('.react-flow__minimap');
+  const minimap = page.getByTestId('canvas-minimap');
   for (let step = 0; step < 6; step += 1) {
     const [box, map] = await Promise.all([target.boundingBox(), minimap.boundingBox()]);
     if (!box || !map || !overlaps(box, map)) return;

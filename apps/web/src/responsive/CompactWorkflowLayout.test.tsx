@@ -56,10 +56,12 @@ describe('FR-MOB-001 / FR-MOB-003 the Canvas screen at phone width', () => {
   it('keeps the desktop editor above 640 px', async () => {
     installMatchMedia(false);
     renderApp(seedWorkflow());
-    // the editor's own chrome: the New node button, the panel toggle and the Chat column
+    // the editor's own chrome: the New node button, the Chat column, and the workspace header's
+    // Split toggle and footer (D330; the panel toggle moved into the workspace menu)
     expect(await screen.findByTestId('new-node-button')).toBeInTheDocument();
-    expect(screen.getByTestId('sheet-toggle')).toBeInTheDocument();
     expect(screen.getByTestId('chat-column')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-toggle')).toBeInTheDocument();
+    expect(screen.getByRole('contentinfo')).toBeInTheDocument();
     expect(screen.queryByTestId('compact-workflow')).not.toBeInTheDocument();
     expect(screen.queryByTestId('readonly-banner')).not.toBeInTheDocument();
     expect(screen.queryByTestId('topbar-menu')).not.toBeInTheDocument();

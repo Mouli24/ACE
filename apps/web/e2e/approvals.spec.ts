@@ -3,12 +3,14 @@ import { expect, test, type Page } from '@playwright/test';
 import { nodeCard } from './helpers';
 import {
   NODE_NAMES,
+  clickStartRun,
+  closeWorkspaceMenu,
   engineNodeRuns,
   engineRun,
+  expectRunStatus,
   inspect,
   openRound3,
-  runStatus,
-  startRun,
+  openWorkspaceMenu,
 } from './round3';
 
 /**
@@ -17,7 +19,8 @@ import {
  * A card is anchored to the node it is about, so these tests run on the real Canvas — which is
  * exactly what `runs/control-wiring.test.tsx` cannot do, because it mocks the Canvas away. What is
  * checked here and not there: the card sitting on its node, the real browser keyboard path, the
- * layout at phone width, and the badge in the top bar.
+ * layout at phone width, and the count of what is waiting in the workspace "…" menu (D331; the
+ * phone header keeps the badge).
  */
 
 /** The card anchored to a node; its own test id carries a node run id a test cannot know. */
@@ -31,12 +34,13 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     const seeded = await openRound3(page, 'chain', 'waiting-approval');
     const [writer, editor] = seeded.agentIds as [string, string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
 
     // The node is WAITING while the card is up, and stays WAITING until the engine hears a decision.
     const card = nodeCard(page, writer);
     await expect(card).toHaveAttribute('data-state', 'WAITING', { timeout: 15_000 });
-    await expect(card.getByTestId('status-chip')).toHaveAttribute('aria-label', 'waiting');
+    await expect(card.getByTestId('status-chip')).toHaveAttribute('data-state', 'WAITING');
+    await expect(card.getByTestId('status-chip')).toHaveText('Waiting');
 
     // Anchored to the node the question is about, and to no other node.
     const approval = approvalOn(page, writer);
@@ -55,8 +59,11 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     await expect(approval.getByTestId('approval-preview')).toContainText('[email redacted]');
     await expect(approval).toHaveAttribute('aria-label', `Approval needed for ${NODE_NAMES.first}`);
 
-    // The top bar counts what is waiting, from the engine's own list rather than the socket's fold.
-    await expect(page.getByTestId('approvals-badge')).toHaveAttribute('data-count', '1');
+    // The workspace menu counts what is waiting, from the engine's own list rather than the
+    // socket's fold.
+    const menu = await openWorkspaceMenu(page);
+    await expect(menu.getByTestId('menu-approvals')).toHaveText('Approvals (1)…');
+    await closeWorkspaceMenu(page);
 
     await approval.getByRole('button', { name: /^Approve/ }).click();
 
@@ -66,7 +73,9 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
      * lives only between the POST and that frame, which the mock engine answers too fast to catch.)
      */
     await expect(page.getByTestId(`node-approval-${writer}`)).toHaveCount(0, { timeout: 15_000 });
-    await expect(page.getByTestId('approvals-badge')).toHaveCount(0);
+    await openWorkspaceMenu(page);
+    await expect(menu.getByTestId('menu-approvals')).toHaveCount(0);
+    await closeWorkspaceMenu(page);
 
     // Approve continues the node it paused, and the run reaches its end.
     await expect(nodeCard(page, writer)).toHaveAttribute('data-state', 'COMPLETED', {
@@ -75,7 +84,7 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     await expect(nodeCard(page, editor)).toHaveAttribute('data-state', 'COMPLETED', {
       timeout: 20_000,
     });
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE');
+    await expectRunStatus(page, 'COMPLETE');
 
     // The decision is on the record, with its time (FR-GRD-013).
     const inspector = await inspect(page, writer);
@@ -91,7 +100,7 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     const seeded = await openRound3(page, 'chain', 'waiting-approval');
     const [writer, editor] = seeded.agentIds as [string, string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
     const approval = approvalOn(page, writer);
     await expect(approval).toBeVisible({ timeout: 15_000 });
 
@@ -107,7 +116,7 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     const guardrail = page.getByTestId(`failure-${writer}`);
     await expect(guardrail).toHaveAttribute('data-reason', 'GUARDRAIL_VIOLATION');
     await expect(guardrail).toHaveText('blocked by a guardrail');
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'HALTED');
+    await expectRunStatus(page, 'HALTED');
     // Nothing downstream is dragged into a failure of its own.
     await expect(nodeCard(page, editor)).not.toHaveAttribute('data-state', 'FAILED');
 
@@ -130,7 +139,7 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
      * equal and this test would fail.
      */
     const contract = await openRound3(page, 'chain', 'contract-violation');
-    await startRun(page).click();
+    await clickStartRun(page);
     const contractNode = page.getByTestId(`failure-${contract.agentIds[0]}`);
     await expect(contractNode).toHaveAttribute('data-reason', 'CONTRACT_VIOLATION', {
       timeout: 15_000,
@@ -145,7 +154,7 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     const seeded = await openRound3(page, 'chain', 'waiting-approval');
     const [writer] = seeded.agentIds as [string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
     await expect(approvalOn(page, writer)).toBeVisible({ timeout: 15_000 });
 
     // `R` rejects the card without a pointer ever touching it.
@@ -156,7 +165,7 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
 
     // And `A` approves the next one.
     const approved = await openRound3(page, 'chain', 'waiting-approval');
-    await startRun(page).click();
+    await clickStartRun(page);
     await expect(approvalOn(page, approved.agentIds[0]!)).toBeVisible({ timeout: 15_000 });
     await page.keyboard.press('a');
     await expect(nodeCard(page, approved.agentIds[0]!)).toHaveAttribute('data-state', 'COMPLETED', {
@@ -167,7 +176,7 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
   test('TC-GRD-013: a letter typed into the note never decides the card', async ({ page }) => {
     const seeded = await openRound3(page, 'chain', 'waiting-approval');
     const [writer] = seeded.agentIds as [string];
-    await startRun(page).click();
+    await clickStartRun(page);
     const approval = approvalOn(page, writer);
     await expect(approval).toBeVisible({ timeout: 15_000 });
 
@@ -181,18 +190,17 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     await expect(nodeCard(page, writer)).toHaveAttribute('data-state', 'WAITING');
   });
 
-  test('FR-GRD-013: the badge lists the pending card and decides it from the top bar', async ({
-    page,
-  }) => {
+  test('FR-GRD-013: the workspace menu lists the pending card and decides it', async ({ page }) => {
     const seeded = await openRound3(page, 'chain', 'waiting-approval');
     const [writer] = seeded.agentIds as [string];
 
-    await startRun(page).click();
-    const badge = page.getByTestId('approvals-badge');
-    await expect(badge).toHaveAttribute('data-count', '1', { timeout: 15_000 });
-    await expect(badge).toHaveAttribute('aria-label', '1 approval waiting');
+    await clickStartRun(page);
+    await expect(approvalOn(page, writer)).toBeVisible({ timeout: 15_000 });
+    const menu = await openWorkspaceMenu(page);
+    const entry = menu.getByTestId('menu-approvals');
+    await expect(entry).toHaveText('Approvals (1)…', { timeout: 15_000 });
 
-    await badge.click();
+    await entry.click();
     const list = page.getByTestId('approvals-list');
     await expect(list).toBeVisible();
     await expect(list).toContainText(NODE_NAMES.first);
@@ -201,7 +209,9 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     await expect(nodeCard(page, writer)).toHaveAttribute('data-state', 'COMPLETED', {
       timeout: 20_000,
     });
-    await expect(page.getByTestId('approvals-badge')).toHaveCount(0);
+    await openWorkspaceMenu(page);
+    await expect(menu.getByTestId('menu-approvals')).toHaveCount(0);
+    await closeWorkspaceMenu(page);
   });
 
   test('FR-GRD-013: the run page shows the pending approval and the decision reaches the engine', async ({
@@ -210,7 +220,7 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     const seeded = await openRound3(page, 'chain', 'waiting-approval');
     const [writer] = seeded.agentIds as [string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
     await expect(approvalOn(page, writer)).toBeVisible({ timeout: 15_000 });
     const run = (await engineRun(page, seeded.workflowId))!;
 
@@ -247,7 +257,7 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     const seeded = await openRound3(page, 'chain', 'waiting-approval');
     const [writer] = seeded.agentIds as [string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
     await expect(approvalOn(page, writer)).toBeVisible({ timeout: 15_000 });
     const run = (await engineRun(page, seeded.workflowId))!;
 
@@ -265,7 +275,7 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     const seeded = await openRound3(page, 'chain', 'waiting-approval');
     const [writer] = seeded.agentIds as [string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
     const approval = approvalOn(page, writer);
     await expect(approval).toBeVisible({ timeout: 15_000 });
 
@@ -295,7 +305,7 @@ test.describe('Approvals (FR-GRD-013, TC-GRD-008/009)', () => {
     const seeded = await openRound3(page, 'chain', 'waiting-approval');
     const [writer] = seeded.agentIds as [string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
     await expect(approvalOn(page, writer)).toBeVisible({ timeout: 15_000 });
     await page.keyboard.press('a');
     await expect(nodeCard(page, writer)).toHaveAttribute('data-state', 'COMPLETED', {

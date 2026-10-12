@@ -9,7 +9,7 @@ import {
 import { Link } from 'react-router-dom';
 
 import { useKnowledgeBases } from '../nodes/retrieval/hooks';
-import { NumberField, SelectField } from './fields';
+import { ERROR_CLASS, FIELD_GRID_CLASS, HELP_CLASS, NumberField, SelectField } from './fields';
 import type { PatchConfig } from './panels';
 import type { NumberRange } from './validation';
 
@@ -50,47 +50,49 @@ export function RetrievalPanel({
     !bases.data.some((base) => base.id === config.knowledgeBaseId);
 
   return (
-    <div className="flex flex-col gap-4" data-testid="retrieval-panel">
-      <SelectField
-        label="Knowledge base"
-        value={config.knowledgeBaseId}
-        options={
-          chosenMissing
-            ? [...options, { value: config.knowledgeBaseId!, label: 'deleted knowledge base' }]
-            : options
-        }
-        placeholder={bases.isPending ? 'Loading…' : 'Choose a knowledge base'}
-        disabled={options.length === 0 && !chosenMissing}
-        onChange={(knowledgeBaseId) => patch({ knowledgeBaseId })}
-        hint="The base this node searches."
-      />
-      {bases.data !== undefined && bases.data.length === 0 && (
-        <p className="text-xs text-fg-muted" data-testid="retrieval-no-bases">
-          No knowledge bases in this project yet.{' '}
-          {projectId !== undefined && (
-            <Link className="text-accent underline" to={`/projects/${projectId}/knowledge`}>
-              Create one
-            </Link>
-          )}
-        </p>
-      )}
-      {chosenMissing && (
-        <p role="alert" className="text-xs text-danger" data-testid="retrieval-kb-missing">
-          The chosen knowledge base no longer exists. Choose another before running.
-        </p>
-      )}
-      <NumberField
-        label="Results (k)"
-        value={config.k}
-        range={RETRIEVAL_K_RANGE}
-        onCommit={(k) => patch({ k })}
-      />
-      <SelectField
-        label="Search mode"
-        value={config.mode ?? DEFAULT_SEARCH_MODE}
-        options={SEARCH_MODES.map((mode) => ({ value: mode, label: MODE_LABEL[mode] }))}
-        onChange={(mode) => patch({ mode })}
-      />
+    <div className="flex min-w-0 flex-col gap-5" data-testid="retrieval-panel">
+      <div className="flex min-w-0 flex-col gap-[7px]">
+        <SelectField
+          label="Knowledge base"
+          value={config.knowledgeBaseId}
+          options={
+            chosenMissing
+              ? [...options, { value: config.knowledgeBaseId!, label: 'deleted knowledge base' }]
+              : options
+          }
+          placeholder={bases.isPending ? 'Loading…' : 'Choose a knowledge base'}
+          disabled={options.length === 0 && !chosenMissing}
+          onChange={(knowledgeBaseId) => patch({ knowledgeBaseId })}
+          hint="The base this node searches."
+        />
+        {bases.data !== undefined && bases.data.length === 0 && (
+          <p className={HELP_CLASS} data-testid="retrieval-no-bases">
+            No knowledge bases in this project yet.{' '}
+            {projectId !== undefined && (
+              <Link to={`/projects/${projectId}/knowledge`}>Create one</Link>
+            )}
+          </p>
+        )}
+        {chosenMissing && (
+          <p role="alert" className={ERROR_CLASS} data-testid="retrieval-kb-missing">
+            The chosen knowledge base no longer exists. Choose another before running.
+          </p>
+        )}
+      </div>
+      <div className={FIELD_GRID_CLASS}>
+        <NumberField
+          label="Results (k)"
+          value={config.k}
+          range={RETRIEVAL_K_RANGE}
+          onCommit={(k) => patch({ k })}
+        />
+        <SelectField
+          label="Search mode"
+          value={config.mode ?? DEFAULT_SEARCH_MODE}
+          options={SEARCH_MODES.map((mode) => ({ value: mode, label: MODE_LABEL[mode] }))}
+          onChange={(mode) => patch({ mode })}
+        />
+      </div>
     </div>
   );
 }

@@ -45,16 +45,20 @@ describe('BottomPanel (theme v2)', () => {
     expect(screen.queryByRole('tabpanel')).not.toBeInTheDocument();
   });
 
-  it('the toggle button flips bottomOpen and a tab click re-opens it', async () => {
+  it('the ✕ ("Close problems & events") closes it and a tab click re-opens it', async () => {
     const user = userEvent.setup();
     renderPanel();
     expect(screen.getByRole('tabpanel')).toBeInTheDocument();
-    await user.click(screen.getByTestId('bottom-toggle'));
+    const close = screen.getByRole('button', { name: 'Close problems & events' });
+    expect(close).toBe(screen.getByTestId('bottom-toggle'));
+    expect(close).toHaveTextContent('✕');
+    await user.click(close);
     expect(usePanelsStore.getState().bottomOpen).toBe(false);
     expect(screen.queryByRole('tabpanel')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Toggle panel' })).toBe(
-      screen.getByTestId('bottom-toggle'),
-    );
+    // nothing left to close, so no close button
+    expect(
+      screen.queryByRole('button', { name: 'Close problems & events' }),
+    ).not.toBeInTheDocument();
     await user.click(screen.getByRole('tab', { name: 'Errors' }));
     expect(usePanelsStore.getState().bottomOpen).toBe(true);
   });
@@ -81,22 +85,20 @@ describe('BottomPanel (theme v2)', () => {
     expect(screen.queryByTestId('bottom-count-errors')).not.toBeInTheDocument();
   });
 
-  it('the toggle sits outside the tablist and reports aria-expanded', async () => {
-    const user = userEvent.setup();
+  it('the close button sits outside the tablist, as the theme 28px ✕', () => {
     renderPanel();
-    const toggle = screen.getByTestId('bottom-toggle');
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const close = screen.getByTestId('bottom-toggle');
+    expect(close).toHaveClass('h-7', 'w-7', 'rounded-[7px]');
     const tablist = screen.getByRole('tablist');
     expect(within(tablist).queryAllByRole('button')).toHaveLength(0);
-    expect(tablist).not.toContainElement(toggle);
-    await user.click(toggle);
-    expect(screen.getByTestId('bottom-toggle')).toHaveAttribute('aria-expanded', 'false');
+    expect(tablist).not.toContainElement(close);
   });
 
-  it('the active tab uses the card look, not the inverted segmented look', () => {
+  it('the tabs are the kit segmented pill (D328), the active one inked', () => {
     renderPanel();
     const active = screen.getByRole('tab', { name: 'Validation' });
-    expect(active.className).toContain('bg-card');
-    expect(active.className).not.toContain('bg-fg');
+    expect(active).toHaveAttribute('data-state', 'active');
+    expect(active.className).toContain('data-[state=active]:bg-[var(--seg)]');
+    expect(screen.getByRole('tablist')).toHaveClass('rounded-full', 'bg-[var(--soft)]');
   });
 });

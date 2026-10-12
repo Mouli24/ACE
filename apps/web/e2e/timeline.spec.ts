@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import { freshApp, serverGraph } from './helpers';
+import { clickStartRun, openBottomTab } from './round3';
 
 // Type-only: brings `window.__aceMock` into scope.
 import type {} from '../src/mocks/browser';
@@ -26,10 +27,8 @@ async function openRunnable(page: Page, scenario: Scenario): Promise<Runnable> {
   return seeded;
 }
 
-const start = (page: Page) =>
-  page.getByTestId('run-bar').getByRole('button', { name: 'Start run', exact: true });
-
-const openTimeline = (page: Page) => page.getByRole('tab', { name: 'Timeline' }).click();
+/** The bottom panel's Timeline tab; the panel opens from the workspace menu (D332). */
+const openTimeline = (page: Page) => openBottomTab(page, 'Timeline');
 
 const timeline = (page: Page) => page.getByTestId('timeline');
 const bubbles = (page: Page) => timeline(page).getByTestId('message-bubble');
@@ -39,7 +38,7 @@ test.describe('Round 4 Timeline (FR-CHAT-001/002/003)', () => {
     page,
   }) => {
     await openRunnable(page, 'timeline-six-types');
-    await start(page).click();
+    await clickStartRun(page);
     await openTimeline(page);
 
     // One bubble per style; the timeline-six-types scenario emits exactly the six of FR-CHAT-001.
@@ -52,7 +51,7 @@ test.describe('Round 4 Timeline (FR-CHAT-001/002/003)', () => {
 
   test('TC-CHAT-002: filtering by node and type shows only matching messages', async ({ page }) => {
     await openRunnable(page, 'timeline-six-types');
-    await start(page).click();
+    await clickStartRun(page);
     await openTimeline(page);
     await expect(bubbles(page)).toHaveCount(6, { timeout: 15_000 });
 
@@ -106,7 +105,7 @@ test.describe('Round 4 Timeline (FR-CHAT-001/002/003)', () => {
 
   test('FR-CHAT-002: the full page keeps its filter in the URL', async ({ page }) => {
     const seeded = await openRunnable(page, 'timeline-six-types');
-    await start(page).click();
+    await clickStartRun(page);
     // Let the run's messages persist before leaving the Canvas.
     await openTimeline(page);
     await expect(bubbles(page)).toHaveCount(6, { timeout: 15_000 });

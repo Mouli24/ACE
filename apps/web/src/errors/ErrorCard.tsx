@@ -1,6 +1,5 @@
 import type { FailureReason, Id, NodeError, NodeState } from '@ace/contracts';
 import { Badge, Button, StatusRing } from '@ace/ui';
-import { RotateCcw } from 'lucide-react';
 
 import { ERROR_KIND_LABEL, NEXT_STEP_BY_ERROR_KIND } from './next-steps';
 
@@ -14,6 +13,10 @@ import { ERROR_KIND_LABEL, NEXT_STEP_BY_ERROR_KIND } from './next-steps';
  * Pure view: the engine owns the retry (`POST /node-runs/:id/retry`), so this component is handed a
  * callback rather than a mutation, and renders identically on the Canvas, in the inspector and in
  * the Errors tab.
+ *
+ * In the theme (D328): a surface card, radius 12, bordered in `#c94c27` at 35%; the state and the
+ * kind as mono chips, the facts in mono 10.5px, the next step as the 11px help line, and Retry as the
+ * Close pill.
  */
 export interface ErrorCardProps {
   nodeId: Id;
@@ -51,66 +54,58 @@ export function ErrorCard({
       data-testid={`error-card-${nodeId}`}
       data-kind={error.kind}
       data-state={state}
-      className="flex flex-col gap-2 rounded-[12px] border bg-card px-3 py-2.5"
-      style={{ borderColor: 'color-mix(in oklab, var(--color-danger) 35%, var(--color-border))' }}
+      className="flex flex-col gap-[10px] rounded-[12px] border border-[rgba(201,76,39,0.35)] bg-[var(--surface)] p-[14px] text-[var(--ink)]"
     >
       <header className="flex flex-wrap items-center gap-2">
+        <span className="min-w-0 truncate text-[13.5px] font-bold">{nodeName}</span>
         <StatusRing state={state} showLabel />
-        <span className="font-human text-[15px] font-semibold">{nodeName}</span>
-        <Badge
-          data-testid={`error-kind-${nodeId}`}
-          className="rounded-chip border-danger/40 px-2 py-[3px] font-machine text-[9px] tracking-[0.08em] text-danger"
-        >
+        <Badge variant="danger" data-testid={`error-kind-${nodeId}`}>
           {error.kind}
         </Badge>
-        <span className="font-machine text-[10px] text-fg-muted">{error.code}</span>
-        {failureReason && (
-          <span className="font-machine text-[10px] text-fg-muted">{failureReason}</span>
-        )}
-        {attempt !== undefined && (
-          <span className="font-machine text-[10px] text-fg-muted">attempt {attempt}</span>
-        )}
-        {provider !== undefined && (
-          <span
-            data-testid={`error-provider-${nodeId}`}
-            className="font-machine text-[10px] text-fg-muted"
-          >
-            provider {provider}
-          </span>
-        )}
       </header>
 
-      <p className="font-human text-sm">
-        <span className="text-fg-muted">{ERROR_KIND_LABEL[error.kind]}: </span>
+      <p className="m-0 flex flex-wrap gap-x-2 font-machine text-[10.5px] text-[var(--muted)]">
+        <span>{error.code}</span>
+        {failureReason && <span>{failureReason}</span>}
+        {attempt !== undefined && <span>attempt {attempt}</span>}
+        {provider !== undefined && (
+          <span data-testid={`error-provider-${nodeId}`}>provider {provider}</span>
+        )}
+      </p>
+
+      <p className="m-0 text-[13px] leading-[1.5]">
+        <span className="text-[var(--muted)]">{ERROR_KIND_LABEL[error.kind]}: </span>
         {error.message}
       </p>
 
       {/* NFR-USE-03: what happened, then what to do about it. */}
       <p
         data-testid={`error-next-step-${nodeId}`}
-        className="font-human text-[13px] leading-[1.45] text-fg-soft"
+        className="m-0 text-[11px] leading-[1.45] text-[var(--muted)]"
       >
         {NEXT_STEP_BY_ERROR_KIND[error.kind]}
       </p>
 
-      <footer className="flex items-center gap-2">
+      <footer className="flex flex-wrap items-center gap-3">
         {onRetry && (
           <Button size="sm" variant="secondary" onClick={onRetry} disabled={retrying}>
-            <RotateCcw className="h-3.5 w-3.5" aria-hidden /> Retry
+            <span aria-hidden>↺</span> Retry
           </Button>
         )}
         {onShowNode && (
           <button
             type="button"
             onClick={onShowNode}
-            className="font-machine text-xs text-accent underline-offset-2 hover:underline"
+            className="cursor-pointer border-none bg-transparent p-0 text-[11.5px] font-semibold text-[#e8623a] outline-none hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
           >
             show node
           </button>
         )}
         {/* `retryable` is about the engine's own retries (FR-ERR-005); a person may always retry. */}
         {!error.retryable && (
-          <span className="font-machine text-[10px] text-fg-muted">not retried automatically</span>
+          <span className="font-machine text-[10.5px] text-[var(--muted)]">
+            not retried automatically
+          </span>
         )}
       </footer>
     </article>

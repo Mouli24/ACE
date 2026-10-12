@@ -1,8 +1,9 @@
-import type { Edge, Node, Port, Provider, ProviderType } from '@ace/contracts';
+import type { DataType, Edge, Node, Port, Provider, ProviderType } from '@ace/contracts';
 
 import { LOOP_EDGE_TYPE, type AceLoopFlowEdge } from '../edges/loop/LoopEdge';
 import type { AceFlowNode } from '../nodes/NodeCard';
 import type { AceFlowEdge } from '../nodes/TypedEdge';
+import { agentsOf } from '../theme/agents';
 
 /** Either kind of edge React Flow is handed: a typed data edge, or the one loop edge (FR-CON-007). */
 export type AceAnyFlowEdge = AceFlowEdge | AceLoopFlowEdge;
@@ -21,6 +22,35 @@ const providerIdOf = (node: Node): string | undefined =>
 const providerTypes = (providers: readonly Provider[]): Map<string, ProviderType> =>
   new Map(providers.map((p) => [p.id, p.type]));
 
+/**
+ * What the cards say about their place in the graph (D332): each Agent/Model node's stage number
+ * (its 1-based place in `agentsOf`), the stages every other node's data edges feed, and the data
+ * types arriving on an Output node.
+ */
+function graphFacts(nodes: readonly Node[], edges: readonly Edge[]) {
+  const stage = new Map(agentsOf(nodes).map((agent) => [agent.nodeId, agent.index + 1]));
+  const outType = new Map<string, DataType>();
+  for (const node of nodes) for (const port of node.outputs) outType.set(port.id, port.dataType);
+  const feeds = new Map<string, Set<number>>();
+  const receives = new Map<string, Set<DataType>>();
+  for (const edge of edges) {
+    if (edge.kind !== 'data') continue;
+    const fed = stage.get(edge.to.nodeId);
+    if (fed !== undefined && !stage.has(edge.from.nodeId)) {
+      const set = feeds.get(edge.from.nodeId) ?? new Set<number>();
+      set.add(fed);
+      feeds.set(edge.from.nodeId, set);
+    }
+    const type = outType.get(edge.from.portId);
+    if (type !== undefined) {
+      const set = receives.get(edge.to.nodeId) ?? new Set<DataType>();
+      set.add(type);
+      receives.set(edge.to.nodeId, set);
+    }
+  }
+  return { stage, feeds, receives };
+}
+
 /** Contract nodes → React Flow nodes. Positions are the contract positions; the engine owns them. */
 export function toFlowNodes(
   nodes: readonly Node[],
@@ -36,13 +66,17 @@ export function toFlowNodes(
     connected.add(edge.from.portId);
     connected.add(edge.to.portId);
   }
-  const typeById = providerTypes(providers);
+  const byId = new Map(providers.map((p) => [p.id, p]));
+  const facts = graphFacts(nodes, edges);
   return nodes.map((node) => {
     const providerId = providerIdOf(node);
-    const provider = providerId === undefined ? undefined : typeById.get(providerId);
+    const record = providerId === undefined ? undefined : byId.get(providerId);
     // FR-PRV-005: the node still names a provider, but the engine no longer has it. Only claimed
     // once the list has actually arrived, or every node would flash the badge on first paint.
-    const providerMissing = providersKnown && providerId !== undefined && provider === undefined;
+    const providerMissing = providersKnown && providerId !== undefined && record === undefined;
+    const stage = facts.stage.get(node.id);
+    const feeds = facts.feeds.get(node.id);
+    const receives = node.kind === 'output' ? facts.receives.get(node.id) : undefined;
     return {
       id: node.id,
       type: 'ace',
@@ -52,8 +86,11 @@ export function toFlowNodes(
         connectedPortIds: connected,
         armedPortId,
         onPortKey,
-        ...(provider === undefined ? {} : { provider }),
+        ...(record === undefined ? {} : { provider: record.type, providerName: record.name }),
         ...(providerMissing ? { providerMissing: true } : {}),
+        ...(stage === undefined ? {} : { stage }),
+        ...(feeds === undefined ? {} : { feeds: [...feeds].sort((a, b) => a - b) }),
+        ...(receives === undefined ? {} : { receives: [...receives] }),
       },
     };
   });

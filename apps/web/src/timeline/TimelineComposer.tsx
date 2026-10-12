@@ -1,5 +1,3 @@
-import { Button, Textarea } from '@ace/ui';
-import { SendHorizonal } from 'lucide-react';
 import { useState, type KeyboardEvent } from 'react';
 
 /**
@@ -10,6 +8,9 @@ import { useState, type KeyboardEvent } from 'react';
  *
  * Enter sends and Shift+Enter makes a newline, so the whole thing is reachable from the keyboard
  * (NFR-USE-03). An empty or whitespace-only message is never sent.
+ *
+ * In the theme (D328) it is Domain's composer: a surface card, radius 14, a borderless 14px / 1.5
+ * box, and the 36px ↑ send button — accent with text, `--sendOff` without.
  */
 
 export interface TimelineComposerProps {
@@ -40,26 +41,35 @@ export function TimelineComposer({ onSend, busy = false, placeholder }: Timeline
   return (
     <form
       data-testid="timeline-composer"
-      className="flex items-end gap-2 border-t border-border p-3"
+      className="border-t border-[var(--line)] p-3"
       onSubmit={(event) => {
         event.preventDefault();
         send();
       }}
     >
-      <Textarea
-        aria-label="Message to send to the workflow"
-        placeholder={placeholder ?? 'Send a message to the workflow…'}
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        onKeyDown={onKeyDown}
-        rows={1}
-        disabled={busy}
-        className="max-h-40 min-h-[2.5rem] flex-1 resize-y"
-      />
-      <Button type="submit" disabled={!canSend} data-testid="timeline-send">
-        <SendHorizonal className="h-4 w-4" aria-hidden />
-        Send to workflow
-      </Button>
+      <div className="flex items-end gap-2 rounded-[14px] border border-[var(--line)] bg-[var(--surface)] py-[10px] pl-4 pr-[10px] focus-within:border-[#ef6b3f]">
+        <textarea
+          aria-label="Message to send to the workflow"
+          placeholder={placeholder ?? 'Send a message to the workflow…'}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={onKeyDown}
+          rows={1}
+          disabled={busy}
+          className="max-h-40 min-h-[36px] flex-1 resize-none border-none bg-transparent py-[7px] font-human text-[14px] leading-[1.5] text-[var(--ink)] outline-none placeholder:text-[var(--muted)] disabled:opacity-50"
+        />
+        <button
+          type="submit"
+          disabled={!canSend}
+          data-testid="timeline-send"
+          aria-label="Send to workflow"
+          title="Send to workflow"
+          className="h-9 w-9 shrink-0 cursor-pointer rounded-[9px] border-none text-[16px] font-bold text-[#fff] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-default"
+          style={{ background: canSend ? '#ef6b3f' : 'var(--sendOff)' }}
+        >
+          <span aria-hidden>↑</span>
+        </button>
+      </div>
     </form>
   );
 }

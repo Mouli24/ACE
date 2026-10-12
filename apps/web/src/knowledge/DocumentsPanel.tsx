@@ -1,7 +1,6 @@
 import { isKbDocumentSettled, type Id, type KbDocument } from '@ace/contracts';
 import type { IngestProgressView } from '@ace/sdk';
-import { Badge, Button, ProgressBar, formatBytes } from '@ace/ui';
-import { RefreshCw, Trash2 } from 'lucide-react';
+import { Badge, Button, DIALOG_CLOSE_CLASS, ProgressBar, cn, formatBytes } from '@ace/ui';
 import { useEffect, useRef, useState } from 'react';
 
 import { AttachmentPicker } from '../artifacts';
@@ -23,6 +22,7 @@ const STATUS_VARIANT = {
  * A base's documents (FR-RAG-002/003/009): upload (the round 4 uploader, many files at once), one
  * row per document with its type, size, a status chip and a progress bar driven live by `kb.ingest`,
  * a failure's reason inline, its chunk count, delete (confirmed) and a reindex of the whole base.
+ * A theme card; each document an inner box (D328).
  */
 export function DocumentsPanel({
   kbId,
@@ -48,9 +48,12 @@ export function DocumentsPanel({
   const docs = documents.data ?? [];
 
   return (
-    <section aria-labelledby="kb-documents-heading" className="flex min-w-0 flex-col gap-3">
+    <section
+      aria-labelledby="kb-documents-heading"
+      className="flex min-w-0 flex-col gap-3 rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4"
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 id="kb-documents-heading" className="font-human text-lg font-semibold">
+        <h2 id="kb-documents-heading" className="text-[14px] font-bold">
           Documents
         </h2>
         <Button
@@ -60,7 +63,7 @@ export function DocumentsPanel({
           onClick={() => reindex.mutate()}
           data-testid="kb-reindex"
         >
-          <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Reindex
+          <span aria-hidden>↺</span> Reindex
         </Button>
       </div>
 
@@ -70,24 +73,24 @@ export function DocumentsPanel({
         onUploaded={(artifact) => add.mutate(artifact.id)}
       />
       {add.error && (
-        <p role="alert" className="text-sm text-danger">
+        <p role="alert" className="text-[12px] text-[#c94c27]">
           Could not add the document: {add.error.message}
         </p>
       )}
       {reindex.error && (
-        <p role="alert" className="text-sm text-danger">
+        <p role="alert" className="text-[12px] text-[#c94c27]">
           Could not reindex: {reindex.error.message}
         </p>
       )}
 
-      {documents.isPending && <p className="text-fg-muted">Loading documents…</p>}
+      {documents.isPending && <p className="text-[13px] text-[var(--muted)]">Loading documents…</p>}
       {documents.isError && (
-        <p role="alert" className="text-danger">
+        <p role="alert" className="text-[12px] text-[#c94c27]">
           Could not load documents: {documents.error.message}
         </p>
       )}
       {documents.isSuccess && docs.length === 0 && (
-        <p className="rounded-card border border-dashed border-border p-6 text-center text-sm text-fg-muted">
+        <p className="py-6 text-center text-[13px] text-[var(--muted)]">
           No documents yet. Upload some to start ingestion.
         </p>
       )}
@@ -105,15 +108,21 @@ export function DocumentsPanel({
                 data-testid={`kb-doc-${doc.id}`}
                 data-focused={doc.id === focusDocumentId ? 'true' : undefined}
                 aria-current={doc.id === focusDocumentId ? 'true' : undefined}
-                className={`flex min-w-0 flex-col gap-2 rounded-card border bg-panel px-3 py-2 ${
-                  doc.id === focusDocumentId ? 'border-accent ring-1 ring-accent' : 'border-border'
-                }`}
+                className={cn(
+                  'flex min-w-0 flex-col gap-2 rounded-[10px] border bg-[var(--soft)] px-[10px] py-2',
+                  doc.id === focusDocumentId
+                    ? 'border-[#ef6b3f] shadow-[0_0_0_1px_#ef6b3f]'
+                    : 'border-[var(--line)]',
+                )}
               >
                 <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-                  <span className="min-w-0 flex-1 truncate font-human text-sm" title={doc.name}>
+                  <span
+                    className="min-w-0 flex-1 truncate text-[12.5px] font-semibold"
+                    title={doc.name}
+                  >
                     {doc.name}
                   </span>
-                  <span className="font-machine text-[11px] text-fg-muted">
+                  <span className="font-machine text-[10px] text-[var(--muted)]">
                     {documentTypeLabel(doc.name, doc.mime)} · {formatBytes(doc.size)}
                   </span>
                   <Badge
@@ -129,20 +138,19 @@ export function DocumentsPanel({
                     {doc.status}
                   </Badge>
                   <span
-                    className="font-machine text-[11px] text-fg-muted"
+                    className="font-machine text-[10px] text-[var(--muted)]"
                     data-testid={`kb-doc-chunks-${doc.id}`}
                   >
                     {doc.chunkCount} {doc.chunkCount === 1 ? 'chunk' : 'chunks'}
                   </span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
+                  <button
+                    type="button"
+                    className={DIALOG_CLOSE_CLASS}
                     aria-label={`Delete ${doc.name}`}
                     onClick={() => setDeleting(doc)}
                   >
-                    <Trash2 className="h-3.5 w-3.5" aria-hidden />
-                  </Button>
+                    <span aria-hidden>✕</span>
+                  </button>
                 </div>
                 {!settled && (
                   <ProgressBar
@@ -155,7 +163,7 @@ export function DocumentsPanel({
                 {doc.status === 'failed' && (
                   <p
                     role="alert"
-                    className="text-xs text-danger"
+                    className="text-[11px] leading-[1.45] text-[#c94c27]"
                     data-testid={`kb-doc-error-${doc.id}`}
                   >
                     {doc.error ?? live?.error ?? 'Ingestion failed.'}

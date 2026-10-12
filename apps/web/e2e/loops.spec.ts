@@ -1,16 +1,43 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
-import { dragConnect, nodeCard, openSheet, port, serverGraph } from './helpers';
+import { closeSettings, dragConnect, nodeCard, port, serverGraph, settingsDialog } from './helpers';
 import {
   NODE_NAMES,
+  clickStartRun,
   engineEdges,
   engineNodeRuns,
   engineRun,
+  expectRunStatus,
   inspect,
   openRound3,
-  runStatus,
-  startRun,
 } from './round3';
+
+/**
+ * Right-click an edge on its hit band (React Flow's invisible path; what is drawn of an edge sits
+ * above the nodes and takes no pointer, D332). The theme's curve is point-symmetric about its
+ * midpoint, so the middle of its box is on the curve; a level edge has a box 0 px tall, which
+ * Playwright's actionability check reads as hidden, so the pointer goes there directly.
+ */
+async function rightClickEdge(page: Page, edge: Locator): Promise<void> {
+  await expect(edge, 'React Flow drew the edge').toBeAttached();
+  const box = await edge.boundingBox();
+  if (!box) throw new Error('the edge has no box');
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: 'right' });
+}
+
+/**
+ * A loop edge's settings: the edge menu's "Loop settings" opens them in the node settings modal
+ * (D333), where the sheet's Configure tab used to show them for a selected edge.
+ */
+async function openLoopSettings(page: Page, loopEdgeId: string): Promise<Locator> {
+  await rightClickEdge(page, page.getByTestId(`loop-edge-${loopEdgeId}`));
+  await page
+    .getByRole('menu', { name: 'Connection actions' })
+    .getByRole('menuitem', { name: 'Loop settings' })
+    .click();
+  await expect(settingsDialog(page)).toBeVisible();
+  return page.getByTestId('loop-edge-editor');
+}
 
 /**
  * Loop edges, iterations and the Merge node on the real Canvas (round 3 §5 items 8, 9, §7.1):
@@ -34,16 +61,15 @@ test.describe('Loop edges (FR-CON-007, TC-CON-007)', () => {
     await expect(edge.locator('title')).toHaveText(
       'Loops at most 3× · exits when verdict = approved · at the maximum: continue',
     );
-    const dash = await edge
-      .locator('path')
-      .first()
+    // what is drawn of an edge is the Canvas's edge layer above the nodes (D332): its line is dashed
+    const dash = await page
+      .getByTestId(`edge-line-${loopEdgeId}`)
+      .locator('path.ace-edge-flow')
       .evaluate((el) => getComputedStyle(el).strokeDasharray);
     expect(dash).not.toBe('none');
 
-    // Selecting it puts its settings on the sheet's Configure tab.
-    await edge.locator('path').first().click({ force: true });
-    await openSheet(page, 'Configure');
-    const editor = page.getByTestId('loop-edge-editor');
+    // Its menu's "Loop settings" opens its settings (the modal that replaced the Configure tab).
+    const editor = await openLoopSettings(page, loopEdgeId);
     await expect(editor).toBeVisible();
     await expect(editor).toContainText(`${NODE_NAMES.reviewer} sends its output back to`);
 
@@ -99,7 +125,10 @@ test.describe('Loop edges (FR-CON-007, TC-CON-007)', () => {
 
     // And it survives a reload: it is the engine's graph now, not a draft (BR-01).
     await page.reload();
-    await expect(page.getByTestId(`loop-edge-${loopEdgeId}`)).toBeVisible();
+    // React Flow's edge is an invisible hit band — 0 px tall when the two cards are level, which
+    // Playwright reads as hidden — so it must be there, and the drawn chip must show (D332)
+    await expect(page.getByTestId(`loop-edge-${loopEdgeId}`)).toBeAttached();
+    await expect(page.getByTestId(`loop-edge-label-${loopEdgeId}`)).toContainText('loop · max 3');
     expect((await savedLoop())?.maxIterations).toBe(3);
   });
 
@@ -108,20 +137,15 @@ test.describe('Loop edges (FR-CON-007, TC-CON-007)', () => {
   }) => {
     const seeded = await openRound3(page, 'loop', 'linear-complete');
     const loopEdgeId = seeded.loopEdgeId!;
-    await page
-      .getByTestId(`loop-edge-${loopEdgeId}`)
-      .locator('path')
-      .first()
-      .click({ force: true });
-    await openSheet(page, 'Configure');
-    const editor = page.getByTestId('loop-edge-editor');
+    const editor = await openLoopSettings(page, loopEdgeId);
     await expect(editor).toBeVisible();
 
     const onMax = editor.getByLabel('At the maximum');
     await onMax.click();
+    // (the chosen option carries the kit Select's ✓)
     await expect(page.getByRole('option')).toHaveText([
-      'continue with the last output',
-      'fail the node',
+      /^✓?continue with the last output$/,
+      /^✓?fail the node$/,
     ]);
     await page.getByRole('option', { name: 'fail the node' }).click();
     await expect
@@ -133,7 +157,7 @@ test.describe('Loop edges (FR-CON-007, TC-CON-007)', () => {
       })
       .toBe('fail');
 
-    await editor.getByRole('button', { name: 'Delete loop edge' }).click();
+    await editor.getByRole('button', { name: 'Remove loop edge' }).click();
     await expect
       .poll(async () =>
         (await engineEdges(page, seeded.workflowId)).some((each) => each.kind === 'loop'),
@@ -197,11 +221,7 @@ test.describe('Loop edges (FR-CON-007, TC-CON-007)', () => {
     const forward = (await engineEdges(page, seeded.workflowId)).find(
       (edge) => edge.from === writer && edge.to === reviewer,
     )!;
-    await page
-      .getByTestId(`edge-${forward.id}`)
-      .locator('path')
-      .first()
-      .click({ force: true, button: 'right' });
+    await rightClickEdge(page, page.getByTestId(`edge-${forward.id}`));
     const menu = page.getByRole('menu');
     await expect(menu).toBeVisible();
     const item = menu.getByRole('menuitem', { name: 'Make loop edge' });
@@ -220,8 +240,9 @@ test.describe('Loop edges (FR-CON-007, TC-CON-007)', () => {
     const [writer] = seeded.agentIds as [string];
     const loopEdgeId = seeded.loopEdgeId!;
 
-    await startRun(page).click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE', { timeout: 30_000 });
+    // the workspace menu's "Start run" (the desktop run bar is gone, D331); the footer has the state
+    await clickStartRun(page);
+    await expectRunStatus(page, 'COMPLETE', { timeout: 30_000 });
 
     // The engine recorded three iterations of the loop body.
     const run = (await engineRun(page, seeded.workflowId))!;
@@ -281,8 +302,9 @@ test.describe('Merge node (FR-PAR-002)', () => {
     const seeded = await openRound3(page, 'merge', 'merge-any');
     const mergeId = seeded.mergeId!;
 
+    // a click on the card opens its settings (D332, D333)
     await nodeCard(page, mergeId).click();
-    await openSheet(page, 'Configure');
+    await expect(settingsDialog(page)).toBeVisible();
     const panel = page.getByTestId('config-panel');
     const mode = panel.getByLabel('Mode');
     await expect(mode).toBeVisible();
@@ -290,7 +312,8 @@ test.describe('Merge node (FR-PAR-002)', () => {
 
     // Both modes the contract knows, and no third one.
     await mode.click();
-    await expect(page.getByRole('option')).toHaveText(['all', 'any']);
+    // (the chosen option carries the kit Select's ✓)
+    await expect(page.getByRole('option')).toHaveText([/^✓?all$/, /^✓?any$/]);
     await page.getByRole('option', { name: 'all' }).click();
     await expect
       .poll(async () => {
@@ -313,10 +336,14 @@ test.describe('Merge node (FR-PAR-002)', () => {
     await expect(slots.getByTestId('merge-slot-in_json')).toContainText(NODE_NAMES.checker);
     await expect(slots.getByTestId('merge-slot-in')).toHaveAttribute('data-arrival', 'waiting');
 
-    // During a run the slots say which branch arrived, and in which position.
-    await startRun(page).click();
-    await expect(runStatus(page)).toHaveAttribute('data-status', 'COMPLETE', { timeout: 30_000 });
+    // During a run the slots say which branch arrived, and in which position. The settings modal
+    // covers the workspace menu, so the run starts with it closed and the slots are read on reopening.
+    await closeSettings(page);
+    await clickStartRun(page);
+    await expectRunStatus(page, 'COMPLETE', { timeout: 30_000 });
     await expect(nodeCard(page, mergeId)).toHaveAttribute('data-state', 'COMPLETED');
+    await nodeCard(page, mergeId).click();
+    await expect(slots).toBeVisible();
     await expect
       .poll(async () => slots.getByTestId('merge-slot-in').getAttribute('data-arrival'))
       .toBe('1');

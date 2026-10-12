@@ -1,265 +1,355 @@
 /*
- * ACE Tailwind v4 theme — the "preset" (Arch §10.1). Values mirror src/tokens.ts.
+ * ACE Tailwind v4 theme — the "preset" (Arch §10.1), in the Ace UI theme (D328).
  * Consumers: `@import "tailwindcss"; @import "@ace/ui/theme.css";`
+ *
+ * Two layers:
+ *  1. The theme's own variables, verbatim from `Ace Canvas.dc.html` (the workspace, on :root) and
+ *     `Ace Home.dc.html` (scoped to `[data-surface='home']`), light by default and dark under
+ *     `data-theme="dark"`. Themed components read these directly: `bg-[var(--surface)]`.
+ *  2. The kit's semantic slots (`--color-card`, `--color-fg-muted`, …) as Tailwind `@theme`
+ *     colours pointing at layer 1, so every `bg-card` / `text-fg-muted` follows the theme and the
+ *     surface it sits in. Values mirror src/tokens.ts.
  *
  * `static`: emit every variable, used by a utility class or not. The provider, status and
  * provider-status colours are read as `var(--color-provider-${type})` built at runtime, which
- * Tailwind's scanner cannot see — without `static` it drops the ones no class names (in Night,
- * a mock or Ollama card lost its fill, border and glow).
+ * Tailwind's scanner cannot see.
  */
 @theme static {
-  --color-canvas: #0a0a0b;
-  --color-canvas-dot: #1f1f23;
-  --color-panel: #0e0e10;
-  --color-card: #111113;
-  --color-sunken: #08080a;
-  --color-border: #232327;
-  --color-border-strong: #34343a;
-  --color-fg: #f6f5f2;
-  --color-fg-soft: #b8b5ae;
-  --color-fg-muted: #8f8c95;
-  --color-fg-faint: #7d7c82;
-  --color-accent: #f6f5f2;
-  --color-accent-fg: #0a0a0b;
-  --color-danger: #f0563f;
-  --color-selection: #c4b5fd;
+  --color-canvas: var(--canvas);
+  --color-canvas-dot: var(--dot);
+  --color-panel: var(--panel);
+  --color-card: var(--surface);
+  --color-sunken: var(--canvas);
+  --color-border: var(--line);
+  --color-border-strong: var(--iconLine);
+  --color-fg: var(--ink);
+  --color-fg-soft: var(--muted);
+  --color-fg-muted: var(--muted);
+  --color-fg-faint: var(--muted);
+  --color-accent: var(--ink);
+  --color-accent-fg: var(--canvas);
+  --color-danger: #c94c27;
+  --color-selection: #ef6b3f;
 
-  --color-provider-anthropic: #e8734a;
-  --color-provider-google: #ec4899;
-  --color-provider-openai: #2dd4bf;
-  --color-provider-openai_compatible: #a78bfa;
-  --color-provider-ollama: #e8e8ea;
-  --color-provider-mock: #9a99a3;
-  --color-provider-claude_code: #f2a37f;
-  --color-provider-codex_cli: #7dd3fc;
-  --color-provider-gemini_cli: #f9a8d4;
+  --color-provider-anthropic: #c2603f;
+  --color-provider-google: #1d4fe0;
+  --color-provider-openai: #0a8048;
+  --color-provider-openai_compatible: #1f1d1b;
+  --color-provider-ollama: #1f1d1b;
+  --color-provider-mock: #1f1d1b;
+  --color-provider-claude_code: #c2603f;
+  --color-provider-codex_cli: #0a8048;
+  --color-provider-gemini_cli: #1d4fe0;
 
-  --color-status-IDLE: #7c7c84;
-  --color-status-READY: #93a8ff;
-  --color-status-RUNNING: #5cc8ff;
-  --color-status-WAITING: #f5c542;
-  --color-status-COMPLETED: #34d399;
-  --color-status-PAUSED: #c8b56a;
-  --color-status-STOPPED: #b8b5ae;
-  --color-status-BLOCKED: #f59e0b;
-  --color-status-FAILED: #f0563f;
+  --color-status-IDLE: #6f6a65;
+  --color-status-READY: #1f97a3;
+  --color-status-RUNNING: #e8572e;
+  --color-status-WAITING: #7a62d6;
+  --color-status-COMPLETED: #2f9e63;
+  --color-status-PAUSED: #6f6a65;
+  --color-status-STOPPED: #6f6a65;
+  --color-status-BLOCKED: #c94c27;
+  --color-status-FAILED: #c94c27;
 
-  --color-provider-status-UNKNOWN: #8f8c95;
-  --color-provider-status-CHECKING: #93a8ff;
-  --color-provider-status-CONNECTED: #34d399;
-  --color-provider-status-AUTH_FAILED: #f0563f;
-  --color-provider-status-UNREACHABLE: #f59e0b;
-  --color-provider-status-RATE_LIMITED: #f5c542;
+  --color-provider-status-UNKNOWN: #6f6a65;
+  --color-provider-status-CHECKING: #1f97a3;
+  --color-provider-status-CONNECTED: #2f9e63;
+  --color-provider-status-AUTH_FAILED: #c94c27;
+  --color-provider-status-UNREACHABLE: #e8572e;
+  --color-provider-status-RATE_LIMITED: #7a62d6;
 
-  --font-human: 'Newsreader Variable', 'Newsreader', 'Iowan Old Style', Georgia, serif;
-  --font-machine: 'JetBrains Mono Variable', 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  --font-human: 'Plus Jakarta Sans', system-ui, sans-serif;
+  --font-machine: 'JetBrains Mono', monospace;
 
-  --radius-card: 14px;
-  --radius-field: 10px;
+  --radius-card: 12px;
+  --radius-field: 9px;
   --radius-chip: 999px;
 }
 
-/*
- * FR-SYS-005, D241: dark is the default (`:root`, or `data-theme="dark"`); `applyTheme()` from
- * @ace/ui sets `data-theme` on <html>. The light set below overrides every semantic colour token —
- * it sits outside `@theme`, so Tailwind's utilities (which read `var(--color-*)`) follow it.
- * Values mirror `tokens.color.light` / `CHART_SERIES_COLORS` in src/tokens.ts.
- */
-:root,
-:root[data-theme='dark'] {
-  color-scheme: dark;
-  --color-minimap-mask: rgba(10, 10, 11, 0.7);
-  --ace-glow-k: 1;
-  --ace-hi: #ffffff10;
-  --ace-ground: 0 8px 24px -12px #000000cc;
-  --color-chart-1: #3987e5;
-  --color-chart-2: #d95926;
-  --color-chart-3: #199e70;
-  --color-chart-4: #c98500;
-  --color-chart-5: #d55181;
-  --color-chart-6: #2f9e2f;
-  --color-chart-7: #9085e9;
-  --color-chart-8: #e66767;
-}
-
-:root[data-theme='light'] {
+/* The workspace, light (the default theme). */
+:root {
+  --canvas: #f4f0ec;
+  --glow: rgba(239, 107, 63, 0.07);
+  --hdr: rgba(250, 246, 243, 0.92);
+  --ink: #1f1d1b;
+  --muted: #6f6a65;
+  --line: #e6e0da;
+  --surface: #fff;
+  --soft: rgba(255, 255, 255, 0.7);
+  --hover: #ece7e2;
+  --dot: rgba(80, 70, 60, 0.16);
+  --frame: rgba(255, 255, 255, 0.45);
+  --frameLine: #e0d9d2;
+  --panel: #faf7f4;
+  --chip: #fff;
+  --iconLine: #cfc9c3;
   color-scheme: light;
-  --color-minimap-mask: rgba(243, 241, 236, 0.7);
+
+  /* Fixed theme colours that change with the theme (segmented control, filter pills, send). */
+  --seg: #1f1d1b;
+  --segInk: #fff;
+  --pillOff: #fff;
+  --pillOffInk: #1f1d1b;
+  --pillOffLine: #e4dfda;
+  --sendOff: #c9c4bf;
+  --edgeGlow: 0.08;
+
+  --color-minimap-mask: rgba(244, 240, 236, 0.7);
   --ace-glow-k: 0.5;
   --ace-hi: #ffffffcc;
   --ace-ground: 0 6px 18px -10px #1b1a1e40;
+  --color-chart-1: #e8572e;
+  --color-chart-2: #7a62d6;
+  --color-chart-3: #1f97a3;
+  --color-chart-4: #2f9e63;
+  --color-chart-5: #5b7fe0;
+  --color-chart-6: #d94a6b;
+  --color-chart-7: #b27408;
+  --color-chart-8: #6c55c8;
+}
 
-  --color-canvas: #f3f1ec;
-  --color-canvas-dot: #d6d2c9;
-  --color-panel: #eeebe5;
-  --color-card: #fbfaf7;
-  --color-sunken: #e9e5de;
-  --color-border: #dcd8d0;
-  --color-border-strong: #c4c0b8;
-  --color-fg: #1b1a1e;
-  --color-fg-soft: #46444c;
-  --color-fg-muted: #66646d;
-  --color-fg-faint: #6b696f;
-  --color-accent: #1b1a1e;
-  --color-accent-fg: #fbfaf7;
-  --color-danger: #c13a27;
-  --color-selection: #7446d8;
+/* The workspace, dark. */
+:root[data-theme='dark'] {
+  --canvas: #0d0c0b;
+  --glow: rgba(239, 107, 63, 0.13);
+  --hdr: rgba(14, 13, 12, 0.92);
+  --ink: #f2eee9;
+  --muted: #a39d97;
+  --line: #2a2725;
+  --surface: #181615;
+  --soft: rgba(255, 255, 255, 0.04);
+  --hover: #24211f;
+  --dot: rgba(255, 255, 255, 0.07);
+  --frame: rgba(255, 255, 255, 0.025);
+  --frameLine: #2e2a27;
+  --panel: #121110;
+  --chip: #1c1a18;
+  --iconLine: #4a4541;
+  color-scheme: dark;
 
-  --color-provider-anthropic: #b04c27;
-  --color-provider-google: #c22d74;
-  --color-provider-openai: #0b786a;
-  --color-provider-openai_compatible: #7446d8;
-  --color-provider-ollama: #3a3a40;
-  --color-provider-mock: #6b6972;
-  --color-provider-claude_code: #94401c;
-  --color-provider-codex_cli: #0b6380;
-  --color-provider-gemini_cli: #a3245f;
+  --seg: #f2eee9;
+  --segInk: #1a1817;
+  --pillOff: #1d1b1a;
+  --pillOffInk: #f2eee9;
+  --pillOffLine: #2e2b28;
+  --sendOff: #3a3633;
+  --edgeGlow: 0.18;
 
-  --color-status-IDLE: #6b6970;
-  --color-status-READY: #3b5bdb;
-  --color-status-RUNNING: #0970a8;
-  --color-status-WAITING: #886509;
-  --color-status-COMPLETED: #117954;
-  --color-status-PAUSED: #7b6924;
-  --color-status-STOPPED: #6b6972;
-  --color-status-BLOCKED: #a15800;
-  --color-status-FAILED: #c13a27;
+  --color-minimap-mask: rgba(13, 12, 11, 0.7);
+  --ace-glow-k: 1;
+  --ace-hi: #ffffff10;
+  --ace-ground: 0 8px 24px -12px #000000cc;
 
-  --color-provider-status-UNKNOWN: #6b6972;
-  --color-provider-status-CHECKING: #3b5bdb;
-  --color-provider-status-CONNECTED: #117954;
-  --color-provider-status-AUTH_FAILED: #c13a27;
-  --color-provider-status-UNREACHABLE: #a15800;
-  --color-provider-status-RATE_LIMITED: #886509;
+  --color-provider-anthropic: #c2603f;
+  --color-provider-google: #8fb0ff;
+  --color-provider-openai: #2fe08a;
+  --color-provider-openai_compatible: #f2eee9;
+  --color-provider-ollama: #f2eee9;
+  --color-provider-mock: #f2eee9;
+  --color-provider-claude_code: #c2603f;
+  --color-provider-codex_cli: #2fe08a;
+  --color-provider-gemini_cli: #8fb0ff;
 
-  --color-chart-1: #2a78d6;
-  --color-chart-2: #d4531f;
-  --color-chart-3: #0f8a5f;
-  --color-chart-4: #b07800;
-  --color-chart-5: #c2457a;
-  --color-chart-6: #008300;
-  --color-chart-7: #4a3aa7;
-  --color-chart-8: #d63b3a;
+  --color-status-IDLE: #a39d97;
+  --color-status-PAUSED: #a39d97;
+  --color-status-STOPPED: #a39d97;
+
+  --color-provider-status-UNKNOWN: #a39d97;
+}
+
+/* Home (`Ace Home.dc.html`), light. */
+[data-surface='home'] {
+  --page: linear-gradient(160deg, #fbf3ee 0%, #f5f2f0 40%, #eef0f2 100%);
+  --hdr: rgba(253, 249, 246, 0.85);
+  --ink: #1f1d1b;
+  --muted: #6f6a65;
+  --line: #e9e3dd;
+  --surface: #fff;
+  --soft: rgba(255, 255, 255, 0.7);
+  --hover: #f3efeb;
+  --btn: #1f1d1b;
+  --btnInk: #fff;
+  --dot: rgba(80, 80, 90, 0.18);
+  --glow: rgba(239, 107, 63, 0.1);
+  --ring6: rgba(255, 255, 255, 0.55);
+  --iconLine: #c9c4bf;
+}
+
+/* Home, dark. */
+:root[data-theme='dark'] [data-surface='home'] {
+  --page: linear-gradient(160deg, #1c1714 0%, #151413 45%, #121416 100%);
+  --hdr: rgba(22, 20, 19, 0.85);
+  --ink: #f2eee9;
+  --muted: #a39d97;
+  --line: #2e2b28;
+  --surface: #1d1b1a;
+  --soft: rgba(255, 255, 255, 0.05);
+  --hover: #2a2725;
+  --btn: #f2eee9;
+  --btnInk: #1a1817;
+  --dot: rgba(255, 255, 255, 0.08);
+  --glow: rgba(239, 107, 63, 0.16);
+  --ring6: rgba(255, 255, 255, 0.03);
+  --iconLine: #5a5550;
+}
+
+/* The theme's keyframes, verbatim. */
+@keyframes flow {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+@keyframes livePulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes orbitA {
+  from {
+    transform: rotate(0deg) translateX(28px) rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg) translateX(28px) rotate(-360deg);
+  }
+}
+@keyframes orbitB {
+  from {
+    transform: rotate(0deg) translateX(38px) rotate(0deg);
+  }
+  to {
+    transform: rotate(-360deg) translateX(38px) rotate(360deg);
+  }
+}
+@keyframes orbitC {
+  from {
+    transform: rotate(0deg) translateX(48px) rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg) translateX(48px) rotate(-360deg);
+  }
+}
+@keyframes pulseRing {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.06);
+  }
+}
+
+@layer base {
+  /* The theme's body: the workspace sits on #0d0c0b, Home on #151413 (with its transition). */
+  /* The theme sets no line-height; Tailwind's preflight would make it 1.5. */
+  html,
+  body {
+    background-color: #0d0c0b;
+    color: var(--ink);
+    font-family: var(--font-human);
+    line-height: normal;
+  }
+  body:has([data-surface='home']) {
+    background-color: #151413;
+    transition: background 0.3s;
+  }
+  a {
+    color: #e8623a;
+    text-decoration: none;
+  }
+  a:hover {
+    color: #c94c27;
+  }
 }
 
 /*
- * React Flow is handed hex values from `tokens` (the dark set) as inline props, so the Canvas
- * surface, its dots and the minimap are pinned to the variables here; in dark they resolve to the
- * same values, in light they follow the light set and the dotted grid stays visible.
+ * The Canvas (D332). React Flow is the engine and the theme draws it: the canvas colour, the glows
+ * and the dot grid are the Canvas's own layers, its edges are drawn above the nodes, and its
+ * minimap is the theme's. What React Flow still paints is pinned to the theme here.
  */
-.react-flow.ace-dotted-canvas {
-  background: var(--color-canvas) !important;
+
+/* The pane keeps the Canvas's cursor: default, the hand tool's grab, grabbing while panning. */
+.ace-canvas .react-flow__pane,
+.ace-canvas .react-flow__pane.draggable,
+.ace-canvas .react-flow__pane.dragging,
+.ace-canvas .react-flow__node.selectable,
+.ace-canvas .react-flow__node.draggable {
+  cursor: inherit;
 }
-.ace-dotted-canvas .react-flow__background-pattern.dots {
-  fill: var(--color-canvas-dot) !important;
+
+/* The selection box and a multi-selection's frame, in the minimap's view-frame colours. */
+.ace-canvas .react-flow__selection,
+.ace-canvas .react-flow__nodesselection-rect {
+  background: rgba(239, 107, 63, 0.06);
+  border: 1.5px solid #ef6b3f;
+  border-radius: 3px;
 }
-.ace-dotted-canvas .react-flow__minimap {
-  background: var(--color-panel) !important;
-}
-.ace-dotted-canvas .react-flow__minimap-node {
-  fill: var(--color-card) !important;
-  stroke: var(--color-border) !important;
-}
-.ace-dotted-canvas .react-flow__minimap-mask {
-  fill: var(--color-minimap-mask) !important;
-}
-/* React Flow's attribution stays visible, in the theme's quiet text instead of its own grey box. */
-.ace-dotted-canvas .react-flow__attribution {
+
+/*
+ * A port's handle: invisible, a 12px hit area centred on the theme's anchor, a crosshair to aim
+ * with, and a #ef6b3f ring when focused from the keyboard or armed for a keyboard connect.
+ */
+.react-flow__handle.ace-port {
+  width: 12px;
+  height: 12px;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  border-radius: 50%;
   background: transparent;
+  opacity: 0;
+  cursor: crosshair;
 }
-.ace-dotted-canvas .react-flow__attribution a {
-  color: var(--color-fg-faint);
-}
-
-html,
-body {
-  background-color: var(--color-canvas);
-  color: var(--color-fg);
-  font-family: var(--font-human);
-  -webkit-font-smoothing: antialiased;
+.react-flow__handle.ace-port:focus-visible,
+.react-flow__handle.ace-port[data-armed='true'] {
+  opacity: 1;
+  outline: none;
+  box-shadow: 0 0 0 2px #ef6b3f;
 }
 
-/* FR-CAN-001: dotted grid (Night and Paper). React Flow draws the dots; this is the fallback surface. */
+/* The loading placeholder: the canvas colour and the theme's dot grid at zoom 1. */
 .ace-dotted-canvas {
-  background-color: var(--color-canvas);
-  background-image: radial-gradient(var(--color-canvas-dot) 1.1px, transparent 1.2px);
-  background-size: 20px 20px;
+  background-color: var(--canvas);
+  background-image: radial-gradient(var(--dot) 1px, transparent 1.3px);
+  background-size: 16px 16px;
 }
 
-/*
- * FR-EXE-015: the edge an envelope just travelled. The dash marches from source to target, so the
- * direction of the handoff is visible, and `prefers-reduced-motion` gets the colour without the
- * movement (NFR-USE-02).
- */
-@keyframes ace-edge-flow {
+/* An edge's dashed line flows with the theme's `flow` keyframes. */
+.ace-edge-flow {
+  animation: flow 1.2s linear infinite;
+}
+
+@keyframes ace-spin {
   to {
-    stroke-dashoffset: -24;
+    transform: rotate(360deg);
   }
 }
-
-.ace-edge-flowing {
-  stroke-dasharray: 6 6;
-  animation: ace-edge-flow 0.6s linear infinite;
-}
-
-
-/*
- * FR-CON-007: a loop edge is the one legal cycle, so it must not read as an ordinary arrow. Dashed
- * and in the WAITING colour, which is the palette's "this will come round again" hue, and with the
- * dash marching *backwards* so the direction of the jump is visible.
- */
-@keyframes ace-loop-flow {
-  to {
-    stroke-dashoffset: 24;
+@keyframes ace-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
   }
 }
-
-.ace-loop-edge {
-  stroke: var(--color-status-WAITING);
-  stroke-dasharray: 4 5;
-  opacity: 0.85;
+.ace-spin {
+  animation: ace-spin 0.9s linear infinite;
+}
+.ace-pulse {
+  animation: ace-pulse 1.2s ease-in-out infinite;
 }
 
-.ace-loop-edge-running {
-  animation: ace-loop-flow 0.8s linear infinite;
-}
-
+/* Reduced motion keeps the dashes, the spinner and the pulse still (NFR-USE-02). */
 @media (prefers-reduced-motion: reduce) {
-  .ace-edge-flowing,
-  .ace-loop-edge-running,
+  .ace-edge-flow,
   .ace-spin,
   .ace-pulse {
     animation: none;
   }
 }
-
-/* The node card: tinted by --accent-color, lit by --g (0..1, set per state). Night and Paper. */
-.ace-node {
-  --g: 0.14;
-  --accent-color: var(--color-fg-faint);
-  border-radius: var(--radius-card);
-  background-color: color-mix(in oklab, var(--accent-color) calc(3% + var(--g) * 5%), var(--color-card));
-  border: 1px solid color-mix(in oklab, var(--accent-color) calc(28% + var(--g) * 42%), var(--color-border));
-  box-shadow:
-    0 0 14px -2px color-mix(in oklab, var(--accent-color) calc(var(--g) * 60% * var(--ace-glow-k)), transparent),
-    0 0 48px -6px color-mix(in oklab, var(--accent-color) calc(var(--g) * 38% * var(--ace-glow-k)), transparent),
-    inset 0 1px 0 0 var(--ace-hi),
-    var(--ace-ground);
-  outline: 1.5px solid transparent;
-  outline-offset: 5px;
-  transition: box-shadow 260ms cubic-bezier(0.2, 0, 0, 1), border-color 260ms, background-color 260ms, opacity 260ms;
-}
-.ace-node[data-state='READY'] { --g: 0.3; }
-.ace-node[data-state='RUNNING'] { --g: 1; }
-.ace-node[data-state='WAITING'] { --g: 0.7; }
-.ace-node[data-state='COMPLETED'] { --g: 0.3; }
-.ace-node[data-state='PAUSED'] { --g: 0.22; }
-.ace-node[data-state='STOPPED'] { --g: 0.06; }
-.ace-node[data-state='FAILED'] { --g: 0.5; }
-.ace-node[data-state='BLOCKED'] { --g: 0; opacity: 0.62; filter: grayscale(1); }
-.ace-node[data-selected='true'] { outline-color: var(--color-selection); }
-
-@keyframes ace-spin { to { transform: rotate(360deg); } }
-@keyframes ace-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-.ace-spin { animation: ace-spin 0.9s linear infinite; }
-.ace-pulse { animation: ace-pulse 1.2s ease-in-out infinite; }

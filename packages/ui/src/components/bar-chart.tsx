@@ -9,8 +9,9 @@ import { chartSeriesColor } from '../tokens.js';
  * - Sized in real pixels from its container (ResizeObserver), so text never scales down with the
  *   viewBox; at narrow widths (or with many categories) it lays the bars out horizontally, one row
  *   per category, which is what stays readable at 380 px (NFR-USE-03).
- * - Colours come from CSS variables (`--color-chart-N`, `--color-fg-muted`, `--color-border`), so
- *   it follows the active theme; text uses text tokens, never the series colour.
+ * - Colours come from CSS variables (`--color-chart-N`, the theme's hues; `--muted` and `--line`
+ *   for the axes and grid), so it follows the active theme; text uses text tokens, never the series
+ *   colour. Axis text is the theme's mono 10px (D328).
  * - Accessible: the SVG is `role="img"` with the caller's label, every bar has a `<title>` (the
  *   native hover tooltip), and a visually-hidden table carries every value for screen readers.
  * - Values below zero are drawn at zero (usage and cost are never negative); the table keeps them.
@@ -252,14 +253,14 @@ export function BarChart({
     <figure className={cn('m-0 flex w-full flex-col gap-2', className)} data-testid="bar-chart">
       {series.length >= 2 ? (
         <ul
-          className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-fg-muted"
+          className="m-0 flex list-none flex-wrap gap-x-3 gap-y-1 p-0 text-[11px] text-[var(--muted)]"
           data-testid="bar-chart-legend"
         >
           {series.map((s, i) => (
             <li key={s.key} className="flex items-center gap-1.5">
               <span
                 aria-hidden
-                className="inline-block size-2.5 rounded-sm"
+                className="inline-block size-2 rounded-[2px]"
                 style={{ background: colorOf(i) }}
               />
               {s.label}
@@ -272,7 +273,7 @@ export function BarChart({
           <div
             role="img"
             aria-label={ariaLabel}
-            className="flex h-24 items-center justify-center rounded-md border border-dashed border-border text-sm text-fg-muted"
+            className="flex h-24 items-center justify-center text-center text-[13px] text-[var(--muted)]"
           >
             No data
           </div>
@@ -295,7 +296,7 @@ export function BarChart({
                       x2={g.pos}
                       y1={plot.y0}
                       y2={plot.y1}
-                      stroke="var(--color-border)"
+                      stroke="var(--line)"
                       strokeWidth={1}
                     />
                     <text
@@ -303,7 +304,7 @@ export function BarChart({
                       y={plot.y1 + 14}
                       textAnchor="middle"
                       fontSize={10}
-                      fill="var(--color-fg-muted)"
+                      fill="var(--muted)"
                     >
                       {g.label}
                     </text>
@@ -315,7 +316,7 @@ export function BarChart({
                       x2={plot.x1}
                       y1={g.pos}
                       y2={g.pos}
-                      stroke="var(--color-border)"
+                      stroke="var(--line)"
                       strokeWidth={1}
                     />
                     <text
@@ -323,7 +324,7 @@ export function BarChart({
                       y={g.pos + 3}
                       textAnchor="end"
                       fontSize={10}
-                      fill="var(--color-fg-muted)"
+                      fill="var(--muted)"
                     >
                       {g.label}
                     </text>
@@ -336,8 +337,8 @@ export function BarChart({
                   x={c.x}
                   y={c.y}
                   textAnchor={c.anchor}
-                  fontSize={11}
-                  fill="var(--color-fg-muted)"
+                  fontSize={10}
+                  fill="var(--muted)"
                 >
                   <title>{c.full}</title>
                   {c.text}

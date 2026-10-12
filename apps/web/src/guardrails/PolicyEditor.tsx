@@ -7,7 +7,7 @@ import type {
 } from '@ace/contracts';
 import {
   Button,
-  Checkbox,
+  DIALOG_CLOSE_CLASS,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -22,10 +22,10 @@ import {
   Textarea,
   guardrailActionLabels,
 } from '@ace/ui';
-import { Lock, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 
 import { newId } from '../lib/ulid';
+import { Toggle } from '../theme/primitives';
 import {
   CHECK_NOTE,
   CHECK_PARAM_FIELDS,
@@ -43,9 +43,15 @@ import { useUpdateGuardrailPolicy } from './hooks';
 
 const ACTION_OPTIONS = guardrailActionLabels();
 
+/* The theme's vocabulary (D328): cards, inner boxes, 11px help. */
+const CARD =
+  'flex flex-col gap-3 rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4';
+const INNER = 'rounded-[10px] border border-[var(--line)] bg-[var(--soft)]';
+const HELP = 'text-[11px] leading-[1.45] text-[var(--muted)]';
+
 /**
  * The policy editor (FR-GRD-001, FR-GRD-011, TC-GRD-001, TC-GRD-016): every check grouped by the
- * point it runs at, each with its action, an on/off box and the params §2.2 gives its type.
+ * point it runs at, each with its action, an on/off switch and the params §2.2 gives its type.
  *
  * Two rules from the contract are visible in the markup rather than only in a comment:
  *
@@ -56,7 +62,7 @@ const ACTION_OPTIONS = guardrailActionLabels();
  *    the bottom says so and shows them switched on and not switchable.
  *
  * Saving PATCHes the policy, which writes version + 1 (FR-GRD-001, Arch §13.4); the answer's version
- * is what the editor then reports.
+ * is what the editor then reports. Theme cards per point, the theme's switch per check (D328).
  */
 export function PolicyEditor({ policy }: { policy: GuardrailPolicy }) {
   const update = useUpdateGuardrailPolicy();
@@ -94,11 +100,10 @@ export function PolicyEditor({ policy }: { policy: GuardrailPolicy }) {
   return (
     <section data-testid="policy-editor" className="flex flex-col gap-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="flex flex-col gap-1.5">
+        <div className="flex w-full max-w-[280px] flex-col gap-[7px]">
           <Label htmlFor="policy-name">Name</Label>
           <Input
             id="policy-name"
-            className="w-64"
             value={name}
             maxLength={80}
             onChange={(event) => setName(event.target.value)}
@@ -106,7 +111,10 @@ export function PolicyEditor({ policy }: { policy: GuardrailPolicy }) {
         </div>
         <div className="flex items-center gap-3">
           {update.data && (
-            <span data-testid="policy-saved-version" className="font-machine text-xs text-fg-muted">
+            <span
+              data-testid="policy-saved-version"
+              className="font-machine text-[10px] text-[var(--muted)]"
+            >
               saved as version {update.data.version}
             </span>
           )}
@@ -117,12 +125,12 @@ export function PolicyEditor({ policy }: { policy: GuardrailPolicy }) {
       </div>
 
       {update.error && (
-        <p role="alert" className="text-sm text-danger">
+        <p role="alert" className="text-[12px] text-[#c94c27]">
           {update.error.message}
         </p>
       )}
 
-      <p className="text-xs text-fg-muted">
+      <p className={HELP}>
         Saving never edits a version in place: the engine writes the next version and runs record
         which one they used (FR-GRD-001, FR-GRD-002).
       </p>
@@ -163,20 +171,17 @@ function PointGroup({
   const addable = checkTypesFor(point).filter((type) => !used.has(type));
 
   return (
-    <div
-      data-testid={`point-group-${point}`}
-      className="flex flex-col gap-2 rounded-card border border-border bg-panel p-4"
-    >
+    <div data-testid={`point-group-${point}`} className={CARD}>
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="font-human text-base font-semibold">{POINT_LABEL[point]}</h3>
-          <p className="text-xs text-fg-muted">{POINT_DESCRIPTION[point]}</p>
+          <h3 className="text-[14px] font-bold">{POINT_LABEL[point]}</h3>
+          <p className={`mt-0.5 ${HELP}`}>{POINT_DESCRIPTION[point]}</p>
         </div>
         {addable.length > 0 && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="secondary" size="sm" aria-label={`Add a ${point} check`}>
-                <Plus className="h-4 w-4" /> Add check
+                Add check
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -190,7 +195,9 @@ function PointGroup({
         )}
       </div>
 
-      {checks.length === 0 && <p className="text-xs text-fg-muted">No checks at this point.</p>}
+      {checks.length === 0 && (
+        <p className="text-[12px] text-[var(--muted)]">No checks at this point.</p>
+      )}
 
       {checks.map((check) => (
         <CheckRow
@@ -222,24 +229,25 @@ function CheckRow({
   return (
     <div
       data-testid={`check-${check.type}-${check.point}`}
-      className="flex flex-col gap-2 rounded-card border border-border bg-card px-3 py-2"
+      className={`flex flex-col gap-[10px] px-3 py-[10px] ${INNER}`}
     >
       <div className="flex flex-wrap items-center gap-3">
-        <span className="min-w-40 flex-1 font-machine text-sm">{check.type}</span>
+        <span className="min-w-40 flex-1 font-machine text-[12px] font-medium">{check.type}</span>
 
-        <div className="flex items-center gap-2">
-          <Checkbox
-            id={`enabled-${check.id}`}
-            checked={check.enabled}
-            aria-label={`Enable ${check.type} at ${check.point}`}
-            onCheckedChange={(value) =>
-              onChange(check.id, (current) => ({ ...current, enabled: value === true }))
-            }
-          />
-          <Label htmlFor={`enabled-${check.id}`} className="text-xs text-fg-muted">
-            enabled
-          </Label>
-        </div>
+        {/* The theme's switch (its Skills rows); the row button carries the state. */}
+        <button
+          type="button"
+          role="switch"
+          aria-checked={check.enabled}
+          aria-label={`Enable ${check.type} at ${check.point}`}
+          onClick={() =>
+            onChange(check.id, (current) => ({ ...current, enabled: !current.enabled }))
+          }
+          className="flex cursor-pointer items-center gap-2 rounded-full text-[11px] text-[var(--muted)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+        >
+          <Toggle on={check.enabled} />
+          enabled
+        </button>
 
         <Select
           value={check.action}
@@ -248,7 +256,7 @@ function CheckRow({
           }
         >
           <SelectTrigger
-            className="w-36"
+            className="w-[150px]"
             aria-label={`Action for ${check.type} at ${check.point}`}
             data-testid={`action-${check.type}-${check.point}`}
           >
@@ -263,14 +271,14 @@ function CheckRow({
           </SelectContent>
         </Select>
 
-        <Button
-          variant="ghost"
-          size="icon"
+        <button
+          type="button"
+          className={DIALOG_CLOSE_CLASS}
           aria-label={`Remove ${check.type} at ${check.point}`}
           onClick={() => onRemove(check.id)}
         >
-          <Trash2 className="h-4 w-4" />
-        </Button>
+          <span aria-hidden>✕</span>
+        </button>
       </div>
 
       {CHECK_PARAM_FIELDS[check.type].length > 0 && (
@@ -286,12 +294,12 @@ function CheckRow({
         </div>
       )}
 
-      {note && <p className="text-xs text-fg-muted">{note}</p>}
+      {note && <p className={HELP}>{note}</p>}
 
       {Object.keys(extra).length > 0 && (
         <p
           data-testid={`check-extra-params-${check.id}`}
-          className="font-machine text-xs text-fg-muted"
+          className="font-machine text-[10px] text-[var(--muted)]"
         >
           kept as saved: {JSON.stringify(extra)}
         </p>
@@ -313,16 +321,14 @@ function ParamInput({
   const label = `${field.label} for ${check.type}`;
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <Label htmlFor={id} className="text-xs">
-        {field.label}
-      </Label>
+    <div className="flex flex-col gap-[7px]">
+      <Label htmlFor={id}>{field.label}</Label>
       {field.kind === 'number' ? (
         <Input
           id={id}
           type="number"
           aria-label={label}
-          className="w-40 font-machine"
+          className="w-40 font-machine text-[12px]"
           value={numberToText(check.params[field.key])}
           {...(field.min === undefined ? {} : { min: field.min })}
           {...(field.max === undefined ? {} : { max: field.max })}
@@ -336,7 +342,7 @@ function ParamInput({
           id={id}
           rows={3}
           aria-label={label}
-          className="w-64 font-machine"
+          className="w-64 font-machine text-[12px]"
           value={patternsToText(check.params[field.key])}
           onChange={(event) => {
             const patterns = textToPatterns(event.target.value);
@@ -344,7 +350,7 @@ function ParamInput({
           }}
         />
       )}
-      {field.hint && <p className="max-w-64 text-xs text-fg-muted">{field.hint}</p>}
+      {field.hint && <p className={`max-w-64 ${HELP}`}>{field.hint}</p>}
     </div>
   );
 }
@@ -366,35 +372,45 @@ const DATA_GUARDRAILS: readonly { key: string; title: string; detail: string }[]
 /**
  * FR-GRD-010 and BR-15: data guardrails are always on. The contract says so by leaving `data` out of
  * `POLICY_GUARDRAIL_POINTS` — a policy has no field that could switch one off — so this section
- * shows them on, with the box disabled, and says why (TC-GRD-015).
+ * shows them on, with the switch disabled, and says why (TC-GRD-015).
  */
 function DataGuardrailsSection() {
   return (
-    <div
-      data-testid="data-guardrails-always-on"
-      className="flex flex-col gap-2 rounded-card border border-border bg-panel p-4"
-    >
-      <div className="flex items-center gap-2">
-        <Lock className="h-4 w-4 text-fg-muted" aria-hidden />
-        <h3 className="font-human text-base font-semibold">Data — always on</h3>
-      </div>
-      <p className="text-xs text-fg-muted">
+    <div data-testid="data-guardrails-always-on" className={CARD}>
+      <h3 className="flex items-center gap-2 text-[14px] font-bold">
+        <span aria-hidden className="text-[12px]">
+          🔒︎
+        </span>
+        Data — always on
+      </h3>
+      <p className={HELP}>
         Data guardrails cannot be switched off and are not part of a policy: the contract gives a
         policy no setting for them (BR-15, FR-GRD-010).
       </p>
-      {DATA_GUARDRAILS.map((guardrail) => (
-        <div
-          key={guardrail.key}
-          data-testid={`data-guardrail-${guardrail.key}`}
-          className="flex items-center gap-3 rounded-card border border-border bg-card px-3 py-2"
-        >
-          <Checkbox checked disabled aria-label={`${guardrail.title} (always on)`} />
-          <div>
-            <p className="font-machine text-sm">{guardrail.title}</p>
-            <p className="text-xs text-fg-muted">{guardrail.detail}</p>
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-2">
+        {DATA_GUARDRAILS.map((guardrail) => (
+          <div
+            key={guardrail.key}
+            data-testid={`data-guardrail-${guardrail.key}`}
+            className="flex items-center gap-[10px] rounded-[9px] border border-[var(--line)] px-3 py-[10px]"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="text-[12.5px] font-semibold">{guardrail.title}</p>
+              <p className="mt-px text-[10.5px] text-[var(--muted)]">{guardrail.detail}</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked
+              disabled
+              aria-label={`${guardrail.title} (always on)`}
+              className="cursor-not-allowed rounded-full"
+            >
+              <Toggle on />
+            </button>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }

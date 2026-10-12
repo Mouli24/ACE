@@ -158,13 +158,15 @@ describe('TC-GRD-016 all five actions are configurable on a check', () => {
 
     await actor.click(screen.getByRole('combobox', { name: 'Action for pii at input' }));
     const options = await screen.findAllByRole('option');
-    expect(options.map((option) => option.textContent)).toEqual([
+    // The theme's dropdown marks the current action in its ✓ column (D328); names are the labels.
+    expect(options.map((option) => option.textContent?.replace(/^✓/, ''))).toEqual([
       'pass',
       'warn',
       'redact',
       'ask user',
       'block',
     ]);
+    expect(screen.getByRole('option', { name: 'warn' })).toHaveTextContent('✓warn');
     expect(GUARDRAIL_ACTIONS).toHaveLength(options.length);
   });
 
@@ -186,7 +188,10 @@ describe('TC-GRD-016 all five actions are configurable on a check', () => {
     renderGuardrails(`?projectId=${projectId}`);
     await screen.findByTestId('policy-editor');
 
-    await actor.click(screen.getByRole('checkbox', { name: 'Enable pii at input' }));
+    const enabled = screen.getByRole('switch', { name: 'Enable pii at input' });
+    expect(enabled).toHaveAttribute('aria-checked', 'true');
+    await actor.click(enabled);
+    expect(enabled).toHaveAttribute('aria-checked', 'false');
     await actor.click(screen.getByRole('button', { name: 'Add a input check' }));
     const offered = await screen.findAllByRole('menuitem');
     // input allows size_limit, pii, prompt_injection, blocked_topics (§2.2); three are already
@@ -209,9 +214,9 @@ describe('TC-GRD-015 data guardrails cannot be disabled', () => {
     const section = await screen.findByTestId('data-guardrails-always-on');
     expect(section).toHaveTextContent('Data guardrails cannot be switched off');
     for (const name of ['Secret redaction (always on)', 'File confinement (always on)']) {
-      const box = within(section).getByRole('checkbox', { name });
-      expect(box).toBeDisabled();
-      expect(box).toHaveAttribute('data-state', 'checked');
+      const toggle = within(section).getByRole('switch', { name });
+      expect(toggle).toBeDisabled();
+      expect(toggle).toHaveAttribute('aria-checked', 'true');
     }
   });
 

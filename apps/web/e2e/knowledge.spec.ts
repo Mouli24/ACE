@@ -32,11 +32,25 @@ async function seedFullBase(page: Page) {
 const docRowByName = (page: Page, name: string) =>
   page.locator('[data-testid^="kb-doc-"]').filter({ hasText: name }).first();
 
-async function runSearch(page: Page, query: string, mode: string, k = 5): Promise<void> {
+/** The Mode dropdown's option for each search mode (a theme Select, D328, not a native select). */
+const MODE_OPTION = {
+  hybrid: 'Hybrid (vector + keyword)',
+  vector: 'Vector only',
+  keyword: 'Keyword only',
+} as const;
+
+async function runSearch(
+  page: Page,
+  query: string,
+  mode: keyof typeof MODE_OPTION,
+  k = 5,
+): Promise<void> {
   const panel = page.getByRole('search');
   await panel.getByLabel('Query').fill(query);
   await panel.getByLabel('Results (k)').fill(String(k));
-  await panel.getByLabel('Mode').selectOption(mode);
+  await panel.getByRole('combobox', { name: 'Mode' }).click();
+  await page.getByRole('option', { name: MODE_OPTION[mode] }).click();
+  await expect(panel.getByRole('combobox', { name: 'Mode' })).toContainText(MODE_OPTION[mode]);
   await panel.getByRole('button', { name: /search/i }).click();
 }
 
@@ -63,7 +77,10 @@ test.describe('Knowledge screens (M5 §5 item 2)', () => {
     await page.getByRole('button', { name: 'New knowledge base' }).click();
     const dialog = page.getByRole('dialog');
     await dialog.getByLabel('Name').fill('Team handbook');
-    await expect(dialog.getByLabel('Embedding model')).toHaveValue('mock-embed');
+    // the theme's Select shows the model as "Name (id)" (D328)
+    await expect(dialog.getByRole('combobox', { name: 'Embedding model' })).toContainText(
+      '(mock-embed)',
+    );
     await expect(dialog.getByLabel('Chunk size (tokens)')).toHaveValue('700');
     await expect(dialog.getByLabel('Overlap (tokens)')).toHaveValue('90');
 
@@ -179,7 +196,8 @@ test.describe('Knowledge screens (M5 §5 item 2)', () => {
     const { projectId, knowledgeBaseId } = await seedFullBase(page);
     await page.goto(`/knowledge/${knowledgeBaseId}`);
 
-    await page.getByRole('button', { name: 'Settings' }).click();
+    // the base's own Settings, not the app's settings gear (D338)
+    await page.getByTestId('knowledge-base-page').getByRole('button', { name: 'Settings' }).click();
     await page.getByRole('dialog').getByLabel('Name').fill('Renamed base');
     await page.getByRole('dialog').getByRole('button', { name: 'Save' }).click();
     await expect(page.getByTestId('kb-name')).toHaveText('Renamed base');

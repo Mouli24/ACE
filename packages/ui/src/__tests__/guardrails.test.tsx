@@ -110,17 +110,20 @@ describe('TC-GRD-016/018/019 verdicts read as actions, and a redaction shows typ
     }
   });
 
-  it('gives each action its own icon and colour, not hue alone', () => {
-    const seen = new Set<string>();
+  it('gives each action its own glyph and colour, not hue alone', () => {
+    const glyphs = new Set<string>();
+    const colours = new Set<string>();
     for (const action of GUARDRAIL_ACTIONS) {
       const { unmount } = render(<VerdictBadge verdict={verdict({ action })} />);
       const badge = screen.getByTestId(`verdict-${ID}`);
       expect(badge).toHaveAttribute('data-action', action);
-      const icon = badge.querySelector('svg')?.getAttribute('class') ?? '';
-      seen.add(icon);
+      const glyph = badge.querySelector('[data-glyph]');
+      glyphs.add(glyph?.textContent ?? '');
+      colours.add(glyph?.getAttribute('style') ?? '');
       unmount();
     }
-    expect(seen.size).toBe(GUARDRAIL_ACTIONS.length);
+    expect(glyphs.size).toBe(GUARDRAIL_ACTIONS.length);
+    expect(colours.size).toBe(GUARDRAIL_ACTIONS.length);
   });
 
   it('shows the types a redaction removed and nothing that could be the value', () => {

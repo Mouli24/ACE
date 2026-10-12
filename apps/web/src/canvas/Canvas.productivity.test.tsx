@@ -2,6 +2,7 @@ import type { Edge, Node } from '@ace/contracts';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
+import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
 import { createNode } from '../nodes/factory';
 import { db, installMockServer, renderWithQuery } from '../test/app';
@@ -146,14 +147,15 @@ describe('TC-CAN-008 deleting is one undoable step (FR-CAN-009)', () => {
     await settle(workflow.id);
     expect(db.edgesOf(workflow.id)).toHaveLength(0);
 
-    await userEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    // the tools pill is gone (D332): Ctrl+Z / Ctrl+Y are the general undo and redo
+    press('z', { ctrlKey: true });
     await settle(workflow.id);
     expect(nodesInDb(workflow.id).find((n) => n.id === nodes[1]!.id)?.config).toEqual(
       nodes[1]!.config,
     );
     expect(db.edgesOf(workflow.id).map((e) => e.id)).toEqual(edges.map((e) => e.id));
 
-    await userEvent.click(screen.getByRole('button', { name: 'Redo' }));
+    press('y', { ctrlKey: true });
     await settle(workflow.id);
     expect(nodesInDb(workflow.id)).toHaveLength(1);
   });
@@ -174,7 +176,9 @@ describe('TC-CAN-007 auto-arrange (FR-CAN-008)', () => {
     await mount(workflow.id);
     const before = db.getWorkflow(workflow.id)!.version;
 
-    await userEvent.click(screen.getByRole('button', { name: 'Auto-arrange' }));
+    // the tools pill is gone (D332): Auto-arrange lives in the empty Canvas's menu
+    fireEvent.contextMenu(document.querySelector('.react-flow__pane') as HTMLElement);
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Auto-arrange/ }));
     await settle(workflow.id);
     const [input, agent] = [nodes[0]!.id, nodes[1]!.id].map((id) =>
       nodesInDb(workflow.id).find((n) => n.id === id)!,
@@ -192,18 +196,55 @@ describe('TC-CAN-007 auto-arrange (FR-CAN-008)', () => {
 });
 
 describe('FR-CAN-011 right-click menus', () => {
-  it('a node offers Duplicate, Copy, Configure and Delete', async () => {
+  it('a node offers Duplicate, Copy, Settings, Inspect and Delete', async () => {
     const { workflow, nodes } = seed(['input', 'agent']);
     await mount(workflow.id);
     fireEvent.contextMenu(flowNode(nodes[1]!.id));
     const menu = await screen.findByTestId('node-context-menu');
-    for (const name of [/Duplicate/, /Copy/, /Configure/, /Delete/]) {
+    for (const name of [/Duplicate/, /Copy/, /Settings/, /Inspect/, /Delete/]) {
       expect(screen.getByRole('menuitem', { name })).toBeInTheDocument();
     }
     expect(menu).toBeInTheDocument();
     await userEvent.click(screen.getByRole('menuitem', { name: /Delete/ }));
     await settle(workflow.id);
     expect(nodesInDb(workflow.id).map((n) => n.id)).toEqual([nodes[0]!.id]);
+  });
+
+  it('Duplicate leaves the copy selected, from the menu and from Ctrl+D', async () => {
+    const { workflow, nodes } = seed(['input', 'agent']);
+    await mount(workflow.id);
+    const copyOf = async (originals: string[]) => {
+      await settle(workflow.id);
+      const known = new Set(originals);
+      return nodesInDb(workflow.id).filter((n) => !known.has(n.id));
+    };
+
+    fireEvent.contextMenu(flowNode(nodes[1]!.id));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Duplicate/ }));
+    const [fromMenu] = await copyOf(nodes.map((n) => n.id));
+    // React Flow's echo of "nothing selected", sent before the copy reached it, used to win
+    await waitFor(() => expect(flowNode(fromMenu!.id)).toHaveClass('selected'));
+    expect(useSelectionStore.getState().nodeIds).toEqual([fromMenu!.id]);
+
+    press('d', { ctrlKey: true });
+    const [fromKey] = await copyOf([...nodes.map((n) => n.id), fromMenu!.id]);
+    await waitFor(() => expect(flowNode(fromKey!.id)).toHaveClass('selected'));
+    expect(useSelectionStore.getState().nodeIds).toEqual([fromKey!.id]);
+  });
+
+  it('D332 Settings opens the node settings modal; Inspect opens the workflow panel’s Inspector', async () => {
+    const { workflow, nodes } = seed(['input', 'agent']);
+    await mount(workflow.id);
+    fireEvent.contextMenu(flowNode(nodes[1]!.id));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Settings/ }));
+    expect(usePanelsStore.getState().settings).toEqual({ kind: 'node', id: nodes[1]!.id });
+
+    act(() => usePanelsStore.getState().closeSettings());
+    fireEvent.contextMenu(flowNode(nodes[0]!.id));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Inspect/ }));
+    expect(useSelectionStore.getState().nodeIds).toEqual([nodes[0]!.id]);
+    expect(usePanelsStore.getState()).toMatchObject({ sheetOpen: true, sheetTab: 'inspect' });
+    expect(usePanelsStore.getState().settings).toBeUndefined();
   });
 
   it('the empty Canvas offers Paste, Add node kinds, Select all, Auto-arrange and Fit view', async () => {
@@ -225,50 +266,79 @@ describe('FR-CAN-011 right-click menus', () => {
     ).toEqual(['agent', 'input']);
   });
 
-  it('the toolbar, minimap and controls get no menu', async () => {
+  it('the toolbar, minimap and Add node get no menu', async () => {
     const { workflow } = seed(['input']);
     await mount(workflow.id);
     fireEvent.contextMenu(screen.getByRole('button', { name: 'Fit to view' }));
     expect(screen.queryByRole('menu')).toBeNull();
     fireEvent.contextMenu(screen.getByRole('button', { name: 'Zoom in' }));
     expect(screen.queryByRole('menu')).toBeNull();
+    fireEvent.contextMenu(screen.getByTestId('canvas-minimap'));
+    expect(screen.queryByRole('menu')).toBeNull();
+    fireEvent.contextMenu(screen.getByTestId('new-node-button'));
+    expect(screen.queryByRole('menu')).toBeNull();
   });
 });
 
-describe('FR-CAN-001 Canvas chrome (POC Theme V2)', () => {
-  it('swaps React Flow controls for the zoom pill and groups the history buttons in one pill', async () => {
+describe('D332 the Canvas chrome is the theme’s', () => {
+  it('the theme toolbar, minimap and Add node replace React Flow’s controls, background and minimap', async () => {
     const { workflow } = seed(['input']);
     await mount(workflow.id);
     expect(document.querySelector('.react-flow__controls')).toBeNull();
-    const pill = screen.getByTestId('canvas-zoom-pill');
-    expect(pill.closest('.react-flow__panel')).toHaveClass('bottom', 'left');
-    expect(screen.getByTestId('canvas-zoom-level')).toHaveTextContent('%');
-
-    const history = screen.getByTestId('canvas-tools-pill');
-    expect(history.closest('.react-flow__panel')).toHaveClass('top', 'right');
-    for (const name of ['Undo', 'Redo', 'Auto-arrange']) {
-      expect(history).toContainElement(screen.getByRole('button', { name }));
+    expect(document.querySelector('.react-flow__background')).toBeNull();
+    expect(document.querySelector('.react-flow__minimap')).toBeNull();
+    expect(document.querySelector('.react-flow__attribution')).toBeNull();
+    // the tools pill (Undo, Redo, Auto-arrange, Duplicate) and the zoom pill are gone
+    expect(screen.queryByTestId('canvas-tools-pill')).toBeNull();
+    expect(screen.queryByTestId('canvas-zoom-pill')).toBeNull();
+    for (const name of ['Undo', 'Redo', 'Auto-arrange', 'Duplicate selected nodes']) {
+      expect(screen.queryByRole('button', { name })).toBeNull();
     }
-    expect(screen.getByRole('button', { name: 'Undo' })).toHaveAttribute(
-      'title',
-      expect.stringMatching(/^Undo \(/),
-    );
-    expect(document.querySelector('.react-flow__minimap')).toHaveClass(
-      'rounded-card',
-      'border-border',
-    );
+
+    const toolbar = screen.getByTestId('canvas-toolbar');
+    expect(toolbar).toHaveClass('left-[18px]', 'bottom-[16px]', 'rounded-[10px]', 'p-[4px]');
+    expect(
+      Array.from(toolbar.querySelectorAll('button')).map((b) => b.getAttribute('title')),
+    ).toEqual([
+      'Zoom in',
+      'Zoom out',
+      'Reset to 100%',
+      'Fit to screen',
+      'Lock nodes',
+      'Hand tool',
+      'Undo move',
+    ]);
+    expect(screen.getByTestId('canvas-zoom-level')).toHaveTextContent(/^\d+%$/);
+
+    const minimap = screen.getByTestId('canvas-minimap');
+    expect(minimap).toHaveClass('right-[16px]', 'bottom-[16px]', 'h-[116px]', 'w-[172px]');
+    expect(minimap).toHaveTextContent('MAP');
+
+    const add = screen.getByTestId('new-node-button');
+    expect(add).toHaveAttribute('title', 'Add an agent node');
+    expect(add).toHaveTextContent('+Add node');
   });
 
-  it('has one Fit control, the zoom pill’s, named "Fit to view"; the F key still fits', async () => {
+  it('draws the theme’s glows and dot grid on the canvas colour, with no text selection', async () => {
+    const { workflow } = seed(['input']);
+    await mount(workflow.id);
+    const canvas = screen.getByTestId('canvas');
+    expect(canvas).toHaveClass('bg-[var(--canvas)]', 'select-none');
+    const grid = screen.getByTestId('canvas-grid');
+    expect(grid.style.backgroundImage).toContain('radial-gradient');
+    expect(grid.style.backgroundSize).toMatch(/^[\d.]+px [\d.]+px$/);
+  });
+
+  it('has one Fit control, named "Fit to view" and titled "Fit to screen"; F still fits', async () => {
     const { workflow } = seed(['input']);
     await mount(workflow.id);
     const fits = screen.getAllByRole('button', { name: /fit/i });
     expect(fits).toHaveLength(1);
     const [fit] = fits as [HTMLElement];
     expect(fit).toHaveAccessibleName('Fit to view');
-    expect(fit).toHaveTextContent('Fit');
-    expect(screen.getByTestId('canvas-zoom-pill')).toContainElement(fit);
-    expect(screen.getByTestId('canvas-tools-pill')).not.toContainElement(fit);
+    expect(fit).toHaveAttribute('title', 'Fit to screen');
+    expect(fit).toHaveTextContent('⛶');
+    expect(screen.getByTestId('canvas-toolbar')).toContainElement(fit);
     // F is still the Canvas's own fit shortcut: it handles (and so cancels) the key
     let notCancelled = true;
     act(() => {
@@ -286,8 +356,10 @@ describe('FR-MOB-003 readOnly Canvas', () => {
     expect(screen.queryByRole('button', { name: 'Auto-arrange' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Fit to view' })).toBeInTheDocument();
-    // nothing left to edit with, so no empty tools pill either
-    expect(screen.queryByTestId('canvas-tools-pill')).toBeNull();
+    // nothing left to edit with: no Add node, no lock, no undo-move
+    expect(screen.queryByTestId('new-node-button')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Lock nodes' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Undo move' })).toBeNull();
     expect(useCanvasApi.getState().api?.readOnly).toBe(true);
 
     press('a', { ctrlKey: true });
@@ -306,5 +378,6 @@ describe('FR-MOB-003 readOnly Canvas', () => {
     expect(screen.getByRole('menuitem', { name: /Inspect/ })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: /Delete/ })).toBeNull();
     expect(screen.queryByRole('menuitem', { name: /Duplicate/ })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: /Settings/ })).toBeNull();
   });
 });

@@ -2,7 +2,7 @@ import { BudgetUsdSchema } from '@ace/contracts';
 import { Input } from '@ace/ui';
 import { useEffect, useId, useState, type KeyboardEvent } from 'react';
 
-import { Field } from '../config-panel/fields';
+import { HELP_CLASS, SettingField } from './SettingFields';
 
 /**
  * A cap the contract accepts, or why it does not. Empty is not an error: no cap is `null`, which is
@@ -49,7 +49,7 @@ function BudgetField({
   };
 
   return (
-    <Field label={label} htmlFor={id} {...(error === undefined ? { hint } : { error })}>
+    <SettingField label={label} htmlFor={id} {...(error === undefined ? { hint } : { error })}>
       <Input
         id={id}
         type="number"
@@ -64,9 +64,9 @@ function BudgetField({
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commit}
         onKeyDown={blurOnEnter}
-        className="font-machine"
+        className="font-machine text-[12px]"
       />
-    </Field>
+    </SettingField>
   );
 }
 
@@ -104,7 +104,7 @@ export function BudgetFields({
 }) {
   return (
     <section className="flex flex-col gap-4" data-testid="budget-fields">
-      <h2 className="font-human text-sm font-semibold">Budgets</h2>
+      <h2 className="text-[14px] font-bold">Budgets</h2>
       {fields !== 'run' && (
         <BudgetField
           label="Daily budget (USD)"
@@ -125,7 +125,7 @@ export function BudgetFields({
           {...(disabled === undefined ? {} : { disabled })}
         />
       )}
-      <p className="text-xs text-fg-muted">
+      <p className={HELP_CLASS}>
         Max tokens per node is set on the node itself, under execution settings.
       </p>
     </section>

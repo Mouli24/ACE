@@ -47,7 +47,7 @@ export function KbSettingsDialog({ kb, onClose }: { kb: KnowledgeBase; onClose: 
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[90vh] max-w-[calc(100vw-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="max-h-[90vh] max-w-[calc(100vw-2rem)] overflow-y-auto sm:max-w-[560px]">
         <form onSubmit={submit} noValidate className="flex flex-col gap-4">
           <DialogHeader>
             <DialogTitle>Knowledge base settings</DialogTitle>
@@ -56,7 +56,7 @@ export function KbSettingsDialog({ kb, onClose }: { kb: KnowledgeBase; onClose: 
               reindex.
             </DialogDescription>
           </DialogHeader>
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-[7px]">
             <Label htmlFor="kb-settings-name">Name</Label>
             <Input
               id="kb-settings-name"
@@ -67,7 +67,7 @@ export function KbSettingsDialog({ kb, onClose }: { kb: KnowledgeBase; onClose: 
             />
             <FieldError id="kb-settings-name-error" message={errors['name']} />
           </div>
-          <p className="font-machine text-xs text-fg-muted">
+          <p className="rounded-[8px] border border-[var(--line)] bg-[var(--soft)] px-[10px] py-2 font-machine text-[11px] text-[var(--muted)]">
             Embedder: {kb.embeddingModelId} (fixed at creation)
           </p>
           <ChunkFields
@@ -79,12 +79,12 @@ export function KbSettingsDialog({ kb, onClose }: { kb: KnowledgeBase; onClose: 
             onChunkOverlap={setChunkOverlap}
           />
           {update.error && (
-            <p role="alert" className="text-sm text-danger">
+            <p role="alert" className="text-[12px] text-[#c94c27]">
               {update.error.message}
             </p>
           )}
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={onClose}>
+            <Button type="button" variant="secondary" onClick={onClose}>
               Cancel
             </Button>
             <Button type="submit" disabled={update.isPending}>

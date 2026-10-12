@@ -5,6 +5,7 @@ import { useMemo } from 'react';
 import { api } from '../app/api';
 import { queryKeys } from '../workflows/query-keys';
 import { useProviders } from '../providers/hooks';
+import { agentMap } from '../theme/agents';
 import { useWorkflowGraph } from '../workflows/hooks';
 import { TimelineComposer } from './TimelineComposer';
 import { TimelineFilters } from './TimelineFilters';
@@ -29,7 +30,8 @@ import {
  *
  * Node names and provider accents come from the workflow graph and the provider list — the same
  * sources the Canvas draws from — so an agent's bubble reads under its node name in its provider's
- * colour without the message having to carry either (BR-01).
+ * colour without the message having to carry either (BR-01). An agent's dot takes the colour the
+ * theme gives that agent everywhere — by its order among the Agent and Model nodes (D328).
  */
 
 export interface TimelinePanelProps {
@@ -61,6 +63,7 @@ export function TimelinePanel({
     () => (graph.data?.nodes ?? []).map(timelineNodeOf),
     [graph.data?.nodes],
   );
+  const agents = useMemo(() => agentMap(graph.data?.nodes ?? []), [graph.data?.nodes]);
   const providerList = useMemo(
     () => (providers.data ?? []).map((provider) => ({ id: provider.id, type: provider.type })),
     [providers.data],
@@ -75,13 +78,15 @@ export function TimelinePanel({
     () =>
       filtered.map((message) => {
         const meta = resolveMessageMeta(message, nodes, providerList);
+        const color = message.nodeId === undefined ? undefined : agents.get(message.nodeId)?.color;
         return {
           message,
           ...(meta.nodeName === undefined ? {} : { nodeName: meta.nodeName }),
           ...(meta.provider === undefined ? {} : { provider: meta.provider }),
+          ...(color === undefined ? {} : { color }),
         };
       }),
-    [filtered, nodes, providerList],
+    [filtered, nodes, providerList, agents],
   );
 
   const send = useMutation({
@@ -104,7 +109,7 @@ export function TimelinePanel({
       data-testid="timeline"
       className={['flex h-full min-h-0 flex-col', className].filter(Boolean).join(' ')}
     >
-      <div className="flex flex-wrap items-center gap-2 border-b border-border p-3">
+      <div className="flex flex-wrap items-center gap-2 border-b border-[var(--line)] p-3">
         <TimelineFilters
           filter={filter}
           onChange={onFilterChange}
@@ -112,7 +117,7 @@ export function TimelinePanel({
           nodeIds={nodeOptions(messages)}
           nodeName={nodeName}
         />
-        <span className="ml-auto font-machine text-xs text-fg-muted" data-testid="timeline-count">
+        <span className="ml-auto text-[12px] text-[var(--muted)]" data-testid="timeline-count">
           {rows.length}
           {isEmptyFilter(filter) ? '' : ` of ${messages.length}`} message
           {rows.length === 1 ? '' : 's'}

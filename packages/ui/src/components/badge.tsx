@@ -3,15 +3,16 @@ import type { HTMLAttributes } from 'react';
 
 import { cn } from '../lib/cn.js';
 
+/** The Ace UI theme's mono chip (D328): JetBrains Mono 8.5px, 0.08em, radius 4. */
 export const badgeVariants = cva(
-  'inline-flex items-center rounded-chip border font-machine leading-4',
+  'inline-flex items-center gap-1 whitespace-nowrap rounded-[4px] px-[6px] py-[2px] font-machine text-[8.5px] font-medium uppercase leading-[1.4] tracking-[0.08em]',
   {
     variants: {
       variant: {
-        default: 'h-[22px] gap-1.5 border-border bg-transparent px-[9px] text-[10px] text-fg-soft',
-        accent: 'border-transparent bg-accent px-2 py-0.5 text-[11px] text-accent-fg',
-        danger: 'border-transparent bg-danger px-2 py-0.5 text-[11px] text-canvas',
-        outline: 'border-border px-2 py-0.5 text-[11px] text-fg',
+        default: 'bg-[var(--hover)] text-[var(--ink)]',
+        accent: 'bg-[rgba(239,107,63,0.12)] text-[#e8572e]',
+        danger: 'bg-[rgba(201,76,39,0.12)] text-[#c94c27]',
+        outline: 'border border-[var(--line)] text-[var(--muted)]',
       },
     },
     defaultVariants: { variant: 'default' },

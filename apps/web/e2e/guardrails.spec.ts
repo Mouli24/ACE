@@ -1,7 +1,15 @@
 import { expect, test } from '@playwright/test';
 
 import { freshApp, nodeCard, openSheet, serverGraph } from './helpers';
-import { enginePolicies, inspect, openRound3, seedShape, setNodePolicy, startRun } from './round3';
+import {
+  clickStartRun,
+  enginePolicies,
+  expectRunStatus,
+  inspect,
+  openRound3,
+  seedShape,
+  setNodePolicy,
+} from './round3';
 
 /**
  * The guardrail policy screens (round 3 §5 items 5, 6, §7.1): FR-GRD-001, 002, 011, 014, 015, 018
@@ -53,8 +61,13 @@ test.describe('Guardrail policies (FR-GRD-001/011/018, TC-GRD-001/016)', () => {
     const action = page.getByTestId('action-pii-input');
     await expect(action).toBeVisible();
     await action.click();
+    // Names, not text: the kit's Select draws a "✓" (aria-hidden) beside the chosen option (D328).
     const options = page.getByRole('option');
-    await expect(options).toHaveText(['pass', 'warn', 'redact', 'ask user', 'block']);
+    const actions = ['pass', 'warn', 'redact', 'ask user', 'block'];
+    await expect(options).toHaveCount(actions.length);
+    for (const [index, name] of actions.entries()) {
+      await expect(options.nth(index)).toHaveAccessibleName(name);
+    }
     await options.filter({ hasText: 'ask user' }).click();
     await expect(action).toContainText('ask user');
 
@@ -262,10 +275,8 @@ test.describe('Guardrail policies (FR-GRD-001/011/018, TC-GRD-001/016)', () => {
     page,
   }) => {
     const seeded = await openRound3(page, 'chain', 'linear-complete');
-    await startRun(page).click();
-    await expect(page.getByTestId('run-status')).toHaveAttribute('data-status', 'COMPLETE', {
-      timeout: 20_000,
-    });
+    await clickStartRun(page);
+    await expectRunStatus(page, 'COMPLETE', { timeout: 20_000 });
 
     const inspector = await inspect(page, seeded.agentIds[0]!);
     await expect(inspector.getByTestId('inspector-policy')).toContainText('version');
@@ -279,7 +290,7 @@ test.describe('Verdicts (FR-GRD-014/015, TC-GRD-018/019)', () => {
     const seeded = await openRound3(page, 'chain', 'waiting-approval');
     const [writer] = seeded.agentIds as [string];
 
-    await startRun(page).click();
+    await clickStartRun(page);
     const approval = page.getByTestId(`node-approval-${writer}`);
     await expect(approval).toBeVisible({ timeout: 15_000 });
     await approval.getByRole('button', { name: /^Approve/ }).click();
