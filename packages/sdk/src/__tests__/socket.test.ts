@@ -1,4 +1,4 @@
-import { WS_CLOSE_UNAUTHORIZED, type WsServerFrame } from '@ace/contracts';
+import { WS_CLOSE_FORBIDDEN_ORIGIN, WS_CLOSE_UNAUTHORIZED, type WsServerFrame } from '@ace/contracts';
 
 import { createAceSocket, type AceSocketStatus } from '../index.js';
 
@@ -236,6 +236,19 @@ describe('createAceSocket (round 1 §2.9, FR-EXE-014, Arch §21.4)', () => {
     vi.advanceTimersByTime(10_000);
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(statuses.at(-1)).toBe('unauthorized');
+  });
+
+  it('does not reconnect after close code 4403 and reports forbidden_origin (FR-SYS-003, D301)', () => {
+    const socket = makeSocket();
+    const statuses: AceSocketStatus[] = [];
+    socket.onStatus((s) => statuses.push(s));
+    socket.connect();
+    latest().serverOpen();
+    latest().serverClose(WS_CLOSE_FORBIDDEN_ORIGIN);
+    vi.advanceTimersByTime(10_000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(statuses.at(-1)).toBe('forbidden_origin');
+    expect(socket.status).toBe('forbidden_origin');
   });
 
   it('does not reconnect after the client closes, and unsubscribe sends a frame', () => {

@@ -4,6 +4,7 @@ import type { Server } from 'node:http';
 import { join } from 'node:path';
 
 import {
+  WS_CLOSE_FORBIDDEN_ORIGIN,
   WS_PATH,
   type Artifact,
   type GuardrailCheck,
@@ -54,6 +55,7 @@ import {
   createWsHub,
   guardrailStoreFor,
   haltActiveRuns,
+  isOriginAllowed,
   loadEngineConfig,
   logDirectory,
   logFileName,
@@ -983,7 +985,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     },
   });
 
-  const selfOrigins = [`http://${BIND_HOST}:${port}`, `http://localhost:${port}`];
+  // Filled once the server is bound: with `port: 0` the configured port is not the real one
+  // (D301). The gateway reads this array on every request, so filling it in place is enough.
+  const selfOrigins: string[] = [];
   const app = createEngineApp({
     repository,
     auth,
@@ -1028,11 +1032,14 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
 
   const bound = server.address() as { port: number; address: string };
   const actualPort = bound.port;
+  selfOrigins.push(`http://${BIND_HOST}:${actualPort}`, `http://localhost:${actualPort}`);
   const url = `http://${BIND_HOST}:${actualPort}`;
 
   /* --------------------------------------------------------------- websocket */
 
   const wss = new WebSocketServer({ noServer: true });
+
+  const originDeps = { repository, scope: LOCAL_SCOPE, selfOrigins };
 
   server.on('upgrade', (request, socket, head) => {
     const requestUrl = new URL(request.url ?? '/', url);
@@ -1040,20 +1047,33 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
       socket.destroy();
       return;
     }
+    const origin = request.headers.origin;
 
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      void hub.handleConnection(
-        {
-          send: (data) => ws.send(data),
-          close: (code, reason) => ws.close(code, reason),
-          on: (event, handler) => {
-            if (event === 'message') ws.on('message', (data) => handler(String(data)));
-            else ws.on('close', () => handler(''));
-          },
-        },
-        requestUrl.searchParams.get('token') ?? undefined,
-      );
-    });
+    isOriginAllowed(originDeps, origin).then(
+      (allowed) => {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          if (!allowed) {
+            // design §7: the same allow-list as REST. Completed, then closed rather than
+            // destroyed, so the client learns why and does not retry (FR-SYS-003).
+            logger.warn({ subsystem: 'ws', origin }, 'refused a WebSocket from a foreign origin');
+            ws.close(WS_CLOSE_FORBIDDEN_ORIGIN, 'forbidden origin');
+            return;
+          }
+          void hub.handleConnection(
+            {
+              send: (data) => ws.send(data),
+              close: (code, reason) => ws.close(code, reason),
+              on: (event, handler) => {
+                if (event === 'message') ws.on('message', (data) => handler(String(data)));
+                else ws.on('close', () => handler(''));
+              },
+            },
+            requestUrl.searchParams.get('token') ?? undefined,
+          );
+        });
+      },
+      () => socket.destroy(),
+    );
   });
 
   // Deliberately no banner here. Announcing readiness belongs to the caller, because the caller is

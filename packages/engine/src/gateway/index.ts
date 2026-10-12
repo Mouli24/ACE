@@ -187,6 +187,24 @@ export function bearerToken(header: string | undefined): string | undefined {
   return match?.[1]?.trim();
 }
 
+/** What the Origin rule reads: the stored allow-list and the engine's own origins. */
+export type OriginDeps = Pick<EngineDeps, 'repository' | 'scope' | 'selfOrigins'>;
+
+/**
+ * FR-SYS-003: may a request from this `Origin` come in? One rule for REST (`originGuard`, and
+ * `corsLayer` for what the browser may read) and for the WebSocket upgrade (design §7), so the
+ * three can never disagree. A missing or empty Origin is allowed: curl and the CLI send none, and
+ * a page cannot forge an allowed one.
+ */
+export async function isOriginAllowed(
+  deps: OriginDeps,
+  origin: string | undefined,
+): Promise<boolean> {
+  if (origin === undefined || origin === '') return true;
+  const settings = await deps.repository.settings.get(deps.scope);
+  return settings.allowedOrigins.includes(origin) || (deps.selfOrigins ?? []).includes(origin);
+}
+
 /**
  * The browser half of FR-SYS-003.
  *
@@ -202,11 +220,8 @@ function corsLayer(deps: EngineDeps): MiddlewareHandler<{ Variables: EngineVaria
   return cors({
     // Deliberately the same two sources `originGuard` reads, so the pair can never disagree: an
     // origin added to settings would otherwise pass the guard and still be blocked by the browser.
-    origin: async (origin) => {
-      const settings = await deps.repository.settings.get(deps.scope);
-      const allowed = new Set([...settings.allowedOrigins, ...(deps.selfOrigins ?? [])]);
-      return allowed.has(origin) ? origin : null;
-    },
+    origin: async (origin) =>
+      origin !== '' && (await isOriginAllowed(deps, origin)) ? origin : null,
     // PUT: Forge's save (D299).
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization', 'x-request-id'],
@@ -225,12 +240,7 @@ function corsLayer(deps: EngineDeps): MiddlewareHandler<{ Variables: EngineVaria
 function originGuard(deps: EngineDeps): MiddlewareHandler<{ Variables: EngineVariables }> {
   return async (c, next) => {
     const origin = c.req.header('Origin');
-    if (origin === undefined || origin === '') return next();
-
-    const settings = await deps.repository.settings.get(deps.scope);
-    const allowed = new Set([...settings.allowedOrigins, ...(deps.selfOrigins ?? [])]);
-
-    if (!allowed.has(origin)) throw forbiddenOrigin(origin);
+    if (!(await isOriginAllowed(deps, origin))) throw forbiddenOrigin(origin ?? '');
     return next();
   };
 }

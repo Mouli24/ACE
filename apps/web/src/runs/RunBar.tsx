@@ -28,6 +28,7 @@ import {
   useStopRun,
 } from './hooks';
 import { useRunStore } from './run-store';
+import { SocketNotice } from './SocketNotice';
 
 /** Run state → how the badge reads. The enum name stays the contract (BR-03: COMPLETE ≠ HALTED). */
 const RUN_STATE_LABEL: Readonly<Record<RunState, string>> = {
@@ -125,15 +126,7 @@ export function RunBar({
   return (
     // On the desktop bar (above 641 px) the run bar holds its width and the workflow tabs give way.
     <div className="flex items-center gap-2 min-[641px]:shrink-0" data-testid="run-bar">
-      {socketStatus === 'reconnecting' && (
-        <span
-          role="status"
-          data-testid="socket-reconnecting"
-          className="font-machine text-xs text-fg-muted"
-        >
-          reconnecting…
-        </span>
-      )}
+      <SocketNotice status={socketStatus} />
 
       {run.status && (
         <span
