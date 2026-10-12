@@ -35,8 +35,9 @@ export interface RunningProcess {
   /** Writes to stdin. Ignored once the process has ended. */
   write(data: string): void;
   /**
-   * Kills the whole process tree. `onExit(null, 'SIGKILL')` follows within 1.5 s on every
-   * platform, even if the kill does not take.
+   * Kills the whole process tree, and `onExit(null, 'SIGKILL')` follows within 1.5 s on every
+   * platform, even if the kill does not take. If the shell has already ended, `stop()` does
+   * nothing and the shell's own exit is what gets reported (within 300 ms).
    */
   stop(): void;
 }

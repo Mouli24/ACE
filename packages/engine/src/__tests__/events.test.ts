@@ -456,3 +456,33 @@ describe('D299 the project scope', () => {
     expect(calls).toEqual([true, false, true]);
   });
 });
+
+describe('D301 process frames ride the project scope', () => {
+  const PROJECT = newId();
+  const PROCESS = newId();
+  const output = {
+    type: 'process.output',
+    payload: { projectId: PROJECT, processId: PROCESS, stream: 'stdout', data: 'hi\n' },
+  };
+  const exited = {
+    type: 'process.exited',
+    payload: { projectId: PROJECT, processId: PROCESS, exitCode: 0, signal: null, status: 'exited' },
+  };
+
+  it('delivers process.output and process.exited to the project’s subscribers only, without a seq', async () => {
+    const watching = await connect();
+    const engineOnly = await connect();
+    await watching.receive({ type: 'subscribe', payload: { scope: 'project', id: PROJECT } });
+    await engineOnly.receive({ type: 'subscribe', payload: { scope: 'engine' } });
+
+    await bus.emitTransient(output);
+    await bus.emitTransient(exited);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(watching.frames().filter((frame) => frame.type.startsWith('process.'))).toEqual([
+      output,
+      exited,
+    ]);
+    expect(engineOnly.frames().some((frame) => frame.type.startsWith('process.'))).toBe(false);
+  });
+});
