@@ -149,6 +149,16 @@ describe('FR-WF-006 validate response', () => {
   });
 });
 
+describe('D301 PATCH /projects/:id takes the terminal trust level', () => {
+  it('sets on, scripts or off, and refuses anything else', () => {
+    for (const terminal of ['on', 'scripts', 'off'] as const) {
+      expect(UpdateProjectRequestSchema.parse({ terminal })).toEqual({ terminal });
+    }
+    expect(UpdateProjectRequestSchema.safeParse({ terminal: 'all' }).success).toBe(false);
+    expect(UpdateProjectRequestSchema.safeParse({ terminal: null }).success).toBe(false);
+  });
+});
+
 describe('FR-GRD-008 PATCH /projects/:id takes a run cost cap (round 3 §2.3)', () => {
   it('sets a cap, and a null removes it (D72)', () => {
     expect(UpdateProjectRequestSchema.parse({ maxCostPerRunUsd: 0.01 })).toEqual({
