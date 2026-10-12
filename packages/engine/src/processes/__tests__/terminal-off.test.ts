@@ -1,5 +1,5 @@
 import type { Project } from '@ace/contracts';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { FakeRepository } from '../../__tests__/fake-repository.js';
 import { InProcessPubSubStub } from '../../__tests__/pubsub-stub.js';
@@ -10,7 +10,7 @@ import { newId } from '../../ids.js';
 import { createLogger } from '../../logging/index.js';
 import { LOCAL_SCOPE, type Auth, type EngineEvent, type Scope } from '../../ports/index.js';
 import { createProcessService, type ProcessService } from '../service.js';
-import { fakeRunner } from './fake-runner.js';
+import { fakeRunner, type FakeRunnerOptions } from './fake-runner.js';
 
 const TOKEN = 'a'.repeat(64);
 const HEADERS = { Authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
@@ -20,7 +20,7 @@ const auth: Auth = {
 };
 const logger = createLogger({ level: 'silent', destination: { write: () => undefined } });
 
-async function harness(options: { withTerminal?: boolean } = {}) {
+async function harness(options: { withTerminal?: boolean; runner?: FakeRunnerOptions } = {}) {
   const repository = new FakeRepository();
   const project: Project = {
     id: newId(),
@@ -35,7 +35,7 @@ async function harness(options: { withTerminal?: boolean } = {}) {
     scope: LOCAL_SCOPE,
     pubsub: new InProcessPubSubStub<EngineEvent>(),
   });
-  const runner = fakeRunner();
+  const runner = fakeRunner(options.runner);
   const processes: ProcessService = createProcessService({
     repository,
     scope: LOCAL_SCOPE,
@@ -105,5 +105,32 @@ describe('D301 a deleted project leaves nothing running', () => {
     // Carried item 1: the records are forgotten once the project is gone.
     await expect(processes.get(project.id, processId)).rejects.toMatchObject({ code: 'not_found' });
     await expect(processes.list(project.id)).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('a start that lands while the delete waits is stopped too, never orphaned', async () => {
+    const { project, runner, processes, remove } = await harness({
+      runner: { exitOnStop: false },
+    });
+    const a = await processes.start(project.id, { command: 'serve' });
+    const first = runner.last();
+
+    const deleting = remove();
+    await vi.waitFor(() => expect(first.stops).toBe(1));
+    const b = await processes.start(project.id, { command: 'late' });
+    const second = runner.last();
+    expect(second).not.toBe(first);
+    first.exit(null, 'SIGKILL');
+    // The second stop now waits on B, which ends after its kill.
+    await vi.waitFor(() => expect(second.stops).toBe(1));
+    second.exit(null, 'SIGKILL');
+
+    expect((await deleting).status).toBe(204);
+    expect(second.stops).toBe(1);
+    await expect(processes.get(project.id, b.processId)).rejects.toMatchObject({
+      code: 'not_found',
+    });
+    await expect(processes.get(project.id, a.processId)).rejects.toMatchObject({
+      code: 'not_found',
+    });
   });
 });

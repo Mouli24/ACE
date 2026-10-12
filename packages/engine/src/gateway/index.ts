@@ -499,6 +499,10 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     // D301: a deleted project's processes would run on, unseen and unstoppable: they stop first.
     await deps.processes?.stopProject(id);
     await deps.graph.deleteProject(id);
+    // A start can land while the first stop waits (the project still exists then) and spawn. Once the
+    // delete has committed no new start can pass, and this second stop also refuses any still in
+    // flight and ends what spawned in that window, so forgetting below never orphans a process.
+    await deps.processes?.stopProject(id);
     // Release the records (up to ~40 MB of output) only after the stop and the delete.
     deps.processes?.forgetProject(id);
     return c.body(null, 204);
