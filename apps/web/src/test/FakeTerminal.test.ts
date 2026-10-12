@@ -20,4 +20,30 @@ describe('the FakeTerminal double shows what a person would see', () => {
     term.type('no');
     expect(typed).toEqual(['ls\r']);
   });
+
+  it('clear() keeps the current line as the new first line, like xterm', () => {
+    const term = new FakeTerminal();
+    term.write('a\r\nb');
+    term.clear();
+    expect(term.plain()).toBe('b');
+    term.write('c');
+    expect(term.plain()).toBe('bc');
+  });
+
+  it('reports keys to onKey and resizes to onResize', () => {
+    const term = new FakeTerminal();
+    const keys: Array<{ key: string; code: string }> = [];
+    const sizes: Array<{ cols: number; rows: number }> = [];
+    term.onKey((event) => keys.push({ key: event.key, code: event.domEvent.code }));
+    term.onResize((size) => sizes.push(size));
+    term.type('x');
+    term.press({ code: 'KeyA', key: 'a' });
+    term.resize(100, 30);
+    expect(keys).toEqual([
+      { key: 'x', code: '' },
+      { key: 'a', code: 'KeyA' },
+    ]);
+    expect(sizes).toEqual([{ cols: 100, rows: 30 }]);
+    expect([term.cols, term.rows]).toEqual([100, 30]);
+  });
 });
