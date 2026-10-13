@@ -99,13 +99,19 @@ describe.skipIf(!hasGit)('D300 G-1: a failed store call waits for its other git 
     expect(outcome.running).toBe(0);
   });
 
-  it('revertFile rethrows the first side’s error when both sides fail', async () => {
+  it('revertFile rethrows the first side’s error when both sides fail, even when it fails last', async () => {
     const { store } = await oneSnapshot();
-    const error = await store
-      .revertFile(PROJECT, root, UNKNOWN, 'e'.repeat(40), 'a.txt')
+    // the before side fails once git has looked; the after side fails at once, without git
+    const beforeFirst = await store
+      .revertFile(PROJECT, root, UNKNOWN, 'not-a-commit', 'a.txt')
       .catch((e: unknown) => e);
-    expect(isCheckpointUnavailableError(error)).toBe(true);
-    expect((error as Error).message).toBe('That checkpoint commit is not in the store.');
+    expect(isCheckpointUnavailableError(beforeFirst)).toBe(true);
+    expect((beforeFirst as Error).message).toBe('That checkpoint commit is not in the store.');
+
+    const afterFirst = await store
+      .revertFile(PROJECT, root, 'not-a-commit', UNKNOWN, 'a.txt')
+      .catch((e: unknown) => e);
+    expect((afterFirst as Error).message).toBe('That is not a checkpoint commit.');
   });
 
   it('diff rejects for an unknown commit only after its other git commands have finished', async () => {

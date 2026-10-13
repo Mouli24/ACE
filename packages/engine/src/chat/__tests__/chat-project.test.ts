@@ -863,7 +863,8 @@ describe('D302 fix F-M4: a failure reading the thread or the catalog is a stored
     const reply = await begun.done;
     expect(reply.role).toBe('agent');
     expect(reply.error?.message).toMatch(/the database is locked/);
-    expect(recorder.finished).toBe(recorder.begun.length);
+    expect(recorder.begun).toHaveLength(1);
+    expect(recorder.finished).toBe(1);
     await flush();
     expect(agentTurnsAnnounced(events).map((message) => message.id)).toEqual([reply.id]);
   });
