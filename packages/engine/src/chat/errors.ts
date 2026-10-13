@@ -57,6 +57,22 @@ export class ChatThreadNodeMismatchError extends Error {
   }
 }
 
+/**
+ * D302: a `targetNodeId` that cannot answer in this thread — no such node, a node of another
+ * workflow, or one that is not an agent or model node. The gateway maps it to **400
+ * `validation_failed`**.
+ */
+export class ChatTargetInvalidError extends Error {
+  override readonly name = 'ChatTargetInvalidError';
+
+  constructor(
+    readonly targetNodeId: Id,
+    reason: string,
+  ) {
+    super(reason);
+  }
+}
+
 /** The router refused to pick a model for this chat (same codes as a run's pre-flight). */
 export class ChatModelError extends Error {
   override readonly name = 'ChatModelError';

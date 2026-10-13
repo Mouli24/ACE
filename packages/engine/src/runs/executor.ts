@@ -388,7 +388,7 @@ type TurnOutcome = { kind: 'cancelled' } | { kind: 'called'; pendingCalls: Pendi
  * gets at least the longest node timeout the contract allows rather than the 2-minute default sized
  * for one model reply (review I6). Stop still ends it at once.
  */
-const CLI_SESSION_MIN_TIMEOUT_MS = 600_000;
+export const CLI_SESSION_MIN_TIMEOUT_MS = 600_000;
 
 /**
  * An accepted, paid-for answer whose memory ops the store refused (13a review m1): Arch §28's

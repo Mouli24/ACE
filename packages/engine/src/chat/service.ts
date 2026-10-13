@@ -1,6 +1,9 @@
 import {
   DEFAULT_CONTEXT_POLICY,
+  DEFAULT_MAX_TOOL_CALLS,
   blockedChatReply,
+  isCliProviderType,
+  type ActivityItem,
   type ChatMessage,
   type ChatRequest,
   type ChatThread,
@@ -19,6 +22,7 @@ import {
   type PostMessageResponse,
   type Run,
   type StartRunRequest,
+  type ToolDefinition,
   type Usage,
 } from '@ace/contracts';
 
@@ -29,14 +33,28 @@ import type { CheckRunner, SecretMasker } from '../guardrails/checks.js';
 import type { PolicyService } from '../guardrails/policy-service.js';
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
-import type { ModelRouter, ProviderAdapter, Repository, Scope, StreamChunk } from '../ports/index.js';
+import type {
+  CheckpointRecorder,
+  CheckpointRecording,
+  ModelRouter,
+  ProviderAdapter,
+  Repository,
+  Scope,
+  StreamChunk,
+  ToolResult,
+} from '../ports/index.js';
+import { createSemaphore, type Semaphore } from '../providers/semaphore.js';
 import { usageFor } from '../runs/cost.js';
+import { CLI_SESSION_MIN_TIMEOUT_MS } from '../runs/executor.js';
+import type { ToolProvider } from '../runs/tool-loop.js';
 import { maskSecrets } from '../security/secret-patterns.js';
+import { activityItemFor } from './activity.js';
 import {
   ChatInputBlockedError,
   ChatModelError,
   ChatNodeNotFoundError,
   ChatRunNotAvailableError,
+  ChatTargetInvalidError,
   ChatThreadNodeMismatchError,
   ChatThreadNotFoundError,
   ChatWorkflowNotFoundError,
@@ -48,6 +66,7 @@ import {
   type ChatGuardrailDeps,
 } from './guardrails.js';
 import { buildChatPrompt } from './prompt.js';
+import { chatToolsFrom, runChatToolLoop, type ChatToolRequest } from './tool-loop.js';
 
 /**
  * The chat service (FR-CHAT-001..008, round 4 §2.3, Arch §12.2).
@@ -64,10 +83,28 @@ import { buildChatPrompt } from './prompt.js';
 /** A `agent` or `model` node — the only kinds with a direct chat. */
 type ChatNode = Extract<Node, { kind: 'agent' | 'model' }>;
 
-/** What `resolveNode` returns: the node and the project whose default policy guards it. */
+/**
+ * What `resolveNode` returns: the node, the project whose default policy guards it and whose
+ * folder a chat works in (D302), and the workflow a `targetNodeId` must share (D302).
+ */
 export interface ResolvedChatNode {
   node: Node;
   projectId: Id;
+  workflowId: Id;
+}
+
+/**
+ * D302: how long one model call of a chat turn may take. A coding-agent CLI working in the project
+ * folder runs a whole session per call, so it gets a run's floor (`CLI_SESSION_MIN_TIMEOUT_MS`);
+ * everything else keeps the node's own clock.
+ */
+export function chatTurnTimeoutMs(
+  nodeTimeoutMs: number,
+  options: { cli: boolean; workspace: boolean },
+): number {
+  return nodeTimeoutMs > 0 && options.cli && options.workspace
+    ? Math.max(nodeTimeoutMs, CLI_SESSION_MIN_TIMEOUT_MS)
+    : nodeTimeoutMs;
 }
 
 /** What `POST /nodes/:id/chat` answers with — plus `done`, the reply the gateway logs but does not await. */
@@ -145,6 +182,16 @@ export interface ChatServiceDeps {
   masker?: SecretMasker;
   /** Starts a run for `postMessage({ run: true })` — the run service's `beginRun`, via the root. */
   startRun?: (workflowId: Id, request: StartRunRequest) => Promise<Run>;
+  /**
+   * D302: the tool registry an API model's project chat draws its tools from — only the
+   * non-destructive project six are ever offered (`CHAT_PROJECT_TOOLS`). Absent: no tools in chat.
+   */
+  tools?: ToolProvider;
+  /**
+   * D302/D300: records a checkpoint around each writing chat turn. Absent: turns still write, and
+   * nothing is recorded to review or revert.
+   */
+  checkpoints?: CheckpointRecorder;
   now?: () => string;
   nextId?: () => string;
   tokenBatchMs?: number;
@@ -189,11 +236,14 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
   function failedTurn(
     threadId: Id,
     error: NodeError,
-    extra: Pick<ChatMessage, 'runId' | 'usage'> = {},
+    extra: Partial<
+      Pick<ChatMessage, 'runId' | 'usage' | 'speakerNodeId' | 'activity' | 'checkpointId'>
+    > = {},
+    id: Id = nextId(),
   ): ChatMessage {
     const message = maskSecrets(error.message);
     return {
-      id: nextId(),
+      id,
       threadId,
       role: 'agent',
       content: [{ type: 'text', text: message }],
@@ -233,22 +283,74 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     return route.route;
   }
 
+  /** The project folder a chat with this project's nodes works in (D302); none without one. */
+  async function workspaceOf(projectId: Id): Promise<string | undefined> {
+    try {
+      const project = await repository.projects.get(scope, projectId);
+      return project === null || project.folderPath === '' ? undefined : project.folderPath;
+    } catch {
+      return undefined;
+    }
+  }
+
   /**
-   * Generate, guard and persist one reply (FR-CHAT-004, FR-CHAT-006, FR-CHAT-008). Never touches a
-   * run: it calls the adapter directly, prices with `usageFor`, and writes only a `ChatMessage`. A
-   * failed call is written too, as a turn carrying its `error`, so the client always hears how the
-   * turn ended.
+   * D302: writing turns go one at a time per project, so two agents' changes never interleave in
+   * one checkpoint. A workflow run in the same project is not held back by this (a documented
+   * limitation: its changes and a chat turn's can mix).
    */
-  async function generateReply(context: {
+  const writeQueues = new Map<Id, Semaphore>();
+  function writeQueue(projectId: Id): Semaphore {
+    let queue = writeQueues.get(projectId);
+    if (queue === undefined) {
+      queue = createSemaphore(1);
+      writeQueues.set(projectId, queue);
+    }
+    return queue;
+  }
+
+  /** Node id → name across the thread's workflow, so the prompt can say who said what (D302). */
+  async function namesOf(workflowId: Id): Promise<Map<string, string>> {
+    try {
+      const nodes = await repository.nodes.listByWorkflow(scope, workflowId);
+      return new Map(nodes.map((each) => [each.id, each.name]));
+    } catch {
+      return new Map();
+    }
+  }
+
+  interface ReplyContext {
+    /** The node answering: the target, or the thread's own node (D302). */
     node: ChatNode;
+    /** The thread's own node — who spoke a turn that names no speaker. */
+    mainNodeId: Id;
+    workflowId: Id;
+    projectId: Id;
+    /** The project folder (D302): set, the turn works in it and is a writing turn. */
+    workspace: string | undefined;
     chosen: ModelUsed;
     policy: Awaited<ReturnType<PolicyService['resolve']>> | null;
     threadId: Id;
     history: readonly ChatMessage[];
     userParts: readonly Part[];
     guardrails: ChatGuardrailDeps | undefined;
-  }): Promise<ChatMessage> {
-    const { node, chosen, policy, threadId, history, userParts, guardrails } = context;
+  }
+
+  /**
+   * Generate, guard and persist one reply (FR-CHAT-004, FR-CHAT-006, FR-CHAT-008). Never touches a
+   * run: it calls the adapter directly, prices with `usageFor`, and writes only a `ChatMessage`. A
+   * failed call is written too, as a turn carrying its `error`, so the client always hears how the
+   * turn ended (D287). A turn in a project with a folder is a writing turn (D302): it waits for the
+   * project's write queue and is checkpointed.
+   */
+  function generateReply(context: ReplyContext): Promise<ChatMessage> {
+    if (context.workspace === undefined) return produceReply(context);
+    return writeQueue(context.projectId).run(() => produceReply(context));
+  }
+
+  async function produceReply(context: ReplyContext): Promise<ChatMessage> {
+    const { node, chosen, policy, threadId, history, userParts, guardrails, workspace } = context;
+    // Known before the call, so the checkpoint can name the turn it belongs to.
+    const replyId = nextId();
 
     const instructions =
       node.kind === 'agent' ? node.config.instructions : (node.config.systemPrompt ?? '');
@@ -265,12 +367,18 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       history: history.filter((message) => message.error === undefined),
       userParts,
       now: now(),
+      speakers: {
+        names: await namesOf(context.workflowId),
+        mainNodeId: context.mainNodeId,
+        selfNodeId: node.id,
+      },
     });
 
     const catalog = await deps.modelsFor();
-    const pricing = catalog.find(
+    const catalogRow = catalog.find(
       (model) => model.providerId === chosen.providerId && model.modelId === chosen.modelId,
-    )?.pricing;
+    );
+    const pricing = catalogRow?.pricing;
 
     /* Stream: `chat.token` deltas batched ~50 ms, then the accumulated text is the reply. */
     const tokens = createBatcher<string>({
@@ -283,8 +391,20 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       },
     });
 
-    const timeoutMs = node.config.execution.timeoutMs;
-    const signal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : new AbortController().signal;
+    /* D300/D302: the files before the turn, so what it changed can be reviewed and reverted. */
+    let recording: CheckpointRecording | undefined;
+    if (workspace !== undefined && deps.checkpoints !== undefined) {
+      try {
+        recording = await deps.checkpoints.begin(context.projectId, {
+          kind: 'chat',
+          threadId,
+          messageId: replyId,
+          nodeId: node.id,
+        });
+      } catch (error) {
+        logger.warn({ subsystem: 'chat', threadId, err: error }, 'chat checkpoint did not start');
+      }
+    }
 
     let text = '';
     let tokensIn = 0;
@@ -293,44 +413,122 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     /** What the provider itself said the call cost — a CLI's own figure (D263), as a run uses it. */
     let reportedCostUsd: number | undefined;
     let failure: NodeError | undefined;
+    /** D302: what the turn did in the project — a CLI's activity or the API tool calls. */
+    const activity: ActivityItem[] = [];
+    let toolsOffered = false;
+    let limitReached = false;
+    const maxToolCalls =
+      node.kind === 'agent' ? node.config.tools.maxToolCalls : DEFAULT_MAX_TOOL_CALLS;
 
     try {
-      await deps.runGated(chosen.providerId, async () => {
-        const adapter = await deps.adapterFor(chosen.providerId);
-        // No `tools` and no `runId`: chat is text-only here and belongs to no run (FR-CHAT-005). A
-        // tool loop in direct chat needs the executor's tool machinery, which is out of scope — see
-        // the A4 report.
-        const stream = adapter.generate(
-          {
-            modelId: chosen.modelId,
-            system: prompt.system,
-            prompt: prompt.text,
-            outputTypes: ['text'],
-            temperature: node.config.execution.temperature,
-            maxTokens: node.config.execution.maxTokens,
-          },
-          signal,
-        );
-
-        for await (const chunk of stream as AsyncIterable<StreamChunk>) {
-          if (chunk.type === 'text') {
-            text += chunk.delta;
-            tokens.push(chunk.delta);
-          } else if (chunk.type === 'usage') {
-            tokensIn = chunk.tokensIn;
-            tokensOut = chunk.tokensOut;
-            if (chunk.costUsd !== undefined) reportedCostUsd = chunk.costUsd;
-          } else if (chunk.type === 'model') {
-            answeredBy = chunk.modelId;
-          }
-        }
+      const adapter: ProviderAdapter = await deps.adapterFor(chosen.providerId);
+      const cli = isCliProviderType(adapter.type);
+      const timeoutMs = chatTurnTimeoutMs(node.config.execution.timeoutMs, {
+        cli,
+        workspace: workspace !== undefined,
       });
+      // D302: an API model in a project gets the non-destructive project tools, when its catalog
+      // row says it can call tools; a CLI uses its own, under its provider's permission preset.
+      const offered =
+        workspace !== undefined && !cli && catalogRow?.supportsTools === true
+          ? chatToolsFrom(deps.tools)
+          : [];
+      toolsOffered = offered.length > 0;
+
+      /** One model call, inside this provider's concurrency gate (FR-PRV-009). */
+      const turn = (options: {
+        tools?: ToolDefinition[];
+        toolResults?: ToolResult[];
+      }): Promise<ChatToolRequest[]> =>
+        deps.runGated(chosen.providerId, async () => {
+          const signal =
+            timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : new AbortController().signal;
+          // No `runId`: a chat belongs to no run (FR-CHAT-005); `turnId` names the turn instead.
+          const stream = adapter.generate(
+            {
+              modelId: chosen.modelId,
+              system: prompt.system,
+              prompt: prompt.text,
+              outputTypes: ['text'],
+              temperature: node.config.execution.temperature,
+              maxTokens: node.config.execution.maxTokens,
+              turnId: replyId,
+              // D302: a CLI works in the project under its preset; without a folder it is read-only.
+              ...(workspace === undefined ? {} : { workingDir: workspace }),
+              ...(options.tools === undefined ? {} : { tools: options.tools }),
+              ...(options.toolResults === undefined ? {} : { toolResults: options.toolResults }),
+            },
+            signal,
+          );
+
+          const requested: ChatToolRequest[] = [];
+          for await (const chunk of stream as AsyncIterable<StreamChunk>) {
+            if (chunk.type === 'text') {
+              text += chunk.delta;
+              tokens.push(chunk.delta);
+            } else if (chunk.type === 'usage') {
+              // Summed: every call of a tool loop is its own billed call.
+              tokensIn += chunk.tokensIn;
+              tokensOut += chunk.tokensOut;
+              if (chunk.costUsd !== undefined) {
+                reportedCostUsd = (reportedCostUsd ?? 0) + chunk.costUsd;
+              }
+            } else if (chunk.type === 'model') {
+              answeredBy = chunk.modelId;
+            } else if (chunk.type === 'tool_call') {
+              requested.push({ callId: chunk.callId, name: chunk.name, args: chunk.args });
+            } else if (chunk.type === 'activity') {
+              // The CLI already did this (D261): kept as what it did, never what it read.
+              activity.push(
+                activityItemFor({
+                  tool: chunk.tool,
+                  args: chunk.args,
+                  status: chunk.status,
+                  ...(workspace === undefined ? {} : { projectDir: workspace }),
+                }),
+              );
+            }
+          }
+          return requested;
+        });
+
+      const loop = await runChatToolLoop({
+        tools: offered,
+        // With nothing offered a stray tool request ends the turn rather than being refused.
+        maxToolCalls: toolsOffered ? maxToolCalls : 0,
+        context: {
+          runId: replyId,
+          sandboxDir: '',
+          ...(workspace === undefined ? {} : { projectDir: workspace }),
+          signal: new AbortController().signal,
+        },
+        turn,
+        activity,
+        onCall: (tool, status) =>
+          logger.info({ subsystem: 'chat', threadId, tool, status }, 'chat tool call'),
+      });
+      limitReached = loop.limitReached;
     } catch (error) {
       failure = classifyError(error, { providerId: chosen.providerId });
     } finally {
       // Before the closing `chat.message`: a token flushed after it would restart the stream.
       tokens.stop();
     }
+
+    /* The files after the turn — whether it answered or failed, what it changed is reviewable. */
+    let checkpointId: Id | undefined;
+    if (recording !== undefined) {
+      try {
+        checkpointId = (await recording.finish())?.id;
+      } catch (error) {
+        logger.warn({ subsystem: 'chat', threadId, err: error }, 'chat checkpoint did not finish');
+      }
+    }
+    const extra = {
+      speakerNodeId: node.id,
+      ...(activity.length === 0 ? {} : { activity }),
+      ...(checkpointId === undefined ? {} : { checkpointId }),
+    };
 
     const priced = usageFor(tokensIn, tokensOut, pricing);
     const usage = reportedCostUsd === undefined ? priced : { ...priced, costUsd: reportedCostUsd };
@@ -340,9 +538,11 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         { subsystem: 'chat', threadId, code: failure.code, kind: failure.kind },
         'chat reply failed',
       );
-      return store(
-        failedTurn(threadId, failure, { usage }),
-      );
+      return store(failedTurn(threadId, failure, { usage, ...extra }, replyId));
+    }
+
+    if (limitReached && toolsOffered && text.trim() === '') {
+      text = `I stopped after ${maxToolCalls} tool calls, the most one chat turn may make.`;
     }
 
     /* The output point (FR-CHAT-008): a block turns the reply into `[blocked by guardrail: …]`. */
@@ -358,7 +558,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     }
 
     return store({
-      id: nextId(),
+      id: replyId,
       threadId,
       role: 'agent',
       content: replyParts,
@@ -366,6 +566,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       usage,
       at: now(),
       ...(answeredBy === undefined ? {} : { modelId: answeredBy }),
+      ...extra,
     });
   }
 
@@ -438,8 +639,50 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     async chat(nodeId, request) {
       const resolved = await deps.resolveNode(nodeId);
       if (resolved === null) throw new ChatNodeNotFoundError(nodeId);
-      const { node, projectId } = resolved;
-      if (node.kind !== 'agent' && node.kind !== 'model') throw new NotAnAgentNodeError(nodeId);
+      const { node: addressed, projectId, workflowId } = resolved;
+      if (addressed.kind !== 'agent' && addressed.kind !== 'model') {
+        throw new NotAnAgentNodeError(nodeId);
+      }
+
+      /*
+       * The named thread, read before anything is decided: with no target, its own node answers.
+       * D302 relaxes the old check — a thread of any node of the same workflow may be continued
+       * from this node — but a thread of another workflow is still refused.
+       */
+      let found: ChatThread | undefined;
+      let owner: ChatNode = addressed;
+      if (request.threadId !== undefined) {
+        const thread = await repository.chatThreads.get(scope, request.threadId);
+        if (thread === null) throw new ChatThreadNotFoundError(request.threadId);
+        if (thread.nodeId !== nodeId) {
+          const other = await deps.resolveNode(thread.nodeId);
+          if (other === null || other.workflowId !== workflowId) {
+            throw new ChatThreadNodeMismatchError(request.threadId, nodeId);
+          }
+          if (other.node.kind !== 'agent' && other.node.kind !== 'model') {
+            throw new NotAnAgentNodeError(thread.nodeId);
+          }
+          owner = other.node;
+        }
+        found = thread;
+      }
+
+      /* D302: the node that answers — the `@handle` target, or the thread's own node. */
+      let node: ChatNode = owner;
+      const targetId = request.targetNodeId;
+      if (targetId !== undefined && targetId !== owner.id) {
+        const target = targetId === addressed.id ? resolved : await deps.resolveNode(targetId);
+        if (target === null || target.workflowId !== workflowId) {
+          throw new ChatTargetInvalidError(targetId, `Node ${targetId} is not in this workflow.`);
+        }
+        if (target.node.kind !== 'agent' && target.node.kind !== 'model') {
+          throw new ChatTargetInvalidError(
+            targetId,
+            `"${target.node.name}" is not an agent or model node, so it cannot answer in chat.`,
+          );
+        }
+        node = target.node;
+      }
 
       // First, before a thread or a turn exists: a node that cannot answer says so in the 400.
       const chosen = routeFor(node);
@@ -460,12 +703,9 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         inputVerdicts = checked.verdicts;
       }
 
-      /* Reuse the named thread or open a new one; a named thread must belong to this node. */
+      /* Reuse the named thread or open a new one; the thread keeps its node, the main one. */
       let thread: ChatThread;
-      if (request.threadId !== undefined) {
-        const found = await repository.chatThreads.get(scope, request.threadId);
-        if (found === null) throw new ChatThreadNotFoundError(request.threadId);
-        if (found.nodeId !== nodeId) throw new ChatThreadNodeMismatchError(request.threadId, nodeId);
+      if (found !== undefined) {
         thread = found;
       } else {
         const at = now();
@@ -493,6 +733,10 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
 
       const done = generateReply({
         node,
+        mainNodeId: thread.nodeId,
+        workflowId,
+        projectId,
+        workspace: await workspaceOf(projectId),
         chosen,
         policy,
         threadId: thread.id,

@@ -93,6 +93,11 @@ export interface GenerateRequest {
   runId?: string;
   iteration?: number;
   /**
+   * D302: the chat turn this call belongs to. A direct chat belongs to no run (FR-CHAT-005), so a
+   * provider keys per-call behaviour on this instead — the mock's attempt and script counters.
+   */
+  turnId?: string;
+  /**
    * The project folder this call works in (X1 §4.2). Only an agent-route provider (a coding-agent
    * CLI) reads it; without it such a provider runs read-only in a fresh temp folder.
    */

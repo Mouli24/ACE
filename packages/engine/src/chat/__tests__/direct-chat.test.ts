@@ -160,9 +160,12 @@ describe('direct chat with an agent (FR-CHAT-004..007)', () => {
     await expect(service.chat(output.id, { content: hi })).rejects.toBeInstanceOf(NotAnAgentNodeError);
   });
 
-  it('rejects a threadId that belongs to another node, and one that does not exist', async () => {
-    // A thread on a different node.
-    const other = makeAgentNode(workflow.id, { name: 'Other' });
+  it('rejects a threadId of a node in another workflow, and one that does not exist', async () => {
+    // D302: a thread of a node in the same workflow may be continued; another workflow's may not.
+    const elsewhere = makeWorkflow(projectId);
+    await setup({ workflowIds: [elsewhere.id] });
+    await repository.workflows.create(scope, elsewhere);
+    const other = makeAgentNode(elsewhere.id, { name: 'Other' });
     await repository.nodes.insert(scope, other);
     const foreign = await repository.chatThreads.create(scope, {
       id: newId(),
@@ -289,7 +292,8 @@ describe('FR-CHAT-004 FR-CHAT-005 TC-CHAT-005 D-079 the prompt a direct chat sen
     // The last turn's prompt: roles labelled, the newest turn last, within the budget, oldest gone.
     const conversation = conversationOf(prompts.at(-1)!);
     expect(conversation.split('\n').at(-1)).toBe('User: And the newest question?');
-    expect(conversation).toContain('Assistant: Reply 5: the answer goes on');
+    // D302: each assistant turn names its speaker, and the node answering sees its own.
+    expect(conversation).toContain('Assistant (Writer, you): Reply 5: the answer goes on');
     expect(conversation).not.toContain('The opening question.');
     expect(estimateTokens(conversation)).toBeLessThanOrEqual(budgetTokens);
     expect(prompts.at(-1)).not.toContain(UNTRUSTED_LABEL);

@@ -36,6 +36,7 @@ import {
   ChatModelError,
   ChatNodeNotFoundError,
   ChatRunNotAvailableError,
+  ChatTargetInvalidError,
   ChatThreadNodeMismatchError,
   ChatThreadNotFoundError,
   ChatWorkflowNotFoundError,
@@ -321,7 +322,11 @@ function toChatHttpError(error: unknown): unknown {
   ) {
     return notFound(error.message.replace(/\.$/, ''));
   }
-  if (error instanceof NotAnAgentNodeError || error instanceof ChatThreadNodeMismatchError) {
+  if (
+    error instanceof NotAnAgentNodeError ||
+    error instanceof ChatThreadNodeMismatchError ||
+    error instanceof ChatTargetInvalidError
+  ) {
     return new HttpError('invalid_config', 'validation_failed', error.message);
   }
   if (error instanceof ChatModelError) {
