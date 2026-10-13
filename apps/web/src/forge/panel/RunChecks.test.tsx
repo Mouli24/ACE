@@ -3,8 +3,16 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
 import { useLayoutStore } from '../../app/stores/layout';
-import { db, installMockServer, installMockSocket, processes, renderApp } from '../../test/app';
+import {
+  db,
+  installMockServer,
+  installMockSocket,
+  processes,
+  renderApp,
+  server,
+} from '../../test/app';
 import { useEditorStore } from '../editor/editor-store';
+import { useTerminalStore } from '../terminal/terminal-store';
 import { useProblemsStore } from './problems-store';
 
 installMockServer();
@@ -43,7 +51,9 @@ describe('D299 Phase 4 Run checks in the Problems panel', () => {
     const row = await within(group).findByRole('button', { name: /Type is wrong\./ });
     expect(row).toHaveTextContent('tsc(TS2322) [Ln 2, Col 3]');
     expect(within(group).getByTestId('checks-sources')).toHaveTextContent('tsc');
-    expect(within(group).getByTestId('checks-time')).toHaveTextContent(/Just now · \d+\.\d s/);
+    expect(within(group).getByTestId('checks-time')).toHaveTextContent(
+      /Just now · \d+\.\d s · exit 0/,
+    );
     // the process is in the Terminal's list like any other
     expect(processes.list(projectId)[0]).toMatchObject({ label: 'Checks', status: 'exited' });
     // the footer and the panel count it
@@ -105,4 +115,76 @@ describe('D299 Phase 4 Run checks in the Problems panel', () => {
     // Ctrl+B alone still toggles the side bar, and Ctrl+Alt+B the chat
     expect(useLayoutStore.getState().sidebarOpen).toBe(true);
   });
+});
+
+describe('D299 Phase 4 fix I2: a failed run never reads as a clean one', () => {
+  it('a non-zero exit with nothing recognised says the checks failed, with its exit code and Show output', async () => {
+    const user = userEvent.setup();
+    const projectId = openForge({ checkCommand: 'fail' });
+    const button = await screen.findByTestId('run-checks');
+    await waitFor(() => expect(button).toBeEnabled());
+    await user.click(button);
+
+    const group = await screen.findByRole('region', { name: 'Checks' });
+    expect(
+      await within(group).findByText(
+        'Checks failed (exit 1); no problems recognised in the output',
+      ),
+    ).toBeInTheDocument();
+    expect(within(group).queryByText(/No problems found/)).toBeNull();
+    expect(within(group).getByTestId('checks-time')).toHaveTextContent('exit 1');
+
+    await user.click(within(group).getByRole('button', { name: 'Show output' }));
+    expect(useLayoutStore.getState()).toMatchObject({ panelOpen: true, panelTab: 'terminal' });
+    // a tab of its own, named for the process, showing what it printed
+    await waitFor(() => {
+      const tabs = useTerminalStore.getState().projects[projectId]?.tabs ?? [];
+      expect(tabs.map((tab) => tab.label)).toContain('Checks');
+    });
+    expect(processes.list(projectId)[0]?.label).toBe('Checks');
+  });
+
+  it('a clean exit with nothing found still says so, with exit 0', async () => {
+    const user = userEvent.setup();
+    openForge({ checkCommand: 'echo all good' });
+    const button = await screen.findByTestId('run-checks');
+    await waitFor(() => expect(button).toBeEnabled());
+    await user.click(button);
+    const group = await screen.findByRole('region', { name: 'Checks' });
+    expect(await within(group).findByText(/No problems found by/)).toBeInTheDocument();
+    expect(within(group).getByTestId('checks-time')).toHaveTextContent('exit 0');
+  });
+});
+
+describe('D299 Phase 4 fix Minor 6: following a run stops when Forge goes', () => {
+  it('stops asking the engine about a run that never ends once Forge unmounts', async () => {
+    const user = userEvent.setup();
+    const created = db.createProject({ name: 'Shop' });
+    const workflow = db.createWorkflow(created.id, 'Main');
+    db.updateProject(created.id, { checkCommand: 'serve' });
+    act(() => useLayoutStore.setState({ panelOpen: true, panelTab: 'problems' }));
+    const { router } = renderApp(`/projects/${created.id}/workflows/${workflow.id}/forge`);
+    const asked: string[] = [];
+    server.events.on('request:start', ({ request }) => {
+      const path = new URL(request.url).pathname;
+      if (request.method === 'GET' && /\/processes\/[0-9A-HJKMNP-TV-Z]{26}$/.test(path)) {
+        asked.push(path);
+      }
+    });
+
+    const button = await screen.findByTestId('run-checks');
+    await waitFor(() => expect(button).toBeEnabled());
+    await user.click(button);
+    // a run that never exits: Run checks follows it, asking about it every second
+    await waitFor(() => expect(asked.length).toBeGreaterThanOrEqual(2), { timeout: 3_000 });
+
+    await act(() => router.navigate(`/projects/${created.id}`));
+    await screen.findByTestId('project-checks-card');
+    const before = asked.length;
+    await new Promise((settle) => setTimeout(settle, 2_500));
+    expect(asked.length).toBe(before);
+    // and it says so, rather than running forever in Problems
+    expect(useProblemsStore.getState().checks[created.id]?.status).not.toBe('running');
+    processes.stopProject(created.id);
+  }, 15_000);
 });

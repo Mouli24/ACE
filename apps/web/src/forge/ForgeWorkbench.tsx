@@ -1,4 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
 
 import { SHORTCUTS, useShortcuts } from '../app/shortcuts';
 import { useLayoutStore } from '../app/stores/layout';
@@ -12,7 +13,7 @@ import { useEditorSync } from './editor/useEditorSync';
 import { ExplorerView } from './explorer/ExplorerView';
 import { useSideViewStore } from './explorer/side-view-store';
 import { BottomPanel } from './panel/BottomPanel';
-import { runChecks } from './panel/run-checks';
+import { runChecks, stopFollowingChecks } from './panel/run-checks';
 import { QuickOpen } from './quick-open/QuickOpen';
 import { useQuickOpen } from './quick-open/quick-open-store';
 import { toggleTerminalFocused } from './terminal/focus';
@@ -43,6 +44,8 @@ export function ForgeWorkbench({
   useEditorSync(projectId);
   // D299 Phase 4: the project's sources for cross-file TypeScript, once Monaco has loaded.
   useProjectTypes(projectId);
+  // Leaving the project stops following its Run checks (fix Minor 6).
+  useEffect(() => () => stopFollowingChecks(projectId), [projectId]);
   const activePath = (): string | undefined =>
     useEditorStore.getState().projects[projectId]?.active;
   useShortcuts([

@@ -11,7 +11,14 @@ import { useEffect } from 'react';
 
 import { api } from '../../app/api';
 import { getSocket } from '../../app/socket';
-import { fileUri, pathOfUri, whenMonaco } from './models';
+import {
+  fileUri,
+  getModel,
+  isRegistryModel,
+  onRegistryChange,
+  pathOfUri,
+  whenMonaco,
+} from './models';
 
 type MonacoApi = typeof Monaco;
 type Defaults = Monaco.typescript.LanguageServiceDefaults;
@@ -130,10 +137,15 @@ export function tsconfigOptions(
  * Cross-file TypeScript IntelliSense (D299 Phase 4, design §6.2): the project's TS/JS sources —
  * up to 1,500 files and 2 MB, as `GET /files/sources` caps them — registered with Monaco's
  * TypeScript service as extra libs at their model URIs (`file:///<projectId>/<path>`), JS files
- * with the JavaScript service too, so an open file's imports resolve to real types. A file open as
- * a model is never also an extra lib (the two would declare everything twice): its lib goes when
- * the model opens and comes back, read fresh from disk, when it closes. Extra libs produce no
- * markers — Monaco validates models only — so Problems still lists only the open files.
+ * with the JavaScript service too, so an open file's imports resolve to real types. A file open in
+ * Forge is never also an extra lib (the two would declare everything twice): its lib goes when the
+ * registry opens it and comes back, read fresh from disk, when it closes.
+ *
+ * Monaco makes real models of its own from extra libs — for go-to-definition, references, rename
+ * and a diagnostic's related information — at the same URIs (fix C2). Those are never "open": the
+ * registry does not adopt them (`ensureModel` replaces one with the disk's text), Problems leaves
+ * out their markers, and this loader disposes one whenever it replaces or drops that file's lib,
+ * and all of them when the project goes, so none is ever left holding older text.
  */
 export function loadProjectTypes(
   monaco: Pick<MonacoApi, 'editor' | 'typescript'>,
@@ -151,8 +163,14 @@ export function loadProjectTypes(
   /** Bumped by every reload, so a slower, older load never lands after a newer one. */
   let generation = 0;
 
-  const isOpen = (path: string): boolean =>
-    monaco.editor.getModel(fileUri(projectId, path)) !== null;
+  /** Open in Forge: the registry made a model for it. Monaco's own models never count. */
+  const isOpen = (path: string): boolean => getModel(projectId, path) !== undefined;
+
+  /** Monaco's model of a lib at this path, if it made one: it holds the lib's text, which is going. */
+  function disposeStray(path: string): void {
+    const model = monaco.editor.getModel(fileUri(projectId, path));
+    if (model !== null && !model.isDisposed() && !isRegistryModel(model)) model.dispose();
+  }
 
   function unregister(path: string): void {
     for (const lib of libs.get(path) ?? []) lib.dispose();
@@ -163,6 +181,7 @@ export function loadProjectTypes(
   function register(path: string, content: string): void {
     unregister(path);
     if (disposed || isOpen(path)) return;
+    disposeStray(path);
     const uri = fileUri(projectId, path).toString();
     const added = [monaco.typescript.typescriptDefaults.addExtraLib(content, uri)];
     if (JAVASCRIPT.has(extensionOf(path))) {
@@ -188,6 +207,7 @@ export function loadProjectTypes(
       else unregister(path);
     } catch {
       unregister(path);
+      disposeStray(path);
     }
   }
 
@@ -223,19 +243,12 @@ export function loadProjectTypes(
     applyOptions(tsconfigOptions(projectId, sources.tsconfig));
   }
 
-  const watching = [
-    monaco.editor.onDidCreateModel((model) => {
-      const where = pathOfUri(model.uri);
-      if (where?.projectId === projectId) unregister(where.path);
-    }),
-    monaco.editor.onWillDisposeModel((model) => {
-      const where = pathOfUri(model.uri);
-      // read once the model is gone: the disk now holds what was saved, or what was never changed
-      if (where?.projectId === projectId && isSource(where.path) && !disposed) {
-        void Promise.resolve().then(() => readFresh(where.path));
-      }
-    }),
-  ];
+  const stopFollowing = onRegistryChange((owner, path, open) => {
+    if (owner !== projectId || disposed) return;
+    if (open) unregister(path);
+    // read once it is closed: the disk now holds what was saved, or what was never changed
+    else if (isSource(path)) void readFresh(path);
+  });
 
   return {
     ready: reload(),
@@ -247,6 +260,7 @@ export function loadProjectTypes(
           .map((change) => {
             if (change.kind === 'deleted') {
               unregister(change.path);
+              if (!isOpen(change.path)) disposeStray(change.path);
               return Promise.resolve();
             }
             return isOpen(change.path) ? Promise.resolve() : readFresh(change.path);
@@ -255,8 +269,14 @@ export function loadProjectTypes(
     },
     dispose() {
       disposed = true;
-      for (const subscription of watching) subscription.dispose();
+      stopFollowing();
       for (const path of [...libs.keys()]) unregister(path);
+      // Monaco's models of this project's libs: nothing will refresh them now
+      for (const model of monaco.editor.getModels()) {
+        if (pathOfUri(model.uri)?.projectId === projectId && !isRegistryModel(model)) {
+          model.dispose();
+        }
+      }
       applyOptions(undefined);
     },
   };

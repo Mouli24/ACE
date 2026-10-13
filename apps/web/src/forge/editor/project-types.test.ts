@@ -145,6 +145,52 @@ describe('D299 Phase 4 cross-file types: the project’s sources as extra libs',
   });
 });
 
+describe('D299 Phase 4 fix C2: a model Monaco makes from an extra lib is never Forge’s', () => {
+  it('keeps the lib, never lets that model go stale, and opening the file shows the disk, clean', async () => {
+    const types = loadProjectTypes(asMonaco(fake), P, client());
+    await types.ready;
+    // go-to-definition: Monaco makes a real model from the lib's text, at the same URI
+    const stray = fake.editor.createModel(
+      tsLibs()[uri('src/a.ts')]?.content ?? '',
+      'typescript',
+      fileUri(P, 'src/a.ts') as never,
+    );
+    expect(tsLibs()[uri('src/a.ts')]).toBeDefined();
+
+    // an agent changes the file: the lib follows, and the stale model goes with the old lib
+    disk['src/a.ts'] = 'export const a = 99;';
+    await types.changed([{ path: 'src/a.ts', kind: 'changed' }]);
+    expect(tsLibs()[uri('src/a.ts')]?.content).toBe('export const a = 99;');
+    expect(stray.isDisposed()).toBe(true);
+
+    // another stray, then the person opens the file: the disk's text, clean, and no lib beside it
+    const again = fake.editor.createModel('stale', 'typescript', fileUri(P, 'src/a.ts') as never);
+    const dirty = vi.fn();
+    const model = ensureModel(P, 'src/a.ts', disk['src/a.ts'] ?? '', 'typescript', dirty);
+    expect(again.isDisposed()).toBe(true);
+    expect(model.getValue()).toBe('export const a = 99;');
+    expect(dirty).not.toHaveBeenCalledWith(true);
+    expect(tsLibs()[uri('src/a.ts')]).toBeUndefined();
+
+    // closing re-adds the lib from disk, and leaves no model at the URI
+    disposeModel(P, 'src/a.ts');
+    await vi.waitFor(() => expect(tsLibs()[uri('src/a.ts')]?.content).toBe('export const a = 99;'));
+    expect(fake.editor.getModel(fileUri(P, 'src/a.ts') as never)).toBeNull();
+    types.dispose();
+  });
+
+  it('leaves none of Monaco’s lib models behind when the project goes', async () => {
+    const types = loadProjectTypes(asMonaco(fake), P, client());
+    await types.ready;
+    const stray = fake.editor.createModel('x', 'typescript', fileUri(P, 'lib/c.js') as never);
+    ensureModel(P, 'src/b.tsx', 'open', 'typescript', () => undefined);
+    types.dispose();
+    expect(stray.isDisposed()).toBe(true);
+    // the open file is the workbench's, not the loader's
+    expect(fake.editor.getModel(fileUri(P, 'src/b.tsx') as never)).not.toBeNull();
+  });
+});
+
 describe('D299 Phase 4 cross-file types: tsconfig.json', () => {
   it('merges baseUrl and paths, rebased under the project, into both services', async () => {
     tsconfig = [

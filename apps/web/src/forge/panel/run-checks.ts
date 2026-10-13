@@ -48,33 +48,50 @@ export function checkStartRequest(
 const messageOf = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+/** Per project, the run Run checks is following now; aborting it stops the following. */
+const following = new Map<string, AbortController>();
+
 /**
- * Resolves once the process has ended: on its `process.exited` frame (D301), or — when that frame
- * was missed, or came before anyone listened — on the engine saying so when asked.
+ * Forge left the project (fix Minor 6): stop following its run, so nothing asks the engine about
+ * a process every second for as long as it runs (`tsc --watch` never ends).
  */
-function ended(projectId: string, processId: string): Promise<void> {
+export function stopFollowingChecks(projectId: string): void {
+  following.get(projectId)?.abort();
+  following.delete(projectId);
+}
+
+/**
+ * Resolves `true` once the process has ended: on its `process.exited` frame (D301), or — when that
+ * frame was missed, or came before anyone listened — on the engine saying so when asked, every
+ * second. Resolves `false`, and stops asking, when `signal` aborts (fix Minor 6).
+ */
+function ended(projectId: string, processId: string, signal: AbortSignal): Promise<boolean> {
   return new Promise((settle) => {
     const socket = getSocket();
     let done = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const listening: { off?: () => void } = {};
-    const finish = (): void => {
+    const finish = (exited: boolean): void => {
       if (done) return;
       done = true;
       listening.off?.();
+      signal.removeEventListener('abort', stop);
       if (timer !== undefined) clearTimeout(timer);
-      settle();
+      settle(exited);
     };
+    const stop = (): void => finish(false);
+    if (signal.aborted) return stop();
+    signal.addEventListener('abort', stop, { once: true });
     listening.off = socket?.on('process.exited', (payload) => {
-      if (payload.projectId === projectId && payload.processId === processId) finish();
+      if (payload.projectId === projectId && payload.processId === processId) finish(true);
     });
     const ask = async (): Promise<void> => {
       try {
         const detail = await api().getProcess(projectId, processId);
-        if (detail.status !== 'running') return finish();
+        if (detail.status !== 'running') return finish(true);
       } catch {
         // gone (the engine restarted): nothing more will come
-        return finish();
+        return finish(true);
       }
       if (!done) timer = setTimeout(() => void ask(), POLL_MS);
     };
@@ -87,7 +104,8 @@ function ended(projectId: string, processId: string): Promise<void> {
  * root, labelled "Checks" — it shows in the Terminal's Processes list like any other — then, once
  * it has exited, its output read back and parsed into the `checks` slice of Problems, replacing
  * the last run. A start the engine refuses (trust `scripts` and a command that is not a script)
- * lands in the slice as `failed` with the engine's own words. One run at a time per project.
+ * lands in the slice as `failed` with the engine's own words. One run at a time per project; a new
+ * run, or Forge leaving the project ({@link stopFollowingChecks}), stops following the last one.
  */
 export async function runChecks(projectId: string, queryClient: QueryClient): Promise<void> {
   if (useProblemsStore.getState().checks[projectId]?.status === 'running') return;
@@ -107,6 +125,9 @@ export async function runChecks(projectId: string, queryClient: QueryClient): Pr
   const previous = useProblemsStore.getState().checks[projectId]?.problems ?? [];
   setChecks(projectId, { status: 'running', command, startedAt, problems: previous });
 
+  following.get(projectId)?.abort();
+  const follow = new AbortController();
+  following.set(projectId, follow);
   const socket = getSocket();
   const release = socket === undefined ? undefined : retainProjectScope(socket, projectId);
   try {
@@ -137,7 +158,21 @@ export async function runChecks(projectId: string, queryClient: QueryClient): Pr
     void queryClient.invalidateQueries({ queryKey: processKeys.list(projectId) });
     setChecks(projectId, { status: 'running', command, processId, startedAt, problems: previous });
 
-    await ended(projectId, processId);
+    if (!(await ended(projectId, processId, follow.signal))) {
+      // No longer followed: say so, unless a newer run has the slice already.
+      if (useProblemsStore.getState().checks[projectId]?.processId === processId) {
+        setChecks(projectId, {
+          status: 'failed',
+          command,
+          processId,
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          problems: previous,
+          error: 'Forge stopped following this run before it ended; its output is in the Terminal.',
+        });
+      }
+      return;
+    }
     const detail = await api().getProcess(projectId, processId);
     setChecks(projectId, {
       status: detail.status === 'failed' ? 'failed' : 'done',
@@ -159,6 +194,7 @@ export async function runChecks(projectId: string, queryClient: QueryClient): Pr
       error: messageOf(error),
     });
   } finally {
+    if (following.get(projectId) === follow) following.delete(projectId);
     release?.();
     void queryClient.invalidateQueries({ queryKey: processKeys.list(projectId) });
   }

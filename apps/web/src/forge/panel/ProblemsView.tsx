@@ -1,11 +1,16 @@
 import { Badge } from '@ace/ui';
+import { useQueryClient } from '@tanstack/react-query';
 
+import { api } from '../../app/api';
+import { useLayoutStore } from '../../app/stores/layout';
 import { useProject } from '../../projects/hooks';
 import { fileIconColor } from '../../theme/constants';
 import { ago } from '../../theme/format';
 import { openFile } from '../editor/actions';
 import { useEditorStore } from '../editor/editor-store';
 import { nameOf, parentOf } from '../files/paths';
+import { requestTerminalFocus } from '../terminal/focus';
+import { openProcessInTab } from '../terminal/session';
 import { TrustNotice } from '../terminal/TrustNotice';
 import {
   clearChecks,
@@ -127,7 +132,7 @@ function ProblemGroups({
   );
 }
 
-/** "2m ago · 3.4 s", or "running…" while the run is on. */
+/** "2m ago · 3.4 s · exit 0", or "running…" while the run is on (fix I2: the exit code always). */
 function runTime(run: ChecksRun): string {
   if (run.status === 'running') return 'running…';
   const finished = run.finishedAt ?? run.startedAt;
@@ -135,15 +140,33 @@ function runTime(run: ChecksRun): string {
     0,
     (new Date(finished).getTime() - new Date(run.startedAt).getTime()) / 1000,
   );
-  return `${ago(finished)} · ${seconds.toFixed(1)} s`;
+  const exit = run.exitCode === undefined ? '' : ` · exit ${run.exitCode ?? 'none'}`;
+  return `${ago(finished)} · ${seconds.toFixed(1)} s${exit}`;
 }
+
+/**
+ * A run that exited non-zero with nothing the parser recognised (fix I2): a crash, a command not
+ * found, a format it does not read. Never "No problems found" — that would be a false all-clear.
+ */
+const failedSilently = (run: ChecksRun): boolean =>
+  run.status === 'done' &&
+  run.problems.length === 0 &&
+  run.exitCode !== undefined &&
+  run.exitCode !== 0;
 
 /**
  * Run checks' results (D299 Phase 4): the "Checks" group under the open files' problems, with the
  * tools that reported (`tsc`, `eslint`, `check`), when it ran and how long it took, and Clear.
  */
 function ChecksGroup({ projectId, run }: { projectId: string; run: ChecksRun }) {
+  const queryClient = useQueryClient();
   const sources = [...new Set(run.problems.map((problem) => problem.source))];
+  /** The Checks process's output, in a Terminal tab of its own. */
+  const showOutput = async (processId: string): Promise<void> => {
+    useLayoutStore.getState().showPanel('terminal');
+    requestTerminalFocus();
+    await openProcessInTab(projectId, await api().getProcess(projectId, processId), queryClient);
+  };
   return (
     <section aria-label="Checks" data-testid="checks-group" className="flex flex-col gap-[8px]">
       <div className="flex min-w-0 items-center gap-[8px] border-t border-[var(--line)] pt-[10px]">
@@ -179,7 +202,23 @@ function ChecksGroup({ projectId, run }: { projectId: string; run: ChecksRun }) 
           {run.error}
         </p>
       )}
-      {run.status === 'done' && run.problems.length === 0 && (
+      {failedSilently(run) && (
+        <div role="alert" className="flex min-w-0 items-center gap-[8px]">
+          <p className="m-0 min-w-0 flex-1 text-[12px] leading-[1.45] text-[#c94c27]">
+            Checks failed (exit {run.exitCode}); no problems recognised in the output
+          </p>
+          {run.processId !== undefined && (
+            <button
+              type="button"
+              onClick={() => run.processId !== undefined && void showOutput(run.processId)}
+              className="flex h-[20px] shrink-0 cursor-pointer items-center rounded-[5px] border-none bg-transparent px-[6px] text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]"
+            >
+              Show output
+            </button>
+          )}
+        </div>
+      )}
+      {run.status === 'done' && run.problems.length === 0 && !failedSilently(run) && (
         <p className="m-0 text-[12px] text-[var(--muted)]">
           No problems found by <span className="font-machine">{run.command}</span>.
         </p>

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { asMonaco, createFakeMonaco, type FakeMonaco } from '../../test/fake-monaco';
-import { fileUri, resetModels, setMonaco } from '../editor/models';
+import { ensureModel, fileUri, resetModels, setMonaco } from '../editor/models';
 import {
   clearChecks,
   problemCounts,
@@ -23,6 +23,9 @@ beforeEach(() => {
 
 describe('D299 §6.4 Problems follows Monaco’s markers for open files', () => {
   it('groups markers by project and file, errors first, hints left out', () => {
+    for (const path of ['src/a.ts', 'src/b.ts']) {
+      ensureModel(P, path, '', 'typescript', () => undefined);
+    }
     const stop = watchMarkers(asMonaco(fake));
     const marker = (path: string, severity: number, message: string, line = 1) => ({
       resource: fileUri(P, path) as unknown as InstanceType<FakeMonaco['Uri']>,
@@ -54,6 +57,27 @@ describe('D299 §6.4 Problems follows Monaco’s markers for open files', () => 
         message: 'unused',
         source: 'ts',
       },
+    ]);
+    stop();
+  });
+});
+
+describe('D299 Phase 4 fix C2: Problems lists only the open files', () => {
+  it('leaves out the markers of a model the registry did not create', () => {
+    ensureModel(P, 'open.ts', '', 'typescript', () => undefined);
+    // Monaco's own model, made from an extra lib for go-to-definition: validated, never open
+    fake.editor.createModel('', 'typescript', fileUri(P, 'lib.ts') as never);
+    const stop = watchMarkers(asMonaco(fake));
+    const marker = (path: string) => ({
+      resource: fileUri(P, path) as unknown as InstanceType<FakeMonaco['Uri']>,
+      severity: fake.MarkerSeverity.Error,
+      message: `bad ${path}`,
+      startLineNumber: 1,
+      startColumn: 1,
+    });
+    fake.setMarkers([marker('open.ts'), marker('lib.ts'), marker('never-made.ts')]);
+    expect(useProblemsStore.getState().byProject[P]?.map((problem) => problem.path)).toEqual([
+      'open.ts',
     ]);
     stop();
   });
@@ -100,6 +124,7 @@ describe('D299 Phase 4 the checks slice', () => {
   });
 
   it('counts errors and warnings from the markers and the checks together', () => {
+    ensureModel(P, 'a.ts', '', 'typescript', () => undefined);
     const stop = watchMarkers(asMonaco(fake));
     fake.setMarkers([
       {

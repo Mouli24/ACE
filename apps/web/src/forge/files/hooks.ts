@@ -55,12 +55,15 @@ export function useFileList(projectId: string, enabled: boolean) {
 
 /**
  * Search's results (D299 Phase 4) for a request given as JSON (stable, so a re-render is never a
- * new search); `undefined` asks for nothing. The last results stay while the next ones load.
+ * new search); `undefined` asks for nothing. The last results stay while the next ones load. The
+ * query's signal goes to the engine (fix C1/I3): a search replaced by a newer one, refetched, or
+ * no longer wanted is aborted there too, ending its worker.
  */
 export function useFileSearch(projectId: string, request: string | undefined) {
   return useQuery({
     queryKey: fileKeys.search(projectId, request ?? ''),
-    queryFn: () => api().searchFiles(projectId, JSON.parse(request ?? '{}') as FileSearchRequest),
+    queryFn: ({ signal }) =>
+      api().searchFiles(projectId, JSON.parse(request ?? '{}') as FileSearchRequest, { signal }),
     enabled: projectId !== '' && request !== undefined,
     placeholderData: keepPreviousData,
     retry: false,

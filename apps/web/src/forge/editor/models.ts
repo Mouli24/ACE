@@ -22,6 +22,11 @@ const entries = new Map<string, Entry>();
 let activeEditor: Monaco.editor.ICodeEditor | undefined;
 /** Who waits for the lazy editor chunk to hand Monaco over (cross-file types). */
 const waiting = new Set<(instance: MonacoApi) => void>();
+/** Who follows the registry opening and closing files (the cross-file type loader). */
+const changeListeners = new Set<(projectId: string, path: string, open: boolean) => void>();
+const announce = (projectId: string, path: string, open: boolean): void => {
+  for (const listener of [...changeListeners]) listener(projectId, path, open);
+};
 const keyOf = (projectId: string, path: string): string => `${projectId}\u0000${path}`;
 
 /**
@@ -82,6 +87,24 @@ export function getModel(projectId: string, path: string): Model | undefined {
   return entry === undefined || entry.model.isDisposed() ? undefined : entry.model;
 }
 
+/**
+ * Whether the registry made this model: an open file's. Monaco makes models of its own — from an
+ * extra lib, for go-to-definition, references, rename or a diagnostic's related information — at
+ * the same URIs; those are never Forge's (fix C2).
+ */
+export function isRegistryModel(model: Model): boolean {
+  for (const entry of entries.values()) if (entry.model === model) return !model.isDisposed();
+  return false;
+}
+
+/** Follow the registry opening (`true`) and closing (`false`) a file. Answers the unsubscribe. */
+export function onRegistryChange(
+  listener: (projectId: string, path: string, open: boolean) => void,
+): () => void {
+  changeListeners.add(listener);
+  return () => changeListeners.delete(listener);
+}
+
 export function ensureModel(
   projectId: string,
   path: string,
@@ -94,7 +117,11 @@ export function ensureModel(
   if (existing !== undefined && !existing.model.isDisposed()) return existing.model;
   if (monaco === undefined) throw new Error('Monaco is not loaded yet.');
   const uri = fileUri(projectId, path);
-  const model = monaco.editor.getModel(uri) ?? monaco.editor.createModel(content, language, uri);
+  // Never adopt a model Monaco made from an extra lib (fix C2): its text is the lib's, which may be
+  // older than the disk, and adopting it would show stale text as clean and save it over newer.
+  const stray = monaco.editor.getModel(uri);
+  if (stray !== null && !stray.isDisposed()) stray.dispose();
+  const model = monaco.editor.createModel(content, language, uri);
   const entry: Entry = {
     model,
     savedAlt: model.getAlternativeVersionId(),
@@ -106,6 +133,7 @@ export function ensureModel(
     }),
   };
   entries.set(key, entry);
+  announce(projectId, path, true);
   return model;
 }
 
@@ -169,6 +197,7 @@ export function moveModels(
     entry.listener.dispose();
     if (!entry.model.isDisposed()) entry.model.dispose();
     entries.delete(key);
+    announce(projectId, path, false);
     ensureModel(projectId, target, value, languageOf(target), onDirtyFor(target));
     const moved = entries.get(keyOf(projectId, target));
     if (moved !== undefined) {
@@ -185,6 +214,7 @@ export function disposeModel(projectId: string, path: string): void {
   entry.listener.dispose();
   if (!entry.model.isDisposed()) entry.model.dispose();
   entries.delete(key);
+  announce(projectId, path, false);
 }
 
 /** Tests only. */
@@ -196,4 +226,5 @@ export function resetModels(): void {
   entries.clear();
   monaco = undefined;
   activeEditor = undefined;
+  changeListeners.clear();
 }

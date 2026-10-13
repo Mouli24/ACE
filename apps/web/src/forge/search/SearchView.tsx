@@ -1,17 +1,54 @@
 import { SEARCH_MAX_RESULTS, searchQueryProblem, type FileSearchFile } from '@ace/contracts';
 import { Badge, cn } from '@ace/ui';
+import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
+import { getSocket } from '../../app/socket';
 import { fileIconColor } from '../../theme/constants';
 import { openFile } from '../editor/actions';
 import { useEditorStore } from '../editor/editor-store';
 import { useSideViewStore } from '../explorer/side-view-store';
 import { useFileSearch } from '../files/hooks';
+import { fileKeys } from '../files/keys';
+import { useProjectScope } from '../project-scope';
 import { nameOf, parentOf } from '../files/paths';
 import { EMPTY_SEARCH, requestOf, useSearchStore, type SearchForm } from './search-store';
 
 /** Search waits this long after the last key before it asks the engine (design §6.4). */
 export const SEARCH_DEBOUNCE_MS = 300;
+/** While Search shows, file changes re-run it at most this often (fix I3). */
+export const SEARCH_REFRESH_MS = 2_000;
+
+/**
+ * While Search shows (it is mounted only then), `files.changed` re-runs the search — at most once
+ * per {@link SEARCH_REFRESH_MS}, however fast the disk churns (fix I3). The refetch cancels a
+ * request still in flight, and that abort reaches the engine, which ends its search.
+ */
+function useRefreshOnChanges(projectId: string): void {
+  const queryClient = useQueryClient();
+  useProjectScope(projectId);
+  useEffect(() => {
+    const socket = getSocket();
+    if (socket === undefined) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const off = socket.on('files.changed', (payload) => {
+      if (payload.projectId !== projectId || timer !== undefined) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        // cancel first: a request still in flight is aborted (and so is its search), even one
+        // that has no results yet, which a refetch alone would wait for instead
+        const queryKey = fileKeys.searches(projectId);
+        void queryClient
+          .cancelQueries({ queryKey })
+          .then(() => queryClient.invalidateQueries({ queryKey }));
+      }, SEARCH_REFRESH_MS);
+    });
+    return () => {
+      off();
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [projectId, queryClient]);
+}
 
 const count = (n: number): string => n.toLocaleString('en-US');
 const plural = (n: number, word: string): string => `${count(n)} ${word}${n === 1 ? '' : 's'}`;
@@ -138,6 +175,7 @@ export function SearchView({ projectId }: { projectId: string }) {
   const set = (change: Partial<SearchForm>): void => update(projectId, change);
   const focus = useSideViewStore((state) => state.searchFocus);
   const input = useRef<HTMLInputElement>(null);
+  useRefreshOnChanges(projectId);
 
   // On opening, and on every Ctrl/⌘+Shift+F: the query box takes the focus, its text selected.
   useEffect(() => {
@@ -232,12 +270,20 @@ export function SearchView({ projectId }: { projectId: string }) {
             {total === 0
               ? 'No results'
               : `${plural(total, 'result')} in ${plural(shown.files.length, 'file')}`}
-            {shown.truncated && total > 0 && (
+            {shown.truncated && total > 0 && shown.timedOut !== true && (
               <>
                 {' — '}
                 <span>showing the first {count(Math.min(total, SEARCH_MAX_RESULTS))}</span>
               </>
             )}
+          </p>
+        )}
+        {shown?.timedOut === true && (
+          <p
+            role="status"
+            className="m-0 px-[14px] pb-[6px] text-[11px] leading-[1.45] text-[#e8572e]"
+          >
+            Search stopped after 5 s; showing partial results
           </p>
         )}
         {shown?.files.map((file) => (

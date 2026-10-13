@@ -1,7 +1,7 @@
 import type * as Monaco from 'monaco-editor';
 import { create } from 'zustand';
 
-import { pathOfUri } from '../editor/models';
+import { getModel, pathOfUri } from '../editor/models';
 import type { CheckProblem } from './check-parser';
 
 export type ProblemSeverity = 'error' | 'warning' | 'info';
@@ -83,6 +83,8 @@ export function watchMarkers(monaco: typeof Monaco): () => void {
     for (const marker of monaco.editor.getModelMarkers({})) {
       const where = pathOfUri(marker.resource);
       if (where === undefined || marker.severity < monaco.MarkerSeverity.Info) continue;
+      // Only the open files (fix C2): Monaco validates the models it makes from extra libs too.
+      if (getModel(where.projectId, where.path) === undefined) continue;
       const severity: ProblemSeverity =
         marker.severity >= monaco.MarkerSeverity.Error
           ? 'error'
