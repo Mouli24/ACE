@@ -94,7 +94,7 @@ export function installMockServer(): void {
     localStorage.removeItem(LAYOUT_STORAGE_KEY);
     useLayoutStore.setState(initialLayout, true);
     useOutputStore.setState({ lines: {} });
-    useProblemsStore.setState({ byProject: {} });
+    useProblemsStore.setState({ byProject: {}, checks: {} });
     useTerminalStore.getState().reset();
     FakeTerminal.instances = [];
     FakeSearchAddon.instances = [];

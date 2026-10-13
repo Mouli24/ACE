@@ -6,11 +6,10 @@ import { nodeStatusLook } from '../../theme/format';
 import { useEditorStatus } from '../editor/editor-status';
 import { useEditorStore } from '../editor/editor-store';
 import { languageLabel } from '../editor/languages';
-import { useProblemsStore, type Problem } from '../panel/problems-store';
+import { problemCounts, useProblemsStore } from '../panel/problems-store';
 import { requestTerminalFocus } from '../terminal/focus';
 import { runningCount, useProcessList } from '../terminal/hooks';
 
-const NONE: Problem[] = [];
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 /*
@@ -23,14 +22,13 @@ const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' 
 const RUNNING = nodeStatusLook('RUNNING').color;
 
 /**
- * The errors and warnings in the open files; a click opens Problems. Mono, muted like the slug; a
+ * The errors and warnings in the open files and from Run checks (D299 Phase 4); a click opens Problems. Mono, muted like the slug; a
  * mark takes the Validation tab's colour (✕ red, ! accent) while its count is not zero.
  */
 export function ProblemsCount({ projectId }: { projectId: string }) {
-  const problems = useProblemsStore((s) => s.byProject[projectId] ?? NONE);
+  const errors = useProblemsStore((s) => problemCounts(s, projectId).errors);
+  const warnings = useProblemsStore((s) => problemCounts(s, projectId).warnings);
   const showPanel = useLayoutStore((s) => s.showPanel);
-  const errors = problems.filter((p) => p.severity === 'error').length;
-  const warnings = problems.filter((p) => p.severity === 'warning').length;
   return (
     <button
       type="button"

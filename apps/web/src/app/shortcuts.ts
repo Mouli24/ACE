@@ -53,6 +53,8 @@ export const SHORTCUTS = {
   toggleTerminal: { code: 'Backquote', mod: true },
   /** D299 Phase 4: Search in Forge's left column, with the focus in its query. */
   searchFiles: { code: 'KeyF', mod: true, shift: true },
+  /** D299 Phase 4: Run checks, into Problems. */
+  runChecks: { code: 'KeyB', mod: true, shift: true },
 } as const satisfies Record<string, Shortcut>;
 
 const isMac = (): boolean =>

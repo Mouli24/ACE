@@ -4,9 +4,8 @@ import { useLayoutStore, type ForgePanelTab } from '../../app/stores/layout';
 import { requestTerminalFocus } from '../terminal/focus';
 import { TerminalPanel } from '../terminal/TerminalPanel';
 import { ProblemsView } from './ProblemsView';
-import { useProblemsStore, type Problem } from './problems-store';
-
-const NONE: Problem[] = [];
+import { problemCounts, useProblemsStore } from './problems-store';
+import { RunChecksButton } from './RunChecksButton';
 
 /**
  * Terminal · Problems (D334 as amended 2026-10-13): the Terminal (D301) first, as VS Code orders
@@ -35,8 +34,9 @@ const SQUARE =
  * as a mono chip — red while there are errors — the theme's ⛶ (pressed while maximized) and 28px ✕.
  */
 export function BottomPanel({ projectId }: { projectId: string }) {
-  const problems = useProblemsStore((s) => s.byProject[projectId] ?? NONE);
-  const errors = problems.some((problem) => problem.severity === 'error');
+  // The open files' markers and Run checks' results together (D299 Phase 4).
+  const total = useProblemsStore((s) => problemCounts(s, projectId).total);
+  const errors = useProblemsStore((s) => problemCounts(s, projectId).errors > 0);
   const panelTab = useLayoutStore((s) => s.panelTab);
   const showPanel = useLayoutStore((s) => s.showPanel);
   const closePanel = useLayoutStore((s) => s.closePanel);
@@ -66,15 +66,16 @@ export function BottomPanel({ projectId }: { projectId: string }) {
                 className="flex-none gap-[6px] px-[14px]"
               >
                 {label}{' '}
-                {tab === 'problems' && problems.length > 0 && (
+                {tab === 'problems' && total > 0 && (
                   <Badge data-testid="problems-count" variant={errors ? 'danger' : 'default'}>
-                    {problems.length}
+                    {total}
                   </Badge>
                 )}
               </TabsTrigger>
             ))}
           </TabsList>
           <div className="flex-1" />
+          {panelTab === 'problems' && <RunChecksButton projectId={projectId} />}
           <button
             type="button"
             aria-label={maximized ? 'Restore panel size' : 'Maximize panel'}
