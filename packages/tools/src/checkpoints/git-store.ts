@@ -113,6 +113,23 @@ const isMissing = (error: unknown): boolean => {
   return code === 'ENOENT' || code === 'ENOTDIR';
 };
 
+/**
+ * Like `Promise.all`, but answers only once every call has finished, then throws the first failure
+ * in argument order (D300 G-1): a git still running holds files in the store, and on Windows an open
+ * file blocks deleting its folder.
+ */
+async function allFinished<T extends readonly unknown[] | []>(
+  calls: T,
+): Promise<{ -readonly [K in keyof T]: Awaited<T[K]> }> {
+  const outcomes = await Promise.allSettled(calls);
+  const values: unknown[] = [];
+  for (const outcome of outcomes) {
+    if (outcome.status === 'rejected') throw outcome.reason;
+    values.push(outcome.value);
+  }
+  return values as { -readonly [K in keyof T]: Awaited<T[K]> };
+}
+
 /** Why `path` was left out of the snapshot this manifest describes, if it was. */
 function omissionOf(
   manifest: Manifest | undefined,
@@ -509,7 +526,7 @@ export function createGitCheckpointStore(
         '--no-ext-diff',
         '--no-textconv',
       ];
-      const [numstat, names, heads] = await Promise.all([
+      const [numstat, names, heads] = await allFinished([
         gitOk([...common, '--numstat', '-z', before, after], gitDir),
         gitOk([...common, '--name-status', '-z', before, after], gitDir),
         readObjects(gitDir, [before, after]),
@@ -518,7 +535,7 @@ export function createGitCheckpointStore(
       if (beforeHead?.type !== 'commit' || afterHead?.type !== 'commit') {
         throw unavailable('That checkpoint commit is not in the store.');
       }
-      const [beforeManifest, afterManifest] = await Promise.all([
+      const [beforeManifest, afterManifest] = await allFinished([
         manifestOf(gitDir, beforeHead.bytes),
         manifestOf(gitDir, afterHead.bytes),
       ]);
@@ -567,7 +584,7 @@ export function createGitCheckpointStore(
 
       // First everything git knows — the slow part — so nothing slow sits between reading the
       // disk and writing it (D300 fix I2).
-      const [was, agentLeft] = await Promise.all([
+      const [was, agentLeft] = await allFinished([
         sideOf(gitDir, before, rel),
         sideOf(gitDir, after, rel),
       ]);
