@@ -1098,6 +1098,10 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
             {
               send: (data) => ws.send(data),
               close: (code, reason) => ws.close(code, reason),
+              // What the hub reads to close a socket that fell too far behind (D301).
+              get bufferedAmount() {
+                return ws.bufferedAmount;
+              },
               on: (event, handler) => {
                 if (event === 'message') ws.on('message', (data) => handler(String(data)));
                 else ws.on('close', () => handler(''));
