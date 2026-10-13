@@ -7,30 +7,37 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@ace/ui';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 
 import { joinPath, nameOf } from '../files/paths';
 
 /**
  * A confirm with an error line for the engine's refusal; the action resolves to that refusal or
  * undefined. The theme's modal shell (D328), as Forge's unsaved-changes dialog wears it: the paths
- * in mono, the refusal in the error red, Cancel as the Close pill.
+ * in mono, the refusal in the error red, Cancel as the Close pill. Changes' Revert all asks with it
+ * too (fix A-M9), its files to be deleted as `children`.
  */
-function ConfirmDialog({
+export function ConfirmDialog({
   title,
   description,
   detail,
+  children,
   action,
   destructive,
+  returnFocus = false,
   onConfirm,
   onClose,
 }: {
   title: string;
   description: string;
   /** The project-relative path or paths the action touches. */
-  detail: string;
+  detail?: string;
+  /** More of the body, under the detail. */
+  children?: ReactNode;
   action: string;
   destructive: boolean;
+  /** Focus goes back where it was on close; the tree's dialogs place it themselves. */
+  returnFocus?: boolean;
   onConfirm(): Promise<string | undefined>;
   onClose(): void;
 }) {
@@ -41,14 +48,17 @@ function ConfirmDialog({
       <DialogContent
         onCloseAutoFocus={(event) => {
           // the tree puts focus on the right row itself; the dialog's row may be gone
-          event.preventDefault();
+          if (!returnFocus) event.preventDefault();
         }}
       >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
-        <p className="break-all font-machine text-[11px] text-[var(--muted)]">{detail}</p>
+        {detail !== undefined && (
+          <p className="break-all font-machine text-[11px] text-[var(--muted)]">{detail}</p>
+        )}
+        {children}
         {problem !== undefined && (
           <p role="alert" className="text-[12px] text-[#c94c27]">
             {problem}

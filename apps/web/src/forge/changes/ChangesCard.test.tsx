@@ -35,6 +35,13 @@ function renderCard(projectId: string, checkpointId: string, workflowId: string)
   );
 }
 
+/** Revert all, then the confirm's own Revert all (fix A-M9). */
+async function revertAll(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(await screen.findByRole('button', { name: 'Revert all' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Revert all changes?' });
+  await user.click(within(dialog).getByRole('button', { name: 'Revert all' }));
+}
+
 function seed() {
   const projectId = db.createProject({ name: 'Shop' }).id;
   const workflowId = db.createWorkflow(projectId, 'Flow').id;
@@ -77,12 +84,84 @@ describe('D300 the Changes card under a chat turn', () => {
     const { projectId, workflowId } = seed();
     const seeded = checkpoints.seed(projectId, [{ path: 'a.ts', before: 'a\n', after: 'b\n' }]);
     renderCard(projectId, seeded.id, workflowId);
-    await user.click(await screen.findByRole('button', { name: 'Revert all' }));
+    await revertAll(user);
     const card = screen.getByRole('region', { name: 'Changes' });
     await waitFor(() => expect(card).toHaveTextContent('Reverted'));
     expect(within(card).queryByRole('button', { name: 'Keep all' })).toBeNull();
     const entry = db.filesOf(projectId)['a.ts'];
     expect(entry?.kind === 'file' ? entry.content : undefined).toBe('a\n');
+  });
+
+  it('Revert all asks first, naming the count; Cancel reverts nothing (fix A-M9)', async () => {
+    const user = userEvent.setup();
+    const { projectId, workflowId } = seed();
+    const seeded = checkpoints.seed(projectId, [
+      { path: 'a.ts', before: 'a\n', after: 'b\n' },
+      { path: 'gone.ts', before: 'x\n' },
+    ]);
+    renderCard(projectId, seeded.id, workflowId);
+    await user.click(await screen.findByRole('button', { name: 'Revert all' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Revert all changes?' });
+    expect(dialog).toHaveTextContent('Revert 2 files to how they were before this change.');
+    // the agent added nothing, so nothing is deleted
+    expect(dialog).not.toHaveTextContent('deleted');
+    // the theme's destructive button, as the Explorer's Delete confirm
+    expect(within(dialog).getByRole('button', { name: 'Revert all' })).toHaveClass(
+      'text-[#c94c27]',
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('region', { name: 'Changes' })).toHaveTextContent('To review');
+    expect(checkpoints.get(projectId, seeded.id).status).toBe('pending');
+    const entry = db.filesOf(projectId)['a.ts'];
+    expect(entry?.kind === 'file' ? entry.content : undefined).toBe('b\n');
+  });
+
+  it('lists the files a Revert all will delete: the ones the agent added (fix A-M9)', async () => {
+    const user = userEvent.setup();
+    const { projectId, workflowId } = seed();
+    const added = Array.from({ length: 12 }, (_, index) => ({
+      path: `src/new-${String(index + 1).padStart(2, '0')}.ts`,
+      after: 'x\n',
+    }));
+    const seeded = checkpoints.seed(projectId, [
+      { path: 'a.ts', before: 'a\n', after: 'b\n' },
+      ...added,
+    ]);
+    renderCard(projectId, seeded.id, workflowId);
+    await user.click(await screen.findByRole('button', { name: 'Revert all' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Revert all changes?' });
+    expect(dialog).toHaveTextContent('Revert 13 files to how they were before this change.');
+    expect(dialog).toHaveTextContent('These files will be deleted:');
+    const list = within(dialog).getByRole('list', { name: 'Files to be deleted' });
+    expect(
+      within(list)
+        .getAllByRole('listitem')
+        .map((item) => item.textContent),
+    ).toEqual(added.slice(0, 10).map((file) => file.path));
+    expect(dialog).toHaveTextContent('and 2 more');
+
+    await user.click(within(dialog).getByRole('button', { name: 'Revert all' }));
+    await waitFor(() =>
+      expect(screen.getByRole('region', { name: 'Changes' })).toHaveTextContent('Reverted'),
+    );
+    expect(db.filesOf(projectId)['src/new-01.ts']).toBeUndefined();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('says one added file in the singular', async () => {
+    const user = userEvent.setup();
+    const { projectId, workflowId } = seed();
+    const seeded = checkpoints.seed(projectId, [{ path: 'new.ts', after: 'x\n' }]);
+    renderCard(projectId, seeded.id, workflowId);
+    await user.click(await screen.findByRole('button', { name: 'Revert all' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Revert all changes?' });
+    expect(dialog).toHaveTextContent('Revert 1 file to how it was before this change.');
+    expect(dialog).toHaveTextContent('This file will be deleted:');
+    expect(dialog).not.toHaveTextContent('more');
   });
 
   it('shows a refused revert on its file', async () => {
@@ -91,7 +170,7 @@ describe('D300 the Changes card under a chat turn', () => {
     const seeded = checkpoints.seed(projectId, [{ path: 'a.ts', before: 'a\n', after: 'b\n' }]);
     db.writeFileExternally(projectId, 'a.ts', 'mine\n');
     renderCard(projectId, seeded.id, workflowId);
-    await user.click(await screen.findByRole('button', { name: 'Revert all' }));
+    await revertAll(user);
     expect(await screen.findByRole('alert')).toHaveTextContent(
       "a.ts changed after the agent's edit; review it before reverting",
     );
