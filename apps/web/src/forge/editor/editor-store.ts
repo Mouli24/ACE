@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 
+import { useReviewStore } from '../changes/review-store';
 import { isWithin, movedPath } from '../files/paths';
 
 export type Conflict = 'changed' | 'deleted';
@@ -81,6 +82,7 @@ interface EditorState {
   resolved(projectId: string, path: string, baseVersion: string | null): void;
   markDeletedOnDisk(projectId: string, path: string): void;
   renamed(projectId: string, from: string, to: string): void;
+  /** Show a place in a file; a review showing gives the editor area back (fix F-M2). */
   revealAt(projectId: string, reveal: Reveal): void;
   revealDone(projectId: string): void;
 }
@@ -222,7 +224,11 @@ export const useEditorStore = create<EditorState>()((set) => {
         };
       }),
 
-    revealAt: (projectId, reveal) => update(projectId, (editor) => ({ ...editor, reveal })),
+    revealAt: (projectId, reveal) => {
+      // the editor host that takes the reveal shows only while no review does
+      useReviewStore.getState().deactivate(projectId);
+      update(projectId, (editor) => ({ ...editor, reveal }));
+    },
     revealDone: (projectId) => update(projectId, (editor) => ({ ...editor, reveal: undefined })),
   };
 });

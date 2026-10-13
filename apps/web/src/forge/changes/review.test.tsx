@@ -5,7 +5,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { checkpoints, db, installMockServer, queryClient, renderWithQuery } from '../../test/app';
 import { openFile } from '../editor/actions';
 import { EditorArea } from '../editor/EditorArea';
+import { useEditorStore } from '../editor/editor-store';
 import { FileTree } from '../explorer/FileTree';
+import { ProblemsView } from '../panel/ProblemsView';
+import { useProblemsStore } from '../panel/problems-store';
 import { useChangesStore } from './changes-store';
 import { openReview } from './review-actions';
 import { useReviewStore } from './review-store';
@@ -93,6 +96,83 @@ describe('D300 reviewing an agent change in the editor area', () => {
     await screen.findByTestId('review-view');
     act(() => openFile(projectId, 'README.md', { preview: false }));
     await waitFor(() => expect(screen.queryByTestId('review-view')).toBeNull());
+  });
+
+  it('choosing the file already active (Quick Open, the Explorer, a Search result) takes the area back (fix A-M12)', async () => {
+    const { projectId, checkpointId } = seed();
+    renderWithQuery(<EditorArea projectId={projectId} />);
+    act(() => openFile(projectId, 'README.md', { preview: false }));
+    await screen.findByLabelText('Editing README.md');
+    act(() => openReview(projectId, checkpointId, 'src/a.ts'));
+    await screen.findByTestId('review-view');
+
+    act(() => openFile(projectId, 'README.md', { preview: true }));
+    await waitFor(() => expect(screen.queryByTestId('review-view')).toBeNull());
+    expect(screen.getByLabelText('Editing README.md')).toBeInTheDocument();
+    // the review stays open behind it
+    expect(screen.getByRole('tab', { name: 'a.ts (agent change)' })).toBeInTheDocument();
+  });
+
+  it('revealing a line takes the area back from the review, and the editor goes to it (fix F-M2)', async () => {
+    const { projectId, checkpointId } = seed();
+    renderWithQuery(<EditorArea projectId={projectId} />);
+    act(() => openFile(projectId, 'README.md', { preview: false }));
+    await screen.findByLabelText('Editing README.md');
+    act(() => openReview(projectId, checkpointId, 'src/a.ts'));
+    await screen.findByTestId('review-view');
+
+    act(() =>
+      useEditorStore.getState().revealAt(projectId, { path: 'README.md', line: 1, column: 3 }),
+    );
+    await waitFor(() => expect(screen.queryByTestId('review-view')).toBeNull());
+    // the editor is back to take the line (the real host reveals it; the stand-in only shows)
+    expect(screen.getByLabelText('Editing README.md')).toBeInTheDocument();
+    expect(useEditorStore.getState().projects[projectId]?.reveal).toEqual({
+      path: 'README.md',
+      line: 1,
+      column: 3,
+    });
+  });
+
+  it('a Problems row for the active file shows the editor at the problem while a review shows (fix F-M2)', async () => {
+    const user = userEvent.setup();
+    const { projectId, checkpointId } = seed();
+    act(() =>
+      useProblemsStore.setState({
+        byProject: {
+          [projectId]: [
+            {
+              path: 'README.md',
+              line: 1,
+              column: 2,
+              severity: 'warning',
+              message: 'heading style',
+              source: 'md',
+            },
+          ],
+        },
+      }),
+    );
+    renderWithQuery(
+      <>
+        <EditorArea projectId={projectId} />
+        <ProblemsView projectId={projectId} />
+      </>,
+    );
+    act(() => openFile(projectId, 'README.md', { preview: false }));
+    await screen.findByLabelText('Editing README.md');
+    act(() => openReview(projectId, checkpointId, 'src/a.ts'));
+    await screen.findByTestId('review-view');
+
+    await user.click(screen.getByRole('button', { name: /heading style/ }));
+    await waitFor(() => expect(screen.queryByTestId('review-view')).toBeNull());
+    expect(screen.getByLabelText('Editing README.md')).toBeInTheDocument();
+    expect(useEditorStore.getState().projects[projectId]?.reveal).toEqual({
+      path: 'README.md',
+      line: 1,
+      column: 2,
+    });
+    expect(useReviewStore.getState().projects[projectId]?.active).toBeUndefined();
   });
 });
 
