@@ -3,7 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createBatcher } from '../events/batcher.js';
 import { createEventBus, type EventBus } from '../events/index.js';
-import { createWsHub, type HubSocket, type WsHub } from '../events/ws-hub.js';
+import {
+  WS_CLOSE_TRY_AGAIN_LATER,
+  WS_SEND_QUEUE_MAX_BYTES,
+  createWsHub,
+  type HubSocket,
+  type WsHub,
+} from '../events/ws-hub.js';
 import { newId } from '../ids.js';
 import { createLogger } from '../logging/index.js';
 import { InProcessPubSubStub } from './pubsub-stub.js';
@@ -21,6 +27,8 @@ const auth: Auth = {
 class FakeSocket implements HubSocket {
   readonly sent: string[] = [];
   closedWith: number | undefined;
+  /** What the socket has queued and not yet written; a test sets it to play a slow reader. */
+  bufferedAmount: number | undefined = 0;
   #handlers = new Map<string, (data: string) => void>();
 
   send(data: string): void {
@@ -45,6 +53,18 @@ class FakeSocket implements HubSocket {
 
   frames(): { type: string; payload: unknown; seq?: number }[] {
     return this.sent.map((line) => JSON.parse(line) as { type: string; payload: unknown });
+  }
+}
+
+/**
+ * A real socket's close only starts the closing handshake: its `close` event comes later, after a
+ * peer that is not reading may take up to ws's 30 s timeout. This one never fires it.
+ */
+class ClosingSocket extends FakeSocket {
+  readonly closes: number[] = [];
+
+  override close(code: number): void {
+    this.closes.push(code);
   }
 }
 
@@ -484,5 +504,39 @@ describe('D301 process frames ride the project scope', () => {
       exited,
     ]);
     expect(engineOnly.frames().some((frame) => frame.type.startsWith('process.'))).toBe(false);
+  });
+
+  it('a socket more than 8 MiB behind is closed with 1013 instead of sent more output, once', async () => {
+    const slow = new ClosingSocket();
+    await hub.handleConnection(slow, TOKEN);
+    await slow.receive({ type: 'subscribe', payload: { scope: 'project', id: PROJECT } });
+    const before = slow.sent.length;
+    slow.bufferedAmount = WS_SEND_QUEUE_MAX_BYTES + 1;
+
+    await bus.emitTransient(output);
+    await bus.emitTransient(output);
+    await bus.emitTransient(exited);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(slow.sent.length).toBe(before);
+    expect(slow.closes).toEqual([WS_CLOSE_TRY_AGAIN_LATER]);
+  });
+
+  it('a socket at the bound, or one without a send queue to read, still gets every frame', async () => {
+    const atBound = await connect();
+    atBound.bufferedAmount = WS_SEND_QUEUE_MAX_BYTES;
+    const plain = await connect();
+    plain.bufferedAmount = undefined;
+    for (const socket of [atBound, plain]) {
+      await socket.receive({ type: 'subscribe', payload: { scope: 'project', id: PROJECT } });
+    }
+
+    await bus.emitTransient(output);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    for (const socket of [atBound, plain]) {
+      expect(socket.frames().filter((frame) => frame.type === 'process.output')).toEqual([output]);
+      expect(socket.closedWith).toBeUndefined();
+    }
   });
 });
