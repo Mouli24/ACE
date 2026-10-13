@@ -40,6 +40,7 @@ import {
   createMemoryService,
   createModelSummariser,
   createPolicyService,
+  createCheckpointService,
   createProcessService,
   createProviderService,
   createDomainRegistry,
@@ -79,6 +80,7 @@ import {
   type IngestJob,
   type Logger,
   type McpService,
+  type CheckpointService,
   type ProviderService,
   type RunService,
   type SecretMasker,
@@ -116,6 +118,7 @@ import {
   ToolRegistry,
   cannedResultsAt,
   createFsProjectFiles,
+  createGitCheckpointStore,
   createProcessRunner,
   registerBuiltinTools,
 } from '@ace/tools';
@@ -284,8 +287,11 @@ export interface RunningEngine {
     blobs: FsBlobStore;
     secrets: KeychainSecretStore;
   };
-  /** The round 2 services, exposed for the acceptance harness and the CLI. */
-  services: { providers: ProviderService; runs: RunService };
+  /**
+   * The round 2 services, exposed for the acceptance harness and the CLI; and D300's checkpoints,
+   * which chat's writing turns record into.
+   */
+  services: { providers: ProviderService; runs: RunService; checkpoints: CheckpointService };
   /**
    * The shared mock adapter every `mock` provider row uses (the injected one, else the engine's own),
    * exposed for the acceptance harness as `ports` and `services` are: TC-RAG-009 asserts exactly one
@@ -398,6 +404,16 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     runner: createProcessRunner(),
     bus,
     logger: logger.child({ subsystem: 'processes' }),
+  });
+  // D300: every agent write is checkpointed in a private git store under the data dir, outside
+  // the project's own .git (design §5.1). A checkpoint left recording by the last process is
+  // finished at startup, below.
+  const checkpoints = createCheckpointService({
+    store: createGitCheckpointStore(config.dataDir),
+    repository,
+    scope: LOCAL_SCOPE,
+    bus,
+    logger: logger.child({ subsystem: 'checkpoints' }),
   });
   const hub = createWsHub({
     bus,
@@ -822,6 +838,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     recordNodeTurn: async (turn) => {
       await chatService.recordRunTurn(turn);
     },
+    // D300: a run in a project with a folder is one checkpoint.
+    checkpoints,
   });
 
   const controls = createRunControls({
@@ -929,6 +947,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
    * run started from Domain, which stays open (D323): its turns that were in flight end FAILED
    * `crash`, and it is driven again, parking at once when it has nothing to do.
    */
+  // D300: before any run is driven again, so a reopened Domain run starts a checkpoint of its own.
+  await checkpoints.recover();
   const recovered = await recoverAfterCrash({
     repository,
     scope: LOCAL_SCOPE,
@@ -1055,6 +1075,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     workspace,
     /* IDE (D301): Forge's terminal. */
     processes,
+    /* IDE (D300): review, keep and revert agents' changes. */
+    checkpoints,
   });
 
   /* -------------------------------------------------------------------- http */
@@ -1132,7 +1154,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     token,
     logger,
     ports: { repository, blobs, secrets },
-    services: { providers, runs },
+    services: { providers, runs, checkpoints },
     mockProvider,
     sweepArtifacts,
 
