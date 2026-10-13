@@ -8,8 +8,10 @@ code editor on the project folder). **Ctrl+Shift+1** and **Ctrl+Shift+2** do the
 
 - **Left:** the Explorer — the project's folder tree, its file count, and a filter at the bottom.
   Changed files carry git's letters (**M**odified, **A**dded, **U**ntracked) and their folders are
-  tinted; an orange dot marks unsaved changes; ignored folders such as `node_modules` are dimmed.
-  **Ctrl+B** shows or hides it.
+  tinted; an orange dot marks unsaved changes; an orange **±** marks a file an agent changed that
+  waits for your review; ignored folders such as `node_modules` are dimmed. The switch at the top,
+  **EXPLORER · SEARCH · CHANGES**, turns the column into [Search](#search) or
+  [Changes](#changes-and-checkpoints). **Ctrl+B** shows or hides it.
 - **Centre:** the editor, under its tabs and the file's path. A single click previews a file
   (italic tab); a double click, or an edit, keeps it.
 - **Bottom:** the Terminal and Problems, as two tabs. **Ctrl+J** shows or hides the panel on the
@@ -29,6 +31,25 @@ code editor on the project folder). **Ctrl+Shift+1** and **Ctrl+Shift+2** do the
 - A rename, move or delete is refused while a file inside it is still saving; try again once the save finishes.
 - **Go to a file:** **Ctrl+P**, then type a few letters of its name.
 
+## Search
+
+**Ctrl+Shift+F** (**⌘⇧F** on a Mac), or **SEARCH** at the top of the left column, opens Search with
+the cursor in its box. Results come as you type.
+
+- The three buttons in the box: **Aa** matches upper and lower case exactly, **ab** matches whole
+  words only, **.\*** reads what you typed as a regular expression.
+- **files to include** and **files to exclude** take patterns separated by commas, written as in a
+  `.gitignore`: `src`, `*.ts`, `docs, *.md`.
+- Results are grouped by file, with a count for each. Click a line to open the file there. The top
+  says how many results in how many files; Search stops at 2,000 and says it shows the first 2,000.
+- It searches what the Explorer shows, minus binary files and files over 2 MB: never
+  `node_modules`, `.git` or anything your `.gitignore` leaves out.
+- While Search is showing, its results follow changes to the files, at most every 2 seconds.
+- A regular expression that does not work is explained under the box, and nothing is searched. So
+  is one that repeats a group that itself repeats, such as `(a+)+`, which can take very long. A
+  regular-expression search stops after 5 seconds and shows what it found by then ("Search stopped
+  after 5 s; showing partial results").
+
 ## Saving, and files that change underneath you
 
 **Ctrl+S** saves, **Ctrl+Alt+S** saves everything. A dot on a tab means unsaved changes.
@@ -44,6 +65,25 @@ If a file is deleted on disk while it is open, a bar says so. With no unsaved ch
 save puts the file back) and **Discard and close**. Closing unsaved text always asks first.
 
 Closing a tab with unsaved changes asks first, and so does closing or reloading the browser tab.
+
+## Formatting
+
+**Format** at the end of the file's path bar, **Shift+Alt+F** (**⇧⌥F**), or right-click →
+**Format Document** formats the open file. It works for TypeScript, JavaScript, JSON, CSS, SCSS,
+Less and HTML; for other files the button is greyed out.
+
+With **Format on save** turned on, on the project page next to **Check command**, each save first
+formats the file in the editor you are working in. **Ctrl+Alt+S** (save everything) formats only
+that one and saves the others as they are. A file Forge cannot format is saved unchanged.
+
+## Types across files
+
+In TypeScript and JavaScript, the editor knows the project's other source files, not only the open
+one: hovers, completions and the open file's errors take into account what your other files
+export. Forge reads the project's `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs` and `.cjs`
+files (never from `node_modules` or anything `.gitignore` leaves out) when you open the project in
+Forge, and follows them as they change. `baseUrl` and `paths` in the project's root
+`tsconfig.json` are honoured. Problems still lists only the files you have open.
 
 ## The terminal
 
@@ -86,6 +126,105 @@ when they hold a secret: `DB_PASS`, `GH_PAT` and `MYSQL_PWD` do reach your comma
 `HOME` and your ssh agent. Values are never inspected: a password inside a value, such as
 `DATABASE_URL=postgres://user:pass@…`, reaches your commands too. Agents never use the terminal.
 
+## Run checks
+
+Name the project's **Check command** on the project page, under **Terminal**: `pnpm tsc --noEmit`,
+say, or `pnpm lint`. Then **Run checks**, in the header of Problems, or **Ctrl+Shift+B**
+(**⌘⇧B**), runs it in the project folder and lists what it found in Problems, under **Checks**.
+
+- It runs like a terminal command, as **Checks** in the Terminal's Processes list. One run at a
+  time per project; a new run replaces the last one's results, and **Clear** removes them.
+- With the terminal on **Scripts only**, name one of the project's `package.json` scripts
+  (`typecheck`, or `pnpm run typecheck`). With it **Off**, Run checks is off too. A command that is
+  exactly a script's name always runs as that script.
+- Problems reads what `tsc` and `eslint` (its usual "stylish" output) print, and the common
+  `file:line:column: message` and `file:line: message` forms. Each row names the tool, opens its
+  file at its line, and has **Fix with agent**. The footer's error and warning counts include them.
+- The **Checks** header says when it ran, how long it took and how it exited. A clean run says
+  "No problems found by" and the command. A run that failed without a line Problems can read says
+  "Checks failed (exit N); no problems recognised in the output", with **Show output** to see it in
+  the Terminal.
+- With no check command, the button reads **Set a check command** and takes you to the project
+  page.
+
+## Chat in the project
+
+When the project has a folder, the chat works in it: the node you talk to can read and change the
+project's files, from Ideate as from Forge. Without a folder, the chat answers as before and
+changes nothing.
+
+- **A coding-agent CLI node** (Claude Code, Codex, Gemini) works in the folder with its own tools.
+  Its provider's **Permission** decides what it may do: **Read-only**, **Edit project files**, or
+  **Full auto**, which also runs commands. A checkpoint can undo its changes to files, not what a
+  command did. A turn gets at least 10 minutes, as in a run.
+- **An API model** (an Agent or a Model node) can list, read, write and edit the project's files
+  and look at `git status` and `git diff`: nothing that deletes, and never a command. It does so
+  only when its model can call tools, at most the Agent's **Max tool calls** per turn (10 for a
+  Model node). What a tool returns is checked before the model reads it, as in a run: hidden
+  instructions are removed and personal data redacted under the node's guardrail policy.
+- **What it did:** under the reply, "What it did: 2 edits, 1 read" opens to the files it read,
+  wrote or edited and the commands it ran. ACE keeps the names, never what the files say.
+- **Every turn in a folder is checkpointed**, and a reply that changed files carries a
+  [Changes card](#changes-and-checkpoints).
+- **One at a time:** in one project, these turns wait for each other. The waiting one shows
+  "… is typing" and starts from the conversation as it is then, so it sees the reply it waited for.
+
+**Asking another node.** Type `@` in the message box to pick a node of the workflow, for example
+`@reviewer check what Coder did`. The line under the box says who the message goes **to**. That
+node answers inside the same conversation, sees who said what, and its reply shows its name and
+avatar. The conversation does not switch: your next message without an `@` goes back to the node
+you were talking to.
+
+- One message goes to one node. `@all`, two different nodes, or a handle no node has is explained
+  under the box, and Send waits until you fix it.
+- Only an `@handle` counts; a node's plain name is just a word. The handles are the ones Domain
+  uses: a node's own, or one made from its name, and `@brain` for the Brain.
+
+## Ask agent and Fix with agent
+
+- **Ask agent:** select code in the editor and press **Ctrl+L** (**⌘L**), or right-click →
+  **Ask agent**. The chat opens with a reference such as `src/app.ts:L3-L7` in its message box,
+  carrying the lines you selected; add your question and send. With nothing selected, the
+  reference is the whole file.
+- **Ask Agent About This File**, when you right-click a file in the Explorer, adds the file's name
+  only; an agent working in the folder reads the file itself.
+- **Fix with agent**, on every row in Problems (the open files' errors and Run checks' results
+  alike), sends the node the chat is talking to "Fix this problem:", the message and the tool that
+  reported it, with the file's lines around the problem (five either side). If the chat has no
+  node selected, the message and the reference wait in the message box until you pick one.
+
+## Changes and checkpoints
+
+Whenever an agent may change your files — a chat turn in a project with a folder, or a run — ACE
+takes a private snapshot of the folder first, and another when the agent stops. What changed in
+between is a **checkpoint**, waiting for your review. The snapshots live in ACE's own data folder,
+never in your project's `.git`: your branches, staging area and stash are not touched.
+
+- **CHANGES**, at the top of the left column, lists the checkpoints, those still open first. Each
+  says where it came from (**Chat with** the node, or **Run** and the end of the run's id), when,
+  its state (**Recording…** while the agent works, **To review**, **Kept**, **Reverted**, **Partly
+  reverted**, or **Not revertible**), and each file it changed, with the lines added and removed.
+  Click a file's orange **±** in the Explorer to open Changes on its checkpoint.
+- **In the chat**, a reply that changed files shows the same list as a card, with **Review**,
+  **Keep all** and **Revert all**. Review opens Forge when you are in Ideate or Domain.
+- **Review:** click a file's name. A read-only tab, "_file_ (agent change)", shows the file before
+  the agent on the left and after it on the right, with **Keep** and **Revert** for that file. A
+  binary file, or one over 2 MB, has no text to compare.
+- **Keep** accepts a change. **Revert** puts the file back as it was before the agent: its old
+  text, deleted again if the agent created it, recreated if the agent deleted it. **Keep all** and
+  **Revert all** do every file still waiting; Revert all does not ask first.
+- **A file changed since the agent's edit** is never overwritten: Revert says "_file_ changed after
+  the agent's edit; review it before reverting" and leaves it. The other files are still reverted.
+- **Files you changed in Forge while the agent worked** (saved, created, moved or deleted) are
+  listed as **yours** and are not reverted here.
+- **Files a snapshot left out** (see the limits below) are not reviewed. One left out on one side
+  only — a file over 5 MB the agent shrank, say — is listed as **not captured** and can't be
+  reverted. Revert deletes a file only when the snapshots prove the agent created it.
+- A turn or run that changed nothing leaves no checkpoint.
+- If a snapshot cannot be taken (git is missing, say), the agent still works, and the checkpoint
+  says its changes can't be reverted, and why. If ACE stops while a checkpoint is recording, that
+  one can't be reverted either: what changed meanwhile can't be told apart from your own work.
+
 ## Keys the browser keeps
 
 The browser keeps **Ctrl+W**, **Ctrl+T**, **Ctrl+N**, **Ctrl+Tab** and **Ctrl+1…9** for itself, so
@@ -93,9 +232,12 @@ Forge uses **Alt+W** to close an editor tab, and **Ctrl+P** lists your open file
 
 ## Limits in this version
 
+### Editor and terminal
+
 - Text files up to 2 MB open for editing; binary files show a notice, images a preview.
-- IntelliSense covers TypeScript, JavaScript, CSS, HTML and JSON inside each file; other languages
-  get highlighting.
+- IntelliSense covers TypeScript, JavaScript, CSS, HTML and JSON; other languages get
+  highlighting. Only TypeScript and JavaScript see across files
+  ([Types across files](#types-across-files)).
 - On a phone, Forge is browse-only.
 - The terminal is line-based: full-screen programs (vim, top, some installers' menus) do not
   render. Prompts that read a line work.
@@ -113,3 +255,52 @@ Forge uses **Alt+W** to close an editor tab, and **Ctrl+P** lists your open file
 - On Windows, `cmd`'s own commands (`echo`, `dir`, `type`) may show accented and other non-ASCII
   characters as `�`. Programs such as node, python, git and npm display them correctly. A fix is
   planned.
+
+### Checkpoints
+
+- Checkpoints need git installed on your computer (on the `PATH`). Without it the agents still
+  work, but every checkpoint says its changes can't be reverted.
+- A snapshot leaves out files over 5 MB; everything a `.gitignore` in the project ignores, as the
+  `.gitignore` files stood when the agent started; the folders Forge always dims (`node_modules`,
+  `.ace`, `dist`, `build`, `.next`, `__pycache__` and `.venv`, at any depth); and links, which it
+  never follows. The Changes view and card say so. What an agent does to those files is not
+  reviewed and can't be reverted.
+- A project of more than 200,000 files gets no checkpoints: each one says the project is too large.
+- A git repository inside the project is snapshotted as plain files: its files are covered, its own
+  `.git` is not.
+- While a checkpoint records, an edit made outside Forge's editor and Explorer counts as the
+  agent's: another editor's, or a command's, even one you run in Forge's own terminal. It is listed
+  in the checkpoint, and Revert can undo it.
+- For about the first second of a checkpoint, while ACE takes the first snapshot, even a file you
+  save in Forge can count as the agent's.
+- A Domain run that stays open records one checkpoint for the whole session, until it ends.
+- Chat turns in a project wait for each other, but runs do not wait for chat turns: a run and a chat
+  turn writing in the same project at once can mix their changes in each other's checkpoints.
+- A renamed file shows as one file deleted and another added.
+- Review shows the agent's change (the file before and after the agent), not the file as it is now.
+- The two snapshots add about 2 seconds to each chat turn or run in a folder on Windows, even when
+  nothing changes.
+- Old checkpoints are never cleaned up: the store in ACE's data folder (`~/.ace/checkpoints`
+  unless `ACE_DATA_DIR` says otherwise) only grows, and deleting a project does not remove its
+  store.
+
+### Chat
+
+- A turn waiting for another one shows only "… is typing", not that it waits.
+- On a phone, the chat shows no Changes card; review the changes in Forge.
+
+### Search, checks, formatting and types
+
+- The 5-second limit on a regular-expression search includes finding the files to search, so in a
+  very large project it covers fewer of them.
+- **files to include** and **files to exclude** follow `.gitignore` patterns, not VS Code's: `src`
+  matches every folder named `src`, anywhere.
+- Run checks reads only `tsc`, `eslint` in its "stylish" format, and the generic
+  `file:line:column` and `file:line` forms. It reads only the last 1 MB of the command's output, and
+  a path printed relative to a sub-folder (a tool run inside one package of a monorepo) does not
+  open.
+- Format on save formats only the file in the active editor; saving everything leaves the others as
+  they are.
+- Types across files stop at 1,500 files and 2 MB of source in all, shallowest folders first.
+  `tsconfig.json` is read for `baseUrl` and `paths` only, and its `extends` is not followed. A
+  JavaScript file sees only the project's JavaScript files.
