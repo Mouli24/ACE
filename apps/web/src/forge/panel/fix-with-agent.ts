@@ -5,6 +5,7 @@ import { useLayoutStore } from '../../app/stores/layout';
 import { usePanelsStore } from '../../app/stores/panels';
 import { chipPart, useComposerChips, type ChipSource } from '../../chat/composer-chips';
 import { sendToNode } from '../../chat/useChat';
+import { isChatNodeOf } from '../../chat/workflow-target';
 import { askAgentAbout } from '../ask-agent';
 import { languageOf } from '../editor/languages';
 import { getModel } from '../editor/models';
@@ -13,7 +14,8 @@ import { getModel } from '../editor/models';
  * Fix with agent (D302, design §6.5): one click hands a problem — from Monaco's markers or, after
  * the merge, from Run checks — to the chat's current node: what is wrong and where, with the
  * file's lines around it as a `code` part. With no node selected it waits in the composer instead,
- * for the person to pick one.
+ * for the person to pick one — and so it does when the chat's node is not one of Forge's workflow
+ * (fix F-I2): a target left over from another workflow or project is never sent to.
  */
 
 /** Lines either side of the problem's line that travel with it. */
@@ -61,6 +63,8 @@ async function textOf(projectId: string, path: string): Promise<string | undefin
 
 export async function fixWithAgent(input: {
   projectId: string;
+  /** Forge's workflow: only a chat node of its graph is sent to directly. */
+  workflowId?: string | undefined;
   problem: FixableProblem;
   queryClient: QueryClient;
 }): Promise<'sent' | 'prefilled'> {
@@ -75,7 +79,7 @@ export async function fixWithAgent(input: {
   const message = fixMessage(problem);
 
   const nodeId = usePanelsStore.getState().chatNodeId;
-  if (nodeId === undefined) {
+  if (nodeId === undefined || !isChatNodeOf(input.queryClient, input.workflowId, nodeId)) {
     useComposerChips.getState().prefill(message);
     askAgentAbout(chip);
     return 'prefilled';

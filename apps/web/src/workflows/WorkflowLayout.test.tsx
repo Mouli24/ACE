@@ -1,8 +1,11 @@
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { useLayoutStore } from '../app/stores/layout';
+import { usePanelsStore } from '../app/stores/panels';
+import { useComposerChips } from '../chat/composer-chips';
+import { createNode } from '../nodes/factory';
 import { db, installMockServer, renderApp } from '../test/app';
 
 installMockServer();
@@ -77,6 +80,44 @@ describe('D299 Ideate and Forge, one click apart', () => {
     await user.click(screen.getByRole('radio', { name: /Domain/ }));
     await screen.findByTestId('domain-page');
     expect(screen.getByTestId('chat-toggle')).toHaveAccessibleName('TEAM Split');
+  });
+
+  it('drops a chat target that is not in the workflow, with the chat column closed (F-I2)', async () => {
+    const { project, main, second } = seed();
+    const writer = createNode('agent', main.id, { x: 0, y: 0 });
+    db.commitGraph(main.id, [writer], []);
+    usePanelsStore.getState().chatWith(writer.id);
+    useLayoutStore.setState({ chatOpen: false });
+    const { router } = renderApp(`/projects/${project.id}/workflows/${main.id}`);
+    await screen.findByTestId('canvas');
+    expect(usePanelsStore.getState().chatNodeId).toBe(writer.id);
+
+    await act(() => router.navigate(`/projects/${project.id}/workflows/${second.id}/forge`));
+    await waitFor(() => expect(usePanelsStore.getState().chatNodeId).toBeUndefined());
+    expect(screen.queryByTestId('chat-aside')).toBeNull();
+  });
+
+  it('clears the composer’s chips and draft when the project changes (B-M7)', async () => {
+    const { project, main, second } = seed();
+    const other = db.createProject({ name: 'Other' });
+    const elsewhere = db.createWorkflow(other.id, 'Elsewhere');
+    useComposerChips.getState().reset();
+    const { router } = renderApp(`/projects/${project.id}/workflows/${main.id}`);
+    await screen.findByTestId('canvas');
+    act(() => {
+      useComposerChips.getState().add({ path: 'src/a.ts', language: 'typescript' });
+      useComposerChips.getState().prefill('Fix this problem: x');
+    });
+
+    // another workflow of the same project: the chip's path still means the same file
+    await act(() => router.navigate(`/projects/${project.id}/workflows/${second.id}`));
+    await screen.findByText(second.id);
+    expect(useComposerChips.getState().chips).toHaveLength(1);
+
+    await act(() => router.navigate(`/projects/${other.id}/workflows/${elsewhere.id}`));
+    await screen.findByText(elsewhere.id);
+    expect(useComposerChips.getState().chips).toEqual([]);
+    expect(useComposerChips.getState().draft).toBeUndefined();
   });
 
   it('says so when the workflow does not exist', async () => {
