@@ -199,21 +199,57 @@ export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 export type ChatTarget =
   { targetNodeId: Id; error?: undefined } | { targetNodeId?: undefined; error: string };
 
+/** Same length, so every offset `parseAddressing` reports still points into the original text. */
+const blank = (span: string): string => span.replace(/[^\n]/g, ' ');
+
+/** A fenced code block, to its closing fence or the end of the message. */
+const FENCED_CODE = /(```|~~~)[\s\S]*?(?:\1|$)/g;
+/** An inline code span: a run of backticks, to the same run. */
+const CODE_SPAN = /(`+)[\s\S]*?\1/g;
+const AT_TOKEN = /@[A-Za-z0-9][A-Za-z0-9-]*/g;
+const QUOTES = new Set(["'", '"', '`']);
+const NOT_A_HANDLE_AFTER = new Set(['/', '(']);
+
+/**
+ * D302 fix B-M3: the message with everything chat never reads as an address blanked out — code
+ * (fenced blocks and inline spans), an `@token` followed by `/` or `(` (a scoped package such as
+ * `@types/node`, a decorator call such as `@Injectable()`) and an `@` straight after a quote
+ * (`'@ace/contracts'`). Chat only: Domain's parser is not changed by it.
+ */
+function chatAddressText(text: string): string {
+  let kept = text.replace(FENCED_CODE, blank).replace(CODE_SPAN, blank);
+  for (const match of text.matchAll(AT_TOKEN)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (QUOTES.has(text[start - 1] ?? '') || NOT_A_HANDLE_AFTER.has(text[end] ?? '')) {
+      kept = `${kept.slice(0, start)}${blank(match[0])}${kept.slice(end)}`;
+    }
+  }
+  return kept;
+}
+
 /**
  * D302: who a chat message is for. Domain's parser reads the text (D324), but chat honours only
  * its `@handle` spans: a plain name stays a word. No handle sends to the conversation's main node;
- * exactly one node sends to it; `@all`, two different nodes or a handle no node has is an error,
- * in Domain's words where they fit, and nothing is sent. The mention stays in the message: it is
- * part of what the person said, and the prompt shows it.
+ * exactly one node sends to it; `@all` or two different nodes is an error, in Domain's words where
+ * they fit, and nothing is sent. The mention stays in the message: it is part of what the person
+ * said, and the prompt shows it.
+ *
+ * In a coding chat `@` is often just text (fix B-M3): code, scoped packages, decorators and quoted
+ * `@`s are never addresses, and an `@word` that matches no node is plain text — except as the
+ * message's first word, where it is most likely a typo of a real handle and is refused with the
+ * nearest handles.
  */
 export function resolveChatTarget(
   text: string,
   roster: readonly RosterEntry[],
   mainNodeId: Id,
 ): ChatTarget {
-  const parsed = parseAddressing(text, roster);
+  const parsed = parseAddressing(chatAddressText(text), roster);
   const handleError = parsed.errors.find(
-    (error) => error.code === 'unknown_handle' || error.code === 'no_brain',
+    (error) =>
+      (error.code === 'unknown_handle' || error.code === 'no_brain') &&
+      text.slice(0, error.span?.start ?? 0).trim() === '',
   );
   if (handleError !== undefined) {
     if (handleError.code === 'unknown_handle') {

@@ -110,6 +110,45 @@ describe('D302 resolveChatTarget', () => {
   });
 });
 
+describe('D302 fix B-M3: ordinary @ text in a coding chat neither blocks Send nor retargets', () => {
+  // the conversation's main node is the Reviewer here, so a message for the Coder is visible
+  const REVIEWER = id(2);
+  const CODER = id(1);
+
+  it.each([
+    ['@types/node is missing', REVIEWER],
+    ['npm i @scope/pkg', REVIEWER],
+    ['use `@x` here', REVIEWER],
+    ["Cannot find module '@ace/contracts'", REVIEWER],
+    ['add @Injectable() to the class', REVIEWER],
+    ['@coder fix it', CODER],
+    ['please @coder fix it', CODER],
+    ['ask about @nobody later', REVIEWER],
+    ['say "@coder" in the docs', REVIEWER],
+    ['the `@coder fix` example', REVIEWER],
+    ['```ts\n@Component({})\nclass A {}\n@nobody\n```\nwhy does this fail?', REVIEWER],
+    ['```\n@coder\n```\n@coder look at the block above', CODER],
+    ['`@scope/pkg` and @coder', CODER],
+  ])('%j goes to the expected node, with no error', (text, expected) => {
+    expect(resolveChatTarget(text, roster, REVIEWER)).toEqual({ targetNodeId: expected });
+  });
+
+  it('a typo of a real handle as the first word is still refused, with the nearest handle', () => {
+    const result = resolveChatTarget('@codr fix it', roster, REVIEWER);
+    expect(result.targetNodeId).toBeUndefined();
+    expect(result.error).toContain('no node is @codr');
+    expect(result.error).toContain('@coder');
+    expect(resolveChatTarget('  @codr fix it', roster, REVIEWER).error).toContain('@coder');
+  });
+
+  it('keeps @all refused wherever it is, and two real handles refused', () => {
+    expect(resolveChatTarget('ping @all please', roster, REVIEWER).error).toMatch(/@all/);
+    expect(resolveChatTarget('please @coder and @reviewer', roster, REVIEWER).error).toMatch(
+      /one node at a time/,
+    );
+  });
+});
+
 describe('D302 ChatRequest.targetNodeId', () => {
   it('is optional and must be an id', () => {
     const content = [{ type: 'text', text: 'hi' }];
