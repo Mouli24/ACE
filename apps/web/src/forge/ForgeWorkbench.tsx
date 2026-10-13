@@ -2,7 +2,6 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import { SHORTCUTS, useShortcuts } from '../app/shortcuts';
 import { useLayoutStore } from '../app/stores/layout';
-import { askAgentAboutFile, askAgentAboutSelection } from './ask-agent';
 import { useForgeAttribution } from './attribution';
 import { saveAll, saveFile } from './editor/actions';
 import { useCloseRequest } from './editor/CloseDialogs';
@@ -12,6 +11,7 @@ import { useEditorSync } from './editor/useEditorSync';
 import { ExplorerView } from './explorer/ExplorerView';
 import { useSideViewStore } from './explorer/side-view-store';
 import { BottomPanel } from './panel/BottomPanel';
+import { runChecks } from './panel/run-checks';
 import { QuickOpen } from './quick-open/QuickOpen';
 import { useQuickOpen } from './quick-open/quick-open-store';
 import { toggleTerminalFocused } from './terminal/focus';
@@ -63,12 +63,11 @@ export function ForgeWorkbench({
     ],
     [SHORTCUTS.saveAll, () => void saveAll(projectId, queryClient)],
     [
-      // D302: the editor's selection, or — with no editor to ask — the active file.
-      SHORTCUTS.askAgent,
+      SHORTCUTS.runChecks,
       () => {
-        if (askAgentAboutSelection()) return;
-        const active = activePath();
-        if (active !== undefined) askAgentAboutFile(active);
+        // Problems shows the run, or why it cannot run (no command, the terminal off).
+        useLayoutStore.getState().showPanel('problems');
+        void runChecks(projectId, queryClient);
       },
     ],
     [

@@ -2,6 +2,7 @@ import type * as Monaco from 'monaco-editor';
 import { create } from 'zustand';
 
 import { pathOfUri } from '../editor/models';
+import type { CheckProblem } from './check-parser';
 
 export type ProblemSeverity = 'error' | 'warning' | 'info';
 
@@ -14,16 +15,67 @@ export interface Problem {
   source: string | undefined;
 }
 
-export const useProblemsStore = create<{ byProject: Record<string, Problem[]> }>()(() => ({
+/**
+ * One Run checks (D299 Phase 4, design §6.4): the project's check command run as a process, and
+ * what its output said. `running` keeps the last run's problems on show until the new ones land.
+ */
+export interface ChecksRun {
+  status: 'running' | 'done' | 'failed';
+  command: string;
+  /** The process in the Terminal's list; absent when it never started. */
+  processId?: string;
+  startedAt: string;
+  finishedAt?: string;
+  exitCode?: number | null;
+  problems: CheckProblem[];
+  /** Why it could not run: the engine's refusal, or what went wrong. */
+  error?: string;
+}
+
+export interface ProblemsState {
+  /** Monaco's markers for the open files, replaced whole by every marker change. */
+  byProject: Record<string, Problem[]>;
+  /** Run checks' last run per project: a separate slice, so the markers never overwrite it. */
+  checks: Record<string, ChecksRun>;
+}
+
+export const useProblemsStore = create<ProblemsState>()(() => ({
   byProject: {},
+  checks: {},
 }));
+
+/** A new run replaces the project's checks slice, whole. */
+export function setChecks(projectId: string, run: ChecksRun): void {
+  useProblemsStore.setState((state) => ({ checks: { ...state.checks, [projectId]: run } }));
+}
+
+/** Problems' Clear: the project's checks are gone until the next run. */
+export function clearChecks(projectId: string): void {
+  useProblemsStore.setState((state) => {
+    const { [projectId]: _cleared, ...rest } = state.checks;
+    return { checks: rest };
+  });
+}
+
+/** The footer's and the panel's counts: the open files' markers and the checks, together. */
+export function problemCounts(
+  state: ProblemsState,
+  projectId: string,
+): { errors: number; warnings: number; total: number } {
+  const all = [...(state.byProject[projectId] ?? []), ...(state.checks[projectId]?.problems ?? [])];
+  return {
+    errors: all.filter((problem) => problem.severity === 'error').length,
+    warnings: all.filter((problem) => problem.severity === 'warning').length,
+    total: all.length,
+  };
+}
 
 const RANK: Record<ProblemSeverity, number> = { error: 0, warning: 1, info: 2 };
 
 /**
  * Follow Monaco's markers for every Forge model (Problems, design §6.4): grouped by project, errors
- * first, hints left out as VS Code does. A disposed model's markers go with it. Phase 4 adds the
- * project's check command to the same list.
+ * first, hints left out as VS Code does. A disposed model's markers go with it. Run checks' results
+ * live in their own `checks` slice, which this never touches.
  */
 export function watchMarkers(monaco: typeof Monaco): () => void {
   const publish = (): void => {
