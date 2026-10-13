@@ -1,7 +1,13 @@
-import type { ActivityItem, ToolDefinition } from '@ace/contracts';
+import type { ActivityItem, NodeError, ToolDefinition } from '@ace/contracts';
 
 import type { ToolResult } from '../ports/index.js';
-import type { ExecutableTool, ToolProvider, ToolRunContext } from '../runs/tool-loop.js';
+import {
+  resultText,
+  withJudgedText,
+  type ExecutableTool,
+  type ToolProvider,
+  type ToolRunContext,
+} from '../runs/tool-loop.js';
 import { activityItemFor, type ActivityStatus } from './activity.js';
 
 /**
@@ -13,8 +19,10 @@ import { activityItemFor, type ActivityStatus } from './activity.js';
  * never a tool whose definition says it is destructive. Their paths are confined by the tools
  * themselves, exactly as in a run. The loop is the run's, cut down: generate; run each requested
  * tool; feed the results back; and at `maxToolCalls` ask once more with no tools. What the model
- * reads back is the tool's result as it returned it, through the adapter's untrusted labelling
- * (FR-TOOL-010); what the turn records is an `ActivityItem` per call, which never holds a result.
+ * reads back is the tool's result after the run's context point (`judge`, FR-GRD-004): hidden
+ * instructions stripped and personal data redacted per the policy, then the adapter's untrusted
+ * labelling (FR-TOOL-010). A result the context point blocks ends the turn. What the turn records
+ * is an `ActivityItem` per call, which never holds a result.
  */
 
 /** The project tools a chat turn may offer, in the order they are offered. */
@@ -36,6 +44,13 @@ export function chatToolsFrom(tools: ToolProvider | undefined): ExecutableTool[]
     return [tool];
   });
 }
+
+/**
+ * The context point over one tool result's text (FR-GRD-004) — the run's `NodeContextHook.toolResult`
+ * shape: `continue` with the text the model may read, or `failed` with why it may not.
+ */
+export type ToolResultJudgement =
+  { kind: 'continue'; text: string } | { kind: 'failed'; error: NodeError };
 
 /** A tool the model asked for in one turn. */
 export interface ChatToolRequest {
@@ -60,12 +75,16 @@ export interface ChatToolLoopInput {
   activity: ActivityItem[];
   /** Told of each call as it ends, for the engine log. */
   onCall?: (name: string, status: ActivityStatus) => void;
+  /** The context point every tool result passes before the model reads it. Absent: unchecked. */
+  judge?: (text: string) => Promise<ToolResultJudgement>;
 }
 
 export interface ChatToolLoopResult {
   toolCalls: number;
   /** The model still asked for a tool after the limit; its last text is the answer. */
   limitReached: boolean;
+  /** The context point blocked a result: the turn ends with this error, the model never reads it. */
+  blocked?: NodeError;
 }
 
 export async function runChatToolLoop(input: ChatToolLoopInput): Promise<ChatToolLoopResult> {
@@ -105,7 +124,21 @@ export async function runChatToolLoop(input: ChatToolLoopInput): Promise<ChatToo
           result = { error: error instanceof Error ? error.message : String(error) };
         }
       }
-      results.push({ callId: call.callId, name: call.name, args: call.args, result });
+
+      // What the model reads next passes the context point first, a failure's message included —
+      // the run's own rule (`judgeToolResult`). A refusal is the engine's words, not the tool's.
+      let blocked: NodeError | undefined;
+      if (input.judge !== undefined && status !== 'refused') {
+        const text = resultText(result);
+        const judged = await input.judge(text);
+        if (judged.kind === 'failed') {
+          blocked = judged.error;
+          status = 'blocked';
+        } else {
+          result = withJudgedText(result, text, judged.text);
+        }
+      }
+
       input.activity.push(
         activityItemFor({
           tool: call.name,
@@ -117,6 +150,8 @@ export async function runChatToolLoop(input: ChatToolLoopInput): Promise<ChatToo
         }),
       );
       input.onCall?.(call.name, status);
+      if (blocked !== undefined) return { toolCalls: calls + 1, limitReached: false, blocked };
+      results.push({ callId: call.callId, name: call.name, args: call.args, result });
       calls += 1;
       // At the limit the turn's later calls are not run; the model answers once more, tool-less.
       if (calls >= limit) {
