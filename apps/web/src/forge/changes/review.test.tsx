@@ -98,6 +98,25 @@ describe('D300 reviewing an agent change in the editor area', () => {
     await waitFor(() => expect(screen.queryByTestId('review-view')).toBeNull());
   });
 
+  it('the keyboard landing on the file tab already active takes the area back too', async () => {
+    const user = userEvent.setup();
+    const { projectId, checkpointId } = seed();
+    renderWithQuery(<EditorArea projectId={projectId} />);
+    act(() => openFile(projectId, 'README.md', { preview: false }));
+    await screen.findByLabelText('Editing README.md');
+
+    // one file tab: → wraps round onto it, Home lands on it
+    for (const key of ['{ArrowRight}', '{Home}']) {
+      act(() => openReview(projectId, checkpointId, 'src/a.ts'));
+      await screen.findByTestId('review-view');
+      act(() => screen.getByTestId('tab-README.md').focus());
+      await user.keyboard(key);
+      await waitFor(() => expect(screen.queryByTestId('review-view')).toBeNull());
+      expect(screen.getByTestId('tab-README.md')).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByRole('tab', { name: 'a.ts (agent change)' })).toBeInTheDocument();
+    }
+  });
+
   it('choosing the file already active (Quick Open, the Explorer, a Search result) takes the area back (fix A-M12)', async () => {
     const { projectId, checkpointId } = seed();
     renderWithQuery(<EditorArea projectId={projectId} />);
