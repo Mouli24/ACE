@@ -358,3 +358,45 @@ describe('D300 the checkpoint service: what it will not revert', () => {
     expect((await recording.finish())?.status).toBe('kept');
   });
 });
+
+describe('D300 final fix wave: a revert is the person’s write, in a safe order', () => {
+  it('F-I1: a file reverted while another checkpoint records is the person’s there, never the agent’s', async () => {
+    store.disk.set('a.ts', 'a0\n');
+    const first = await service.begin(project.id, { kind: 'chat', threadId: newId() });
+    store.disk.set('a.ts', 'a1\n');
+    await first.finish();
+
+    const second = await service.begin(project.id, { kind: 'chat', threadId: newId() });
+    await service.act(project.id, first.id, { action: 'revert', paths: ['a.ts'] });
+    expect(store.disk.get('a.ts')).toBe('a0\n');
+    const later = await second.finish();
+    expect(later?.files.map((file) => `${file.path}:${file.state}`)).toEqual(['a.ts:person']);
+
+    // so the later checkpoint's Revert all never brings back what the person rejected
+    await service.act(project.id, second.id, { action: 'revert' });
+    expect(store.disk.get('a.ts')).toBe('a0\n');
+  });
+
+  it('F-M1: Revert all reverts an added file before a deleted one (a case-only rename)', async () => {
+    store.disk.set('Foo.ts', 'foo\n');
+    const { checkpoint } = await recorded(() => {
+      store.disk.delete('Foo.ts');
+      store.disk.set('foo.ts', 'foo\n');
+      store.disk.set('b.ts', 'b\n');
+    });
+    expect(checkpoint?.files.map((file) => `${file.path}:${file.change}`)).toEqual([
+      'Foo.ts:deleted',
+      'b.ts:added',
+      'foo.ts:added',
+    ]);
+    const order: string[] = [];
+    const revertFile = store.revertFile.bind(store);
+    store.revertFile = async (...args) => {
+      order.push(args[4]);
+      return revertFile(...args);
+    };
+
+    await service.act(project.id, checkpoint!.id, { action: 'revert' });
+    expect(order).toEqual(['b.ts', 'foo.ts', 'Foo.ts']);
+  });
+});
