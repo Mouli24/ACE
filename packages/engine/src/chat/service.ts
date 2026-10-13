@@ -61,11 +61,7 @@ import {
   ChatWorkflowNotFoundError,
   NotAnAgentNodeError,
 } from './errors.js';
-import {
-  evaluateChatInput,
-  evaluateChatReply,
-  type ChatGuardrailDeps,
-} from './guardrails.js';
+import { evaluateChatInput, evaluateChatReply, type ChatGuardrailDeps } from './guardrails.js';
 import { buildChatPrompt } from './prompt.js';
 import {
   chatToolsFrom,
@@ -214,7 +210,9 @@ export interface ChatServiceDeps {
 const TOKEN_BATCH_MS = 50;
 
 function titleFor(content: readonly Part[]): string {
-  const firstText = content.find((part): part is Extract<Part, { type: 'text' }> => part.type === 'text');
+  const firstText = content.find(
+    (part): part is Extract<Part, { type: 'text' }> => part.type === 'text',
+  );
   const raw = firstText?.text.trim() ?? '';
   if (raw === '') return 'New chat';
   return raw.length <= 60 ? raw : `${raw.slice(0, 59)}…`;
@@ -382,37 +380,6 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     const { node, chosen, policy, threadId, userParts, guardrails, workspace } = context;
     // Known before the call, so the checkpoint can name the turn it belongs to.
     const replyId = nextId();
-    // Read now, holding the project's queue — never the snapshot from before the turn waited.
-    const history = await historyFor(threadId, context.userMessageId);
-
-    const instructions =
-      node.kind === 'agent' ? node.config.instructions : (node.config.systemPrompt ?? '');
-    const budgetTokens =
-      node.kind === 'agent' ? node.config.contextPolicy.budgetTokens : DEFAULT_CONTEXT_POLICY.budgetTokens;
-
-    const prompt = buildChatPrompt({
-      conversationId: nextId(),
-      nodeId: node.id,
-      instructions,
-      inputTypes: node.config.inputTypes,
-      budgetTokens,
-      // A failed turn is the engine speaking, not the model: it is never replayed as its answer.
-      history: history.filter((message) => message.error === undefined),
-      userParts,
-      now: now(),
-      speakers: {
-        names: await namesOf(context.workflowId),
-        mainNodeId: context.mainNodeId,
-        selfNodeId: node.id,
-      },
-    });
-
-    const catalog = await deps.modelsFor();
-    const catalogRow = catalog.find(
-      (model) => model.providerId === chosen.providerId && model.modelId === chosen.modelId,
-    );
-    const pricing = catalogRow?.pricing;
-
     /* Stream: `chat.token` deltas batched ~50 ms, then the accumulated text is the reply. */
     const tokens = createBatcher<string>({
       intervalMs: batchMs,
@@ -482,7 +449,44 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
               : { kind: 'continue', text: judged.text };
           };
 
+    /** From the catalog row, once it is read: what the reply's usage is priced at. */
+    let pricing: Model['pricing'];
     try {
+      // Inside the turn (D287 fix F-M4): a thread or catalog that cannot be read ends the turn as
+      // a stored failed reply, like any other failure, rather than leaving the client "typing…".
+      // Read now, holding the project's queue — never the snapshot from before the turn waited.
+      const history = await historyFor(threadId, context.userMessageId);
+
+      const instructions =
+        node.kind === 'agent' ? node.config.instructions : (node.config.systemPrompt ?? '');
+      const budgetTokens =
+        node.kind === 'agent'
+          ? node.config.contextPolicy.budgetTokens
+          : DEFAULT_CONTEXT_POLICY.budgetTokens;
+
+      const prompt = buildChatPrompt({
+        conversationId: nextId(),
+        nodeId: node.id,
+        instructions,
+        inputTypes: node.config.inputTypes,
+        budgetTokens,
+        // A failed turn is the engine speaking, not the model: it is never replayed as its answer.
+        history: history.filter((message) => message.error === undefined),
+        userParts,
+        now: now(),
+        speakers: {
+          names: await namesOf(context.workflowId),
+          mainNodeId: context.mainNodeId,
+          selfNodeId: node.id,
+        },
+      });
+
+      const catalog = await deps.modelsFor();
+      const catalogRow = catalog.find(
+        (model) => model.providerId === chosen.providerId && model.modelId === chosen.modelId,
+      );
+      pricing = catalogRow?.pricing;
+
       const adapter: ProviderAdapter = await deps.adapterFor(chosen.providerId);
       const cli = isCliProviderType(adapter.type);
       const timeoutMs = chatTurnTimeoutMs(node.config.execution.timeoutMs, {

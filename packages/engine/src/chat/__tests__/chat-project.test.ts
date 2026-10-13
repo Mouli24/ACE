@@ -834,3 +834,50 @@ describe('D302 fix I2: a queued turn reads the thread when it starts', () => {
     expect(requests[0]?.prompt ?? '').not.toContain('@reviewer');
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Final fix wave — F-M4: a failure before the call still ends the turn       */
+/* -------------------------------------------------------------------------- */
+
+describe('D302 fix F-M4: a failure reading the thread or the catalog is a stored failed turn', () => {
+  /** The agent turns announced on the thread: what ends "typing…" in the client. */
+  function agentTurnsAnnounced(events: { type: string; payload: unknown }[]): ChatMessage[] {
+    return events
+      .filter((event) => event.type === 'chat.message')
+      .map((event) => (event.payload as { message: ChatMessage }).message)
+      .filter((message) => message.role === 'agent');
+  }
+
+  it('the history read rejects: the thread gets a failed reply, announced, and the checkpoint is finished', async () => {
+    const recorder = fakeRecorder();
+    const { bus, events } = makeBus(repository, now);
+    service = makeChatService(repository, bus, { workflowId, now, checkpoints: recorder });
+    repository.chatMessages.listByThread = async () => {
+      throw new Error('the database is locked');
+    };
+
+    const begun = await service.chat(coder.id, { content: hi() });
+    const reply = await begun.done;
+    expect(reply.role).toBe('agent');
+    expect(reply.error?.message).toMatch(/the database is locked/);
+    expect(recorder.finished).toBe(recorder.begun.length);
+    await flush();
+    expect(agentTurnsAnnounced(events).map((message) => message.id)).toEqual([reply.id]);
+  });
+
+  it('the catalog read rejects: the thread gets a failed reply, announced', async () => {
+    const { bus, events } = makeBus(repository, now);
+    service = makeChatService(repository, bus, {
+      workflowId,
+      now,
+      modelsFor: async () => {
+        throw new Error('the catalog is unreadable');
+      },
+    });
+
+    const reply = await (await service.chat(coder.id, { content: hi() })).done;
+    expect(reply.error?.message).toMatch(/the catalog is unreadable/);
+    await flush();
+    expect(agentTurnsAnnounced(events).map((message) => message.id)).toEqual([reply.id]);
+  });
+});
