@@ -37,9 +37,35 @@ export const CHECKPOINT_FILE_CHANGES = ['added', 'modified', 'deleted'] as const
 export const CheckpointFileChangeSchema = z.enum(CHECKPOINT_FILE_CHANGES);
 export type CheckpointFileChange = z.infer<typeof CheckpointFileChangeSchema>;
 
-export const CHECKPOINT_FILE_STATES = ['pending', 'kept', 'reverted'] as const;
+/**
+ * `pending` waits for Keep or Revert; `kept` and `reverted` are decided. Two are never reverted:
+ * `person` — the person saved, created, moved or removed it through Forge while the checkpoint was
+ * recording, so the change may be theirs — and `not_revertible` — a snapshot could not capture it
+ * (`reason` says why), so there is no proof of what it was.
+ */
+export const CHECKPOINT_FILE_STATES = [
+  'pending',
+  'kept',
+  'reverted',
+  'person',
+  'not_revertible',
+] as const;
 export const CheckpointFileStateSchema = z.enum(CHECKPOINT_FILE_STATES);
 export type CheckpointFileState = z.infer<typeof CheckpointFileStateSchema>;
+
+/**
+ * Why a snapshot left an existing path out: matched by the ignore rules as they were before the
+ * agent ran, over 5 MB, unreadable (a link, a locked file, a name git cannot hold), or gone between
+ * the listing and the read.
+ */
+export const CHECKPOINT_UNCAPTURED_REASONS = [
+  'ignored',
+  'too_large',
+  'unreadable',
+  'vanished',
+] as const;
+export const CheckpointUncapturedReasonSchema = z.enum(CHECKPOINT_UNCAPTURED_REASONS);
+export type CheckpointUncapturedReason = z.infer<typeof CheckpointUncapturedReasonSchema>;
 
 export const CheckpointFileSchema = z.strictObject({
   path: ProjectPathSchema,
@@ -49,6 +75,8 @@ export const CheckpointFileSchema = z.strictObject({
   deletions: z.number().int().min(0),
   binary: z.boolean(),
   state: CheckpointFileStateSchema,
+  /** Set on a `not_revertible` file: why the snapshot could not capture it. */
+  reason: CheckpointUncapturedReasonSchema.optional(),
 });
 export type CheckpointFile = z.infer<typeof CheckpointFileSchema>;
 
