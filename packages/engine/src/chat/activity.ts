@@ -79,6 +79,25 @@ function clip(text: string, max: number): string {
   return line.length <= max ? line : `${line.slice(0, max - 1)}…`;
 }
 
+/** The most of a command its activity keeps. */
+const COMMAND_MAX = 80;
+/** A heredoc or here-string, or an output redirect (`>`, `>>`, `1>`, `2>`, `&>`). */
+const COMMAND_TAIL = /<<|(?:(?<=^|\s)[12&])?>/;
+
+/**
+ * What a command's activity says it ran (D302 fix B-M5): its first line, cut before a heredoc and
+ * before an output redirect — where a command that writes a file carries the file's text — then
+ * capped. Codex's `apply_patch` is only its name. Secrets are masked before the cap, so a cut never
+ * leaves part of one behind (and `clip` masks the summary again).
+ */
+function commandLine(command: string): string {
+  const firstLine = command.split(/\r?\n/, 1)[0] ?? '';
+  if (/^apply_patch(?:\s|$)/.test(firstLine.trim())) return 'apply_patch';
+  const tail = COMMAND_TAIL.exec(firstLine);
+  const kept = maskSecrets((tail === null ? firstLine : firstLine.slice(0, tail.index)).trim());
+  return kept.length <= COMMAND_MAX ? kept : `${kept.slice(0, COMMAND_MAX - 1)}…`;
+}
+
 /** A path the way the person reads it: project-relative, forward slashes. */
 export function projectPath(path: string, projectDir: string | undefined): string {
   const slashed = path.replace(/\\/g, '/');
@@ -131,7 +150,7 @@ export function activityItemFor(input: {
     summary = path === undefined ? 'Read the git diff' : `Read the git diff of ${where}`;
   } else if (kind === 'command') {
     const command = firstString(args, ['command', 'cmd']);
-    summary = command === undefined ? `Ran ${input.tool}` : `Ran ${command}`;
+    summary = command === undefined ? `Ran ${input.tool}` : `Ran ${commandLine(command)}`;
   } else if (kind === 'search') {
     const query = firstString(args, ['pattern', 'query', 'q']);
     summary =

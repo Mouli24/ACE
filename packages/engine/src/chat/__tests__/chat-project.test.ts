@@ -990,3 +990,55 @@ describe('D302 R-1: the next turn in a thread is told which files the person rev
     );
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Final fix wave — B-M5: a command's activity never carries file text         */
+/* -------------------------------------------------------------------------- */
+
+describe('D302 fix B-M5: a command is summarised by its first line, before any heredoc or redirect', () => {
+  const ran = (command: string): string =>
+    activityItemFor({ tool: 'Bash', args: { command } }).summary;
+
+  it('cuts a heredoc and an output redirect, so the file text never reaches the summary', () => {
+    expect(ran("cat > src/a.ts <<'EOF'\nsecret code\nEOF")).toBe('Ran cat');
+    expect(ran('echo hi > out.txt')).toBe('Ran echo hi');
+    expect(ran("echo 'secret code' >> notes.txt")).toBe("Ran echo 'secret code'");
+    expect(ran('pnpm test 2>&1')).toBe('Ran pnpm test');
+    expect(ran('node build.js 1> out.log')).toBe('Ran node build.js');
+    expect(ran("python - <<'PY'\nprint('secret code')\nPY")).toBe('Ran python -');
+  });
+
+  it('names Codex’s apply_patch and nothing of the patch', () => {
+    expect(ran("apply_patch <<'PATCH'\n*** Begin Patch\n+secret code\n*** End Patch\nPATCH")).toBe(
+      'Ran apply_patch',
+    );
+    expect(ran('apply_patch "*** Begin Patch +secret code"')).toBe('Ran apply_patch');
+  });
+
+  it('keeps only the first line, capped at 80 characters', () => {
+    expect(ran('pnpm test\nrm -rf secret')).toBe('Ran pnpm test');
+    const long = ran(`echo ${'x'.repeat(300)}`);
+    expect(long).toBe(`Ran echo ${'x'.repeat(74)}…`);
+    expect(long.length).toBe('Ran '.length + 80);
+  });
+
+  it('a write or an edit is summarised by its path, never its text', () => {
+    const items = [
+      activityItemFor({ tool: 'Write', args: { file_path: 'src/a.ts', content: SECRET } }),
+      activityItemFor({
+        tool: 'MultiEdit',
+        args: { file_path: 'src/a.ts', edits: [{ old_string: SECRET, new_string: SECRET }] },
+      }),
+      activityItemFor({ tool: 'write_file', args: { file_path: 'src/a.ts', content: SECRET } }),
+      activityItemFor({ tool: 'replace', args: { file_path: 'src/a.ts', new_string: SECRET } }),
+      activityItemFor({ tool: 'apply_patch', args: { input: SECRET } }),
+      activityItemFor({ tool: 'file_change', args: { changes: [{ path: 'src/a.ts' }] } }),
+    ];
+    expect(JSON.stringify(items)).not.toContain(SECRET);
+  });
+
+  it('still masks a secret in what is kept', () => {
+    const summary = ran(`curl -H "Authorization: Bearer sk-ant-api03-${'A'.repeat(40)}" x`);
+    expect(summary).not.toContain('sk-ant-api03-AAAA');
+  });
+});
