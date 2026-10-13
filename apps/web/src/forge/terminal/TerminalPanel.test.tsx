@@ -352,3 +352,64 @@ describe('D301 rewrites reset inside the write stream, and typed-ahead input wai
     expect(FakeTerminal.instances.length).toBeGreaterThan(1);
   });
 });
+
+describe('D301 a line typed ahead with nothing attached runs, never dropped (design §10)', () => {
+  const lineOf = (projectId: string) =>
+    useTerminalStore.getState().projects[projectId]?.tabs[0]?.line;
+
+  it('a pasted cd src⏎echo hi⏎ moves into src, then runs echo hi there', async () => {
+    const start = vi.spyOn(api(), 'startProcess');
+    const projectId = await open();
+    type('cd src\recho hi\r');
+    await waitFor(() => expect(shown()).toBe('~ $ cd src\necho hi\nsrc $ echo hi\nhi\nsrc $ '));
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(start).toHaveBeenCalledWith(projectId, { command: 'echo hi', cwd: 'src' });
+    expect(lineOf(projectId)?.busy).toBe(false);
+    expect(lineOf(projectId)?.history).toEqual(['cd src', 'echo hi']);
+    start.mockRestore();
+  });
+
+  it('after a refused start, the next line typed ahead runs', async () => {
+    const projectId = await open();
+    const serving = Array.from(
+      { length: 8 },
+      () => processes.start(projectId, { command: 'serve' }).processId,
+    );
+    const original = api().startProcess.bind(api());
+    const start = vi.spyOn(api(), 'startProcess').mockImplementationOnce(async (id, request) => {
+      try {
+        return await original(id, request);
+      } finally {
+        // Refused: eight already run. One of them ends, so the next start has room.
+        processes.stop(id, serving[0] ?? '');
+      }
+    });
+    type('echo nine\recho ten\r');
+    await waitFor(() =>
+      expect(shown()).toBe(
+        `~ $ echo nine\necho ten\n${MOCK_MESSAGES.process_limit}\n~ $ echo ten\nten\n~ $ `,
+      ),
+    );
+    expect(start).toHaveBeenLastCalledWith(projectId, { command: 'echo ten', cwd: '' });
+    expect(lineOf(projectId)?.busy).toBe(false);
+    start.mockRestore();
+  });
+
+  it('a line typed ahead of a command that ended on its own runs next', async () => {
+    const projectId = await open();
+    const original = api().startProcess.bind(api());
+    const start = vi.spyOn(api(), 'startProcess').mockImplementationOnce(async (id, request) => {
+      const answer = await original(id, request);
+      // It ends before its start is answered: the tab attaches a process that has already ended.
+      await vi.waitFor(() =>
+        expect(useTerminalStore.getState().unowned[answer.processId]?.exit).toBeDefined(),
+      );
+      return answer;
+    });
+    type('echo a\recho b\r');
+    await waitFor(() => expect(shown()).toBe('~ $ echo a\necho b\na\n~ $ echo b\nb\n~ $ '));
+    expect(start).toHaveBeenLastCalledWith(projectId, { command: 'echo b', cwd: '' });
+    expect(lineOf(projectId)?.busy).toBe(false);
+    start.mockRestore();
+  });
+});
