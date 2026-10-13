@@ -53,11 +53,11 @@ export const DOMAIN_MIGRATION_ID = '20261010T120000_domain';
 export const FORGE_TERMINAL_MIGRATION_ID = '20261013T120000_forge_terminal_trust';
 
 /**
- * D300: checkpoints of agents' changes to a project folder — paths and counts only; the contents
- * live in the private git store under the data dir (design §7). The id was fixed by the Forge
- * Phase 3–4 plan so the tracks' migrations never collide.
+ * D302: who answered a chat turn, what it did in the project and the checkpoint of what it
+ * changed. Dated between Track A's checkpoints (T100000) and Track C's project checks (T110000), so
+ * the three Forge phase 3–4 migrations apply in the order they merge.
  */
-export const FORGE_CHECKPOINTS_MIGRATION_ID = '20261014T100000_forge_checkpoints';
+export const FORGE_CHAT_TURNS_MIGRATION_ID = '20261014T105000_forge_chat_turns';
 
 /**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
@@ -620,31 +620,13 @@ export const MIGRATIONS: readonly Migration[] = [
     `,
   },
   {
-    id: FORGE_CHECKPOINTS_MIGRATION_ID,
+    id: FORGE_CHAT_TURNS_MIGRATION_ID,
     up: `
-      -- D300: one row per checkpoint. files_json is CheckpointFile[] (paths and counts),
-      -- skipped_json the paths left out for size; before_ref and after_ref are the private
-      -- store's commits and never leave the engine.
-      CREATE TABLE IF NOT EXISTS checkpoints (
-        id           TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
-        project_id   TEXT NOT NULL,
-        kind         TEXT NOT NULL,
-        thread_id    TEXT,
-        message_id   TEXT,
-        run_id       TEXT,
-        node_id      TEXT,
-        status       TEXT NOT NULL,
-        files_json   TEXT NOT NULL,
-        skipped_json TEXT NOT NULL,
-        before_ref   TEXT,
-        after_ref    TEXT,
-        error        TEXT,
-        created_at   TEXT NOT NULL,
-        updated_at   TEXT NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS checkpoints_project_idx
-        ON checkpoints (workspace_id, project_id, created_at);
+      -- D302: the node that answered a chat turn, what it did (JSON ActivityItem[]: tool, path and
+      -- a short summary, never file contents) and its checkpoint. NULL on every turn stored before.
+      ALTER TABLE chat_messages ADD COLUMN speaker_node_id TEXT;
+      ALTER TABLE chat_messages ADD COLUMN activity TEXT;
+      ALTER TABLE chat_messages ADD COLUMN checkpoint_id TEXT;
     `,
   },
 ];

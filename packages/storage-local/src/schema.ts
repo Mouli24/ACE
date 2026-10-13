@@ -547,6 +547,12 @@ export const chatMessages = sqliteTable(
     error: text('error'),
     /** D285: the model the provider reported answering. */
     modelId: text('model_id'),
+    /** D302: the node that answered, when an `@handle` brought another node in. */
+    speakerNodeId: text('speaker_node_id'),
+    /** D302: JSON `ActivityItem[]` — tool, path and summary only, never file contents. */
+    activity: text('activity'),
+    /** D302/D300: the checkpoint of the files the turn changed. */
+    checkpointId: text('checkpoint_id'),
   },
   (table) => [index('chat_messages_thread_idx').on(table.workspaceId, table.threadId, table.id)],
 );
