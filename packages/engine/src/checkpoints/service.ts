@@ -134,6 +134,19 @@ function textOf(bytes: Uint8Array | undefined): string | undefined | null {
   }
 }
 
+/**
+ * The order Revert all works in (D300 F-M1): an agent's added files first, then the ones it
+ * deleted, then the rest, each in path order. On a case-insensitive file system an agent's
+ * case-only rename is `D Foo.ts` + `A foo.ts`; deleting `foo.ts` first lets `Foo.ts` come back.
+ */
+const REVERT_RANK: Readonly<Record<CheckpointFile['change'], number>> = {
+  added: 0,
+  deleted: 1,
+  modified: 2,
+};
+const revertOrder = (a: CheckpointFile, b: CheckpointFile): number =>
+  REVERT_RANK[a.change] - REVERT_RANK[b.change] || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+
 const refused = (message: string): HttpError =>
   new HttpError('invalid_config', 'validation_failed', message, undefined, false);
 
@@ -206,6 +219,14 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
    * restart there are none: `recover` fails whatever was still recording.
    */
   const recordings = new Map<Id, { projectId: Id; personTouched: Set<string> }>();
+
+  /** Every checkpoint of the project still recording marks these paths the person's. */
+  function notePersonWrite(projectId: Id, paths: readonly string[]): void {
+    for (const recording of recordings.values()) {
+      if (recording.projectId !== projectId) continue;
+      for (const path of paths) recording.personTouched.add(path);
+    }
+  }
 
   /** The after snapshot and the diff: its files, or dropped when nothing changed. */
   async function complete(id: Id): Promise<Checkpoint | undefined> {
@@ -396,10 +417,13 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
           for (const file of targets) decided.set(file.path, 'kept');
         } else if (targets.length > 0) {
           const folder = await folderOf(projectId);
-          for (const file of targets) {
+          for (const file of [...targets].sort(revertOrder)) {
             try {
               await store.revertFile(projectId, folder, row.beforeRef, row.afterRef, file.path);
               decided.set(file.path, 'reverted');
+              // the disk is the person's choice now: a checkpoint still recording never books it
+              // as its agent's change (D300 F-I1)
+              notePersonWrite(projectId, [file.path]);
             } catch (error) {
               if (isCheckpointUnavailableError(error)) {
                 unavailable = error.message;
@@ -444,11 +468,6 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
       }
     },
 
-    notePersonWrite(projectId, paths) {
-      for (const recording of recordings.values()) {
-        if (recording.projectId !== projectId) continue;
-        for (const path of paths) recording.personTouched.add(path);
-      }
-    },
+    notePersonWrite,
   };
 }
