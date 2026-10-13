@@ -290,9 +290,10 @@ export function createGitCheckpointStore(
           }
           continue;
         }
-        // a link (to a file or a folder) is never followed, and so never captured
+        // a link (to a file or a folder) is never followed, and so never captured; as a folder
+        // entry it also covers what sits under its name, should the agent swap it for a folder
         if (!dirent.isFile() || /[\r\n]/.test(rel)) {
-          omitted.push({ path: rel, reason: 'unreadable' });
+          omitted.push({ path: rel, reason: 'unreadable', folder: true });
           continue;
         }
         if (rules.isIgnored(rel, false)) {
