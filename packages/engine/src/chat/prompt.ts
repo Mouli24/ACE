@@ -129,10 +129,35 @@ export interface BuildChatPromptInput {
   now: string;
   /** D302: label each assistant turn with its speaker's name. */
   speakers?: SpeakerNames;
+  /**
+   * D302 R-1: what the engine tells the model ahead of the new turn's own words (the files the
+   * person reverted). Part of the turn the model reads, never of the message stored or shown.
+   */
+  note?: string;
+}
+
+/** The most reverted paths one note names; the rest are counted. */
+export const REVERT_NOTE_MAX_PATHS = 20;
+
+/** D302 R-1: the note a thread's next turn starts with after the person reverted files. Paths only. */
+export function revertedFilesNote(paths: readonly string[]): string {
+  const shown = paths.slice(0, REVERT_NOTE_MAX_PATHS);
+  const more = paths.length - shown.length;
+  return (
+    'Note: the person reverted your earlier changes to these files; they are back to how they ' +
+    `were before that turn: ${shown.join(', ')}${more > 0 ? ` and ${more} more` : ''}. ` +
+    'Re-read a file before relying on its contents.'
+  );
 }
 
 export function buildChatPrompt(input: BuildChatPromptInput): AssembledPrompt {
-  const newTurn: ConversationTurn = { role: 'user', content: [...input.userParts] };
+  const newTurn: ConversationTurn = {
+    role: 'user',
+    content:
+      input.note === undefined
+        ? [...input.userParts]
+        : [{ type: 'text', text: input.note }, ...input.userParts],
+  };
   // The new turn is last, so it is the one the budget keeps longest (and truncates, never drops).
   const transcript = renderConversation(
     [...input.history, newTurn],

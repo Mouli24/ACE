@@ -32,6 +32,12 @@ export interface CheckpointRecording {
 /** Begins a checkpoint before a writing turn or run (D300 §5.2). */
 export interface CheckpointRecorder {
   begin(projectId: string, meta: CheckpointMeta): Promise<CheckpointRecording>;
+  /**
+   * D302 R-1: the files the person reverted in this chat thread's checkpoints since the thread's
+   * last turn, project-relative, in the order they were reverted — answered once, then forgotten,
+   * so the thread's next turn can tell the model. Absent on a recorder that keeps no such notes.
+   */
+  takeRevertedPaths?(threadId: string): string[];
 }
 
 /** One side of a checkpoint, pinned in the store under `refs/ace/<checkpointId>/<side>`. */

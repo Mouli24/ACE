@@ -62,7 +62,7 @@ import {
   NotAnAgentNodeError,
 } from './errors.js';
 import { evaluateChatInput, evaluateChatReply, type ChatGuardrailDeps } from './guardrails.js';
-import { buildChatPrompt } from './prompt.js';
+import { buildChatPrompt, revertedFilesNote } from './prompt.js';
 import {
   chatToolsFrom,
   runChatToolLoop,
@@ -380,6 +380,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     const { node, chosen, policy, threadId, userParts, guardrails, workspace } = context;
     // Known before the call, so the checkpoint can name the turn it belongs to.
     const replyId = nextId();
+    // R-1: the files the person reverted in this thread since its last turn, told once, here.
+    const reverted = deps.checkpoints?.takeRevertedPaths?.(threadId) ?? [];
     /* Stream: `chat.token` deltas batched ~50 ms, then the accumulated text is the reply. */
     const tokens = createBatcher<string>({
       intervalMs: batchMs,
@@ -473,6 +475,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         // A failed turn is the engine speaking, not the model: it is never replayed as its answer.
         history: history.filter((message) => message.error === undefined),
         userParts,
+        ...(reverted.length === 0 ? {} : { note: revertedFilesNote(reverted) }),
         now: now(),
         speakers: {
           names: await namesOf(context.workflowId),

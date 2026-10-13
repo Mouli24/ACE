@@ -60,6 +60,8 @@ export interface CheckpointService extends CheckpointRecorder {
    * them — `person`: listed, never reverted (D300 fix I3).
    */
   notePersonWrite(projectId: Id, paths: readonly string[]): void;
+  /** R-1: what the person reverted in this thread's checkpoints since its last turn, once. */
+  takeRevertedPaths(threadId: Id): string[];
 }
 
 export interface CheckpointServiceDeps {
@@ -219,6 +221,19 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
    * restart there are none: `recover` fails whatever was still recording.
    */
   const recordings = new Map<Id, { projectId: Id; personTouched: Set<string> }>();
+
+  /**
+   * R-1: chat thread → the files the person reverted in its checkpoints since its last turn, for
+   * that turn to tell the model (a CLI keeps its own memory of what it wrote and never re-reads).
+   * In memory only: a note not yet told is lost when the engine restarts.
+   */
+  const revertedByThread = new Map<Id, string[]>();
+
+  function noteReverted(threadId: Id, paths: readonly string[]): void {
+    const noted = revertedByThread.get(threadId) ?? [];
+    for (const path of paths) if (!noted.includes(path)) noted.push(path);
+    revertedByThread.set(threadId, noted);
+  }
 
   /** Every checkpoint of the project still recording marks these paths the person's. */
   function notePersonWrite(projectId: Id, paths: readonly string[]): void {
@@ -438,6 +453,11 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
           }
         }
 
+        // R-1: a chat turn's agent is told, on the thread's next turn, which of its files went back
+        if (action.action === 'revert' && checkpoint.threadId !== undefined && decided.size > 0) {
+          noteReverted(checkpoint.threadId, [...decided.keys()]);
+        }
+
         let current = checkpoint;
         if (decided.size > 0) {
           const files = checkpoint.files.map((file) => {
@@ -469,5 +489,11 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
     },
 
     notePersonWrite,
+
+    takeRevertedPaths(threadId) {
+      const paths = revertedByThread.get(threadId) ?? [];
+      revertedByThread.delete(threadId);
+      return paths;
+    },
   };
 }
