@@ -10,7 +10,7 @@ import { maskSecrets } from '../security/secret-patterns.js';
  * is exactly that output, so it is not used.
  */
 
-export type ActivityStatus = 'ok' | 'error' | 'refused';
+export type ActivityStatus = 'ok' | 'error' | 'refused' | 'blocked';
 
 /** `ReadFile`, `read-file` and `read_file` are one tool to the mapper. */
 function normalise(tool: string): string {
@@ -152,7 +152,9 @@ export function activityItemFor(input: {
       ? ' — failed'
       : input.status === 'refused'
         ? ' — refused: not available in chat'
-        : '';
+        : input.status === 'blocked'
+          ? ' — blocked by a guardrail'
+          : '';
   return {
     kind,
     tool: clip(input.tool, 80) || 'tool',

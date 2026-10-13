@@ -26,6 +26,7 @@ import {
   type Usage,
 } from '@ace/contracts';
 
+import type { ContextGuard } from '../context/guard.js';
 import { classifyError } from '../errors/index.js';
 import { createBatcher } from '../events/batcher.js';
 import { workflowUpdatedEvent, type EventBus } from '../events/index.js';
@@ -66,7 +67,12 @@ import {
   type ChatGuardrailDeps,
 } from './guardrails.js';
 import { buildChatPrompt } from './prompt.js';
-import { chatToolsFrom, runChatToolLoop, type ChatToolRequest } from './tool-loop.js';
+import {
+  chatToolsFrom,
+  runChatToolLoop,
+  type ChatToolRequest,
+  type ToolResultJudgement,
+} from './tool-loop.js';
 
 /**
  * The chat service (FR-CHAT-001..008, round 4 §2.3, Arch §12.2).
@@ -192,6 +198,13 @@ export interface ChatServiceDeps {
    * nothing is recorded to review or revert.
    */
   checkpoints?: CheckpointRecorder;
+  /**
+   * D302: the run's context point (FR-GRD-004). Every result of an API model's project tool passes
+   * it before the model reads it — hidden instructions stripped, personal data redacted per the
+   * speaker's policy — and its verdicts ride the reply. Only `inspect`: a chat has no node run to
+   * record them against (FR-CHAT-005). Absent: tool results reach the model unchecked.
+   */
+  contextGuard?: Pick<ContextGuard, 'inspect'>;
   now?: () => string;
   nextId?: () => string;
   tokenBatchMs?: number;
@@ -237,7 +250,10 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     threadId: Id,
     error: NodeError,
     extra: Partial<
-      Pick<ChatMessage, 'runId' | 'usage' | 'speakerNodeId' | 'activity' | 'checkpointId'>
+      Pick<
+        ChatMessage,
+        'runId' | 'usage' | 'speakerNodeId' | 'activity' | 'checkpointId' | 'verdicts'
+      >
     > = {},
     id: Id = nextId(),
   ): ChatMessage {
@@ -330,9 +346,24 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     chosen: ModelUsed;
     policy: Awaited<ReturnType<PolicyService['resolve']>> | null;
     threadId: Id;
-    history: readonly ChatMessage[];
+    /** The stored user turn this reply answers — left out of the history it reads. */
+    userMessageId: Id;
     userParts: readonly Part[];
     guardrails: ChatGuardrailDeps | undefined;
+  }
+
+  /**
+   * The thread as it is when the turn starts (D302): a turn that waited in the write queue reads
+   * the replies that landed while it waited — a queued `@reviewer` sees what the coder just did.
+   * The turn's own message is the new turn, so it is left out, and so is any later user message:
+   * that is a question for a later turn.
+   */
+  async function historyFor(threadId: Id, userMessageId: Id): Promise<ChatMessage[]> {
+    const messages = await repository.chatMessages.listByThread(scope, threadId);
+    return messages.filter(
+      (message) =>
+        message.id !== userMessageId && !(message.role === 'user' && message.id > userMessageId),
+    );
   }
 
   /**
@@ -348,9 +379,11 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
   }
 
   async function produceReply(context: ReplyContext): Promise<ChatMessage> {
-    const { node, chosen, policy, threadId, history, userParts, guardrails, workspace } = context;
+    const { node, chosen, policy, threadId, userParts, guardrails, workspace } = context;
     // Known before the call, so the checkpoint can name the turn it belongs to.
     const replyId = nextId();
+    // Read now, holding the project's queue — never the snapshot from before the turn waited.
+    const history = await historyFor(threadId, context.userMessageId);
 
     const instructions =
       node.kind === 'agent' ? node.config.instructions : (node.config.systemPrompt ?? '');
@@ -419,6 +452,35 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     let limitReached = false;
     const maxToolCalls =
       node.kind === 'agent' ? node.config.tools.maxToolCalls : DEFAULT_MAX_TOOL_CALLS;
+    /** The context point's verdicts on the tool results, in order; they ride the reply. */
+    const toolVerdicts: ChatVerdict[] = [];
+    const contextGuard = deps.contextGuard;
+    const judge =
+      contextGuard === undefined
+        ? undefined
+        : async (text: string): Promise<ToolResultJudgement> => {
+            // The run's context point, judged as a node run of this turn would be (`tool` label,
+            // the speaker's policy); nothing is recorded — the verdicts go on the reply instead.
+            const judged = await contextGuard.inspect({
+              target: {
+                runId: replyId,
+                workflowId: context.workflowId,
+                nodeRunId: replyId,
+                nodeId: node.id,
+                nodeName: node.name,
+                iteration: 1,
+                policy,
+              },
+              label: 'tool',
+              text,
+            });
+            for (const { nodeRunId: _noNodeRun, ...verdict } of judged.verdicts) {
+              toolVerdicts.push(verdict);
+            }
+            return judged.kind === 'failed'
+              ? { kind: 'failed', error: judged.error }
+              : { kind: 'continue', text: judged.text };
+          };
 
     try {
       const adapter: ProviderAdapter = await deps.adapterFor(chosen.providerId);
@@ -506,8 +568,11 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         activity,
         onCall: (tool, status) =>
           logger.info({ subsystem: 'chat', threadId, tool, status }, 'chat tool call'),
+        ...(judge === undefined ? {} : { judge }),
       });
       limitReached = loop.limitReached;
+      // D287: a result the context point blocked ends the turn as a stored error, with its reason.
+      if (loop.blocked !== undefined) failure = loop.blocked;
     } catch (error) {
       failure = classifyError(error, { providerId: chosen.providerId });
     } finally {
@@ -529,6 +594,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       ...(activity.length === 0 ? {} : { activity }),
       ...(checkpointId === undefined ? {} : { checkpointId }),
     };
+    const failedExtra = toolVerdicts.length === 0 ? extra : { ...extra, verdicts: toolVerdicts };
 
     const priced = usageFor(tokensIn, tokensOut, pricing);
     const usage = reportedCostUsd === undefined ? priced : { ...priced, costUsd: reportedCostUsd };
@@ -538,7 +604,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         { subsystem: 'chat', threadId, code: failure.code, kind: failure.kind },
         'chat reply failed',
       );
-      return store(failedTurn(threadId, failure, { usage, ...extra }, replyId));
+      return store(failedTurn(threadId, failure, { usage, ...failedExtra }, replyId));
     }
 
     if (limitReached && toolsOffered && text.trim() === '') {
@@ -547,14 +613,14 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
 
     /* The output point (FR-CHAT-008): a block turns the reply into `[blocked by guardrail: …]`. */
     let replyParts: Part[] = [{ type: 'text', text }];
-    let verdicts: ChatVerdict[] = [];
+    let verdicts: ChatVerdict[] = [...toolVerdicts];
     if (guardrails !== undefined) {
       const checked = evaluateChatReply(policy, replyParts, guardrails);
       replyParts =
         checked.kind === 'blocked'
           ? [{ type: 'text', text: blockedChatReply(checked.reason) }]
           : checked.parts;
-      verdicts = checked.verdicts;
+      verdicts = [...toolVerdicts, ...checked.verdicts];
     }
 
     return store({
@@ -718,8 +784,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         });
       }
 
-      /* The prompt sees the turns before this one; the stored user turn carries the input verdicts. */
-      const history = await repository.chatMessages.listByThread(scope, thread.id);
+      /* The stored user turn carries the input verdicts; the reply reads the thread when it starts. */
       const userMessage: ChatMessage = {
         id: nextId(),
         threadId: thread.id,
@@ -740,7 +805,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         chosen,
         policy,
         threadId: thread.id,
-        history,
+        userMessageId: userMessage.id,
         userParts: inputParts,
         guardrails,
       });

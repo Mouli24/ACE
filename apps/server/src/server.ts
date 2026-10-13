@@ -899,6 +899,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     masker,
     startRun: async (workflowId, request) => (await runs.beginRun(workflowId, request)).run,
     tools: toolProvider,
+    // D302: a chat tool result passes the same context point a run's does (FR-GRD-004).
+    contextGuard,
   });
 
   /*

@@ -211,5 +211,6 @@ export function makeChatService(
     ...(overrides.startRun === undefined ? {} : { startRun: overrides.startRun }),
     ...(overrides.tools === undefined ? {} : { tools: overrides.tools }),
     ...(overrides.checkpoints === undefined ? {} : { checkpoints: overrides.checkpoints }),
+    ...(overrides.contextGuard === undefined ? {} : { contextGuard: overrides.contextGuard }),
   });
 }
