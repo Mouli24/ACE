@@ -49,6 +49,8 @@ interface ComposerChipsState {
   chips: ComposerChip[];
   /** Text for the composer's box, taken once (Fix with agent with no node selected). */
   draft: string | undefined;
+  /** The project the chips and the draft were made in (fix B-M7). */
+  projectId: string | undefined;
   /** Add a chip; one with the same place is already there, so it is not added twice. */
   add(chip: ChipSource): void;
   remove(id: string): void;
@@ -56,6 +58,11 @@ interface ComposerChipsState {
   prefill(text: string): void;
   /** The draft, once: the composer takes it and it is gone. */
   takeDraft(): string | undefined;
+  /**
+   * The workspace shows this project now (fix B-M7): chips and a draft made in another project go,
+   * so another project's paths and code are never sent to this one's nodes.
+   */
+  enterProject(projectId: string): void;
   /** Tests only. */
   reset(): void;
 }
@@ -65,6 +72,7 @@ let seq = 0;
 export const useComposerChips = create<ComposerChipsState>()((set, get) => ({
   chips: [],
   draft: undefined,
+  projectId: undefined,
   add: (chip) =>
     set((state) =>
       state.chips.some((each) => chipLabel(each) === chipLabel(chip) && each.text === chip.text)
@@ -79,5 +87,9 @@ export const useComposerChips = create<ComposerChipsState>()((set, get) => ({
     if (draft !== undefined) set({ draft: undefined });
     return draft;
   },
-  reset: () => set({ chips: [], draft: undefined }),
+  enterProject: (projectId) =>
+    set((state) =>
+      state.projectId === projectId ? state : { chips: [], draft: undefined, projectId },
+    ),
+  reset: () => set({ chips: [], draft: undefined, projectId: undefined }),
 }));

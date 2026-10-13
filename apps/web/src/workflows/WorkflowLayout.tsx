@@ -1,9 +1,12 @@
+import { useEffect } from 'react';
 import { Link, Outlet, useNavigate, useParams } from 'react-router-dom';
 
 import { SHORTCUTS, useShortcuts } from '../app/shortcuts';
 import { useWorkflowSubscription } from '../app/socket';
 import { useLayoutStore } from '../app/stores/layout';
 import { ChatAside } from '../chat';
+import { useComposerChips } from '../chat/composer-chips';
+import { useDropStaleChatTarget } from '../chat/workflow-target';
 import { workflowPath } from '../forge/mode';
 import { useIsCompact } from '../responsive/useIsCompact';
 import { useAdoptActiveRun, useRunEvents } from '../runs/hooks';
@@ -15,7 +18,8 @@ import { useWorkflowGraph } from './hooks';
  * switching Ideate ⇄ Forge changes the main area only and a reply still arriving keeps arriving.
  * The chat column is the theme's fixed aside beside the main area (D330), shown while Split is on.
  * At phone width the modes lay themselves out and there is no chat column here (Ideate's compact
- * layout has its own chat tab).
+ * layout has its own chat tab). It also keeps the chat's target and the composer's chips to this
+ * workflow and project, with the column open or not (fix F-I2, B-M7).
  */
 export function WorkflowLayout() {
   const { projectId = '', workflowId = '' } = useParams();
@@ -23,6 +27,10 @@ export function WorkflowLayout() {
   useWorkflowSubscription(workflowId);
   useRunEvents(workflowId);
   useAdoptActiveRun(workflowId);
+  useDropStaleChatTarget(workflowId);
+  useEffect(() => {
+    useComposerChips.getState().enterProject(projectId);
+  }, [projectId]);
   const compact = useIsCompact();
   const chatOpen = useLayoutStore((s) => s.chatOpen);
   const toggleChat = useLayoutStore((s) => s.toggleChat);

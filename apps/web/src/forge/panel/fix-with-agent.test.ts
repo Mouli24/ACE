@@ -4,8 +4,9 @@ import { api } from '../../app/api';
 import { useLayoutStore } from '../../app/stores/layout';
 import { usePanelsStore } from '../../app/stores/panels';
 import { useComposerChips } from '../../chat/composer-chips';
-import { installChatMockServer, queryClient, seedAgentNode } from '../../chat/test-support';
+import { db, installChatMockServer, queryClient, seedAgentNode } from '../../chat/test-support';
 import { asMonaco, createFakeMonaco } from '../../test/fake-monaco';
+import { queryKeys } from '../../workflows/query-keys';
 import { ensureModel, resetModels, setMonaco } from '../editor/models';
 import { fixMessage, fixWithAgent, problemContext } from './fix-with-agent';
 
@@ -24,6 +25,14 @@ const problem = {
   message: "Cannot find name 'foo'.",
   source: 'ts',
 };
+
+/** Forge's workflow graph as the workflow layout loads it: in the query cache. */
+async function loadGraph(workflowId: string): Promise<void> {
+  await queryClient.fetchQuery({
+    queryKey: queryKeys.workflow(workflowId),
+    queryFn: () => api().getWorkflow(workflowId),
+  });
+}
 
 beforeEach(() => {
   useComposerChips.getState().reset();
@@ -54,10 +63,11 @@ describe('D302 the problem as the agent reads it', () => {
 
 describe('D302 Fix with agent', () => {
   it('sends the chat’s current node the problem and the code around it at once', async () => {
-    const { node } = seedAgentNode();
+    const { node, workflowId } = seedAgentNode();
+    await loadGraph(workflowId);
     usePanelsStore.getState().chatWith(node.id);
 
-    expect(await fixWithAgent({ projectId: P, problem, queryClient })).toBe('sent');
+    expect(await fixWithAgent({ projectId: P, workflowId, problem, queryClient })).toBe('sent');
     expect(useLayoutStore.getState().chatOpen).toBe(true);
     await waitFor(async () => {
       const [thread] = await api().listNodeChatThreads(node.id);
@@ -78,10 +88,13 @@ describe('D302 Fix with agent', () => {
   });
 
   it('puts the message and the chip in the composer when no node is selected', async () => {
-    const { node } = seedAgentNode();
+    const { node, workflowId } = seedAgentNode();
+    await loadGraph(workflowId);
     usePanelsStore.getState().chatWith(undefined);
 
-    expect(await fixWithAgent({ projectId: P, problem, queryClient })).toBe('prefilled');
+    expect(await fixWithAgent({ projectId: P, workflowId, problem, queryClient })).toBe(
+      'prefilled',
+    );
     expect(useComposerChips.getState().draft).toBe(
       "Fix this problem: Cannot find name 'foo'. (ts)",
     );
@@ -89,6 +102,39 @@ describe('D302 Fix with agent', () => {
       { path: 'src/app.ts', startLine: 5, endLine: 15 },
     ]);
     expect(useLayoutStore.getState().chatOpen).toBe(true);
+    expect(await api().listNodeChatThreads(node.id)).toEqual([]);
+  });
+
+  it('never sends to a node of another workflow: the chat opens with the problem instead (F-I2)', async () => {
+    // the person chatted with a node of another project's workflow, then closed the chat
+    const { node: elsewhere } = seedAgentNode();
+    usePanelsStore.getState().chatWith(elsewhere.id);
+    const forge = db.createWorkflow(db.createProject({ name: 'B' }).id, 'Forge');
+    seedAgentNode({ workflowId: forge.id, name: 'Coder' });
+    await loadGraph(forge.id);
+
+    expect(await fixWithAgent({ projectId: P, workflowId: forge.id, problem, queryClient })).toBe(
+      'prefilled',
+    );
+    expect(useLayoutStore.getState().chatOpen).toBe(true);
+    expect(useComposerChips.getState().draft).toBe(
+      "Fix this problem: Cannot find name 'foo'. (ts)",
+    );
+    expect(useComposerChips.getState().chips).toMatchObject([
+      { path: 'src/app.ts', startLine: 5, endLine: 15 },
+    ]);
+    expect(await api().listNodeChatThreads(elsewhere.id)).toEqual([]);
+  });
+
+  it('prefills rather than sends while Forge’s workflow graph is not loaded, or with no workflow', async () => {
+    const { node, workflowId } = seedAgentNode();
+    usePanelsStore.getState().chatWith(node.id);
+
+    expect(await fixWithAgent({ projectId: P, workflowId, problem, queryClient })).toBe(
+      'prefilled',
+    );
+    await loadGraph(workflowId);
+    expect(await fixWithAgent({ projectId: P, problem, queryClient })).toBe('prefilled');
     expect(await api().listNodeChatThreads(node.id)).toEqual([]);
   });
 });

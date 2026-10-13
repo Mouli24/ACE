@@ -1,5 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useParams } from 'react-router-dom';
 
 import { fixWithAgent, type FixableProblem } from './fix-with-agent';
 
@@ -15,6 +16,8 @@ export function FixWithAgentButton({
   problem: FixableProblem;
 }) {
   const queryClient = useQueryClient();
+  // Forge's workflow, from its route: a chat target outside it is never sent to (fix F-I2)
+  const { workflowId } = useParams();
   const [busy, setBusy] = useState(false);
   return (
     <button
@@ -24,7 +27,9 @@ export function FixWithAgentButton({
       disabled={busy}
       onClick={() => {
         setBusy(true);
-        void fixWithAgent({ projectId, problem, queryClient }).finally(() => setBusy(false));
+        void fixWithAgent({ projectId, workflowId, problem, queryClient }).finally(() =>
+          setBusy(false),
+        );
       }}
       className="h-[22px] shrink-0 cursor-pointer whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--chip)] px-[9px] text-[10px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-default disabled:opacity-60"
     >

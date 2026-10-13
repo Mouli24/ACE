@@ -24,8 +24,7 @@ import { ChatConversation } from './ChatConversation';
 import { ChatThreadList } from './ChatThreadList';
 import { useChatSessions } from './session-store';
 import { sendToNode, useChatSocket, useThreadConversation } from './useChat';
-
-const isChatNode = (node: Node): boolean => node.kind === 'agent' || node.kind === 'model';
+import { isChatNode, useDropStaleChatTarget } from './workflow-target';
 
 /** Tabs drawn before the rest go under "More" (the theme's tabs row). */
 const VISIBLE_TABS = 3;
@@ -107,11 +106,9 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
     if (usePanelsStore.getState().chatNodeId !== focusedNodeId) chatWith(focusedNodeId);
   }, [focusedNodeId, focusedCanChat, chatWith]);
 
-  // The target left the graph (or cannot chat): back to the intro state.
-  useEffect(() => {
-    if (nodes !== undefined && chatNodeId !== undefined && target === undefined)
-      chatWith(undefined);
-  }, [nodes, chatNodeId, target, chatWith]);
+  // The target left the graph (or cannot chat): back to the intro state. The workflow layout runs
+  // the same guard with the column closed (fix F-I2); here it keeps the column right on its own.
+  useDropStaleChatTarget(workflowId);
 
   // The footer's message count (D330): nothing to count without a target, or once the column goes.
   const hasTarget = target !== undefined;
