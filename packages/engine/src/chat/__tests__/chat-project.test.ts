@@ -9,6 +9,8 @@ import type {
 } from '@ace/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { fakeCheckpointStore } from '../../checkpoints/__tests__/fake-store.js';
+import { createCheckpointService } from '../../checkpoints/service.js';
 import { contextChecks, contextPolicy } from '../../context/__tests__/context-checks.js';
 import { createContextGuard, type ContextGuard } from '../../context/guard.js';
 import type { PolicyService } from '../../guardrails/policy-service.js';
@@ -37,6 +39,7 @@ import {
   makeSimpleNode,
   makeWorkflow,
   scope,
+  silentLogger,
 } from './harness.js';
 
 /*
@@ -879,5 +882,111 @@ describe('D302 fix F-M4: a failure reading the thread or the catalog is a stored
     expect(reply.error?.message).toMatch(/the catalog is unreadable/);
     await flush();
     expect(agentTurnsAnnounced(events).map((message) => message.id)).toEqual([reply.id]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Final fix wave — R-1: the next turn hears what the person reverted          */
+/* -------------------------------------------------------------------------- */
+
+describe('D302 R-1: the next turn in a thread is told which files the person reverted', () => {
+  const NOTE =
+    'Note: the person reverted your earlier changes to these files; they are back to how they ' +
+    'were before that turn: src/main.ts. Re-read a file before relying on its contents.';
+
+  it('a CLI turn after a revert reads the note ahead of the person’s words, once; the stored turn has none', async () => {
+    const { bus } = makeBus(repository, now);
+    const disk = fakeCheckpointStore();
+    disk.disk.set('src/main.ts', "add(1, '2')\n");
+    const checkpoints = createCheckpointService({
+      store: disk,
+      repository,
+      scope,
+      bus,
+      logger: silentLogger,
+    });
+    const { adapter, requests } = scriptedAdapter(
+      (_req, call) => {
+        if (call === 1) disk.disk.set('src/main.ts', 'add(1, 2)\n');
+        return answer(call === 1 ? 'Fixed the call.' : 'It prints 12 5.');
+      },
+      { type: 'claude_code' },
+    );
+    service = makeChatService(repository, bus, {
+      workflowId,
+      now,
+      adapterFor: async () => adapter,
+      checkpoints,
+    });
+
+    const first = await (await service.chat(coder.id, { content: hi('fix the add call') })).done;
+    await checkpoints.act(projectId, first.checkpointId!, {
+      action: 'revert',
+      paths: ['src/main.ts'],
+    });
+    expect(disk.disk.get('src/main.ts')).toBe("add(1, '2')\n");
+
+    const ask = hi('what does line 8 print?');
+    await (
+      await service.chat(coder.id, { threadId: first.threadId, content: ask })
+    ).done;
+    await (
+      await service.chat(coder.id, { threadId: first.threadId, content: hi('thanks') })
+    ).done;
+
+    expect(requests[1]?.prompt).toContain(`User: ${NOTE}\nwhat does line 8 print?`);
+    expect(requests[2]?.prompt).not.toContain('Note: the person reverted');
+    const { messages } = await service.getThread(first.threadId);
+    expect(JSON.stringify(messages)).not.toContain('Note: the person reverted');
+  });
+
+  it('a run’s checkpoint reverted leaves no note in a chat', async () => {
+    const { bus } = makeBus(repository, now);
+    const disk = fakeCheckpointStore();
+    const checkpoints = createCheckpointService({
+      store: disk,
+      repository,
+      scope,
+      bus,
+      logger: silentLogger,
+    });
+    const run = await checkpoints.begin(projectId, { kind: 'run', runId: newId() });
+    disk.disk.set('src/main.ts', 'from the run\n');
+    await run.finish();
+    await checkpoints.act(projectId, run.id, { action: 'revert' });
+
+    const { adapter, requests } = scriptedAdapter(() => answer('ok'));
+    service = makeChatService(repository, bus, {
+      workflowId,
+      now,
+      adapterFor: async () => adapter,
+      checkpoints,
+    });
+    await (
+      await service.chat(coder.id, { content: hi() })
+    ).done;
+    expect(requests[0]?.prompt).not.toContain('Note: the person reverted');
+  });
+
+  it('an API turn gets the note in its user turn, at most 20 paths and how many more', async () => {
+    const paths = Array.from({ length: 25 }, (_, n) => `src/f${String(n + 1).padStart(2, '0')}.ts`);
+    const asked: string[] = [];
+    const recorder: CheckpointRecorder = {
+      ...fakeRecorder(),
+      takeRevertedPaths: (threadId) => {
+        asked.push(threadId);
+        return asked.length === 1 ? paths : [];
+      },
+    };
+    const { adapter, requests } = scriptedAdapter(() => answer('ok'));
+    build({ adapterFor: async () => adapter, checkpoints: recorder });
+
+    const reply = await (await service.chat(coder.id, { content: hi('go on') })).done;
+    expect(asked).toEqual([reply.threadId]);
+    expect(requests[0]?.prompt).toContain(
+      `User: Note: the person reverted your earlier changes to these files; they are back to how ` +
+        `they were before that turn: ${paths.slice(0, 20).join(', ')} and 5 more. Re-read a file ` +
+        `before relying on its contents.\ngo on`,
+    );
   });
 });

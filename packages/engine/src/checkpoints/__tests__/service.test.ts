@@ -400,3 +400,52 @@ describe('D300 final fix wave: a revert is the person’s write, in a safe order
     expect(order).toEqual(['b.ts', 'foo.ts', 'Foo.ts']);
   });
 });
+
+describe('D302 R-1: a revert in a chat checkpoint is told to that thread’s next turn', () => {
+  it('remembers the files that reverted for the thread, conflicts left out, and answers them once', async () => {
+    const threadId = newId();
+    store.disk.set('a.ts', 'a0\n');
+    store.disk.set('b.ts', 'b0\n');
+    const recording = await service.begin(project.id, { kind: 'chat', threadId });
+    store.disk.set('a.ts', 'a1\n');
+    store.disk.set('b.ts', 'b1\n');
+    await recording.finish();
+    store.disk.set('b.ts', 'person edit\n');
+    const conflict = await conflictOf(service.act(project.id, recording.id, { action: 'revert' }));
+    expect(conflict.code).toBe('checkpoint_conflict');
+
+    expect(service.takeRevertedPaths(threadId)).toEqual(['a.ts']);
+    expect(service.takeRevertedPaths(threadId)).toEqual([]);
+  });
+
+  it('merges reverts made before the next turn, single files and Revert all alike', async () => {
+    const threadId = newId();
+    store.disk.set('a.ts', 'a0\n');
+    store.disk.set('c.ts', 'c0\n');
+    const first = await service.begin(project.id, { kind: 'chat', threadId });
+    store.disk.set('a.ts', 'a1\n');
+    await first.finish();
+    const second = await service.begin(project.id, { kind: 'chat', threadId });
+    store.disk.set('c.ts', 'c1\n');
+    store.disk.set('a.ts', 'a2\n');
+    await second.finish();
+
+    await service.act(project.id, second.id, { action: 'revert', paths: ['c.ts'] });
+    await service.act(project.id, second.id, { action: 'revert' });
+    expect(service.takeRevertedPaths(threadId)).toEqual(['c.ts', 'a.ts']);
+  });
+
+  it('keeps nothing for a kept file or for a run’s checkpoint', async () => {
+    const threadId = newId();
+    store.disk.set('a.ts', 'a0\n');
+    const chat = await service.begin(project.id, { kind: 'chat', threadId });
+    store.disk.set('a.ts', 'a1\n');
+    await chat.finish();
+    await service.act(project.id, chat.id, { action: 'keep' });
+
+    const { checkpoint } = await recorded(() => store.disk.set('r.ts', 'run\n'));
+    await service.act(project.id, checkpoint!.id, { action: 'revert' });
+    expect(store.disk.has('r.ts')).toBe(false);
+    expect(service.takeRevertedPaths(threadId)).toEqual([]);
+  });
+});
