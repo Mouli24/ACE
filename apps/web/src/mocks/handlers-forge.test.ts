@@ -188,3 +188,21 @@ describe('D299 Phase 4 the mock engine’s search', () => {
     expect(refused.json).toMatchObject({ error: { code: 'validation_failed' } });
   });
 });
+
+describe('D299 Phase 4 the mock engine’s project sources', () => {
+  it('answers the TS/JS sources that are not ignored, shallowest first, with the root tsconfig', async () => {
+    db.seedFiles(projectId, {
+      'src/deep/b.tsx': 'export const b = 1;',
+      'index.js': 'module.exports = 1;',
+      'tsconfig.json': '{}',
+    });
+    const { status, json } = await call('GET', '/sources');
+    expect(status).toBe(200);
+    expect((json?.files as { path: string }[]).map((file) => file.path)).toEqual([
+      'index.js',
+      'src/app.ts',
+      'src/deep/b.tsx',
+    ]);
+    expect(json).toMatchObject({ truncated: false, tsconfig: '{}' });
+  });
+});

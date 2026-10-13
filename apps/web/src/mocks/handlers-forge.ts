@@ -203,6 +203,11 @@ export function createForgeHandlers(db: MockDb): HttpHandler[] {
     ),
 
     http.get(
+      `${API}/projects/:id/files/sources`,
+      route((fs) => HttpResponse.json(files.readSources(fs))),
+    ),
+
+    http.get(
       `${API}/projects/:id/files/status`,
       route((_fs, projectId) => HttpResponse.json(db.repoStatusOf(projectId))),
     ),

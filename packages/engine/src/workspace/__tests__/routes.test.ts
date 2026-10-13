@@ -15,7 +15,7 @@ import {
 } from '../../ports/index.js';
 import { createWorkspaceRoutes } from '../routes.js';
 import { createWorkspaceService } from '../service.js';
-import { AT, FOUND, LISTING, SAVED, STATUS, TEXT, fakeFiles } from './fake-files.js';
+import { AT, FOUND, LISTING, SAVED, SOURCES, STATUS, TEXT, fakeFiles } from './fake-files.js';
 
 const FOLDER = 'D:/projects/demo';
 const logger = createLogger({ level: 'silent', destination: { write: () => undefined } });
@@ -166,6 +166,19 @@ describe('D299 FR-GIT-003 the project file routes', () => {
       'POST',
       `${base()}/search`,
       { query: 'a' },
+    );
+    expect(without.status).toBe(501);
+  });
+
+  it('D299 Phase 4 reads the project sources for cross-file types, in the project folder', async () => {
+    const response = await send(app, 'GET', `${base()}/sources`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(SOURCES);
+    expect(files.calls).toEqual([['readSources', FOLDER]]);
+    const without = await send(
+      routeApp(createWorkspaceRoutes(undefined)),
+      'GET',
+      `${base()}/sources`,
     );
     expect(without.status).toBe(501);
   });

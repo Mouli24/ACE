@@ -193,3 +193,21 @@ describe('D299 Phase 4 Search through the real engine', () => {
     expect(refused.json.error.code).toBe('validation_failed');
   });
 });
+
+describe('D299 Phase 4 project sources through the real engine', () => {
+  it('reads the TS/JS sources, never node_modules, with the root tsconfig', async () => {
+    mkdirSync(join(folder, 'lib'), { recursive: true });
+    writeFileSync(join(folder, 'lib', 'util.ts'), 'export const util = 1;\n');
+    writeFileSync(join(folder, 'tsconfig.json'), '{ "compilerOptions": {} }');
+    const sources = await api<{ files: { path: string }[]; tsconfig?: string; truncated: boolean }>(
+      'GET',
+      `/projects/${projectId}/files/sources`,
+    );
+    expect(sources.status).toBe(200);
+    const paths = sources.json.files.map((file) => file.path);
+    expect(paths).toContain('lib/util.ts');
+    expect(paths.some((path) => path.startsWith('node_modules/'))).toBe(false);
+    expect(sources.json.tsconfig).toBe('{ "compilerOptions": {} }');
+    expect(sources.json.truncated).toBe(false);
+  });
+});

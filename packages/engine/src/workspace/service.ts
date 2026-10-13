@@ -10,6 +10,7 @@ import type {
   RepoStatus,
   SaveFileRequest,
   SaveFileResult,
+  SourcesResult,
 } from '@ace/contracts';
 
 import type { EventBus } from '../events/index.js';
@@ -35,6 +36,8 @@ export interface WorkspaceService {
   status(projectId: Id): Promise<RepoStatus>;
   /** `POST /files/search` (D299 Phase 4): the project's files that are not ignored. */
   search(projectId: Id, request: FileSearchRequest): Promise<FileSearchResult>;
+  /** `GET /files/sources` (D299 Phase 4): TS/JS sources for cross-file IntelliSense, capped. */
+  sources(projectId: Id): Promise<SourcesResult>;
   /** The WS hub says a project gained its first subscriber (`true`) or lost its last (`false`). */
   setWatched(projectId: Id, watched: boolean): Promise<void>;
   /** Shutdown: every watcher stops and no restart is pending. */
@@ -181,6 +184,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): WorkspaceSer
     listAll: async (projectId) => files.listAll(await folderOf(projectId)),
     status: async (projectId) => files.status(await folderOf(projectId)),
     search: async (projectId, request) => files.search(await folderOf(projectId), request),
+    sources: async (projectId) => files.readSources(await folderOf(projectId)),
 
     async setWatched(projectId, watched) {
       if (watched) {

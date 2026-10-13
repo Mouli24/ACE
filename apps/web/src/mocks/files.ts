@@ -2,6 +2,9 @@ import {
   FILE_EDIT_MAX_BYTES,
   SEARCH_MAX_RESULTS,
   SEARCH_PREVIEW_MAX,
+  SOURCE_EXTENSIONS,
+  SOURCES_MAX_BYTES,
+  SOURCES_MAX_FILES,
   searchPattern,
   type CreateEntryRequest,
   type FileContent,
@@ -10,6 +13,7 @@ import {
   type FileSearchMatch,
   type FileSearchRequest,
   type FileSearchResult,
+  type SourcesResult,
   type FolderListing,
   type SaveFileRequest,
   type SaveFileResult,
@@ -306,4 +310,25 @@ export function searchFiles(fs: MockFs, request: FileSearchRequest): FileSearchR
     if (matches.length > 0) files.push({ path, matches });
   }
   return { files, truncated: false, searchedFiles };
+}
+
+/** `GET /files/sources` on the mock engine: the engine's order and caps over the mock's files. */
+export function readSources(fs: MockFs): SourcesResult {
+  const exts = new Set<string>(SOURCE_EXTENSIONS);
+  const files: SourcesResult['files'] = [];
+  let bytes = 0;
+  let truncated = false;
+  for (const path of listAll(fs).files) {
+    const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
+    const content = fs[path]?.content ?? '';
+    if (!exts.has(ext) || content.includes('\u0000')) continue;
+    if (files.length >= SOURCES_MAX_FILES || bytes + bytesOf(content) > SOURCES_MAX_BYTES) {
+      truncated = true;
+      break;
+    }
+    bytes += bytesOf(content);
+    files.push({ path, content });
+  }
+  const tsconfig = fs['tsconfig.json'];
+  return { files, truncated, ...(tsconfig?.kind === 'file' ? { tsconfig: tsconfig.content } : {}) };
 }

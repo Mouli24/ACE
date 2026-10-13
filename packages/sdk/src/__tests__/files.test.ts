@@ -131,6 +131,13 @@ describe('D299 FR-GIT-003 FR-GIT-004 the SDK’s file methods', () => {
     expect(refused.seen).toEqual([]);
   });
 
+  it('D299 Phase 4 reads the project sources', async () => {
+    const answer = { files: [{ path: 'a.ts', content: 'x' }], truncated: true, tsconfig: '{}' };
+    const { client, seen } = clientAnswering(200, answer);
+    expect(await client.projectSources(PID)).toEqual(answer);
+    expect(seen[0]?.url).toBe(`http://127.0.0.1:4747/api/v1/projects/${PID}/files/sources`);
+  });
+
   it('reads raw bytes as a Blob with their type', async () => {
     const { client } = clientAnswering(200, new Uint8Array([1, 2, 3]), 'image/png');
     const blob = await client.readFileRaw(PID, 'a.png');
