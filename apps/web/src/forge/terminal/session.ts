@@ -4,7 +4,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { api } from '../../app/api';
 import { parseBuiltin, resolveCd } from './builtins';
 import { processKeys } from './hooks';
-import { busyLine, feed, type LineAction } from './line-discipline';
+import { busyLine, feed, settleLine, type LineAction } from './line-discipline';
 import { reattach } from './process-events';
 import { errorLine, tabOf, useTerminalStore } from './terminal-store';
 
@@ -125,9 +125,20 @@ async function perform(
       await runLine(projectId, tabId, action.line, queryClient);
       return;
     case 'input': {
-      const processId = tabOf(projectId, tabId)?.processId;
-      // No process: its start was refused, or it has already ended.
-      if (processId === undefined) return;
+      const tab = tabOf(projectId, tabId);
+      if (tab === undefined) return;
+      const processId = tab.processId;
+      if (processId === undefined) {
+        // Typed ahead, and nothing is attached: a built-in ran, the start was refused, or the
+        // process had already ended. As in a real shell, what no program read goes to the shell:
+        // the line is entered at the prompt the tab is back at, exactly as Enter there runs it
+        // (design §10: never swallowed). The settled state is not busy, so this never loops.
+        const step = feed(settleLine(tab.line), action.data);
+        store.setLine(projectId, tabId, step.state);
+        store.write(projectId, tabId, step.echo);
+        for (const next of step.actions) await perform(projectId, tabId, next, queryClient);
+        return;
+      }
       try {
         await api().processInput(projectId, processId, action.data);
       } catch {
