@@ -84,17 +84,48 @@ const COMMAND_MAX = 80;
 /** A heredoc or here-string, or an output redirect (`>`, `>>`, `1>`, `2>`, `&>`). */
 const COMMAND_TAIL = /<<|(?:(?<=^|\s)[12&])?>/;
 
+/** Programs whose arguments are the text they print into a pipe (`echo 'x' | tee f`). */
+const PRINTS_ARGUMENTS = new Set(['echo', 'printf', 'write-output', 'cat']);
+/** PowerShell cmdlets that write their arguments into a file, as whole words. */
+const WRITE_CMDLET = /\b(?:Set-Content|Add-Content|Out-File)\b/i;
+/** A value rather than a program: a quoted string or a PowerShell variable. */
+const VALUE = /^['"$]/;
+
+const programOf = (segment: string): string => segment.trim().split(/\s+/, 1)[0] ?? '';
+
 /**
- * What a command's activity says it ran (D302 fix B-M5): its first line, cut before a heredoc and
- * before an output redirect — where a command that writes a file carries the file's text — then
- * capped. Codex's `apply_patch` is only its name. Secrets are masked before the cap, so a cut never
- * leaves part of one behind (and `clip` masks the summary again).
+ * A piped command shows what comes before its first `|` (fix round 1). When that is text being
+ * printed into the pipe (`echo`, `printf`, `Write-Output`, `cat` with arguments), only the program
+ * is kept; when it is a bare value (`'x' | Out-File f`, `$text | Add-Content f`), only the program
+ * it is piped into — or nothing, when there is none.
+ */
+function beforePipe(line: string): string {
+  const bar = line.indexOf('|');
+  if (bar === -1) return line;
+  const head = line.slice(0, bar).trim();
+  if (head === '' || VALUE.test(head)) {
+    const next = programOf(line.slice(bar + 1).replace(/^\|/, ''));
+    return VALUE.test(next) ? '' : next;
+  }
+  const program = programOf(head);
+  return PRINTS_ARGUMENTS.has(program.toLowerCase()) && head !== program ? program : head;
+}
+
+/**
+ * What a command's activity says it ran (D302 fix B-M5): no argument text of a command that writes
+ * a file may reach it. Its first line, cut before a heredoc and before an output redirect, then
+ * before a pipe (`beforePipe`), and after the name of a PowerShell write cmdlet; then capped.
+ * Codex's `apply_patch` is only its name, and nothing left is `command`. Secrets are masked before
+ * the cap, so a cut never leaves part of one behind (and `clip` masks the summary again).
  */
 function commandLine(command: string): string {
   const firstLine = command.split(/\r?\n/, 1)[0] ?? '';
   if (/^apply_patch(?:\s|$)/.test(firstLine.trim())) return 'apply_patch';
   const tail = COMMAND_TAIL.exec(firstLine);
-  const kept = maskSecrets((tail === null ? firstLine : firstLine.slice(0, tail.index)).trim());
+  let kept = beforePipe((tail === null ? firstLine : firstLine.slice(0, tail.index)).trim());
+  const cmdlet = WRITE_CMDLET.exec(kept);
+  if (cmdlet !== null) kept = kept.slice(0, cmdlet.index + cmdlet[0].length);
+  kept = maskSecrets(kept.trim()) || 'command';
   return kept.length <= COMMAND_MAX ? kept : `${kept.slice(0, COMMAND_MAX - 1)}…`;
 }
 
