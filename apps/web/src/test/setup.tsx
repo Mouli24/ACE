@@ -5,6 +5,16 @@ vi.mock('../forge/editor/CompareView', () => ({
   CompareView: ({ path }: { path: string }) => <div data-testid="compare-view">{path}</div>,
 }));
 
+// D300's review diff is Monaco's diff editor: tests see both sides as text.
+vi.mock('../forge/changes/ReviewDiffEditor', () => ({
+  ReviewDiffEditor: ({ path, before, after }: { path: string; before: string; after: string }) => (
+    <div data-testid="review-diff" data-path={path}>
+      <pre data-testid="review-before">{before}</pre>
+      <pre data-testid="review-after">{after}</pre>
+    </div>
+  ),
+}));
+
 vi.mock('../forge/editor/EditorHost', async () => ({
   EditorHost: (await import('./FakeEditorHost')).FakeEditorHost,
 }));
