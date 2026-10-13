@@ -12,7 +12,7 @@ import {
   useCheckpointEvents,
   useCheckpointFileDiff,
 } from './hooks';
-import { actionFailure, fileStateLabel } from './present';
+import { actionFailure, fileNote, fileStateLabel } from './present';
 
 const ReviewDiffEditor = lazy(() =>
   import('./ReviewDiffEditor').then((module) => ({ default: module.ReviewDiffEditor })),
@@ -50,6 +50,7 @@ export function ReviewView({
   const conflict = useCheckpointConflicts(checkpointId)[path];
   const file = checkpoint.data?.files.find((candidate) => candidate.path === path);
   const failure = actionFailure(action.error);
+  const note = file === undefined ? undefined : fileNote(file);
 
   return (
     <div
@@ -103,6 +104,11 @@ export function ReviewView({
           )
         )}
       </div>
+      {note !== undefined && (
+        <p className="m-0 shrink-0 border-b border-[var(--line)] px-[14px] py-[6px] text-[12px] text-[var(--muted)]">
+          {note}
+        </p>
+      )}
       {(conflict !== undefined || failure !== undefined) && (
         <p
           role="alert"

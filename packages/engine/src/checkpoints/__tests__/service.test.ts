@@ -268,23 +268,93 @@ describe('D300 the checkpoint service: keep and revert', () => {
 });
 
 describe('D300 the checkpoint service: recover', () => {
-  it('finishes a recording the last process left, or marks it failed when it cannot', async () => {
+  it('marks a recording the last process left as failed, and takes no after snapshot', async () => {
     store.disk.set('a.ts', 'a\n');
-    const changed = await service.begin(project.id, { kind: 'run', runId: newId() });
-    const broken = await service.begin(project.id, { kind: 'run', runId: newId() });
+    const left = await service.begin(project.id, { kind: 'run', runId: newId() });
     store.disk.set('a.ts', 'b\n');
+    const snapshots = store.snapshots;
 
-    const realSnapshot = store.snapshot;
-    store.snapshot = async (projectId, root, target) => {
-      if (target.checkpointId === broken.id) throw new Error('unreadable');
-      return realSnapshot(projectId, root, target);
-    };
     await service.recover();
 
-    expect((await service.get(project.id, changed.id)).status).toBe('pending');
-    expect(await service.get(project.id, broken.id)).toMatchObject({
+    expect(store.snapshots).toBe(snapshots);
+    expect(await service.get(project.id, left.id)).toMatchObject({
       status: 'failed',
-      error: 'engine stopped while recording',
+      files: [],
+      error: "the engine stopped while recording; these changes can't be told apart from yours",
     });
+  });
+});
+
+describe('D300 the checkpoint service: what it will not revert', () => {
+  it('a file the person saved while recording is theirs: listed, not revertible, and Revert all leaves it', async () => {
+    store.disk.set('agent.ts', 'a0\n');
+    store.disk.set('mine.ts', 'm0\n');
+    const recording = await service.begin(project.id, { kind: 'run', runId: newId() });
+    store.disk.set('agent.ts', 'a1\n');
+    store.disk.set('mine.ts', 'm1\n');
+    service.notePersonWrite(project.id, ['mine.ts']);
+    const checkpoint = await recording.finish();
+    expect(checkpoint?.files.map((file) => `${file.path}:${file.state}`)).toEqual([
+      'agent.ts:pending',
+      'mine.ts:person',
+    ]);
+
+    const reverted = await service.act(project.id, recording.id, { action: 'revert' });
+    expect(store.disk.get('agent.ts')).toBe('a0\n');
+    expect(store.disk.get('mine.ts')).toBe('m1\n');
+    expect(reverted.status).toBe('reverted');
+    expect(reverted.files.find((file) => file.path === 'mine.ts')?.state).toBe('person');
+
+    const named = await conflictOf(
+      service.act(project.id, recording.id, { action: 'revert', paths: ['mine.ts'] }),
+    );
+    expect(named.code).toBe('checkpoint_conflict');
+    expect(named.message).toBe(
+      'You edited mine.ts during the session, so it is not reverted here.',
+    );
+  });
+
+  it('a person’s write to a folder covers the files under it; another project’s does not count', async () => {
+    const recording = await service.begin(project.id, { kind: 'run', runId: newId() });
+    store.disk.set('src/a.ts', 'x\n');
+    store.disk.set('lib/b.ts', 'y\n');
+    service.notePersonWrite(project.id, ['src']);
+    service.notePersonWrite(newId(), ['lib/b.ts']);
+    const checkpoint = await recording.finish();
+    expect(checkpoint?.files.map((file) => `${file.path}:${file.state}`)).toEqual([
+      'lib/b.ts:pending',
+      'src/a.ts:person',
+    ]);
+  });
+
+  it('a file the store could not capture is not revertible, with its reason; Revert all skips it', async () => {
+    store.disk.set('a.ts', 'a0\n');
+    const recording = await service.begin(project.id, { kind: 'run', runId: newId() });
+    store.disk.set('a.ts', 'a1\n');
+    store.disk.set('big.bin', 'shrunk');
+    store.uncaptured.set('big.bin', 'too_large');
+    const checkpoint = await recording.finish();
+    expect(checkpoint?.files.find((file) => file.path === 'big.bin')).toMatchObject({
+      state: 'not_revertible',
+      reason: 'too_large',
+    });
+
+    const reverted = await service.act(project.id, recording.id, { action: 'revert' });
+    expect(reverted.status).toBe('reverted');
+    expect(store.disk.get('big.bin')).toBe('shrunk');
+
+    const named = await conflictOf(
+      service.act(project.id, recording.id, { action: 'revert', paths: ['big.bin'] }),
+    );
+    expect(named.message).toBe(
+      "ACE could not capture big.bin (over 5 MB), so it can't be reverted",
+    );
+  });
+
+  it('closes as kept when nothing it recorded can be reverted', async () => {
+    const recording = await service.begin(project.id, { kind: 'run', runId: newId() });
+    store.disk.set('mine.ts', 'm\n');
+    service.notePersonWrite(project.id, ['mine.ts']);
+    expect((await recording.finish())?.status).toBe('kept');
   });
 });

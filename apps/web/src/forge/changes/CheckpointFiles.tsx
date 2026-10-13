@@ -5,7 +5,7 @@ import { fileIconColor } from '../../theme/constants';
 import { TONE_COLOR } from '../explorer/decorations';
 import { nameOf, parentOf } from '../files/paths';
 import { useCheckpointConflicts } from './changes-store';
-import { fileStateLabel } from './present';
+import { fileNote, fileStateLabel } from './present';
 
 /** A row's quiet action, as the Processes list's: mono, small, a hover wash, the accent ring. */
 export const ROW_ACTION =
@@ -48,6 +48,7 @@ export function CheckpointFiles({ checkpoint, onReview, onAction, busy }: Checkp
       {checkpoint.files.map((file) => {
         const pending = file.state === 'pending';
         const conflict = pending ? conflicts[file.path] : undefined;
+        const note = fileNote(file);
         const folder = parentOf(file.path);
         return (
           <li
@@ -111,6 +112,9 @@ export function CheckpointFiles({ checkpoint, onReview, onAction, busy }: Checkp
                 )
               )}
             </div>
+            {note !== undefined && (
+              <p className="m-0 pl-[12px] text-[11px] leading-[1.35] text-[var(--muted)]">{note}</p>
+            )}
             {conflict !== undefined && (
               <p role="alert" className="m-0 pl-[12px] text-[11px] leading-[1.35] text-[#c94c27]">
                 {conflict}

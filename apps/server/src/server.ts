@@ -389,6 +389,16 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   /* ------------------------------------------------------------------ engine */
 
   const bus = createEventBus({ repository, scope: LOCAL_SCOPE, pubsub });
+  // D300: every agent write is checkpointed in a private git store under the data dir, outside
+  // the project's own .git (design §5.1). A checkpoint left recording by the last process is
+  // marked failed at startup, below.
+  const checkpoints = createCheckpointService({
+    store: createGitCheckpointStore(config.dataDir),
+    repository,
+    scope: LOCAL_SCOPE,
+    bus,
+    logger: logger.child({ subsystem: 'checkpoints' }),
+  });
   // Forge's project files (D299): a project folder is watched while a client subscribes to its scope.
   const workspace = createWorkspaceService({
     repository,
@@ -396,6 +406,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     files: createFsProjectFiles(),
     bus,
     logger: logger.child({ subsystem: 'workspace' }),
+    // D300: the person's own writes are never claimed by an agent's checkpoint
+    onPersonWrite: (projectId, paths) => checkpoints.notePersonWrite(projectId, paths),
   });
   // Forge's terminal (D301): a person's commands as supervised processes. Agents never get it.
   const processes = createProcessService({
@@ -404,16 +416,6 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     runner: createProcessRunner(),
     bus,
     logger: logger.child({ subsystem: 'processes' }),
-  });
-  // D300: every agent write is checkpointed in a private git store under the data dir, outside
-  // the project's own .git (design §5.1). A checkpoint left recording by the last process is
-  // finished at startup, below.
-  const checkpoints = createCheckpointService({
-    store: createGitCheckpointStore(config.dataDir),
-    repository,
-    scope: LOCAL_SCOPE,
-    bus,
-    logger: logger.child({ subsystem: 'checkpoints' }),
   });
   const hub = createWsHub({
     bus,
@@ -947,7 +949,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
    * run started from Domain, which stays open (D323): its turns that were in flight end FAILED
    * `crash`, and it is driven again, parking at once when it has nothing to do.
    */
-  // D300: before any run is driven again, so a reopened Domain run starts a checkpoint of its own.
+  // D300: a checkpoint the last process left recording is failed — what changed since can't be
+  // told apart from the person's work — before any run is driven again, so a reopened Domain run
+  // starts a checkpoint of its own.
   await checkpoints.recover();
   const recovered = await recoverAfterCrash({
     repository,

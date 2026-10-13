@@ -200,7 +200,59 @@ describe.skipIf(!hasGit)('D300 checkpoints through the real engine and a real gi
     expect(found.status).toBe(404);
   });
 
-  it('finishes a recording the last engine left, when the engine starts again', async () => {
+  it('Revert all after the agent rewrites .gitignore never deletes the person’s .env (C1)', async () => {
+    write('.gitignore', '.env\n');
+    write('.env', 'SECRET=person\n');
+    const recording = await engine.services.checkpoints.begin(projectId, {
+      kind: 'chat',
+      threadId: THREAD,
+    });
+    write('.gitignore', 'dist/\n');
+    const finished = await recording.finish();
+    expect(finished?.files.map((file) => file.path)).toEqual(['.gitignore']);
+
+    const reverted = await api<Checkpoint>('POST', `${base()}/${recording.id}/actions`, {
+      action: 'revert',
+    });
+    expect(reverted.status).toBe(200);
+    expect(read('.gitignore')).toBe('.env\n');
+    expect(read('.env')).toBe('SECRET=person\n');
+  });
+
+  it('a file the person saves in Forge while a recording is open stays theirs on Revert all (I3)', async () => {
+    write('mine.txt', 'v0\n');
+    const opened = await api<{ version: string }>(
+      'GET',
+      `/projects/${projectId}/files/content?path=mine.txt`,
+    );
+    const recording = await engine.services.checkpoints.begin(projectId, {
+      kind: 'chat',
+      threadId: THREAD,
+    });
+    write('agent.txt', 'from the agent\n');
+    const saved = await api('PUT', `/projects/${projectId}/files/content`, {
+      path: 'mine.txt',
+      content: 'v1\n',
+      baseVersion: opened.json.version,
+      eol: 'lf',
+      bom: false,
+    });
+    expect(saved.status).toBe(200);
+    const finished = await recording.finish();
+    expect(finished?.files.map((file) => `${file.path}:${file.state}`)).toEqual([
+      'agent.txt:pending',
+      'mine.txt:person',
+    ]);
+
+    const reverted = await api<Checkpoint>('POST', `${base()}/${recording.id}/actions`, {
+      action: 'revert',
+    });
+    expect(reverted.json.status).toBe('reverted');
+    expect(existsSync(join(folder, 'agent.txt'))).toBe(false);
+    expect(read('mine.txt')).toBe('v1\n');
+  });
+
+  it('marks a recording the last engine left as failed when the engine starts again (I3)', async () => {
     const recording = await engine.services.checkpoints.begin(projectId, {
       kind: 'chat',
       threadId: THREAD,
@@ -210,7 +262,11 @@ describe.skipIf(!hasGit)('D300 checkpoints through the real engine and a real gi
     engine = await startEngine({ dataDir, port: 0, env: {} });
 
     const after = await api<Checkpoint>('GET', `${base()}/${recording.id}`);
-    expect(after.json.status).toBe('pending');
-    expect(after.json.files.map((file) => file.path)).toEqual(['later.txt']);
+    expect(after.json).toMatchObject({
+      status: 'failed',
+      files: [],
+      error: "the engine stopped while recording; these changes can't be told apart from yours",
+    });
+    expect(read('later.txt')).toBe('written while the engine went down\n');
   });
 });

@@ -18,6 +18,8 @@ import {
   isCheckpointConflictError,
   isCheckpointUnavailableError,
   isWorkspaceFsError,
+  uncapturedMessage,
+  type CheckpointFileDiffEntry,
   type CheckpointMeta,
   type CheckpointRecorder,
   type CheckpointRecording,
@@ -48,10 +50,16 @@ export interface CheckpointService extends CheckpointRecorder {
    */
   act(projectId: Id, id: Id, action: CheckpointAction): Promise<Checkpoint>;
   /**
-   * Engine start: a checkpoint the last process left recording is finished now, best effort, or
-   * marked failed — "engine stopped while recording".
+   * Engine start: a checkpoint the last process left recording is marked failed, and no after
+   * snapshot is taken — whatever changed since may be the person's (D300 fix I3).
    */
   recover(): Promise<void>;
+  /**
+   * The person wrote these paths through Forge (a save, a create, a move, a remove). Every
+   * checkpoint of the project still recording marks them — and anything under a folder among
+   * them — `person`: listed, never reverted (D300 fix I3).
+   */
+  notePersonWrite(projectId: Id, paths: readonly string[]): void;
 }
 
 export interface CheckpointServiceDeps {
@@ -63,20 +71,55 @@ export interface CheckpointServiceDeps {
   now?: () => string;
 }
 
-const STOPPED_WHILE_RECORDING = 'engine stopped while recording';
+const STOPPED_WHILE_RECORDING =
+  "the engine stopped while recording; these changes can't be told apart from yours";
 /** How much of a file is searched for a NUL byte to call it binary — git's own heuristic. */
 const SNIFF_BYTES = 8000;
 const OPEN: ReadonlySet<CheckpointStatus> = new Set(['recording', 'pending']);
+/** The states Keep and Revert decide; `person` and `not_revertible` are only listed. */
+const DECIDABLE: ReadonlySet<CheckpointFileState> = new Set(['pending', 'kept', 'reverted']);
 
 const messageOf = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-/** Every file decided closes the checkpoint: all kept, all reverted, or partly each. */
+/**
+ * Every decidable file decided closes the checkpoint: all kept, all reverted, or partly each. A
+ * checkpoint with nothing it may revert is closed as kept: its changes stand.
+ */
 function statusOf(files: readonly CheckpointFile[]): CheckpointStatus {
-  if (files.some((file) => file.state === 'pending')) return 'pending';
-  if (files.every((file) => file.state === 'kept')) return 'kept';
-  if (files.every((file) => file.state === 'reverted')) return 'reverted';
+  const decidable = files.filter((file) => DECIDABLE.has(file.state));
+  if (decidable.some((file) => file.state === 'pending')) return 'pending';
+  if (decidable.every((file) => file.state === 'kept')) return 'kept';
+  if (decidable.every((file) => file.state === 'reverted')) return 'reverted';
   return 'partial';
+}
+
+/** `path` is one of the person's writes, or inside a folder they wrote (moved, removed). */
+const touchedBy = (touched: ReadonlySet<string> | undefined, path: string): boolean => {
+  if (touched === undefined) return false;
+  for (const written of touched) {
+    if (written === path || written === '' || path.startsWith(`${written}/`)) return true;
+  }
+  return false;
+};
+
+/** A diff entry as a checkpoint file: never revertible when uncaptured or the person's. */
+function fileOf(entry: CheckpointFileDiffEntry, touched: ReadonlySet<string> | undefined) {
+  const { uncaptured, ...file } = entry;
+  if (uncaptured !== undefined) {
+    return { ...file, state: 'not_revertible' as const, reason: uncaptured };
+  }
+  return {
+    ...file,
+    state: touchedBy(touched, file.path) ? ('person' as const) : ('pending' as const),
+  };
+}
+
+/** Why a named file is not reverted, for the 409's details. */
+function notRevertedMessage(file: CheckpointFile): string {
+  return file.state === 'person'
+    ? `You edited ${file.path} during the session, so it is not reverted here.`
+    : uncapturedMessage(file.path, file.reason ?? 'unreadable');
 }
 
 /** UTF-8 text, `undefined` for a missing side, `null` for one Monaco cannot show as text. */
@@ -158,8 +201,22 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
     return update(id, { status: 'failed', error, updatedAt: now() });
   }
 
-  /** The after snapshot and the diff: pending with its files, or dropped when nothing changed. */
-  async function complete(id: Id, failure?: string): Promise<Checkpoint | undefined> {
+  /**
+   * Recordings in this process, and the paths the person wrote meanwhile (D300 fix I3). After a
+   * restart there are none: `recover` fails whatever was still recording.
+   */
+  const recordings = new Map<Id, { projectId: Id; personTouched: Set<string> }>();
+
+  /** The after snapshot and the diff: its files, or dropped when nothing changed. */
+  async function complete(id: Id): Promise<Checkpoint | undefined> {
+    try {
+      return await completeRecording(id);
+    } finally {
+      recordings.delete(id);
+    }
+  }
+
+  async function completeRecording(id: Id): Promise<Checkpoint | undefined> {
     const row = await checkpoints.get(scope, id);
     if (row === null) return undefined;
     const { checkpoint } = row;
@@ -184,18 +241,19 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
         announce(checkpoint, true);
         return undefined;
       }
+      const touched = recordings.get(id)?.personTouched;
       const files: CheckpointFile[] = changed
-        .map((file) => ({ ...file, state: 'pending' as const }))
+        .map((entry) => fileOf(entry, touched))
         .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
       return await update(id, {
-        status: 'pending',
+        status: statusOf(files),
         files,
         skipped: [...new Set([...checkpoint.skipped, ...after.skipped])].sort(),
         afterRef: after.commit,
         updatedAt: now(),
       });
     } catch (error) {
-      return fail(id, failure ?? messageOf(error));
+      return fail(id, messageOf(error));
     }
   }
 
@@ -232,6 +290,9 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
         stored = { checkpoint: { ...base, status: 'failed', error: reason } };
       }
       await checkpoints.insert(scope, stored);
+      if (stored.checkpoint.status === 'recording') {
+        recordings.set(id, { projectId, personTouched: new Set() });
+      }
       announce(stored.checkpoint);
 
       let finishing: Promise<Checkpoint | undefined> | undefined;
@@ -322,6 +383,15 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
         const decided = new Map<string, CheckpointFileState>();
         const conflicts: CheckpointConflictDetails['conflicts'] = [];
         let unavailable: string | undefined;
+        // the person's files and the ones a snapshot left out are never reverted (D300 fix
+        // C1, I3): Revert all passes over them, and naming one is refused with the reason
+        if (action.action === 'revert' && wanted !== undefined) {
+          for (const file of checkpoint.files) {
+            if (wanted.has(file.path) && !DECIDABLE.has(file.state)) {
+              conflicts.push({ path: file.path, message: notRevertedMessage(file) });
+            }
+          }
+        }
         if (action.action === 'keep') {
           for (const file of targets) decided.set(file.path, 'kept');
         } else if (targets.length > 0) {
@@ -359,13 +429,25 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
 
     async recover() {
       for (const row of await checkpoints.listByStatus(scope, 'recording')) {
-        const id = row.checkpoint.id;
-        await serial(id, () => complete(id, STOPPED_WHILE_RECORDING)).catch((error: unknown) =>
+        const { id, projectId } = row.checkpoint;
+        // No after snapshot: what changed while the engine was down cannot be told apart from
+        // the person's own work, so none of it is offered for revert (D300 fix I3).
+        await serial(id, async () => {
+          await fail(id, STOPPED_WHILE_RECORDING);
+          await store.drop(projectId, id);
+        }).catch((error: unknown) =>
           logger.warn(
             { subsystem: 'checkpoints', checkpointId: id, reason: messageOf(error) },
             'could not recover a checkpoint',
           ),
         );
+      }
+    },
+
+    notePersonWrite(projectId, paths) {
+      for (const recording of recordings.values()) {
+        if (recording.projectId !== projectId) continue;
+        for (const path of paths) recording.personTouched.add(path);
       }
     },
   };

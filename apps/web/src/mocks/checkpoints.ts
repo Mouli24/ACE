@@ -7,6 +7,7 @@ import type {
   CheckpointFileState,
   CheckpointKind,
   CheckpointStatus,
+  CheckpointUncapturedReason,
 } from '@ace/contracts';
 
 import { newId } from '../lib/ulid';
@@ -30,6 +31,14 @@ export class MockCheckpointError extends Error {
   }
 }
 
+/** The engine's `UNCAPTURED_REASON_WORDS`. */
+const UNCAPTURED_WORDS: Readonly<Record<CheckpointUncapturedReason, string>> = {
+  ignored: 'ignored',
+  too_large: 'over 5 MB',
+  unreadable: 'unreadable',
+  vanished: 'it vanished while being captured',
+};
+
 /** The engine's refusals, word for word (`packages/engine/src/ports/checkpoints.ts`, `errors.ts`). */
 export const MOCK_CHECKPOINT_MESSAGES = {
   conflict: (path: string) => `${path} changed after the agent's edit; review it before reverting`,
@@ -37,6 +46,9 @@ export const MOCK_CHECKPOINT_MESSAGES = {
     `${count} files changed after the agent's edit; review them before reverting.`,
   recording: 'This checkpoint is still recording; wait for the agent to finish.',
   failed: 'This checkpoint failed, so its changes cannot be kept or reverted.',
+  person: (path: string) => `You edited ${path} during the session, so it is not reverted here.`,
+  uncaptured: (path: string, reason: CheckpointUncapturedReason) =>
+    `ACE could not capture ${path} (${UNCAPTURED_WORDS[reason]}), so it can't be reverted`,
 } as const;
 
 /** One file of a seeded checkpoint: absent `before` is a file the agent created. */
@@ -46,6 +58,9 @@ export interface SeedCheckpointFile {
   /** Absent: the agent deleted it. */
   after?: string;
   binary?: boolean;
+  /** The person's own edit, or one a snapshot could not capture: listed, never reverted. */
+  state?: 'person' | 'not_revertible';
+  reason?: CheckpointUncapturedReason;
 }
 
 export interface SeedCheckpointOptions {
@@ -82,10 +97,14 @@ function counts(before: string | undefined, after: string | undefined) {
   return { additions, deletions };
 }
 
+const DECIDABLE: ReadonlySet<CheckpointFileState> = new Set(['pending', 'kept', 'reverted']);
+
+/** The engine's: only Keep and Revert's files decide; with none, the changes stand (kept). */
 function statusOf(files: readonly CheckpointFile[]): CheckpointStatus {
-  if (files.some((file) => file.state === 'pending')) return 'pending';
-  if (files.every((file) => file.state === 'kept')) return 'kept';
-  if (files.every((file) => file.state === 'reverted')) return 'reverted';
+  const decidable = files.filter((file) => DECIDABLE.has(file.state));
+  if (decidable.some((file) => file.state === 'pending')) return 'pending';
+  if (decidable.every((file) => file.state === 'kept')) return 'kept';
+  if (decidable.every((file) => file.state === 'reverted')) return 'reverted';
   return 'partial';
 }
 
@@ -159,6 +178,18 @@ export class MockCheckpoints {
     }
     const decided = new Map<string, CheckpointFileState>();
     const conflicts: CheckpointConflictDetails['conflicts'] = [];
+    if (action.action === 'revert' && wanted !== undefined) {
+      for (const file of checkpoint.files) {
+        if (!wanted.has(file.path) || DECIDABLE.has(file.state)) continue;
+        conflicts.push({
+          path: file.path,
+          message:
+            file.state === 'person'
+              ? MOCK_CHECKPOINT_MESSAGES.person(file.path)
+              : MOCK_CHECKPOINT_MESSAGES.uncaptured(file.path, file.reason ?? 'unreadable'),
+        });
+      }
+    }
     for (const file of checkpoint.files) {
       if (file.state !== 'pending' || (wanted !== undefined && !wanted.has(file.path))) continue;
       if (action.action === 'keep') {
@@ -230,6 +261,24 @@ export class MockCheckpoints {
     }
     this.db.seedFiles(projectId, present);
     this.sides.set(id, sides);
+    const recorded: CheckpointFile[] =
+      status === 'pending'
+        ? files.map((file) => ({
+            path: file.path,
+            change:
+              file.before === undefined
+                ? ('added' as const)
+                : file.after === undefined
+                  ? ('deleted' as const)
+                  : ('modified' as const),
+            ...(file.binary === true
+              ? { additions: 0, deletions: 0 }
+              : counts(file.before, file.after)),
+            binary: file.binary === true,
+            state: file.state ?? 'pending',
+            ...(file.reason === undefined ? {} : { reason: file.reason }),
+          }))
+        : [];
     return this.save({
       id,
       projectId,
@@ -238,24 +287,8 @@ export class MockCheckpoints {
       ...(options.messageId === undefined ? {} : { messageId: options.messageId }),
       ...(options.runId === undefined ? {} : { runId: options.runId }),
       ...(options.nodeId === undefined ? {} : { nodeId: options.nodeId }),
-      status,
-      files:
-        status === 'pending'
-          ? files.map((file) => ({
-              path: file.path,
-              change:
-                file.before === undefined
-                  ? ('added' as const)
-                  : file.after === undefined
-                    ? ('deleted' as const)
-                    : ('modified' as const),
-              ...(file.binary === true
-                ? { additions: 0, deletions: 0 }
-                : counts(file.before, file.after)),
-              binary: file.binary === true,
-              state: 'pending' as const,
-            }))
-          : [],
+      status: status === 'pending' ? statusOf(recorded) : status,
+      files: recorded,
       skipped: options.skipped ?? [],
       ...(options.error === undefined ? {} : { error: options.error }),
       createdAt: at,

@@ -45,7 +45,20 @@ export interface WorkspaceServiceDeps {
   logger: Logger;
   /** How long a watcher that died waits before it starts again while someone still watches. */
   restartDelayMs?: number;
+  /**
+   * D300: told the paths of each person's write that succeeded — a save, a create, both sides of
+   * a move, a remove — so an agent's checkpoint recording meanwhile never claims them. A throw
+   * here is logged and never fails the write.
+   */
+  onPersonWrite?: (projectId: Id, paths: string[]) => void;
 }
+
+/** A wire path as the checkpoint names files: forward slashes, no `./` or trailing slash. */
+const asProjectPath = (path: string): string =>
+  path
+    .replace(/\\/g, '/')
+    .replace(/^(\.\/)+/, '')
+    .replace(/\/+$/, '');
 
 export function createWorkspaceService(deps: WorkspaceServiceDeps): WorkspaceService {
   const { repository, scope, files, bus, logger } = deps;
@@ -60,6 +73,22 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): WorkspaceSer
     if (project === null) throw notFound(`Project ${projectId}`);
     if (project.folderPath === '') throw invalidPath('(none)', 'this project has no folder.');
     return project.folderPath;
+  }
+
+  /** The person wrote these paths: tell the checkpoints, never failing the write (D300). */
+  function personWrote(projectId: Id, paths: string[]): void {
+    try {
+      deps.onPersonWrite?.(projectId, paths.map(asProjectPath));
+    } catch (error) {
+      logger.warn(
+        {
+          subsystem: 'workspace',
+          projectId,
+          reason: error instanceof Error ? error.message : String(error),
+        },
+        'could not note a person write for the checkpoints',
+      );
+    }
   }
 
   const announce = (projectId: Id, batch: FileChangeBatch): void => {
@@ -126,10 +155,25 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): WorkspaceSer
     listFolder: async (projectId, path) => files.listFolder(await folderOf(projectId), path),
     read: async (projectId, path) => files.read(await folderOf(projectId), path),
     readRaw: async (projectId, path) => files.readRaw(await folderOf(projectId), path),
-    save: async (projectId, request) => files.write(await folderOf(projectId), request),
-    create: async (projectId, request) => files.create(await folderOf(projectId), request),
-    move: async (projectId, from, to) => files.move(await folderOf(projectId), from, to),
-    remove: async (projectId, path) => files.remove(await folderOf(projectId), path),
+    async save(projectId, request) {
+      const saved = await files.write(await folderOf(projectId), request);
+      personWrote(projectId, [saved.path]);
+      return saved;
+    },
+    async create(projectId, request) {
+      const entry = await files.create(await folderOf(projectId), request);
+      personWrote(projectId, [entry.path]);
+      return entry;
+    },
+    async move(projectId, from, to) {
+      const entry = await files.move(await folderOf(projectId), from, to);
+      personWrote(projectId, [from, entry.path]);
+      return entry;
+    },
+    async remove(projectId, path) {
+      await files.remove(await folderOf(projectId), path);
+      personWrote(projectId, [path]);
+    },
     listAll: async (projectId) => files.listAll(await folderOf(projectId)),
     status: async (projectId) => files.status(await folderOf(projectId)),
 

@@ -71,6 +71,13 @@ describe('D300 the mock engine’s checkpoints', () => {
     );
     expect(engineService).toContain(MOCK_CHECKPOINT_MESSAGES.recording);
     expect(engineService).toContain(MOCK_CHECKPOINT_MESSAGES.failed);
+    expect(engineService).toContain('during the session, so it is not reverted here.');
+    expect(enginePort).toContain("ACE could not capture ${path} (${UNCAPTURED_REASON_WORDS");
+    expect(enginePort).toContain("too_large: 'over 5 MB'");
+    expect(enginePort).toContain("vanished: 'it vanished while being captured'");
+    expect(MOCK_CHECKPOINT_MESSAGES.uncaptured('a.bin', 'too_large')).toBe(
+      "ACE could not capture a.bin (over 5 MB), so it can't be reverted",
+    );
   });
 
   it('seeds a pending checkpoint, puts its after text in the folder and announces it', async () => {

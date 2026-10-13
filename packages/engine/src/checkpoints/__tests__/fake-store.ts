@@ -1,3 +1,5 @@
+import type { CheckpointUncapturedReason } from '@ace/contracts';
+
 import {
   CheckpointConflictError,
   CheckpointUnavailableError,
@@ -17,6 +19,8 @@ export interface FakeCheckpointStore extends CheckpointStore {
   /** Pinned refs by `<checkpointId>/<side>`. */
   refs: Map<string, string>;
   snapshots: number;
+  /** Paths a snapshot "could not capture", and why: the diff marks them, revertFile refuses them. */
+  uncaptured: Map<string, CheckpointUncapturedReason>;
 }
 
 const encode = (value: string | Uint8Array): Uint8Array =>
@@ -48,6 +52,7 @@ export function fakeCheckpointStore(): FakeCheckpointStore {
     failNext: undefined,
     refs: new Map(),
     snapshots: 0,
+    uncaptured: new Map(),
 
     async snapshot(_projectId, _root, target) {
       if (store.failNext !== undefined) {
@@ -80,6 +85,7 @@ export function fakeCheckpointStore(): FakeCheckpointStore {
           additions: binary ? 0 : fresh.filter((line) => !old.includes(line)).length,
           deletions: binary ? 0 : old.filter((line) => !fresh.includes(line)).length,
           binary,
+          ...(store.uncaptured.has(path) ? { uncaptured: store.uncaptured.get(path) } : {}),
         });
       }
       return files;
@@ -91,6 +97,9 @@ export function fakeCheckpointStore(): FakeCheckpointStore {
     },
 
     async revertFile(_projectId, _root, before, after, path) {
+      if (store.uncaptured.has(path)) {
+        throw new CheckpointConflictError(path, `ACE could not capture ${path}`);
+      }
       if (!same(store.disk.get(path), commitOf(after).get(path))) {
         throw new CheckpointConflictError(path);
       }
