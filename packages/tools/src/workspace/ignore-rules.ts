@@ -37,9 +37,14 @@ export interface IgnoreRules {
  * to the paths below its own folder, plus {@link DEFAULT_IGNORED_FOLDERS}. Files are read lazily
  * and cached; a pattern that ignores a folder ignores everything under it, as git does.
  * Approximation: a `!` re-include in a nested file cannot undo a parent folder's exclusion (git
- * cannot either).
+ * cannot either). `readGitignore` replaces the disk: checkpoints (D300) record each folder's
+ * `.gitignore` text at one moment and apply exactly that text later.
  */
-export function createIgnoreRules(root: string): IgnoreRules {
+export function createIgnoreRules(
+  root: string,
+  readGitignore: (folder: string) => string | null = (folder) =>
+    readFileSync(join(root, folder, '.gitignore'), 'utf8'),
+): IgnoreRules {
   const cache = new Map<string, Ignore | null>();
 
   function rulesIn(folder: string): Ignore | null {
@@ -47,7 +52,8 @@ export function createIgnoreRules(root: string): IgnoreRules {
     if (cached !== undefined) return cached;
     let rules: Ignore | null;
     try {
-      rules = ignore().add(readFileSync(join(root, folder, '.gitignore'), 'utf8'));
+      const text = readGitignore(folder);
+      rules = text === null ? null : ignore().add(text);
     } catch {
       rules = null;
     }

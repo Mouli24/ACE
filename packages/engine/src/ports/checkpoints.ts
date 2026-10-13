@@ -1,4 +1,4 @@
-import type { Checkpoint, CheckpointFile, Id } from '@ace/contracts';
+import type { Checkpoint, CheckpointFile, CheckpointUncapturedReason, Id } from '@ace/contracts';
 
 /*
  * Checkpoints (D300, design §5). Two seams live here:
@@ -46,8 +46,14 @@ export interface SnapshotRef {
   skipped: string[];
 }
 
-/** A changed file as the store's diff reports it; the checkpoint adds its `state`. */
-export type CheckpointFileDiffEntry = Omit<CheckpointFile, 'state'>;
+/**
+ * A changed file as the store's diff reports it; the checkpoint adds its `state`. `uncaptured` is
+ * set when either snapshot left the path out (its manifest says why): such a file is never
+ * reverted, because there is no proof of what it was.
+ */
+export type CheckpointFileDiffEntry = Omit<CheckpointFile, 'state' | 'reason'> & {
+  uncaptured?: CheckpointUncapturedReason;
+};
 
 /**
  * The private store: `<dataDir>/checkpoints/<projectId>.git`, outside the project's own `.git`,
@@ -57,17 +63,25 @@ export type CheckpointFileDiffEntry = Omit<CheckpointFile, 'state'>;
 export interface CheckpointStore {
   /**
    * Every file of `root` that is not ignored (`.gitignore`, `.git`/`.ace` at any depth, ACE's
-   * default excludes) and not over 5 MB, as one commit pinned under `target`. Throws
-   * {@link CheckpointUnavailableError} when git is missing or the folder cannot be read.
+   * default excludes) and not over 5 MB, as one commit pinned under `target`, with a manifest of
+   * every existing path it left out and why. The `after` side applies the ignore rules recorded
+   * by the `before` side, so a `.gitignore` the agent changed never makes a file look added or
+   * deleted. Throws {@link CheckpointUnavailableError} when git is missing, the folder cannot be
+   * read, or it holds more files than a snapshot covers.
    */
   snapshot(projectId: Id, root: string, target: SnapshotTarget): Promise<SnapshotRef>;
   /** What changed from `before` to `after`, file by file, without rename detection. */
   diff(projectId: Id, before: string, after: string): Promise<CheckpointFileDiffEntry[]>;
-  /** The file's bytes in `commit`; `undefined` when it is not there. */
+  /**
+   * The file's bytes in `commit`; `undefined` only when git proves it is not there. An unknown
+   * commit or a store failure throws {@link CheckpointUnavailableError}.
+   */
   fileAt(projectId: Id, commit: string, path: string): Promise<Uint8Array | undefined>;
   /**
    * Puts `path` back as it was at `before` — or deletes it, when the agent created it — but only
    * while the disk still holds what `after` recorded: otherwise {@link CheckpointConflictError}.
+   * "Created" needs proof: absent from the `before` tree and not named by its manifest. A path
+   * either snapshot left out is refused with a {@link CheckpointConflictError} saying why.
    */
   revertFile(
     projectId: Id,
@@ -105,10 +119,26 @@ export class CheckpointConflictError extends Error {
   override readonly name = 'CheckpointConflictError';
   readonly [CONFLICT] = true;
 
-  constructor(readonly path: string) {
-    super(`${path} changed after the agent's edit; review it before reverting`);
+  constructor(
+    readonly path: string,
+    /** Why it is refused, when it is not a later change: a path the snapshot left out. */
+    message: string = `${path} changed after the agent's edit; review it before reverting`,
+  ) {
+    super(message);
   }
 }
+
+/** How a reason reads inside "ACE could not capture <path> (<words>)". */
+export const UNCAPTURED_REASON_WORDS: Readonly<Record<CheckpointUncapturedReason, string>> = {
+  ignored: 'ignored',
+  too_large: 'over 5 MB',
+  unreadable: 'unreadable',
+  vanished: 'it vanished while being captured',
+};
+
+/** Why a path a snapshot left out is never reverted (D300 fix C1). */
+export const uncapturedMessage = (path: string, reason: CheckpointUncapturedReason): string =>
+  `ACE could not capture ${path} (${UNCAPTURED_REASON_WORDS[reason]}), so it can't be reverted`;
 
 const branded = (error: unknown, brand: symbol): boolean =>
   error instanceof Error && (error as Error & Record<symbol, unknown>)[brand] === true;

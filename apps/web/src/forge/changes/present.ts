@@ -1,4 +1,9 @@
-import type { Checkpoint, CheckpointFile, CheckpointStatus } from '@ace/contracts';
+import type {
+  Checkpoint,
+  CheckpointFile,
+  CheckpointStatus,
+  CheckpointUncapturedReason,
+} from '@ace/contracts';
 import { AceApiError } from '@ace/sdk';
 
 /*
@@ -31,9 +36,34 @@ export const STATUS_LABEL: Record<CheckpointStatus, string> = {
 export const failureNote = (checkpoint: Checkpoint): string =>
   `Changes were made but can't be reverted: ${checkpoint.error ?? 'the folder could not be snapshotted'}`;
 
-/** The theme's file-change words for a decided file. */
+/** The theme's file-change words for a file that is no longer waiting. */
 export const fileStateLabel = (file: CheckpointFile): string =>
-  file.state === 'kept' ? 'kept' : file.state === 'reverted' ? 'reverted' : '';
+  file.state === 'kept'
+    ? 'kept'
+    : file.state === 'reverted'
+      ? 'reverted'
+      : file.state === 'person'
+        ? 'yours'
+        : file.state === 'not_revertible'
+          ? 'not captured'
+          : '';
+
+const UNCAPTURED_WORDS: Readonly<Record<CheckpointUncapturedReason, string>> = {
+  ignored: 'ignored',
+  too_large: 'over 5 MB',
+  unreadable: 'unreadable',
+  vanished: 'it vanished while being captured',
+};
+
+/**
+ * Why a listed file has no Revert (D300 fix C1, I3): the person edited it while the agent worked,
+ * or a snapshot could not capture it. `undefined` for every other file.
+ */
+export function fileNote(file: CheckpointFile): string | undefined {
+  if (file.state === 'person') return 'You edited this during the session';
+  if (file.state !== 'not_revertible') return undefined;
+  return `ACE could not capture this file (${UNCAPTURED_WORDS[file.reason ?? 'unreadable']}), so it can't be reverted`;
+}
 
 export const pendingFiles = (checkpoint: Checkpoint): CheckpointFile[] =>
   checkpoint.files.filter((file) => file.state === 'pending');

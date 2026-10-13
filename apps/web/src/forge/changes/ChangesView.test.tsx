@@ -169,6 +169,36 @@ describe('D300 Forge’s Changes view', () => {
     );
   });
 
+  it('lists the person’s own files and uncaptured ones without Revert, and Revert all leaves them', async () => {
+    const user = userEvent.setup();
+    const { projectId } = seed();
+    const seeded = checkpoints.seed(projectId, [
+      { path: 'agent.ts', before: 'a0\n', after: 'a1\n' },
+      { path: 'mine.ts', before: 'm0\n', after: 'm1\n', state: 'person' },
+      { path: 'big.json', after: '{}', state: 'not_revertible', reason: 'too_large' },
+    ]);
+    const view = await open(projectId);
+
+    const mine = await within(view).findByTestId(`change-${seeded.id}-mine.ts`);
+    expect(mine).toHaveTextContent('You edited this during the session');
+    expect(within(mine).queryByRole('button', { name: 'Revert mine.ts' })).toBeNull();
+    const big = within(view).getByTestId(`change-${seeded.id}-big.json`);
+    expect(big).toHaveTextContent(
+      "ACE could not capture this file (over 5 MB), so it can't be reverted",
+    );
+    expect(within(big).queryByRole('button', { name: 'Revert big.json' })).toBeNull();
+
+    await user.click(within(view).getByRole('button', { name: 'Revert all' }));
+    await waitFor(() =>
+      expect(within(view).getByTestId(`checkpoint-status-${seeded.id}`)).toHaveTextContent(
+        'Reverted',
+      ),
+    );
+    expect(fileOf(projectId, 'agent.ts')).toBe('a0\n');
+    expect(fileOf(projectId, 'mine.ts')).toBe('m1\n');
+    expect(fileOf(projectId, 'big.json')).toBe('{}');
+  });
+
   it('outlines the checkpoint an Explorer marker asked for', async () => {
     const { projectId } = seed();
     const seeded = checkpoints.seed(projectId, [{ path: 'a.ts', before: 'a\n', after: 'b\n' }]);
