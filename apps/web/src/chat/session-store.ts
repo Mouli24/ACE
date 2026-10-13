@@ -19,8 +19,11 @@ export interface NodeSession {
   fresh?: boolean;
   /** The message is on its way to the engine. */
   sending?: boolean;
-  /** Accepted by the engine; its reply has not settled yet. */
-  pending?: { threadId: string; userMessage: ChatMessage };
+  /**
+   * Accepted by the engine; its reply has not settled yet. `speakerNodeId` is the node answering
+   * it (D302) — the `@handle` target, or the session's own node.
+   */
+  pending?: { threadId: string; userMessage: ChatMessage; speakerNodeId?: string };
   /** The last send failed before the engine took it — no model chosen, the engine unreachable. */
   error?: string;
   /** The last send was refused by the input guardrails. */

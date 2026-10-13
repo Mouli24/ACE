@@ -16,10 +16,10 @@ import { useSelectionStore } from '../app/stores/selection';
 import { useWorkspaceStatus } from '../app/stores/workspace-status';
 import { workflowPath } from '../forge/mode';
 import { useSocketStatus } from '../runs/hooks';
-import { agentsOf, type AgentLook } from '../theme/agents';
+import { agentMap, agentsOf, type AgentLook } from '../theme/agents';
 import { Avatar, Dot } from '../theme/primitives';
 import { useWorkflowGraph } from '../workflows/hooks';
-import { ChatComposer, type MentionTarget } from './ChatComposer';
+import { ChatComposer, type ChatRosterEntry } from './ChatComposer';
 import { ChatConversation } from './ChatConversation';
 import { ChatThreadList } from './ChatThreadList';
 import { useChatSessions } from './session-store';
@@ -75,10 +75,11 @@ MoreTab.displayName = 'MoreTab';
  * The permanent 340 px Chat column (FR-CHAT-004..008, D285), in the theme's Team chat aside
  * (D335) — where every node's conversation and every model response is read. Each Agent or Model
  * node has a session of its own: its direct chat and the goal and result of each run of it. The
- * column shows one node's session at a time; it follows the node selected on the Canvas, a tab,
- * or an `@Name …` typed in the composer, and switching back finds the session exactly as it was
- * left. "Live" shows only while the socket is open. The compact layout keeps `ChatPanel`
- * (FR-MOB-003).
+ * column shows one node's session at a time; it follows the node selected on the Canvas or a tab,
+ * and switching back finds the session exactly as it was left. D302: that node is the
+ * conversation's main node; an `@handle` in a message asks another node of the workflow inside the
+ * same conversation, and the session does not switch. "Live" shows only while the socket is open.
+ * The compact layout keeps `ChatPanel` (FR-MOB-003).
  */
 export function ChatAside({ workflowId }: { workflowId: string }) {
   const chatNodeId = usePanelsStore((s) => s.chatNodeId);
@@ -94,7 +95,8 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
   const chatNodes = (nodes ?? []).filter(isChatNode);
   const target = chatNodes.find((each) => each.id === chatNodeId);
   const agents = agentsOf(nodes ?? []);
-  const handles = new Map(rosterFor(nodes ?? []).map((entry) => [entry.nodeId, entry.handle]));
+  const roster = rosterFor(nodes ?? []);
+  const handles = new Map(roster.map((entry) => [entry.nodeId, entry.handle]));
   const handleOf = (agent: AgentLook) => handles.get(agent.nodeId) ?? slugHandle(agent.name);
   const projectId = graph.data?.workflow.projectId;
 
@@ -121,18 +123,16 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
   // One socket link for every session, so a reply owed to a node off screen still arrives.
   useChatSocket(target?.id);
 
-  const mentionables: MentionTarget[] = agents.map((agent) => ({
-    id: agent.nodeId,
-    name: agent.name,
-    handle: handleOf(agent),
-    letter: agent.letter,
-    color: agent.color,
+  const looks = agentMap(nodes ?? []);
+  const chatRoster: ChatRosterEntry[] = roster.map((entry) => ({
+    ...entry,
+    letter: looks.get(entry.nodeId)?.letter ?? entry.name.slice(0, 1).toUpperCase(),
+    color: looks.get(entry.nodeId)?.color ?? '#ef6b3f',
   }));
 
   /**
    * Show one node's session, and select that node on the Canvas too: the chat and the Canvas then
-   * agree on which node is in focus, so clicking any other card — even the one that was selected
-   * before an `@mention` moved the chat — brings that card's session back.
+   * agree on which node is in focus, so clicking any other card brings that card's session back.
    */
   const openSession = (nodeId: string) => {
     if (usePanelsStore.getState().chatNodeId !== nodeId) chatWith(nodeId);
@@ -141,12 +141,13 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
     }
   };
 
-  /** A message goes to the node it `@mentions`, or else to the node on screen. */
-  const send = (content: Part[], mentioned: string | undefined) => {
-    const nodeId = mentioned ?? target?.id;
-    if (nodeId === undefined) return;
-    openSession(nodeId);
-    if (content.length > 0) void sendToNode(queryClient, nodeId, content);
+  /**
+   * D302: a message goes into the main node's conversation; an `@handle` names the node that
+   * answers it there. The session stays where it is.
+   */
+  const send = (content: Part[], targetNodeId: string | undefined) => {
+    if (target === undefined || content.length === 0) return;
+    void sendToNode(queryClient, target.id, content, targetNodeId);
   };
 
   const sendToForge =
@@ -210,16 +211,10 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
     target === undefined ? false : state.sessions[target.id]?.sending === true,
   );
 
-  // One composer for the whole column, never remounted: picking a node with `@` keeps the text
-  // typed so far and the keyboard focus while the conversation above it changes.
+  // One composer for the whole column, never remounted: switching nodes keeps the text typed so
+  // far, its chips and the keyboard focus while the conversation above it changes.
   const composer = (
-    <ChatComposer
-      onSend={send}
-      disabled={sending}
-      mentionables={mentionables}
-      onMention={openSession}
-      hasTarget={hasTarget}
-    />
+    <ChatComposer onSend={send} disabled={sending} roster={chatRoster} mainNodeId={target?.id} />
   );
 
   return (
@@ -260,20 +255,36 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
       {target === undefined ? (
         <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-[14px] py-[16px]">
           <p className="text-center text-[13px] text-[var(--muted)]">
-            Select an Agent node on the Canvas, or mention one, to see its conversation and its
+            Select an Agent node on the Canvas, or pick one above, to see its conversation and its
             results.
           </p>
         </div>
       ) : (
         // Keyed by node id: each session renders from its own state in the session store.
-        <TargetChat key={target.id} node={target} onSendToForge={sendToForge} />
+        <TargetChat
+          key={target.id}
+          node={target}
+          onSendToForge={sendToForge}
+          speakers={looks}
+          projectId={projectId}
+        />
       )}
       {composer}
     </aside>
   );
 }
 
-function TargetChat({ node, onSendToForge }: { node: Node; onSendToForge?: () => void }) {
+function TargetChat({
+  node,
+  onSendToForge,
+  speakers,
+  projectId,
+}: {
+  node: Node;
+  onSendToForge?: () => void;
+  speakers: ReadonlyMap<string, AgentLook>;
+  projectId: string | undefined;
+}) {
   const convo = useThreadConversation(node.id);
   const count = convo.messages.length;
   useEffect(() => {
@@ -288,7 +299,13 @@ function TargetChat({ node, onSendToForge }: { node: Node; onSendToForge?: () =>
         onSelect={convo.selectThread}
         onNew={convo.newThread}
       />
-      <ChatConversation node={node} convo={convo} onSendToForge={onSendToForge} />
+      <ChatConversation
+        node={node}
+        convo={convo}
+        onSendToForge={onSendToForge}
+        speakers={speakers}
+        {...(projectId === undefined ? {} : { projectId })}
+      />
     </>
   );
 }

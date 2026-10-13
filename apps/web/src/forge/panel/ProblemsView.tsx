@@ -4,6 +4,7 @@ import { fileIconColor } from '../../theme/constants';
 import { openFile } from '../editor/actions';
 import { useEditorStore } from '../editor/editor-store';
 import { nameOf, parentOf } from '../files/paths';
+import { FixWithAgentButton } from './FixWithAgentButton';
 import { useProblemsStore, type Problem, type ProblemSeverity } from './problems-store';
 
 const NONE: Problem[] = [];
@@ -43,7 +44,8 @@ const ICON: Record<ProblemSeverity, JSX.Element> = {
  * Problems (design §6.4): Monaco's markers for the open files, by file, errors first; a click
  * opens the file at the problem. In the theme (D328), as the Validation tab: per file a header
  * with the extension dot, the name, the folder in mono and a count chip, then one surface card with
- * a 36px row per problem, hairlines between, the source and place in mono.
+ * a 36px row per problem, hairlines between, the source and place in mono. D302: each row has
+ * "Fix with agent", which hands the problem to the chat's current node.
  */
 export function ProblemsView({ projectId }: { projectId: string }) {
   const problems = useProblemsStore((s) => s.byProject[projectId] ?? NONE);
@@ -83,12 +85,12 @@ export function ProblemsView({ projectId }: { projectId: string }) {
             {list.map((problem, index) => (
               <li
                 key={`${problem.line}:${problem.column}:${index}`}
-                className="border-t border-[var(--line)] first:border-t-0"
+                className="flex items-center gap-[8px] border-t border-[var(--line)] pr-[10px] first:border-t-0 hover:bg-[var(--hover)]"
               >
                 <button
                   type="button"
                   onClick={() => reveal(problem)}
-                  className="flex min-h-[36px] w-full cursor-pointer items-center gap-[10px] border-none bg-transparent px-[14px] py-[7px] text-left text-[12.5px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]"
+                  className="flex min-h-[36px] min-w-0 flex-1 cursor-pointer items-center gap-[10px] border-none bg-transparent py-[7px] pl-[14px] pr-0 text-left text-[12.5px] text-[var(--ink)] outline-none focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]"
                 >
                   {ICON[problem.severity]}
                   <span className="min-w-0 flex-1 whitespace-pre-wrap">{problem.message}</span>
@@ -97,6 +99,7 @@ export function ProblemsView({ projectId }: { projectId: string }) {
                     Col {problem.column}]
                   </span>
                 </button>
+                <FixWithAgentButton projectId={projectId} problem={problem} />
               </li>
             ))}
           </ul>

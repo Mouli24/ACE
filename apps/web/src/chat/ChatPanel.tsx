@@ -1,9 +1,10 @@
-import type { Node } from '@ace/contracts';
+import { rosterFor, type Node } from '@ace/contracts';
 import type { ReactNode } from 'react';
 
 import { useSelectionStore } from '../app/stores/selection';
+import { agentMap } from '../theme/agents';
 import { useWorkflowGraph } from '../workflows/hooks';
-import { ChatComposer } from './ChatComposer';
+import { ChatComposer, type ChatRosterEntry } from './ChatComposer';
 import { ChatConversation } from './ChatConversation';
 import { ChatThreadList } from './ChatThreadList';
 import { useChatSocket, useThreadConversation } from './useChat';
@@ -45,11 +46,18 @@ export function ChatPanel({ workflowId }: { workflowId: string }) {
     return <Empty>Direct chat is available on Agent and Model nodes (FR-CHAT-004).</Empty>;
   }
 
-  return <ChatForNode key={node.id} node={node} />;
+  return <ChatForNode key={node.id} node={node} nodes={graph.data?.nodes ?? []} />;
 }
 
-function ChatForNode({ node }: { node: Node }) {
+function ChatForNode({ node, nodes }: { node: Node; nodes: readonly Node[] }) {
   const convo = useThreadConversation(node.id);
+  // D302: `@handle` asks another node of the workflow here too, in this same session.
+  const looks = agentMap(nodes);
+  const roster: ChatRosterEntry[] = rosterFor(nodes).map((entry) => ({
+    ...entry,
+    letter: looks.get(entry.nodeId)?.letter ?? entry.name.slice(0, 1).toUpperCase(),
+    color: looks.get(entry.nodeId)?.color ?? '#ef6b3f',
+  }));
 
   return (
     <section
@@ -67,13 +75,16 @@ function ChatForNode({ node }: { node: Node }) {
       <ChatConversation
         node={node}
         convo={convo}
+        speakers={looks}
         composer={
           <ChatComposer
-            onSend={(content) => {
-              if (content.length > 0) convo.send(content);
+            onSend={(content, targetNodeId) => {
+              if (content.length > 0) convo.send(content, targetNodeId);
             }}
             disabled={convo.sending}
             placeholder="Message this agent…"
+            roster={roster}
+            mainNodeId={node.id}
           />
         }
       />

@@ -4,8 +4,12 @@ import { useEffect, useRef, type ReactNode } from 'react';
 
 import { api } from '../app/api';
 import { useNodeOverlay } from '../runs/run-store';
+import type { AgentLook } from '../theme/agents';
 import { fmt } from '../theme/constants';
 import { clockTime } from '../theme/format';
+import { Avatar } from '../theme/primitives';
+import { ChangesCardSlot } from './ChangesCardSlot';
+import { ChatActivity } from './ChatActivity';
 import {
   CHAT_NOTE_CLASS,
   CHAT_NOTE_HEAD_CLASS,
@@ -39,25 +43,39 @@ function ChatAvatar({ you }: { you: boolean }) {
   );
 }
 
-/** One theme message row: avatar, name and time, then the body (D335). */
+/**
+ * One theme message row: avatar, name and time, then the body (D335). D302: a reply another node
+ * gave in this conversation wears that node's avatar and name (`speaker`).
+ */
 function Row({
   you,
   name,
   at,
+  speaker,
   children,
 }: {
   you: boolean;
   name: string;
   /** Omitted for a reply still on its way: it has no time yet. */
   at?: string;
+  speaker?: AgentLook | undefined;
   children: ReactNode;
 }) {
   return (
     <div className="flex gap-[10px]">
-      <ChatAvatar you={you} />
+      {speaker === undefined ? (
+        <ChatAvatar you={you} />
+      ) : (
+        <Avatar letter={speaker.letter} color={speaker.color} size={26} fontSize={11} />
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
-          <span className="text-[12.5px] font-bold">{name}</span>
+          <span
+            className="text-[12.5px] font-bold"
+            {...(speaker === undefined ? {} : { 'data-testid': 'chat-speaker' })}
+          >
+            {name}
+          </span>
           {at !== undefined && (
             <span className="text-[10px] text-[var(--muted)]">{clockTime(at)}</span>
           )}
@@ -154,6 +172,8 @@ export function ChatConversation({
   convo,
   composer,
   onSendToForge,
+  speakers,
+  projectId,
 }: {
   node: Node;
   convo: Conversation;
@@ -161,7 +181,18 @@ export function ChatConversation({
   composer?: ReactNode;
   /** The meta line's "Send to Forge →" (the column only); absent, the chip is not drawn. */
   onSendToForge?: () => void;
+  /** D302: the workflow's agents by node id, to name a reply another node gave. */
+  speakers?: ReadonlyMap<string, AgentLook>;
+  /** The project, for a turn's Changes card (D300). */
+  projectId?: string;
 }) {
+  /** Another node that answered here (D302); undefined for the conversation's own node. */
+  const otherSpeaker = (speakerNodeId: string | undefined): AgentLook | undefined =>
+    speakerNodeId === undefined || speakerNodeId === node.id
+      ? undefined
+      : speakers?.get(speakerNodeId);
+  const replying = otherSpeaker(convo.replyingNodeId);
+  const replyName = replying?.name ?? node.name;
   const scroller = useRef<HTMLDivElement>(null);
   const run = useNodeOverlay(node.id);
   const running = WORKING.has(run.state);
@@ -206,9 +237,11 @@ export function ChatConversation({
 
         {convo.messages.map((message) => {
           const you = message.role === 'user';
+          const speaker = you ? undefined : otherSpeaker(message.speakerNodeId);
+          const name = you ? 'You' : (speaker?.name ?? node.name);
           return (
             <div key={message.id} data-testid={`chat-turn-${message.role}`}>
-              <Row you={you} name={you ? 'You' : node.name} at={message.at}>
+              <Row you={you} name={name} at={message.at} speaker={speaker}>
                 {message.error !== undefined ? (
                   <div
                     role="alert"
@@ -217,7 +250,7 @@ export function ChatConversation({
                     className={cn(CHAT_NOTE_CLASS, 'mt-1')}
                   >
                     <div className={CHAT_NOTE_HEAD_CLASS}>
-                      {node.name} could not answer · {message.error.code}
+                      {name} could not answer · {message.error.code}
                       {message.runId !== undefined && (
                         <span data-testid="chat-run-badge">· run</span>
                       )}
@@ -229,6 +262,10 @@ export function ChatConversation({
                     <Body content={message.content} />
                     {!you && <TurnMeta message={message} onSendToForge={onSendToForge} />}
                   </>
+                )}
+                {message.activity !== undefined && <ChatActivity items={message.activity} />}
+                {message.checkpointId !== undefined && projectId !== undefined && (
+                  <ChangesCardSlot projectId={projectId} checkpointId={message.checkpointId} />
                 )}
                 {message.verdicts.length > 0 && (
                   <div className="mt-2">
@@ -242,7 +279,7 @@ export function ChatConversation({
 
         {convo.streamingText.length > 0 && (
           <div aria-live="polite" data-testid="chat-streaming">
-            <Row you={false} name={node.name}>
+            <Row you={false} name={replyName} speaker={replying}>
               <Body content={[{ type: 'text', text: convo.streamingText }]} />
             </Row>
           </div>
@@ -265,7 +302,8 @@ export function ChatConversation({
             <span aria-hidden className="animate-[livePulse_1s_ease-in-out_infinite]">
               ●
             </span>
-            {node.name} is typing…
+            {convo.awaitingReply || convo.streamingText.length > 0 ? replyName : node.name} is
+            typing…
           </div>
         )}
 

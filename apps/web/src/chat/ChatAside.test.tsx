@@ -11,6 +11,7 @@ import { useWorkspaceStatus } from '../app/stores/workspace-status';
 import { setChatScenario } from '../mocks/handlers-round4';
 import { createNode } from '../nodes/factory';
 import { ChatAside } from './ChatAside';
+import { useComposerChips } from './composer-chips';
 import { useChatSessions } from './session-store';
 import { db, installChatMockServer, queryClient, renderChat, seedAgentNode } from './test-support';
 
@@ -44,7 +45,7 @@ describe('FR-CHAT-004 the Chat column', () => {
     expect(tab).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('heading', { name: 'Team chat' })).toBeInTheDocument();
     expect(
-      screen.getByText(/Select an Agent node on the Canvas, or mention one/),
+      screen.getByText(/Select an Agent node on the Canvas, or pick one above/),
     ).toBeInTheDocument();
     expect(screen.queryByTestId('chat-conversation')).toBeNull();
     // nobody to send to yet
@@ -116,79 +117,6 @@ describe('FR-CHAT-004 the Chat column', () => {
     renderChat(<ChatAside workflowId={workflowId} />);
     expect(await screen.findByText(/Select an Agent node on the Canvas/)).toBeInTheDocument();
     expect(screen.queryByTestId('chat-conversation')).toBeNull();
-  });
-});
-
-describe('FR-CHAT-004 @mentions', () => {
-  it('typing @Dr opens a picker and Enter picks Draft', async () => {
-    const user = userEvent.setup();
-    const { workflowId, node } = seedAgentNode({ name: 'Draft' });
-    useSelectionStore.getState().clear();
-    renderChat(<ChatAside workflowId={workflowId} />);
-    await screen.findByTestId(`chat-mention-${node.id}`);
-    const input = screen.getByTestId('chat-input');
-    await user.type(input, '@Dr');
-    const picker = await screen.findByTestId('chat-mention-picker');
-    expect(picker).toHaveTextContent('Draft');
-    expect(picker).toHaveTextContent('@draft');
-    await user.keyboard('{Enter}');
-    expect(usePanelsStore.getState().chatNodeId).toBe(node.id);
-    expect(await screen.findByTestId('chat-conversation')).toBeInTheDocument();
-    // the mention is completed in the box, ready for the message
-    expect(screen.getByTestId('chat-input')).toHaveValue('@Draft ');
-  });
-
-  it('sends "@Name message" to that node — without the mention — from the intro', async () => {
-    const user = userEvent.setup();
-    const { workflowId, writer } = seedTwo();
-    renderChat(<ChatAside workflowId={workflowId} />);
-    await screen.findByTestId(`chat-mention-${writer.id}`);
-
-    await user.type(screen.getByTestId('chat-input'), '@Writer write a haiku');
-    await user.click(screen.getByTestId('chat-send'));
-
-    await waitFor(() => expect(conversation()).toHaveAttribute('data-node-id', writer.id));
-    await waitFor(() => expect(conversation()).toHaveTextContent('You said: write a haiku'));
-    expect(conversation()).not.toHaveTextContent('@Writer write');
-  });
-
-  it('routes a mention to another node while one is open, and switches to it', async () => {
-    const user = userEvent.setup();
-    const { workflowId, writer, critic } = seedTwo();
-    usePanelsStore.getState().chatWith(writer.id);
-    renderChat(<ChatAside workflowId={workflowId} />);
-    await screen.findByTestId('chat-conversation');
-
-    await user.type(screen.getByTestId('chat-input'), '@Critic review it');
-    await user.keyboard('{Escape}');
-    await user.keyboard('{Enter}');
-
-    await waitFor(() => expect(usePanelsStore.getState().chatNodeId).toBe(critic.id));
-    await waitFor(() => expect(conversation()).toHaveTextContent('You said: review it'));
-    // nothing reached the Writer
-    expect(await api().listNodeChatThreads(writer.id)).toEqual([]);
-  });
-});
-
-describe('D285 the chat and the Canvas agree on the node in focus', () => {
-  it('after an @mention moves the chat, clicking the card that was selected brings its chat back', async () => {
-    const user = userEvent.setup();
-    const { workflowId, writer, critic } = seedTwo();
-    renderChat(<ChatAside workflowId={workflowId} />);
-
-    useSelectionStore.getState().setSelection([critic.id], []);
-    await waitFor(() => expect(conversation()).toHaveAttribute('data-node-id', critic.id));
-
-    await user.type(screen.getByTestId('chat-input'), '@Writer hi');
-    await user.keyboard('{Escape}');
-    await user.keyboard('{Enter}');
-    await waitFor(() => expect(conversation()).toHaveAttribute('data-node-id', writer.id));
-    // the Canvas selection followed the chat
-    expect(useSelectionStore.getState().focusedNodeId).toBe(writer.id);
-
-    // what a click on the Critic's card does
-    useSelectionStore.getState().setSelection([critic.id], []);
-    await waitFor(() => expect(conversation()).toHaveAttribute('data-node-id', critic.id));
   });
 });
 
@@ -499,5 +427,194 @@ describe('D330 the footer’s message count', () => {
     await waitFor(() => expect(useWorkspaceStatus.getState().messageCount).toBe(2));
     view.unmount();
     expect(useWorkspaceStatus.getState().messageCount).toBeNull();
+  });
+});
+
+describe('D302 @handle brings another node into the conversation', () => {
+  it('typing @cr opens a picker; Enter completes @critic and the chat stays where it was', async () => {
+    const user = userEvent.setup();
+    const { workflowId, writer, critic } = seedTwo();
+    usePanelsStore.getState().chatWith(writer.id);
+    renderChat(<ChatAside workflowId={workflowId} />);
+    await screen.findByTestId('chat-conversation');
+
+    await user.type(screen.getByTestId('chat-input'), 'ask @cr');
+    const picker = await screen.findByTestId('chat-mention-picker');
+    expect(picker).toHaveTextContent('Critic');
+    expect(picker).toHaveTextContent('@critic');
+    expect(within(picker).getByTestId(`chat-mention-option-${critic.id}`)).toBeInTheDocument();
+    await user.keyboard('{Enter}');
+
+    expect(screen.getByTestId('chat-input')).toHaveValue('ask @critic ');
+    expect(screen.queryByTestId('chat-mention-picker')).toBeNull();
+    // no session switch: the Writer is still the conversation's main node
+    expect(usePanelsStore.getState().chatNodeId).toBe(writer.id);
+    expect(conversation()).toHaveAttribute('data-node-id', writer.id);
+  });
+
+  it('says who it goes to, sends it with targetNodeId in the same thread, and names the speaker', async () => {
+    const user = userEvent.setup();
+    const { workflowId, writer, critic } = seedTwo();
+    usePanelsStore.getState().chatWith(writer.id);
+    renderChat(<ChatAside workflowId={workflowId} />);
+    await screen.findByTestId('chat-conversation');
+
+    await user.type(screen.getByTestId('chat-input'), '@critic review it');
+    expect(screen.getByTestId('chat-send-preview')).toHaveTextContent('to Critic');
+    await user.keyboard('{Enter}');
+
+    const reply = await screen.findByTestId('chat-turn-agent', {}, { timeout: 3000 });
+    await waitFor(() => expect(reply).toHaveTextContent('You said: @critic review it'));
+    // the speaker is the Critic, by name and avatar, in the Writer's conversation
+    expect(within(reply).getByTestId('chat-speaker')).toHaveTextContent('Critic');
+    expect(reply).toHaveTextContent(/^CCritic/);
+    expect(usePanelsStore.getState().chatNodeId).toBe(writer.id);
+    expect(conversation()).toHaveAttribute('data-node-id', writer.id);
+    // one thread, the Writer's; the mention stays in what was said
+    const [thread] = await api().listNodeChatThreads(writer.id);
+    const detail = await api().getChatThread(thread!.id);
+    expect(detail.messages.map((m) => m.role)).toEqual(['user', 'agent']);
+    expect(detail.messages[1]?.speakerNodeId).toBe(critic.id);
+    expect(await api().listNodeChatThreads(critic.id)).toEqual([]);
+  });
+
+  it('a plain message previews the main node', async () => {
+    const user = userEvent.setup();
+    const { workflowId, writer } = seedTwo();
+    usePanelsStore.getState().chatWith(writer.id);
+    renderChat(<ChatAside workflowId={workflowId} />);
+    await screen.findByTestId('chat-conversation');
+    await user.type(screen.getByTestId('chat-input'), 'hello');
+    expect(screen.getByTestId('chat-send-preview')).toHaveTextContent('to Writer');
+  });
+
+  it('an unknown handle disables Send and says why', async () => {
+    const user = userEvent.setup();
+    const { workflowId, writer } = seedTwo();
+    usePanelsStore.getState().chatWith(writer.id);
+    renderChat(<ChatAside workflowId={workflowId} />);
+    await screen.findByTestId('chat-conversation');
+
+    await user.type(screen.getByTestId('chat-input'), '@nobody hi');
+    expect(screen.getByTestId('chat-target-error')).toHaveTextContent('no node is @nobody');
+    expect(screen.getByTestId('chat-send')).toBeDisabled();
+    await user.keyboard('{Enter}');
+    expect(await api().listNodeChatThreads(writer.id)).toEqual([]);
+  });
+});
+
+describe('D302 what an agent did, under its reply', () => {
+  it('shows the activity collapsed as counts, and expands to the items', async () => {
+    const user = userEvent.setup();
+    const { workflowId, node } = seedAgentNode();
+    const at = new Date().toISOString();
+    db.addChatThread({ id: THREAD, nodeId: node.id, title: 'fix', createdAt: at, updatedAt: at });
+    db.addChatMessage({ ...userTurn('fix the bug'), id: '01J0PERS0N0000000000000000' });
+    db.addChatMessage({
+      id: '01J0AGENT00000000000000000',
+      threadId: THREAD,
+      role: 'agent',
+      content: [{ type: 'text', text: 'Fixed.' }],
+      verdicts: [],
+      at,
+      speakerNodeId: node.id,
+      activity: [
+        { kind: 'read', tool: 'read_file', path: 'src/a.ts', summary: 'Read src/a.ts' },
+        { kind: 'edit', tool: 'edit_file', path: 'src/a.ts', summary: 'Edited src/a.ts' },
+        { kind: 'edit', tool: 'edit_file', path: 'src/b.ts', summary: 'Edited src/b.ts' },
+      ],
+    });
+    renderChat(<ChatAside workflowId={workflowId} />);
+
+    const toggle = await screen.findByRole('button', { name: /What it did: 2 edits, 1 read/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Edited src/b.ts')).toBeNull();
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const items = within(screen.getByTestId('chat-activity-list')).getAllByRole('listitem');
+    expect(items.map((item) => item.textContent)).toEqual([
+      expect.stringContaining('Read src/a.ts'),
+      expect.stringContaining('Edited src/a.ts'),
+      expect.stringContaining('Edited src/b.ts'),
+    ]);
+    // a reply its own node gave keeps the node's mark, not a second avatar
+    expect(screen.getByTestId('chat-turn-agent')).toHaveTextContent(/^✳Writer/);
+  });
+
+  it('renders nothing yet for a checkpoint (Track A’s Changes card plugs in at the merge)', async () => {
+    const { workflowId, node } = seedAgentNode();
+    const at = new Date().toISOString();
+    db.addChatThread({ id: THREAD, nodeId: node.id, title: 'fix', createdAt: at, updatedAt: at });
+    db.addChatMessage({
+      id: '01J0AGENT00000000000000000',
+      threadId: THREAD,
+      role: 'agent',
+      content: [{ type: 'text', text: 'Changed two files.' }],
+      verdicts: [],
+      at,
+      checkpointId: '01CHECKPNT0000000000000000',
+    });
+    renderChat(<ChatAside workflowId={workflowId} />);
+    await waitFor(() => expect(conversation()).toHaveTextContent('Changed two files.'));
+    expect(screen.queryByTestId('chat-changes-card')).toBeNull();
+  });
+});
+
+describe('D302 Ask agent chips in the composer', () => {
+  beforeEach(() => useComposerChips.getState().reset());
+
+  it('shows each chip and sends it as a code part with its path and lines', async () => {
+    const user = userEvent.setup();
+    const { workflowId, node } = seedAgentNode();
+    renderChat(<ChatAside workflowId={workflowId} />);
+    await waitFor(() => expect(conversation()).toHaveAttribute('data-node-id', node.id));
+
+    act(() =>
+      useComposerChips.getState().add({
+        path: 'src/a.ts',
+        startLine: 3,
+        endLine: 4,
+        text: 'const a = 1;\nconst b = 2;',
+        language: 'typescript',
+      }),
+    );
+    expect(screen.getByTestId('chat-chips')).toHaveTextContent('src/a.ts:L3-L4');
+    await waitFor(() => expect(screen.getByTestId('chat-input')).toHaveFocus());
+
+    await say(user, 'why does this fail?');
+    await waitFor(async () => {
+      const [thread] = await api().listNodeChatThreads(node.id);
+      const detail = await api().getChatThread(thread!.id);
+      expect(detail.messages[0]?.content).toEqual([
+        { type: 'text', text: 'why does this fail?' },
+        {
+          type: 'code',
+          language: 'typescript',
+          text: 'const a = 1;\nconst b = 2;',
+          path: 'src/a.ts',
+          startLine: 3,
+          endLine: 4,
+        },
+      ]);
+    });
+    expect(screen.queryByTestId('chat-chips')).toBeNull();
+    expect(useComposerChips.getState().chips).toEqual([]);
+  });
+
+  it('removes a chip with its ✕, and a draft fills the box once', async () => {
+    const user = userEvent.setup();
+    const { workflowId, node } = seedAgentNode();
+    renderChat(<ChatAside workflowId={workflowId} />);
+    await waitFor(() => expect(conversation()).toHaveAttribute('data-node-id', node.id));
+
+    act(() => {
+      useComposerChips.getState().add({ path: 'README.md', language: 'markdown' });
+      useComposerChips.getState().prefill('Fix this problem: x');
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-input')).toHaveValue('Fix this problem: x'),
+    );
+    await user.click(screen.getByRole('button', { name: 'Remove README.md' }));
+    expect(screen.queryByTestId('chat-chips')).toBeNull();
   });
 });

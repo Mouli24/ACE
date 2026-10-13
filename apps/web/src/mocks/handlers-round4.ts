@@ -604,6 +604,23 @@ export function createRound4Handlers(db: MockDb): HttpHandler[] {
           );
         }
 
+        // D302: another agent or model node of the same workflow may answer, in this thread.
+        const targetId = parsed.data.targetNodeId;
+        const speaker = targetId === undefined ? found : findNode(db, targetId);
+        if (
+          targetId !== undefined &&
+          (speaker === undefined ||
+            speaker.workflowId !== found?.workflowId ||
+            (speaker.kind !== 'agent' && speaker.kind !== 'model'))
+        ) {
+          return error(
+            400,
+            'invalid_config',
+            'validation_failed',
+            `Node ${targetId} cannot answer in this chat.`,
+          );
+        }
+
         // Open or reuse the thread; store the user turn, whose id the client echoes while it waits.
         const threadId = parsed.data.threadId ?? openThread(db, nodeId, parsed.data.content);
         if (parsed.data.threadId !== undefined && db.getChatThread(threadId) === undefined) {
@@ -619,7 +636,7 @@ export function createRound4Handlers(db: MockDb): HttpHandler[] {
         };
         db.addChatMessage(userMessage);
 
-        streamReply(db, threadId, found, parsed.data.content);
+        streamReply(db, threadId, speaker, parsed.data.content);
         return HttpResponse.json({ threadId, messageId: userMessage.id }, { status: 202 });
       }),
     ),
@@ -702,6 +719,7 @@ function streamReply(db: MockDb, threadId: string, node: Node | undefined, conte
       verdicts: [],
       at: new Date().toISOString(),
       error: failure,
+      ...(node === undefined ? {} : { speakerNodeId: node.id }),
     };
     startPlayback(threadId, [
       {
@@ -749,6 +767,7 @@ function streamReply(db: MockDb, threadId: string, node: Node | undefined, conte
       content: [{ type: 'text', text: blockedChatReply(reason) }],
       verdicts: [verdict],
       at: new Date().toISOString(),
+      ...(node === undefined ? {} : { speakerNodeId: node.id }),
     };
     startPlayback(threadId, [
       {
@@ -782,6 +801,7 @@ function streamReply(db: MockDb, threadId: string, node: Node | undefined, conte
       priceTableVersion: 'mock-v1',
     },
     at: new Date().toISOString(),
+    ...(node === undefined ? {} : { speakerNodeId: node.id }),
   };
 
   startPlayback(threadId, [

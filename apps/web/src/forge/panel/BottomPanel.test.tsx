@@ -60,7 +60,9 @@ describe('D299 D334 Forge’s bottom panel in the theme', () => {
     renderWithQuery(<BottomPanel projectId={P} />);
     const card = screen.getByRole('list', { name: 'Problems in src/a.ts' });
     expect(card).toHaveClass('rounded-[12px]', 'bg-[var(--surface)]');
-    expect(within(card).getAllByRole('button')).toHaveLength(3);
+    // one row per problem, each opening it; D302 gives every row a Fix with agent beside it
+    expect(within(card).getAllByRole('button', { name: /\[Ln/ })).toHaveLength(3);
+    expect(within(card).getAllByRole('button', { name: 'Fix with agent' })).toHaveLength(3);
     expect(within(card).getByRole('img', { name: 'Error' })).toHaveClass('text-[#c94c27]');
     expect(within(card).getByRole('img', { name: 'Warning' })).toHaveClass('text-[#e8572e]');
     expect(within(card).getByRole('img', { name: 'Info' })).toHaveClass('text-[var(--muted)]');
