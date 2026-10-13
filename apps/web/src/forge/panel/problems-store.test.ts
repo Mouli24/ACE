@@ -267,4 +267,29 @@ describe('smoke S-2: one error seen live and by the checks counts once', () => {
     expect(useProblemsStore.getState().byProject[P]).toHaveLength(2);
     expect(useProblemsStore.getState().checks[P]?.problems).toHaveLength(2);
   });
+
+  // one live marker stands for one check entry at most: tsc's second report is still counted
+  it.each([
+    ['two same checks at one place, one marker: tsc said 2', 1, 2, 2],
+    ['two same checks, two markers', 2, 2, 2],
+    ['one check, two markers', 2, 1, 2],
+    ['one check, one marker', 1, 1, 1],
+    ['three same checks, one marker', 1, 3, 3],
+  ])('matches one to one: %s', (_name, markerCount, checkCount, errors) => {
+    useProblemsStore.setState({
+      byProject: { [P]: Array.from({ length: markerCount }, () => marker()) },
+    });
+    setChecks(P, {
+      status: 'done',
+      command: 'tsc --noEmit -p .',
+      startedAt: '2026-10-13T10:00:00.000Z',
+      exitCode: 2,
+      problems: Array.from({ length: checkCount }, () => check()),
+    });
+    expect(problemCounts(useProblemsStore.getState(), P)).toEqual({
+      errors,
+      warnings: 0,
+      total: errors,
+    });
+  });
 });
