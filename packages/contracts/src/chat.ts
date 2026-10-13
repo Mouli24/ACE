@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
+import { closestHandles, parseAddressing, type RosterEntry } from './domain.js';
 import { PartSchema } from './envelope.js';
-import { IdSchema, TimestampSchema } from './graph.js';
+import { IdSchema, TimestampSchema, type Id } from './graph.js';
 import { ChatVerdictSchema } from './guardrails.js';
 import { NodeErrorSchema, RunSchema, UsageSchema } from './runs.js';
 
@@ -122,6 +123,25 @@ export const ChatRoleSchema = z.enum(CHAT_ROLES);
 export type ChatRole = z.infer<typeof ChatRoleSchema>;
 
 /**
+ * D302: what an agent did in the project during one chat turn — a CLI's own `activity` or an API
+ * model's project tool call. Only the tool, the path and a short summary: never a file's contents
+ * (design §7), which is why the summary is capped and the object is strict.
+ */
+export const ACTIVITY_KINDS = ['read', 'write', 'edit', 'command', 'search', 'other'] as const;
+export const ActivityKindSchema = z.enum(ACTIVITY_KINDS);
+export type ActivityKind = z.infer<typeof ActivityKindSchema>;
+export const ACTIVITY_SUMMARY_MAX = 200;
+
+export const ActivityItemSchema = z.strictObject({
+  kind: ActivityKindSchema,
+  tool: z.string().min(1),
+  /** Project-relative where it could be made so. */
+  path: z.string().min(1).optional(),
+  summary: z.string().max(ACTIVITY_SUMMARY_MAX),
+});
+export type ActivityItem = z.infer<typeof ActivityItemSchema>;
+
+/**
  * One turn of a direct chat. `verdicts` are `ChatVerdict`s — the same verdicts, without a
  * `nodeRunId`, because the thread touches no node run (FR-CHAT-005). A reply the output point
  * blocked arrives as content `[blocked by guardrail: <reason>]` with the verdicts that say why
@@ -148,6 +168,15 @@ export const ChatMessageSchema = z.strictObject({
   error: NodeErrorSchema.optional(),
   /** The model that actually answered, as the provider reported it (an alias resolved). */
   modelId: z.string().min(1).optional(),
+  /**
+   * D302: the node that replied. The thread's `nodeId` stays the conversation's main node; an
+   * `@handle` in the user turn brings another node of the workflow in, and its reply says so here.
+   */
+  speakerNodeId: IdSchema.optional(),
+  /** D302: what the turn did in the project folder, in order. Absent when it did nothing. */
+  activity: z.array(ActivityItemSchema).optional(),
+  /** D302/D300: the checkpoint of the files this turn changed; absent when it changed none. */
+  checkpointId: IdSchema.optional(),
 });
 export type ChatMessage = z.infer<typeof ChatMessageSchema>;
 
@@ -158,8 +187,57 @@ export type ChatMessage = z.infer<typeof ChatMessageSchema>;
 export const ChatRequestSchema = z.strictObject({
   threadId: IdSchema.optional(),
   content: z.array(PartSchema).min(1),
+  /**
+   * D302: the node that answers this turn — an agent or model node of the same workflow, named by
+   * an `@handle` in the message (`resolveChatTarget`). Absent: the thread's own node answers.
+   */
+  targetNodeId: IdSchema.optional(),
 });
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
+
+/** What `resolveChatTarget` decided: the node to send to, or why the message cannot go. */
+export type ChatTarget =
+  { targetNodeId: Id; error?: undefined } | { targetNodeId?: undefined; error: string };
+
+/**
+ * D302: who a chat message is for. Domain's parser reads the text (D324), but chat honours only
+ * its `@handle` spans: a plain name stays a word. No handle sends to the conversation's main node;
+ * exactly one node sends to it; `@all`, two different nodes or a handle no node has is an error,
+ * in Domain's words where they fit, and nothing is sent. The mention stays in the message: it is
+ * part of what the person said, and the prompt shows it.
+ */
+export function resolveChatTarget(
+  text: string,
+  roster: readonly RosterEntry[],
+  mainNodeId: Id,
+): ChatTarget {
+  const parsed = parseAddressing(text, roster);
+  const handleError = parsed.errors.find(
+    (error) => error.code === 'unknown_handle' || error.code === 'no_brain',
+  );
+  if (handleError !== undefined) {
+    if (handleError.code === 'unknown_handle') {
+      const near = handleError.suggestions ?? closestHandles(handleError.handle ?? '', roster);
+      const hint = near.length === 0 ? '' : ` — did you mean ${near.join(' or ')}?`;
+      return { error: `${handleError.message}${hint}` };
+    }
+    return { error: handleError.message };
+  }
+  if (parsed.all) {
+    return { error: '@all is for team runs — in a chat, ask one node at a time' };
+  }
+  const targets: Id[] = [];
+  for (const span of parsed.spans) {
+    if (span.via !== 'handle' || span.nodeId === undefined) continue;
+    if (!targets.includes(span.nodeId)) targets.push(span.nodeId);
+  }
+  const [only, ...others] = targets;
+  if (only === undefined) return { targetNodeId: mainNodeId };
+  if (others.length > 0) {
+    return { error: 'a chat message goes to one node at a time — mention just one @handle' };
+  }
+  return { targetNodeId: only };
+}
 
 /**
  * `POST /nodes/:id/chat` → 202 `{ threadId, messageId }` (§2.3). The answer comes back over the

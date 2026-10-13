@@ -30,7 +30,16 @@ const mediaPart = <T extends 'image' | 'audio' | 'video' | 'file'>(type: T) =>
 export const PartSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('text'), text: z.string() }),
   z.strictObject({ type: z.literal('json'), value: z.unknown() }),
-  z.strictObject({ type: z.literal('code'), language: z.string().min(1), text: z.string() }),
+  z.strictObject({
+    type: z.literal('code'),
+    language: z.string().min(1),
+    text: z.string(),
+    /** D302: the project file the code is from, project-relative — a chip from the editor. */
+    path: z.string().min(1).optional(),
+    /** D302: the 1-based lines of `path` the text spans. */
+    startLine: z.number().int().min(1).optional(),
+    endLine: z.number().int().min(1).optional(),
+  }),
   mediaPart('image'),
   mediaPart('audio'),
   mediaPart('video'),
