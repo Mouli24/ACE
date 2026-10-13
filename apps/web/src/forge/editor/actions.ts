@@ -3,6 +3,7 @@ import { AceApiError } from '@ace/sdk';
 import type { QueryClient } from '@tanstack/react-query';
 
 import { api } from '../../app/api';
+import { useReviewStore } from '../changes/review-store';
 import { useExplorerStore } from '../explorer/explorer-store';
 import { fileContentQuery } from '../files/hooks';
 import { fileKeys } from '../files/keys';
@@ -19,7 +20,11 @@ export const dirtyHandler =
   (dirty: boolean): void =>
     useEditorStore.getState().setDirty(projectId, path, dirty);
 
-/** Open a file in Forge; a preview replaces the last preview, and the Explorer reveals the file. */
+/**
+ * Open a file in Forge; a preview replaces the last preview, and the Explorer reveals the file. A
+ * review showing gives the area back, even for the file already active (fix A-M12): the Explorer,
+ * Quick Open, Search results and Problems rows all choose a file through here.
+ */
 export function openFile(
   projectId: string,
   path: string,
@@ -30,6 +35,7 @@ export function openFile(
     options.preview === true && before.files[path] === undefined
       ? replaceablePreview(before, path)
       : undefined;
+  useReviewStore.getState().deactivate(projectId);
   useEditorStore.getState().open(projectId, path, options);
   if (replaced !== undefined) disposeModel(projectId, replaced);
   const explorer = useExplorerStore.getState();
