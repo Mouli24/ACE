@@ -343,6 +343,7 @@ export function createAceClient(options: AceClientOptions) {
     responseSchema: { parse(value: unknown): T },
     body?: { schema: z.ZodType; value: unknown },
     query?: Query,
+    signal?: AbortSignal,
   ): Promise<T> {
     let payload: string | undefined;
     if (body) {
@@ -354,9 +355,11 @@ export function createAceClient(options: AceClientOptions) {
     const response = await send(
       method,
       path,
-      payload === undefined
-        ? { accept: 'application/json' }
-        : { accept: 'application/json', contentType: 'application/json', body: payload },
+      {
+        accept: 'application/json',
+        ...(payload === undefined ? {} : { contentType: 'application/json', body: payload }),
+        ...(signal === undefined ? {} : { signal }),
+      },
       query,
     );
     return parseJson(response, path, responseSchema);
@@ -847,13 +850,22 @@ export function createAceClient(options: AceClientOptions) {
       request('GET', `/projects/${projectId}/files/status`, RepoStatusSchema),
     /**
      * Forge's Search (D299 Phase 4): a POST with the request as its body. A query the contract
-     * refuses (an invalid or runaway regex) is refused here, before anything is sent.
+     * refuses (an invalid or runaway regex) is refused here, before anything is sent. Aborting
+     * `signal` cancels the request, and the engine then stops the search (fix C1).
      */
-    searchFiles: (projectId: Id, body: FileSearchRequest): Promise<FileSearchResult> =>
-      request('POST', `/projects/${projectId}/files/search`, FileSearchResultSchema, {
-        schema: FileSearchRequestSchema,
-        value: body,
-      }),
+    searchFiles: (
+      projectId: Id,
+      body: FileSearchRequest,
+      searchOptions: { signal?: AbortSignal } = {},
+    ): Promise<FileSearchResult> =>
+      request(
+        'POST',
+        `/projects/${projectId}/files/search`,
+        FileSearchResultSchema,
+        { schema: FileSearchRequestSchema, value: body },
+        undefined,
+        searchOptions.signal,
+      ),
     /** The project's TS/JS sources for cross-file IntelliSense (D299 Phase 4), capped. */
     projectSources: (projectId: Id): Promise<SourcesResult> =>
       request('GET', `/projects/${projectId}/files/sources`, SourcesResultSchema),

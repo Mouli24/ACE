@@ -184,6 +184,8 @@ export const SEARCH_MAX_RESULTS = 2_000;
 export const SEARCH_QUERY_MAX = 1_000;
 /** The most of one line a match's preview carries. */
 export const SEARCH_PREVIEW_MAX = 240;
+/** A regex search is stopped after this long, wherever it is, and answers what it found. */
+export const SEARCH_REGEX_DEADLINE_MS = 5_000;
 /** Search skips a file larger than this, as Forge's editor does (§6.1). */
 export const SEARCH_FILE_MAX_BYTES = FILE_EDIT_MAX_BYTES;
 
@@ -314,6 +316,11 @@ export const FileSearchResultSchema = z.strictObject({
   truncated: z.boolean(),
   /** How many files were read and searched. */
   searchedFiles: z.number().int().min(0),
+  /**
+   * The search hit its time limit — a regex search's hard 5 s, run in a worker the engine ends
+   * then — and these are the results found before it (D299 Phase 4 fix C1). Absent reads as false.
+   */
+  timedOut: z.boolean().optional(),
 });
 export type FileSearchResult = z.infer<typeof FileSearchResultSchema>;
 

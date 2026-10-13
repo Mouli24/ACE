@@ -145,7 +145,8 @@ describe('D299 FR-GIT-003 the project file routes', () => {
     const response = await send(app, 'POST', `${base()}/search`, request);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(FOUND);
-    expect(files.calls).toEqual([['search', FOLDER, request]]);
+    // the request's own signal goes along, so a client that leaves stops the search (fix C1)
+    expect(files.calls).toEqual([['search', FOLDER, request, expect.any(AbortSignal)]]);
   });
 
   it('D299 Phase 4 refuses a search the contract refuses before the files are touched', async () => {
