@@ -175,6 +175,172 @@ export const FileChangedDetailsSchema = z.object({ currentVersion: FileVersionSc
 export type FileChangedDetails = z.infer<typeof FileChangedDetailsSchema>;
 
 /* -------------------------------------------------------------------------- */
+/* Search and sources: Forge Phase 4 (D299, design §6.1, §6.2, §6.4)           */
+/* -------------------------------------------------------------------------- */
+
+/** `POST /files/search` stops at this many matches and says so with `truncated`. */
+export const SEARCH_MAX_RESULTS = 2_000;
+/** The longest query, literal or regex; a longer pattern is refused before it compiles. */
+export const SEARCH_QUERY_MAX = 1_000;
+/** The most of one line a match's preview carries. */
+export const SEARCH_PREVIEW_MAX = 240;
+/** Search skips a file larger than this, as Forge's editor does (§6.1). */
+export const SEARCH_FILE_MAX_BYTES = FILE_EDIT_MAX_BYTES;
+
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** `*`, `+` or `{n,}` / `{n,m}` at `index`: a quantifier that repeats a variable number of times. */
+const repeatsAt = (pattern: string, index: number): boolean => {
+  const char = pattern[index];
+  return (
+    char === '*' || char === '+' || (char === '{' && /^\{\d+,\d*\}/.test(pattern.slice(index)))
+  );
+};
+
+/**
+ * A repeated group that itself holds a repetition — `(a+)+`, `(\w*)*`, `(x{2,})+` — is the classic
+ * catastrophic-backtracking shape (ReDoS). One line can stall the engine on it, which no per-file
+ * deadline can interrupt, so such a pattern is refused before it runs.
+ */
+function hasNestedQuantifier(pattern: string): boolean {
+  /** Per open group: whether a repetition appeared inside it. */
+  const stack: boolean[] = [];
+  let inClass = false;
+  for (let i = 0; i < pattern.length; i += 1) {
+    const char = pattern[i];
+    if (char === '\\') {
+      i += 1;
+      continue;
+    }
+    if (inClass) {
+      if (char === ']') inClass = false;
+      continue;
+    }
+    if (char === '[') inClass = true;
+    else if (char === '(') stack.push(false);
+    else if (char === ')') {
+      const inner = stack.pop() ?? false;
+      if (inner && repeatsAt(pattern, i + 1)) return true;
+      if (inner && stack.length > 0) stack[stack.length - 1] = true;
+    } else if (stack.length > 0 && repeatsAt(pattern, i)) {
+      stack[stack.length - 1] = true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Why a search query cannot run, or `undefined` when it can. Shared by the request schema (the
+ * engine answers 400 `validation_failed` with this message) and by Forge's Search view, which says
+ * it inline before sending anything.
+ */
+export function searchQueryProblem(query: string, regex: boolean | undefined): string | undefined {
+  if (query.length > SEARCH_QUERY_MAX) return `A search is at most ${SEARCH_QUERY_MAX} characters.`;
+  if (regex !== true) return undefined;
+  try {
+    new RegExp(query);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return `Not a valid regular expression: ${reason}`;
+  }
+  if (hasNestedQuantifier(query)) {
+    return 'This pattern repeats a group that itself repeats, which can take too long. Simplify it.';
+  }
+  return undefined;
+}
+
+/**
+ * The RegExp a search runs, global and per line: the query as a pattern or as literal text,
+ * case-insensitive unless `matchCase`, and wrapped in word boundaries for `wholeWord`. Callers check
+ * {@link searchQueryProblem} first.
+ */
+export function searchPattern(request: {
+  query: string;
+  regex?: boolean | undefined;
+  matchCase?: boolean | undefined;
+  wholeWord?: boolean | undefined;
+}): RegExp {
+  const body = request.regex === true ? request.query : escapeRegExp(request.query);
+  const source = request.wholeWord === true ? `\\b(?:${body})\\b` : body;
+  return new RegExp(source, request.matchCase === true ? 'g' : 'gi');
+}
+
+/** A comma-separated list of globs, as VS Code's "files to include" / "files to exclude" take. */
+const GlobListSchema = z.string().max(1_000);
+
+/** `POST /projects/:id/files/search` — a body, because a regex is not at home in a query string. */
+export const FileSearchRequestSchema = z
+  .strictObject({
+    query: z.string().min(1).max(SEARCH_QUERY_MAX),
+    regex: z.boolean().optional(),
+    matchCase: z.boolean().optional(),
+    wholeWord: z.boolean().optional(),
+    /** Only files matching one of these globs, in gitignore syntax (`src`, `*.ts`, `lib/*.js`). */
+    include: GlobListSchema.optional(),
+    /** Files matching one of these globs are left out. */
+    exclude: GlobListSchema.optional(),
+    maxResults: z.number().int().min(1).max(SEARCH_MAX_RESULTS).optional(),
+  })
+  .superRefine((request, context) => {
+    const problem = searchQueryProblem(request.query, request.regex);
+    if (problem !== undefined)
+      context.addIssue({ code: 'custom', path: ['query'], message: problem });
+  });
+export type FileSearchRequest = z.infer<typeof FileSearchRequestSchema>;
+
+export const FileSearchMatchSchema = z.strictObject({
+  /** 1-based, as the editor counts. */
+  line: z.number().int().min(1),
+  /** 1-based, in UTF-16 code units, as Monaco counts. */
+  column: z.number().int().min(1),
+  /** The line around the match, at most {@link SEARCH_PREVIEW_MAX} characters. */
+  preview: z.string().max(SEARCH_PREVIEW_MAX),
+  /** Where the match starts inside `preview` (0-based), for highlighting. */
+  previewOffset: z.number().int().min(0),
+  /** The match's length in UTF-16 code units. */
+  length: z.number().int().min(0),
+});
+export type FileSearchMatch = z.infer<typeof FileSearchMatchSchema>;
+
+export const FileSearchFileSchema = z.strictObject({
+  path: ProjectPathSchema,
+  matches: z.array(FileSearchMatchSchema),
+});
+export type FileSearchFile = z.infer<typeof FileSearchFileSchema>;
+
+export const FileSearchResultSchema = z.strictObject({
+  files: z.array(FileSearchFileSchema),
+  /** The search stopped early: at `maxResults`, at the file list's cap, or at a time limit. */
+  truncated: z.boolean(),
+  /** How many files were read and searched. */
+  searchedFiles: z.number().int().min(0),
+});
+export type FileSearchResult = z.infer<typeof FileSearchResultSchema>;
+
+/** `GET /files/sources` reads at most this many files… */
+export const SOURCES_MAX_FILES = 1_500;
+/** …and at most this many bytes of them in all (design §6.2, §14). */
+export const SOURCES_MAX_BYTES = 2 * 1024 * 1024;
+/** The extensions cross-file IntelliSense loads (`.d.ts` is covered by `ts`). */
+export const SOURCE_EXTENSIONS = ['ts', 'tsx', 'mts', 'cts', 'js', 'jsx', 'mjs', 'cjs'] as const;
+
+export const SourceFileSchema = z.strictObject({ path: ProjectPathSchema, content: z.string() });
+export type SourceFile = z.infer<typeof SourceFileSchema>;
+
+/**
+ * `GET /projects/:id/files/sources` — the project's TS/JS sources for Monaco's cross-file
+ * IntelliSense: not ignored, never `node_modules`, shallowest first and then by name, stopping at
+ * {@link SOURCES_MAX_FILES} files or {@link SOURCES_MAX_BYTES} bytes (`truncated`). Also the
+ * project's root `tsconfig.json`, when there is one, for its `compilerOptions`.
+ */
+export const SourcesResultSchema = z.strictObject({
+  files: z.array(SourceFileSchema),
+  truncated: z.boolean(),
+  tsconfig: z.string().optional(),
+});
+export type SourcesResult = z.infer<typeof SourcesResultSchema>;
+
+/* -------------------------------------------------------------------------- */
 /* Processes: Forge's terminal (D301, design §6.3)                             */
 /* -------------------------------------------------------------------------- */
 

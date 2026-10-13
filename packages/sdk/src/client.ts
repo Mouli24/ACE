@@ -95,6 +95,8 @@ import {
   FileContentSchema,
   FileEntrySchema,
   FileListSchema,
+  FileSearchRequestSchema,
+  FileSearchResultSchema,
   FolderListingSchema,
   MoveEntryRequestSchema,
   RepoStatusSchema,
@@ -104,6 +106,8 @@ import {
   type FileContent,
   type FileEntry,
   type FileList,
+  type FileSearchRequest,
+  type FileSearchResult,
   type FolderListing,
   type MoveEntryRequest,
   type RepoStatus,
@@ -839,6 +843,15 @@ export function createAceClient(options: AceClientOptions) {
       request('GET', `/projects/${projectId}/files/list`, FileListSchema),
     repoStatus: (projectId: Id): Promise<RepoStatus> =>
       request('GET', `/projects/${projectId}/files/status`, RepoStatusSchema),
+    /**
+     * Forge's Search (D299 Phase 4): a POST with the request as its body. A query the contract
+     * refuses (an invalid or runaway regex) is refused here, before anything is sent.
+     */
+    searchFiles: (projectId: Id, body: FileSearchRequest): Promise<FileSearchResult> =>
+      request('POST', `/projects/${projectId}/files/search`, FileSearchResultSchema, {
+        schema: FileSearchRequestSchema,
+        value: body,
+      }),
 
     /* IDE — Forge's terminal (D301, design §6.3) */
     startProcess: (projectId: Id, body: ProcessStartRequest): Promise<ProcessStartResponse> =>

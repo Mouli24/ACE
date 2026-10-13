@@ -3,6 +3,8 @@ import type {
   FileContent,
   FileEntry,
   FileList,
+  FileSearchRequest,
+  FileSearchResult,
   FilesChangedPayload,
   FolderListing,
   RepoStatus,
@@ -35,6 +37,12 @@ export interface ProjectFiles {
   remove(root: string, path: string): Promise<void>;
   listAll(root: string): Promise<FileList>;
   status(root: string): Promise<RepoStatus>;
+  /**
+   * Search the files that are not ignored (design §6.4), skipping binary files and files over
+   * 2 MB, capped at the request's `maxResults` and at a time limit (`truncated`). A request the
+   * contract refuses — an invalid or runaway regex — throws a `ZodError`.
+   */
+  search(root: string, request: FileSearchRequest): Promise<FileSearchResult>;
   /**
    * Watch the folder recursively. `onChange` gets each debounced burst; `onError` fires once if
    * the watcher dies (it is stopped by then). The returned function stops watching.

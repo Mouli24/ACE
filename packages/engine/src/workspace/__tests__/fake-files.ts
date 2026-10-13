@@ -1,6 +1,7 @@
 import type {
   FileContent,
   FileEntry,
+  FileSearchResult,
   FolderListing,
   RepoStatus,
   SaveFileResult,
@@ -29,6 +30,16 @@ export const ENTRY: FileEntry = {
 export const LISTING: FolderListing = { path: '', items: [ENTRY] };
 export const SAVED: SaveFileResult = { path: 'a.ts', version: 'v2', size: 1, mtime: AT };
 export const STATUS: RepoStatus = { repo: false };
+export const FOUND: FileSearchResult = {
+  files: [
+    {
+      path: 'a.ts',
+      matches: [{ line: 1, column: 1, preview: 'x', previewOffset: 0, length: 1 }],
+    },
+  ],
+  truncated: false,
+  searchedFiles: 1,
+};
 
 export type Call = [method: string, ...args: unknown[]];
 
@@ -70,6 +81,10 @@ export function fakeFiles(overrides: Partial<ProjectFiles> = {}): ProjectFiles &
     status: async (...args) => {
       calls.push(['status', ...args]);
       return STATUS;
+    },
+    search: async (...args) => {
+      calls.push(['search', ...args]);
+      return FOUND;
     },
     watch: () => () => undefined,
     ...overrides,

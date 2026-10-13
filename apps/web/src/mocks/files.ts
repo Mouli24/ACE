@@ -1,9 +1,15 @@
 import {
   FILE_EDIT_MAX_BYTES,
+  SEARCH_MAX_RESULTS,
+  SEARCH_PREVIEW_MAX,
+  searchPattern,
   type CreateEntryRequest,
   type FileContent,
   type FileEntry,
   type FileList,
+  type FileSearchMatch,
+  type FileSearchRequest,
+  type FileSearchResult,
   type FolderListing,
   type SaveFileRequest,
   type SaveFileResult,
@@ -228,4 +234,76 @@ export function listAll(fs: MockFs): FileList {
     .filter((path) => fs[path]?.kind === 'file' && !isHidden(path) && !isIgnored(path, 'file'))
     .sort((a, b) => depth(a) - depth(b) || collator.compare(a, b));
   return { files, truncated: false };
+}
+
+/**
+ * One comma-separated glob list in `.gitignore` syntax, as the engine reads Search's include and
+ * exclude: `src` matches that folder anywhere and what is in it, `*.ts` any TypeScript file, a
+ * pattern with a slash in it is anchored at the root. Undefined when the list is empty.
+ */
+function globMatcher(list: string | undefined): ((path: string) => boolean) | undefined {
+  const patterns = (list ?? '')
+    .split(',')
+    .map((pattern) => pattern.trim().replace(/\/+$/, ''))
+    .filter((pattern) => pattern !== '');
+  if (patterns.length === 0) return undefined;
+  const regexes = patterns.map((pattern) => {
+    const anchored = pattern.includes('/');
+    const glob = pattern.replace(/^\//, '');
+    let body = '';
+    for (let i = 0; i < glob.length; i += 1) {
+      const char = glob[i] ?? '';
+      if (char === '*' && glob[i + 1] === '*') {
+        const slash = glob[i + 2] === '/';
+        body += slash ? '(?:.*/)?' : '.*';
+        i += slash ? 2 : 1;
+      } else if (char === '*') body += '[^/]*';
+      else if (char === '?') body += '[^/]';
+      else body += char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    }
+    return new RegExp(`${anchored ? '^' : '(^|/)'}${body}(/.*)?$`, 'i');
+  });
+  return (path) => regexes.some((regex) => regex.test(path));
+}
+
+/** `POST /files/search` on the mock engine: the engine's rules over the mock's files (D299 Phase 4). */
+export function searchFiles(fs: MockFs, request: FileSearchRequest): FileSearchResult {
+  const pattern = searchPattern(request);
+  const max = request.maxResults ?? SEARCH_MAX_RESULTS;
+  const included = globMatcher(request.include);
+  const excluded = globMatcher(request.exclude);
+  const files: FileSearchResult['files'] = [];
+  let found = 0;
+  let searchedFiles = 0;
+  for (const path of listAll(fs).files) {
+    if ((included !== undefined && !included(path)) || excluded?.(path) === true) continue;
+    const content = fs[path]?.content ?? '';
+    if (content.includes('\u0000') || bytesOf(content) > FILE_EDIT_MAX_BYTES) continue;
+    searchedFiles += 1;
+    const matches: FileSearchMatch[] = [];
+    for (const [index, line] of content.split(/\r\n|\r|\n/).entries()) {
+      pattern.lastIndex = 0;
+      for (let match = pattern.exec(line); match !== null; match = pattern.exec(line)) {
+        if (match[0].length === 0) {
+          pattern.lastIndex += 1;
+          continue;
+        }
+        if (found === max) {
+          if (matches.length > 0) files.push({ path, matches });
+          return { files, truncated: true, searchedFiles };
+        }
+        found += 1;
+        const from = Math.min(line.length - line.trimStart().length, match.index);
+        matches.push({
+          line: index + 1,
+          column: match.index + 1,
+          preview: line.slice(from, from + SEARCH_PREVIEW_MAX),
+          previewOffset: match.index - from,
+          length: match[0].length,
+        });
+      }
+    }
+    if (matches.length > 0) files.push({ path, matches });
+  }
+  return { files, truncated: false, searchedFiles };
 }

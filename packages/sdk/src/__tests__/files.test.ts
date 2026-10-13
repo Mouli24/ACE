@@ -102,6 +102,35 @@ describe('D299 FR-GIT-003 FR-GIT-004 the SDK’s file methods', () => {
     expect(await status.client.repoStatus(PID)).toEqual({ repo: false });
   });
 
+  it('D299 Phase 4 searches with a POST body, and refuses a runaway regex before sending', async () => {
+    const answer = {
+      files: [
+        {
+          path: 'a.ts',
+          matches: [{ line: 2, column: 3, preview: 'x needle', previewOffset: 2, length: 6 }],
+        },
+      ],
+      truncated: false,
+      searchedFiles: 4,
+    };
+    const { client, seen } = clientAnswering(200, answer);
+    const body = { query: 'need.e', regex: true, include: 'src' };
+    expect(await client.searchFiles(PID, body)).toEqual(answer);
+    expect(seen).toEqual([
+      {
+        method: 'POST',
+        url: `http://127.0.0.1:4747/api/v1/projects/${PID}/files/search`,
+        body,
+      },
+    ]);
+
+    const refused = clientAnswering(200, answer);
+    await expect(
+      refused.client.searchFiles(PID, { query: '(a+)+', regex: true }),
+    ).rejects.toBeInstanceOf(AceApiError);
+    expect(refused.seen).toEqual([]);
+  });
+
   it('reads raw bytes as a Blob with their type', async () => {
     const { client } = clientAnswering(200, new Uint8Array([1, 2, 3]), 'image/png');
     const blob = await client.readFileRaw(PID, 'a.png');

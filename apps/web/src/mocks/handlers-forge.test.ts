@@ -144,3 +144,47 @@ describe('D299 the mock engine’s project files', () => {
     expect(leaked.some((f) => f.type === 'files.changed')).toBe(false);
   });
 });
+
+describe('D299 Phase 4 the mock engine’s search', () => {
+  it('searches the files that are not ignored, with case, whole word, regex and globs', async () => {
+    db.seedFiles(projectId, {
+      'src/app.ts': 'export const Needle = 1;\nneedles();\n',
+      'src/deep/b.tsx': 'needle',
+      'node_modules/x/i.js': 'needle',
+      'logo.png': 'needle\u0000',
+    });
+    const paths = (json: Record<string, unknown> | undefined) =>
+      (json?.files as { path: string; matches: { line: number; column: number }[] }[]).flatMap(
+        (file) => file.matches.map((match) => `${file.path}:${match.line}:${match.column}`),
+      );
+
+    const all = await call('POST', '/search', { query: 'needle' });
+    expect(all.status).toBe(200);
+    expect(paths(all.json)).toEqual(['src/app.ts:1:14', 'src/app.ts:2:1', 'src/deep/b.tsx:1:1']);
+    expect(all.json).toMatchObject({ truncated: false });
+    expect(
+      paths((await call('POST', '/search', { query: 'Needle', matchCase: true })).json),
+    ).toEqual(['src/app.ts:1:14']);
+    expect(
+      paths((await call('POST', '/search', { query: 'needle', wholeWord: true })).json),
+    ).toEqual(['src/app.ts:1:14', 'src/deep/b.tsx:1:1']);
+    expect(
+      paths((await call('POST', '/search', { query: 'need(le)s\\(', regex: true })).json),
+    ).toEqual(['src/app.ts:2:1']);
+    expect(
+      paths((await call('POST', '/search', { query: 'needle', include: '*.tsx' })).json),
+    ).toEqual(['src/deep/b.tsx:1:1']);
+    expect(
+      paths((await call('POST', '/search', { query: 'needle', exclude: 'deep, README.md' })).json),
+    ).toEqual(['src/app.ts:1:14', 'src/app.ts:2:1']);
+  });
+
+  it('caps at maxResults and refuses a regex the contract refuses', async () => {
+    db.seedFiles(projectId, { 'a.ts': 'x x x' });
+    const cut = await call('POST', '/search', { query: 'x', maxResults: 2 });
+    expect(cut.json).toMatchObject({ truncated: true });
+    const refused = await call('POST', '/search', { query: '(a+)+', regex: true });
+    expect(refused.status).toBe(400);
+    expect(refused.json).toMatchObject({ error: { code: 'validation_failed' } });
+  });
+});

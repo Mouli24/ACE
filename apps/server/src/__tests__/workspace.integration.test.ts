@@ -167,3 +167,29 @@ describe('D299 FR-GIT-003 FR-GIT-004 Forge’s files through the real engine', (
     }
   }, 20_000);
 });
+
+describe('D299 Phase 4 Search through the real engine', () => {
+  it('finds text in the project with a POST body, and refuses a runaway regex as 400', async () => {
+    mkdirSync(join(folder, 'src'), { recursive: true });
+    writeFileSync(join(folder, 'src', 'needle.ts'), 'export const needle = 1;\n');
+    mkdirSync(join(folder, 'node_modules', 'pkg'), { recursive: true });
+    writeFileSync(join(folder, 'node_modules', 'pkg', 'index.js'), 'needle');
+
+    const found = await api<{ files: { path: string }[]; truncated: boolean }>(
+      'POST',
+      `/projects/${projectId}/files/search`,
+      { query: 'need(le)', regex: true },
+    );
+    expect(found.status).toBe(200);
+    expect(found.json.files.map((file) => file.path)).toEqual(['src/needle.ts']);
+    expect(found.json.truncated).toBe(false);
+
+    const refused = await api<{ error: { code: string } }>(
+      'POST',
+      `/projects/${projectId}/files/search`,
+      { query: '(a+)+$', regex: true },
+    );
+    expect(refused.status).toBe(400);
+    expect(refused.json.error.code).toBe('validation_failed');
+  });
+});
