@@ -13,6 +13,8 @@ export interface Problem {
   severity: ProblemSeverity;
   message: string;
   source: string | undefined;
+  /** The marker's code: TypeScript's `2345`, an eslint rule. */
+  code?: string;
 }
 
 /**
@@ -57,12 +59,51 @@ export function clearChecks(projectId: string): void {
   });
 }
 
-/** The footer's and the panel's counts: the open files' markers and the checks, together. */
+/** A code as either side writes it: tsc prints `TS2345`, Monaco's TypeScript markers `2345`. */
+const codeKey = (code: string): string => code.trim().replace(/^TS(?=\d+$)/i, '');
+
+const hasCode = (code: string | undefined): code is string =>
+  code !== undefined && code.trim() !== '';
+
+/**
+ * A check's entry and a live marker are one problem (smoke S-2): the same project-relative path,
+ * line and column, and the same code when both carry one — else the same message text.
+ */
+export function sameProblem(
+  check: Pick<CheckProblem, 'path' | 'line' | 'column' | 'message' | 'code'>,
+  marker: Pick<Problem, 'path' | 'line' | 'column' | 'message' | 'code'>,
+): boolean {
+  if (check.path !== marker.path || check.line !== marker.line || check.column !== marker.column) {
+    return false;
+  }
+  if (hasCode(check.code) && hasCode(marker.code)) {
+    return codeKey(check.code) === codeKey(marker.code);
+  }
+  return check.message.trim() === marker.message.trim();
+}
+
+const placeOf = (problem: { path: string; line: number; column: number }): string =>
+  `${problem.path}\n${problem.line}\n${problem.column}`;
+
+/**
+ * The footer's and the panel's counts: the open files' markers and the checks, together — a
+ * check's entry only when no live marker is the same problem (smoke S-2), so one error Monaco
+ * and the checks both report counts once. The Problems list still shows both.
+ */
 export function problemCounts(
   state: ProblemsState,
   projectId: string,
 ): { errors: number; warnings: number; total: number } {
-  const all = [...(state.byProject[projectId] ?? []), ...(state.checks[projectId]?.problems ?? [])];
+  const markers = state.byProject[projectId] ?? [];
+  const at = new Map<string, Problem[]>();
+  for (const marker of markers) {
+    const place = placeOf(marker);
+    at.set(place, [...(at.get(place) ?? []), marker]);
+  }
+  const checks = (state.checks[projectId]?.problems ?? []).filter(
+    (check) => !(at.get(placeOf(check)) ?? []).some((marker) => sameProblem(check, marker)),
+  );
+  const all = [...markers, ...checks];
   return {
     errors: all.filter((problem) => problem.severity === 'error').length,
     warnings: all.filter((problem) => problem.severity === 'warning').length,
@@ -91,6 +132,8 @@ export function watchMarkers(monaco: typeof Monaco): () => void {
           : marker.severity >= monaco.MarkerSeverity.Warning
             ? 'warning'
             : 'info';
+      // a plain code, or one with a link to its docs (S-2 matches the checks' entries by it)
+      const code = typeof marker.code === 'string' ? marker.code : marker.code?.value;
       (byProject[where.projectId] ??= []).push({
         path: where.path,
         line: marker.startLineNumber,
@@ -98,6 +141,7 @@ export function watchMarkers(monaco: typeof Monaco): () => void {
         severity,
         message: marker.message,
         source: marker.source,
+        ...(code === undefined ? {} : { code }),
       });
     }
     for (const problems of Object.values(byProject)) {
