@@ -22,6 +22,12 @@ import {
 import { createForgeHandlers } from './handlers-forge';
 import { createProcessHandlers } from './handlers-processes';
 import { MockProcesses } from './processes';
+import {
+  MockCheckpoints,
+  type SeedCheckpointFile,
+  type SeedCheckpointOptions,
+} from './checkpoints';
+import { createCheckpointHandlers } from './handlers-checkpoints';
 import { createRound5Handlers } from './handlers-round5';
 import { failNextIngest, setIngestPace } from './knowledge';
 import {
@@ -156,6 +162,15 @@ declare global {
       setRepoStatus(projectId: string, files: Array<{ path: string; status: RepoFileStatus }>): void;
       /** Forge's terminal (D301): set a project's trust level; `off` stops what runs, as a PATCH does. */
       setTerminal(projectId: string, level: TerminalTrust): void;
+      /**
+       * Checkpoints (D300): what an agent's turn left — the folder takes each file's `after` text,
+       * and a pending checkpoint is announced. Answers its id.
+       */
+      seedCheckpoint(
+        projectId: string,
+        files: SeedCheckpointFile[],
+        options?: SeedCheckpointOptions,
+      ): string;
     };
   }
 }
@@ -196,10 +211,13 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
   const db = new MockDb({ persist: true });
   // In memory, like the engine's: a reload is an engine restart (D301).
   const processes = new MockProcesses(db);
+  // D300: in memory too.
+  const checkpoints = new MockCheckpoints(db);
   restoreScenario();
   const worker = setupWorker(
     // First: it answers a project PATCH and sees a project DELETE before the others (D301).
     ...createProcessHandlers(db, processes),
+    ...createCheckpointHandlers(db, checkpoints),
     ...createDomainHandlers(db),
     ...createForgeHandlers(db),
     ...createRound5Handlers(db),
@@ -222,6 +240,7 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
     reset() {
       db.reset();
       processes.reset();
+      checkpoints.reset();
       try {
         localStorage.removeItem(SCENARIO_KEY);
         localStorage.removeItem(PACE_KEY);
@@ -416,6 +435,10 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
       db.load();
       db.updateProject(projectId, { terminal: level });
       if (level === 'off') processes.stopProject(projectId);
+    },
+    seedCheckpoint(projectId, files, options) {
+      db.load();
+      return checkpoints.seed(projectId, files, options).id;
     },
     connect(workflowId, fromNodeId, fromPort, toNodeId, toPort) {
       db.load();

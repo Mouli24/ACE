@@ -19,10 +19,12 @@ import { useProblemsStore } from '../forge/panel/problems-store';
 import { useQuickOpen } from '../forge/quick-open/quick-open-store';
 import { cancelTerminalFocus } from '../forge/terminal/focus';
 import { useTerminalStore } from '../forge/terminal/terminal-store';
+import { MockCheckpoints } from '../mocks/checkpoints';
 import { MockDb } from '../mocks/db';
 import { createFakeWebSocket } from '../mocks/fake-socket';
 import { createHandlers } from '../mocks/handlers';
 import { createDomainHandlers, domainMock } from '../mocks/handlers-domain';
+import { createCheckpointHandlers } from '../mocks/handlers-checkpoints';
 import { createForgeHandlers } from '../mocks/handlers-forge';
 import { createProcessHandlers } from '../mocks/handlers-processes';
 import { createRound2Handlers, stopScenario } from '../mocks/handlers-round2';
@@ -38,10 +40,13 @@ import { FakeSearchAddon, FakeTerminal } from './FakeTerminal';
 export const db = new MockDb({ persist: false });
 /** The mock engine's terminal processes (D301); reset before every test. */
 export const processes = new MockProcesses(db);
+/** The mock engine's checkpoints (D300); reset before every test. */
+export const checkpoints = new MockCheckpoints(db);
 /** Newest round first: a round 3 route wins over a round 2 stand-in for the same path. */
 export const server = setupServer(
   // First: it answers a project PATCH and sees a project DELETE before the others (D301).
   ...createProcessHandlers(db, processes),
+  ...createCheckpointHandlers(db, checkpoints),
   ...createDomainHandlers(db),
   ...createForgeHandlers(db),
   ...createRound5Handlers(db),
@@ -68,6 +73,7 @@ export function installMockServer(): void {
     db.reset();
     domainMock.reset();
     processes.reset();
+    checkpoints.reset();
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     resetGraphSyncRegistry();
     useSelectionStore.getState().clear();

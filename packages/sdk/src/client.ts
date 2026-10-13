@@ -121,6 +121,14 @@ import {
   type ProcessStartResponse,
   type ProcessSummary,
   type ProjectScripts,
+  // Forge (D300): checkpoints of agents' changes
+  CheckpointActionSchema,
+  CheckpointFileDiffSchema,
+  CheckpointListSchema,
+  CheckpointSchema,
+  type Checkpoint,
+  type CheckpointAction,
+  type CheckpointFileDiff,
   // Round 4 §2.4 (artifacts, tools, MCP servers, timeline messages, direct chat)
   ArtifactSchema,
   ToolListResponseSchema,
@@ -854,6 +862,44 @@ export function createAceClient(options: AceClientOptions) {
       request('GET', `/projects/${projectId}/processes/${processId}`, ProcessDetailSchema),
     projectScripts: (projectId: Id): Promise<ProjectScripts> =>
       request('GET', `/projects/${projectId}/processes/scripts`, ProjectScriptsSchema),
+
+    /* IDE — checkpoints of agents' changes (D300, design §5.3) */
+    /** Open ones (recording, pending) first, then the rest; newest first in each. */
+    listCheckpoints: (projectId: Id): Promise<Checkpoint[]> =>
+      request('GET', `/projects/${projectId}/checkpoints`, CheckpointListSchema),
+    getCheckpoint: (projectId: Id, checkpointId: Id): Promise<Checkpoint> =>
+      request('GET', `/projects/${projectId}/checkpoints/${checkpointId}`, CheckpointSchema),
+    /** One file before and after the agent's change, for the review diff. */
+    checkpointFileDiff: (
+      projectId: Id,
+      checkpointId: Id,
+      path: string,
+    ): Promise<CheckpointFileDiff> =>
+      request(
+        'GET',
+        `/projects/${projectId}/checkpoints/${checkpointId}/diff`,
+        CheckpointFileDiffSchema,
+        undefined,
+        { path },
+      ),
+    /**
+     * Keep or revert every pending file, or `paths`. A revert of a file changed since the agent's
+     * edit answers 409 `checkpoint_conflict`, its paths in `details.conflicts`.
+     */
+    checkpointAction: (
+      projectId: Id,
+      checkpointId: Id,
+      action: CheckpointAction,
+    ): Promise<Checkpoint> =>
+      request(
+        'POST',
+        `/projects/${projectId}/checkpoints/${checkpointId}/actions`,
+        CheckpointSchema,
+        {
+          schema: CheckpointActionSchema,
+          value: action,
+        },
+      ),
   };
 }
 
