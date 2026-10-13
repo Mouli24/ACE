@@ -80,7 +80,14 @@ import { notFound } from '../gateway/errors.js';
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
 import { maskSecrets } from '../security/secret-patterns.js';
-import type { ModelRouter, ProviderAdapter, Repository, Scope } from '../ports/index.js';
+import type {
+  CheckpointRecorder,
+  CheckpointRecording,
+  ModelRouter,
+  ProviderAdapter,
+  Repository,
+  Scope,
+} from '../ports/index.js';
 import type { ProviderService } from '../providers/index.js';
 import {
   DEFAULT_REPEATED_OUTPUT_TIMES,
@@ -274,6 +281,13 @@ export interface RunServiceDeps {
    * takes no messages and ends as it always has.
    */
   domains?: DomainRegistry;
+
+  /**
+   * D300: each run in a project with a folder is one checkpoint — begun before the run drives and
+   * finished when the drive settles (completed, halted or stopped). A Domain run that stays open
+   * keeps recording until it ends. Absent, or failing, a run is never stopped by it.
+   */
+  checkpoints?: CheckpointRecorder;
 }
 
 /** Why one turn of a node started, and its own abort (D309). */
@@ -2895,15 +2909,31 @@ export function createRunService(deps: RunServiceDeps): RunService {
     }
   }
 
+  /** D300: the run's checkpoint, when its project has a folder; never a reason the run fails. */
+  async function beginRunCheckpoint(run: Run): Promise<CheckpointRecording | undefined> {
+    const recorder = deps.checkpoints;
+    if (recorder === undefined) return undefined;
+    try {
+      const project = await repository.projects.get(scope, run.projectId);
+      if (project === null || project.folderPath === '') return undefined;
+      return await recorder.begin(run.projectId, { kind: 'run', runId: run.id });
+    } catch (error) {
+      logger.warn({ subsystem: 'runs', runId: run.id, err: error }, 'run checkpoint not begun');
+      return undefined;
+    }
+  }
+
   /** Start driving a run that has been pre-flighted, and register its gate (FR-CTL-001..003). */
   function startDriving(run: Run, seed?: DriveSeed): Promise<Run> {
     const gate = createRunGate(run.id);
     const unregister = deps.gates.register(gate);
     let domain: RunDomain | undefined;
+    let checkpoint: CheckpointRecording | undefined;
 
     const done = (async (): Promise<Run> => {
       // Domain (D309, D323): the run's live conversation, with what its log says it still owes.
       domain = await deps.domains?.open(run);
+      checkpoint = await beginRunCheckpoint(run);
       return drive(run, gate, seed, domain);
     })()
       .catch(async (error: unknown) => {
@@ -2911,8 +2941,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
         await domain?.close().catch(() => undefined);
         return haltAfterThrow(run, gate);
       })
-      .then((ended) => {
+      .then(async (ended) => {
         domain?.settle(ended);
+        // D300: what the run changed in the folder, recorded once it has stopped changing it
+        await checkpoint?.finish().catch(() => undefined);
         return ended;
       })
       .finally(() => {

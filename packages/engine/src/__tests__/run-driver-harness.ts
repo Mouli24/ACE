@@ -28,6 +28,7 @@ import { newId } from '../ids.js';
 import { createLogger } from '../logging/index.js';
 import {
   LOCAL_SCOPE,
+  type CheckpointRecorder,
   type EngineEvent,
   type ModelRouter,
   type ProviderAdapter,
@@ -61,7 +62,7 @@ import { InProcessPubSubStub } from './pubsub-stub.js';
 
 export const scope = LOCAL_SCOPE;
 export const PROVIDER_ID = '01JBXQ8Z9KQ4R7N2VWXYZ0PRVD';
-const PROJECT_ID = '01JBXQ8Z9KQ4R7N2VWXYZ0PRJC';
+export const PROJECT_ID = '01JBXQ8Z9KQ4R7N2VWXYZ0PRJC';
 const NOW = '2026-09-29T10:00:00.000Z';
 
 /** One scripted answer to one `generate()` call. */
@@ -193,6 +194,8 @@ export async function createRunDriverHarness(
     providerConcurrency?: number;
     /** Runs when the run service rejects a run's pending approvals — a test can make it throw. */
     onCancelPending?: (runId: string) => void;
+    /** D300: what wraps each run in a checkpoint. */
+    checkpoints?: CheckpointRecorder;
   } = {},
 ): Promise<RunDriverHarness> {
   const shared = options.repository !== undefined;
@@ -346,6 +349,7 @@ export async function createRunDriverHarness(
     recordProviderStatus: (providerId, found) => providers.recordStatus(providerId, found),
     tokenBatchMs: 0,
     domains,
+    ...(options.checkpoints === undefined ? {} : { checkpoints: options.checkpoints }),
   });
 
   const controls = createRunControls({
