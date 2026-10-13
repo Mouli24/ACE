@@ -1,10 +1,10 @@
-import type { TerminalTrust } from '@ace/contracts';
+import { CheckCommandSchema, type TerminalTrust } from '@ace/contracts';
 import { Button } from '@ace/ui';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { BudgetFields } from '../settings/BudgetFields';
-import { SelectField } from '../settings/SettingFields';
+import { SelectField, SettingInput, type DraftRead } from '../settings/SettingFields';
 import { ago } from '../theme/format';
 import { useWorkflowImport } from '../workflows/ImportWorkflowButton';
 import { CreateWorkflowDialog } from '../workflows/WorkflowDialogs';
@@ -17,6 +17,24 @@ const TERMINAL_OPTIONS: ReadonlyArray<{ value: TerminalTrust; label: string }> =
   { value: 'scripts', label: 'Scripts only' },
   { value: 'off', label: 'Off' },
 ];
+
+/** Forge's format-on-save (D299 Phase 4): absent reads as Off. */
+const FORMAT_ON_SAVE_OPTIONS: ReadonlyArray<{ value: 'on' | 'off'; label: string }> = [
+  { value: 'off', label: 'Off' },
+  { value: 'on', label: 'On' },
+];
+
+/**
+ * The check command as typed: trimmed, 1..1000 characters (the contract's bound). Blank removes a
+ * saved command (`null`) and is nothing to save when there is none.
+ */
+function readCheckCommand(raw: string, current: string | undefined): DraftRead<string | null> {
+  const trimmed = raw.trim();
+  if (trimmed === '') return current === undefined ? { skip: true } : { value: null };
+  return CheckCommandSchema.safeParse(trimmed).success
+    ? { value: trimmed }
+    : { error: 'A check command is at most 1000 characters.' };
+}
 
 /**
  * `/projects/:projectId` — the project with its workflows; pick one to open the Canvas. An uncovered
@@ -149,6 +167,40 @@ export function ProjectPage() {
             value={project.data?.terminal ?? 'on'}
             options={TERMINAL_OPTIONS}
             onChange={(terminal) => updateProject.mutate({ id: projectId, terminal })}
+            disabled={!project.data}
+          />
+        </div>
+
+        {/* D299 Phase 4: what Forge's Run checks runs, and whether a save formats first. */}
+        <div
+          data-testid="project-checks-card"
+          className="grid gap-4 rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4 sm:grid-cols-2"
+        >
+          <SettingInput<string | null>
+            label="Check command"
+            hint="Run checks in Forge's Problems runs it at the project folder, and lists the errors it prints. Under Scripts only, name a package.json script."
+            testId="project-check-command"
+            value={project.data?.checkCommand ?? undefined}
+            read={(raw) => readCheckCommand(raw, project.data?.checkCommand ?? undefined)}
+            onSave={(checkCommand) =>
+              updateProject.mutateAsync({ id: projectId, checkCommand }).then(
+                () => true,
+                () => false,
+              )
+            }
+            disabled={!project.data}
+            placeholder="pnpm tsc --noEmit"
+          />
+          <SelectField<'on' | 'off'>
+            id="project-format-on-save"
+            label="Format on save"
+            hint="Forge formats the file in the editor before saving it, where a formatter knows its language."
+            testId="project-format-on-save"
+            value={project.data?.formatOnSave === true ? 'on' : 'off'}
+            options={FORMAT_ON_SAVE_OPTIONS}
+            onChange={(value) =>
+              updateProject.mutate({ id: projectId, formatOnSave: value === 'on' })
+            }
             disabled={!project.data}
           />
         </div>

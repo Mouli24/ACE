@@ -498,12 +498,15 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     const patch = UpdateProjectRequestSchema.parse(await readJson(c));
     const id = c.req.param('id');
     // Every field of the patch, not just the name: `maxCostPerRunUsd` is the cap FR-GRD-008 halts a
-    // run against, and `terminal` the trust level D301 starts processes by. Reading only `name`
-    // here made the others unsettable through the API.
+    // run against, `terminal` the trust level D301 starts processes by, and `checkCommand` and
+    // `formatOnSave` Forge's Run checks and format-on-save. Reading only `name` here made the
+    // others unsettable through the API.
     if (
       patch.name === undefined &&
       patch.maxCostPerRunUsd === undefined &&
-      patch.terminal === undefined
+      patch.terminal === undefined &&
+      patch.checkCommand === undefined &&
+      patch.formatOnSave === undefined
     ) {
       return c.json(await deps.graph.getProject(id));
     }

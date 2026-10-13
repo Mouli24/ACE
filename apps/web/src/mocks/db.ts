@@ -287,11 +287,16 @@ export class MockDb {
       maxCostPerRunUsd?: number | null;
       /** D301: the terminal trust level; the PATCH handler passes it through. */
       terminal?: TerminalTrust;
+      /** D299 Phase 4: Run checks' command; `null` removes it, as the engine's store does. */
+      checkCommand?: string | null;
+      /** D299 Phase 4: format-on-save. */
+      formatOnSave?: boolean;
     },
   ): Project | undefined {
     const project = this.getProject(id);
     if (!project) return undefined;
     Object.assign(project, patch, { updatedAt: now() });
+    if (project.checkCommand === null) delete project.checkCommand;
     this.save();
     return project;
   }

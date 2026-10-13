@@ -48,6 +48,12 @@ export const TerminalTrustSchema = z.enum(TERMINAL_TRUST_LEVELS);
 export type TerminalTrust = z.infer<typeof TerminalTrustSchema>;
 export const DEFAULT_TERMINAL_TRUST: TerminalTrust = 'on';
 
+/**
+ * Forge's Run checks (design §6.4): the command a project's checks run as, such as
+ * `pnpm tsc --noEmit`. Under trust `scripts` it must name a package.json script.
+ */
+export const CheckCommandSchema = z.string().min(1).max(1000);
+
 export const ProjectSchema = z.object({
   id: IdSchema,
   name: EntityNameSchema,
@@ -57,6 +63,14 @@ export const ProjectSchema = z.object({
   maxCostPerRunUsd: BudgetUsdSchema.nullable().optional(),
   /** D301: absent is `on`. */
   terminal: TerminalTrustSchema.optional(),
+  /**
+   * Forge's Run checks: absent means none is set, and Run checks asks for one. A PATCH removes it
+   * with `null`, and a record reads `null` like absence, so a patch merges into the record as it
+   * is — the way D72 reads a removed budget.
+   */
+  checkCommand: CheckCommandSchema.nullable().optional(),
+  /** Forge formats the active editor's file before saving it. Absent is `false`. */
+  formatOnSave: z.boolean().optional(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 });

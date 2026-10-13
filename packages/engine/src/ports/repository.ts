@@ -109,6 +109,10 @@ export interface ProjectRepository {
       maxCostPerRunUsd?: number | null;
       /** D301: the terminal trust level; `undefined` leaves it. */
       terminal?: TerminalTrust;
+      /** D299 Phase 4: Run checks' command. `null` removes it, `undefined` leaves it. */
+      checkCommand?: string | null;
+      /** D299 Phase 4: format-on-save; `undefined` leaves it. */
+      formatOnSave?: boolean;
       updatedAt: Timestamp;
     },
   ): Promise<Project | null>;

@@ -274,6 +274,8 @@ export class FakeRepository implements Repository {
         name?: string;
         lastOpenedAt?: Timestamp;
         terminal?: TerminalTrust;
+        checkCommand?: string | null;
+        formatOnSave?: boolean;
         updatedAt: Timestamp;
       },
     ) => {
@@ -284,8 +286,13 @@ export class FakeRepository implements Repository {
         ...(patch.name === undefined ? {} : { name: patch.name }),
         ...(patch.lastOpenedAt === undefined ? {} : { lastOpenedAt: patch.lastOpenedAt }),
         ...(patch.terminal === undefined ? {} : { terminal: patch.terminal }),
+        ...(patch.checkCommand === undefined || patch.checkCommand === null
+          ? {}
+          : { checkCommand: patch.checkCommand }),
+        ...(patch.formatOnSave === undefined ? {} : { formatOnSave: patch.formatOnSave }),
         updatedAt: patch.updatedAt,
       };
+      if (patch.checkCommand === null) delete next.checkCommand;
       this.#for(scope).projects.set(id, next);
       return next;
     },

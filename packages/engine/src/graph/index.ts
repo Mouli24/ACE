@@ -70,11 +70,18 @@ export interface GraphService {
   /**
    * `PATCH /projects/:id` — the whole patch, not only the name. `maxCostPerRunUsd: null` removes the
    * per-run cap and `undefined` leaves it alone, the way D72 reads a removed budget (FR-GRD-008).
-   * `terminal` is the trust level (D301).
+   * `terminal` is the trust level (D301). `checkCommand` and `formatOnSave` are Forge's Run checks
+   * and format-on-save (D299 Phase 4); `checkCommand: null` removes the command.
    */
   updateProject(
     id: Id,
-    patch: { name?: string; maxCostPerRunUsd?: number | null; terminal?: TerminalTrust },
+    patch: {
+      name?: string;
+      maxCostPerRunUsd?: number | null;
+      terminal?: TerminalTrust;
+      checkCommand?: string | null;
+      formatOnSave?: boolean;
+    },
   ): Promise<Project>;
   deleteProject(id: Id): Promise<void>;
   openProject(id: Id): Promise<Project>;
@@ -173,6 +180,8 @@ export function createGraphService(deps: GraphServiceDeps): GraphService {
         ...(patch.name === undefined ? {} : { name: patch.name }),
         ...(patch.maxCostPerRunUsd === undefined ? {} : { maxCostPerRunUsd: patch.maxCostPerRunUsd }),
         ...(patch.terminal === undefined ? {} : { terminal: patch.terminal }),
+        ...(patch.checkCommand === undefined ? {} : { checkCommand: patch.checkCommand }),
+        ...(patch.formatOnSave === undefined ? {} : { formatOnSave: patch.formatOnSave }),
         updatedAt: now(),
       });
       if (updated === null) throw notFound(`Project ${id}`);

@@ -159,6 +159,31 @@ describe('D301 PATCH /projects/:id takes the terminal trust level', () => {
   });
 });
 
+describe('D299 Phase 4 PATCH /projects/:id takes the check command and format-on-save', () => {
+  it('sets a check command, a null removes it, and an empty one is refused', () => {
+    expect(UpdateProjectRequestSchema.parse({ checkCommand: 'pnpm lint' })).toEqual({
+      checkCommand: 'pnpm lint',
+    });
+    expect(UpdateProjectRequestSchema.parse({ checkCommand: null })).toEqual({
+      checkCommand: null,
+    });
+    expect(UpdateProjectRequestSchema.safeParse({ checkCommand: '' }).success).toBe(false);
+    expect(UpdateProjectRequestSchema.safeParse({ checkCommand: 'x'.repeat(1001) }).success).toBe(
+      false,
+    );
+  });
+
+  it('turns format-on-save on and off, and refuses anything but a boolean', () => {
+    expect(UpdateProjectRequestSchema.parse({ formatOnSave: true })).toEqual({
+      formatOnSave: true,
+    });
+    expect(UpdateProjectRequestSchema.parse({ formatOnSave: false })).toEqual({
+      formatOnSave: false,
+    });
+    expect(UpdateProjectRequestSchema.safeParse({ formatOnSave: null }).success).toBe(false);
+  });
+});
+
 describe('FR-GRD-008 PATCH /projects/:id takes a run cost cap (round 3 §2.3)', () => {
   it('sets a cap, and a null removes it (D72)', () => {
     expect(UpdateProjectRequestSchema.parse({ maxCostPerRunUsd: 0.01 })).toEqual({

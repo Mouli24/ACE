@@ -15,9 +15,8 @@ import {
   type Migration,
   CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
   DOMAIN_MIGRATION_ID,
-  FORGE_CHAT_TURNS_MIGRATION_ID,
   FORGE_TERMINAL_MIGRATION_ID,
-  FORGE_CHECKPOINTS_MIGRATION_ID,
+  FORGE_CHECKS_MIGRATION_ID,
 } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
 import { makeProject, scope } from './fixtures.js';
@@ -64,9 +63,9 @@ afterEach(() => {
 
 /**
  * Creates a project on a database that predates the forge-terminal migration. The repository now
- * writes `projects.terminal` on create, so the column is added for the insert and dropped again,
- * which leaves the database as an install of that age really was (and the later migration free to
- * add it).
+ * writes `projects.terminal`, `check_command` and `format_on_save` on create, so the columns are
+ * added for the insert and dropped again, which leaves the database as an install of that age
+ * really was (and the later migrations free to add them).
  */
 async function createProjectBeforeTerminal(
   repository: SqliteRepository,
@@ -74,7 +73,11 @@ async function createProjectBeforeTerminal(
   project: Project,
 ): Promise<void> {
   sqlite.exec('ALTER TABLE projects ADD COLUMN terminal TEXT');
+  sqlite.exec('ALTER TABLE projects ADD COLUMN check_command TEXT');
+  sqlite.exec('ALTER TABLE projects ADD COLUMN format_on_save INTEGER');
   await repository.projects.create(scope, project);
+  sqlite.exec('ALTER TABLE projects DROP COLUMN format_on_save');
+  sqlite.exec('ALTER TABLE projects DROP COLUMN check_command');
   sqlite.exec('ALTER TABLE projects DROP COLUMN terminal');
 }
 
@@ -128,8 +131,7 @@ describe('Arch §15.3 migration applies on a round-4 database and is recorded', 
       CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
       DOMAIN_MIGRATION_ID,
       FORGE_TERMINAL_MIGRATION_ID,
-      FORGE_CHECKPOINTS_MIGRATION_ID,
-      FORGE_CHAT_TURNS_MIGRATION_ID,
+      FORGE_CHECKS_MIGRATION_ID,
     ]);
     for (const table of NEW_TABLES) expect(tableNames(after.sqlite)).toContain(table);
     expect(columnsOf(after.sqlite, 'node_runs')).toEqual(
@@ -171,16 +173,15 @@ describe('Arch §15.3 migration applies on a round-4 database and is recorded', 
     again.sqlite.close();
   });
 
-  it('sorts after every earlier migration, and only X1, chat-sessions, Domain and the three Forge ones follow it', () => {
+  it('sorts after every earlier migration, and only X1, chat-sessions, Domain, forge-terminal and forge-checks follow it', () => {
     const ids = MIGRATIONS.map((migration) => migration.id);
-    expect(ids.indexOf(ROUND_5_MIGRATION_ID)).toBe(ids.length - 7);
-    expect(ids.slice(-6)).toEqual([
+    expect(ids.indexOf(ROUND_5_MIGRATION_ID)).toBe(ids.length - 6);
+    expect(ids.slice(-5)).toEqual([
       X1_CLI_PROVIDERS_MIGRATION_ID,
       CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
       DOMAIN_MIGRATION_ID,
       FORGE_TERMINAL_MIGRATION_ID,
-      FORGE_CHECKPOINTS_MIGRATION_ID,
-      FORGE_CHAT_TURNS_MIGRATION_ID,
+      FORGE_CHECKS_MIGRATION_ID,
     ]);
     expect([...ids].sort()).toEqual(ids);
     expect(ROUND_5_MIGRATION_ID).toBe('20261001T120000_round_5_knowledge_memory_usage');
