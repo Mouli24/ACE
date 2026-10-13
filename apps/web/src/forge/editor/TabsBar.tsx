@@ -42,6 +42,8 @@ export function TabsBar({ projectId }: { projectId: string }) {
               : undefined;
     if (target === undefined) return;
     event.preventDefault();
+    // as a click: the file takes the area back from a review, even the tab already active
+    useReviewStore.getState().deactivate(projectId);
     useEditorStore.getState().activate(projectId, target);
     tabRefs.current.get(target)?.focus();
   };
