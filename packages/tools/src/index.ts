@@ -15,6 +15,9 @@ export * from './workspace/project-files.js';
 /* D301: the terminal's supervised processes. */
 export * from './process/runner.js';
 export * from './process/scripts.js';
+/* D300: the private checkpoint store. */
+export * from './checkpoints/git-store.js';
+export * from './checkpoints/run-store-git.js';
 
 export * from './search/backends.js';
 

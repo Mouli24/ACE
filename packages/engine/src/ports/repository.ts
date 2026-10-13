@@ -1,6 +1,9 @@
 import type {
   Artifact,
   ChatMessage,
+  Checkpoint,
+  CheckpointFile,
+  CheckpointStatus,
   ChatThread,
   CursorQuery,
   Edge,
@@ -271,6 +274,39 @@ export interface ChatMessageRepository {
 }
 
 /**
+ * A checkpoint as stored (D300): the wire shape plus the private store's commits, which never
+ * leave the engine. Paths and counts only — the file contents live in the store (design §7).
+ */
+export interface StoredCheckpoint {
+  checkpoint: Checkpoint;
+  /** The store's commit before the turn or run; absent when the snapshot failed. */
+  beforeRef?: string;
+  /** The store's commit after it; absent while recording. */
+  afterRef?: string;
+}
+
+export interface CheckpointPatch {
+  status?: CheckpointStatus;
+  files?: CheckpointFile[];
+  skipped?: string[];
+  /** `null` clears it. */
+  error?: string | null;
+  afterRef?: string;
+  updatedAt: Timestamp;
+}
+
+export interface CheckpointRepository {
+  insert(scope: Scope, stored: StoredCheckpoint): Promise<StoredCheckpoint>;
+  get(scope: Scope, id: Id): Promise<StoredCheckpoint | null>;
+  /** The project's checkpoints, newest first. */
+  listByProject(scope: Scope, projectId: Id): Promise<StoredCheckpoint[]>;
+  /** Every checkpoint in `status`, oldest first — `recording` ones at startup (recover). */
+  listByStatus(scope: Scope, status: CheckpointStatus): Promise<StoredCheckpoint[]>;
+  update(scope: Scope, id: Id, patch: CheckpointPatch): Promise<StoredCheckpoint | null>;
+  delete(scope: Scope, id: Id): Promise<boolean>;
+}
+
+/**
  * The relational store (Arch §7: SQLite locally, Postgres hosted).
  *
  * Methods are async so the same interface can front an async driver; the local adapter serialises
@@ -321,4 +357,10 @@ export interface Repository {
   memory?: MemoryRepository;
   summaryCache?: SummaryCacheRepository;
   usage?: UsageRepository;
+
+  /**
+   * IDE (D300): checkpoints of agents' changes to a project folder. Optional like round 5's: the
+   * checkpoint service refuses to start without it.
+   */
+  checkpoints?: CheckpointRepository;
 }

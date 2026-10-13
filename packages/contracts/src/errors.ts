@@ -57,7 +57,9 @@ export const ROUND_4_ERROR_CODES = [
  * size (413), a path outside the project folder (403) and a write into `.git`/`.ace` (403). The
  * terminal (D301, §6.3): a start the project's trust level refuses (403 `terminal_disabled` when
  * it is off, 403 `terminal_restricted` for a typed command when only scripts may run), a ninth
- * running process (409) and input to a process that has finished (409).
+ * running process (409) and input to a process that has finished (409). Checkpoints (D300, §5): a
+ * revert of a file that changed after the agent's edit (409, each path in `details`), and a
+ * checkpoint action with no git to run it (503).
  */
 export const IDE_ERROR_CODES = [
   'file_changed',
@@ -70,6 +72,8 @@ export const IDE_ERROR_CODES = [
   'process_limit',
   'process_not_running',
   'engine_stopping',
+  'checkpoint_conflict',
+  'checkpoints_unavailable',
 ] as const;
 
 export const ERROR_CODES = [
@@ -109,6 +113,8 @@ export const ERROR_CODE_HTTP_STATUS: Readonly<Record<ErrorCode, number>> = {
   process_limit: 409,
   process_not_running: 409,
   engine_stopping: 503,
+  checkpoint_conflict: 409,
+  checkpoints_unavailable: 503,
 };
 
 /** `details` shapes §2.3 names explicitly. */

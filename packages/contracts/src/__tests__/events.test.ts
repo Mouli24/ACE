@@ -352,8 +352,14 @@ describe('§2.4 node.token is transient, and round 4 §2.5 chat.token with it', 
       'files.changed',
       'process.output',
       'process.exited',
+      'checkpoint.updated',
     ]);
-    expect([...PROJECT_EVENT_TYPES]).toEqual(['files.changed', 'process.output', 'process.exited']);
+    expect([...PROJECT_EVENT_TYPES]).toEqual([
+      'files.changed',
+      'process.output',
+      'process.exited',
+      'checkpoint.updated',
+    ]);
     expect([...PERSISTED_RUN_EVENT_TYPES]).not.toContain('node.token');
     expect(PERSISTED_RUN_EVENT_TYPES).toHaveLength(RUN_EVENT_TYPES.length - 1);
     expect([...PERSISTED_THREAD_EVENT_TYPES]).toEqual(['chat.message']);
