@@ -1,4 +1,4 @@
-import type { FileContent } from '@ace/contracts';
+import type { FileContent, Project } from '@ace/contracts';
 import { AceApiError } from '@ace/sdk';
 import type { QueryClient } from '@tanstack/react-query';
 
@@ -7,10 +7,11 @@ import { useExplorerStore } from '../explorer/explorer-store';
 import { fileContentQuery } from '../files/hooks';
 import { fileKeys } from '../files/keys';
 import { isWithin, parentOf } from '../files/paths';
+import { queryKeys } from '../../workflows/query-keys';
 import { logOutput } from '../panel/output-store';
 import { EMPTY_EDITOR, needsSaveAll, replaceablePreview, useEditorStore } from './editor-store';
 import { languageOf } from './languages';
-import { disposeModel, getModel, markSaved, moveModels, replaceContent } from './models';
+import { disposeModel, editorFor, getModel, markSaved, moveModels, replaceContent } from './models';
 
 /** How a model tells the store its buffer is (un)saved. */
 export const dirtyHandler =
@@ -63,13 +64,40 @@ export function filesRemoved(projectId: string, path: string): void {
 
 const messageOf = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+/**
+ * Format Document (D299 Phase 4, design §6.2): Monaco's own formatter for the file's language,
+ * run through the editor showing it — Shift+Alt+F and the context menu do the same. False when no
+ * editor shows the file or no formatter knows its language; the text is then left as it is.
+ */
+export async function formatDocument(projectId: string, path: string): Promise<boolean> {
+  const action = editorFor(projectId, path)?.getAction('editor.action.formatDocument');
+  if (action === null || action === undefined || !action.isSupported()) return false;
+  await action.run();
+  return true;
+}
+
+/** The project's format-on-save, from the cache the workbench keeps (absent reads as off). */
+async function formatsOnSave(projectId: string, queryClient: QueryClient): Promise<boolean> {
+  try {
+    const project = await queryClient.ensureQueryData<Project>({
+      queryKey: queryKeys.project(projectId),
+      queryFn: () => api().getProject(projectId),
+    });
+    return project.formatOnSave === true;
+  } catch {
+    return false;
+  }
+}
 const isNotFound = (error: unknown): boolean => AceApiError.is(error) && error.status === 404;
 
 /**
  * Save one buffer (FR-GIT-004, §6.1): against the version it was loaded from, so a file the disk
  * changed meanwhile is never overwritten — that answers 409 and raises the conflict bar (§5.4). A
  * clean file deleted on disk is saved too: that recreates it. Only the text that was sent counts
- * as saved; typing during the save stays unsaved.
+ * as saved; typing during the save stays unsaved. With the project's format-on-save on, the file
+ * is formatted first when an editor shows it (D299 Phase 4) — so Save all formats only the active
+ * file — and a language with no formatter saves as typed.
  */
 export async function saveFile(
   projectId: string,
@@ -89,6 +117,13 @@ export async function saveFile(
       `${path} changed on disk — choose Compare, Take theirs or Keep mine first.`,
     );
     return false;
+  }
+  if (editorFor(projectId, path) !== undefined && (await formatsOnSave(projectId, queryClient))) {
+    try {
+      await formatDocument(projectId, path);
+    } catch (error) {
+      logOutput(projectId, 'warn', `Could not format ${path}: ${messageOf(error)}`);
+    }
   }
   const content = model.getValue();
   const sent = model.getAlternativeVersionId();

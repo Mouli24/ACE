@@ -5,9 +5,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mockVersion, moveEntry } from '../../mocks/files';
 import { db, installMockServer, queryClient, server } from '../../test/app';
 import { useOutputStore } from '../panel/output-store';
+import type * as Monaco from 'monaco-editor';
+
 import {
   dirtyHandler,
   filesMoved,
+  formatDocument,
   keepMine,
   openFile,
   saveAll,
@@ -15,7 +18,7 @@ import {
   takeTheirs,
 } from './actions';
 import { needsSaveAll, useEditorStore } from './editor-store';
-import { ensureModel, getModel, replaceContent } from './models';
+import { ensureModel, getModel, replaceContent, setActiveEditor } from './models';
 
 installMockServer();
 
@@ -245,5 +248,94 @@ describe('D299 §6.2 a clean buffer following the disk', () => {
     expect(useEditorStore.getState().projects[projectId]?.preview).toBe('a.ts');
     expect(file()?.dirty).toBe(false);
     expect(getModel(projectId, 'a.ts')?.getValue()).toBe('theirs');
+  });
+});
+
+describe('D299 Phase 4 Format and format-on-save', () => {
+  /**
+   * An editor showing `model` whose Format Document rewrites the text as `format` says — Monaco's
+   * formatters run through an editor, so the tests stand one in for the host's.
+   */
+  function attach(
+    model: ReturnType<typeof openOnDisk>,
+    format: (text: string) => string,
+    supported = true,
+  ) {
+    const run = vi.fn(async () => model.setValue(format(model.getValue())));
+    const editor = {
+      getModel: () => model,
+      getAction: (id: string) =>
+        id === 'editor.action.formatDocument' ? { isSupported: () => supported, run } : null,
+    };
+    setActiveEditor(editor as unknown as Monaco.editor.ICodeEditor);
+    return run;
+  }
+  const tidy = (text: string): string => text.replace(/\s*=\s*/g, ' = ');
+
+  it('Format Document runs the editor’s formatter on the file it shows, and nothing else', async () => {
+    const model = openOnDisk('a=1');
+    expect(await formatDocument(projectId, 'a.ts')).toBe(false);
+    const run = attach(model, tidy);
+    expect(await formatDocument(projectId, 'a.ts')).toBe(true);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(model.getValue()).toBe('a = 1');
+    expect(await formatDocument(projectId, 'other.ts')).toBe(false);
+  });
+
+  it('with format-on-save on, formats the active file first and saves the formatted text', async () => {
+    db.updateProject(projectId, { formatOnSave: true });
+    const model = openOnDisk('a=1');
+    const run = attach(model, tidy);
+    model.setValue('b=2');
+
+    expect(await saveFile(projectId, 'a.ts', queryClient)).toBe(true);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(disk()).toBe('b = 2');
+    expect(file()).toMatchObject({ dirty: false, baseVersion: mockVersion('b = 2') });
+  });
+
+  it('with format-on-save off, saves the text as typed', async () => {
+    const model = openOnDisk('a=1');
+    const run = attach(model, tidy);
+    model.setValue('b=2');
+    expect(await saveFile(projectId, 'a.ts', queryClient)).toBe(true);
+    expect(run).not.toHaveBeenCalled();
+    expect(disk()).toBe('b=2');
+  });
+
+  it('saves unchanged a file no editor shows, and a language with no formatter', async () => {
+    db.updateProject(projectId, { formatOnSave: true });
+    const model = openOnDisk('a=1');
+    model.setValue('b=2');
+    expect(await saveFile(projectId, 'a.ts', queryClient)).toBe(true);
+    expect(disk()).toBe('b=2');
+
+    const run = attach(model, tidy, false);
+    model.setValue('c=3');
+    expect(await saveFile(projectId, 'a.ts', queryClient)).toBe(true);
+    expect(run).not.toHaveBeenCalled();
+    expect(disk()).toBe('c=3');
+  });
+
+  it('Save all formats only the active file', async () => {
+    db.updateProject(projectId, { formatOnSave: true });
+    db.seedFiles(projectId, { 'b.ts': 'x=1' });
+    const active = openOnDisk('a=1');
+    openFile(projectId, 'b.ts');
+    const other = ensureModel(
+      projectId,
+      'b.ts',
+      'x=1',
+      'typescript',
+      dirtyHandler(projectId, 'b.ts'),
+    );
+    useEditorStore.getState().loaded(projectId, 'b.ts', mockVersion('x=1'), false);
+    attach(active, tidy);
+    active.setValue('a=2');
+    other.setValue('x=2');
+
+    await saveAll(projectId, queryClient);
+    expect(disk()).toBe('a = 2');
+    expect(db.filesOf(projectId)['b.ts']?.content).toBe('x=2');
   });
 });

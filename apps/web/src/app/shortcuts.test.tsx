@@ -90,3 +90,41 @@ describe('D299 Forge’s keyboard shortcuts', () => {
     expect(shortcutLabel(SHORTCUTS.toggleTerminal)).toBe('Ctrl+`');
   });
 });
+
+describe('D299 Phase 4 Search, Run checks and Format keys', () => {
+  it('binds Ctrl/⌘+Shift+F to Search and Ctrl/⌘+Shift+B to Run checks, apart from Ctrl+B and Ctrl+Alt+B', () => {
+    const key = (code: string, init: KeyboardEventInit) =>
+      new KeyboardEvent('keydown', { code, key: code.slice(3).toLowerCase(), ...init });
+    expect(matches(key('KeyF', { ctrlKey: true, shiftKey: true }), SHORTCUTS.searchFiles)).toBe(
+      true,
+    );
+    expect(matches(key('KeyF', { ctrlKey: true }), SHORTCUTS.searchFiles)).toBe(false);
+    const ctrlShiftB = key('KeyB', { ctrlKey: true, shiftKey: true });
+    expect(matches(ctrlShiftB, SHORTCUTS.runChecks)).toBe(true);
+    expect(matches(ctrlShiftB, SHORTCUTS.toggleSidebar)).toBe(false);
+    expect(matches(ctrlShiftB, SHORTCUTS.toggleChat)).toBe(false);
+    expect(shortcutLabel(SHORTCUTS.runChecks)).toBe('Ctrl+Shift+B');
+  });
+
+  it('leaves Shift+Alt+F to Monaco’s Format Document: no shortcut takes it', () => {
+    const shiftAltF = new KeyboardEvent('keydown', {
+      code: 'KeyF',
+      key: 'F',
+      shiftKey: true,
+      altKey: true,
+    });
+    for (const shortcut of Object.values(SHORTCUTS)) {
+      expect(matches(shiftAltF, shortcut)).toBe(false);
+    }
+    const run = vi.fn();
+    render(<Bound bindings={Object.values(SHORTCUTS).map((shortcut) => [shortcut, run])} />);
+    const event = press({ code: 'KeyF', key: 'F', shiftKey: true, altKey: true });
+    expect(run).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+function Bound({ bindings }: { bindings: ReadonlyArray<readonly [Shortcut, () => void]> }) {
+  useShortcuts(bindings);
+  return null;
+}

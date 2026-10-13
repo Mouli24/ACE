@@ -1,13 +1,14 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it } from 'vitest';
+import type * as Monaco from 'monaco-editor';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useRunStore } from '../../runs/run-store';
 import { db, installMockServer, renderWithQuery } from '../../test/app';
 import type { FileTouch } from '../attribution';
 import { openFile } from './actions';
 import { useEditorStore } from './editor-store';
-import { ensureModel } from './models';
+import { ensureModel, setActiveEditor } from './models';
 import { PathBar } from './PathBar';
 
 installMockServer();
@@ -105,5 +106,31 @@ describe('D334 ▶ Run pipeline', () => {
     act(() => void openText('a.ts', 'x'));
     renderWithQuery(<PathBar projectId={projectId} path="a.ts" />);
     expect(screen.queryByRole('button', { name: 'Run pipeline' })).toBeNull();
+  });
+});
+
+describe('D299 Phase 4 Format in the path bar', () => {
+  it('formats the file in the editor with Monaco’s Format Document', async () => {
+    const user = userEvent.setup();
+    const model = openText('src/app.ts', 'a=1');
+    const run = vi.fn(async () => model.setValue('a = 1'));
+    setActiveEditor({
+      getModel: () => model,
+      getAction: () => ({ isSupported: () => true, run }),
+    } as unknown as Monaco.editor.ICodeEditor);
+    renderWithQuery(<PathBar projectId={projectId} path="src/app.ts" />);
+
+    const format = screen.getByRole('button', { name: 'Format Document' });
+    expect(format).toHaveClass('rounded-[999px]', 'bg-[var(--chip)]');
+    expect(format).toHaveAttribute('title', 'Format Document (Shift+Alt+F)');
+    await user.click(format);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(model.getValue()).toBe('a = 1');
+  });
+
+  it('is disabled for a language Monaco has no formatter for', () => {
+    openText('notes.md', '# hi');
+    renderWithQuery(<PathBar projectId={projectId} path="notes.md" />);
+    expect(screen.getByRole('button', { name: 'Format Document' })).toBeDisabled();
   });
 });
