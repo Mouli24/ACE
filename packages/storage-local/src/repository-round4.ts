@@ -146,6 +146,9 @@ function toChatMessage(row: ChatMessageRow): ChatMessage {
     ...(row.runId === null ? {} : { runId: row.runId }),
     ...(row.error === null ? {} : { error: JSON.parse(row.error) }),
     ...(row.modelId === null ? {} : { modelId: row.modelId }),
+    ...(row.speakerNodeId === null ? {} : { speakerNodeId: row.speakerNodeId }),
+    ...(row.activity === null ? {} : { activity: JSON.parse(row.activity) }),
+    ...(row.checkpointId === null ? {} : { checkpointId: row.checkpointId }),
   });
 }
 
@@ -549,6 +552,12 @@ export function createChatMessageRepository(db: Db): ChatMessageRepository {
           runId: message.runId ?? null,
           error: message.error === undefined ? null : toJsonColumn(message.error, `${at}.error`),
           modelId: message.modelId ?? null,
+          speakerNodeId: message.speakerNodeId ?? null,
+          activity:
+            message.activity === undefined
+              ? null
+              : toJsonColumn(message.activity, `${at}.activity`),
+          checkpointId: message.checkpointId ?? null,
         })
         .run();
       return message;
