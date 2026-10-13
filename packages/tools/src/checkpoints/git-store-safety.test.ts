@@ -40,8 +40,8 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'ace-cp-root-'));
 });
 afterEach(() => {
-  rmSync(dataDir, { recursive: true, force: true });
-  rmSync(root, { recursive: true, force: true });
+  rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 /** before → the agent's change → after, on one store. */

@@ -15,6 +15,8 @@ import { CheckpointUnavailableError } from '@ace/engine';
 export const STORE_GLOBAL_CONFIG = 'ace-empty-gitconfig';
 export const STORE_GIT_TIMEOUT_MS = 60_000;
 export const STORE_GIT_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
+/** How long a killed command may take to exit before it is answered regardless. */
+export const STORE_GIT_KILL_GRACE_MS = 2_000;
 
 /** Ahead of every command: nothing configured anywhere may run a program or rewrite bytes. */
 const SAFE_CONFIG = [
@@ -79,6 +81,10 @@ function storeEnv(options: StoreGitOptions): NodeJS.ProcessEnv {
  * Runs one git command against the store. Resolves with the exit code, stdout as bytes (capped at
  * 64 MB — more rejects rather than truncating) and the tail of stderr. Rejects with
  * `CheckpointUnavailableError('git_missing')` when git is not installed, and after 60 s.
+ *
+ * A command killed for its time or its output is answered only once it has exited (D300 G-1): until
+ * then git holds files in the store, and on Windows an open file blocks deleting its folder. Should
+ * the exit never be reported, it is answered {@link STORE_GIT_KILL_GRACE_MS} after the kill anyway.
  */
 export function runStoreGit(
   args: readonly string[],
@@ -89,10 +95,14 @@ export function runStoreGit(
     let size = 0;
     let stderr = '';
     let settled = false;
+    /** Why the command was killed: the answer once it has exited. */
+    let killedFor: Error | undefined;
+    let grace: NodeJS.Timeout | undefined;
     const finish = (outcome: () => void): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(grace);
       outcome();
     };
     const child = spawn(options.git ?? 'git', [...SAFE_CONFIG, ...args], {
@@ -101,22 +111,26 @@ export function runStoreGit(
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     });
-    const timer = setTimeout(() => {
+    const kill = (reason: Error): void => {
+      if (settled || killedFor !== undefined) return;
+      killedFor = reason;
+      clearTimeout(timer);
       child.kill('SIGKILL');
-      finish(() =>
-        reject(new CheckpointUnavailableError('failed', `git ${args[0] ?? ''} timed out.`)),
-      );
-    }, options.timeoutMs ?? STORE_GIT_TIMEOUT_MS);
+      // nothing more goes in: whatever still reads the pipe sees its end
+      child.stdin.destroy();
+      grace = setTimeout(() => finish(() => reject(reason)), STORE_GIT_KILL_GRACE_MS);
+    };
+    const timer = setTimeout(
+      () => kill(new CheckpointUnavailableError('failed', `git ${args[0] ?? ''} timed out.`)),
+      options.timeoutMs ?? STORE_GIT_TIMEOUT_MS,
+    );
 
     child.stdout.on('data', (chunk: Buffer) => {
+      if (killedFor !== undefined) return;
       size += chunk.length;
       if (size > STORE_GIT_MAX_OUTPUT_BYTES) {
-        child.kill('SIGKILL');
-        finish(() =>
-          reject(
-            new CheckpointUnavailableError('failed', `git ${args[0] ?? ''} answered too much.`),
-          ),
-        );
+        chunks.length = 0;
+        kill(new CheckpointUnavailableError('failed', `git ${args[0] ?? ''} answered too much.`));
         return;
       }
       chunks.push(chunk);
@@ -124,17 +138,23 @@ export function runStoreGit(
     child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
       stderr = (stderr + chunk).slice(-8192);
     });
-    child.on('error', (error: NodeJS.ErrnoException) =>
+    child.on('error', (error: NodeJS.ErrnoException) => {
+      // a kill that failed: the exit, or the grace period, still decides
+      if (killedFor !== undefined) return;
       finish(() =>
         reject(
           error.code === 'ENOENT'
             ? new CheckpointUnavailableError('git_missing', 'git is not installed or not on PATH.')
             : new CheckpointUnavailableError('failed', `git could not run: ${error.message}`),
         ),
-      ),
-    );
+      );
+    });
     child.on('close', (code) =>
-      finish(() => resolve({ code, stdout: Buffer.concat(chunks), stderr })),
+      finish(() =>
+        killedFor === undefined
+          ? resolve({ code, stdout: Buffer.concat(chunks), stderr })
+          : reject(killedFor),
+      ),
     );
     // A command that exits before reading its input closes the pipe; that is not an error here.
     child.stdin.on('error', () => undefined);
