@@ -222,8 +222,9 @@ function ChecksGroup({ projectId, run }: { projectId: string; run: ChecksRun }) 
         </div>
       )}
       {run.status === 'done' && run.problems.length === 0 && !failedSilently(run) && (
+        // no period after the command: one ending in `.` (`tsc -p .`) would read `..` (smoke S-1)
         <p className="m-0 text-[12px] text-[var(--muted)]">
-          No problems found by <span className="font-machine">{run.command}</span>.
+          No problems found by <span className="font-machine">{run.command}</span>
         </p>
       )}
       <ProblemGroups projectId={projectId} problems={run.problems} label="Checks" />
