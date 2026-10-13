@@ -1,4 +1,5 @@
 import { cn } from '@ace/ui';
+import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { useWorkflowMode, workflowPath } from '../mode';
@@ -6,12 +7,14 @@ import { CheckpointFiles, ROW_ACTION } from './CheckpointFiles';
 import { useCheckpoint, useCheckpointAction, useCheckpointEvents } from './hooks';
 import { COVERAGE_NOTE, STATUS_LABEL, actionFailure, failureNote, pendingFiles } from './present';
 import { openReview } from './review-actions';
+import { RevertAllDialog } from './RevertAllDialog';
 
 /**
  * The Changes card under a chat turn that wrote files (D300, design §5.3): the files with `+/−`,
- * Review, Keep all and Revert all. Review opens the diff in Forge — switching to it from Ideate or
- * Domain. A checkpoint that could not be taken says the changes cannot be reverted (§10); one that
- * is decided says how. Live from `checkpoint.updated`. Needs a router (the chat column has one).
+ * Review, Keep all and Revert all — which asks first (fix A-M9). Review opens the diff in Forge —
+ * switching to it from Ideate or Domain. A checkpoint that could not be taken says the changes
+ * cannot be reverted (§10); one that is decided says how. Live from `checkpoint.updated`. Needs a
+ * router (the chat column has one).
  */
 export function ChangesCard({
   projectId,
@@ -27,6 +30,7 @@ export function ChangesCard({
   const mode = useWorkflowMode();
   const { workflowId } = useParams();
   const checkpoint = query.data;
+  const [confirmRevert, setConfirmRevert] = useState(false);
 
   const review = (path: string): void => {
     openReview(projectId, checkpointId, path);
@@ -101,12 +105,19 @@ export function ChangesCard({
           <button
             type="button"
             disabled={action.isPending}
-            onClick={() => action.mutate({ action: 'revert' })}
+            onClick={() => setConfirmRevert(true)}
             className={cn(ROW_ACTION, 'text-[#c94c27] hover:text-[#c94c27]')}
           >
             Revert all
           </button>
         </footer>
+      )}
+      {confirmRevert && pending.length > 0 && (
+        <RevertAllDialog
+          files={pending}
+          onConfirm={() => action.mutate({ action: 'revert' })}
+          onClose={() => setConfirmRevert(false)}
+        />
       )}
       {(checkpoint.skipped.length > 0 || pending.length > 0) && (
         <p

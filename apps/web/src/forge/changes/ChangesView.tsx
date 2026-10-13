@@ -1,7 +1,7 @@
 import type { Checkpoint } from '@ace/contracts';
 import { AceApiError } from '@ace/sdk';
 import { cn } from '@ace/ui';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { ago, nodeStatusLook } from '../../theme/format';
 import { useWorkflowGraph } from '../../workflows/hooks';
@@ -17,6 +17,7 @@ import {
   sourceLabel,
 } from './present';
 import { openReview } from './review-actions';
+import { RevertAllDialog } from './RevertAllDialog';
 
 const messageOf = (error: unknown): string =>
   AceApiError.is(error) || error instanceof Error ? error.message : String(error);
@@ -24,9 +25,10 @@ const messageOf = (error: unknown): string =>
 /**
  * Forge's Changes (D300, design §5.3): every checkpoint of the project, the ones to review first —
  * where it came from, when, and each file with its `+/−`. Review opens a file's diff in the editor
- * area; Keep all, Revert all, and Keep or Revert per file decide it. A revert the engine refused
- * says why on that file. Live from `checkpoint.updated`. A standalone column body: the left
- * column's header switch (EXPLORER · SEARCH · CHANGES) mounts it (D339, at the merge).
+ * area; Keep all, Revert all (after a confirm, fix A-M9), and Keep or Revert per file decide it. A
+ * revert the engine refused says why on that file. Live from `checkpoint.updated`. A standalone
+ * column body: the left column's header switch (EXPLORER · SEARCH · CHANGES) mounts it (D339, at
+ * the merge).
  */
 export function ChangesView({
   projectId,
@@ -113,6 +115,7 @@ function CheckpointEntry({
   const action = useCheckpointAction(projectId, checkpoint.id);
   const pending = pendingFiles(checkpoint);
   const failure = actionFailure(action.error);
+  const [confirmRevert, setConfirmRevert] = useState(false);
   useEffect(() => {
     if (focused) element.current?.scrollIntoView?.({ block: 'nearest' });
   }, [focused]);
@@ -177,12 +180,19 @@ function CheckpointEntry({
           <button
             type="button"
             disabled={action.isPending}
-            onClick={() => action.mutate({ action: 'revert' })}
+            onClick={() => setConfirmRevert(true)}
             className={cn(ROW_ACTION, 'text-[#c94c27] hover:text-[#c94c27]')}
           >
             Revert all
           </button>
         </footer>
+      )}
+      {confirmRevert && pending.length > 0 && (
+        <RevertAllDialog
+          files={pending}
+          onConfirm={() => action.mutate({ action: 'revert' })}
+          onClose={() => setConfirmRevert(false)}
+        />
       )}
     </article>
   );

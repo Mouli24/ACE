@@ -31,6 +31,13 @@ const fileOf = (projectId: string, path: string): string | undefined => {
   return entry?.kind === 'file' ? entry.content : undefined;
 };
 
+/** Revert all, then the confirm's own Revert all (fix A-M9). */
+async function revertAll(user: ReturnType<typeof userEvent.setup>, view: HTMLElement) {
+  await user.click(await within(view).findByRole('button', { name: 'Revert all' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Revert all changes?' });
+  await user.click(within(dialog).getByRole('button', { name: 'Revert all' }));
+}
+
 async function open(projectId: string, workflowId?: string) {
   renderWithQuery(<ChangesView projectId={projectId} workflowId={workflowId} />);
   return screen.findByRole('region', { name: 'Changes' });
@@ -111,6 +118,43 @@ describe('D300 Forge’s Changes view', () => {
     );
     expect(fileOf(projectId, 'a.ts')).toBe('a0\n');
     expect(within(view).getByRole('button', { name: 'Revert b.ts' })).toBeEnabled();
+    // one file stays one click: no confirm (fix A-M9 is for Revert all)
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('Revert all asks first: Cancel sends nothing, the confirm reverts and deletes what the agent added (fix A-M9)', async () => {
+    const user = userEvent.setup();
+    const { projectId } = seed();
+    const seeded = checkpoints.seed(projectId, [
+      { path: 'a.ts', before: 'a0\n', after: 'a1\n' },
+      { path: 'src/new.ts', after: 'fresh\n' },
+      { path: 'src/other.ts', after: 'more\n' },
+    ]);
+    const view = await open(projectId);
+
+    await user.click(await within(view).findByRole('button', { name: 'Revert all' }));
+    let dialog = await screen.findByRole('dialog', { name: 'Revert all changes?' });
+    expect(dialog).toHaveTextContent('Revert 3 files to how they were before this change.');
+    expect(
+      within(within(dialog).getByRole('list', { name: 'Files to be deleted' }))
+        .getAllByRole('listitem')
+        .map((item) => item.textContent),
+    ).toEqual(['src/new.ts', 'src/other.ts']);
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(checkpoints.get(projectId, seeded.id).status).toBe('pending');
+    expect(fileOf(projectId, 'src/new.ts')).toBe('fresh\n');
+
+    await user.click(within(view).getByRole('button', { name: 'Revert all' }));
+    dialog = await screen.findByRole('dialog', { name: 'Revert all changes?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Revert all' }));
+    await waitFor(() =>
+      expect(within(view).getByTestId(`checkpoint-status-${seeded.id}`)).toHaveTextContent(
+        'Reverted',
+      ),
+    );
+    expect(fileOf(projectId, 'a.ts')).toBe('a0\n');
+    expect(fileOf(projectId, 'src/new.ts')).toBeUndefined();
   });
 
   it('shows a refused revert’s reason on that file, and reverts the others', async () => {
@@ -122,7 +166,7 @@ describe('D300 Forge’s Changes view', () => {
     ]);
     db.writeFileExternally(projectId, 'a.ts', 'mine\n');
     const view = await open(projectId);
-    await user.click(await within(view).findByRole('button', { name: 'Revert all' }));
+    await revertAll(user, view);
 
     const a = within(view).getByTestId(`change-${seeded.id}-a.ts`);
     expect(await within(a).findByRole('alert')).toHaveTextContent(
@@ -188,7 +232,7 @@ describe('D300 Forge’s Changes view', () => {
     );
     expect(within(big).queryByRole('button', { name: 'Revert big.json' })).toBeNull();
 
-    await user.click(within(view).getByRole('button', { name: 'Revert all' }));
+    await revertAll(user, view);
     await waitFor(() =>
       expect(within(view).getByTestId(`checkpoint-status-${seeded.id}`)).toHaveTextContent(
         'Reverted',
