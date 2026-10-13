@@ -1,5 +1,6 @@
-import type { CreateEntryRequest, MoveEntryRequest } from '@ace/contracts';
+import type { CreateEntryRequest, FileSearchRequest, MoveEntryRequest } from '@ace/contracts';
 import {
+  keepPreviousData,
   useMutation,
   useQueries,
   useQuery,
@@ -49,6 +50,20 @@ export function useFileList(projectId: string, enabled: boolean) {
     queryFn: () => api().listAllFiles(projectId),
     enabled: enabled && projectId !== '',
     staleTime: 60_000,
+  });
+}
+
+/**
+ * Search's results (D299 Phase 4) for a request given as JSON (stable, so a re-render is never a
+ * new search); `undefined` asks for nothing. The last results stay while the next ones load.
+ */
+export function useFileSearch(projectId: string, request: string | undefined) {
+  return useQuery({
+    queryKey: fileKeys.search(projectId, request ?? ''),
+    queryFn: () => api().searchFiles(projectId, JSON.parse(request ?? '{}') as FileSearchRequest),
+    enabled: projectId !== '' && request !== undefined,
+    placeholderData: keepPreviousData,
+    retry: false,
   });
 }
 

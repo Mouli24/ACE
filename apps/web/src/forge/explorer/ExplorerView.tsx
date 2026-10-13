@@ -6,8 +6,11 @@ import type { AgentLook } from '../../theme/agents';
 import { openFile } from '../editor/actions';
 import { useFileList } from '../files/hooks';
 import { parentOf } from '../files/paths';
+import { SearchView } from '../search/SearchView';
 import { useExplorerStore, useProjectExplorer } from './explorer-store';
 import { FileTree } from './FileTree';
+import { useSideViewStore } from './side-view-store';
+import { SideViewSwitch } from './SideViewSwitch';
 import { useTreeRows } from './useTreeRows';
 
 /** "{n} files" from the project's file list; `n+` when the engine cut the list short. */
@@ -17,9 +20,9 @@ function fileCount(list: { files: readonly string[]; truncated: boolean } | unde
 }
 
 /**
- * The theme's Explorer (D334): a fixed 248px column — "EXPLORER", the file count and New File /
- * New Folder (D299, created where the selection is, as in VS Code), the tree, and the filter at the
- * bottom. The file watcher keeps it fresh, so it has no refresh or collapse.
+ * The theme's Explorer (D334): a fixed 248px column. Its header switches EXPLORER · SEARCH (D299
+ * Phase 4; the merge adds CHANGES) in the kit's pill, and the body is the view picked: the
+ * project's files ({@link ExplorerFiles}) or {@link SearchView}.
  */
 export function ExplorerView({
   projectId,
@@ -28,6 +31,34 @@ export function ExplorerView({
   projectId: string;
   /** Path → the agent writing it now (D334). */
   live?: ReadonlyMap<string, AgentLook>;
+}) {
+  const view = useSideViewStore((state) => state.view);
+  return (
+    <nav
+      aria-label="Explorer"
+      className="flex w-[248px] shrink-0 flex-col border-r border-[var(--line)] bg-[var(--panel)]"
+    >
+      <div className="flex items-center px-[10px] pb-[8px] pt-[10px]">
+        <SideViewSwitch />
+      </div>
+      {/* One body per side view; the merge step adds `changes` (ChangesView) beside these. */}
+      {view === 'explorer' && <ExplorerFiles projectId={projectId} live={live} />}
+      {view === 'search' && <SearchView projectId={projectId} />}
+    </nav>
+  );
+}
+
+/**
+ * The Explorer's own body: the file count and New File / New Folder (D299, created where the
+ * selection is, as in VS Code), the tree, and the filter at the bottom. The file watcher keeps it
+ * fresh, so it has no refresh or collapse.
+ */
+function ExplorerFiles({
+  projectId,
+  live,
+}: {
+  projectId: string;
+  live: ReadonlyMap<string, AgentLook> | undefined;
 }) {
   const project = useProject(projectId);
   const list = useFileList(projectId, true);
@@ -45,15 +76,8 @@ export function ExplorerView({
   const name = project.data?.name ?? 'Project';
   const count = fileCount(list.data);
   return (
-    <nav
-      aria-label="Explorer"
-      className="flex w-[248px] shrink-0 flex-col border-r border-[var(--line)] bg-[var(--panel)]"
-    >
-      <div className="flex items-center gap-[8px] px-[14px] pb-[8px] pt-[12px]">
-        <span className="font-machine text-[10px] tracking-[0.1em] text-[var(--muted)]">
-          EXPLORER
-        </span>
-        <div className="flex-1" />
+    <>
+      <div className="flex items-center gap-[8px] px-[14px] pb-[8px]">
         {count !== '' && (
           <span
             data-testid="explorer-count"
@@ -62,6 +86,7 @@ export function ExplorerView({
             {count}
           </span>
         )}
+        <div className="flex-1" />
         <div className="-my-[4px] -mr-[6px] flex items-center">
           <CreateButton
             label="New File"
@@ -93,7 +118,7 @@ export function ExplorerView({
           className="h-[30px] w-full rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-[10px] text-[12px] [font-family:inherit] text-[var(--ink)] outline-none focus:border-[#ef6b3f]"
         />
       </div>
-    </nav>
+    </>
   );
 }
 

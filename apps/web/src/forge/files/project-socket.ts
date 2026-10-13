@@ -32,6 +32,8 @@ function refreshStatusSoon(queryClient: QueryClient, projectId: string): void {
 export function applyFilesChanged(queryClient: QueryClient, payload: FilesChangedPayload): void {
   const { projectId } = payload;
   refreshStatusSoon(queryClient, projectId);
+  // Search's results follow the disk, as VS Code's do (D299 Phase 4).
+  void queryClient.invalidateQueries({ queryKey: fileKeys.searches(projectId) });
   if (payload.resync) {
     void queryClient.invalidateQueries({ queryKey: fileKeys.all(projectId) });
     return;
