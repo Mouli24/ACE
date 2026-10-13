@@ -174,19 +174,20 @@ export function makeRun(id: Id, workflowId: Id, projectId: Id, nodes: Node[]): R
 export function makeChatService(
   repository: FakeRepository,
   bus: EventBus,
-  overrides: Partial<ChatServiceDeps> & { workflowId?: Id } = {},
+  overrides: Partial<ChatServiceDeps> & { workflowId?: Id; workflowIds?: Id[] } = {},
 ): ReturnType<typeof createChatService> {
   const now = overrides.now ?? makeClock();
   const resolveNode =
     overrides.resolveNode ??
     (async (nodeId: Id): Promise<ResolvedChatNode | null> => {
       // Test doubles know their workflow; the real root supplies a node-by-id lookup (see report).
-      for (const wf of [overrides.workflowId].filter((w): w is Id => w !== undefined)) {
+      const workflows = [overrides.workflowId, ...(overrides.workflowIds ?? [])];
+      for (const wf of workflows.filter((w): w is Id => w !== undefined)) {
         const node = (await repository.nodes.listByWorkflow(scope, wf)).find((n) => n.id === nodeId);
         if (node === undefined) continue;
         const workflow = await repository.workflows.get(scope, node.workflowId);
         if (workflow === null) continue;
-        return { node, projectId: workflow.projectId };
+        return { node, projectId: workflow.projectId, workflowId: node.workflowId };
       }
       return null;
     });
@@ -208,5 +209,7 @@ export function makeChatService(
     ...(overrides.checks === undefined ? {} : { checks: overrides.checks }),
     ...(overrides.masker === undefined ? {} : { masker: overrides.masker }),
     ...(overrides.startRun === undefined ? {} : { startRun: overrides.startRun }),
+    ...(overrides.tools === undefined ? {} : { tools: overrides.tools }),
+    ...(overrides.checkpoints === undefined ? {} : { checkpoints: overrides.checkpoints }),
   });
 }

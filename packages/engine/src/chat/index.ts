@@ -3,8 +3,10 @@
  * agent threads. `createChatService` is the HTTP surface's engine; `startTimelinePopulation` wires
  * the timeline to the event bus.
  */
+export * from './activity.js';
 export * from './errors.js';
 export * from './guardrails.js';
 export * from './prompt.js';
 export * from './timeline.js';
 export * from './service.js';
+export * from './tool-loop.js';

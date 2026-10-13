@@ -1,0 +1,662 @@
+import type { ChatMessage, Id, Model, Part, ToolDefinition } from '@ace/contracts';
+import { beforeEach, describe, expect, it } from 'vitest';
+
+import { newId } from '../../ids.js';
+import type {
+  CheckpointMeta,
+  CheckpointRecorder,
+  GenerateRequest,
+  ProviderAdapter,
+  StreamChunk,
+} from '../../ports/index.js';
+import { FakeRepository } from '../../__tests__/fake-repository.js';
+import type { ExecutableTool, ToolProvider, ToolRunContext } from '../../runs/tool-loop.js';
+import { activityItemFor } from '../activity.js';
+import { ChatTargetInvalidError } from '../errors.js';
+import { buildChatPrompt } from '../prompt.js';
+import { chatTurnTimeoutMs, type ChatService } from '../service.js';
+import { CHAT_PROJECT_TOOLS } from '../tool-loop.js';
+import {
+  MODEL_ID,
+  PROVIDER_ID,
+  makeAgentNode,
+  makeBus,
+  makeChatService,
+  makeClock,
+  makeSimpleNode,
+  makeWorkflow,
+  scope,
+} from './harness.js';
+
+/*
+ * D302: a node chat works in the project folder. A CLI node gets the folder and its preset; an API
+ * node gets ACE's non-destructive project tools in a bounded loop; writing turns queue per project
+ * and are checkpointed; `@handle` brings another node of the workflow into the same thread.
+ */
+
+const FOLDER = 'D:/projects/shop';
+const SECRET = 'TOP SECRET FILE CONTENT';
+const hi = (text = 'hi'): Part[] => [{ type: 'text', text }];
+
+/** A gate a test opens by hand, so it can see what waits behind it. */
+function gate(): { wait: Promise<void>; open: () => void } {
+  let open = (): void => undefined;
+  const wait = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { wait, open };
+}
+
+const flush = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+/** A catalog row for the harness model — `supportsTools` decides whether tools are offered. */
+function catalogRow(supportsTools: boolean): Model {
+  return {
+    id: newId(),
+    providerId: PROVIDER_ID,
+    modelId: MODEL_ID,
+    displayName: 'Mock chat',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+    contextWindow: 100_000,
+    supportsTools,
+    supportsJson: false,
+    available: true,
+    source: 'discovered',
+    lastCheckedAt: '2026-10-14T09:00:00.000Z',
+  };
+}
+
+function definition(name: string, destructive = false): ToolDefinition {
+  return {
+    name,
+    description: name,
+    inputSchema: { type: 'object' },
+    outputSchema: { type: 'object' },
+    permissions: { network: false, fsPaths: ['<project>'], destructive },
+    timeoutMs: 10_000,
+    source: 'builtin',
+  };
+}
+
+interface ToolRun {
+  name: string;
+  args: unknown;
+  context: ToolRunContext;
+}
+
+/** The registry: the six project tools, plus `run_command` and a destructive one never offered. */
+function makeTools(): { provider: ToolProvider; runs: ToolRun[] } {
+  const runs: ToolRun[] = [];
+  const tools = new Map<string, ExecutableTool>();
+  const add = (name: string, destructive: boolean, result: (args: unknown) => unknown) =>
+    tools.set(name, {
+      definition: definition(name, destructive),
+      run: async (args, context) => {
+        runs.push({ name, args, context });
+        return result(args);
+      },
+    });
+  add('list_files', false, () => ({ entries: ['src/'] }));
+  add('read_file', false, () => ({ path: 'src/a.ts', content: SECRET }));
+  add('write_file', false, () => ({ path: 'src/b.ts', written: true }));
+  add('edit_file', false, () => ({ ok: true }));
+  add('git_status', false, () => ({ files: [] }));
+  add('git_diff', false, () => ({ diff: '' }));
+  add('run_command', false, () => ({ exitCode: 0 }));
+  add('sandbox_delete', true, () => ({ deleted: true }));
+  return { provider: { get: (name) => tools.get(name) }, runs };
+}
+
+/** An API adapter that plays one script per call: what to stream, given the request. */
+function scriptedAdapter(
+  script: (req: GenerateRequest, call: number) => StreamChunk[],
+  options: { type?: ProviderAdapter['type']; before?: (call: number) => Promise<void> } = {},
+): { adapter: ProviderAdapter; requests: GenerateRequest[] } {
+  const requests: GenerateRequest[] = [];
+  return {
+    requests,
+    adapter: {
+      type: options.type ?? 'openai_compatible',
+      check: async () => ({ status: 'CONNECTED' }),
+      listModels: async () => [],
+      async *generate(req) {
+        requests.push(req);
+        const call = requests.length;
+        await options.before?.(call);
+        for (const chunk of script(req, call)) yield chunk;
+      },
+    },
+  };
+}
+
+const answer = (text: string): StreamChunk[] => [
+  { type: 'text', delta: text },
+  { type: 'usage', tokensIn: 3, tokensOut: 2 },
+  { type: 'finish', reason: 'stop' },
+];
+const callTool = (name: string, args: unknown, n = 1): StreamChunk[] => [
+  { type: 'tool_call', callId: `call-${name}-${n}`, name, args },
+  { type: 'usage', tokensIn: 3, tokensOut: 0 },
+  { type: 'finish', reason: 'tool_calls' },
+];
+
+let repository: FakeRepository;
+let service: ChatService;
+const now = makeClock();
+let projectId: Id;
+let workflowId: Id;
+let coder: ReturnType<typeof makeAgentNode>;
+let reviewer: ReturnType<typeof makeAgentNode>;
+
+async function seed(folderPath = FOLDER): Promise<void> {
+  repository = new FakeRepository();
+  projectId = newId();
+  await repository.projects.create(scope, {
+    id: projectId,
+    name: 'Shop',
+    folderPath,
+    createdAt: '2026-10-14T09:00:00.000Z',
+    updatedAt: '2026-10-14T09:00:00.000Z',
+  });
+  const workflow = makeWorkflow(projectId);
+  workflowId = workflow.id;
+  await repository.workflows.create(scope, workflow);
+  coder = makeAgentNode(workflow.id, { name: 'Coder', instructions: 'You write the code.' });
+  reviewer = makeAgentNode(workflow.id, { name: 'Reviewer', instructions: 'You review code.' });
+  await repository.nodes.insert(scope, coder);
+  await repository.nodes.insert(scope, reviewer);
+}
+
+function build(overrides: Parameters<typeof makeChatService>[2] = {}): void {
+  const { bus } = makeBus(repository, now);
+  service = makeChatService(repository, bus, { workflowId, now, ...overrides });
+}
+
+beforeEach(async () => {
+  await seed();
+});
+
+/* -------------------------------------------------------------------------- */
+/* CLI nodes                                                                   */
+/* -------------------------------------------------------------------------- */
+
+describe('D302 a CLI node chats in the project folder', () => {
+  it('gets the folder as workingDir, a turn id and no run, and keeps its activity without contents', async () => {
+    const { adapter, requests } = scriptedAdapter(
+      () => [
+        {
+          type: 'activity',
+          tool: 'Read',
+          args: { file_path: `${FOLDER}/src/a.ts` },
+          status: 'ok',
+          summary: SECRET,
+          durationMs: 3,
+        },
+        {
+          type: 'activity',
+          tool: 'Edit',
+          args: { file_path: `${FOLDER}/src/a.ts`, old_string: SECRET, new_string: 'x' },
+          status: 'ok',
+          summary: SECRET,
+          durationMs: 3,
+        },
+        {
+          type: 'activity',
+          tool: 'Bash',
+          args: { command: 'pnpm test' },
+          status: 'error',
+          summary: SECRET,
+          durationMs: 3,
+        },
+        ...answer('Fixed it.'),
+      ],
+      { type: 'claude_code' },
+    );
+    build({ adapterFor: async () => adapter });
+
+    const reply = await (await service.chat(coder.id, { content: hi('fix the bug') })).done;
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.workingDir).toBe(FOLDER);
+    expect(requests[0]?.runId).toBeUndefined();
+    expect(requests[0]?.turnId).toBe(reply.id);
+    expect(requests[0]?.tools).toBeUndefined();
+    expect(reply.speakerNodeId).toBe(coder.id);
+    expect(reply.activity).toEqual([
+      { kind: 'read', tool: 'Read', path: 'src/a.ts', summary: 'Read src/a.ts' },
+      { kind: 'edit', tool: 'Edit', path: 'src/a.ts', summary: 'Edited src/a.ts' },
+      { kind: 'command', tool: 'Bash', summary: 'Ran pnpm test — failed' },
+    ]);
+    expect(JSON.stringify(reply)).not.toContain(SECRET);
+    // stored as it was announced
+    const [, stored] = (await service.getThread(reply.threadId)).messages;
+    expect(stored).toEqual(reply);
+  });
+
+  it('gets a run’s 600 s floor on its clock in a project; anything else keeps the node’s', () => {
+    expect(chatTurnTimeoutMs(120_000, { cli: true, workspace: true })).toBe(600_000);
+    expect(chatTurnTimeoutMs(900_000, { cli: true, workspace: true })).toBe(900_000);
+    expect(chatTurnTimeoutMs(120_000, { cli: true, workspace: false })).toBe(120_000);
+    expect(chatTurnTimeoutMs(120_000, { cli: false, workspace: true })).toBe(120_000);
+    expect(chatTurnTimeoutMs(0, { cli: true, workspace: true })).toBe(0);
+  });
+
+  it('without a project folder, runs as before: no workingDir, no tools, no checkpoint', async () => {
+    await seed('');
+    const recorder = fakeRecorder();
+    const { adapter, requests } = scriptedAdapter(() => answer('Hello.'), { type: 'claude_code' });
+    build({ adapterFor: async () => adapter, checkpoints: recorder, tools: makeTools().provider });
+
+    const reply = await (await service.chat(coder.id, { content: hi() })).done;
+    expect(requests[0]?.workingDir).toBeUndefined();
+    expect(requests[0]?.tools).toBeUndefined();
+    expect(recorder.begun).toEqual([]);
+    expect(reply.checkpointId).toBeUndefined();
+    expect(reply.activity).toBeUndefined();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* API nodes: the bounded tool loop                                            */
+/* -------------------------------------------------------------------------- */
+
+describe('D302 an API node gets the non-destructive project tools in a bounded loop', () => {
+  it('offers exactly the six project tools — never run_command, never a destructive one', async () => {
+    const { provider } = makeTools();
+    const { adapter, requests } = scriptedAdapter(() => answer('Nothing to do.'));
+    build({
+      adapterFor: async () => adapter,
+      tools: provider,
+      modelsFor: async () => [catalogRow(true)],
+    });
+
+    await (
+      await service.chat(coder.id, { content: hi() })
+    ).done;
+    expect(requests[0]?.tools?.map((tool) => tool.name)).toEqual([...CHAT_PROJECT_TOOLS]);
+    expect(requests[0]?.tools?.some((tool) => tool.permissions.destructive)).toBe(false);
+  });
+
+  it('runs the calls in the project with a per-turn id, feeds the results back and records activity, never results', async () => {
+    const { provider, runs } = makeTools();
+    const { adapter, requests } = scriptedAdapter((req) => {
+      const done = req.toolResults?.length ?? 0;
+      if (done === 0) return callTool('read_file', { path: 'src/a.ts' });
+      if (done === 1) return callTool('write_file', { path: 'src/b.ts', content: SECRET });
+      return answer('Wrote src/b.ts.');
+    });
+    build({
+      adapterFor: async () => adapter,
+      tools: provider,
+      modelsFor: async () => [catalogRow(true)],
+    });
+
+    const reply = await (await service.chat(coder.id, { content: hi('copy a to b') })).done;
+
+    expect(runs.map((run) => run.name)).toEqual(['read_file', 'write_file']);
+    for (const run of runs) {
+      expect(run.context.projectDir).toBe(FOLDER);
+      expect(run.context.runId).toBe(reply.id);
+    }
+    // the second call reads the first result; the third reads both
+    expect(requests[1]?.toolResults?.map((result) => result.name)).toEqual(['read_file']);
+    expect(requests[2]?.toolResults).toHaveLength(2);
+    expect(requests.every((req) => req.runId === undefined)).toBe(true);
+
+    expect(reply.content).toEqual([{ type: 'text', text: 'Wrote src/b.ts.' }]);
+    expect(reply.activity).toEqual([
+      { kind: 'read', tool: 'read_file', path: 'src/a.ts', summary: 'Read src/a.ts' },
+      { kind: 'write', tool: 'write_file', path: 'src/b.ts', summary: 'Wrote src/b.ts' },
+    ]);
+    expect(JSON.stringify(reply)).not.toContain(SECRET);
+    // usage is the three calls together
+    expect(reply.usage?.tokensIn).toBe(9);
+  });
+
+  it('stops at tools.maxToolCalls and asks once more with no tools', async () => {
+    await seed();
+    const capped = makeAgentNode(workflowId, { name: 'Looper' });
+    if (capped.kind === 'agent') capped.config.tools.maxToolCalls = 2;
+    await repository.nodes.insert(scope, capped);
+    const { provider, runs } = makeTools();
+    const { adapter, requests } = scriptedAdapter((_req, call) => callTool('list_files', {}, call));
+    build({
+      adapterFor: async () => adapter,
+      tools: provider,
+      modelsFor: async () => [catalogRow(true)],
+    });
+
+    const reply = await (await service.chat(capped.id, { content: hi() })).done;
+    expect(runs).toHaveLength(2);
+    expect(requests).toHaveLength(3);
+    expect(requests[2]?.tools).toBeUndefined();
+    expect(reply.activity).toHaveLength(2);
+    expect(reply.error).toBeUndefined();
+    expect(reply.content).toEqual([
+      { type: 'text', text: 'I stopped after 2 tool calls, the most one chat turn may make.' },
+    ]);
+  });
+
+  it('drops one of the six when the registry marks it destructive', async () => {
+    const { provider } = makeTools();
+    const shadowed: ToolProvider = {
+      get: (name) => {
+        const tool = provider.get(name);
+        if (name !== 'edit_file' || tool === undefined) return tool;
+        return { ...tool, definition: definition('edit_file', true) };
+      },
+    };
+    const { adapter, requests } = scriptedAdapter(() => answer('ok'));
+    build({
+      adapterFor: async () => adapter,
+      tools: shadowed,
+      modelsFor: async () => [catalogRow(true)],
+    });
+    await (await service.chat(coder.id, { content: hi() })).done;
+    expect(requests[0]?.tools?.map((tool) => tool.name)).not.toContain('edit_file');
+    expect(requests[0]?.tools).toHaveLength(5);
+  });
+
+  it('refuses a tool it did not offer without running it', async () => {
+    const { provider, runs } = makeTools();
+    const { adapter } = scriptedAdapter((req) =>
+      (req.toolResults?.length ?? 0) === 0
+        ? callTool('run_command', { command: 'rm -rf .' })
+        : answer('Understood.'),
+    );
+    build({
+      adapterFor: async () => adapter,
+      tools: provider,
+      modelsFor: async () => [catalogRow(true)],
+    });
+
+    const reply = await (await service.chat(coder.id, { content: hi() })).done;
+    expect(runs).toEqual([]);
+    expect(reply.activity).toEqual([
+      {
+        kind: 'command',
+        tool: 'run_command',
+        summary: 'Ran rm -rf . — refused: not available in chat',
+      },
+    ]);
+  });
+
+  it('offers no tools when the model’s catalog row says it cannot call them', async () => {
+    const { provider } = makeTools();
+    const { adapter, requests } = scriptedAdapter(() => answer('Plain answer.'));
+    build({
+      adapterFor: async () => adapter,
+      tools: provider,
+      modelsFor: async () => [catalogRow(false)],
+    });
+    await (
+      await service.chat(coder.id, { content: hi() })
+    ).done;
+    expect(requests[0]?.tools).toBeUndefined();
+    // the folder is still where it works
+    expect(requests[0]?.workingDir).toBe(FOLDER);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The write queue                                                             */
+/* -------------------------------------------------------------------------- */
+
+describe('D302 writing turns run one at a time per project', () => {
+  it('holds a second turn until the first has finished', async () => {
+    const first = gate();
+    const { adapter, requests } = scriptedAdapter((_req, call) => answer(`reply ${call}`), {
+      before: (call) => (call === 1 ? first.wait : Promise.resolve()),
+    });
+    build({ adapterFor: async () => adapter });
+
+    const one = await service.chat(coder.id, { content: hi('one') });
+    const two = await service.chat(reviewer.id, { content: hi('two') });
+    await flush();
+    expect(requests).toHaveLength(1);
+
+    first.open();
+    const [a, b] = await Promise.all([one.done, two.done]);
+    expect(requests).toHaveLength(2);
+    expect(a.content).toEqual([{ type: 'text', text: 'reply 1' }]);
+    expect(b.content).toEqual([{ type: 'text', text: 'reply 2' }]);
+  });
+
+  it('lets turns in a project without a folder run side by side', async () => {
+    await seed('');
+    const first = gate();
+    const { adapter, requests } = scriptedAdapter((_req, call) => answer(`reply ${call}`), {
+      before: (call) => (call === 1 ? first.wait : Promise.resolve()),
+    });
+    build({ adapterFor: async () => adapter });
+
+    const one = await service.chat(coder.id, { content: hi('one') });
+    const two = await service.chat(reviewer.id, { content: hi('two') });
+    await two.done;
+    expect(requests).toHaveLength(2);
+    first.open();
+    await one.done;
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Targeting and shared context                                                */
+/* -------------------------------------------------------------------------- */
+
+describe('D302 @handle brings another node into the same thread', () => {
+  it('answers with the target, in the main node’s thread, labelled with who said what', async () => {
+    const { adapter, requests } = scriptedAdapter((req) =>
+      answer(
+        `${req.system ?? ''}${req.prompt}`.includes('You review code.') ? 'Looks good.' : 'Done.',
+      ),
+    );
+    build({ adapterFor: async () => adapter });
+
+    const opened = await service.chat(coder.id, { content: hi('write the parser') });
+    await opened.done;
+    const asked = await service.chat(coder.id, {
+      threadId: opened.threadId,
+      content: hi('@reviewer what do you think?'),
+      targetNodeId: reviewer.id,
+    });
+    const review = await asked.done;
+    expect(review.speakerNodeId).toBe(reviewer.id);
+    expect(review.content).toEqual([{ type: 'text', text: 'Looks good.' }]);
+    // the reviewer saw the conversation, with the coder's turn named
+    expect(requests[1]?.prompt).toContain('Assistant (Coder): Done.');
+    expect(requests[1]?.prompt).toContain('User: @reviewer what do you think?');
+
+    // a plain message goes back to the main node, which sees the reviewer's reply
+    const back = await service.chat(coder.id, {
+      threadId: opened.threadId,
+      content: hi('fix what they said'),
+    });
+    const fixed = await back.done;
+    expect(fixed.speakerNodeId).toBe(coder.id);
+    expect(requests[2]?.prompt).toContain('Assistant (Reviewer): Looks good.');
+    expect(requests[2]?.prompt).toContain('Assistant (Coder, you): Done.');
+
+    const [thread] = await service.listThreads(coder.id);
+    expect(thread?.nodeId).toBe(coder.id);
+    expect(await service.listThreads(reviewer.id)).toEqual([]);
+  });
+
+  it('refuses a target in another workflow, an unknown one and one that is not an agent', async () => {
+    const elsewhere = makeWorkflow(projectId);
+    await repository.workflows.create(scope, elsewhere);
+    const stranger = makeAgentNode(elsewhere.id, { name: 'Stranger' });
+    await repository.nodes.insert(scope, stranger);
+    const output = makeSimpleNode(workflowId, 'output');
+    await repository.nodes.insert(scope, output);
+    build({ workflowIds: [elsewhere.id] });
+
+    for (const targetNodeId of [stranger.id, newId(), output.id]) {
+      await expect(service.chat(coder.id, { content: hi(), targetNodeId })).rejects.toBeInstanceOf(
+        ChatTargetInvalidError,
+      );
+    }
+    expect(await service.listThreads(coder.id)).toEqual([]);
+  });
+
+  it('continues a thread of another node of the same workflow, answered by that node', async () => {
+    build();
+    const opened = await service.chat(reviewer.id, { content: hi('review this') });
+    await opened.done;
+    const next = await service.chat(coder.id, {
+      threadId: opened.threadId,
+      content: hi('and again'),
+    });
+    const reply = await next.done;
+    expect(next.threadId).toBe(opened.threadId);
+    expect(reply.speakerNodeId).toBe(reviewer.id);
+  });
+
+  it('shows a code chip in the prompt as its file and lines', () => {
+    const prompt = buildChatPrompt({
+      conversationId: newId(),
+      nodeId: coder.id,
+      instructions: 'x',
+      inputTypes: ['text'],
+      budgetTokens: 4000,
+      history: [],
+      userParts: [
+        { type: 'text', text: 'why does this fail?' },
+        {
+          type: 'code',
+          language: 'typescript',
+          text: 'const a = 1;',
+          path: 'src/a.ts',
+          startLine: 3,
+          endLine: 4,
+        },
+        { type: 'code', language: 'typescript', text: '', path: 'src/b.ts' },
+      ],
+      now: '2026-10-14T09:00:00.000Z',
+    });
+    expect(prompt.text).toContain('[src/a.ts:L3-L4]\n```typescript\nconst a = 1;\n```');
+    expect(prompt.text).toContain('[file: src/b.ts]');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Checkpoints                                                                 */
+/* -------------------------------------------------------------------------- */
+
+interface FakeRecorder extends CheckpointRecorder {
+  begun: { projectId: string; meta: CheckpointMeta }[];
+  finished: number;
+}
+
+function fakeRecorder(
+  options: { result?: { id: string } | undefined; failBegin?: boolean } = {
+    result: { id: 'cp-1' },
+  },
+): FakeRecorder {
+  const recorder: FakeRecorder = {
+    begun: [],
+    finished: 0,
+    async begin(projectId, meta) {
+      if (options.failBegin === true) throw new Error('git is not installed');
+      recorder.begun.push({ projectId, meta });
+      return {
+        id: 'cp-1',
+        finish: async () => {
+          recorder.finished += 1;
+          return options.result;
+        },
+      };
+    },
+  };
+  return recorder;
+}
+
+describe('D302/D300 a writing turn is checkpointed', () => {
+  it('begins before the call with the turn’s ids and sets checkpointId from finish()', async () => {
+    const recorder = fakeRecorder();
+    let begunBeforeCall = false;
+    const { adapter } = scriptedAdapter(() => {
+      begunBeforeCall = recorder.begun.length === 1 && recorder.finished === 0;
+      return answer('Done.');
+    });
+    build({ adapterFor: async () => adapter, checkpoints: recorder });
+
+    const begun = await service.chat(coder.id, { content: hi() });
+    const reply = await begun.done;
+    expect(begunBeforeCall).toBe(true);
+    expect(recorder.begun).toEqual([
+      {
+        projectId,
+        meta: { kind: 'chat', threadId: begun.threadId, messageId: reply.id, nodeId: coder.id },
+      },
+    ]);
+    expect(recorder.finished).toBe(1);
+    expect(reply.checkpointId).toBe('cp-1');
+  });
+
+  it('leaves checkpointId off when nothing changed', async () => {
+    build({ checkpoints: fakeRecorder({ result: undefined }) });
+    const reply = await (await service.chat(coder.id, { content: hi() })).done;
+    expect(reply.checkpointId).toBeUndefined();
+  });
+
+  it('still answers when the checkpoint cannot start', async () => {
+    build({ checkpoints: fakeRecorder({ failBegin: true }) });
+    const reply: ChatMessage = await (await service.chat(coder.id, { content: hi() })).done;
+    expect(reply.error).toBeUndefined();
+    expect(reply.checkpointId).toBeUndefined();
+  });
+
+  it('finishes the checkpoint of a turn that failed, and the error turn carries it', async () => {
+    const recorder = fakeRecorder();
+    const { adapter } = scriptedAdapter(() => {
+      throw new Error('the CLI crashed after editing');
+    });
+    build({ adapterFor: async () => adapter, checkpoints: recorder });
+    const reply = await (await service.chat(coder.id, { content: hi() })).done;
+    expect(reply.error).toBeDefined();
+    expect(recorder.finished).toBe(1);
+    expect(reply.checkpointId).toBe('cp-1');
+  });
+});
+
+describe('D302 activity items', () => {
+  it('maps Codex, Gemini and ACE tools without ever reading a result', () => {
+    expect(
+      activityItemFor({
+        tool: 'file_change',
+        args: { changes: [{ path: 'src/new.ts', kind: 'add' }] },
+      }),
+    ).toEqual({
+      kind: 'write',
+      tool: 'file_change',
+      path: 'src/new.ts',
+      summary: 'Wrote src/new.ts',
+    });
+    expect(
+      activityItemFor({ tool: 'search_file_content', args: { pattern: 'TODO', path: 'src' } }),
+    ).toEqual({
+      kind: 'search',
+      tool: 'search_file_content',
+      path: 'src',
+      summary: 'Searched for "TODO" in src',
+    });
+    expect(activityItemFor({ tool: 'git_status', args: {} })).toEqual({
+      kind: 'read',
+      tool: 'git_status',
+      summary: 'Checked git status',
+    });
+    expect(activityItemFor({ tool: 'mcp_docs_lookup', args: { q: 1 } }).kind).toBe('other');
+  });
+
+  it('keeps a summary to 200 characters and masks a secret in a command', () => {
+    const item = activityItemFor({
+      tool: 'Bash',
+      args: {
+        command: `curl -H "Authorization: Bearer sk-ant-api03-${'A'.repeat(40)}" ${'x'.repeat(400)}`,
+      },
+    });
+    expect(item.summary.length).toBeLessThanOrEqual(200);
+    expect(item.summary).not.toContain('sk-ant-api03-AAAA');
+  });
+});

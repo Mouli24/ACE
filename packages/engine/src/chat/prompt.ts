@@ -17,9 +17,21 @@ import { assemblePrompt, type AssembledPrompt } from '../prompts/index.js';
  *
  * The turns are the user's own words and the agent's own replies, so they are not fenced as
  * untrusted; what is untrusted keeps its label (BR-13, FR-PRM-002): the new turn's attachments are
- * the envelope's reads, and land in the `## Input` block marked untrusted. A direct chat calls no
- * tools, so it has no tool results to fence.
+ * the envelope's reads, and land in the `## Input` block marked untrusted. Tool results, in a
+ * project chat (D302), reach the model through the adapter, labelled as a run's are.
+ *
+ * D302: more than one node can speak in a thread (`@handle`), so each assistant turn is labelled
+ * with its speaker's name, and the node answering now sees which turns were its own.
  */
+
+/** `path:L3-L7` for a chip from the editor, `path` for a whole file. */
+function placeOf(part: Extract<Part, { type: 'code' }>): string {
+  const path = part.path ?? '';
+  if (part.startLine === undefined) return path;
+  const end =
+    part.endLine === undefined || part.endLine === part.startLine ? '' : `-L${part.endLine}`;
+  return `${path}:L${part.startLine}${end}`;
+}
 
 /** How a part reads inside a conversation transcript — a file is its reference, never its bytes. */
 function renderPart(part: Part): string {
@@ -27,7 +39,10 @@ function renderPart(part: Part): string {
     case 'text':
       return part.text;
     case 'code':
-      return part.text;
+      // D302: a chip from the editor says where its code is from; a bare file chip is only that.
+      if (part.path === undefined) return part.text;
+      if (part.text === '') return `[file: ${placeOf(part)}]`;
+      return `[${placeOf(part)}]\n\`\`\`${part.language}\n${part.text}\n\`\`\``;
     case 'json':
       return JSON.stringify(part.value ?? null);
     default:
@@ -36,12 +51,28 @@ function renderPart(part: Part): string {
 }
 
 /** One turn of a thread: who said it, and what. */
-export type ConversationTurn = Pick<ChatMessage, 'role' | 'content'>;
+export type ConversationTurn = Pick<ChatMessage, 'role' | 'content' | 'speakerNodeId'>;
 
-function renderTurn(message: ConversationTurn): string {
-  const who = message.role === 'user' ? 'User' : 'Assistant';
+/**
+ * Who spoke, by name (D302). An assistant turn without a speaker was the thread's own node's. With
+ * no names every assistant turn is just "Assistant", as before.
+ */
+export interface SpeakerNames {
+  /** Node id → name, for the nodes of the thread's workflow. */
+  names: ReadonlyMap<string, string>;
+  /** The thread's own node: who spoke a turn that names no speaker. */
+  mainNodeId: string;
+  /** The node answering now: its own turns say so. */
+  selfNodeId: string;
+}
+
+export function renderTurn(message: ConversationTurn, speakers?: SpeakerNames): string {
   const body = message.content.map(renderPart).join('\n');
-  return `${who}: ${body}`;
+  if (message.role === 'user') return `User: ${body}`;
+  const speakerId = message.speakerNodeId ?? speakers?.mainNodeId;
+  const name = speakerId === undefined ? undefined : speakers?.names.get(speakerId);
+  if (name === undefined) return `Assistant: ${body}`;
+  return `Assistant (${name}${speakerId === speakers?.selfNodeId ? ', you' : ''}): ${body}`;
 }
 
 /**
@@ -52,12 +83,13 @@ function renderTurn(message: ConversationTurn): string {
 export function renderConversation(
   history: readonly ConversationTurn[],
   budgetTokens: number,
+  speakers?: SpeakerNames,
 ): string {
   const kept: string[] = [];
   let spent = 0;
 
   for (let i = history.length - 1; i >= 0; i -= 1) {
-    const line = renderTurn(history[i]!);
+    const line = renderTurn(history[i]!, speakers);
     const cost = estimateTokens(line) + 1; // +1 for the newline that joins it
     if (spent + cost > budgetTokens) break;
     kept.push(line);
@@ -70,7 +102,10 @@ export function renderConversation(
   // A single turn longer than the whole budget is still shown, truncated, rather than dropped: an
   // empty conversation is worse than a clipped one.
   if (joined === '' && history.length > 0) {
-    return renderTurn(history[history.length - 1]!).slice(0, Math.max(0, budgetTokens * CHARS_PER_TOKEN));
+    return renderTurn(history[history.length - 1]!, speakers).slice(
+      0,
+      Math.max(0, budgetTokens * CHARS_PER_TOKEN),
+    );
   }
   return joined;
 }
@@ -92,12 +127,18 @@ export interface BuildChatPromptInput {
   /** The new user turn's parts — the turn the model answers. */
   userParts: readonly Part[];
   now: string;
+  /** D302: label each assistant turn with its speaker's name. */
+  speakers?: SpeakerNames;
 }
 
 export function buildChatPrompt(input: BuildChatPromptInput): AssembledPrompt {
   const newTurn: ConversationTurn = { role: 'user', content: [...input.userParts] };
   // The new turn is last, so it is the one the budget keeps longest (and truncates, never drops).
-  const transcript = renderConversation([...input.history, newTurn], input.budgetTokens);
+  const transcript = renderConversation(
+    [...input.history, newTurn],
+    input.budgetTokens,
+    input.speakers,
+  );
   const latestText = input.userParts
     .filter((part): part is Extract<Part, { type: 'text' }> => part.type === 'text')
     .map((part) => part.text)
