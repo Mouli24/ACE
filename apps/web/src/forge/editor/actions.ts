@@ -99,7 +99,36 @@ const isNotFound = (error: unknown): boolean => AceApiError.is(error) && error.s
  * is formatted first when an editor shows it (D299 Phase 4) — so Save all formats only the active
  * file — and a language with no formatter saves as typed.
  */
-export async function saveFile(
+/** Per file, the save running now: the next one waits for it (fix I4). */
+const saving = new Map<string, Promise<boolean>>();
+
+export function saveFile(
+  projectId: string,
+  path: string,
+  queryClient: QueryClient,
+): Promise<boolean> {
+  // Saves of one file run one after another (fix I4). Format-on-save awaits the formatter before
+  // the request, and a second Ctrl+S, or Save all, in that window used to send the same base
+  // version again — the first save won and the second raised a false "changed on disk". Now the
+  // second waits; by then the buffer is clean, or holds only what was typed since, and that saves.
+  const key = `${projectId}\u0000${path}`;
+  const before = saving.get(key);
+  // With none in flight it starts now, so the text it sends is the text as Save was pressed.
+  const next =
+    before === undefined
+      ? saveOnce(projectId, path, queryClient)
+      : before.then(
+          () => saveOnce(projectId, path, queryClient),
+          () => saveOnce(projectId, path, queryClient),
+        );
+  saving.set(key, next);
+  void next.finally(() => {
+    if (saving.get(key) === next) saving.delete(key);
+  });
+  return next;
+}
+
+async function saveOnce(
   projectId: string,
   path: string,
   queryClient: QueryClient,
@@ -118,6 +147,8 @@ export async function saveFile(
     );
     return false;
   }
+  // Marked as saving before the formatter runs, so nothing takes this file for idle meanwhile.
+  store.saveStarted(projectId, path);
   if (editorFor(projectId, path) !== undefined && (await formatsOnSave(projectId, queryClient))) {
     try {
       await formatDocument(projectId, path);
@@ -128,12 +159,13 @@ export async function saveFile(
   const content = model.getValue();
   const sent = model.getAlternativeVersionId();
   const eol = model.getEOL() === '\r\n' ? 'crlf' : 'lf';
-  store.saveStarted(projectId, path);
+  // read again after the format: a Keep mine meanwhile moves the base this save must name
+  const base = useEditorStore.getState().projects[projectId]?.files[path]?.baseVersion;
   try {
     const result = await api().saveFile(projectId, {
       path,
       content,
-      baseVersion: file.baseVersion,
+      baseVersion: base ?? file.baseVersion,
       eol,
       bom: file.bom,
     });

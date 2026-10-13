@@ -2,9 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { asMonaco, createFakeMonaco } from '../../test/fake-monaco';
 import {
+  disposeModel,
   ensureModel,
   fileUri,
   getModel,
+  isRegistryModel,
+  onRegistryChange,
   markSaved,
   moveModels,
   pathOfUri,
@@ -78,5 +81,45 @@ describe('D299 one Monaco model per open file', () => {
     expect(target?.getValue()).toBe('edited');
     target?.setValue('edited more');
     expect(moved).toHaveBeenLastCalledWith(true);
+  });
+});
+
+describe('D299 Phase 4 fix C2: the registry owns its models', () => {
+  it('never adopts a model it did not create: that one goes, and the disk’s text shows, clean', () => {
+    const fake = createFakeMonaco();
+    setMonaco(asMonaco(fake));
+    // what Monaco does for go-to-definition: a model from the extra lib's (older) text
+    const stray = fake.editor.createModel(
+      'export const b = 1;',
+      'typescript',
+      fileUri(P, 'b.ts') as never,
+    );
+    const dirty = vi.fn();
+    const model = ensureModel(P, 'b.ts', 'export const b = 2;', 'typescript', dirty);
+    expect(model).not.toBe(stray);
+    expect(stray.isDisposed()).toBe(true);
+    expect(model.getValue()).toBe('export const b = 2;');
+    expect(dirty).not.toHaveBeenCalledWith(true);
+    expect(isRegistryModel(model)).toBe(true);
+    expect(isRegistryModel(stray as never)).toBe(false);
+  });
+
+  it('says when it opens and closes a file, so the type loader can follow', () => {
+    const seen: string[] = [];
+    const off = onRegistryChange((projectId, path, open) =>
+      seen.push(`${projectId === P ? 'P' : projectId}:${path}:${open ? 'open' : 'closed'}`),
+    );
+    ensureModel(P, 'a.ts', 'x', 'typescript', () => undefined);
+    moveModels(
+      P,
+      'a.ts',
+      'b.ts',
+      () => () => undefined,
+      () => 'typescript',
+    );
+    disposeModel(P, 'b.ts');
+    off();
+    ensureModel(P, 'c.ts', 'x', 'typescript', () => undefined);
+    expect(seen).toEqual(['P:a.ts:open', 'P:a.ts:closed', 'P:b.ts:open', 'P:b.ts:closed']);
   });
 });

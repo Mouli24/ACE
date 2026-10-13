@@ -1,8 +1,17 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { http, HttpResponse } from 'msw';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { db, installMockServer, renderApp, renderWithQuery, server } from '../../test/app';
+import { api } from '../../app/api';
+import {
+  db,
+  installMockServer,
+  installMockSocket,
+  renderApp,
+  renderWithQuery,
+  server,
+} from '../../test/app';
 import { useEditorStore } from '../editor/editor-store';
 import { ExplorerView } from '../explorer/ExplorerView';
 import { useSideViewStore } from '../explorer/side-view-store';
@@ -158,4 +167,79 @@ describe('D299 Phase 4 Ctrl/⌘+Shift+F', () => {
     await waitFor(() => expect(query()).toHaveFocus());
     expect(useSideViewStore.getState().view).toBe('search');
   });
+});
+
+describe('D299 Phase 4 fix C1: a search the engine stopped at its time limit', () => {
+  it('says it stopped after 5 s and shows what it has', async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.post('*/api/v1/projects/:id/files/search', () =>
+        HttpResponse.json({
+          files: [
+            {
+              path: 'src/app.ts',
+              matches: [{ line: 1, column: 1, preview: 'aaa', previewOffset: 0, length: 3 }],
+            },
+          ],
+          truncated: true,
+          searchedFiles: 1,
+          timedOut: true,
+        }),
+      ),
+    );
+    renderWithQuery(<SearchView projectId={projectId} />);
+    await user.click(screen.getByRole('button', { name: 'Use regular expression' }));
+    await user.type(query(), '(.*a){12}$');
+    expect(
+      await screen.findByText('Search stopped after 5 s; showing partial results'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'src/app.ts' })).toBeInTheDocument();
+  });
+});
+
+describe('D299 Phase 4 fix I3: file changes re-run the search sparingly', () => {
+  installMockSocket();
+
+  it('re-runs at most once per 2 s while Search shows, and aborts the request it replaces', async () => {
+    const user = userEvent.setup();
+    const signals: (AbortSignal | undefined)[] = [];
+    const client = api();
+    const real = client.searchFiles.bind(client);
+    const spy = vi.spyOn(client, 'searchFiles').mockImplementation((id, body, options) => {
+      signals.push(options?.signal);
+      return real(id, body, options);
+    });
+    db.setLatency(2_500);
+    renderWithQuery(<SearchView projectId={projectId} />);
+    await user.type(query(), 'needle');
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+
+    // three bursts within a second, while the first search is still on its way
+    for (let burst = 0; burst < 3; burst += 1) {
+      act(() => db.emitFilesChanged(projectId, [{ path: 'src/app.ts', kind: 'changed' }]));
+      await new Promise((settle) => setTimeout(settle, 300));
+    }
+    expect(spy).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2), { timeout: 3_000 });
+    expect(signals[0]?.aborted).toBe(true);
+
+    db.setLatency(0);
+    expect(
+      await screen.findByText('5 results in 3 files', {}, { timeout: 4_000 }),
+    ).toBeInTheDocument();
+    await new Promise((settle) => setTimeout(settle, 300));
+    expect(spy).toHaveBeenCalledTimes(2);
+  }, 20_000);
+
+  it('does not re-run while Search is not showing', async () => {
+    const user = userEvent.setup();
+    const spy = vi.spyOn(api(), 'searchFiles');
+    const view = renderWithQuery(<SearchView projectId={projectId} />);
+    await user.type(query(), 'needle');
+    await screen.findByText('5 results in 3 files');
+    view.unmount();
+    act(() => db.emitFilesChanged(projectId, [{ path: 'src/app.ts', kind: 'changed' }]));
+    await new Promise((settle) => setTimeout(settle, 2_300));
+    expect(spy).toHaveBeenCalledTimes(1);
+  }, 10_000);
 });

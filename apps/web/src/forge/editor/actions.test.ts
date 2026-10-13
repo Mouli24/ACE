@@ -338,4 +338,71 @@ describe('D299 Phase 4 Format and format-on-save', () => {
     expect(disk()).toBe('a = 2');
     expect(db.filesOf(projectId)['b.ts']?.content).toBe('x=2');
   });
+
+  /** A formatter that takes a moment, as the TS worker's does. */
+  function attachSlow(model: ReturnType<typeof openOnDisk>) {
+    const run = vi.fn(async () => {
+      const before = model.getValue();
+      await new Promise((settle) => setTimeout(settle, 40));
+      model.setValue(tidy(before));
+    });
+    setActiveEditor({
+      getModel: () => model,
+      getAction: () => ({ isSupported: () => true, run }),
+    } as unknown as Monaco.editor.ICodeEditor);
+    return run;
+  }
+
+  /** Every save the engine received, as the text it was sent. */
+  function savesSent(): string[] {
+    const sent: string[] = [];
+    server.events.on('request:start', ({ request }) => {
+      if (request.method !== 'PUT' || !request.url.endsWith('/files/content')) return;
+      void request
+        .clone()
+        .json()
+        .then((body: { content: string }) => sent.push(body.content));
+    });
+    return sent;
+  }
+
+  it('fix I4: two quick saves under format-on-save raise no conflict, and write in order', async () => {
+    db.updateProject(projectId, { formatOnSave: true });
+    const model = openOnDisk('a=1');
+    attachSlow(model);
+    const sent = savesSent();
+    model.setValue('b=2');
+
+    const first = saveFile(projectId, 'a.ts', queryClient);
+    const second = saveFile(projectId, 'a.ts', queryClient);
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+
+    expect(file()?.conflict).toBeUndefined();
+    expect(file()).toMatchObject({ dirty: false, baseVersion: mockVersion('b = 2') });
+    expect(disk()).toBe('b = 2');
+    await vi.waitFor(() => expect(sent.length).toBeGreaterThan(0));
+    expect(sent).toEqual(['b = 2']);
+    expect(output().some((line) => line.includes('changed on disk'))).toBe(false);
+  });
+
+  it('fix I4: typing between two saves is saved by the second, after the first', async () => {
+    db.updateProject(projectId, { formatOnSave: true });
+    const model = openOnDisk('a=1');
+    attachSlow(model);
+    const sent = savesSent();
+    model.setValue('b=2');
+
+    const first = saveFile(projectId, 'a.ts', queryClient);
+    await new Promise((settle) => setTimeout(settle, 10));
+    const second = saveFile(projectId, 'a.ts', queryClient);
+    await first;
+    model.setValue(`${model.getValue()}\nc=3`);
+    await second;
+    await saveFile(projectId, 'a.ts', queryClient);
+
+    expect(file()?.conflict).toBeUndefined();
+    expect(disk()).toBe('b = 2\nc = 3');
+    await vi.waitFor(() => expect(sent).toEqual(['b = 2', 'b = 2\nc = 3']));
+  });
 });
