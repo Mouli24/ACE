@@ -1130,4 +1130,24 @@ describe('D302 fix B-M5: a command is summarised by its first line, before any h
     const summary = ran(`curl -H "Authorization: Bearer sk-ant-api03-${'A'.repeat(40)}" x`);
     expect(summary).not.toContain('sk-ant-api03-AAAA');
   });
+
+  it('fix round 1: a pipe keeps what comes before it, and text piped into a command is only its name', () => {
+    expect(ran("echo 'secret' | tee src/a.ts")).toBe('Ran echo');
+    expect(ran('printf "%s" secret | sh')).toBe('Ran printf');
+    expect(ran("Write-Output 'secret' | Set-Content a.ts")).toBe('Ran Write-Output');
+    expect(ran('cat notes.md | grep TODO')).toBe('Ran cat');
+    expect(ran('git status | head')).toBe('Ran git status');
+    expect(ran("'secret' | Out-File a.ts")).toBe('Ran Out-File');
+    expect(ran('$text | Add-Content notes.md')).toBe('Ran Add-Content');
+    expect(ran("'secret' |")).toBe('Ran command');
+  });
+
+  it('fix round 1: a PowerShell write cmdlet keeps its name, never its arguments', () => {
+    expect(ran("Set-Content a.ts 'secret'")).toBe('Ran Set-Content');
+    expect(ran("add-content -Path a.ts -Value 'secret'")).toBe('Ran add-content');
+    expect(ran("$x = 1; Out-File -FilePath a.ts -InputObject 'secret'")).toBe(
+      'Ran $x = 1; Out-File',
+    );
+    expect(ran('Get-Content a.ts')).toBe('Ran Get-Content a.ts');
+  });
 });
