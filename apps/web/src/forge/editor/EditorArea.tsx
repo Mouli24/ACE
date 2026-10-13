@@ -1,7 +1,9 @@
 import { AceApiError } from '@ace/sdk';
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 
 import { NO_ATTRIBUTION, type FileTouch, type ForgeAttribution } from '../attribution';
+import { useProjectReviews, useReviewStore } from '../changes/review-store';
+import { ReviewView } from '../changes/ReviewView';
 import { useFileContent } from '../files/hooks';
 import { isImagePath, nameOf } from '../files/paths';
 import { ConflictBar, DeletedBar, SaveErrorBar } from './ConflictBar';
@@ -31,7 +33,8 @@ function Quiet({ children }: { children: string }) {
 
 /**
  * The theme's code column (D334): the tabs strip, the path bar over an open file, then the file —
- * text in Monaco, an image as a picture, the rest as a notice — or the empty state.
+ * text in Monaco, an image as a picture, the rest as a notice — or the empty state. An agent
+ * change under review (D300) takes the area until a file tab is chosen again.
  */
 export function EditorArea({
   projectId,
@@ -47,13 +50,26 @@ export function EditorArea({
   const editor = useProjectEditor(projectId);
   const active = editor.active;
   const touch = active === undefined ? undefined : attribution.last.get(active);
+  const reviews = useProjectReviews(projectId);
+  const review = reviews.reviews.find((each) => each.key === reviews.active);
+  // a file opened or chosen since takes the area back from the review (D300)
+  const shown = useRef(active);
+  useEffect(() => {
+    if (shown.current === active) return;
+    shown.current = active;
+    useReviewStore.getState().deactivate(projectId);
+  }, [active, projectId]);
   return (
     <section
       aria-label="Editor"
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--surface)]"
     >
       <TabsBar projectId={projectId} />
-      {active === undefined ? (
+      {review !== undefined ? (
+        <div className="relative min-h-0 flex-1">
+          <ReviewView projectId={projectId} checkpointId={review.checkpointId} path={review.path} />
+        </div>
+      ) : active === undefined ? (
         <EmptyEditor projectId={projectId} />
       ) : (
         <>

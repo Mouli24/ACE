@@ -10,6 +10,8 @@ import { startSocket, stopSocket } from '../app/socket';
 import { LAYOUT_STORAGE_KEY, useLayoutStore } from '../app/stores/layout';
 import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
+import { useChangesStore } from '../forge/changes/changes-store';
+import { useReviewStore } from '../forge/changes/review-store';
 import { useEditorStatus } from '../forge/editor/editor-status';
 import { useEditorStore } from '../forge/editor/editor-store';
 import { resetModels, setMonaco } from '../forge/editor/models';
@@ -81,6 +83,8 @@ export function installMockServer(): void {
     useExplorerStore.setState({ projects: {} });
     useQuickOpen.setState({ open: false });
     useEditorStore.setState({ projects: {} });
+    useReviewStore.setState({ projects: {} });
+    useChangesStore.setState({ projects: {}, conflicts: {} });
     resetModels();
     setMonaco(asMonaco(createFakeMonaco()));
     localStorage.removeItem(LAYOUT_STORAGE_KEY);

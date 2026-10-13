@@ -22,6 +22,8 @@ import {
 import { useProject } from '../../projects/hooks';
 import { fileIconColor } from '../../theme/constants';
 import type { AgentLook } from '../../theme/agents';
+import { useChangesStore } from '../changes/changes-store';
+import { usePendingChanges } from '../changes/hooks';
 import { filesMoved, filesRemoved, openFile } from '../editor/actions';
 import { useEditorStore, useProjectEditor } from '../editor/editor-store';
 import {
@@ -75,7 +77,8 @@ const NO_AGENTS: ReadonlyMap<string, AgentLook> = new Map();
 /**
  * The project folder as an ARIA tree (FR-GIT-003) in the theme's Explorer rows (D334): lazy (a
  * folder lists when it opens), folders first, ignored entries dimmed, the open file marked, unsaved
- * files dotted, git changes marked, a pulsing badge while an agent writes a file, keyboard
+ * files dotted, git changes marked, a pulsing badge while an agent writes a file, an accent ±
+ * on a file whose agent change waits for review (D300; it opens Changes), keyboard
  * navigation with one roving tab stop. With a filter it lists the matching files flat, each by its
  * full path. When editable, VS Code's operations (D299): inline create and rename (F2), delete
  * (Delete) after a confirm, move by drag after a confirm, all from a context menu too. Open tabs
@@ -99,6 +102,8 @@ export function FileTree({
   const status = useRepoStatus(projectId);
   const project = useProject(projectId);
   const decorations = useMemo(() => buildDecorations(status.data), [status.data]);
+  // D300: files an agent changed that wait for review, apart from git's letters
+  const pendingChanges = usePendingChanges(projectId);
   const create = useCreateEntry(projectId);
   const move = useMoveEntry(projectId);
   const remove = useDeleteEntry(projectId);
@@ -382,6 +387,7 @@ export function FileTree({
     const active = !folder && editor.active === path;
     const dirty = !folder && editor.files[path]?.dirty === true;
     const agent = folder ? undefined : live.get(path);
+    const changedIn = folder ? undefined : pendingChanges.get(path);
     const decoration = folder ? undefined : decorations.file(path);
     const tone = folder ? decorations.folder(path) : decoration?.tone;
     const renaming = editing?.mode === 'rename' && editing.path === path;
@@ -477,6 +483,22 @@ export function FileTree({
               aria-hidden
               data-testid={`tree-dirty-${path}`}
               className="h-[6px] w-[6px] shrink-0 rounded-full bg-[#ef6b3f]"
+            />
+          )}
+          {changedIn !== undefined && (
+            <span
+              role="button"
+              tabIndex={-1}
+              data-testid={`tree-change-${path}`}
+              data-glyph="±"
+              aria-label={`Review the agent's changes to ${nameOf(path)}`}
+              title="An agent changed this file: review it in Changes"
+              onClick={(event) => {
+                event.stopPropagation();
+                useChangesStore.getState().show(projectId, changedIn);
+              }}
+              onDoubleClick={(event) => event.stopPropagation()}
+              className="flex h-[16px] w-[16px] shrink-0 cursor-pointer items-center justify-center rounded-full bg-[#ef6b3f] text-[9px] font-bold text-[#fff] after:content-[attr(data-glyph)]"
             />
           )}
           {agent && (

@@ -9,6 +9,7 @@ import {
 import { useRef, type KeyboardEvent } from 'react';
 
 import { fileIconColor } from '../../theme/constants';
+import { useProjectReviews, useReviewStore } from '../changes/review-store';
 import { nameOf, parentOf } from '../files/paths';
 import { useCloseRequest } from './CloseDialogs';
 import { useEditorStore, useProjectEditor } from './editor-store';
@@ -19,6 +20,7 @@ import { useEditorStore, useProjectEditor } from './editor-store';
  */
 export function TabsBar({ projectId }: { projectId: string }) {
   const editor = useProjectEditor(projectId);
+  const reviews = useProjectReviews(projectId);
   const { request: close, dialog } = useCloseRequest(projectId);
   const nameCount = new Map<string, number>();
   for (const tab of editor.tabs) nameCount.set(nameOf(tab), (nameCount.get(nameOf(tab)) ?? 0) + 1);
@@ -54,7 +56,8 @@ export function TabsBar({ projectId }: { projectId: string }) {
       {editor.tabs.map((path) => {
         const file = editor.files[path];
         if (file === undefined) return null;
-        const active = editor.active === path;
+        // an agent change under review is the selected tab while it shows (D300)
+        const active = editor.active === path && reviews.active === undefined;
         return (
           <ContextMenu key={path}>
             <ContextMenuTrigger asChild>
@@ -81,7 +84,10 @@ export function TabsBar({ projectId }: { projectId: string }) {
                     editor.preview === path && 'italic',
                     file.deletedOnDisk && 'line-through',
                   )}
-                  onClick={() => useEditorStore.getState().activate(projectId, path)}
+                  onClick={() => {
+                    useReviewStore.getState().deactivate(projectId);
+                    useEditorStore.getState().activate(projectId, path);
+                  }}
                   onDoubleClick={() => useEditorStore.getState().pin(projectId, path)}
                   onKeyDown={(event) => onKeyDown(event, path)}
                   onAuxClick={(event) => {
@@ -142,6 +148,56 @@ export function TabsBar({ projectId }: { projectId: string }) {
               </ContextMenuItem>
             </ContextMenuContent>
           </ContextMenu>
+        );
+      })}
+      {reviews.reviews.map((review) => {
+        const active = reviews.active === review.key;
+        const label = `${nameOf(review.path)} (agent change)`;
+        const closeReview = () => useReviewStore.getState().close(projectId, review.key);
+        return (
+          <div
+            key={review.key}
+            role="presentation"
+            className={cn(
+              'flex shrink-0 items-center gap-[8px] whitespace-nowrap border-r border-[var(--line)] pr-[8px] text-[12px] font-medium',
+              active
+                ? 'bg-[var(--surface)] text-[var(--ink)] shadow-[inset_0_2px_0_#ef6b3f]'
+                : 'bg-transparent text-[var(--muted)]',
+            )}
+          >
+            <div
+              role="tab"
+              aria-selected={active}
+              tabIndex={active ? 0 : -1}
+              title={`${review.path} (agent change)`}
+              data-testid={`review-tab-${review.path}`}
+              className="flex h-full cursor-pointer items-center gap-[8px] pl-[14px] italic outline-none focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]"
+              onClick={() => useReviewStore.getState().activate(projectId, review.key)}
+              onAuxClick={(event) => {
+                if (event.button !== 1) return;
+                event.preventDefault();
+                closeReview();
+              }}
+            >
+              <span
+                aria-hidden
+                className="h-[7px] w-[7px] shrink-0 rounded-full"
+                style={{ background: fileIconColor(review.path) }}
+              />
+              {label}
+            </div>
+            <button
+              type="button"
+              tabIndex={-1}
+              aria-label={`Close ${label}`}
+              className="h-[20px] w-[20px] shrink-0 cursor-pointer rounded-[5px] border-none bg-transparent text-[12px] leading-none hover:bg-[var(--hover)]"
+              onClick={closeReview}
+            >
+              <span aria-hidden className="text-[var(--muted)]">
+                ×
+              </span>
+            </button>
+          </div>
         );
       })}
     </div>
