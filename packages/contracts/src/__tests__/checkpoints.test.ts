@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CHECKPOINT_FILE_STATES,
   CHECKPOINT_STATUSES,
+  CHECKPOINT_UNCAPTURED_REASONS,
   CheckpointActionSchema,
   CheckpointConflictDetailsSchema,
   CheckpointFileDiffSchema,
@@ -59,6 +61,31 @@ describe('D300 the checkpoint contract', () => {
   it('refuses a file change the diff never produces', () => {
     const file = { ...checkpoint.files[0], change: 'renamed' };
     expect(CheckpointSchema.safeParse({ ...checkpoint, files: [file] }).success).toBe(false);
+  });
+
+  it('marks a file the person edited, and one the snapshot could not capture with its reason', () => {
+    const file = checkpoint.files[0]!;
+    const person = { ...file, state: 'person' };
+    const uncaptured = { ...file, state: 'not_revertible', reason: 'too_large' };
+    expect(CheckpointSchema.parse({ ...checkpoint, files: [person, uncaptured] }).files).toEqual([
+      person,
+      uncaptured,
+    ]);
+    expect([...CHECKPOINT_FILE_STATES]).toEqual([
+      'pending',
+      'kept',
+      'reverted',
+      'person',
+      'not_revertible',
+    ]);
+    expect([...CHECKPOINT_UNCAPTURED_REASONS]).toEqual([
+      'ignored',
+      'too_large',
+      'unreadable',
+      'vanished',
+    ]);
+    const unknown = { ...file, state: 'not_revertible', reason: 'cosmic_rays' };
+    expect(CheckpointSchema.safeParse({ ...checkpoint, files: [unknown] }).success).toBe(false);
   });
 
   it('takes keep or revert, for every pending file or for named paths', () => {
