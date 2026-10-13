@@ -7,6 +7,7 @@ export * from './repository-guardrails.js';
 export * from './repository-round4.js';
 export * from './repository-round5.js';
 export * from './repository-usage.js';
+export * from './repository-checkpoints.js';
 export * from './indexes.js';
 export * from './backup.js';
 export * from './default-policy.js';

@@ -23,6 +23,7 @@ import type {
   ArtifactRepository,
   ChatMessageRepository,
   ChatThreadRepository,
+  CheckpointRepository,
   EdgeRepository,
   GuardrailPolicyRepository,
   GuardrailVerdictRepository,
@@ -64,6 +65,7 @@ import {
   VectorStore,
   type VectorExtension,
 } from './indexes.js';
+import { createCheckpointRepository } from './repository-checkpoints.js';
 import {
   createApprovalRepository,
   createGuardrailPolicyRepository,
@@ -257,6 +259,7 @@ export const GATED_REPOSITORIES = [
   'memory',
   'summaryCache',
   'usage',
+  'checkpoints',
 ] as const satisfies readonly Exclude<keyof Repository, 'transaction'>[];
 
 type GatedRepository = (typeof GATED_REPOSITORIES)[number];
@@ -317,6 +320,9 @@ export class SqliteRepository implements Repository {
   readonly summaryCache: SummaryCacheRepository;
   readonly usage: UsageRepository;
 
+  /* IDE (D300). */
+  readonly checkpoints: CheckpointRepository;
+
   constructor(db: Db, sqlite: BetterSqlite3.Database, options: SqliteRepositoryOptions = {}) {
     this.#db = db;
     this.#sqlite = sqlite;
@@ -354,6 +360,8 @@ export class SqliteRepository implements Repository {
     this.memory = createMemoryRepository(db);
     this.summaryCache = createSummaryCacheRepository(db, sqlite);
     this.usage = createUsageRepository(sqlite);
+    // IDE (D300): checkpoints of agents' changes, paths and counts only.
+    this.checkpoints = createCheckpointRepository(db);
 
     // The gate (NFR-REL-02). Every repository is composed twice: as built, for a transaction body,
     // which holds the connection; and gated, for everyone else, so a call that is not part of the
@@ -389,6 +397,7 @@ export class SqliteRepository implements Repository {
       memory: this.memory,
       summaryCache: this.summaryCache,
       usage: this.usage,
+      checkpoints: this.checkpoints,
     };
     this.#owner = owner;
 
