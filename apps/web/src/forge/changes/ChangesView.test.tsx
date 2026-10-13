@@ -146,7 +146,7 @@ describe('D300 Forge’s Changes view', () => {
     });
   });
 
-  it('follows checkpoint.updated live: a new one appears, recording then waiting', async () => {
+  it('follows checkpoint.updated live: a new one appears while it is still recording', async () => {
     const { projectId } = seed();
     const view = await open(projectId);
     await within(view).findByText(/No agent changes yet/);
