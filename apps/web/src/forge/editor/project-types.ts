@@ -242,8 +242,12 @@ export function loadProjectTypes(
       return;
     }
     if (disposed || mine !== generation) return;
-    for (const path of [...libs.keys()]) unregister(path);
+    const before = [...libs.keys()];
+    for (const path of before) unregister(path);
     for (const file of sources.files) register(file.path, file.content);
+    // a source that left (deleted, now over the caps): Monaco's model of its lib goes too (F-M3)
+    const kept = new Set(sources.files.map((file) => file.path));
+    for (const path of before) if (!kept.has(path)) disposeStray(path);
     applyOptions(tsconfigOptions(projectId, sources.tsconfig));
   }
 

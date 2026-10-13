@@ -276,4 +276,35 @@ describe('D299 Phase 4 merge fix N2: a source that leaves the types leaves no Mo
     expect(stray.isDisposed()).toBe(true);
     types.dispose();
   });
+
+  it('a reload disposes Monaco’s model of a source that left the sources (fix F-M3)', async () => {
+    const types = loadProjectTypes(asMonaco(fake), P, client());
+    await types.ready;
+    // Monaco made models of A's and B's libs (go-to-definition, related information)
+    const strayA = fake.editor.createModel('a', 'typescript', fileUri(P, 'src/a.ts') as never);
+    const strayB = fake.editor.createModel('b', 'typescript', fileUri(P, 'src/b.tsx') as never);
+    // the person has lib/c.js open: the registry's model is never a stray
+    const open = ensureModel(P, 'lib/c.js', 'export const c = 3;', 'javascript', () => undefined);
+
+    delete disk['src/b.tsx'];
+    delete disk['lib/c.js'];
+    await types.reload();
+    expect(tsLibs()[uri('src/b.tsx')]).toBeUndefined();
+    expect(strayB.isDisposed()).toBe(true);
+    // A is registered again: its stray goes too, as register always did
+    expect(tsLibs()[uri('src/a.ts')]?.content).toBe('export const a = 1;');
+    expect(strayA.isDisposed()).toBe(true);
+    expect(open.isDisposed()).toBe(false);
+    types.dispose();
+  });
+
+  it('a reload leaves another project’s models alone', async () => {
+    const types = loadProjectTypes(asMonaco(fake), P, client());
+    await types.ready;
+    const theirs = fake.editor.createModel('b', 'typescript', fileUri(OTHER, 'src/b.tsx') as never);
+    delete disk['src/b.tsx'];
+    await types.reload();
+    expect(theirs.isDisposed()).toBe(false);
+    types.dispose();
+  });
 });
