@@ -139,7 +139,8 @@ say, or `pnpm lint`. Then **Run checks**, in the header of Problems, or **Ctrl+S
   exactly a script's name always runs as that script.
 - Problems reads what `tsc` and `eslint` (its usual "stylish" output) print, and the common
   `file:line:column: message` and `file:line: message` forms. Each row names the tool, opens its
-  file at its line, and has **Fix with agent**. The footer's error and warning counts include them.
+  file at its line, and has **Fix with agent**. The footer's error and warning counts include
+  them; an error an open file's live check also shows counts once.
 - The **Checks** header says when it ran, how long it took and how it exited. A clean run says
   "No problems found by" and the command. A run that failed without a line Problems can read says
   "Checks failed (exit N); no problems recognised in the output", with **Show output** to see it in
@@ -163,7 +164,8 @@ changes nothing.
   Model node). What a tool returns is checked before the model reads it, as in a run: hidden
   instructions are removed and personal data redacted under the node's guardrail policy.
 - **What it did:** under the reply, "What it did: 2 edits, 1 read" opens to the files it read,
-  wrote or edited and the commands it ran. ACE keeps the names, never what the files say.
+  wrote or edited and the commands it ran (a command's first line, cut before anything it writes
+  to a file). ACE keeps the names, never what the files say.
 - **Every turn in a folder is checkpointed**, and a reply that changed files carries a
   [Changes card](#changes-and-checkpoints).
 - **One at a time:** in one project, these turns wait for each other. The waiting one shows
@@ -175,8 +177,10 @@ node answers inside the same conversation, sees who said what, and its reply sho
 avatar. The conversation does not switch: your next message without an `@` goes back to the node
 you were talking to.
 
-- One message goes to one node. `@all`, two different nodes, or a handle no node has is explained
-  under the box, and Send waits until you fix it.
+- One message goes to one node. `@all` or two different nodes is explained under the box, and
+  Send waits until you fix it; so is a handle no node has, when it is the message's first word.
+  Anywhere else an unknown `@word` is plain text, and so is an `@` in code, in quotes, or in
+  `@scope/package` and `@Decorator(…)`.
 - Only an `@handle` counts; a node's plain name is just a word. The handles are the ones Domain
   uses: a node's own, or one made from its name, and `@brain` for the Brain.
 
@@ -191,7 +195,8 @@ you were talking to.
 - **Fix with agent**, on every row in Problems (the open files' errors and Run checks' results
   alike), sends the node the chat is talking to "Fix this problem:", the message and the tool that
   reported it, with the file's lines around the problem (five either side). If the chat has no
-  node selected, the message and the reference wait in the message box until you pick one.
+  node of this workflow selected, the message and the reference wait in the message box until
+  you pick one.
 
 ## Changes and checkpoints
 
@@ -212,9 +217,12 @@ never in your project's `.git`: your branches, staging area and stash are not to
   binary file, or one over 2 MB, has no text to compare.
 - **Keep** accepts a change. **Revert** puts the file back as it was before the agent: its old
   text, deleted again if the agent created it, recreated if the agent deleted it. **Keep all** and
-  **Revert all** do every file still waiting; Revert all does not ask first.
+  **Revert all** do every file still waiting. Revert all asks first, naming how many files it
+  reverts and which ones it will delete.
 - **A file changed since the agent's edit** is never overwritten: Revert says "_file_ changed after
   the agent's edit; review it before reverting" and leaves it. The other files are still reverted.
+- **The agent hears about it.** After you revert files from a chat's checkpoint, that chat's next
+  turn starts with a note naming them, so the agent does not build on a change you undid.
 - **Files you changed in Forge while the agent worked** (saved, created, moved or deleted) are
   listed as **yours** and are not reverted here.
 - **Files a snapshot left out** (see the limits below) are not reviewed. One left out on one side
@@ -287,6 +295,8 @@ Forge uses **Alt+W** to close an editor tab, and **Ctrl+P** lists your open file
 ### Chat
 
 - A turn waiting for another one shows only "… is typing", not that it waits.
+- The note that tells the agent which files you reverted waits in memory for the chat's next turn:
+  if ACE restarts first, the agent is not told.
 - On a phone, the chat shows no Changes card; review the changes in Forge.
 
 ### Search, checks, formatting and types
