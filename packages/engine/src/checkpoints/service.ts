@@ -62,6 +62,8 @@ export interface CheckpointService extends CheckpointRecorder {
   notePersonWrite(projectId: Id, paths: readonly string[]): void;
   /** R-1: what the person reverted in this thread's checkpoints since its last turn, once. */
   takeRevertedPaths(threadId: Id): string[];
+  /** R-1: a failed turn's taken paths, back ahead of any reverted since. */
+  restoreRevertedPaths(threadId: Id, paths: readonly string[]): void;
 }
 
 export interface CheckpointServiceDeps {
@@ -494,6 +496,12 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
       const paths = revertedByThread.get(threadId) ?? [];
       revertedByThread.delete(threadId);
       return paths;
+    },
+
+    restoreRevertedPaths(threadId, paths) {
+      if (paths.length === 0) return;
+      const newer = revertedByThread.get(threadId) ?? [];
+      revertedByThread.set(threadId, [...paths, ...newer.filter((path) => !paths.includes(path))]);
     },
   };
 }

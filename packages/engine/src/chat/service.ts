@@ -611,6 +611,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         { subsystem: 'chat', threadId, code: failure.code, kind: failure.kind },
         'chat reply failed',
       );
+      // R-1: a failed turn may never have told the model, so the next turn tells it again
+      if (reverted.length > 0) deps.checkpoints?.restoreRevertedPaths?.(threadId, reverted);
       return store(failedTurn(threadId, failure, { usage, ...failedExtra }, replyId));
     }
 
