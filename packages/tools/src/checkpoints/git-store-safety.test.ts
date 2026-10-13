@@ -1,5 +1,15 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmdirSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -168,5 +178,47 @@ describe.skipIf(!hasGit)('D300 I1: a project too large for checkpoints fails hon
     for (const name of ['a', 'b', 'c']) write(`${name}.txt`, `${name}\n`);
     const snap = await store.snapshot(PROJECT, root, { checkpointId: 'c1', side: 'before' });
     expect(snap.commit).toMatch(/^[0-9a-f]{40}$/);
+  });
+});
+
+/** A link to a folder: a junction on Windows (no privilege needed), a symlink elsewhere. */
+function linkFolder(target: string, path: string): boolean {
+  try {
+    symlinkSync(target, path, 'junction');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+describe.skipIf(!hasGit)('D300 merge fix N3: a link covers the paths under its name', () => {
+  it('a link swapped for a folder: what is under it is refused, not deleted', async (ctx) => {
+    const outside = mkdtempSync(join(tmpdir(), 'ace-cp-outside-'));
+    const theirs = 'the person’s, through the link\n';
+    try {
+      writeFileSync(join(outside, 'x.txt'), theirs);
+      if (!linkFolder(outside, join(root, 'shared'))) ctx.skip();
+      const store = createGitCheckpointStore(dataDir);
+      const { files, revert } = await checkpoint(store, () => {
+        // the agent replaces the link with a folder of its own, at the same name
+        try {
+          unlinkSync(join(root, 'shared'));
+        } catch {
+          rmdirSync(join(root, 'shared'));
+        }
+        write('shared/x.txt', 'the agent’s\n');
+      });
+
+      expect(files.find((file) => file.path === 'shared/x.txt')).toMatchObject({
+        uncaptured: 'unreadable',
+      });
+      expect(await revertAll(files, revert)).toEqual([]);
+      const error = await revert('shared/x.txt').catch((e: unknown) => e);
+      expect(isCheckpointConflictError(error)).toBe(true);
+      expect(read('shared/x.txt')).toBe('the agent’s\n');
+      expect(readFileSync(join(outside, 'x.txt'), 'utf8')).toBe(theirs);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
