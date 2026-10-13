@@ -867,7 +867,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
    * executor uses, and starts a run for `postMessage({ run: true })` through the run service. A
    * direct chat touches no run (FR-CHAT-005). D302: in a project with a folder it works there — a
    * CLI under its preset, an API model with the non-destructive project tools from the same
-   * registry (`tools`). Its checkpoints (`checkpoints`) are wired with Track A's service at merge.
+   * registry (`tools`), and each such writing turn is a checkpoint of D300's service
+   * (`checkpoints`), so its reply carries the `checkpointId` the Changes card reviews.
    */
   const chatService: ChatService = createChatService({
     scope: LOCAL_SCOPE,
@@ -899,6 +900,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     masker,
     startRun: async (workflowId, request) => (await runs.beginRun(workflowId, request)).run,
     tools: toolProvider,
+    checkpoints,
     // D302: a chat tool result passes the same context point a run's does (FR-GRD-004).
     contextGuard,
   });

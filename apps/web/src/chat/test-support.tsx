@@ -8,9 +8,11 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import { configureApi } from '../app/api';
 import { startSocket, stopSocket } from '../app/socket';
 import { useSelectionStore } from '../app/stores/selection';
+import { MockCheckpoints } from '../mocks/checkpoints';
 import { MockDb } from '../mocks/db';
 import { createFakeWebSocket } from '../mocks/fake-socket';
 import { createHandlers } from '../mocks/handlers';
+import { createCheckpointHandlers } from '../mocks/handlers-checkpoints';
 import { createRound2Handlers, stopScenario } from '../mocks/handlers-round2';
 import { createRound3Handlers } from '../mocks/handlers-round3';
 import { createRound4Handlers, setChatScenario } from '../mocks/handlers-round4';
@@ -28,7 +30,10 @@ import { useChatSessions } from './session-store';
  * leans on — plus the fake socket the streaming reply arrives on.
  */
 export const db = new MockDb({ persist: false });
+/** D300: the mock engine's checkpoints, for the Changes card under a chat turn. */
+export const checkpoints = new MockCheckpoints(db);
 export const server = setupServer(
+  ...createCheckpointHandlers(db, checkpoints),
   ...createRound4Handlers(db),
   ...createRound3Handlers(db),
   ...createRound2Handlers(db),
@@ -46,6 +51,7 @@ export function installChatMockServer(): void {
     stopScenario();
     setChatScenario('chat-stream');
     db.reset();
+    checkpoints.reset();
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     resetGraphSyncRegistry();
     useSelectionStore.getState().clear();

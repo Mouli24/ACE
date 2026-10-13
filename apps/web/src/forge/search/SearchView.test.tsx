@@ -55,7 +55,7 @@ describe('D299 Phase 4 the Explorer header switches EXPLORER · SEARCH', () => {
       within(switcher)
         .getAllByRole('tab')
         .map((tab) => tab.textContent),
-    ).toEqual(['EXPLORER', 'SEARCH']);
+    ).toEqual(['EXPLORER', 'SEARCH', 'CHANGES']);
     expect(switcher).toHaveClass('rounded-full', 'bg-[var(--soft)]');
     expect(await screen.findByRole('tree', { name: 'Files of Shop' })).toBeInTheDocument();
 

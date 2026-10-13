@@ -3,8 +3,8 @@ import { create } from 'zustand';
 /** What the Changes view shows for one project. */
 export interface ProjectChanges {
   /**
-   * Asked to show (an Explorer marker was clicked): the left column's header switch shows CHANGES
-   * while this is true, and clears it when the person switches away (wired at the merge, D339).
+   * Asked to show (an Explorer marker was clicked): the Explorer switches its header to CHANGES and
+   * then settles the request (`dismiss`), so the next click asks again (D339).
    */
   requested: boolean;
   /** The checkpoint to bring into view and outline. */

@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
@@ -89,5 +89,53 @@ describe('D302 Fix with agent on a problem', () => {
     );
     expect(useComposerChips.getState().draft).toBe('Fix this problem: type error (ts)');
     expect(useComposerChips.getState().chips[0]?.text).toContain('const v9 = 1;');
+  });
+});
+
+describe('D299 Phase 4 + D302 merge seam: Fix with agent on a check result', () => {
+  it('a Run checks row has the button too, and it hands over the check’s tool', async () => {
+    const user = userEvent.setup();
+    useComposerChips.getState().reset();
+    const projectId = db.createProject({ name: 'P' }).id;
+    db.seedFiles(projectId, { 'src/b.ts': 'export const b: number = "two";\n' });
+    const at = new Date().toISOString();
+    act(() =>
+      useProblemsStore.setState({
+        byProject: {},
+        checks: {
+          [projectId]: {
+            status: 'done',
+            command: 'pnpm tsc --noEmit',
+            startedAt: at,
+            finishedAt: at,
+            exitCode: 2,
+            problems: [
+              {
+                path: 'src/b.ts',
+                line: 1,
+                column: 14,
+                severity: 'error',
+                message: "Type 'string' is not assignable to type 'number'.",
+                source: 'tsc',
+                code: 'TS2322',
+              },
+            ],
+          },
+        },
+      }),
+    );
+    renderWithQuery(<ProblemsView projectId={projectId} />);
+    const checks = await screen.findByTestId('checks-group');
+    const button = within(checks).getByRole('button', { name: 'Fix with agent' });
+
+    await user.click(button);
+    await waitFor(() =>
+      expect(useComposerChips.getState().chips).toMatchObject([
+        { path: 'src/b.ts', startLine: 1, language: 'typescript' },
+      ]),
+    );
+    expect(useComposerChips.getState().draft).toBe(
+      "Fix this problem: Type 'string' is not assignable to type 'number'. (tsc)",
+    );
   });
 });

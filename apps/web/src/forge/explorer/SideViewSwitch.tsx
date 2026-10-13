@@ -3,9 +3,9 @@ import { Tabs, TabsList, TabsTrigger } from '@ace/ui';
 import { SIDE_VIEWS, useSideViewStore, type SideView } from './side-view-store';
 
 /**
- * EXPLORER · SEARCH (D299 Phase 4): the kit's segmented pill (D328), compact — mono caps, as the
- * column's old "EXPLORER" label read — at the top of Forge's left column. It lists
- * {@link SIDE_VIEWS}, so the merge step's CHANGES needs no change here.
+ * EXPLORER · SEARCH · CHANGES (D299 Phase 4, D339): the kit's segmented pill (D328), compact —
+ * mono caps, as the column's old "EXPLORER" label read — at the top of Forge's left column. It
+ * lists {@link SIDE_VIEWS}.
  */
 export function SideViewSwitch() {
   const view = useSideViewStore((state) => state.view);
