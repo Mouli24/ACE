@@ -54,7 +54,10 @@ system's shell (`cmd.exe` on Windows, `/bin/sh` elsewhere), and its output strea
 and links included.
 
 - **While it runs**, what you type goes to it: answer its prompt and press **Enter**. **Ctrl+C**
-  stops it, and everything it started.
+  copies when text is selected; otherwise it stops what runs, and everything it started.
+- **Pasting several lines** runs the first. Each line after it goes to what is running, as its
+  input; once nothing runs (after a `cd`, or a command that has already ended), the next line runs
+  as a command. To run commands one after another, chain them on one line with `&&`.
 - **`cd src`** moves the tab into a folder of the project, and the prompt says where you are.
   `cd ..` stops at the project folder; `cd` alone prints where you are. **`cls`** or **`clear`**
   clears the tab.
@@ -76,10 +79,12 @@ Ideate, the **…** menu next to the project name → **Project page**):
 
 With **Scripts only** or **Off**, the Terminal says so above its tabs, with a link to that setting.
 
-Commands get your environment minus anything whose **name** looks like a secret: API keys,
-tokens and passwords never reach them, while `PATH`, `HOME` and your ssh agent do. Only names are
-checked, never values: a password inside a value, such as `DATABASE_URL=postgres://user:pass@…`,
-does reach your commands. Agents never use the terminal.
+Commands get your environment minus every variable whose **name** contains KEY, TOKEN, SECRET,
+PASSWORD, PASSWD, CREDENTIAL, SESSION, AUTH or COOKIE, anywhere in the name and in any case (so
+`ANTHROPIC_API_KEY` and `GITHUB_TOKEN` never reach them). Other names are passed through, even
+when they hold a secret: `DB_PASS`, `GH_PAT` and `MYSQL_PWD` do reach your commands, as do `PATH`,
+`HOME` and your ssh agent. Values are never inspected: a password inside a value, such as
+`DATABASE_URL=postgres://user:pass@…`, reaches your commands too. Agents never use the terminal.
 
 ## Keys the browser keeps
 
@@ -96,7 +101,11 @@ Forge uses **Alt+W** to close an editor tab, and **Ctrl+P** lists your open file
   render. Prompts that read a line work.
 - A tab keeps its `cd`, but nothing else carries from one command to the next (`set`, `export`, an
   activated virtualenv). Chain them on one line instead: `venv\Scripts\activate && python app.py`.
-- Processes live in the engine's memory: restarting the engine ends every command.
+- Processes live in the engine's memory. When the engine shuts down normally, it stops every
+  command first. If the engine exits abruptly instead (a crash, Task Manager, or `pnpm dev`
+  restarting it after an edit), the tab says the engine restarted and the process may still be
+  running: what the command started (a dev server, say) can live on and keep its port. If a port is
+  still in use, stop it from the system's task manager.
 - There is no end-of-input key (Ctrl+D): a program that reads until its input ends (`sort` or
   `cat` with no file) waits until you stop it with Ctrl+C.
 - Background jobs are not tracked: something a command leaves running after it ends (`cmd &`,
