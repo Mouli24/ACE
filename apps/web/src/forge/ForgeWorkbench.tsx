@@ -7,6 +7,7 @@ import { saveAll, saveFile } from './editor/actions';
 import { useCloseRequest } from './editor/CloseDialogs';
 import { EditorArea } from './editor/EditorArea';
 import { useEditorStore } from './editor/editor-store';
+import { useProjectTypes } from './editor/project-types';
 import { useEditorSync } from './editor/useEditorSync';
 import { ExplorerView } from './explorer/ExplorerView';
 import { useSideViewStore } from './explorer/side-view-store';
@@ -40,6 +41,8 @@ export function ForgeWorkbench({
   const closeRequest = useCloseRequest(projectId);
   const attribution = useForgeAttribution(projectId, workflowId);
   useEditorSync(projectId);
+  // D299 Phase 4: the project's sources for cross-file TypeScript, once Monaco has loaded.
+  useProjectTypes(projectId);
   const activePath = (): string | undefined =>
     useEditorStore.getState().projects[projectId]?.active;
   useShortcuts([

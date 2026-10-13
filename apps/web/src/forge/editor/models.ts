@@ -20,6 +20,8 @@ let monaco: MonacoApi | undefined;
 const entries = new Map<string, Entry>();
 /** The workbench's one Monaco editor while it is mounted (Format, format-on-save). */
 let activeEditor: Monaco.editor.ICodeEditor | undefined;
+/** Who waits for the lazy editor chunk to hand Monaco over (cross-file types). */
+const waiting = new Set<(instance: MonacoApi) => void>();
 const keyOf = (projectId: string, path: string): string => `${projectId}\u0000${path}`;
 
 /**
@@ -29,6 +31,21 @@ const keyOf = (projectId: string, path: string): string => `${projectId}\u0000${
  */
 export function setMonaco(instance: MonacoApi): void {
   monaco = instance;
+  for (const callback of [...waiting]) callback(instance);
+  waiting.clear();
+}
+
+/**
+ * Runs `callback` with Monaco now, or once the editor chunk has loaded it. Answers a function that
+ * cancels a wait still pending.
+ */
+export function whenMonaco(callback: (instance: MonacoApi) => void): () => void {
+  if (monaco !== undefined) {
+    callback(monaco);
+    return () => undefined;
+  }
+  waiting.add(callback);
+  return () => waiting.delete(callback);
 }
 
 /** `file:///<projectId>/<path>`: one URI space per project, so two projects' `src/index.ts` never share a model. */

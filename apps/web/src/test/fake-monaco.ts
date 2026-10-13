@@ -42,6 +42,9 @@ export function createFakeMonaco() {
     source?: string;
   }> = [];
   const markerListeners = new Set<() => void>();
+  type FakeModel = ReturnType<typeof createModel>;
+  const created = new Set<(model: FakeModel) => void>();
+  const disposing = new Set<(model: FakeModel) => void>();
 
   function createModel(value: string, language: string, uri: Uri) {
     let text = value;
@@ -63,6 +66,7 @@ export function createFakeMonaco() {
       },
       isDisposed: () => disposed,
       dispose() {
+        disposing.forEach((listener) => listener(model));
         disposed = true;
         models.delete(uri.toString());
       },
@@ -71,6 +75,7 @@ export function createFakeMonaco() {
       getOptions: () => ({ insertSpaces: true, tabSize: 2 }),
     };
     models.set(uri.toString(), model);
+    created.forEach((listener) => listener(model));
     return model;
   }
 
@@ -104,12 +109,27 @@ export function createFakeMonaco() {
   /** A language service's settings, starting from what Monaco 0.55 starts with. */
   function tsDefaults(compiler: Record<string, unknown>) {
     let compilerOptions = compiler;
+    /** Monaco's extra libs: path → content, as `getExtraLibs` answers them. */
+    const extraLibs: Record<string, { content: string; version: number }> = {};
+    let version = 0;
     let diagnosticsOptions: { diagnosticCodesToIgnore?: number[]; [key: string]: unknown } = {
       noSemanticValidation: false,
       noSyntaxValidation: false,
     };
     return {
       getCompilerOptions: () => compilerOptions,
+      getExtraLibs: () => extraLibs,
+      /** As Monaco: the same path again replaces it; a dispose removes only its own version. */
+      addExtraLib(content: string, path: string) {
+        version += 1;
+        const mine = version;
+        extraLibs[path] = { content, version: mine };
+        return {
+          dispose: () => {
+            if (extraLibs[path]?.version === mine) delete extraLibs[path];
+          },
+        };
+      },
       setCompilerOptions(next: Record<string, unknown>) {
         compilerOptions = next;
       },
@@ -159,6 +179,14 @@ export function createFakeMonaco() {
       getModel: (uri: Uri) => models.get(uri.toString()) ?? null,
       getModels: () => [...models.values()],
       getModelMarkers: () => markers,
+      onDidCreateModel(listener: (model: FakeModel) => void) {
+        created.add(listener);
+        return { dispose: () => created.delete(listener) };
+      },
+      onWillDisposeModel(listener: (model: FakeModel) => void) {
+        disposing.add(listener);
+        return { dispose: () => disposing.delete(listener) };
+      },
       onDidChangeMarkers(listener: () => void) {
         markerListeners.add(listener);
         return { dispose: () => markerListeners.delete(listener) };
