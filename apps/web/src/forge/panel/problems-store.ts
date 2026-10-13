@@ -88,7 +88,8 @@ const placeOf = (problem: { path: string; line: number; column: number }): strin
 /**
  * The footer's and the panel's counts: the open files' markers and the checks, together — a
  * check's entry only when no live marker is the same problem (smoke S-2), so one error Monaco
- * and the checks both report counts once. The Problems list still shows both.
+ * and the checks both report counts once. One to one: a marker that matched an entry is used up,
+ * so a second same entry still counts. The Problems list still shows both.
  */
 export function problemCounts(
   state: ProblemsState,
@@ -100,9 +101,18 @@ export function problemCounts(
     const place = placeOf(marker);
     at.set(place, [...(at.get(place) ?? []), marker]);
   }
-  const checks = (state.checks[projectId]?.problems ?? []).filter(
-    (check) => !(at.get(placeOf(check)) ?? []).some((marker) => sameProblem(check, marker)),
-  );
+  const checks = (state.checks[projectId]?.problems ?? []).filter((check) => {
+    const place = placeOf(check);
+    const unmatched = at.get(place) ?? [];
+    const index = unmatched.findIndex((marker) => sameProblem(check, marker));
+    if (index === -1) return true;
+    // this marker stands for this entry only
+    at.set(
+      place,
+      unmatched.filter((_, each) => each !== index),
+    );
+    return false;
+  });
   const all = [...markers, ...checks];
   return {
     errors: all.filter((problem) => problem.severity === 'error').length,
