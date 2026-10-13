@@ -10,6 +10,7 @@ import { EditorArea } from './editor/EditorArea';
 import { useEditorStore } from './editor/editor-store';
 import { useEditorSync } from './editor/useEditorSync';
 import { ExplorerView } from './explorer/ExplorerView';
+import { useSideViewStore } from './explorer/side-view-store';
 import { BottomPanel } from './panel/BottomPanel';
 import { QuickOpen } from './quick-open/QuickOpen';
 import { useQuickOpen } from './quick-open/quick-open-store';
@@ -46,6 +47,13 @@ export function ForgeWorkbench({
     [SHORTCUTS.togglePanel, togglePanel],
     [SHORTCUTS.toggleTerminal, toggleTerminalFocused],
     [SHORTCUTS.quickOpen, () => useQuickOpen.getState().show()],
+    [
+      SHORTCUTS.searchFiles,
+      () => {
+        if (!useLayoutStore.getState().sidebarOpen) toggleExplorer();
+        useSideViewStore.getState().focusSearch();
+      },
+    ],
     [
       SHORTCUTS.save,
       () => {
