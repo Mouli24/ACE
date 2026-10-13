@@ -38,6 +38,11 @@ export interface CheckpointRecorder {
    * so the thread's next turn can tell the model. Absent on a recorder that keeps no such notes.
    */
   takeRevertedPaths?(threadId: string): string[];
+  /**
+   * D302 R-1: a turn that took them and then failed gives them back, ahead of any reverted since,
+   * so the thread's next turn still hears them.
+   */
+  restoreRevertedPaths?(threadId: string, paths: readonly string[]): void;
 }
 
 /** One side of a checkpoint, pinned in the store under `refs/ace/<checkpointId>/<side>`. */

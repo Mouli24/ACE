@@ -940,6 +940,95 @@ describe('D302 R-1: the next turn in a thread is told which files the person rev
     expect(JSON.stringify(messages)).not.toContain('Note: the person reverted');
   });
 
+  it('fix round 1: a turn that fails keeps the note for the next one, merged with a newer revert', async () => {
+    const { bus } = makeBus(repository, now);
+    const disk = fakeCheckpointStore();
+    disk.disk.set('src/main.ts', "add(1, '2')\n");
+    const checkpoints = createCheckpointService({
+      store: disk,
+      repository,
+      scope,
+      bus,
+      logger: silentLogger,
+    });
+    const { adapter, requests } = scriptedAdapter(
+      (_req, call) => {
+        if (call === 1) disk.disk.set('src/main.ts', 'add(1, 2)\n');
+        if (call === 2) {
+          // the CLI writes, then crashes: the turn fails
+          disk.disk.set('src/b.ts', 'half done\n');
+          throw new Error('the CLI crashed');
+        }
+        return answer('ok');
+      },
+      { type: 'claude_code' },
+    );
+    service = makeChatService(repository, bus, {
+      workflowId,
+      now,
+      adapterFor: async () => adapter,
+      checkpoints,
+    });
+    const turn = async (text: string, threadId?: string) =>
+      (
+        await service.chat(coder.id, {
+          ...(threadId === undefined ? {} : { threadId }),
+          content: hi(text),
+        })
+      ).done;
+
+    const first = await turn('fix the add call');
+    await checkpoints.act(projectId, first.checkpointId!, { action: 'revert' });
+    const failed = await turn('what does line 8 print?', first.threadId);
+    expect(failed.error).toBeDefined();
+    expect(requests[1]?.prompt).toContain(NOTE);
+    // a newer revert, made after the failed turn took the note
+    await checkpoints.act(projectId, failed.checkpointId!, { action: 'revert' });
+
+    await turn('try again', first.threadId);
+    await turn('thanks', first.threadId);
+    expect(requests[2]?.prompt).toContain(
+      'they are back to how they were before that turn: src/main.ts, src/b.ts. Re-read',
+    );
+    expect(requests[3]?.prompt).not.toContain('Note: the person reverted');
+  });
+
+  it('fix round 1: a turn that fails before the model call gives the note back too', async () => {
+    let pending = ['src/main.ts'];
+    const restored: { threadId: string; paths: string[] }[] = [];
+    const recorder: CheckpointRecorder = {
+      ...fakeRecorder(),
+      takeRevertedPaths: () => {
+        const taken = pending;
+        pending = [];
+        return taken;
+      },
+      restoreRevertedPaths: (threadId, paths) => {
+        restored.push({ threadId, paths: [...paths] });
+        pending = [...paths, ...pending];
+      },
+    };
+    let catalogReads = 0;
+    const { adapter, requests } = scriptedAdapter(() => answer('ok'));
+    build({
+      adapterFor: async () => adapter,
+      checkpoints: recorder,
+      modelsFor: async () => {
+        catalogReads += 1;
+        if (catalogReads === 1) throw new Error('the catalog is unreadable');
+        return [];
+      },
+    });
+
+    const failed = await (await service.chat(coder.id, { content: hi('go') })).done;
+    expect(failed.error).toBeDefined();
+    expect(restored).toEqual([{ threadId: failed.threadId, paths: ['src/main.ts'] }]);
+    await (
+      await service.chat(coder.id, { threadId: failed.threadId, content: hi('again') })
+    ).done;
+    expect(requests[0]?.prompt).toContain('before that turn: src/main.ts. Re-read');
+  });
+
   it('a run’s checkpoint reverted leaves no note in a chat', async () => {
     const { bus } = makeBus(repository, now);
     const disk = fakeCheckpointStore();

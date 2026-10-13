@@ -449,3 +449,28 @@ describe('D302 R-1: a revert in a chat checkpoint is told to that thread’s nex
     expect(service.takeRevertedPaths(threadId)).toEqual([]);
   });
 });
+
+describe('D302 R-1 fix round 1: a failed turn gives its note back', () => {
+  it('restores the taken paths ahead of reverts made meanwhile, once each', async () => {
+    const threadId = newId();
+    store.disk.set('a.ts', 'a0\n');
+    store.disk.set('b.ts', 'b0\n');
+    const first = await service.begin(project.id, { kind: 'chat', threadId });
+    store.disk.set('a.ts', 'a1\n');
+    await first.finish();
+    await service.act(project.id, first.id, { action: 'revert' });
+    const taken = service.takeRevertedPaths(threadId);
+    expect(taken).toEqual(['a.ts']);
+
+    // while the turn that took them runs, the person reverts more
+    const second = await service.begin(project.id, { kind: 'chat', threadId });
+    store.disk.set('b.ts', 'b1\n');
+    store.disk.set('a.ts', 'a2\n');
+    await second.finish();
+    await service.act(project.id, second.id, { action: 'revert' });
+
+    service.restoreRevertedPaths(threadId, taken);
+    expect(service.takeRevertedPaths(threadId)).toEqual(['a.ts', 'b.ts']);
+    expect(service.takeRevertedPaths(threadId)).toEqual([]);
+  });
+});
