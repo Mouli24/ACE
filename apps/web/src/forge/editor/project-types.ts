@@ -204,7 +204,11 @@ export function loadProjectTypes(
       const file = await client.readFile(projectId, path);
       if (disposed) return;
       if (file.kind === 'text' && fits(path, file.content)) register(path, file.content);
-      else unregister(path);
+      else {
+        // Over the caps, or no longer text: the lib goes, and Monaco's model of it with it.
+        unregister(path);
+        disposeStray(path);
+      }
     } catch {
       unregister(path);
       disposeStray(path);
