@@ -374,10 +374,15 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
       if (file.binary) return { binary: true };
       let sides: [Uint8Array | undefined, Uint8Array | undefined];
       try {
-        sides = await Promise.all([
+        // both sides finish before anything is answered, and a failure is the first side's to
+        // fail in argument order — a store read still running holds its files (D300 G-1)
+        const [before, after] = await Promise.allSettled([
           store.fileAt(projectId, row.beforeRef, path),
           store.fileAt(projectId, row.afterRef, path),
         ]);
+        if (before.status === 'rejected') throw before.reason;
+        if (after.status === 'rejected') throw after.reason;
+        sides = [before.value, after.value];
       } catch (error) {
         if (isCheckpointUnavailableError(error)) throw checkpointsUnavailable(error.message);
         throw error;

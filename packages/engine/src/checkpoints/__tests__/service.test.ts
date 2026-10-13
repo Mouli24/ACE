@@ -7,7 +7,7 @@ import { createEventBus } from '../../events/index.js';
 import { HttpError } from '../../gateway/errors.js';
 import { newId } from '../../ids.js';
 import { createLogger } from '../../logging/index.js';
-import { LOCAL_SCOPE, type EngineEvent } from '../../ports/index.js';
+import { CheckpointUnavailableError, LOCAL_SCOPE, type EngineEvent } from '../../ports/index.js';
 import { createCheckpointService, type CheckpointService } from '../service.js';
 import { fakeCheckpointStore, gitMissing, type FakeCheckpointStore } from './fake-store.js';
 
@@ -472,5 +472,47 @@ describe('D302 R-1 fix round 1: a failed turn gives its note back', () => {
     service.restoreRevertedPaths(threadId, taken);
     expect(service.takeRevertedPaths(threadId)).toEqual(['a.ts', 'b.ts']);
     expect(service.takeRevertedPaths(threadId)).toEqual([]);
+  });
+});
+
+describe('D300 fix round 1: a file diff answers only once both sides are read', () => {
+  const unavailable = (side: string) => new CheckpointUnavailableError('failed', `${side} is gone`);
+  const later = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  async function oneFile() {
+    store.disk.set('a.ts', 'a0\n');
+    const { checkpoint } = await recorded(() => store.disk.set('a.ts', 'a1\n'));
+    return checkpoint!;
+  }
+
+  it('waits for the other side before it answers a failure', async () => {
+    const checkpoint = await oneFile();
+    let afterRead = false;
+    let call = 0;
+    store.fileAt = async () => {
+      call += 1;
+      if (call === 1) throw unavailable('the before side');
+      await later(30);
+      afterRead = true;
+      return new TextEncoder().encode('a1\n');
+    };
+    const error = await conflictOf(service.fileDiff(project.id, checkpoint.id, 'a.ts'));
+    expect(error.code).toBe('checkpoints_unavailable');
+    expect(afterRead).toBe(true);
+  });
+
+  it('answers the before side’s failure when both fail, whichever failed first', async () => {
+    const checkpoint = await oneFile();
+    let call = 0;
+    store.fileAt = async () => {
+      call += 1;
+      if (call === 1) {
+        await later(30);
+        throw unavailable('the before side');
+      }
+      throw unavailable('the after side');
+    };
+    const error = await conflictOf(service.fileDiff(project.id, checkpoint.id, 'a.ts'));
+    expect(error.message).toBe('Checkpoints are unavailable: the before side is gone');
   });
 });
