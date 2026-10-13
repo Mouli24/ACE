@@ -78,10 +78,11 @@ export function createWorkspaceRoutes(
   router.get(`${base}/status`, async (c) => c.json(await workspace().status(c.req.param('id'))));
 
   // A body, not query params: a regex is full of characters a query string mangles (D299 Phase 4).
+  // The request's signal goes along: a client that leaves stops the search, and its worker.
   router.post(`${base}/search`, async (c) => {
     const service = workspace();
     const body = FileSearchRequestSchema.parse(await readJson(c));
-    return c.json(await service.search(c.req.param('id'), body));
+    return c.json(await service.search(c.req.param('id'), body, c.req.raw.signal));
   });
 
   // D299 Phase 4: the project's TS/JS sources for Monaco's cross-file IntelliSense, capped.

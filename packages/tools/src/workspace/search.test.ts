@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { SEARCH_FILE_MAX_BYTES, type FileSearchRequest } from '@ace/contracts';
 import { ZodError } from 'zod';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { Worker } from 'node:worker_threads';
 
 import { searchFiles } from './search.js';
 
@@ -60,6 +61,7 @@ describe('D299 Phase 4 searchFiles', () => {
       ],
       truncated: false,
       searchedFiles: 1,
+      timedOut: false,
     });
   });
 
@@ -191,5 +193,84 @@ describe('D299 Phase 4 searchFiles', () => {
     const result = await search({ query: 'needle' }, { listLimit: 1 });
     expect(result.searchedFiles).toBe(1);
     expect(result.truncated).toBe(true);
+  });
+});
+
+/** Every 100 ms, the time: a blocked event loop shows as a gap. */
+function watchEventLoop(): { stop(): number[] } {
+  const ticks: number[] = [Date.now()];
+  const timer = setInterval(() => ticks.push(Date.now()), 100);
+  return {
+    stop() {
+      clearInterval(timer);
+      ticks.push(Date.now());
+      return ticks.slice(1).map((tick, index) => tick - (ticks[index] ?? tick));
+    },
+  };
+}
+
+describe('D299 Phase 4 fix C1: a regex search runs in a worker with a hard deadline', () => {
+  it('stops a catastrophic pattern at 5 s with what it found, and the event loop stays free', async () => {
+    put('a.ts', 'a'.repeat(12));
+    // 41 characters: (.*a){12}$ backtracks for minutes on this line
+    put('b.ts', `${'a'.repeat(40)}!`);
+    const loop = watchEventLoop();
+    const started = Date.now();
+    const result = await search({ query: '(.*a){12}$', regex: true });
+    const elapsed = Date.now() - started;
+    const gaps = loop.stop();
+
+    expect(result.timedOut).toBe(true);
+    expect(result.truncated).toBe(true);
+    expect(where(result)).toEqual(['a.ts:1:1']);
+    expect(elapsed).toBeGreaterThanOrEqual(4_500);
+    expect(elapsed).toBeLessThan(6_500);
+    expect(Math.max(...gaps)).toBeLessThan(1_000);
+  }, 15_000);
+
+  it('keeps the engine responsive while an alternation backtracks, and finishes it', async () => {
+    put('a.ts', 'a'.repeat(24));
+    const loop = watchEventLoop();
+    const result = await search({ query: '(a|a)*b', regex: true });
+    const gaps = loop.stop();
+    expect(Math.max(...gaps)).toBeLessThan(1_000);
+    // finished or stopped at the deadline on a loaded machine: either way, no match and no freeze
+    expect(result.files).toEqual([]);
+  }, 15_000);
+
+  it('terminates the worker when the search is aborted, and answers with what it has', async () => {
+    put('a.ts', 'ab');
+    put('b.ts', 'a'.repeat(30));
+    const controller = new AbortController();
+    let worker: Worker | undefined;
+    const started = Date.now();
+    setTimeout(() => controller.abort(), 300);
+    const result = await search(
+      { query: '(a|a)*b', regex: true },
+      { signal: controller.signal, onWorker: (created) => (worker = created) },
+    );
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(result.truncated).toBe(true);
+    expect(result.timedOut).toBe(false);
+    expect(where(result)).toEqual(['a.ts:1:1']);
+    expect(worker).toBeDefined();
+    // a terminated worker reports its exit; a live one never would
+    expect(worker?.threadId).toBe(-1);
+  }, 15_000);
+
+  it('searches literal text in-thread, with no worker', async () => {
+    put('a.ts', '(.*a){12}$');
+    let workers = 0;
+    const result = await search({ query: '(.*a){12}$' }, { onWorker: () => (workers += 1) });
+    expect(where(result)).toEqual(['a.ts:1:1']);
+    expect(workers).toBe(0);
+  });
+
+  it('stops before reading when the signal is already aborted', async () => {
+    put('a.ts', 'needle');
+    const controller = new AbortController();
+    controller.abort();
+    const result = await search({ query: 'needle' }, { signal: controller.signal });
+    expect(result).toMatchObject({ files: [], truncated: true, searchedFiles: 0 });
   });
 });

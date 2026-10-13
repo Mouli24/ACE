@@ -47,10 +47,11 @@ export interface ProjectFiles {
   status(root: string): Promise<RepoStatus>;
   /**
    * Search the files that are not ignored (design §6.4), skipping binary files and files over
-   * 2 MB, capped at the request's `maxResults` and at a time limit (`truncated`). A request the
-   * contract refuses — an invalid or runaway regex — throws a `ZodError`.
+   * 2 MB, capped at the request's `maxResults` and at a time limit (`truncated`; a regex search's
+   * hard limit also says `timedOut`). A request the contract refuses — an invalid or runaway regex
+   * — throws a `ZodError`. `signal` aborting (the client went away) stops it, answering what it has.
    */
-  search(root: string, request: FileSearchRequest): Promise<FileSearchResult>;
+  search(root: string, request: FileSearchRequest, signal?: AbortSignal): Promise<FileSearchResult>;
   /**
    * The project's TS/JS sources for cross-file IntelliSense (design §6.2): not ignored, never
    * `node_modules`, shallowest first, capped at 1,500 files and 2 MB (`truncated`), plus the root

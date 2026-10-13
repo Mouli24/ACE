@@ -131,6 +131,24 @@ describe('D299 FR-GIT-003 FR-GIT-004 the SDK’s file methods', () => {
     expect(refused.seen).toEqual([]);
   });
 
+  it('D299 Phase 4 fix C1 passes an abort signal to the search request', async () => {
+    let seen: AbortSignal | null | undefined;
+    const client = createAceClient({
+      baseUrl: 'http://127.0.0.1:4747',
+      token: 't',
+      fetch: async (_input, init) => {
+        seen = init?.signal;
+        return new Response(JSON.stringify({ files: [], truncated: false, searchedFiles: 0 }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+    const controller = new AbortController();
+    await client.searchFiles(PID, { query: 'x' }, { signal: controller.signal });
+    expect(seen).toBe(controller.signal);
+  });
+
   it('D299 Phase 4 reads the project sources', async () => {
     const answer = { files: [{ path: 'a.ts', content: 'x' }], truncated: true, tsconfig: '{}' };
     const { client, seen } = clientAnswering(200, answer);

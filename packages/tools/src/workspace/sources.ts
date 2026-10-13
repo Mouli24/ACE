@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 
 import {
   FILE_LIST_LIMIT,
@@ -11,6 +11,7 @@ import {
 } from '@ace/contracts';
 
 import { listAllFiles } from './fs-files.js';
+import { toAbsolute } from './resolve.js';
 
 /** How much of a file is searched for a NUL byte to call it binary — git's own heuristic. */
 const SNIFF_BYTES = 8000;
@@ -27,8 +28,13 @@ export interface ReadSourcesOptions {
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 const depthOf = (path: string): number => path.split('/').length;
 
-async function readText(absolute: string, maxBytes: number): Promise<Buffer | undefined> {
+/**
+ * One file's bytes, read only through the file API's confinement (fix I1): `toAbsolute` refuses a
+ * link out of the project and anything in `.git`, so such a file is left out, never read.
+ */
+async function readText(base: string, path: string, maxBytes: number): Promise<Buffer | undefined> {
   try {
+    const absolute = toAbsolute(base, path);
     const stats = await fs.stat(absolute);
     if (!stats.isFile() || stats.size > maxBytes) return undefined;
     const bytes = await fs.readFile(absolute);
@@ -76,7 +82,7 @@ export async function readSources(
       truncated = true;
       break;
     }
-    const read = await readText(join(base, path), maxBytes);
+    const read = await readText(base, path, maxBytes);
     if (read === undefined) continue;
     if (bytes + read.length > maxBytes) {
       truncated = true;
@@ -86,6 +92,6 @@ export async function readSources(
     files.push({ path, content: textOf(read) });
   }
 
-  const tsconfig = await readText(join(base, 'tsconfig.json'), TSCONFIG_MAX_BYTES);
+  const tsconfig = await readText(base, 'tsconfig.json', TSCONFIG_MAX_BYTES);
   return { files, truncated, ...(tsconfig === undefined ? {} : { tsconfig: textOf(tsconfig) }) };
 }

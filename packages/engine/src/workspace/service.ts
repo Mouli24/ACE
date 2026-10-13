@@ -34,8 +34,15 @@ export interface WorkspaceService {
   remove(projectId: Id, path: string): Promise<void>;
   listAll(projectId: Id): Promise<FileList>;
   status(projectId: Id): Promise<RepoStatus>;
-  /** `POST /files/search` (D299 Phase 4): the project's files that are not ignored. */
-  search(projectId: Id, request: FileSearchRequest): Promise<FileSearchResult>;
+  /**
+   * `POST /files/search` (D299 Phase 4): the project's files that are not ignored. `signal` is the
+   * request's: when the client leaves, the search stops.
+   */
+  search(
+    projectId: Id,
+    request: FileSearchRequest,
+    signal?: AbortSignal,
+  ): Promise<FileSearchResult>;
   /** `GET /files/sources` (D299 Phase 4): TS/JS sources for cross-file IntelliSense, capped. */
   sources(projectId: Id): Promise<SourcesResult>;
   /** The WS hub says a project gained its first subscriber (`true`) or lost its last (`false`). */
@@ -183,7 +190,8 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): WorkspaceSer
     },
     listAll: async (projectId) => files.listAll(await folderOf(projectId)),
     status: async (projectId) => files.status(await folderOf(projectId)),
-    search: async (projectId, request) => files.search(await folderOf(projectId), request),
+    search: async (projectId, request, signal) =>
+      files.search(await folderOf(projectId), request, signal),
     sources: async (projectId) => files.readSources(await folderOf(projectId)),
 
     async setWatched(projectId, watched) {

@@ -27,7 +27,8 @@ export function createFsProjectFiles(): ProjectFiles {
     remove: removeEntry,
     listAll: (root) => listAllFiles(root),
     status: (root) => readRepoStatus(root),
-    search: (root, request) => searchFiles(root, request),
+    search: (root, request, signal) =>
+      searchFiles(root, request, signal === undefined ? {} : { signal }),
     readSources: (root, options) => readSources(root, options),
     watch: (root, onChange, onError) => watchProject(root, onChange, onError),
   };

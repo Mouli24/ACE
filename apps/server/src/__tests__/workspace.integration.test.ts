@@ -211,3 +211,26 @@ describe('D299 Phase 4 project sources through the real engine', () => {
     expect(sources.json.truncated).toBe(false);
   });
 });
+
+describe('D299 Phase 4 fix C1: a runaway regex never freezes the real engine', () => {
+  it('answers timedOut within about 5 s, and the engine serves other requests meanwhile', async () => {
+    mkdirSync(join(folder, 'slow'), { recursive: true });
+    writeFileSync(join(folder, 'slow', 'line.txt'), `${'a'.repeat(40)}!`);
+    const started = Date.now();
+    const search = api<{ timedOut?: boolean; truncated: boolean }>(
+      'POST',
+      `/projects/${projectId}/files/search`,
+      { query: '(.*a){12}$', regex: true, include: 'slow' },
+    );
+    // while the worker spins, the engine still answers at once
+    await new Promise((settle) => setTimeout(settle, 500));
+    const pinged = Date.now();
+    expect((await api('GET', `/projects/${projectId}`)).status).toBe(200);
+    expect(Date.now() - pinged).toBeLessThan(1_000);
+
+    const result = await search;
+    expect(result.status).toBe(200);
+    expect(result.json).toMatchObject({ timedOut: true, truncated: true });
+    expect(Date.now() - started).toBeLessThan(7_000);
+  }, 20_000);
+});
