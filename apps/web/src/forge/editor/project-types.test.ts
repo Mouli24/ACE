@@ -1,4 +1,4 @@
-import type { FileContent, SourcesResult } from '@ace/contracts';
+import { SOURCES_MAX_BYTES, type FileContent, type SourcesResult } from '@ace/contracts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { asMonaco, createFakeMonaco, type FakeMonaco } from '../../test/fake-monaco';
@@ -238,5 +238,42 @@ describe('D299 Phase 4 cross-file types: tsconfig.json', () => {
     expect(
       parseJsonc('{ "a": "// not a comment", /* c */ "b": [1, 2,], // end\n "c": "x,]" }'),
     ).toEqual({ a: '// not a comment', b: [1, 2], c: 'x,]' });
+  });
+});
+
+describe('D299 Phase 4 merge fix N2: a source that leaves the types leaves no Monaco model', () => {
+  it('a changed source that is no longer text drops its lib and Monaco’s model', async () => {
+    const sources = client();
+    const types = loadProjectTypes(asMonaco(fake), P, {
+      ...sources,
+      readFile: async (projectId, path) =>
+        path === 'src/a.ts'
+          ? { kind: 'binary', path, size: 10 }
+          : sources.readFile(projectId, path),
+    });
+    await types.ready;
+    const stray = fake.editor.createModel(
+      tsLibs()[uri('src/a.ts')]?.content ?? '',
+      'typescript',
+      fileUri(P, 'src/a.ts') as never,
+    );
+
+    await types.changed([{ path: 'src/a.ts', kind: 'changed' }]);
+    expect(tsLibs()[uri('src/a.ts')]).toBeUndefined();
+    expect(stray.isDisposed()).toBe(true);
+    types.dispose();
+  });
+
+  it('a created source over the caps gets no lib, and no stale model at its URI', async () => {
+    const types = loadProjectTypes(asMonaco(fake), P, client());
+    await types.ready;
+    disk['src/huge.ts'] = 'x'.repeat(SOURCES_MAX_BYTES + 1);
+    const huge = fileUri(P, 'src/huge.ts') as never;
+    const stray = fake.editor.createModel('stale', 'typescript', huge);
+
+    await types.changed([{ path: 'src/huge.ts', kind: 'created' }]);
+    expect(tsLibs()[uri('src/huge.ts')]).toBeUndefined();
+    expect(stray.isDisposed()).toBe(true);
+    types.dispose();
   });
 });
