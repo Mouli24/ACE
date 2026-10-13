@@ -72,7 +72,13 @@ export function exitLine(exit: ExitInfo): string {
 export const errorLine = (message: string): string => `${RED}${message}${RESET}\r\n`;
 
 export const DROPPED_NOTE = `${DIM}[earlier output dropped: the engine keeps the last 1 MB]${RESET}\r\n`;
-export const LOST_NOTE = `${DIM}[the engine no longer knows this process: it stopped when the engine restarted]${RESET}\r\n`;
+/**
+ * The engine restarted and no longer knows the process. It never says the process stopped: an
+ * abrupt engine exit (a crash, Task Manager, `tsx watch` restarting it) skips the shutdown that
+ * stops processes, and on Windows what the shell started (npm, node, vite) breaks away from the
+ * engine's job and runs on, holding its port (D301, known limitation).
+ */
+export const LOST_NOTE = `${DIM}[the engine restarted; this process may still be running — if a port is still in use, stop it from the system's task manager]${RESET}\r\n`;
 
 const isLowSurrogate = (code: number): boolean => code >= 0xdc00 && code <= 0xdfff;
 

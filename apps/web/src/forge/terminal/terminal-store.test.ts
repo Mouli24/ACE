@@ -154,6 +154,13 @@ describe('D301 terminal tabs live outside the view, per project', () => {
     expect(tab().processId).toBeUndefined();
   });
 
+  it('the note never says a lost process stopped: after an abrupt engine exit it may still run', () => {
+    expect(LOST_NOTE).toContain(
+      "[the engine restarted; this process may still be running — if a port is still in use, stop it from the system's task manager]",
+    );
+    expect(LOST_NOTE).not.toMatch(/stopped/);
+  });
+
   it('holds at most 20 processes no tab owns, dropping the oldest', () => {
     for (let i = 0; i < UNOWNED_MAX + 5; i += 1) store().output(P, `p${i}`, 'x');
     const kept = Object.keys(store().unowned);
