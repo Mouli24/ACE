@@ -865,7 +865,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
    * The chat service (FR-CHAT-001..008): the workflow timeline and direct agent threads. It reaches
    * a node by id through the repository's `getById` join, prices with the same catalog the run
    * executor uses, and starts a run for `postMessage({ run: true })` through the run service. A
-   * direct chat is text-only and touches no run (FR-CHAT-005), so it needs no tool wiring.
+   * direct chat touches no run (FR-CHAT-005). D302: in a project with a folder it works there — a
+   * CLI under its preset, an API model with the non-destructive project tools from the same
+   * registry (`tools`). Its checkpoints (`checkpoints`) are wired with Track A's service at merge.
    */
   const chatService: ChatService = createChatService({
     scope: LOCAL_SCOPE,
@@ -883,12 +885,20 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
       // before the model is resolved — so a model added a moment ago is chattable (FR-RTR-002).
       await gateway.refreshCatalog();
       const resolved = await repository.nodes.getById(LOCAL_SCOPE, nodeId);
-      return resolved === null ? null : { node: resolved.node, projectId: resolved.projectId };
+      return resolved === null
+        ? null
+        : {
+            node: resolved.node,
+            projectId: resolved.projectId,
+            // D302: a `targetNodeId` must be a node of the same workflow.
+            workflowId: resolved.node.workflowId,
+          };
     },
     policies: guardrailPolicies,
     checks,
     masker,
     startRun: async (workflowId, request) => (await runs.beginRun(workflowId, request)).run,
+    tools: toolProvider,
   });
 
   /*
