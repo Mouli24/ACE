@@ -5,7 +5,12 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openDatabase } from '../db.js';
-import { DOMAIN_MIGRATION_ID, FORGE_TERMINAL_MIGRATION_ID, MIGRATIONS } from '../migrations.js';
+import {
+  DOMAIN_MIGRATION_ID,
+  FORGE_CHECKPOINTS_MIGRATION_ID,
+  FORGE_TERMINAL_MIGRATION_ID,
+  MIGRATIONS,
+} from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
 import { makeProject, scope } from './fixtures.js';
 
@@ -32,10 +37,14 @@ afterEach(() => {
 });
 
 describe('D301 migration: projects.terminal', () => {
-  it('is the last migration, and its id sorts after the Domain migration', () => {
+  it('follows the Domain migration, and the checkpoints migration follows it (D300)', () => {
     const ids = MIGRATIONS.map((migration) => migration.id);
     expect(FORGE_TERMINAL_MIGRATION_ID).toBe('20261013T120000_forge_terminal_trust');
-    expect(ids.slice(-2)).toEqual([DOMAIN_MIGRATION_ID, FORGE_TERMINAL_MIGRATION_ID]);
+    expect(ids.slice(-3)).toEqual([
+      DOMAIN_MIGRATION_ID,
+      FORGE_TERMINAL_MIGRATION_ID,
+      FORGE_CHECKPOINTS_MIGRATION_ID,
+    ]);
     expect([...ids].sort()).toEqual(ids);
   });
 
@@ -52,7 +61,10 @@ describe('D301 migration: projects.terminal', () => {
     before.sqlite.close();
 
     const after = openDatabase({ path });
-    expect(after.appliedMigrations).toEqual([FORGE_TERMINAL_MIGRATION_ID]);
+    expect(after.appliedMigrations).toEqual([
+      FORGE_TERMINAL_MIGRATION_ID,
+      FORGE_CHECKPOINTS_MIGRATION_ID,
+    ]);
     const columns = (
       after.sqlite.prepare('PRAGMA table_info(projects)').all() as { name: string }[]
     ).map((column) => column.name);

@@ -46,6 +46,7 @@ import {
 } from '@ace/contracts';
 
 import type {
+  CheckpointRepository,
   EngineEvent,
   EventFilter,
   GuardrailPolicyPatch,
@@ -62,6 +63,7 @@ import type {
   RunPatch,
   Scope,
   StoredApproval,
+  StoredCheckpoint,
   SummaryCacheRepository,
   UsageRepository,
 } from '../ports/index.js';
@@ -97,6 +99,7 @@ interface State {
   kbChunks: Map<string, { chunk: KbChunk; embedding: number[] }>;
   memory: Map<string, MemoryEntry>;
   summaryCache: Map<string, { summary: string; createdAt: Timestamp; lastUsedAt: Timestamp }>;
+  checkpoints: Map<string, StoredCheckpoint>;
 }
 
 function emptyState(): State {
@@ -127,6 +130,7 @@ function emptyState(): State {
     kbChunks: new Map(),
     memory: new Map(),
     summaryCache: new Map(),
+    checkpoints: new Map(),
   };
 }
 
@@ -158,6 +162,7 @@ function cloneState(state: State): State {
     kbChunks: new Map(state.kbChunks),
     memory: new Map(state.memory),
     summaryCache: new Map(state.summaryCache),
+    checkpoints: new Map(state.checkpoints),
   };
 }
 
@@ -1275,5 +1280,53 @@ export class FakeRepository implements Repository {
         since,
       };
     },
+  };
+
+  /* IDE (D300): checkpoints, newest first per project. */
+  readonly checkpoints: CheckpointRepository = {
+    insert: async (scope, stored) => {
+      this.#for(scope).checkpoints.set(stored.checkpoint.id, stored);
+      return stored;
+    },
+    get: async (scope, id) => this.#for(scope).checkpoints.get(id) ?? null,
+    listByProject: async (scope, projectId) =>
+      [...this.#for(scope).checkpoints.values()]
+        .filter((row) => row.checkpoint.projectId === projectId)
+        .sort(
+          (a, b) =>
+            b.checkpoint.createdAt.localeCompare(a.checkpoint.createdAt) ||
+            b.checkpoint.id.localeCompare(a.checkpoint.id),
+        ),
+    listByStatus: async (scope, status) =>
+      [...this.#for(scope).checkpoints.values()]
+        .filter((row) => row.checkpoint.status === status)
+        .sort(
+          (a, b) =>
+            a.checkpoint.createdAt.localeCompare(b.checkpoint.createdAt) ||
+            a.checkpoint.id.localeCompare(b.checkpoint.id),
+        ),
+    update: async (scope, id, patch) => {
+      const state = this.#for(scope);
+      const current = state.checkpoints.get(id);
+      if (current === undefined) return null;
+      const { error: _error, ...rest } = current.checkpoint;
+      const error =
+        patch.error === undefined ? current.checkpoint.error : (patch.error ?? undefined);
+      const next: StoredCheckpoint = {
+        ...current,
+        checkpoint: {
+          ...rest,
+          ...(patch.status === undefined ? {} : { status: patch.status }),
+          ...(patch.files === undefined ? {} : { files: patch.files }),
+          ...(patch.skipped === undefined ? {} : { skipped: patch.skipped }),
+          ...(error === undefined ? {} : { error }),
+          updatedAt: patch.updatedAt,
+        },
+        ...(patch.afterRef === undefined ? {} : { afterRef: patch.afterRef }),
+      };
+      state.checkpoints.set(id, next);
+      return next;
+    },
+    delete: async (scope, id) => this.#for(scope).checkpoints.delete(id),
   };
 }

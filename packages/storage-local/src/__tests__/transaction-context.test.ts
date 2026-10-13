@@ -403,6 +403,7 @@ const PORT_MEMBERS = {
   memory: true,
   summaryCache: true,
   usage: true,
+  checkpoints: true,
 } as const satisfies Record<keyof Repository, true>;
 
 /** The port's repositories the adapter has: every member but `transaction`, which is the gate. */

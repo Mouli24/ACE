@@ -689,3 +689,33 @@ export const summaryCache = sqliteTable(
     index('summary_cache_lru_idx').on(table.workspaceId, table.lastUsedAt),
   ],
 );
+
+/**
+ * Checkpoints of agents' changes to a project folder (D300, design §5). Paths and counts only:
+ * `filesJson` is `CheckpointFile[]`, `skippedJson` the paths left out for size. `beforeRef` and
+ * `afterRef` are the private store's commits, which never leave the engine.
+ */
+export const checkpoints = sqliteTable(
+  'checkpoints',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    projectId: text('project_id').notNull(),
+    kind: text('kind').notNull(),
+    threadId: text('thread_id'),
+    messageId: text('message_id'),
+    runId: text('run_id'),
+    nodeId: text('node_id'),
+    status: text('status').notNull(),
+    filesJson: text('files_json').notNull(),
+    skippedJson: text('skipped_json').notNull(),
+    beforeRef: text('before_ref'),
+    afterRef: text('after_ref'),
+    error: text('error'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    index('checkpoints_project_idx').on(table.workspaceId, table.projectId, table.createdAt),
+  ],
+);

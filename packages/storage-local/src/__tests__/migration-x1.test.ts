@@ -9,6 +9,7 @@ import {
   CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
   DOMAIN_MIGRATION_ID,
   FORGE_TERMINAL_MIGRATION_ID,
+  FORGE_CHECKPOINTS_MIGRATION_ID,
   MIGRATIONS,
   X1_CLI_PROVIDERS_MIGRATION_ID,
 } from '../migrations.js';
@@ -56,6 +57,7 @@ describe('X1 migration: providers.cli_permission (D262)', () => {
       CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
       DOMAIN_MIGRATION_ID,
       FORGE_TERMINAL_MIGRATION_ID,
+      FORGE_CHECKPOINTS_MIGRATION_ID,
     ]);
     const columns = (
       after.sqlite.prepare('PRAGMA table_info(providers)').all() as { name: string }[]

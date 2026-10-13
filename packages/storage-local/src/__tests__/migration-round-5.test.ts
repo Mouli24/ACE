@@ -16,6 +16,7 @@ import {
   CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
   DOMAIN_MIGRATION_ID,
   FORGE_TERMINAL_MIGRATION_ID,
+  FORGE_CHECKPOINTS_MIGRATION_ID,
 } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
 import { makeProject, scope } from './fixtures.js';
@@ -126,6 +127,7 @@ describe('Arch §15.3 migration applies on a round-4 database and is recorded', 
       CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
       DOMAIN_MIGRATION_ID,
       FORGE_TERMINAL_MIGRATION_ID,
+      FORGE_CHECKPOINTS_MIGRATION_ID,
     ]);
     for (const table of NEW_TABLES) expect(tableNames(after.sqlite)).toContain(table);
     expect(columnsOf(after.sqlite, 'node_runs')).toEqual(
@@ -167,14 +169,15 @@ describe('Arch §15.3 migration applies on a round-4 database and is recorded', 
     again.sqlite.close();
   });
 
-  it('sorts after every earlier migration, and only X1, chat-sessions, Domain and forge-terminal follow it', () => {
+  it('sorts after every earlier migration, and only X1, chat-sessions, Domain and the two Forge ones follow it', () => {
     const ids = MIGRATIONS.map((migration) => migration.id);
-    expect(ids.indexOf(ROUND_5_MIGRATION_ID)).toBe(ids.length - 5);
-    expect(ids.slice(-4)).toEqual([
+    expect(ids.indexOf(ROUND_5_MIGRATION_ID)).toBe(ids.length - 6);
+    expect(ids.slice(-5)).toEqual([
       X1_CLI_PROVIDERS_MIGRATION_ID,
       CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
       DOMAIN_MIGRATION_ID,
       FORGE_TERMINAL_MIGRATION_ID,
+      FORGE_CHECKPOINTS_MIGRATION_ID,
     ]);
     expect([...ids].sort()).toEqual(ids);
     expect(ROUND_5_MIGRATION_ID).toBe('20261001T120000_round_5_knowledge_memory_usage');
