@@ -270,3 +270,80 @@ describe.skipIf(!hasGit)('D300 checkpoints through the real engine and a real gi
     expect(read('later.txt')).toBe('written while the engine went down\n');
   });
 });
+
+describe.skipIf(!hasGit)('D300 + D302 seam: a chat turn in the project is checkpointed', () => {
+  const fixture = new URL(
+    '../../../../tests/acceptance/fixtures/round-4/chat-french.json',
+    import.meta.url,
+  );
+
+  /** The round 4 chat fixture on the mock's slow model, imported into the folder project. */
+  async function slowAgent(): Promise<string> {
+    const provider = await api<{ id: string }>('POST', '/providers', { type: 'mock', name: 'M' });
+    await api('POST', `/providers/${provider.json.id}/refresh-models`, {});
+    const text = readFileSync(fixture, 'utf8')
+      .replaceAll('01M4R4PV0000000000000000PV', provider.json.id)
+      .replaceAll('"mock-chat"', '"mock-slow"');
+    const graph = await api<{ nodes: { id: string; kind: string }[] }>(
+      'POST',
+      `/projects/${projectId}/workflows/import`,
+      JSON.parse(text),
+    );
+    expect(graph.status).toBe(201);
+    const agent = graph.json.nodes.find((node) => node.kind === 'agent');
+    if (agent === undefined) throw new Error('the fixture has no agent node');
+    return agent.id;
+  }
+
+  it('the server gives chat the checkpoint service: the reply carries its checkpoint', async () => {
+    const agentId = await slowAgent();
+    const { socket, frames } = await watch(projectId);
+    try {
+      const begun = await api<{ threadId: string }>('POST', `/nodes/${agentId}/chat`, {
+        content: [{ type: 'text', text: 'Bonjour' }],
+      });
+      expect(begun.status).toBeLessThan(300);
+
+      // While the slow model answers, the turn's recording is open: a file written now is its.
+      const opened = async (): Promise<Checkpoint | undefined> => {
+        for (let i = 0; i < 100; i++) {
+          const frame = frames.find(
+            (f) =>
+              f.type === 'checkpoint.updated' &&
+              f.payload.checkpoint?.kind === 'chat' &&
+              f.payload.checkpoint.threadId === begun.json.threadId,
+          );
+          if (frame !== undefined) return frame.payload.checkpoint;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        return undefined;
+      };
+      const recording = await opened();
+      expect(recording?.status).toBe('recording');
+      write('from-chat.txt', 'written during the chat turn\n');
+
+      let messages: { role: string; id: string; checkpointId?: string }[] = [];
+      for (let i = 0; i < 200 && messages.length < 2; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        messages = (
+          await api<{ messages: typeof messages }>('GET', `/chat/threads/${begun.json.threadId}`)
+        ).json.messages;
+      }
+      const reply = messages[1];
+      expect(reply?.role).toBe('agent');
+      expect(reply?.checkpointId).toBe(recording?.id);
+
+      const checkpoint = await api<Checkpoint>('GET', `${base()}/${recording?.id}`);
+      expect(checkpoint.json).toMatchObject({
+        kind: 'chat',
+        status: 'pending',
+        threadId: begun.json.threadId,
+        messageId: reply?.id,
+        nodeId: agentId,
+      });
+      expect(checkpoint.json.files.map((file) => file.path)).toEqual(['from-chat.txt']);
+    } finally {
+      socket.close();
+    }
+  }, 30_000);
+});

@@ -13,7 +13,14 @@ import { createNode } from '../nodes/factory';
 import { ChatAside } from './ChatAside';
 import { useComposerChips } from './composer-chips';
 import { useChatSessions } from './session-store';
-import { db, installChatMockServer, queryClient, renderChat, seedAgentNode } from './test-support';
+import {
+  checkpoints,
+  db,
+  installChatMockServer,
+  queryClient,
+  renderChat,
+  seedAgentNode,
+} from './test-support';
 
 installChatMockServer();
 
@@ -541,8 +548,13 @@ describe('D302 what an agent did, under its reply', () => {
     expect(screen.getByTestId('chat-turn-agent')).toHaveTextContent(/^✳Writer/);
   });
 
-  it('renders nothing yet for a checkpoint (Track A’s Changes card plugs in at the merge)', async () => {
+  it('renders Track A’s Changes card under a turn with a checkpoint, and none without', async () => {
     const { workflowId, node } = seedAgentNode();
+    const projectId = db.getWorkflow(workflowId)?.projectId ?? '';
+    const checkpoint = checkpoints.seed(projectId, [
+      { path: 'src/a.ts', before: 'one\n', after: 'one\ntwo\n' },
+      { path: 'gone.ts', before: 'x\n' },
+    ]);
     const at = new Date().toISOString();
     db.addChatThread({ id: THREAD, nodeId: node.id, title: 'fix', createdAt: at, updatedAt: at });
     db.addChatMessage({
@@ -552,11 +564,25 @@ describe('D302 what an agent did, under its reply', () => {
       content: [{ type: 'text', text: 'Changed two files.' }],
       verdicts: [],
       at,
-      checkpointId: '01CHECKPNT0000000000000000',
+      checkpointId: checkpoint.id,
+    });
+    db.addChatMessage({
+      id: '01J0AGENT00000000000000001',
+      threadId: THREAD,
+      role: 'agent',
+      content: [{ type: 'text', text: 'Nothing to change.' }],
+      verdicts: [],
+      at,
     });
     renderChat(<ChatAside workflowId={workflowId} />);
-    await waitFor(() => expect(conversation()).toHaveTextContent('Changed two files.'));
-    expect(screen.queryByTestId('chat-changes-card')).toBeNull();
+    await waitFor(() => expect(conversation()).toHaveTextContent('Nothing to change.'));
+    const card = await within(conversation()).findByRole('region', { name: 'Changes' });
+    expect(card).toHaveAttribute('data-testid', `changes-card-${checkpoint.id}`);
+    await waitFor(() => expect(card).toHaveTextContent('2 files'));
+    for (const name of ['Review', 'Keep all', 'Revert all']) {
+      expect(within(card).getByRole('button', { name })).toBeInTheDocument();
+    }
+    expect(within(conversation()).getAllByRole('region', { name: 'Changes' })).toHaveLength(1);
   });
 });
 

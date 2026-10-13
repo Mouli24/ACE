@@ -98,7 +98,9 @@ export function ForgeWorkbench({
 
   return (
     <div data-testid="forge" className="flex h-full min-h-0 min-w-0 flex-1">
-      {explorerOpen && <ExplorerView projectId={projectId} live={attribution.live} />}
+      {explorerOpen && (
+        <ExplorerView projectId={projectId} workflowId={workflowId} live={attribution.live} />
+      )}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {showEditor && (
           <EditorArea projectId={projectId} workflowId={workflowId} attribution={attribution} />

@@ -5,7 +5,7 @@ import { fixWithAgent, type FixableProblem } from './fix-with-agent';
 
 /**
  * "Fix with agent" on a problem (D302, design §6.5), in the theme's chip style (the chat's "Send to
- * Forge →"). Problems rows carry it; the merge gives Run checks' rows the same button.
+ * Forge →"). Every Problems row carries it: the open files' markers and Run checks' results.
  */
 export function FixWithAgentButton({
   projectId,

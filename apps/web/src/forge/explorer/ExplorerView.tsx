@@ -1,8 +1,10 @@
 import { cn } from '@ace/ui';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { useProject } from '../../projects/hooks';
 import type { AgentLook } from '../../theme/agents';
+import { useChangesStore, useProjectChanges } from '../changes/changes-store';
+import { ChangesView } from '../changes/ChangesView';
 import { openFile } from '../editor/actions';
 import { useFileList } from '../files/hooks';
 import { parentOf } from '../files/paths';
@@ -20,19 +22,30 @@ function fileCount(list: { files: readonly string[]; truncated: boolean } | unde
 }
 
 /**
- * The theme's Explorer (D334): a fixed 248px column. Its header switches EXPLORER · SEARCH (D299
- * Phase 4; the merge adds CHANGES) in the kit's pill, and the body is the view picked: the
- * project's files ({@link ExplorerFiles}) or {@link SearchView}.
+ * The theme's Explorer (D334): a fixed 248px column. Its header switches EXPLORER · SEARCH ·
+ * CHANGES (D299 Phase 4, D339) in the kit's pill, and the body is the view picked: the project's
+ * files ({@link ExplorerFiles}), {@link SearchView} or D300's {@link ChangesView}.
  */
 export function ExplorerView({
   projectId,
+  workflowId,
   live,
 }: {
   projectId: string;
+  /** The workflow whose nodes name a chat's checkpoints in Changes ("Chat with Writer"). */
+  workflowId?: string;
   /** Path → the agent writing it now (D334). */
   live?: ReadonlyMap<string, AgentLook>;
 }) {
   const view = useSideViewStore((state) => state.view);
+  // D300: an agent-change marker asks for Changes on its checkpoint; the switch shows it, and the
+  // request is settled so the next marker click asks again. Its `focus` stays for the outline.
+  const requested = useProjectChanges(projectId).requested;
+  useEffect(() => {
+    if (!requested) return;
+    useSideViewStore.getState().show('changes');
+    useChangesStore.getState().dismiss(projectId);
+  }, [requested, projectId]);
   return (
     <nav
       aria-label="Explorer"
@@ -41,9 +54,10 @@ export function ExplorerView({
       <div className="flex items-center px-[10px] pb-[8px] pt-[10px]">
         <SideViewSwitch />
       </div>
-      {/* One body per side view; the merge step adds `changes` (ChangesView) beside these. */}
+      {/* One body per side view. */}
       {view === 'explorer' && <ExplorerFiles projectId={projectId} live={live} />}
       {view === 'search' && <SearchView projectId={projectId} />}
+      {view === 'changes' && <ChangesView projectId={projectId} workflowId={workflowId} />}
     </nav>
   );
 }

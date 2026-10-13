@@ -22,8 +22,9 @@ const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' 
 const RUNNING = nodeStatusLook('RUNNING').color;
 
 /**
- * The errors and warnings in the open files and from Run checks (D299 Phase 4); a click opens Problems. Mono, muted like the slug; a
- * mark takes the Validation tab's colour (✕ red, ! accent) while its count is not zero.
+ * The errors and warnings in the open files and from Run checks (D299 Phase 4); a click opens
+ * Problems. Mono, muted like the slug; a mark takes the Validation tab's colour (✕ red, ! accent)
+ * while its count is not zero.
  */
 export function ProblemsCount({ projectId }: { projectId: string }) {
   const errors = useProblemsStore((s) => problemCounts(s, projectId).errors);
