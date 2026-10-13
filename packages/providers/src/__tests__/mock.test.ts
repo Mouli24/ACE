@@ -1074,3 +1074,22 @@ describe('D315 mock-script plays each node its [[turn N]] section', () => {
     );
   });
 });
+
+describe('D302 a chat turn has no run, so the mock counts its calls per turn', () => {
+  it('gives each chat turn its own attempts instead of one shared "no run"', async () => {
+    const mock = adapter();
+    const call = async (turnId: string): Promise<StreamChunk[]> =>
+      collect(
+        mock.generate(
+          { modelId: 'mock-429-then-ok', prompt: 'x', outputTypes: ['text'], turnId },
+          new AbortController().signal,
+        ),
+      );
+
+    await expect(call('turn-a')).rejects.toMatchObject({ nodeError: { code: 'http_429' } });
+    await expect(call('turn-a')).rejects.toMatchObject({ nodeError: { code: 'http_429' } });
+    await call('turn-a');
+    // a second chat turn starts its own count, as a second run would
+    await expect(call('turn-b')).rejects.toMatchObject({ nodeError: { code: 'http_429' } });
+  });
+});

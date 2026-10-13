@@ -589,9 +589,15 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
   /** Bumped for every `tool_call` chunk, so repeated requests get distinct (still stable) ids. */
   let toolCallSeq = 0;
 
+  /**
+   * Whose calls these are: the run, or — a direct chat belongs to no run (D302) — the chat turn,
+   * so two chat turns never share one "no run" count.
+   */
+  const ownerOf = (req: GenerateRequest): string => req.runId ?? req.turnId ?? 'no-run';
+
   /** Next attempt number for this exact call: 1 the first time, 2 on the first retry. */
   const nextAttempt = (req: GenerateRequest): number => {
-    const key = `${req.runId ?? 'no-run'}|${req.modelId}|${hash(req.prompt)}`;
+    const key = `${ownerOf(req)}|${req.modelId}|${hash(req.prompt)}`;
     const attempt = (attempts.get(key) ?? 0) + 1;
     attempts.set(key, attempt);
     return attempt;
@@ -603,7 +609,7 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
    * script when a caller leaves the field out.
    */
   const nextIteration = (req: GenerateRequest): number => {
-    const key = `${req.runId ?? 'no-run'}|${req.modelId}`;
+    const key = `${ownerOf(req)}|${req.modelId}`;
     const nth = (callsPerNode.get(key) ?? 0) + 1;
     callsPerNode.set(key, nth);
     return req.iteration ?? nth;
@@ -948,7 +954,7 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
       case 'mock-script': {
         const whole = `${req.system ?? ''}\n${req.prompt}`;
         const script = scriptOf(whole);
-        const key = `${req.runId ?? 'no-run'}|${hash(script)}`;
+        const key = `${ownerOf(req)}|${hash(script)}`;
         const turn = (scriptTurns.get(key) ?? 0) + 1;
         scriptTurns.set(key, turn);
 
