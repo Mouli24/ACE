@@ -283,7 +283,11 @@ export async function searchFiles(
           }
         } else {
           const answer = await worker.match(lines, limit);
-          if (answer === undefined) break search;
+          // Stopped, or the worker errored or exited on its own: either way the answer is partial.
+          if (answer === undefined) {
+            truncated = true;
+            break search;
+          }
           positions = answer;
         }
         searchedFiles += 1;
