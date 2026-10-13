@@ -11,6 +11,33 @@ import { useProblemsStore } from './problems-store';
 installMockServer();
 
 describe('D299 §6.4 the Problems panel', () => {
+  it('a clean check run names its command with no period after it (smoke S-1)', () => {
+    const projectId = db.createProject({ name: 'P' }).id;
+    const command = 'node "C:/tools/node_modules/typescript/bin/tsc" --noEmit -p .';
+    act(() =>
+      useProblemsStore.setState({
+        checks: {
+          [projectId]: {
+            status: 'done',
+            command,
+            startedAt: '2026-10-13T10:00:00.000Z',
+            finishedAt: '2026-10-13T10:00:02.000Z',
+            exitCode: 0,
+            problems: [],
+          },
+        },
+      }),
+    );
+    renderWithQuery(<ProblemsView projectId={projectId} />);
+    const line = within(screen.getByRole('region', { name: 'Checks' })).getByText(
+      /No problems found/,
+    );
+    expect(line).toHaveTextContent(`No problems found by ${command}`);
+    expect(line.textContent).not.toMatch(/\.\.$/);
+    expect(line.textContent?.endsWith(command)).toBe(true);
+    expect(within(line).getByText(command)).toHaveClass('font-machine');
+  });
+
   it('says so when there are none', () => {
     renderWithQuery(<ProblemsView projectId="p1" />);
     expect(screen.getByText('No problems in the open files.')).toBeInTheDocument();
