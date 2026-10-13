@@ -5,8 +5,21 @@ import { useProject } from '../../projects/hooks';
 import { useStartRunFlow } from '../../runs/useStartRunFlow';
 import { ago } from '../../theme/format';
 import { touchedLines, type FileTouch, type LineSpan } from '../attribution';
+import { formatDocument } from './actions';
 import { useEditorStore } from './editor-store';
+import { languageOf } from './languages';
 import { getModel } from './models';
+
+/** The languages Monaco formats itself (D299 Phase 4): TS/JS by range, the others by document. */
+const FORMATTABLE: ReadonlySet<string> = new Set([
+  'typescript',
+  'javascript',
+  'json',
+  'css',
+  'scss',
+  'less',
+  'html',
+]);
 
 /**
  * The lines the run's last write to this file covers in the buffer now, following every edit to
@@ -48,8 +61,9 @@ function useClock(enabled: boolean): void {
 
 /**
  * The theme's path bar over the open file (D334): the project slug and the path as crumbs, who
- * last edited which lines of it in the current run, and "▶ Run pipeline", which starts a real run
- * of the workflow (asking for Input-node text first when a node has none).
+ * last edited which lines of it in the current run, Format (D299 Phase 4: Monaco's Format
+ * Document, as Shift+Alt+F), and "▶ Run pipeline", which starts a real run of the workflow (asking
+ * for Input-node text first when a node has none).
  */
 export function PathBar({
   projectId,
@@ -116,6 +130,16 @@ export function PathBar({
           </span>
         </span>
       )}
+      <button
+        type="button"
+        aria-label="Format Document"
+        title="Format Document (Shift+Alt+F)"
+        onClick={() => void formatDocument(projectId, path)}
+        disabled={!FORMATTABLE.has(languageOf(path))}
+        className="flex h-[24px] shrink-0 cursor-pointer items-center whitespace-nowrap rounded-[999px] border border-[var(--line)] bg-[var(--chip)] px-[10px] font-human text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f] disabled:cursor-default disabled:opacity-[0.45] disabled:hover:bg-[var(--chip)]"
+      >
+        Format
+      </button>
       {workflowId !== undefined && workflowId !== '' && <RunPipeline workflowId={workflowId} />}
     </div>
   );

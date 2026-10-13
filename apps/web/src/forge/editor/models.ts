@@ -18,6 +18,8 @@ interface Entry {
 
 let monaco: MonacoApi | undefined;
 const entries = new Map<string, Entry>();
+/** The workbench's one Monaco editor while it is mounted (Format, format-on-save). */
+let activeEditor: Monaco.editor.ICodeEditor | undefined;
 const keyOf = (projectId: string, path: string): string => `${projectId}\u0000${path}`;
 
 /**
@@ -42,6 +44,20 @@ export function pathOfUri(uri: Monaco.Uri): { projectId: string; path: string } 
   return projectId === undefined || projectId === '' || rest.length === 0
     ? undefined
     : { projectId, path: rest.join('/') };
+}
+
+/** The editor host says which editor is on screen; `undefined` when it unmounts. */
+export function setActiveEditor(editor: Monaco.editor.ICodeEditor | undefined): void {
+  activeEditor = editor;
+}
+
+/**
+ * The editor showing this file now, if any: format-on-save formats only a file an editor is
+ * attached to (D299 Phase 4), since Monaco's formatters run through an editor.
+ */
+export function editorFor(projectId: string, path: string): Monaco.editor.ICodeEditor | undefined {
+  const model = getModel(projectId, path);
+  return model !== undefined && activeEditor?.getModel() === model ? activeEditor : undefined;
 }
 
 export function getModel(projectId: string, path: string): Model | undefined {
@@ -162,4 +178,5 @@ export function resetModels(): void {
   }
   entries.clear();
   monaco = undefined;
+  activeEditor = undefined;
 }
