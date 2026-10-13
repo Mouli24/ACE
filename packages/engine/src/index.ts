@@ -46,3 +46,5 @@ export * from './workspace/routes.js';
 export * from './processes/service.js';
 export * from './processes/routes.js';
 export * from './processes/errors.js';
+/* IDE (D300): checkpoints of agents' changes. */
+export * from './checkpoints/index.js';

@@ -69,6 +69,8 @@ import { createWorkspaceRoutes } from '../workspace/routes.js';
 import type { WorkspaceService } from '../workspace/service.js';
 import { createProcessRoutes } from '../processes/routes.js';
 import type { ProcessService } from '../processes/service.js';
+import { createCheckpointRoutes } from '../checkpoints/routes.js';
+import type { CheckpointService } from '../checkpoints/service.js';
 import {
   HttpError,
   forbiddenOrigin,
@@ -176,6 +178,8 @@ export interface EngineDeps {
   workspace?: WorkspaceService;
   /** `/projects/:id/processes/*`: Forge's terminal (D301). Agents never reach it. */
   processes?: ProcessService;
+  /** `/projects/:id/checkpoints/*`: review, keep and revert agents' changes (D300). */
+  checkpoints?: CheckpointService;
 }
 
 export interface EngineVariables {
@@ -851,6 +855,8 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.route('/', createWorkspaceRoutes(deps.workspace));
   /* IDE (D301): Forge's terminal, inside the same middleware. */
   api.route('/', createProcessRoutes(deps.processes));
+  /* IDE (D300): checkpoints of agents' changes, inside the same middleware. */
+  api.route('/', createCheckpointRoutes(deps.checkpoints));
 
   app.route(API_BASE_PATH, api);
 
