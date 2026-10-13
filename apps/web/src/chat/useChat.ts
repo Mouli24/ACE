@@ -52,11 +52,13 @@ export function effectiveThreadId(
  * Send one message to a node, in its current session (FR-CHAT-004/006/008, D285). Every outcome is
  * written onto that node's session — accepted (the reply is then awaited), refused by a guardrail,
  * or failed before the engine took it — so it stays with the node whichever node is on screen.
+ * D302: `targetNodeId` names another node of the workflow to answer it in this same session.
  */
 export async function sendToNode(
   queryClient: QueryClient,
   nodeId: string,
   content: Part[],
+  targetNodeId?: string,
 ): Promise<void> {
   const { update } = useChatSessions.getState();
   update(nodeId, ({ error: _error, refusal: _refusal, ...session }) => ({
@@ -78,10 +80,11 @@ export async function sendToNode(
         )[0]?.id;
     }
 
-    const response = await api().postNodeChat(
-      nodeId,
-      threadId === undefined ? { content } : { threadId, content },
-    );
+    const response = await api().postNodeChat(nodeId, {
+      content,
+      ...(threadId === undefined ? {} : { threadId }),
+      ...(targetNodeId === undefined ? {} : { targetNodeId }),
+    });
     const userMessage: ChatMessage = {
       id: response.messageId,
       threadId: response.threadId,
@@ -93,7 +96,11 @@ export async function sendToNode(
     update(nodeId, ({ sending: _sending, fresh: _fresh, ...rest }) => ({
       ...rest,
       threadId: response.threadId,
-      pending: { threadId: response.threadId, userMessage },
+      pending: {
+        threadId: response.threadId,
+        userMessage,
+        speakerNodeId: targetNodeId ?? nodeId,
+      },
     }));
     void queryClient.invalidateQueries({ queryKey: chatKeys.threads(nodeId) });
   } catch (error) {
@@ -215,13 +222,15 @@ export interface ChatConversation {
   streamingText: string;
   /** A sent message's reply has not landed yet. */
   awaitingReply: boolean;
+  /** D302: the node answering the reply that is owed, when one is. */
+  replyingNodeId: string | undefined;
   /** The message is on its way to the engine. */
   sending: boolean;
   /** Set when the last send was refused on the input; cleared on the next send. */
   refusal: ChatRefusal | undefined;
   /** Set when the last send failed before the engine took it; cleared on the next send. */
   error: string | undefined;
-  send: (content: Part[]) => void;
+  send: (content: Part[], targetNodeId?: string) => void;
   selectThread: (threadId: string) => void;
   /** Start an empty session; its first message opens a thread. */
   newThread: () => void;
@@ -266,10 +275,11 @@ export function useThreadConversation(nodeId: string): ChatConversation {
     messages: [...loaded, ...echo],
     streamingText,
     awaitingReply: pending !== undefined && !replied,
+    replyingNodeId: pending !== undefined && !replied ? pending.speakerNodeId : undefined,
     sending: session.sending === true,
     refusal: session.refusal,
     error: session.error,
-    send: (content) => void sendToNode(queryClient, nodeId, content),
+    send: (content, targetNodeId) => void sendToNode(queryClient, nodeId, content, targetNodeId),
     selectThread: (id) =>
       update(nodeId, ({ fresh: _fresh, error: _error, refusal: _refusal, ...rest }) => ({
         ...rest,

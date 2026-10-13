@@ -51,6 +51,8 @@ export const SHORTCUTS = {
   closeTab: { code: 'KeyW', alt: true },
   /** D301: shows or hides the Terminal. Not a browser key, so it is safe to bind. */
   toggleTerminal: { code: 'Backquote', mod: true },
+  /** D302: the editor's selection (or file) as a chip in the chat composer. */
+  askAgent: { code: 'KeyL', mod: true },
 } as const satisfies Record<string, Shortcut>;
 
 const isMac = (): boolean =>

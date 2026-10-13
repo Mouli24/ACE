@@ -7,6 +7,8 @@ import { mockVersion } from '../mocks/files';
 import { useRunStore } from '../runs/run-store';
 import { db, installMockServer, renderApp } from '../test/app';
 import { FakeTerminal } from '../test/FakeTerminal';
+import { useComposerChips } from '../chat/composer-chips';
+import { setSelectionSource } from './ask-agent';
 import { openFile } from './editor/actions';
 import { useEditorStore } from './editor/editor-store';
 
@@ -152,5 +154,38 @@ describe('D334 FR-GIT-003 Forge in the theme’s code view', () => {
     await user.click(pill);
     expect(await screen.findByTestId('terminal-panel')).toBeInTheDocument();
     await waitFor(() => expect(FakeTerminal.latest().focused).toBe(1));
+  });
+});
+
+describe('D302 Ctrl/⌘+L asks the agent', () => {
+  it('adds the editor’s selection, or the active file when no editor can say', async () => {
+    const user = userEvent.setup();
+    useComposerChips.getState().reset();
+    renderApp(seed());
+    await screen.findByRole('tree', { name: 'Files of Shop' });
+    act(() => openFile(projectId, 'src/app.ts', { preview: false }));
+    await screen.findByTestId('fake-editor');
+
+    // the stand-in editor reads no selection: the active file goes, by its path
+    await user.keyboard('{Control>}l{/Control}');
+    expect(useComposerChips.getState().chips).toMatchObject([
+      { path: 'src/app.ts', language: 'typescript' },
+    ]);
+
+    const stop = setSelectionSource(() => ({
+      path: 'src/app.ts',
+      startLine: 1,
+      endLine: 1,
+      text: 'export {};',
+      language: 'typescript',
+    }));
+    await user.keyboard('{Control>}l{/Control}');
+    expect(useComposerChips.getState().chips[1]).toMatchObject({
+      path: 'src/app.ts',
+      startLine: 1,
+      endLine: 1,
+      text: 'export {};',
+    });
+    stop();
   });
 });

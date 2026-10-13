@@ -2,6 +2,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { useComposerChips } from '../../chat/composer-chips';
 import { db, installMockServer, queryClient, renderWithQuery } from '../../test/app';
 import { openFile } from '../editor/actions';
 import { useEditorStore } from '../editor/editor-store';
@@ -400,5 +401,26 @@ describe('D334 the file operations in the theme', () => {
     expect(within(dialog).getByText('docs/readme.md')).toHaveClass('font-machine');
     expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveClass('bg-[var(--soft)]');
     expect(within(dialog).getByRole('button', { name: 'Delete' })).toHaveClass('text-[#c94c27]');
+  });
+});
+
+describe('D302 Ask agent about this file', () => {
+  it('adds the file, by its path alone, as a chip in the chat composer', async () => {
+    const user = userEvent.setup();
+    useComposerChips.getState().reset();
+    renderWithQuery(<ExplorerView projectId={projectId} />);
+    fireEvent.contextMenu(await screen.findByTestId('tree-item-notes.md'));
+    await user.click(await screen.findByRole('menuitem', { name: 'Ask Agent About This File' }));
+    expect(useComposerChips.getState().chips).toMatchObject([
+      { path: 'notes.md', language: 'markdown' },
+    ]);
+    expect(useComposerChips.getState().chips[0]).not.toHaveProperty('text');
+  });
+
+  it('is not offered on a folder', async () => {
+    renderWithQuery(<ExplorerView projectId={projectId} />);
+    fireEvent.contextMenu(await screen.findByTestId('tree-item-src'));
+    expect(await screen.findByRole('menuitem', { name: /Copy Relative Path/ })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Ask Agent About This File' })).toBeNull();
   });
 });

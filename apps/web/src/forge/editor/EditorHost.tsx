@@ -5,6 +5,7 @@ import { useEffect, useRef } from 'react';
 import { useResolvedTheme } from '../../app/theme';
 import { monaco } from '../../config-panel/monaco-loader';
 import { AGENT_COLORS } from '../../theme/constants';
+import { askAgentAboutSelection, selectionChip, setSelectionSource } from '../ask-agent';
 import { touchedLines, type FileTouch } from '../attribution';
 import { dirtyHandler } from './actions';
 import { useEditorStore } from './editor-store';
@@ -96,12 +97,32 @@ export function EditorHost({ projectId, path, initial, touch }: EditorHostProps)
     const cursor = editor.onDidChangeCursorPosition((event) =>
       useEditorStatus.getState().setCursor(event.position.lineNumber, event.position.column),
     );
+    // D302 Ask agent: the selection, or the file, as a chip in the chat composer. Ctrl/⌘+L is
+    // Forge's own shortcut (it runs before Monaco sees the key); the binding here labels the menu.
+    const stopSource = setSelectionSource(() => {
+      const model = editor.getModel();
+      const selection = editor.getSelection();
+      if (shown.current === null || model === null || selection === null) return undefined;
+      return selectionChip(shown.current.path, model.getValue(), selection);
+    });
+    const askAgent = editor.addAction({
+      id: 'ace.askAgent',
+      label: 'Ask agent',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyL],
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 0,
+      run: () => {
+        askAgentAboutSelection();
+      },
+    });
     return () => {
       // Before dispose: a disposed editor has detached its model and has no view state to give.
       if (shown.current !== null) {
         saveViewState(shown.current.projectId, shown.current.path, editor.saveViewState());
       }
       cursor.dispose();
+      askAgent.dispose();
+      stopSource();
       editor.dispose();
       editorRef.current = null;
       bars.current = null;

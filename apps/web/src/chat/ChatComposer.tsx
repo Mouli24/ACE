@@ -1,17 +1,15 @@
-import type { Artifact, Part } from '@ace/contracts';
+import type { Artifact, Part, RosterEntry } from '@ace/contracts';
 import { cn, formatBytes, MENU_CONTENT_CLASS, MENU_ITEM_CLASS, MENU_LABEL_CLASS } from '@ace/ui';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { api } from '../app/api';
 import { Avatar } from '../theme/primitives';
-import { insertMention, mentionMatches, parseMention, type Mentionable } from './mentions';
+import { chipLabel, chipPart, useComposerChips } from './composer-chips';
 import { partForArtifact } from './parts';
+import { completeHandle, handleOptions, handlePartial, previewChatTarget } from './target';
 
-/** A node the composer can `@mention`, with what the picker shows beside its name. */
-export interface MentionTarget extends Mentionable {
-  /** The node's handle, without the `@`. */
-  handle: string;
-  /** The agent avatar's initial and colour (`agentsOf`), so the picker matches the tabs. */
+/** A roster entry with the avatar the picker draws beside it (`agentsOf`, D328). */
+export interface ChatRosterEntry extends RosterEntry {
   letter: string;
   color: string;
 }
@@ -20,67 +18,107 @@ export interface MentionTarget extends Mentionable {
 export const TEAM_PLACEHOLDER = 'Message the team… @ to tag an agent, / for commands';
 
 const FOCUS = 'focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+const CHIP =
+  'flex h-[24px] max-w-full items-center gap-[6px] rounded-full border border-[var(--line)] bg-[var(--chip)] pl-[9px] pr-[6px] text-[11px] text-[var(--ink)]';
+const CHIP_REMOVE = cn(
+  FOCUS,
+  'flex h-[16px] w-[16px] shrink-0 cursor-pointer items-center justify-center rounded-full text-[9px] text-[var(--muted)] hover:text-[#c94c27]',
+);
 
 /**
- * The chat composer (FR-CHAT-004/007), as the theme's Team chat composer (D335): a surface card
- * with a two-row textarea, ⌁ Attach and ↑ Send. Enter sends, Shift+Enter breaks a line, so the
+ * The chat composer (FR-CHAT-004/007, D302), as the theme's Team chat composer (D335): a surface
+ * card with a two-row textarea, ⌁ Attach and ↑ Send. Enter sends, Shift+Enter breaks a line, so the
  * whole thing is reachable from the keyboard alone (NFR-USE-03).
  *
- * `@` opens a picker over the nodes that can chat; choosing one completes the mention and points
- * the chat at that node. A message that opens with `@<node>` is sent to that node — the mention is
- * stripped, it is an address, not part of the message — and anything else goes to the node the
- * chat is already talking to. With no such node and no mention there is nobody to send to, so the
- * send stays disabled.
+ * D302: a message goes to the conversation's main node, or — with one `@handle` in it — to that
+ * node of the workflow, inside the same conversation. `@` opens a picker that completes the
+ * handle; the line under the box says who the message goes to, or why it cannot go, by the
+ * engine's own rule. The session never switches. Forge's Ask agent and Fix with agent put
+ * reference chips here (`useComposerChips`), sent as `code` parts with their path and lines.
  */
 export function ChatComposer({
   onSend,
   disabled,
   placeholder = TEAM_PLACEHOLDER,
-  mentionables = [],
-  onMention,
-  hasTarget = true,
+  roster = [],
+  mainNodeId,
 }: {
-  /** `mentioned` is the node a leading `@mention` named, when there was one. */
-  onSend: (content: Part[], mentioned: string | undefined) => void;
+  /** `targetNodeId` is set when an `@handle` names a node other than the main one. */
+  onSend: (content: Part[], targetNodeId: string | undefined) => void;
   disabled: boolean;
   placeholder?: string;
-  mentionables?: readonly MentionTarget[];
-  /** A node was picked from the `@` picker. */
-  onMention?: (nodeId: string) => void;
-  /** Whether a message without a mention has somewhere to go. */
-  hasTarget?: boolean;
+  /** The workflow's agents and models, for `@handle`. Empty: every message is the main node's. */
+  roster?: readonly ChatRosterEntry[];
+  /** The conversation's main node; without one there is nobody to send to. */
+  mainNodeId: string | undefined;
 }) {
   const [text, setText] = useState('');
+  const [caret, setCaret] = useState(0);
   const [cursor, setCursor] = useState(0);
   const [attachments, setAttachments] = useState<Artifact[]>([]);
   const [uploadError, setUploadError] = useState<string>();
   const [uploading, setUploading] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const box = useRef<HTMLTextAreaElement>(null);
+  const chips = useComposerChips((state) => state.chips);
+  const draft = useComposerChips((state) => state.draft);
 
-  const matches = mentionMatches(text, mentionables);
+  // A chip or a draft from Forge brings the keyboard here, and a draft fills the box once.
+  const chipCount = chips.length;
+  const seenChips = useRef(chipCount);
+  useEffect(() => {
+    if (chipCount > seenChips.current) box.current?.focus();
+    seenChips.current = chipCount;
+  }, [chipCount]);
+  useEffect(() => {
+    if (draft === undefined) return;
+    const taken = useComposerChips.getState().takeDraft();
+    if (taken === undefined) return;
+    setText(taken);
+    setCaret(taken.length);
+    box.current?.focus();
+  }, [draft]);
+
+  const at = roster.length === 0 ? undefined : handlePartial(text, caret);
+  const matches = at === undefined ? [] : handleOptions(roster, at.partial);
   const pickerOpen = matches.length > 0;
   const active = Math.min(cursor, Math.max(matches.length - 1, 0));
 
-  const addressed = parseMention(text, mentionables);
-  const hasBody = addressed.body.length > 0 || attachments.length > 0;
-  const canSend =
-    !disabled && !uploading && (addressed.node !== undefined || (hasTarget && hasBody));
+  const preview =
+    mainNodeId === undefined ? undefined : previewChatTarget(text, roster, mainNodeId);
+  const hasBody = text.trim().length > 0 || attachments.length > 0 || chips.length > 0;
+  const canSend = !disabled && !uploading && preview !== undefined && preview.canSend && hasBody;
 
-  const pick = (node: MentionTarget) => {
-    setText(insertMention(text, node.name));
+  const place = (next: string, position: number): void => {
+    setText(next);
+    setCaret(position);
     setCursor(0);
-    onMention?.(node.id);
+    const element = box.current;
+    if (element === null) return;
+    element.focus();
+    // After React writes the value, so the caret lands where the handle ends.
+    requestAnimationFrame(() => element.setSelectionRange(position, position));
+  };
+
+  const pick = (entry: ChatRosterEntry) => {
+    if (at === undefined) return;
+    const completed = completeHandle(text, at, caret, entry.handle);
+    place(completed.text, completed.caret);
   };
 
   const submit = () => {
-    if (!canSend) return;
+    if (!canSend || preview === undefined) return;
     const content: Part[] = [];
-    if (addressed.body.length > 0) content.push({ type: 'text', text: addressed.body });
+    if (text.trim().length > 0) content.push({ type: 'text', text: text.trim() });
+    for (const chip of chips) content.push(chipPart(chip));
     for (const artifact of attachments) content.push(partForArtifact(artifact));
-    onSend(content, addressed.node?.id);
+    const target = preview.targetNodeId === mainNodeId ? undefined : preview.targetNodeId;
+    onSend(content, target);
     setText('');
+    setCaret(0);
     setAttachments([]);
     setUploadError(undefined);
+    useComposerChips.getState().clear();
   };
 
   const onFiles = async (files: FileList | null) => {
@@ -102,6 +140,8 @@ export function ChatComposer({
     }
   };
 
+  const showPreview = preview !== undefined && text.trim() !== '';
+
   return (
     <div
       className="relative flex flex-col gap-[10px] px-[14px] pb-[14px] pt-[12px]"
@@ -117,42 +157,63 @@ export function ChatComposer({
             'absolute bottom-[calc(100%-4px)] left-[14px] right-[14px] z-10',
           )}
         >
-          <span className={MENU_LABEL_CLASS}>Nodes</span>
-          {matches.map((node, index) => (
+          <span className={MENU_LABEL_CLASS}>Ask a node</span>
+          {matches.map((entry, index) => (
             <button
-              key={node.id}
+              key={entry.nodeId}
               type="button"
               role="option"
               aria-selected={index === active}
-              data-testid={`chat-mention-option-${node.id}`}
+              data-testid={`chat-mention-option-${entry.nodeId}`}
               data-highlighted={index === active ? '' : undefined}
               onMouseDown={(event) => event.preventDefault()}
-              onClick={() => pick(node)}
+              onClick={() => pick(entry)}
               className={cn(MENU_ITEM_CLASS, 'text-left hover:bg-[rgba(239,107,63,0.12)]')}
             >
               <Avatar
-                letter={node.letter}
-                color={node.color}
+                letter={entry.letter}
+                color={entry.color}
                 size={16}
                 fontSize={8}
                 className="font-semibold"
               />
-              <span className="min-w-0 truncate">{node.name}</span>
+              <span className="min-w-0 truncate">{entry.name}</span>
               <span className="ml-auto font-machine text-[9px] text-[var(--muted)]">
-                @{node.handle}
+                @{entry.handle}
               </span>
             </button>
           ))}
         </div>
       )}
 
+      {chips.length > 0 && (
+        <ul className="flex flex-wrap gap-[6px]" data-testid="chat-chips" aria-label="References">
+          {chips.map((chip) => {
+            const label = chipLabel(chip);
+            return (
+              <li key={chip.id} className={CHIP} title={label}>
+                <span aria-hidden className="text-[10px] text-[var(--muted)]">
+                  {'</>'}
+                </span>
+                <span className="max-w-[14rem] truncate font-machine">{label}</span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${label}`}
+                  onClick={() => useComposerChips.getState().remove(chip.id)}
+                  className={CHIP_REMOVE}
+                >
+                  ✕
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
       {attachments.length > 0 && (
         <ul className="flex flex-wrap gap-[6px]" data-testid="chat-attachments">
           {attachments.map((artifact) => (
-            <li
-              key={artifact.id}
-              className="flex h-[24px] max-w-full items-center gap-[6px] rounded-full border border-[var(--line)] bg-[var(--chip)] pl-[9px] pr-[6px] text-[11px] text-[var(--ink)]"
-            >
+            <li key={artifact.id} className={CHIP}>
               <span className="max-w-[10rem] truncate font-machine" title={artifact.name}>
                 {artifact.name}
               </span>
@@ -163,10 +224,7 @@ export function ChatComposer({
                 onClick={() =>
                   setAttachments((current) => current.filter((each) => each.id !== artifact.id))
                 }
-                className={cn(
-                  FOCUS,
-                  'flex h-[16px] w-[16px] shrink-0 cursor-pointer items-center justify-center rounded-full text-[9px] text-[var(--muted)] hover:text-[#c94c27]',
-                )}
+                className={CHIP_REMOVE}
               >
                 ✕
               </button>
@@ -183,11 +241,14 @@ export function ChatComposer({
 
       <div className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] px-[10px] pb-[8px] pt-[10px] focus-within:border-[#ef6b3f]">
         <textarea
+          ref={box}
           value={text}
           onChange={(event) => {
             setText(event.target.value);
+            setCaret(event.target.selectionStart);
             setCursor(0);
           }}
+          onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
           onKeyDown={(event) => {
             if (pickerOpen) {
               if (event.key === 'ArrowDown') {
@@ -206,13 +267,13 @@ export function ChatComposer({
                 if (chosen !== undefined) pick(chosen);
                 return;
               }
-              if (event.key === 'Escape') {
+              if (event.key === 'Escape' && at !== undefined) {
                 event.preventDefault();
-                setText(text.replace(/@[^\s@]*$/, ''));
+                place(`${text.slice(0, at.start)}${text.slice(caret)}`, at.start);
                 return;
               }
             }
-            if (event.key === 'Enter' && !event.shiftKey) {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
               submit();
             }
@@ -225,7 +286,13 @@ export function ChatComposer({
           className="block w-full resize-none border-none bg-transparent p-0 text-[12.5px] leading-[1.45] text-[var(--ink)] outline-none placeholder:text-[var(--muted)]"
         />
         <div className="mt-1 flex items-center gap-[6px]">
-          <span className="flex-1" />
+          <span className="min-w-0 flex-1 truncate text-[10.5px]">
+            {showPreview && preview.canSend && (
+              <span data-testid="chat-send-preview" className="text-[var(--muted)]">
+                to <span className="font-semibold text-[var(--ink)]">{preview.name}</span>
+              </span>
+            )}
+          </span>
           <input
             ref={fileInput}
             type="file"
@@ -239,7 +306,7 @@ export function ChatComposer({
             type="button"
             title="Attach"
             aria-label="Attach a file"
-            disabled={disabled || uploading || !hasTarget}
+            disabled={disabled || uploading || mainNodeId === undefined}
             onClick={() => fileInput.current?.click()}
             className={cn(
               FOCUS,
@@ -265,6 +332,11 @@ export function ChatComposer({
           </button>
         </div>
       </div>
+      {preview?.error !== undefined && (
+        <p role="alert" data-testid="chat-target-error" className="text-[11px] text-[#c94c27]">
+          {preview.error}
+        </p>
+      )}
     </div>
   );
 }

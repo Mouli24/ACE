@@ -20,6 +20,7 @@ import {
 } from 'react';
 
 import { useProject } from '../../projects/hooks';
+import { askAgentAboutFile } from '../ask-agent';
 import { fileIconColor } from '../../theme/constants';
 import type { AgentLook } from '../../theme/agents';
 import { useChangesStore } from '../changes/changes-store';
@@ -591,6 +592,15 @@ export function FileTree({
                 <ContextMenuItem onSelect={() => void navigator.clipboard?.writeText(target.path)}>
                   Copy Relative Path
                 </ContextMenuItem>
+                {!target.folder && (
+                  <>
+                    <ContextMenuSeparator />
+                    {/* D302: the file, by its path, as a chip in the chat composer. */}
+                    <ContextMenuItem onSelect={() => askAgentAboutFile(target.path)}>
+                      Ask Agent About This File
+                    </ContextMenuItem>
+                  </>
+                )}
               </>
             )}
           </ContextMenuContent>
