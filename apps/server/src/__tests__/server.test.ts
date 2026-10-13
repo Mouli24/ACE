@@ -1083,6 +1083,40 @@ describe('Round 4 wiring: artifacts, tools, MCP, chat and the tool loop over the
     expect(ApiErrorSchema.parse(await response.json()).error.kind).toBe('invalid_config');
   }, 30_000);
 
+  it('D302 stores who answered, and refuses a target that cannot answer with a 400', async () => {
+    const providerId = await mockProvider();
+    const graph = await importFixture('chat-french.json', providerId);
+    const agentId = nodeId(graph, 'agent');
+    const outputId = nodeId(graph, 'output');
+
+    const refused = await json(`/nodes/${agentId}/chat`, {
+      method: 'POST',
+      body: JSON.stringify({ content: [{ type: 'text', text: 'hi' }], targetNodeId: outputId }),
+    });
+    expect(refused.status).toBe(400);
+    expect(ApiErrorSchema.parse(await refused.json()).error.code).toBe('validation_failed');
+
+    const begun = (await (
+      await json(`/nodes/${agentId}/chat`, {
+        method: 'POST',
+        body: JSON.stringify({
+          content: [{ type: 'text', text: 'Bonjour' }],
+          targetNodeId: agentId,
+        }),
+      })
+    ).json()) as { threadId: string };
+    let detail = ChatThreadDetailSchema.parse(
+      await (await api(`/chat/threads/${begun.threadId}`)).json(),
+    );
+    for (let i = 0; i < 200 && detail.messages.length < 2; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      detail = ChatThreadDetailSchema.parse(
+        await (await api(`/chat/threads/${begun.threadId}`)).json(),
+      );
+    }
+    expect(detail.messages[1]?.speakerNodeId).toBe(agentId);
+  }, 30_000);
+
   it('derives a timeline from run events and starts a run from a posted message (FR-CHAT-001/003)', async () => {
     const providerId = await mockProvider();
     const graph = await importFixture('chat-french.json', providerId);
