@@ -5,6 +5,7 @@ import type {
   FolderListing,
   RepoStatus,
   SaveFileResult,
+  SourcesResult,
 } from '@ace/contracts';
 
 import type { ProjectFiles } from '../../ports/index.js';
@@ -30,6 +31,11 @@ export const ENTRY: FileEntry = {
 export const LISTING: FolderListing = { path: '', items: [ENTRY] };
 export const SAVED: SaveFileResult = { path: 'a.ts', version: 'v2', size: 1, mtime: AT };
 export const STATUS: RepoStatus = { repo: false };
+export const SOURCES: SourcesResult = {
+  files: [{ path: 'a.ts', content: 'export const a = 1;' }],
+  truncated: false,
+  tsconfig: '{}',
+};
 export const FOUND: FileSearchResult = {
   files: [
     {
@@ -85,6 +91,10 @@ export function fakeFiles(overrides: Partial<ProjectFiles> = {}): ProjectFiles &
     search: async (...args) => {
       calls.push(['search', ...args]);
       return FOUND;
+    },
+    readSources: async (...args) => {
+      calls.push(['readSources', ...args]);
+      return SOURCES;
     },
     watch: () => () => undefined,
     ...overrides,

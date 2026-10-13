@@ -97,6 +97,7 @@ import {
   FileListSchema,
   FileSearchRequestSchema,
   FileSearchResultSchema,
+  SourcesResultSchema,
   FolderListingSchema,
   MoveEntryRequestSchema,
   RepoStatusSchema,
@@ -108,6 +109,7 @@ import {
   type FileList,
   type FileSearchRequest,
   type FileSearchResult,
+  type SourcesResult,
   type FolderListing,
   type MoveEntryRequest,
   type RepoStatus,
@@ -852,6 +854,9 @@ export function createAceClient(options: AceClientOptions) {
         schema: FileSearchRequestSchema,
         value: body,
       }),
+    /** The project's TS/JS sources for cross-file IntelliSense (D299 Phase 4), capped. */
+    projectSources: (projectId: Id): Promise<SourcesResult> =>
+      request('GET', `/projects/${projectId}/files/sources`, SourcesResultSchema),
 
     /* IDE — Forge's terminal (D301, design §6.3) */
     startProcess: (projectId: Id, body: ProcessStartRequest): Promise<ProcessStartResponse> =>

@@ -84,5 +84,8 @@ export function createWorkspaceRoutes(
     return c.json(await service.search(c.req.param('id'), body));
   });
 
+  // D299 Phase 4: the project's TS/JS sources for Monaco's cross-file IntelliSense, capped.
+  router.get(`${base}/sources`, async (c) => c.json(await workspace().sources(c.req.param('id'))));
+
   return router;
 }

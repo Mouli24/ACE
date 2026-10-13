@@ -10,10 +10,18 @@ import type {
   RepoStatus,
   SaveFileRequest,
   SaveFileResult,
+  SourcesResult,
 } from '@ace/contracts';
 
 /** One debounced watcher burst — the `files.changed` payload before the engine names the project. */
 export type FileChangeBatch = Omit<FilesChangedPayload, 'projectId'>;
+
+/** What `readSources` reads: extensions without the dot (`ts` covers `.d.ts`), and its caps. */
+export interface ReadSourcesOptions {
+  exts?: readonly string[];
+  maxFiles?: number;
+  maxBytes?: number;
+}
 
 /** `GET /files/raw`: the bytes and the type they are served with (image previews). */
 export interface RawFile {
@@ -43,6 +51,12 @@ export interface ProjectFiles {
    * contract refuses — an invalid or runaway regex — throws a `ZodError`.
    */
   search(root: string, request: FileSearchRequest): Promise<FileSearchResult>;
+  /**
+   * The project's TS/JS sources for cross-file IntelliSense (design §6.2): not ignored, never
+   * `node_modules`, shallowest first, capped at 1,500 files and 2 MB (`truncated`), plus the root
+   * `tsconfig.json` as text when there is one.
+   */
+  readSources(root: string, options?: ReadSourcesOptions): Promise<SourcesResult>;
   /**
    * Watch the folder recursively. `onChange` gets each debounced burst; `onError` fires once if
    * the watcher dies (it is stopped by then). The returned function stops watching.
