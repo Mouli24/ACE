@@ -142,6 +142,35 @@ describe('TC-PRJ-003 Delete project', () => {
     expect(refused.status).toBe(400);
     expect(ApiErrorSchema.parse(await body(refused)).error.code).toBe('validation_failed');
   });
+
+  it('D299 Phase 4 stores the check command and format-on-save a PATCH sets; null removes the command', async () => {
+    const project = await createProject(h.app, projectFolder());
+    const url = `/api/v1/projects/${project.id}`;
+
+    const set = ProjectSchema.parse(
+      await body(
+        await patch(h.app, url, { checkCommand: 'pnpm tsc --noEmit', formatOnSave: true }),
+      ),
+    );
+    expect(set).toMatchObject({ checkCommand: 'pnpm tsc --noEmit', formatOnSave: true });
+    expect(ProjectSchema.parse(await body(await get(h.app, url)))).toMatchObject({
+      checkCommand: 'pnpm tsc --noEmit',
+      formatOnSave: true,
+    });
+
+    // Each field alone is enough for the PATCH to reach the store.
+    const off = ProjectSchema.parse(await body(await patch(h.app, url, { formatOnSave: false })));
+    expect(off).toMatchObject({ checkCommand: 'pnpm tsc --noEmit', formatOnSave: false });
+    const cleared = ProjectSchema.parse(
+      await body(await patch(h.app, url, { checkCommand: null })),
+    );
+    expect(cleared.checkCommand).toBeUndefined();
+    expect(cleared.formatOnSave).toBe(false);
+
+    const refused = await patch(h.app, url, { checkCommand: '' });
+    expect(refused.status).toBe(400);
+    expect(ApiErrorSchema.parse(await body(refused)).error.code).toBe('validation_failed');
+  });
 });
 
 describe('TC-PRJ-004 Reopen last project', () => {

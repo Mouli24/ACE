@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import {
   BudgetUsdSchema,
+  CheckCommandSchema,
   EdgeSchema,
   EntityNameSchema,
   NodeSchema,
@@ -75,6 +76,10 @@ export const UpdateProjectRequestSchema = z.object({
   maxCostPerRunUsd: BudgetUsdSchema.nullable().optional(),
   /** D301: the terminal trust level. `off` also stops what runs (the gateway's PATCH route). */
   terminal: TerminalTrustSchema.optional(),
+  /** Forge's Run checks command; `null` removes it. */
+  checkCommand: CheckCommandSchema.nullable().optional(),
+  /** Forge's format-on-save toggle. */
+  formatOnSave: z.boolean().optional(),
 });
 export type UpdateProjectRequest = z.infer<typeof UpdateProjectRequestSchema>;
 

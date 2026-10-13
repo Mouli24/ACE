@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 import {
+  CheckCommandSchema,
   EdgeSchema,
   NodeSchema,
   SettingsSchema,
@@ -136,8 +137,21 @@ function terminalOf(value: string | null): TerminalTrust | undefined {
   return parsed.success ? parsed.data : undefined;
 }
 
+/** D299 Phase 4: NULL, or a command the contract would refuse, reads as none. */
+function checkCommandOf(value: string | null): string | undefined {
+  const parsed = CheckCommandSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/** D299 Phase 4: 1 is on and 0 off; NULL, or anything else, reads as absent (off). */
+function formatOnSaveOf(value: number | null): boolean | undefined {
+  return value === 1 ? true : value === 0 ? false : undefined;
+}
+
 function toProject(row: ProjectRow): Project {
   const terminal = terminalOf(row.terminal);
+  const checkCommand = checkCommandOf(row.checkCommand);
+  const formatOnSave = formatOnSaveOf(row.formatOnSave);
   return {
     id: row.id,
     name: row.name,
@@ -146,6 +160,8 @@ function toProject(row: ProjectRow): Project {
     // A cap that was never set and one that was removed read the same: no cap (D72).
     ...(row.maxCostPerRunUsd === null ? {} : { maxCostPerRunUsd: row.maxCostPerRunUsd }),
     ...(terminal === undefined ? {} : { terminal }),
+    ...(checkCommand === undefined ? {} : { checkCommand }),
+    ...(formatOnSave === undefined ? {} : { formatOnSave }),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -519,6 +535,8 @@ export class SqliteRepository implements Repository {
             lastOpenedAt: project.lastOpenedAt ?? null,
             maxCostPerRunUsd: project.maxCostPerRunUsd ?? null,
             terminal: project.terminal ?? null,
+            checkCommand: project.checkCommand ?? null,
+            formatOnSave: project.formatOnSave === undefined ? null : Number(project.formatOnSave),
             createdAt: project.createdAt,
             updatedAt: project.updatedAt,
           })
@@ -565,6 +583,8 @@ export class SqliteRepository implements Repository {
         lastOpenedAt?: Timestamp;
         maxCostPerRunUsd?: number | null;
         terminal?: TerminalTrust;
+        checkCommand?: string | null;
+        formatOnSave?: boolean;
         updatedAt: Timestamp;
       },
     ) => {
@@ -578,6 +598,9 @@ export class SqliteRepository implements Repository {
             ? {}
             : { maxCostPerRunUsd: patch.maxCostPerRunUsd }),
           ...(patch.terminal === undefined ? {} : { terminal: patch.terminal }),
+          // `null` removes the command, `undefined` leaves it alone.
+          ...(patch.checkCommand === undefined ? {} : { checkCommand: patch.checkCommand }),
+          ...(patch.formatOnSave === undefined ? {} : { formatOnSave: Number(patch.formatOnSave) }),
           updatedAt: patch.updatedAt,
         })
         .where(and(eq(projects.workspaceId, scope.workspaceId), eq(projects.id, id)))

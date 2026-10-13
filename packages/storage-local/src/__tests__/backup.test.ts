@@ -630,10 +630,14 @@ describe('FR-SYS-012 a backup from an older schema is migrated forward before th
     );
     const old = await startEngine('old', BEFORE_ROUND_5);
     const project = makeProject({ name: 'From round 4' });
-    // The repository writes `projects.terminal` on create; this install predates that column, so
-    // it is added for the insert and dropped again.
+    // The repository writes `projects.terminal`, `check_command` and `format_on_save` on create;
+    // this install predates those columns, so they are added for the insert and dropped again.
     old.opened.sqlite.exec('ALTER TABLE projects ADD COLUMN terminal TEXT');
+    old.opened.sqlite.exec('ALTER TABLE projects ADD COLUMN check_command TEXT');
+    old.opened.sqlite.exec('ALTER TABLE projects ADD COLUMN format_on_save INTEGER');
     await old.repository.projects.create(scope, project);
+    old.opened.sqlite.exec('ALTER TABLE projects DROP COLUMN format_on_save');
+    old.opened.sqlite.exec('ALTER TABLE projects DROP COLUMN check_command');
     old.opened.sqlite.exec('ALTER TABLE projects DROP COLUMN terminal');
     const policy = await old.repository.guardrailPolicies.getProjectDefault(scope, project.id);
     // A round 4 install's default policy had no context-point checks.

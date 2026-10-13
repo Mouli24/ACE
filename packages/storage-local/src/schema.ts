@@ -33,6 +33,10 @@ export const projects = sqliteTable(
     maxCostPerRunUsd: real('max_cost_per_run_usd'),
     /** D301: the terminal trust level, null when the project has none (it reads as `on`). */
     terminal: text('terminal'),
+    /** D299 Phase 4: Run checks' command, null when the project has none. */
+    checkCommand: text('check_command'),
+    /** D299 Phase 4: 1 formats before a save, 0 does not; null reads as off. */
+    formatOnSave: integer('format_on_save'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },

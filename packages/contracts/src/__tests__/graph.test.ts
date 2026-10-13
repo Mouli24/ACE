@@ -125,6 +125,37 @@ describe('D301 a project says how far it trusts its terminal', () => {
   });
 });
 
+describe('D299 Phase 4 a project names its check command and format-on-save', () => {
+  const project = {
+    id: PROJECT_ID,
+    name: 'Demo',
+    folderPath: 'D:/projects/demo',
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+
+  it('keeps both absent by default, and bounds the command to 1..1000 characters', () => {
+    const parsed = ProjectSchema.parse(project);
+    expect(parsed.checkCommand).toBeUndefined();
+    expect(parsed.formatOnSave).toBeUndefined();
+    const set = { ...project, checkCommand: 'pnpm tsc --noEmit', formatOnSave: true };
+    expect(ProjectSchema.parse(set)).toMatchObject({
+      checkCommand: 'pnpm tsc --noEmit',
+      formatOnSave: true,
+    });
+    expect(ProjectSchema.safeParse({ ...project, checkCommand: '' }).success).toBe(false);
+    expect(ProjectSchema.safeParse({ ...project, checkCommand: 'x'.repeat(1000) }).success).toBe(
+      true,
+    );
+    expect(ProjectSchema.safeParse({ ...project, checkCommand: 'x'.repeat(1001) }).success).toBe(
+      false,
+    );
+    expect(ProjectSchema.safeParse({ ...project, formatOnSave: 'yes' }).success).toBe(false);
+    // A merged PATCH's null reads as no command (D72's pattern).
+    expect(ProjectSchema.parse({ ...project, checkCommand: null }).checkCommand).toBeNull();
+  });
+});
+
 describe('FR-GRD-008 a project can cap what one run may cost', () => {
   const project = {
     id: PROJECT_ID,

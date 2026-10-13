@@ -7,8 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '../db.js';
 import {
   DOMAIN_MIGRATION_ID,
-  FORGE_CHECKPOINTS_MIGRATION_ID,
-  FORGE_CHAT_TURNS_MIGRATION_ID,
+  FORGE_CHECKS_MIGRATION_ID,
   FORGE_TERMINAL_MIGRATION_ID,
   MIGRATIONS,
 } from '../migrations.js';
@@ -38,14 +37,13 @@ afterEach(() => {
 });
 
 describe('D301 migration: projects.terminal', () => {
-  it('follows the Domain migration, and the checkpoints and chat-turns migrations follow it (D300, D302)', () => {
+  it('sorts after the Domain migration; only the forge-checks one follows it', () => {
     const ids = MIGRATIONS.map((migration) => migration.id);
     expect(FORGE_TERMINAL_MIGRATION_ID).toBe('20261013T120000_forge_terminal_trust');
-    expect(ids.slice(-4)).toEqual([
+    expect(ids.slice(-3)).toEqual([
       DOMAIN_MIGRATION_ID,
       FORGE_TERMINAL_MIGRATION_ID,
-      FORGE_CHECKPOINTS_MIGRATION_ID,
-      FORGE_CHAT_TURNS_MIGRATION_ID,
+      FORGE_CHECKS_MIGRATION_ID,
     ]);
     expect([...ids].sort()).toEqual(ids);
   });
@@ -65,8 +63,7 @@ describe('D301 migration: projects.terminal', () => {
     const after = openDatabase({ path });
     expect(after.appliedMigrations).toEqual([
       FORGE_TERMINAL_MIGRATION_ID,
-      FORGE_CHECKPOINTS_MIGRATION_ID,
-      FORGE_CHAT_TURNS_MIGRATION_ID,
+      FORGE_CHECKS_MIGRATION_ID,
     ]);
     const columns = (
       after.sqlite.prepare('PRAGMA table_info(projects)').all() as { name: string }[]

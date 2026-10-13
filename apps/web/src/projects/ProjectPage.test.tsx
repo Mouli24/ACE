@@ -123,3 +123,65 @@ describe('D301 a project says how far it trusts its terminal', () => {
     });
   });
 });
+
+describe('D299 Phase 4 a project names its check command and format-on-save', () => {
+  async function checkInput() {
+    const input = await screen.findByTestId('project-check-command');
+    await waitFor(() => expect(input).toBeEnabled());
+    return input;
+  }
+
+  it('shows a Checks card after the Terminal card, with the placeholder and Off by default', async () => {
+    const project = db.createProject({ name: 'Shop' });
+    renderApp(`/projects/${project.id}`);
+    const input = await checkInput();
+    expect(input).toHaveAttribute('placeholder', 'pnpm tsc --noEmit');
+    expect(input).toHaveValue('');
+    expect(screen.getByTestId('project-format-on-save')).toHaveTextContent('Off');
+    const terminal = screen.getByTestId('project-terminal-card');
+    const checks = screen.getByTestId('project-checks-card');
+    expect(checks).toHaveClass('rounded-[12px]', 'border-[var(--line)]', 'bg-[var(--surface)]');
+    expect(
+      terminal.compareDocumentPosition(checks) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('saves the check command on Enter, and clearing it removes it', async () => {
+    const user = userEvent.setup();
+    const project = db.createProject({ name: 'Shop' });
+    renderApp(`/projects/${project.id}`);
+    const input = await checkInput();
+
+    await user.type(input, '  pnpm lint  {Enter}');
+    await waitFor(() => expect(db.getProject(project.id)?.checkCommand).toBe('pnpm lint'));
+
+    await user.clear(input);
+    await user.keyboard('{Enter}');
+    input.blur();
+    await waitFor(() => expect(db.getProject(project.id)).not.toHaveProperty('checkCommand'));
+  });
+
+  it('refuses a command over 1000 characters inline and sends nothing', async () => {
+    const project = db.createProject({ name: 'Shop' });
+    renderApp(`/projects/${project.id}`);
+    const input = await checkInput();
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.change(input, { target: { value: 'x'.repeat(1001) } });
+    fireEvent.blur(input);
+    expect(await screen.findByRole('alert')).toHaveTextContent('1000');
+    expect(db.getProject(project.id)?.checkCommand).toBeUndefined();
+  });
+
+  it('turns format-on-save on', async () => {
+    const user = userEvent.setup();
+    const project = db.createProject({ name: 'Shop' });
+    renderApp(`/projects/${project.id}`);
+    const select = await screen.findByTestId('project-format-on-save');
+    await waitFor(() => expect(select).toBeEnabled());
+
+    await user.click(select);
+    await user.click(await screen.findByRole('option', { name: 'On' }));
+    await waitFor(() => expect(db.getProject(project.id)?.formatOnSave).toBe(true));
+    expect(select).toHaveTextContent('On');
+  });
+});
