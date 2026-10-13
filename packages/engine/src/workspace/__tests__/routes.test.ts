@@ -15,7 +15,7 @@ import {
 } from '../../ports/index.js';
 import { createWorkspaceRoutes } from '../routes.js';
 import { createWorkspaceService } from '../service.js';
-import { AT, LISTING, SAVED, STATUS, TEXT, fakeFiles } from './fake-files.js';
+import { AT, FOUND, LISTING, SAVED, STATUS, TEXT, fakeFiles } from './fake-files.js';
 
 const FOLDER = 'D:/projects/demo';
 const logger = createLogger({ level: 'silent', destination: { write: () => undefined } });
@@ -138,6 +138,36 @@ describe('D299 FR-GIT-003 the project file routes', () => {
       truncated: false,
     });
     expect(await (await send(app, 'GET', `${base()}/status`)).json()).toEqual(STATUS);
+  });
+
+  it('D299 Phase 4 searches with a POST body, regex characters intact, in the project folder', async () => {
+    const request = { query: 'a[0-9]+?b & c=d#e', regex: true, include: 'src', maxResults: 5 };
+    const response = await send(app, 'POST', `${base()}/search`, request);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(FOUND);
+    expect(files.calls).toEqual([['search', FOLDER, request]]);
+  });
+
+  it('D299 Phase 4 refuses a search the contract refuses before the files are touched', async () => {
+    for (const request of [
+      { query: '(a', regex: true },
+      { query: '(a+)+$', regex: true },
+      { query: 'a'.repeat(1001) },
+      { query: 'a', maxResults: 2001 },
+      { query: '' },
+    ]) {
+      const response = await send(app, 'POST', `${base()}/search`, request);
+      expect(response.status).toBe(400);
+      expect(await errorCode(response)).toBe('validation_failed');
+    }
+    expect(files.calls).toEqual([]);
+    const without = await send(
+      routeApp(createWorkspaceRoutes(undefined)),
+      'POST',
+      `${base()}/search`,
+      { query: 'a' },
+    );
+    expect(without.status).toBe(501);
   });
 
   it('refuses a project with no folder as invalid_path', async () => {

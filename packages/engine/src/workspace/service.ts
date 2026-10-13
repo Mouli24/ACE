@@ -3,6 +3,8 @@ import type {
   FileContent,
   FileEntry,
   FileList,
+  FileSearchRequest,
+  FileSearchResult,
   FolderListing,
   Id,
   RepoStatus,
@@ -31,6 +33,8 @@ export interface WorkspaceService {
   remove(projectId: Id, path: string): Promise<void>;
   listAll(projectId: Id): Promise<FileList>;
   status(projectId: Id): Promise<RepoStatus>;
+  /** `POST /files/search` (D299 Phase 4): the project's files that are not ignored. */
+  search(projectId: Id, request: FileSearchRequest): Promise<FileSearchResult>;
   /** The WS hub says a project gained its first subscriber (`true`) or lost its last (`false`). */
   setWatched(projectId: Id, watched: boolean): Promise<void>;
   /** Shutdown: every watcher stops and no restart is pending. */
@@ -176,6 +180,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): WorkspaceSer
     },
     listAll: async (projectId) => files.listAll(await folderOf(projectId)),
     status: async (projectId) => files.status(await folderOf(projectId)),
+    search: async (projectId, request) => files.search(await folderOf(projectId), request),
 
     async setWatched(projectId, watched) {
       if (watched) {

@@ -11,6 +11,7 @@ import {
   writeFile,
 } from './fs-files.js';
 import { readRepoStatus } from './repo-status.js';
+import { searchFiles } from './search.js';
 import { watchProject } from './watcher.js';
 
 /** Forge's `ProjectFiles` port on the real file system (D299); `apps/server` wires it. */
@@ -25,6 +26,7 @@ export function createFsProjectFiles(): ProjectFiles {
     remove: removeEntry,
     listAll: (root) => listAllFiles(root),
     status: (root) => readRepoStatus(root),
+    search: (root, request) => searchFiles(root, request),
     watch: (root, onChange, onError) => watchProject(root, onChange, onError),
   };
 }

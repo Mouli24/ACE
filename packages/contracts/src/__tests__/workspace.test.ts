@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CreateEntryRequestSchema,
+  FileSearchRequestSchema,
+  FileSearchResultSchema,
+  SEARCH_MAX_RESULTS,
+  SOURCES_MAX_BYTES,
+  SOURCES_MAX_FILES,
+  SourcesResultSchema,
+  searchPattern,
+  searchQueryProblem,
   PACKAGE_MANAGERS,
   PROCESS_COMMAND_MAX,
   PROCESS_FRAME_MAX_CHARS,
@@ -205,5 +213,78 @@ describe('D301 the terminal’s processes contract (design §6.3)', () => {
       ProcessExitedPayloadSchema.safeParse({ ...exited, status: 'running' }).success,
       'an end is never "running"',
     ).toBe(false);
+  });
+});
+
+describe('D299 Phase 4 file search requests', () => {
+  it('takes a query with options and caps maxResults at 2,000', () => {
+    const request = {
+      query: 'todo',
+      regex: false,
+      matchCase: true,
+      wholeWord: true,
+      include: 'src, *.ts',
+      exclude: 'dist',
+      maxResults: 10,
+    };
+    expect(FileSearchRequestSchema.parse(request)).toEqual(request);
+    expect(SEARCH_MAX_RESULTS).toBe(2000);
+    expect(FileSearchRequestSchema.safeParse({ query: 'a', maxResults: 2001 }).success).toBe(false);
+    expect(FileSearchRequestSchema.safeParse({ query: '' }).success).toBe(false);
+    expect(FileSearchRequestSchema.safeParse({ query: 'a', extra: 1 }).success).toBe(false);
+  });
+
+  it('refuses a pattern over 1000 characters, a regex that does not compile, and nested repeats', () => {
+    expect(FileSearchRequestSchema.safeParse({ query: 'a'.repeat(1001) }).success).toBe(false);
+    expect(searchQueryProblem('a'.repeat(1001), false)).toMatch(/at most 1000/);
+    const broken = FileSearchRequestSchema.safeParse({ query: '(a', regex: true });
+    expect(broken.success).toBe(false);
+    expect(broken.error?.issues[0]?.message).toMatch(/^Not a valid regular expression/);
+    // The same text is fine as a literal.
+    expect(FileSearchRequestSchema.safeParse({ query: '(a' }).success).toBe(true);
+    for (const pattern of ['(a+)+b', '(\\w*)*$', '(x{2,})+', '((ab)*c)*']) {
+      expect(searchQueryProblem(pattern, true)).toMatch(/too long/);
+    }
+    for (const pattern of ['(a|b)+', 'a+b*', '\\(a+\\)+', '[(a+)]+', '(ab){2}', 'foo(bar)?']) {
+      expect(searchQueryProblem(pattern, true)).toBeUndefined();
+    }
+  });
+
+  it('builds the pattern a search runs: literal or regex, case, whole word', () => {
+    expect(searchPattern({ query: 'a.b' }).test('axb')).toBe(false);
+    expect(searchPattern({ query: 'a.b', regex: true }).test('axb')).toBe(true);
+    expect(searchPattern({ query: 'Foo' }).flags).toContain('i');
+    expect(searchPattern({ query: 'Foo', matchCase: true }).flags).not.toContain('i');
+    expect('foo foobar'.match(searchPattern({ query: 'foo', wholeWord: true }))).toEqual(['foo']);
+    expect('a|b'.match(searchPattern({ query: 'a|b' }))).toEqual(['a|b']);
+  });
+
+  it('answers files of matches, truncated and the number searched', () => {
+    const result = {
+      files: [
+        {
+          path: 'src/a.ts',
+          matches: [{ line: 1, column: 3, preview: 'a todo', previewOffset: 2, length: 4 }],
+        },
+      ],
+      truncated: false,
+      searchedFiles: 3,
+    };
+    expect(FileSearchResultSchema.parse(result)).toEqual(result);
+    const long = { ...result.files[0]?.matches[0], preview: 'x'.repeat(241) };
+    expect(
+      FileSearchResultSchema.safeParse({ ...result, files: [{ path: 'a', matches: [long] }] })
+        .success,
+    ).toBe(false);
+  });
+});
+
+describe('D299 Phase 4 project sources for cross-file types', () => {
+  it('caps at 1,500 files and 2 MB, and carries the root tsconfig when there is one', () => {
+    expect(SOURCES_MAX_FILES).toBe(1500);
+    expect(SOURCES_MAX_BYTES).toBe(2 * 1024 * 1024);
+    const sources = { files: [{ path: 'a.ts', content: 'export {}' }], truncated: false };
+    expect(SourcesResultSchema.parse(sources)).toEqual(sources);
+    expect(SourcesResultSchema.parse({ ...sources, tsconfig: '{}' }).tsconfig).toBe('{}');
   });
 });

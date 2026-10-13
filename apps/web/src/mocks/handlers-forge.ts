@@ -1,6 +1,7 @@
 import {
   CreateEntryRequestSchema,
   ERROR_CODE_HTTP_STATUS,
+  FileSearchRequestSchema,
   MoveEntryRequestSchema,
   SaveFileRequestSchema,
   aceError,
@@ -190,6 +191,15 @@ export function createForgeHandlers(db: MockDb): HttpHandler[] {
     http.get(
       `${API}/projects/:id/files/list`,
       route((fs) => HttpResponse.json(files.listAll(fs))),
+    ),
+
+    http.post(
+      `${API}/projects/:id/files/search`,
+      route(async (fs, _id, request) => {
+        const body = await parsed(request, FileSearchRequestSchema);
+        if (!body.ok) return body.response;
+        return HttpResponse.json(files.searchFiles(fs, body.data));
+      }),
     ),
 
     http.get(

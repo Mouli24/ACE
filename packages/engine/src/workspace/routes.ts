@@ -1,6 +1,7 @@
 import {
   CreateEntryRequestSchema,
   FilePathQuerySchema,
+  FileSearchRequestSchema,
   MoveEntryRequestSchema,
   RequiredFilePathQuerySchema,
   SaveFileRequestSchema,
@@ -75,6 +76,13 @@ export function createWorkspaceRoutes(
 
   router.get(`${base}/list`, async (c) => c.json(await workspace().listAll(c.req.param('id'))));
   router.get(`${base}/status`, async (c) => c.json(await workspace().status(c.req.param('id'))));
+
+  // A body, not query params: a regex is full of characters a query string mangles (D299 Phase 4).
+  router.post(`${base}/search`, async (c) => {
+    const service = workspace();
+    const body = FileSearchRequestSchema.parse(await readJson(c));
+    return c.json(await service.search(c.req.param('id'), body));
+  });
 
   return router;
 }
