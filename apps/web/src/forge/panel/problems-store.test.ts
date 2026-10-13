@@ -5,11 +5,14 @@ import { ensureModel, fileUri, resetModels, setMonaco } from '../editor/models';
 import {
   clearChecks,
   problemCounts,
+  sameProblem,
   setChecks,
   useProblemsStore,
   watchMarkers,
   type ChecksRun,
+  type Problem,
 } from './problems-store';
+import type { CheckProblem } from './check-parser';
 
 const P = '01J9ZZZZZZZZZZZZZZZZZZZZZZ';
 let fake: FakeMonaco;
@@ -147,5 +150,121 @@ describe('D299 Phase 4 the checks slice', () => {
       total: 0,
     });
     stop();
+  });
+});
+
+describe('smoke S-2: one error seen live and by the checks counts once', () => {
+  const marker = (over: Partial<Problem> = {}): Problem => ({
+    path: 'src/main.ts',
+    line: 3,
+    column: 5,
+    severity: 'error',
+    message: "Argument of type 'string' is not assignable to parameter of type 'number'.",
+    source: undefined,
+    code: '2345',
+    ...over,
+  });
+  const check = (over: Partial<CheckProblem> = {}): CheckProblem => ({
+    path: 'src/main.ts',
+    line: 3,
+    column: 5,
+    severity: 'error',
+    message: "Argument of type 'string' is not assignable to parameter of type 'number'.",
+    source: 'tsc',
+    code: 'TS2345',
+    ...over,
+  });
+
+  it.each([
+    ['tsc’s TS2345 and Monaco’s 2345 at the same place', check(), marker(), true],
+    ['the same code written the same way', check(), marker({ code: 'TS2345' }), true],
+    [
+      'an eslint rule on both',
+      check({ code: 'no-undef', source: 'eslint' }),
+      marker({ code: 'no-undef' }),
+      true,
+    ],
+    ['another code at the same place', check({ code: 'TS2322' }), marker(), false],
+    ['codes match but the line differs', check({ line: 4 }), marker(), false],
+    ['codes match but the column differs', check({ column: 6 }), marker(), false],
+    ['codes match but the file differs', check({ path: 'src/other.ts' }), marker(), false],
+    ['no code on the marker: the same message', check(), marker({ code: undefined }), true],
+    ['no code on the check: the same message', check({ code: undefined }), marker(), true],
+    ['an empty code is no code', check({ code: '' }), marker(), true],
+    [
+      'no code on the marker, another message',
+      check(),
+      marker({ code: undefined, message: 'Other.' }),
+      false,
+    ],
+    [
+      'no code on either, another message',
+      check({ code: undefined }),
+      marker({ code: undefined, message: 'Other.' }),
+      false,
+    ],
+  ])('%s', (_name, a, b, same) => {
+    expect(sameProblem(a, b)).toBe(same);
+  });
+
+  it('takes each marker’s code from Monaco, a plain one or a linked one', () => {
+    ensureModel(P, 'src/main.ts', '', 'typescript', () => undefined);
+    const stop = watchMarkers(asMonaco(fake));
+    const resource = fileUri(P, 'src/main.ts') as unknown as InstanceType<FakeMonaco['Uri']>;
+    fake.setMarkers([
+      {
+        resource,
+        severity: fake.MarkerSeverity.Error,
+        message: 'a',
+        startLineNumber: 1,
+        startColumn: 1,
+        code: '2345',
+      },
+      {
+        resource,
+        severity: fake.MarkerSeverity.Warning,
+        message: 'b',
+        startLineNumber: 2,
+        startColumn: 1,
+        code: { value: 'no-undef', target: resource },
+      },
+      {
+        resource,
+        severity: fake.MarkerSeverity.Warning,
+        message: 'c',
+        startLineNumber: 3,
+        startColumn: 1,
+      },
+    ]);
+    expect(useProblemsStore.getState().byProject[P]?.map((problem) => problem.code)).toEqual([
+      '2345',
+      'no-undef',
+      undefined,
+    ]);
+    stop();
+  });
+
+  it('counts a check entry only when no live marker matches it; both stay listed', () => {
+    useProblemsStore.setState({
+      byProject: {
+        [P]: [marker(), marker({ line: 9, severity: 'warning', code: '6133', message: 'unused' })],
+      },
+    });
+    setChecks(P, {
+      status: 'done',
+      command: 'tsc --noEmit -p .',
+      startedAt: '2026-10-13T10:00:00.000Z',
+      finishedAt: '2026-10-13T10:00:02.000Z',
+      exitCode: 2,
+      problems: [check(), check({ path: 'src/closed.ts', code: 'TS2304', message: 'gone' })],
+    });
+    expect(problemCounts(useProblemsStore.getState(), P)).toEqual({
+      errors: 2,
+      warnings: 1,
+      total: 3,
+    });
+    // the Problems list keeps both groups as they are
+    expect(useProblemsStore.getState().byProject[P]).toHaveLength(2);
+    expect(useProblemsStore.getState().checks[P]?.problems).toHaveLength(2);
   });
 });

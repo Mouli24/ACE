@@ -40,6 +40,8 @@ export function createFakeMonaco() {
     startLineNumber: number;
     startColumn: number;
     source?: string;
+    /** As Monaco's markers carry it: TypeScript's `2345`, or a value with a link. */
+    code?: string | { value: string; target: Uri };
   }> = [];
   const markerListeners = new Set<() => void>();
   type FakeModel = ReturnType<typeof createModel>;

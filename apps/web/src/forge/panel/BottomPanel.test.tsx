@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import { useLayoutStore } from '../../app/stores/layout';
 import { installMockServer, renderWithQuery } from '../../test/app';
+import { ProblemsCount } from '../layout/StatusBar';
 import { BottomPanel } from './BottomPanel';
 import { useProblemsStore, type Problem } from './problems-store';
 
@@ -49,6 +50,66 @@ describe('D299 D334 Forge’s bottom panel in the theme', () => {
     );
     expect(screen.getByTestId('problems-count')).toHaveTextContent('2');
     expect(screen.getByTestId('problems-count')).toHaveClass('text-[#c94c27]');
+  });
+
+  it('counts one error once when Monaco and the checks both report it, and lists both rows (smoke S-2)', () => {
+    const message = "Argument of type 'string' is not assignable to parameter of type 'number'.";
+    act(() =>
+      useProblemsStore.setState({
+        byProject: {
+          [P]: [
+            {
+              path: 'src/main.ts',
+              line: 3,
+              column: 5,
+              severity: 'error',
+              message,
+              source: undefined,
+              code: '2345',
+            },
+          ],
+        },
+        checks: {
+          [P]: {
+            status: 'done',
+            command: 'tsc --noEmit -p .',
+            startedAt: '2026-10-13T10:00:00.000Z',
+            finishedAt: '2026-10-13T10:00:02.000Z',
+            exitCode: 2,
+            problems: [
+              {
+                path: 'src/main.ts',
+                line: 3,
+                column: 5,
+                severity: 'error',
+                message,
+                source: 'tsc',
+                code: 'TS2345',
+              },
+            ],
+          },
+        },
+      }),
+    );
+    renderWithQuery(
+      <>
+        <BottomPanel projectId={P} />
+        <ProblemsCount projectId={P} />
+      </>,
+    );
+    expect(screen.getByTestId('problems-count')).toHaveTextContent(/^1$/);
+    expect(screen.getByTestId('footer-problems')).toHaveAccessibleName('1 error, 0 warnings');
+    // the list keeps both: the open file's marker and the Checks group's row
+    expect(
+      within(screen.getByRole('list', { name: 'Problems in src/main.ts' })).getAllByRole(
+        'listitem',
+      ),
+    ).toHaveLength(1);
+    expect(
+      within(screen.getByRole('region', { name: 'Checks' })).getByRole('button', {
+        name: /not assignable/,
+      }),
+    ).toHaveTextContent('tsc(TS2345) [Ln 3, Col 5]');
   });
 
   it('lists a file’s problems in one surface card, the severity as the Validation tab’s glyph', () => {
