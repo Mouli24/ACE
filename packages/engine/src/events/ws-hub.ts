@@ -18,7 +18,20 @@ export interface HubSocket {
   send(data: string): void;
   close(code: number, reason?: string): void;
   on(event: 'message' | 'close', handler: (data: string) => void): void;
+  /** Bytes queued and not yet written (ws's `bufferedAmount`); a socket without it is never behind. */
+  readonly bufferedAmount?: number;
 }
+
+/**
+ * How far behind a socket may fall before the hub stops sending it process output (D301). A
+ * client that stops reading (a stalled tab, a browser that cannot keep up with a flood) otherwise
+ * grows the engine's send queue without limit: under a stdout flood it was measured growing at
+ * about 120 MB/s, past 2.5 GB in 20 s.
+ */
+export const WS_SEND_QUEUE_MAX_BYTES = 8 * 1024 * 1024;
+
+/** RFC 6455 "try again later": not 4401 or 4403, so the SDK reconnects. */
+export const WS_CLOSE_TRY_AGAIN_LATER = 1013;
 
 export interface WsHubDeps {
   bus: EventBus;
@@ -161,8 +174,25 @@ export function createWsHub({
         engineScope: false,
       };
 
+      /** Set once this socket was closed for falling behind: nothing more is queued for it. */
+      let behind = false;
       const unsubscribe = await bus.subscribe((event) => {
-        if (wants(subscription, event)) send(socket, event);
+        if (behind || !wants(subscription, event)) return;
+        // A transient output frame is droppable: the engine keeps each process's last 1 MiB, and
+        // the web re-reads it on the `hello` of the reconnect this close causes (D301).
+        if (
+          event.type === 'process.output' &&
+          (socket.bufferedAmount ?? 0) > WS_SEND_QUEUE_MAX_BYTES
+        ) {
+          behind = true;
+          logger.warn(
+            { subsystem: 'ws', bufferedAmount: socket.bufferedAmount },
+            'closed a WebSocket that fell too far behind',
+          );
+          socket.close(WS_CLOSE_TRY_AGAIN_LATER, 'too far behind');
+          return;
+        }
+        send(socket, event);
       });
       const entry = { socket, unsubscribe, subscription };
       open.add(entry);
