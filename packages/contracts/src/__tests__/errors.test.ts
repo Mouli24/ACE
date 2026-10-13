@@ -125,6 +125,8 @@ describe('FR-SYS-006 round 1 error codes', () => {
       'process_limit',
       'process_not_running',
       'engine_stopping',
+      'checkpoint_conflict',
+      'checkpoints_unavailable',
     ]);
   });
 
@@ -155,6 +157,8 @@ describe('FR-SYS-006 round 1 error codes', () => {
       process_limit: 409,
       process_not_running: 409,
       engine_stopping: 503,
+      checkpoint_conflict: 409,
+      checkpoints_unavailable: 503,
     });
   });
 });

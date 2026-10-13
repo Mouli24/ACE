@@ -203,7 +203,7 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
 }
 
 /** A temp file in the same folder, then a rename: a reader never sees half a file. */
-async function atomicWrite(
+export async function atomicWrite(
   absolute: string,
   bytes: Uint8Array,
   mode: number | undefined,

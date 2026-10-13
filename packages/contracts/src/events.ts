@@ -8,6 +8,7 @@ import {
   ProviderTypeSchema,
 } from './enums.js';
 import { ChatMessageSchema, MessageSchema } from './chat.js';
+import { CheckpointUpdatedPayloadSchema } from './checkpoints.js';
 import {
   EnvelopeRoutedPayloadSchema,
   EnvelopeSentPayloadSchema,
@@ -375,6 +376,7 @@ export const PROJECT_EVENT_FRAME_SCHEMAS = [
   transientFrame('files.changed', FilesChangedPayloadSchema),
   transientFrame('process.output', ProcessOutputPayloadSchema),
   transientFrame('process.exited', ProcessExitedPayloadSchema),
+  transientFrame('checkpoint.updated', CheckpointUpdatedPayloadSchema),
 ] as const;
 
 /** Server → client, run scope (round 2 §2.4, round 3 §2.6, round 4 §2.5). */
@@ -437,7 +439,12 @@ export const ENGINE_EVENT_TYPES = [
 ] as const;
 export type EngineEventType = (typeof ENGINE_EVENT_TYPES)[number];
 
-export const PROJECT_EVENT_TYPES = ['files.changed', 'process.output', 'process.exited'] as const;
+export const PROJECT_EVENT_TYPES = [
+  'files.changed',
+  'process.output',
+  'process.exited',
+  'checkpoint.updated',
+] as const;
 export type ProjectEventType = (typeof PROJECT_EVENT_TYPES)[number];
 
 /** Not persisted, no `seq`, never replayed by `resume` (§2.4, round 4 §2.5, D299, D301). */
@@ -447,6 +454,7 @@ export const TRANSIENT_EVENT_TYPES = [
   'files.changed',
   'process.output',
   'process.exited',
+  'checkpoint.updated',
 ] as const;
 export type TransientEventType = (typeof TRANSIENT_EVENT_TYPES)[number];
 
