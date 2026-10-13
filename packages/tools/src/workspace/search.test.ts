@@ -274,3 +274,28 @@ describe('D299 Phase 4 fix C1: a regex search runs in a worker with a hard deadl
     expect(result).toMatchObject({ files: [], truncated: true, searchedFiles: 0 });
   });
 });
+
+describe('D299 Phase 4 merge fix N1: a worker that dies on its own never reads as complete', () => {
+  it('a worker that errors makes the answer truncated, not a clean "no more matches"', async () => {
+    put('a.ts', 'needle');
+    put('b.ts', 'needle');
+    const result = await search(
+      { query: 'needle', regex: true },
+      // a crash arrives as an event after the worker started, as a real one would
+      { onWorker: (created) => setImmediate(() => created.emit('error', new Error('crashed'))) },
+    );
+    expect(result.truncated).toBe(true);
+    expect(result.timedOut).toBe(false);
+  });
+
+  it('a worker that exits by itself makes the answer truncated', async () => {
+    put('a.ts', 'needle');
+    put('b.ts', 'needle');
+    const result = await search(
+      { query: 'needle', regex: true },
+      { onWorker: (created) => void created.terminate() },
+    );
+    expect(result.truncated).toBe(true);
+    expect(result.timedOut).toBe(false);
+  });
+});
