@@ -62,6 +62,19 @@ interface Tracked {
   readonly exited: Promise<void>;
 }
 
+/** `taskkill /pid <pid> /T /F`, resolved once taskkill has finished (or could not start). */
+function taskkillTree(pid: number): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+        .on('error', () => resolve())
+        .on('exit', () => resolve());
+    } catch {
+      resolve();
+    }
+  });
+}
+
 export function createBackgroundProcesses(
   options: BackgroundProcessesOptions,
 ): AgentBackgroundProcesses {
@@ -73,18 +86,25 @@ export function createBackgroundProcesses(
   const processes = new Map<string, Tracked>();
   let counter = 0;
 
-  const settle = (tracked: Tracked): Promise<void> =>
+  const bounded = (work: Promise<unknown>): Promise<void> =>
     Promise.race([
-      tracked.exited,
+      work.then(() => undefined),
       new Promise<void>((resolve) => setTimeout(resolve, killWaitMs).unref()),
     ]);
 
   const killOne = async (tracked: Tracked): Promise<boolean> => {
     const wasRunning = tracked.running;
+    if (tracked.pid === undefined) return wasRunning;
+    if (platform === 'win32') {
+      if (!wasRunning) return false;
+      // Wait for taskkill itself, not only the shell: the shell's exit is reported before the rest
+      // of its tree is gone, and "killed" should mean nothing it started still holds the folder.
+      await bounded(Promise.all([taskkillTree(tracked.pid), tracked.exited]));
+      return true;
+    }
     // On POSIX the group may outlive its leader, so a finished shell's group is still signalled.
-    if (tracked.pid !== undefined && (wasRunning || platform !== 'win32'))
-      killTree(tracked.pid, platform);
-    if (wasRunning) await settle(tracked);
+    killTree(tracked.pid, platform);
+    if (wasRunning) await bounded(tracked.exited);
     return wasRunning;
   };
 
