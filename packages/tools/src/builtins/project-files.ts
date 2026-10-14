@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path';
 import { type ToolDefinition } from '@ace/contracts';
 import { z } from 'zod';
 
+import { contentHash } from '../agent/ledger.js';
+import { type AgentSession } from '../agent/session.js';
 import { ToolError } from '../errors.js';
 import { assertInsideProject, assertWritable, projectRelative } from '../project/paths.js';
 import { type RegisteredTool } from '../registry.js';
@@ -18,6 +20,11 @@ import { type ToolContext } from '../tool.js';
 
 const PROJECT = '<project>';
 const READ_LIMIT_CHARS = 256 * 1024;
+/** Agentic nodes: lines `read_file` shows when no `limit` is given. */
+const AGENT_READ_LINES = 2000;
+/** Agentic nodes: a line longer than this is cut, and marked. */
+const AGENT_LINE_CHARS = 2000;
+const LINE_CUT_MARK = '… [line truncated]';
 const SKIPPED = new Set(['.git', 'node_modules', '.ace']);
 
 function definition(
@@ -148,13 +155,26 @@ export function createReadFileTool(): RegisteredTool {
         throw new ToolError('invalid_args', 'read_file', `read_file: ${path} is not a file.`);
       }
       const bytes = readFileSync(target);
+      const agent = agentOf(context);
+      // The whole file's hash, even for a window: the rule is "unchanged since you looked".
+      agent?.session.ledger.record(agent.nodeId, target, contentHash(bytes));
       if (bytes.includes(0)) {
+        if (agent !== undefined) {
+          return {
+            path: projectRelative(context.projectDir as string, target),
+            content: '',
+            binary: true,
+            bytes: bytes.length,
+            notice: `${path} is a binary file (${bytes.length} bytes); read_file shows text only.`,
+          };
+        }
         throw new ToolError(
           'invalid_args',
           'read_file',
           `read_file: ${path} looks binary; it reads text only.`,
         );
       }
+      if (agent !== undefined) return readForAgent(context, target, bytes, offset, limit);
       const lines = bytes.toString('utf8').split(/\r?\n/);
       const from = (offset ?? 1) - 1;
       const window = limit === undefined ? lines.slice(from) : lines.slice(from, from + limit);
@@ -170,6 +190,93 @@ export function createReadFileTool(): RegisteredTool {
       };
     },
   };
+}
+
+/**
+ * `read_file` for an agentic node (a session and a node id): the same `content` as a chat turn
+ * gets — raw text, not numbered — but bounded the way a model's context needs: at most
+ * {@link AGENT_READ_LINES} lines unless `limit` says otherwise, and no line longer than
+ * {@link AGENT_LINE_CHARS} characters. A file that fits is returned byte-for-byte, line endings
+ * and all; a cut one is joined with `\n` and says where to continue.
+ */
+function readForAgent(
+  context: ToolContext,
+  target: string,
+  bytes: Buffer,
+  offset: number | undefined,
+  limit: number | undefined,
+): Record<string, unknown> {
+  const text = bytes.toString('utf8');
+  const lines = text.split(/\r?\n/);
+  const from = (offset ?? 1) - 1;
+  const window = lines.slice(from, from + (limit ?? AGENT_READ_LINES));
+  let cutLine = false;
+  const shown = window.map((line) => {
+    if (line.length <= AGENT_LINE_CHARS) return line;
+    cutLine = true;
+    return `${line.slice(0, AGENT_LINE_CHARS)}${LINE_CUT_MARK}`;
+  });
+  const whole = offset === undefined && limit === undefined && window.length === lines.length;
+  let content = whole && !cutLine ? text : shown.join('\n');
+  const moreLines = from + window.length < lines.length;
+  let truncated = moreLines || cutLine;
+  if (content.length > READ_LIMIT_CHARS) {
+    content = content.slice(0, READ_LIMIT_CHARS);
+    truncated = true;
+  }
+  return {
+    path: projectRelative(context.projectDir as string, target),
+    content,
+    totalLines: lines.length,
+    truncated,
+    ...(moreLines ? { nextOffset: from + window.length + 1 } : {}),
+  };
+}
+
+/** The node and the run's shared session, when the call comes from an agentic node. */
+function agentOf(context: ToolContext): { session: AgentSession; nodeId: string } | undefined {
+  const { session, nodeId } = context;
+  return session !== undefined && nodeId !== undefined && nodeId !== ''
+    ? { session, nodeId }
+    : undefined;
+}
+
+/** Runs `fn` under the run's per-path write lock, or directly without a session. */
+const underLock = <T>(context: ToolContext, target: string, fn: () => Promise<T>): Promise<T> =>
+  context.session === undefined ? fn() : context.session.locks.withLock(target, fn);
+
+/**
+ * Read-before-edit (agentic nodes): an existing file may be overwritten or edited only by a node
+ * that has seen its current content — read it, or wrote it last itself. Anything else (another
+ * node's edit, a command, the person in Forge) changed it under the node, which must read it again
+ * rather than overwrite a change it never saw. A no-op without a session.
+ */
+function assertSeenCurrent(context: ToolContext, tool: string, target: string, path: string): void {
+  const agent = agentOf(context);
+  if (agent === undefined || !existsSync(target)) return;
+  const seen = agent.session.ledger.seen(agent.nodeId, target);
+  if (seen === undefined) {
+    throw new ToolError(
+      'invalid_args',
+      tool,
+      `${tool}: this node has not read ${path} yet. Call read_file on it first, then retry.`,
+      { reason: 'not_read' },
+    );
+  }
+  if (seen !== contentHash(readFileSync(target))) {
+    throw new ToolError(
+      'invalid_args',
+      tool,
+      `${tool}: ${path} has changed since this node last read it. Call read_file on it again, then retry.`,
+      { reason: 'changed_since_read' },
+    );
+  }
+}
+
+/** After a successful write: the node has seen what it wrote, so it may keep editing it. */
+function recordWrite(context: ToolContext, target: string, written: string): void {
+  const agent = agentOf(context);
+  agent?.session.ledger.record(agent.nodeId, target, contentHash(written));
 }
 
 /* ------------------------------------------------------------------ write_file */
@@ -193,19 +300,28 @@ export function createWriteFileTool(): RegisteredTool {
       const { path, content } = parse(WriteArgs, args, 'write_file', '{ path, content }');
       const target = where(context, 'write_file', 'write', path);
       assertWritable(context.projectDir as string, target, 'write_file');
-      const created = !existsSync(target);
-      mkdirSync(dirname(target), { recursive: true });
-      writeFileSync(target, content, 'utf8');
-      return {
-        path: projectRelative(context.projectDir as string, target),
-        bytes: Buffer.byteLength(content, 'utf8'),
-        created,
-      };
+      return underLock(context, target, async () => {
+        assertSeenCurrent(context, 'write_file', target, path);
+        const created = !existsSync(target);
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, content, 'utf8');
+        recordWrite(context, target, content);
+        return {
+          path: projectRelative(context.projectDir as string, target),
+          bytes: Buffer.byteLength(content, 'utf8'),
+          created,
+        };
+      });
     },
   };
 }
 
 /* ------------------------------------------------------------------- edit_file */
+
+/** Every line break in `text` is CRLF (and there is at least one). Mixed files are left alone. */
+const isCrlf = (text: string): boolean => text.includes('\r\n') && !/(^|[^\r])\n/.test(text);
+/** `\n` → `\r\n`, leaving any `\r\n` already there as it is. */
+const toCrlf = (text: string): string => text.replace(/\r?\n/g, '\r\n');
 
 const EditArgs = z.strictObject({
   path: z.string(),
@@ -238,35 +354,42 @@ export function createEditFileTool(): RegisteredTool {
       } = parse(EditArgs, args, 'edit_file', '{ path, oldString, newString, replaceAll? }');
       const target = where(context, 'edit_file', 'edit', path);
       assertWritable(context.projectDir as string, target, 'edit_file');
-      if (!existsSync(target) || !statSync(target).isFile()) {
-        throw new ToolError('invalid_args', 'edit_file', `edit_file: ${path} is not a file.`);
-      }
-      const text = readFileSync(target, 'utf8');
-      const matches = text.split(oldString).length - 1;
-      if (matches === 0) {
-        throw new ToolError(
-          'invalid_args',
-          'edit_file',
-          'edit_file: oldString was not found in the file.',
-        );
-      }
-      if (matches > 1 && !replaceAll) {
-        throw new ToolError(
-          'invalid_args',
-          'edit_file',
-          `edit_file: oldString matches ${matches} times; give more context or set replaceAll.`,
-          { matches },
-        );
-      }
-      // A function replacement, so `$&` and friends in newString stay literal.
-      const next = replaceAll
-        ? text.split(oldString).join(newString)
-        : text.replace(oldString, () => newString);
-      writeFileSync(target, next, 'utf8');
-      return {
-        path: projectRelative(context.projectDir as string, target),
-        replacements: replaceAll ? matches : 1,
-      };
+      return underLock(context, target, async () => {
+        if (!existsSync(target) || !statSync(target).isFile()) {
+          throw new ToolError('invalid_args', 'edit_file', `edit_file: ${path} is not a file.`);
+        }
+        assertSeenCurrent(context, 'edit_file', target, path);
+        const text = readFileSync(target, 'utf8');
+        // A CRLF file stays CRLF: the model writes `\n`, so its strings follow the file's endings.
+        const crlf = isCrlf(text);
+        const find = crlf ? toCrlf(oldString) : oldString;
+        const put = crlf ? toCrlf(newString) : newString;
+        const matches = text.split(find).length - 1;
+        if (matches === 0) {
+          throw new ToolError(
+            'invalid_args',
+            'edit_file',
+            'edit_file: oldString was not found in the file (found 0 times); read the file and copy the text exactly.',
+            { matches },
+          );
+        }
+        if (matches > 1 && !replaceAll) {
+          throw new ToolError(
+            'invalid_args',
+            'edit_file',
+            `edit_file: oldString matches ${matches} times; give more context or set replaceAll.`,
+            { matches },
+          );
+        }
+        // A function replacement, so `$&` and friends in newString stay literal.
+        const next = replaceAll ? text.split(find).join(put) : text.replace(find, () => put);
+        writeFileSync(target, next, 'utf8');
+        recordWrite(context, target, next);
+        return {
+          path: projectRelative(context.projectDir as string, target),
+          replacements: replaceAll ? matches : 1,
+        };
+      });
     },
   };
 }
