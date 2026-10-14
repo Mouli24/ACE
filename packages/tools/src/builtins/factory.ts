@@ -5,6 +5,7 @@ import { type Sandbox, type SearchBackend } from '@ace/engine';
 import { type ToolRegistry, type RegisteredTool } from '../registry.js';
 import { ChildProcessSandbox } from '../sandbox/runner.js';
 import { CannedSearchBackend } from '../search/backends.js';
+import { createCommandOutputTool, createKillCommandTool } from './background-tools.js';
 import { createCodeSandboxTool, type CodeSandboxToolOptions } from './code-sandbox.js';
 import { createEchoTool } from './echo.js';
 import { createGitDiffTool, createGitStatusTool } from './git.js';
@@ -54,6 +55,8 @@ export function createBuiltinTools(deps: BuiltinToolDeps = {}): RegisteredTool[]
     createGitStatusTool(),
     createGitDiffTool(),
     createRunCommandTool(),
+    createCommandOutputTool(),
+    createKillCommandTool(),
   ];
 }
 
