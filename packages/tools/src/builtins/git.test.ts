@@ -102,9 +102,16 @@ describe.skipIf(!hasGit)('FR-TOOL-008 git tools', () => {
     const diff = (await createGitDiffTool().implementation({}, context)) as { diff: string };
     expect(diff.diff).toContain('+inside');
     expect(diff.diff).not.toContain('outside');
-    // Pathspec magic is a literal name, not a way back to the repository's top.
-    const magic = (await createGitDiffTool().implementation({ path: ':(top)' }, context)) as { diff: string };
-    expect(magic.diff).toBe('');
+    // Pathspec magic is a literal name, not a way back to the repository's top. On Windows a `:`
+    // in a path names an NTFS stream, so the path guard refuses it before git sees it (agentic nodes).
+    if (process.platform === 'win32') {
+      await expect(createGitDiffTool().implementation({ path: ':(top)' }, context)).rejects.toThrow(
+        /alternate_data_stream/,
+      );
+    } else {
+      const magic = (await createGitDiffTool().implementation({ path: ':(top)' }, context)) as { diff: string };
+      expect(magic.diff).toBe('');
+    }
   });
 
   it('neither tool is destructive', () => {
