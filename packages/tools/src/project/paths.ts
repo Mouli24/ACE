@@ -23,6 +23,8 @@ export interface AssertInsideProjectOptions {
   readonly operation: string;
   readonly logger: ToolLogger;
   readonly runId: string;
+  /** Whose path rules apply (Windows refuses device names and `:` streams). Tests only. */
+  readonly platform?: NodeJS.Platform;
 }
 
 export function assertInsideProject(options: AssertInsideProjectOptions): string {
@@ -38,12 +40,21 @@ export function assertInsideProject(options: AssertInsideProjectOptions): string
   if (candidate === '' || candidate === '.' || candidate === './' || candidate === '.\\') {
     return resolve(projectDir);
   }
-  const resolution = resolveInsideSandbox(projectDir, candidate);
+  const resolution = resolveInsideSandbox(
+    projectDir,
+    candidate,
+    options.platform === undefined ? {} : { platform: options.platform },
+  );
   if (resolution.ok) return resolution.path;
 
   // The reason, never the value the model passed (FR-GRD-014).
   options.logger.warn(
-    { tool: options.toolName, operation: options.operation, reason: resolution.reason, runId: options.runId },
+    {
+      tool: options.toolName,
+      operation: options.operation,
+      reason: resolution.reason,
+      runId: options.runId,
+    },
     'project path refused',
   );
   throw new ToolError(
