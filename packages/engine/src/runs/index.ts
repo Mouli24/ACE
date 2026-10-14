@@ -2527,7 +2527,11 @@ export function createRunService(deps: RunServiceDeps): RunService {
       for (const row of rows) {
         const key = attemptKey(row.nodeId, row.iteration);
         lastAttempt.set(key, Math.max(lastAttempt.get(key) ?? 0, row.attempt));
-        if (row.status === 'COMPLETED') completedIterations.add(key);
+        // A node this drive re-runs is not "completing an iteration again" (D309): its new turn is
+        // the control's, and only what `withDownstream` forces runs after it (FR-CTL-005).
+        if (row.status === 'COMPLETED' && !plannedRuns.has(row.nodeId)) {
+          completedIterations.add(key);
+        }
       }
       const recorded = latestByNode(rows);
 
