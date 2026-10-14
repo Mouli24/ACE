@@ -28,6 +28,10 @@ export * from './agent/env.js';
 export * from './agent/output.js';
 export * from './agent/background.js';
 export * from './agent/changes.js';
+export * from './agent/ledger.js';
+export * from './agent/locks.js';
+export * from './agent/classify.js';
+export * from './agent/create-session.js';
 
 export * from './builtins/echo.js';
 export * from './builtins/code-sandbox.js';
@@ -39,6 +43,7 @@ export * from './builtins/project-files.js';
 export * from './builtins/git.js';
 export * from './builtins/run-command.js';
 export * from './builtins/background-tools.js';
+export * from './builtins/search-tool.js';
 export * from './builtins/factory.js';
 
 export * from './mcp/transport.js';

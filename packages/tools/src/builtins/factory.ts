@@ -10,7 +10,13 @@ import { createCodeSandboxTool, type CodeSandboxToolOptions } from './code-sandb
 import { createEchoTool } from './echo.js';
 import { createGitDiffTool, createGitStatusTool } from './git.js';
 import { createHttpRequestTool } from './http-request.js';
-import { createEditFileTool, createListFilesTool, createReadFileTool, createWriteFileTool } from './project-files.js';
+import {
+  createEditFileTool,
+  createListFilesTool,
+  createReadFileTool,
+  createWriteFileTool,
+} from './project-files.js';
+import { createSearchTool } from './search-tool.js';
 import { createRunCommandTool } from './run-command.js';
 import { createSandboxDeleteTool } from './sandbox-delete.js';
 import { createWebFetchTool } from './web-fetch.js';
@@ -55,6 +61,7 @@ export function createBuiltinTools(deps: BuiltinToolDeps = {}): RegisteredTool[]
     createGitStatusTool(),
     createGitDiffTool(),
     createRunCommandTool(),
+    createSearchTool(),
     createCommandOutputTool(),
     createKillCommandTool(),
   ];

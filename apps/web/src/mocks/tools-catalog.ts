@@ -157,7 +157,10 @@ export const BUILTIN_TOOL_DEFINITIONS: ToolDefinition[] = [
   projectTool('edit_file', 'Replace exact text in a file in the project folder.', { path: { type: 'string' }, oldString: { type: 'string' }, newString: { type: 'string' } }, ['path', 'oldString', 'newString']),
   projectTool('git_status', 'Show the project repository’s branch and changed files.', {}, []),
   projectTool('git_diff', 'Show the project’s uncommitted changes.', { staged: { type: 'boolean' }, path: { type: 'string' } }, []),
-  projectTool('run_command', 'Run a shell command in the project folder. Asks for approval.', { command: { type: 'string' } }, ['command']),
+  projectTool('run_command', 'Run a shell command in the project folder. Asks for approval.', { command: { type: 'string' }, background: { type: 'boolean' } }, ['command']),
+  projectTool('search', 'Search the project’s files for a regular expression.', { pattern: { type: 'string' }, path: { type: 'string' }, glob: { type: 'string' } }, ['pattern']),
+  projectTool('command_output', 'New output of a background command this run started.', { processId: { type: 'string' } }, ['processId']),
+  projectTool('kill_command', 'Stop a background command this run started.', { processId: { type: 'string' } }, ['processId']),
 ];
 
 /** A server name reduced to a snake_case fragment a tool name can carry (`ToolNameSchema`). */

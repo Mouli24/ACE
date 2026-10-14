@@ -49,6 +49,8 @@ export interface ExecutableTool {
 /** The little a tool needs about the call in flight — the run it belongs to, and how to be stopped. */
 export interface ToolRunContext {
   runId: Id;
+  /** The node making the call: agentic nodes key read-before-edit and background commands on it. */
+  nodeId?: Id;
   /** `<projectFolder>/.ace/sandbox/<runId>/` — the only folder a tool may touch (NFR-SEC-03). */
   sandboxDir: string;
   /** X1: the project folder the run works in — the only folder the project tools may touch. */

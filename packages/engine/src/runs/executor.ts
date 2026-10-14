@@ -1123,6 +1123,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
           try {
             result = await registered!.run(call.args, {
               runId: input.runId,
+              nodeId: input.node.id,
               sandboxDir,
               signal: toolSignal,
               ...(workingDir === undefined ? {} : { projectDir: workingDir }),
