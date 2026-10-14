@@ -6,7 +6,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ToolError } from '../errors.js';
 import { RecordingToolLogger, SANDBOX_DENIED_MESSAGE } from '../logging.js';
-import { assertInsideSandbox, resolveInsideSandbox, sandboxDirFor } from './paths.js';
+import {
+  PATH_REFUSAL_REASONS,
+  assertInsideSandbox,
+  resolveInsideSandbox,
+  sandboxDirFor,
+} from './paths.js';
 
 let projectFolder: string;
 let sandboxDir: string;
@@ -70,7 +75,11 @@ describe('TC-GRD-006 Path confinement', () => {
   });
 
   it('refuses an absolute path, POSIX or Windows style', () => {
-    for (const candidate of ['/etc/passwd', 'C:\\Windows\\System32\\drivers\\etc\\hosts', '\\\\server\\share']) {
+    for (const candidate of [
+      '/etc/passwd',
+      'C:\\Windows\\System32\\drivers\\etc\\hosts',
+      '\\\\server\\share',
+    ]) {
       expect(resolveInsideSandbox(sandboxDir, candidate)).toMatchObject({
         ok: false,
         reason: 'absolute_path',
@@ -169,9 +178,9 @@ describe('TC-GRD-006 Path confinement', () => {
   it('is not fooled by a sibling folder whose name starts with the sandbox name', () => {
     const sibling = `${sandboxDir}-evil`;
     mkdirSync(sibling, { recursive: true });
-    expect(resolveInsideSandbox(sandboxDir, `..${sep}${sandboxDir.split(sep).at(-1)}-evil/x`)).toMatchObject(
-      { ok: false, reason: 'escapes_sandbox' },
-    );
+    expect(
+      resolveInsideSandbox(sandboxDir, `..${sep}${sandboxDir.split(sep).at(-1)}-evil/x`),
+    ).toMatchObject({ ok: false, reason: 'escapes_sandbox' });
   });
 });
 
@@ -254,5 +263,105 @@ describe('review r1: a dangling link cannot hide where it points', () => {
     symlinkSync(join(sandboxDir, 'q'), join(sandboxDir, 'p'), 'junction');
     symlinkSync(join(sandboxDir, 'p'), join(sandboxDir, 'q'), 'junction');
     expect(resolveInsideSandbox(sandboxDir, 'p/x')).toMatchObject({ ok: false });
+  });
+});
+
+describe('FR-TOOL-008 Windows path forms (agentic nodes path guard)', () => {
+  const win = { platform: 'win32' } as const;
+  const posix = { platform: 'linux' } as const;
+
+  it('refuses the \\\\?\\ and \\\\.\\ device namespaces, either slash', () => {
+    for (const candidate of ['\\\\?\\C:\\x', '\\\\.\\PhysicalDrive0', '//?/C:/x', '//./COM1']) {
+      expect(resolveInsideSandbox(sandboxDir, candidate, win)).toMatchObject({
+        ok: false,
+        reason: 'device_namespace',
+      });
+      expect(resolveInsideSandbox(sandboxDir, candidate, posix)).toMatchObject({ ok: false });
+    }
+  });
+
+  it('refuses a UNC path', () => {
+    for (const candidate of ['\\\\server\\share\\x', '//server/share/x']) {
+      expect(resolveInsideSandbox(sandboxDir, candidate, win)).toMatchObject({
+        ok: false,
+        reason: 'absolute_path',
+      });
+    }
+  });
+
+  it('refuses an alternate data stream on any segment, and a drive-relative path', () => {
+    for (const candidate of [
+      'file.txt:hidden',
+      'src/a.ts::$DATA',
+      'dir:x/file.txt',
+      'C:file.txt',
+    ]) {
+      expect(resolveInsideSandbox(sandboxDir, candidate, win), candidate).toMatchObject({
+        ok: false,
+        reason: 'alternate_data_stream',
+      });
+    }
+  });
+
+  it('refuses a reserved device name on any segment, with or without an extension, any case', () => {
+    for (const candidate of [
+      'NUL',
+      'nul',
+      'con.txt',
+      'src/CON',
+      'src\\aux.tar.gz',
+      'prn',
+      'COM1',
+      'com9.log',
+      'LPT1',
+      'lpt9.txt',
+      'nul.',
+      'NUL .txt',
+      'con/x.txt',
+      'COM\u00b9',
+      'CONIN$',
+    ]) {
+      expect(resolveInsideSandbox(sandboxDir, candidate, win), candidate).toMatchObject({
+        ok: false,
+        reason: 'reserved_device_name',
+      });
+    }
+  });
+
+  it('still allows look-alikes of device names', () => {
+    for (const candidate of [
+      'console.txt',
+      'nul1',
+      'COM10',
+      'LPT0x',
+      'auxiliary/a.ts',
+      'icon.png',
+      'connect',
+    ]) {
+      expect(resolveInsideSandbox(sandboxDir, candidate, win), candidate).toMatchObject({
+        ok: true,
+      });
+    }
+  });
+
+  // On a Windows host `a:b.txt` is drive-relative to `path.resolve`, so this runs on POSIX only.
+  it.runIf(process.platform !== 'win32')('leaves `:` and device names alone on POSIX', () => {
+    expect(resolveInsideSandbox(sandboxDir, 'a:b.txt', posix)).toMatchObject({ ok: true });
+    expect(resolveInsideSandbox(sandboxDir, 'con.txt', posix)).toMatchObject({ ok: true });
+  });
+
+  it.runIf(process.platform === 'win32')('applies on this Windows host by default', () => {
+    expect(resolveInsideSandbox(sandboxDir, 'NUL')).toMatchObject({
+      reason: 'reserved_device_name',
+    });
+    expect(resolveInsideSandbox(sandboxDir, 'file.txt:hidden')).toMatchObject({
+      reason: 'alternate_data_stream',
+    });
+  });
+
+  it('lists every new reason', () => {
+    expect(PATH_REFUSAL_REASONS).toEqual(
+      expect.arrayContaining(['device_namespace', 'alternate_data_stream', 'reserved_device_name']),
+    );
   });
 });

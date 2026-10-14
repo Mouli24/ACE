@@ -34,6 +34,12 @@ export const PATH_REFUSAL_REASONS = [
   'escapes_sandbox',
   'symlink_escape',
   'sandbox_root',
+  /** `\\?\…` or `\\.\…`: Win32 device and verbatim namespaces, which skip path normalisation. */
+  'device_namespace',
+  /** Windows: a `:` in a segment names an NTFS alternate data stream (or a drive-relative path). */
+  'alternate_data_stream',
+  /** Windows: `CON`, `NUL`, `COM1`… open a device whatever folder or extension they carry. */
+  'reserved_device_name',
 ] as const;
 export type PathRefusalReason = (typeof PATH_REFUSAL_REASONS)[number];
 
@@ -45,6 +51,29 @@ export type PathResolution =
 const DRIVE_LETTER = /^[A-Za-z]:[\\/]/;
 /** A UNC or POSIX-double-slash root (`\\host\share`, `//host/share`). */
 const NETWORK_ROOT = /^[\\/]{2}/;
+/** The Win32 device (`\\.\`) and verbatim (`\\?\`) namespaces, with either slash. */
+const DEVICE_NAMESPACE = /^[\\/]{2}[?.][\\/]/;
+/**
+ * Reserved device names (Win32 naming rules): matched on a segment's name before its first dot,
+ * with the trailing spaces Windows drops removed, so `con.txt`, `NUL .txt` and `nul.` all count.
+ * The superscript digits are reserved too.
+ */
+const RESERVED_DEVICE = /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³]|conin\$|conout\$)$/i;
+
+export interface ResolvePathOptions {
+  /** Whose path rules apply. Defaults to this process's; tests pass `win32` to check them anywhere. */
+  readonly platform?: NodeJS.Platform;
+}
+
+/** The Windows-only refusals, one segment at a time. Undefined when every segment is a plain name. */
+function windowsSegmentProblem(candidate: string): PathRefusalReason | undefined {
+  for (const segment of candidate.split(/[\\/]/)) {
+    if (segment.includes(':')) return 'alternate_data_stream';
+    const stem = (segment.split('.')[0] ?? '').replace(/ +$/, '');
+    if (RESERVED_DEVICE.test(stem)) return 'reserved_device_name';
+  }
+  return undefined;
+}
 
 /**
  * `<projectFolder>/.ace/sandbox/<runId>/`. The run id is a ULID in practice, but this is the one
@@ -54,7 +83,12 @@ export function sandboxDirFor(projectFolder: string, runId: string): string {
   if (runId.length === 0 || runId.trim().length === 0) {
     throw new ToolError('denied', 'sandbox', 'A sandbox folder needs a run id.', { runId });
   }
-  if (runId.includes('/') || runId.includes('\\') || runId.includes('..') || runId.includes('\u0000')) {
+  if (
+    runId.includes('/') ||
+    runId.includes('\\') ||
+    runId.includes('..') ||
+    runId.includes('\u0000')
+  ) {
     throw new ToolError(
       'denied',
       'sandbox',
@@ -120,7 +154,11 @@ export function realpathOfDeepestExisting(target: string): string {
  * Resolves `candidate` inside `sandboxDir`, or says why it will not. Pure: it neither logs nor
  * throws, so it can be used for a "would this be allowed?" question as well as for enforcement.
  */
-export function resolveInsideSandbox(sandboxDir: string, candidate: string): PathResolution {
+export function resolveInsideSandbox(
+  sandboxDir: string,
+  candidate: string,
+  options: ResolvePathOptions = {},
+): PathResolution {
   const refuse = (reason: PathRefusalReason): PathResolution => ({
     ok: false,
     reason,
@@ -132,8 +170,13 @@ export function resolveInsideSandbox(sandboxDir: string, candidate: string): Pat
   if (candidate === '~' || candidate.startsWith('~/') || candidate.startsWith('~\\')) {
     return refuse('home_relative');
   }
+  if (DEVICE_NAMESPACE.test(candidate)) return refuse('device_namespace');
   if (isAbsolute(candidate) || DRIVE_LETTER.test(candidate) || NETWORK_ROOT.test(candidate)) {
     return refuse('absolute_path');
+  }
+  if ((options.platform ?? process.platform) === 'win32') {
+    const problem = windowsSegmentProblem(candidate);
+    if (problem !== undefined) return refuse(problem);
   }
 
   const root = resolve(sandboxDir);

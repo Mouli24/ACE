@@ -118,6 +118,42 @@ describe('D299 FR-GIT-008 protected folders at any depth', () => {
   });
 });
 
+describe('FR-TOOL-008 agentic nodes path guard: Windows forms and links out', () => {
+  const refusal = (candidate: string, platform: NodeJS.Platform = 'win32'): unknown => {
+    try {
+      assertInsideProject({
+        projectDir: project,
+        candidate,
+        toolName: 'write_file',
+        operation: 'write',
+        logger: new RecordingToolLogger(),
+        runId: 'run-1',
+        platform,
+      });
+    } catch (error) {
+      return error instanceof ToolError ? error.details : error;
+    }
+    return undefined;
+  };
+
+  it('refuses UNC, device namespaces, alternate data streams and device names as tool errors', () => {
+    expect(refusal('\\\\server\\share\\x')).toMatchObject({ reason: 'absolute_path' });
+    expect(refusal('\\\\?\\C:\\x')).toMatchObject({ reason: 'device_namespace' });
+    expect(refusal('\\\\.\\NUL')).toMatchObject({ reason: 'device_namespace' });
+    expect(refusal('file.txt:hidden')).toMatchObject({ reason: 'alternate_data_stream' });
+    expect(refusal('NUL')).toMatchObject({ reason: 'reserved_device_name' });
+    expect(refusal('src/con.txt')).toMatchObject({ reason: 'reserved_device_name' });
+    expect(refusal('src/a.ts')).toBeUndefined();
+  });
+
+  it('refuses a path through a junction that points out of the project', () => {
+    const outside = join(root, 'outside');
+    mkdirSync(outside);
+    symlinkSync(outside, join(project, 'out'), 'junction');
+    expect(refusal('out/x.txt', process.platform)).toMatchObject({ reason: 'symlink_escape' });
+  });
+});
+
 describe('review r1: a dangling link into a protected folder', () => {
   it('refuses a write through a dangling junction that points at .git/hooks', () => {
     mkdirSync(join(project, '.git'));
