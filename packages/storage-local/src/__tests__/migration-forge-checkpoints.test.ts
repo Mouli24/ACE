@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openDatabase } from '../db.js';
 import {
+  FORGE_CHAT_TURNS_MIGRATION_ID,
   FORGE_CHECKPOINTS_MIGRATION_ID,
   FORGE_TERMINAL_MIGRATION_ID,
   MIGRATIONS,
@@ -61,17 +62,24 @@ const stored = (cp: Checkpoint, beforeRef = 'a'.repeat(40)): StoredCheckpoint =>
 });
 
 describe('D300 migration: the checkpoints table', () => {
-  it('is the last migration, after the terminal’s, with the id the plan fixed', () => {
+  it('follows the terminal’s, with the id the plan fixed, and the chat turns’ follows it', () => {
     const ids = MIGRATIONS.map((migration) => migration.id);
     expect(FORGE_CHECKPOINTS_MIGRATION_ID).toBe('20261014T100000_forge_checkpoints');
-    expect(ids.slice(-2)).toEqual([FORGE_TERMINAL_MIGRATION_ID, FORGE_CHECKPOINTS_MIGRATION_ID]);
+    expect(ids.slice(-3)).toEqual([
+      FORGE_TERMINAL_MIGRATION_ID,
+      FORGE_CHECKPOINTS_MIGRATION_ID,
+      FORGE_CHAT_TURNS_MIGRATION_ID,
+    ]);
     expect([...ids].sort()).toEqual(ids);
   });
 
   it('creates the table and its index on a database from before it', () => {
     openDatabase({ path, migrations: BEFORE }).sqlite.close();
     const after = openDatabase({ path });
-    expect(after.appliedMigrations).toEqual([FORGE_CHECKPOINTS_MIGRATION_ID]);
+    expect(after.appliedMigrations).toEqual([
+      FORGE_CHECKPOINTS_MIGRATION_ID,
+      FORGE_CHAT_TURNS_MIGRATION_ID,
+    ]);
     const columns = (
       after.sqlite.prepare('PRAGMA table_info(checkpoints)').all() as { name: string }[]
     ).map((column) => column.name);
