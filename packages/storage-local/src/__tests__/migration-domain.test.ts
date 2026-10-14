@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '../db.js';
 import {
   DOMAIN_MIGRATION_ID,
+  FORGE_CHECKPOINTS_MIGRATION_ID,
+  FORGE_CHAT_TURNS_MIGRATION_ID,
   FORGE_CHECKS_MIGRATION_ID,
   FORGE_TERMINAL_MIGRATION_ID,
   MIGRATIONS,
@@ -53,6 +55,8 @@ describe('Domain migration', () => {
     expect(after.appliedMigrations).toEqual([
       DOMAIN_MIGRATION_ID,
       FORGE_TERMINAL_MIGRATION_ID,
+      FORGE_CHECKPOINTS_MIGRATION_ID,
+      FORGE_CHAT_TURNS_MIGRATION_ID,
       FORGE_CHECKS_MIGRATION_ID,
     ]);
     expect(columnsOf(after.sqlite, 'nodes')).toContain('handle');

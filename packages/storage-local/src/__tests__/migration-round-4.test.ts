@@ -13,7 +13,9 @@ import {
   X1_CLI_PROVIDERS_MIGRATION_ID,
   CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
   DOMAIN_MIGRATION_ID,
+  FORGE_CHAT_TURNS_MIGRATION_ID,
   FORGE_TERMINAL_MIGRATION_ID,
+  FORGE_CHECKPOINTS_MIGRATION_ID,
   FORGE_CHECKS_MIGRATION_ID,
 } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
@@ -71,6 +73,8 @@ describe('Arch §15.3 the round 4 migration adds the six new tables', () => {
       CHAT_SESSIONS_CLI_MODELS_MIGRATION_ID,
       DOMAIN_MIGRATION_ID,
       FORGE_TERMINAL_MIGRATION_ID,
+      FORGE_CHECKPOINTS_MIGRATION_ID,
+      FORGE_CHAT_TURNS_MIGRATION_ID,
       FORGE_CHECKS_MIGRATION_ID,
     ]);
     const tablesAfter = (

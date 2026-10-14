@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 
 import { SHORTCUTS, useShortcuts } from '../app/shortcuts';
 import { useLayoutStore } from '../app/stores/layout';
+import { askAgentAboutFile, askAgentAboutSelection } from './ask-agent';
 import { useForgeAttribution } from './attribution';
 import { saveAll, saveFile } from './editor/actions';
 import { useCloseRequest } from './editor/CloseDialogs';
@@ -68,6 +69,15 @@ export function ForgeWorkbench({
       },
     ],
     [SHORTCUTS.saveAll, () => void saveAll(projectId, queryClient)],
+    [
+      // D302: the editor's selection, or — with no editor to ask — the active file.
+      SHORTCUTS.askAgent,
+      () => {
+        if (askAgentAboutSelection()) return;
+        const active = activePath();
+        if (active !== undefined) askAgentAboutFile(active);
+      },
+    ],
     [
       SHORTCUTS.runChecks,
       () => {
