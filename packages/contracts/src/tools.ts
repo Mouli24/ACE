@@ -127,6 +127,10 @@ export const BUILTIN_TOOL_NAMES = [
   'git_status',
   'git_diff',
   'run_command',
+  // Agentic nodes (D344's names): content search and the run's background commands.
+  'search',
+  'command_output',
+  'kill_command',
 ] as const;
 export const BuiltinToolNameSchema = z.enum(BUILTIN_TOOL_NAMES);
 export type BuiltinToolName = z.infer<typeof BuiltinToolNameSchema>;

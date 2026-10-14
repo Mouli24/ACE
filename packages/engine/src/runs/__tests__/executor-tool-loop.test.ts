@@ -37,6 +37,7 @@ import {
   type ToolGuardStep,
   type ToolPointInput,
   type ToolProvider,
+  type ToolRunContext,
 } from '../tool-loop.js';
 
 const scope = LOCAL_SCOPE;
@@ -351,6 +352,32 @@ describe('TC-TOOL-001 an agent runs a tool and feeds its result back', () => {
 
     expect(outcome.prompt?.text).toContain(UNTRUSTED_TOOL_RESULT_LABEL);
     expect(outcome.prompt?.text).toContain('echo');
+  });
+});
+
+describe('agentic nodes: a tool call carries the node that made it', () => {
+  it('passes the node id with the run id, so the run session keys reads and commands on it', async () => {
+    const contexts: ToolRunContext[] = [];
+    const echo: ExecutableTool = {
+      definition: echoDefinition,
+      async run(_args, context) {
+        contexts.push(context);
+        return { text: 'echoed hi' };
+      },
+    };
+    const harness = await buildHarness({
+      turns: (req) => (req.toolResults?.length ? say('done') : requestEcho()),
+      tools: toolProvider([echo]),
+      beforeTool: async () => ({ kind: 'allow' }),
+      maxToolCalls: 10,
+    });
+    const node = agentNode({ tools: { enabled: ['echo'], maxToolCalls: 10, allowedDomains: [] } });
+
+    await runInput(harness, node);
+
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]?.nodeId).toBe(node.id);
+    expect(contexts[0]?.runId).toBeDefined();
   });
 });
 

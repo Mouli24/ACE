@@ -879,7 +879,7 @@ describe('Round 4 wiring: artifacts, tools, MCP, chat and the tool loop over the
     expect(ApiErrorSchema.parse(await response.json()).error.code).toBe('unsupported_type');
   });
 
-  it('GET /tools lists the thirteen built-ins in §2.2 then X1 order (FR-TOOL-001, FR-TOOL-008)', async () => {
+  it('GET /tools lists the built-ins in §2.2, X1, then agentic-nodes order (FR-TOOL-001, FR-TOOL-008)', async () => {
     const body = ToolListResponseSchema.parse(await (await api('/tools')).json());
     expect(body.items.map((tool) => tool.name)).toEqual([
       'echo',
@@ -895,6 +895,9 @@ describe('Round 4 wiring: artifacts, tools, MCP, chat and the tool loop over the
       'git_status',
       'git_diff',
       'run_command',
+      'search',
+      'command_output',
+      'kill_command',
     ]);
   });
 

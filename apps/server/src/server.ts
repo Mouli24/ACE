@@ -117,7 +117,9 @@ import {
   McpManager,
   ToolRegistry,
   cannedResultsAt,
+  createAgentSession,
   createFsProjectFiles,
+  type OwnedAgentSession,
   createGitCheckpointStore,
   createProcessRunner,
   registerBuiltinTools,
@@ -626,6 +628,28 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
    * whose `run` takes `@ace/tools`' `ToolContext`; the executor hands a narrower `ToolRunContext`, so
    * this fills in the workspace scope and the tool logger the context needs.
    */
+  /*
+   * Agentic nodes (D341): one session per run, shared by its nodes' tool calls — the reads behind
+   * read-before-edit, the per-file write locks, and the background commands. Made on the run's first
+   * node tool call and ended (its commands killed) when the run completes or the engine shuts down.
+   * Chat turns pass no node id and get none, so they behave as before (D302).
+   */
+  const agentSessions = new Map<Id, OwnedAgentSession>();
+  const agentSessionFor = (runId: Id): OwnedAgentSession => {
+    let session = agentSessions.get(runId);
+    if (session === undefined) {
+      session = createAgentSession();
+      agentSessions.set(runId, session);
+    }
+    return session;
+  };
+  const endAgentSession = async (runId: Id): Promise<void> => {
+    const session = agentSessions.get(runId);
+    if (session === undefined) return;
+    agentSessions.delete(runId);
+    await session.processes.killAll();
+  };
+
   const toolProvider: ToolProvider = {
     get: (name) => {
       const registered = toolRegistry.get(name);
@@ -638,6 +662,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
             runId: ctx.runId,
             sandboxDir: ctx.sandboxDir,
             ...(ctx.projectDir === undefined ? {} : { projectDir: ctx.projectDir }),
+            ...(ctx.nodeId === undefined || ctx.projectDir === undefined
+              ? {}
+              : { nodeId: ctx.nodeId, session: agentSessionFor(ctx.runId) }),
             logger: toolLogger,
             signal: ctx.signal,
           }),
@@ -915,6 +942,13 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     repository,
     bus,
     logger: logger.child({ subsystem: 'chat' }),
+  });
+
+  /* Agentic nodes: a finished run's background commands do not outlive it (D341). */
+  const stopAgentSessions = await bus.subscribe((event) => {
+    if (event.type === 'run.completed' && event.runId !== undefined) {
+      void endAgentSession(event.runId);
+    }
   });
 
   /*
@@ -1209,12 +1243,14 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
 
       // Round 4: stop deriving timeline rows and close every MCP connection before the DB closes.
       timeline.unsubscribe();
+      stopAgentSessions();
       await mcpManager.closeAll();
     } finally {
       // FR-SYS-008, D301: every terminal process stops, its whole tree with it, before the
       // database closes; none outlives the engine, even if an earlier step above rejected.
       workspace.stopAll();
       await processes.stopAll();
+      await Promise.all([...agentSessions.keys()].map((runId) => endAgentSession(runId)));
     }
     hub.closeAll();
     wss.close();

@@ -195,6 +195,9 @@ describe('§2.2 the six built-in tools', () => {
       'git_status',
       'git_diff',
       'run_command',
+      'search',
+      'command_output',
+      'kill_command',
     ]);
     for (const name of BUILTIN_TOOL_NAMES) {
       expect(TOOL_NAME_REGEX.test(name), name).toBe(true);
