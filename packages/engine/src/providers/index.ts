@@ -11,12 +11,12 @@ import {
   type ProviderDetectResponse,
   type ProviderState,
   type UpdateProviderRequest,
-} from '@ace/contracts';
+} from "@ace/contracts";
 
-import { classifyError } from '../errors/index.js';
-import type { EventBus } from '../events/index.js';
-import { newId } from '../ids.js';
-import type { Logger } from '../logging/index.js';
+import { classifyError } from "../errors/index.js";
+import type { EventBus } from "../events/index.js";
+import { newId } from "../ids.js";
+import type { Logger } from "../logging/index.js";
 import type {
   ModelInfo,
   ProviderAdapter,
@@ -24,11 +24,11 @@ import type {
   Repository,
   Scope,
   SecretStore,
-} from '../ports/index.js';
-import { maskSecrets } from '../security/secret-patterns.js';
-import { createSemaphore, type Semaphore } from './semaphore.js';
+} from "../ports/index.js";
+import { maskSecrets } from "../security/secret-patterns.js";
+import { createSemaphore, type Semaphore } from "./semaphore.js";
 
-export * from './semaphore.js';
+export * from "./semaphore.js";
 
 /**
  * The provider service (FR-PRV-001..010, Arch §12.2).
@@ -51,7 +51,7 @@ export type RemoveProviderResult =
   | { ok: true }
   | {
       ok: false;
-      reason: 'in_use';
+      reason: "in_use";
       nodeIds: Id[];
       /** The names of the knowledge bases that embed with the provider, when any do. */
       knowledgeBases?: string[];
@@ -72,7 +72,10 @@ export interface ProviderService {
    * `check` stores its verdict the same way, so there is one writer of provider state. A provider
    * removed meanwhile is left alone.
    */
-  recordStatus(id: Id, found: { status: ProviderState; message?: string }): Promise<void>;
+  recordStatus(
+    id: Id,
+    found: { status: ProviderState; message?: string },
+  ): Promise<void>;
   checkAll(): Promise<void>;
   /** Starts the 60 s timer; the returned function stops it. */
   startPeriodicChecks(): () => void;
@@ -81,7 +84,9 @@ export interface ProviderService {
    * FR-MOD-006, D286: ask the provider for its models. When it cannot be asked, `warning` says why;
    * the models it last listed are then kept, marked unavailable — never replaced by a guess.
    */
-  refreshModels(id: Id): Promise<{ models: Model[]; refreshedAt: string; warning?: string }>;
+  refreshModels(
+    id: Id,
+  ): Promise<{ models: Model[]; refreshedAt: string; warning?: string }>;
   listModels(query: ModelQuery): Promise<Model[]>;
   detect(): Promise<ProviderDetectResponse>;
   /** X1 (FR-PRV-008): the terminal scan — installed, version and sign-in per CLI. */
@@ -105,14 +110,16 @@ export interface ProviderServiceDeps {
 }
 
 export class ProviderNotFoundError extends Error {
-  override readonly name = 'ProviderNotFoundError';
+  override readonly name = "ProviderNotFoundError";
 
   constructor(id: Id) {
     super(`Provider ${id} was not found.`);
   }
 }
 
-export function createProviderService(deps: ProviderServiceDeps): ProviderService {
+export function createProviderService(
+  deps: ProviderServiceDeps,
+): ProviderService {
   const { repository, scope, secrets, factory, bus, logger } = deps;
   const now = deps.now ?? (() => new Date().toISOString());
   const nextId = deps.nextId ?? newId;
@@ -155,7 +162,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
 
     // Engine scope: no workflowId, so every client watching the engine sees it (§2.4).
     await bus.emit({
-      type: 'provider.status',
+      type: "provider.status",
       payload: {
         providerId: id,
         status: found.status,
@@ -169,7 +176,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       const timestamp = now();
       const id = nextId();
 
-      if (input.apiKey !== undefined && input.apiKey !== '') {
+      if (input.apiKey !== undefined && input.apiKey !== "") {
         await secrets.set(scope, providerSecretKey(id), input.apiKey);
       }
 
@@ -178,9 +185,9 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         type: input.type,
         name: input.name,
         ...(input.baseUrl === undefined ? {} : { baseUrl: input.baseUrl }),
-        keySet: input.apiKey !== undefined && input.apiKey !== '',
+        keySet: input.apiKey !== undefined && input.apiKey !== "",
         // A provider is UNKNOWN until something has actually asked it (Arch §19.3).
-        status: 'UNKNOWN',
+        status: "UNKNOWN",
         concurrency: input.concurrency,
         ...(isCliProviderType(input.type)
           ? { cliPermission: input.cliPermission ?? DEFAULT_CLI_PERMISSION }
@@ -190,7 +197,10 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       };
 
       await repository.providers.create(scope, provider);
-      logger.info({ subsystem: 'providers', providerId: id, type: input.type }, 'provider added');
+      logger.info(
+        { subsystem: "providers", providerId: id, type: input.type },
+        "provider added",
+      );
 
       /*
        * D286: a CLI provider lists its models by asking the installed CLI, which costs no tokens,
@@ -202,8 +212,8 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
           await service.refreshModels(id);
         } catch (error) {
           logger.warn(
-            { subsystem: 'providers', providerId: id, err: error },
-            'the new CLI provider could not list its models yet',
+            { subsystem: "providers", providerId: id, err: error },
+            "the new CLI provider could not list its models yet",
           );
         }
       }
@@ -225,15 +235,19 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       if (existing === null) return null;
 
       // An `apiKey` in the patch means rotate (§2.1); its absence means leave the key alone.
-      if (patch.apiKey !== undefined && patch.apiKey !== '') {
+      if (patch.apiKey !== undefined && patch.apiKey !== "") {
         await secrets.set(scope, providerSecretKey(id), patch.apiKey);
       }
 
       const updated = await repository.providers.update(scope, id, {
         ...(patch.name === undefined ? {} : { name: patch.name }),
         ...(patch.baseUrl === undefined ? {} : { baseUrl: patch.baseUrl }),
-        ...(patch.concurrency === undefined ? {} : { concurrency: patch.concurrency }),
-        ...(patch.cliPermission === undefined ? {} : { cliPermission: patch.cliPermission }),
+        ...(patch.concurrency === undefined
+          ? {}
+          : { concurrency: patch.concurrency }),
+        ...(patch.cliPermission === undefined
+          ? {}
+          : { cliPermission: patch.cliPermission }),
         ...(patch.apiKey === undefined ? {} : { keySet: true }),
         updatedAt: now(),
       });
@@ -248,18 +262,24 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       const nodes = await repository.nodes.listByProvider(scope, id);
       // A base embeds with its provider for good — the field cannot be changed — so a base counts
       // as a use, and so do the agent and Retrieval nodes reading it (final-review I5).
-      const bases = (await repository.knowledgeBases?.listByEmbeddingProvider(scope, id)) ?? [];
+      const bases =
+        (await repository.knowledgeBases?.listByEmbeddingProvider(scope, id)) ??
+        [];
       const attached = await Promise.all(
         bases.map((kb) => repository.nodes.listByKnowledgeBase(scope, kb.id)),
       );
-      const nodeIds = [...new Set([...nodes, ...attached.flat()].map((node) => node.id))].sort();
+      const nodeIds = [
+        ...new Set([...nodes, ...attached.flat()].map((node) => node.id)),
+      ].sort();
 
       if ((nodeIds.length > 0 || bases.length > 0) && !options.confirm) {
         return {
           ok: false,
-          reason: 'in_use',
+          reason: "in_use",
           nodeIds,
-          ...(bases.length === 0 ? {} : { knowledgeBases: bases.map((kb) => kb.name) }),
+          ...(bases.length === 0
+            ? {}
+            : { knowledgeBases: bases.map((kb) => kb.name) }),
         };
       }
 
@@ -272,12 +292,12 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
 
       logger.info(
         {
-          subsystem: 'providers',
+          subsystem: "providers",
           providerId: id,
           nodes: nodeIds.length,
           knowledgeBases: bases.length,
         },
-        'provider removed',
+        "provider removed",
       );
       return { ok: true };
     },
@@ -297,10 +317,31 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         checkedAt,
       );
 
+      /*
+       * FR-MOD-001: a provider that answers lists its models without anyone pressing Refresh. Only
+       * an empty catalog is filled here — once filled, Refresh is what asks again. Best effort: a
+       * listing that fails leaves the check's answer as it is.
+       */
+      if (
+        status.status === "CONNECTED" &&
+        (await repository.models.list(scope, { providerId: id })).length === 0
+      ) {
+        try {
+          await service.refreshModels(id);
+        } catch (error) {
+          logger.warn(
+            { subsystem: "providers", providerId: id, err: error },
+            "the connected provider could not list its models yet",
+          );
+        }
+      }
+
       return {
         status: status.status,
         ...(status.message === undefined ? {} : { message: status.message }),
-        ...(status.latencyMs === undefined ? {} : { latencyMs: status.latencyMs }),
+        ...(status.latencyMs === undefined
+          ? {}
+          : { latencyMs: status.latencyMs }),
         checkedAt,
       };
     },
@@ -314,8 +355,8 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         } catch (error) {
           // One unreachable provider must not stop the sweep over the others.
           logger.warn(
-            { subsystem: 'providers', providerId: provider.id, err: error },
-            'scheduled provider check failed',
+            { subsystem: "providers", providerId: provider.id, err: error },
+            "scheduled provider check failed",
           );
         }
       }
@@ -344,8 +385,8 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         // the reason is reported, never swallowed (D286).
         warning = maskSecrets(classifyError(error, { providerId: id }).message);
         logger.warn(
-          { subsystem: 'providers', providerId: id, err: error },
-          'model discovery failed; falling back to the manifest',
+          { subsystem: "providers", providerId: id, err: error },
+          "model discovery failed; falling back to the manifest",
         );
       }
 
@@ -354,7 +395,9 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
 
       // Row ids are stable across refreshes, so a node that names a model keeps working.
       const existing = await repository.models.list(scope, { providerId: id });
-      const idByModelId = new Map(existing.map((model) => [model.modelId, model.id]));
+      const idByModelId = new Map(
+        existing.map((model) => [model.modelId, model.id]),
+      );
 
       /*
        * D286: nothing to fall back on — a CLI has no manifest — so the models it last listed stay,
@@ -389,7 +432,9 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
           source: model.source,
           lastCheckedAt: refreshedAt,
           ...(model.pricing === undefined ? {} : { pricing: model.pricing }),
-          ...(model.description === undefined ? {} : { description: model.description }),
+          ...(model.description === undefined
+            ? {}
+            : { description: model.description }),
           ...(model.resolvedModelId === undefined
             ? {}
             : { resolvedModelId: model.resolvedModelId }),
@@ -402,7 +447,11 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       await repository.models.replaceForProvider(scope, id, models);
       await freezePriceTables(models, refreshedAt);
 
-      return { models, refreshedAt, ...(warning === undefined ? {} : { warning }) };
+      return {
+        models,
+        refreshedAt,
+        ...(warning === undefined ? {} : { warning }),
+      };
     },
 
     listModels: (query) => repository.models.list(scope, query),
@@ -421,7 +470,9 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       const existing = gates.get(id);
       if (existing !== undefined) return existing;
 
-      const gate = load(id).then((provider) => createSemaphore(provider.concurrency));
+      const gate = load(id).then((provider) =>
+        createSemaphore(provider.concurrency),
+      );
       gates.set(id, gate);
       // A failed lookup (say, a provider removed mid-dispatch) must not stay cached.
       gate.catch(() => {
@@ -436,7 +487,10 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
    * version it already has, so an old run's estimate can always be recomputed from the table
    * that was in force when it ran.
    */
-  async function freezePriceTables(models: readonly Model[], at: string): Promise<void> {
+  async function freezePriceTables(
+    models: readonly Model[],
+    at: string,
+  ): Promise<void> {
     const byVersion = new Map<
       string,
       Record<string, { inputPer1k: number; outputPer1k: number }>
