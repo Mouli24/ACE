@@ -35,3 +35,4 @@ export * from './builtins/factory.js';
 export * from './mcp/transport.js';
 export * from './mcp/client.js';
 export * from './mcp/manager.js';
+export * from './debate/workspace.js';

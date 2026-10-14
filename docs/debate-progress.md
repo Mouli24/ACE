@@ -69,8 +69,8 @@ Debate is debater nodes arguing a topic over a few rounds, then a judge whose ve
 
 | Phase | State | Commit | Gate |
 |---|---|---|---|
-| 0 Pre-flight | done | (this commit) | docs only; baseline below |
-| 1 Debate engine (headless) | todo | | |
+| 0 Pre-flight | done | 7db5412 | docs only; baseline below |
+| 1 Debate engine (headless) | done | (this commit) | green — see Phase 1 |
 | 2 Falsification script, then STOP | todo | | |
 | 3 Canvas and run engine | todo | | |
 | 4 Domain | todo | | |
@@ -102,6 +102,103 @@ Debate is debater nodes arguing a topic over a few rounds, then a judge whose ve
 | storage-local | 24 | 319 |
 | tools | 42 | 382 + 4 skipped |
 | server | 32 | 191 |
+
+## Phase 1 — the debate engine (headless)
+
+**Done**
+
+- **`packages/contracts/src/debate.ts`:**
+  - the schemas: hub config, debater config, turn, verdict, stats;
+  - the 13 event payloads, plus `debate.failed` (D358: a hub that ends without a verdict);
+  - the limits;
+  - the pure fold `createDebateFold` / `foldDebates` / `foldDebate` (D352).
+  - The events are appended to the run-event union, with the delta transient. The trace-kind map files each one as a `run_event`.
+- **`packages/engine/src/debate/`:**
+  - `runner.ts`: protocol, stopping, failures and repair, budget, guardrails, controls;
+  - `prompts.ts`: the templates verbatim;
+  - `contract.ts`: `lastJsonBlock`, the turn and verdict validators;
+  - `baseline.ts`: openings majority, `changedFromOpenings`;
+  - `budget.ts`: the D354 estimate;
+  - `caller.ts`: router → concurrency gate → adapter, the CLI timeout floor, and an estimate when usage is not reported;
+  - `control.ts`: Judge now, pause, resume, interrupt;
+  - `ports.ts`: workspace, guardrails, budget, hooks.
+  - The record the runner returns is the fold of exactly the events it wrote.
+- **`GenerateRequest.readOnly`** (D359) is honoured by the CLI adapter: the read-only preset in the folder it is given.
+- **`packages/tools/src/debate/workspace.ts`:** the workspace port. Reads are confined by `resolveInsideSandbox`; the sha and dirty flag come from git; each turn gets a scratch folder from `mkdtemp`.
+- **Web:** the Events tab words every debate event and links it to its node, and the observability mock files them. A contract change makes exhaustive switches fail to compile, so these had to go in.
+
+**Test fakes (pre-flight Q5):**
+- `engine/src/debate/__tests__/fake-debate-provider.ts` scripts by call id × attempt. The call id rides `GenerateRequest.turnId` as `<debateId>/<callId>`, so no name is needed.
+- It can reply, fail, hold until aborted, write a file into `workingDir`, and report or withhold usage. It records every prompt, folder, `readOnly` flag and abort.
+
+**Brief tests → where they are** (all in `packages/engine/src/debate/__tests__/` unless noted):
+
+| Brief | Test |
+|---|---|
+| free 3×2 → 11 calls; choice → 10 | protocol.test.ts |
+| converged after round 1; earlyStop off runs all | protocol.test.ts |
+| no opening sees another's; round k holds k−1 only; no names; instruction only in A's next prompt | isolation.test.ts |
+| zero rebuttals → repair → accepted; two invalid → violation, sits out, back next round | contract.test.ts |
+| choice answer not an option; positionChanged without changedBecause; own / missing / wrong-round target (6 cases) | contract.test.ts |
+| choice: engine positionChanged wins (both directions) | contract.test.ts |
+| verdict citing a missing turn → repair → hub CONTRACT_VIOLATION; model stats ignored | contract.test.ts |
+| openingsMajority in code incl. tie; changedFromOpenings both ways; openingsVerdict; baseline prompt openings only | baseline.test.ts |
+| retry then success; two failures → out; 1 left → RUN_FAILED, partial record | stopping.test.ts |
+| Judge now mid-round; budget stop; refusal before start; USD caps; pause → zero calls | stopping.test.ts |
+| temp cwd per turn, read-only, deleted; snapshot unchanged by an edit; >100,000 refused, zero calls; truncation | workspace-record.test.ts |
+| replay reproduces the record exactly | workspace-record.test.ts |
+| git status unchanged after a debater writes a file | `apps/server/src/__tests__/debate-workspace.test.ts` (real git, real tools workspace) |
+| D355 guardrails (mask input, mask reply, block a turn, block the verdict, block material) | workspace-record.test.ts |
+| D353 node states; usage per node | protocol.test.ts, contract.test.ts |
+
+- **Mutation checks**, each reverted afterwards. Every mutation turned exactly the expected tests red:
+  - turning off the truncation broke 2 tests;
+  - letting a debater cite its own turn broke 2;
+  - turning off the early stop broke 2;
+  - running the turn in the project folder broke the server workspace test.
+
+**Choices made while building** (all inside D343–D359):
+- A rebuttal prompt restates "You are debater X." The brief's template leaves the label to "as above", and a stateless call cannot know its own turn otherwise.
+- The rebuttal and judge prompts repeat the `Answer:` format line, because choice mode is invalid without it.
+- **What the judge sees:**
+  - its FINAL ROUND is each debater's latest valid turn (which covers a partial round after "Judge now");
+  - everything else goes in EARLIER ROUNDS;
+  - reasoning shown to the judge is capped at 6000 characters too, since the judge is one of the "others".
+- **When the last round also converged,** `converged` wins over `max_rounds`.
+- **The baseline judge runs after the verdict.** If it fails, only `openingsVerdict` is lost, never the verdict.
+- **When the openings tie,** `changedFromOpenings` is left out.
+- **The routing fallback chain is not walked** by a debate call. A CLI failure is retried once on the same model (DB11).
+- **Refusals before any call** use these codes:
+  - `debate_reads_too_large`, `debate_read_failed` and `debate_reads_without_folder` (BLOCKED);
+  - `debate_budget_too_low` (BLOCKED);
+  - `debate_input_blocked` (GUARDRAIL_VIOLATION).
+
+**Gate 1, 2026-10-14.** All green:
+- `pnpm --filter "./packages/**" build`: exit 0.
+- `pnpm typecheck`: exit 0.
+- `pnpm lint`: exit 0. It was rerun after two Debate lint fixes and one comment move in the web mock.
+- `pnpm -r --workspace-concurrency=1 --no-bail test`. The engine was rerun after adding the debate types to `trace-usage.test.ts`'s every-event script, and tools and web after the lint fixes.
+
+| Package | Files | Tests | vs baseline |
+|---|---|---|---|
+| contracts | 30 | 1304 | +48 |
+| engine | 133 | 1946 | +80 |
+| sdk | 16 | 167 | — |
+| ui | 13 | 278 | — |
+| web | 186 | 1637 | +1 |
+| context | 4 | 52 | — |
+| guardrails | 18 | 357 | — |
+| providers | 21 | 448 + 1 skipped + 3 todo | +1 |
+| storage-local | 24 | 319 | — |
+| tools | 43 | 388 + 4 skipped | +6 |
+| server | 33 | 192 | +1 |
+
+**Engine coverage:** all files 92.98 statements / 85.12 branches / 94.31 functions / 95.24 lines. `src/debate` is 90.96 / 80.13 / 93.93 / 94.84.
+
+**Deliberate changes to existing tests:**
+- `events.test.ts`: the event-type list and the transient list, with one fixture per debate frame (`debate-frames.ts`).
+- `trace-usage.test.ts`: the every-event script and its labels.
+- `EventsTab.test.tsx`: one entry per debate type, and the Reviewer filter now also shows debater B's three debate rows.
 
 ## Open decisions
 

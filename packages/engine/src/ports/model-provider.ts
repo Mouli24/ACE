@@ -102,6 +102,11 @@ export interface GenerateRequest {
    * CLI) reads it; without it such a provider runs read-only in a fresh temp folder.
    */
   workingDir?: string;
+  /**
+   * D359: run read-only even in `workingDir`. A debate turn sets it, so a coding-agent CLI gets its
+   * `read_only` preset in the scratch folder it is given rather than the provider's own.
+   */
+  readOnly?: boolean;
 }
 
 /**

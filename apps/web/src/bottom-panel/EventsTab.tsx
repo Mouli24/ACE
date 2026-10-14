@@ -1,4 +1,11 @@
-import { type Id, type LoopStopReason, type RunEvent, type Timestamp } from '@ace/contracts';
+import {
+  type DebateControlAction,
+  type DebateStoppedBy,
+  type Id,
+  type LoopStopReason,
+  type RunEvent,
+  type Timestamp,
+} from '@ace/contracts';
 import {
   NODE_STATE_META,
   Select,
@@ -102,8 +109,41 @@ export function eventNodeIds(
       return [event.payload.fromNodeId, ...event.payload.toNodeIds];
     case 'run.blocked':
       return event.payload.nodeIds ?? [];
+    /* Debate (D352): the hub's record. A turn names the debater it belongs to. */
+    case 'debate.started':
+      return [event.payload.hubNodeId, ...event.payload.debaters.map((debater) => debater.nodeId)];
+    case 'debate.turn_started':
+    case 'debate.turn_completed':
+    case 'debate.turn_failed':
+    case 'debate.turn_violation':
+    case 'debate.instruction_delivered':
+      return [event.payload.nodeId];
+    case 'debate.round_started':
+    case 'debate.round_completed':
+    case 'debate.control':
+    case 'debate.stopped':
+    case 'debate.verdict':
+    case 'debate.failed':
+      return [];
   }
 }
+
+/** DB10's stop reasons, in words. */
+const DEBATE_STOPPED_LABEL: Readonly<Record<DebateStoppedBy, string>> = {
+  max_rounds: 'it reached its last round',
+  converged: 'no debater changed position',
+  human_end: 'you asked the judge to decide now',
+  budget: 'the budget would not cover another round and the judge',
+  failures: 'fewer than two debaters were left',
+};
+
+const DEBATE_CONTROL_LABEL: Readonly<Record<DebateControlAction, string>> = {
+  pause_after_round: 'you asked the debate to pause after this round',
+  resume: 'you resumed the debate',
+  judge_now: 'you asked the judge to decide now',
+};
+
+const roundName = (round: number): string => (round === 0 ? 'openings' : `round ${round}`);
 
 /** The text colour of an event row: the node's state colour for state changes, red for errors. */
 function eventTone(event: PersistedRunEvent): string {
@@ -215,6 +255,50 @@ export function describeEvent(event: PersistedRunEvent, nameOf: (nodeId: Id) => 
       return event.payload.graph === 'complete'
         ? 'the graph finished — the run stays open'
         : 'the graph stopped with failures — the run stays open';
+    /* Debate (D352). */
+    case 'debate.started': {
+      const { debaters, config } = event.payload;
+      return `debate started — ${debaters.length} debaters, up to ${config.maxRounds} rounds: ${config.topic}`;
+    }
+    case 'debate.round_started':
+      return `${roundName(event.payload.round)} started — ${event.payload.labels.join(', ')}`;
+    case 'debate.turn_started': {
+      const { nodeId, callId, kind } = event.payload;
+      return `${nameOf(nodeId)} — ${callId} ${kind === 'turn' ? 'started' : `${kind} started`}`;
+    }
+    case 'debate.turn_completed': {
+      const { nodeId, turn } = event.payload;
+      const changed =
+        turn.changedBecause === null ? '' : ` · changed mind because of ${turn.changedBecause.turnId}`;
+      return `${nameOf(nodeId)} — ${turn.turnId}: ${turn.answer} (confidence ${turn.confidence})${changed}`;
+    }
+    case 'debate.turn_failed': {
+      const { nodeId, callId, reason, willRetry, out } = event.payload;
+      const then = willRetry ? ' · retrying once' : out ? ' · out of the debate' : '';
+      return `${nameOf(nodeId)} — ${callId} failed: ${reason}${then}`;
+    }
+    case 'debate.turn_violation': {
+      const { nodeId, callId, errors, willRepair } = event.payload;
+      return `${nameOf(nodeId)} — ${callId} broke the turn contract: ${errors.join('; ')}${
+        willRepair ? ' · asked to repair it' : ' · sits out this round'
+      }`;
+    }
+    case 'debate.instruction_delivered': {
+      const { nodeId, callId, text } = event.payload;
+      return `your message reached ${nameOf(nodeId)} in ${callId}: ${text}`;
+    }
+    case 'debate.round_completed':
+      return `${roundName(event.payload.round)} done — ${event.payload.changedCount} changed position`;
+    case 'debate.control':
+      return DEBATE_CONTROL_LABEL[event.payload.action];
+    case 'debate.stopped':
+      return `debate stopped — ${DEBATE_STOPPED_LABEL[event.payload.stoppedBy]}`;
+    case 'debate.verdict': {
+      const { verdict } = event.payload;
+      return `verdict: ${verdict.answer} (confidence ${verdict.confidence}) · ${verdict.stats.tokens} tokens`;
+    }
+    case 'debate.failed':
+      return `debate failed — ${event.payload.failureReason}: ${event.payload.message}`;
   }
 }
 

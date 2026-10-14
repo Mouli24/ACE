@@ -15,6 +15,8 @@ const REQUEST = '01HRZ3NDEKTSV4RRFFQ69G5FAV';
 const VERDICT = '01JRZ3NDEKTSV4RRFFQ69G5FAV';
 const TOOL_CALL = '01KRZ3NDEKTSV4RRFFQ69G5FAV';
 const MESSAGE = '01MRZ3NDEKTSV4RRFFQ69G5FAV';
+const DEBATE = '01NRZ3NDEKTSV4RRFFQ69G5FAV';
+const HUB = '01PRZ3NDEKTSV4RRFFQ69G5FAV';
 
 const NODES = [
   { id: WRITER, name: 'Writer' },
@@ -316,7 +318,131 @@ const ENTRIES: RunEventEntry[] = [
     },
   },
   { event: { type: 'run.parked', seq: 25, payload: { runId: RUN, graph: 'complete' } } },
+  /* Debate (D352): every persisted debate type words itself too. */
+  {
+    event: {
+      type: 'debate.started',
+      seq: 26,
+      payload: {
+        runId: RUN,
+        debateId: DEBATE,
+        hubNodeId: HUB,
+        config: { topic: 'Which cache?', answerFormat: 'free', maxRounds: 2, earlyStop: true, baselineJudge: true },
+        debaters: [
+          { label: 'A', nodeId: WRITER },
+          { label: 'B', nodeId: REVIEWER },
+        ],
+        readsSnapshot: { sha: null, dirty: false, files: [] },
+      },
+    },
+  },
+  { event: { type: 'debate.round_started', seq: 27, payload: { runId: RUN, debateId: DEBATE, round: 0, labels: ['A', 'B'] } } },
+  {
+    event: {
+      type: 'debate.turn_started',
+      seq: 28,
+      payload: { runId: RUN, debateId: DEBATE, callId: 'R0-A', nodeId: WRITER, attempt: 1, kind: 'turn' },
+    },
+  },
+  {
+    event: {
+      type: 'debate.turn_completed',
+      seq: 29,
+      payload: {
+        runId: RUN,
+        debateId: DEBATE,
+        nodeId: WRITER,
+        turn: {
+          turnId: 'R0-A',
+          round: 0,
+          label: 'A',
+          answer: 'Redis',
+          confidence: 0.6,
+          reasoning: 'Shared across instances.',
+          rebuttals: [],
+          positionChanged: false,
+          changedBecause: null,
+        },
+        usage: zeroUsage(),
+        durationMs: 10,
+      },
+    },
+  },
+  {
+    event: {
+      type: 'debate.turn_failed',
+      seq: 30,
+      payload: {
+        runId: RUN,
+        debateId: DEBATE,
+        callId: 'R0-B',
+        nodeId: REVIEWER,
+        reason: 'The CLI exited with code 1.',
+        failureReason: 'RUN_FAILED',
+        willRetry: false,
+        out: true,
+        usage: zeroUsage(),
+      },
+    },
+  },
+  {
+    event: {
+      type: 'debate.turn_violation',
+      seq: 31,
+      payload: {
+        runId: RUN,
+        debateId: DEBATE,
+        callId: 'R0-B',
+        nodeId: REVIEWER,
+        errors: ['no fenced json block'],
+        willRepair: false,
+        usage: zeroUsage(),
+      },
+    },
+  },
+  {
+    event: {
+      type: 'debate.instruction_delivered',
+      seq: 32,
+      payload: { runId: RUN, debateId: DEBATE, nodeId: WRITER, callId: 'R1-A', messageId: MESSAGE, text: 'Mind the cost.' },
+    },
+  },
+  { event: { type: 'debate.round_completed', seq: 33, payload: { runId: RUN, debateId: DEBATE, round: 1, changedCount: 2 } } },
+  { event: { type: 'debate.control', seq: 34, payload: { runId: RUN, debateId: DEBATE, action: 'judge_now' } } },
+  { event: { type: 'debate.stopped', seq: 35, payload: { runId: RUN, debateId: DEBATE, stoppedBy: 'converged' } } },
+  {
+    event: {
+      type: 'debate.verdict',
+      seq: 36,
+      payload: {
+        runId: RUN,
+        debateId: DEBATE,
+        verdict: {
+          answer: 'Redis',
+          confidence: 0.7,
+          rationale: [{ point: 'Shared state wins.', supportedBy: ['R0-A'] }],
+          dissent: [],
+          openQuestions: [],
+          stats: { debateId: DEBATE, rounds: 1, stoppedBy: 'converged', turns: 3, violations: 1, tokens: 1234 },
+        },
+        usage: zeroUsage(),
+      },
+    },
+  },
+  {
+    event: {
+      type: 'debate.failed',
+      seq: 37,
+      payload: { runId: RUN, debateId: DEBATE, failureReason: 'RUN_FAILED', message: 'Only one debater is left.' },
+    },
+  },
 ];
+
+const byType = (type: string) => {
+  const found = ENTRIES.find((entry) => entry.event.type === type);
+  if (found === undefined) throw new Error(`no entry for ${type}`);
+  return found.event;
+};
 
 describe('Events tab — the run, in order (round 3 §5 item 7, NFR-OBS-01)', () => {
   it('covers every persisted event type the contract declares', () => {
@@ -327,6 +453,35 @@ describe('Events tab — the run, in order (round 3 §5 item 7, NFR-OBS-01)', ()
     for (const { event } of ENTRIES) {
       expect(describeEvent(event, () => 'Writer').trim().length).toBeGreaterThan(3);
     }
+  });
+
+  it('words a debate: turns, failures, violations, instructions and the verdict (D352)', () => {
+    const name = (id: string) => (id === WRITER ? 'Writer' : 'Reviewer');
+    expect(describeEvent(byType('debate.started'), name)).toBe(
+      'debate started — 2 debaters, up to 2 rounds: Which cache?',
+    );
+    expect(describeEvent(byType('debate.round_started'), name)).toBe('openings started — A, B');
+    expect(describeEvent(byType('debate.turn_completed'), name)).toBe(
+      'Writer — R0-A: Redis (confidence 0.6)',
+    );
+    expect(describeEvent(byType('debate.turn_failed'), name)).toBe(
+      'Reviewer — R0-B failed: The CLI exited with code 1. · out of the debate',
+    );
+    expect(describeEvent(byType('debate.turn_violation'), name)).toBe(
+      'Reviewer — R0-B broke the turn contract: no fenced json block · sits out this round',
+    );
+    expect(describeEvent(byType('debate.instruction_delivered'), name)).toBe(
+      'your message reached Writer in R1-A: Mind the cost.',
+    );
+    expect(describeEvent(byType('debate.round_completed'), name)).toBe(
+      'round 1 done — 2 changed position',
+    );
+    expect(describeEvent(byType('debate.stopped'), name)).toBe(
+      'debate stopped — no debater changed position',
+    );
+    expect(describeEvent(byType('debate.verdict'), name)).toBe(
+      'verdict: Redis (confidence 0.7) · 1234 tokens',
+    );
   });
 
   it('lists state changes, verdicts, approvals, loop iterations and the halt, in seq order', () => {
@@ -404,7 +559,8 @@ describe('Events tab — the run, in order (round 3 §5 item 7, NFR-OBS-01)', ()
     await user.click(await screen.findByRole('option', { name: 'Reviewer' }));
 
     // The Reviewer's own events: the transfer into it, its approval request and decision, its error,
-    // the FLAG it sent and the loop guard that named it (D303).
+    // the FLAG it sent and the loop guard that named it (D303), and, as debater B, the debate that
+    // named it and its own failed and broken turns (D352).
     const types = within(screen.getByTestId('events-list'))
       .getAllByRole('listitem')
       .map((row) => row.getAttribute('data-type'));
@@ -415,6 +571,9 @@ describe('Events tab — the run, in order (round 3 §5 item 7, NFR-OBS-01)', ()
       'node.error',
       'envelope.sent',
       'run.blocked',
+      'debate.started',
+      'debate.turn_failed',
+      'debate.turn_violation',
     ]);
     // The Writer's state change is not the Reviewer's business, and neither is the run's own halt,
     // the Writer's tool call, or a timeline message that names no node.
@@ -422,7 +581,7 @@ describe('Events tab — the run, in order (round 3 §5 item 7, NFR-OBS-01)', ()
     expect(screen.queryByTestId('event-14')).not.toBeInTheDocument();
     expect(screen.queryByTestId('event-15')).not.toBeInTheDocument();
     expect(screen.queryByTestId('event-16')).not.toBeInTheDocument();
-    expect(screen.getByTestId('events-count')).toHaveTextContent('6 events');
+    expect(screen.getByTestId('events-count')).toHaveTextContent('9 events');
   });
 
   it('can point at the node a row is about', async () => {

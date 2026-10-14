@@ -37,6 +37,8 @@ export * from './usage/index.js';
 export * from './templates/service.js';
 export * from './backup/index.js';
 export * from './domain/index.js';
+/* Debate (D340–D359) */
+export * from './debate/index.js';
 
 /* IDE (D299): Forge's project files. */
 export * from './workspace/service.js';

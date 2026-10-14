@@ -180,7 +180,9 @@ export function createCliAdapter(dialect: CliDialect, options: CliAdapterOptions
         // No project folder (direct chat, a summary): a throwaway folder, read-only (spec §4.2).
         const scratch = req.workingDir === undefined ? mkdtempSync(join(tmpdir(), 'ace-cli-')) : undefined;
         const cwd = req.workingDir ?? (scratch as string);
-        const permission: CliPermission = scratch === undefined ? options.permission : 'read_only';
+        // D359: a debate turn brings its own scratch folder and asks for read-only in it.
+        const permission: CliPermission =
+          scratch === undefined && req.readOnly !== true ? options.permission : 'read_only';
 
         const run = runCli({
           command: command.command,

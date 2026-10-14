@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { DEBATE_FRAMES } from './debate-frames.js';
+
 import {
   EDGE_TRANSFER_SUMMARY_MAX,
   ENGINE_EVENT_TYPES,
@@ -276,6 +278,8 @@ const frames: Record<string, { type: string; payload: unknown; seq?: number }> =
     seq: 37,
   },
   'run.parked': { type: 'run.parked', payload: { runId: RUN_ID, graph: 'complete' }, seq: 38 },
+  /* Debate (D352) */
+  ...DEBATE_FRAMES,
 };
 
 /** One valid frame per thread event type (round 4 §2.5). */
@@ -296,7 +300,7 @@ const payloadOf = (type: string): Record<string, unknown> => {
 };
 
 describe('FR-EXE-014 RunEvent covers every type of round 2 §2.4 and round 3 §2.6', () => {
-  it('declares exactly the run event types: sixteen through round 5 (D230), then the nine Domain adds (D303)', () => {
+  it('declares exactly the run event types: sixteen through round 5 (D230), the nine Domain adds (D303), then the thirteen of Debate (D352)', () => {
     expect([...RUN_EVENT_TYPES]).toEqual([
       'run.started',
       'run.completed',
@@ -323,6 +327,19 @@ describe('FR-EXE-014 RunEvent covers every type of round 2 §2.4 and round 3 §2
       'run.config',
       'run.blocked',
       'run.parked',
+      'debate.started',
+      'debate.round_started',
+      'debate.turn_started',
+      'debate.turn_delta',
+      'debate.turn_completed',
+      'debate.turn_failed',
+      'debate.turn_violation',
+      'debate.instruction_delivered',
+      'debate.round_completed',
+      'debate.control',
+      'debate.stopped',
+      'debate.verdict',
+      'debate.failed',
     ]);
   });
 
@@ -353,6 +370,7 @@ describe('§2.4 node.token is transient, and round 4 §2.5 chat.token with it', 
       'process.output',
       'process.exited',
       'checkpoint.updated',
+      'debate.turn_delta',
     ]);
     expect([...PROJECT_EVENT_TYPES]).toEqual([
       'files.changed',
@@ -361,7 +379,8 @@ describe('§2.4 node.token is transient, and round 4 §2.5 chat.token with it', 
       'checkpoint.updated',
     ]);
     expect([...PERSISTED_RUN_EVENT_TYPES]).not.toContain('node.token');
-    expect(PERSISTED_RUN_EVENT_TYPES).toHaveLength(RUN_EVENT_TYPES.length - 1);
+    expect([...PERSISTED_RUN_EVENT_TYPES]).not.toContain('debate.turn_delta');
+    expect(PERSISTED_RUN_EVENT_TYPES).toHaveLength(RUN_EVENT_TYPES.length - 2);
     expect([...PERSISTED_THREAD_EVENT_TYPES]).toEqual(['chat.message']);
   });
 

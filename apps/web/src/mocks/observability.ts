@@ -232,7 +232,7 @@ export function buildTrace(db: MockDb, run: Run): TraceEntry[] {
         case 'message.created':
           label = `Message: ${payload.message?.type ?? 'message'}`;
           break;
-        /* Domain (D303): the mock engine emits none of these yet; a run that has one reads by type. */
+        /* Domain (D303) and Debate (D352): the mock engine emits none of these yet; a run that has one reads by type. */
         case 'human.message':
         case 'instruction.state':
         case 'envelope.sent':
@@ -242,6 +242,18 @@ export function buildTrace(db: MockDb, run: Run): TraceEntry[] {
         case 'run.config':
         case 'run.blocked':
         case 'run.parked':
+        case 'debate.started':
+        case 'debate.round_started':
+        case 'debate.turn_started':
+        case 'debate.turn_completed':
+        case 'debate.turn_failed':
+        case 'debate.turn_violation':
+        case 'debate.instruction_delivered':
+        case 'debate.round_completed':
+        case 'debate.control':
+        case 'debate.stopped':
+        case 'debate.verdict':
+        case 'debate.failed':
           label = type;
           break;
       }

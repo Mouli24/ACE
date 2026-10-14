@@ -136,6 +136,19 @@ const script: [string, unknown, number][] = [
   ['run.token_budget', { runId: RUN, limit: 100, used: 90, level: 'WARN' }, 687],
   ['run.blocked', { runId: RUN, reason: 'LOOP_GUARD', detail: 'd' }, 688],
   ['run.parked', { runId: RUN, graph: 'complete' }, 689],
+  /* Debate (D352): the hub's record rides the run's log; each type is a run_event entry. */
+  ['debate.started', { runId: RUN, debateId: NODE_RUN }, 690],
+  ['debate.round_started', { runId: RUN, debateId: NODE_RUN }, 690.1],
+  ['debate.turn_started', { runId: RUN, debateId: NODE_RUN }, 690.2],
+  ['debate.turn_completed', { runId: RUN, debateId: NODE_RUN }, 690.3],
+  ['debate.turn_failed', { runId: RUN, debateId: NODE_RUN }, 690.4],
+  ['debate.turn_violation', { runId: RUN, debateId: NODE_RUN }, 690.5],
+  ['debate.instruction_delivered', { runId: RUN, debateId: NODE_RUN }, 690.6],
+  ['debate.round_completed', { runId: RUN, debateId: NODE_RUN }, 690.7],
+  ['debate.control', { runId: RUN, debateId: NODE_RUN }, 690.8],
+  ['debate.stopped', { runId: RUN, debateId: NODE_RUN }, 690.9],
+  ['debate.verdict', { runId: RUN, debateId: NODE_RUN }, 691],
+  ['debate.failed', { runId: RUN, debateId: NODE_RUN }, 691.1],
   ['run.completed', { runId: RUN, status: 'COMPLETE', totals: usage }, 700],
 ];
 
@@ -223,6 +236,18 @@ describe('FR-OBS-001 kinds, labels and durations', () => {
       'run.token_budget',
       'run.blocked',
       'run.parked',
+      'debate.started',
+      'debate.round_started',
+      'debate.turn_started',
+      'debate.turn_completed',
+      'debate.turn_failed',
+      'debate.turn_violation',
+      'debate.instruction_delivered',
+      'debate.round_completed',
+      'debate.control',
+      'debate.stopped',
+      'debate.verdict',
+      'debate.failed',
       'run.completed',
     ]);
   });

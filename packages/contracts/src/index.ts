@@ -44,3 +44,5 @@ export * from './workspace.js';
 export * from './checkpoints.js';
 /* Domain (D303–D327) */
 export * from './domain.js';
+/* Debate (D340–D359) */
+export * from './debate.js';

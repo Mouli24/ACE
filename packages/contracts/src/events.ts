@@ -21,6 +21,21 @@ import {
   RunTokenBudgetPayloadSchema,
   TurnTriggerSchema,
 } from './domain.js';
+import {
+  DebateControlPayloadSchema,
+  DebateFailedPayloadSchema,
+  DebateInstructionDeliveredPayloadSchema,
+  DebateRoundCompletedPayloadSchema,
+  DebateRoundStartedPayloadSchema,
+  DebateStartedPayloadSchema,
+  DebateStoppedPayloadSchema,
+  DebateTurnCompletedPayloadSchema,
+  DebateTurnDeltaPayloadSchema,
+  DebateTurnFailedPayloadSchema,
+  DebateTurnStartedPayloadSchema,
+  DebateTurnViolationPayloadSchema,
+  DebateVerdictPayloadSchema,
+} from './debate.js';
 import { PartSchema } from './envelope.js';
 import { IdSchema, LoopStopReasonSchema, TimestampSchema } from './graph.js';
 import { ApprovalDecisionSchema, ApprovalRequestSchema, VerdictSchema } from './guardrails.js';
@@ -348,6 +363,20 @@ export const RUN_EVENT_FRAME_SCHEMAS = [
   persistedFrame('run.config', RunConfigPayloadSchema),
   persistedFrame('run.blocked', RunBlockedPayloadSchema),
   persistedFrame('run.parked', RunParkedPayloadSchema),
+  /* Debate (D352) — the record is a fold of these; only the delta is transient (D358). */
+  persistedFrame('debate.started', DebateStartedPayloadSchema),
+  persistedFrame('debate.round_started', DebateRoundStartedPayloadSchema),
+  persistedFrame('debate.turn_started', DebateTurnStartedPayloadSchema),
+  transientFrame('debate.turn_delta', DebateTurnDeltaPayloadSchema),
+  persistedFrame('debate.turn_completed', DebateTurnCompletedPayloadSchema),
+  persistedFrame('debate.turn_failed', DebateTurnFailedPayloadSchema),
+  persistedFrame('debate.turn_violation', DebateTurnViolationPayloadSchema),
+  persistedFrame('debate.instruction_delivered', DebateInstructionDeliveredPayloadSchema),
+  persistedFrame('debate.round_completed', DebateRoundCompletedPayloadSchema),
+  persistedFrame('debate.control', DebateControlPayloadSchema),
+  persistedFrame('debate.stopped', DebateStoppedPayloadSchema),
+  persistedFrame('debate.verdict', DebateVerdictPayloadSchema),
+  persistedFrame('debate.failed', DebateFailedPayloadSchema),
 ] as const;
 
 /**
@@ -425,6 +454,19 @@ export const RUN_EVENT_TYPES = [
   'run.config',
   'run.blocked',
   'run.parked',
+  'debate.started',
+  'debate.round_started',
+  'debate.turn_started',
+  'debate.turn_delta',
+  'debate.turn_completed',
+  'debate.turn_failed',
+  'debate.turn_violation',
+  'debate.instruction_delivered',
+  'debate.round_completed',
+  'debate.control',
+  'debate.stopped',
+  'debate.verdict',
+  'debate.failed',
 ] as const;
 export type RunEventType = (typeof RUN_EVENT_TYPES)[number];
 
@@ -455,6 +497,7 @@ export const TRANSIENT_EVENT_TYPES = [
   'process.output',
   'process.exited',
   'checkpoint.updated',
+  'debate.turn_delta',
 ] as const;
 export type TransientEventType = (typeof TRANSIENT_EVENT_TYPES)[number];
 

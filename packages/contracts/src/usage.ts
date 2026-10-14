@@ -132,6 +132,19 @@ export const TRACE_ENTRY_KIND_BY_EVENT_TYPE = {
   'run.config': 'run_event',
   'run.blocked': 'run_event',
   'run.parked': 'run_event',
+  /* Debate (D352): the hub's own record; a turn is not a node run of its own. */
+  'debate.started': 'run_event',
+  'debate.round_started': 'run_event',
+  'debate.turn_started': 'run_event',
+  'debate.turn_completed': 'run_event',
+  'debate.turn_failed': 'run_event',
+  'debate.turn_violation': 'run_event',
+  'debate.instruction_delivered': 'run_event',
+  'debate.round_completed': 'run_event',
+  'debate.control': 'run_event',
+  'debate.stopped': 'run_event',
+  'debate.verdict': 'run_event',
+  'debate.failed': 'run_event',
 } as const satisfies Record<PersistedRunEventType, TraceEntryKind>;
 
 /**

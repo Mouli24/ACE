@@ -255,6 +255,22 @@ describe('X1 the Claude Code adapter end to end, against a fake CLI', () => {
     expect(existsSync(seen.cwd)).toBe(false);
   });
 
+  it('D359 a readOnly call runs read-only in the folder it is given, whatever the provider allows', async () => {
+    const echo = join(dir, 'echo-readonly.json');
+    const scratch = mkdtempSync(join(dir, 'debate-turn-'));
+    await drain(
+      fakeAdapter({ FAKE_CLI_MODE: 'echo-stdin', FAKE_CLI_ECHO_FILE: echo }, 'full_auto').generate(
+        { modelId: 'haiku', prompt: 'turn', outputTypes: ['text'], workingDir: scratch, readOnly: true },
+        new AbortController().signal,
+      ),
+    ).catch(() => undefined);
+    const seen = JSON.parse(readFileSync(echo, 'utf8')) as { argv: string[]; cwd: string };
+    expect(seen.cwd).toBe(scratch);
+    expect(seen.argv).toEqual(expect.arrayContaining(['--permission-mode', 'dontAsk', '--tools', 'Read,Grep,Glob']));
+    // The folder is the caller's: the adapter does not delete it.
+    expect(existsSync(scratch)).toBe(true);
+  });
+
   it('refuses a project folder that does not exist', async () => {
     const error = await drain(
       fakeAdapter({ FAKE_CLI_MODE: 'echo-stdin' }).generate(
