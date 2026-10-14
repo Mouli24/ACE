@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -19,10 +20,11 @@ beforeEach(() => {
   project = join(root, 'demo project');
   mkdirSync(join(project, 'sub'), { recursive: true });
 });
-afterEach(() => {
+afterEach(async () => {
   for (const cleanup of cleanups) cleanup();
   cleanups = [];
-  rmSync(root, { recursive: true, force: true, maxRetries: 40, retryDelay: 50 });
+  // fs/promises' rm retries EPERM while Windows releases a killed process's handle on the folder.
+  await rm(root, { recursive: true, force: true, maxRetries: 40, retryDelay: 50 });
 });
 
 const ctx = (extra: { signal?: AbortSignal; session?: AgentSession } = {}) => {

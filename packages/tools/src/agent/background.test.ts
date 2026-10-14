@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,7 +13,7 @@ const platform = process.platform;
 const shell = resolveAgentShell({ platform, env: process.env });
 const env = agentEnv(process.env, platform);
 const workspace = mkdtempSync(join(tmpdir(), 'ace-bg-'));
-afterAll(() => rmSync(workspace, { recursive: true, force: true, maxRetries: 40, retryDelay: 50 }));
+afterAll(() => rm(workspace, { recursive: true, force: true, maxRetries: 40, retryDelay: 50 }));
 
 /** A node one-liner for bash (Windows Git Bash or POSIX) or PowerShell, with forward-slash paths. */
 const node = (script: string) => {
