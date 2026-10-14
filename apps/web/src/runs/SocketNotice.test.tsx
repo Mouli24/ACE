@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { SocketNotice } from './SocketNotice';
 
-describe('the run bar says what is wrong with the connection', () => {
+describe('the connection indicator says what is wrong with the connection', () => {
   it('says reconnecting while the socket retries (FR-EXE-014)', () => {
     render(<SocketNotice status="reconnecting" />);
     expect(screen.getByTestId('socket-reconnecting')).toHaveTextContent('reconnecting…');

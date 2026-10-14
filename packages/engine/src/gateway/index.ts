@@ -51,6 +51,8 @@ import type { ApprovalService } from '../approvals/index.js';
 import { createApprovalRoutes } from '../approvals/routes.js';
 import { createGuardrailRoutes, type PolicyService } from '../guardrails/index.js';
 import { createRunControlRoutes, type RunControls, type RunService } from '../runs/index.js';
+import { createDomainRoutes } from '../domain/routes.js';
+import type { DomainService } from '../domain/service.js';
 import type { BackupService } from '../backup/index.js';
 import { createBackupRoutes } from '../backup/routes.js';
 import { createKnowledgeRoutes } from '../knowledge/routes.js';
@@ -124,6 +126,8 @@ export interface EngineDeps {
 
   /** `POST /runs/:id/pause` · `/resume` · `/stop` · `/restart`, retry and re-run (FR-CTL-001..006). */
   controls?: RunControls;
+  /** Domain (D309, D323): `POST /runs/:runId/messages` and `/end`. */
+  domain?: DomainService;
   /** `/guardrail-policies` (FR-GRD-001, FR-GRD-010). */
   guardrailPolicies?: PolicyService;
   /** `/runs/:id/approvals`, `/node-runs/:id/approve` and `/reject` (FR-GRD-013). */
@@ -222,9 +226,10 @@ function corsLayer(deps: EngineDeps): MiddlewareHandler<{ Variables: EngineVaria
     // origin added to settings would otherwise pass the guard and still be blocked by the browser.
     origin: async (origin) =>
       origin !== '' && (await isOriginAllowed(deps, origin)) ? origin : null,
-    // PUT: Forge's save (D299).
+    // PUT: Forge's save (D299) and Domain's budget (D313).
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization', 'x-request-id'],
+    // Last-Event-ID: Domain's stream resumes where it stopped (D314).
+    allowHeaders: ['Content-Type', 'Authorization', 'x-request-id', 'Last-Event-ID'],
     maxAge: 600,
   });
 }
@@ -829,6 +834,10 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.route(
     '/',
     createRunControlRoutes(() => deps.controls),
+  );
+  api.route(
+    '/',
+    createDomainRoutes(() => deps.domain),
   );
   api.route('/', createGuardrailRoutes(deps.guardrailPolicies));
   api.route('/', createApprovalRoutes(deps.approvals));
