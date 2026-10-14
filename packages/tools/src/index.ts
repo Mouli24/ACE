@@ -21,6 +21,14 @@ export * from './checkpoints/run-store-git.js';
 
 export * from './search/backends.js';
 
+/* Agentic nodes, Phase 1: the command runner's shell, env, output cap, background processes, changes. */
+export * from './agent/session.js';
+export * from './agent/shell.js';
+export * from './agent/env.js';
+export * from './agent/output.js';
+export * from './agent/background.js';
+export * from './agent/changes.js';
+
 export * from './builtins/echo.js';
 export * from './builtins/code-sandbox.js';
 export * from './builtins/sandbox-delete.js';
@@ -30,6 +38,7 @@ export * from './builtins/web-fetch.js';
 export * from './builtins/project-files.js';
 export * from './builtins/git.js';
 export * from './builtins/run-command.js';
+export * from './builtins/background-tools.js';
 export * from './builtins/factory.js';
 
 export * from './mcp/transport.js';
