@@ -1,5 +1,6 @@
 import { type Scope } from '@ace/engine';
 
+import { type AgentSession } from './agent/session.js';
 import { type ToolLogger } from './logging.js';
 
 /**
@@ -22,6 +23,13 @@ export interface ToolContext {
    * when the run has no project folder; those tools then refuse.
    */
   readonly projectDir?: string;
+  /** The node making the call. With `session`, it keys the read-before-edit rule (agentic nodes). */
+  readonly nodeId?: string;
+  /**
+   * Agentic nodes: what the run's nodes share — reads, write locks, background commands. Absent
+   * (chat turns, older callers), the project tools behave as before this feature.
+   */
+  readonly session?: AgentSession;
   readonly logger: ToolLogger;
   /** Aborted when the run is stopped, so a tool cancels within the 2 s Stop budget. */
   readonly signal?: AbortSignal;
