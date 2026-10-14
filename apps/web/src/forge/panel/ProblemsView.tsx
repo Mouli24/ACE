@@ -12,6 +12,7 @@ import { nameOf, parentOf } from '../files/paths';
 import { requestTerminalFocus } from '../terminal/focus';
 import { openProcessInTab } from '../terminal/session';
 import { TrustNotice } from '../terminal/TrustNotice';
+import { FixWithAgentButton } from './FixWithAgentButton';
 import {
   clearChecks,
   useProblemsStore,
@@ -61,8 +62,9 @@ type ShownProblem = Problem & { code?: string };
  * Problems by file, in the theme (D328) as the Validation tab: per file a header with the
  * extension dot, the name, the folder in mono and a count chip, then one surface card with a 36px
  * row per problem, hairlines between, the source (and code) and place in mono. A click opens the
- * file at the problem. Both the open files' markers and Run checks' results draw with this, so a
- * row action (Fix with agent, at the merge) reaches both.
+ * file at the problem. Both the open files' markers and Run checks' results draw with this, so
+ * D302's "Fix with agent", which hands the problem to the chat's current node, is on every row of
+ * both.
  */
 function ProblemGroups({
   projectId,
@@ -107,12 +109,12 @@ function ProblemGroups({
             {list.map((problem, index) => (
               <li
                 key={`${problem.line}:${problem.column}:${index}`}
-                className="border-t border-[var(--line)] first:border-t-0"
+                className="flex items-center gap-[8px] border-t border-[var(--line)] pr-[10px] first:border-t-0 hover:bg-[var(--hover)]"
               >
                 <button
                   type="button"
                   onClick={() => reveal(problem)}
-                  className="flex min-h-[36px] w-full cursor-pointer items-center gap-[10px] border-none bg-transparent px-[14px] py-[7px] text-left text-[12.5px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]"
+                  className="flex min-h-[36px] min-w-0 flex-1 cursor-pointer items-center gap-[10px] border-none bg-transparent py-[7px] pl-[14px] pr-0 text-left text-[12.5px] text-[var(--ink)] outline-none focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]"
                 >
                   {ICON[problem.severity]}
                   <span className="min-w-0 flex-1 whitespace-pre-wrap">{problem.message}</span>
@@ -123,6 +125,7 @@ function ProblemGroups({
                     [Ln {problem.line}, Col {problem.column}]
                   </span>
                 </button>
+                <FixWithAgentButton projectId={projectId} problem={problem} />
               </li>
             ))}
           </ul>

@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openDatabase } from '../db.js';
 import {
+  FORGE_CHAT_TURNS_MIGRATION_ID,
+  FORGE_CHECKPOINTS_MIGRATION_ID,
   FORGE_CHECKS_MIGRATION_ID,
   FORGE_TERMINAL_MIGRATION_ID,
   MIGRATIONS,
@@ -36,10 +38,15 @@ afterEach(() => {
 });
 
 describe('D299 Phase 4 migration: projects.check_command and projects.format_on_save', () => {
-  it('is the last migration, and its id sorts after the terminal one', () => {
+  it('is the last migration, after the terminal, checkpoints and chat-turns ones', () => {
     const ids = MIGRATIONS.map((migration) => migration.id);
     expect(FORGE_CHECKS_MIGRATION_ID).toBe('20261014T110000_forge_project_checks');
-    expect(ids.slice(-2)).toEqual([FORGE_TERMINAL_MIGRATION_ID, FORGE_CHECKS_MIGRATION_ID]);
+    expect(ids.slice(-4)).toEqual([
+      FORGE_TERMINAL_MIGRATION_ID,
+      FORGE_CHECKPOINTS_MIGRATION_ID,
+      FORGE_CHAT_TURNS_MIGRATION_ID,
+      FORGE_CHECKS_MIGRATION_ID,
+    ]);
     expect([...ids].sort()).toEqual(ids);
   });
 

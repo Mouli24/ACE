@@ -51,6 +51,8 @@ export const SHORTCUTS = {
   closeTab: { code: 'KeyW', alt: true },
   /** D301: shows or hides the Terminal. Not a browser key, so it is safe to bind. */
   toggleTerminal: { code: 'Backquote', mod: true },
+  /** D302: the editor's selection (or file) as a chip in the chat composer. */
+  askAgent: { code: 'KeyL', mod: true },
   /** D299 Phase 4: Search in Forge's left column, with the focus in its query. */
   searchFiles: { code: 'KeyF', mod: true, shift: true },
   /** D299 Phase 4: Run checks, into Problems. */
