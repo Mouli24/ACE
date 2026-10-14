@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openDatabase } from '../db.js';
-import { FORGE_TERMINAL_MIGRATION_ID, MIGRATIONS } from '../migrations.js';
+import { DOMAIN_MIGRATION_ID, FORGE_TERMINAL_MIGRATION_ID, MIGRATIONS } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
 import { makeProject, scope } from './fixtures.js';
 
@@ -32,6 +32,13 @@ afterEach(() => {
 });
 
 describe('D301 migration: projects.terminal', () => {
+  it('is the last migration, and its id sorts after the Domain migration', () => {
+    const ids = MIGRATIONS.map((migration) => migration.id);
+    expect(FORGE_TERMINAL_MIGRATION_ID).toBe('20261013T120000_forge_terminal_trust');
+    expect(ids.slice(-2)).toEqual([DOMAIN_MIGRATION_ID, FORGE_TERMINAL_MIGRATION_ID]);
+    expect([...ids].sort()).toEqual(ids);
+  });
+
   it('adds the column; a project stored before it reads back with no trust level, which means on', async () => {
     const before = openDatabase({ path, migrations: BEFORE });
     expect(before.appliedMigrations).not.toContain(FORGE_TERMINAL_MIGRATION_ID);

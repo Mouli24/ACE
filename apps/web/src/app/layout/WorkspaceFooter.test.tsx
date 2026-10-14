@@ -85,6 +85,19 @@ describe('D330 the workspace footer', () => {
       expect(notice).toHaveTextContent('Disconnected');
       expect((notice.firstElementChild as HTMLElement).style.background).toBe('rgb(201, 76, 39)');
     });
+
+    it('after a 4403, says this address may not connect, as a red alert that says how to fix it (FR-SYS-003, D301)', () => {
+      socket.status = 'forbidden_origin';
+      renderFooter('ideate');
+      const notice = within(footer()).getByRole('alert');
+      expect(notice).toHaveAttribute('data-testid', 'socket-forbidden-origin');
+      expect(notice).toHaveTextContent('this address may not connect to the engine');
+      expect(notice).toHaveAttribute('title', expect.stringContaining('allowedOrigins'));
+      expect(notice).toHaveClass('text-[#c94c27]');
+      expect(notice.firstElementChild).toHaveClass('h-[6px]', 'w-[6px]', 'rounded-full');
+      expect(within(footer()).queryByText('Disconnected')).toBeNull();
+      expect(screen.queryByTestId('socket-reconnecting')).toBeNull();
+    });
   });
 
   it('shows the project as its slug, in mono', async () => {
