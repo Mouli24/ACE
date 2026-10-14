@@ -3,24 +3,39 @@ import { spawn } from 'node:child_process';
 import { type ToolDefinition } from '@ace/contracts';
 import { z } from 'zod';
 
+import { changedPaths, snapshotWorkspace, type WorkspaceSnapshot } from '../agent/changes.js';
+import { agentEnv } from '../agent/env.js';
+import { MODEL_OUTPUT_CHARS, OutputBuffer } from '../agent/output.js';
+import { resolveAgentShell, shellInvocation, type AgentShell } from '../agent/shell.js';
 import { ToolError } from '../errors.js';
 import { assertInsideProject } from '../project/paths.js';
 import { type RegisteredTool } from '../registry.js';
 import { killTree } from '../sandbox/runner.js';
 
 /**
- * `run_command` (X1, FR-TOOL-008, D266): one shell command in the project folder — `cmd.exe` on
- * Windows, `/bin/sh` elsewhere — returning its exit code and the tail of its output. It is
- * **destructive**, so under the default policy every call waits for an approval card: on Windows it
- * runs with no sandbox at all (the D-083 risk). A Stop or the timeout kills the whole process tree.
+ * `run_command` (X1, FR-TOOL-008, D266; reworked for agentic nodes, `agentic-nodes-prompt.md`
+ * Command runner): one shell command in the project folder, in the agent shell — Git Bash on
+ * Windows (PowerShell when Git is missing), bash elsewhere ({@link resolveAgentShell}).
+ *
+ * - **Env** is an allowlist (`agentEnv`), never the engine's: no provider key, no engine token.
+ * - **stdin** is closed, so an interactive prompt fails fast instead of hanging.
+ * - **Output** going back to the model is capped to its head and tail with the cut marked.
+ * - **Changes**: the project is snapshotted before and after, and the files the command changed
+ *   are returned as `changedPaths` (project-relative) for `files.changed { source: "command" }`.
+ * - **Background** (`background: true`, agentic runs only): started in the run's session and
+ *   answered at once with a `processId`, read with `command_output`, ended with `kill_command`.
+ *
+ * It is **destructive**, so under the default policy every call waits for an approval card. A
+ * command is not confined: it runs as the user and can reach anything the user can (D-083). A Stop
+ * or the timeout kills the whole process tree.
  *
  * It ends when the shell exits, not when its output closes (review I5): something the command left
- * running (a build server, `start /b`, a daemon) inherits the output pipe and would hold it open
- * past the timeout and past a Stop.
+ * running inherits the output pipe and would hold it open past the timeout and past a Stop.
  */
 
-const OUTPUT_TAIL_CHARS = 64 * 1024;
 const DEFAULT_TIMEOUT_MS = 120_000;
+/** Retained per stream while the command runs; what the model gets is capped further. */
+const RETAIN_CHARS = 1_000_000;
 /** After the shell exits, how long its last output may take to arrive before the pipes are dropped. */
 const EXIT_DRAIN_MS = 300;
 /** After a kill, how long to wait for the shell to go before answering anyway. */
@@ -30,42 +45,78 @@ const RunArgs = z.strictObject({
   command: z.string().min(1).max(8_000),
   cwd: z.string().optional(),
   timeoutMs: z.number().int().min(1_000).max(600_000).optional(),
+  background: z.boolean().optional(),
 });
 
-export const RUN_COMMAND_DEFINITION: ToolDefinition = {
-  name: 'run_command',
-  description:
-    'Runs a shell command in the project folder (cmd.exe on Windows, /bin/sh elsewhere) and returns its exit code and output. Destructive: every call asks for approval.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      command: { type: 'string', description: 'The command line, e.g. "pnpm test".' },
-      cwd: { type: 'string', description: 'Folder relative to the project; the project root when omitted.' },
-      timeoutMs: { type: 'integer', minimum: 1_000, maximum: 600_000 },
+function definitionFor(shellText: string): ToolDefinition {
+  return {
+    name: 'run_command',
+    description: `Runs a shell command in the project folder with ${shellText} and returns its exit code, output (head and tail, capped) and the files it changed. stdin is closed: nothing can prompt. background: true starts it and returns a processId at once (read it with command_output, stop it with kill_command). Destructive: every call asks for approval.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'The command line, e.g. "pnpm test".' },
+        cwd: {
+          type: 'string',
+          description: 'Folder relative to the project; the project root when omitted.',
+        },
+        timeoutMs: { type: 'integer', minimum: 1_000, maximum: 600_000 },
+        background: {
+          type: 'boolean',
+          description: 'Start it and return a processId at once (dev servers, watchers).',
+        },
+      },
+      required: ['command'],
+      additionalProperties: false,
     },
-    required: ['command'],
-    additionalProperties: false,
-  },
-  outputSchema: { type: 'object' },
-  permissions: { network: true, fsPaths: ['<project>'], destructive: true },
-  timeoutMs: 600_000,
-  source: 'builtin',
-};
+    outputSchema: { type: 'object' },
+    permissions: { network: true, fsPaths: ['<project>'], destructive: true },
+    timeoutMs: 600_000,
+    source: 'builtin',
+  };
+}
+
+/** The definition as listed without a resolved shell (`GET /tools`, the contract tests). */
+export const RUN_COMMAND_DEFINITION: ToolDefinition = definitionFor(
+  'Git Bash on Windows (Windows PowerShell when Git is not installed) and bash elsewhere',
+);
 
 export interface RunCommandOptions {
   platform?: NodeJS.Platform;
-  env?: NodeJS.ProcessEnv;
+  /** The command's exact env. Defaults to `agentEnv(process.env)`, read at each call. */
+  env?: Record<string, string>;
+  /** The shell. Defaults to {@link resolveAgentShell} over `process.env`. */
+  shell?: AgentShell;
+}
+
+async function snapshot(
+  root: string | undefined,
+  previous?: WorkspaceSnapshot,
+): Promise<WorkspaceSnapshot | undefined> {
+  if (root === undefined) return undefined;
+  try {
+    return await snapshotWorkspace(root, previous === undefined ? {} : { previous });
+  } catch {
+    // Change detection is a report, never a reason for the command itself to fail.
+    return undefined;
+  }
 }
 
 export function createRunCommandTool(options: RunCommandOptions = {}): RegisteredTool {
+  const platform = options.platform ?? process.platform;
+  const shell = options.shell ?? resolveAgentShell({ platform, env: process.env });
+
   return {
-    definition: RUN_COMMAND_DEFINITION,
+    definition: definitionFor(shell.label),
     implementation: async (args, context) => {
       const parsed = RunArgs.safeParse(args ?? {});
       if (!parsed.success) {
-        throw new ToolError('invalid_args', 'run_command', 'run_command needs { command, cwd?, timeoutMs? }.', {
-          issues: parsed.error.issues.map((issue) => issue.message),
-        });
+        throw new ToolError(
+          'invalid_args',
+          'run_command',
+          'run_command needs { command, cwd?, timeoutMs?, background? }.',
+          { issues: parsed.error.issues.map((issue) => issue.message) },
+        );
       }
       const cwd = assertInsideProject({
         projectDir: context.projectDir,
@@ -75,34 +126,47 @@ export function createRunCommandTool(options: RunCommandOptions = {}): Registere
         logger: context.logger,
         runId: context.runId,
       });
-      const platform = options.platform ?? process.platform;
-      const env = options.env ?? process.env;
-      const timeoutMs = parsed.data.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-      // cmd.exe /s strips exactly the outer quotes we add, so the line runs as written.
-      const [shell, argv] =
-        platform === 'win32'
-          ? [env['ComSpec'] ?? 'cmd.exe', ['/d', '/s', '/c', `"${parsed.data.command}"`]]
-          : ['/bin/sh', ['-c', parsed.data.command]];
 
-      return new Promise((resolve, reject) => {
-        let stdout = '';
-        let stderr = '';
-        let truncated = false;
+      if (parsed.data.background === true) {
+        if (context.session === undefined) {
+          throw new ToolError(
+            'unavailable',
+            'run_command',
+            'background: true needs an agentic node run; run it in the foreground instead.',
+          );
+        }
+        const { processId } = context.session.processes.start({
+          nodeId: context.nodeId ?? 'unknown',
+          command: parsed.data.command,
+          cwd,
+        });
+        return { processId, background: true };
+      }
+
+      const env = options.env ?? agentEnv(process.env, platform);
+      const timeoutMs = parsed.data.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      const spec = shellInvocation(shell, parsed.data.command, env);
+      const before = await snapshot(context.projectDir);
+      const startedAt = Date.now();
+
+      const outcome = await new Promise<{
+        code: number | null;
+        timedOut: boolean;
+        stopped: boolean;
+        error?: Error;
+        stdout: OutputBuffer;
+        stderr: OutputBuffer;
+      }>((resolve) => {
+        const stdout = new OutputBuffer(RETAIN_CHARS);
+        const stderr = new OutputBuffer(RETAIN_CHARS);
         let timedOut = false;
         let settled = false;
-        const keep = (current: string, chunk: string): string => {
-          const next = current + chunk;
-          if (next.length <= OUTPUT_TAIL_CHARS) return next;
-          truncated = true;
-          return next.slice(-OUTPUT_TAIL_CHARS);
-        };
 
-        const child = spawn(shell, argv, {
+        const child = spawn(spec.file, spec.args, {
           cwd,
-          env,
+          env: spec.env,
           stdio: ['ignore', 'pipe', 'pipe'],
           windowsHide: true,
-          windowsVerbatimArguments: platform === 'win32',
           // POSIX: lead a process group so one kill reaches everything the command started.
           detached: platform !== 'win32',
         });
@@ -122,7 +186,7 @@ export function createRunCommandTool(options: RunCommandOptions = {}): Registere
         const onAbort = (): void => stop();
         context.signal?.addEventListener('abort', onAbort, { once: true });
 
-        const finish = (settle: () => void): void => {
+        const finish = (code: number | null, error?: Error): void => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
@@ -130,36 +194,64 @@ export function createRunCommandTool(options: RunCommandOptions = {}): Registere
           child.stdout.destroy();
           child.stderr.destroy();
           context.signal?.removeEventListener('abort', onAbort);
-          settle();
-        };
-
-        child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
-          stdout = keep(stdout, chunk);
-        });
-        child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
-          stderr = keep(stderr, chunk);
-        });
-        child.on('error', (error) =>
-          finish(() => reject(new ToolError('failed', 'run_command', `Could not start the shell: ${error.message}`))),
-        );
-        const done = (code: number | null): void =>
-          finish(() => {
-            if (timedOut) {
-              reject(
-                new ToolError('timeout', 'run_command', `The command did not finish within ${timeoutMs} ms.`, {
-                  stdoutTail: stdout.slice(-2_000),
-                  stderrTail: stderr.slice(-2_000),
-                }),
-              );
-            } else if (context.signal?.aborted === true) {
-              reject(new ToolError('failed', 'run_command', 'The command was stopped.'));
-            } else {
-              resolve({ exitCode: code, stdout, stderr, truncated });
-            }
+          resolve({
+            code,
+            timedOut,
+            stopped: context.signal?.aborted === true,
+            stdout,
+            stderr,
+            ...(error === undefined ? {} : { error }),
           });
+        };
+        const done = (code: number | null): void => finish(code);
+
+        child.stdout.setEncoding('utf8').on('data', (chunk: string) => stdout.push(chunk));
+        child.stderr.setEncoding('utf8').on('data', (chunk: string) => stderr.push(chunk));
+        child.stdout.on('error', () => undefined);
+        child.stderr.on('error', () => undefined);
+        child.on('error', (error) => finish(null, error));
         child.on('exit', (code) => later(EXIT_DRAIN_MS, () => done(code)));
         child.on('close', (code) => done(code));
       });
+
+      const durationMs = Date.now() - startedAt;
+      if (outcome.error !== undefined) {
+        throw new ToolError(
+          'failed',
+          'run_command',
+          `Could not start the shell: ${outcome.error.message}`,
+        );
+      }
+      if (outcome.stopped && !outcome.timedOut) {
+        throw new ToolError('failed', 'run_command', 'The command was stopped.');
+      }
+      const after = before === undefined ? undefined : await snapshot(context.projectDir, before);
+      const changed =
+        before === undefined || after === undefined ? [] : changedPaths(before, after);
+      const stdout = outcome.stdout.text(MODEL_OUTPUT_CHARS);
+      const stderr = outcome.stderr.text(MODEL_OUTPUT_CHARS);
+      if (outcome.timedOut) {
+        throw new ToolError(
+          'timeout',
+          'run_command',
+          `The command did not finish within ${timeoutMs} ms.`,
+          {
+            stdoutTail: outcome.stdout.text(4_000),
+            stderrTail: outcome.stderr.text(4_000),
+            durationMs,
+            changedPaths: changed,
+          },
+        );
+      }
+      return {
+        exitCode: outcome.code,
+        stdout,
+        stderr,
+        truncated:
+          outcome.stdout.length > MODEL_OUTPUT_CHARS || outcome.stderr.length > MODEL_OUTPUT_CHARS,
+        durationMs,
+        changedPaths: changed,
+      };
     },
   };
 }
