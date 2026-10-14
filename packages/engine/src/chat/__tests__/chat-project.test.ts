@@ -1,4 +1,12 @@
-import type { ChatMessage, GuardrailPolicy, Id, Model, Part, ToolDefinition } from '@ace/contracts';
+import type {
+  ChatMessage,
+  Checkpoint,
+  GuardrailPolicy,
+  Id,
+  Model,
+  Part,
+  ToolDefinition,
+} from '@ace/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { contextChecks, contextPolicy } from '../../context/__tests__/context-checks.js';
@@ -553,9 +561,21 @@ interface FakeRecorder extends CheckpointRecorder {
   finished: number;
 }
 
+/** The checkpoint a finished recording returns; the chat reads only its id. */
+const pendingCheckpoint = (id: string): Checkpoint => ({
+  id,
+  projectId: 'project',
+  kind: 'chat',
+  status: 'pending',
+  files: [],
+  skipped: [],
+  createdAt: '2026-10-14T09:00:00.000Z',
+  updatedAt: '2026-10-14T09:00:00.000Z',
+});
+
 function fakeRecorder(
-  options: { result?: { id: string } | undefined; failBegin?: boolean } = {
-    result: { id: 'cp-1' },
+  options: { result?: Checkpoint | undefined; failBegin?: boolean } = {
+    result: pendingCheckpoint('cp-1'),
   },
 ): FakeRecorder {
   const recorder: FakeRecorder = {
