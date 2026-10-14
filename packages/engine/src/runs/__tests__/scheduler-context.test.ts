@@ -1795,3 +1795,35 @@ describe('FR-RAG-005 the implicit retrieval query is cut to the base chunk size 
     expect(embedded).toEqual([question.slice(0, 700 * CHARS_PER_TOKEN)]);
   });
 });
+
+describe('TC-CTL-005 a re-run of one node runs that node alone (FR-CTL-005)', () => {
+  it('re-running the Writer adds one node run, and nothing after it runs again', async () => {
+    const h = await build({ usage: true });
+    const input = inputNode();
+    const writer = agentNode('Writer');
+    const reviewer = agentNode('Reviewer');
+    const output = outputNode();
+    await h.seed(
+      [input, writer, reviewer, output],
+      [edge(input, writer), edge(writer, reviewer), edge(reviewer, output)],
+    );
+    const run = await h.run();
+    const before = await h.repository.nodeRuns.listByRun(scope, run.id);
+
+    const rerun = await h.controls.rerunNode(run.id, writer.id);
+    await waitFor(
+      () =>
+        h.events.filter(
+          (event) =>
+            event.type === 'run.completed' && (event.payload as { runId: string }).runId === run.id,
+        ).length === 2,
+      'the re-run to end',
+    );
+
+    const after = await h.repository.nodeRuns.listByRun(scope, run.id);
+    expect(after).toHaveLength(before.length + 1);
+    expect(after.filter((row) => row.nodeId === reviewer.id)).toHaveLength(1);
+    expect(after.filter((row) => row.nodeId === output.id)).toHaveLength(1);
+    expect(after.find((row) => row.id === rerun.id)?.status).toBe('COMPLETED');
+  });
+});
