@@ -145,6 +145,9 @@ jobs:
           else
             echo "SKIPPED: tests/acceptance/vitest.config.ts does not exist yet (Arhant creates it in round 1, feature A1)."
           fi
+        # The Playwright pass builds apps/web itself (its web server); see `verify`'s Build (D-094).
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
       - name: Upload Playwright results
         if: failure()
