@@ -69,7 +69,10 @@ export const LIST_FILES_DEFINITION = definition(
   'list_files',
   'Lists files and folders in the project folder (skips .git, node_modules and .ace). Folders end in "/".',
   {
-    path: { type: 'string', description: 'Folder relative to the project; the project root when omitted.' },
+    path: {
+      type: 'string',
+      description: 'Folder relative to the project; the project root when omitted.',
+    },
     recursive: { type: 'boolean' },
     maxEntries: { type: 'integer', minimum: 1, maximum: 2000 },
   },
@@ -80,14 +83,20 @@ export function createListFilesTool(): RegisteredTool {
   return {
     definition: LIST_FILES_DEFINITION,
     implementation: async (args, context) => {
-      const { path, recursive = false, maxEntries = 500 } = parse(ListArgs, args, 'list_files', '{ path?, recursive?, maxEntries? }');
+      const {
+        path,
+        recursive = false,
+        maxEntries = 500,
+      } = parse(ListArgs, args, 'list_files', '{ path?, recursive?, maxEntries? }');
       const start = where(context, 'list_files', 'list', path);
       const projectDir = context.projectDir as string;
       const entries: string[] = [];
       let truncated = false;
 
       const walk = (dir: string): void => {
-        const children = readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+        const children = readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+          a.name.localeCompare(b.name),
+        );
         for (const child of children) {
           if (child.isDirectory() && SKIPPED.has(child.name)) continue;
           if (entries.length >= maxEntries) {
@@ -128,19 +137,29 @@ export function createReadFileTool(): RegisteredTool {
   return {
     definition: READ_FILE_DEFINITION,
     implementation: async (args, context) => {
-      const { path, offset, limit } = parse(ReadArgs, args, 'read_file', '{ path, offset?, limit? }');
+      const { path, offset, limit } = parse(
+        ReadArgs,
+        args,
+        'read_file',
+        '{ path, offset?, limit? }',
+      );
       const target = where(context, 'read_file', 'read', path);
       if (!existsSync(target) || !statSync(target).isFile()) {
         throw new ToolError('invalid_args', 'read_file', `read_file: ${path} is not a file.`);
       }
       const bytes = readFileSync(target);
       if (bytes.includes(0)) {
-        throw new ToolError('invalid_args', 'read_file', `read_file: ${path} looks binary; it reads text only.`);
+        throw new ToolError(
+          'invalid_args',
+          'read_file',
+          `read_file: ${path} looks binary; it reads text only.`,
+        );
       }
       const lines = bytes.toString('utf8').split(/\r?\n/);
       const from = (offset ?? 1) - 1;
       const window = limit === undefined ? lines.slice(from) : lines.slice(from, from + limit);
-      let content = offset === undefined && limit === undefined ? bytes.toString('utf8') : window.join('\n');
+      let content =
+        offset === undefined && limit === undefined ? bytes.toString('utf8') : window.join('\n');
       const truncated = content.length > READ_LIMIT_CHARS;
       if (truncated) content = content.slice(0, READ_LIMIT_CHARS);
       return {
@@ -211,12 +230,12 @@ export function createEditFileTool(): RegisteredTool {
   return {
     definition: EDIT_FILE_DEFINITION,
     implementation: async (args, context) => {
-      const { path, oldString, newString, replaceAll = false } = parse(
-        EditArgs,
-        args,
-        'edit_file',
-        '{ path, oldString, newString, replaceAll? }',
-      );
+      const {
+        path,
+        oldString,
+        newString,
+        replaceAll = false,
+      } = parse(EditArgs, args, 'edit_file', '{ path, oldString, newString, replaceAll? }');
       const target = where(context, 'edit_file', 'edit', path);
       assertWritable(context.projectDir as string, target, 'edit_file');
       if (!existsSync(target) || !statSync(target).isFile()) {
@@ -225,7 +244,11 @@ export function createEditFileTool(): RegisteredTool {
       const text = readFileSync(target, 'utf8');
       const matches = text.split(oldString).length - 1;
       if (matches === 0) {
-        throw new ToolError('invalid_args', 'edit_file', 'edit_file: oldString was not found in the file.');
+        throw new ToolError(
+          'invalid_args',
+          'edit_file',
+          'edit_file: oldString was not found in the file.',
+        );
       }
       if (matches > 1 && !replaceAll) {
         throw new ToolError(
@@ -236,7 +259,9 @@ export function createEditFileTool(): RegisteredTool {
         );
       }
       // A function replacement, so `$&` and friends in newString stay literal.
-      const next = replaceAll ? text.split(oldString).join(newString) : text.replace(oldString, () => newString);
+      const next = replaceAll
+        ? text.split(oldString).join(newString)
+        : text.replace(oldString, () => newString);
       writeFileSync(target, next, 'utf8');
       return {
         path: projectRelative(context.projectDir as string, target),
