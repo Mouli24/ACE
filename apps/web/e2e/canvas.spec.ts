@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 import {
+  answerProviderPicker,
   closeSettings,
   configureNode,
   connect,
@@ -49,6 +50,8 @@ test.describe('Canvas (FR-CAN-001..007, 010)', () => {
     const dropY = box.y + box.height * 0.6;
     // the New node dialog that was the drag's source is gone (D332); the Canvas still takes the drop
     await dragKindToCanvas(page, 'agent', { x: dropX, y: dropY });
+    // D351 (PG-1.3): the dropped Agent waits for its provider and model
+    await answerProviderPicker(page);
     await expect(page.locator('.react-flow__node')).toHaveCount(2);
     await settled(page, seeded.workflowId, 2);
     const graph = await serverGraph(page, seeded.workflowId);
@@ -154,6 +157,8 @@ test.describe('Canvas (FR-CAN-001..007, 010)', () => {
     await closeSettings(page);
     // Ctrl+D duplicates the selection (the tools pill's button is gone, D332)
     await page.keyboard.press(`${MOD}+d`);
+    // D351 (PG-1.3): this seeded Agent has no provider, so its copy asks for one first
+    await answerProviderPicker(page);
     await expect(page.locator('.react-flow__node')).toHaveCount(2);
     await settled(page, seeded.workflowId, 2);
     const graph = await serverGraph(page, seeded.workflowId);
