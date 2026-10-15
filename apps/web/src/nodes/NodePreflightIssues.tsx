@@ -2,6 +2,7 @@ import type { Node } from '@ace/contracts';
 
 import { useRun } from '../runs/hooks';
 import { useRunStore } from '../runs/run-store';
+import { undoReasonText } from '../runs/UndoChoice';
 
 /**
  * Pre-flight issues for one node, anchored under its card (FR-MM-005). When a run is BLOCKED at
@@ -38,7 +39,11 @@ export function NodePreflightIssues({ node }: { node: Node }) {
             aria-hidden
             className="mt-[4px] h-[6px] w-[6px] shrink-0 rounded-full bg-[#c94c27]"
           />
-          <span>{issue.message}</span>
+          <span>
+            {issue.code === 'checkpoint_unavailable'
+              ? `Undo unavailable — ${undoReasonText(issue.message)}`
+              : issue.message}
+          </span>
         </p>
       ))}
     </div>
