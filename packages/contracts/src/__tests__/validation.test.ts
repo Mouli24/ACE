@@ -137,7 +137,12 @@ describe('FR-WF-006 ValidationIssue', () => {
   });
 
   it('PG-1.3 adds missing_provider (D358) beside missing_model and provider_missing', () => {
-    expect([...PRODUCT_GAPS_VALIDATION_ISSUE_CODES]).toEqual(['missing_provider']);
+    // PG-2.4 (D361) adds checkpoint_unavailable and running_without_undo after it.
+    expect([...PRODUCT_GAPS_VALIDATION_ISSUE_CODES]).toEqual([
+      'missing_provider',
+      'checkpoint_unavailable',
+      'running_without_undo',
+    ]);
     expect(ValidationIssueCodeSchema.safeParse('missing_provider').success).toBe(true);
     expect(VALIDATION_ISSUE_CODES).toContain('missing_model');
     expect(VALIDATION_ISSUE_CODES).toContain('provider_missing');

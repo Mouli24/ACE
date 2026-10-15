@@ -90,7 +90,11 @@ export const EDGE_TRANSFER_SUMMARY_MAX = 120;
 
 const PartsByNodeIdSchema = z.record(IdSchema, z.array(PartSchema));
 
-export const RunStartedPayloadSchema = z.strictObject({ run: RunSummarySchema });
+export const RunStartedPayloadSchema = z.strictObject({
+  run: RunSummarySchema,
+  /** PG-2.4 (D361): the person chose to run this one without undo; its changes are not recorded. */
+  withoutUndo: z.literal(true).optional(),
+});
 export type RunStartedPayload = z.infer<typeof RunStartedPayloadSchema>;
 
 export const RunCompletedPayloadSchema = z.strictObject({

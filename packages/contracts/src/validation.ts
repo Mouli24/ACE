@@ -136,8 +136,16 @@ export const ROUND_5_VALIDATION_ISSUE_CODES = ['missing_knowledge_base'] as cons
  * The codes the product-gaps work adds. `missing_provider` (D358): an Agent/Model node with no
  * provider chosen; `missing_model` keeps "provider set, no model", `provider_missing` a deleted
  * provider. Pre-flight blocks on all three; a graph op that makes such a node is never refused.
+ *
+ * PG-2.4 (D361): `checkpoint_unavailable` is an error — a writing run whose checkpoint could not
+ * begin stops before its first write, with zero provider calls. `running_without_undo` is the
+ * warning a run started with `withoutUndo` keeps on its row when that checkpoint still failed.
  */
-export const PRODUCT_GAPS_VALIDATION_ISSUE_CODES = ['missing_provider'] as const;
+export const PRODUCT_GAPS_VALIDATION_ISSUE_CODES = [
+  'missing_provider',
+  'checkpoint_unavailable',
+  'running_without_undo',
+] as const;
 
 export const VALIDATION_ISSUE_CODES = [
   ...ROUND_1_VALIDATION_ISSUE_CODES,

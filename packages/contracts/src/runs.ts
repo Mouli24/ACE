@@ -302,6 +302,12 @@ export const StartRunRequestSchema = z.object({
   goal: z.string().trim().min(1).max(MESSAGE_TEXT_MAX).optional(),
   /** D312: Domain settings. Omitted, a run is supervised, has no budget and ends as it always has. */
   domain: RunDomainConfigInputSchema.optional(),
+  /**
+   * PG-2.4 (D361): the person chose "Run without undo" after a run was BLOCKED with
+   * `checkpoint_unavailable`. One-time: only this run goes ahead when its checkpoint cannot begin,
+   * and `run.started` records the choice.
+   */
+  withoutUndo: z.boolean().optional(),
 });
 /** What a caller may send: the Domain settings it leaves out take their defaults (D312). */
 export type StartRunRequest = z.input<typeof StartRunRequestSchema>;
