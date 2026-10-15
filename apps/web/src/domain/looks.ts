@@ -76,7 +76,7 @@ const PILLS: Record<NodeState, StatusPill> = {
   READY: WAITING,
   WAITING,
   PAUSED: WAITING,
-  COMPLETED: { label: 'Done', bg: 'rgba(47,158,99,0.14)', ink: '#2f9e63', pulse: false },
+  COMPLETED: { label: 'Done', bg: 'rgba(47,158,99,0.14)', ink: 'var(--ok-ink)', pulse: false },
   FAILED: { label: 'Failed', bg: 'var(--hover)', ink: '#c94c27', pulse: false },
   BLOCKED: { label: 'Blocked', bg: 'var(--hover)', ink: '#c94c27', pulse: false },
   STOPPED: { label: 'Stopped', bg: 'var(--hover)', ink: 'var(--muted)', pulse: false },

@@ -239,7 +239,7 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
         {live && (
           <span
             data-testid="chat-live"
-            className="flex items-center gap-1 text-[10px] font-semibold text-[#2f9e63]"
+            className="flex items-center gap-1 text-[10px] font-semibold text-[var(--ok-ink)]"
           >
             <Dot color="#2f9e63" size={6} pulse="livePulse 2s ease-in-out infinite" />
             Live

@@ -51,25 +51,6 @@ const CONTROLS: Array<{ open: RegExp; close: string }> = [
   { open: /<TooltipTrigger\b/g, close: '</TooltipTrigger>' },
 ];
 
-/**
- * TEMPORARY (PG-1.2 is split across worktrees): chat/, domain/ and providers/ belong to the
- * PG-1.3/1.4 and PG-1.5/1.6 agents, so their glyphs are converted after the Phase 1 merge. Each
- * entry is one file; empty this list once they are converted. Never add a file outside those three
- * folders.
- */
-const TEMPORARY_ALLOW: readonly string[] = [
-  'apps/web/src/chat/ChatAside.tsx',
-  'apps/web/src/chat/ChatComposer.tsx',
-  'apps/web/src/chat/ChatConversation.tsx',
-  'apps/web/src/chat/ChatThreadList.tsx',
-  'apps/web/src/domain/Composer.tsx',
-  'apps/web/src/domain/Conversation.tsx',
-  'apps/web/src/domain/DomainPage.tsx',
-  'apps/web/src/domain/TeamPanel.tsx',
-  'apps/web/src/providers/ModelsTab.tsx',
-  'apps/web/src/providers/ProvidersPage.tsx',
-];
-
 /** Every control in `source` whose body holds a glyph: `line: <the glyph line>`. */
 export function glyphControls(source: string): string[] {
   const found: string[] = [];
@@ -132,17 +113,9 @@ describe('PG-1.2 no unicode glyph inside a control (D360)', () => {
     expect([...all.keys()].some((name) => name.startsWith('packages/ui/src/'))).toBe(true);
     const offenders: string[] = [];
     for (const [name, text] of all) {
-      if (TEMPORARY_ALLOW.includes(name)) continue;
       for (const hit of glyphControls(text)) offenders.push(`${name}:${hit}`);
     }
     expect(offenders).toEqual([]);
   });
 
-  it('the allow-list holds only chat/, domain/ and providers/ files that still have a glyph', () => {
-    const all = sources();
-    for (const name of TEMPORARY_ALLOW) {
-      expect(name).toMatch(/^apps\/web\/src\/(chat|domain|providers)\//);
-      expect(glyphControls(all.get(name) ?? '').length).toBeGreaterThan(0);
-    }
-  });
 });

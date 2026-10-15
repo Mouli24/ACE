@@ -2,7 +2,6 @@ import AxeBuilder from '@axe-core/playwright';
 import { test, type Page } from '@playwright/test';
 
 import {
-  NOT_BUILT,
   card,
   closeSettings,
   expect,
@@ -58,26 +57,10 @@ const AXE_RULES = [
 const GLYPH_SOURCE =
   '[\\u2190-\\u21FF\\u2300-\\u23FF\\u25A0-\\u25FF\\u2600-\\u27BF\\u2900-\\u2BFF\\u22EF\\u2026\\u00D7\\uFE0E\\uFE0F\\u{1F300}-\\u{1FAFF}]';
 
-/**
- * TEMPORARY (PG-1.2 is split across worktrees, as in `apps/web/src/test/no-glyph-controls.test.ts`):
- * the chat column, Domain's conversation and the Providers page belong to the PG-1.3/1.4 and
- * PG-1.5/1.6 agents, whose glyphs are converted after the Phase 1 merge. A glyph control inside one
- * of these is not counted until then; empty this list once they are converted. Contrast and names
- * are checked everywhere, with no exception.
- */
-const TEMPORARY_GLYPH_ALLOW: readonly string[] = [
-  '[data-testid="chat-aside"]',
-  'section[aria-label="Domain"]',
-  'aside[aria-label="Team"]',
-];
-/** …and the Providers page as a whole (no wrapper of its own to scope by). Same rule: empty it. */
-const TEMPORARY_GLYPH_ALLOW_ROUTES: readonly string[] = ['Providers'];
-
 /** Glyph controls: a control whose visible text is a glyph (and at most one other character). */
 async function glyphControls(page: Page, route: string): Promise<Violation[]> {
-  if (TEMPORARY_GLYPH_ALLOW_ROUTES.includes(route)) return [];
   const found = await page.evaluate(
-    ({ glyphSource, allow }) => {
+    ({ glyphSource }) => {
       const glyph = new RegExp(glyphSource, 'u');
       const out: string[] = [];
       const visible = (el: Element): boolean => {
@@ -95,7 +78,6 @@ async function glyphControls(page: Page, route: string): Promise<Violation[]> {
         ),
       ).filter(visible);
       for (const el of controls) {
-        if (allow.some((selector) => el.closest(selector) !== null)) continue;
         const text = (el.textContent ?? '').trim();
         if (
           text !== '' &&
@@ -108,7 +90,7 @@ async function glyphControls(page: Page, route: string): Promise<Violation[]> {
       }
       return out;
     },
-    { glyphSource: GLYPH_SOURCE, allow: [...TEMPORARY_GLYPH_ALLOW] },
+    { glyphSource: GLYPH_SOURCE },
   );
   return found.map((what) => ({ route, rule: 'glyph', what }));
 }
@@ -170,10 +152,6 @@ test.describe('PG-1.2 every control visible', () => {
     test(`a scan of every route has no unnamed control, no glyph control and no text under AA contrast (${theme})`, async ({
       page,
     }) => {
-      // PG-1.2 (D360): still red on two hard-coded #2f9e63 texts outside this worktree's paths:
-      // chat/ChatAside.tsx "Live" (3.17:1) and domain/looks.ts COMPLETED pill (2.9:1); each is
-      // `var(--ok-ink)` after the Phase 1 merge, then this marker goes.
-      test.fail(NOT_BUILT, 'PG-1.2: #2f9e63 text in chat/ and domain/ under AA');
       test.setTimeout(240_000);
       await useTheme(page, theme);
       const routes = await seedRoutes(theme);
