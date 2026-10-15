@@ -1,7 +1,6 @@
 import { test, type Page } from '@playwright/test';
 
 import {
-  NOT_BUILT,
   card,
   centre,
   closeSettings,
@@ -54,8 +53,7 @@ test.describe('PG-1.1 drag a line from an output to an input', () => {
       test(`ports show on hover and while dragging, and out→in creates an edge (${theme}, ${zoom * 100}% zoom)`, async ({
         page,
       }) => {
-        // PG-1.1: ports are invisible today (opacity 0), at every theme and zoom.
-        test.fail(NOT_BUILT, 'PG-1.1: port handles are invisible (D332, X1)');
+        // PG-1.1 (D350): was red while ports were invisible (opacity 0), at every theme and zoom.
         await useTheme(page, theme);
         const flow = await twoAgents(`connect-${theme}-${zoom * 100}`);
         await ready(page, flow);
@@ -98,8 +96,7 @@ test.describe('PG-1.1 drag a line from an output to an input', () => {
   }
 
   test('a line dropped on a card body connects to its first compatible input', async ({ page }) => {
-    // PG-1.1: "Drop on the card" does not exist — only a drop on the (invisible) handle connects.
-    test.fail(NOT_BUILT, 'PG-1.1: a drop on a card body connects nothing');
+    // PG-1.1 (D350): was red while only a drop on the (invisible) handle connected.
     const flow = await twoAgents('drop-on-card');
     await ready(page, flow);
 
@@ -124,8 +121,7 @@ test.describe('PG-1.1 drag a line from an output to an input', () => {
   test('a refused drop shows its reason: incompatible ports dim with the reason while dragging', async ({
     page,
   }) => {
-    // PG-1.1: "Incompatible ports dim, with the reason in a tooltip" — today they stay invisible.
-    test.fail(NOT_BUILT, 'PG-1.1: incompatible ports are not shown dimmed with a reason');
+    // PG-1.1 (D350): "Incompatible ports dim, with the reason in a tooltip" — red while invisible.
     const flow = await twoAgents('refused');
     // An image-only input, as a workflow saved before D285 can hold (TC-CON-002).
     await updateNodeConfig(flow.workflowId, flow.byName('Editor').id, { inputTypes: ['image'] });
@@ -150,9 +146,8 @@ test.describe('PG-1.1 drag a line from an output to an input', () => {
   });
 
   test('a drag that starts on a port never opens settings', async ({ page }) => {
-    // PG-1.1: a press 9 px inside the card from the port centre misses today's 12 px handle and
-    // lands on the card, which then moves instead of drawing; the spec's 20 px target takes it.
-    test.fail(NOT_BUILT, 'PG-1.1: a drag from beside a port lands on the card');
+    // PG-1.1 (D350): a press 9 px inside the card from the port centre missed the old 12 px handle
+    // and landed on the card, which moved instead of drawing; the spec's 20 px target takes it.
     const flow = await twoAgents('no-settings');
     await ready(page, flow);
     const writer = flow.byName('Writer');

@@ -106,6 +106,18 @@
   --color-chart-6: #d94a6b;
   --color-chart-7: #b27408;
   --color-chart-8: #6c55c8;
+
+  /* PG-1.2 (D360): the destructive red as text, AA (4.5:1) on card, panel and canvas (tokens.ts). */
+  --danger-ink: #b23f1d;
+
+  /* PG-1.1 (D350): port dots by data type, each >= 3:1 on card, panel and canvas (tokens.ts). */
+  --port-text: #c2410c;
+  --port-image: #6d52cc;
+  --port-audio: #0e7c86;
+  --port-video: #be3a74;
+  --port-code: #2f7d4f;
+  --port-json: #946200;
+  --port-file: #5b6675;
 }
 
 /* The workspace, dark. */
@@ -139,6 +151,14 @@
   --ace-glow-k: 1;
   --ace-hi: #ffffff10;
   --ace-ground: 0 8px 24px -12px #000000cc;
+  --danger-ink: #ef7a5a;
+  --port-text: #f08a5d;
+  --port-image: #a996f0;
+  --port-audio: #4fc3cc;
+  --port-video: #e27aa8;
+  --port-code: #5fcf8c;
+  --port-json: #e0b040;
+  --port-file: #a3adba;
 
   --color-provider-anthropic: #c2603f;
   --color-provider-google: #8fb0ff;
@@ -291,12 +311,15 @@
 }
 
 /*
- * A port's handle: invisible, a 12px hit area centred on the theme's anchor, a crosshair to aim
- * with, and a #ef6b3f ring when focused from the keyboard or armed for a keyboard connect.
+ * A port (D350, supersedes D332's invisible handle): a 22px hit area centred on the theme's anchor,
+ * holding an 8px dot in its data type's colour (`--port-color`, set per port). Hidden at rest; it
+ * shows while its card is hovered or selected, on keyboard focus or armed for a keyboard connect
+ * (NFR-USE-02), and on every compatible port while a line is being drawn. An incompatible port is
+ * shown dimmed (its reason is in the tooltip). The dot above the edge layer is `.ace-port-dot`.
  */
 .react-flow__handle.ace-port {
-  width: 12px;
-  height: 12px;
+  width: 22px;
+  height: 22px;
   min-width: 0;
   min-height: 0;
   border: 0;
@@ -304,6 +327,31 @@
   background: transparent;
   opacity: 0;
   cursor: crosshair;
+  transition: opacity 0.12s;
+}
+.react-flow__handle.ace-port::after,
+.ace-port-dot {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--port-color, #ef6b3f);
+  box-shadow: 0 0 0 2px var(--surface);
+  pointer-events: none;
+}
+.react-flow__node:hover .react-flow__handle.ace-port,
+.react-flow__node.selected .react-flow__handle.ace-port,
+.react-flow__handle.ace-port[data-connect='source'],
+.react-flow__handle.ace-port[data-connect='compatible'] {
+  opacity: 1;
+}
+.react-flow__node .react-flow__handle.ace-port[data-connect='incompatible'] {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 .react-flow__handle.ace-port:focus-visible,
 .react-flow__handle.ace-port[data-armed='true'] {

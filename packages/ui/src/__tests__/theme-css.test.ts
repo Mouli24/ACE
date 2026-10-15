@@ -1,5 +1,7 @@
 import css from '../theme.css?raw';
-import { THEME_COLORS } from '../tokens.js';
+import { DATA_TYPES } from '@ace/contracts';
+
+import { PORT_COLORS, THEME_COLORS } from '../tokens.js';
 
 const block = (selector: RegExp): string => {
   const start = css.search(selector);
@@ -98,7 +100,8 @@ describe('D328 theme.css mirrors tokens.ts through the theme variables', () => {
 
 /*
  * D332: the Canvas draws its own surface, grid, minimap and edges, so React Flow's are no longer
- * restyled here; what stays is the pane cursor, the invisible port handles and the edge flow.
+ * restyled here; what stays is the pane cursor, the port handles (visible since D350) and the
+ * edge flow.
  */
 describe('D332 the Canvas block', () => {
   it('no longer styles React Flow’s background, minimap or attribution (the Canvas hides it)', () => {
@@ -107,15 +110,40 @@ describe('D332 the Canvas block', () => {
     expect(css).not.toContain('.react-flow__attribution');
   });
 
-  it('a port handle is an invisible 12px hit area with a #ef6b3f ring on keyboard focus', () => {
+  /*
+   * D350 (PG-1.1) supersedes D332's invisible 12px handle: the port is a 22px target holding an
+   * 8px dot in its data type's colour, hidden at rest and shown on hover, selection, focus and while
+   * a line is drawn; an incompatible port is dimmed, never hidden.
+   */
+  it('PG-1.1 a port is a ≥20px target with an 8px dot, shown on hover, selection and while connecting', () => {
     const port = block(/^\.react-flow__handle\.ace-port \{/m);
-    expect(port).toContain('width: 12px;');
-    expect(port).toContain('height: 12px;');
+    expect(port).toContain('width: 22px;');
+    expect(port).toContain('height: 22px;');
     expect(port).toContain('opacity: 0;');
     expect(port).toContain('cursor: crosshair;');
+    const dot = block(/^\.react-flow__handle\.ace-port::after,/m);
+    expect(dot).toContain('width: 8px;');
+    expect(dot).toContain('height: 8px;');
+    expect(dot).toContain('background: var(--port-color, #ef6b3f);');
+    expect(css).toContain('.react-flow__node.selected .react-flow__handle.ace-port,');
+    expect(css).toContain(".react-flow__handle.ace-port[data-connect='compatible'] {");
+    expect(block(/^\.react-flow__node:hover \.react-flow__handle\.ace-port,/m)).toContain(
+      'opacity: 1;',
+    );
+    const dimmed = block(
+      /^\.react-flow__node \.react-flow__handle\.ace-port\[data-connect='incompatible'\] \{/m,
+    );
+    expect(dimmed).toContain('opacity: 0.35;');
     const focused = block(/^\.react-flow__handle\.ace-port:focus-visible,/m);
     expect(focused).toContain('opacity: 1;');
     expect(focused).toContain('box-shadow: 0 0 0 2px #ef6b3f;');
+  });
+
+  it.each(DATA_TYPES)('PG-1.1 --port-%s mirrors PORT_COLORS in both themes', (type) => {
+    const light = block(/^:root \{/m);
+    const dark = block(/^:root\[data-theme='dark'\] \{/m);
+    expect(varValue(light, `port-${type}`)).toBe(PORT_COLORS.light[type]);
+    expect(varValue(dark, `port-${type}`)).toBe(PORT_COLORS.dark[type]);
   });
 
   it('an edge line flows with the theme’s keyframes, and stands still for reduced motion', () => {

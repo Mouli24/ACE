@@ -2,6 +2,7 @@ import { NODE_STATES, PROVIDER_STATES, PROVIDER_TYPES } from '@ace/contracts';
 
 import {
   CHART_SERIES_COLORS,
+  PORT_COLORS,
   THEME_COLORS,
   chartSeriesColor,
   contrastRatio,
@@ -115,6 +116,15 @@ describe('FR-SYS-005 both themes define every slot and keep text readable', () =
       expect(ratio).toBeGreaterThan(1.1);
       expect(ratio).toBeLessThan(3);
     });
+
+    it.each(Object.entries(PORT_COLORS[theme]))(
+      'PG-1.1 port dot %s (%s) ≥ 3:1 on card, panel and canvas',
+      (_type, hex) => {
+        expect(contrastRatio(hex, c.card)).toBeGreaterThanOrEqual(3);
+        expect(contrastRatio(hex, c.panel)).toBeGreaterThanOrEqual(3);
+        expect(contrastRatio(hex, c.canvas)).toBeGreaterThanOrEqual(3);
+      },
+    );
 
     it.each(CHART_SERIES_COLORS[theme].map((hex, i) => [i + 1, hex] as const))(
       'FR-OBS-004 chart series %i (%s) ≥ 3:1 on the panel',

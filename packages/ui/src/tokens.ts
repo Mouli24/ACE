@@ -1,4 +1,4 @@
-import type { NodeState, ProviderState, ProviderType } from '@ace/contracts';
+import type { DataType, NodeState, ProviderState, ProviderType } from '@ace/contracts';
 
 /**
  * ACE design tokens (Arch §10.1 design system, CLAUDE.md §2), in the Ace UI theme's palette (D328):
@@ -95,6 +95,32 @@ export const CHART_SERIES_COLORS = {
   dark: ['#e8572e', '#7a62d6', '#1f97a3', '#2f9e63', '#5b7fe0', '#d94a6b', '#b27408', '#6c55c8'],
   light: ['#e8572e', '#7a62d6', '#1f97a3', '#2f9e63', '#5b7fe0', '#d94a6b', '#b27408', '#6c55c8'],
 } as const satisfies Record<'dark' | 'light', readonly string[]>;
+
+/**
+ * PG-1.1 (D350): a port dot's colour comes from its data type. Each is ≥ 3:1 against the card,
+ * the panel and the canvas of its theme (WCAG 1.4.11, non-text), so a dot reads on any surface it
+ * sits on. `theme.css` exposes them as `--port-<type>`.
+ */
+export const PORT_COLORS = {
+  light: {
+    text: '#c2410c',
+    image: '#6d52cc',
+    audio: '#0e7c86',
+    video: '#be3a74',
+    code: '#2f7d4f',
+    json: '#946200',
+    file: '#5b6675',
+  },
+  dark: {
+    text: '#f08a5d',
+    image: '#a996f0',
+    audio: '#4fc3cc',
+    video: '#e27aa8',
+    code: '#5fcf8c',
+    json: '#e0b040',
+    file: '#a3adba',
+  },
+} as const satisfies Record<'dark' | 'light', Readonly<Record<DataType, string>>>;
 
 /** The CSS colour for series slot `index` (0-based), following the active theme. */
 export function chartSeriesColor(index: number): string {

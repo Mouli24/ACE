@@ -113,6 +113,62 @@ function labelOf(edge: AceAnyFlowEdge): EdgeLabel {
 
 const selectNodes = (state: ReactFlowState) => state.nodes;
 
+/** How a port's dot shows above the edges: fully, or dimmed (an incompatible drop, D350). */
+export type PortDotLook = 'on' | 'dim';
+
+/**
+ * PG-1.1 (D350): ports sit above the edge layer. The edges are drawn over the nodes (D332), so a
+ * port's own handle — inside its card — would sit under any edge crossing it; this layer repeats
+ * each shown port's dot just above the edges, at the same anchor and in the same colour. It touches
+ * no pointer: the handle underneath still takes the press.
+ */
+export const PortDotLayer = memo(function PortDotLayer({
+  nodes,
+  shown,
+}: {
+  nodes: readonly Node[];
+  shown: ReadonlyMap<string, PortDotLook>;
+}) {
+  const live = useStore(selectNodes);
+  if (shown.size === 0) return null;
+  const positions = new Map(live.map((node) => [node.id, node.position]));
+  const dots = nodes.flatMap((node) => {
+    const at = positions.get(node.id);
+    if (at === undefined) return [];
+    return [...node.inputs, ...node.outputs].flatMap((port) => {
+      const look = shown.get(port.id);
+      const anchor = look === undefined ? undefined : anchorOfPort(node, port.id);
+      return look === undefined || anchor === undefined
+        ? []
+        : [{ id: port.id, x: at.x + anchor.x, y: at.y + anchor.y, look, type: port.dataType }];
+    });
+  });
+  return (
+    <ViewportPortal>
+      <div
+        data-testid="canvas-port-dots"
+        aria-hidden
+        className="pointer-events-none absolute left-0 top-0 z-[2001]"
+      >
+        {dots.map((dot) => (
+          <span
+            key={dot.id}
+            data-testid={`port-dot-${dot.id}`}
+            data-look={dot.look}
+            className="ace-port-dot"
+            style={{
+              left: dot.x,
+              top: dot.y,
+              opacity: dot.look === 'dim' ? 0.35 : 1,
+              ['--port-color' as string]: `var(--port-${dot.type})`,
+            }}
+          />
+        ))}
+      </div>
+    </ViewportPortal>
+  );
+});
+
 /**
  * Every edge's look, drawn above the nodes as the theme draws them (D332). It lives in React Flow's
  * viewport portal — after the node layer, in the same pan and zoom — and touches no pointer: React
