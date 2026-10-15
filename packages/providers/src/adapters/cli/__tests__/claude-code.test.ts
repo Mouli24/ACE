@@ -71,11 +71,19 @@ async function drain(stream: AsyncIterable<StreamChunk>): Promise<StreamChunk[]>
 describe('X1 Claude Code flags (spec §5.1, verified 2026-10-06)', () => {
   const req = { modelId: 'sonnet', prompt: 'p', outputTypes: ['text' as const], system: 'You are a node.' };
 
-  it('keeps the user’s hooks and plugins out and never prompts', () => {
+  it('keeps the user’s hooks and plugins out, with flags every Claude Code 2.1 accepts (D-098)', () => {
     expect([...CLAUDE_CODE_BASE_ARGS]).toEqual([
       '-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-      '--setting-sources', '', '--strict-mcp-config', '--permission-prompts', 'none',
+      '--setting-sources', '', '--strict-mcp-config',
     ]);
+    // 2.1.132 refuses `--permission-prompts` ("unknown option") and every turn exits 1.
+    expect(CLAUDE_CODE_BASE_ARGS).not.toContain('--permission-prompts');
+  });
+
+  it('never waits for a prompt: every preset names its permission mode (D-098)', () => {
+    for (const permission of ['read_only', 'edit_files', 'full_auto'] as const) {
+      expect(claudeCodeDialect.args(req, permission)).toContain('--permission-mode');
+    }
   });
 
   it.each([

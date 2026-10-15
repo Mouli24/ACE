@@ -15,10 +15,11 @@ import {
 import { listClaudeCodeModels } from './claude-models.js';
 
 /**
- * Claude Code in print mode (X1 spec §5.1). The flags were verified against Claude Code 2.1.282 on
- * 2026-10-06: `--setting-sources ""` keeps the user's own hooks and plugins (a SessionStart hook
- * that injects instructions, say) out of an agent run, and `--permission-prompts none` denies
- * anything the preset does not allow instead of waiting for a person who is not there.
+ * Claude Code in print mode (X1 spec §5.1). `--setting-sources ""` keeps the user's own hooks and
+ * plugins (a SessionStart hook that injects instructions, say) out of an agent run. Nothing waits
+ * for a person who is not there: print mode cannot prompt, and every preset below names its
+ * `--permission-mode`. `--permission-prompts none` is not passed (D-098): Claude Code 2.1.132
+ * refuses it as an unknown option, and every turn on such an install exited 1.
  */
 export const CLAUDE_CODE_BASE_ARGS = [
   '-p',
@@ -29,8 +30,6 @@ export const CLAUDE_CODE_BASE_ARGS = [
   '--setting-sources',
   '',
   '--strict-mcp-config',
-  '--permission-prompts',
-  'none',
 ] as const;
 
 /** D262's presets. `edit_files` drops the shell entirely: on Windows there is no shell sandbox. */
