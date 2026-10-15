@@ -20,7 +20,7 @@ code editor on the project folder). **Ctrl+Shift+1** and **Ctrl+Shift+2** do the
   **▶ running** count the Terminal. Warnings about saves and conflicts appear as notices.
 - **Footer:** where the cursor is, then the open file's indentation, encoding, line endings and
   language.
-- **Right:** the chat. **Ctrl+Alt+B**, or **Split** in the header, shows or hides it.
+- **Right:** the chat. **Ctrl+Alt+B**, or **Chat** in the header, shows or hides it.
 
 ## Files
 
@@ -160,8 +160,8 @@ project's files, from Ideate as from Forge. Without a folder, the chat answers a
 changes nothing.
 
 - **A coding-agent CLI node** (Claude Code, Codex, Gemini) works in the folder with its own tools.
-  Its provider's **Permission** decides what it may do: **Read-only**, **Edit project files**, or
-  **Full auto**, which also runs commands. A checkpoint can undo its changes to files, not what a
+  Its provider's **Permission** decides what it may do: **Read-only** or **Edit project files**
+  ([CLI agents](providers.md#cli-agents)). A checkpoint can undo its changes to files, not what a
   command did. A turn gets at least 10 minutes, as in a run.
 - **An API model** (an Agent or a Model node) can list, read, write and edit the project's files
   and look at `git status` and `git diff`: nothing that deletes, and never a command. It does so
