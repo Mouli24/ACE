@@ -3,6 +3,7 @@ import {
   type ApprovalDecisionRequest,
   type Id,
   type Run,
+  type RunState,
   type StartRunRequest,
 } from '@ace/contracts';
 import type { AceSocketStatus } from '@ace/sdk';
@@ -190,7 +191,8 @@ function useRunControl(action: (runId: Id) => Promise<Run>) {
        * A restart is a *new* run on the same snapshot (FR-CTL-004), so the overlay is cleared and
        * re-armed on it; pause, resume and stop keep folding the run already on screen.
        */
-      if (run.restartedFromRunId !== undefined) {
+      // PG-5.4: a replay is a new run too.
+      if (run.restartedFromRunId !== undefined || run.replayOf !== undefined) {
         arm(run.workflowId);
         begin(run.workflowId, run.id, run.status);
       }
@@ -202,6 +204,16 @@ export const usePauseRun = () => useRunControl((runId) => api().pauseRun(runId))
 export const useResumeRun = () => useRunControl((runId) => api().resumeRun(runId));
 export const useStopRun = () => useRunControl((runId) => api().stopRun(runId));
 export const useRestartRun = () => useRunControl((runId) => api().restartRun(runId));
+/**
+ * PG-5.4: replay a finished run — a new run answered from this one's recording, zero provider
+ * calls. Only COMPLETE and HALTED runs can be replayed ({@link canReplay}).
+ */
+export const useReplayRun = () => useRunControl((runId) => api().replayRun(runId));
+
+/** PG-5.4: whether a run in this state has a whole recording to replay. */
+export const canReplay = (status: RunState | undefined): boolean =>
+  status === 'COMPLETE' || status === 'HALTED';
+
 /** D323: a run started from Domain stays open until it is ended. */
 export const useEndRun = () => useRunControl((runId) => api().endRun(runId));
 

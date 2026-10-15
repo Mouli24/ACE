@@ -27,9 +27,11 @@ import { DeleteProjectDialog, RenameProjectDialog } from '../../projects/Project
 import { useProject } from '../../projects/hooks';
 import { ApprovalsDialog } from '../../runs/approvals/ApprovalsBadge';
 import {
+  canReplay,
   useApprovals,
   useEndRun,
   usePauseRun,
+  useReplayRun,
   useRestartRun,
   useResumeRun,
   useStopRun,
@@ -236,6 +238,21 @@ export function WorkspaceMenu({
               {ACTION_LABEL[action]}
             </DropdownMenuItem>
           ))}
+          {/* PG-5.4: a finished run plays back from its recording — no provider is called. */}
+          {run.canReplay && (
+            <DropdownMenuItem
+              data-testid="menu-run-replay"
+              disabled={run.busy}
+              onSelect={run.replay}
+            >
+              Replay run
+            </DropdownMenuItem>
+          )}
+          {run.runId !== undefined && (
+            <MenuLink to={`/runs/compare?a=${run.runId}`} testId="menu-run-compare">
+              Compare with…
+            </MenuLink>
+          )}
           {run.runId !== undefined && run.approvals > 0 && (
             <DropdownMenuItem
               data-testid="menu-approvals"
@@ -382,6 +399,7 @@ function useRunSection(workflowId: string) {
       return {
         runId: mine ? store.runId : undefined,
         allowedActions: mine ? store.allowedActions : undefined,
+        status: mine ? store.status : undefined,
       };
     }),
   );
@@ -393,7 +411,9 @@ function useRunSection(workflowId: string) {
     restart: useRestartRun(),
     end: useEndRun(),
   };
-  const busy = Object.values(mutations).some((mutation) => mutation.isPending);
+  const replayMutation = useReplayRun();
+  const busy =
+    Object.values(mutations).some((mutation) => mutation.isPending) || replayMutation.isPending;
   const allowed = new Set<RunAction>(run.allowedActions ?? []);
 
   const fire = (action: RunAction) => {
@@ -415,6 +435,16 @@ function useRunSection(workflowId: string) {
     startPending: flow.pending,
     dialog: flow.dialog,
     actions: run.runId === undefined ? [] : RUN_ACTIONS.filter((action) => allowed.has(action)),
+    canReplay: run.runId !== undefined && canReplay(run.status),
+    replay: () => {
+      const runId = run.runId;
+      if (runId === undefined) return;
+      replayMutation.mutate(runId, {
+        // The replay becomes the selected run, in the same mode (as a restart does, PG-3.5).
+        onSuccess: (result) => openRun(result.id),
+        onError: (error) => toast.error(error.message),
+      });
+    },
     approvals: approvals.data?.length ?? 0,
     busy,
     fire,

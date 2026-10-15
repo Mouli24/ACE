@@ -13,6 +13,7 @@ import { GuardrailsPage } from '../guardrails/GuardrailsPage';
 import { ProvidersPage } from '../providers/ProvidersPage';
 import { ProjectRunsPage } from '../runs/ProjectRunsPage';
 import { RunDetailPage } from '../runs/RunDetailPage';
+import { RunComparePage } from '../runs/compare/RunComparePage';
 import { SettingsPage } from '../settings/SettingsPage';
 import { ToolsLibraryPage } from '../library/ToolsLibraryPage';
 import { TimelinePage } from '../timeline/TimelinePage';
@@ -53,6 +54,8 @@ export const routes: RouteObject[] = [
       { path: 'projects/:projectId/runs', element: <ProjectRunsPage /> },
       { path: 'projects/:projectId/knowledge', element: <KnowledgeListPage /> },
       { path: 'knowledge/:kbId', element: <KnowledgeBasePage /> },
+      // PG-5.4: two runs side by side, `?a=&b=`; ranked above `runs/:runId` as a static segment.
+      { path: 'runs/compare', element: <RunComparePage /> },
       { path: 'runs/:runId', element: <RunDetailPage /> },
       { path: 'providers', element: <ProvidersPage /> },
       { path: 'guardrails', element: <GuardrailsPage /> },
