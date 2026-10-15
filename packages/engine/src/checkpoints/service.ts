@@ -334,8 +334,11 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
       announce(stored.checkpoint);
 
       let finishing: Promise<Checkpoint | undefined> | undefined;
+      const failedReason =
+        stored.checkpoint.status === 'failed' ? (stored.checkpoint.error ?? 'failed') : undefined;
       return {
         id,
+        ...(failedReason === undefined ? {} : { failed: failedReason }),
         finish: () => {
           finishing ??= serial(id, () => complete(id)).catch((error: unknown) => {
             logger.warn(

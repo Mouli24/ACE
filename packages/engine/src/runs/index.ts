@@ -18,6 +18,7 @@ import {
   type NodeState,
   type Page,
   type Part,
+  type Provider,
   type ProviderCheckResult,
   type Run,
   type RunSummary,
@@ -51,6 +52,7 @@ import type { TeamPromptInput } from '../prompts/index.js';
 import type { ApprovalService } from '../approvals/index.js';
 import type { BudgetService } from '../budgets/index.js';
 import type { NodeRunTurn } from '../chat/service.js';
+import { nodeWrites, undoUnavailableMessage } from '../checkpoints/writing.js';
 import { goalOf, isGoalDriven } from '../graph/validate.js';
 import { buildNodeContext } from '../context/builder.js';
 import type { ContextGuard } from '../context/guard.js';
@@ -2927,8 +2929,70 @@ export function createRunService(deps: RunServiceDeps): RunService {
     }
   }
 
-  /** Start driving a run that has been pre-flighted, and register its gate (FR-CTL-001..003). */
-  function startDriving(run: Run, seed?: DriveSeed): Promise<Run> {
+  /**
+   * PG-2.4 (D361): the run's checkpoint, begun before the run is RUNNING. A run that writes (a node
+   * with a project-writing tool, or a CLI allowed to edit) and whose checkpoint cannot begin gets an
+   * error issue and is BLOCKED with zero provider calls — unless the person chose "Run without
+   * undo" for this run, which leaves a warning instead. A run that only reads keeps D300's rule:
+   * the failure is logged and the run goes on.
+   */
+  async function prepareUndo(
+    run: Run,
+    providers: readonly Provider[],
+    withoutUndo: boolean,
+  ): Promise<{ recording?: CheckpointRecording; issue?: ValidationIssue }> {
+    const recorder = deps.checkpoints;
+    if (recorder === undefined) return {};
+    let reason: string | undefined;
+    let recording: CheckpointRecording | undefined;
+    try {
+      const project = await repository.projects.get(scope, run.projectId);
+      if (project === null || project.folderPath === '') return {};
+      recording = await recorder.begin(run.projectId, { kind: 'run', runId: run.id });
+      reason = recording.failed;
+    } catch (error) {
+      reason = error instanceof Error ? error.message : String(error);
+    }
+    if (reason === undefined) return recording === undefined ? {} : { recording };
+
+    const byId = new Map(providers.map((provider) => [provider.id, provider]));
+    const writer = run.snapshot.nodes.find((node) => nodeWrites(node, (id) => byId.get(id)));
+    logger.warn(
+      { subsystem: 'runs', runId: run.id, reason, writing: writer !== undefined },
+      'run checkpoint not begun',
+    );
+    const kept = recording === undefined ? {} : { recording };
+    if (writer === undefined) return kept;
+    if (withoutUndo) {
+      return {
+        ...kept,
+        issue: {
+          severity: 'warning',
+          code: 'running_without_undo',
+          message: `Running without undo, as you chose: ${reason}. What this run changes cannot be reverted.`,
+          nodeId: writer.id,
+        },
+      };
+    }
+    return {
+      issue: {
+        severity: 'error',
+        code: 'checkpoint_unavailable',
+        message: undoUnavailableMessage(reason, 'run'),
+        nodeId: writer.id,
+      },
+    };
+  }
+
+  /**
+   * Start driving a run that has been pre-flighted, and register its gate (FR-CTL-001..003).
+   * `prepared` is the checkpoint `begin` already started (PG-2.4); a re-drive begins its own.
+   */
+  function startDriving(
+    run: Run,
+    seed?: DriveSeed,
+    prepared?: { recording?: CheckpointRecording },
+  ): Promise<Run> {
     const gate = createRunGate(run.id);
     const unregister = deps.gates.register(gate);
     let domain: RunDomain | undefined;
@@ -2937,7 +3001,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const done = (async (): Promise<Run> => {
       // Domain (D309, D323): the run's live conversation, with what its log says it still owes.
       domain = await deps.domains?.open(run);
-      checkpoint = await beginRunCheckpoint(run);
+      checkpoint =
+        prepared === undefined ? await beginRunCheckpoint(run) : prepared.recording;
       return drive(run, gate, seed, domain);
     })()
       .catch(async (error: unknown) => {
@@ -2977,7 +3042,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
    */
   async function begin(
     run: Run,
-    extra: { issues?: ValidationIssue[]; seed?: DriveSeed } = {},
+    extra: { issues?: ValidationIssue[]; seed?: DriveSeed; withoutUndo?: boolean } = {},
   ): Promise<BegunRun> {
     const workflowId = run.workflowId;
 
@@ -3030,6 +3095,15 @@ export function createRunService(deps: RunServiceDeps): RunService {
         deps.policies === undefined ? null : await deps.policies.resolve(run.projectId);
       issues.push(...(await deps.budgets.preflightIssues({ projectId: run.projectId, policy })));
     }
+
+    // PG-2.4 (D361): only a run that would otherwise start begins a checkpoint; a writing run whose
+    // checkpoint cannot begin is BLOCKED here, before any provider call or file write.
+    let undo: { recording?: CheckpointRecording; issue?: ValidationIssue } | undefined;
+    if (!issues.some((issue) => issue.severity === 'error')) {
+      undo = await prepareUndo(run, providers, extra.withoutUndo === true);
+      if (undo.issue !== undefined) issues.push(undo.issue);
+    }
+    const ranWithoutUndo = undo?.issue?.code === 'running_without_undo';
 
     // Every issue `preflight` itself raises is an error; only a `warn` daily budget can be a
     // warning, and D79 says that one reports and lets the run start.
@@ -3089,7 +3163,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
       type: 'run.started',
       workflowId,
       runId: run.id,
-      payload: { run: toSummary(running) },
+      // PG-2.4 (D361): the one-time "Run without undo" is written to the run's events.
+      payload: { run: toSummary(running), ...(ranWithoutUndo ? { withoutUndo: true } : {}) },
     });
 
     // D312: a run that came with Domain settings records them, then its goal as the first message.
@@ -3117,7 +3192,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
       });
     }
 
-    return { run: running, done: startDriving(running, extra.seed) };
+    return { run: running, done: startDriving(running, extra.seed, undo ?? {}) };
   }
 
   const service: RunService = {
@@ -3168,7 +3243,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
         return tx.runs.create(scope, created);
       });
 
-      if (request.startFromNodeId === undefined) return begin(run);
+      if (request.startFromNodeId === undefined) return begin(run, { withoutUndo: request.withoutUndo === true });
 
       /*
        * Start from a node (FR-EXE-013, TC-EXE-012, D83). Every node above the chosen one has its
@@ -3199,6 +3274,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
       return begin(run, {
         issues: plan.issues,
+        withoutUndo: request.withoutUndo === true,
         // The copies are already COMPLETED rows, so the generic seed marks them COMPLETED and
         // delivers their outputs; the start node is IDLE and becomes ready when they land.
         seed: { nodeRuns: [], withDownstream: false },

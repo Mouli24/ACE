@@ -22,6 +22,12 @@ export type CheckpointMeta = {
 export interface CheckpointRecording {
   readonly id: string;
   /**
+   * PG-2.4 (D361): set when the "before" snapshot could not be taken — the checkpoint is `failed`
+   * from the start and nothing the writer does can be reverted. A writing run or turn stops here
+   * unless the person chose "Run without undo".
+   */
+  readonly failed?: string;
+  /**
    * `undefined` when nothing changed (the checkpoint is dropped); otherwise the checkpoint, which
    * is `pending`, or `failed` when the folder could not be snapshotted. Never throws, and a second
    * call answers what the first did.
