@@ -183,7 +183,11 @@ export interface ChatService {
    * this agent message (a reply or a failed turn). The old turn is marked `supersededAt` and a new
    * reply is appended; `messageId` is the user turn it answers.
    */
-  retryMessage(threadId: Id, messageId: Id, options?: { withoutUndo?: boolean }): Promise<ChatBegun>;
+  retryMessage(
+    threadId: Id,
+    messageId: Id,
+    options?: { withoutUndo?: boolean },
+  ): Promise<ChatBegun>;
   /** PG-2.2 (D359) `GET /chat/threads/:id/approvals`: the tool calls on the thread waiting on a person. */
   listApprovals(threadId: Id): Promise<ApprovalRequest[]>;
   /**
@@ -485,8 +489,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     const checkOf = (type: string): GuardrailCheck | undefined =>
       policy?.checks.find((check) => check.point === 'cost' && check.type === type);
     const stops = (check: GuardrailCheck | undefined): boolean =>
-      check === undefined ||
-      (check.enabled && check.action !== 'pass' && check.action !== 'warn');
+      check === undefined || (check.enabled && check.action !== 'pass' && check.action !== 'warn');
     const paramUsd = (check: GuardrailCheck | undefined): number | undefined => {
       const raw = check?.params['usd'];
       return typeof raw === 'number' && raw > 0 ? raw : undefined;
@@ -506,7 +509,10 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         const usd = paramUsd(dailyCheck) ?? settings.dailyBudgetUsd ?? undefined;
         if (usd !== undefined && usd !== null && usd > 0) {
           const day = now().slice(0, 10);
-          const spentUsd = await guardrailStoreFor(repository, scope).usage.costUsdForDay(scope, day);
+          const spentUsd = await guardrailStoreFor(repository, scope).usage.costUsdForDay(
+            scope,
+            day,
+          );
           caps.daily = { capUsd: usd, spentUsd };
         }
       }
@@ -571,10 +577,9 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       checkType: input.check.type,
       reason: input.reason,
       // The card shows the tool and its arguments with secret-shaped values masked (BR-07).
-      preview: maskSecrets(`${input.call.name} ${JSON.stringify(redactArgs(input.call.args))}`).slice(
-        0,
-        APPROVAL_PREVIEW_MAX,
-      ),
+      preview: maskSecrets(
+        `${input.call.name} ${JSON.stringify(redactArgs(input.call.args))}`,
+      ).slice(0, APPROVAL_PREVIEW_MAX),
       requestedAt: now(),
     };
     const decided = new Promise<ApprovalDecision>((resolve, reject) => {
@@ -736,6 +741,21 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
 
     /* D300/D302: the files before the turn, so what it changed can be reviewed and reverted. */
     let recording: CheckpointRecording | undefined;
+    /** PG-2.4 (D361): why the checkpoint could not begin; judged once the turn's tools are known. */
+    let checkpointFailure: string | undefined;
+    if (workspace !== undefined && deps.checkpoints !== undefined) {
+      try {
+        recording = await deps.checkpoints.begin(context.projectId, {
+          kind: 'chat',
+          threadId,
+          messageId: replyId,
+          nodeId: node.id,
+        });
+        checkpointFailure = recording.failed;
+      } catch (error) {
+        checkpointFailure = error instanceof Error ? error.message : String(error);
+      }
+    }
     /** PG-1.4 (D359): the provider that answers, for the cost rule (local $0, unpriced unknown). */
     let pricedProvider: PricedProvider | undefined;
 
@@ -835,46 +855,39 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
           : [];
       toolsOffered = offered.length > 0;
 
-      const providerRow = await repository.providers.get(scope, chosen.providerId).catch(() => null);
+      const providerRow = await repository.providers
+        .get(scope, chosen.providerId)
+        .catch(() => null);
       pricedProvider = providerRow ?? undefined;
 
       /*
-       * D300/D302, PG-2.4 (D361): the checkpoint before the turn. A turn that can write — an
-       * offered write tool, or a CLI whose preset may edit — and whose checkpoint cannot begin
+       * D300/D302, PG-2.4 (D361): a turn that can write and whose checkpoint could not begin
        * stops here, before any model call or tool runs, unless the person chose Run without undo.
        */
-      if (workspace !== undefined && deps.checkpoints !== undefined) {
-        let reason: string | undefined;
-        try {
-          recording = await deps.checkpoints.begin(context.projectId, {
-            kind: 'chat',
+      if (checkpointFailure !== undefined) {
+        // A writing turn: a write tool on offer, a node set up to write (as a run judges it), or
+        // a CLI whose preset may edit.
+        const writes =
+          offered.some((tool) => PROJECT_WRITING_TOOLS.includes(tool.definition.name)) ||
+          nodeWrites(node, () => providerRow ?? undefined) ||
+          (cli && (providerRow?.cliPermission ?? DEFAULT_CLI_PERMISSION) !== 'read_only');
+        logger.warn(
+          {
+            subsystem: 'chat',
             threadId,
-            messageId: replyId,
-            nodeId: node.id,
+            reason: checkpointFailure,
+            writes,
+            withoutUndo: context.withoutUndo === true,
+          },
+          'chat checkpoint did not start',
+        );
+        if (writes && context.withoutUndo !== true) {
+          throw new TurnRefusal({
+            kind: 'workflow',
+            code: 'checkpoint_unavailable',
+            message: undoUnavailableMessage(checkpointFailure, 'turn'),
+            retryable: true,
           });
-          reason = recording.failed;
-        } catch (error) {
-          reason = error instanceof Error ? error.message : String(error);
-        }
-        if (reason !== undefined) {
-          // A writing turn: a write tool on offer, a node set up to write (as a run judges it), or
-          // a CLI whose preset may edit.
-          const writes =
-            offered.some((tool) => PROJECT_WRITING_TOOLS.includes(tool.definition.name)) ||
-            nodeWrites(node, () => providerRow ?? undefined) ||
-            (cli && (providerRow?.cliPermission ?? DEFAULT_CLI_PERMISSION) !== 'read_only');
-          logger.warn(
-            { subsystem: 'chat', threadId, reason, writes, withoutUndo: context.withoutUndo === true },
-            'chat checkpoint did not start',
-          );
-          if (writes && context.withoutUndo !== true) {
-            throw new TurnRefusal({
-              kind: 'workflow',
-              code: 'checkpoint_unavailable',
-              message: undoUnavailableMessage(reason, 'turn'),
-              retryable: true,
-            });
-          }
         }
       }
 
@@ -905,7 +918,10 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       const beforeTool =
         guardrails === undefined || policy === null
           ? undefined
-          : async (tool: (typeof offered)[number], call: ChatToolRequest): Promise<ChatToolStep> => {
+          : async (
+              tool: (typeof offered)[number],
+              call: ChatToolRequest,
+            ): Promise<ChatToolStep> => {
               const point = evaluateChatTool(
                 policy,
                 {
