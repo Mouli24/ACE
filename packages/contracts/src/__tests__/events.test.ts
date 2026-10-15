@@ -285,6 +285,14 @@ const threadFrames: Record<string, { type: string; payload: unknown; seq?: numbe
     payload: { threadId: THREAD_ID, message: chatMessage },
     seq: 16,
   },
+  'chat.update': {
+    type: 'chat.update',
+    payload: {
+      threadId: THREAD_ID,
+      message: { ...chatMessage, supersededAt: '2026-10-15T10:00:00.000Z' },
+    },
+    seq: 17,
+  },
   'chat.token': { type: 'chat.token', payload: { threadId: THREAD_ID, delta: 'You ' } },
 };
 
@@ -362,7 +370,7 @@ describe('§2.4 node.token is transient, and round 4 §2.5 chat.token with it', 
     ]);
     expect([...PERSISTED_RUN_EVENT_TYPES]).not.toContain('node.token');
     expect(PERSISTED_RUN_EVENT_TYPES).toHaveLength(RUN_EVENT_TYPES.length - 1);
-    expect([...PERSISTED_THREAD_EVENT_TYPES]).toEqual(['chat.message']);
+    expect([...PERSISTED_THREAD_EVENT_TYPES]).toEqual(['chat.message', 'chat.update']);
   });
 
   it('refuses a seq on node.token, because it is never persisted or resumed', () => {
@@ -601,8 +609,10 @@ describe('FR-PRV-004 EngineEvent', () => {
       'an MCP status is lowercase, not a ProviderState',
     ).toBe(false);
     expect(
-      EngineEventSchema.safeParse({ ...mcp, payload: { serverId: MCP_SERVER_ID, status: 'connected' } })
-        .success,
+      EngineEventSchema.safeParse({
+        ...mcp,
+        payload: { serverId: MCP_SERVER_ID, status: 'connected' },
+      }).success,
       'the tool count says how many tools the registry gained',
     ).toBe(false);
   });
@@ -613,8 +623,10 @@ describe('FR-PRV-004 EngineEvent', () => {
 
   it('refuses a status that is not a ProviderState', () => {
     expect(
-      EngineEventSchema.safeParse({ ...frame, payload: { providerId: PROVIDER_ID, status: 'down' } })
-        .success,
+      EngineEventSchema.safeParse({
+        ...frame,
+        payload: { providerId: PROVIDER_ID, status: 'down' },
+      }).success,
     ).toBe(false);
   });
 });
@@ -633,12 +645,17 @@ describe('FR-EXE-014 the persisted event log', () => {
   });
 
   it('scopes an event to a run, a workflow, both or neither', () => {
-    expect(EventSchema.safeParse({ seq: 1, at: NOW, type: 'provider.status', payload: {} }).success).toBe(
-      true,
-    );
     expect(
-      EventSchema.safeParse({ seq: 1, at: NOW, workflowId: WORKFLOW_ID, type: 'workflow.updated', payload: {} })
-        .success,
+      EventSchema.safeParse({ seq: 1, at: NOW, type: 'provider.status', payload: {} }).success,
+    ).toBe(true);
+    expect(
+      EventSchema.safeParse({
+        seq: 1,
+        at: NOW,
+        workflowId: WORKFLOW_ID,
+        type: 'workflow.updated',
+        payload: {},
+      }).success,
     ).toBe(true);
   });
 
@@ -652,7 +669,9 @@ describe('FR-EXE-014 the persisted event log', () => {
 
   it('refuses a negative or fractional seq — resume depends on it being monotonic', () => {
     expect(EventSchema.safeParse({ seq: -1, at: NOW, type: 'x', payload: {} }).success).toBe(false);
-    expect(EventSchema.safeParse({ seq: 1.5, at: NOW, type: 'x', payload: {} }).success).toBe(false);
+    expect(EventSchema.safeParse({ seq: 1.5, at: NOW, type: 'x', payload: {} }).success).toBe(
+      false,
+    );
   });
 });
 
@@ -705,7 +724,8 @@ describe('round 4 §2.5 the five events this round adds', () => {
     for (const type of THREAD_EVENT_TYPES) {
       expect(ThreadEventSchema.safeParse(threadFrames[type]).success, type).toBe(true);
     }
-    expect([...THREAD_EVENT_TYPES]).toEqual(['chat.message', 'chat.token']);
+    // PG-1.6 (D352) adds chat.update, persisted like chat.message.
+    expect([...THREAD_EVENT_TYPES]).toEqual(['chat.message', 'chat.update', 'chat.token']);
   });
 
   it('FR-TOOL-009 logs the whole tool call, verdicts and all', () => {
@@ -715,7 +735,11 @@ describe('round 4 §2.5 the five events this round adds', () => {
     expect(
       RunEventSchema.safeParse({
         type: 'tool.call',
-        payload: { runId: RUN_ID, nodeRunId: NODE_RUN_ID, toolCall: { ...toolCall, toolName: 'Echo' } },
+        payload: {
+          runId: RUN_ID,
+          nodeRunId: NODE_RUN_ID,
+          toolCall: { ...toolCall, toolName: 'Echo' },
+        },
         seq: 14,
       }).success,
       'a tool name is snake_case',
@@ -750,14 +774,20 @@ describe('round 4 §2.5 the five events this round adds', () => {
       'a transient frame is never persisted or resumed',
     ).toBe(false);
     expect(
-      ThreadEventSchema.safeParse({ type: 'chat.message', payload: { threadId: THREAD_ID, message: chatMessage } })
-        .success,
+      ThreadEventSchema.safeParse({
+        type: 'chat.message',
+        payload: { threadId: THREAD_ID, message: chatMessage },
+      }).success,
       'chat.message is persisted, so it carries a seq',
     ).toBe(false);
   });
 
   it('rides the one whole-socket union, and isPersistedFrame tells them apart', () => {
-    for (const frame of [frames['tool.call'], frames['message.created'], threadFrames['chat.message']]) {
+    for (const frame of [
+      frames['tool.call'],
+      frames['message.created'],
+      threadFrames['chat.message'],
+    ]) {
       expect(isPersistedFrame(ServerFrameSchema.parse(frame)), JSON.stringify(frame)).toBe(true);
     }
     expect(isPersistedFrame(ServerFrameSchema.parse(threadFrames['chat.token']))).toBe(false);

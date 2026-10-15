@@ -177,6 +177,16 @@ export const ChatMessageSchema = z.strictObject({
   activity: z.array(ActivityItemSchema).optional(),
   /** D302/D300: the checkpoint of the files this turn changed; absent when it changed none. */
   checkpointId: IdSchema.optional(),
+  /**
+   * PG-1.6 (D352): a retry or an edit replaced this turn. It stays in the thread, collapsed as an
+   * earlier version, and is never part of a later prompt.
+   */
+  supersededAt: TimestampSchema.optional(),
+  /**
+   * PG-1.6 (D352): the person deleted this turn. `GET /chat/threads/:id` leaves it out; it stays in
+   * the event log and is never part of a later prompt.
+   */
+  deletedAt: TimestampSchema.optional(),
 });
 export type ChatMessage = z.infer<typeof ChatMessageSchema>;
 
@@ -286,6 +296,31 @@ export const ChatResponseSchema = z.strictObject({
   messageId: IdSchema,
 });
 export type ChatResponse = z.infer<typeof ChatResponseSchema>;
+
+/**
+ * PG-1.6 (D352), message actions. Each answers like `POST /nodes/:id/chat`: 202 with the new user
+ * turn's `{ threadId, messageId }`, the reply following over the socket.
+ *
+ * - `POST /chat/threads/:id/messages/:messageId/retry` (no body): re-run the turn that produced an
+ *   agent message, or a failed one. The old reply is marked `supersededAt`; a new turn is appended.
+ * - `POST /chat/threads/:id/messages/:messageId/edit` (`ChatEditRequest`): a user message. It and
+ *   every turn after it are marked `supersededAt`, and the edited text is sent as a new turn.
+ * - `DELETE /chat/threads/:id/messages/:messageId` → 204: hides one message (`deletedAt`).
+ * - `POST /chat/threads/:id/stop` → 200 `ChatStopResponse`: aborts the turn in flight, which is
+ *   stored as a failed turn of kind `user_cancelled`.
+ *
+ * Every change to an existing row is announced by a `chat.update` frame on the thread.
+ */
+export const ChatEditRequestSchema = z.strictObject({
+  content: z.array(PartSchema).min(1),
+});
+export type ChatEditRequest = z.infer<typeof ChatEditRequestSchema>;
+
+export const ChatStopResponseSchema = z.strictObject({
+  /** `false` when no turn was in flight. */
+  stopped: z.boolean(),
+});
+export type ChatStopResponse = z.infer<typeof ChatStopResponseSchema>;
 
 /** `GET /chat/threads/:id` → `{ thread, messages: ChatMessage[] }` (§2.4). */
 export const ChatThreadDetailSchema = z.strictObject({

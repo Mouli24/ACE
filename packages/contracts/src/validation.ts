@@ -18,8 +18,7 @@ const CROSS_TYPE_PAIRS: ReadonlyArray<readonly [DataType, DataType]> = [
 export type ConnectionRefusalCode = 'incompatible_types' | 'single_input_occupied';
 
 export type ConnectionCheck =
-  | { ok: true }
-  | { ok: false; code: ConnectionRefusalCode; reason: string };
+  { ok: true } | { ok: false; code: ConnectionRefusalCode; reason: string };
 
 function typesAreCompatible(from: DataType, to: DataType): boolean {
   if (from === to) return true;
@@ -133,12 +132,20 @@ export const ROUND_4_VALIDATION_ISSUE_CODES = [
  */
 export const ROUND_5_VALIDATION_ISSUE_CODES = ['missing_knowledge_base'] as const;
 
+/**
+ * The codes the product-gaps work adds. `missing_provider` (D358): an Agent/Model node with no
+ * provider chosen; `missing_model` keeps "provider set, no model", `provider_missing` a deleted
+ * provider. Pre-flight blocks on all three; a graph op that makes such a node is never refused.
+ */
+export const PRODUCT_GAPS_VALIDATION_ISSUE_CODES = ['missing_provider'] as const;
+
 export const VALIDATION_ISSUE_CODES = [
   ...ROUND_1_VALIDATION_ISSUE_CODES,
   ...ROUND_2_VALIDATION_ISSUE_CODES,
   ...ROUND_3_VALIDATION_ISSUE_CODES,
   ...ROUND_4_VALIDATION_ISSUE_CODES,
   ...ROUND_5_VALIDATION_ISSUE_CODES,
+  ...PRODUCT_GAPS_VALIDATION_ISSUE_CODES,
 ] as const;
 export const ValidationIssueCodeSchema = z.enum(VALIDATION_ISSUE_CODES);
 export type ValidationIssueCode = z.infer<typeof ValidationIssueCodeSchema>;

@@ -58,6 +58,12 @@ export const UsageSchema = z.object({
   source: UsageSourceSchema.optional(),
   /** D306: where `costUsd` came from — the provider's own report, or the catalog's price table. */
   costSource: z.enum(['reported', 'catalog']).optional(),
+  /**
+   * PG-1.4 (D359): `false` when the model has no price — an unpriced remote model, whose spend is
+   * unknown and must never read as $0. Absent or `true`: `costUsd` is the cost (a local model's is 0
+   * by rule).
+   */
+  costKnown: z.boolean().optional(),
   /** D313: the part of `tokensIn` read from a prompt cache; `tokensIn` already includes it. */
   cachedTokensIn: z.number().int().min(0).optional(),
 });

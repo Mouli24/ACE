@@ -263,6 +263,17 @@ export const ChatMessagePayloadSchema = z.strictObject({
 });
 export type ChatMessagePayload = z.infer<typeof ChatMessagePayloadSchema>;
 
+/**
+ * PG-1.6 (D352): an existing turn changed — superseded by a retry or an edit, or deleted. Carries
+ * the row as it now is; a client replaces its copy by `message.id`. Persisted on the thread, like
+ * `chat.message`. Domain's SSE `chat.update` (domain.ts) is a different stream and shape.
+ */
+export const ChatUpdatePayloadSchema = z.strictObject({
+  threadId: IdSchema,
+  message: ChatMessageSchema,
+});
+export type ChatUpdatePayload = z.infer<typeof ChatUpdatePayloadSchema>;
+
 /** Batched like `node.token`, and transient for the same reason (FR-CHAT-006). */
 export const ChatTokenPayloadSchema = z.strictObject({
   threadId: IdSchema,
@@ -357,6 +368,7 @@ export const RUN_EVENT_FRAME_SCHEMAS = [
  */
 export const THREAD_EVENT_FRAME_SCHEMAS = [
   persistedFrame('chat.message', ChatMessagePayloadSchema),
+  persistedFrame('chat.update', ChatUpdatePayloadSchema),
   transientFrame('chat.token', ChatTokenPayloadSchema),
 ] as const;
 
@@ -428,7 +440,7 @@ export const RUN_EVENT_TYPES = [
 ] as const;
 export type RunEventType = (typeof RUN_EVENT_TYPES)[number];
 
-export const THREAD_EVENT_TYPES = ['chat.message', 'chat.token'] as const;
+export const THREAD_EVENT_TYPES = ['chat.message', 'chat.update', 'chat.token'] as const;
 export type ThreadEventType = (typeof THREAD_EVENT_TYPES)[number];
 
 export const ENGINE_EVENT_TYPES = [
@@ -463,8 +475,7 @@ export type PersistedThreadEventType = Exclude<ThreadEventType, TransientEventTy
 
 const isTransient = (
   type: RunEventType | ThreadEventType | ProjectEventType,
-): type is TransientEventType =>
-  (TRANSIENT_EVENT_TYPES as readonly string[]).includes(type);
+): type is TransientEventType => (TRANSIENT_EVENT_TYPES as readonly string[]).includes(type);
 
 export const PERSISTED_RUN_EVENT_TYPES = RUN_EVENT_TYPES.filter(
   (type): type is PersistedRunEventType => !isTransient(type),
