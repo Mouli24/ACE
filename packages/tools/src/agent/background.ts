@@ -2,7 +2,11 @@ import { spawn } from 'node:child_process';
 
 import { killTree } from '../sandbox/runner.js';
 import { MODEL_OUTPUT_CHARS, OutputBuffer } from './output.js';
-import { type BackgroundProcesses, type BackgroundSnapshot } from './session.js';
+import {
+  type AgentCommandObserver,
+  type BackgroundProcesses,
+  type BackgroundSnapshot,
+} from './session.js';
 import { shellInvocation, type AgentShell } from './shell.js';
 
 /**
@@ -32,6 +36,8 @@ export interface BackgroundProcessesOptions {
   /** What one `command_output` returns per stream, at most. Default 30 000. */
   readonly returnChars?: number;
   readonly killWaitMs?: number;
+  /** PG-5.3: each command's output and end, for Forge's Terminal and Processes list. */
+  readonly observer?: AgentCommandObserver;
 }
 
 /** One background command as the engine lists it (not sent to a model). */
@@ -141,21 +147,31 @@ export function createBackgroundProcesses(
         exited,
       };
       processes.set(processId, tracked);
+      const watch = options.observer?.started({ nodeId, command, cwd, background: true });
 
-      const end = (code: number | null): void => {
+      const end = (code: number | null, failed = false): void => {
         if (!tracked.running) return;
         tracked.running = false;
         tracked.exitCode = code;
+        watch?.exited(code, failed);
         markExited();
       };
-      child.stdout.setEncoding('utf8').on('data', (chunk: string) => stdout.push(chunk));
-      child.stderr.setEncoding('utf8').on('data', (chunk: string) => stderr.push(chunk));
+      child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+        stdout.push(chunk);
+        watch?.output('stdout', chunk);
+      });
+      child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
+        stderr.push(chunk);
+        watch?.output('stderr', chunk);
+      });
       child.stdout.on('error', () => undefined);
       child.stderr.on('error', () => undefined);
       child.on('error', (error) => {
         if (child.pid === undefined) {
-          stderr.push(`Could not start the shell: ${error.message}\n`);
-          end(null);
+          const message = `Could not start the shell: ${error.message}\n`;
+          stderr.push(message);
+          watch?.output('stderr', message);
+          end(null, true);
         }
       });
       child.on('exit', (code) => end(code));

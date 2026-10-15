@@ -108,6 +108,11 @@ and links included.
   each in its own tab, with the package manager the project uses (pnpm, yarn, bun or npm).
 - **Processes**, beside the terminal, lists what runs, with **Stop**, and what ran, with how it
   ended. A command started from another browser tab shows there too; **Show** opens it in a tab.
+- **Agents' commands** show in Processes as well, marked **agent**: every command a node runs with
+  Shell commands, in the foreground or the background, with its output. They are read-only here —
+  no Stop, no typing into them; stopping the run stops them. They do not count toward the 8 below.
+  An agent's command is not confined to the project folder: it runs as you and can reach anything
+  you can, which is why each one asks before it runs.
 - Up to 8 commands run at once in a project. A tab keeps the last 1 MB of output.
 
 Each project chooses how far it trusts its terminal, on the project page under **Terminal** (in
@@ -205,11 +210,19 @@ takes a private snapshot of the folder first, and another when the agent stops. 
 between is a **checkpoint**, waiting for your review. The snapshots live in ACE's own data folder,
 never in your project's `.git`: your branches, staging area and stash are not touched.
 
+- **One checkpoint per writing step.** In a run, each step of a node that can change files (one
+  with Write files or Shell commands on, or a coding-agent CLI allowed to edit) is a checkpoint of
+  its own, so you can keep one node's work and revert another's. Those steps take turns within a
+  run, so each checkpoint holds only its own node's changes. A run whose nodes only read is one
+  checkpoint, as before.
 - **CHANGES**, at the top of the left column, lists the checkpoints, those still open first. Each
-  says where it came from (**Chat with** the node, or **Run** and the end of the run's id), when,
+  says where it came from (**Chat with** the node, **Run** and the end of the run's id, or **Run**
+  and the node whose step it was), when,
   its state (**Recording…** while the agent works, **To review**, **Kept**, **Reverted**, **Partly
   reverted**, or **Not revertible**), and each file it changed, with the lines added and removed.
-  Click a file's orange **±** in the Explorer to open Changes on its checkpoint.
+  Click a file's orange **±** in the Explorer to open Changes on its checkpoint. A run's
+  checkpoint links back to the run (**open the run at this node**), and the run's page lists its
+  checkpoints under **Changes to the project**, each with **Review in Forge**.
 - **In the chat**, a reply that changed files shows the same list as a card, with **Review**,
   **Keep all** and **Revert all**. Review opens Forge when you are in Ideate or Domain.
 - **Review:** click a file's name. A read-only tab, "_file_ (agent change)", shows the file before
@@ -276,18 +289,28 @@ Forge uses **Alt+W** to close an editor tab, and **Ctrl+P** lists your open file
 - A project of more than 200,000 files gets no checkpoints: each one says the project is too large.
 - A git repository inside the project is snapshotted as plain files: its files are covered, its own
   `.git` is not.
-- While a checkpoint records, an edit made outside Forge's editor and Explorer counts as the
-  agent's: another editor's, or a command's, even one you run in Forge's own terminal. It is listed
-  in the checkpoint, and Revert can undo it.
+- While a checkpoint records, a command you run in Forge's own terminal counts as yours: whatever
+  changes while it runs, and for about two seconds after it ends, is listed as **yours** and never
+  reverted. That holds for everything changed in that time, an agent's edits included, so a
+  long-running command (a dev server, a watcher) makes the agents' changes meanwhile yours too.
+  ACE sees these changes through Forge's file watcher, so they count as yours only while Forge is
+  open on the project.
+- An edit made outside Forge altogether (another editor, a terminal outside ACE) still counts as
+  the agent's while a checkpoint records. It is listed in the checkpoint, and Revert can undo it.
+- Saves in Forge and agents' file edits take turns on the same file: a save never lands between an
+  agent's check that it has seen the file and its write.
 - For about the first second of a checkpoint, while ACE takes the first snapshot, even a file you
   save in Forge can count as the agent's.
-- A Domain run that stays open records one checkpoint for the whole session, until it ends.
+- A Domain run that stays open records a checkpoint for each writing turn of a node; a turn that
+  only reads records none.
 - Chat turns in a project wait for each other, but runs do not wait for chat turns: a run and a chat
   turn writing in the same project at once can mix their changes in each other's checkpoints.
 - A renamed file shows as one file deleted and another added.
 - Review shows the agent's change (the file before and after the agent), not the file as it is now.
-- The two snapshots add about 2 seconds to each chat turn or run in a folder on Windows, even when
-  nothing changes.
+- The two snapshots add about 2 seconds to each chat turn, each writing node step of a run, and
+  each run that only reads, in a folder on Windows, even when nothing changes. Writing steps of one
+  run wait for each other, so a run with several writing nodes in parallel takes longer than it
+  did.
 - Old checkpoints are never cleaned up: the store in ACE's data folder (`~/.ace/checkpoints`
   unless `ACE_DATA_DIR` says otherwise) only grows, and deleting a project does not remove its
   store.

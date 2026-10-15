@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { createWriteStream, mkdirSync, writeFileSync, type WriteStream } from 'node:fs';
 import type { Server } from 'node:http';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 
 import {
   WS_CLOSE_FORBIDDEN_ORIGIN,
@@ -119,6 +119,7 @@ import {
   cannedResultsAt,
   createAgentSession,
   createFsProjectFiles,
+  type AgentCommandObserver,
   type OwnedAgentSession,
   createGitCheckpointStore,
   createProcessRunner,
@@ -419,6 +420,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     logger: logger.child({ subsystem: 'workspace' }),
     // D300: the person's own writes are never claimed by an agent's checkpoint
     onPersonWrite: (projectId, paths) => checkpoints.notePersonWrite(projectId, paths),
+    // PG-5.2: nor what their own terminal command changes (the processes below say when one runs)
+    onFilesChanged: (projectId, paths) => checkpoints.noteFilesChanged(projectId, paths),
   });
   // Forge's terminal (D301): a person's commands as supervised processes. Agents never get it.
   const processes = createProcessService({
@@ -427,6 +430,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     runner: createProcessRunner(),
     bus,
     logger: logger.child({ subsystem: 'processes' }),
+    onPersonCommand: (projectId, processId, running) =>
+      checkpoints.notePersonCommand(projectId, processId, running),
   });
   const hub = createWsHub({
     bus,
@@ -644,10 +649,41 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
    * Chat turns pass no node id and get none, so they behave as before (D302).
    */
   const agentSessions = new Map<Id, OwnedAgentSession>();
-  const agentSessionFor = (runId: Id): OwnedAgentSession => {
+  /**
+   * PG-5.3 (D361): a run's commands as read-only rows of its project's processes, so Forge's
+   * Terminal and Processes list show what an agent runs. The run's project is looked up once; the
+   * feed's calls queue behind that lookup in order, and a run without a project shows nothing.
+   */
+  const agentCommandsFor = (runId: Id, projectDir: string): AgentCommandObserver => {
+    const projectId = repository.runs
+      .get(LOCAL_SCOPE, runId)
+      .then((run) => run?.projectId)
+      .catch(() => undefined);
+    return {
+      started(spec) {
+        const rel = relative(projectDir, spec.cwd);
+        const cwd = rel === '' || rel.startsWith('..') ? '' : rel.split(sep).join('/');
+        const feed = projectId.then((id) =>
+          id === undefined
+            ? undefined
+            : processes.observeAgentCommand(id, {
+                runId,
+                nodeId: spec.nodeId,
+                command: spec.command,
+                cwd,
+              }),
+        );
+        return {
+          output: (stream, data) => void feed.then((open) => open?.output(stream, data)),
+          exited: (exitCode, failed) => void feed.then((open) => open?.exited(exitCode, failed)),
+        };
+      },
+    };
+  };
+  const agentSessionFor = (runId: Id, projectDir: string): OwnedAgentSession => {
     let session = agentSessions.get(runId);
     if (session === undefined) {
-      session = createAgentSession();
+      session = createAgentSession({ commands: agentCommandsFor(runId, projectDir) });
       agentSessions.set(runId, session);
     }
     return session;
@@ -673,7 +709,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
             ...(ctx.projectDir === undefined ? {} : { projectDir: ctx.projectDir }),
             ...(ctx.nodeId === undefined || ctx.projectDir === undefined
               ? {}
-              : { nodeId: ctx.nodeId, session: agentSessionFor(ctx.runId) }),
+              : { nodeId: ctx.nodeId, session: agentSessionFor(ctx.runId, ctx.projectDir) }),
             logger: toolLogger,
             signal: ctx.signal,
           }),

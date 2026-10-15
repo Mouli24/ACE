@@ -101,6 +101,7 @@ import {
   splitOutgoing,
   type LoopContinue,
 } from '../loops/index.js';
+import { createSemaphore } from '../providers/semaphore.js';
 import { createMergeArrivalLog, executeMergeNode, isMergeReady } from '../merge/index.js';
 import { downstreamOf } from './control/graph.js';
 import { createRunGate, type RunGate, type RunGateRegistry } from './control/gate.js';
@@ -663,10 +664,17 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const plannedRuns = new Map<Id, NodeRun>();
     /** The catalogue, read once: the cost point needs the price of the model a node would use. */
     const catalog = await repository.models.list(scope, {});
+    const providerRows = await repository.providers.list(scope);
     /** D313: each provider's type, so a turn's usage says which kind of provider spent it. */
-    const providerTypes = new Map(
-      (await repository.providers.list(scope)).map((provider) => [provider.id, provider.type]),
-    );
+    const providerTypes = new Map(providerRows.map((provider) => [provider.id, provider.type]));
+    /**
+     * PG-5.1 (D341, D361): each step of a node that can write the project folder is a checkpoint
+     * of its own, `{ kind: 'run', runId, nodeId }`, so one node's work can be reverted alone. The
+     * steps of writing nodes take turns (one at a time per run), so each checkpoint holds only its
+     * own node's changes; reading nodes run alongside as before.
+     */
+    const writers = await writingNodes(run, providerRows);
+    const writeTurns = createSemaphore(1);
 
     /*
      * Domain (D309, D323). A node may take more turns than the graph gives it — a human message, a
@@ -2169,6 +2177,21 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
     }
 
+    /**
+     * PG-5.1: one writing node step inside its own checkpoint — begun before the step's first
+     * attempt, finished once its last attempt ended (completed, failed, stopped). A checkpoint that
+     * cannot begin is stored `failed` and shown in Changes; the step goes on, as the run's own
+     * check already passed at start (D361) or the person chose to run without undo.
+     */
+    async function recordedStep(node: Node, step: () => Promise<void>): Promise<void> {
+      const recording = await beginStepCheckpoint(run, node.id);
+      try {
+        await step();
+      } finally {
+        await recording?.finish().catch(() => undefined);
+      }
+    }
+
     async function runNode(
       node: Node,
       iteration: number,
@@ -2294,7 +2317,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
       };
 
       try {
-        await attempts();
+        await (writers.has(node.id)
+          ? writeTurns.run(() => recordedStep(node, attempts))
+          : attempts());
       } finally {
         if (turnAbort !== undefined) domain?.endTurn(node.id, turnAbort);
         // DONE when the turn ended; cut short, the messages wait for the next turn (D309).
@@ -2969,16 +2994,65 @@ export function createRunService(deps: RunServiceDeps): RunService {
     }
   }
 
-  /** D300: the run's checkpoint, when its project has a folder; never a reason the run fails. */
+  /**
+   * PG-5.1: the snapshot's nodes that can change the project folder, as configured (D361) — none
+   * without a recorder or a folder.
+   */
+  async function writingNodes(run: Run, providers?: readonly Provider[]): Promise<ReadonlySet<Id>> {
+    if (deps.checkpoints === undefined) return new Set();
+    const project = await repository.projects.get(scope, run.projectId);
+    if (project === null || project.folderPath === '') return new Set();
+    const rows = providers ?? (await repository.providers.list(scope));
+    const byId = new Map(rows.map((provider) => [provider.id, provider]));
+    return new Set(
+      run.snapshot.nodes
+        .filter((node) => nodeWrites(node, (id) => byId.get(id)))
+        .map((node) => node.id),
+    );
+  }
+
+  /**
+   * D300: the checkpoint of a run whose nodes only read, when its project has a folder; never a
+   * reason the run fails. A run with a writing node has none: each writing step records its own
+   * (PG-5.1), so a change is never listed twice.
+   */
   async function beginRunCheckpoint(run: Run): Promise<CheckpointRecording | undefined> {
     const recorder = deps.checkpoints;
     if (recorder === undefined) return undefined;
     try {
+      if ((await writingNodes(run)).size > 0) return undefined;
       const project = await repository.projects.get(scope, run.projectId);
       if (project === null || project.folderPath === '') return undefined;
       return await recorder.begin(run.projectId, { kind: 'run', runId: run.id });
     } catch (error) {
       logger.warn({ subsystem: 'runs', runId: run.id, err: error }, 'run checkpoint not begun');
+      return undefined;
+    }
+  }
+
+  /** PG-5.1: one writing node step's checkpoint; `undefined` without a folder or a recorder. */
+  async function beginStepCheckpoint(
+    run: Run,
+    nodeId: Id,
+  ): Promise<CheckpointRecording | undefined> {
+    const recorder = deps.checkpoints;
+    if (recorder === undefined) return undefined;
+    try {
+      const project = await repository.projects.get(scope, run.projectId);
+      if (project === null || project.folderPath === '') return undefined;
+      const recording = await recorder.begin(run.projectId, { kind: 'run', runId: run.id, nodeId });
+      if (recording.failed !== undefined) {
+        logger.warn(
+          { subsystem: 'runs', runId: run.id, nodeId, reason: recording.failed },
+          'node step checkpoint failed; its changes cannot be reverted',
+        );
+      }
+      return recording;
+    } catch (error) {
+      logger.warn(
+        { subsystem: 'runs', runId: run.id, nodeId, err: error },
+        'node step checkpoint not begun',
+      );
       return undefined;
     }
   }
@@ -3008,12 +3082,21 @@ export function createRunService(deps: RunServiceDeps): RunService {
     try {
       const project = await repository.projects.get(scope, run.projectId);
       if (project === null || project.folderPath === '') return {};
-      recording = await recorder.begin(run.projectId, { kind: 'run', runId: run.id });
+      recording = await recorder.begin(run.projectId, {
+        kind: 'run',
+        runId: run.id,
+        nodeId: writer.id,
+      });
       reason = recording.failed;
     } catch (error) {
       reason = error instanceof Error ? error.message : String(error);
     }
-    if (reason === undefined) return recording === undefined ? {} : { recording };
+    // PG-5.1: the store works, so each writing step will record its own checkpoint; this probe
+    // recorded nothing and is dropped once finished.
+    if (reason === undefined) {
+      await recording?.finish().catch(() => undefined);
+      return {};
+    }
 
     logger.warn({ subsystem: 'runs', runId: run.id, reason }, 'run checkpoint not begun');
     const kept = recording === undefined ? {} : { recording };

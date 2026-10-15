@@ -5,6 +5,7 @@ import { type ToolDefinition } from '@ace/contracts';
 import { z } from 'zod';
 
 import { contentHash } from '../agent/ledger.js';
+import { projectWriteLocks } from '../agent/locks.js';
 import { type AgentSession } from '../agent/session.js';
 import { ToolError } from '../errors.js';
 import { assertInsideProject, assertWritable, projectRelative } from '../project/paths.js';
@@ -241,9 +242,13 @@ function agentOf(context: ToolContext): { session: AgentSession; nodeId: string 
     : undefined;
 }
 
-/** Runs `fn` under the run's per-path write lock, or directly without a session. */
+/**
+ * Runs `fn` under the file's write lock. PG-5.2 (D361): with a run session, its locks (the
+ * engine-wide set); without one — a chat turn's file tools — the engine-wide set directly, the
+ * same one Forge's saves take. Never a call that writes without the lock.
+ */
 const underLock = <T>(context: ToolContext, target: string, fn: () => Promise<T>): Promise<T> =>
-  context.session === undefined ? fn() : context.session.locks.withLock(target, fn);
+  (context.session?.locks ?? projectWriteLocks).withLock(target, fn);
 
 /**
  * Read-before-edit (agentic nodes): an existing file may be overwritten or edited only by a node

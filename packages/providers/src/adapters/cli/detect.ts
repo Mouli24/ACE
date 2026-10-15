@@ -14,6 +14,7 @@ import {
 
 import { resolveCommand, type ResolvedCommand } from './resolve.js';
 import { EXIT_DRAIN_MS } from './runner.js';
+import { cliEnv } from './env.js';
 
 /**
  * The terminal scan (X1, FR-PRV-008): is each CLI on PATH, which version, is it signed in?
@@ -58,6 +59,8 @@ export function probeCommand(
     let child: ChildProcess;
     try {
       child = spawn(command.command, [...command.prefixArgs, ...args], {
+        // D-093: a version or sign-in probe gets the allowlist too (every CLI's own variables)
+        env: cliEnv(process.env, process.platform),
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
         timeout: timeoutMs,

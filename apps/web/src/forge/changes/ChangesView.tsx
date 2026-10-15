@@ -2,6 +2,7 @@ import type { Checkpoint } from '@ace/contracts';
 import { AceApiError } from '@ace/sdk';
 import { cn } from '@ace/ui';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 
 import { ago, nodeStatusLook } from '../../theme/format';
 import { useWorkflowGraph } from '../../workflows/hooks';
@@ -14,6 +15,7 @@ import {
   actionFailure,
   failureNote,
   pendingFiles,
+  runLink,
   sourceLabel,
 } from './present';
 import { openReview } from './review-actions';
@@ -116,6 +118,7 @@ function CheckpointEntry({
   const pending = pendingFiles(checkpoint);
   const failure = actionFailure(action.error);
   const [confirmRevert, setConfirmRevert] = useState(false);
+  const toRun = runLink(checkpoint);
   useEffect(() => {
     if (focused) element.current?.scrollIntoView?.({ block: 'nearest' });
   }, [focused]);
@@ -136,13 +139,26 @@ function CheckpointEntry({
         </span>
         <StatusChip checkpoint={checkpoint} />
       </header>
-      <time
-        dateTime={checkpoint.createdAt}
-        title={new Date(checkpoint.createdAt).toLocaleString()}
-        className="font-machine text-[9.5px] text-[var(--muted)]"
-      >
-        {ago(checkpoint.createdAt)}
-      </time>
+      <span className="flex items-center gap-[8px]">
+        <time
+          dateTime={checkpoint.createdAt}
+          title={new Date(checkpoint.createdAt).toLocaleString()}
+          className="font-machine text-[9.5px] text-[var(--muted)]"
+        >
+          {ago(checkpoint.createdAt)}
+        </time>
+        {/* PG-5.1: back to the run that made these changes, on the node whose step it was. */}
+        {toRun !== undefined && (
+          <Link
+            to={toRun}
+            data-testid={`checkpoint-run-link-${checkpoint.id}`}
+            className="font-machine text-[9.5px] text-[var(--muted)] underline-offset-2 hover:text-[var(--ink)] hover:underline"
+          >
+            {checkpoint.nodeId === undefined ? 'open the run' : 'open the run at this node'}
+            <span aria-hidden>&nbsp;→</span>
+          </Link>
+        )}
+      </span>
       {checkpoint.status === 'failed' && (
         <p role="alert" className="m-0 text-[11.5px] leading-[1.4] text-[#c94c27]">
           {failureNote(checkpoint)}

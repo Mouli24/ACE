@@ -195,7 +195,9 @@ export function runScript(
   const tab = tabOf(projectId, tabId);
   if (tab !== undefined) store.setLine(projectId, tabId, busyLine(tab.line));
   // No cwd: a script always runs at the project root (decision 5), whatever the tab's folder.
-  return enqueue(projectId, tabId, () => startInTab(projectId, tabId, { script: name }, queryClient));
+  return enqueue(projectId, tabId, () =>
+    startInTab(projectId, tabId, { script: name }, queryClient),
+  );
 }
 
 /**
@@ -209,6 +211,14 @@ export async function openProcessInTab(
 ): Promise<void> {
   const store = useTerminalStore.getState();
   const tabId = store.newTab(projectId, { label: summary.label, cwd: summary.cwd });
+  // PG-5.3: an agent's command is shown, not driven — the engine refuses input and Stop for it.
+  if (summary.agent !== undefined) {
+    store.write(
+      projectId,
+      tabId,
+      `\u001b[2m# An agent's command (read-only here; stop its run to stop it)\u001b[0m\r\n`,
+    );
+  }
   store.write(projectId, tabId, `${summary.command}\r\n`);
   const tab = tabOf(projectId, tabId);
   if (tab !== undefined) store.setLine(projectId, tabId, busyLine(tab.line));
