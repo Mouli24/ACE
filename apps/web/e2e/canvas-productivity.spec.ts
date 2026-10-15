@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 import {
   addFromDialog,
+  answerProviderPicker,
   clearOfMinimap,
   closeSettings,
   connect,
@@ -352,6 +353,8 @@ test.describe('Canvas productivity (round 5)', () => {
       await expect(nodeMenu.getByRole('menuitem', { name })).toBeVisible();
     }
     await nodeMenu.getByRole('menuitem', { name: /Duplicate/ }).click();
+    // D351 (PG-1.3): this seeded agent has no provider, so its copy asks for one first
+    await answerProviderPicker(page);
     await settled(page, seeded.workflowId, 3);
 
     // empty Canvas

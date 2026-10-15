@@ -13,6 +13,7 @@ import {
   type KbFixture,
 } from '../src/mocks/knowledge-fixtures';
 import {
+  answerProviderPicker,
   closeSettings,
   closeSheet,
   dragBy,
@@ -490,6 +491,8 @@ test.describe('Round 5 §1 — the demo script, end to end against the mock engi
       .getByTestId('pane-context-menu')
       .getByRole('menuitem', { name: 'Add Agent' })
       .click();
+    // D351 (PG-1.3): the Agent waits for a provider and model; the settings below then refine them
+    await answerProviderPicker(page, { provider: /^Mock/, model: /Mock memory/ });
     await expect
       .poll(async () => (await serverGraph(page, workflowId)).nodes.length)
       .toBe(before.length + 1);
