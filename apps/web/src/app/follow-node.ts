@@ -77,13 +77,22 @@ export function useNodeFocusSync(mode: WorkflowMode | undefined): void {
   // `null`: not run yet, so the first pass counts as the URL arriving.
   const seenUrl = useRef<string | undefined | null>(null);
   const seenFocus = useRef(focused);
+  /**
+   * The `?node=` this hook last wrote, until the URL shows it. That change is the store's own echo,
+   * not the URL speaking: the store may have moved on since (React Flow reports "nothing selected"
+   * for a moment while a Canvas mounts, then the node is selected again), so it is not applied back.
+   */
+  const written = useRef<{ node: string | undefined } | null>(null);
 
   useEffect(() => {
     const urlChanged = seenUrl.current !== urlNode;
     const focusChanged = seenFocus.current !== focused;
     seenUrl.current = urlNode;
     seenFocus.current = focused;
-    if (urlChanged) {
+    const echo = urlChanged && written.current !== null && written.current.node === urlNode;
+    if (echo) written.current = null;
+    if (urlChanged && !echo) {
+      written.current = null;
       if (urlNode !== undefined && focused !== urlNode) {
         useSelectionStore.getState().setSelection([urlNode], []);
       } else if (urlNode === undefined && focused !== undefined) {
@@ -92,7 +101,8 @@ export function useNodeFocusSync(mode: WorkflowMode | undefined): void {
       }
       return;
     }
-    if (!focusChanged || mode !== 'ideate' || focused === urlNode) return;
+    if (!(focusChanged || echo) || mode !== 'ideate' || focused === urlNode) return;
+    written.current = { node: focused };
     setSearch(
       (current) => {
         const query = new URLSearchParams(current);

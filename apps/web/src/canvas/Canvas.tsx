@@ -524,15 +524,18 @@ function CanvasInner({
    */
   const focusNode = useCallback(
     (nodeId: string): boolean => {
-      const target = flow.getNode(nodeId);
+      const target = flow.getInternalNode(nodeId);
       const { width, height, panZoom } = rf.getState();
-      if (target === undefined || panZoom === null || width <= 0 || height <= 0) return false;
+      // measured: React Flow has mounted the card, and settled its first selection and view
+      if (target?.measured?.width === undefined || panZoom === null || width <= 0 || height <= 0) {
+        return false;
+      }
       fitOnLoad.current = false;
       setSelection([nodeId], []);
-      const rect = rectOf(target);
-      void flow.setViewport(
-        centreOn(flow.getViewport(), rect.x + rect.w / 2, rect.y + rect.h / 2, width, height),
-      );
+      const { x, y } = target.internals.positionAbsolute;
+      const w = target.measured.width ?? 0;
+      const h = target.measured.height ?? 0;
+      void flow.setViewport(centreOn(flow.getViewport(), x + w / 2, y + h / 2, width, height));
       return true;
     },
     [flow, rf, setSelection],
@@ -824,7 +827,11 @@ function CanvasInner({
       toFlowNodes(nodes, edges, armedPortId, onPortKey, providers.data ?? [], providers.isSuccess),
     [nodes, edges, armedPortId, onPortKey, providers.data, providers.isSuccess],
   );
-  const [flowNodes, setFlowNodes] = useState<AceFlowNode[]>(serverNodes);
+  // Mounted with the selection it arrives with (PG-3.4: a node followed here from Domain or
+  // Forge), so its card is drawn selected from the first frame.
+  const [flowNodes, setFlowNodes] = useState<AceFlowNode[]>(() =>
+    serverNodes.map((node) => ({ ...node, selected: selectedNodeIds.includes(node.id) })),
+  );
 
   /**
    * Nodes to select once they are on the Canvas: what Add node, a drop, Duplicate and Paste just
