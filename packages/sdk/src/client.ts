@@ -148,7 +148,11 @@ import {
   ChatResponseSchema,
   ChatThreadSchema,
   ChatThreadDetailSchema,
+  ChatEditRequestSchema,
+  ChatStopResponseSchema,
   type Artifact,
+  type ChatEditRequest,
+  type ChatStopResponse,
   type ChatRequest,
   type ChatResponse,
   type ChatThread,
@@ -682,6 +686,26 @@ export function createAceClient(options: AceClientOptions) {
       request('GET', `/chat/threads/${id}`, ChatThreadDetailSchema),
     deleteChatThread: (id: Id): Promise<void> =>
       request('DELETE', `/chat/threads/${id}`, NoContentSchema),
+
+    /*
+     * PG-1.6 (D352) message actions. Retry and edit answer 202 `{ threadId, messageId }` like
+     * `postNodeChat`; the replaced rows arrive as `chat.update`, the new reply as `chat.message`.
+     */
+    retryChatMessage: (threadId: Id, messageId: Id): Promise<ChatResponse> =>
+      request(
+        'POST',
+        `/chat/threads/${threadId}/messages/${messageId}/retry`,
+        ChatResponseSchema,
+      ),
+    editChatMessage: (threadId: Id, messageId: Id, body: ChatEditRequest): Promise<ChatResponse> =>
+      request('POST', `/chat/threads/${threadId}/messages/${messageId}/edit`, ChatResponseSchema, {
+        schema: ChatEditRequestSchema,
+        value: body,
+      }),
+    deleteChatMessage: (threadId: Id, messageId: Id): Promise<void> =>
+      request('DELETE', `/chat/threads/${threadId}/messages/${messageId}`, NoContentSchema),
+    stopChatThread: (threadId: Id): Promise<ChatStopResponse> =>
+      request('POST', `/chat/threads/${threadId}/stop`, ChatStopResponseSchema),
 
     /* Knowledge bases (round 5 §2.1/§2.9, FR-RAG-001/002/003/004/008/009) */
 
