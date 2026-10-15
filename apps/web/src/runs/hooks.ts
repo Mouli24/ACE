@@ -7,7 +7,7 @@ import {
 } from '@ace/contracts';
 import type { AceSocketStatus } from '@ace/sdk';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { api } from '../app/api';
 import { getSocket } from '../app/socket';
@@ -48,7 +48,14 @@ export function useRunEvents(workflowId?: Id): void {
      * (FR-CTL-006). The overlay already has them from the frame — this is for everything reading the
      * record: the history row, and any screen opened after the fact (BR-01).
      */
-    for (const type of ['run.started', 'run.paused', 'run.resumed'] as const) {
+    // PG-3.3: a block mid-run (D305) and a Domain run parking (D323) change the record too.
+    for (const type of [
+      'run.started',
+      'run.paused',
+      'run.resumed',
+      'run.blocked',
+      'run.parked',
+    ] as const) {
       offs.push(
         socket.on(type, (_payload, frame) => {
           const runId = frame.type === 'run.started' ? frame.payload.run.id : frame.payload.runId;
@@ -141,51 +148,6 @@ export function useNodeRunsOnce(runId: Id | undefined) {
     queryFn: () => api().listNodeRuns(runId ?? ''),
     enabled: Boolean(runId),
   });
-}
-
-/**
- * Adopt the workflow's active run when a Canvas opens (FR-EXE-014). A reload loses the in-memory
- * overlay, and the socket cannot help: it seeds `lastSeq` from `hello`, so `resume` replays nothing
- * from before the load. The records are the way back — after which live frames carry on normally.
- */
-export function useAdoptActiveRun(workflowId: Id | undefined): void {
-  const adopt = useRunStore((store) => store.adopt);
-  /*
-   * A ref, not state: there is nothing to render here, and a `setState` after the await re-rendered
-   * the Canvas a few hundred milliseconds after mount — right where a drag-to-connect begins, which
-   * React Flow then lost. Nothing to adopt has to mean nothing happens.
-   */
-  const asked = useRef<string>();
-
-  useEffect(() => {
-    if (workflowId === undefined || asked.current === workflowId) return;
-    asked.current = workflowId;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const page = await api().listRuns(workflowId);
-        const newest = page.items[0];
-        // Only a run that is still going: a finished one belongs to the history, not the Canvas.
-        const live =
-          newest !== undefined &&
-          (newest.status === 'RUNNING' ||
-            newest.status === 'PAUSED' ||
-            newest.status === 'PREFLIGHT');
-        if (!live || cancelled) return;
-        const [run, nodeRuns, approvals] = await Promise.all([
-          api().getRun(newest.id),
-          api().listNodeRuns(newest.id),
-          api().listApprovals(newest.id),
-        ]);
-        if (!cancelled) adopt(workflowId, run, nodeRuns, approvals);
-      } catch {
-        // A workflow with no run history is the normal case; nothing to adopt is not an error.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [workflowId, adopt]);
 }
 
 /** Which Input nodes still have nothing to send — what the input dialog asks for (FR-NODE-011). */
