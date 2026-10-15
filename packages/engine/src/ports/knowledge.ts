@@ -172,7 +172,16 @@ export interface SummaryCacheRepository {
 export interface UsageRepository {
   /** D234 semantics. */
   aggregate(scope: Scope, query: UsageQuery): Promise<UsageResponse>;
+  /**
+   * D234: one UTC day of node runs. PG-4.3: `costKnown: false` when part of it is unknown (D359).
+   * `aggregate` also folds direct-chat replies in, as `source: 'chat'` buckets.
+   */
   dayTotals(scope: Scope, day: string): Promise<Usage>;
+  /**
+   * PG-4.3: one UTC day of direct-chat replies (a turn a run wrote is its node run's, never counted
+   * twice). Absent on an older store: the day totals then hold node runs only.
+   */
+  chatDayTotals?(scope: Scope, day: string): Promise<Usage>;
   /** F10. */
   healthCounts(scope: Scope): Promise<HealthMetrics>;
 }

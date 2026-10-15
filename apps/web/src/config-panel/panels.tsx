@@ -36,6 +36,7 @@ import {
   SelectField,
   TextAreaField,
   TextField,
+  UsdCapField,
 } from './fields';
 import { BUDGET_RANGE, EXECUTION_RANGES } from './validation';
 
@@ -87,7 +88,7 @@ function ExecutionFields({
   /** More numbers that sit in the same grid (the Agent's context budget). */
   children?: ReactNode;
 }) {
-  const set = (key: keyof AgentConfig['execution']) => (value: number) =>
+  const set = (key: 'temperature' | 'maxTokens' | 'timeoutMs' | 'retries') => (value: number) =>
     onChange({ ...execution, [key]: value });
   return (
     <div className={FIELD_GRID_CLASS} data-testid="execution-fields">
@@ -114,6 +115,13 @@ function ExecutionFields({
         value={execution.retries}
         range={EXECUTION_RANGES.retries}
         onCommit={set('retries')}
+      />
+      <UsdCapField
+        label="Max cost per run of this node (USD)"
+        hint="Over it, the node fails with a budget reason. Blank is no cap."
+        testId="node-max-cost"
+        value={execution.maxCostUsd}
+        onCommit={(maxCostUsd) => onChange({ ...execution, maxCostUsd })}
       />
       {children}
     </div>

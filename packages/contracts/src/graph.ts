@@ -127,6 +127,12 @@ export const ExecutionSettingsSchema = z.object({
   maxTokens: z.number().int().min(1).max(200_000).default(DEFAULT_EXECUTION_SETTINGS.maxTokens),
   timeoutMs: z.number().int().min(1000).max(600_000).default(DEFAULT_EXECUTION_SETTINGS.timeoutMs),
   retries: z.number().int().min(0).max(5).default(DEFAULT_EXECUTION_SETTINGS.retries),
+  /**
+   * PG-4.3: what this node may spend in one run, across every turn and iteration of it. A node whose
+   * recorded cost goes over it ends FAILED (`GUARDRAIL_VIOLATION`, code `node_budget_exceeded`). An
+   * unknown cost (D359) is never refused. Absent or `null` (how a patch clears it, D72): no cap.
+   */
+  maxCostUsd: BudgetUsdSchema.nullable().optional(),
 });
 export type ExecutionSettings = z.infer<typeof ExecutionSettingsSchema>;
 
