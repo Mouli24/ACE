@@ -4,7 +4,6 @@ import type { Provider } from '@ace/contracts';
 import { test } from '@playwright/test';
 
 import {
-  NOT_BUILT,
   api,
   card,
   expect,
@@ -70,8 +69,6 @@ test.describe('PG-1.4 local and open models get their own section', () => {
   test('the Providers page lists a detected Ollama under "Local & open models" with its models', async ({
     page,
   }) => {
-    // PG-1.4: the Providers page has no grouping today.
-    test.fail(NOT_BUILT, 'PG-1.4: no "Local & open models" section on the Providers page');
     await mockProvider();
     await ollamaProvider();
     await open(page, '/providers');
@@ -93,8 +90,6 @@ test.describe('PG-1.4 local and open models get their own section', () => {
   });
 
   test('the node provider picker groups Ollama under "Local & open models"', async ({ page }) => {
-    // PG-1.4: the node settings Provider select is one flat list.
-    test.fail(NOT_BUILT, 'PG-1.4: the Provider select is not grouped');
     const providerId = await mockProvider();
     const ollamaId = await ollamaProvider();
     const flow = await seedAgents('local-picker', [

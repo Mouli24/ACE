@@ -1,7 +1,6 @@
 import { test, type Page } from '@playwright/test';
 
 import {
-  NOT_BUILT,
   api,
   card,
   expect,
@@ -39,8 +38,6 @@ test.describe('PG-1.3 no node without a provider', () => {
   test('Add node creates nothing until a provider is chosen, and nothing on Cancel', async ({
     page,
   }) => {
-    // PG-1.3: Add node makes an Agent at once, on whichever provider is first.
-    test.fail(NOT_BUILT, 'PG-1.3: Add node creates a node before a provider is picked');
     const { workflowId } = await emptyCanvas(page, 'add-cancel');
 
     await page.getByTestId('new-node-button').click();
@@ -57,8 +54,6 @@ test.describe('PG-1.3 no node without a provider', () => {
   });
 
   test('Add node creates the node with the chosen provider and model', async ({ page }) => {
-    // PG-1.3: there is no picker; the provider is whatever the planner chose.
-    test.fail(NOT_BUILT, 'PG-1.3: no provider/model picker on Add node');
     await mockProvider('PG other mock');
     const chosen = await mockProvider('PG chosen mock');
     const { workflowId } = await emptyCanvas(page, 'add-pick');
@@ -87,9 +82,8 @@ test.describe('PG-1.3 no node without a provider', () => {
   });
 
   test('pre-flight blocks a providerless node with missing_provider', async ({ page }) => {
-    // PG-1.3, D358: pre-flight names the issue `missing_provider` (today `missing_model` /
+    // PG-1.3, D358: pre-flight names the issue `missing_provider` (not `missing_model` /
     // `provider_missing`).
-    test.fail(NOT_BUILT, 'PG-1.3: pre-flight has no missing_provider issue');
     const flow: Seeded = await seedAgents('providerless', [{ name: 'Orphan' }]);
     await openCanvas(page, flow.projectId, flow.workflowId);
     await expect(card(page, flow.byName('Orphan').id)).toBeVisible({ timeout: 15_000 });
@@ -106,9 +100,8 @@ test.describe('PG-1.3 no node without a provider', () => {
   test('an imported workflow with an unknown provider shows the "Choose a provider" state', async ({
     page,
   }) => {
-    // PG-1.3: today the card says "provider missing" in small print; the spec is a red card in a
+    // PG-1.3: once only "provider missing" in small print; the spec is a red card in a
     // visible "Choose a provider" state.
-    test.fail(NOT_BUILT, 'PG-1.3: no "Choose a provider" state on the card');
     const flow = await seedAgents('unknown-provider', [
       { name: 'Imported', providerId: '01J000000000000000000ABCDE', modelId: 'mock-text' },
     ]);
