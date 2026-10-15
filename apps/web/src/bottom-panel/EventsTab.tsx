@@ -11,6 +11,7 @@ import { GUARDRAIL_ACTION_LABEL } from '@ace/ui';
 import { useMemo, useState } from 'react';
 
 import { haltReasonText, money } from '../runs/controls/HaltReason';
+import { costText } from '../runs/CostValue';
 
 /**
  * The bottom pane's "Events" tab (round 3 §5 item 7, NFR-OBS-01): the run's events in the order the
@@ -142,7 +143,7 @@ export function describeEvent(event: PersistedRunEvent, nameOf: (nodeId: Id) => 
     case 'edge.transfer':
       return `${nameOf(event.payload.fromNodeId)} → ${nameOf(event.payload.toNodeId)}: ${event.payload.summary}`;
     case 'usage.updated':
-      return `run cost so far ${money(event.payload.totals.costUsd)}`;
+      return `run cost so far ${costText(event.payload.totals, money)}`;
     case 'node.approval_required': {
       const { request } = event.payload;
       return `${request.nodeName} is waiting for you — ${request.checkType} at ${request.point}: ${request.reason}`;

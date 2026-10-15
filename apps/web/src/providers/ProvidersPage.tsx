@@ -1,22 +1,30 @@
-import { DEFAULT_CLI_PERMISSION, isCliProviderType, type Provider } from '@ace/contracts';
+import {
+  DEFAULT_CLI_PERMISSION,
+  isCliProviderType,
+  type Provider,
+  type ProviderGroup,
+} from '@ace/contracts';
 import {
   Button,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  Icons,
   ProviderStatusChip,
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
 } from '@ace/ui';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 
 import { clockTime } from '../theme/format';
 import { ModelsTab } from './ModelsTab';
 import { AddProviderDialog, DeleteProviderDialog, EditProviderDialog } from './ProviderDialogs';
+import { LocalModelsList, PullModelHint } from './ProviderModelPicker';
 import { ProviderMark } from './ProviderMark';
+import { groupProviders } from './provider-groups';
 import { useCheckProvider, useProviderDetect, useProviders } from './hooks';
 import { CLI_PERMISSION_LABEL, PROVIDER_TYPE_LABEL } from './provider-meta';
 
@@ -84,11 +92,17 @@ export function ProvidersPage() {
                 No providers yet. Add one — the mock provider needs no key and runs offline.
               </p>
             )}
-            <ul className="flex flex-col gap-[10px]">
-              {providers.data?.map((provider) => (
-                <ProviderRow key={provider.id} provider={provider} onAction={setDialog} />
+            {/* PG-1.4: the providers in their sections; Local & open models is always shown. */}
+            {providers.data !== undefined &&
+              groupProviders(providers.data, ['local']).map((section) => (
+                <ProviderSectionView
+                  key={section.group}
+                  group={section.group}
+                  label={section.label}
+                  providers={section.providers}
+                  onAction={setDialog}
+                />
               ))}
-            </ul>
           </TabsContent>
 
           <TabsContent value="models">
@@ -113,13 +127,65 @@ export function ProvidersPage() {
   );
 }
 
+/**
+ * One PG-1.4 section — Cloud APIs, Local & open models, CLI agents, Custom endpoints, Test
+ * providers. Local & open models also lists what each runtime has on this machine (size,
+ * tools/JSON, "Free · runs on your machine"), and says how to pull a model when there is none.
+ */
+function ProviderSectionView({
+  group,
+  label,
+  providers,
+  onAction,
+}: {
+  group: ProviderGroup;
+  label: string;
+  providers: Provider[];
+  onAction: (dialog: DialogState) => void;
+}) {
+  const headingId = `provider-section-${group}`;
+  return (
+    <section
+      aria-labelledby={headingId}
+      data-testid={`provider-section-${group}`}
+      className="flex flex-col gap-[8px]"
+    >
+      <h2
+        id={headingId}
+        className="mt-2 font-machine text-[10px] font-medium uppercase tracking-[0.1em] text-[var(--muted)]"
+      >
+        {label}
+      </h2>
+      {group === 'local' && providers.length === 0 && (
+        <div className="rounded-[12px] border border-dashed border-[var(--line)] p-3">
+          <p className="text-[12.5px]">
+            No local runtime added yet. Models from Ollama or LM Studio run on your machine, for
+            free.
+          </p>
+          <PullModelHint className="mt-1" />
+        </div>
+      )}
+      <ul className="flex flex-col gap-[10px]">
+        {providers.map((provider) => (
+          <ProviderRow key={provider.id} provider={provider} onAction={onAction}>
+            {group === 'local' && <LocalModelsList provider={provider} />}
+          </ProviderRow>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 /** One provider as a theme card (the Team aside's agent card): orb, name, mono details, actions. */
 function ProviderRow({
   provider,
   onAction,
+  children,
 }: {
   provider: Provider;
   onAction: (dialog: DialogState) => void;
+  /** Shown under the row's own line: a local runtime's models (PG-1.4). */
+  children?: ReactNode;
 }) {
   const check = useCheckProvider();
 
@@ -185,9 +251,9 @@ function ProviderRow({
           <button
             type="button"
             aria-label={`Actions for ${provider.name}`}
-            className="h-6 cursor-pointer rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[11px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f]"
+            className="grid h-6 cursor-pointer place-items-center rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f]"
           >
-            …
+            <Icons.Ellipsis aria-hidden size={14} />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
@@ -199,6 +265,9 @@ function ProviderRow({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      {children !== undefined && children !== false && (
+        <div className="basis-full pl-[32px]">{children}</div>
+      )}
     </li>
   );
 }

@@ -1,23 +1,30 @@
 import {
   DATA_TYPES,
+  PROVIDER_GROUP_LABELS,
+  providerGroup,
   type DataType,
   type Model,
   type ModelQuery,
   type Provider,
+  type ProviderGroup,
 } from '@ace/contracts';
 import {
   Badge,
   Button,
+  Icons,
   Label,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
+  formatBytes,
 } from '@ace/ui';
 import { useState } from 'react';
 
+import { LOCAL_COST_TEXT, UNKNOWN_COST_TITLE, isLocalProvider } from '../runs/CostValue';
 import { ProviderMark } from './ProviderMark';
+import { GROUP_ORDER } from './provider-groups';
 import { useModels, useRefreshModels } from './hooks';
 import { PROVIDER_TYPE_LABEL } from './provider-meta';
 
@@ -167,11 +174,27 @@ export function ModelsTab({ providers }: { providers: Provider[] }) {
                 <th className="px-3 font-medium">Price / 1k</th>
               </tr>
             </thead>
-            <tbody>
-              {models.data?.items.map((model) => (
-                <ModelRow key={model.id} model={model} provider={byId.get(model.providerId)} />
-              ))}
-            </tbody>
+            {/* PG-1.4: the catalog in the same sections as every provider picker. */}
+            {modelSections(models.data?.items ?? [], byId).map((section) => (
+              <tbody
+                key={section.group}
+                aria-label={section.label}
+                data-testid={`models-section-${section.group}`}
+              >
+                <tr className="border-t border-[var(--line)] bg-[var(--soft)]">
+                  <th
+                    colSpan={7}
+                    scope="colgroup"
+                    className="px-3 py-[6px] text-left font-machine text-[9.5px] font-medium uppercase tracking-[0.1em] text-[var(--muted)]"
+                  >
+                    {section.label}
+                  </th>
+                </tr>
+                {section.models.map((model) => (
+                  <ModelRow key={model.id} model={model} provider={byId.get(model.providerId)} />
+                ))}
+              </tbody>
+            ))}
           </table>
         </div>
       )}
@@ -179,8 +202,32 @@ export function ModelsTab({ providers }: { providers: Provider[] }) {
   );
 }
 
+/** The catalog's rows in PG-1.4's sections; a model whose provider is unknown goes last. */
+function modelSections(
+  models: readonly Model[],
+  byId: ReadonlyMap<string, Provider>,
+): Array<{ group: ProviderGroup | 'unknown'; label: string; models: Model[] }> {
+  const groupOf = (model: Model): ProviderGroup | 'unknown' => {
+    const provider = byId.get(model.providerId);
+    return provider === undefined ? 'unknown' : providerGroup(provider);
+  };
+  return [...GROUP_ORDER, 'unknown' as const].flatMap((group) => {
+    const members = models.filter((model) => groupOf(model) === group);
+    return members.length === 0
+      ? []
+      : [
+          {
+            group,
+            label: group === 'unknown' ? 'Unknown provider' : PROVIDER_GROUP_LABELS[group],
+            models: members,
+          },
+        ];
+  });
+}
+
 function ModelRow({ model, provider }: { model: Model; provider: Provider | undefined }) {
   const note = model.available ? model.description : model.unavailableReason;
+  const local = isLocalProvider(provider);
   return (
     <tr
       className="border-t border-[var(--line)]"
@@ -205,6 +252,11 @@ function ModelRow({ model, provider }: { model: Model; provider: Provider | unde
           </span>
         )}
         <span className="ml-2 text-[var(--muted)]">{model.displayName}</span>
+        {model.sizeBytes !== undefined && (
+          <span className="ml-2 font-machine text-[11px] text-[var(--muted)]">
+            {formatBytes(model.sizeBytes)}
+          </span>
+        )}
         {!model.available && (
           <Badge variant="outline" className="ml-2" title={model.unavailableReason}>
             unavailable
@@ -228,9 +280,14 @@ function ModelRow({ model, provider }: { model: Model; provider: Provider | unde
       </td>
       <td className={`${CELL} text-[11px] text-[var(--muted)]`}>{model.source}</td>
       <td className={`${CELL} whitespace-nowrap font-machine text-[11px]`}>
-        {model.pricing
-          ? `${money(model.pricing.inputPer1k)} / ${money(model.pricing.outputPer1k)}`
-          : '—'}
+        {/* PG-1.4: local is free by rule; an unpriced remote model's cost is unknown, never $0. */}
+        {local ? (
+          <span className="text-[#2f7d52]">{LOCAL_COST_TEXT}</span>
+        ) : model.pricing && model.pricing.priceTableVersion !== 'unpriced' ? (
+          `${money(model.pricing.inputPer1k)} / ${money(model.pricing.outputPer1k)}`
+        ) : (
+          <span title={UNKNOWN_COST_TITLE}>unknown</span>
+        )}
       </td>
     </tr>
   );
@@ -304,7 +361,7 @@ function RefreshMenu({
         disabled={pending || !selected}
         onClick={() => selected && onRefresh(selected)}
       >
-        <span aria-hidden>↺</span> Refresh models
+        <Icons.RefreshCw aria-hidden size={13} /> Refresh models
       </Button>
     </div>
   );

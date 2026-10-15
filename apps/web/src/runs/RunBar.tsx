@@ -3,6 +3,7 @@ import { Button, cn } from '@ace/ui';
 import { useNavigate } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
 
+import { CostValue } from './CostValue';
 import { RunControls } from './controls/RunControls';
 import {
   usePauseRun,
@@ -129,7 +130,8 @@ export function RunBar({ workflowId }: { workflowId: string }) {
           data-testid="run-totals"
           className="shrink-0 whitespace-nowrap font-machine text-[10px] text-[var(--muted)]"
         >
-          {run.totals.tokensIn}↓ {run.totals.tokensOut}↑ {money(run.totals.costUsd)}
+          {run.totals.tokensIn}↓ {run.totals.tokensOut}↑{' '}
+          <CostValue usage={run.totals} format={money} />
         </span>
       )}
 
