@@ -1,6 +1,5 @@
 import type { HaltReason, Id, RunAction, RunState } from '@ace/contracts';
 import { Button, Icons, cn } from '@ace/ui';
-import { useNavigate } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
 
 import { CostValue } from './CostValue';
@@ -14,7 +13,8 @@ import {
   useEndRun,
 } from './hooks';
 import { useRunStore } from './run-store';
-import { useStartRunFlow } from './useStartRunFlow';
+import { useOpenRunInPlace } from './useOpenRunInPlace';
+import { OpenRunEnd, useStartRunFlow } from './useStartRunFlow';
 
 /** Run state → how the badge reads. The enum name stays the contract (BR-03: COMPLETE ≠ HALTED). */
 const RUN_STATE_LABEL: Readonly<Record<RunState, string>> = {
@@ -52,7 +52,7 @@ const money = (value: number) => `$${value.toFixed(4)}`;
  * list comes from the engine through the overlay (FR-CTL-006, BR-01).
  */
 export function RunBar({ workflowId }: { workflowId: string }) {
-  const navigate = useNavigate();
+  const openRun = useOpenRunInPlace();
   const flow = useStartRunFlow(workflowId);
   const socketStatus = useSocketStatus();
 
@@ -140,6 +140,8 @@ export function RunBar({ workflowId }: { workflowId: string }) {
           <Icons.Play aria-hidden size={12} /> Run
         </Button>
       )}
+      {/* PG-3.5 (D323): a Domain run still open says it waits, and offers its End. */}
+      {flow.open !== undefined && <OpenRunEnd open={flow.open} />}
 
       <RunControls
         {...(run.runId === undefined ? {} : { runId: run.runId })}
@@ -148,7 +150,7 @@ export function RunBar({ workflowId }: { workflowId: string }) {
         {...(run.haltReason === undefined ? {} : { haltReason: run.haltReason })}
         {...(run.budgetHalt === undefined ? {} : { budgetHalt: run.budgetHalt })}
         onAction={onAction}
-        onOpenRun={(runId: Id) => navigate(`/runs/${runId}`)}
+        onOpenRun={(runId: Id) => openRun(runId)}
         busy={busy}
       />
 

@@ -35,6 +35,7 @@ import {
   useStopRun,
 } from '../../runs/hooks';
 import { useRunStore } from '../../runs/run-store';
+import { useOpenRunInPlace } from '../../runs/useOpenRunInPlace';
 import { useStartRunFlow } from '../../runs/useStartRunFlow';
 import { useWorkflowImport } from '../../workflows/ImportWorkflowButton';
 import {
@@ -369,11 +370,11 @@ function MenuLink({ to, testId, children }: { to: string; testId: string; childr
 
 /**
  * The Run section's state and actions. The controls offered are exactly `Run.allowedActions`
- * (FR-CTL-006); each sends its own mutation, and a restart opens the new run (FR-CTL-004), as the
- * run controls do.
+ * (FR-CTL-006); each sends its own mutation, and a restart selects the new run in the same mode
+ * (FR-CTL-004, PG-3.5), as the run controls do.
  */
 function useRunSection(workflowId: string) {
-  const navigate = useNavigate();
+  const openRun = useOpenRunInPlace();
   const flow = useStartRunFlow(workflowId);
   const run = useRunStore(
     useShallow((store) => {
@@ -400,7 +401,8 @@ function useRunSection(workflowId: string) {
     if (runId === undefined) return;
     mutations[action].mutate(runId, {
       onSuccess: (result) => {
-        if (action === 'restart' && result.id !== runId) navigate(`/runs/${result.id}`);
+        // PG-3.5 (D360): restart keeps the mode; the new run becomes the selected one.
+        if (action === 'restart' && result.id !== runId) openRun(result.id);
       },
       onError: (error) => toast.error(error.message),
     });
