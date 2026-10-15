@@ -27,6 +27,7 @@ import {
   type TurnTriggerKind,
   type Usage,
   type ValidationIssue,
+  type Verdict,
 } from '@ace/contracts';
 
 import { countLoop, digestLine, routeEnvelope as routeByBrain } from '../domain/brain.js';
@@ -721,6 +722,33 @@ export function createRunService(deps: RunServiceDeps): RunService {
     }
 
     /**
+     * PG-4.5 (Arch §12.4): each stored envelope carries the input-point verdicts on its reads as
+     * `guardrailVerdicts`. The row's envelopes are read fresh — a context step may have replaced
+     * them a moment ago — and only the matching ones gain the field; their reads stay as stored.
+     */
+    async function recordEnvelopeVerdicts(
+      nodeRunId: Id,
+      byEnvelope: readonly { envelopeId: Id; verdicts: Verdict[] }[],
+    ): Promise<void> {
+      if (byEnvelope.length === 0) return;
+      const row = await repository.nodeRuns.get(scope, nodeRunId);
+      if (row === null) return;
+      const verdictsOf = new Map(byEnvelope.map((entry) => [entry.envelopeId, entry.verdicts]));
+      if (!row.inputEnvelopes.some((envelope) => verdictsOf.has(envelope.id))) return;
+      await repository.nodeRuns.update(scope, nodeRunId, {
+        inputEnvelopes: row.inputEnvelopes.map((envelope) => {
+          const verdicts = verdictsOf.get(envelope.id);
+          return verdicts === undefined
+            ? envelope
+            : {
+                ...envelope,
+                guardrailVerdicts: [...(envelope.guardrailVerdicts ?? []), ...verdicts],
+              };
+        }),
+      });
+    }
+
+    /**
      * The guardrail points for one node run (FR-GRD-003, 007, 011..015, Arch §13.1).
      *
      * The executor calls these and knows nothing else about guardrails: it does not resolve a
@@ -765,6 +793,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
           ...toolFields,
           async beforePrompt(envelopes) {
             const outcome = await evaluator.evaluateEnvelopes({ target, envelopes });
+            await recordEnvelopeVerdicts(nodeRun.id, outcome.byEnvelope);
             return outcome.kind === 'failed'
               ? {
                   kind: 'failed',
