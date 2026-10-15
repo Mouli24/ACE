@@ -39,10 +39,11 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react';
-import { Link, useInRouterContext, useNavigate, useParams } from 'react-router-dom';
+import { Link, useInRouterContext, useParams, useSearchParams } from 'react-router-dom';
 
 import { WorkspaceMenu } from '../app/layout/WorkspaceMenu';
 import { usePanelsStore } from '../app/stores/panels';
+import { useFollowNode } from '../app/follow-node';
 import { useSelectionStore } from '../app/stores/selection';
 import { useViewportStore } from '../app/stores/viewport';
 import { useResolvedTheme } from '../app/theme';
@@ -207,19 +208,19 @@ function isEditable(target: EventTarget | null): boolean {
  */
 const onCard = isCardBody;
 
-/** D303: a node's lens in Domain, opened from the board. */
+/**
+ * D303: a node's lens in Domain, opened from the board — on the selected run, which goes along as
+ * `?run=` (PG-3.4).
+ */
+function useOpenInDomain(workflowId: string): (nodeId: string) => void {
+  const projectId = useWorkflowGraph(workflowId).data?.workflow.projectId;
+  const follow = useFollowNode({ projectId, workflowId });
+  return useCallback((nodeId: string) => follow(nodeId, 'domain'), [follow]);
+}
+
 function OpenInDomainItem({ workflowId, nodeId }: { workflowId: string; nodeId: string }) {
-  const navigate = useNavigate();
-  const { projectId = '' } = useParams();
-  return (
-    <ContextMenuItem
-      onSelect={() =>
-        navigate(`/projects/${projectId}/workflows/${workflowId}/domain?node=${nodeId}`)
-      }
-    >
-      Open in Domain
-    </ContextMenuItem>
-  );
+  const open = useOpenInDomain(workflowId);
+  return <ContextMenuItem onSelect={() => open(nodeId)}>Open in Domain</ContextMenuItem>;
 }
 
 /**
@@ -256,17 +257,63 @@ function RoutedCardActions({
   workflowId: string;
   children: ReactNode;
 }) {
-  const navigate = useNavigate();
-  const { projectId = '' } = useParams();
+  const openInDomain = useOpenInDomain(workflowId);
   const routedValue = useMemo<NodeCardActions>(
-    () => ({
-      ...value,
-      openInDomain: (nodeId) =>
-        navigate(`/projects/${projectId}/workflows/${workflowId}/domain?node=${nodeId}`),
-    }),
-    [value, navigate, projectId, workflowId],
+    () => ({ ...value, openInDomain }),
+    [value, openInDomain],
   );
   return <NodeActionsContext.Provider value={routedValue}>{children}</NodeActionsContext.Provider>;
+}
+
+/**
+ * PG-3.4: the node `?node=` names, selected and centred — on arriving in Ideate, and when the URL
+ * names a node that is not the one selected (a link, Back). A node the person just clicked is
+ * already selected when its id reaches the URL, so the view does not jump under them. Waits on
+ * React Flow's store until the node and the canvas are measured.
+ */
+function FollowNodeFromUrl({
+  focus,
+  subscribe,
+}: {
+  focus(nodeId: string): boolean;
+  subscribe(listener: () => void): () => void;
+}) {
+  const [search] = useSearchParams();
+  const wanted = search.get('node');
+  /** The node last centred; the one still to centre; whether the first URL has been read. */
+  const done = useRef<string | null>(null);
+  const pending = useRef<string | null>(null);
+  const arrived = useRef(false);
+  useEffect(() => {
+    const arriving = !arrived.current;
+    arrived.current = true;
+    if (wanted === null) {
+      done.current = null;
+      pending.current = null;
+      return;
+    }
+    if (done.current === wanted) return;
+    if (pending.current !== wanted) {
+      if (!arriving && useSelectionStore.getState().focusedNodeId === wanted) {
+        done.current = wanted;
+        return;
+      }
+      pending.current = wanted;
+    }
+    const attempt = (): void => {
+      if (done.current === wanted || !focus(wanted)) return;
+      done.current = wanted;
+      pending.current = null;
+    };
+    attempt();
+    if (done.current === wanted) return;
+    const unsubscribe = subscribe(() => {
+      attempt();
+      if (done.current === wanted) unsubscribe();
+    });
+    return unsubscribe;
+  }, [wanted, focus, subscribe]);
+  return null;
 }
 
 /**
@@ -469,6 +516,27 @@ function CanvasInner({
     attempt();
     return rf.subscribe(attempt);
   }, [rf, flow]);
+
+  /**
+   * PG-3.4: select a node and centre the view on it — a node followed here from Domain or Forge.
+   * `false` while it cannot be done yet (the node or the canvas not measured), so it is retried.
+   * Done once, it stands in for the first-load fit.
+   */
+  const focusNode = useCallback(
+    (nodeId: string): boolean => {
+      const target = flow.getNode(nodeId);
+      const { width, height, panZoom } = rf.getState();
+      if (target === undefined || panZoom === null || width <= 0 || height <= 0) return false;
+      fitOnLoad.current = false;
+      setSelection([nodeId], []);
+      const rect = rectOf(target);
+      void flow.setViewport(
+        centreOn(flow.getViewport(), rect.x + rect.w / 2, rect.y + rect.h / 2, width, height),
+      );
+      return true;
+    },
+    [flow, rf, setSelection],
+  );
 
   /*
    * The theme's wheel (D332): Ctrl/⌘ + wheel zooms at the cursor by `exp(−deltaY·0.01)`, a plain
@@ -1491,6 +1559,7 @@ function CanvasInner({
   return (
     <CanvasDarkContext.Provider value={dark}>
       <PortConnectContext.Provider value={connectStates}>
+        {inRouter && <FollowNodeFromUrl focus={focusNode} subscribe={rf.subscribe} />}
         <CardActionsProvider value={cardActions} routed={inRouter} workflowId={workflowId}>
           <ContextMenu
             modal={false}

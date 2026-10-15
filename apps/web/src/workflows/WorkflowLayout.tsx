@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Link, Outlet, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
+import { useNodeFocusSync } from '../app/follow-node';
 import { SHORTCUTS, useShortcuts } from '../app/shortcuts';
 import { useWorkflowSubscription } from '../app/socket';
 import { useLayoutStore } from '../app/stores/layout';
@@ -39,6 +40,8 @@ export function WorkflowLayout() {
   // PG-3.2: coming back to a mode re-adopts the selected run, finished or live.
   useAdoptActiveRun(workflowId, mode);
   useFollowStartedRun(workflowId);
+  // PG-3.4: `?node=` and the selected node are one, in every mode.
+  useNodeFocusSync(mode);
   useDropStaleChatTarget(workflowId);
   useEffect(() => {
     useComposerChips.getState().enterProject(projectId);
