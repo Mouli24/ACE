@@ -1,7 +1,8 @@
+import type { RunApprovalRequest } from '../../ports/index.js';
 import {
   API_BASE_PATH,
   type ApiError,
-  type ApprovalRequest,
+  
   type GuardrailPolicy,
   type NodeRun,
   type PolicyTestResponse,
@@ -363,7 +364,7 @@ describe('FR-GRD-013 The approval routes', () => {
   it('answers 409 invalid_run_state when the request was decided under it', async () => {
     const store = new FakeGuardrailStore();
     const { runId, nodeRunId } = waiting(store);
-    const request: ApprovalRequest = {
+    const request: RunApprovalRequest = {
       id: id(),
       runId,
       nodeRunId,

@@ -1,7 +1,8 @@
+import type { RunApprovalRequest } from '../ports/index.js';
 import {
   AgentConfigSchema,
   API_BASE_PATH,
-  type ApprovalRequest,
+  
   type Edge,
   type GuardrailPolicy,
   type Model,
@@ -171,7 +172,7 @@ export interface ApprovalRunHarness {
   framesOf: (nodeId: string) => string[];
   waitFor: (predicate: () => boolean | Promise<boolean>, label: string) => Promise<void>;
   /** The first approval of the run, once its node run is WAITING. */
-  waitForApproval: (runId: string) => Promise<ApprovalRequest>;
+  waitForApproval: (runId: string) => Promise<RunApprovalRequest>;
   nodeRun: (id: string) => Promise<NodeRun>;
   nodeRunsOf: (runId: string, nodeId: string) => Promise<NodeRun[]>;
   runRow: (id: string) => Promise<Run>;
@@ -529,7 +530,7 @@ export async function createApprovalRunHarness(
     waitFor,
 
     async waitForApproval(runId) {
-      let found: ApprovalRequest | undefined;
+      let found: RunApprovalRequest | undefined;
       await waitFor(async () => {
         const [pending] = await approvals.listPending(runId);
         if (pending === undefined) return false;

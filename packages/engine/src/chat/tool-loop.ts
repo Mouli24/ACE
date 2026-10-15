@@ -77,7 +77,19 @@ export interface ChatToolLoopInput {
   onCall?: (name: string, status: ActivityStatus) => void;
   /** The context point every tool result passes before the model reads it. Absent: unchecked. */
   judge?: (text: string) => Promise<ToolResultJudgement>;
+  /**
+   * PG-2.2: the tool point (FR-GRD-005/006), asked before every offered tool runs. `refuse` stops
+   * the call — a guardrail's `block` (`blocked`) or a person's reject of an `ask_user` approval
+   * (`refused`) — and the reason is fed back to the model as the call's result, as an unknown
+   * tool's refusal is. Absent: every offered tool runs.
+   */
+  beforeTool?: (tool: ExecutableTool, call: ChatToolRequest) => Promise<ChatToolStep>;
 }
+
+/** What the tool point decided for one chat tool call (PG-2.2). */
+export type ChatToolStep =
+  | { kind: 'allow' }
+  | { kind: 'refuse'; status: 'blocked' | 'refused'; reason: string };
 
 export interface ChatToolLoopResult {
   toolCalls: number;
@@ -116,19 +128,26 @@ export async function runChatToolLoop(input: ChatToolLoopInput): Promise<ChatToo
           }.`,
         };
       } else {
-        try {
-          result = await tool.run(call.args, input.context);
-          status = 'ok';
-        } catch (error) {
-          status = 'error';
-          result = { error: error instanceof Error ? error.message : String(error) };
+        const step: ChatToolStep =
+          input.beforeTool === undefined ? { kind: 'allow' } : await input.beforeTool(tool, call);
+        if (step.kind === 'refuse') {
+          status = step.status;
+          result = { error: `${call.name} was not run: ${step.reason}` };
+        } else {
+          try {
+            result = await tool.run(call.args, input.context);
+            status = 'ok';
+          } catch (error) {
+            status = 'error';
+            result = { error: error instanceof Error ? error.message : String(error) };
+          }
         }
       }
 
       // What the model reads next passes the context point first, a failure's message included —
       // the run's own rule (`judgeToolResult`). A refusal is the engine's words, not the tool's.
       let blocked: NodeError | undefined;
-      if (input.judge !== undefined && status !== 'refused') {
+      if (input.judge !== undefined && status !== 'refused' && status !== 'blocked') {
         const text = resultText(result);
         const judged = await input.judge(text);
         if (judged.kind === 'failed') {

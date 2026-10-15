@@ -183,7 +183,7 @@ async function world(project: { maxCostPerRunUsd?: number } = {}): Promise<World
 }
 
 describe('PG-2.2 chat spend counts toward dailyBudgetUsd', () => {
-  it.fails('a priced chat turn shows in the day’s cost the daily_budget check reads', async () => {
+  it('a priced chat turn shows in the day’s cost the daily_budget check reads', async () => {
     const w = await world();
     const now = makeClock();
     const { bus } = makeBus(w.repository, now);
@@ -205,7 +205,7 @@ describe('PG-2.2 chat spend counts toward dailyBudgetUsd', () => {
 });
 
 describe('PG-2.2 a per-turn cap refuses a chat turn with the budget reason', () => {
-  it.fails(
+  it(
     'a turn over the project’s cost cap ends as a failed turn that names the budget',
     async () => {
       const w = await world({ maxCostPerRunUsd: 0.000001 });
@@ -228,7 +228,7 @@ describe('PG-2.2 a per-turn cap refuses a chat turn with the budget reason', () 
 });
 
 describe('PG-2.2 tool-point guardrails run on chat tool calls', () => {
-  it.fails(
+  it(
     'a chat tool call passes the tool point, and a block stops the tool from running',
     async () => {
       const w = await world();
@@ -259,7 +259,7 @@ describe('PG-2.2 tool-point guardrails run on chat tool calls', () => {
     },
   );
 
-  it.fails(
+  it(
     'a tool_allowed check set to ask_user asks before the chat tool runs (as runs do)',
     async () => {
       const w = await world();

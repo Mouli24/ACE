@@ -1,6 +1,6 @@
 import type {
   ApprovalDecision,
-  ApprovalRequest,
+
   GuardrailPolicy,
   Id,
   Node,
@@ -10,7 +10,7 @@ import type {
   Verdict,
 } from '@ace/contracts';
 
-import type { Scope } from '../ports/index.js';
+import type { RunApprovalRequest, Scope } from '../ports/index.js';
 
 /**
  * The storage this round's guardrail engine needs (Arch §7, §15.3).
@@ -50,17 +50,17 @@ export interface GuardrailPolicyRepository {
 
 /** A pending request, or one already decided. The decision is written once (FR-GRD-013). */
 export interface StoredApproval {
-  request: ApprovalRequest;
+  request: RunApprovalRequest;
   decision?: ApprovalDecision;
 }
 
 export interface ApprovalRepository {
-  create(scope: Scope, request: ApprovalRequest): Promise<ApprovalRequest>;
+  create(scope: Scope, request: RunApprovalRequest): Promise<RunApprovalRequest>;
   get(scope: Scope, id: Id): Promise<StoredApproval | null>;
   /** `GET /runs/:id/approvals` — the undecided ones, oldest first (§2.5, D78). */
-  listPendingByRun(scope: Scope, runId: Id): Promise<ApprovalRequest[]>;
+  listPendingByRun(scope: Scope, runId: Id): Promise<RunApprovalRequest[]>;
   /** The routes are addressed by node run, not by request id (§2.5). */
-  findPendingByNodeRun(scope: Scope, nodeRunId: Id): Promise<ApprovalRequest | null>;
+  findPendingByNodeRun(scope: Scope, nodeRunId: Id): Promise<RunApprovalRequest | null>;
   /** Refused when the request already carries a decision — a decision is final. */
   recordDecision(scope: Scope, requestId: Id, decision: ApprovalDecision): Promise<boolean>;
 }

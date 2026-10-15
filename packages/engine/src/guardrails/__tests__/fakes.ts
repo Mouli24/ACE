@@ -1,9 +1,10 @@
+import type { RunApprovalRequest } from '../../ports/index.js';
 import {
   NodeSchema,
   SettingsSchema,
   derivePorts,
   type ApprovalDecision,
-  type ApprovalRequest,
+  
   type GuardrailCheck,
   type GuardrailPolicy,
   type Id,
@@ -294,7 +295,7 @@ export class FakeGuardrailStore implements GuardrailStore {
   };
 
   readonly approvals: GuardrailStore['approvals'] = {
-    create: async (_scope: Scope, request: ApprovalRequest) => {
+    create: async (_scope: Scope, request: RunApprovalRequest) => {
       this.approvalRows.set(request.id, { request });
       return request;
     },

@@ -1,10 +1,11 @@
+import type { RunApprovalRequest } from '@ace/engine';
 import {
   AgentConfigSchema,
   ApprovalRequestSchema,
   DEFAULT_GUARDRAIL_POLICY_NAME,
   VerdictSchema,
   defaultGuardrailChecks,
-  type ApprovalRequest,
+  
   type GuardrailCheck,
   type Node,
   type NodeRun,
@@ -112,9 +113,9 @@ function verdict(nodeRunId: string, overrides: Partial<Verdict> = {}): Verdict {
 function approvalRequest(
   runId: string,
   nodeRunId: string,
-  overrides: Partial<ApprovalRequest> = {},
-): ApprovalRequest {
-  return ApprovalRequestSchema.parse({
+  overrides: Partial<RunApprovalRequest> = {},
+): RunApprovalRequest {
+  const parsed = ApprovalRequestSchema.parse({
     id: newId(),
     runId,
     nodeRunId,
@@ -127,6 +128,8 @@ function approvalRequest(
     requestedAt: NOW,
     ...overrides,
   });
+  // PG-2.2 (D359): a run's request always names both.
+  return { ...parsed, runId: overrides.runId ?? runId, nodeRunId: overrides.nodeRunId ?? nodeRunId };
 }
 
 /** Compare checks ignoring the ids, which are fresh per policy by design. */

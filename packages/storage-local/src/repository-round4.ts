@@ -597,5 +597,26 @@ export function createChatMessageRepository(db: Db): ChatMessageRepository {
         .orderBy(asc(chatMessages.id))
         .all()
         .map(toChatMessage),
+
+    /**
+     * PG-2.2: the day's direct-chat spend for the `daily_budget` check, summed in SQL as the node
+     * runs' is. A turn a run wrote into its node's session (`run_id` set) is its node run's cost.
+     */
+    dailyCostUsd: async (scope: Scope, day: string) => {
+      const row = db
+        .select({
+          total: sql<number>`COALESCE(SUM(json_extract(${chatMessages.usage}, '$.costUsd')), 0)`,
+        })
+        .from(chatMessages)
+        .where(
+          and(
+            eq(chatMessages.workspaceId, scope.workspaceId),
+            sql`${chatMessages.runId} IS NULL`,
+            sql`${chatMessages.at} LIKE ${`${day}%`}`,
+          ),
+        )
+        .get();
+      return row?.total ?? 0;
+    },
   };
 }

@@ -1,6 +1,6 @@
+import type { RunApprovalRequest } from '../../ports/index.js';
 import type {
   ApprovalDecision,
-  ApprovalRequest,
   GuardrailPolicy,
   Verdict,
 } from '@ace/contracts';
@@ -96,7 +96,7 @@ describe('guardrailStoreFor: Repository → GuardrailStore', () => {
     expect(await store.policies.deleteAllVersions(scope, id())).toBe(false);
   });
 
-  function request(runId: string, nodeRunId: string, nodeId: string): ApprovalRequest {
+  function request(runId: string, nodeRunId: string, nodeId: string): RunApprovalRequest {
     return {
       id: id(),
       runId,

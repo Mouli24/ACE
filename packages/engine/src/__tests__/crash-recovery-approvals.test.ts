@@ -1,4 +1,5 @@
-import type { ApprovalRequest, NodeRun, Run } from '@ace/contracts';
+import type { RunApprovalRequest } from '../ports/index.js';
+import type { NodeRun, Run } from '@ace/contracts';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -102,7 +103,7 @@ async function harness(options: { failCancel?: boolean } = {}) {
       approvals: [],
     };
     await repository.nodeRuns.create(scope, nodeRun);
-    const request: ApprovalRequest = {
+    const request: RunApprovalRequest = {
       id: newId(),
       runId: run.id,
       nodeRunId: nodeRun.id,

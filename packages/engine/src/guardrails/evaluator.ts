@@ -596,7 +596,7 @@ function loopStopFor(type: GuardrailCheckType): LoopStopReason {
  * it is the one that may put the node in front of a person, and there is no point asking for
  * approval of a call that a cheaper check would have blocked anyway.
  */
-const TOOL_CHECK_ORDER = [
+export const TOOL_CHECK_ORDER = [
   'tool_allowed',
   'path_confinement',
   'domain_allowlist',
