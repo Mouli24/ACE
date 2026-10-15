@@ -97,6 +97,17 @@ export const CHART_SERIES_COLORS = {
 } as const satisfies Record<'dark' | 'light', readonly string[]>;
 
 /**
+ * PG-1.2 (D360): D328's accents where they carry meaning as text or under a white icon, shifted to
+ * WCAG AA in both themes (`theme.css`: `--danger-ink`, `--accent-ink`, `--ok-ink`,
+ * `--accent-strong`). The theme hues (#c94c27, #ef6b3f, #e8572e, #2f9e63) stay as decoration —
+ * fills, dots, borders — where the floors in `tokens.test.ts` still apply.
+ */
+export const INK_COLORS = {
+  light: { dangerInk: '#b23f1d', accentInk: '#b4441b', okInk: '#1a6b3f', accentStrong: '#c2410c' },
+  dark: { dangerInk: '#ef7a5a', accentInk: '#f08a5d', okInk: '#4cc283', accentStrong: '#c2410c' },
+} as const;
+
+/**
  * PG-1.1 (D350): a port dot's colour comes from its data type. Each is ≥ 3:1 against the card,
  * the panel and the canvas of its theme (WCAG 1.4.11, non-text), so a dot reads on any surface it
  * sits on. `theme.css` exposes them as `--port-<type>`.
@@ -166,9 +177,9 @@ const lightColor: Readonly<ThemeColors> = {
   border: '#e6e0da',
   borderStrong: '#cfc9c3',
   fg: '#1f1d1b',
-  fgSoft: '#6f6a65',
-  fgMuted: '#6f6a65',
-  fgFaint: '#6f6a65',
+  fgSoft: '#6b6661',
+  fgMuted: '#6b6661',
+  fgFaint: '#6b6661',
   accent: '#1f1d1b',
   accentFg: '#f4f0ec',
   danger: '#c94c27',

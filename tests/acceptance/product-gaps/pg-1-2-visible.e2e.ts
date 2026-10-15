@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright';
 import { test, type Page } from '@playwright/test';
 
 import {
@@ -16,21 +17,39 @@ import {
 } from './helpers.js';
 
 /**
- * PG-1.2 Every control visible (product-gaps prompt, Phase 1). Red until PG-1.2 lands.
+ * PG-1.2 Every control visible (product-gaps prompt, Phase 1; D360).
  *
- * The prompt asks for an axe-core scan. `@axe-core/playwright` is not a dependency of this package,
- * and adding it would change the workspace lockfile for one test; the scan below checks in the page
- * the two rule families PG-1.2 names — every control has an accessible name, and its text meets WCAG
- * AA contrast (4.5:1, 3:1 for large text) against the background it is drawn on — plus the prompt's
- * own rule that no control is a unicode glyph (a glyph renders as a box or not at all on some
- * Windows setups). If axe is added later, it replaces `scan()`; the assertions stay.
+ * Every route is scanned in both themes by axe-core (`@axe-core/playwright`) for the rule families
+ * PG-1.2 names — WCAG AA colour contrast, and an accessible name on every button, link, input and
+ * ARIA widget — plus the prompt's own rule that no control is a unicode glyph (a glyph renders as a
+ * box or not at all on some Windows setups), which axe has no rule for and is checked in the page.
  */
 
 interface Violation {
   route: string;
-  rule: 'name' | 'contrast' | 'glyph';
+  rule: string;
   what: string;
 }
+
+/**
+ * The axe rules PG-1.2 asks for: contrast, and the name rules for every kind of control. Run with
+ * only these, so a scan reports what this item fixes and nothing it does not own.
+ */
+const AXE_RULES = [
+  'color-contrast',
+  'button-name',
+  'link-name',
+  'input-button-name',
+  'select-name',
+  'label',
+  'aria-command-name',
+  'aria-input-field-name',
+  'aria-toggle-field-name',
+  'aria-meter-name',
+  'aria-progressbar-name',
+  'aria-tooltip-name',
+  'aria-dialog-name',
+];
 
 /**
  * The glyph rule: a symbol from the arrows, technical, geometric, dingbat, misc-symbol or emoji
@@ -39,132 +58,78 @@ interface Violation {
 const GLYPH_SOURCE =
   '[\\u2190-\\u21FF\\u2300-\\u23FF\\u25A0-\\u25FF\\u2600-\\u27BF\\u2900-\\u2BFF\\u22EF\\u2026\\u00D7\\uFE0E\\uFE0F\\u{1F300}-\\u{1FAFF}]';
 
-/** Scan the page as it stands: controls without a name, glyph controls, text under AA contrast. */
-async function scan(page: Page, route: string): Promise<Violation[]> {
-  const found = await page.evaluate((glyphSource) => {
-    const glyph = new RegExp(glyphSource, 'u');
-    const out: Array<{ rule: 'name' | 'contrast' | 'glyph'; what: string }> = [];
+/**
+ * TEMPORARY (PG-1.2 is split across worktrees, as in `apps/web/src/test/no-glyph-controls.test.ts`):
+ * the chat column, Domain's conversation and the Providers page belong to the PG-1.3/1.4 and
+ * PG-1.5/1.6 agents, whose glyphs are converted after the Phase 1 merge. A glyph control inside one
+ * of these is not counted until then; empty this list once they are converted. Contrast and names
+ * are checked everywhere, with no exception.
+ */
+const TEMPORARY_GLYPH_ALLOW: readonly string[] = [
+  '[data-testid="chat-aside"]',
+  'section[aria-label="Domain"]',
+  'aside[aria-label="Team"]',
+];
+/** …and the Providers page as a whole (no wrapper of its own to scope by). Same rule: empty it. */
+const TEMPORARY_GLYPH_ALLOW_ROUTES: readonly string[] = ['Providers'];
 
-    const visible = (el: Element): boolean => {
-      const box = el.getBoundingClientRect();
-      if (box.width === 0 || box.height === 0) return false;
-      for (let at: Element | null = el; at !== null; at = at.parentElement) {
-        const style = getComputedStyle(at);
-        if (style.visibility === 'hidden' || style.display === 'none') return false;
-      }
-      return true;
-    };
-    const describe = (el: Element): string => {
-      const html = el.outerHTML.replace(/\s+/gu, ' ');
-      return html.length > 140 ? `${html.slice(0, 140)}…` : html;
-    };
-    const nameOf = (el: Element): string => {
-      const labelledBy = el.getAttribute('aria-labelledby');
-      if (labelledBy !== null) {
-        const text = labelledBy
-          .split(/\s+/u)
-          .map((id) => document.getElementById(id)?.textContent ?? '')
-          .join(' ')
-          .trim();
-        if (text !== '') return text;
-      }
-      const aria = el.getAttribute('aria-label')?.trim();
-      if (aria) return aria;
-      if (
-        el instanceof HTMLInputElement ||
-        el instanceof HTMLTextAreaElement ||
-        el instanceof HTMLSelectElement
-      ) {
-        const label = el.labels?.[0]?.textContent?.trim();
-        if (label) return label;
-        const placeholder = el.getAttribute('placeholder');
-        if (placeholder) return placeholder;
-      }
-      const text = (el.textContent ?? '').trim();
-      if (text !== '') return text;
-      const img = el.querySelector('img[alt], svg[aria-label], [title]');
-      return (
-        img?.getAttribute('alt') ??
-        img?.getAttribute('aria-label') ??
-        img?.getAttribute('title') ??
-        el.getAttribute('title') ??
-        ''
-      ).trim();
-    };
-
-    const parse = (value: string): [number, number, number, number] | null => {
-      const m = /rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)/u.exec(value);
-      if (m === null) return null;
-      return [Number(m[1]), Number(m[2]), Number(m[3]), m[4] === undefined ? 1 : Number(m[4])];
-    };
-    const luminance = ([r, g, b]: [number, number, number, number]): number => {
-      const lin = (c: number) => {
-        const s = c / 255;
-        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+/** Glyph controls: a control whose visible text is a glyph (and at most one other character). */
+async function glyphControls(page: Page, route: string): Promise<Violation[]> {
+  if (TEMPORARY_GLYPH_ALLOW_ROUTES.includes(route)) return [];
+  const found = await page.evaluate(
+    ({ glyphSource, allow }) => {
+      const glyph = new RegExp(glyphSource, 'u');
+      const out: string[] = [];
+      const visible = (el: Element): boolean => {
+        const box = el.getBoundingClientRect();
+        if (box.width === 0 || box.height === 0) return false;
+        for (let at: Element | null = el; at !== null; at = at.parentElement) {
+          const style = getComputedStyle(at);
+          if (style.visibility === 'hidden' || style.display === 'none') return false;
+        }
+        return true;
       };
-      return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
-    };
-    /** The first opaque-enough background behind an element, blended over white at the root. */
-    const backgroundOf = (el: Element): [number, number, number, number] => {
-      for (let at: Element | null = el; at !== null; at = at.parentElement) {
-        const bg = parse(getComputedStyle(at).backgroundColor);
-        if (bg !== null && bg[3] >= 0.9) return bg;
-      }
-      return [255, 255, 255, 1];
-    };
-
-    const controls = Array.from(
-      document.querySelectorAll(
-        'button, a[href], [role="button"], [role="tab"], [role="menuitem"], [role="switch"], [role="radio"], [role="checkbox"], input:not([type="hidden"]), select, textarea',
-      ),
-    ).filter(visible);
-
-    for (const el of controls) {
-      const name = nameOf(el);
-      if (name === '') out.push({ rule: 'name', what: describe(el) });
-      const text = (el.textContent ?? '').trim();
-      if (
-        text !== '' &&
-        glyph.test(text) &&
-        text.replace(new RegExp(glyphSource, 'gu'), '').trim().length <= 1
-      ) {
-        out.push({ rule: 'glyph', what: `"${text}" ${describe(el)}` });
-      }
-      if (text !== '') {
-        const style = getComputedStyle(el);
-        const fg = parse(style.color);
-        if (fg !== null) {
-          const bg = backgroundOf(el);
-          const alpha = fg[3] * Number(style.opacity);
-          const blended: [number, number, number, number] = [
-            fg[0] * alpha + bg[0] * (1 - alpha),
-            fg[1] * alpha + bg[1] * (1 - alpha),
-            fg[2] * alpha + bg[2] * (1 - alpha),
-            1,
-          ];
-          const [hi, lo] = [luminance(blended), luminance(bg)].sort((a, b) => b - a) as [
-            number,
-            number,
-          ];
-          const ratio = (hi + 0.05) / (lo + 0.05);
-          const size = parseFloat(style.fontSize);
-          const large = size >= 24 || (size >= 18.66 && Number(style.fontWeight) >= 700);
-          const needed = large ? 3 : 4.5;
-          const disabled =
-            (el as HTMLButtonElement).disabled === true ||
-            el.getAttribute('aria-disabled') === 'true';
-          if (!disabled && ratio < needed) {
-            out.push({
-              rule: 'contrast',
-              what: `${ratio.toFixed(2)}:1 < ${needed}:1 "${text.slice(0, 40)}" ${describe(el)}`,
-            });
-          }
+      const controls = Array.from(
+        document.querySelectorAll(
+          'button, a[href], [role="button"], [role="tab"], [role="menuitem"], [role="switch"], [role="radio"], [role="checkbox"]',
+        ),
+      ).filter(visible);
+      for (const el of controls) {
+        if (allow.some((selector) => el.closest(selector) !== null)) continue;
+        const text = (el.textContent ?? '').trim();
+        if (
+          text !== '' &&
+          glyph.test(text) &&
+          text.replace(new RegExp(glyphSource, 'gu'), '').trim().length <= 1
+        ) {
+          const html = el.outerHTML.replace(/\s+/gu, ' ');
+          out.push(`"${text}" ${html.length > 140 ? `${html.slice(0, 140)}…` : html}`);
         }
       }
-    }
-    return out;
-  }, GLYPH_SOURCE);
-  return found.map((each) => ({ route, ...each }));
+      return out;
+    },
+    { glyphSource: GLYPH_SOURCE, allow: [...TEMPORARY_GLYPH_ALLOW] },
+  );
+  return found.map((what) => ({ route, rule: 'glyph', what }));
+}
+
+/** axe-core over the page as it stands, with PG-1.2's rules. */
+async function axe(page: Page, route: string): Promise<Violation[]> {
+  const results = await new AxeBuilder({ page }).withRules(AXE_RULES).analyze();
+  return results.violations.flatMap((violation) =>
+    violation.nodes.map((node) => ({
+      route,
+      rule: violation.id,
+      what: `${node.target.join(' ')} — ${node.failureSummary?.replace(/\s+/gu, ' ') ?? ''}`.slice(
+        0,
+        320,
+      ),
+    })),
+  );
+}
+
+async function scan(page: Page, route: string): Promise<Violation[]> {
+  return [...(await axe(page, route)), ...(await glyphControls(page, route))];
 }
 
 interface Routes {
@@ -205,8 +170,10 @@ test.describe('PG-1.2 every control visible', () => {
     test(`a scan of every route has no unnamed control, no glyph control and no text under AA contrast (${theme})`, async ({
       page,
     }) => {
-      // PG-1.2: glyph controls (⚙︎ ⛶ ⌕ …) and under-contrast controls exist on today's routes.
-      test.fail(NOT_BUILT, 'PG-1.2: unicode glyph controls and AA contrast failures today');
+      // PG-1.2 (D360): still red on two hard-coded #2f9e63 texts outside this worktree's paths:
+      // chat/ChatAside.tsx "Live" (3.17:1) and domain/looks.ts COMPLETED pill (2.9:1); each is
+      // `var(--ok-ink)` after the Phase 1 merge, then this marker goes.
+      test.fail(NOT_BUILT, 'PG-1.2: #2f9e63 text in chat/ and domain/ under AA');
       test.setTimeout(240_000);
       await useTheme(page, theme);
       const routes = await seedRoutes(theme);
@@ -226,8 +193,7 @@ test.describe('PG-1.2 every control visible', () => {
   test('each node card has always-visible Settings and More buttons, and More holds the node actions', async ({
     page,
   }) => {
-    // PG-1.2: a card has no buttons today; settings open on a click, the rest is a right-click menu.
-    test.fail(NOT_BUILT, 'PG-1.2: node cards have no visible Settings / More buttons');
+    // PG-1.2 (D360): was red while a card had no buttons (settings on a click, the rest right-click).
     const providerId = await mockProvider();
     const flow = await seedAgents('card-buttons', [
       { name: 'Writer', providerId, modelId: 'mock-text' },
@@ -253,8 +219,7 @@ test.describe('PG-1.2 every control visible', () => {
     test(`run controls sit in the header in ${mode}: Run, Pause, Stop, Restart`, async ({
       page,
     }) => {
-      // PG-1.2: today the run controls live only in Ideate's "…" menu (`canvas/Canvas.tsx`).
-      test.fail(NOT_BUILT, `PG-1.2: no run controls in the ${mode} header`);
+      // PG-1.2 (D360): was red while the run controls lived only in Ideate's "…" menu.
       const providerId = await mockProvider();
       const flow = await seedAgents(`header-${mode}`, [
         { name: 'Writer', providerId, modelId: 'mock-text' },
@@ -278,8 +243,7 @@ test.describe('PG-1.2 every control visible', () => {
   }
 
   test('Problems & events has a visible footer button', async ({ page }) => {
-    // PG-1.2: Problems & events is reachable only from the "…" workspace menu today.
-    test.fail(NOT_BUILT, 'PG-1.2: no Problems & events button in the footer');
+    // PG-1.2 (D360): was red while Problems & events was reachable only from the "…" menu.
     const providerId = await mockProvider();
     const flow = await seedAgents('footer', [{ name: 'Writer', providerId, modelId: 'mock-text' }]);
     await openCanvas(page, flow.projectId, flow.workflowId);

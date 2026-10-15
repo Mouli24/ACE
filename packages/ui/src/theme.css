@@ -72,7 +72,7 @@
   --glow: rgba(239, 107, 63, 0.07);
   --hdr: rgba(250, 246, 243, 0.92);
   --ink: #1f1d1b;
-  --muted: #6f6a65;
+  --muted: #6b6661;
   --line: #e6e0da;
   --surface: #fff;
   --soft: rgba(255, 255, 255, 0.7);
@@ -115,6 +115,7 @@
   --danger-ink: #b23f1d;
   --accent-ink: #b4441b;
   --accent-strong: #c2410c;
+  --ok-ink: #1a6b3f;
 
   /* PG-1.1 (D350): port dots by data type, each >= 3:1 on card, panel and canvas (tokens.ts). */
   --port-text: #c2410c;
@@ -160,6 +161,7 @@
   --danger-ink: #ef7a5a;
   --accent-ink: #f08a5d;
   --accent-strong: #c2410c;
+  --ok-ink: #4cc283;
   --port-text: #f08a5d;
   --port-image: #a996f0;
   --port-audio: #4fc3cc;
@@ -190,7 +192,7 @@
   --page: linear-gradient(160deg, #fbf3ee 0%, #f5f2f0 40%, #eef0f2 100%);
   --hdr: rgba(253, 249, 246, 0.85);
   --ink: #1f1d1b;
-  --muted: #6f6a65;
+  --muted: #6b6661;
   --line: #e9e3dd;
   --surface: #fff;
   --soft: rgba(255, 255, 255, 0.7);
@@ -286,12 +288,13 @@
     background-color: #151413;
     transition: background 0.3s;
   }
+  /* PG-1.2 (D360): links in the AA accent (#e8623a measured 2.96:1 on the light canvas). */
   a {
-    color: #e8623a;
+    color: var(--accent-ink);
     text-decoration: none;
   }
   a:hover {
-    color: #c94c27;
+    color: var(--ink);
   }
 }
 

@@ -2,6 +2,7 @@ import { NODE_STATES, PROVIDER_STATES, PROVIDER_TYPES } from '@ace/contracts';
 
 import {
   CHART_SERIES_COLORS,
+  INK_COLORS,
   PORT_COLORS,
   THEME_COLORS,
   chartSeriesColor,
@@ -115,6 +116,28 @@ describe('FR-SYS-005 both themes define every slot and keep text readable', () =
       const ratio = contrastRatio(c.canvasDot, c.canvas);
       expect(ratio).toBeGreaterThan(1.1);
       expect(ratio).toBeLessThan(3);
+    });
+
+    // PG-1.2 (D360): what carries meaning as text meets AA (4.5:1) on card, panel and canvas —
+    // stronger than the D328 floors above, which now cover the theme hues as decoration only.
+    it.each([
+      ['danger ink', INK_COLORS[theme].dangerInk],
+      ['accent ink (links, running)', INK_COLORS[theme].accentInk],
+      ['ok ink (complete)', INK_COLORS[theme].okInk],
+    ])('PG-1.2 %s (%s) ≥ 4.5:1 on card, panel and canvas', (_label, hex) => {
+      expect(contrastRatio(hex, c.card)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(hex, c.panel)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(hex, c.canvas)).toBeGreaterThanOrEqual(4.5);
+    });
+
+    it('PG-1.2 white on --accent-strong (pressed tool, checked box) ≥ 4.5:1', () => {
+      expect(contrastRatio('#ffffff', INK_COLORS[theme].accentStrong)).toBeGreaterThanOrEqual(4.5);
+    });
+
+    it('PG-1.2 muted text ≥ 4.5:1 even on the accent tint (rgba(239,107,63,0.10) over the panel)', () => {
+      // the Split toggle's pressed fill, composited: #f9e8e1 light; the dark tint is darker still
+      const tint = theme === 'light' ? '#f9e8e1' : '#271813';
+      expect(contrastRatio(c.fgMuted, tint)).toBeGreaterThanOrEqual(4.5);
     });
 
     it.each(Object.entries(PORT_COLORS[theme]))(

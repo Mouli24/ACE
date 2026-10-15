@@ -1,7 +1,7 @@
 import css from '../theme.css?raw';
 import { DATA_TYPES } from '@ace/contracts';
 
-import { PORT_COLORS, THEME_COLORS } from '../tokens.js';
+import { INK_COLORS, PORT_COLORS, THEME_COLORS } from '../tokens.js';
 
 const block = (selector: RegExp): string => {
   const start = css.search(selector);
@@ -137,6 +137,20 @@ describe('D332 the Canvas block', () => {
     const focused = block(/^\.react-flow__handle\.ace-port:focus-visible,/m);
     expect(focused).toContain('opacity: 1;');
     expect(focused).toContain('box-shadow: 0 0 0 2px #ef6b3f;');
+  });
+
+  it.each([
+    ['danger-ink', 'dangerInk'],
+    ['accent-ink', 'accentInk'],
+    ['ok-ink', 'okInk'],
+    ['accent-strong', 'accentStrong'],
+  ] as const)('PG-1.2 --%s mirrors INK_COLORS in both themes', (name, key) => {
+    expect(varValue(block(/^:root \{/m), name)).toBe(INK_COLORS.light[key]);
+    expect(varValue(block(/^:root\[data-theme='dark'\] \{/m), name)).toBe(INK_COLORS.dark[key]);
+  });
+
+  it('PG-1.2 links are drawn in the AA accent ink', () => {
+    expect(css).toMatch(/ {2}a \{\n {4}color: var\(--accent-ink\);/);
   });
 
   it.each(DATA_TYPES)('PG-1.1 --port-%s mirrors PORT_COLORS in both themes', (type) => {
