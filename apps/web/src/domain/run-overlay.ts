@@ -1,4 +1,11 @@
-import type { DomainUsageSnapshot, Id, NodeState, RunState } from '@ace/contracts';
+import type {
+  DomainUsageSnapshot,
+  FailureReason,
+  HaltReason,
+  Id,
+  NodeState,
+  RunState,
+} from '@ace/contracts';
 import { useMemo } from 'react';
 
 import { useRunStore } from '../runs/run-store';
@@ -13,6 +20,10 @@ export interface DomainRunOverlay {
   /** The overlay holds this run: its numbers below are the run's own. */
   held: boolean;
   status: RunState | undefined;
+  /** PG-4.2: why the run halted, once it has. */
+  haltReason: HaltReason | undefined;
+  /** PG-4.2: each FAILED node's reason, from its newest node run. */
+  failureReasons: ReadonlyMap<Id, FailureReason>;
   states: Readonly<Record<Id, NodeState>>;
   /** Each node's tokens over every node run of it in this run. */
   tokens: ReadonlyMap<Id, { in: number; out: number }>;
@@ -22,6 +33,8 @@ export interface DomainRunOverlay {
 const EMPTY: DomainRunOverlay = {
   held: false,
   status: undefined,
+  haltReason: undefined,
+  failureReasons: new Map(),
   states: {},
   tokens: new Map(),
   totals: undefined,
@@ -37,9 +50,12 @@ export function useDomainRunOverlay(runId: Id | undefined): DomainRunOverlay {
     const store = useRunStore.getState();
     const states: Record<Id, NodeState> = {};
     const tokens = new Map<Id, { in: number; out: number }>();
+    const failureReasons = new Map<Id, FailureReason>();
     for (const nodeRun of store.nodeRuns()) {
       // the newest node run of each node decides its state, as on the Canvas
       states[nodeRun.nodeId] = store.nodeState(nodeRun.nodeId);
+      const reason = store.nodeRun(nodeRun.nodeId)?.failureReason;
+      if (reason !== undefined) failureReasons.set(nodeRun.nodeId, reason);
       const sum = tokens.get(nodeRun.nodeId) ?? { in: 0, out: 0 };
       tokens.set(nodeRun.nodeId, {
         in: sum.in + nodeRun.usage.tokensIn,
@@ -49,6 +65,8 @@ export function useDomainRunOverlay(runId: Id | undefined): DomainRunOverlay {
     return {
       held: true,
       status: store.status,
+      haltReason: store.haltReason,
+      failureReasons,
       states,
       tokens,
       totals:

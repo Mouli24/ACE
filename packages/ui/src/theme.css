@@ -41,15 +41,20 @@
   --color-provider-codex_cli: #0a8048;
   --color-provider-gemini_cli: #1d4fe0;
 
-  --color-status-IDLE: #6f6a65;
-  --color-status-READY: #1f97a3;
-  --color-status-RUNNING: #e8572e;
-  --color-status-WAITING: #7a62d6;
-  --color-status-COMPLETED: #2f9e63;
-  --color-status-PAUSED: #6f6a65;
-  --color-status-STOPPED: #6f6a65;
-  --color-status-BLOCKED: #c94c27;
-  --color-status-FAILED: #c94c27;
+  /*
+   * PG-4.2 (D360): nine node states, nine colours — no two share one — each >= 4.5:1 on the card,
+   * panel, canvas and hover fill of its theme (tokens.ts STATUS_RING / LIGHT_STATUS_RING), so the
+   * state word can be read in its own colour.
+   */
+  --color-status-IDLE: #6b6661;
+  --color-status-READY: #0b6e77;
+  --color-status-RUNNING: #b4441b;
+  --color-status-WAITING: #6d52cc;
+  --color-status-COMPLETED: #1a6b3f;
+  --color-status-PAUSED: #8a5a00;
+  --color-status-STOPPED: #4a5d7a;
+  --color-status-BLOCKED: #9b3a72;
+  --color-status-FAILED: #c0262d;
 
   --color-provider-status-UNKNOWN: #6f6a65;
   --color-provider-status-CHECKING: #1f97a3;
@@ -181,8 +186,14 @@
   --color-provider-gemini_cli: #8fb0ff;
 
   --color-status-IDLE: #a39d97;
-  --color-status-PAUSED: #a39d97;
-  --color-status-STOPPED: #a39d97;
+  --color-status-READY: #4fc3cc;
+  --color-status-RUNNING: #f08a5d;
+  --color-status-WAITING: #a996f0;
+  --color-status-COMPLETED: #4cc283;
+  --color-status-PAUSED: #e0b040;
+  --color-status-STOPPED: #8fa6c8;
+  --color-status-BLOCKED: #e07ab0;
+  --color-status-FAILED: #ff6b6b;
 
   --color-provider-status-UNKNOWN: #a39d97;
 }

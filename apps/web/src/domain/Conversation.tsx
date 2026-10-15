@@ -9,6 +9,7 @@ import type {
   Part,
   RosterEntry,
   RouteEnvelopeRequest,
+  TurnOutcome,
 } from '@ace/contracts';
 import {
   Button,
@@ -20,6 +21,7 @@ import {
   DialogTitle,
   Icons,
   INPUT_CLASS,
+  type LucideIcon,
 } from '@ace/ui';
 import { useId, useMemo, useState, type ReactNode } from 'react';
 
@@ -568,13 +570,61 @@ function TurnFailure({
   );
 }
 
-/** The toggle's mark follows the turn: ✓ done, ● still going, ✕ ended otherwise. */
-function outcomeMark(turn: DomainTurn): { glyph: string; color: string; pulse: boolean } {
-  if (turn.outcome === 'OK') return { glyph: '✓', color: '#2f9e63', pulse: false };
-  if (turn.outcome === 'RUNNING' || turn.outcome === 'WAITING') {
-    return { glyph: '●', color: '#ef6b3f', pulse: true };
-  }
-  return { glyph: '✕', color: '#c94c27', pulse: false };
+interface OutcomeMark {
+  icon: LucideIcon;
+  color: string;
+  pulse: boolean;
+  /** What the mark means, for a screen reader and a hover. */
+  label: string;
+}
+
+/**
+ * The toggle's mark follows the turn (PG-4.2): each outcome its own glyph and colour — done,
+ * working, waiting on a person, failed, stopped by a person, and interrupted (the run ended under
+ * it) — so FAILED, STOPPED and INTERRUPTED are no longer one red ✕. Colours are the node-state
+ * tokens (AA in both themes); INTERRUPTED takes the amber of a held run, not the red of a fault.
+ */
+const OUTCOME_MARKS: Readonly<Record<TurnOutcome, OutcomeMark>> = {
+  OK: {
+    icon: Icons.CircleCheck,
+    color: 'var(--color-status-COMPLETED)',
+    pulse: false,
+    label: 'Done',
+  },
+  RUNNING: {
+    icon: Icons.LoaderCircle,
+    color: 'var(--color-status-RUNNING)',
+    pulse: true,
+    label: 'Working',
+  },
+  WAITING: {
+    icon: Icons.Hourglass,
+    color: 'var(--color-status-WAITING)',
+    pulse: true,
+    label: 'Needs approval',
+  },
+  FAILED: {
+    icon: Icons.CircleX,
+    color: 'var(--color-status-FAILED)',
+    pulse: false,
+    label: 'Failed',
+  },
+  STOPPED: {
+    icon: Icons.CircleStop,
+    color: 'var(--color-status-STOPPED)',
+    pulse: false,
+    label: 'Stopped',
+  },
+  INTERRUPTED: {
+    icon: Icons.Unplug,
+    color: 'var(--color-status-PAUSED)',
+    pulse: false,
+    label: 'Interrupted',
+  },
+};
+
+function outcomeMark(turn: DomainTurn): OutcomeMark {
+  return OUTCOME_MARKS[turn.outcome];
 }
 
 /** "What it did" (D327, D336): the turn's steps with their durations, then its full output. */
@@ -594,14 +644,18 @@ function WhatItDid({ turn, output }: { turn: DomainTurn; output: Part[] }) {
         className="flex cursor-pointer items-center gap-[10px] rounded-[6px] border-none bg-transparent p-0 text-left text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
       >
         <span
-          aria-hidden
-          className="text-[13px]"
+          role="img"
+          aria-label={mark.label}
+          title={mark.label}
+          data-testid="turn-outcome-mark"
+          data-outcome={turn.outcome}
+          className="flex"
           style={{
             color: mark.color,
             animation: mark.pulse ? 'livePulse 1s ease-in-out infinite' : undefined,
           }}
         >
-          {mark.glyph}
+          <mark.icon aria-hidden size={14} strokeWidth={2.2} />
         </span>
         <span className="shrink-0 whitespace-nowrap text-[13.5px] font-bold">What it did</span>
         {turn.steps.length > 0 && (

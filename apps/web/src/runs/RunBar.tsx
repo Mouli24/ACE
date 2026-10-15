@@ -26,7 +26,20 @@ const RUN_STATE_LABEL: Readonly<Record<RunState, string>> = {
   HALTED: 'halted',
 };
 
-/** The run state as a theme status colour. A stopped halt reads STOPPED, any other FAILED. */
+/**
+ * How a halt reads (PG-4.2): only a failure or a crash is coloured as one. A person's stop and an
+ * engine shutdown read STOPPED; a spent budget is a limit the run reached, not a fault — it takes
+ * the amber of a held run.
+ */
+const HALT_COLOR: Readonly<Record<HaltReason, string>> = {
+  stopped: 'STOPPED',
+  shutdown: 'STOPPED',
+  budget_exceeded: 'PAUSED',
+  failure: 'FAILED',
+  crash: 'FAILED',
+};
+
+/** The run state as a theme status colour; a halt by its reason. */
 function runStateColor(status: RunState, haltReason: HaltReason | undefined): string {
   const name = {
     PREFLIGHT: 'READY',
@@ -34,7 +47,7 @@ function runStateColor(status: RunState, haltReason: HaltReason | undefined): st
     PAUSED: 'PAUSED',
     COMPLETE: 'COMPLETED',
     BLOCKED: 'BLOCKED',
-    HALTED: haltReason === 'stopped' ? 'STOPPED' : 'FAILED',
+    HALTED: haltReason === undefined ? 'FAILED' : HALT_COLOR[haltReason],
   }[status];
   return `var(--color-status-${name})`;
 }
