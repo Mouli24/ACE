@@ -16,7 +16,7 @@ import {
   DropdownMenuTrigger,
   Icons,
 } from '@ace/ui';
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import { useLayoutStore } from '../app/stores/layout';
@@ -24,6 +24,8 @@ import { useWorkspaceStatus } from '../app/stores/workspace-status';
 import { openFile } from '../forge/editor/actions';
 import { workflowPath } from '../forge/mode';
 import { useProject } from '../projects/hooks';
+import { useIsCompact } from '../responsive/useIsCompact';
+import { RunApprovalsDock } from '../runs/approvals/RunApprovalsDock';
 import { useEndRun, useRetryNodeRun, useRun, useStartRun } from '../runs/hooks';
 import { useSelectedRun } from '../runs/selected-run';
 import { clockTime } from '../theme/format';
@@ -39,6 +41,7 @@ import {
   useSetRunBudget,
 } from './hooks';
 import { domainLooks, lookOf, plural } from './looks';
+import { NodeChatThreads } from './NodeChatThreads';
 import { useDomainRunOverlay, withRunOverlay } from './run-overlay';
 import { TeamPanel } from './TeamPanel';
 
@@ -57,6 +60,9 @@ export function DomainPage() {
   // D354: the mode keys and the sockets are the workflow layout's; Domain registers none itself.
   const teamOpen = useLayoutStore((s) => s.teamOpen);
   const toggleTeam = useLayoutStore((s) => s.toggleTeam);
+  // PG-3.7: at phone width the Team aside is a sheet over the chat, opened from the header.
+  const compact = useIsCompact();
+  const [teamSheet, setTeamSheet] = useState(false);
   const project = useProject(projectId);
   // PG-3.2: the one selected run — the live one by default, else the newest; `?run=new` none.
   const selected = useSelectedRun(workflowId);
@@ -137,7 +143,12 @@ export function DomainPage() {
           aria-hidden
           className="pointer-events-none absolute inset-0 bg-[radial-gradient(900px_480px_at_0%_0%,var(--glow),transparent_70%)]"
         />
-        <header className="relative flex flex-wrap items-center gap-[10px] border-b border-[var(--line)] px-6 py-3">
+        <header
+          className={cn(
+            'relative flex flex-wrap items-center gap-[10px] border-b border-[var(--line)] py-3',
+            compact ? 'px-3' : 'px-6',
+          )}
+        >
           <div className="text-[16px] font-bold tracking-[-0.01em]">Team chat</div>
           {streamOpen && (
             <span
@@ -152,7 +163,14 @@ export function DomainPage() {
             </span>
           )}
           {roster.length > 0 && (
-            <nav aria-label="Lenses" className="flex flex-wrap gap-1.5">
+            <nav
+              aria-label="Lenses"
+              className={cn(
+                'flex gap-1.5',
+                // One scrolling row on a phone, so the lenses never push the chat off screen.
+                compact ? 'order-last w-full flex-nowrap overflow-x-auto pb-1' : 'flex-wrap',
+              )}
+            >
               <FilterPill
                 label="All"
                 letter="✳"
@@ -179,6 +197,17 @@ export function DomainPage() {
           <span className="text-[12px] text-[var(--muted)]">
             {plural(messages.length, 'message')}
           </span>
+          {compact && (
+            <button
+              type="button"
+              data-testid="domain-team-sheet-open"
+              aria-expanded={teamSheet}
+              onClick={() => setTeamSheet((open) => !open)}
+              className="flex h-7 cursor-pointer items-center rounded-full border border-[var(--line)] bg-transparent px-[11px] text-[12px] font-semibold text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+            >
+              Team
+            </button>
+          )}
           <RunPill
             runId={runId}
             run={run.data}
@@ -192,6 +221,16 @@ export function DomainPage() {
             onEnd={(id) => end.mutate(id)}
           />
         </header>
+
+        {/* PG-3.6: in a node's lens, that node's direct chats (Ideate's channel), read-only. */}
+        {node !== undefined && roster.some((entry) => entry.nodeId === node) && (
+          <NodeChatThreads
+            projectId={projectId}
+            workflowId={workflowId}
+            nodeId={node}
+            nodeName={names.get(node) ?? 'this node'}
+          />
+        )}
 
         <div
           ref={scroller}
@@ -231,6 +270,13 @@ export function DomainPage() {
           )}
         </div>
 
+        {/* PG-3.5: a node WAITING on an approval is answered here as on the Canvas. */}
+        <RunApprovalsDock
+          runId={run.data?.id}
+          revision={messages.length}
+          className={cn('relative border-t border-[var(--line)] py-3', compact ? 'px-3' : 'px-6')}
+        />
+
         {(runId === undefined || run.data !== undefined) && (
           <Composer
             roster={roster}
@@ -249,7 +295,7 @@ export function DomainPage() {
           />
         )}
       </section>
-      {teamOpen && (
+      {!compact && teamOpen && (
         <TeamPanel
           usage={usage}
           looks={looks}
@@ -258,6 +304,19 @@ export function DomainPage() {
           onSetBudget={(limit) => budget.mutateAsync(limit)}
           onClose={toggleTeam}
         />
+      )}
+      {compact && teamSheet && (
+        // PG-3.7: on a phone the Team aside covers the chat, and closes back to it.
+        <div data-testid="domain-team-sheet" className="fixed inset-0 z-40 flex bg-[var(--panel)]">
+          <TeamPanel
+            usage={conversation.usage}
+            looks={looks}
+            agentCount={roster.length}
+            readOnly={!live}
+            onSetBudget={(limit) => budget.mutateAsync(limit)}
+            onClose={() => setTeamSheet(false)}
+          />
+        </div>
       )}
     </div>
   );

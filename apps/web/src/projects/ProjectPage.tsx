@@ -3,6 +3,7 @@ import { Button } from '@ace/ui';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
+import { ModeLinks } from '../app/ModeLinks';
 import { BudgetFields } from '../settings/BudgetFields';
 import { SelectField, SettingInput, type DraftRead } from '../settings/SettingFields';
 import { ago } from '../theme/format';
@@ -122,11 +123,14 @@ export function ProjectPage() {
           )}
           <ul className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-[10px]">
             {workflows.data?.map((wf) => (
-              <li key={wf.id}>
+              <li
+                key={wf.id}
+                className="flex h-full flex-col rounded-[12px] border border-[var(--line)] bg-[var(--surface)] transition-colors focus-within:border-[#ef6b3f] hover:border-[#ef6b3f]"
+              >
                 <Link
                   to={`/projects/${projectId}/workflows/${wf.id}`}
                   data-testid={`workflow-card-${wf.id}`}
-                  className="flex h-full flex-col rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-3 text-[var(--ink)] outline-none transition-colors hover:border-[#ef6b3f] hover:text-[var(--ink)] focus-visible:border-[#ef6b3f]"
+                  className="flex flex-1 flex-col rounded-[12px] p-3 pb-2 text-[var(--ink)] outline-none hover:text-[var(--ink)]"
                 >
                   <span className="truncate text-[13.5px] font-bold">{wf.name}</span>
                   <span className="mt-[9px] flex gap-2 border-t border-[var(--line)] pt-[9px] font-machine text-[10px] text-[var(--muted)]">
@@ -135,6 +139,13 @@ export function ProjectPage() {
                     <span>{ago(wf.updatedAt)}</span>
                   </span>
                 </Link>
+                {/* PG-3.7: the card opens Ideate; each mode is one click away too. */}
+                <ModeLinks
+                  projectId={projectId}
+                  workflowId={wf.id}
+                  testIdPrefix={`workflow-card-${wf.id}-mode`}
+                  className="px-3 pb-3"
+                />
               </li>
             ))}
           </ul>

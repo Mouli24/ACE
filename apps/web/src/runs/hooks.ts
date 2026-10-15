@@ -239,10 +239,18 @@ export function useRerunNode() {
  * approval frame lands, which is what `approvalRevision` tracks: the socket says when to ask, the
  * engine says what is pending (BR-01).
  */
-export function useApprovals(runId: Id | undefined) {
+export function useApprovals(runId: Id | undefined, extraRevision?: number) {
   const revision = useRunStore((store) => store.revision);
   return useQuery({
-    queryKey: [...queryKeys.approvals(runId ?? ''), revision],
+    queryKey: [
+      ...queryKeys.approvals(runId ?? ''),
+      revision,
+      // PG-3.5: a screen with a stream of its own (Domain) says when to ask again too.
+      ...(extraRevision === undefined ? [] : [extraRevision]),
+    ],
+    // A new revision keeps showing the cards it had until the engine answers again.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey.includes(runId ?? '') === true ? previous : undefined,
     queryFn: () => api().listApprovals(runId ?? ''),
     enabled: Boolean(runId),
   });

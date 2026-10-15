@@ -286,11 +286,21 @@ describe('D305/D312/D323 runs', () => {
     expect(RunDomainConfigInputSchema.parse({})).toEqual(defaultRunDomainConfig());
   });
 
-  it('`end` is a run action, offered only to runs that stay open', () => {
+  it('`end` is a run action, offered only to runs that stay open; D360: so is restart while open', () => {
     expect([...RUN_ACTIONS]).toEqual(['pause', 'resume', 'stop', 'restart', 'end']);
     expect(allowedRunActions('RUNNING')).toEqual(['pause', 'stop']);
-    expect(allowedRunActions('RUNNING', { stayOpen: true })).toEqual(['pause', 'stop', 'end']);
-    expect(allowedRunActions('PAUSED', { stayOpen: true })).toEqual(['resume', 'stop', 'end']);
+    expect(allowedRunActions('RUNNING', { stayOpen: true })).toEqual([
+      'pause',
+      'stop',
+      'restart',
+      'end',
+    ]);
+    expect(allowedRunActions('PAUSED', { stayOpen: true })).toEqual([
+      'resume',
+      'stop',
+      'restart',
+      'end',
+    ]);
   });
 
   it('a run BLOCKED mid-run can be resumed or stopped; one blocked at pre-flight only restarted', () => {
@@ -301,7 +311,7 @@ describe('D305/D312/D323 runs', () => {
     ]);
     expect(
       allowedRunActions('BLOCKED', { blockedReason: 'BUDGET_EXCEEDED', stayOpen: true }),
-    ).toEqual(['resume', 'stop', 'end']);
+    ).toEqual(['resume', 'stop', 'restart', 'end']);
   });
 
   it('a run records why it is blocked and its Domain config', () => {

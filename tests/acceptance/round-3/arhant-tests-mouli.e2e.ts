@@ -853,8 +853,12 @@ test.describe('Run controls (FR-CTL-001..006)', () => {
     expect(restartedRecord.snapshot.version).toBe(halted.snapshot.version);
     expect(restartedRecord.inputs).toEqual(halted.inputs);
 
-    await expect(page).toHaveURL(new RegExp(`/runs/${restarted.id}`), { timeout: 30_000 });
-    await expect(page.getByTestId('run-detail-status')).toBeVisible();
+    // PG-3.5 (D360): the restart keeps the mode — the Canvas stays, with the new run selected.
+    await expect(page).toHaveURL(
+      new RegExp(`/projects/${projectId}/workflows/${workflowId}\\?run=${restarted.id}$`),
+      { timeout: 30_000 },
+    );
+    await expect(card(page, drafter.id)).toBeVisible();
   });
 });
 

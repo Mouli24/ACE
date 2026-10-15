@@ -1,6 +1,8 @@
 import { useParams } from 'react-router-dom';
 
 import { useIsCompact } from '../responsive/useIsCompact';
+import { RunApprovalsDock } from '../runs/approvals/RunApprovalsDock';
+import { useSelectedRun } from '../runs/selected-run';
 import { CompactForge } from './CompactForge';
 import { useProjectFiles } from './files/project-socket';
 import { ForgeWorkbench } from './ForgeWorkbench';
@@ -12,9 +14,17 @@ export function ForgePage() {
   useProjectFiles(projectId);
   // D301: process frames reach their tabs while Forge is open; entering re-attaches each tab.
   useProcessEvents(projectId);
-  return useIsCompact() ? (
-    <CompactForge projectId={projectId} />
-  ) : (
-    <ForgeWorkbench projectId={projectId} workflowId={workflowId} />
+  // PG-3.5: the workflow's one selected run (PG-3.2) — its approvals are answered here too.
+  const { runId } = useSelectedRun(workflowId);
+  const compact = useIsCompact();
+  return (
+    <>
+      {compact ? (
+        <CompactForge projectId={projectId} />
+      ) : (
+        <ForgeWorkbench projectId={projectId} workflowId={workflowId} />
+      )}
+      <RunApprovalsDock runId={runId} floating />
+    </>
   );
 }

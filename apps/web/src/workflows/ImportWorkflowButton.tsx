@@ -1,7 +1,10 @@
 import { FORMAT_VERSION, WorkflowExportSchema } from '@ace/contracts';
+import { toast } from '@ace/ui';
 import { useId, useRef, type ChangeEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+import { MODE_LABEL, MODES } from '../app/ModeLinks';
+import { workflowPath } from '../forge/mode';
 import { useImportWorkflow } from './hooks';
 
 /** `Blob.text()` is missing in some environments; FileReader is everywhere. */
@@ -66,7 +69,28 @@ export function useWorkflowImport(
       return;
     }
     importWorkflow.mutate(parsed.data, {
-      onSuccess: (graph) => navigate(`/projects/${projectId}/workflows/${graph.workflow.id}`),
+      onSuccess: (graph) => {
+        const workflowId = graph.workflow.id;
+        navigate(workflowPath(projectId, workflowId, 'ideate'));
+        // PG-3.7: the imported workflow opens in Ideate, and every mode is offered with it.
+        toast.success(`Imported “${graph.workflow.name}”`, {
+          description: (
+            <span className="flex gap-[6px] pt-1" data-testid="import-mode-links">
+              {MODES.map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  data-testid={`import-open-${mode}`}
+                  onClick={() => navigate(workflowPath(projectId, workflowId, mode))}
+                  className="inline-flex h-[24px] cursor-pointer items-center rounded-full border border-[var(--line)] bg-[var(--chip)] px-[10px] text-[11px] font-semibold text-[var(--ink)] hover:bg-[var(--hover)]"
+                >
+                  {MODE_LABEL[mode]}
+                </button>
+              ))}
+            </span>
+          ),
+        });
+      },
       onError: (e) => onError(e.message),
     });
   };

@@ -8,13 +8,14 @@ import {
   DropdownMenuTrigger,
 } from '@ace/ui';
 import { useQueryClient } from '@tanstack/react-query';
-import { forwardRef, useEffect, type ComponentPropsWithoutRef } from 'react';
+import { forwardRef, useEffect, useState, type ComponentPropsWithoutRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { useLayoutStore } from '../app/stores/layout';
 import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
 import { useWorkspaceStatus } from '../app/stores/workspace-status';
+import { RunConversationTab } from '../domain/RunConversationTab';
 import { workflowPath } from '../forge/mode';
 import { useSocketStatus } from '../runs/hooks';
 import { agentMap, agentsOf, type AgentLook } from '../theme/agents';
@@ -90,6 +91,8 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
   const live = useSocketStatus() === 'open';
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  // PG-3.6: which channel the column shows — the node's direct chat, or the run's conversation.
+  const [view, setView] = useState<'node' | 'run'>('node');
 
   const nodes = graph.data?.nodes;
   const chatNodes = (nodes ?? []).filter(isChatNode);
@@ -99,6 +102,7 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
   const handles = new Map(roster.map((entry) => [entry.nodeId, entry.handle]));
   const handleOf = (agent: AgentLook) => handles.get(agent.nodeId) ?? slugHandle(agent.name);
   const projectId = graph.data?.workflow.projectId;
+  const showRun = view === 'run' && projectId !== undefined;
 
   // The chat follows the Canvas: selecting an Agent or Model node opens its session (D285).
   const focusedCanChat = chatNodes.some((each) => each.id === focusedNodeId);
@@ -261,26 +265,52 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
         </button>
       </div>
 
-      {tabs}
+      {/* PG-3.6: the node's direct chat, or the selected run's team conversation (read-only). */}
+      <div
+        role="tablist"
+        aria-label="Chat channel"
+        className="flex gap-[6px] px-[14px] pb-[10px]"
+        data-testid="chat-channel"
+      >
+        {(['node', 'run'] as const).map((each) => (
+          <button
+            key={each}
+            type="button"
+            role="tab"
+            aria-selected={view === each}
+            data-testid={`chat-channel-${each}`}
+            onClick={() => setView(each)}
+            className={tabClass(view === each)}
+          >
+            {each === 'node' ? 'Node chat' : 'Run'}
+          </button>
+        ))}
+      </div>
 
-      {target === undefined ? (
-        <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-[14px] py-[16px]">
-          <p className="text-center text-[13px] text-[var(--muted)]">
-            Select an Agent node on the Canvas, or pick one above, to see its conversation and its
-            results.
-          </p>
-        </div>
-      ) : (
-        // Keyed by node id: each session renders from its own state in the session store.
-        <TargetChat
-          key={target.id}
-          node={target}
-          onSendToForge={sendToForge}
-          speakers={looks}
-          projectId={projectId}
-        />
-      )}
-      {composer}
+      {showRun && <RunConversationTab projectId={projectId} workflowId={workflowId} />}
+      {/* Hidden, not unmounted, behind the Run tab: the composer keeps what was typed (D335). */}
+      <div className={showRun ? 'hidden' : 'contents'}>
+        {tabs}
+
+        {target === undefined ? (
+          <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-[14px] py-[16px]">
+            <p className="text-center text-[13px] text-[var(--muted)]">
+              Select an Agent node on the Canvas, or pick one above, to see its conversation and its
+              results.
+            </p>
+          </div>
+        ) : (
+          // Keyed by node id: each session renders from its own state in the session store.
+          <TargetChat
+            key={target.id}
+            node={target}
+            onSendToForge={sendToForge}
+            speakers={looks}
+            projectId={projectId}
+          />
+        )}
+        {composer}
+      </div>
     </aside>
   );
 }

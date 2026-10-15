@@ -3,7 +3,7 @@ import { Icons } from '@ace/ui';
 import { useEffect, useState } from 'react';
 
 import { useProject } from '../../projects/hooks';
-import { useStartRunFlow } from '../../runs/useStartRunFlow';
+import { OpenRunEnd, useStartRunFlow } from '../../runs/useStartRunFlow';
 import { ago } from '../../theme/format';
 import { touchedLines, type FileTouch, type LineSpan } from '../attribution';
 import { formatDocument } from './actions';
@@ -148,7 +148,9 @@ export function PathBar({
 
 /** "▶ Run pipeline": the workflow's real run, refused while one is already going. */
 function RunPipeline({ workflowId }: { workflowId: string }) {
-  const { start, dialog, active, pending } = useStartRunFlow(workflowId);
+  const { start, dialog, active, pending, open } = useStartRunFlow(workflowId);
+  // PG-3.5 (D323): a Domain run still open waits for the person — say so and offer its End.
+  if (open !== undefined) return <OpenRunEnd open={open} />;
   return (
     <>
       <button

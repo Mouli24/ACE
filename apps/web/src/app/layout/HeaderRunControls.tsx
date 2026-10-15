@@ -1,13 +1,13 @@
 import type { RunAction } from '@ace/contracts';
 import { Icons, cn, toast, type LucideIcon } from '@ace/ui';
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
 
 import { usePauseRun, useRestartRun, useResumeRun, useRun, useStopRun } from '../../runs/hooks';
 import { useRunStore } from '../../runs/run-store';
+import { useOpenRunInPlace } from '../../runs/useOpenRunInPlace';
 import { useSelectedRun } from '../../runs/selected-run';
-import { useStartRunFlow } from '../../runs/useStartRunFlow';
+import { OpenRunEnd, useStartRunFlow } from '../../runs/useStartRunFlow';
 import { StopConfirm } from './WorkspaceMenu';
 
 const PILL =
@@ -20,10 +20,10 @@ const PILL =
  * The other three act on the workflow's one selected run (PG-3.2, `useSelectedRun`). Each
  * control is enabled only because the run's `allowedActions` names it (FR-CTL-006): the header
  * decides nothing about the run's state. Pause reads Resume while the run allows resuming. Stop
- * asks first (FR-CTL-003); Restart opens the new run (FR-CTL-004).
+ * asks first (FR-CTL-003); Restart selects the new run in the same mode (FR-CTL-004, PG-3.5).
  */
 export function HeaderRunControls({ workflowId }: { workflowId: string }) {
-  const navigate = useNavigate();
+  const openRun = useOpenRunInPlace();
   const flow = useStartRunFlow(workflowId);
   // PG-3.2: the one selected run; its actions from the overlay while it holds that run, else from
   // the run's record (a run picked but not yet adopted).
@@ -57,7 +57,8 @@ export function HeaderRunControls({ workflowId }: { workflowId: string }) {
     if (runId === undefined) return;
     mutations[action].mutate(runId, {
       onSuccess: (result) => {
-        if (action === 'restart' && result.id !== runId) navigate(`/runs/${result.id}`);
+        // PG-3.5 (D360): the restarted run is selected where the person is, in the same mode.
+        if (action === 'restart' && result.id !== runId) openRun(result.id);
       },
       onError: (error) => toast.error(error.message),
     });
@@ -88,18 +89,23 @@ export function HeaderRunControls({ workflowId }: { workflowId: string }) {
 
   return (
     <div role="group" aria-label="Run controls" className="flex items-center gap-[4px]">
-      <button
-        type="button"
-        aria-label="Run"
-        title="Start a run of this workflow"
-        data-testid="header-run-start"
-        disabled={flow.active || flow.pending}
-        onClick={flow.start}
-        className={cn(PILL, 'px-[10px]')}
-      >
-        <Icons.Play aria-hidden size={12} strokeWidth={2.4} />
-        Run
-      </button>
+      {flow.open === undefined ? (
+        <button
+          type="button"
+          aria-label="Run"
+          title="Start a run of this workflow"
+          data-testid="header-run-start"
+          disabled={flow.active || flow.pending}
+          onClick={flow.start}
+          className={cn(PILL, 'px-[10px]')}
+        >
+          <Icons.Play aria-hidden size={12} strokeWidth={2.4} />
+          Run
+        </button>
+      ) : (
+        // PG-3.5 (D323): a run started from Domain is open until ended; say so, offer the End.
+        <OpenRunEnd open={flow.open} />
+      )}
       {resume
         ? control('resume', 'Resume', Icons.Play, () => fire('resume'))
         : control('pause', 'Pause', Icons.Pause, () => fire('pause'))}

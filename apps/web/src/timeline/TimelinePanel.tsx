@@ -5,6 +5,7 @@ import { useMemo } from 'react';
 import { api } from '../app/api';
 import { queryKeys } from '../workflows/query-keys';
 import { useProviders } from '../providers/hooks';
+import { useRunStore } from '../runs/run-store';
 import { agentMap } from '../theme/agents';
 import { useWorkflowGraph } from '../workflows/hooks';
 import { TimelineComposer } from './TimelineComposer';
@@ -89,13 +90,28 @@ export function TimelinePanel({
     [filtered, nodes, providerList, agents],
   );
 
+  const arm = useRunStore((store) => store.arm);
+  const begin = useRunStore((store) => store.begin);
   const send = useMutation({
     mutationFn: (text: string) =>
       api().postMessage(workflowId, { content: [{ type: 'text', text }], run: true }),
-    onSuccess: () => {
+    /*
+     * D-058: the run this message starts is the workflow's run, so the overlay is armed for it
+     * before the request — as `useStartRun` does, so a frame that beats the answer is still folded —
+     * and named by the answer. Without this the Canvas never lit until a reload adopted the run.
+     */
+    onMutate: () => arm(workflowId),
+    onSuccess: (response) => {
+      if (response.run !== undefined) {
+        begin(workflowId, response.run.id, response.run.status);
+        queryClient.setQueryData(queryKeys.run(response.run.id), response.run);
+      } else {
+        useRunStore.getState().reset();
+      }
       void queryClient.invalidateQueries({ queryKey: timelineMessagesKey(workflowId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs(workflowId) });
     },
+    onError: () => useRunStore.getState().reset(),
   });
 
   const emptyLabel = isError

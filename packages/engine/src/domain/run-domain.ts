@@ -3,6 +3,7 @@ import type {
   EnvelopeKind,
   Id,
   InstructionState,
+  NodeRun,
   NodeState,
   Part,
   RosterEntry,
@@ -76,6 +77,17 @@ export interface EnvelopeDecision {
   edit?: { kind?: EnvelopeKind; toNodeIds?: Id[]; summary?: string };
 }
 
+/**
+ * D360: a node run a control created for this live run — a retry of a failed turn, or a re-run —
+ * handed to the drive already running it rather than to a second drive beside it. The row is the
+ * one the client was answered with; the drive executes exactly that row once the node is free.
+ */
+export interface PlannedTurn {
+  nodeRun: NodeRun;
+  /** FR-ERR-004: what the node's failure BLOCKED runs again after it. */
+  withDownstream: boolean;
+}
+
 /** Why a turn's own abort fired: a message cut it short, or the run was ended (D309, D323). */
 export type TurnAbortReason = { domain: 'interrupt'; messageId: Id } | { domain: 'end' };
 
@@ -134,6 +146,14 @@ export interface RunDomain {
   /** Cut the node's turn short for this message; false when it has none in flight. */
   interrupt(nodeId: Id, messageId: Id): boolean;
   hasTurn(nodeId: Id): boolean;
+
+  /* Controls on a live run (D360). */
+  /** A retry or a re-run for the drive to execute once the node is free; the drive is woken. */
+  planTurn(plan: PlannedTurn): void;
+  /** What waits to be executed, oldest first. */
+  plannedTurns(): PlannedTurn[];
+  /** The drive takes this node's planned turn to execute it now. */
+  takePlannedTurn(nodeId: Id): PlannedTurn | undefined;
 
   /* The run's life. */
   /** The drive waits on this while parked or between dispatches. */
@@ -205,6 +225,7 @@ export function createRunDomain(deps: RunDomainDeps): RunDomain {
   let budget = freshBudget(config.tokenBudget);
   let used = 0;
   const turns = new Map<Id, AbortController>();
+  let planned: PlannedTurn[] = [];
   let waiters: (() => void)[] = [];
   let ending = false;
   let closed = false;
@@ -378,6 +399,23 @@ export function createRunDomain(deps: RunDomainDeps): RunDomain {
 
     hasTurn: (nodeId) => turns.has(nodeId),
 
+    planTurn(plan) {
+      // One planned turn per node: a second retry of the same node replaces the first.
+      planned = [
+        ...planned.filter((each) => each.nodeRun.nodeId !== plan.nodeRun.nodeId),
+        plan,
+      ];
+      domain.wake();
+    },
+
+    plannedTurns: () => [...planned],
+
+    takePlannedTurn(nodeId) {
+      const plan = planned.find((each) => each.nodeRun.nodeId === nodeId);
+      if (plan !== undefined) planned = planned.filter((each) => each !== plan);
+      return plan;
+    },
+
     changed: () => new Promise<void>((resolve) => waiters.push(resolve)),
 
     wake() {
@@ -411,6 +449,7 @@ export function createRunDomain(deps: RunDomainDeps): RunDomain {
       }
       queue.clear();
       envelopeQueue.clear();
+      planned = [];
       heldById.clear();
       decisions = [];
       domain.wake();
