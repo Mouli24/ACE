@@ -120,9 +120,10 @@ export function allowedRunActions(
     status === 'BLOCKED' && context.blockedReason !== undefined
       ? ['resume', 'stop']
       : [...ALLOWED_RUN_ACTIONS[status]];
-  // D323: a run started from Domain stays open until the human ends it.
+  // D323: a run started from Domain stays open until the human ends it. D360: it can be restarted
+  // while open too — the engine ends it first, then starts the new run.
   const live = status === 'RUNNING' || status === 'PAUSED' || actions.includes('resume');
-  if (context.stayOpen === true && live) actions.push('end');
+  if (context.stayOpen === true && live) actions.push('restart', 'end');
   return actions;
 }
 

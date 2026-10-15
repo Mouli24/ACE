@@ -160,8 +160,8 @@ describe('D309/D323 POST /runs/:runId/messages and /end', () => {
   });
 });
 
-describe('D309 a live run is never re-run beside itself', () => {
-  it('rerun and retry on a parked Domain run are 409', async () => {
+describe('D309 a live run is never re-run beside itself; D360 its own drive takes the control', () => {
+  it('rerun and retry on a parked Domain run are turns of its drive; restart ends it first', async () => {
     const h = await createRunDriverHarness();
     const writer = h.agentNode('Writer');
     await h.seed([writer], []);
@@ -169,15 +169,36 @@ describe('D309 a live run is never re-run beside itself', () => {
     await h.waitForEvent('run.parked');
     const [row] = await h.nodeRunsOf(begun.run.id, writer.id);
 
+    // D360: the parked drive takes the re-run as a turn, and parks again once it is done.
+    const rerun = await h.controls.rerunNode(begun.run.id, writer.id);
+    expect(rerun).toMatchObject({ status: 'READY', attempt: 2 });
+    await h.waitForEvent('run.parked', 2);
+    const retried = await h.controls.retryNodeRun(row?.id ?? '', { withDownstream: false });
+    expect(retried.runId).toBe(begun.run.id);
+    await h.waitForEvent('run.parked', 3);
+    expect((await h.nodeRunsOf(begun.run.id, writer.id)).map((each) => each.status)).toEqual([
+      'COMPLETED',
+      'COMPLETED',
+      'COMPLETED',
+    ]);
+
+    // D360: Restart on the open run ends it, then starts the new one on the same snapshot.
+    const restarted = await h.controls.restart(begun.run.id);
+    expect(restarted.restartedFromRunId).toBe(begun.run.id);
+    expect((await h.controls.get(begun.run.id)).status).toBe('COMPLETE');
+  });
+
+  it('a board-started run that is still going is refused (409)', async () => {
+    const h = await createRunDriverHarness();
+    const hold = new Promise<void>(() => undefined);
+    h.scripts.set('Writer', [{ hold }]);
+    const writer = h.agentNode('Writer');
+    await h.seed([writer], []);
+    const begun = await h.start();
     await expect(h.controls.rerunNode(begun.run.id, writer.id)).rejects.toMatchObject({
       status: 409,
     });
-    await expect(
-      h.controls.retryNodeRun(row?.id ?? '', { withDownstream: false }),
-    ).rejects.toMatchObject({
-      status: 409,
-    });
-    await expect(h.controls.restart(begun.run.id)).rejects.toMatchObject({ status: 409 });
+    await h.controls.stop(begun.run.id);
   });
 });
 

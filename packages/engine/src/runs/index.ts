@@ -2669,6 +2669,32 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
 
       if (!ending) {
+        // D360: a retry or a re-run a control planned on this live run, once its node is free.
+        for (const plan of domain?.plannedTurns() ?? []) {
+          if (inFlight.size >= limit) break;
+          const nodeId = plan.nodeRun.nodeId;
+          const node = nodeById.get(nodeId);
+          const state = states.get(nodeId);
+          if (node !== undefined && (inFlightNodes.has(nodeId) || BUSY_STATES.has(state ?? 'IDLE')))
+            continue;
+          domain?.takePlannedTurn(nodeId);
+          if (node === undefined) continue;
+          const row = plan.nodeRun;
+          plannedRuns.set(nodeId, row);
+          envelopesFor.set(nodeId, asDelivered(row.inputEnvelopes, nodes));
+          iterations.set(nodeId, row.iteration);
+          const key = attemptKey(nodeId, row.iteration);
+          lastAttempt.set(key, Math.max(lastAttempt.get(key) ?? 0, row.attempt));
+          // D323: what this node's failure BLOCKED is unblocked, as a turn of it would, and runs
+          // once the fresh output reaches it; what had completed runs again on that output
+          // (`rearmSuccessors`), so `withDownstream` asks nothing more of a live run.
+          for (const id of downstreamOf(nodeId, edges)) {
+            if (states.get(id) === 'BLOCKED') states.set(id, 'IDLE');
+          }
+          stateBeforeTurn.set(nodeId, state ?? 'IDLE');
+          launch(node, 'dispatch');
+        }
+
         const ready = nodes.filter(
           (node) => states.get(node.id) === 'IDLE' && isReady(node, edges, deliveredEdges),
         );
@@ -2735,6 +2761,15 @@ export function createRunService(deps: RunServiceDeps): RunService {
         await repository.nodeRuns.update(scope, row.id, { status: 'STOPPED', endedAt: now() });
         await emitNodeState(run, row, 'STOPPED');
       }
+    }
+
+    // D360: a retry or a re-run the run ended before it could take never ran — STOPPED, not left
+    // READY on a finished run. A Stop has already stopped every READY row itself.
+    for (const plan of domain?.plannedTurns() ?? []) {
+      domain?.takePlannedTurn(plan.nodeRun.nodeId);
+      if (gate.abortCause() === 'stopped') continue;
+      await repository.nodeRuns.update(scope, plan.nodeRun.id, { status: 'STOPPED', endedAt: now() });
+      await emitNodeState(run, plan.nodeRun, 'STOPPED');
     }
 
     // D309: whatever is still PENDING was never delivered — DROPPED, before the run's end is said.

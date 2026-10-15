@@ -12,6 +12,7 @@ import {
 
 import type { ApprovalService } from '../../approvals/index.js';
 import type { DomainRegistry } from '../../domain/registry.js';
+import type { RunDomain } from '../../domain/run-domain.js';
 import type { EmittedEvent } from '../../events/index.js';
 import { HttpError, notFound } from '../../gateway/errors.js';
 import { asDelivered } from '../../envelopes/index.js';
@@ -375,7 +376,18 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
     },
 
     async restart(runId) {
-      const source = await load(runId);
+      let source = await load(runId);
+      // D360: a Domain run that is still open is ended first — its turns cut short, what was
+      // pending dropped, exactly as End does — and then restarted, so two drives never share it.
+      const open = liveDomainOf(source);
+      if (open !== undefined) {
+        open.requestEnd();
+        if (source.status === 'BLOCKED') deps.gates.get(runId)?.resume();
+        source = withAllowedActions(await open.finished());
+      } else if (isLive(source) && source.domain?.stayOpen === true) {
+        // Open, but no drive here holds it (it is being carried on, or ending): nothing safe to end.
+        throw liveRefusal(source, 'restart');
+      }
       assertRunAction(source, 'restart');
 
       // BR-04: the same snapshot, not a fresh one off the live tables. A restart re-runs what the
@@ -407,10 +419,13 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
 
     async rerunNode(runId, nodeId) {
       const run = await load(runId);
-      assertNotLive(run, 'rerun');
+      // D360: on an open Domain run the drive already running takes the re-run as a turn.
+      const open = liveDomainOf(run);
+      if (open === undefined) assertNotLive(run, 'rerun');
       if (!run.snapshot.nodes.some((node) => node.id === nodeId)) {
         throw notFound(`node ${nodeId} in run ${runId}`);
       }
+      if (open !== undefined) assertNodeFree(run, open, nodeId, 'rerun');
 
       const rows = await deps.nodeRuns.listByRun(runId);
       const previous = rows.filter((row) => row.nodeId === nodeId);
@@ -439,6 +454,10 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
         approvals: [],
       });
 
+      if (open !== undefined) {
+        open.planTurn({ nodeRun, withDownstream: false });
+        return nodeRun;
+      }
       await reopen(run, { run, nodeRuns: [nodeRun], withDownstream: false });
       return nodeRun;
     },
@@ -448,7 +467,10 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
       if (failed === null) throw notFound(`node run ${nodeRunId}`);
 
       const run = await load(failed.runId);
-      assertNotLive(run, 'retry');
+      // D360: Retry of a failed turn on an open Domain run is a turn of the drive running it.
+      const open = liveDomainOf(run);
+      if (open === undefined) assertNotLive(run, 'retry');
+      else assertNodeFree(run, open, failed.nodeId, 'retry');
       const rows = await deps.nodeRuns.listByRun(run.id);
 
       // FR-ERR-003: identical inputs. The envelopes the failed attempt was *delivered* are copied
@@ -483,6 +505,10 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
         }
       }
 
+      if (open !== undefined) {
+        open.planTurn({ nodeRun: retry, withDownstream: request.withDownstream });
+        return retry;
+      }
       await reopen(run, {
         run,
         nodeRuns: [retry],
@@ -498,16 +524,51 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
    * message instead, which takes a turn in the drive already running.
    */
   function assertNotLive(run: Run, what: 'rerun' | 'retry'): void {
-    const live =
+    if (!isLive(run)) return;
+    throw liveRefusal(run, what);
+  }
+
+  function isLive(run: Run): boolean {
+    return (
       run.status === 'RUNNING' ||
       run.status === 'PAUSED' ||
-      (run.status === 'BLOCKED' && run.blockedReason !== undefined);
-    if (!live) return;
+      (run.status === 'BLOCKED' && run.blockedReason !== undefined)
+    );
+  }
+
+  function liveRefusal(run: Run, what: 'rerun' | 'retry' | 'restart'): HttpError {
+    const action = what === 'restart' ? 'be restarted' : `${what} a node`;
+    return new HttpError(
+      'workflow',
+      'invalid_run_state',
+      `A run that is ${run.status} cannot ${action} — it is still going; send that node a message instead.`,
+      { runId: run.id, status: run.status, allowedActions: withAllowedActions(run).allowedActions },
+    );
+  }
+
+  /**
+   * D360 (amends D323): an open Domain run whose drive is in this process and has not been told to
+   * end. Its controls go to that drive — a retry or a re-run becomes one of its turns, a restart
+   * ends it first — rather than a second drive beside it (D309). Any other live run is refused.
+   */
+  function liveDomainOf(run: Run): RunDomain | undefined {
+    if (!isLive(run) || run.domain?.stayOpen !== true) return undefined;
+    const domain = deps.domains?.get(run.id);
+    if (domain === undefined || domain.isClosed() || domain.endRequested()) return undefined;
+    return domain;
+  }
+
+  /** A node with a turn in flight takes no second one beside it (D309): 409, as before. */
+  function assertNodeFree(run: Run, domain: RunDomain, nodeId: Id, what: 'rerun' | 'retry'): void {
+    const state = domain.nodeStates()[nodeId];
+    const busy =
+      domain.hasTurn(nodeId) || state === 'RUNNING' || state === 'READY' || state === 'WAITING';
+    if (!busy) return;
     throw new HttpError(
       'workflow',
       'invalid_run_state',
-      `A run that is ${run.status} cannot ${what} a node — it is still going; send that node a message instead.`,
-      { runId: run.id, status: run.status, allowedActions: withAllowedActions(run).allowedActions },
+      `This node is still working in the run — it cannot ${what} until its turn ends.`,
+      { runId: run.id, nodeId, status: run.status },
     );
   }
 
