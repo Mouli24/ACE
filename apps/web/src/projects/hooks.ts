@@ -2,12 +2,18 @@ import type { CreateProjectRequest, Project, UpdateProjectRequest } from '@ace/c
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api } from '../app/api';
+import { allPages } from '../lib/pages';
 import { queryKeys } from '../workflows/query-keys';
 
+/**
+ * Every project, across every page (D-101): `GET /projects` answers 50 a page, oldest first, so
+ * reading only the first page hid the newest projects from Home, Guardrails and the home redirect.
+ */
 export function useProjects() {
   return useQuery({
     queryKey: queryKeys.projects(),
-    queryFn: async () => (await api().listProjects()).items,
+    queryFn: () =>
+      allPages((cursor) => api().listProjects(cursor === undefined ? {} : { cursor })),
   });
 }
 

@@ -16,6 +16,7 @@ When a test is written and green, delete its row.
 ### To write
 | Item | Test to write (what it asserts) | File |
 |---|---|---|
+| D-101 | `useProjects` follows `nextCursor`: with 51 projects, Home lists the 51st | `apps/web/src/projects/ProjectsPage.test.tsx` |
 | PG-1.1 | The drop chooser appears when several inputs fit, and connects the one picked | `apps/web/src/canvas/Canvas.connect.test.tsx` |
 | PG-1.1 | `PortDotLayer`/`shownPorts`: dots show for selected, armed and connect states only | `apps/web/src/canvas/EdgeLayer.test.tsx` |
 | PG-1.1/1.2 | Below 45% zoom, `data-far` hides the card buttons and handle dots | `apps/web/src/canvas/Canvas.theme.test.tsx` |
