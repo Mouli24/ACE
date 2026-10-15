@@ -51,13 +51,16 @@ describe('FR-PRV-008 the terminal scan in Add provider (X1)', () => {
     });
   });
 
-  it('warns before Full auto', async () => {
+  it('offers Read-only and Edit project files only — no Full auto (D355)', async () => {
     const user = userEvent.setup();
     const dialog = await openAddDialog(user);
     await user.click(await within(dialog).findByRole('button', { name: 'Add Claude Code' }));
     await user.click(within(dialog).getByRole('combobox', { name: 'Permission' }));
-    await user.click(await screen.findByRole('option', { name: 'Full auto' }));
-    expect(within(dialog).getByTestId('cli-permission-hint')).toHaveTextContent(/any command on your machine/);
+    await screen.findByRole('option', { name: 'Read-only' });
+    expect(screen.getAllByRole('option').map((option) => option.textContent?.replace('✓', ''))).toEqual([
+      'Read-only',
+      'Edit project files',
+    ]);
   });
 
   it('tells Codex users it runs commands in its own sandbox, which the other CLIs do not (review I8)', async () => {
@@ -83,9 +86,10 @@ describe('FR-PRV-008 the terminal scan in Add provider (X1)', () => {
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).queryByLabelText(/API key/)).toBeNull();
 
+    // D355: Edit project files is the widest preset offered.
     await user.click(within(dialog).getByRole('combobox', { name: 'Permission' }));
-    await user.click(await screen.findByRole('option', { name: 'Full auto' }));
+    await user.click(await screen.findByRole('option', { name: 'Edit project files' }));
     await user.click(within(dialog).getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(db.getProvider(created.id)?.cliPermission).toBe('full_auto'));
+    await waitFor(() => expect(db.getProvider(created.id)?.cliPermission).toBe('edit_files'));
   });
 });
