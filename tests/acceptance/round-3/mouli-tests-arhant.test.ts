@@ -1433,7 +1433,10 @@ describe('TC-GRD-008/009 an ask_user check waits for a person', () => {
       'the approval request',
     );
 
-    const request = watcher.of('node.approval_required')[0]?.payload.request as ApprovalRequest;
+    // A run's approval always names its node run; D359 made it optional for chat's.
+    const request = watcher.of('node.approval_required')[0]?.payload.request as ApprovalRequest & {
+      nodeRunId: string;
+    };
     expect(request.runId).toBe(started.id);
     expect(request.preview.length).toBeLessThanOrEqual(500);
     expect(request.reason.length).toBeGreaterThan(0);
@@ -1476,7 +1479,10 @@ describe('TC-GRD-008/009 an ask_user check waits for a person', () => {
       30_000,
       'the approval request',
     );
-    const request = watcher.of('node.approval_required')[0]?.payload.request as ApprovalRequest;
+    // A run's approval always names its node run; D359 made it optional for chat's.
+    const request = watcher.of('node.approval_required')[0]?.payload.request as ApprovalRequest & {
+      nodeRunId: string;
+    };
 
     const rejected = await postNodeRun(`/node-runs/${request.nodeRunId}/reject`, {
       note: 'Do not send that.',
