@@ -159,3 +159,34 @@ Built features only (owner, 2026-10-16: no tests written, updated or run; typech
 - PG-4.3: a node over its own `maxCostUsd` ends FAILED with `GUARDRAIL_VIOLATION`, code `node_budget_exceeded`. `budget_exceeded` stays a run halt reason; the run then HALTs with `failure`.
 - PG-4.3: Start confirms only when an Input needs text or the estimate's max exceeds what the caps leave; otherwise the estimate is on the Run button.
 - PG-4.2: light READY was darkened to `#0b6e77` and not re-measured.
+
+## Phase 5
+
+Built features only (owner, 2026-10-16: no tests written, updated or run; typecheck and lint only). PG-5.7's `@provider` tests (Codex CLI, Gemini CLI, the API tool loop) are not built: they are tests, so they wait with everything else here. D-093 is fixed.
+
+### Existing tests likely broken by Phase 5
+| Item | Test | Why |
+|---|---|---|
+| PG-5.1 | Engine checkpoint tests and PG-2.4 tests expecting one run checkpoint `{kind:'run', runId}` | Now one per writing node step, with `nodeId`; the start-of-run check is a probe that is dropped |
+| PG-5.1 | Engine scheduler/concurrency tests with writing agents and a recorder | Writing steps of one run now take turns |
+| PG-5.1 | `apps/web/src/forge/changes/ChangesView.test.tsx`, `ChangesCard.test.tsx` | Run checkpoint labels now name the node |
+| PG-5.2 | `packages/tools/src/agent/create-session.test.ts`, `locks.test.ts` | The lock set is engine-wide, not per session |
+| PG-5.3 | `packages/engine/src/processes/__tests__`, contracts `ProcessSummary` tests | Agent process rows; `agent` field |
+| PG-5.3 | `apps/web/src/config-panel/*.test.tsx` | The Shell description text changed (D346) |
+| PG-5.4/5.6 | `packages/storage-local/src/__tests__/migration-*.test.ts` | Two new migrations (`20261016T120000_bench`, `20261016T120000_run_replay_of`) change "migrations after this one" and "last migration" |
+| PG-5.6 | `packages/contracts/src/__tests__/errors.test.ts` | `ERROR_CODES` gains `bench_task_frozen`, `bench_task_not_frozen`, `bench_experiment_locked` |
+| PG-5.4 | `apps/web/src/runs/ProjectRunsPage.test.tsx`, `RunDetailPage.test.tsx`, `app/layout/WorkspaceMenu.test.tsx` | Compare checkboxes, Replay/Export buttons, new menu items |
+
+### To write
+| Item | Test to write | File |
+|---|---|---|
+| PG-5.1 | Per-node run checkpoints; reverting one node's work; Run detail ↔ Changes links | `packages/engine/src/checkpoints/__tests__/`, `apps/web/src/runs/RunDetailPage.test.tsx`, e2e |
+| PG-5.2 | A user save and an agent edit of one path interleave safely under the shared lock; terminal attribution and its 2 s window | `packages/tools/src/workspace/fs-files.test.ts`, `packages/engine/src/checkpoints/__tests__/` |
+| PG-5.3 | `run_command` and background commands emit `process.output`/`process.exited` read-only rows; Stop and input refused; ProcessesList shows the agent tag and no Stop | `packages/engine/src/processes/__tests__/`, `apps/web/src/forge/terminal/ProcessesList.test.tsx` |
+| D-093 | `cliEnv` passes only the allowlist; a Claude Code child never sees `OPENAI_API_KEY` | `packages/providers/src/adapters/cli/__tests__/` |
+| PG-5.4 | Replay makes zero provider calls and reproduces outputs; `replay_missing`; 409 on an unfinished run; `replayOf`; the replay book's matching rules | `packages/engine/src/runs/__tests__/replay.test.ts`, run-control tests |
+| PG-5.4 | Compare page: diff (LCS, JSON with sorted keys), pick, swap, unknown cost | `apps/web/src/runs/compare/` |
+| PG-5.5 | Export bundle shape; anonymise strips names, providers and models and rewrites free text; secrets masked | `packages/engine/src/runs/__tests__/export.test.ts`, gateway test |
+| PG-5.6 | TC-BEN-001..007 over HTTP against the real engine, and the bench walk in Playwright | `tests/acceptance/product-gaps/bench.test.ts`, `bench.e2e.ts` |
+| PG-5.6 | Unit: `baseline.ts`, `parseScoresCsv`, `repository-bench.ts`, the bench migration, the SDK buffer's bench filter, the web bench tabs | `packages/engine/src/bench/__tests__/`, `packages/storage-local/src/__tests__/migration-bench.test.ts`, `packages/sdk/src/__tests__/`, `apps/web/src/bench/` |
+| PG-5.7 | `@provider` tests for Codex CLI, Gemini CLI and the API tool loop, in `pnpm test:providers` | `packages/providers/src/__tests__/*.provider.test.ts` |
