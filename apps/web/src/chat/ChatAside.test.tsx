@@ -330,7 +330,7 @@ const owe = (nodeId: string, text: string) =>
   );
 
 describe('D335 the theme’s message rows', () => {
-  it('names each turn, and a reply’s meta line carries "Send to Forge →" into Forge', async () => {
+  it('names each turn, and a reply’s meta line carries "Send to Forge" into Forge', async () => {
     const user = userEvent.setup();
     const { workflowId } = seedAgentNode();
     const { workflow } = await api().getWorkflow(workflowId);
@@ -350,7 +350,7 @@ describe('D335 the theme’s message rows', () => {
     // a user turn has no meta line
     expect(within(userTurnRow).queryByTestId('chat-send-to-forge')).toBeNull();
 
-    await user.click(within(agentTurn).getByRole('button', { name: 'Send to Forge →' }));
+    await user.click(within(agentTurn).getByRole('button', { name: 'Send to Forge' }));
     await waitFor(() =>
       expect(screen.getByTestId('location')).toHaveTextContent(
         `/projects/${workflow.projectId}/workflows/${workflowId}/forge`,

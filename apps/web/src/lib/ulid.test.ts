@@ -19,4 +19,10 @@ describe('newId (D21: ids are Crockford ULIDs)', () => {
     const b = newId(2_000_000);
     expect(a.slice(0, 10) < b.slice(0, 10)).toBe(true);
   });
+
+  it('PG-1.6: ids minted in one millisecond keep the order they were made in (monotonic)', () => {
+    const ids = Array.from({ length: 500 }, () => newId());
+    expect([...ids].sort()).toEqual(ids);
+    expect(ids.every((id) => IdSchema.safeParse(id).success)).toBe(true);
+  });
 });

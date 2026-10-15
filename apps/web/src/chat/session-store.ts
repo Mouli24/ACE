@@ -23,7 +23,18 @@ export interface NodeSession {
    * Accepted by the engine; its reply has not settled yet. `speakerNodeId` is the node answering
    * it (D302) — the `@handle` target, or the session's own node.
    */
-  pending?: { threadId: string; userMessage: ChatMessage; speakerNodeId?: string };
+  pending?: {
+    threadId: string;
+    userMessage: ChatMessage;
+    speakerNodeId?: string;
+    /**
+     * PG-1.6: the reply must come after this turn — the old reply a retry replaces. Absent: after
+     * the user message.
+     */
+    afterId?: string;
+    /** PG-1.5: when it was accepted (ms), the start of the stall clock. */
+    since?: number;
+  };
   /** The last send failed before the engine took it — no model chosen, the engine unreachable. */
   error?: string;
   /** The last send was refused by the input guardrails. */
@@ -34,6 +45,8 @@ interface ChatSessionsState {
   sessions: Record<string, NodeSession>;
   /** threadId → the reply streaming in right now, from `chat.token` frames. */
   streams: Record<string, string>;
+  /** PG-1.5: threadId → when its last `chat.token` arrived (ms), which restarts the stall clock. */
+  heardAt: Record<string, number>;
   /** Replace one node's session with what `next` makes of it. */
   update(nodeId: string, next: (session: NodeSession) => NodeSession): void;
   appendToken(threadId: string, delta: string): void;
@@ -46,6 +59,7 @@ interface ChatSessionsState {
 export const useChatSessions = create<ChatSessionsState>()((set) => ({
   sessions: {},
   streams: {},
+  heardAt: {},
   update: (nodeId, next) =>
     set((state) => ({
       sessions: { ...state.sessions, [nodeId]: next(state.sessions[nodeId] ?? {}) },
@@ -53,10 +67,12 @@ export const useChatSessions = create<ChatSessionsState>()((set) => ({
   appendToken: (threadId, delta) =>
     set((state) => ({
       streams: { ...state.streams, [threadId]: (state.streams[threadId] ?? '') + delta },
+      heardAt: { ...state.heardAt, [threadId]: Date.now() },
     })),
   settleThread: (threadId) =>
     set((state) => {
       const { [threadId]: _settled, ...streams } = state.streams;
+      const { [threadId]: _heard, ...heardAt } = state.heardAt;
       const sessions: Record<string, NodeSession> = {};
       for (const [nodeId, session] of Object.entries(state.sessions)) {
         if (session.pending?.threadId === threadId) {
@@ -66,9 +82,9 @@ export const useChatSessions = create<ChatSessionsState>()((set) => ({
           sessions[nodeId] = session;
         }
       }
-      return { streams, sessions };
+      return { streams, heardAt, sessions };
     }),
-  reset: () => set({ sessions: {}, streams: {} }),
+  reset: () => set({ sessions: {}, streams: {}, heardAt: {} }),
 }));
 
 /** One node's session, never undefined. */

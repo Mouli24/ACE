@@ -1,5 +1,12 @@
 import type { Artifact, Part, RosterEntry } from '@ace/contracts';
-import { cn, formatBytes, MENU_CONTENT_CLASS, MENU_ITEM_CLASS, MENU_LABEL_CLASS } from '@ace/ui';
+import {
+  cn,
+  formatBytes,
+  Icons,
+  MENU_CONTENT_CLASS,
+  MENU_ITEM_CLASS,
+  MENU_LABEL_CLASS,
+} from '@ace/ui';
 import { useEffect, useRef, useState } from 'react';
 
 import { api } from '../app/api';
@@ -27,8 +34,9 @@ const CHIP_REMOVE = cn(
 
 /**
  * The chat composer (FR-CHAT-004/007, D302), as the theme's Team chat composer (D335): a surface
- * card with a two-row textarea, ⌁ Attach and ↑ Send. Enter sends, Shift+Enter breaks a line, so the
- * whole thing is reachable from the keyboard alone (NFR-USE-03).
+ * card with a two-row textarea, Attach and Send. Enter sends, Shift+Enter breaks a line, so the
+ * whole thing is reachable from the keyboard alone (NFR-USE-03). PG-1.6 (D352): while a reply is
+ * on its way, Stop stands beside Send and aborts it.
  *
  * D302: a message goes to the conversation's main node, or — with one `@handle` in it — to that
  * node of the workflow, inside the same conversation. `@` opens a picker that completes the
@@ -42,6 +50,8 @@ export function ChatComposer({
   placeholder = TEAM_PLACEHOLDER,
   roster = [],
   mainNodeId,
+  replying = false,
+  onStop,
 }: {
   /** `targetNodeId` is set when an `@handle` names a node other than the main one. */
   onSend: (content: Part[], targetNodeId: string | undefined) => void;
@@ -51,6 +61,10 @@ export function ChatComposer({
   roster?: readonly ChatRosterEntry[];
   /** The conversation's main node; without one there is nobody to send to. */
   mainNodeId: string | undefined;
+  /** PG-1.6: a reply is on its way in this session, so Stop is offered. */
+  replying?: boolean;
+  /** PG-1.6: abort the reply on its way; it is stored as `user_cancelled`. */
+  onStop?: () => void;
 }) {
   const [text, setText] = useState('');
   const [caret, setCaret] = useState(0);
@@ -202,7 +216,7 @@ export function ChatComposer({
                   onClick={() => useComposerChips.getState().remove(chip.id)}
                   className={CHIP_REMOVE}
                 >
-                  ✕
+                  <Icons.X aria-hidden size={10} />
                 </button>
               </li>
             );
@@ -226,7 +240,7 @@ export function ChatComposer({
                 }
                 className={CHIP_REMOVE}
               >
-                ✕
+                <Icons.X aria-hidden size={10} />
               </button>
             </li>
           ))}
@@ -310,11 +324,26 @@ export function ChatComposer({
             onClick={() => fileInput.current?.click()}
             className={cn(
               FOCUS,
-              'h-[30px] w-[30px] shrink-0 cursor-pointer rounded-[8px] border border-[var(--line)] bg-transparent text-[13px] text-[var(--ink)] disabled:cursor-default',
+              'flex h-[30px] w-[30px] shrink-0 cursor-pointer items-center justify-center rounded-[8px] border border-[var(--line)] bg-transparent text-[var(--ink)] disabled:cursor-default',
             )}
           >
-            ⌁
+            <Icons.Paperclip aria-hidden size={14} />
           </button>
+          {replying && onStop !== undefined && (
+            <button
+              type="button"
+              title="Stop"
+              aria-label="Stop"
+              data-testid="chat-stop"
+              onClick={onStop}
+              className={cn(
+                FOCUS,
+                'flex h-[30px] w-[30px] shrink-0 cursor-pointer items-center justify-center rounded-[8px] border border-[var(--line)] bg-transparent text-[#c94c27]',
+              )}
+            >
+              <Icons.Square aria-hidden size={12} className="fill-current" />
+            </button>
+          )}
           <button
             type="button"
             title="Send"
@@ -325,10 +354,10 @@ export function ChatComposer({
             style={{ background: canSend ? '#ef6b3f' : 'var(--sendOff)' }}
             className={cn(
               FOCUS,
-              'h-[30px] w-[30px] shrink-0 cursor-pointer rounded-[8px] border-none text-[14px] font-bold text-[#fff] disabled:cursor-default',
+              'flex h-[30px] w-[30px] shrink-0 cursor-pointer items-center justify-center rounded-[8px] border-none text-[#fff] disabled:cursor-default',
             )}
           >
-            ↑
+            <Icons.ArrowUp aria-hidden size={15} strokeWidth={2.5} />
           </button>
         </div>
       </div>

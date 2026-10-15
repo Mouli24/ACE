@@ -836,6 +836,20 @@ export class MockDb {
     return this.state.chatMessages.filter((message) => message.threadId === threadId);
   }
 
+  /** PG-1.6 (D352): set a turn's `supersededAt`/`deletedAt`; nothing else about it changes. */
+  markChatMessage(
+    id: string,
+    patch: { supersededAt?: string; deletedAt?: string },
+  ): ChatMessage | undefined {
+    const index = this.state.chatMessages.findIndex((message) => message.id === id);
+    const current = this.state.chatMessages[index];
+    if (current === undefined) return undefined;
+    const next: ChatMessage = { ...current, ...patch };
+    this.state.chatMessages[index] = next;
+    this.save();
+    return next;
+  }
+
   addChatMessage(message: ChatMessage): ChatMessage {
     this.state.chatMessages.push(message);
     this.touchChatThread(message.threadId);
