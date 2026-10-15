@@ -32,7 +32,11 @@ import {
   type Usage,
 } from '@ace/contracts';
 
-import { PROJECT_WRITING_TOOLS, undoUnavailableMessage } from '../checkpoints/writing.js';
+import {
+  PROJECT_WRITING_TOOLS,
+  nodeWrites,
+  undoUnavailableMessage,
+} from '../checkpoints/writing.js';
 import type { ContextGuard } from '../context/guard.js';
 import { classifyError } from '../errors/index.js';
 import { createBatcher } from '../events/batcher.js';
@@ -853,8 +857,11 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
           reason = error instanceof Error ? error.message : String(error);
         }
         if (reason !== undefined) {
+          // A writing turn: a write tool on offer, a node set up to write (as a run judges it), or
+          // a CLI whose preset may edit.
           const writes =
             offered.some((tool) => PROJECT_WRITING_TOOLS.includes(tool.definition.name)) ||
+            nodeWrites(node, () => providerRow ?? undefined) ||
             (cli && (providerRow?.cliPermission ?? DEFAULT_CLI_PERMISSION) !== 'read_only');
           logger.warn(
             { subsystem: 'chat', threadId, reason, writes, withoutUndo: context.withoutUndo === true },
