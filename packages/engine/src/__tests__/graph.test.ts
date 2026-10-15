@@ -747,7 +747,8 @@ describe('TC-WF-006 Validation list', () => {
       await post(h.app, `/api/v1/workflows/${workflow.id}/validate`),
     );
 
-    const missing = issues.find((i) => i.code === 'missing_model');
+    // D358 (PG-1.3): this helper Agent has no provider either, so its issue is `missing_provider`.
+    const missing = issues.find((i) => i.code === 'missing_provider');
     expect(missing?.severity).toBe('error');
   });
 
