@@ -81,6 +81,16 @@ describe('FR-CAN-011 ContextMenu', () => {
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
+  it('the right-button release that opened it (Linux: contextmenu on press) selects nothing', async () => {
+    const onDuplicate = vi.fn();
+    render(<Menu onDuplicate={onDuplicate} onDelete={vi.fn()} />);
+    fireEvent.contextMenu(screen.getByTestId('target'));
+    const item = (await screen.findAllByRole('menuitem'))[0] as HTMLElement;
+    fireEvent.pointerUp(item, { button: 2, pointerType: 'mouse' });
+    expect(onDuplicate).not.toHaveBeenCalled();
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+  });
+
   it('closes on Escape without running anything', async () => {
     const onDuplicate = vi.fn();
     render(<Menu onDuplicate={onDuplicate} onDelete={vi.fn()} />);
