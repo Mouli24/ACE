@@ -7,15 +7,15 @@ import type { WorkflowMode } from '../../forge/mode';
 import { agentsOf } from '../../theme/agents';
 import { Avatar, LogoMark, ThemeToggle } from '../../theme/primitives';
 import { useWorkflowGraph } from '../../workflows/hooks';
-import { SHORTCUTS, shortcutLabel, useShortcuts } from '../shortcuts';
+import { SHORTCUTS, shortcutLabel } from '../shortcuts';
 import { useLayoutStore } from '../stores/layout';
 import { HeaderRunControls } from './HeaderRunControls';
 import { ModeSwitch } from './ModeSwitch';
 
 /**
  * The workspace header of `Ace Canvas.dc.html` (D330) on Ideate, Forge and Domain: the mark and
- * ACE (to Home), the run controls (PG-1.2, D360), the mode switch, Split, the workflow's agents and
- * the theme toggle.
+ * ACE (to Home), the run controls (PG-1.2, D360), the mode switch, the Chat or Team toggle (D356),
+ * the workflow's agents and the theme toggle.
  */
 export function WorkspaceHeader({
   projectId,
@@ -52,25 +52,27 @@ export function WorkspaceHeader({
 }
 
 /**
- * Split: the chat column in Ideate and Forge, the Team aside in Domain — both are `chatOpen`
- * (D330). Domain sits outside the workflow layout, so its Ctrl+Alt+B is bound here.
+ * D356 (amends D330/D336): two toggles where there was one Split — Chat, the chat column of Ideate
+ * and Forge, and Team, Domain's Team aside — each remembered on its own, so closing one leaves the
+ * other as it was. Each mode shows its own; Ctrl+Alt+B toggles it (bound by the workflow layout).
  */
 function SplitToggle({ mode }: { mode: WorkflowMode }) {
-  const chatOpen = useLayoutStore((store) => store.chatOpen);
+  const team = mode === 'domain';
+  const open = useLayoutStore((store) => (team ? store.teamOpen : store.chatOpen));
   const toggleChat = useLayoutStore((store) => store.toggleChat);
-  useShortcuts([[SHORTCUTS.toggleChat, toggleChat]], mode === 'domain');
-  const tag = mode === 'domain' ? 'TEAM' : 'CHAT';
+  const toggleTeam = useLayoutStore((store) => store.toggleTeam);
+  const label = team ? 'Team' : 'Chat';
   return (
     <button
       type="button"
-      data-testid="chat-toggle"
-      aria-pressed={chatOpen}
-      aria-label={`${tag} Split`}
-      title={`${mode === 'domain' ? 'Team' : 'Chat'} (${shortcutLabel(SHORTCUTS.toggleChat)})`}
-      onClick={toggleChat}
+      data-testid={team ? 'team-toggle' : 'chat-toggle'}
+      aria-pressed={open}
+      aria-label={label}
+      title={`${label} (${shortcutLabel(SHORTCUTS.toggleChat)})`}
+      onClick={team ? toggleTeam : toggleChat}
       className={cn(
         'flex h-7 cursor-pointer items-center gap-[6px] rounded-[8px] border px-[10px] text-[11px] font-semibold text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]',
-        chatOpen
+        open
           ? 'border-[#ef6b3f] bg-[rgba(239,107,63,0.10)]'
           : 'border-[var(--line)] bg-transparent',
       )}
@@ -81,8 +83,7 @@ function SplitToggle({ mode }: { mode: WorkflowMode }) {
       >
         <span className="w-1 bg-[#ef6b3f]" />
       </span>
-      <span className="font-machine text-[9px] tracking-[0.08em] text-[var(--muted)]">{tag}</span>
-      Split
+      {label}
     </button>
   );
 }
