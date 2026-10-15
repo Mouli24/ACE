@@ -14,7 +14,7 @@ export default defineConfig({
   root: fileURLToPath(new URL('.', import.meta.url)),
   test: {
     globalSetup: ['./global-setup.ts'],
-    include: ['round-*/*.test.ts', 'helpers/*.test.ts'],
+    include: ['round-*/*.test.ts', 'product-gaps/*.test.ts', 'helpers/*.test.ts'],
     // One engine, one database: specs must not run concurrently against shared state.
     fileParallelism: false,
     testTimeout: 30_000,
