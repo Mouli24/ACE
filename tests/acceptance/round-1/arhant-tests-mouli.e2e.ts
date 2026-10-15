@@ -92,6 +92,8 @@ interface Graph {
 
 /** A project and an empty workflow, created through the engine so the UI starts from server truth. */
 async function seedWorkflow(name = 'cross'): Promise<{ projectId: string; workflowId: string }> {
+  // D351: the provider the picker is answered with exists before the page loads its providers
+  await mockProvider();
   const project = await api<{ id: string }>('/projects', {
     method: 'POST',
     body: JSON.stringify({ name: `${name}-${newId().slice(-6)}` }),
@@ -142,6 +144,50 @@ async function serverHas(
   return last as Graph;
 }
 
+/** One mock provider with its catalogue fetched, shared by every test here (D351 asks for one). */
+const PICKER_PROVIDER = 'R1 mock';
+async function mockProvider(): Promise<string> {
+  const { items } = await api<{ items: Array<{ id: string; type: string; name: string }> }>(
+    '/providers?limit=500',
+  );
+  const known = items.find((p) => p.type === 'mock' && p.name === PICKER_PROVIDER);
+  if (known !== undefined) return known.id;
+  const created = await api<{ id: string }>('/providers', {
+    method: 'POST',
+    body: JSON.stringify({ type: 'mock', name: PICKER_PROVIDER }),
+  });
+  await api(`/providers/${created.id}/refresh-models`, { method: 'POST' });
+  return created.id;
+}
+
+/**
+ * D351 (PG-1.3): an Agent is not created until a provider and a model are picked. Answer the
+ * picker with the mock provider and its first available model, the way a person would.
+ */
+async function answerProviderPicker(
+  page: Page,
+  { keyboard = false }: { keyboard?: boolean } = {},
+): Promise<void> {
+  const providerId = await mockProvider();
+  const picker = page.getByTestId('provider-picker');
+  await expect(picker).toBeVisible();
+  // `keyboard`: focus and Enter, as the keyboard-only test drives every other control
+  const press = async (target: Locator): Promise<void> => {
+    if (!keyboard) return target.click();
+    await target.focus();
+    await page.keyboard.press('Enter');
+  };
+  await press(picker.getByTestId(`picker-provider-${providerId}`));
+  await press(
+    picker
+      .getByRole('listbox', { name: /Model/ })
+      .locator('[role="option"]:not([disabled])')
+      .first(),
+  );
+  await press(picker.getByRole('button', { name: /^(Add node|Duplicate|Use this model)$/ }));
+  await expect(picker).toHaveCount(0);
+}
+
 /*
  * Ace UI layout (D330–D333): the Canvas's "Add node" pill adds an Agent after the last stage,
  * linked to it, and opens its settings; the empty-Canvas menu's "Add Agent" adds one that is not
@@ -163,6 +209,8 @@ async function closeSettings(page: Page): Promise<void> {
 async function addStage(page: Page, { keepOpen = false } = {}): Promise<void> {
   await closeSettings(page);
   await page.getByTestId('new-node-button').click();
+  // D351: the provider/model picker comes first, then the node and its settings
+  await answerProviderPicker(page);
   await expect(settingsDialog(page)).toBeVisible();
   if (!keepOpen) await closeSettings(page);
 }
@@ -200,6 +248,8 @@ async function addAgentFromMenu(page: Page): Promise<void> {
   const point = await emptyCanvasPoint(page);
   await page.mouse.click(point.x, point.y, { button: 'right' });
   await page.getByRole('menuitem', { name: 'Add Agent' }).click();
+  // D351: the Agent is created only once the picker is answered
+  await answerProviderPicker(page);
 }
 
 /** Close the workflow sheet (and the settings modal) when open, so the whole Canvas can be clicked. */
@@ -776,6 +826,8 @@ test.describe('M1 against the real engine (§8.1)', () => {
     // what the keyboard is asked to make below.
     await page.getByTestId('new-node-button').focus();
     await page.keyboard.press('Enter');
+    // D351: provider and model are picked first — with the keyboard too
+    await answerProviderPicker(page, { keyboard: true });
     await expect(settingsDialog(page)).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(settingsDialog(page)).toHaveCount(0);
