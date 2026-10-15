@@ -39,7 +39,8 @@ function seedTeam(status: Run['status'] = 'RUNNING') {
     snapshot: { version: 1, nodes: [writer, review], edges: [] },
     inputs: {},
     preflightIssues: [],
-    totals: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
+    // PG-3.3: the run's own totals, which every mode now reads — the snapshot's below agree.
+    totals: { tokensIn: 600, tokensOut: 200, costUsd: 0 },
     startedAt: NOW,
     allowedActions: live ? ['pause', 'stop', 'end'] : ['restart'],
     domain: { routing: 'manual', loopGuardLimit: 3, tokenBudget: null, stayOpen: true },
@@ -381,12 +382,12 @@ describe('Domain page', () => {
       within(screen.getByRole('region', { name: 'Domain' })).getByText('7 messages'),
     ).toBeInTheDocument();
     await waitFor(() => expect(useWorkspaceStatus.getState().messageCount).toBe(7));
+    // PG-3.3: the footer reads the selected run's totals itself, as in Ideate and Forge.
     await waitFor(() =>
-      expect(useWorkspaceStatus.getState().tokens).toEqual({ in: 600, out: 200 }),
+      expect(screen.getByTestId('footer-tokens')).toHaveTextContent('600 in / 200 out'),
     );
     unmount();
     expect(useWorkspaceStatus.getState().messageCount).toBeNull();
-    expect(useWorkspaceStatus.getState().tokens).toBeNull();
   });
 
   it('the "live" pill shows while the stream is open, and goes when the run ends', async () => {
@@ -451,8 +452,10 @@ describe('Domain page', () => {
     expect(within(aside).getByTestId('team-node-review')).toHaveTextContent('Working');
     await user.click(within(aside).getByRole('button', { name: 'Close' }));
     expect(screen.queryByRole('complementary', { name: 'Team' })).not.toBeInTheDocument();
-    expect(useLayoutStore.getState().chatOpen).toBe(false);
-    act(() => useLayoutStore.getState().toggleChat());
+    // D356: Team is remembered on its own; the chat column's Chat is left as it was.
+    expect(useLayoutStore.getState().teamOpen).toBe(false);
+    expect(useLayoutStore.getState().chatOpen).toBe(true);
+    act(() => useLayoutStore.getState().toggleTeam());
     expect(screen.getByRole('complementary', { name: 'Team' })).toBeInTheDocument();
   });
 

@@ -1,5 +1,6 @@
 import type {
   DomainMessage,
+  DomainUsageSnapshot,
   Id,
   PostRunMessageRequest,
   RouteEnvelopeRequest,
@@ -32,14 +33,21 @@ export const isLiveRun = (run: Pick<Run, 'status' | 'blockedReason'>): boolean =
 export function useDomainConversation(
   runId: Id | undefined,
   options: { node?: Id; live: boolean },
-): ConversationState & { error?: string; streamStatus: ChatStreamStatus | undefined } {
+): ConversationState & {
+  usage: DomainUsageSnapshot | null;
+  error?: string;
+  streamStatus: ChatStreamStatus | undefined;
+} {
   const { node, live } = options;
   const [state, setState] = useState<ConversationState>(initialConversation);
+  // PG-3.3: the engine's usage snapshot, kept beside the messages rather than in their reducer.
+  const [usage, setUsage] = useState<DomainUsageSnapshot | null>(null);
   const [error, setError] = useState<string>();
   const [streamStatus, setStreamStatus] = useState<ChatStreamStatus>();
 
   useEffect(() => {
     setState(initialConversation());
+    setUsage(null);
     setError(undefined);
     setStreamStatus(undefined);
     if (runId === undefined) return undefined;
@@ -49,7 +57,10 @@ export function useDomainConversation(
       let current = true;
       const stream = api().streamChat(runId, {
         ...(node === undefined ? {} : { node }),
-        onFrame: (frame) => setState((state) => applyFrame(state, frame)),
+        onFrame: (frame) => {
+          if (frame.event === 'usage.snapshot') setUsage(frame.data.snapshot);
+          else setState((state) => applyFrame(state, frame));
+        },
         onStatus: (status) => {
           if (current) setStreamStatus(status);
         },
@@ -79,8 +90,11 @@ export function useDomainConversation(
           if (page.nextCursor === undefined) break;
           after = page.nextCursor;
         }
-        const usage = await api().runUsage(runId);
-        if (!cancelled) setState({ ...fromPage(messages), usage });
+        const snapshot = await api().runUsage(runId);
+        if (!cancelled) {
+          setState(fromPage(messages));
+          setUsage(snapshot);
+        }
       } catch (failure) {
         if (!cancelled) setError(failure instanceof Error ? failure.message : String(failure));
       }
@@ -90,7 +104,7 @@ export function useDomainConversation(
     };
   }, [runId, node, live]);
 
-  return { ...state, ...(error === undefined ? {} : { error }), streamStatus };
+  return { ...state, usage, ...(error === undefined ? {} : { error }), streamStatus };
 }
 
 export function usePostRunMessage(runId: Id | undefined) {

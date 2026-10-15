@@ -1,13 +1,14 @@
-import { slugHandle } from '@ace/contracts';
+import { slugHandle, type RunState } from '@ace/contracts';
 import { Icons } from '@ace/ui';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
 
 import { CursorInfo, ProblemsCount, RunningCount } from '../../forge/layout/StatusBar';
 import { workflowPath, type WorkflowMode } from '../../forge/mode';
 import { useProject } from '../../projects/hooks';
-import { useSocketStatus } from '../../runs/hooks';
+import { useRun, useSocketStatus } from '../../runs/hooks';
 import { useRunStore } from '../../runs/run-store';
+import { useSelectedRun } from '../../runs/selected-run';
 import { SocketNotice } from '../../runs/SocketNotice';
 import { fmt } from '../../theme/constants';
 import { usePanelsStore } from '../stores/panels';
@@ -37,11 +38,9 @@ export function WorkspaceFooter({
 }) {
   const project = useProject(projectId);
   const messageCount = useWorkspaceStatus((store) => store.messageCount);
-  const tokens = useFooterTokens(workflowId, mode);
-  // not drawn: the run's state for tests and tools, now that the header has no run chip (D330)
-  const runStatus = useRunStore((store) =>
-    store.workflowId === workflowId ? store.status : undefined,
-  );
+  // the selected run's tokens, and — not drawn — its state for tests and tools, now that the
+  // header has no run chip (D330)
+  const { tokens, status: runStatus } = useSelectedRunFacts(workflowId);
   return (
     <footer
       data-run-status={runStatus}
@@ -104,6 +103,7 @@ function ProblemsButton({
   mode: WorkflowMode;
 }) {
   const navigate = useNavigate();
+  const [search] = useSearchParams();
   const bottomOpen = usePanelsStore((store) => store.bottomOpen);
   const setBottomTab = usePanelsStore((store) => store.setBottomTab);
   const toggleBottom = usePanelsStore((store) => store.toggleBottom);
@@ -119,7 +119,7 @@ function ProblemsButton({
           toggleBottom();
           return;
         }
-        if (mode !== 'ideate') navigate(workflowPath(projectId, workflowId, 'ideate'));
+        if (mode !== 'ideate') navigate(workflowPath(projectId, workflowId, 'ideate', search));
         setBottomTab('validation');
       }}
       className="flex h-[18px] shrink-0 cursor-pointer items-center gap-[4px] rounded-[5px] border-none bg-transparent px-[4px] text-[10px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] aria-pressed:text-[var(--ink)]"
@@ -162,17 +162,36 @@ function Connection() {
 }
 
 /**
- * Domain's tokens are what the Domain page publishes (its usage totals); Ideate and Forge show
- * this workflow's run totals from the live overlay, as the run bar did.
+ * PG-3.3: one source in every mode — the selected run's totals and state (PG-3.2), from the run
+ * overlay while it holds that run (live as frames arrive), else from the run's record.
  */
-function useFooterTokens(workflowId: string, mode: WorkflowMode): WorkspaceTokens | null {
-  const published = useWorkspaceStatus((store) => store.tokens);
-  const run = useRunStore(
+function useSelectedRunFacts(workflowId: string): {
+  tokens: WorkspaceTokens | null;
+  status: RunState | undefined;
+} {
+  const { runId } = useSelectedRun(workflowId);
+  const held = useRunStore(
     useShallow((store) =>
-      store.workflowId === workflowId && store.totals
-        ? { in: store.totals.tokensIn, out: store.totals.tokensOut }
+      runId !== undefined && store.workflowId === workflowId && store.runId === runId
+        ? {
+            status: store.status,
+            in: store.totals?.tokensIn,
+            out: store.totals?.tokensOut,
+          }
         : null,
     ),
   );
-  return mode === 'domain' ? published : run;
+  const record = useRun(held === null ? runId : undefined).data;
+  if (held !== null) {
+    return {
+      tokens:
+        held.in === undefined || held.out === undefined ? null : { in: held.in, out: held.out },
+      status: held.status,
+    };
+  }
+  if (record === undefined || record.id !== runId) return { tokens: null, status: undefined };
+  return {
+    tokens: { in: record.totals.tokensIn, out: record.totals.tokensOut },
+    status: record.status,
+  };
 }

@@ -4,6 +4,7 @@ import {
   type NodeState,
   type RosterEntry,
   type Run,
+  type RunState,
   type RunSummary,
 } from '@ace/contracts';
 import {
@@ -18,13 +19,13 @@ import {
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
-import { SHORTCUTS, useShortcuts } from '../app/shortcuts';
 import { useLayoutStore } from '../app/stores/layout';
 import { useWorkspaceStatus } from '../app/stores/workspace-status';
 import { openFile } from '../forge/editor/actions';
 import { workflowPath } from '../forge/mode';
 import { useProject } from '../projects/hooks';
-import { useEndRun, useRetryNodeRun, useRun, useRuns, useStartRun } from '../runs/hooks';
+import { useEndRun, useRetryNodeRun, useRun, useStartRun } from '../runs/hooks';
+import { useSelectedRun } from '../runs/selected-run';
 import { clockTime } from '../theme/format';
 import { Avatar } from '../theme/primitives';
 import { Composer } from './Composer';
@@ -38,38 +39,35 @@ import {
   useSetRunBudget,
 } from './hooks';
 import { domainLooks, lookOf, plural } from './looks';
+import { useDomainRunOverlay, withRunOverlay } from './run-overlay';
 import { TeamPanel } from './TeamPanel';
 
 /**
  * Domain (D303–D327) in the theme's team-chat view (D336): a run as its team's conversation — who
  * did what, what went to whom, who is stuck, and what it cost. `?run=` picks the run (the live one
  * by default), `?node=` a node's lens (the header's filter pills). A run that has ended opens
- * read-only. The Team aside follows the header's Split toggle.
+ * read-only. The Team aside follows the header's Team toggle (D356). Since D354 it sits inside the
+ * workflow layout, which hides its chat column here; the run is the one selected run (PG-3.2) and
+ * its node states and tokens are the run overlay's (PG-3.3).
  */
 export function DomainPage() {
   const { projectId = '', workflowId = '' } = useParams();
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
-  // The mode switch's keys work here too (D299): Domain sits outside the workflow layout.
-  useShortcuts([
-    [SHORTCUTS.ideate, () => navigate(workflowPath(projectId, workflowId, 'ideate'))],
-    [SHORTCUTS.forge, () => navigate(workflowPath(projectId, workflowId, 'forge'))],
-  ]);
-  const chatOpen = useLayoutStore((s) => s.chatOpen);
-  const toggleChat = useLayoutStore((s) => s.toggleChat);
+  // D354: the mode keys and the sockets are the workflow layout's; Domain registers none itself.
+  const teamOpen = useLayoutStore((s) => s.teamOpen);
+  const toggleTeam = useLayoutStore((s) => s.toggleTeam);
   const project = useProject(projectId);
-  const runs = useRuns(workflowId);
-  const requested = params.get('run') ?? undefined;
+  // PG-3.2: the one selected run — the live one by default, else the newest; `?run=new` none.
+  const selected = useSelectedRun(workflowId);
   const node = params.get('node') ?? undefined;
-
-  const fallback = useMemo(() => {
-    const list = runs.data ?? [];
-    return (list.find((summary) => isLiveRun(summary)) ?? list[0])?.id;
-  }, [runs.data]);
-  // `?run=new`: write a goal to start a new run, whatever ran before.
-  const runId = requested === 'new' ? undefined : (requested ?? fallback);
+  const runId = selected.runId;
   const run = useRun(runId);
-  const live = run.data !== undefined && isLiveRun(run.data);
+  // PG-3.3: the overlay every mode reads hears the run end first; the record follows its refetch.
+  const overlay = useDomainRunOverlay(runId);
+  const overlayEnded =
+    overlay.held && (overlay.status === 'COMPLETE' || overlay.status === 'HALTED');
+  const live = run.data !== undefined && isLiveRun(run.data) && !overlayEnded;
   const roster: RosterEntry[] = useMemo(
     () => (run.data === undefined ? [] : rosterFor(run.data.snapshot.nodes)),
     [run.data],
@@ -89,34 +87,21 @@ export function DomainPage() {
   });
   const { byId } = conversation;
   const messages = useMemo(() => orderedMessages({ byId }), [byId]);
+  // PG-3.3: node states and tokens come from the run overlay, as in Ideate and Forge.
+  const usage = useMemo(
+    () => withRunOverlay(conversation.usage, overlay),
+    [conversation.usage, overlay],
+  );
   const states: Record<Id, NodeState> = useMemo(
-    () =>
-      Object.fromEntries(
-        (conversation.usage?.perNode ?? []).map((entry) => [entry.nodeId, entry.state]),
-      ),
-    [conversation.usage],
+    () => Object.fromEntries((usage?.perNode ?? []).map((entry) => [entry.nodeId, entry.state])),
+    [usage],
   );
 
-  // The footer's message count and token totals (D330), cleared when Domain closes.
+  // The footer's message count (D330), cleared when Domain closes. Its tokens are the selected
+  // run's, read by the footer itself in every mode (PG-3.3).
   const setMessageCount = useWorkspaceStatus((s) => s.setMessageCount);
-  const setTokens = useWorkspaceStatus((s) => s.setTokens);
-  const totalIn = conversation.usage?.total.input;
-  const totalOut = conversation.usage?.total.output;
   useEffect(() => setMessageCount(messages.length), [messages.length, setMessageCount]);
-  useEffect(
-    () =>
-      setTokens(
-        totalIn === undefined || totalOut === undefined ? null : { in: totalIn, out: totalOut },
-      ),
-    [totalIn, totalOut, setTokens],
-  );
-  useEffect(
-    () => () => {
-      setMessageCount(null);
-      setTokens(null);
-    },
-    [setMessageCount, setTokens],
-  );
+  useEffect(() => () => setMessageCount(null), [setMessageCount]);
 
   // Chat auto-scroll: new messages and live text keep the bottom in view, unless the person has
   // scrolled up to read.
@@ -197,7 +182,8 @@ export function DomainPage() {
           <RunPill
             runId={runId}
             run={run.data}
-            runs={runs.data ?? []}
+            status={overlayEnded ? overlay.status : undefined}
+            runs={selected.runs ?? []}
             live={live}
             ending={end.isPending}
             onSelect={(id) => select({ run: id, node: undefined })}
@@ -235,7 +221,7 @@ export function DomainPage() {
               onOpenFile={(path) => {
                 // D336: an output card inside the project opens its file in Forge.
                 openFile(projectId, path);
-                navigate(workflowPath(projectId, workflowId, 'forge'));
+                navigate(workflowPath(projectId, workflowId, 'forge', params));
               }}
               // PG-1.5/PG-1.6: a failed turn's Retry is the node retry; a turn id is its node run.
               onRetryTurn={(turnId) =>
@@ -263,14 +249,14 @@ export function DomainPage() {
           />
         )}
       </section>
-      {chatOpen && (
+      {teamOpen && (
         <TeamPanel
-          usage={conversation.usage}
+          usage={usage}
           looks={looks}
           agentCount={roster.length}
           readOnly={!live}
           onSetBudget={(limit) => budget.mutateAsync(limit)}
-          onClose={toggleChat}
+          onClose={toggleTeam}
         />
       )}
     </div>
@@ -329,6 +315,7 @@ function startedLabel(at: string): string {
 function RunPill({
   runId,
   run,
+  status,
   runs,
   live,
   ending,
@@ -339,6 +326,8 @@ function RunPill({
 }: {
   runId: Id | undefined;
   run: Run | undefined;
+  /** PG-3.3: the run's end as the overlay heard it, ahead of the record's refetch. */
+  status?: RunState | undefined;
   runs: readonly RunSummary[];
   live: boolean;
   ending: boolean;
@@ -377,8 +366,10 @@ function RunPill({
               data-testid="domain-run-status"
               className="font-machine text-[10px] font-normal text-[var(--muted)]"
             >
-              {run.status}
-              {run.blockedReason !== undefined && ` · ${run.blockedReason}`}
+              {status ?? run.status}
+              {(status ?? run.status) === run.status &&
+                run.blockedReason !== undefined &&
+                ` · ${run.blockedReason}`}
             </span>
           )}
           <Icons.ChevronDown aria-hidden size={12} className="text-[var(--muted)]" />

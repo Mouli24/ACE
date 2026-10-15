@@ -61,7 +61,8 @@ describe('the conversation, folded from frames', () => {
     expect(state.tokens[TURN]).toBeUndefined();
   });
 
-  it('keeps the latest usage snapshot', () => {
+  // PG-3.3: the reducer keeps messages only; the usage snapshot is held beside it by the hook.
+  it('leaves a usage snapshot to the hook: the conversation is unchanged by it', () => {
     const snapshot: DomainUsageSnapshot = {
       runId: RUN,
       budget: null,
@@ -70,10 +71,11 @@ describe('the conversation, folded from frames', () => {
       perNode: [],
       perTurn: [],
     };
-    const state = applyFrame(initialConversation(), {
+    const before = initialConversation();
+    const state = applyFrame(before, {
       event: 'usage.snapshot',
       data: { snapshot },
     });
-    expect(state.usage).toEqual(snapshot);
+    expect(state).toBe(before);
   });
 });
