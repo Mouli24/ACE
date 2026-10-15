@@ -1,11 +1,14 @@
 import { slugHandle } from '@ace/contracts';
 import { Icons } from '@ace/ui';
 import { useEffect, useState } from 'react';
+import { useInRouterContext } from 'react-router-dom';
 
+import { useFollowNode } from '../../app/follow-node';
 import { useProject } from '../../projects/hooks';
 import { OpenRunEnd, useStartRunFlow } from '../../runs/useStartRunFlow';
+import type { AgentLook } from '../../theme/agents';
 import { ago } from '../../theme/format';
-import { touchedLines, type FileTouch, type LineSpan } from '../attribution';
+import { touchedLines, useNodeModel, type FileTouch, type LineSpan } from '../attribution';
 import { formatDocument } from './actions';
 import { useEditorStore } from './editor-store';
 import { languageOf } from './languages';
@@ -81,6 +84,8 @@ export function PathBar({
   const lines = useTouchedLines(projectId, path, touch);
   const shown = touch !== undefined && lines !== undefined;
   useClock(shown);
+  // PG-3.4: the model the writing node ran on
+  const model = useNodeModel(workflowId, touch?.agent.nodeId, touch?.nodeRunId);
   const crumbs = [
     ...(project.data === undefined ? [] : [slugHandle(project.data.name)]),
     ...path.split('/'),
@@ -127,8 +132,18 @@ export function PathBar({
             {touch.agent.letter}
           </span>
           <span className="min-w-0 truncate">
-            {touch.agent.name} edited lines {lines.from}–{lines.to} · {ago(touch.at)}
+            <AgentName workflowId={workflowId} agent={touch.agent} /> edited lines {lines.from}–
+            {lines.to} · {ago(touch.at)}
+            {model !== undefined && (
+              <>
+                {' · '}
+                <span data-testid="path-touch-model" className="font-machine text-[10.5px]">
+                  {model}
+                </span>
+              </>
+            )}
           </span>
+          <NodeInDomain workflowId={workflowId} agent={touch.agent} />
         </span>
       )}
       <button
@@ -143,6 +158,61 @@ export function PathBar({
       </button>
       {workflowId !== undefined && workflowId !== '' && <RunPipeline workflowId={workflowId} />}
     </div>
+  );
+}
+
+const LINK =
+  'cursor-pointer rounded-[4px] text-[var(--ink)] underline-offset-2 outline-none hover:underline focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+
+/**
+ * PG-3.4: the writing agent's name — a link to its node on the canvas (selected, centred, the
+ * selected run kept) inside a workflow route; plain text anywhere else.
+ */
+function AgentName({ workflowId, agent }: { workflowId?: string | undefined; agent: AgentLook }) {
+  if (!useInRouterContext() || workflowId === undefined || workflowId === '') {
+    return <>{agent.name}</>;
+  }
+  return <FollowLink workflowId={workflowId} agent={agent} mode="ideate" />;
+}
+
+/** PG-3.4: the same node's lens in Domain, beside the name. */
+function NodeInDomain({
+  workflowId,
+  agent,
+}: {
+  workflowId?: string | undefined;
+  agent: AgentLook;
+}) {
+  if (!useInRouterContext() || workflowId === undefined || workflowId === '') return null;
+  return <FollowLink workflowId={workflowId} agent={agent} mode="domain" />;
+}
+
+function FollowLink({
+  workflowId,
+  agent,
+  mode,
+}: {
+  workflowId: string;
+  agent: AgentLook;
+  mode: 'ideate' | 'domain';
+}) {
+  const follow = useFollowNode({ workflowId });
+  const label = mode === 'ideate' ? `Show ${agent.name} on canvas` : `Open ${agent.name} in Domain`;
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      data-testid={mode === 'ideate' ? 'path-touch-node' : 'path-touch-domain'}
+      onClick={() => follow(agent.nodeId, mode)}
+      className={
+        mode === 'ideate'
+          ? `${LINK} border-none bg-transparent p-0 font-semibold`
+          : 'flex h-[20px] shrink-0 cursor-pointer items-center rounded-full border border-[var(--line)] bg-transparent px-[7px] font-human text-[10.5px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]'
+      }
+    >
+      {mode === 'ideate' ? agent.name : 'Domain'}
+    </button>
   );
 }
 

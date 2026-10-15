@@ -19,6 +19,7 @@ import {
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
+import { useFollowNode } from '../app/follow-node';
 import { useLayoutStore } from '../app/stores/layout';
 import { useWorkspaceStatus } from '../app/stores/workspace-status';
 import { openFile } from '../forge/editor/actions';
@@ -124,6 +125,9 @@ export function DomainPage() {
   const end = useEndRun();
   const start = useStartRun(workflowId);
   const retry = useRetryNodeRun();
+  // PG-3.4: a message, a roster card or the lens's pill leads to its node on the canvas, this run.
+  const follow = useFollowNode();
+  const showOnCanvas = (nodeId: Id): void => follow(nodeId, 'ideate');
 
   const select = (next: { run?: Id; node?: Id }): void => {
     const query = new URLSearchParams();
@@ -188,6 +192,7 @@ export function DomainPage() {
                     color={look.color}
                     active={node === entry.nodeId}
                     onPick={() => select({ node: entry.nodeId })}
+                    onShowOnCanvas={() => showOnCanvas(entry.nodeId)}
                   />
                 );
               })}
@@ -266,6 +271,7 @@ export function DomainPage() {
               onRetryTurn={(turnId) =>
                 retry.mutateAsync({ nodeRunId: turnId, withDownstream: false })
               }
+              onShowOnCanvas={showOnCanvas}
             />
           )}
         </div>
@@ -303,6 +309,8 @@ export function DomainPage() {
           readOnly={!live}
           onSetBudget={(limit) => budget.mutateAsync(limit)}
           onClose={toggleTeam}
+          focusedNodeId={node}
+          onShowOnCanvas={showOnCanvas}
         />
       )}
       {compact && teamSheet && (
@@ -332,14 +340,17 @@ function FilterPill({
   color,
   active,
   onPick,
+  onShowOnCanvas,
 }: {
   label: string;
   letter: string;
   color: string;
   active: boolean;
   onPick(): void;
+  /** PG-3.4: the lens's node on the canvas, offered beside the pill while it is the lens. */
+  onShowOnCanvas?(): void;
 }) {
-  return (
+  const pill = (
     <button
       type="button"
       aria-pressed={active}
@@ -352,6 +363,21 @@ function FilterPill({
       <Avatar letter={letter} color={color} size={18} fontSize={9} />
       {label}
     </button>
+  );
+  if (!active || onShowOnCanvas === undefined) return pill;
+  return (
+    <span className="flex items-center gap-[2px]">
+      {pill}
+      <button
+        type="button"
+        aria-label={`Show ${label} on canvas`}
+        title="Show on canvas"
+        onClick={onShowOnCanvas}
+        className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full border-none bg-transparent text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+      >
+        <Icons.LocateFixed aria-hidden size={13} />
+      </button>
+    </span>
   );
 }
 

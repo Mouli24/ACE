@@ -23,6 +23,10 @@ export interface TeamPanelProps {
   readOnly?: boolean;
   onSetBudget?(limit: number | null): Promise<unknown>;
   onClose?(): void;
+  /** PG-3.4: the node in focus (Domain's lens): its card is marked. */
+  focusedNodeId?: string | undefined;
+  /** PG-3.4: follow an agent to the canvas. Absent: not offered. */
+  onShowOnCanvas?(nodeId: string): void;
 }
 
 const count = (value: number): string => value.toLocaleString('en-US');
@@ -83,6 +87,8 @@ export function TeamPanel({
   readOnly = false,
   onSetBudget,
   onClose,
+  focusedNodeId,
+  onShowOnCanvas,
 }: TeamPanelProps) {
   const [draft, setDraft] = useState('');
   const budgetId = useId();
@@ -142,11 +148,17 @@ export function TeamPanel({
           {nodes.map((node, index) => {
             const look = lookOf(looks, node.nodeId, node.name, index);
             const pill = statusPill(node.state);
+            const focused = node.nodeId === focusedNodeId;
             return (
               <li
                 key={node.nodeId}
                 data-testid={`team-node-${node.handle}`}
-                className="flex flex-col gap-[10px] rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-3"
+                aria-current={focused ? 'true' : undefined}
+                className={cn(
+                  'flex flex-col gap-[10px] rounded-[12px] border bg-[var(--surface)] p-3',
+                  focused ? 'border-[var(--ink)]' : 'border-[var(--line)]',
+                )}
+                style={focused ? { boxShadow: `inset 3px 0 0 ${look.color}` } : undefined}
               >
                 <div className="flex items-center gap-[10px]">
                   <Avatar letter={look.letter} color={look.color} size={30} fontSize={12} />
@@ -170,6 +182,17 @@ export function TeamPanel({
                     />
                     <span data-testid="team-node-state">{pill.label}</span>
                   </span>
+                  {onShowOnCanvas !== undefined && (
+                    <button
+                      type="button"
+                      aria-label={`Show ${node.name} on canvas`}
+                      title="Show on canvas"
+                      onClick={() => onShowOnCanvas(node.nodeId)}
+                      className="flex h-[22px] w-[22px] shrink-0 cursor-pointer items-center justify-center rounded-[6px] border-none bg-transparent text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                    >
+                      <Icons.LocateFixed aria-hidden size={13} />
+                    </button>
+                  )}
                 </div>
                 <div className="rounded-[8px] border border-[var(--line)] bg-[var(--soft)] px-[10px] py-2 text-[12px] text-[var(--muted)]">
                   {node.activity}

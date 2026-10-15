@@ -150,6 +150,8 @@ describe('D334 the editor in the theme’s code view', () => {
     ensureModel(P, 'c.ts', 'one\ntwo\nthree\n', 'typescript', () => undefined);
     const touch: FileTouch = {
       agent: { nodeId: 'n2', name: 'Writer', letter: 'W', color: '#7a62d6', index: 1 },
+      // PG-3.4: a touch names the node run that wrote it
+      nodeRunId: 'r2',
       at: '2026-10-10T10:00:00.000Z',
       edit: ['two\nthree'],
     };

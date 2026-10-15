@@ -1,8 +1,9 @@
-import type { NodeState } from '@ace/contracts';
+import { isAddressableNode, type Node, type NodeState } from '@ace/contracts';
 import type { PersistedRunEvent } from '@ace/sdk';
 import { useMemo } from 'react';
 
 import { useProject } from '../projects/hooks';
+import { useRun } from '../runs/hooks';
 import { useRunStore } from '../runs/run-store';
 import { agentMap, type AgentLook } from '../theme/agents';
 import { useWorkflowGraph } from '../workflows/hooks';
@@ -89,6 +90,8 @@ export function editedTexts(args: unknown): string[] | undefined {
 /** The latest write to one file: by whom, when, and what it wrote. */
 export interface FileTouch {
   agent: AgentLook;
+  /** The node run that wrote it, to name the model it ran on (PG-3.4). */
+  nodeRunId: string;
   at: string;
   /** `undefined`: the whole file; otherwise the new texts of the edit (D334). */
   edit: readonly string[] | undefined;
@@ -133,7 +136,7 @@ export function attribute(
     for (const raw of writtenPaths(toolCall.args)) {
       const path = projectPath(raw, sources.folderPath);
       if (path === undefined) continue;
-      last.set(path, { agent, at: toolCall.at, edit });
+      last.set(path, { agent, nodeRunId, at: toolCall.at, edit });
       if (running) live.set(path, agent);
     }
   }
@@ -181,6 +184,48 @@ export function touchedLines(
         : { from: Math.min(span.from, from), to: Math.max(span.to, to) };
   }
   return span;
+}
+
+/** PG-3.4: the files a node wrote last in the run — what Forge marks while that node is followed. */
+export function filesWrittenBy(
+  attribution: ForgeAttribution,
+  nodeId: string | undefined,
+): ReadonlySet<string> {
+  const paths = new Set<string>();
+  if (nodeId === undefined) return paths;
+  for (const [path, touch] of attribution.last) if (touch.agent.nodeId === nodeId) paths.add(path);
+  return paths;
+}
+
+const modelOfNode = (nodes: readonly Node[] | undefined, nodeId: string): string | undefined => {
+  const node = nodes?.find((each) => each.id === nodeId);
+  return node !== undefined && isAddressableNode(node) ? node.config.modelId : undefined;
+};
+
+/**
+ * PG-3.4: the model a node ran on — what its node run reports it used (the resolved model when the
+ * provider names one), else the run's snapshot of the node, else the node as configured now.
+ */
+export function useNodeModel(
+  workflowId: string | undefined,
+  nodeId: string | undefined,
+  nodeRunId?: string,
+): string | undefined {
+  const used = useRunStore((store) => {
+    if (nodeId === undefined || workflowId === undefined || store.workflowId !== workflowId) {
+      return undefined;
+    }
+    const nodeRun =
+      (nodeRunId === undefined ? undefined : store.nodeRunById(nodeRunId)) ?? store.nodeRun(nodeId);
+    return nodeRun?.modelUsed?.resolvedModelId ?? nodeRun?.modelUsed?.modelId;
+  });
+  const runId = useRunStore((store) =>
+    workflowId !== undefined && store.workflowId === workflowId ? store.runId : undefined,
+  );
+  const snapshot = useRun(used === undefined ? runId : undefined).data?.snapshot.nodes;
+  const graph = useWorkflowGraph(workflowId).data?.nodes;
+  if (nodeId === undefined) return undefined;
+  return used ?? modelOfNode(snapshot, nodeId) ?? modelOfNode(graph, nodeId);
 }
 
 /**
