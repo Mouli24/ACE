@@ -304,19 +304,35 @@ export const APPROVAL_PREVIEW_MAX = 500;
  * What an `ask_user` action puts in front of the user while the node is WAITING. Emitted as
  * `node.approval_required`; `GET /runs/:id/approvals` answers the pending ones as a plain
  * `ApprovalRequest[]`, the way §2.5 writes it.
+ *
+ * PG-2.2 (D359): a direct chat's tool call asks through the same request. A chat belongs to no run
+ * (FR-CHAT-005), so its request names the `threadId` instead; a run's request names `runId` and
+ * `nodeRunId`. Exactly one of the two is present. A chat request is announced on its thread as
+ * `chat.approval_required` and decided at `POST /chat/threads/:id/approvals/:requestId/approve`.
  */
-export const ApprovalRequestSchema = z.strictObject({
-  id: IdSchema,
-  runId: IdSchema,
-  nodeRunId: IdSchema,
-  nodeId: IdSchema,
-  nodeName: NodeNameSchema,
-  point: GuardrailPointSchema,
-  checkType: GuardrailCheckTypeSchema,
-  reason: z.string(),
-  preview: z.string().max(APPROVAL_PREVIEW_MAX),
-  requestedAt: TimestampSchema,
-});
+export const ApprovalRequestSchema = z
+  .strictObject({
+    id: IdSchema,
+    runId: IdSchema.optional(),
+    nodeRunId: IdSchema.optional(),
+    /** PG-2.2 (D359): the chat thread whose turn is waiting. */
+    threadId: IdSchema.optional(),
+    nodeId: IdSchema,
+    nodeName: NodeNameSchema,
+    point: GuardrailPointSchema,
+    checkType: GuardrailCheckTypeSchema,
+    reason: z.string(),
+    preview: z.string().max(APPROVAL_PREVIEW_MAX),
+    requestedAt: TimestampSchema,
+  })
+  .refine(
+    (request) => {
+      const anyRun = request.runId !== undefined || request.nodeRunId !== undefined;
+      if (request.threadId !== undefined) return !anyRun;
+      return request.runId !== undefined && request.nodeRunId !== undefined;
+    },
+    { message: 'An approval request names either runId and nodeRunId, or threadId.' },
+  );
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
 
 export const APPROVAL_DECISION_KINDS = ['approve', 'reject'] as const;

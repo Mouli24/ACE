@@ -274,6 +274,23 @@ export const ChatUpdatePayloadSchema = z.strictObject({
 });
 export type ChatUpdatePayload = z.infer<typeof ChatUpdatePayloadSchema>;
 
+/**
+ * PG-2.2 (D359): a chat turn's tool call waits for a person — a tool-point check set to `ask_user`.
+ * The request names the thread, never a run (FR-CHAT-005). Persisted on the thread.
+ */
+export const ChatApprovalRequiredPayloadSchema = z.strictObject({
+  threadId: IdSchema,
+  request: ApprovalRequestSchema,
+});
+export type ChatApprovalRequiredPayload = z.infer<typeof ChatApprovalRequiredPayloadSchema>;
+
+/** PG-2.2 (D359): the decision on a chat approval; a reject ends that tool call as refused. */
+export const ChatApprovalDecidedPayloadSchema = z.strictObject({
+  threadId: IdSchema,
+  decision: ApprovalDecisionSchema,
+});
+export type ChatApprovalDecidedPayload = z.infer<typeof ChatApprovalDecidedPayloadSchema>;
+
 /** Batched like `node.token`, and transient for the same reason (FR-CHAT-006). */
 export const ChatTokenPayloadSchema = z.strictObject({
   threadId: IdSchema,
@@ -370,6 +387,8 @@ export const THREAD_EVENT_FRAME_SCHEMAS = [
   persistedFrame('chat.message', ChatMessagePayloadSchema),
   persistedFrame('chat.update', ChatUpdatePayloadSchema),
   transientFrame('chat.token', ChatTokenPayloadSchema),
+  persistedFrame('chat.approval_required', ChatApprovalRequiredPayloadSchema),
+  persistedFrame('chat.approval_decided', ChatApprovalDecidedPayloadSchema),
 ] as const;
 
 export const ENGINE_EVENT_FRAME_SCHEMAS = [
@@ -440,7 +459,13 @@ export const RUN_EVENT_TYPES = [
 ] as const;
 export type RunEventType = (typeof RUN_EVENT_TYPES)[number];
 
-export const THREAD_EVENT_TYPES = ['chat.message', 'chat.update', 'chat.token'] as const;
+export const THREAD_EVENT_TYPES = [
+  'chat.message',
+  'chat.update',
+  'chat.token',
+  'chat.approval_required',
+  'chat.approval_decided',
+] as const;
 export type ThreadEventType = (typeof THREAD_EVENT_TYPES)[number];
 
 export const ENGINE_EVENT_TYPES = [

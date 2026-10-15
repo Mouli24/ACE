@@ -294,6 +294,22 @@ const threadFrames: Record<string, { type: string; payload: unknown; seq?: numbe
     seq: 17,
   },
   'chat.token': { type: 'chat.token', payload: { threadId: THREAD_ID, delta: 'You ' } },
+  // PG-2.2 (D359): a chat tool call's approval names the thread, never a run.
+  'chat.approval_required': {
+    type: 'chat.approval_required',
+    payload: {
+      threadId: THREAD_ID,
+      request: (({ runId: _r, nodeRunId: _n, ...rest }) => ({ ...rest, threadId: THREAD_ID }))(
+        approvalRequest,
+      ),
+    },
+    seq: 18,
+  },
+  'chat.approval_decided': {
+    type: 'chat.approval_decided',
+    payload: { threadId: THREAD_ID, decision: approvalDecision },
+    seq: 19,
+  },
 };
 
 /** Indexed access is checked in this workspace, so fixture lookup fails loudly instead. */
@@ -370,7 +386,12 @@ describe('§2.4 node.token is transient, and round 4 §2.5 chat.token with it', 
     ]);
     expect([...PERSISTED_RUN_EVENT_TYPES]).not.toContain('node.token');
     expect(PERSISTED_RUN_EVENT_TYPES).toHaveLength(RUN_EVENT_TYPES.length - 1);
-    expect([...PERSISTED_THREAD_EVENT_TYPES]).toEqual(['chat.message', 'chat.update']);
+    expect([...PERSISTED_THREAD_EVENT_TYPES]).toEqual([
+      'chat.message',
+      'chat.update',
+      'chat.approval_required',
+      'chat.approval_decided',
+    ]);
   });
 
   it('refuses a seq on node.token, because it is never persisted or resumed', () => {
@@ -724,8 +745,14 @@ describe('round 4 §2.5 the five events this round adds', () => {
     for (const type of THREAD_EVENT_TYPES) {
       expect(ThreadEventSchema.safeParse(threadFrames[type]).success, type).toBe(true);
     }
-    // PG-1.6 (D352) adds chat.update, persisted like chat.message.
-    expect([...THREAD_EVENT_TYPES]).toEqual(['chat.message', 'chat.update', 'chat.token']);
+    // PG-1.6 (D352) adds chat.update, persisted like chat.message; PG-2.2 (D359) the approvals.
+    expect([...THREAD_EVENT_TYPES]).toEqual([
+      'chat.message',
+      'chat.update',
+      'chat.token',
+      'chat.approval_required',
+      'chat.approval_decided',
+    ]);
   });
 
   it('FR-TOOL-009 logs the whole tool call, verdicts and all', () => {
