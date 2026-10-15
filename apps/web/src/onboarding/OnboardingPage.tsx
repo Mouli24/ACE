@@ -4,8 +4,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
+import { MODE_LABEL, MODES } from '../app/ModeLinks';
 import { api } from '../app/api';
 import { getSocket } from '../app/socket';
+import { workflowPath, type WorkflowMode } from '../forge/mode';
 import { HelpLink } from '../help/HelpLink';
 import { ProviderMark } from '../providers/ProviderMark';
 import { useCreateProvider, useProviderDetect, useProviders } from '../providers/hooks';
@@ -444,6 +446,8 @@ function CreateStep({
   const patchSettings = usePatchSettings();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // PG-3.7: where the new workflow opens — the Canvas by default, or Forge, or Domain.
+  const [openIn, setOpenIn] = useState<WorkflowMode>('ideate');
   const ready = projectName.trim() !== '' && question.trim() !== '';
 
   /**
@@ -496,15 +500,18 @@ function CreateStep({
     getSocket()?.subscribe({ scope: 'workflow', id: workflow.id });
     const store = useRunStore.getState();
     store.arm(workflow.id);
+    let runId: string | undefined;
     try {
       const run = await api().startRun(workflow.id, inputs ? { inputs } : {});
       useRunStore.getState().begin(workflow.id, run.id, run.status);
       queryClient.setQueryData(queryKeys.run(run.id), run);
+      runId = run.id;
     } catch {
       // The Canvas still opens; its Start button runs the workflow by hand.
       useRunStore.getState().reset();
     }
-    navigate(`/projects/${project.id}/workflows/${workflow.id}`);
+    const path = workflowPath(project.id, workflow.id, openIn);
+    navigate(runId === undefined ? path : `${path}?run=${encodeURIComponent(runId)}`);
   };
 
   return (
@@ -533,6 +540,29 @@ function CreateStep({
           required
         />
       </div>
+
+      <fieldset className="flex flex-col gap-[7px]" data-testid="onboarding-open-in">
+        <legend className="mb-[7px] text-[12px] font-semibold text-[var(--ink)]">Open it in</legend>
+        <div className="flex flex-wrap gap-[6px]">
+          {MODES.map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              aria-pressed={openIn === mode}
+              data-testid={`onboarding-open-${mode}`}
+              onClick={() => setOpenIn(mode)}
+              className={cn(
+                'h-[28px] cursor-pointer rounded-full border px-[12px] text-[12px] font-semibold text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]',
+                openIn === mode
+                  ? 'border-[var(--ink)] bg-[var(--surface)]'
+                  : 'border-[var(--line)] bg-transparent',
+              )}
+            >
+              {MODE_LABEL[mode]}
+            </button>
+          ))}
+        </div>
+      </fieldset>
 
       {error && (
         <p role="alert" className={ERROR} data-testid="onboarding-error">

@@ -3,7 +3,7 @@ import { Icons, cn } from '@ace/ui';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { workflowPath } from '../forge/mode';
+import { workflowPath, type WorkflowMode } from '../forge/mode';
 import { useProviders } from '../providers/hooks';
 import { useSocketStatus } from '../runs/hooks';
 import { useCreateWorkflow } from '../workflows/hooks';
@@ -13,10 +13,10 @@ import { CreateProjectDialog } from './ProjectDialogs';
 import { useOpenProject, useProjects } from './hooks';
 import { useProjectSummaries } from './useProjectSummaries';
 
-/** Where a new project opens: Canvas → Ideate, Forge → Forge. */
-type EntryMode = 'ideate' | 'forge';
+/** Where a new project opens: Canvas → Ideate, Forge → Forge, Team → Domain (PG-3.7). */
+type EntryMode = WorkflowMode;
 
-/** The hero's two entry cards (`Ace Home.dc.html`); class strings are literal for Tailwind. */
+/** The hero's three entry cards (`Ace Home.dc.html`); class strings are literal for Tailwind. */
 const ENTRIES: ReadonlyArray<{
   mode: EntryMode;
   icon: string;
@@ -40,6 +40,14 @@ const ENTRIES: ReadonlyArray<{
     sub: 'Code editor — build and ship',
     accent: 'hover:border-[#5b7fe0] focus-visible:border-[#5b7fe0]',
     tile: 'bg-[#5b7fe01f] text-[#5b7fe0]',
+  },
+  {
+    mode: 'domain',
+    icon: '@',
+    title: 'Domain',
+    sub: 'Give a team a goal and talk to it',
+    accent: 'hover:border-[#7a62d6] focus-visible:border-[#7a62d6]',
+    tile: 'bg-[#7a62d61f] text-[#7a62d6]',
   },
 ];
 
@@ -123,6 +131,7 @@ export function ProjectsPage() {
             project={project}
             summary={summaries.get(project.id)}
             onOpen={() => openAt(project.id, `/projects/${project.id}`)}
+            onOpenMode={(path) => openAt(project.id, path)}
           />
         ))}
       </div>
@@ -156,7 +165,7 @@ export function ProjectsPage() {
           <p className="relative mb-[34px] text-pretty text-center text-[14px] text-[var(--muted)]">
             Describe it once — Ace assembles the team and gets to work.
           </p>
-          <div className="relative grid w-full max-w-[620px] grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-[16px]">
+          <div className="relative grid w-full max-w-[860px] grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-[16px]">
             {ENTRIES.map((entry) => (
               <button
                 key={entry.mode}

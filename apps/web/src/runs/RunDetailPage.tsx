@@ -122,10 +122,18 @@ export function RunDetailPage() {
           </span>
           <span className="flex-1" />
           <Link
-            to={`/projects/${run.data.projectId}/workflows/${run.data.workflowId}`}
+            to={`/projects/${run.data.projectId}/workflows/${run.data.workflowId}?run=${run.data.id}`}
             className={ACTION_LINK}
           >
             open the Canvas<span aria-hidden>&nbsp;→</span>
+          </Link>
+          {/* PG-3.7: every mode, the run selected in it. */}
+          <Link
+            to={`/projects/${run.data.projectId}/workflows/${run.data.workflowId}/forge?run=${run.data.id}`}
+            className={ACTION_LINK}
+            data-testid="run-detail-open-forge"
+          >
+            Open in Forge<span aria-hidden>&nbsp;→</span>
           </Link>
           <Link
             to={`/projects/${run.data.projectId}/workflows/${run.data.workflowId}/domain?run=${run.data.id}`}

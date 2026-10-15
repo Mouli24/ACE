@@ -47,7 +47,9 @@ export function useStartRunFlow(workflowId: string): {
   const working = useRunStore((store) =>
     store
       .nodeRuns()
-      .some((run) => run.status === 'RUNNING' || run.status === 'READY' || run.status === 'WAITING'),
+      .some(
+        (run) => run.status === 'RUNNING' || run.status === 'READY' || run.status === 'WAITING',
+      ),
   );
   const [dialogNodes, setDialogNodes] = useState<Array<{ id: string; name: string }>>();
 
@@ -72,8 +74,7 @@ export function useStartRunFlow(workflowId: string): {
       : {
           parked: !working,
           ending: endRun.isPending,
-          end: () =>
-            endRun.mutate(openRunId, { onError: (error) => toast.error(error.message) }),
+          end: () => endRun.mutate(openRunId, { onError: (error) => toast.error(error.message) }),
         };
 
   return { start, dialog, active, pending: startRun.isPending, open };
