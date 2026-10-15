@@ -59,6 +59,8 @@ export interface FileTreeProps {
   filter?: string;
   /** Path → the agent writing that file now, from the run (D334). */
   live?: ReadonlyMap<string, AgentLook>;
+  /** PG-3.4: the node in focus and the files it wrote in the run, marked in its colour. */
+  followed?: FollowedFiles | undefined;
   /** False on a phone: browse only (FR-MOB-001). */
   editable?: boolean;
 }
@@ -74,6 +76,12 @@ interface Row {
 }
 
 const NO_AGENTS: ReadonlyMap<string, AgentLook> = new Map();
+
+/** PG-3.4: a followed node's files, as the Explorer marks them. */
+export interface FollowedFiles {
+  agent: AgentLook;
+  paths: ReadonlySet<string>;
+}
 
 /**
  * The project folder as an ARIA tree (FR-GIT-003) in the theme's Explorer rows (D334): lazy (a
@@ -91,6 +99,7 @@ export function FileTree({
   onOpen,
   filter = '',
   live = NO_AGENTS,
+  followed,
   editable = true,
 }: FileTreeProps) {
   const tree = useTreeRows(projectId);
@@ -388,6 +397,7 @@ export function FileTree({
     const active = !folder && editor.active === path;
     const dirty = !folder && editor.files[path]?.dirty === true;
     const agent = folder ? undefined : live.get(path);
+    const byFollowed = !folder && followed !== undefined && followed.paths.has(path);
     const changedIn = folder ? undefined : pendingChanges.get(path);
     const decoration = folder ? undefined : decorations.file(path);
     const tone = folder ? decorations.folder(path) : decoration?.tone;
@@ -444,7 +454,13 @@ export function FileTree({
             dropTarget === path && DROP_TARGET,
             row.ignored && 'opacity-50',
           )}
-          style={{ paddingLeft: 8 + depth * 14 }}
+          data-followed={byFollowed ? 'true' : undefined}
+          style={{
+            paddingLeft: 8 + depth * 14,
+            ...(byFollowed && followed !== undefined
+              ? { boxShadow: `inset 2px 0 0 ${followed.agent.color}` }
+              : {}),
+          }}
           onClick={() => {
             store.getState().select(projectId, path);
             activate(row, true);

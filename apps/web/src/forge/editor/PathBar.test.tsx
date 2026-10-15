@@ -32,6 +32,8 @@ function openText(path: string, text: string) {
 
 const touch = (edit: string[] | undefined): FileTouch => ({
   agent: { nodeId: 'n1', name: 'Writer', letter: 'W', color: '#7a62d6', index: 1 },
+  // PG-3.4: a touch names the node run that wrote it
+  nodeRunId: 'r1',
   at: new Date().toISOString(),
   edit,
 });

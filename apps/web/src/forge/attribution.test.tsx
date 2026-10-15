@@ -157,8 +157,19 @@ describe('D334 who wrote which file, from the run’s tool calls', () => {
       ),
       sources,
     );
-    expect(result.last.get('a.ts')).toEqual({ agent: writer, at: 'T2', edit: ['y'] });
-    expect(result.last.get('b.ts')).toEqual({ agent: editor, at: AT, edit: ['q'] });
+    // PG-3.4: each touch also names the node run that wrote it, for the model it ran on
+    expect(result.last.get('a.ts')).toEqual({
+      agent: writer,
+      nodeRunId: 'r1',
+      at: 'T2',
+      edit: ['y'],
+    });
+    expect(result.last.get('b.ts')).toEqual({
+      agent: editor,
+      nodeRunId: 'r2',
+      at: AT,
+      edit: ['q'],
+    });
     expect([...result.live]).toEqual([['a.ts', writer]]);
   });
 

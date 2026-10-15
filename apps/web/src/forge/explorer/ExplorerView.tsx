@@ -10,7 +10,7 @@ import { useFileList } from '../files/hooks';
 import { parentOf } from '../files/paths';
 import { SearchView } from '../search/SearchView';
 import { useExplorerStore, useProjectExplorer } from './explorer-store';
-import { FileTree } from './FileTree';
+import { FileTree, type FollowedFiles } from './FileTree';
 import { useSideViewStore } from './side-view-store';
 import { SideViewSwitch } from './SideViewSwitch';
 import { useTreeRows } from './useTreeRows';
@@ -30,12 +30,15 @@ export function ExplorerView({
   projectId,
   workflowId,
   live,
+  followed,
 }: {
   projectId: string;
   /** The workflow whose nodes name a chat's checkpoints in Changes ("Chat with Writer"). */
   workflowId?: string;
   /** Path → the agent writing it now (D334). */
   live?: ReadonlyMap<string, AgentLook>;
+  /** PG-3.4: the node in focus and the files it wrote. */
+  followed?: FollowedFiles | undefined;
 }) {
   const view = useSideViewStore((state) => state.view);
   // D300: an agent-change marker asks for Changes on its checkpoint; the switch shows it, and the
@@ -55,7 +58,9 @@ export function ExplorerView({
         <SideViewSwitch />
       </div>
       {/* One body per side view. */}
-      {view === 'explorer' && <ExplorerFiles projectId={projectId} live={live} />}
+      {view === 'explorer' && (
+        <ExplorerFiles projectId={projectId} live={live} followed={followed} />
+      )}
       {view === 'search' && <SearchView projectId={projectId} />}
       {view === 'changes' && <ChangesView projectId={projectId} workflowId={workflowId} />}
     </nav>
@@ -70,9 +75,11 @@ export function ExplorerView({
 function ExplorerFiles({
   projectId,
   live,
+  followed,
 }: {
   projectId: string;
   live: ReadonlyMap<string, AgentLook> | undefined;
+  followed: FollowedFiles | undefined;
 }) {
   const project = useProject(projectId);
   const list = useFileList(projectId, true);
@@ -119,6 +126,7 @@ function ExplorerFiles({
         label={`Files of ${name}`}
         filter={filter}
         live={live}
+        followed={followed}
         onOpen={(path, options) => openFile(projectId, path, options)}
       />
       <div className="border-t border-[var(--line)] p-[10px]">
