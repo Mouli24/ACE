@@ -71,7 +71,7 @@ import { useProject } from '../projects/hooks';
 import { ProviderPickerHost } from '../providers/ProviderModelPicker';
 import { useProviders } from '../providers/hooks';
 import { requestProviderChoice } from '../providers/provider-picker-store';
-import { useStartRun } from '../runs/hooks';
+import { useRun, useStartRun } from '../runs/hooks';
 import { useRunStore } from '../runs/run-store';
 import { useGraphSync, useWorkflowGraph } from '../workflows/hooks';
 import { useCanvasApi } from './canvas-api';
@@ -114,6 +114,7 @@ import {
 import { useGraphEditor } from './interactions/use-graph-editor';
 import { autoLayout } from './layout/auto-layout';
 import { freeSlotNear } from './placement';
+import { GHOST_EDGE_CLASS, runSnapshotOverlay } from './run-snapshot';
 import { toFlowEdges, toFlowNodes } from './to-flow';
 import {
   ZOOM_MAX,
@@ -822,10 +823,42 @@ function CanvasInner({
   // Providers give the stage cards their look and sub line, and the "provider missing" note
   // (FR-NODE-010, FR-PRV-005); the model catalogue gives "Add node" its model.
   const providers = useProviders();
+  /*
+   * PG-4.4: while this workflow's run is live, the cards are drawn from what it executes — its
+   * snapshot (BR-04) — over the graph being edited: a node removed since is a ghost, a node edited
+   * since says so, and the edges the run still walks stay drawn.
+   */
+  const liveRunId = useRunStore((store) =>
+    store.workflowId === workflowId && store.active ? store.runId : undefined,
+  );
+  const liveRun = useRun(liveRunId);
+  const liveSnapshot =
+    liveRunId !== undefined && liveRun.data?.id === liveRunId ? liveRun.data.snapshot : undefined;
+  const drawn = useMemo(
+    () => runSnapshotOverlay(nodes, edges, liveSnapshot),
+    [nodes, edges, liveSnapshot],
+  );
   const serverNodes = useMemo(
     () =>
-      toFlowNodes(nodes, edges, armedPortId, onPortKey, providers.data ?? [], providers.isSuccess),
-    [nodes, edges, armedPortId, onPortKey, providers.data, providers.isSuccess],
+      toFlowNodes(
+        drawn.nodes,
+        drawn.edges,
+        armedPortId,
+        onPortKey,
+        providers.data ?? [],
+        providers.isSuccess,
+      ).map((node): AceFlowNode => {
+        const sinceRun = drawn.sinceRun.get(node.id);
+        if (sinceRun === undefined) return node;
+        const ghost = sinceRun === 'removed';
+        return {
+          ...node,
+          data: { ...node.data, sinceRun },
+          // A ghost is drawn, never edited: the graph no longer has it to move, wire or delete.
+          ...(ghost ? { draggable: false, connectable: false, deletable: false } : {}),
+        };
+      }),
+    [drawn, armedPortId, onPortKey, providers.data, providers.isSuccess],
   );
   // Mounted with the selection it arrives with (PG-3.4: a node followed here from Domain or
   // Forge), so its card is drawn selected from the first frame.
@@ -918,15 +951,20 @@ function CanvasInner({
    * iteration, not one per token.
    */
   const runRevision = useRunStore((store) => store.revision);
+  // PG-4.2: a paused run, or one held on a WAITING node, is still live — not idle.
   const runIsLive = useRunStore(
-    (store) => store.workflowId === workflowId && store.status === 'RUNNING',
+    (store) =>
+      store.workflowId === workflowId &&
+      (store.status === 'RUNNING' ||
+        store.status === 'PAUSED' ||
+        (store.active && store.nodeRuns().some((run) => run.status === 'WAITING'))),
   );
 
   const flowEdges = useMemo(() => {
     // React Flow drops an edge whose endpoints it does not know yet and does not retry, so an
     // edge is handed over only once both its nodes are mounted; this memo re-runs when they are.
     const mounted = new Set(mountedIds === '' ? [] : mountedIds.split(','));
-    const connectable = edges.filter(
+    const connectable = drawn.edges.filter(
       (edge) => mounted.has(edge.from.nodeId) && mounted.has(edge.to.nodeId),
     );
     const store = useRunStore.getState();
@@ -936,20 +974,13 @@ function CanvasInner({
       const iteration = store.workflowId === workflowId ? store.iterations(edge.to.nodeId) : 0;
       return iteration > 0 ? { iteration, running: runIsLive } : { running: runIsLive };
     };
-    return toFlowEdges(connectable, nodes, live, providers.data ?? []).map((e) => ({
-      ...e,
-      selected: selectedEdgeIds.includes(e.id),
-    }));
-  }, [
-    edges,
-    nodes,
-    mountedIds,
-    selectedEdgeIds,
-    workflowId,
-    runRevision,
-    runIsLive,
-    providers.data,
-  ]);
+    return toFlowEdges(connectable, drawn.nodes, live, providers.data ?? []).map((e) =>
+      drawn.ghostEdgeIds.has(e.id)
+        ? // PG-4.4: an edge the run still walks but the graph lost — drawn faint, never edited.
+          { ...e, className: GHOST_EDGE_CLASS, selectable: false, deletable: false }
+        : { ...e, selected: selectedEdgeIds.includes(e.id) },
+    );
+  }, [drawn, mountedIds, selectedEdgeIds, workflowId, runRevision, runIsLive, providers.data]);
 
   // Edges are fully derived from the query cache, so the only change to honour is selection.
   const onEdgesChange = useCallback(
@@ -1380,9 +1411,12 @@ function CanvasInner({
       if (!isClick(pressAt.current, { x: event.clientX, y: event.clientY })) return;
       if (event.shiftKey || event.ctrlKey || event.metaKey) return;
       setSelection([node.id], []);
+      // PG-4.4: a ghost has no settings to open — the graph no longer has it; selecting it is
+      // what shows its run in the Inspector.
+      if (drawn.sinceRun.get(node.id) === 'removed') return;
       if (!readOnly) usePanelsStore.getState().openSettings({ kind: 'node', id: node.id });
     },
-    [hand, readOnly, setSelection],
+    [hand, readOnly, setSelection, drawn],
   );
 
   /* ---------------------------------------------------------------- drop from a drag source */
@@ -1503,6 +1537,14 @@ function CanvasInner({
       const target = event.target instanceof Element ? event.target : null;
       const nodeEl = target?.closest('.react-flow__node');
       const nodeId = nodeEl?.getAttribute('data-id') ?? undefined;
+      if (nodeId !== undefined && drawn.sinceRun.get(nodeId) === 'removed') {
+        // PG-4.4: a ghost card offers no actions; the right-click only selects it.
+        event.preventDefault();
+        setEdgeMenu(undefined);
+        setMenuTarget(undefined);
+        setSelection([nodeId], []);
+        return;
+      }
       if (nodeId !== undefined) {
         setEdgeMenu(undefined);
         setMenuTarget({ kind: 'node', nodeId });
@@ -1524,7 +1566,7 @@ function CanvasInner({
       }
       event.preventDefault();
     },
-    [flow, selectedNodeIds, setSelection],
+    [flow, selectedNodeIds, setSelection, drawn],
   );
 
   /** The one graph-op a confirmed loop edge needs: `add_edge` with `kind: 'loop'` (§2.6). */
@@ -1635,7 +1677,7 @@ function CanvasInner({
                   className="ace-canvas"
                   style={{ background: 'transparent' }}
                 >
-                  <EdgeLayer nodes={nodes} edges={flowEdges} />
+                  <EdgeLayer nodes={drawn.nodes} edges={flowEdges} />
                   <PortDotLayer
                     nodes={nodes}
                     connectStates={connectStates}

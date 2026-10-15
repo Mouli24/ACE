@@ -75,7 +75,14 @@ export function Inspector({ workflowId }: { workflowId: string }) {
   const rerun = useRerunNode();
   const start = useStartRun(workflowId);
   const busy = retry.isPending || rerun.isPending || start.isPending;
-  const nodeName = graph.data?.nodes.find((node) => node.id === focusedNodeId)?.name ?? 'this node';
+  /*
+   * PG-4.4: the node as the run knew it — its snapshot name first, so a node deleted or renamed
+   * since the run started is still called what it ran as; never a stand-in like "this node".
+   */
+  const nodeName =
+    focusedNodeId === undefined
+      ? ''
+      : (names.get(focusedNodeId) ?? (run.isLoading ? 'Loading…' : `Node ${focusedNodeId}`));
 
   return (
     <section
