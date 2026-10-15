@@ -13,8 +13,10 @@ import { defineConfig } from '@playwright/test';
  * exists, which is why the root `test:acceptance` script and CI both skip the Playwright half
  * until then.
  */
-const ENGINE_PORT = 47_470;
-const WEB_PORT = 47_471;
+// ACE_ACCEPTANCE_PORT moves both ports (engine = it, web = it + 1), so parallel worktrees never
+// test each other's build.
+const ENGINE_PORT = Number(process.env['ACE_ACCEPTANCE_PORT'] ?? 47_470);
+const WEB_PORT = ENGINE_PORT + 1;
 const ENGINE_URL = `http://127.0.0.1:${ENGINE_PORT}`;
 
 export default defineConfig({
@@ -22,7 +24,7 @@ export default defineConfig({
   // both of a round's files, and a new round-N folder should need no change here.
   testDir: '.',
   // Domain (D303) keeps its end-to-end tests in a folder of its own, beside the rounds.
-  testMatch: /(round-\d+|domain)[/\\].*\.e2e\.ts/,
+  testMatch: /(round-\d+|domain|product-gaps)[/\\].*\.e2e\.ts/,
   // The §8 manual pass starts and kills its own engine, so it cannot run against the `webServer`
   // below; it has its own config and its own `pnpm test:manual-pass`.
   testIgnore: /manual-pass\.e2e\.ts/,
