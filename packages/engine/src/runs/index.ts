@@ -523,9 +523,12 @@ export function createRunService(deps: RunServiceDeps): RunService {
         budgetTokens,
         // BR-13: only an Input node's content is trusted.
         trust: trustForSource(from.kind),
+        // PG-4.1: the contract the receiving node's executor enforces, its `maxTokens` included,
+        // so the envelope on screen says what the node was held to.
         contract: contractFor(
           outputTypes,
           to.kind === 'agent' ? to.config.outputContract?.jsonSchema : undefined,
+          to.kind === 'agent' || to.kind === 'model' ? to.config.execution.maxTokens : undefined,
         ),
         createdAt: now(),
         ...(target === undefined ? {} : { target }),
