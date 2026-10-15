@@ -1,13 +1,16 @@
 import { slugHandle } from '@ace/contracts';
+import { Icons } from '@ace/ui';
+import { useNavigate } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
 
 import { CursorInfo, ProblemsCount, RunningCount } from '../../forge/layout/StatusBar';
-import type { WorkflowMode } from '../../forge/mode';
+import { workflowPath, type WorkflowMode } from '../../forge/mode';
 import { useProject } from '../../projects/hooks';
 import { useSocketStatus } from '../../runs/hooks';
 import { useRunStore } from '../../runs/run-store';
 import { SocketNotice } from '../../runs/SocketNotice';
 import { fmt } from '../../theme/constants';
+import { usePanelsStore } from '../stores/panels';
 import { useWorkspaceStatus, type WorkspaceTokens } from '../stores/workspace-status';
 import { SettingsMenu } from './SettingsMenu';
 
@@ -47,6 +50,10 @@ export function WorkspaceFooter({
       <div className="flex min-w-0 items-center gap-[6px]">
         <SettingsMenu placement="footer" />
         <Connection />
+        <span aria-hidden className="opacity-50">
+          |
+        </span>
+        <ProblemsButton projectId={projectId} workflowId={workflowId} mode={mode} />
         {project.data && (
           <>
             <span aria-hidden className="opacity-50">
@@ -79,6 +86,47 @@ export function WorkspaceFooter({
         </span>
       </div>
     </footer>
+  );
+}
+
+/**
+ * PG-1.2 (D360, over D332's "hidden until … → Problems & events"): the bottom panel's own visible
+ * button. In Ideate it opens or closes the panel on its Problems tab; from Forge or Domain it goes
+ * to Ideate with the panel open, as the "…" menu's item does.
+ */
+function ProblemsButton({
+  projectId,
+  workflowId,
+  mode,
+}: {
+  projectId: string;
+  workflowId: string;
+  mode: WorkflowMode;
+}) {
+  const navigate = useNavigate();
+  const bottomOpen = usePanelsStore((store) => store.bottomOpen);
+  const setBottomTab = usePanelsStore((store) => store.setBottomTab);
+  const toggleBottom = usePanelsStore((store) => store.toggleBottom);
+  const open = mode === 'ideate' && bottomOpen;
+  return (
+    <button
+      type="button"
+      data-testid="footer-problems-events"
+      aria-pressed={open}
+      title="Problems & events"
+      onClick={() => {
+        if (open) {
+          toggleBottom();
+          return;
+        }
+        if (mode !== 'ideate') navigate(workflowPath(projectId, workflowId, 'ideate'));
+        setBottomTab('validation');
+      }}
+      className="flex h-[18px] shrink-0 cursor-pointer items-center gap-[4px] rounded-[5px] border-none bg-transparent px-[4px] text-[10px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] aria-pressed:text-[var(--ink)]"
+    >
+      <Icons.PanelBottom aria-hidden size={11} strokeWidth={2} />
+      Problems & events
+    </button>
   );
 }
 

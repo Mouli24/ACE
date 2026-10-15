@@ -1,5 +1,6 @@
 import type { AceSocketStatus } from '@ace/sdk';
 import { act, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
 import { useEditorStatus } from '../../forge/editor/editor-status';
@@ -8,6 +9,7 @@ import type { WorkflowMode } from '../../forge/mode';
 import type * as RunHooks from '../../runs/hooks';
 import { useRunStore } from '../../runs/run-store';
 import { db, installMockServer, processes, renderWithQuery } from '../../test/app';
+import { usePanelsStore } from '../stores/panels';
 import { useWorkspaceStatus } from '../stores/workspace-status';
 import { WorkspaceFooter } from './WorkspaceFooter';
 
@@ -269,5 +271,24 @@ describe('D330 the workspace footer', () => {
     await screen.findByTestId('project-slug');
     expect(screen.queryByTestId('footer-running')).toBeNull();
     processes.stopProject(project.id);
+  });
+});
+
+describe('PG-1.2 a visible Problems & events button in the footer (D360)', () => {
+  afterEach(() => usePanelsStore.setState({ bottomOpen: false, bottomTab: 'validation' }));
+
+  it.each(['ideate', 'forge', 'domain'] as const)('is a named, visible button in %s', (mode) => {
+    renderFooter(mode);
+    expect(within(footer()).getByRole('button', { name: /Problems & events/ })).toBeVisible();
+  });
+
+  it('in Ideate it opens the bottom panel on Problems, and a second click closes it', async () => {
+    renderFooter('ideate');
+    const button = within(footer()).getByRole('button', { name: /Problems & events/ });
+    await userEvent.click(button);
+    expect(usePanelsStore.getState()).toMatchObject({ bottomOpen: true, bottomTab: 'validation' });
+    expect(button).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.click(button);
+    expect(usePanelsStore.getState().bottomOpen).toBe(false);
   });
 });

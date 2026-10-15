@@ -419,7 +419,7 @@ function useRunSection(workflowId: string) {
 }
 
 /** Stop asks first, in the run controls' words: it cancels calls in flight (FR-CTL-003). */
-function StopConfirm({ onCancel, onStop }: { onCancel: () => void; onStop: () => void }) {
+export function StopConfirm({ onCancel, onStop }: { onCancel: () => void; onStop: () => void }) {
   return (
     <Dialog open onOpenChange={(open) => !open && onCancel()}>
       <DialogContent>

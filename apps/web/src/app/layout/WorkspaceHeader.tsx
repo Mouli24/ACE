@@ -9,11 +9,13 @@ import { Avatar, LogoMark, ThemeToggle } from '../../theme/primitives';
 import { useWorkflowGraph } from '../../workflows/hooks';
 import { SHORTCUTS, shortcutLabel, useShortcuts } from '../shortcuts';
 import { useLayoutStore } from '../stores/layout';
+import { HeaderRunControls } from './HeaderRunControls';
 import { ModeSwitch } from './ModeSwitch';
 
 /**
  * The workspace header of `Ace Canvas.dc.html` (D330) on Ideate, Forge and Domain: the mark and
- * ACE (to Home), the mode switch, Split, the workflow's agents and the theme toggle.
+ * ACE (to Home), the run controls (PG-1.2, D360), the mode switch, Split, the workflow's agents and
+ * the theme toggle.
  */
 export function WorkspaceHeader({
   projectId,
@@ -34,6 +36,8 @@ export function WorkspaceHeader({
           <LogoMark size={13} />
           <span className="text-[15px] font-bold tracking-[0.02em]">ACE</span>
         </Link>
+        {/* PG-1.2 (D360): the run controls in every mode, over D330's header layout. */}
+        <HeaderRunControls workflowId={workflowId} />
       </div>
       <div className="flex items-center gap-2">
         <ModeSwitch projectId={projectId} workflowId={workflowId} />
