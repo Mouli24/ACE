@@ -14,6 +14,7 @@ import { useRunStore } from '../runs/run-store';
 import { usePatchSettings } from '../settings/hooks';
 import { queryKeys } from '../workflows/query-keys';
 import { TemplateThumbnail } from './TemplateThumbnail';
+import { templateProviderOps } from './template-provider';
 import {
   TEMPLATE_QUESTIONS,
   clearWizardState,
@@ -175,6 +176,7 @@ export function OnboardingPage() {
           {state.step === 3 && state.templateId !== undefined && (
             <CreateStep
               templateId={state.templateId}
+              {...(state.providerId === undefined ? {} : { providerId: state.providerId })}
               projectName={state.projectName}
               question={state.question ?? TEMPLATE_QUESTIONS[state.templateId]}
               onChange={update}
@@ -423,12 +425,15 @@ function TemplateCard({
 
 function CreateStep({
   templateId,
+  providerId,
   projectName,
   question,
   onChange,
   onBack,
 }: {
   templateId: TemplateId;
+  /** Step 1's answer: the one provider every node of the template uses (PG-1.3, D351). */
+  providerId?: string;
   projectName: string;
   question: string;
   onChange: (patch: Partial<WizardState>) => void;
@@ -462,6 +467,20 @@ function CreateStep({
       return;
     }
     const { project, workflow, nodes } = created;
+    // PG-1.3 (D351): the template asked once — every Agent/Model goes on step 1's provider.
+    if (providerId !== undefined) {
+      try {
+        const models = await api().listModels({ providerId });
+        const ops = templateProviderOps(nodes, providerId, models.items);
+        if (ops.length > 0) {
+          await api().applyGraphOps(workflow.id, { baseVersion: workflow.version, ops });
+        }
+      } catch (cause) {
+        setError(
+          `The project was created, but its nodes could not be moved onto your provider: ${message(cause)}`,
+        );
+      }
+    }
     void queryClient.invalidateQueries({ queryKey: queryKeys.projects() });
     try {
       await patchSettings.mutateAsync({ onboardingCompleted: true });

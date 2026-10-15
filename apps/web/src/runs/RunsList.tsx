@@ -1,6 +1,7 @@
 import type { RunSummary } from '@ace/contracts';
 import { Link } from 'react-router-dom';
 
+import { CostValue } from './CostValue';
 import { useRuns } from './hooks';
 import { RunStateChip } from './RunStateChip';
 
@@ -66,7 +67,7 @@ export function RunsList({ workflowId }: { workflowId: string }) {
               <span>
                 {run.totals.tokensIn}↓ {run.totals.tokensOut}↑
               </span>
-              <span>${run.totals.costUsd.toFixed(4)}</span>
+              <CostValue usage={run.totals} format={(value) => `$${value.toFixed(4)}`} />
             </span>
           </Link>
         </li>

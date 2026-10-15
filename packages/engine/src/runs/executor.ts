@@ -50,7 +50,7 @@ import { estimateTokens } from '../envelopes/index.js';
 import { maskSecrets } from '../security/secret-patterns.js';
 import { assemblePrompt, type TeamPromptInput } from '../prompts/index.js';
 import type { RunGate } from './control/gate.js';
-import { usageFor } from './cost.js';
+import { usageFor, withReportedCost, type PricedProvider } from './cost.js';
 import {
   buildToolCall,
   resultText,
@@ -274,6 +274,11 @@ export interface NodeExecutorDeps {
   adapterFor: (providerId: Id) => Promise<ProviderAdapter>;
   /** The catalog rows the router chooses from and the executor prices against. */
   modelsFor: () => Promise<Model[]>;
+  /**
+   * PG-1.4 (D359): the provider row a call went to, for the cost rule — a local model is $0 by
+   * rule and an unpriced remote one is `costKnown: false`. Absent, the price table alone decides.
+   */
+  providerFor?: (providerId: Id) => Promise<PricedProvider | undefined>;
   /** Runs the provider call inside that provider's concurrency gate (FR-PRV-009). */
   runGated: <T>(providerId: Id, fn: () => Promise<T>) => Promise<T>;
   /**
@@ -752,6 +757,12 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         (model) => model.providerId === chosen.providerId && model.modelId === chosen.modelId,
       );
       const pricing = catalogRow?.pricing;
+      let pricedProvider: PricedProvider | undefined;
+      try {
+        pricedProvider = await deps.providerFor?.(chosen.providerId);
+      } catch {
+        pricedProvider = undefined;
+      }
       const modelTakesTools = catalogRow?.supportsTools !== false;
 
       // A copy: a `model` chunk adds what the provider says actually answered, and the router's
@@ -812,12 +823,9 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       let sawUsage = false;
       let cachedTokensIn = 0;
       const usageNow = (): Usage => {
-        const priced = usageFor(tokensIn, tokensOut, pricing);
+        const priced = usageFor(tokensIn, tokensOut, pricing, pricedProvider);
         return {
-          ...priced,
-          ...(reportedCostUsd === undefined
-            ? {}
-            : { costUsd: reportedCostUsd, costSource: 'reported' as const }),
+          ...(reportedCostUsd === undefined ? priced : withReportedCost(priced, reportedCostUsd)),
           ...(cachedTokensIn > 0 ? { cachedTokensIn } : {}),
         };
       };

@@ -398,6 +398,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
     logger,
     adapterFor: deps.adapterFor,
     modelsFor: () => repository.models.list(scope, {}),
+    // PG-1.4 (D359): local is $0 by rule, an unpriced remote model's cost is unknown.
+    providerFor: async (providerId) =>
+      (await repository.providers.get(scope, providerId)) ?? undefined,
     runGated: deps.runGated,
     router: deps.router,
     ...(deps.tokenBatchMs === undefined ? {} : { tokenBatchMs: deps.tokenBatchMs }),

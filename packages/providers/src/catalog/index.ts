@@ -70,7 +70,13 @@ export function mergeCatalog(
     merged.push(
       known === undefined
         ? { ...model, source: 'discovered' }
-        : { ...known, displayName: model.displayName, source: 'discovered' },
+        : {
+            ...known,
+            displayName: model.displayName,
+            // PG-1.4: the size is the machine's word, never the manifest's.
+            ...(model.sizeBytes === undefined ? {} : { sizeBytes: model.sizeBytes }),
+            source: 'discovered',
+          },
     );
   }
 

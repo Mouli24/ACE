@@ -167,11 +167,19 @@ export function validateGraph(
     if (node.kind === 'agent' || node.kind === 'model') {
       const { providerId, modelId } = node.config;
 
-      if (modelId === undefined || modelId === '' || providerId === undefined) {
+      if (providerId === undefined || providerId === '') {
+        // PG-1.3 (D358): no provider chosen yet — its own issue, so the card can ask for one.
+        issues.push({
+          severity: 'error',
+          code: 'missing_provider',
+          message: `"${node.name}" has no provider chosen yet — choose a provider and a model.`,
+          nodeId: node.id,
+        });
+      } else if (modelId === undefined || modelId === '') {
         issues.push({
           severity: 'error',
           code: 'missing_model',
-          message: `"${node.name}" has no provider and model chosen yet.`,
+          message: `"${node.name}" has a provider but no model chosen yet.`,
           nodeId: node.id,
         });
       } else if (context.providers !== undefined && !providersById.has(providerId)) {

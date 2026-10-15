@@ -18,6 +18,8 @@ import { useArtifact } from '../artifacts';
 import { useSelectionStore } from '../app/stores/selection';
 import { IterationSelector } from '../edges/loop/IterationSelector';
 import { VerdictList } from '../guardrails/VerdictList';
+import { useProviders } from '../providers/hooks';
+import { LOCAL_COST_TEXT, UNKNOWN_COST_TITLE, costText, isLocalProvider } from '../runs/CostValue';
 import { NodeRunMenu } from '../runs/controls/NodeRunMenu';
 import { useRerunNode, useRetryNodeRun, useRuns, useStartRun, useNodeRuns } from '../runs/hooks';
 import { useRunStore } from '../runs/run-store';
@@ -266,10 +268,21 @@ export function Inspector({ workflowId }: { workflowId: string }) {
 }
 
 function Facts({ nodeRun }: { nodeRun: NodeRun }) {
+  const providers = useProviders();
+  // PG-1.4 (D359): a local model is free by rule; an unpriced one's cost is unknown, never $0.
+  const local = isLocalProvider(
+    providers.data?.find((provider) => provider.id === nodeRun.modelUsed?.providerId),
+  );
+  const unknownCost = nodeRun.usage.costKnown === false;
   const stats: Array<[string, string]> = [
     ['attempt', String(nodeRun.attempt)],
     ['tokens', `${nodeRun.usage.tokensIn + nodeRun.usage.tokensOut}`],
-    ['cost', money(nodeRun.usage.costUsd)],
+    [
+      'cost',
+      local && !unknownCost && nodeRun.usage.costUsd === 0
+        ? LOCAL_COST_TEXT
+        : costText(nodeRun.usage, money),
+    ],
   ];
   const rows: Array<[string, string]> = [
     ['model', nodeRun.modelUsed ? nodeRun.modelUsed.modelId : '—'],
@@ -291,7 +304,7 @@ function Facts({ nodeRun }: { nodeRun: NodeRun }) {
             <span className="text-[10.5px] text-[var(--muted)]">{label}</span>
             <span
               className="mt-[3px] truncate font-machine text-[13px] font-medium text-[var(--ink)]"
-              title={value}
+              title={label === 'cost' && unknownCost ? UNKNOWN_COST_TITLE : value}
             >
               {value}
             </span>

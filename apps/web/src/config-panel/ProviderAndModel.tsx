@@ -3,7 +3,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, cn } fro
 import { useId } from 'react';
 
 import { useResolvedTheme } from '../app/theme';
+import { ProviderSelectGroups } from '../providers/ProviderModelPicker';
 import { useModels, useProviders } from '../providers/hooks';
+import { isLocalProvider, LOCAL_COST_TEXT } from '../runs/CostValue';
+import { localModelFacts } from '../providers/provider-groups';
 import { th, themeProviderOf } from '../theme/constants';
 import { ProviderOrb } from '../theme/primitives';
 import { FIELD_GRID_CLASS, Field, HELP_CLASS } from './fields';
@@ -58,6 +61,8 @@ export function ProviderAndModel({
   const chosen = providerList.find((provider) => provider.id === providerId);
   const modelList = providerId === undefined ? [] : (models.data?.items ?? []);
   const picked = modelList.find((model) => model.modelId === modelId);
+  // PG-1.4: a local model shows its size and tools/JSON, and is free by rule.
+  const local = isLocalProvider(chosen);
   // D286: a model the node names that its provider no longer lists — never shown as if usable.
   const gone = modelId !== undefined && modelId !== '' && models.isSuccess && picked === undefined;
   const modelHint =
@@ -92,15 +97,11 @@ export function ProviderAndModel({
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {providerList.map((provider) => (
-              <SelectItem
-                key={provider.id}
-                value={provider.id}
-                icon={<SmallOrb type={provider.type} />}
-              >
-                {provider.name}
-              </SelectItem>
-            ))}
+            {/* PG-1.4: the providers in their sections — Cloud APIs, Local & open models, … */}
+            <ProviderSelectGroups
+              providers={providerList}
+              renderIcon={(provider) => <SmallOrb type={provider.type} />}
+            />
           </SelectContent>
         </Select>
         {/* FR-PRV-005: the node keeps pointing at a provider the engine no longer has. */}
@@ -136,6 +137,7 @@ export function ProviderAndModel({
                 >
                   {model.displayName}
                   {model.resolvedModelId !== undefined ? ` · ${model.resolvedModelId}` : ''}
+                  {local ? ` · ${localModelFacts(model)}` : ''}
                   {blocked ? ` — ${blocked}` : ''}
                 </SelectItem>
               );
@@ -153,6 +155,11 @@ export function ProviderAndModel({
               {picked.description !== undefined && <span> · {picked.description}</span>}
             </p>
           )}
+        {local && picked !== undefined && (
+          <p className={HELP_CLASS} data-testid="config-model-local">
+            {LOCAL_COST_TEXT}
+          </p>
+        )}
         {gone && (
           <p role="alert" className={HELP_CLASS} data-testid="config-model-gone">
             “{modelId}” is not in this provider’s model list any more. Choose another, or refresh

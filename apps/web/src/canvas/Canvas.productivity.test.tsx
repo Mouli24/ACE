@@ -1,5 +1,5 @@
 import type { Edge, Node } from '@ace/contracts';
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { usePanelsStore } from '../app/stores/panels';
@@ -19,10 +19,20 @@ beforeEach(() => {
   clearClipboard();
 });
 
+/** An Agent/Model on a mock provider — a node with none would make Duplicate ask first (D351). */
+function onProvider(node: Node, providerId: string): Node {
+  return node.kind === 'agent' || node.kind === 'model'
+    ? ({ ...node, config: { ...node.config, providerId, modelId: 'mock-text' } } as Node)
+    : node;
+}
+
 function seed(kinds: Array<Parameters<typeof createNode>[0]> = ['input', 'agent']) {
   const project = db.createProject({ name: 'P' });
   const workflow = db.createWorkflow(project.id, 'F');
-  const nodes = kinds.map((kind, i) => createNode(kind, workflow.id, { x: i * 300, y: 0 }));
+  const provider = db.createProvider({ type: 'mock', name: 'Mock' });
+  const nodes = kinds.map((kind, i) =>
+    onProvider(createNode(kind, workflow.id, { x: i * 300, y: 0 }), provider.id),
+  );
   const edges: Edge[] =
     nodes.length >= 2
       ? [
@@ -232,6 +242,33 @@ describe('FR-CAN-011 right-click menus', () => {
     expect(useSelectionStore.getState().nodeIds).toEqual([fromKey!.id]);
   });
 
+  it('PG-1.3 duplicating an Agent with no provider asks for one; Cancel copies nothing', async () => {
+    const project = db.createProject({ name: 'P' });
+    const workflow = db.createWorkflow(project.id, 'F');
+    const provider = db.createProvider({ type: 'mock', name: 'Mock' });
+    const bare = createNode('agent', workflow.id, { x: 0, y: 0 });
+    db.commitGraph(workflow.id, [bare], []);
+    await mount(workflow.id);
+
+    fireEvent.contextMenu(flowNode(bare.id));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Duplicate/ }));
+    let picker = await screen.findByRole('dialog', { name: /provider/i });
+    await userEvent.click(within(picker).getByRole('button', { name: 'Cancel' }));
+    await settle(workflow.id);
+    expect(nodesInDb(workflow.id)).toHaveLength(1);
+
+    fireEvent.contextMenu(flowNode(bare.id));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Duplicate/ }));
+    picker = await screen.findByRole('dialog', { name: /provider/i });
+    await userEvent.click(await within(picker).findByRole('option', { name: /Mock/ }));
+    await userEvent.click(await within(picker).findByRole('option', { name: /Mock JSON/ }));
+    await userEvent.click(within(picker).getByRole('button', { name: 'Duplicate' }));
+    await settle(workflow.id);
+    const copy = nodesInDb(workflow.id).find((n) => n.id !== bare.id);
+    expect(copy?.kind === 'agent' && copy.config.providerId).toBe(provider.id);
+    expect(copy?.kind === 'agent' && copy.config.modelId).toBe('mock-json');
+  });
+
   it('D332 Settings opens the node settings modal; Inspect opens the workflow panel’s Inspector', async () => {
     const { workflow, nodes } = seed(['input', 'agent']);
     await mount(workflow.id);
@@ -258,6 +295,12 @@ describe('FR-CAN-011 right-click menus', () => {
     // nothing copied yet
     expect(screen.getByRole('menuitem', { name: /Paste/ })).toHaveAttribute('data-disabled');
     await userEvent.click(screen.getByRole('menuitem', { name: /Add Agent/ }));
+    // D351 (PG-1.3): an Agent waits for its provider and model
+    const picker = await screen.findByRole('dialog', { name: /provider/i });
+    expect(nodesInDb(workflow.id)).toHaveLength(1);
+    await userEvent.click(await within(picker).findByRole('option', { name: /Mock/ }));
+    await userEvent.click(await within(picker).findByRole('option', { name: /Mock text/ }));
+    await userEvent.click(within(picker).getByRole('button', { name: 'Add node' }));
     await settle(workflow.id);
     expect(
       nodesInDb(workflow.id)

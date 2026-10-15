@@ -339,7 +339,7 @@ describe('D332 click to open settings', () => {
   });
 });
 
-describe('D332 Add node', () => {
+describe('D332 Add node (provider first, D351)', () => {
   it('adds a linked "New agent" after the last stage, as one undo step, then opens its settings', async () => {
     const { workflow, nodes } = seed(['input', 'agent']);
     const provider = db.createProvider({ type: 'mock', name: 'Mock' });
@@ -347,7 +347,13 @@ describe('D332 Add node', () => {
     await mount(workflow.id);
     const last = nodes[1]!;
 
+    // D351 (PG-1.3): Add node asks for the provider and model first; nothing is sent before.
     await userEvent.click(screen.getByTestId('new-node-button'));
+    const picker = await screen.findByRole('dialog', { name: /provider/i });
+    expect(db.nodesOf(workflow.id)).toHaveLength(nodes.length);
+    await userEvent.click(await within(picker).findByRole('option', { name: /Mock/ }));
+    await userEvent.click(await within(picker).findByRole('option', { name: /Mock text/ }));
+    await userEvent.click(within(picker).getByRole('button', { name: 'Add node' }));
     await settle(workflow.id);
     const added = db.nodesOf(workflow.id).find((n) => !nodes.some((o) => o.id === n.id))!;
     expect(added.kind).toBe('agent');
@@ -355,7 +361,7 @@ describe('D332 Add node', () => {
     // the second stage: k = 2 is even, so 50 up
     expect(added.position).toEqual({ x: last.position.x + 320, y: last.position.y - 50 });
     expect(added.kind === 'agent' && added.config.providerId).toBe(provider.id);
-    expect(added.kind === 'agent' && added.config.modelId).toEqual(expect.any(String));
+    expect(added.kind === 'agent' && added.config.modelId).toBe('mock-text');
     expect(
       db
         .edgesOf(workflow.id)

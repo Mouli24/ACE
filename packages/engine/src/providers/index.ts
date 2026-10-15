@@ -438,6 +438,7 @@ export function createProviderService(
           ...(model.resolvedModelId === undefined
             ? {}
             : { resolvedModelId: model.resolvedModelId }),
+          ...(model.sizeBytes === undefined ? {} : { sizeBytes: model.sizeBytes }),
           ...(available || model.unavailableReason === undefined
             ? {}
             : { unavailableReason: model.unavailableReason }),

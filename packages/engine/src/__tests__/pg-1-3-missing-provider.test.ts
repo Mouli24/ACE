@@ -90,7 +90,7 @@ const runPreflight = (nodes: Node[]) =>
 const codes = (issues: { code: string }[]): string[] => issues.map((issue) => issue.code);
 
 describe('PG-1.3 pre-flight names a node with no provider (missing_provider)', () => {
-  it.fails(
+  it(
     'an Agent with no provider is blocked with missing_provider, naming the node',
     async () => {
       const issues = await runPreflight([agent({ providerId: undefined })]);
@@ -109,7 +109,7 @@ describe('PG-1.3 pre-flight names a node with no provider (missing_provider)', (
     expect(codes(issues)).not.toContain('missing_provider');
   });
 
-  it.fails('POST /validate (validateGraph) raises missing_provider for the same node', () => {
+  it('POST /validate (validateGraph) raises missing_provider for the same node', () => {
     const issues = validateGraph([agent({ providerId: undefined, modelId: undefined })], [], {
       providers: [provider],
       models: [model],

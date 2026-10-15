@@ -22,6 +22,7 @@ import {
   useStopRun,
   useEndRun,
 } from './hooks';
+import { CostValue, costText } from './CostValue';
 import { CHIP_CLASS, RunStateChip } from './RunStateChip';
 
 /** The theme's small-caps section label: JetBrains Mono 9.5px, 0.1em, muted, 500 (D328). */
@@ -137,8 +138,8 @@ export function RunDetailPage() {
           className="font-machine text-[11.5px] text-[var(--muted)]"
           data-testid="run-detail-totals"
         >
-          {run.data.totals.tokensIn}↓ {run.data.totals.tokensOut}↑ $
-          {run.data.totals.costUsd.toFixed(4)}
+          {run.data.totals.tokensIn}↓ {run.data.totals.tokensOut}↑{' '}
+          <CostValue usage={run.data.totals} format={(value) => `$${value.toFixed(4)}`} />
           {run.data.totals.priceTableVersion ? ` · ${run.data.totals.priceTableVersion}` : ''}
         </span>
       </header>
@@ -263,7 +264,7 @@ export function RunDetailPage() {
                 )}
                 <span className="ml-auto font-machine text-[11px] text-[var(--muted)]">
                   {nodeRun
-                    ? `${nodeRun.usage.tokensIn}↓ ${nodeRun.usage.tokensOut}↑ $${nodeRun.usage.costUsd.toFixed(4)}`
+                    ? `${nodeRun.usage.tokensIn}↓ ${nodeRun.usage.tokensOut}↑ ${costText(nodeRun.usage, (value) => `$${value.toFixed(4)}`)}`
                     : 'not run'}
                 </span>
               </li>
