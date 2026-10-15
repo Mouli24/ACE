@@ -28,10 +28,11 @@ import {
  */
 export const GEMINI_BASE_ARGS = ['-o', 'stream-json', '--skip-trust'] as const;
 
+/** D355 (PG-2.3): no preset approves everything; an old `full_auto` row runs as `edit_files`. */
 const APPROVAL_MODE: Readonly<Record<CliPermission, string>> = {
   read_only: 'plan',
   edit_files: 'auto_edit',
-  full_auto: 'yolo',
+  full_auto: 'auto_edit',
 };
 
 /**

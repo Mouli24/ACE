@@ -41,7 +41,8 @@ describe('X1 Codex CLI flags', () => {
   it.each([
     ['read_only', ['--sandbox', 'read-only']],
     ['edit_files', ['--sandbox', 'workspace-write']],
-    ['full_auto', ['--dangerously-bypass-approvals-and-sandbox']],
+    // D355: an old full_auto row runs as edit_files — the sandbox is never bypassed.
+    ['full_auto', ['--sandbox', 'workspace-write']],
   ] as const)('maps %s, reads the prompt from stdin', (permission, flags) => {
     expect(codexDialect.args(req, permission)).toEqual([...CODEX_BASE_ARGS, ...flags, '-m', 'gpt-6.1-sol', '-']);
   });
