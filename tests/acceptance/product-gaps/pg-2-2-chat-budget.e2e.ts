@@ -1,7 +1,6 @@
 import { test } from '@playwright/test';
 
 import {
-  NOT_BUILT,
   api,
   expect,
   mockProvider,
@@ -20,7 +19,6 @@ import {
 
 test.describe('PG-2.2 chat obeys budgets', () => {
   test("the chat shows a turn's cost", async ({ page }) => {
-    test.fail(NOT_BUILT, 'PG-2.2: a chat turn shows tokens, never its cost');
     const providerId = await mockProvider();
     const flow = await seedAgents('chat-cost', [
       { name: 'Writer', providerId, modelId: 'mock-chat' },
@@ -38,7 +36,6 @@ test.describe('PG-2.2 chat obeys budgets', () => {
   test("a chat turn over the project's cost cap is refused with the budget reason", async ({
     page,
   }) => {
-    test.fail(NOT_BUILT, 'PG-2.2: chat ignores maxCostPerRunUsd and replies anyway');
     const providerId = await mockProvider();
     const flow = await seedAgents('chat-budget', [
       { name: 'Writer', providerId, modelId: 'mock-chat' },
