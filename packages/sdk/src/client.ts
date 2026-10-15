@@ -36,6 +36,7 @@ import {
   CliDetectResponseSchema,
   ProviderSchema,
   RefreshModelsResponseSchema,
+  RunExportSchema,
   RunSchema,
   RunSummarySchema,
   StartRunRequestSchema,
@@ -75,6 +76,7 @@ import {
   type CliDetectResponse,
   type RefreshModelsResponse,
   type Run,
+  type RunExport,
   type RunSummary,
   type StartRunRequest,
   type UpdateProviderRequest,
@@ -502,6 +504,24 @@ export function createAceClient(options: AceClientOptions) {
     stopRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/stop`, RunSchema),
     /** Answers the **new** run, which carries `restartedFromRunId` (FR-CTL-004). */
     restartRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/restart`, RunSchema),
+    /**
+     * PG-5.4: replay a finished run — a **new** run with `replayOf`, answered from this run's
+     * recorded node outputs with zero provider calls. 409 `invalid_run_state` unless COMPLETE or
+     * HALTED.
+     */
+    replayRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/replay`, RunSchema),
+    /**
+     * PG-5.5: the run as a judging bundle — record, node runs, outputs and event log. `anonymise`
+     * strips node names, providers and models for blind judging (FR-BEN-005).
+     */
+    exportRun: (runId: Id, options: { anonymise?: boolean } = {}): Promise<RunExport> =>
+      request(
+        'GET',
+        `/runs/${runId}/export`,
+        RunExportSchema,
+        undefined,
+        options.anonymise === true ? { anonymise: '1' } : {},
+      ),
     /** D323: end a run started from Domain — in-flight turns stop, pending messages are dropped. */
     endRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/end`, RunSchema),
 
