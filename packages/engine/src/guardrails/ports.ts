@@ -1,6 +1,5 @@
 import type {
   ApprovalDecision,
-
   GuardrailPolicy,
   Id,
   Node,

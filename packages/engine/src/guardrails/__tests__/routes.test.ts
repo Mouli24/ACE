@@ -2,7 +2,6 @@ import type { RunApprovalRequest } from '../../ports/index.js';
 import {
   API_BASE_PATH,
   type ApiError,
-  
   type GuardrailPolicy,
   type NodeRun,
   type PolicyTestResponse,
@@ -230,7 +229,9 @@ describe('FR-GRD-001 DELETE /guardrail-policies/:id', () => {
     const response = await send(app, 'DELETE', `/guardrail-policies/${created.id}?confirm=true`);
 
     expect(response.status).toBe(409);
-    expect(((await response.json()) as ApiError).error.details).toMatchObject({ projectDefault: true });
+    expect(((await response.json()) as ApiError).error.details).toMatchObject({
+      projectDefault: true,
+    });
   });
 
   it('deletes an unused policy with no confirm at all', async () => {
@@ -291,7 +292,9 @@ describe('FR-GRD-013 The approval routes', () => {
     expect(((await approved.json()) as NodeRun).id).toBe(nodeRunId);
     expect((await pending).decision).toBe('approve');
 
-    expect((await (await send(app, 'GET', `/runs/${runId}/approvals`)).json()) as unknown[]).toEqual([]);
+    expect(
+      (await (await send(app, 'GET', `/runs/${runId}/approvals`)).json()) as unknown[],
+    ).toEqual([]);
   });
 
   it('reject is its own route, and answers the node run too', async () => {

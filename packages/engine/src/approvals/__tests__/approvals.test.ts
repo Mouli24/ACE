@@ -126,7 +126,11 @@ describe('TC-GRD-008 Approval approve', () => {
     const { decision, nodeRun } = await approvals.decide(target.nodeRunId, 'approve', 'Fine by me');
 
     // FR-GRD-013: the decision is logged with its time.
-    expect(decision).toMatchObject({ requestId: request.id, decision: 'approve', note: 'Fine by me' });
+    expect(decision).toMatchObject({
+      requestId: request.id,
+      decision: 'approve',
+      note: 'Fine by me',
+    });
     expect(Date.parse(decision.decidedAt)).not.toBeNaN();
     expect(nodeRun?.id).toBe(target.nodeRunId);
     expect(decided.map((entry) => entry.id)).toEqual([request.id]);
@@ -159,7 +163,10 @@ describe('TC-GRD-008 Approval approve', () => {
     // Approving the PII did not approve everything else: the citation check still failed the node.
     expect(outcome.kind).toBe('failed');
     if (outcome.kind !== 'failed') return;
-    expect(outcome.verdicts.map((verdict) => verdict.checkType)).toEqual(['pii', 'required_citations']);
+    expect(outcome.verdicts.map((verdict) => verdict.checkType)).toEqual([
+      'pii',
+      'required_citations',
+    ]);
   });
 
   it('truncates a long preview to the contract’s limit', async () => {

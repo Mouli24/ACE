@@ -159,7 +159,10 @@ declare global {
       writeFileExternally(projectId: string, path: string, content: string): void;
       deleteFileExternally(projectId: string, path: string): void;
       /** Forge: what the Explorer's git decorations read. */
-      setRepoStatus(projectId: string, files: Array<{ path: string; status: RepoFileStatus }>): void;
+      setRepoStatus(
+        projectId: string,
+        files: Array<{ path: string; status: RepoFileStatus }>,
+      ): void;
       /** Forge's terminal (D301): set a project's trust level; `off` stops what runs, as a PATCH does. */
       setTerminal(projectId: string, level: TerminalTrust): void;
       /**

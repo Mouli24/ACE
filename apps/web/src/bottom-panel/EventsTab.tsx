@@ -241,7 +241,10 @@ export function EventsTab({ entries, nodes = [], onShowNode }: EventsTabProps) {
       ) {
         map.set(event.payload.nodeRunId, event.payload.nodeId);
       }
-      if (event.type === 'node.approval_required' && event.payload.request.nodeRunId !== undefined) {
+      if (
+        event.type === 'node.approval_required' &&
+        event.payload.request.nodeRunId !== undefined
+      ) {
         map.set(event.payload.request.nodeRunId, event.payload.request.nodeId);
       }
     }

@@ -88,8 +88,7 @@ export interface ChatToolLoopInput {
 
 /** What the tool point decided for one chat tool call (PG-2.2). */
 export type ChatToolStep =
-  | { kind: 'allow' }
-  | { kind: 'refuse'; status: 'blocked' | 'refused'; reason: string };
+  { kind: 'allow' } | { kind: 'refuse'; status: 'blocked' | 'refused'; reason: string };
 
 export interface ChatToolLoopResult {
   toolCalls: number;

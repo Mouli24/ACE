@@ -3001,8 +3001,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const done = (async (): Promise<Run> => {
       // Domain (D309, D323): the run's live conversation, with what its log says it still owes.
       domain = await deps.domains?.open(run);
-      checkpoint =
-        prepared === undefined ? await beginRunCheckpoint(run) : prepared.recording;
+      checkpoint = prepared === undefined ? await beginRunCheckpoint(run) : prepared.recording;
       return drive(run, gate, seed, domain);
     })()
       .catch(async (error: unknown) => {
@@ -3243,7 +3242,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
         return tx.runs.create(scope, created);
       });
 
-      if (request.startFromNodeId === undefined) return begin(run, { withoutUndo: request.withoutUndo === true });
+      if (request.startFromNodeId === undefined)
+        return begin(run, { withoutUndo: request.withoutUndo === true });
 
       /*
        * Start from a node (FR-EXE-013, TC-EXE-012, D83). Every node above the chosen one has its

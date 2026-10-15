@@ -1,9 +1,5 @@
 import type { RunApprovalRequest } from '../../ports/index.js';
-import type {
-  ApprovalDecision,
-  GuardrailPolicy,
-  Verdict,
-} from '@ace/contracts';
+import type { ApprovalDecision, GuardrailPolicy, Verdict } from '@ace/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { FakeRepository } from '../../__tests__/fake-repository.js';
@@ -40,7 +36,12 @@ describe('guardrailStoreFor: Repository → GuardrailStore', () => {
     expect(createdBack.version).toBe(1);
 
     // Version 2 is an update carrying the version; both rows survive (FR-GRD-001, Arch §13.4).
-    const v2: GuardrailPolicy = { ...v1, version: 2, name: 'Renamed', updatedAt: '2026-09-27T09:00:00.000Z' };
+    const v2: GuardrailPolicy = {
+      ...v1,
+      version: 2,
+      name: 'Renamed',
+      updatedAt: '2026-09-27T09:00:00.000Z',
+    };
     const updatedBack = await store.policies.insert(scope, v2);
     expect(updatedBack).toMatchObject({ id: v1.id, version: 2, name: 'Renamed' });
 
@@ -120,7 +121,9 @@ describe('guardrailStoreFor: Repository → GuardrailStore', () => {
 
     await store.approvals.create(scope, req);
     expect((await store.approvals.get(scope, req.id))?.request.id).toBe(req.id);
-    expect((await store.approvals.listPendingByRun(scope, runId)).map((r) => r.id)).toEqual([req.id]);
+    expect((await store.approvals.listPendingByRun(scope, runId)).map((r) => r.id)).toEqual([
+      req.id,
+    ]);
     expect((await store.approvals.findPendingByNodeRun(scope, nodeRunId))?.id).toBe(req.id);
   });
 
@@ -185,7 +188,9 @@ describe('guardrailStoreFor: Repository → GuardrailStore', () => {
       at: '2026-09-27T09:00:00.000Z',
     };
     await store.verdicts.append(scope, verdict);
-    expect((await store.verdicts.listByNodeRun(scope, nodeRunId)).map((v) => v.id)).toEqual([verdict.id]);
+    expect((await store.verdicts.listByNodeRun(scope, nodeRunId)).map((v) => v.id)).toEqual([
+      verdict.id,
+    ]);
 
     // No node runs recorded that day → zero spend.
     expect(await store.usage.costUsdForDay(scope, '2026-09-27')).toBe(0);
@@ -197,8 +202,8 @@ describe('guardrailStoreFor: Repository → GuardrailStore', () => {
     const policyId = id();
     const node = agentNode({ guardrailPolicyId: policyId });
     await repository.nodes.insert(scope, node);
-    expect((await store.policyUsage.listByGuardrailPolicy(scope, policyId)).map((n) => n.id)).toEqual([
-      node.id,
-    ]);
+    expect(
+      (await store.policyUsage.listByGuardrailPolicy(scope, policyId)).map((n) => n.id),
+    ).toEqual([node.id]);
   });
 });

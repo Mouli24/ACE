@@ -4,7 +4,6 @@ import {
   SettingsSchema,
   derivePorts,
   type ApprovalDecision,
-  
   type GuardrailCheck,
   type GuardrailPolicy,
   type Id,
@@ -75,7 +74,8 @@ export const fakeChecks: CheckRunner = {
   evaluate(check: GuardrailCheck, input: CheckInput): CheckOutcome | undefined {
     switch (check.type) {
       case 'size_limit': {
-        const max = typeof check.params['maxChars'] === 'number' ? check.params['maxChars'] : 200_000;
+        const max =
+          typeof check.params['maxChars'] === 'number' ? check.params['maxChars'] : 200_000;
         return input.text.length <= max
           ? { passed: true, reason: `${input.text.length} characters, within ${max}.` }
           : { passed: false, reason: `${input.text.length} characters, over the ${max} limit.` };
@@ -111,7 +111,9 @@ export const fakeChecks: CheckRunner = {
               (pattern): pattern is string => typeof pattern === 'string',
             )
           : [];
-        const hit = patterns.find((pattern) => input.text.toLowerCase().includes(pattern.toLowerCase()));
+        const hit = patterns.find((pattern) =>
+          input.text.toLowerCase().includes(pattern.toLowerCase()),
+        );
         return hit === undefined
           ? { passed: true, reason: 'No blocked topic found.' }
           : { passed: false, reason: `Blocked topic "${hit}".` };
@@ -122,7 +124,8 @@ export const fakeChecks: CheckRunner = {
         if (matches.length === 0) return { passed: true, reason: 'No credential found.' };
 
         let sanitized = input.text;
-        for (const { match } of matches) sanitized = sanitized.split(match).join('[api_key redacted]');
+        for (const { match } of matches)
+          sanitized = sanitized.split(match).join('[api_key redacted]');
 
         return {
           passed: false,
@@ -360,7 +363,9 @@ export class FakeGuardrailStore implements GuardrailStore {
 
 export const id = (): Id => newId();
 
-export function check(partial: Partial<GuardrailCheck> & Pick<GuardrailCheck, 'point' | 'type'>): GuardrailCheck {
+export function check(
+  partial: Partial<GuardrailCheck> & Pick<GuardrailCheck, 'point' | 'type'>,
+): GuardrailCheck {
   return {
     id: id(),
     action: 'warn',

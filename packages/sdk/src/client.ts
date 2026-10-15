@@ -701,12 +701,10 @@ export function createAceClient(options: AceClientOptions) {
       messageId: Id,
       body: ChatRetryRequest = {},
     ): Promise<ChatResponse> =>
-      request(
-        'POST',
-        `/chat/threads/${threadId}/messages/${messageId}/retry`,
-        ChatResponseSchema,
-        { schema: ChatRetryRequestSchema, value: body },
-      ),
+      request('POST', `/chat/threads/${threadId}/messages/${messageId}/retry`, ChatResponseSchema, {
+        schema: ChatRetryRequestSchema,
+        value: body,
+      }),
     /** PG-2.2 (D359): the chat tool calls on a thread waiting on a person. */
     listChatApprovals: (threadId: Id): Promise<ApprovalRequest[]> =>
       request('GET', `/chat/threads/${threadId}/approvals`, ApprovalRequestListSchema),
@@ -876,7 +874,9 @@ export function createAceClient(options: AceClientOptions) {
     listFolder: (projectId: Id, path = ''): Promise<FolderListing> =>
       request('GET', `/projects/${projectId}/files/tree`, FolderListingSchema, undefined, { path }),
     readFile: (projectId: Id, path: string): Promise<FileContent> =>
-      request('GET', `/projects/${projectId}/files/content`, FileContentSchema, undefined, { path }),
+      request('GET', `/projects/${projectId}/files/content`, FileContentSchema, undefined, {
+        path,
+      }),
     /** The bytes of a file (image previews); an error answers as an `AceApiError` like any route. */
     readFileRaw: async (projectId: Id, path: string, signal?: AbortSignal): Promise<Blob> => {
       const response = await send(
@@ -904,7 +904,9 @@ export function createAceClient(options: AceClientOptions) {
         value: body,
       }),
     deleteEntry: (projectId: Id, path: string): Promise<void> =>
-      request('DELETE', `/projects/${projectId}/files/entries`, NoContentSchema, undefined, { path }),
+      request('DELETE', `/projects/${projectId}/files/entries`, NoContentSchema, undefined, {
+        path,
+      }),
     listAllFiles: (projectId: Id): Promise<FileList> =>
       request('GET', `/projects/${projectId}/files/list`, FileListSchema),
     repoStatus: (projectId: Id): Promise<RepoStatus> =>

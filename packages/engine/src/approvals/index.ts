@@ -1,7 +1,6 @@
 import type {
   ApprovalDecision,
   ApprovalDecisionKind,
-
   GuardrailCheckType,
   GuardrailPoint,
   Id,

@@ -370,12 +370,13 @@ export function ChatConversation({
                   : message.error.message}
               </p>
               {/* PG-2.2: what the turn spent before it stopped — a budget refusal names it. */}
-              {message.usage !== undefined && message.usage.tokensIn + message.usage.tokensOut > 0 && (
-                <p className="text-[10px] text-[var(--muted)]" data-testid="chat-usage">
-                  {fmt(message.usage.tokensIn)} in · {fmt(message.usage.tokensOut)} out ·{' '}
-                  <span data-testid="chat-cost">{chatCostText(message.usage)}</span>
-                </p>
-              )}
+              {message.usage !== undefined &&
+                message.usage.tokensIn + message.usage.tokensOut > 0 && (
+                  <p className="text-[10px] text-[var(--muted)]" data-testid="chat-usage">
+                    {fmt(message.usage.tokensIn)} in · {fmt(message.usage.tokensOut)} out ·{' '}
+                    <span data-testid="chat-cost">{chatCostText(message.usage)}</span>
+                  </p>
+                )}
               {/* PG-2.4 (D361): the turn stopped before writing — run it once without undo, or not. */}
               {message.error.code === 'checkpoint_unavailable' &&
                 !earlier &&
