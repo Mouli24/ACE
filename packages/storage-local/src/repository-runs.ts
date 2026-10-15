@@ -118,6 +118,8 @@ function toRun(row: RunRow): Run {
     ...(row.allowedActions === null ? {} : { allowedActions: JSON.parse(row.allowedActions) }),
     ...(row.budgetHalt === null ? {} : { budgetHalt: JSON.parse(row.budgetHalt) }),
     ...(row.restartedFromRunId === null ? {} : { restartedFromRunId: row.restartedFromRunId }),
+    // PG-5.4: NULL on every run that is not a replay, and absent then.
+    ...(row.replayOf === null ? {} : { replayOf: row.replayOf }),
     // Domain (D305, D312). NULL on runs from before Domain, which stays absent.
     ...(row.blockedReason === null ? {} : { blockedReason: row.blockedReason }),
     ...(row.domain === null ? {} : { domain: JSON.parse(row.domain) }),
@@ -385,6 +387,7 @@ export function createRunRepository(db: Db): RunRepository {
               ? null
               : toJsonColumn(run.budgetHalt, `run(${run.id}).budgetHalt`),
           restartedFromRunId: run.restartedFromRunId ?? null,
+          replayOf: run.replayOf ?? null,
           blockedReason: run.blockedReason ?? null,
           domain:
             run.domain === undefined ? null : toJsonColumn(run.domain, `run(${run.id}).domain`),
