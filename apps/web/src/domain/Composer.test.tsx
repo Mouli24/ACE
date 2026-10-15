@@ -118,12 +118,14 @@ describe('Domain composer', () => {
     const { unmount } = render(
       <Composer roster={roster} states={{}} live onSend={vi.fn()} onStart={vi.fn()} />,
     );
-    expect(screen.getByRole('button', { name: 'Send' })).toHaveTextContent('↑');
+    expect(screen.getByRole('button', { name: 'Send' }).querySelector('svg')).not.toBeNull();
     unmount();
     render(
       <Composer roster={roster} states={{}} live={false} onSend={vi.fn()} onStart={vi.fn()} />,
     );
-    expect(screen.getByRole('button', { name: 'Start team run' })).toHaveTextContent('↑');
+    expect(
+      screen.getByRole('button', { name: 'Start team run' }).querySelector('svg'),
+    ).not.toBeNull();
   });
 
   it('"Enter starts a team run" shows only when Enter does start one', () => {

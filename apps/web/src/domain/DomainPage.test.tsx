@@ -213,12 +213,12 @@ describe('Domain page', () => {
     const toggle = within(message).getByRole('button', { name: /What it did/ });
     // Three steps; the two that were timed took 1.5 s between them.
     expect(toggle).toHaveTextContent('3 steps · 2s');
-    expect(toggle).toHaveTextContent('▸ show');
+    expect(toggle).toHaveTextContent(/show$/);
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(within(message).queryByText('Read brief.md')).not.toBeInTheDocument();
     await user.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    expect(toggle).toHaveTextContent('▾ hide');
+    expect(toggle).toHaveTextContent(/hide$/);
     expect(within(message).getByText('Read brief.md')).toBeVisible();
     expect(within(message).getByText('Read brief.md').closest('li')).toHaveTextContent('1s');
     // A step that failed says so, with "—" for a duration nobody measured.
@@ -415,7 +415,10 @@ describe('Domain page', () => {
     const pill = screen.getByRole('button', { name: /^Run ·/ });
     expect(within(pill).getByTestId('domain-run-status')).toHaveTextContent('RUNNING');
     await user.click(pill);
-    expect(await screen.findByRole('menuitem', { name: /^RUNNING/ })).toHaveTextContent('✓');
+    // the run shown is checked (an icon, PG-1.2)
+    expect(
+      (await screen.findByRole('menuitem', { name: /^RUNNING/ })).querySelector('svg'),
+    ).not.toBeNull();
     // A live run offers End, not New run.
     expect(screen.getByRole('menuitem', { name: 'End run' })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: 'New run' })).not.toBeInTheDocument();

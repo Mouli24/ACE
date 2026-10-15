@@ -2,14 +2,16 @@ import type {
   ArtifactRef,
   DomainMessage,
   DomainTurn,
+  FailureReason,
   Id,
   Part,
   RosterEntry,
   RouteEnvelopeRequest,
 } from '@ace/contracts';
-import { Button, cn, INPUT_CLASS } from '@ace/ui';
+import { Button, cn, Icons, INPUT_CLASS } from '@ace/ui';
 import { useId, useState, type ReactNode } from 'react';
 
+import { ACTIONS_CLASS, CopyButton } from '../chat/MessageActions';
 import { nameOf } from '../forge/files/paths';
 import { clockTime, initial } from '../theme/format';
 import { lookOf, plural, seconds, type DomainLooks } from './looks';
@@ -39,6 +41,11 @@ export interface ConversationProps {
   folderPath?: string;
   /** Open a project file (relative path) in Forge; without it, files open as artifacts. */
   onOpenFile?(path: string): void;
+  /**
+   * PG-1.5/PG-1.6: retry a failed node turn (its node run) with the existing node retry. Absent:
+   * no Retry is offered.
+   */
+  onRetryTurn?(turnId: Id): Promise<unknown>;
 }
 
 /** The theme's empty state: one muted 13px line, centred. */
@@ -65,6 +72,7 @@ export function Conversation({
   onRoute,
   folderPath,
   onOpenFile,
+  onRetryTurn,
 }: ConversationProps) {
   const label = (nodeId: Id | undefined): string => {
     if (nodeId === undefined) return '?';
@@ -131,7 +139,12 @@ export function Conversation({
       className="mx-auto flex max-w-[860px] flex-col gap-[28px] px-6 pb-3 pt-[28px]"
     >
       {messages.map((message) => (
-        <li key={message.id} data-testid="domain-message" data-type={message.type}>
+        <li
+          key={message.id}
+          data-testid="domain-message"
+          data-type={message.type}
+          className="group"
+        >
           {message.type === 'system' ? (
             <SystemRow message={message} />
           ) : (
@@ -145,12 +158,33 @@ export function Conversation({
               onRoute={onRoute}
               folderPath={folderPath}
               onOpenFile={onOpenFile}
+              onRetryTurn={onRetryTurn}
             />
           )}
         </li>
       ))}
     </ol>
   );
+}
+
+/**
+ * PG-1.6: what Copy takes from a Domain message — its text, or the live text of a turn still
+ * running; with neither, its output's words. Domain is a projection of the log (D303), so Copy is
+ * its only message action.
+ */
+function copyOf(message: DomainMessage, live?: string): string {
+  if (message.text !== '') return message.text;
+  if (live !== undefined && live !== '') return live;
+  return (message.output ?? [])
+    .map((part) =>
+      part.type === 'text' || part.type === 'code'
+        ? part.text
+        : part.type === 'json'
+          ? JSON.stringify(part.value, null, 2)
+          : '',
+    )
+    .filter((text) => text !== '')
+    .join('\n\n');
 }
 
 /** A system note (uncovered): one compact muted line under the avatars' column. */
@@ -160,6 +194,9 @@ function SystemRow({ message }: { message: DomainMessage }) {
   return (
     <div className="flex items-baseline gap-2 pl-[48px] text-[12px]" style={{ color: ink }}>
       <span className="min-w-0 flex-1 whitespace-pre-wrap">{message.text}</span>
+      <div className={cn(ACTIONS_CLASS, 'self-center')}>
+        <CopyButton text={copyOf(message)} />
+      </div>
       <time dateTime={message.at} className="shrink-0 text-[11.5px] text-[var(--muted)]">
         {clockTime(message.at)}
       </time>
@@ -177,6 +214,7 @@ interface RowProps {
   onRoute: ConversationProps['onRoute'];
   folderPath: string | undefined;
   onOpenFile: ConversationProps['onOpenFile'];
+  onRetryTurn: ConversationProps['onRetryTurn'];
 }
 
 function MessageRow({ message, who, label, ...rest }: RowProps) {
@@ -202,6 +240,9 @@ function MessageRow({ message, who, label, ...rest }: RowProps) {
             <span className="text-[12px] text-[var(--muted)]">→ {to.map(label).join(', ')}</span>
           )}
           <div className="flex-1" />
+          <div className={ACTIONS_CLASS}>
+            <CopyButton text={copyOf(message, rest.live)} />
+          </div>
           <time dateTime={message.at} className="text-[11.5px] text-[var(--muted)]">
             {clockTime(message.at)}
           </time>
@@ -234,6 +275,7 @@ function Body({
   onRoute,
   folderPath,
   onOpenFile,
+  onRetryTurn,
 }: BodyProps) {
   const auto = message.textSource === 'auto';
   if (message.type === 'envelope' && message.envelope !== undefined) {
@@ -291,6 +333,9 @@ function Body({
         </div>
       )}
       {turn !== undefined && <TurnMeta turn={turn} />}
+      {turn !== undefined && (turn.outcome === 'FAILED' || turn.failureReason !== undefined) && (
+        <TurnFailure turn={turn} onRetry={onRetryTurn} />
+      )}
       {turn !== undefined && (turn.steps.length > 0 || output.length > 0) && (
         <WhatItDid turn={turn} output={output} />
       )}
@@ -318,6 +363,71 @@ function TurnMeta({ turn }: { turn: DomainTurn }) {
       <span>{turn.outcome}</span>
       {turn.durationMs !== undefined && <span> · {(turn.durationMs / 1000).toFixed(1)} s</span>}
       {turn.error !== undefined && <span className="text-[#c94c27]"> · {turn.error}</span>}
+    </div>
+  );
+}
+
+/** PG-1.5: why a node turn failed, in words — never only the enum. */
+const FAILURE_WORDS: Readonly<Record<FailureReason, string>> = {
+  CONTRACT_VIOLATION: 'contract violation — its output did not match the output contract',
+  RUN_FAILED: 'provider failure — the model call failed',
+  GUARDRAIL_VIOLATION: 'guardrail block — a guardrail stopped it',
+  BLOCKED: 'blocked — a node before it failed',
+};
+
+/**
+ * PG-1.5/PG-1.6: a failed node turn says why, and offers Retry — the existing node retry
+ * (FR-ERR-003). The engine answers whether the run can take it (D323/D360); a refusal is shown here.
+ */
+function TurnFailure({
+  turn,
+  onRetry,
+}: {
+  turn: DomainTurn;
+  onRetry: ConversationProps['onRetryTurn'];
+}) {
+  const [busy, setBusy] = useState(false);
+  const [refused, setRefused] = useState<string>();
+  const why =
+    turn.failureReason === undefined ? 'it did not finish' : FAILURE_WORDS[turn.failureReason];
+  return (
+    <div
+      role="alert"
+      data-testid="domain-turn-failure"
+      data-reason={turn.failureReason}
+      className="flex max-w-[560px] flex-col gap-1.5 rounded-[10px] border border-[rgba(201,76,39,0.35)] bg-[rgba(201,76,39,0.06)] px-3 py-2 text-[12.5px]"
+    >
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1">
+          <span className="font-bold text-[#c94c27]">Failed: </span>
+          {why}
+        </span>
+        {onRetry !== undefined && (
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setRefused(undefined);
+              onRetry(turn.turnId)
+                .catch((error: unknown) =>
+                  setRefused(error instanceof Error ? error.message : String(error)),
+                )
+                .finally(() => setBusy(false));
+            }}
+          >
+            <Icons.RotateCcw aria-hidden size={13} />
+            Retry
+          </Button>
+        )}
+      </div>
+      {turn.error !== undefined && (
+        <p className="whitespace-pre-wrap break-words font-machine text-[11px] text-[var(--muted)]">
+          {turn.error}
+        </p>
+      )}
+      {refused !== undefined && <p className="text-[11.5px] text-[#c94c27]">{refused}</p>}
     </div>
   );
 }
@@ -365,8 +475,13 @@ function WhatItDid({ turn, output }: { turn: DomainTurn; output: Part[] }) {
           </span>
         )}
         <span className="flex-1" />
-        <span className="shrink-0 whitespace-nowrap text-[11.5px] text-[var(--muted)]">
-          {open ? '▾ hide' : '▸ show'}
+        <span className="flex shrink-0 items-center gap-0.5 whitespace-nowrap text-[11.5px] text-[var(--muted)]">
+          {open ? (
+            <Icons.ChevronDown aria-hidden size={12} />
+          ) : (
+            <Icons.ChevronRight aria-hidden size={12} />
+          )}
+          {open ? 'hide' : 'show'}
         </span>
       </button>
       {open && (
@@ -469,7 +584,8 @@ function OutputCard({
             className={OPEN_CLASS}
             onClick={() => onOpenFile?.(target.path)}
           >
-            Open →
+            Open
+            <Icons.ArrowRight aria-hidden size={12} className="ml-1" />
           </button>
         ) : target?.kind === 'href' ? (
           <a
@@ -479,7 +595,8 @@ function OutputCard({
             aria-label={`Open ${name}`}
             className={OPEN_CLASS}
           >
-            Open →
+            Open
+            <Icons.ArrowRight aria-hidden size={12} className="ml-1" />
           </a>
         ) : null}
       </div>

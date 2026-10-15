@@ -13,6 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  Icons,
 } from '@ace/ui';
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -23,7 +24,7 @@ import { useWorkspaceStatus } from '../app/stores/workspace-status';
 import { openFile } from '../forge/editor/actions';
 import { workflowPath } from '../forge/mode';
 import { useProject } from '../projects/hooks';
-import { useEndRun, useRun, useRuns, useStartRun } from '../runs/hooks';
+import { useEndRun, useRetryNodeRun, useRun, useRuns, useStartRun } from '../runs/hooks';
 import { clockTime } from '../theme/format';
 import { Avatar } from '../theme/primitives';
 import { Composer } from './Composer';
@@ -131,6 +132,7 @@ export function DomainPage() {
   const budget = useSetRunBudget(runId);
   const end = useEndRun();
   const start = useStartRun(workflowId);
+  const retry = useRetryNodeRun();
 
   const select = (next: { run?: Id; node?: Id }): void => {
     const query = new URLSearchParams();
@@ -235,6 +237,10 @@ export function DomainPage() {
                 openFile(projectId, path);
                 navigate(workflowPath(projectId, workflowId, 'forge'));
               }}
+              // PG-1.5/PG-1.6: a failed turn's Retry is the node retry; a turn id is its node run.
+              onRetryTurn={(turnId) =>
+                retry.mutateAsync({ nodeRunId: turnId, withDownstream: false })
+              }
             />
           )}
         </div>
@@ -375,9 +381,7 @@ function RunPill({
               {run.blockedReason !== undefined && ` · ${run.blockedReason}`}
             </span>
           )}
-          <span aria-hidden className="text-[10px] text-[var(--muted)]">
-            ▾
-          </span>
+          <Icons.ChevronDown aria-hidden size={12} className="text-[var(--muted)]" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="max-h-[360px] overflow-y-auto">
@@ -386,11 +390,7 @@ function RunPill({
             <span className="flex-1">
               {each.status} · {startedLabel(each.startedAt)}
             </span>
-            {each.id === runId && (
-              <span aria-hidden className="text-[11px] text-[#e8572e]">
-                ✓
-              </span>
-            )}
+            {each.id === runId && <Icons.Check aria-hidden size={13} className="text-[#e8572e]" />}
           </DropdownMenuItem>
         ))}
         {listed.length > 0 && (canNew || runId !== undefined) && <DropdownMenuSeparator />}
