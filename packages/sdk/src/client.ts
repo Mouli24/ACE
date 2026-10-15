@@ -15,6 +15,10 @@ import {
   type RouteEnvelopeRequest,
   type RouteEnvelopeResponse,
   ApprovalDecisionRequestSchema,
+  ApprovalDecisionSchema,
+  ChatRetryRequestSchema,
+  type ApprovalDecision,
+  type ChatRetryRequest,
   ApprovalRequestSchema,
   CreateGuardrailPolicyRequestSchema,
   CreateProviderRequestSchema,
@@ -691,11 +695,44 @@ export function createAceClient(options: AceClientOptions) {
      * PG-1.6 (D352) message actions. Retry and edit answer 202 `{ threadId, messageId }` like
      * `postNodeChat`; the replaced rows arrive as `chat.update`, the new reply as `chat.message`.
      */
-    retryChatMessage: (threadId: Id, messageId: Id): Promise<ChatResponse> =>
+    /** PG-2.4 (D361): `{ withoutUndo: true }` lets a turn stopped without a checkpoint write once. */
+    retryChatMessage: (
+      threadId: Id,
+      messageId: Id,
+      body: ChatRetryRequest = {},
+    ): Promise<ChatResponse> =>
       request(
         'POST',
         `/chat/threads/${threadId}/messages/${messageId}/retry`,
         ChatResponseSchema,
+        { schema: ChatRetryRequestSchema, value: body },
+      ),
+    /** PG-2.2 (D359): the chat tool calls on a thread waiting on a person. */
+    listChatApprovals: (threadId: Id): Promise<ApprovalRequest[]> =>
+      request('GET', `/chat/threads/${threadId}/approvals`, ApprovalRequestListSchema),
+    /** PG-2.2 (D359): approve a chat tool call; the turn runs it and goes on. */
+    approveChatToolCall: (
+      threadId: Id,
+      requestId: Id,
+      body: ApprovalDecisionRequest = {},
+    ): Promise<ApprovalDecision> =>
+      request(
+        'POST',
+        `/chat/threads/${threadId}/approvals/${requestId}/approve`,
+        ApprovalDecisionSchema,
+        { schema: ApprovalDecisionRequestSchema, value: body },
+      ),
+    /** PG-2.2 (D359): reject a chat tool call; the turn goes on without it. */
+    rejectChatToolCall: (
+      threadId: Id,
+      requestId: Id,
+      body: ApprovalDecisionRequest = {},
+    ): Promise<ApprovalDecision> =>
+      request(
+        'POST',
+        `/chat/threads/${threadId}/approvals/${requestId}/reject`,
+        ApprovalDecisionSchema,
+        { schema: ApprovalDecisionRequestSchema, value: body },
       ),
     editChatMessage: (threadId: Id, messageId: Id, body: ChatEditRequest): Promise<ChatResponse> =>
       request('POST', `/chat/threads/${threadId}/messages/${messageId}/edit`, ChatResponseSchema, {
