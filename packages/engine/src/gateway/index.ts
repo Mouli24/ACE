@@ -16,6 +16,7 @@ import {
   MessageQuerySchema,
   ModelQuerySchema,
   PostMessageRequestSchema,
+  RunExportQuerySchema,
   SettingsPatchSchema,
   StartRunRequestSchema,
   UpdateProjectRequestSchema,
@@ -57,7 +58,12 @@ import type { Auth, Repository, Scope } from '../ports/index.js';
 import type { ApprovalService } from '../approvals/index.js';
 import { createApprovalRoutes } from '../approvals/routes.js';
 import { createGuardrailRoutes, type PolicyService } from '../guardrails/index.js';
-import { createRunControlRoutes, type RunControls, type RunService } from '../runs/index.js';
+import {
+  buildRunExport,
+  createRunControlRoutes,
+  type RunControls,
+  type RunService,
+} from '../runs/index.js';
 import { createDomainRoutes } from '../domain/routes.js';
 import type { DomainService } from '../domain/service.js';
 import type { BackupService } from '../backup/index.js';
@@ -702,6 +708,42 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
         payload: event.payload,
       })),
     );
+  });
+
+  /*
+   * PG-5.5 (FR-BEN-005): one run as a judging bundle — the run record, its node runs, each node's
+   * final output and its event log. `?anonymise=1` strips node names, providers and models for
+   * blind judging (TC-BEN-004). Never a secret: every string goes through the mask.
+   */
+  api.get('/runs/:id/export', async (c) => {
+    const { anonymise } = RunExportQuerySchema.parse(c.req.query());
+    const runId = c.req.param('id');
+    const run = await runs(c).getRun(runId);
+    const [nodeRuns, events, providerRows, models] = await Promise.all([
+      runs(c).listNodeRuns(runId),
+      deps.repository.events.listAfter(deps.scope, 0, { runIds: [runId] }),
+      deps.repository.providers.list(deps.scope),
+      deps.repository.models.list(deps.scope, {}),
+    ]);
+    const bundle = buildRunExport({
+      run,
+      nodeRuns,
+      events: events.map((event) => ({
+        seq: event.seq,
+        at: event.createdAt,
+        ...(event.runId === undefined ? {} : { runId: event.runId }),
+        ...(event.workflowId === undefined ? {} : { workflowId: event.workflowId }),
+        type: event.type,
+        payload: event.payload,
+      })),
+      anonymise,
+      providers: providerRows,
+      models,
+      now: () => new Date().toISOString(),
+    });
+    const name = `run-${run.id}${anonymise ? '-anonymised' : ''}.json`;
+    c.header('Content-Disposition', `attachment; filename="${name}"`);
+    return c.json(bundle);
   });
 
   api.get('/node-runs/:id', async (c) => c.json(await runs(c).getNodeRun(c.req.param('id'))));

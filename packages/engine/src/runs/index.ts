@@ -119,6 +119,7 @@ import { preflight } from './preflight.js';
 import type { ArtifactMaterialiser, ToolGuardrailEvaluator, ToolProvider } from './tool-loop.js';
 import type { ToolCall } from '@ace/contracts';
 import { toSummary } from './summary.js';
+import { createReplayBook, isReplayedKind, type ReplayBook } from './replay.js';
 
 export * from './cost.js';
 export * from './executor.js';
@@ -129,6 +130,8 @@ export * from './machines/index.js';
 export * from './lifecycle.js';
 export * from './control/index.js';
 export * from './summary.js';
+export * from './replay.js';
+export * from './export.js';
 
 /**
  * The run service and scheduler (FR-EXE-001..012, Arch §12.2, §12.3, BR-04).
@@ -169,6 +172,13 @@ export interface RunService {
    * its end (FR-CTL-004).
    */
   driveRecordedRun(run: Run): Promise<Run>;
+  /**
+   * PG-5.4: pre-flights and drives a replay row (`replayOf` set) somebody else recorded. Every
+   * provider call — and every Retrieval search — is answered from the source run's recorded node
+   * outputs: zero provider calls, no provider check, no budget, no checkpoint. A node with no
+   * recording fails clearly. Resolves once the replay is under way, like `driveRecordedRun`.
+   */
+  driveReplayRun?(run: Run): Promise<Run>;
   /**
    * Re-opens a recorded run and drives the node runs in the plan, plus everything after them when
    * the plan says so (D81, FR-CTL-005, FR-ERR-003, FR-ERR-004). Resolves once it is going again.
@@ -394,6 +404,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
   const summariser = deps.summariser ?? createTruncatingSummariser();
   /** Summariser usage per run and target node, until the target's node run is recorded and takes it (F5). */
   const summaryUsage = createSummaryUsageLedger();
+  /** PG-5.4: the replays this process is driving, by replay run id, and what answers them. */
+  const replays = new Map<Id, ReplayBook>();
+  /** A replay summarises by truncation: a model summary would be a provider call. */
+  const replaySummariser = createTruncatingSummariser();
 
   const executor: NodeExecutor = createNodeExecutor({
     bus,
@@ -532,7 +546,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
         ...(signal === undefined ? {} : { signal }),
         ...(sanitise === undefined ? {} : { sanitise }),
       },
-      summariser,
+      replays.has(run.id) ? replaySummariser : summariser,
     );
 
     // F5: a summarisation call is the receiving node's spend, carried until its run is recorded.
@@ -862,7 +876,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
                     node,
                     envelopes,
                     memory: reader === undefined ? [] : await reader.list(node.id),
-                    search: deps.search,
+                    // PG-5.4: a replay embeds nothing — no knowledge search, which would call a provider.
+                    search: replays.has(run.id) ? undefined : deps.search,
                     guard,
                     target: targetFor(node, nodeRun),
                     signal: runSignal,
@@ -2441,6 +2456,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
                   ...(repairReason === undefined ? {} : { repairReason }),
                   ...teamFor(messagesForPrompt, envelopesForPrompt),
                   ...rulesFor(envelopesForPrompt),
+                  ...replayFor(run.id, node, iteration),
                 });
 
           // A node that failed before it got a slot (no route, say) still passes through RUNNING, so
@@ -3077,10 +3093,19 @@ export function createRunService(deps: RunServiceDeps): RunService {
    * it — a restart records its own run on the *source run's* snapshot (BR-04, FR-CTL-004), so it
    * must not go back to the live tables for a fresh one.
    */
+  /** PG-5.4: the recorded answer for a replayed node's call; nothing on any other run. */
+  function replayFor(runId: Id, node: Node, iteration: number): Pick<ExecuteNodeInput, 'replay'> {
+    const book = replays.get(runId);
+    if (book === undefined || !isReplayedKind(node)) return {};
+    return { replay: book.answer(node, iteration) };
+  }
+
   async function begin(
     run: Run,
     extra: { issues?: ValidationIssue[]; seed?: DriveSeed; withoutUndo?: boolean } = {},
   ): Promise<BegunRun> {
+    // PG-5.4: a replay calls no provider, so pre-flight asks none and it costs nothing to budget.
+    const replaying = replays.has(run.id);
     const workflowId = run.workflowId;
 
     const [providers, models, mcpServers] = await Promise.all([
@@ -3097,7 +3122,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
         inputs: run.inputs,
         providers,
         models,
-        checkProvider: deps.checkProvider,
+        checkProvider: replaying
+          ? () => Promise.resolve({ status: 'CONNECTED' as const, checkedAt: now() })
+          : deps.checkProvider,
         // An agent that still enables a tool the registry no longer has — its MCP server was
         // removed — is refused here, before any node runs (round 4 §2.4, BR-08, D-069).
         ...(deps.tools === undefined ? {} : { tools: deps.tools }),
@@ -3127,7 +3154,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
      * `daily_budget_exceeded` and **zero** provider calls. Checked against the project's default
      * policy, because pre-flight is about the run rather than about one node.
      */
-    if (deps.budgets !== undefined) {
+    if (deps.budgets !== undefined && !replaying) {
       const policy =
         deps.policies === undefined ? null : await deps.policies.resolve(run.projectId);
       issues.push(...(await deps.budgets.preflightIssues({ projectId: run.projectId, policy })));
@@ -3136,7 +3163,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
     // PG-2.4 (D361): only a run that would otherwise start begins a checkpoint; a writing run whose
     // checkpoint cannot begin is BLOCKED here, before any provider call or file write.
     let undo: { recording?: CheckpointRecording; issue?: ValidationIssue } | undefined;
-    if (!issues.some((issue) => issue.severity === 'error')) {
+    if (replaying) {
+      // A replay writes nothing — no tool runs — so it records no checkpoint (D300).
+      undo = {};
+    } else if (!issues.some((issue) => issue.severity === 'error')) {
       undo = await prepareUndo(run, providers, extra.withoutUndo === true);
       if (undo?.issue !== undefined) issues.push(undo.issue);
     }
@@ -3321,6 +3351,21 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
     async driveRecordedRun(run) {
       return (await begin(run)).run;
+    },
+
+    async driveReplayRun(run) {
+      const sourceRunId = run.replayOf;
+      if (sourceRunId === undefined) throw new Error(`run ${run.id} is not a replay`);
+      const sourceNodeRuns = await repository.nodeRuns.listByRun(scope, sourceRunId);
+      replays.set(run.id, createReplayBook(sourceRunId, run.snapshot, sourceNodeRuns));
+      try {
+        const begun = await begin(run);
+        void begun.done.finally(() => replays.delete(run.id));
+        return begun.run;
+      } catch (error) {
+        replays.delete(run.id);
+        throw error;
+      }
     },
 
     async resumeOpenRun(run) {
