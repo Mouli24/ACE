@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { Checkpoint } from '@ace/contracts';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 
 import { startEngine, type RunningEngine } from '../server.js';
@@ -62,6 +62,11 @@ const write = (path: string, content: string): void => {
 };
 const read = (path: string): string => readFileSync(join(folder, path), 'utf8');
 const base = () => `/projects/${projectId}/checkpoints`;
+
+// D-099: every test here drives a real git store through child processes. Alone each finishes in
+// well under 5 s, but in the Windows workspace gate, with other suites loading the machine, git's
+// children can take longer. The budget is sized for real git; nothing about the checks changes.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 beforeAll(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'ace-checkpoints-int-'));
