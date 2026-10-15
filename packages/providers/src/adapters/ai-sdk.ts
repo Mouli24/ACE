@@ -1,6 +1,7 @@
 import type { ProviderType, ToolDefinition } from '@ace/contracts';
 import { toolResultBlock } from '@ace/engine';
 import {
+  Output,
   jsonSchema,
   streamText,
   tool,
@@ -337,7 +338,8 @@ export function continuationMessages(req: GenerateRequest, withTools = true): Mo
  *
  * Output is always streamed as text, even when the contract asks for JSON: the executor parses and
  * checks the result against the contract (FR-EXE-006), and streaming is what puts words on the
- * Canvas while the model is still thinking (FR-EXE-008).
+ * Canvas while the model is still thinking (FR-EXE-008). A `jsonSchema` is also handed to the model
+ * as a JSON response format (D353), so a provider with structured output is held to it.
  */
 export function createAiSdkAdapter(options: AiSdkAdapterOptions): ProviderAdapter {
   return {
@@ -357,6 +359,18 @@ export function createAiSdkAdapter(options: AiSdkAdapterOptions): ProviderAdapte
             ...(req.system === undefined ? {} : { system: req.system }),
             ...input,
             ...(tools === undefined ? {} : { tools }),
+            /*
+             * PG-2.1 (D353): a node's output contract reaches a provider with structured output as a
+             * JSON response format in that schema. The executor still parses and checks the answer
+             * (FR-EXE-006), so a provider that ignores the format falls back to the prompt's schema.
+             */
+            ...(req.jsonSchema === undefined
+              ? {}
+              : {
+                  output: Output.object({
+                    schema: jsonSchema(req.jsonSchema as Parameters<typeof jsonSchema>[0]),
+                  }),
+                }),
             ...(req.maxTokens === undefined ? {} : { maxOutputTokens: req.maxTokens }),
             ...(req.temperature === undefined ? {} : { temperature: req.temperature }),
             abortSignal: signal,
