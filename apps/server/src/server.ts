@@ -1013,6 +1013,17 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   for (const run of recovered.reopened) await runs.resumeOpenRun(run);
 
   /*
+   * PG-1.5: a chat turn the last process accepted (202) but never answered — it died, or shut down,
+   * mid-reply — gets its failed turn now, so no client is left "typing…" forever. Never the reason
+   * the engine does not start.
+   */
+  try {
+    await chatService.recoverOpenTurns();
+  } catch (error) {
+    logger.error({ subsystem: 'chat', err: error }, 'could not close chat turns left open');
+  }
+
+  /*
    * F7: a document the last process left mid-pipeline goes back to `pending` and is queued again —
    * never stuck `parsing` — and only then does the worker start draining, outside any transaction.
    */

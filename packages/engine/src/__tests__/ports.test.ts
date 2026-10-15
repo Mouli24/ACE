@@ -171,12 +171,14 @@ describe('Arch §7 Repository', () => {
         create: async (_s, thread) => thread,
         get: async () => null,
         listByNode: async () => [],
+        list: async () => [],
         touch: async () => null,
         delete: async () => false,
       },
       chatMessages: {
         append: async (_s, message) => message,
         listByThread: async () => [],
+        mark: async () => null,
       },
     };
 

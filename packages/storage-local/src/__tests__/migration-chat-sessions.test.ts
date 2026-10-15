@@ -11,6 +11,7 @@ import {
   DOMAIN_MIGRATION_ID,
   FORGE_CHAT_TURNS_MIGRATION_ID,
   FORGE_CHECKS_MIGRATION_ID,
+  CHAT_MESSAGE_ACTIONS_MIGRATION_ID,
   FORGE_TERMINAL_MIGRATION_ID,
   FORGE_CHECKPOINTS_MIGRATION_ID,
   MIGRATIONS,
@@ -65,6 +66,7 @@ describe('D285/D286 migration: chat turns from runs and failures, discovered mod
       FORGE_CHECKPOINTS_MIGRATION_ID,
       FORGE_CHAT_TURNS_MIGRATION_ID,
       FORGE_CHECKS_MIGRATION_ID,
+      CHAT_MESSAGE_ACTIONS_MIGRATION_ID,
     ]);
     expect(columnsOf(after.sqlite, 'chat_messages')).toEqual(
       expect.arrayContaining(['run_id', 'error', 'model_id']),

@@ -2,6 +2,7 @@ import {
   API_BASE_PATH,
   ARTIFACT_ACCEPT_RANGES,
   ARTIFACT_UPLOAD_FIELD,
+  ChatEditRequestSchema,
   ChatRequestSchema,
   CreateProjectRequestSchema,
   CreateProviderRequestSchema,
@@ -39,6 +40,8 @@ import {
   ChatTargetInvalidError,
   ChatThreadNodeMismatchError,
   ChatThreadNotFoundError,
+  ChatMessageNotFoundError,
+  ChatActionInvalidError,
   ChatWorkflowNotFoundError,
   NotAnAgentNodeError,
 } from '../chat/index.js';
@@ -318,11 +321,13 @@ function toChatHttpError(error: unknown): unknown {
   if (
     error instanceof ChatWorkflowNotFoundError ||
     error instanceof ChatNodeNotFoundError ||
-    error instanceof ChatThreadNotFoundError
+    error instanceof ChatThreadNotFoundError ||
+    error instanceof ChatMessageNotFoundError
   ) {
     return notFound(error.message.replace(/\.$/, ''));
   }
   if (
+    error instanceof ChatActionInvalidError ||
     error instanceof NotAnAgentNodeError ||
     error instanceof ChatThreadNodeMismatchError ||
     error instanceof ChatTargetInvalidError
@@ -832,6 +837,47 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     try {
       await chat(c).deleteThread(c.req.param('id'));
       return c.body(null, 204);
+    } catch (error) {
+      throw toChatHttpError(error);
+    }
+  });
+
+  /* PG-1.6 (D352): message actions. Retry and edit answer 202 like `POST /nodes/:id/chat`. */
+  api.post('/chat/threads/:id/messages/:messageId/retry', async (c) => {
+    try {
+      const begun = await chat(c).retryMessage(c.req.param('id'), c.req.param('messageId'));
+      return c.json({ threadId: begun.threadId, messageId: begun.messageId }, 202);
+    } catch (error) {
+      throw toChatHttpError(error);
+    }
+  });
+
+  api.post('/chat/threads/:id/messages/:messageId/edit', async (c) => {
+    const request = ChatEditRequestSchema.parse(await readJson(c));
+    try {
+      const begun = await chat(c).editMessage(
+        c.req.param('id'),
+        c.req.param('messageId'),
+        request.content,
+      );
+      return c.json({ threadId: begun.threadId, messageId: begun.messageId }, 202);
+    } catch (error) {
+      throw toChatHttpError(error);
+    }
+  });
+
+  api.delete('/chat/threads/:id/messages/:messageId', async (c) => {
+    try {
+      await chat(c).deleteMessage(c.req.param('id'), c.req.param('messageId'));
+      return c.body(null, 204);
+    } catch (error) {
+      throw toChatHttpError(error);
+    }
+  });
+
+  api.post('/chat/threads/:id/stop', async (c) => {
+    try {
+      return c.json(await chat(c).stopThread(c.req.param('id')));
     } catch (error) {
       throw toChatHttpError(error);
     }

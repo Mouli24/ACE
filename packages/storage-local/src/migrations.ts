@@ -73,6 +73,12 @@ export const FORGE_CHAT_TURNS_MIGRATION_ID = '20261014T105000_forge_chat_turns';
 export const FORGE_CHECKS_MIGRATION_ID = '20261014T110000_forge_project_checks';
 
 /**
+ * PG-1.6 (D352): a chat turn a retry or an edit replaced (`superseded_at`), or one the person
+ * deleted (`deleted_at`). Both NULL on every turn stored before.
+ */
+export const CHAT_MESSAGE_ACTIONS_MIGRATION_ID = '20261015T120000_chat_message_actions';
+
+/**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
  * written.
@@ -677,6 +683,15 @@ export const MIGRATIONS: readonly Migration[] = [
       -- NULL reads as absent in both (no command; format-on-save off), so no row needs a backfill.
       ALTER TABLE projects ADD COLUMN check_command TEXT;
       ALTER TABLE projects ADD COLUMN format_on_save INTEGER;
+    `,
+  },
+  {
+    id: CHAT_MESSAGE_ACTIONS_MIGRATION_ID,
+    up: `
+      -- PG-1.6 (D352): message actions. A superseded or deleted turn stays in the table (and the
+      -- event log); the flags keep it out of every later prompt. NULL reads as "still standing".
+      ALTER TABLE chat_messages ADD COLUMN superseded_at TEXT;
+      ALTER TABLE chat_messages ADD COLUMN deleted_at TEXT;
     `,
   },
 ];

@@ -51,7 +51,9 @@ import type { ToolProvider } from '../runs/tool-loop.js';
 import { maskSecrets } from '../security/secret-patterns.js';
 import { activityItemFor } from './activity.js';
 import {
+  ChatActionInvalidError,
   ChatInputBlockedError,
+  ChatMessageNotFoundError,
   ChatModelError,
   ChatNodeNotFoundError,
   ChatRunNotAvailableError,
@@ -157,6 +159,30 @@ export interface ChatService {
    * new one — and announce both turns on the thread (see {@link NodeRunTurn}).
    */
   recordRunTurn(turn: NodeRunTurn): Promise<{ threadId: Id }>;
+  /**
+   * PG-1.6 (D352) `POST /chat/threads/:id/messages/:messageId/retry`: re-run the turn that produced
+   * this agent message (a reply or a failed turn). The old turn is marked `supersededAt` and a new
+   * reply is appended; `messageId` is the user turn it answers.
+   */
+  retryMessage(threadId: Id, messageId: Id): Promise<ChatBegun>;
+  /**
+   * PG-1.6 (D352) `POST /chat/threads/:id/messages/:messageId/edit`: the user message and every
+   * turn after it are marked `supersededAt`, and the edited content goes as a new turn.
+   */
+  editMessage(threadId: Id, messageId: Id, content: Part[]): Promise<ChatBegun>;
+  /** PG-1.6 (D352) `DELETE /chat/threads/:id/messages/:messageId`: hide one turn (`deletedAt`). */
+  deleteMessage(threadId: Id, messageId: Id): Promise<void>;
+  /**
+   * PG-1.6 (D352) `POST /chat/threads/:id/stop`: abort the turn(s) in flight on the thread; each is
+   * stored as a failed turn of kind `user_cancelled`. `false` when nothing was in flight.
+   */
+  stopThread(threadId: Id): Promise<{ stopped: boolean }>;
+  /**
+   * PG-1.5: run once at engine start. Every user turn the last process accepted but never answered
+   * (a crash or a shutdown in the middle of it) gets one stored failed agent turn, announced as
+   * `chat.message`, so no client waits on it forever. Returns how many turns it closed.
+   */
+  recoverOpenTurns(): Promise<number>;
 }
 
 export interface ChatServiceDeps {
@@ -230,13 +256,71 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     return { checks: deps.checks, masker: deps.masker, now, nextId };
   }
 
-  /** Store one turn, move its thread's `updatedAt`, and announce it on the thread (FR-CHAT-006). */
-  async function store(message: ChatMessage): Promise<ChatMessage> {
+  /**
+   * Store one turn, move its thread's `updatedAt`, and announce it on the thread (FR-CHAT-006).
+   * `onAppended` is told the moment the row exists, so a caller recovering from a later throw never
+   * stores the same turn twice (PG-1.5). A thread whose `updatedAt` cannot move still announces it.
+   */
+  async function store(message: ChatMessage, onAppended?: () => void): Promise<ChatMessage> {
     await repository.chatMessages.append(scope, message);
-    await repository.chatThreads.touch(scope, message.threadId, now());
-    await bus.emit({ type: 'chat.message', payload: { threadId: message.threadId, message } });
+    onAppended?.();
+    try {
+      await repository.chatThreads.touch(scope, message.threadId, now());
+    } catch (error) {
+      logger.warn(
+        { subsystem: 'chat', threadId: message.threadId, err: error },
+        'thread not touched',
+      );
+    }
+    await bus.emit({
+      type: 'chat.message',
+      payload: { threadId: message.threadId, message },
+    });
     return message;
   }
+
+  /** PG-1.6 (D352): mark an existing turn and announce it as `chat.update` on its thread. */
+  async function markAndAnnounce(
+    message: ChatMessage,
+    patch: { supersededAt?: string; deletedAt?: string },
+  ): Promise<ChatMessage> {
+    const marked = (await repository.chatMessages.mark(scope, message.id, patch)) ?? {
+      ...message,
+      ...patch,
+    };
+    await bus.emit({
+      type: 'chat.update',
+      payload: { threadId: message.threadId, message: marked },
+    });
+    return marked;
+  }
+
+  /** A turn still part of the conversation: neither replaced by a retry or edit, nor deleted. */
+  const standing = (message: ChatMessage): boolean =>
+    message.supersededAt === undefined && message.deletedAt === undefined;
+
+  /**
+   * PG-1.6 (D352): the turns in flight on each thread, so `stopThread` can abort them. A turn is
+   * registered before it waits for its project's write queue, so a stop reaches a queued turn too.
+   */
+  const inFlight = new Map<Id, Set<AbortController>>();
+
+  /** What a turn the person stopped records (PG-1.6): Arch §28's `user_cancelled`, never retried by itself. */
+  const cancelledError = (): NodeError => ({
+    kind: 'user_cancelled',
+    code: 'stopped',
+    message: 'You stopped this reply before it finished.',
+    retryable: true,
+  });
+
+  /** What a turn the last process never answered records (PG-1.5, as D323's crashed turn). */
+  const openTurnError = (): NodeError => ({
+    kind: 'workflow',
+    code: 'crash',
+    message:
+      'The engine stopped (a shutdown or a crash) before this turn was answered, so it has no reply.',
+    retryable: true,
+  });
 
   /**
    * The agent turn that stands where a reply could not be produced: the error itself for the client
@@ -348,19 +432,35 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     userMessageId: Id;
     userParts: readonly Part[];
     guardrails: ChatGuardrailDeps | undefined;
+    /**
+     * PG-1.6: a retry reads the thread as it stood when the turn it replaces ran — only turns
+     * before this id. Absent: the thread as it is now (D302).
+     */
+    historyBefore?: Id;
+  }
+
+  /** Set as a reply's path runs, so a throw anywhere can be closed out exactly once (PG-1.5). */
+  interface TurnProgress {
+    /** The reply's row exists: a later throw must not store a second turn. */
+    appended: boolean;
+    /** R-1: the reverted paths taken for this turn, handed back if it never told the model. */
+    reverted: string[];
   }
 
   /**
    * The thread as it is when the turn starts (D302): a turn that waited in the write queue reads
    * the replies that landed while it waited — a queued `@reviewer` sees what the coder just did.
    * The turn's own message is the new turn, so it is left out, and so is any later user message:
-   * that is a question for a later turn.
+   * that is a question for a later turn. A superseded or deleted turn is never read (PG-1.6).
    */
-  async function historyFor(threadId: Id, userMessageId: Id): Promise<ChatMessage[]> {
+  async function historyFor(threadId: Id, userMessageId: Id, before?: Id): Promise<ChatMessage[]> {
     const messages = await repository.chatMessages.listByThread(scope, threadId);
     return messages.filter(
       (message) =>
-        message.id !== userMessageId && !(message.role === 'user' && message.id > userMessageId),
+        standing(message) &&
+        message.id !== userMessageId &&
+        !(message.role === 'user' && message.id > userMessageId) &&
+        (before === undefined || message.id < before),
     );
   }
 
@@ -370,18 +470,59 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
    * failed call is written too, as a turn carrying its `error`, so the client always hears how the
    * turn ended (D287). A turn in a project with a folder is a writing turn (D302): it waits for the
    * project's write queue and is checkpointed.
+   *
+   * PG-1.5: the whole path is wrapped. A throw anywhere — the write queue, the reverted-paths read,
+   * the output guardrail, pricing, the final store — ends the turn as one stored failed turn and one
+   * `chat.message`, never as a log line and a client left "typing…". PG-1.6: a stop aborts it, and
+   * it is stored as `user_cancelled`.
    */
-  function generateReply(context: ReplyContext): Promise<ChatMessage> {
-    if (context.workspace === undefined) return produceReply(context);
-    return writeQueue(context.projectId).run(() => produceReply(context));
-  }
-
-  async function produceReply(context: ReplyContext): Promise<ChatMessage> {
-    const { node, chosen, policy, threadId, userParts, guardrails, workspace } = context;
+  async function generateReply(context: ReplyContext): Promise<ChatMessage> {
+    const { threadId } = context;
+    const controller = new AbortController();
+    let running = inFlight.get(threadId);
+    if (running === undefined) {
+      running = new Set();
+      inFlight.set(threadId, running);
+    }
+    running.add(controller);
     // Known before the call, so the checkpoint can name the turn it belongs to.
     const replyId = nextId();
+    const progress: TurnProgress = { appended: false, reverted: [] };
+    const produce = (): Promise<ChatMessage> =>
+      produceReply(context, replyId, controller.signal, progress);
+    try {
+      return context.workspace === undefined
+        ? await produce()
+        : await writeQueue(context.projectId).run(produce);
+    } catch (error) {
+      // The reply is stored; only its announcement failed. Never a second turn for it.
+      if (progress.appended) throw error;
+      logger.error({ subsystem: 'chat', threadId, err: error }, 'chat reply path failed');
+      if (progress.reverted.length > 0) {
+        deps.checkpoints?.restoreRevertedPaths?.(threadId, progress.reverted);
+      }
+      const failure = controller.signal.aborted
+        ? cancelledError()
+        : classifyError(error, { providerId: context.chosen.providerId });
+      return store(failedTurn(threadId, failure, { speakerNodeId: context.node.id }, replyId));
+    } finally {
+      running.delete(controller);
+      if (running.size === 0) inFlight.delete(threadId);
+    }
+  }
+
+  async function produceReply(
+    context: ReplyContext,
+    replyId: Id,
+    stopSignal: AbortSignal,
+    progress: TurnProgress,
+  ): Promise<ChatMessage> {
+    const { node, chosen, policy, threadId, userParts, guardrails, workspace } = context;
+    // Stopped while it waited for the project's write queue: it never starts.
+    if (stopSignal.aborted) throw new Error('stopped before it started');
     // R-1: the files the person reverted in this thread since its last turn, told once, here.
     const reverted = deps.checkpoints?.takeRevertedPaths?.(threadId) ?? [];
+    progress.reverted = reverted;
     /* Stream: `chat.token` deltas batched ~50 ms, then the accumulated text is the reply. */
     const tokens = createBatcher<string>({
       intervalMs: batchMs,
@@ -457,7 +598,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       // Inside the turn (D287 fix F-M4): a thread or catalog that cannot be read ends the turn as
       // a stored failed reply, like any other failure, rather than leaving the client "typing…".
       // Read now, holding the project's queue — never the snapshot from before the turn waited.
-      const history = await historyFor(threadId, context.userMessageId);
+      const history = await historyFor(threadId, context.userMessageId, context.historyBefore);
 
       const instructions =
         node.kind === 'agent' ? node.config.instructions : (node.config.systemPrompt ?? '');
@@ -510,8 +651,11 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         toolResults?: ToolResult[];
       }): Promise<ChatToolRequest[]> =>
         deps.runGated(chosen.providerId, async () => {
+          // PG-1.6: a stop aborts the call in flight, as the node's own clock does.
           const signal =
-            timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : new AbortController().signal;
+            timeoutMs > 0
+              ? AbortSignal.any([stopSignal, AbortSignal.timeout(timeoutMs)])
+              : stopSignal;
           // No `runId`: a chat belongs to no run (FR-CHAT-005); `turnId` names the turn instead.
           const stream = adapter.generate(
             {
@@ -532,6 +676,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
 
           const requested: ChatToolRequest[] = [];
           for await (const chunk of stream as AsyncIterable<StreamChunk>) {
+            // PG-1.6: an adapter that does not watch its signal is left at the first chunk after a stop.
+            if (stopSignal.aborted) break;
             if (chunk.type === 'text') {
               text += chunk.delta;
               tokens.push(chunk.delta);
@@ -569,7 +715,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
           runId: replyId,
           sandboxDir: '',
           ...(workspace === undefined ? {} : { projectDir: workspace }),
-          signal: new AbortController().signal,
+          signal: stopSignal,
         },
         turn,
         activity,
@@ -578,10 +724,14 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         ...(judge === undefined ? {} : { judge }),
       });
       limitReached = loop.limitReached;
+      // PG-1.6: an adapter that finished despite the stop still ends as the stop the person asked for.
+      if (stopSignal.aborted) throw new Error('stopped');
       // D287: a result the context point blocked ends the turn as a stored error, with its reason.
       if (loop.blocked !== undefined) failure = loop.blocked;
     } catch (error) {
-      failure = classifyError(error, { providerId: chosen.providerId });
+      failure = stopSignal.aborted
+        ? cancelledError()
+        : classifyError(error, { providerId: chosen.providerId });
     } finally {
       // Before the closing `chat.message`: a token flushed after it would restart the stream.
       tokens.stop();
@@ -613,7 +763,10 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       );
       // R-1: a failed turn may never have told the model, so the next turn tells it again
       if (reverted.length > 0) deps.checkpoints?.restoreRevertedPaths?.(threadId, reverted);
-      return store(failedTurn(threadId, failure, { usage, ...failedExtra }, replyId));
+      progress.reverted = [];
+      return store(failedTurn(threadId, failure, { usage, ...failedExtra }, replyId), () => {
+        progress.appended = true;
+      });
     }
 
     if (limitReached && toolsOffered && text.trim() === '') {
@@ -632,20 +785,242 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       verdicts = [...toolVerdicts, ...checked.verdicts];
     }
 
-    return store({
-      id: replyId,
-      threadId,
-      role: 'agent',
-      content: replyParts,
-      verdicts,
-      usage,
-      at: now(),
-      ...(answeredBy === undefined ? {} : { modelId: answeredBy }),
-      ...extra,
+    // Told the model now: a throw from here on must not tell it again.
+    progress.reverted = [];
+    return store(
+      {
+        id: replyId,
+        threadId,
+        role: 'agent',
+        content: replyParts,
+        verdicts,
+        usage,
+        at: now(),
+        ...(answeredBy === undefined ? {} : { modelId: answeredBy }),
+        ...extra,
+      },
+      () => {
+        progress.appended = true;
+      },
+    );
+  }
+
+  /** The thread and its own node, for a message action (PG-1.6). */
+  async function threadWithNode(threadId: Id): Promise<{
+    thread: ChatThread;
+    owner: ResolvedChatNode & { node: ChatNode };
+  }> {
+    const thread = await repository.chatThreads.get(scope, threadId);
+    if (thread === null) throw new ChatThreadNotFoundError(threadId);
+    const owner = await deps.resolveNode(thread.nodeId);
+    if (owner === null) throw new ChatNodeNotFoundError(thread.nodeId);
+    if (owner.node.kind !== 'agent' && owner.node.kind !== 'model') {
+      throw new NotAnAgentNodeError(thread.nodeId);
+    }
+    return { thread, owner: { ...owner, node: owner.node } };
+  }
+
+  /**
+   * The node that answers a re-run turn (PG-1.6): the one that answered it before — an `@handle`
+   * target is kept — when it is still an agent or model node of the same workflow; otherwise the
+   * thread's own node.
+   */
+  async function speakerFor(
+    speakerNodeId: Id | undefined,
+    owner: ResolvedChatNode & { node: ChatNode },
+  ): Promise<ChatNode> {
+    if (speakerNodeId === undefined || speakerNodeId === owner.node.id) return owner.node;
+    const speaker = await deps.resolveNode(speakerNodeId);
+    if (
+      speaker === null ||
+      speaker.workflowId !== owner.workflowId ||
+      (speaker.node.kind !== 'agent' && speaker.node.kind !== 'model')
+    ) {
+      return owner.node;
+    }
+    return speaker.node;
+  }
+
+  /** Start one reply (shared by `chat`, retry and edit): route, policy, folder, then generate. */
+  async function beginReply(options: {
+    node: ChatNode;
+    thread: ChatThread;
+    owner: ResolvedChatNode;
+    userMessage: ChatMessage;
+    guardrails: ChatGuardrailDeps | undefined;
+    policy: Awaited<ReturnType<PolicyService['resolve']>> | null;
+    chosen: ModelUsed;
+    historyBefore?: Id;
+  }): Promise<ChatBegun> {
+    const { thread, owner, userMessage } = options;
+    const done = generateReply({
+      node: options.node,
+      mainNodeId: thread.nodeId,
+      workflowId: owner.workflowId,
+      projectId: owner.projectId,
+      workspace: await workspaceOf(owner.projectId),
+      chosen: options.chosen,
+      policy: options.policy,
+      threadId: thread.id,
+      userMessageId: userMessage.id,
+      userParts: userMessage.content,
+      guardrails: options.guardrails,
+      ...(options.historyBefore === undefined ? {} : { historyBefore: options.historyBefore }),
     });
+    // The gateway answers 202 and does not await the reply. `generateReply` already stores a
+    // failed turn for any throw (PG-1.5); what still reaches here is a turn that could not be
+    // stored at all, which is logged rather than left an unhandled rejection.
+    done.catch((error: unknown) => {
+      logger.error({ subsystem: 'chat', err: error, threadId: thread.id }, 'chat reply failed');
+    });
+    return { threadId: thread.id, messageId: userMessage.id, done };
   }
 
   return {
+    async retryMessage(threadId, messageId) {
+      const { thread, owner } = await threadWithNode(threadId);
+      const messages = await repository.chatMessages.listByThread(scope, threadId);
+      const target = messages.find((message) => message.id === messageId);
+      if (target === undefined || target.deletedAt !== undefined) {
+        throw new ChatMessageNotFoundError(threadId, messageId);
+      }
+      if (target.role !== 'agent') {
+        throw new ChatActionInvalidError('Only an agent reply or a failed turn can be retried.');
+      }
+      if (target.supersededAt !== undefined) {
+        throw new ChatActionInvalidError('This turn was already replaced by a newer version.');
+      }
+      // The question it answered: the last standing user turn before it.
+      const question = messages
+        .filter((message) => message.role === 'user' && message.id < target.id && standing(message))
+        .at(-1);
+      if (question === undefined) {
+        throw new ChatActionInvalidError('There is no question before this turn to ask again.');
+      }
+
+      const node = await speakerFor(target.speakerNodeId, owner);
+      const chosen = routeFor(node);
+      const policy =
+        deps.policies === undefined ? null : await deps.policies.resolve(owner.projectId, node);
+
+      await markAndAnnounce(target, { supersededAt: now() });
+      return beginReply({
+        node,
+        thread,
+        owner,
+        userMessage: question,
+        guardrails: guardrailDeps(),
+        policy,
+        chosen,
+        historyBefore: target.id,
+      });
+    },
+
+    async editMessage(threadId, messageId, content) {
+      const { thread, owner } = await threadWithNode(threadId);
+      const messages = await repository.chatMessages.listByThread(scope, threadId);
+      const target = messages.find((message) => message.id === messageId);
+      if (target === undefined || target.deletedAt !== undefined) {
+        throw new ChatMessageNotFoundError(threadId, messageId);
+      }
+      if (target.role !== 'user') {
+        throw new ChatActionInvalidError('Only your own messages can be edited and resent.');
+      }
+      if (target.supersededAt !== undefined) {
+        throw new ChatActionInvalidError('This message was already replaced by a newer version.');
+      }
+
+      // Whoever answered it answers the new version.
+      const answered = messages.find(
+        (message) => message.role === 'agent' && message.id > target.id && standing(message),
+      );
+      const node = await speakerFor(answered?.speakerNodeId, owner);
+      const chosen = routeFor(node);
+      const policy =
+        deps.policies === undefined ? null : await deps.policies.resolve(owner.projectId, node);
+
+      /* Input point first (FR-CHAT-008): a blocked edit changes nothing, only the 422. */
+      const guardrails = guardrailDeps();
+      let inputParts: Part[] = [...content];
+      let inputVerdicts: ChatVerdict[] = [];
+      if (guardrails !== undefined) {
+        const checked = evaluateChatInput(policy, content, guardrails);
+        if (checked.kind === 'blocked') {
+          throw new ChatInputBlockedError(checked.verdicts, checked.reason);
+        }
+        inputParts = checked.parts;
+        inputVerdicts = checked.verdicts;
+      }
+
+      /* The message and every standing turn after it are the earlier version now. */
+      const at = now();
+      for (const message of messages) {
+        if (message.id >= target.id && standing(message)) {
+          await markAndAnnounce(message, { supersededAt: at });
+        }
+      }
+
+      const userMessage: ChatMessage = {
+        id: nextId(),
+        threadId: thread.id,
+        role: 'user',
+        content: inputParts,
+        verdicts: inputVerdicts,
+        at: now(),
+      };
+      await repository.chatMessages.append(scope, userMessage);
+      await repository.chatThreads.touch(scope, thread.id, now());
+      return beginReply({
+        node,
+        thread,
+        owner,
+        userMessage,
+        guardrails,
+        policy,
+        chosen,
+      });
+    },
+
+    async deleteMessage(threadId, messageId) {
+      const thread = await repository.chatThreads.get(scope, threadId);
+      if (thread === null) throw new ChatThreadNotFoundError(threadId);
+      const messages = await repository.chatMessages.listByThread(scope, threadId);
+      const target = messages.find((message) => message.id === messageId);
+      if (target === undefined) throw new ChatMessageNotFoundError(threadId, messageId);
+      // Deleting twice is still deleted: nothing to announce.
+      if (target.deletedAt !== undefined) return;
+      await markAndAnnounce(target, { deletedAt: now() });
+    },
+
+    async stopThread(threadId) {
+      const thread = await repository.chatThreads.get(scope, threadId);
+      if (thread === null) throw new ChatThreadNotFoundError(threadId);
+      const running = inFlight.get(threadId);
+      if (running === undefined || running.size === 0) return { stopped: false };
+      for (const controller of running) controller.abort();
+      return { stopped: true };
+    },
+
+    async recoverOpenTurns() {
+      let closed = 0;
+      for (const thread of await repository.chatThreads.list(scope)) {
+        // Each user turn is owed one agent turn; replies land in order behind them. A superseded
+        // turn was replaced (its replacement is counted instead); a deleted one still happened.
+        let owed = 0;
+        for (const message of await repository.chatMessages.listByThread(scope, thread.id)) {
+          if (message.supersededAt !== undefined) continue;
+          if (message.role === 'user') owed += 1;
+          else if (owed > 0) owed -= 1;
+        }
+        for (; owed > 0; owed -= 1) {
+          await store(failedTurn(thread.id, openTurnError()));
+          closed += 1;
+        }
+      }
+      if (closed > 0) logger.warn({ subsystem: 'chat', closed }, 'closed chat turns left open');
+      return closed;
+    },
+
     async postMessage(workflowId, request) {
       const workflow = await repository.workflows.get(scope, workflowId);
       if (workflow === null) throw new ChatWorkflowNotFoundError(workflowId);
@@ -805,26 +1180,15 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       await repository.chatMessages.append(scope, userMessage);
       await repository.chatThreads.touch(scope, thread.id, now());
 
-      const done = generateReply({
+      return beginReply({
         node,
-        mainNodeId: thread.nodeId,
-        workflowId,
-        projectId,
-        workspace: await workspaceOf(projectId),
-        chosen,
-        policy,
-        threadId: thread.id,
-        userMessageId: userMessage.id,
-        userParts: inputParts,
+        thread,
+        owner: { node: owner, projectId, workflowId },
+        userMessage,
         guardrails,
+        policy,
+        chosen,
       });
-      // The gateway answers 202 and does not await the reply, so its own branch logs a failure and
-      // stops it becoming an unhandled rejection; `done` itself still rejects for a caller that awaits.
-      done.catch((error: unknown) => {
-        logger.error({ subsystem: 'chat', err: error, threadId: thread.id }, 'chat reply failed');
-      });
-
-      return { threadId: thread.id, messageId: userMessage.id, done };
     },
 
     listThreads: (nodeId) => repository.chatThreads.listByNode(scope, nodeId),
@@ -833,7 +1197,11 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       const thread = await repository.chatThreads.get(scope, threadId);
       if (thread === null) throw new ChatThreadNotFoundError(threadId);
       const messages = await repository.chatMessages.listByThread(scope, threadId);
-      return { thread, messages };
+      // PG-1.6 (D352): a deleted turn is left out; a superseded one stays, as an earlier version.
+      return {
+        thread,
+        messages: messages.filter((message) => message.deletedAt === undefined),
+      };
     },
 
     async deleteThread(threadId) {

@@ -105,3 +105,44 @@ describe('ThreadEventBuffer (round 4 §2.3/§2.5, FR-CHAT-004/006)', () => {
     });
   });
 });
+
+describe('PG-1.6 chat.update replaces a row by id, and drops a deleted one (D352)', () => {
+  const update = (seq: number, changed: ChatMessage, threadId = TH): ServerFrame =>
+    ({ type: 'chat.update', payload: { threadId, message: changed }, seq }) as ServerFrame;
+  const rowOf = (frame: ServerFrame): ChatMessage =>
+    (frame.payload as { message: ChatMessage }).message;
+
+  it('a superseded reply is replaced where it stands', () => {
+    const buffer = new ThreadEventBuffer(TH);
+    const user = message(1, 'user', 'hi');
+    const reply = message(2, 'agent', 'old');
+    buffer.apply(user);
+    buffer.apply(reply);
+    const superseded = { ...rowOf(reply), supersededAt: NOW };
+    buffer.apply(update(3, superseded));
+
+    expect(buffer.view.messages).toEqual([rowOf(user), superseded]);
+    expect(buffer.view.lastSeq).toBe(3);
+  });
+
+  it('a deleted row leaves the view; a replay of the same seq changes nothing', () => {
+    const buffer = new ThreadEventBuffer(TH);
+    const user = message(1, 'user', 'hi');
+    const reply = message(2, 'agent', 'there');
+    buffer.apply(user);
+    buffer.apply(reply);
+    const deleted = update(3, { ...rowOf(user), deletedAt: NOW });
+    buffer.apply(deleted);
+    buffer.apply(deleted);
+    expect(buffer.view.messages).toEqual([rowOf(reply)]);
+  });
+
+  it('another thread’s update, or one for a row it never saw, is ignored', () => {
+    const buffer = new ThreadEventBuffer(TH);
+    const user = message(1, 'user', 'hi');
+    buffer.apply(user);
+    buffer.apply(update(2, { ...rowOf(user), supersededAt: NOW }, OTHER));
+    buffer.apply(update(3, { ...rowOf(message(9, 'agent', 'x')), supersededAt: NOW }));
+    expect(buffer.view.messages).toEqual([rowOf(user)]);
+  });
+});

@@ -917,6 +917,8 @@ export class FakeRepository implements Repository {
       [...this.#for(scope).chatThreads.values()]
         .filter((thread) => thread.nodeId === nodeId)
         .sort((a, b) => a.id.localeCompare(b.id)),
+    list: async (scope: Scope) =>
+      [...this.#for(scope).chatThreads.values()].sort((a, b) => a.id.localeCompare(b.id)),
     touch: async (scope: Scope, id: Id, updatedAt: Timestamp) => {
       const current = this.#for(scope).chatThreads.get(id);
       if (current === undefined) return null;
@@ -946,6 +948,18 @@ export class FakeRepository implements Repository {
       [...this.#for(scope).chatMessages.values()]
         .filter((message) => message.threadId === threadId)
         .sort((a, b) => a.id.localeCompare(b.id)),
+    mark: async (
+      scope: Scope,
+      id: Id,
+      patch: { supersededAt?: Timestamp; deletedAt?: Timestamp },
+    ) => {
+      const state = this.#for(scope);
+      const current = state.chatMessages.get(id);
+      if (current === undefined) return null;
+      const next: ChatMessage = { ...current, ...patch };
+      state.chatMessages.set(id, next);
+      return next;
+    },
   };
 
   /* Round 5 (Arch §15.3, §21.3). */

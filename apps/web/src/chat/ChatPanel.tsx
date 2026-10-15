@@ -85,6 +85,8 @@ function ChatForNode({ node, nodes }: { node: Node; nodes: readonly Node[] }) {
             placeholder="Message this agent…"
             roster={roster}
             mainNodeId={node.id}
+            replying={convo.awaitingReply}
+            onStop={convo.stop}
           />
         }
       />

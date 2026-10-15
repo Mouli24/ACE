@@ -1,9 +1,17 @@
-import type { ChatMessage, Node, Part } from '@ace/contracts';
-import { cn, PartRenderer } from '@ace/ui';
-import { useEffect, useRef, type ReactNode } from 'react';
+import {
+  isCliProviderType,
+  type ChatMessage,
+  type Node,
+  type Part,
+  type Provider,
+} from '@ace/contracts';
+import { cn, Icons, PartRenderer } from '@ace/ui';
+import { useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { api } from '../app/api';
 import { useNodeOverlay } from '../runs/run-store';
+import { queryKeys } from '../workflows/query-keys';
 import type { AgentLook } from '../theme/agents';
 import { fmt } from '../theme/constants';
 import { clockTime } from '../theme/format';
@@ -16,7 +24,55 @@ import {
   ChatRefusalCard,
   ChatVerdicts,
 } from './ChatVerdicts';
+import { ActionButton, EarlierVersion, EditBox, MessageActions } from './MessageActions';
 import type { ChatConversation as Conversation } from './useChat';
+
+/** PG-1.5: how long past the node's own timeout a reply may stay silent before it is called lost. */
+export const STALL_GRACE_MS = 10_000;
+
+/** D302: a CLI working in the project folder gets a run's floor (the engine's CLI_SESSION_MIN_TIMEOUT_MS). */
+const CLI_TURN_FLOOR_MS = 600_000;
+
+/**
+ * PG-1.5 client stall rule: true once no `chat.token` or `chat.message` has arrived for the node's
+ * timeout plus 10 s while a reply is owed. A node with no timeout never stalls by this rule.
+ */
+export function useStalled(waitingSince: number | undefined, budgetMs: number): boolean {
+  const [stalledFor, setStalledFor] = useState<number>();
+  useEffect(() => {
+    if (waitingSince === undefined || budgetMs <= 0) return;
+    const wait = waitingSince + budgetMs + STALL_GRACE_MS - Date.now();
+    const timer = setTimeout(() => setStalledFor(waitingSince), Math.max(wait, 0));
+    return () => clearTimeout(timer);
+  }, [waitingSince, budgetMs]);
+  return waitingSince !== undefined && stalledFor === waitingSince;
+}
+
+/** The node's own clock for one chat turn, as the engine reads it (D302's CLI floor included). */
+function turnBudgetMs(node: Node, providers: readonly Provider[] | undefined): number {
+  if (node.kind !== 'agent' && node.kind !== 'model') return 0;
+  const timeoutMs = node.config.execution.timeoutMs;
+  const provider = providers?.find((each) => each.id === node.config.providerId);
+  const cli = provider !== undefined && isCliProviderType(provider.type);
+  return timeoutMs > 0 && cli ? Math.max(timeoutMs, CLI_TURN_FLOOR_MS) : timeoutMs;
+}
+
+/** One rendered item: a turn, or a run of turns a retry or an edit replaced (PG-1.6). */
+type Item = { kind: 'turn'; message: ChatMessage } | { kind: 'earlier'; messages: ChatMessage[] };
+
+function itemsOf(messages: readonly ChatMessage[]): Item[] {
+  const items: Item[] = [];
+  for (const message of messages) {
+    if (message.supersededAt === undefined) {
+      items.push({ kind: 'turn', message });
+      continue;
+    }
+    const last = items.at(-1);
+    if (last?.kind === 'earlier') last.messages.push(message);
+    else items.push({ kind: 'earlier', messages: [message] });
+  }
+  return items;
+}
 
 /**
  * A message's text in the theme's type (D335): 13px / 1.5 ink. The kit's Markdown already draws a
@@ -86,12 +142,40 @@ function Row({
   );
 }
 
+const FENCE = /```([^\n`]*)\n([\s\S]*?)```/gu;
+
+/**
+ * PG-1.6: a fenced code block inside a text part becomes a `code` part of its own, so the kit's code
+ * block draws it with its own Copy; the text around it stays text.
+ */
+export function splitFences(content: readonly Part[]): Part[] {
+  return content.flatMap((part): Part[] => {
+    if (part.type !== 'text' || !part.text.includes('```')) return [part];
+    const out: Part[] = [];
+    let last = 0;
+    for (const match of part.text.matchAll(FENCE)) {
+      const before = part.text.slice(last, match.index).trim();
+      if (before !== '') out.push({ type: 'text', text: before });
+      const language = (match[1] ?? '').trim();
+      out.push({
+        type: 'code',
+        language: language === '' ? 'text' : language,
+        text: (match[2] ?? '').replace(/\n$/u, ''),
+      });
+      last = match.index + match[0].length;
+    }
+    const after = part.text.slice(last).trim();
+    if (after !== '') out.push({ type: 'text', text: after });
+    return out.length === 0 ? [part] : out;
+  });
+}
+
 /** A turn's parts: text through the kit's Markdown in the theme's type, media via PartRenderer. */
 function Body({ content }: { content: Part[] }) {
   const contentUrl = (artifactId: string) => api().artifactContentUrl(artifactId);
   return (
     <div className="mt-1 flex flex-col gap-2" data-testid="message-body">
-      {content.map((part, index) => (
+      {splitFences(content).map((part, index) => (
         <PartRenderer
           key={index}
           part={part}
@@ -148,9 +232,10 @@ function TurnMeta({
           type="button"
           data-testid="chat-send-to-forge"
           onClick={onSendToForge}
-          className="h-[22px] shrink-0 cursor-pointer whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--chip)] px-[9px] text-[10px] font-semibold text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+          className="flex h-[22px] shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--chip)] px-[9px] text-[10px] font-semibold text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
         >
-          Send to Forge →
+          Send to Forge
+          <Icons.ArrowRight aria-hidden size={11} />
         </button>
       )}
     </div>
@@ -202,14 +287,114 @@ export function ChatConversation({
       : run.state === 'RUNNING'
         ? run.streamedText
         : '';
-  const typing = convo.awaitingReply || convo.streamingText.length > 0 || run.state === 'RUNNING';
+  const queryClient = useQueryClient();
+  const budgetMs = turnBudgetMs(node, queryClient.getQueryData<Provider[]>(queryKeys.providers()));
+  // PG-1.5: a reply owed and silent past the node's timeout + 10 s is "No answer — Retry".
+  const stalled = useStalled(convo.waitingSince, budgetMs);
+  const [editing, setEditing] = useState<string>();
+  const typing =
+    !stalled && (convo.awaitingReply || convo.streamingText.length > 0 || run.state === 'RUNNING');
   const hasStreamText = convo.streamingText.length > 0 || runText.length > 0;
+  const busy = convo.awaitingReply || convo.sending;
+
+  /** A message and its actions (PG-1.6). `earlier`: a replaced turn — Copy and Delete only. */
+  const renderTurn = (message: ChatMessage, earlier: boolean) => {
+    const you = message.role === 'user';
+    const speaker = you ? undefined : otherSpeaker(message.speakerNodeId);
+    const name = you ? 'You' : (speaker?.name ?? node.name);
+    const isEditing = editing === message.id && !earlier;
+    // The turns an edit of this message would replace, and how many of them changed files.
+    const replaced = you
+      ? convo.messages.filter((each) => each.id >= message.id && each.supersededAt === undefined)
+      : [];
+    const checkpointIds = replaced.flatMap((each) =>
+      each.checkpointId === undefined ? [] : [each.checkpointId],
+    );
+    return (
+      <div key={message.id} data-testid={`chat-turn-${message.role}`} className="group">
+        <Row you={you} name={name} at={message.at} speaker={speaker}>
+          {isEditing ? (
+            <EditBox
+              initial={message.content
+                .flatMap((part) => (part.type === 'text' ? [part.text] : []))
+                .join('\n')}
+              changedFiles={projectId === undefined ? 0 : checkpointIds.length}
+              onCancel={() => setEditing(undefined)}
+              onSend={(text, revert) => {
+                setEditing(undefined);
+                const others = message.content.filter((part) => part.type !== 'text');
+                convo.edit(
+                  message,
+                  [{ type: 'text', text }, ...others],
+                  revert && projectId !== undefined && checkpointIds.length > 0
+                    ? { projectId, checkpointIds }
+                    : undefined,
+                );
+              }}
+            />
+          ) : message.error !== undefined ? (
+            <div
+              role="alert"
+              data-testid="chat-error-turn"
+              data-code={message.error.code}
+              data-kind={message.error.kind}
+              className={cn(CHAT_NOTE_CLASS, 'mt-1')}
+            >
+              <div className={CHAT_NOTE_HEAD_CLASS}>
+                {message.error.kind === 'user_cancelled'
+                  ? `Stopped · ${name} did not finish`
+                  : `${name} could not answer · ${message.error.code}`}
+                {message.runId !== undefined && <span data-testid="chat-run-badge">· run</span>}
+              </div>
+              <p className="whitespace-pre-wrap break-words">{message.error.message}</p>
+            </div>
+          ) : (
+            <>
+              <Body content={message.content} />
+              {!you && <TurnMeta message={message} onSendToForge={onSendToForge} />}
+            </>
+          )}
+          {message.activity !== undefined && <ChatActivity items={message.activity} />}
+          {message.checkpointId !== undefined && projectId !== undefined && (
+            <ChangesCardSlot projectId={projectId} checkpointId={message.checkpointId} />
+          )}
+          {message.verdicts.length > 0 && (
+            <div className="mt-2">
+              <ChatVerdicts verdicts={message.verdicts} />
+            </div>
+          )}
+          {!isEditing && (
+            <div className="mt-1">
+              <MessageActions
+                message={message}
+                busy={busy}
+                onDelete={() => convo.remove(message)}
+                {...(earlier
+                  ? {}
+                  : you
+                    ? { onEdit: () => setEditing(message.id) }
+                    : { onRetry: () => convo.retry(message) })}
+              />
+            </div>
+          )}
+        </Row>
+      </div>
+    );
+  };
 
   // Follow the tail as turns arrive, the reply streams, the run works and typing starts or stops.
   useEffect(() => {
     const element = scroller.current;
     if (element) element.scrollTop = element.scrollHeight;
-  }, [convo.messages.length, convo.streamingText, convo.refusal, convo.error, typing, runText]);
+  }, [
+    convo.messages.length,
+    convo.streamingText,
+    convo.refusal,
+    convo.error,
+    typing,
+    runText,
+    stalled,
+  ]);
 
   const empty =
     convo.messages.length === 0 &&
@@ -235,47 +420,18 @@ export function ChatConversation({
           </p>
         )}
 
-        {convo.messages.map((message) => {
-          const you = message.role === 'user';
-          const speaker = you ? undefined : otherSpeaker(message.speakerNodeId);
-          const name = you ? 'You' : (speaker?.name ?? node.name);
-          return (
-            <div key={message.id} data-testid={`chat-turn-${message.role}`}>
-              <Row you={you} name={name} at={message.at} speaker={speaker}>
-                {message.error !== undefined ? (
-                  <div
-                    role="alert"
-                    data-testid="chat-error-turn"
-                    data-code={message.error.code}
-                    className={cn(CHAT_NOTE_CLASS, 'mt-1')}
-                  >
-                    <div className={CHAT_NOTE_HEAD_CLASS}>
-                      {name} could not answer · {message.error.code}
-                      {message.runId !== undefined && (
-                        <span data-testid="chat-run-badge">· run</span>
-                      )}
-                    </div>
-                    <p className="whitespace-pre-wrap break-words">{message.error.message}</p>
-                  </div>
-                ) : (
-                  <>
-                    <Body content={message.content} />
-                    {!you && <TurnMeta message={message} onSendToForge={onSendToForge} />}
-                  </>
-                )}
-                {message.activity !== undefined && <ChatActivity items={message.activity} />}
-                {message.checkpointId !== undefined && projectId !== undefined && (
-                  <ChangesCardSlot projectId={projectId} checkpointId={message.checkpointId} />
-                )}
-                {message.verdicts.length > 0 && (
-                  <div className="mt-2">
-                    <ChatVerdicts verdicts={message.verdicts} />
-                  </div>
-                )}
-              </Row>
-            </div>
-          );
-        })}
+        {itemsOf(convo.messages).map((item) =>
+          item.kind === 'turn' ? (
+            renderTurn(item.message, false)
+          ) : (
+            <EarlierVersion
+              key={`earlier-${item.messages[0]?.id ?? ''}`}
+              count={item.messages.length}
+            >
+              {item.messages.map((message) => renderTurn(message, true))}
+            </EarlierVersion>
+          ),
+        )}
 
         {convo.streamingText.length > 0 && (
           <div aria-live="polite" data-testid="chat-streaming">
@@ -299,11 +455,28 @@ export function ChatConversation({
             data-testid={hasStreamText ? 'chat-typing' : 'chat-thinking'}
             className="flex items-center gap-2 pl-[36px] text-[11px] text-[var(--muted)]"
           >
-            <span aria-hidden className="animate-[livePulse_1s_ease-in-out_infinite]">
-              ●
-            </span>
+            <Icons.Circle
+              aria-hidden
+              size={8}
+              className="animate-[livePulse_1s_ease-in-out_infinite] fill-current"
+            />
             {convo.awaitingReply || convo.streamingText.length > 0 ? replyName : node.name} is
             typing…
+          </div>
+        )}
+
+        {stalled && (
+          <div role="alert" data-testid="chat-stalled" className={CHAT_NOTE_CLASS}>
+            <div className={CHAT_NOTE_HEAD_CLASS}>No answer</div>
+            <div className="flex items-center gap-2">
+              <p className="min-w-0 flex-1">
+                {replyName} has not answered within its time limit. Retry reads the conversation
+                again, and asks again if the answer is not there.
+              </p>
+              <ActionButton label="Retry" onClick={convo.recover}>
+                <Icons.RotateCcw aria-hidden size={14} />
+              </ActionButton>
+            </div>
           </div>
         )}
 

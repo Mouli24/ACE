@@ -2,6 +2,7 @@ import {
   ARTIFACT_ACCEPT_RANGES,
   ARTIFACT_CONTENT_HEADERS,
   ARTIFACT_UPLOAD_FIELD,
+  ChatEditRequestSchema,
   ChatRequestSchema,
   CreateMcpServerRequestSchema,
   MessageQuerySchema,
@@ -30,7 +31,7 @@ import { HttpResponse, http, type HttpHandler, type PathParams } from 'msw';
 import { newId } from '../lib/ulid';
 import { type MockDb } from './db';
 import { playScenario, preflight } from './handlers-round2';
-import { startPlayback } from './playback';
+import { cancelPlayback, pendingPlaybackSteps, startPlayback } from './playback';
 import {
   BUILTIN_TOOL_DEFINITIONS,
   MCP_FIXTURE_TOOL_COUNT,
@@ -169,9 +170,11 @@ export function parseMultipartFile(bytes: Uint8Array, boundary: string): Multipa
 /**
  * Which story a direct chat tells (M4 §5.5): `chat-stream` streams a normal reply; `chat-blocked`
  * refuses the input with a 422 the way a block policy would; `chat-reply-blocked` streams nothing
- * and settles with a reply the output point blocked (FR-CHAT-008).
+ * and settles with a reply the output point blocked (FR-CHAT-008). PG-1.6: `chat-slow` streams a
+ * word every second or so, long enough to press Stop.
  */
-export type ChatScenario = 'chat-stream' | 'chat-blocked' | 'chat-reply-blocked' | 'chat-fails';
+export type ChatScenario =
+  'chat-stream' | 'chat-blocked' | 'chat-reply-blocked' | 'chat-fails' | 'chat-slow';
 
 let chatScenario: ChatScenario = 'chat-stream';
 export function setChatScenario(next: ChatScenario): void {
@@ -651,7 +654,141 @@ export function createRound4Handlers(db: MockDb): HttpHandler[] {
       guard((ctx) => {
         const thread = db.getChatThread(param(ctx, 'id'));
         if (thread === undefined) return notFound('Chat thread');
-        return HttpResponse.json({ thread, messages: db.chatMessagesOf(thread.id) });
+        // PG-1.6 (D352): a deleted turn is left out; a superseded one stays as an earlier version.
+        const messages = db
+          .chatMessagesOf(thread.id)
+          .filter((message) => message.deletedAt === undefined);
+        return HttpResponse.json({ thread, messages });
+      }),
+    ),
+
+    /* ---------------------------------------------------- message actions (PG-1.6, D352) */
+    http.post(
+      `${API}/chat/threads/:id/messages/:messageId/retry`,
+      guard((ctx) => {
+        const threadId = param(ctx, 'id');
+        const thread = db.getChatThread(threadId);
+        if (thread === undefined) return notFound('Chat thread');
+        const messages = db.chatMessagesOf(threadId);
+        const target = messages.find((message) => message.id === param(ctx, 'messageId'));
+        if (target === undefined || target.deletedAt !== undefined) return notFound('Message');
+        if (target.role !== 'agent' || target.supersededAt !== undefined) {
+          return error(400, 'invalid_config', 'validation_failed', 'This turn cannot be retried.');
+        }
+        const question = messages
+          .filter(
+            (message) =>
+              message.role === 'user' &&
+              message.id < target.id &&
+              message.supersededAt === undefined &&
+              message.deletedAt === undefined,
+          )
+          .at(-1);
+        if (question === undefined) {
+          return error(400, 'invalid_config', 'validation_failed', 'There is no question to ask.');
+        }
+        markAndAnnounce(db, target, { supersededAt: now() });
+        const speaker = findNode(db, target.speakerNodeId ?? thread.nodeId);
+        streamReply(db, threadId, speaker, question.content);
+        return HttpResponse.json({ threadId, messageId: question.id }, { status: 202 });
+      }),
+    ),
+
+    http.post(
+      `${API}/chat/threads/:id/messages/:messageId/edit`,
+      guard(async (ctx) => {
+        const threadId = param(ctx, 'id');
+        const thread = db.getChatThread(threadId);
+        if (thread === undefined) return notFound('Chat thread');
+        const parsed = await body(ctx.request, ChatEditRequestSchema);
+        if (!parsed.ok) return parsed.response;
+        const messages = db.chatMessagesOf(threadId);
+        const target = messages.find((message) => message.id === param(ctx, 'messageId'));
+        if (target === undefined || target.deletedAt !== undefined) return notFound('Message');
+        if (target.role !== 'user' || target.supersededAt !== undefined) {
+          return error(
+            400,
+            'invalid_config',
+            'validation_failed',
+            'This message cannot be edited.',
+          );
+        }
+        const answered = messages.find(
+          (message) =>
+            message.role === 'agent' &&
+            message.id > target.id &&
+            message.supersededAt === undefined,
+        );
+        const at = now();
+        for (const message of messages) {
+          if (
+            message.id >= target.id &&
+            message.supersededAt === undefined &&
+            message.deletedAt === undefined
+          ) {
+            markAndAnnounce(db, message, { supersededAt: at });
+          }
+        }
+        const userMessage: ChatMessage = {
+          id: newId(),
+          threadId,
+          role: 'user',
+          content: parsed.data.content,
+          verdicts: [],
+          at: now(),
+        };
+        db.addChatMessage(userMessage);
+        const speaker = findNode(db, answered?.speakerNodeId ?? thread.nodeId);
+        streamReply(db, threadId, speaker, parsed.data.content);
+        return HttpResponse.json({ threadId, messageId: userMessage.id }, { status: 202 });
+      }),
+    ),
+
+    http.delete(
+      `${API}/chat/threads/:id/messages/:messageId`,
+      guard((ctx) => {
+        const threadId = param(ctx, 'id');
+        if (db.getChatThread(threadId) === undefined) return notFound('Chat thread');
+        const target = db
+          .chatMessagesOf(threadId)
+          .find((message) => message.id === param(ctx, 'messageId'));
+        if (target === undefined) return notFound('Message');
+        if (target.deletedAt === undefined) markAndAnnounce(db, target, { deletedAt: now() });
+        return new HttpResponse(null, { status: 204 });
+      }),
+    ),
+
+    http.post(
+      `${API}/chat/threads/:id/stop`,
+      guard((ctx) => {
+        const threadId = param(ctx, 'id');
+        const thread = db.getChatThread(threadId);
+        if (thread === undefined) return notFound('Chat thread');
+        if (pendingPlaybackSteps(threadId) === 0) return HttpResponse.json({ stopped: false });
+        cancelPlayback(threadId);
+        const message: ChatMessage = {
+          id: newId(),
+          threadId,
+          role: 'agent',
+          content: [{ type: 'text', text: 'You stopped this reply before it finished.' }],
+          verdicts: [],
+          at: now(),
+          error: {
+            kind: 'user_cancelled',
+            code: 'stopped',
+            message: 'You stopped this reply before it finished.',
+            retryable: true,
+          },
+          speakerNodeId: thread.nodeId,
+        };
+        db.addChatMessage(message);
+        db.emit({
+          type: 'chat.message',
+          payload: { threadId, message },
+          scope: 'thread',
+          threadId,
+        });
+        return HttpResponse.json({ stopped: true });
       }),
     ),
 
@@ -679,6 +816,21 @@ function findNode(db: MockDb, nodeId: string): Node | undefined {
     }
   }
   return undefined;
+}
+
+/** PG-1.6 (D352): mark a turn and announce the row as it now is, as `chat.update`. */
+function markAndAnnounce(
+  db: MockDb,
+  message: ChatMessage,
+  patch: { supersededAt?: string; deletedAt?: string },
+): void {
+  const marked = db.markChatMessage(message.id, patch) ?? { ...message, ...patch };
+  db.emit({
+    type: 'chat.update',
+    payload: { threadId: message.threadId, message: marked },
+    scope: 'thread',
+    threadId: message.threadId,
+  });
 }
 
 /** Open a new thread titled after the first words of the opening message (FR-CHAT-004). */
@@ -804,9 +956,10 @@ function streamReply(db: MockDb, threadId: string, node: Node | undefined, conte
     ...(node === undefined ? {} : { speakerNodeId: node.id }),
   };
 
+  const slow = chatScenario === 'chat-slow';
   startPlayback(threadId, [
     ...deltas.map((delta, index) => ({
-      after: index === 0 ? 40 : 25,
+      after: index === 0 ? 40 : slow ? 1_000 : 25,
       play: () => {
         db.emit({
           type: 'chat.token',

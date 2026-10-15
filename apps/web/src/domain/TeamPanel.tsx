@@ -1,5 +1,5 @@
 import type { DomainCost, DomainUsageSnapshot } from '@ace/contracts';
-import { Button, cn, FIELD_LABEL_CLASS, INPUT_CLASS } from '@ace/ui';
+import { Button, cn, FIELD_LABEL_CLASS, Icons, INPUT_CLASS } from '@ace/ui';
 import { useEffect, useId, useState, type ReactNode } from 'react';
 
 import { fmt } from '../theme/constants';
@@ -124,9 +124,9 @@ export function TeamPanel({
             title="Close"
             aria-label="Close"
             onClick={onClose}
-            className="h-7 w-7 cursor-pointer rounded-[7px] border border-[var(--line)] bg-transparent text-[12px] text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+            className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-[7px] border border-[var(--line)] bg-transparent text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
           >
-            ✕
+            <Icons.X aria-hidden size={13} />
           </button>
         )}
       </div>

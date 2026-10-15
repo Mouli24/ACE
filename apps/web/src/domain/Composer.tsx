@@ -1,5 +1,6 @@
 import type { AddressingError, DeliveryMode, Id, NodeState, RosterEntry } from '@ace/contracts';
-import { cn, MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from '@ace/ui';
+import { AceApiError } from '@ace/sdk';
+import { Button, cn, Icons, MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from '@ace/ui';
 import { useRef, useState, type KeyboardEvent } from 'react';
 
 import { Avatar } from '../theme/primitives';
@@ -72,6 +73,11 @@ export function Composer({
   const [exclude, setExclude] = useState<Id[]>([]);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
+  /**
+   * PG-1.5: the post failed, and its text is still in the box. `ended`: the engine refused it
+   * because the run has ended (409), so it is offered as a new run's goal instead.
+   */
+  const [unsent, setUnsent] = useState<{ text: string; ended: boolean }>();
   const box = useRef<HTMLTextAreaElement>(null);
 
   // A removal only stands while the text still addresses that node.
@@ -118,6 +124,7 @@ export function Composer({
     if (!canSend) return;
     setBusy(true);
     setFailure(undefined);
+    setUnsent(undefined);
     try {
       if (live) {
         await onSend({
@@ -130,6 +137,26 @@ export function Composer({
       }
       setText('');
       setExclude([]);
+    } catch (error) {
+      // PG-1.5: the text stays in the box; the failure says why and offers to send it again.
+      const ended = live && AceApiError.is(error) && error.status === 409;
+      setUnsent({ text, ended });
+      if (!ended) setFailure(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** PG-1.5: a run that has ended takes the message as a new run's goal (D312). */
+  const startNew = async (): Promise<void> => {
+    if (unsent === undefined) return;
+    setBusy(true);
+    setFailure(undefined);
+    try {
+      await onStart(unsent.text);
+      setText('');
+      setExclude([]);
+      setUnsent(undefined);
     } catch (error) {
       setFailure(error instanceof Error ? error.message : String(error));
     } finally {
@@ -220,10 +247,10 @@ export function Composer({
                     <button
                       type="button"
                       aria-label={`Remove @${entry.handle}`}
-                      className="-mr-1 flex h-4 w-4 cursor-pointer items-center justify-center rounded-full border-none bg-transparent text-[9px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                      className="-mr-1 flex h-4 w-4 cursor-pointer items-center justify-center rounded-full border-none bg-transparent text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
                       onClick={() => setExclude([...kept, entry.nodeId])}
                     >
-                      ✕
+                      <Icons.X aria-hidden size={10} />
                     </button>
                   )}
                 </span>
@@ -276,6 +303,38 @@ export function Composer({
               ))}
             </div>
           )}
+          {unsent !== undefined && writable && (
+            <div
+              role="alert"
+              data-testid="composer-unsent"
+              className="mt-1.5 flex flex-wrap items-center gap-2 text-[11.5px]"
+            >
+              {unsent.ended ? (
+                <>
+                  <span className="text-[#c94c27]">
+                    This run has ended, so it takes no more messages.
+                  </span>
+                  <Button type="button" size="sm" disabled={busy} onClick={() => void startNew()}>
+                    Start a new run with this message
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <span className="text-[var(--muted)]">Your message was not sent.</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={busy || text.trim() === ''}
+                    onClick={() => void submit()}
+                  >
+                    <Icons.RotateCcw aria-hidden size={13} />
+                    Resend
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {writable && (
@@ -312,12 +371,12 @@ export function Composer({
               type="submit"
               aria-label={live ? 'Send' : 'Start team run'}
               disabled={!canSend}
-              className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-[9px] border-none text-[16px] font-bold text-[#fff] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-not-allowed"
+              className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-[9px] border-none text-[#fff] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-not-allowed"
               style={{
                 background: text.trim() !== '' && canSend ? '#ef6b3f' : 'var(--sendOff)',
               }}
             >
-              ↑
+              <Icons.ArrowUp aria-hidden size={17} strokeWidth={2.5} />
             </button>
           </div>
         )}

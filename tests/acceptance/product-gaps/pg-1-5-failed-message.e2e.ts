@@ -2,7 +2,6 @@ import type { Run } from '@ace/contracts';
 import { test, type Page } from '@playwright/test';
 
 import {
-  NOT_BUILT,
   api,
   domain,
   engine,
@@ -71,7 +70,6 @@ test.describe('PG-1.5 a failed message always shows', () => {
     page,
   }) => {
     // PG-1.5 client stall rule: today the conversation says "typing…" for as long as nothing comes.
-    test.fail(NOT_BUILT, 'PG-1.5: no stall rule — a lost answer is "typing…" forever');
     test.setTimeout(90_000);
     const providerId = await mockProvider();
     const flow = await seedAgents('stall', [
@@ -95,7 +93,6 @@ test.describe('PG-1.5 a failed message always shows', () => {
 
   test('Domain: a failed node turn says why in words, with Retry', async ({ page }) => {
     // PG-1.5: Domain never reads `failureReason` (`domain/looks.ts`).
-    test.fail(NOT_BUILT, "PG-1.5: Domain does not show a failed turn's failureReason");
     test.setTimeout(90_000);
     const flow = await team('domain-fail', 'mock-bad-json', ['json']);
     await open(page, domainPath(flow));
@@ -128,7 +125,6 @@ test.describe('PG-1.5 a failed message always shows', () => {
     page,
   }) => {
     // PG-1.5: a post that fails on the wire offers no Resend.
-    test.fail(NOT_BUILT, 'PG-1.5: a failed Domain post has no Resend');
     const flow = await team('domain-post', 'mock-text');
     await open(page, domainPath(flow));
     const box = page.getByRole('textbox', { name: 'Message' });
@@ -148,7 +144,6 @@ test.describe('PG-1.5 a failed message always shows', () => {
     page,
   }) => {
     // PG-1.5: the 409 "run has ended" is not put in words, and nothing offers a new run.
-    test.fail(NOT_BUILT, 'PG-1.5: a 409 run-has-ended post is not explained');
     const flow = await team('domain-ended', 'mock-text');
     const run = await api<Run>(`/workflows/${flow.workflowId}/runs`, {
       method: 'POST',

@@ -1,6 +1,7 @@
 import { rosterFor, slugHandle, type Node, type Part } from '@ace/contracts';
 import {
   cn,
+  Icons,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -23,7 +24,7 @@ import { ChatComposer, type ChatRosterEntry } from './ChatComposer';
 import { ChatConversation } from './ChatConversation';
 import { ChatThreadList } from './ChatThreadList';
 import { useChatSessions } from './session-store';
-import { sendToNode, useChatSocket, useThreadConversation } from './useChat';
+import { sendToNode, stopNode, useChatSocket, useThreadConversation } from './useChat';
 import { isChatNode, useDropStaleChatTarget } from './workflow-target';
 
 /** Tabs drawn before the rest go under "More" (the theme's tabs row). */
@@ -207,11 +208,24 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
   const sending = useChatSessions((state) =>
     target === undefined ? false : state.sessions[target.id]?.sending === true,
   );
+  // PG-1.6: a reply on its way in the shown session can be stopped from the composer.
+  const replying = useChatSessions((state) =>
+    target === undefined ? false : state.sessions[target.id]?.pending !== undefined,
+  );
 
   // One composer for the whole column, never remounted: switching nodes keeps the text typed so
   // far, its chips and the keyboard focus while the conversation above it changes.
   const composer = (
-    <ChatComposer onSend={send} disabled={sending} roster={chatRoster} mainNodeId={target?.id} />
+    <ChatComposer
+      onSend={send}
+      disabled={sending}
+      roster={chatRoster}
+      mainNodeId={target?.id}
+      replying={replying}
+      onStop={() => {
+        if (target !== undefined) void stopNode(queryClient, target.id);
+      }}
+    />
   );
 
   return (
@@ -240,10 +254,10 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
           onClick={toggleChat}
           className={cn(
             FOCUS,
-            'h-7 w-7 shrink-0 cursor-pointer rounded-[7px] border border-[var(--line)] bg-transparent text-[12px] text-[var(--ink)]',
+            'flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-[7px] border border-[var(--line)] bg-transparent text-[var(--ink)]',
           )}
         >
-          ✕
+          <Icons.X aria-hidden size={13} />
         </button>
       </div>
 

@@ -23,6 +23,7 @@ import {
   FORGE_TERMINAL_MIGRATION_ID,
   FORGE_CHECKPOINTS_MIGRATION_ID,
   FORGE_CHECKS_MIGRATION_ID,
+  CHAT_MESSAGE_ACTIONS_MIGRATION_ID,
 } from '../migrations.js';
 import { SqliteRepository } from '../repository.js';
 
@@ -114,6 +115,7 @@ describe('FR-GRD-018 The migration backfills a project that existed before it ra
       FORGE_CHECKPOINTS_MIGRATION_ID,
       FORGE_CHAT_TURNS_MIGRATION_ID,
       FORGE_CHECKS_MIGRATION_ID,
+      CHAT_MESSAGE_ACTIONS_MIGRATION_ID,
     ]);
 
     const rows = after.sqlite.prepare(SELECT_POLICIES).all() as PolicyRow[];
@@ -287,6 +289,7 @@ describe('FR-CTL-006 The run-controls migration adds four columns to an existing
       FORGE_CHECKPOINTS_MIGRATION_ID,
       FORGE_CHAT_TURNS_MIGRATION_ID,
       FORGE_CHECKS_MIGRATION_ID,
+      CHAT_MESSAGE_ACTIONS_MIGRATION_ID,
     ]);
 
     const columnsAfter = (
