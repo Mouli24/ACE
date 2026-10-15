@@ -41,6 +41,7 @@ import {
   createModelSummariser,
   createPolicyService,
   createCheckpointService,
+  createBenchService,
   createProcessService,
   createProviderService,
   createDomainRegistry,
@@ -437,7 +438,11 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     onProjectWatch: (projectId, watched) => {
       workspace.setWatched(projectId, watched).catch((error: unknown) => {
         logger.warn(
-          { subsystem: 'workspace', projectId, reason: error instanceof Error ? error.message : String(error) },
+          {
+            subsystem: 'workspace',
+            projectId,
+            reason: error instanceof Error ? error.message : String(error),
+          },
           'could not change the project watch',
         );
       });
@@ -1079,6 +1084,22 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   });
 
   /*
+   * ACE Bench (PG-5.6): tasks, experiments and their runs. Bench runs are ordinary runs recorded
+   * by the bench and driven by the run service — guardrails, budgets, approvals and the event log
+   * all apply — one at a time, so concurrency never skews one arm's latency.
+   */
+  const bench = createBenchService({
+    bench: repository.bench,
+    repository,
+    scope: LOCAL_SCOPE,
+    bus,
+    logger,
+    runs,
+    buildVersion: ENGINE_VERSION,
+  });
+  await bench.start();
+
+  /*
    * Backup and restore (FR-SYS-012, F12) on the live connection. `exclusive` keeps a repository
    * transaction from opening while `VACUUM INTO` or `ATTACH` runs, which both refuse to inside one.
    */
@@ -1149,6 +1170,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     processes,
     /* IDE (D300): review, keep and revert agents' changes. */
     checkpoints,
+    /* PG-5.6: ACE Bench. */
+    bench,
   });
 
   /* -------------------------------------------------------------------- http */
@@ -1252,6 +1275,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     // The document in flight finishes before the database closes; the rest are re-queued at start (F7).
     try {
       await ingestion.stop();
+      // The bench queue stops after its current run, which the run service halts next.
+      await bench.stop();
       await runs.shutdown();
       await haltActiveRuns({
         repository,
