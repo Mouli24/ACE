@@ -143,7 +143,7 @@ test.describe('PG-1.5 a failed message always shows', () => {
   test('Domain: a post to a run that has ended says so and offers to start a new run with it', async ({
     page,
   }) => {
-    // PG-1.5: the 409 "run has ended" is not put in words, and nothing offers a new run.
+    // PG-1.5: a run that has ended says so, and a message offers itself as a new run's goal.
     const flow = await team('domain-ended', 'mock-text');
     const run = await api<Run>(`/workflows/${flow.workflowId}/runs`, {
       method: 'POST',
@@ -154,18 +154,23 @@ test.describe('PG-1.5 a failed message always shows', () => {
     await expect(box).toBeEnabled({ timeout: 30_000 });
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
 
-    // The run ends behind the page's back (another tab, the API); the page still offers Send.
+    // The run ends behind the page's back (another tab, the API). Since PG-3.3 Domain hears the
+    // end at once, so the page says so before anything is sent, and a message starts a new run
+    // with itself as the goal (D312) instead of meeting a 409. The 409 path itself (a post racing
+    // the end) is the composer's, covered at component level (tests-todo, PG-1.5).
     await api(`/runs/${run.id}/end`, { method: 'POST' });
+    await expect(domain(page).getByText(/run has ended/i).first()).toBeVisible({ timeout: 30_000 });
     await box.fill('One more idea');
-    const answered = page.waitForResponse((response) =>
-      response.url().includes(`/runs/${run.id}/messages`),
+    const started = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        response.url().includes(`/workflows/${flow.workflowId}/runs`),
     );
-    await page.getByRole('button', { name: 'Send', exact: true }).click();
-    expect((await answered).status(), 'the engine refuses: the run has ended').toBe(409);
-
-    await expect(domain(page).getByText(/run has ended/i)).toBeVisible();
-    await expect(
-      page.getByRole('button', { name: 'Start a new run with this message' }),
-    ).toBeVisible();
+    await page.getByRole('button', { name: 'Start team run' }).click();
+    const response = await started;
+    expect(response.status(), 'a new run starts').toBe(201);
+    const body = response.request().postDataJSON() as { goal?: string };
+    expect(body.goal, 'with the message as its goal').toBe('One more idea');
+    expect(((await response.json()) as Run).id).not.toBe(run.id);
   });
 });
