@@ -230,7 +230,9 @@ export async function createRunDriverHarness(
     // JSON too, so a node with a JSON contract can be scripted into a CONTRACT_VIOLATION (D309).
     outputTypes: ['text', 'json'],
     contextWindow: 200_000,
-    supportsTools: false,
+    // D353: a node with tools on a model that cannot call them is blocked at pre-flight, so the
+    // scripted model takes tools — a writing node's run gets past pre-flight to its first call.
+    supportsTools: true,
     supportsJson: true,
     available: true,
     source: 'discovered',

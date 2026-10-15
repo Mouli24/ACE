@@ -186,7 +186,8 @@ const model: Model = {
   inputTypes: ['text'],
   outputTypes: ['text', 'json'],
   contextWindow: 200_000,
-  supportsTools: false,
+  // D353: tools on a model with supportsTools:false are blocked at pre-flight (tools_unsupported).
+  supportsTools: true,
   supportsJson: true,
   available: true,
   source: 'discovered',
