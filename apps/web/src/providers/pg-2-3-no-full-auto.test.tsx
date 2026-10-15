@@ -17,7 +17,7 @@ import { db, installMockServer, renderApp } from '../test/app';
 installMockServer();
 
 describe('PG-2.3 the provider dialogs do not offer Full auto', () => {
-  it.fails(
+  it(
     'Add provider → a CLI → Permission lists Read-only and Edit project files only',
     async () => {
       const user = userEvent.setup();
@@ -34,7 +34,7 @@ describe('PG-2.3 the provider dialogs do not offer Full auto', () => {
     },
   );
 
-  it.fails('Edit provider on a CLI provider does not offer Full auto either', async () => {
+  it('Edit provider on a CLI provider does not offer Full auto either', async () => {
     const user = userEvent.setup();
     db.createProvider({
       type: 'claude_code',
