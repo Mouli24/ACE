@@ -33,6 +33,17 @@ const GROUP_HEADING =
 
 /* ----------------------------------------------------------------- node settings' Select */
 
+/** The four sections every picker always shows, so a kind of provider not added yet is visible. */
+const MAIN_GROUPS = ['cloud', 'local', 'cli', 'custom'] as const;
+
+function NoneAdded() {
+  return (
+    <div className="px-[10px] pb-[4px] text-[11.5px] text-[var(--muted)]">
+      None added — see the Providers page
+    </div>
+  );
+}
+
 /**
  * The provider Select's items in their sections (node settings, PG-1.4). Each section is a
  * `group` named by its label, so a screen reader announces "Local & open models" before Ollama.
@@ -46,7 +57,7 @@ export function ProviderSelectGroups({
 }) {
   return (
     <>
-      {groupProviders(providers).map((section) => (
+      {groupProviders(providers, MAIN_GROUPS).map((section) => (
         <SelectGroup
           key={section.group}
           aria-label={section.label}
@@ -56,6 +67,7 @@ export function ProviderSelectGroups({
           <div aria-hidden className={GROUP_HEADING}>
             {section.label}
           </div>
+          {section.providers.length === 0 && <NoneAdded />}
           {section.providers.map((provider) => (
             <SelectItem
               key={provider.id}
@@ -206,7 +218,7 @@ export function ProviderModelPicker({
           aria-labelledby="picker-provider-label"
           className="flex max-h-[300px] flex-col gap-[2px] overflow-y-auto"
         >
-          {groupProviders(providers).map((section) => (
+          {groupProviders(providers, MAIN_GROUPS).map((section) => (
             <div
               key={section.group}
               role="group"
@@ -216,6 +228,7 @@ export function ProviderModelPicker({
               <div aria-hidden className={GROUP_HEADING}>
                 {section.label}
               </div>
+              {section.providers.length === 0 && <NoneAdded />}
               {section.providers.map((provider) => (
                 <ProviderOption
                   key={provider.id}

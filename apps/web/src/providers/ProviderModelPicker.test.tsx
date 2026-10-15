@@ -108,6 +108,17 @@ describe('PG-1.4 the grouped provider picker', () => {
   });
 });
 
+describe('PG-1.4 the four main sections are always shown', () => {
+  it('a kind of provider not added yet keeps its section, saying none is added', async () => {
+    db.createProvider({ type: 'mock', name: 'Mock' });
+    pickerDialog();
+    await screen.findByRole('option', { name: /Mock/ });
+    for (const name of ['Cloud APIs', 'Local & open models', 'CLI agents', 'Custom endpoints']) {
+      expect(groupNamed(name)).toHaveTextContent('None added');
+    }
+  });
+});
+
 describe('PG-1.3 the provider-first dialog', () => {
   it('names the provider, waits for a provider and a model, then hands back both', async () => {
     const user = userEvent.setup();
