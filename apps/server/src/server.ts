@@ -126,6 +126,7 @@ import {
 } from '@ace/tools';
 import { WebSocketServer } from 'ws';
 
+import { migrateFullAutoProviders } from './full-auto-migration.js';
 import { createPricingLoader } from './pricing.js';
 
 export const ENGINE_VERSION = '0.1.0';
@@ -391,6 +392,14 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   /* ------------------------------------------------------------------ engine */
 
   const bus = createEventBus({ repository, scope: LOCAL_SCOPE, pubsub });
+  // D355 (PG-2.3): a CLI provider an older engine left on Full auto is moved to Edit project files
+  // before any provider is built or checked, with one notice. Never the reason the engine does not
+  // start: the adapters already run an old `full_auto` row as `edit_files`.
+  try {
+    await migrateFullAutoProviders({ repository, scope: LOCAL_SCOPE, bus, logger });
+  } catch (error) {
+    logger.error({ subsystem: 'providers', err: error }, 'could not move Full auto providers');
+  }
   // D300: every agent write is checkpointed in a private git store under the data dir, outside
   // the project's own .git (design §5.1). A checkpoint left recording by the last process is
   // marked failed at startup, below.
