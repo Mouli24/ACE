@@ -79,6 +79,12 @@ export const FORGE_CHECKS_MIGRATION_ID = '20261014T110000_forge_project_checks';
 export const CHAT_MESSAGE_ACTIONS_MIGRATION_ID = '20261015T120000_chat_message_actions';
 
 /**
+ * PG-5.6 (FR-BEN-001..008): ACE Bench's four tables, and `runs.bench_experiment_id`, which keeps a
+ * bench run out of the normal run history. NULL on every run stored before.
+ */
+export const BENCH_MIGRATION_ID = '20261016T120000_bench';
+
+/**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
  * written.
@@ -692,6 +698,78 @@ export const MIGRATIONS: readonly Migration[] = [
       -- event log); the flags keep it out of every later prompt. NULL reads as "still standing".
       ALTER TABLE chat_messages ADD COLUMN superseded_at TEXT;
       ALTER TABLE chat_messages ADD COLUMN deleted_at TEXT;
+    `,
+  },
+  {
+    id: BENCH_MIGRATION_ID,
+    up: `
+      -- PG-5.6: a task's inputs are JSON Part[]; content_hash is set once, at freeze.
+      CREATE TABLE IF NOT EXISTS bench_tasks (
+        id           TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        name         TEXT NOT NULL,
+        prompt       TEXT NOT NULL,
+        inputs       TEXT NOT NULL,
+        rubric       TEXT NOT NULL,
+        status       TEXT NOT NULL,
+        content_hash TEXT,
+        frozen_at    TEXT,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS bench_tasks_workspace_idx ON bench_tasks (workspace_id, id);
+
+      -- rules is JSON BenchRules, locked once started_at is set.
+      CREATE TABLE IF NOT EXISTS bench_experiments (
+        id               TEXT PRIMARY KEY,
+        workspace_id     TEXT NOT NULL,
+        name             TEXT NOT NULL,
+        workflow_id      TEXT NOT NULL,
+        project_id       TEXT NOT NULL,
+        task_ids         TEXT NOT NULL,
+        repetitions      INTEGER NOT NULL,
+        baseline_model   TEXT,
+        rules            TEXT NOT NULL,
+        status           TEXT NOT NULL,
+        pending_approval TEXT,
+        started_at       TEXT,
+        ended_at         TEXT,
+        created_at       TEXT NOT NULL,
+        updated_at       TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS bench_experiments_workspace_idx
+        ON bench_experiments (workspace_id, id);
+
+      -- One row per planned run. label is the blind label: the key that never leaves the engine.
+      CREATE TABLE IF NOT EXISTS bench_runs (
+        id            TEXT PRIMARY KEY,
+        workspace_id  TEXT NOT NULL,
+        experiment_id TEXT NOT NULL,
+        task_id       TEXT NOT NULL,
+        arm           TEXT NOT NULL,
+        rep           INTEGER NOT NULL,
+        ord           INTEGER NOT NULL,
+        status        TEXT NOT NULL,
+        run_id        TEXT,
+        record        TEXT,
+        label         TEXT
+      );
+      CREATE INDEX IF NOT EXISTS bench_runs_experiment_idx
+        ON bench_runs (workspace_id, experiment_id, ord);
+
+      CREATE TABLE IF NOT EXISTS bench_scores (
+        bench_run_id  TEXT PRIMARY KEY,
+        workspace_id  TEXT NOT NULL,
+        experiment_id TEXT NOT NULL,
+        label         TEXT NOT NULL,
+        score         REAL NOT NULL,
+        note          TEXT,
+        imported_at   TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS bench_scores_experiment_idx
+        ON bench_scores (workspace_id, experiment_id);
+
+      ALTER TABLE runs ADD COLUMN bench_experiment_id TEXT;
     `,
   },
 ];

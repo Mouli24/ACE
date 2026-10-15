@@ -27,7 +27,7 @@ import type {
   RunRepository,
   Scope,
 } from '@ace/engine';
-import { and, asc, desc, eq, inArray, isNotNull, like, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, like, lt, or, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 
@@ -122,6 +122,8 @@ function toRun(row: RunRow): Run {
     ...(row.blockedReason === null ? {} : { blockedReason: row.blockedReason }),
     ...(row.domain === null ? {} : { domain: JSON.parse(row.domain) }),
     ...(row.goal === null ? {} : { goal: row.goal }),
+    // PG-5.6: NULL on a normal run, which stays absent.
+    ...(row.benchExperimentId === null ? {} : { benchExperimentId: row.benchExperimentId }),
   });
 }
 
@@ -389,6 +391,7 @@ export function createRunRepository(db: Db): RunRepository {
           domain:
             run.domain === undefined ? null : toJsonColumn(run.domain, `run(${run.id}).domain`),
           goal: run.goal ?? null,
+          benchExperimentId: run.benchExperimentId ?? null,
         })
         .run();
       return run;
@@ -413,6 +416,8 @@ export function createRunRepository(db: Db): RunRepository {
           and(
             eq(runs.workspaceId, scope.workspaceId),
             eq(runs.workflowId, workflowId),
+            // FR-BEN-008: the normal run history never lists a bench run.
+            isNull(runs.benchExperimentId),
             page.cursor === undefined ? undefined : lt(runs.id, page.cursor),
           ),
         )
