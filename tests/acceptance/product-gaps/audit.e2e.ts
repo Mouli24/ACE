@@ -129,7 +129,7 @@ async function board(
         outputTypes: ['text'],
       },
     };
-    return { ...draft, ...derivePorts(draft as Parameters<typeof derivePorts>[0]) } as Node;
+    return { ...draft, ...derivePorts(draft as unknown as Parameters<typeof derivePorts>[0]) } as Node;
   });
   const byName = (name: string): Node => {
     const node = nodes.find((n) => n.name === name);
