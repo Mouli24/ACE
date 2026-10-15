@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { DataTypeSchema, type DataType } from './enums.js';
-import { IdSchema, PortIdSchema, TimestampSchema } from './graph.js';
+import { IdSchema, PortIdSchema, TimestampSchema, outputTypesWithSchema } from './graph.js';
 import { VerdictSchema } from './guardrails.js';
 import { SearchScoreSchema } from './knowledge.js';
 
@@ -274,6 +274,7 @@ function checkJsonSchema(value: unknown, schema: JsonSchemaLike, path: string): 
  * The output satisfies the contract when the set of part types is exactly the contracted set —
  * a missing type means the node did not deliver, an extra type means it delivered something the
  * downstream ports cannot accept — and every JSON part matches `jsonSchema` when one is given.
+ * A `jsonSchema` adds `json` to the contracted set (D353), so the schema is never skipped.
  * A failure here is `CONTRACT_VIOLATION`, never `RUN_FAILED` (BR-03).
  */
 export function validateAgainstContract(
@@ -285,7 +286,8 @@ export function validateAgainstContract(
   }
 
   const produced = new Set<DataType>(output.map((part) => part.type));
-  const expected = new Set<DataType>(contract.outputTypes);
+  // D353: a schema implies json, so a `['text']` contract with a schema expects a json part too.
+  const expected = new Set<DataType>(outputTypesWithSchema(contract.outputTypes, contract.jsonSchema));
 
   const missing = [...expected].filter((type) => !produced.has(type));
   const unexpected = [...produced].filter((type) => !expected.has(type));

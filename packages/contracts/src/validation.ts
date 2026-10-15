@@ -136,8 +136,17 @@ export const ROUND_5_VALIDATION_ISSUE_CODES = ['missing_knowledge_base'] as cons
  * The codes the product-gaps work adds. `missing_provider` (D358): an Agent/Model node with no
  * provider chosen; `missing_model` keeps "provider set, no model", `provider_missing` a deleted
  * provider. Pre-flight blocks on all three; a graph op that makes such a node is never refused.
+ *
+ * D353 (PG-2.1), both errors on the node, raised by validation and so by pre-flight:
+ * `schema_unsupported` — an output contract's JSON schema on a model without structured output
+ * (`supportsJson: false`) or on a CLI provider, which cannot be held to one; `tools_unsupported` —
+ * tools or skills on a model with `supportsTools: false`, which the executor would otherwise drop.
  */
-export const PRODUCT_GAPS_VALIDATION_ISSUE_CODES = ['missing_provider'] as const;
+export const PRODUCT_GAPS_VALIDATION_ISSUE_CODES = [
+  'missing_provider',
+  'schema_unsupported',
+  'tools_unsupported',
+] as const;
 
 export const VALIDATION_ISSUE_CODES = [
   ...ROUND_1_VALIDATION_ISSUE_CODES,
