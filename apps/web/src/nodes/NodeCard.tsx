@@ -204,7 +204,11 @@ function NodeEstimateTag({ nodeId }: { nodeId: string }) {
   const title = estimate.free
     ? 'A local model: free'
     : estimate.unknown
-      ? 'Cost unknown: this model has no price'
+      ? estimate.reason === 'no_model'
+        ? 'Cost unknown: no model chosen'
+        : estimate.reason === 'model_missing'
+          ? 'Cost unknown: the model is not in the catalogue'
+          : 'Cost unknown: this model has no price'
       : `Estimated cost of one run of this node: ${text}`;
   return (
     <div
