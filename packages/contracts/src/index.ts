@@ -44,3 +44,5 @@ export * from './workspace.js';
 export * from './checkpoints.js';
 /* Domain (D303–D327) */
 export * from './domain.js';
+/* ACE Bench (PG-5.6) */
+export * from './bench.js';

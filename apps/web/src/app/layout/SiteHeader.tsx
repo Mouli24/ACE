@@ -1,5 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 
+import { BenchLink } from '../../bench/BenchLink';
 import { LogoMark, ThemeToggle } from '../../theme/primitives';
 
 /**
@@ -19,6 +20,7 @@ const SECTIONS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^\/guardrails\/?/, 'GUARDRAILS'],
   [/^\/library\/tools\/?/, 'TOOLS'],
   [/^\/usage\/?/, 'USAGE'],
+  [/^\/bench(\/|$)/, 'BENCH'],
   [/^\/settings\/?/, 'SETTINGS'],
   [/^\/help\//, 'HELP'],
   [/^\/onboarding\/?/, 'ONBOARDING'],
@@ -54,6 +56,7 @@ export function SiteHeader() {
         </div>
       )}
       <div className="flex-1" />
+      <BenchLink />
       <ThemeToggle variant="home" />
     </header>
   );

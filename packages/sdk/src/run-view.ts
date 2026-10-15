@@ -138,6 +138,11 @@ export class RunEventBuffer {
   private readonly pendingApprovals = new Map<Id, ApprovalRequest>();
   private readonly verdictsByNodeRunId = new Map<Id, Verdict[]>();
   private readonly iterationByNodeId = new Map<Id, number>();
+  /**
+   * FR-BEN-008: runs ACE Bench queued, learned from their `run.started`. A buffer not already
+   * following one never adopts it — a bench run is shown only where the bench opens it.
+   */
+  private readonly benchRunIds = new Set<Id>();
 
   /** Fold one frame in. Frames for another run, and repeats of a persisted frame, are ignored. */
   apply(frame: ServerFrame): void {
@@ -148,6 +153,15 @@ export class RunEventBuffer {
     // buffer, leaving the previous run's node views in place beside it.
     const incoming =
       frame.type === 'run.started' ? frame.payload.run.id : (frame.payload as { runId?: Id }).runId;
+    if (
+      frame.type === 'run.started' &&
+      frame.payload.run.benchExperimentId !== undefined &&
+      this.runId !== frame.payload.run.id
+    ) {
+      this.benchRunIds.add(frame.payload.run.id);
+      return;
+    }
+    if (incoming !== undefined && incoming !== this.runId && this.benchRunIds.has(incoming)) return;
     if (this.runId !== undefined && incoming !== undefined && incoming !== this.runId) return;
 
     if (isPersistedFrame(frame)) {

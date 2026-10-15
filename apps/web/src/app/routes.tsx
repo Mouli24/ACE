@@ -1,5 +1,6 @@
 import type { RouteObject } from 'react-router-dom';
 
+import { BenchPage } from '../bench/BenchPage';
 import { DomainPage } from '../domain/DomainPage';
 import { HelpPage } from '../help/HelpPage';
 import { KnowledgeBasePage } from '../knowledge/KnowledgeBasePage';
@@ -61,6 +62,9 @@ export const routes: RouteObject[] = [
       { path: 'guardrails', element: <GuardrailsPage /> },
       { path: 'library/tools', element: <ToolsLibraryPage /> },
       { path: 'usage', element: <UsagePage /> },
+      // PG-5.6: ACE Bench (Arch §33.3). Its runs open from here only (FR-BEN-008).
+      { path: 'bench', element: <BenchPage /> },
+      { path: 'bench/experiments/:experimentId', element: <BenchPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: 'help/:page', element: <HelpPage /> },
     ],

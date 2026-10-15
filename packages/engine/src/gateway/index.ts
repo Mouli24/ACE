@@ -74,6 +74,8 @@ import type { KnowledgeService } from '../knowledge/service.js';
 import { createMemoryRoutes } from '../memory/routes.js';
 import type { MemoryService } from '../memory/service.js';
 import { createTemplateRoutes } from '../templates/routes.js';
+import { createBenchRoutes } from '../bench/routes.js';
+import type { BenchService } from '../bench/service.js';
 import type { TemplateService } from '../templates/service.js';
 import type { TraceService } from '../trace/index.js';
 import type { UsageService } from '../usage/index.js';
@@ -193,6 +195,9 @@ export interface EngineDeps {
   processes?: ProcessService;
   /** `/projects/:id/checkpoints/*`: review, keep and revert agents' changes (D300). */
   checkpoints?: CheckpointService;
+
+  /** `/bench/*`: ACE Bench's tasks, experiments, blind export, scores and report (PG-5.6). */
+  bench?: BenchService;
 }
 
 export interface EngineVariables {
@@ -990,6 +995,8 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.route('/', createProcessRoutes(deps.processes));
   /* IDE (D300): checkpoints of agents' changes, inside the same middleware. */
   api.route('/', createCheckpointRoutes(deps.checkpoints));
+  /* PG-5.6: ACE Bench (Arch §20.2), inside the same middleware. */
+  api.route('/', createBenchRoutes(deps.bench));
 
   app.route(API_BASE_PATH, api);
 

@@ -1,3 +1,4 @@
+import { BenchLink } from '../bench/BenchLink';
 import { LogoMark, ThemeToggle } from '../theme/primitives';
 
 /** Home's sticky 44px header (`Ace Home.dc.html`, D337): the mark, "ACE", "HOME", the ☀ / ☾ toggle. */
@@ -8,6 +9,7 @@ export function HomeHeader() {
       <div className="text-[15px] font-bold tracking-[0.02em]">ACE</div>
       <div className="text-[9px] font-semibold tracking-[0.12em] text-[var(--muted)]">HOME</div>
       <div className="flex-1" />
+      <BenchLink />
       <ThemeToggle variant="home" />
     </header>
   );

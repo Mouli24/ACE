@@ -6,6 +6,7 @@ import {
   defaultGuardrailChecks,
   modelMatchesQuery,
   type ApprovalDecision,
+  type BenchTask,
   type Artifact,
   type ChatMessage,
   type ChatThread,
@@ -64,6 +65,10 @@ import type {
   Scope,
   StoredApproval,
   StoredCheckpoint,
+  BenchRepository,
+  StoredBenchExperiment,
+  StoredBenchRun,
+  StoredBenchScore,
   SummaryCacheRepository,
   UsageRepository,
 } from '../ports/index.js';
@@ -524,7 +529,8 @@ export class FakeRepository implements Repository {
       query: CursorQuery,
     ): Promise<Page<Run>> => {
       const ordered = [...this.#for(scope).runs.values()]
-        .filter((run) => run.workflowId === workflowId)
+        // FR-BEN-008: the normal run history never lists a bench run.
+        .filter((run) => run.workflowId === workflowId && run.benchExperimentId === undefined)
         .sort((a, b) => b.id.localeCompare(a.id));
       const start =
         query.cursor === undefined ? 0 : ordered.findIndex((run) => run.id < query.cursor!);
@@ -1354,5 +1360,67 @@ export class FakeRepository implements Repository {
       return next;
     },
     delete: async (scope, id) => this.#for(scope).checkpoints.delete(id),
+  };
+
+  /*
+   * PG-5.6: ACE Bench's store, in memory. Not on the `Repository` port (the bench service is handed
+   * it on its own), and not rolled back by `transaction` — the bench service never writes it inside
+   * one. Keyed per workspace like everything else.
+   */
+  readonly #bench = new Map<
+    string,
+    {
+      tasks: Map<string, BenchTask>;
+      experiments: Map<string, StoredBenchExperiment>;
+      runs: Map<string, StoredBenchRun>;
+      scores: Map<string, StoredBenchScore>;
+    }
+  >();
+
+  #benchFor(scope: Scope) {
+    let state = this.#bench.get(scope.workspaceId);
+    if (state === undefined) {
+      state = { tasks: new Map(), experiments: new Map(), runs: new Map(), scores: new Map() };
+      this.#bench.set(scope.workspaceId, state);
+    }
+    return state;
+  }
+
+  readonly bench: BenchRepository = {
+    putTask: async (scope, task) => {
+      this.#benchFor(scope).tasks.set(task.id, task);
+      return task;
+    },
+    getTask: async (scope, id) => this.#benchFor(scope).tasks.get(id) ?? null,
+    listTasks: async (scope) =>
+      [...this.#benchFor(scope).tasks.values()].sort((a, b) => b.id.localeCompare(a.id)),
+    putExperiment: async (scope, experiment) => {
+      this.#benchFor(scope).experiments.set(experiment.id, experiment);
+      return experiment;
+    },
+    getExperiment: async (scope, id) => this.#benchFor(scope).experiments.get(id) ?? null,
+    listExperiments: async (scope) =>
+      [...this.#benchFor(scope).experiments.values()].sort((a, b) => b.id.localeCompare(a.id)),
+    replaceRuns: async (scope, experimentId, runs) => {
+      const state = this.#benchFor(scope);
+      for (const [id, stored] of state.runs) {
+        if (stored.run.experimentId === experimentId) state.runs.delete(id);
+      }
+      for (const stored of runs) state.runs.set(stored.run.id, stored);
+    },
+    putRun: async (scope, stored) => {
+      this.#benchFor(scope).runs.set(stored.run.id, stored);
+    },
+    listRuns: async (scope, experimentId) =>
+      [...this.#benchFor(scope).runs.values()]
+        .filter((stored) => stored.run.experimentId === experimentId)
+        .sort((a, b) => a.run.order - b.run.order),
+    putScore: async (scope, score) => {
+      this.#benchFor(scope).scores.set(score.benchRunId, score);
+    },
+    listScores: async (scope, experimentId) =>
+      [...this.#benchFor(scope).scores.values()].filter(
+        (score) => score.experimentId === experimentId,
+      ),
   };
 }
