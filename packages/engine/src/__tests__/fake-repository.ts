@@ -6,7 +6,6 @@ import {
   defaultGuardrailChecks,
   modelMatchesQuery,
   type ApprovalDecision,
-  type ApprovalRequest,
   type Artifact,
   type ChatMessage,
   type ChatThread,
@@ -60,6 +59,7 @@ import type {
   PriceTable,
   ProviderPatch,
   Repository,
+  RunApprovalRequest,
   RunPatch,
   Scope,
   StoredApproval,
@@ -716,7 +716,7 @@ export class FakeRepository implements Repository {
   };
 
   readonly approvals = {
-    create: async (scope: Scope, request: ApprovalRequest) => {
+    create: async (scope: Scope, request: RunApprovalRequest) => {
       this.#for(scope).approvals.set(request.id, { request });
       return request;
     },
@@ -960,6 +960,11 @@ export class FakeRepository implements Repository {
       state.chatMessages.set(id, next);
       return next;
     },
+    /** PG-2.2: the day's direct-chat spend; a run's turns are counted by their node runs. */
+    dailyCostUsd: async (scope: Scope, day: string) =>
+      [...this.#for(scope).chatMessages.values()]
+        .filter((message) => message.runId === undefined && message.at.startsWith(day))
+        .reduce((sum, message) => sum + (message.usage?.costUsd ?? 0), 0),
   };
 
   /* Round 5 (Arch §15.3, §21.3). */

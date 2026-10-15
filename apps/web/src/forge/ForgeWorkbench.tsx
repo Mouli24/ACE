@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 
 import { SHORTCUTS, useShortcuts } from '../app/shortcuts';
 import { useLayoutStore } from '../app/stores/layout';
+import { WorkflowUndoChoice } from '../runs/UndoChoice';
 import { askAgentAboutFile, askAgentAboutSelection } from './ask-agent';
 import { useForgeAttribution } from './attribution';
 import { saveAll, saveFile } from './editor/actions';
@@ -101,7 +102,9 @@ export function ForgeWorkbench({
       {explorerOpen && (
         <ExplorerView projectId={projectId} workflowId={workflowId} live={attribution.live} />
       )}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        {/* PG-2.4 (D361): a writing run stopped without undo asks here too. */}
+        {workflowId !== undefined && <WorkflowUndoChoice workflowId={workflowId} />}
         {showEditor && (
           <EditorArea projectId={projectId} workflowId={workflowId} attribution={attribution} />
         )}

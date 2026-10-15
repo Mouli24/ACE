@@ -141,11 +141,17 @@ export const ROUND_5_VALIDATION_ISSUE_CODES = ['missing_knowledge_base'] as cons
  * `schema_unsupported` — an output contract's JSON schema on a model without structured output
  * (`supportsJson: false`) or on a CLI provider, which cannot be held to one; `tools_unsupported` —
  * tools or skills on a model with `supportsTools: false`, which the executor would otherwise drop.
+ *
+ * PG-2.4 (D361): `checkpoint_unavailable` is an error — a writing run whose checkpoint could not
+ * begin stops before its first write, with zero provider calls. `running_without_undo` is the
+ * warning a run started with `withoutUndo` keeps on its row when that checkpoint still failed.
  */
 export const PRODUCT_GAPS_VALIDATION_ISSUE_CODES = [
   'missing_provider',
   'schema_unsupported',
   'tools_unsupported',
+  'checkpoint_unavailable',
+  'running_without_undo',
 ] as const;
 
 export const VALIDATION_ISSUE_CODES = [

@@ -1,7 +1,6 @@
 import type {
   ApprovalDecision,
   ApprovalDecisionKind,
-  ApprovalRequest,
   GuardrailCheckType,
   GuardrailPoint,
   Id,
@@ -11,7 +10,7 @@ import type {
 import { userCancelledError } from '../errors/index.js';
 import type { EventBus } from '../events/index.js';
 import { newId } from '../ids.js';
-import type { Scope } from '../ports/index.js';
+import type { RunApprovalRequest, Scope } from '../ports/index.js';
 import type { ApprovalRepository, NodeRunLookup } from '../guardrails/ports.js';
 
 /**
@@ -86,7 +85,7 @@ export class ApprovalAlreadyDecidedError extends Error {
 
 export interface ApprovalService extends ApprovalGate {
   /** `GET /runs/:id/approvals` — the pending ones, as a bare array (§2.5, D78). */
-  listPending(runId: Id): Promise<ApprovalRequest[]>;
+  listPending(runId: Id): Promise<RunApprovalRequest[]>;
   /**
    * `POST /node-runs/:id/approve` and `/reject`. The route is the decision (§2.5); the answer is the
    * node run, which the caller reads back once the decision is stored.
@@ -95,7 +94,7 @@ export interface ApprovalService extends ApprovalGate {
     nodeRunId: Id,
     kind: ApprovalDecisionKind,
     note?: string,
-  ): Promise<{ request: ApprovalRequest; decision: ApprovalDecision; nodeRun: NodeRun | null }>;
+  ): Promise<{ request: RunApprovalRequest; decision: ApprovalDecision; nodeRun: NodeRun | null }>;
   /**
    * Reject everything still waiting on a run, without a user: a Stop, a shutdown or crash recovery
    * must not leave a node awaiting an answer nobody will give (FR-CTL-003, FR-SYS-009).
@@ -114,14 +113,14 @@ export interface ApprovalServiceDeps {
    * node run rows have exactly one writer (the scheduler), which is what keeps concurrent nodes from
    * interleaving on one row.
    */
-  onWaiting?: (request: ApprovalRequest) => Promise<void>;
+  onWaiting?: (request: RunApprovalRequest) => Promise<void>;
   /**
    * Called once a decision is stored, before the paused evaluation resumes. Not called for a request
    * nobody in this process is waiting on — one whose wait the run's abort ended (D-054), or one a
    * dead process left pending (D-061): there is no paused evaluation to resume, and the node it
    * would move is STOPPED (D111).
    */
-  onDecided?: (request: ApprovalRequest, decision: ApprovalDecision) => Promise<void>;
+  onDecided?: (request: RunApprovalRequest, decision: ApprovalDecision) => Promise<void>;
   now?: () => string;
   nextId?: () => string;
 }
@@ -150,7 +149,7 @@ export function createApprovalService(deps: ApprovalServiceDeps): ApprovalServic
   const workflowOfRun = new Map<Id, Id>();
 
   async function store(
-    request: ApprovalRequest,
+    request: RunApprovalRequest,
     kind: ApprovalDecisionKind,
     note: string | undefined,
   ): Promise<ApprovalDecision> {
@@ -203,7 +202,7 @@ export function createApprovalService(deps: ApprovalServiceDeps): ApprovalServic
       // A run already stopped asks nobody anything: no card for a run that is ending (D-054).
       if (aborted()) throw cancelledWait();
 
-      const request: ApprovalRequest = {
+      const request: RunApprovalRequest = {
         id: nextId(),
         runId: input.runId,
         nodeRunId: input.nodeRunId,

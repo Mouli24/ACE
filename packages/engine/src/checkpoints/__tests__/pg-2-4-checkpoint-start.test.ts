@@ -91,7 +91,7 @@ async function writingRun(failBegin: boolean): Promise<{ h: RunDriverHarness; wr
 }
 
 describe('PG-2.4 a writing run whose checkpoint cannot begin stops before its first write', () => {
-  it.fails('no provider call is made and the run does not COMPLETE', async () => {
+  it('no provider call is made and the run does not COMPLETE', async () => {
     const { h } = await writingRun(true);
 
     const ended = await (await h.start()).done;
@@ -215,7 +215,7 @@ async function writingTurn(failBegin: boolean) {
 }
 
 describe('PG-2.4 a writing chat turn whose checkpoint cannot begin stops before its first write', () => {
-  it.fails('the write tool never runs and the turn ends saying why', async () => {
+  it('the write tool never runs and the turn ends saying why', async () => {
     const { reply, ran } = await writingTurn(true);
 
     expect(ran).not.toContain('write_file');

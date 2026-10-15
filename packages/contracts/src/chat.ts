@@ -202,6 +202,12 @@ export const ChatRequestSchema = z.strictObject({
    * an `@handle` in the message (`resolveChatTarget`). Absent: the thread's own node answers.
    */
   targetNodeId: IdSchema.optional(),
+  /**
+   * PG-2.4 (D361): the person chose "Run without undo" — this one turn may write even though its
+   * checkpoint cannot begin. Absent, such a writing turn ends as a failed turn with code
+   * `checkpoint_unavailable` before any write tool runs.
+   */
+  withoutUndo: z.boolean().optional(),
 });
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 
@@ -315,6 +321,15 @@ export const ChatEditRequestSchema = z.strictObject({
   content: z.array(PartSchema).min(1),
 });
 export type ChatEditRequest = z.infer<typeof ChatEditRequestSchema>;
+
+/**
+ * `POST /chat/threads/:id/messages/:messageId/retry` body, optional. PG-2.4 (D361): `withoutUndo`
+ * retries a turn that stopped with `checkpoint_unavailable`, writing without a checkpoint this once.
+ */
+export const ChatRetryRequestSchema = z.strictObject({
+  withoutUndo: z.boolean().optional(),
+});
+export type ChatRetryRequest = z.infer<typeof ChatRetryRequestSchema>;
 
 export const ChatStopResponseSchema = z.strictObject({
   /** `false` when no turn was in flight. */

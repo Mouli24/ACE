@@ -282,6 +282,12 @@ export interface ChatMessageRepository {
    * ever changes. `null` when there is no such message.
    */
   mark(scope: Scope, id: Id, patch: ChatMessageMark): Promise<ChatMessage | null>;
+  /**
+   * PG-2.2: what the direct-chat replies of one UTC day (`YYYY-MM-DD`, by `at`) cost, summed — the
+   * chat part of the day the `daily_budget` check reads. A turn a run wrote (`runId` set) is left
+   * out: its node run already counts it. A day with none is 0. Absent on an older store: 0.
+   */
+  dailyCostUsd?(scope: Scope, day: string): Promise<number>;
 }
 
 /** PG-1.6 (D352): the two flags a message action sets on an existing turn. */

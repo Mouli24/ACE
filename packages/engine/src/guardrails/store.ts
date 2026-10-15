@@ -76,7 +76,10 @@ export function guardrailStoreFor(repository: Repository, scope: Scope): Guardra
     },
 
     usage: {
-      costUsdForDay: (_scope, day) => repository.nodeRuns.dailyCostUsd(scope, day),
+      // PG-2.2: the day is node runs and direct chat turns together.
+      costUsdForDay: async (_scope, day) =>
+        (await repository.nodeRuns.dailyCostUsd(scope, day)) +
+        ((await repository.chatMessages.dailyCostUsd?.(scope, day)) ?? 0),
     },
 
     projects: { get: (_scope, id) => repository.projects.get(scope, id) },

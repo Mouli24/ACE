@@ -5,7 +5,6 @@ import {
   NodeSchema,
   VerdictSchema,
   type ApprovalDecision,
-  type ApprovalRequest,
   type GuardrailPolicy,
   type Id,
   type Node,
@@ -16,6 +15,7 @@ import type {
   GuardrailPolicyPatch,
   GuardrailPolicyRepository,
   GuardrailVerdictRepository,
+  RunApprovalRequest,
   Scope,
   StoredApproval,
 } from '@ace/engine';
@@ -76,8 +76,9 @@ function toVerdict(row: VerdictRow): Verdict {
   });
 }
 
-function toApprovalRequest(row: ApprovalRow): ApprovalRequest {
-  return ApprovalRequestSchema.parse({
+/** A stored row is always a run's request (PG-2.2: a chat's lives in the chat service). */
+function toApprovalRequest(row: ApprovalRow): RunApprovalRequest {
+  const parsed = ApprovalRequestSchema.parse({
     id: row.id,
     runId: row.runId,
     nodeRunId: row.nodeRunId,
@@ -89,6 +90,7 @@ function toApprovalRequest(row: ApprovalRow): ApprovalRequest {
     preview: row.preview,
     requestedAt: row.requestedAt,
   });
+  return { ...parsed, runId: row.runId, nodeRunId: row.nodeRunId };
 }
 
 function toStoredApproval(row: ApprovalRow): StoredApproval {
@@ -120,7 +122,10 @@ export function createGuardrailPolicyRepository(
     return name;
   };
 
-  const rowFor = (scope: Scope, policy: GuardrailPolicy): typeof guardrailPolicies.$inferInsert => ({
+  const rowFor = (
+    scope: Scope,
+    policy: GuardrailPolicy,
+  ): typeof guardrailPolicies.$inferInsert => ({
     id: policy.id,
     workspaceId: scope.workspaceId,
     projectId: policy.projectId,
@@ -137,7 +142,9 @@ export function createGuardrailPolicyRepository(
     db
       .select()
       .from(guardrailPolicies)
-      .where(and(eq(guardrailPolicies.workspaceId, scope.workspaceId), eq(guardrailPolicies.id, id)))
+      .where(
+        and(eq(guardrailPolicies.workspaceId, scope.workspaceId), eq(guardrailPolicies.id, id)),
+      )
       .orderBy(asc(guardrailPolicies.version))
       .all();
 
@@ -154,7 +161,9 @@ export function createGuardrailPolicyRepository(
       const seen = byId.get(row.id);
       if (seen === undefined || row.version > seen.version) byId.set(row.id, row);
     }
-    return [...byId.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).map(toPolicy);
+    return [...byId.values()]
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map(toPolicy);
   };
 
   /** Clears the flag on every row of the project, so the unique index has room for the new one. */
@@ -305,7 +314,9 @@ export function createGuardrailPolicyRepository(
     delete: async (scope: Scope, id: Id) =>
       db
         .delete(guardrailPolicies)
-        .where(and(eq(guardrailPolicies.workspaceId, scope.workspaceId), eq(guardrailPolicies.id, id)))
+        .where(
+          and(eq(guardrailPolicies.workspaceId, scope.workspaceId), eq(guardrailPolicies.id, id)),
+        )
         .run().changes > 0,
 
     /**
@@ -317,7 +328,9 @@ export function createGuardrailPolicyRepository(
       db
         .select()
         .from(nodes)
-        .where(and(eq(nodes.workspaceId, scope.workspaceId), sql`${nodes.config} LIKE ${`%"${id}"%`}`))
+        .where(
+          and(eq(nodes.workspaceId, scope.workspaceId), sql`${nodes.config} LIKE ${`%"${id}"%`}`),
+        )
         .all()
         .map(toNodeRow)
         .filter(
@@ -418,10 +431,7 @@ export function createGuardrailVerdictRepository(
 /* Approvals (FR-GRD-013)                                                      */
 /* -------------------------------------------------------------------------- */
 
-export function createApprovalRepository(
-  db: Db,
-  inTransaction: InTransaction,
-): ApprovalRepository {
+export function createApprovalRepository(db: Db, inTransaction: InTransaction): ApprovalRepository {
   const read = (scope: Scope, id: Id): ApprovalRow | undefined =>
     db
       .select()
@@ -445,7 +455,7 @@ export function createApprovalRepository(
   };
 
   return {
-    create: async (scope: Scope, request: ApprovalRequest) => {
+    create: async (scope: Scope, request: RunApprovalRequest) => {
       const at = `approval(${request.id})`;
       // The preview is text that tripped a check, so both it and the reason go through the guard.
       // FR-GRD-014 has already redacted anything sensitive by the time it gets here; a preview

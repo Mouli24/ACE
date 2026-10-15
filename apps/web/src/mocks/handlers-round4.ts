@@ -758,6 +758,15 @@ export function createRound4Handlers(db: MockDb): HttpHandler[] {
       }),
     ),
 
+    // PG-2.2 (D359): the mock engine never asks about a chat tool call, so nothing waits.
+    http.get(
+      `${API}/chat/threads/:id/approvals`,
+      guard((ctx) => {
+        if (db.getChatThread(param(ctx, 'id')) === undefined) return notFound('Chat thread');
+        return HttpResponse.json([]);
+      }),
+    ),
+
     http.post(
       `${API}/chat/threads/:id/stop`,
       guard((ctx) => {

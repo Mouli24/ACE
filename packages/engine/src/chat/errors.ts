@@ -125,6 +125,18 @@ export class ChatActionInvalidError extends Error {
   }
 }
 
+/** PG-2.2 (D359): no chat approval with this id is waiting on the thread (gone, or decided). */
+export class ChatApprovalNotFoundError extends Error {
+  override readonly name = 'ChatApprovalNotFoundError';
+
+  constructor(
+    readonly threadId: Id,
+    readonly requestId: Id,
+  ) {
+    super(`Chat thread ${threadId} has no approval ${requestId} waiting for a decision.`);
+  }
+}
+
 /** `POST /workflows/:id/messages { run: true }` on a service built without a run starter (see report). */
 export class ChatRunNotAvailableError extends Error {
   override readonly name = 'ChatRunNotAvailableError';

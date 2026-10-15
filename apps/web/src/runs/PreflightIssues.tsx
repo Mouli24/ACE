@@ -2,6 +2,7 @@ import { useSelectionStore } from '../app/stores/selection';
 import { useRun } from './hooks';
 import { useRunStore } from './run-store';
 import { CHIP_CLASS } from './RunStateChip';
+import { RunUndoChoice, undoIssueOf } from './UndoChoice';
 
 /**
  * Pre-flight refused the run (FR-EXE-003, BR-08). The run exists and is recorded; nothing was sent
@@ -20,6 +21,15 @@ export function PreflightIssues({ workflowId }: { workflowId: string }) {
 
   const issues = run.data?.preflightIssues ?? [];
   if (status !== 'BLOCKED' || issues.length === 0) return null;
+
+  // PG-2.4 (D361): a writing run stopped because undo could not be recorded asks what to do.
+  if (run.data !== undefined && undoIssueOf(run.data) !== undefined) {
+    return (
+      <div className="absolute inset-x-3 top-[58px] z-10">
+        <RunUndoChoice workflowId={workflowId} run={run.data} />
+      </div>
+    );
+  }
 
   return (
     <section

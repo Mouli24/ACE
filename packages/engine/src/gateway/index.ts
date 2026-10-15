@@ -2,7 +2,9 @@ import {
   API_BASE_PATH,
   ARTIFACT_ACCEPT_RANGES,
   ARTIFACT_UPLOAD_FIELD,
+  ApprovalDecisionRequestSchema,
   ChatEditRequestSchema,
+  ChatRetryRequestSchema,
   ChatRequestSchema,
   CreateProjectRequestSchema,
   CreateProviderRequestSchema,
@@ -40,6 +42,7 @@ import {
   ChatTargetInvalidError,
   ChatThreadNodeMismatchError,
   ChatThreadNotFoundError,
+  ChatApprovalNotFoundError,
   ChatMessageNotFoundError,
   ChatActionInvalidError,
   ChatWorkflowNotFoundError,
@@ -322,7 +325,8 @@ function toChatHttpError(error: unknown): unknown {
     error instanceof ChatWorkflowNotFoundError ||
     error instanceof ChatNodeNotFoundError ||
     error instanceof ChatThreadNotFoundError ||
-    error instanceof ChatMessageNotFoundError
+    error instanceof ChatMessageNotFoundError ||
+    error instanceof ChatApprovalNotFoundError
   ) {
     return notFound(error.message.replace(/\.$/, ''));
   }
@@ -844,13 +848,46 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
 
   /* PG-1.6 (D352): message actions. Retry and edit answer 202 like `POST /nodes/:id/chat`. */
   api.post('/chat/threads/:id/messages/:messageId/retry', async (c) => {
+    // PG-2.4 (D361): an optional `{ withoutUndo }` — Run without undo, once.
+    const request = ChatRetryRequestSchema.parse(await readJson(c));
     try {
-      const begun = await chat(c).retryMessage(c.req.param('id'), c.req.param('messageId'));
+      const begun = await chat(c).retryMessage(
+        c.req.param('id'),
+        c.req.param('messageId'),
+        request.withoutUndo === true ? { withoutUndo: true } : {},
+      );
       return c.json({ threadId: begun.threadId, messageId: begun.messageId }, 202);
     } catch (error) {
       throw toChatHttpError(error);
     }
   });
+
+  /* PG-2.2 (D359): a chat tool call waiting on a person, and its decision. */
+  api.get('/chat/threads/:id/approvals', async (c) => {
+    try {
+      return c.json(await chat(c).listApprovals(c.req.param('id')));
+    } catch (error) {
+      throw toChatHttpError(error);
+    }
+  });
+
+  const decideChatApproval = (kind: 'approve' | 'reject') => async (c: Context) => {
+    const { note } = ApprovalDecisionRequestSchema.parse(await readJson(c));
+    try {
+      return c.json(
+        await chat(c).decideApproval(
+          c.req.param('id') ?? '',
+          c.req.param('requestId') ?? '',
+          kind,
+          note,
+        ),
+      );
+    } catch (error) {
+      throw toChatHttpError(error);
+    }
+  };
+  api.post('/chat/threads/:id/approvals/:requestId/approve', decideChatApproval('approve'));
+  api.post('/chat/threads/:id/approvals/:requestId/reject', decideChatApproval('reject'));
 
   api.post('/chat/threads/:id/messages/:messageId/edit', async (c) => {
     const request = ChatEditRequestSchema.parse(await readJson(c));

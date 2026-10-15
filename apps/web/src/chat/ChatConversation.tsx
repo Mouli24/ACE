@@ -4,6 +4,7 @@ import {
   type Node,
   type Part,
   type Provider,
+  type Usage,
 } from '@ace/contracts';
 import { cn, Icons, PartRenderer } from '@ace/ui';
 import { useQueryClient } from '@tanstack/react-query';
@@ -11,6 +12,8 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { api } from '../app/api';
 import { useNodeOverlay } from '../runs/run-store';
+import { UNDO_UNAVAILABLE_TITLE, UndoChoiceButtons, undoReasonText } from '../runs/UndoChoice';
+import { formatUsd } from '../usage/format';
 import { queryKeys } from '../workflows/query-keys';
 import type { AgentLook } from '../theme/agents';
 import { fmt } from '../theme/constants';
@@ -187,6 +190,11 @@ function Body({ content }: { content: Part[] }) {
   );
 }
 
+/** A turn's cost as the meta line says it (PG-2.2): `$0.0012`, or "cost unknown" (PG-1.4). */
+export function chatCostText(usage: Usage): string {
+  return usage.costKnown === false ? 'cost unknown' : formatUsd(usage.costUsd);
+}
+
 /**
  * The line under an agent turn (FR-CHAT-006, D335): the model that actually answered, its tokens,
  * and whether a run of the node wrote it (D285) — then the theme's "Send to Forge →" chip. Only
@@ -211,6 +219,12 @@ function TurnMeta({
     parts.push(
       <span key="usage" data-testid="chat-usage">
         {fmt(message.usage.tokensIn)} in · {fmt(message.usage.tokensOut)} out
+      </span>,
+    );
+    // PG-2.2: the turn's cost. An unpriced remote model's cost is unknown, never $0 (PG-1.4).
+    parts.push(
+      <span key="cost" data-testid="chat-cost">
+        {chatCostText(message.usage)}
       </span>,
     );
   }
@@ -292,6 +306,8 @@ export function ChatConversation({
   // PG-1.5: a reply owed and silent past the node's timeout + 10 s is "No answer — Retry".
   const stalled = useStalled(convo.waitingSince, budgetMs);
   const [editing, setEditing] = useState<string>();
+  /** PG-2.4: undo choices the person cancelled — the failed turn stays, its buttons go. */
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
   const typing =
     !stalled && (convo.awaitingReply || convo.streamingText.length > 0 || run.state === 'RUNNING');
   const hasStreamText = convo.streamingText.length > 0 || runText.length > 0;
@@ -343,10 +359,36 @@ export function ChatConversation({
               <div className={CHAT_NOTE_HEAD_CLASS}>
                 {message.error.kind === 'user_cancelled'
                   ? `Stopped · ${name} did not finish`
-                  : `${name} could not answer · ${message.error.code}`}
+                  : message.error.code === 'checkpoint_unavailable'
+                    ? UNDO_UNAVAILABLE_TITLE
+                    : `${name} could not answer · ${message.error.code}`}
                 {message.runId !== undefined && <span data-testid="chat-run-badge">· run</span>}
               </div>
-              <p className="whitespace-pre-wrap break-words">{message.error.message}</p>
+              <p className="whitespace-pre-wrap break-words">
+                {message.error.code === 'checkpoint_unavailable'
+                  ? undoReasonText(message.error.message)
+                  : message.error.message}
+              </p>
+              {/* PG-2.2: what the turn spent before it stopped — a budget refusal names it. */}
+              {message.usage !== undefined &&
+                message.usage.tokensIn + message.usage.tokensOut > 0 && (
+                  <p className="text-[10px] text-[var(--muted)]" data-testid="chat-usage">
+                    {fmt(message.usage.tokensIn)} in · {fmt(message.usage.tokensOut)} out ·{' '}
+                    <span data-testid="chat-cost">{chatCostText(message.usage)}</span>
+                  </p>
+                )}
+              {/* PG-2.4 (D361): the turn stopped before writing — run it once without undo, or not. */}
+              {message.error.code === 'checkpoint_unavailable' &&
+                !earlier &&
+                !dismissed.has(message.id) && (
+                  <div className="mt-2">
+                    <UndoChoiceButtons
+                      busy={busy}
+                      onRunWithoutUndo={() => convo.retryWithoutUndo(message)}
+                      onCancel={() => setDismissed((set) => new Set(set).add(message.id))}
+                    />
+                  </div>
+                )}
             </div>
           ) : (
             <>
@@ -464,6 +506,42 @@ export function ChatConversation({
             typing…
           </div>
         )}
+
+        {/* PG-2.2 (D359): a tool call the guardrail asked a person about; the turn waits. */}
+        {convo.approvals.map((request) => (
+          <div
+            key={request.id}
+            role="alert"
+            data-testid="chat-approval"
+            className={CHAT_NOTE_CLASS}
+          >
+            <div className={CHAT_NOTE_HEAD_CLASS}>
+              {request.nodeName} wants to run a tool · approval needed
+            </div>
+            <p className="whitespace-pre-wrap break-words">{request.reason}</p>
+            <pre className="m-0 overflow-x-auto whitespace-pre-wrap break-all rounded-[6px] bg-[var(--chip)] p-[6px] font-mono text-[11px]">
+              {request.preview}
+            </pre>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                data-testid="chat-approval-approve"
+                onClick={() => convo.decideApproval(request, 'approve')}
+                className="flex h-[28px] cursor-pointer items-center rounded-[8px] border border-[var(--line)] bg-[var(--ink)] px-[12px] text-[12px] font-semibold text-[var(--surface)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+              >
+                Approve
+              </button>
+              <button
+                type="button"
+                data-testid="chat-approval-reject"
+                onClick={() => convo.decideApproval(request, 'reject')}
+                className="flex h-[28px] cursor-pointer items-center rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-[12px] text-[12px] font-semibold text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+              >
+                Reject
+              </button>
+            </div>
+          </div>
+        ))}
 
         {stalled && (
           <div role="alert" data-testid="chat-stalled" className={CHAT_NOTE_CLASS}>

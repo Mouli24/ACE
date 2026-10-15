@@ -1,4 +1,11 @@
-import type { ChatMessage, ChatThread, ChatThreadDetail, NodeState, Part } from '@ace/contracts';
+import type {
+  ApprovalRequest,
+  ChatMessage,
+  ChatThread,
+  ChatThreadDetail,
+  NodeState,
+  Part,
+} from '@ace/contracts';
 import { GuardrailBlockedDetailsSchema } from '@ace/contracts';
 import { AceApiError } from '@ace/sdk';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
@@ -143,10 +150,16 @@ export async function retryMessage(
   queryClient: QueryClient,
   nodeId: string,
   message: ChatMessage,
+  options: { withoutUndo?: boolean } = {},
 ): Promise<void> {
   clearOutcome(nodeId);
   try {
-    const response = await api().retryChatMessage(message.threadId, message.id);
+    // PG-2.4 (D361): "Run without undo" retries the stopped turn, letting it write this once.
+    const response = await api().retryChatMessage(
+      message.threadId,
+      message.id,
+      options.withoutUndo === true ? { withoutUndo: true } : {},
+    );
     useChatSessions.getState().update(nodeId, (session) => ({
       ...session,
       threadId: response.threadId,
@@ -358,6 +371,13 @@ export function useChatSocket(activeNodeId: string | undefined): void {
     const offUpdate = socket.on('chat.update', (payload) => {
       void queryClient.invalidateQueries({ queryKey: chatKeys.thread(payload.threadId) });
     });
+    // PG-2.2 (D359): a tool call waits on a person, or was decided.
+    const offAsk = socket.on('chat.approval_required', (payload) => {
+      void queryClient.invalidateQueries({ queryKey: chatKeys.approvals(payload.threadId) });
+    });
+    const offDecided = socket.on('chat.approval_decided', (payload) => {
+      void queryClient.invalidateQueries({ queryKey: chatKeys.approvals(payload.threadId) });
+    });
     const offState = socket.on('node.state', (payload) => {
       if (!SETTLED.has(payload.status)) return;
       void queryClient.invalidateQueries({ queryKey: chatKeys.threads(payload.nodeId) });
@@ -367,6 +387,8 @@ export function useChatSocket(activeNodeId: string | undefined): void {
       offToken();
       offMessage();
       offUpdate();
+      offAsk();
+      offDecided();
       offState();
     };
   }, [queryClient]);
@@ -424,6 +446,12 @@ export interface ChatConversation {
   waitingSince: number | undefined;
   /** PG-1.6 (D352) message actions. */
   retry: (message: ChatMessage) => void;
+  /** PG-2.4 (D361): retry a turn stopped without a checkpoint, writing this once without undo. */
+  retryWithoutUndo: (message: ChatMessage) => void;
+  /** PG-2.2 (D359): the thread's tool calls waiting on a person. */
+  approvals: ApprovalRequest[];
+  /** PG-2.2: approve or reject one of them; the turn goes on either way. */
+  decideApproval: (request: ApprovalRequest, kind: 'approve' | 'reject') => void;
   edit: (
     message: ChatMessage,
     content: Part[],
@@ -451,6 +479,12 @@ export function useThreadConversation(nodeId: string): ChatConversation {
   const threads = useChatThreads(nodeId);
   const threadId = effectiveThreadId(session, threads.data);
   const detail = useChatThreadDetail(threadId);
+  // PG-2.2 (D359): what this thread's turn is waiting on; the frames re-read it.
+  const approvals = useQuery({
+    queryKey: chatKeys.approvals(threadId ?? ''),
+    queryFn: () => api().listChatApprovals(threadId ?? ''),
+    enabled: threadId !== undefined,
+  });
   const streamingText = useChatSessions((state) =>
     threadId === undefined ? '' : (state.streams[threadId] ?? ''),
   );
@@ -491,6 +525,23 @@ export function useThreadConversation(nodeId: string): ChatConversation {
         ? Math.max(pending.since ?? 0, heardAt ?? 0) || undefined
         : undefined,
     retry: (message) => void retryMessage(queryClient, nodeId, message),
+    retryWithoutUndo: (message) =>
+      void retryMessage(queryClient, nodeId, message, { withoutUndo: true }),
+    approvals: approvals.data ?? [],
+    decideApproval: (request, kind) => {
+      const threadOf = request.threadId ?? threadId ?? '';
+      const call =
+        kind === 'approve'
+          ? api().approveChatToolCall(threadOf, request.id)
+          : api().rejectChatToolCall(threadOf, request.id);
+      void call
+        .catch((error: unknown) =>
+          failedAction(nodeId, error, 'The decision could not be sent to the engine.'),
+        )
+        .finally(
+          () => void queryClient.invalidateQueries({ queryKey: chatKeys.approvals(threadOf) }),
+        );
+    },
     edit: (message, content, revert) => {
       // Whoever answered it answers the new version (D302): the first reply after it.
       const answered = loaded.find(

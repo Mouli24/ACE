@@ -1,9 +1,15 @@
 import {
+  APPROVAL_PREVIEW_MAX,
+  DEFAULT_CLI_PERMISSION,
   DEFAULT_CONTEXT_POLICY,
   DEFAULT_MAX_TOOL_CALLS,
   blockedChatReply,
   isCliProviderType,
   type ActivityItem,
+  type ApprovalDecision,
+  type ApprovalDecisionKind,
+  type ApprovalRequest,
+  type GuardrailCheck,
   type ChatMessage,
   type ChatRequest,
   type ChatThread,
@@ -26,12 +32,18 @@ import {
   type Usage,
 } from '@ace/contracts';
 
+import {
+  PROJECT_WRITING_TOOLS,
+  nodeWrites,
+  undoUnavailableMessage,
+} from '../checkpoints/writing.js';
 import type { ContextGuard } from '../context/guard.js';
 import { classifyError } from '../errors/index.js';
 import { createBatcher } from '../events/batcher.js';
 import { workflowUpdatedEvent, type EventBus } from '../events/index.js';
 import type { CheckRunner, SecretMasker } from '../guardrails/checks.js';
 import type { PolicyService } from '../guardrails/policy-service.js';
+import { guardrailStoreFor } from '../guardrails/store.js';
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
 import type {
@@ -45,13 +57,14 @@ import type {
   ToolResult,
 } from '../ports/index.js';
 import { createSemaphore, type Semaphore } from '../providers/semaphore.js';
-import { usageFor } from '../runs/cost.js';
+import { usageFor, withReportedCost, type PricedProvider } from '../runs/cost.js';
 import { CLI_SESSION_MIN_TIMEOUT_MS } from '../runs/executor.js';
-import type { ToolProvider } from '../runs/tool-loop.js';
+import { redactArgs, type ToolProvider } from '../runs/tool-loop.js';
 import { maskSecrets } from '../security/secret-patterns.js';
 import { activityItemFor } from './activity.js';
 import {
   ChatActionInvalidError,
+  ChatApprovalNotFoundError,
   ChatInputBlockedError,
   ChatMessageNotFoundError,
   ChatModelError,
@@ -63,12 +76,18 @@ import {
   ChatWorkflowNotFoundError,
   NotAnAgentNodeError,
 } from './errors.js';
-import { evaluateChatInput, evaluateChatReply, type ChatGuardrailDeps } from './guardrails.js';
+import {
+  evaluateChatInput,
+  evaluateChatReply,
+  evaluateChatTool,
+  type ChatGuardrailDeps,
+} from './guardrails.js';
 import { buildChatPrompt, revertedFilesNote } from './prompt.js';
 import {
   chatToolsFrom,
   runChatToolLoop,
   type ChatToolRequest,
+  type ChatToolStep,
   type ToolResultJudgement,
 } from './tool-loop.js';
 
@@ -164,7 +183,23 @@ export interface ChatService {
    * this agent message (a reply or a failed turn). The old turn is marked `supersededAt` and a new
    * reply is appended; `messageId` is the user turn it answers.
    */
-  retryMessage(threadId: Id, messageId: Id): Promise<ChatBegun>;
+  retryMessage(
+    threadId: Id,
+    messageId: Id,
+    options?: { withoutUndo?: boolean },
+  ): Promise<ChatBegun>;
+  /** PG-2.2 (D359) `GET /chat/threads/:id/approvals`: the tool calls on the thread waiting on a person. */
+  listApprovals(threadId: Id): Promise<ApprovalRequest[]>;
+  /**
+   * PG-2.2 (D359) `POST /chat/threads/:id/approvals/:requestId/approve` and `/reject`: settle a chat
+   * tool call's approval. Approve runs the tool; reject refuses it and the turn goes on without it.
+   */
+  decideApproval(
+    threadId: Id,
+    requestId: Id,
+    kind: ApprovalDecisionKind,
+    note?: string,
+  ): Promise<ApprovalDecision>;
   /**
    * PG-1.6 (D352) `POST /chat/threads/:id/messages/:messageId/edit`: the user message and every
    * turn after it are marked `supersededAt`, and the edited content goes as a new turn.
@@ -234,6 +269,41 @@ export interface ChatServiceDeps {
 
 /** Arch §24: stream frames are batched ~50 ms before they reach a client. */
 const TOKEN_BATCH_MS = 50;
+
+/**
+ * Ends a turn with a stored failed turn carrying this error, rather than the classified throw:
+ * a budget the turn crossed (PG-2.2) or a checkpoint it could not begin (PG-2.4).
+ */
+class TurnRefusal extends Error {
+  override readonly name = 'TurnRefusal';
+
+  constructor(readonly nodeError: NodeError) {
+    super(nodeError.message);
+  }
+}
+
+const money = (usd: number): string => `$${usd.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
+
+/** PG-2.2: a chat turn's caps, from the project and the settings unless the policy says otherwise. */
+interface TurnCaps {
+  /** The project's `maxCostPerRunUsd`, applied to each turn. */
+  turn?: number;
+  /** `dailyBudgetUsd`, with what today has already cost before this turn. */
+  daily?: { capUsd: number; spentUsd: number };
+}
+
+/** The budget refusal a chat turn ends with (PG-2.2), in the run's budget words. */
+function budgetError(scope: 'turn' | 'daily', costUsd: number, capUsd: number): NodeError {
+  return {
+    kind: 'guardrail',
+    code: 'budget_exceeded',
+    message:
+      scope === 'turn'
+        ? `Budget exceeded: this turn cost ${money(costUsd)}, over the project's ${money(capUsd)} cost cap.`
+        : `Budget exceeded: today has cost ${money(costUsd)}, at or over the ${money(capUsd)} daily budget.`,
+    retryable: false,
+  };
+}
 
 function titleFor(content: readonly Part[]): string {
   const firstText = content.find(
@@ -406,6 +476,139 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     return queue;
   }
 
+  /**
+   * PG-2.2: the caps a chat turn obeys. The project's `maxCostPerRunUsd` caps each turn and
+   * `dailyBudgetUsd` caps the day, chat spend included. The policy's own cost checks speak first,
+   * as they do for a run (D79): `params.usd` sets the cap, and a check that is off or only `warn`s
+   * or `pass`es does not stop a turn. With no such check the project's and settings' caps apply.
+   */
+  async function capsFor(
+    projectId: Id,
+    policy: Awaited<ReturnType<PolicyService['resolve']>> | null,
+  ): Promise<TurnCaps> {
+    const checkOf = (type: string): GuardrailCheck | undefined =>
+      policy?.checks.find((check) => check.point === 'cost' && check.type === type);
+    const stops = (check: GuardrailCheck | undefined): boolean =>
+      check === undefined || (check.enabled && check.action !== 'pass' && check.action !== 'warn');
+    const paramUsd = (check: GuardrailCheck | undefined): number | undefined => {
+      const raw = check?.params['usd'];
+      return typeof raw === 'number' && raw > 0 ? raw : undefined;
+    };
+
+    const caps: TurnCaps = {};
+    try {
+      const runCheck = checkOf('max_cost_per_run');
+      if (stops(runCheck)) {
+        const project = await repository.projects.get(scope, projectId);
+        const usd = paramUsd(runCheck) ?? project?.maxCostPerRunUsd ?? undefined;
+        if (usd !== undefined && usd !== null && usd > 0) caps.turn = usd;
+      }
+      const dailyCheck = checkOf('daily_budget');
+      if (stops(dailyCheck)) {
+        const settings = await repository.settings.get(scope);
+        const usd = paramUsd(dailyCheck) ?? settings.dailyBudgetUsd ?? undefined;
+        if (usd !== undefined && usd !== null && usd > 0) {
+          const day = now().slice(0, 10);
+          const spentUsd = await guardrailStoreFor(repository, scope).usage.costUsdForDay(
+            scope,
+            day,
+          );
+          caps.daily = { capUsd: usd, spentUsd };
+        }
+      }
+    } catch (error) {
+      logger.warn({ subsystem: 'chat', projectId, err: error }, 'chat budget caps not read');
+    }
+    return caps;
+  }
+
+  /**
+   * PG-2.2 (D359): the chat tool calls waiting on a person, by request id. They live as long as the
+   * turn waits — in this process, as a run's approval wait does (FR-SYS-009); a turn a restart cut
+   * short is closed by `recoverOpenTurns`.
+   */
+  const chatApprovals = new Map<
+    Id,
+    { request: ApprovalRequest; settle: (decision: ApprovalDecision) => void }
+  >();
+
+  /** Store-less decision: announced on the thread, then the waiting turn resumes. */
+  async function settleApproval(
+    threadId: Id,
+    requestId: Id,
+    kind: ApprovalDecisionKind,
+    note?: string,
+  ): Promise<ApprovalDecision> {
+    const pending = chatApprovals.get(requestId);
+    if (pending === undefined || pending.request.threadId !== threadId) {
+      throw new ChatApprovalNotFoundError(threadId, requestId);
+    }
+    chatApprovals.delete(requestId);
+    const decision: ApprovalDecision = {
+      requestId,
+      decision: kind,
+      ...(note === undefined ? {} : { note }),
+      decidedAt: now(),
+    };
+    try {
+      await bus.emit({ type: 'chat.approval_decided', payload: { threadId, decision } });
+    } finally {
+      pending.settle(decision);
+    }
+    return decision;
+  }
+
+  /** Ask a person about one chat tool call and wait; a stop of the turn ends the wait (PG-1.6). */
+  async function askApproval(input: {
+    threadId: Id;
+    node: ChatNode;
+    check: GuardrailCheck;
+    reason: string;
+    call: ChatToolRequest;
+    signal: AbortSignal;
+  }): Promise<ApprovalDecision> {
+    if (input.signal.aborted) throw new Error('stopped before the approval was asked');
+    const request: ApprovalRequest = {
+      id: nextId(),
+      threadId: input.threadId,
+      nodeId: input.node.id,
+      nodeName: input.node.name,
+      point: 'tool',
+      checkType: input.check.type,
+      reason: input.reason,
+      // The card shows the tool and its arguments with secret-shaped values masked (BR-07).
+      preview: maskSecrets(
+        `${input.call.name} ${JSON.stringify(redactArgs(input.call.args))}`,
+      ).slice(0, APPROVAL_PREVIEW_MAX),
+      requestedAt: now(),
+    };
+    const decided = new Promise<ApprovalDecision>((resolve, reject) => {
+      const abandon = (): void => {
+        if (!chatApprovals.has(request.id)) return;
+        void settleApproval(
+          input.threadId,
+          request.id,
+          'reject',
+          'The turn was stopped before this was decided.',
+        ).catch(() => undefined);
+        reject(new Error('stopped while waiting for an approval'));
+      };
+      chatApprovals.set(request.id, {
+        request,
+        settle: (decision) => {
+          input.signal.removeEventListener('abort', abandon);
+          resolve(decision);
+        },
+      });
+      input.signal.addEventListener('abort', abandon, { once: true });
+    });
+    await bus.emit({
+      type: 'chat.approval_required',
+      payload: { threadId: input.threadId, request },
+    });
+    return decided;
+  }
+
   /** Node id → name across the thread's workflow, so the prompt can say who said what (D302). */
   async function namesOf(workflowId: Id): Promise<Map<string, string>> {
     try {
@@ -437,6 +640,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
      * before this id. Absent: the thread as it is now (D302).
      */
     historyBefore?: Id;
+    /** PG-2.4 (D361): the person chose "Run without undo" for this one turn. */
+    withoutUndo?: boolean;
   }
 
   /** Set as a reply's path runs, so a throw anywhere can be closed out exactly once (PG-1.5). */
@@ -536,6 +741,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
 
     /* D300/D302: the files before the turn, so what it changed can be reviewed and reverted. */
     let recording: CheckpointRecording | undefined;
+    /** PG-2.4 (D361): why the checkpoint could not begin; judged once the turn's tools are known. */
+    let checkpointFailure: string | undefined;
     if (workspace !== undefined && deps.checkpoints !== undefined) {
       try {
         recording = await deps.checkpoints.begin(context.projectId, {
@@ -544,10 +751,13 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
           messageId: replyId,
           nodeId: node.id,
         });
+        checkpointFailure = recording.failed;
       } catch (error) {
-        logger.warn({ subsystem: 'chat', threadId, err: error }, 'chat checkpoint did not start');
+        checkpointFailure = error instanceof Error ? error.message : String(error);
       }
     }
+    /** PG-1.4 (D359): the provider that answers, for the cost rule (local $0, unpriced unknown). */
+    let pricedProvider: PricedProvider | undefined;
 
     let text = '';
     let tokensIn = 0;
@@ -645,6 +855,106 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
           : [];
       toolsOffered = offered.length > 0;
 
+      const providerRow = await repository.providers
+        .get(scope, chosen.providerId)
+        .catch(() => null);
+      pricedProvider = providerRow ?? undefined;
+
+      /*
+       * D300/D302, PG-2.4 (D361): a turn that can write and whose checkpoint could not begin
+       * stops here, before any model call or tool runs, unless the person chose Run without undo.
+       */
+      if (checkpointFailure !== undefined) {
+        // A writing turn: a write tool on offer, a node set up to write (as a run judges it), or
+        // a CLI whose preset may edit.
+        const writes =
+          offered.some((tool) => PROJECT_WRITING_TOOLS.includes(tool.definition.name)) ||
+          nodeWrites(node, () => providerRow ?? undefined) ||
+          (cli && (providerRow?.cliPermission ?? DEFAULT_CLI_PERMISSION) !== 'read_only');
+        logger.warn(
+          {
+            subsystem: 'chat',
+            threadId,
+            reason: checkpointFailure,
+            writes,
+            withoutUndo: context.withoutUndo === true,
+          },
+          'chat checkpoint did not start',
+        );
+        if (writes && context.withoutUndo !== true) {
+          throw new TurnRefusal({
+            kind: 'workflow',
+            code: 'checkpoint_unavailable',
+            message: undoUnavailableMessage(checkpointFailure, 'turn'),
+            retryable: true,
+          });
+        }
+      }
+
+      /* PG-2.2: the day's budget is already spent — no call is made. */
+      const caps = await capsFor(context.projectId, policy);
+      if (caps.daily !== undefined && caps.daily.spentUsd >= caps.daily.capUsd) {
+        throw new TurnRefusal(budgetError('daily', caps.daily.spentUsd, caps.daily.capUsd));
+      }
+      /** After every model call: has the turn crossed a cap? An unknown cost never counts as $0. */
+      const checkBudget = (): void => {
+        const spent = usageFor(tokensIn, tokensOut, pricing, pricedProvider);
+        const costUsd = reportedCostUsd ?? spent.costUsd;
+        const known = reportedCostUsd !== undefined || spent.costKnown !== false;
+        if (!known) return;
+        if (caps.turn !== undefined && costUsd > caps.turn) {
+          throw new TurnRefusal(budgetError('turn', costUsd, caps.turn));
+        }
+        if (caps.daily !== undefined && caps.daily.spentUsd + costUsd > caps.daily.capUsd) {
+          throw new TurnRefusal(
+            budgetError('daily', caps.daily.spentUsd + costUsd, caps.daily.capUsd),
+          );
+        }
+      };
+
+      /* PG-2.2: the tool point on every chat tool call, with the run's ask_user approvals. */
+      const offeredNames = offered.map((tool) => tool.definition.name);
+      const allowedDomains = node.kind === 'agent' ? node.config.tools.allowedDomains : [];
+      const beforeTool =
+        guardrails === undefined || policy === null
+          ? undefined
+          : async (
+              tool: (typeof offered)[number],
+              call: ChatToolRequest,
+            ): Promise<ChatToolStep> => {
+              const point = evaluateChatTool(
+                policy,
+                {
+                  definition: tool.definition,
+                  args: call.args,
+                  enabledTools: offeredNames,
+                  sandboxDir: workspace ?? '',
+                  allowedDomains,
+                },
+                guardrails,
+              );
+              toolVerdicts.push(...point.verdicts);
+              if (point.kind === 'allow') return { kind: 'allow' };
+              if (point.kind === 'block') {
+                return { kind: 'refuse', status: 'blocked', reason: point.reason };
+              }
+              const decision = await askApproval({
+                threadId,
+                node,
+                check: point.check,
+                reason: point.reason,
+                call,
+                signal: stopSignal,
+              });
+              if (decision.decision === 'approve') return { kind: 'allow' };
+              const note = decision.note === undefined ? '' : ` (${decision.note})`;
+              return {
+                kind: 'refuse',
+                status: 'refused',
+                reason: `a reviewer rejected this tool call${note}: ${point.reason}`,
+              };
+            };
+
       /** One model call, inside this provider's concurrency gate (FR-PRV-009). */
       const turn = (options: {
         tools?: ToolDefinition[];
@@ -704,6 +1014,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
               );
             }
           }
+          // PG-2.2: a turn over its cap makes no further call and runs no tool it asked for.
+          if (!stopSignal.aborted) checkBudget();
           return requested;
         });
 
@@ -722,6 +1034,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         onCall: (tool, status) =>
           logger.info({ subsystem: 'chat', threadId, tool, status }, 'chat tool call'),
         ...(judge === undefined ? {} : { judge }),
+        ...(beforeTool === undefined ? {} : { beforeTool }),
       });
       limitReached = loop.limitReached;
       // PG-1.6: an adapter that finished despite the stop still ends as the stop the person asked for.
@@ -731,7 +1044,9 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     } catch (error) {
       failure = stopSignal.aborted
         ? cancelledError()
-        : classifyError(error, { providerId: chosen.providerId });
+        : error instanceof TurnRefusal
+          ? error.nodeError
+          : classifyError(error, { providerId: chosen.providerId });
     } finally {
       // Before the closing `chat.message`: a token flushed after it would restart the stream.
       tokens.stop();
@@ -753,8 +1068,10 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     };
     const failedExtra = toolVerdicts.length === 0 ? extra : { ...extra, verdicts: toolVerdicts };
 
-    const priced = usageFor(tokensIn, tokensOut, pricing);
-    const usage = reportedCostUsd === undefined ? priced : { ...priced, costUsd: reportedCostUsd };
+    // PG-1.4 (D359): the run's cost rule — local is $0, an unpriced remote model's cost is unknown.
+    const priced = usageFor(tokensIn, tokensOut, pricing, pricedProvider);
+    const usage =
+      reportedCostUsd === undefined ? priced : withReportedCost(priced, reportedCostUsd);
 
     if (failure !== undefined) {
       logger.warn(
@@ -851,6 +1168,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     policy: Awaited<ReturnType<PolicyService['resolve']>> | null;
     chosen: ModelUsed;
     historyBefore?: Id;
+    withoutUndo?: boolean;
   }): Promise<ChatBegun> {
     const { thread, owner, userMessage } = options;
     const done = generateReply({
@@ -866,6 +1184,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       userParts: userMessage.content,
       guardrails: options.guardrails,
       ...(options.historyBefore === undefined ? {} : { historyBefore: options.historyBefore }),
+      ...(options.withoutUndo === true ? { withoutUndo: true } : {}),
     });
     // The gateway answers 202 and does not await the reply. `generateReply` already stores a
     // failed turn for any throw (PG-1.5); what still reaches here is a turn that could not be
@@ -877,7 +1196,18 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
   }
 
   return {
-    async retryMessage(threadId, messageId) {
+    async listApprovals(threadId) {
+      const thread = await repository.chatThreads.get(scope, threadId);
+      if (thread === null) throw new ChatThreadNotFoundError(threadId);
+      return [...chatApprovals.values()]
+        .map((pending) => pending.request)
+        .filter((request) => request.threadId === threadId);
+    },
+
+    decideApproval: (threadId, requestId, kind, note) =>
+      settleApproval(threadId, requestId, kind, note),
+
+    async retryMessage(threadId, messageId, options = {}) {
       const { thread, owner } = await threadWithNode(threadId);
       const messages = await repository.chatMessages.listByThread(scope, threadId);
       const target = messages.find((message) => message.id === messageId);
@@ -913,6 +1243,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         policy,
         chosen,
         historyBefore: target.id,
+        ...(options.withoutUndo === true ? { withoutUndo: true } : {}),
       });
     },
 
@@ -1188,6 +1519,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         guardrails,
         policy,
         chosen,
+        ...(request.withoutUndo === true ? { withoutUndo: true } : {}),
       });
     },
 
