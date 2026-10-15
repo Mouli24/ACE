@@ -1,9 +1,10 @@
-import type { DataType, Model, Provider, RoutingPolicy } from '@ace/contracts';
+import type { CapabilityNeeds, DataType, Model, Provider, RoutingPolicy } from '@ace/contracts';
 import { Icons, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, cn } from '@ace/ui';
 import { useId } from 'react';
 
 import { useResolvedTheme } from '../app/theme';
 import { ProviderSelectGroups } from '../providers/ProviderModelPicker';
+import { modelCapabilityBlock } from '../providers/model-capability';
 import { useModels, useProviders } from '../providers/hooks';
 import { isLocalProvider, LOCAL_COST_TEXT } from '../runs/CostValue';
 import { localModelFacts } from '../providers/provider-groups';
@@ -33,6 +34,8 @@ export interface ProviderAndModelProps {
   modelId: string | undefined;
   inputTypes: readonly DataType[];
   outputTypes: readonly DataType[];
+  /** What the node asks of its model beyond data types — a schema, tools, skills (D353). */
+  needs?: CapabilityNeeds;
   onChange: (patch: { providerId?: string; modelId?: string }) => void;
 }
 
@@ -53,6 +56,7 @@ export function ProviderAndModel({
   modelId,
   inputTypes,
   outputTypes,
+  needs,
   onChange,
 }: ProviderAndModelProps) {
   const providers = useProviders();
@@ -65,6 +69,9 @@ export function ProviderAndModel({
   const local = isLocalProvider(chosen);
   // D286: a model the node names that its provider no longer lists — never shown as if usable.
   const gone = modelId !== undefined && modelId !== '' && models.isSuccess && picked === undefined;
+  // D353: the chosen model cannot honour this node's schema or tools — the pre-flight error, early.
+  const pickedBlock =
+    picked === undefined ? undefined : modelCapabilityBlock(picked, needs, chosen);
   const modelHint =
     providerId === undefined
       ? 'choose a provider first'
@@ -127,13 +134,16 @@ export function ProviderAndModel({
           </SelectTrigger>
           <SelectContent>
             {modelList.map((model) => {
-              const blocked = modelBlockedReason(model, inputTypes, outputTypes);
+              const capability = modelCapabilityBlock(model, needs, chosen);
+              const blocked =
+                modelBlockedReason(model, inputTypes, outputTypes) ?? capability?.short;
               return (
                 <SelectItem
                   key={model.id}
                   value={model.modelId}
                   disabled={blocked !== undefined}
                   data-blocked={blocked ?? undefined}
+                  title={capability?.reason}
                 >
                   {model.displayName}
                   {model.resolvedModelId !== undefined ? ` · ${model.resolvedModelId}` : ''}
@@ -158,6 +168,11 @@ export function ProviderAndModel({
         {local && picked !== undefined && (
           <p className={HELP_CLASS} data-testid="config-model-local">
             {LOCAL_COST_TEXT}
+          </p>
+        )}
+        {pickedBlock !== undefined && (
+          <p role="alert" className={HELP_CLASS} data-testid="config-model-capability">
+            {pickedBlock.reason}
           </p>
         )}
         {gone && (

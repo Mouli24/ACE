@@ -1,4 +1,4 @@
-import type { Id } from '@ace/contracts';
+import type { CapabilityNeeds, Id } from '@ace/contracts';
 import { create } from 'zustand';
 
 /** What the picker hands back: both halves, never one (PG-1.3, D351). */
@@ -14,6 +14,8 @@ export interface ProviderChoiceRequest {
   confirmLabel?: string;
   /** Pre-selected, e.g. a duplicated node's own provider and model. */
   initial?: Partial<ProviderChoice>;
+  /** What the node asks of its model (a schema, tools), so a model that cannot is marked (D353). */
+  needs?: CapabilityNeeds;
   onChosen: (choice: ProviderChoice) => void;
   onCancel?: () => void;
 }

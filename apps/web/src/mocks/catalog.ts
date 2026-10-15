@@ -35,7 +35,8 @@ export const MOCK_CATALOG: CatalogEntry[] = [
     outputTypes: ['text'],
     contextWindow: 8192,
     supportsTools: false,
-    supportsJson: false,
+    // As the engine's mock (D353): a schema on it is allowed, and its prose is TC-EXE-005's violation.
+    supportsJson: true,
   },
   {
     modelId: 'mock-slow',

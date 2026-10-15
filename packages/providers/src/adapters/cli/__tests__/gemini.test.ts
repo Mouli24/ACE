@@ -47,7 +47,8 @@ describe('X1 Gemini CLI flags', () => {
   it.each([
     ['read_only', 'plan'],
     ['edit_files', 'auto_edit'],
-    ['full_auto', 'yolo'],
+    // D355: an old full_auto row runs as edit_files — never the approve-everything mode.
+    ['full_auto', 'auto_edit'],
   ] as const)('maps %s to --approval-mode %s', (permission, mode) => {
     expect(geminiDialect.args(req, permission)).toEqual([...GEMINI_BASE_ARGS, '--approval-mode', mode, '-m', 'pro']);
   });

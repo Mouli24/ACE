@@ -175,7 +175,7 @@ async function execute(node: Node, reply: string) {
 }
 
 describe('PG-2.1 a schema implies JSON output in the executor', () => {
-  it.fails(
+  it(
     'outputTypes [text] + a schema: non-conforming output is CONTRACT_VIOLATION',
     async () => {
       const outcome = await execute(
@@ -188,7 +188,7 @@ describe('PG-2.1 a schema implies JSON output in the executor', () => {
     },
   );
 
-  it.fails(
+  it(
     'outputTypes [text] + a schema: prose that is not JSON at all is CONTRACT_VIOLATION',
     async () => {
       const outcome = await execute(
@@ -200,7 +200,7 @@ describe('PG-2.1 a schema implies JSON output in the executor', () => {
     },
   );
 
-  it.fails(
+  it(
     'outputTypes [text] + a schema: conforming output is parsed into a json part',
     async () => {
       const outcome = await execute(
@@ -225,7 +225,7 @@ describe('PG-2.1 a schema implies JSON output in the executor', () => {
 });
 
 describe('PG-2.1 a Review→Fix loop from a node with a schema is accepted', () => {
-  it.fails(
+  it(
     'graph-ops accept a loop edge whose source has a schema but outputTypes [text]',
     async () => {
       const h = createHarness();
@@ -284,7 +284,7 @@ describe('PG-2.1 blocked combinations are named validation issues', () => {
       models: [catalog],
     }).filter((issue) => issue.severity === 'error' && issue.nodeId === NODE_ID);
 
-  it.fails('a schema on a model with supportsJson:false is an error on the node (validate)', () => {
+  it('a schema on a model with supportsJson:false is an error on the node (validate)', () => {
     const issues = errorsFor(
       agent({ outputContract: { jsonSchema: SCHEMA } }),
       model({ supportsJson: false }),
@@ -293,7 +293,7 @@ describe('PG-2.1 blocked combinations are named validation issues', () => {
     expect(issues.length).toBeGreaterThan(0);
   });
 
-  it.fails(
+  it(
     'tools enabled on a model with supportsTools:false is an error on the node (validate)',
     () => {
       const issues = errorsFor(
@@ -311,7 +311,7 @@ describe('PG-2.1 blocked combinations are named validation issues', () => {
     },
   );
 
-  it.fails('pre-flight blocks the same schema + supportsJson:false node', async () => {
+  it('pre-flight blocks the same schema + supportsJson:false node', async () => {
     const node = agent({ outputContract: { jsonSchema: SCHEMA } });
     const issues = await preflight({
       nodes: [node],

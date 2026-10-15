@@ -82,7 +82,7 @@ afterEach(async () => {
 });
 
 describe('PG-2.3 a startup migration moves full_auto providers to edit_files', () => {
-  it.fails(
+  it(
     'a provider saved on full_auto reads back on edit_files after a restart',
     async () => {
       engine = await start();

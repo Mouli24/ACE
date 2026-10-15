@@ -1069,9 +1069,13 @@ function CanvasInner({
         place(copies);
         return;
       }
+      const only = copies.length === 1 ? copies[0] : undefined;
+      const agentCopy = only?.kind === 'agent' ? only : undefined;
       requestProviderChoice({
         title: 'Choose a provider for the copy',
         confirmLabel: 'Duplicate',
+        // D353: one agent copied — a model that cannot honour its schema or tools is marked.
+        ...(agentCopy === undefined ? {} : { needs: agentCopy.config }),
         onChosen: (choice) =>
           place(
             copies.map((copy) =>

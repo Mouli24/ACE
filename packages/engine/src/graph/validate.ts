@@ -1,5 +1,7 @@
 import {
   ExecutionSettingsSchema,
+  capabilityGaps,
+  isCliProviderType,
   isConnectionAllowed,
   type DataType,
   type Edge,
@@ -210,6 +212,20 @@ export function validateGraph(
             message: `"${modelId}" cannot handle the data types "${node.name}" is configured for.`,
             nodeId: node.id,
           });
+        }
+
+        // D353 (PG-2.1): a schema or tools the model cannot honour is an error, never a silent drop.
+        if (node.kind === 'agent' && model !== undefined && model.available) {
+          const provider = providersById.get(providerId);
+          const cli = provider !== undefined && isCliProviderType(provider.type);
+          for (const gap of capabilityGaps(node.config, model, cli)) {
+            issues.push({
+              severity: 'error',
+              code: gap.code,
+              message: `"${node.name}": ${gap.reason}`,
+              nodeId: node.id,
+            });
+          }
         }
       }
 

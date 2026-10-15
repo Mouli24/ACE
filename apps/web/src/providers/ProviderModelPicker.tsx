@@ -1,4 +1,4 @@
-import { providerGroup, type Model, type Provider } from '@ace/contracts';
+import { providerGroup, type CapabilityNeeds, type Model, type Provider } from '@ace/contracts';
 import {
   Button,
   Dialog,
@@ -18,6 +18,7 @@ import { Link, useInRouterContext } from 'react-router-dom';
 import { LOCAL_COST_TEXT } from '../runs/CostValue';
 import { ProviderMark } from './ProviderMark';
 import { useCreateProvider, useModels, useProviderDetect, useProviders } from './hooks';
+import { modelCapabilityBlock } from './model-capability';
 import { groupProviders, localModelFacts, pullCommand } from './provider-groups';
 import { PROVIDER_STATE_LABEL } from './provider-meta';
 import { useProviderPicker, type ProviderChoice } from './provider-picker-store';
@@ -161,26 +162,36 @@ function ModelOption({
   model,
   local,
   selected,
+  blocked,
   onSelect,
 }: {
   model: Model;
   local: boolean;
   selected: boolean;
+  /** D353: the node asks for a schema or tools this model cannot honour — the pre-flight reason. */
+  blocked?: { short: string; reason: string } | undefined;
   onSelect: () => void;
 }) {
+  const disabled = !model.available || blocked !== undefined;
   return (
     <button
       type="button"
       role="option"
       aria-selected={selected}
-      aria-disabled={!model.available}
-      disabled={!model.available}
-      title={model.available ? undefined : model.unavailableReason}
+      aria-disabled={disabled}
+      disabled={disabled}
+      title={model.available ? blocked?.reason : model.unavailableReason}
       data-testid={`picker-model-${model.modelId}`}
+      data-blocked={blocked?.short}
       className={OPTION}
       onClick={onSelect}
     >
-      <span className="min-w-0 flex-1 truncate">{model.displayName}</span>
+      <span className="min-w-0 flex-1 truncate">
+        {model.displayName}
+        {blocked !== undefined && (
+          <span className="text-[11px] text-[var(--muted)]"> — {blocked.short}</span>
+        )}
+      </span>
       <span className="shrink-0 font-machine text-[10px] text-[var(--muted)]">
         {local ? `${localModelFacts(model)} · ${LOCAL_COST_TEXT}` : model.modelId}
       </span>
@@ -196,10 +207,13 @@ function ModelOption({
 export function ProviderModelPicker({
   providers,
   value,
+  needs,
   onChange,
 }: {
   providers: readonly Provider[];
   value: Partial<ProviderChoice>;
+  /** What the node asks of its model — a schema, tools, skills — so a model that cannot is marked. */
+  needs?: CapabilityNeeds;
   onChange: (value: Partial<ProviderChoice>) => void;
 }) {
   const chosen = providers.find((provider) => provider.id === value.providerId);
@@ -270,6 +284,7 @@ export function ProviderModelPicker({
                 model={model}
                 local={local}
                 selected={model.modelId === value.modelId}
+                blocked={modelCapabilityBlock(model, needs, chosen)}
                 onSelect={() => onChange({ providerId: chosen.id, modelId: model.modelId })}
               />
             ))}
@@ -362,12 +377,14 @@ export function ProviderPickerDialog({
   title = 'Choose a provider and model',
   confirmLabel = 'Add node',
   initial,
+  needs,
   onConfirm,
   onCancel,
 }: {
   title?: string;
   confirmLabel?: string;
   initial?: Partial<ProviderChoice>;
+  needs?: CapabilityNeeds;
   onConfirm: (choice: ProviderChoice) => void;
   onCancel: () => void;
 }) {
@@ -414,7 +431,12 @@ export function ProviderPickerDialog({
         {providers.isPending ? (
           <p className="text-[12px] text-[var(--muted)]">Loading providers…</p>
         ) : (
-          <ProviderModelPicker providers={list} value={value} onChange={setValue} />
+          <ProviderModelPicker
+            providers={list}
+            value={value}
+            {...(needs === undefined ? {} : { needs })}
+            onChange={setValue}
+          />
         )}
 
         <DialogFooter>
@@ -447,6 +469,7 @@ export function ProviderPickerHost() {
       {...(request.title === undefined ? {} : { title: request.title })}
       {...(request.confirmLabel === undefined ? {} : { confirmLabel: request.confirmLabel })}
       {...(request.initial === undefined ? {} : { initial: request.initial })}
+      {...(request.needs === undefined ? {} : { needs: request.needs })}
       onConfirm={(choice) => {
         close();
         request.onChosen(choice);

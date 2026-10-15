@@ -137,7 +137,12 @@ describe('FR-WF-006 ValidationIssue', () => {
   });
 
   it('PG-1.3 adds missing_provider (D358) beside missing_model and provider_missing', () => {
-    expect([...PRODUCT_GAPS_VALIDATION_ISSUE_CODES]).toEqual(['missing_provider']);
+    // D353 (PG-2.1) adds the two blocked-combination codes after it.
+    expect([...PRODUCT_GAPS_VALIDATION_ISSUE_CODES]).toEqual([
+      'missing_provider',
+      'schema_unsupported',
+      'tools_unsupported',
+    ]);
     expect(ValidationIssueCodeSchema.safeParse('missing_provider').success).toBe(true);
     expect(VALIDATION_ISSUE_CODES).toContain('missing_model');
     expect(VALIDATION_ISSUE_CODES).toContain('provider_missing');

@@ -1,7 +1,7 @@
 import type { Provider } from '@ace/contracts';
 import { test, type Page } from '@playwright/test';
 
-import { NOT_BUILT, api, expect, open } from './helpers.js';
+import { api, expect, open } from './helpers.js';
 
 /**
  * PG-2.3 No silent Full auto (product-gaps prompt, Phase 2; X6, D342). Today the provider dialog
@@ -19,7 +19,6 @@ async function permissionOptions(page: Page): Promise<string[]> {
 
 test.describe('PG-2.3 no silent Full auto', () => {
   test('the Add provider dialog does not offer Full auto for a CLI provider', async ({ page }) => {
-    test.fail(NOT_BUILT, 'PG-2.3: Full auto is offered in the Add provider dialog');
     await open(page, '/providers');
     await page.getByRole('button', { name: 'Add provider' }).click({ timeout: 30_000 });
     const dialog = page.getByRole('dialog', { name: 'Add provider' });
@@ -39,7 +38,6 @@ test.describe('PG-2.3 no silent Full auto', () => {
   });
 
   test('a provider saved on Full auto is not offered it again when edited', async ({ page }) => {
-    test.fail(NOT_BUILT, 'PG-2.3: the Edit dialog still offers Full auto');
     const name = `PG full auto ${Date.now().toString(36)}`;
     // A row from before X6: the contract still parses `full_auto` so old rows load.
     await api<Provider>('/providers', {

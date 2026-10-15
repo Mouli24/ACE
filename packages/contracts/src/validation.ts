@@ -136,8 +136,17 @@ export const ROUND_5_VALIDATION_ISSUE_CODES = ['missing_knowledge_base'] as cons
  * The codes the product-gaps work adds. `missing_provider` (D358): an Agent/Model node with no
  * provider chosen; `missing_model` keeps "provider set, no model", `provider_missing` a deleted
  * provider. Pre-flight blocks on all three; a graph op that makes such a node is never refused.
+ *
+ * D353 (PG-2.1), both errors on the node, raised by validation and so by pre-flight:
+ * `schema_unsupported` — an output contract's JSON schema on a model without structured output
+ * (`supportsJson: false`) or on a CLI provider, which cannot be held to one; `tools_unsupported` —
+ * tools or skills on a model with `supportsTools: false`, which the executor would otherwise drop.
  */
-export const PRODUCT_GAPS_VALIDATION_ISSUE_CODES = ['missing_provider'] as const;
+export const PRODUCT_GAPS_VALIDATION_ISSUE_CODES = [
+  'missing_provider',
+  'schema_unsupported',
+  'tools_unsupported',
+] as const;
 
 export const VALIDATION_ISSUE_CODES = [
   ...ROUND_1_VALIDATION_ISSUE_CODES,
@@ -162,3 +171,67 @@ export const ValidationIssueSchema = z.object({
   edgeId: IdSchema.optional(),
 });
 export type ValidationIssue = z.infer<typeof ValidationIssueSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* Blocked model combinations (D353, PG-2.1)                                   */
+/* -------------------------------------------------------------------------- */
+
+/** What a node asks of its model that not every model can give. */
+export interface CapabilityNeeds {
+  outputContract?: { jsonSchema?: Record<string, unknown> | undefined } | undefined;
+  tools?: { enabled: readonly string[] } | undefined;
+  skillIds?: readonly string[] | undefined;
+}
+
+/** What a model says it can do, as the catalogue records it. */
+export interface ModelCapabilities {
+  modelId: string;
+  supportsJson: boolean;
+  supportsTools: boolean;
+}
+
+export interface CapabilityGap {
+  code: Extract<ValidationIssueCode, 'schema_unsupported' | 'tools_unsupported'>;
+  /** Why, without the node's name — a sentence the model picker can show as it is. */
+  reason: string;
+}
+
+/**
+ * D353: the combinations a run would otherwise drop silently. One rule, read by graph validation
+ * (and so pre-flight) and by the model picker, so the picker's reason is the error the run gives.
+ *
+ * - an output contract's JSON schema on a CLI provider (it cannot be held to one) or on a model
+ *   with `supportsJson: false`: `schema_unsupported`;
+ * - tools or skills on a model with `supportsTools: false`: `tools_unsupported`.
+ *
+ * `cli` is whether the model's provider is a CLI (`isCliProviderType`). Pure.
+ */
+export function capabilityGaps(
+  needs: CapabilityNeeds,
+  model: ModelCapabilities,
+  cli: boolean,
+): CapabilityGap[] {
+  const gaps: CapabilityGap[] = [];
+  if (needs.outputContract?.jsonSchema !== undefined) {
+    if (cli) {
+      gaps.push({
+        code: 'schema_unsupported',
+        reason:
+          'A CLI provider cannot be held to a JSON schema — remove the output contract or choose an API model with structured output.',
+      });
+    } else if (!model.supportsJson) {
+      gaps.push({
+        code: 'schema_unsupported',
+        reason: `"${model.modelId}" does not support structured JSON output, so the output contract's schema cannot be enforced — remove it or choose a model with JSON support.`,
+      });
+    }
+  }
+  const wantsTools = (needs.tools?.enabled.length ?? 0) > 0 || (needs.skillIds?.length ?? 0) > 0;
+  if (wantsTools && !model.supportsTools) {
+    gaps.push({
+      code: 'tools_unsupported',
+      reason: `"${model.modelId}" cannot call tools, so this node's tools and skills would be dropped — turn them off or choose a model with tool support.`,
+    });
+  }
+  return gaps;
+}
