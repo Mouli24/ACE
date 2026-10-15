@@ -573,6 +573,19 @@ async function addAgentFromPaneMenu(page: Page): Promise<void> {
   const menu = await paneMenu(page);
   await menu.getByRole('menuitem', { name: 'Add Agent' }).click();
   await expect(menu).toHaveCount(0);
+  // D351 (PG-1.3): the Agent is created only once a provider and a model are picked — the mock
+  // provider every fixture here is imported on, and its first available model
+  const providerId = await mockProvider();
+  const picker = page.getByTestId('provider-picker');
+  await expect(picker).toBeVisible();
+  await picker.getByTestId(`picker-provider-${providerId}`).click();
+  await picker
+    .getByRole('listbox', { name: /Model/ })
+    .locator('[role="option"]:not([disabled])')
+    .first()
+    .click();
+  await picker.getByRole('button', { name: 'Add node' }).click();
+  await expect(picker).toHaveCount(0);
 }
 
 async function fitView(page: Page): Promise<void> {
