@@ -203,6 +203,30 @@ import {
   type UpdateKnowledgeBaseRequest,
   type UsageResponse,
 } from '@ace/contracts';
+import {
+  BenchExperimentListResponseSchema,
+  BenchExperimentSchema,
+  BenchReportSchema,
+  BenchTaskListResponseSchema,
+  BenchTaskSchema,
+  BlindExportSchema,
+  CreateBenchExperimentRequestSchema,
+  CreateBenchTaskRequestSchema,
+  ImportBenchScoresRequestSchema,
+  ImportBenchScoresResponseSchema,
+  UpdateBenchExperimentRequestSchema,
+  UpdateBenchTaskRequestSchema,
+  type BenchExperiment,
+  type BenchReport,
+  type BenchTask,
+  type BlindExport,
+  type CreateBenchExperimentRequest,
+  type CreateBenchTaskRequest,
+  type ImportBenchScoresRequest,
+  type ImportBenchScoresResponse,
+  type UpdateBenchExperimentRequest,
+  type UpdateBenchTaskRequest,
+} from '@ace/contracts';
 import { z } from 'zod';
 
 import { openChatStream, type ChatStream, type StreamChatOptions } from './domain.js';
@@ -993,6 +1017,56 @@ export function createAceClient(options: AceClientOptions) {
           value: action,
         },
       ),
+
+    /* ACE Bench (PG-5.6, FR-BEN-001..008, Arch §20.2) */
+
+    listBenchTasks: async (): Promise<BenchTask[]> =>
+      (await request('GET', '/bench/tasks', BenchTaskListResponseSchema)).items,
+    getBenchTask: (id: Id): Promise<BenchTask> =>
+      request('GET', `/bench/tasks/${id}`, BenchTaskSchema),
+    createBenchTask: (body: CreateBenchTaskRequest): Promise<BenchTask> =>
+      request('POST', '/bench/tasks', BenchTaskSchema, {
+        schema: CreateBenchTaskRequestSchema,
+        value: body,
+      }),
+    /** A frozen task answers 409 `bench_task_frozen` (FR-BEN-002). */
+    updateBenchTask: (id: Id, body: UpdateBenchTaskRequest): Promise<BenchTask> =>
+      request('PATCH', `/bench/tasks/${id}`, BenchTaskSchema, {
+        schema: UpdateBenchTaskRequestSchema,
+        value: body,
+      }),
+    freezeBenchTask: (id: Id): Promise<BenchTask> =>
+      request('POST', `/bench/tasks/${id}/freeze`, BenchTaskSchema),
+
+    listBenchExperiments: async (): Promise<BenchExperiment[]> =>
+      (await request('GET', '/bench/experiments', BenchExperimentListResponseSchema)).items,
+    getBenchExperiment: (id: Id): Promise<BenchExperiment> =>
+      request('GET', `/bench/experiments/${id}`, BenchExperimentSchema),
+    createBenchExperiment: (body: CreateBenchExperimentRequest): Promise<BenchExperiment> =>
+      request('POST', '/bench/experiments', BenchExperimentSchema, {
+        schema: CreateBenchExperimentRequestSchema,
+        value: body,
+      }),
+    /** While `draft` only; after start 409 `bench_experiment_locked` (FR-BEN-007). */
+    updateBenchExperiment: (id: Id, body: UpdateBenchExperimentRequest): Promise<BenchExperiment> =>
+      request('PATCH', `/bench/experiments/${id}`, BenchExperimentSchema, {
+        schema: UpdateBenchExperimentRequestSchema,
+        value: body,
+      }),
+    startBenchExperiment: (id: Id): Promise<BenchExperiment> =>
+      request('POST', `/bench/experiments/${id}/start`, BenchExperimentSchema),
+    benchBlindExport: (id: Id): Promise<BlindExport> =>
+      request('GET', `/bench/experiments/${id}/blind-export`, BlindExportSchema),
+    importBenchScores: (
+      id: Id,
+      body: ImportBenchScoresRequest,
+    ): Promise<ImportBenchScoresResponse> =>
+      request('POST', `/bench/experiments/${id}/scores`, ImportBenchScoresResponseSchema, {
+        schema: ImportBenchScoresRequestSchema,
+        value: body,
+      }),
+    benchReport: (id: Id): Promise<BenchReport> =>
+      request('GET', `/bench/experiments/${id}/report`, BenchReportSchema),
   };
 }
 
