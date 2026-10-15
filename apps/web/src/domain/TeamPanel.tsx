@@ -1,10 +1,10 @@
-import type { DomainCost, DomainUsageSnapshot } from '@ace/contracts';
+import type { DomainCost, DomainUsageSnapshot, FailureReason } from '@ace/contracts';
 import { Button, cn, FIELD_LABEL_CLASS, Icons, INPUT_CLASS } from '@ace/ui';
 import { useEffect, useId, useState, type ReactNode } from 'react';
 
 import { fmt } from '../theme/constants';
 import { Avatar } from '../theme/primitives';
-import { lookOf, plural, statusPill, type DomainLooks } from './looks';
+import { failureWords, lookOf, plural, statusPill, type DomainLooks } from './looks';
 
 /**
  * The Team aside (D6, D7, D306, D313) in the theme's Domain view (D336): a card per agent — its
@@ -18,6 +18,8 @@ export interface TeamPanelProps {
   usage: DomainUsageSnapshot | null;
   /** Each agent's colour, letter and model (D328); one it lacks gets its place's colour. */
   looks?: DomainLooks;
+  /** PG-4.2: why each FAILED agent failed, so its card says which failure it was. */
+  failureReasons?: ReadonlyMap<string, FailureReason>;
   /** How many agents the run has, while no usage has arrived. */
   agentCount?: number;
   readOnly?: boolean;
@@ -83,6 +85,7 @@ const pct = (share: number): string => `${Math.min(100, Math.max(0, share * 100)
 export function TeamPanel({
   usage,
   looks,
+  failureReasons,
   agentCount,
   readOnly = false,
   onSetBudget,
@@ -194,6 +197,16 @@ export function TeamPanel({
                     </button>
                   )}
                 </div>
+                {node.state === 'FAILED' && failureReasons?.get(node.nodeId) !== undefined && (
+                  <div
+                    data-testid="team-node-failure"
+                    data-reason={failureReasons.get(node.nodeId)}
+                    className="text-[11.5px] font-semibold"
+                    style={{ color: 'var(--color-status-FAILED)' }}
+                  >
+                    {failureWords(failureReasons.get(node.nodeId) ?? 'RUN_FAILED')}
+                  </div>
+                )}
                 <div className="rounded-[8px] border border-[var(--line)] bg-[var(--soft)] px-[10px] py-2 text-[12px] text-[var(--muted)]">
                   {node.activity}
                 </div>

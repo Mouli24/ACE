@@ -5,7 +5,7 @@ import {
   type Node,
   type WorkflowGraphResponse,
 } from '@ace/contracts';
-import { Dialog, DialogContent, DialogTitle } from '@ace/ui';
+import { Dialog, DialogContent, DialogTitle, chipFill } from '@ace/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect } from 'react';
 
@@ -303,7 +303,7 @@ function NodeSettings({
           { label: kind.toUpperCase(), background: look.chipBg, color: look.chipInk },
           {
             label: status.label.toUpperCase(),
-            background: `${status.color}1f`,
+            background: chipFill(status.color),
             color: status.color,
           },
         ]}

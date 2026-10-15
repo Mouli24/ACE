@@ -1,5 +1,7 @@
 import {
   rosterFor,
+  type FailureReason,
+  type HaltReason,
   type Id,
   type NodeState,
   type RosterEntry,
@@ -41,7 +43,7 @@ import {
   useRouteEnvelope,
   useSetRunBudget,
 } from './hooks';
-import { domainLooks, lookOf, plural } from './looks';
+import { domainLooks, haltWords, lookOf, plural } from './looks';
 import { NodeChatThreads } from './NodeChatThreads';
 import { useDomainRunOverlay, withRunOverlay } from './run-overlay';
 import { TeamPanel } from './TeamPanel';
@@ -105,6 +107,19 @@ export function DomainPage() {
     () => Object.fromEntries((usage?.perNode ?? []).map((entry) => [entry.nodeId, entry.state])),
     [usage],
   );
+  /**
+   * PG-4.2: why each failed node failed — the newest node run's `failureReason` on record, with
+   * the overlay's (ahead of the refetch) over it — so the Team aside says which failure it was.
+   */
+  const failureReasons = useMemo(() => {
+    const reasons = new Map<Id, FailureReason>();
+    for (const record of nodeRuns.data ?? []) {
+      if (record.failureReason === undefined) reasons.delete(record.nodeId);
+      else reasons.set(record.nodeId, record.failureReason);
+    }
+    for (const [nodeId, reason] of overlay.failureReasons) reasons.set(nodeId, reason);
+    return reasons;
+  }, [nodeRuns.data, overlay.failureReasons]);
 
   // The footer's message count (D330), cleared when Domain closes. Its tokens are the selected
   // run's, read by the footer itself in every mode (PG-3.3).
@@ -219,6 +234,7 @@ export function DomainPage() {
             runId={runId}
             run={run.data}
             status={overlayEnded ? overlay.status : undefined}
+            haltReason={overlayEnded ? overlay.haltReason : run.data?.haltReason}
             runs={selected.runs ?? []}
             live={live}
             ending={end.isPending}
@@ -308,6 +324,7 @@ export function DomainPage() {
         <TeamPanel
           usage={usage}
           looks={looks}
+          failureReasons={failureReasons}
           agentCount={roster.length}
           readOnly={!live}
           onSetBudget={(limit) => budget.mutateAsync(limit)}
@@ -322,6 +339,7 @@ export function DomainPage() {
           <TeamPanel
             usage={conversation.usage}
             looks={looks}
+            failureReasons={failureReasons}
             agentCount={roster.length}
             readOnly={!live}
             onSetBudget={(limit) => budget.mutateAsync(limit)}
@@ -404,6 +422,7 @@ function RunPill({
   runId,
   run,
   status,
+  haltReason,
   runs,
   live,
   ending,
@@ -416,6 +435,8 @@ function RunPill({
   run: Run | undefined;
   /** PG-3.3: the run's end as the overlay heard it, ahead of the record's refetch. */
   status?: RunState | undefined;
+  /** PG-4.2: why a HALTED run halted, so the pill says it rather than a bare HALTED. */
+  haltReason?: HaltReason | undefined;
   runs: readonly RunSummary[];
   live: boolean;
   ending: boolean;
@@ -458,6 +479,11 @@ function RunPill({
               {(status ?? run.status) === run.status &&
                 run.blockedReason !== undefined &&
                 ` · ${run.blockedReason}`}
+              {(status ?? run.status) === 'HALTED' && haltReason !== undefined && (
+                <span data-testid="domain-run-halt" data-reason={haltReason}>
+                  {` · ${haltWords(haltReason)}`}
+                </span>
+              )}
             </span>
           )}
           <Icons.ChevronDown aria-hidden size={12} className="text-[var(--muted)]" />
