@@ -419,6 +419,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     logger: logger.child({ subsystem: 'workspace' }),
     // D300: the person's own writes are never claimed by an agent's checkpoint
     onPersonWrite: (projectId, paths) => checkpoints.notePersonWrite(projectId, paths),
+    // PG-5.2: nor what their own terminal command changes (the processes below say when one runs)
+    onFilesChanged: (projectId, paths) => checkpoints.noteFilesChanged(projectId, paths),
   });
   // Forge's terminal (D301): a person's commands as supervised processes. Agents never get it.
   const processes = createProcessService({
@@ -427,6 +429,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     runner: createProcessRunner(),
     bus,
     logger: logger.child({ subsystem: 'processes' }),
+    onPersonCommand: (projectId, processId, running) =>
+      checkpoints.notePersonCommand(projectId, processId, running),
   });
   const hub = createWsHub({
     bus,

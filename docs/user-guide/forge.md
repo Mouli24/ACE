@@ -276,9 +276,16 @@ Forge uses **Alt+W** to close an editor tab, and **Ctrl+P** lists your open file
 - A project of more than 200,000 files gets no checkpoints: each one says the project is too large.
 - A git repository inside the project is snapshotted as plain files: its files are covered, its own
   `.git` is not.
-- While a checkpoint records, an edit made outside Forge's editor and Explorer counts as the
-  agent's: another editor's, or a command's, even one you run in Forge's own terminal. It is listed
-  in the checkpoint, and Revert can undo it.
+- While a checkpoint records, a command you run in Forge's own terminal counts as yours: whatever
+  changes while it runs, and for about two seconds after it ends, is listed as **yours** and never
+  reverted. That holds for everything changed in that time, an agent's edits included, so a
+  long-running command (a dev server, a watcher) makes the agents' changes meanwhile yours too.
+  ACE sees these changes through Forge's file watcher, so they count as yours only while Forge is
+  open on the project.
+- An edit made outside Forge altogether (another editor, a terminal outside ACE) still counts as
+  the agent's while a checkpoint records. It is listed in the checkpoint, and Revert can undo it.
+- Saves in Forge and agents' file edits take turns on the same file: a save never lands between an
+  agent's check that it has seen the file and its write.
 - For about the first second of a checkpoint, while ACE takes the first snapshot, even a file you
   save in Forge can count as the agent's.
 - A Domain run that stays open records one checkpoint for the whole session, until it ends.

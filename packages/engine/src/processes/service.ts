@@ -81,6 +81,12 @@ export interface ProcessServiceDeps {
   /** The most one `process.output` frame carries; a bigger batch goes out as several frames. */
   frameMaxChars?: number;
   now?: () => string;
+  /**
+   * PG-5.2 (D361): a person's own command started (`true`) or ended (`false`), so the checkpoints
+   * can book what it changes as the person's. Never told about an agent's command. A throw here
+   * is logged and changes nothing about the process.
+   */
+  onPersonCommand?: (projectId: Id, processId: Id, running: boolean) => void;
 }
 
 /**
@@ -197,6 +203,23 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
     return project;
   }
 
+  /** PG-5.2: the checkpoints hear when a person's own command starts and ends. */
+  function personCommand(summary: ProcessSummary, running: boolean): void {
+    if (summary.agent !== undefined || deps.onPersonCommand === undefined) return;
+    try {
+      deps.onPersonCommand(summary.projectId, summary.id, running);
+    } catch (error) {
+      logger.warn(
+        {
+          subsystem: 'processes',
+          processId: summary.id,
+          reason: error instanceof Error ? error.message : String(error),
+        },
+        'could not tell the checkpoints about a terminal command',
+      );
+    }
+  }
+
   function find(projectId: Id, processId: Id): Supervised {
     const record = byProject.get(projectId)?.get(processId);
     if (record === undefined) throw notFound(`Process ${processId}`);
@@ -279,6 +302,7 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
       status,
     };
     void bus.emitTransient({ type: 'process.exited', payload });
+    personCommand(record.summary, false);
     record.markEnded();
     prune(record.summary.projectId);
   }
@@ -363,6 +387,7 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
         markEnded,
       };
       records.set(summary.id, record);
+      personCommand(summary, true);
 
       try {
         record.handle = runner.start(
@@ -391,6 +416,7 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
       } catch (error) {
         // A refused working folder: nothing ran, so nothing is remembered.
         records.delete(summary.id);
+        personCommand(summary, false);
         throw error;
       }
       return { processId: summary.id };

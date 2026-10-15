@@ -65,6 +65,12 @@ export interface WorkspaceServiceDeps {
    * here is logged and never fails the write.
    */
   onPersonWrite?: (projectId: Id, paths: string[]) => void;
+  /**
+   * PG-5.2 (D361): told the paths of each watcher burst, so a checkpoint recording meanwhile can
+   * book what the person's own terminal command changed as theirs. A throw here is logged and
+   * never stops the frame.
+   */
+  onFilesChanged?: (projectId: Id, paths: string[]) => void;
 }
 
 /** A wire path as the checkpoint names files: forward slashes, no `./` or trailing slash. */
@@ -106,6 +112,23 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): WorkspaceSer
   }
 
   const announce = (projectId: Id, batch: FileChangeBatch): void => {
+    if (batch.changes.length > 0 && deps.onFilesChanged !== undefined) {
+      try {
+        deps.onFilesChanged(
+          projectId,
+          batch.changes.map((change) => asProjectPath(change.path)),
+        );
+      } catch (error) {
+        logger.warn(
+          {
+            subsystem: 'workspace',
+            projectId,
+            reason: error instanceof Error ? error.message : String(error),
+          },
+          'could not note a watcher burst for the checkpoints',
+        );
+      }
+    }
     void bus.emitTransient({ type: 'files.changed', payload: { projectId, ...batch } });
   };
 
