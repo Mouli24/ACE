@@ -1,4 +1,5 @@
 import type { Id } from '@ace/contracts';
+import { Icons } from '@ace/ui';
 import { useNavigate } from 'react-router-dom';
 
 import { openChatThread } from '../chat/open-thread';
@@ -61,7 +62,7 @@ export function NodeChatThreads({
             <span className="font-machine text-[9px] font-normal text-[var(--muted)]">
               {ago(thread.updatedAt)}
             </span>
-            <span aria-hidden>→</span>
+            <Icons.ArrowRight aria-hidden size={11} />
           </button>
         ))
       )}

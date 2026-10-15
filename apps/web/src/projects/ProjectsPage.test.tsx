@@ -263,18 +263,21 @@ describe('Home Recent (D337)', () => {
     const all = await within(surface).findByRole('button', { name: 'All 4' });
     const live = await within(surface).findByRole('button', { name: 'Live 2' });
     expect(all).toHaveAttribute('aria-pressed', 'true');
-    expect(within(surface).getAllByRole('link')).toHaveLength(4);
+    // PG-3.7: a card's mode links (Ideate · Forge · Domain) are links too; the cards are the named ones.
+    const cards = () =>
+      within(surface)
+        .getAllByRole('link')
+        .filter((link) => link.hasAttribute('aria-label'));
+    expect(cards()).toHaveLength(4);
 
     await user.click(live);
     expect(live).toHaveAttribute('aria-pressed', 'true');
-    const names = within(surface)
-      .getAllByRole('link')
-      .map((link) => link.getAttribute('aria-label'));
+    const names = cards().map((link) => link.getAttribute('aria-label'));
     // which projects, not their order (Recent sorts by activity; see the ordering test below)
     expect([...names].sort()).toEqual(['Paused', 'Running']);
 
     await user.click(all);
-    expect(within(surface).getAllByRole('link')).toHaveLength(4);
+    expect(cards()).toHaveLength(4);
   });
 
   it('footer: the agent count, Repository only for a git folder, and how long ago', async () => {

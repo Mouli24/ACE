@@ -300,7 +300,7 @@ describe('D331 the workspace menu', () => {
       }
     });
 
-    it('Pause, Resume, Restart and End send their control; a restart opens the new run', async () => {
+    it('Pause, Resume, Restart and End send their control; a restart selects the new run in place (D360)', async () => {
       const user = userEvent.setup();
       const { main, ideate } = seed();
       const answer = (status: Run['status']) =>
@@ -334,7 +334,9 @@ describe('D331 the workspace menu', () => {
       expect(within(menu).getByTestId('menu-start-run')).toBeInTheDocument();
       await user.click(within(menu).getByTestId('menu-run-restart'));
       await waitFor(() => expect(restart).toHaveBeenCalledWith(RUN_ID));
-      await waitFor(() => expect(router.state.location.pathname).toBe(`/runs/${NEW_RUN}`));
+      // PG-3.5 (D360): the restart keeps the mode — Ideate, with the new run selected.
+      await waitFor(() => expect(router.state.location.search).toBe(`?run=${NEW_RUN}`));
+      expect(router.state.location.pathname).toBe(ideate);
     });
 
     it('Stop… asks first in the run controls’ words; Keep running sends nothing', async () => {
