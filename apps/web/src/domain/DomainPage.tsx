@@ -27,7 +27,7 @@ import { workflowPath } from '../forge/mode';
 import { useProject } from '../projects/hooks';
 import { useIsCompact } from '../responsive/useIsCompact';
 import { RunApprovalsDock } from '../runs/approvals/RunApprovalsDock';
-import { useEndRun, useRetryNodeRun, useRun, useStartRun } from '../runs/hooks';
+import { useEndRun, useNodeRuns, useRetryNodeRun, useRun, useStartRun } from '../runs/hooks';
 import { useSelectedRun } from '../runs/selected-run';
 import { clockTime } from '../theme/format';
 import { Avatar } from '../theme/primitives';
@@ -70,6 +70,8 @@ export function DomainPage() {
   const node = params.get('node') ?? undefined;
   const runId = selected.runId;
   const run = useRun(runId);
+  // PG-4.1/PG-4.5: the node runs behind the messages — envelopes as delivered, memory, reuse.
+  const nodeRuns = useNodeRuns(runId);
   // PG-3.3: the overlay every mode reads hears the run end first; the record follows its refetch.
   const overlay = useDomainRunOverlay(runId);
   const overlayEnded =
@@ -272,6 +274,7 @@ export function DomainPage() {
                 retry.mutateAsync({ nodeRunId: turnId, withDownstream: false })
               }
               onShowOnCanvas={showOnCanvas}
+              {...(nodeRuns.data === undefined ? {} : { nodeRuns: nodeRuns.data })}
             />
           )}
         </div>

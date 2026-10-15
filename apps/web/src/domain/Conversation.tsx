@@ -2,17 +2,31 @@ import type {
   ArtifactRef,
   DomainMessage,
   DomainTurn,
+  Envelope,
   FailureReason,
   Id,
+  NodeRun,
   Part,
   RosterEntry,
   RouteEnvelopeRequest,
 } from '@ace/contracts';
-import { Button, cn, Icons, INPUT_CLASS } from '@ace/ui';
-import { useId, useState, type ReactNode } from 'react';
+import {
+  Button,
+  cn,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  Icons,
+  INPUT_CLASS,
+} from '@ace/ui';
+import { useId, useMemo, useState, type ReactNode } from 'react';
 
 import { ACTIONS_CLASS, ActionButton, CopyButton } from '../chat/MessageActions';
 import { nameOf } from '../forge/files/paths';
+import { EnvelopeView } from '../inspector/EnvelopeView';
+import { MemoryOpsList, ReusedNote } from '../inspector/RecordNotes';
 import { clockTime, initial } from '../theme/format';
 import { lookOf, plural, seconds, type DomainLooks } from './looks';
 import { artifactTarget } from './open-artifact';
@@ -51,6 +65,12 @@ export interface ConversationProps {
    * person's message went to. Absent: not offered.
    */
   onShowOnCanvas?(nodeId: Id): void;
+  /**
+   * PG-4.1/PG-4.5: the run's node runs, so a delivered envelope opens the edge envelopes it
+   * travelled as (linked by `teamEnvelopeId`) and a turn shows what it remembered and whether it was
+   * reused. Absent: neither is offered.
+   */
+  nodeRuns?: readonly NodeRun[];
 }
 
 /** The theme's empty state: one muted 13px line, centred. */
@@ -81,7 +101,35 @@ export function Conversation({
   onOpenFile,
   onRetryTurn,
   onShowOnCanvas,
+  nodeRuns,
 }: ConversationProps) {
+  /** PG-4.1: every edge envelope a team envelope was delivered as, by `teamEnvelopeId`. */
+  const delivered = useMemo(() => {
+    const byTeam = new Map<Id, Envelope[]>();
+    const seen = new Set<Id>();
+    for (const row of nodeRuns ?? []) {
+      for (const envelope of row.inputEnvelopes) {
+        // A retry's row carries the same envelope again; it was delivered once.
+        if (envelope.teamEnvelopeId === undefined || seen.has(envelope.id)) continue;
+        seen.add(envelope.id);
+        byTeam.set(envelope.teamEnvelopeId, [
+          ...(byTeam.get(envelope.teamEnvelopeId) ?? []),
+          envelope,
+        ]);
+      }
+    }
+    return byTeam;
+  }, [nodeRuns]);
+  const nodeRunById = useMemo(
+    () => new Map((nodeRuns ?? []).map((row) => [row.id, row])),
+    [nodeRuns],
+  );
+  const allNames = useMemo(() => {
+    const map = new Map<Id, string>(names ?? []);
+    for (const entry of roster) if (!map.has(entry.nodeId)) map.set(entry.nodeId, entry.name);
+    return map;
+  }, [names, roster]);
+
   const label = (nodeId: Id | undefined): string => {
     if (nodeId === undefined) return '?';
     const entry = roster.find((each) => each.nodeId === nodeId);
@@ -172,6 +220,13 @@ export function Conversation({
               onOpenFile={onOpenFile}
               onRetryTurn={onRetryTurn}
               onShowOnCanvas={onShowOnCanvas}
+              envelopes={
+                message.envelope === undefined ? undefined : delivered.get(message.envelope.id)
+              }
+              nodeRun={
+                message.turn === undefined ? undefined : nodeRunById.get(message.turn.turnId)
+              }
+              names={allNames}
             />
           )}
         </li>
@@ -229,6 +284,11 @@ interface RowProps {
   onOpenFile: ConversationProps['onOpenFile'];
   onRetryTurn: ConversationProps['onRetryTurn'];
   onShowOnCanvas?: ConversationProps['onShowOnCanvas'];
+  /** PG-4.1: the edge envelopes this message's team envelope was delivered as. */
+  envelopes: readonly Envelope[] | undefined;
+  /** PG-4.5: the node run behind this message's turn. */
+  nodeRun: NodeRun | undefined;
+  names: ReadonlyMap<Id, string>;
 }
 
 function MessageRow({ message, who, label, onShowOnCanvas, ...rest }: RowProps) {
@@ -296,6 +356,9 @@ function Body({
   folderPath,
   onOpenFile,
   onRetryTurn,
+  envelopes,
+  nodeRun,
+  names,
 }: BodyProps) {
   const auto = message.textSource === 'auto';
   if (message.type === 'envelope' && message.envelope !== undefined) {
@@ -330,6 +393,9 @@ function Body({
         {envelope.routing === 'HELD' && !readOnly && (
           <HeldActions envelopeId={envelope.id} summary={message.text} onRoute={onRoute} />
         )}
+        {envelopes !== undefined && envelopes.length > 0 && (
+          <ViewEnvelope envelopes={envelopes} names={names} />
+        )}
       </>
     );
   }
@@ -353,6 +419,11 @@ function Body({
         </div>
       )}
       {turn !== undefined && <TurnMeta turn={turn} />}
+      {/* PG-4.5: a turn copied from an earlier run says so, and what it remembered or forgot. */}
+      {nodeRun !== undefined && <ReusedNote nodeRun={nodeRun} />}
+      {nodeRun?.memoryOps !== undefined && nodeRun.memoryOps.length > 0 && (
+        <MemoryOpsList ops={nodeRun.memoryOps} />
+      )}
       {turn !== undefined && (turn.outcome === 'FAILED' || turn.failureReason !== undefined) && (
         <TurnFailure turn={turn} onRetry={onRetryTurn} />
       )}
@@ -367,6 +438,51 @@ function Body({
           onOpenFile={onOpenFile}
         />
       ))}
+    </>
+  );
+}
+
+/**
+ * PG-4.1: "View envelope" — the edge envelopes a delivered team envelope travelled as, one per
+ * receiving node, with what each was handed: sources by name, used vs budget, contract and the
+ * input-point verdicts, as the Inspector shows them.
+ */
+function ViewEnvelope({
+  envelopes,
+  names,
+}: {
+  envelopes: readonly Envelope[];
+  names: ReadonlyMap<Id, string>;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        data-testid="view-envelope"
+        onClick={() => setOpen(true)}
+        className="cursor-pointer self-start rounded-[6px] border-none bg-transparent p-0 text-[12px] font-semibold text-[#e8623a] outline-none hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+      >
+        View envelope
+      </button>
+      {open && (
+        <Dialog open onOpenChange={setOpen}>
+          <DialogContent className="max-h-[calc(100vh-48px)] max-w-[680px] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Envelope</DialogTitle>
+              <DialogDescription>
+                What each receiving node was handed: its reads, its context budget and the contract
+                its answer is held to (BR-02).
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex flex-col gap-2" data-testid="envelope-dialog">
+              {envelopes.map((envelope) => (
+                <EnvelopeView key={envelope.id} envelope={envelope} names={names} showTo />
+              ))}
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </>
   );
 }

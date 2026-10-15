@@ -3,7 +3,7 @@ import { useLayoutEffect, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 
 import { workflowPath } from '../forge/mode';
-import { useRun } from '../runs/hooks';
+import { useNodeRuns, useRun } from '../runs/hooks';
 import { useSelectedRun } from '../runs/selected-run';
 import { Conversation, DomainEmpty } from './Conversation';
 import { orderedMessages } from './conversation-state';
@@ -24,6 +24,7 @@ export function RunConversationTab({
 }) {
   const runId: Id | undefined = useSelectedRun(workflowId).runId;
   const run = useRun(runId);
+  const nodeRuns = useNodeRuns(runId);
   const live = run.data !== undefined && isLiveRun(run.data);
   const conversation = useDomainConversation(run.data?.id, { live });
   const { byId } = conversation;
@@ -83,6 +84,7 @@ export function RunConversationTab({
             // A projection to read here; routing and retries are Domain's.
             readOnly
             onRoute={() => Promise.resolve()}
+            {...(nodeRuns.data === undefined ? {} : { nodeRuns: nodeRuns.data })}
           />
         )}
       </div>

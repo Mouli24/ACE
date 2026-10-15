@@ -1111,7 +1111,8 @@ describe('TC-RAG-007 a Retrieval node run records what it read as envelope.conte
         reads: [{ type: 'json', value: { hits } }],
         // The Reader has no base and no memory, so its envelope keeps its whole budget.
         context: { budgetTokens: 4000, trust: 'untrusted' },
-        contract: { outputTypes: ['text'] },
+        // PG-4.1: the envelope's contract carries the receiving node's maxTokens.
+        contract: { outputTypes: ['text'], maxTokens: 4096 },
         createdAt: NOW,
       },
     ]);

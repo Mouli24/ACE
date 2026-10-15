@@ -88,6 +88,102 @@ export type EnvelopeMemoryEntry = z.infer<typeof EnvelopeMemoryEntrySchema>;
  */
 export const CONTEXT_BUDGET_SHARES = Object.freeze({ retrieved: 0.5, memory: 0.25 } as const);
 
+/** What `readsBudgetFor` and `contextBudgetSplit` read of an Agent node: its budget and its context sources. */
+export interface ContextBudgetSource {
+  readonly config: {
+    readonly contextPolicy: { readonly budgetTokens: number };
+    readonly knowledgeBaseIds?: readonly string[] | undefined;
+    readonly memory?: { readonly enabled: boolean } | undefined;
+  };
+}
+
+/** How an Agent's `budgetTokens` is split between its reads, its retrieved chunks and its memory. */
+export interface ContextBudgetSplit {
+  budgetTokens: number;
+  /** What the reads and their summary may take — `readsBudgetFor`. */
+  reads: number;
+  /** The most retrieved chunks may take; 0 without a knowledge base. */
+  retrieved: number;
+  /** The most memory may take; 0 with memory off. */
+  memory: number;
+}
+
+/**
+ * PG-4.1: the split of an Agent's context budget (round 5 §2.2, §2.4) — the shares its retrieved
+ * chunks and its memory may take when it has a knowledge base and memory on, and the rest for its
+ * reads. Pure; the engine builds envelopes to it and the settings modal shows it, so both agree.
+ */
+export function contextBudgetSplit(agent: ContextBudgetSource): ContextBudgetSplit {
+  const { budgetTokens } = agent.config.contextPolicy;
+  const retrievedShare =
+    (agent.config.knowledgeBaseIds?.length ?? 0) > 0 ? CONTEXT_BUDGET_SHARES.retrieved : 0;
+  const memoryShare = agent.config.memory?.enabled === true ? CONTEXT_BUDGET_SHARES.memory : 0;
+  return {
+    budgetTokens,
+    reads: Math.floor(budgetTokens * (1 - retrievedShare - memoryShare)),
+    retrieved: Math.floor(budgetTokens * retrievedShare),
+    memory: Math.floor(budgetTokens * memoryShare),
+  };
+}
+
+/**
+ * The budget an agent's envelopes are built to (Task 9 review ruling, round 5 §2.2, §2.4): its
+ * `budgetTokens` less the share its retrieved chunks may take when it has a knowledge base and the
+ * share its memory may take when memory is on — so the reads and their summary leave room for both,
+ * and the context builder, given the whole budget, fits them in what is left. An agent with neither
+ * keeps the whole budget, exactly as before round 5. Moved here from the engine for PG-4.1.
+ */
+export function readsBudgetFor(agent: ContextBudgetSource): number {
+  return contextBudgetSplit(agent).reads;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Token estimates (Arch §24)                                                  */
+/* -------------------------------------------------------------------------- */
+
+/** Arch §24: the engine estimates tokens as characters over four rather than tokenising. */
+export const CHARS_PER_TOKEN = 4;
+
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / CHARS_PER_TOKEN);
+}
+
+/** What a part costs, measured the way it will be rendered into the prompt (Arch §12.5). */
+export function renderForMeasurement(part: Part): string {
+  switch (part.type) {
+    case 'text':
+      return part.text;
+    case 'json':
+      return JSON.stringify(part.value);
+    case 'code':
+      return part.text;
+    default:
+      // D6: a file travels as a reference, so it costs the reference, not the file.
+      return `[artifact ${part.name}]`;
+  }
+}
+
+export function estimatePartsTokens(parts: readonly Part[]): number {
+  return parts.reduce((total, part) => total + estimateTokens(renderForMeasurement(part)), 0);
+}
+
+/**
+ * PG-4.1: the tokens an envelope's reads and context take, estimated as the engine fits them
+ * (Arch §24) — reads, summary, retrieved chunks and memory — for "used vs budget" on screen.
+ */
+export function envelopeUsedTokens(envelope: Pick<Envelope, 'reads' | 'context'>): number {
+  const { summary, retrieved, memory } = envelope.context;
+  return (
+    estimatePartsTokens(envelope.reads) +
+    (summary === undefined ? 0 : estimateTokens(summary)) +
+    (retrieved ?? []).reduce((total, chunk) => total + estimateTokens(chunk.text), 0) +
+    (memory ?? []).reduce(
+      (total, entry) => total + estimateTokens(`${entry.key}: ${entry.value}`),
+      0,
+    )
+  );
+}
+
 /**
  * From round 5 the engine fills all three parts (§2.4, §2.5, §2.2) — summary, then retrieved,
  * then memory, the Arch §12.6 order — and every one of them has been through the context

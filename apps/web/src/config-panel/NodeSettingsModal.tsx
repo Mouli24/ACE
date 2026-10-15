@@ -26,6 +26,7 @@ import { queryKeys } from '../workflows/query-keys';
 import { HELP_CLASS } from './fields';
 import { KindPanel } from './panels';
 import { PendingEditsProvider, usePendingEditsRegistry } from './pending-edits';
+import { ReadsSection } from './ReadsSection';
 
 /*
  * The node settings modal (D333; Ace Canvas.dc.html 145–353), opened by `openSettings` when a node
@@ -99,6 +100,7 @@ export function NodeSettingsModal({ workflowId }: { workflowId: string }) {
                 key={node.id}
                 node={node}
                 nodes={graph.data?.nodes ?? []}
+                edges={graph.data?.edges ?? []}
                 workflowId={workflowId}
                 onClose={close}
                 flushPending={pending.flushAll}
@@ -218,12 +220,14 @@ const BODY_CLASS = 'flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-5';
 function NodeSettings({
   node,
   nodes,
+  edges,
   workflowId,
   onClose,
   flushPending,
 }: {
   node: Node;
   nodes: readonly Node[];
+  edges: readonly Edge[];
   workflowId: string;
   onClose: () => void;
   flushPending: () => void;
@@ -308,6 +312,8 @@ function NodeSettings({
       <div className={BODY_CLASS}>
         <AppliesNextRun workflowId={workflowId} />
         <KindPanel node={node} patch={patchConfig} rename={rename} workflowId={workflowId} />
+        {/* PG-4.1: what this node will be handed, before a run. */}
+        <ReadsSection node={node} nodes={nodes} edges={edges} />
         {!readOnly && (
           <button type="button" className={REMOVE_CLASS} onClick={remove}>
             Remove node from canvas
