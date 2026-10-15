@@ -289,7 +289,17 @@ export function modelIssues(
         inputTypes: string[];
         outputTypes: string[];
       };
-      if (!config.providerId || !config.modelId) {
+      if (!config.providerId) {
+        // PG-1.3 (D358): no provider chosen yet, as the engine names it.
+        issues.push({
+          severity: 'error',
+          code: 'missing_provider',
+          message: `"${node.name}" has no provider chosen yet — choose a provider and a model.`,
+          nodeId: node.id,
+        });
+        continue;
+      }
+      if (!config.modelId) {
         issues.push({
           severity: 'error',
           code: 'missing_model',
@@ -417,7 +427,8 @@ export function createRound2Handlers(db: MockDb): HttpHandler[] {
         const existing = db.getProvider(param(ctx, 'id'));
         if (!existing) return notFound('Provider');
         const misfit = cliPatchError(existing.type, parsed.data);
-        if (misfit !== undefined) return error(400, 'invalid_config', 'validation_failed', misfit, []);
+        if (misfit !== undefined)
+          return error(400, 'invalid_config', 'validation_failed', misfit, []);
         const provider = db.updateProvider(param(ctx, 'id'), parsed.data);
         return provider ? HttpResponse.json(provider) : notFound('Provider');
       }),

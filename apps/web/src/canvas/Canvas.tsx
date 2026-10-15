@@ -59,7 +59,9 @@ import {
   type NewNodeInit,
 } from '../nodes/factory';
 import { useProject } from '../projects/hooks';
-import { useModels, useProviders } from '../providers/hooks';
+import { ProviderPickerHost } from '../providers/ProviderModelPicker';
+import { useProviders } from '../providers/hooks';
+import { requestProviderChoice } from '../providers/provider-picker-store';
 import { useRunStore } from '../runs/run-store';
 import { useGraphSync, useWorkflowGraph } from '../workflows/hooks';
 import { useCanvasApi } from './canvas-api';
@@ -68,6 +70,7 @@ import { CanvasToolbar } from './CanvasToolbar';
 import { checkConnection, type ConnectionAttempt } from './connect';
 import { PALETTE_DRAG_TYPE, PALETTE_INIT_TYPE } from './drag';
 import { DUPLICATE_OFFSET, duplicateNodes } from './duplicate';
+import { lacksUsableProvider, needsProviderChoice, withProviderChoice } from './provider-first';
 import { EdgeLayer } from './EdgeLayer';
 import {
   MOVE_HISTORY_LIMIT,
@@ -539,7 +542,6 @@ function CanvasInner({
   // Providers give the stage cards their look and sub line, and the "provider missing" note
   // (FR-NODE-010, FR-PRV-005); the model catalogue gives "Add node" its model.
   const providers = useProviders();
-  const models = useModels();
   const serverNodes = useMemo(
     () =>
       toFlowNodes(nodes, edges, armedPortId, onPortKey, providers.data ?? [], providers.isSuccess),
@@ -745,8 +747,20 @@ function CanvasInner({
   );
 
   const addNodeAt = useCallback(
-    (kind: CanvasNodeKind, position: { x: number; y: number }, init?: NewNodeInit) => {
+    function addNodeAt(
+      kind: CanvasNodeKind,
+      position: { x: number; y: number },
+      init?: NewNodeInit,
+    ): Node | undefined {
       if (readOnly) return undefined;
+      // PG-1.3 (D351): an Agent/Model waits for the picker; Cancel creates nothing.
+      if (needsProviderChoice(kind, init)) {
+        requestProviderChoice({
+          ...(init?.modelId === undefined ? {} : { initial: { modelId: init.modelId } }),
+          onChosen: (choice) => addNodeAt(kind, position, { ...init, ...choice }),
+        });
+        return undefined;
+      }
       const node = applyNewNodeInit(
         createNode(kind, workflowId, {
           x: Math.round(position.x),
@@ -806,31 +820,19 @@ function CanvasInner({
    */
   const addStage = useCallback(() => {
     if (readOnly) return;
-    const plan = planNewStage({
-      nodes,
-      edges,
-      workflowId,
-      providers: providers.data ?? [],
-      models: models.data?.items ?? [],
+    // PG-1.3 (D351): provider, then model, then the node — nothing is sent before both are chosen.
+    requestProviderChoice({
+      onChosen: (choice) => {
+        const plan = planNewStage({ nodes, edges, workflowId, choice });
+        editor.edit(plan.ops, 'Add node');
+        selectWhenAdded([plan.node.id]);
+        usePanelsStore.getState().openSettings({ kind: 'node', id: plan.node.id });
+        const { cw, ch } = canvasSize();
+        const { x, y } = plan.node.position;
+        void flow.setViewport(centreOn(flow.getViewport(), x + 105, y + 140, cw, ch));
+      },
     });
-    editor.edit(plan.ops, 'Add node');
-    selectWhenAdded([plan.node.id]);
-    usePanelsStore.getState().openSettings({ kind: 'node', id: plan.node.id });
-    const { cw, ch } = canvasSize();
-    const { x, y } = plan.node.position;
-    void flow.setViewport(centreOn(flow.getViewport(), x + 105, y + 140, cw, ch));
-  }, [
-    readOnly,
-    nodes,
-    edges,
-    workflowId,
-    providers.data,
-    models.data,
-    editor,
-    selectWhenAdded,
-    canvasSize,
-    flow,
-  ]);
+  }, [readOnly, nodes, edges, workflowId, editor, selectWhenAdded, canvasSize, flow]);
 
   /** The nodes an action applies to: the selection, or the right-clicked node when outside it. */
   const targetIds = useCallback(
@@ -845,13 +847,31 @@ function CanvasInner({
       const selected = nodes.filter((n) => ids.includes(n.id));
       if (selected.length === 0) return;
       const copies = duplicateNodes(selected, nodes);
-      editor.edit(
-        copies.map((node) => ({ op: 'add_node' as const, node })),
-        copies.length === 1 ? 'Duplicate node' : `Duplicate ${copies.length} nodes`,
-      );
-      selectWhenAdded(copies.map((n) => n.id));
+      const place = (placed: Node[]) => {
+        editor.edit(
+          placed.map((node) => ({ op: 'add_node' as const, node })),
+          placed.length === 1 ? 'Duplicate node' : `Duplicate ${placed.length} nodes`,
+        );
+        selectWhenAdded(placed.map((n) => n.id));
+      };
+      // PG-1.3 (D351): a copy that would be born without a usable provider asks for one first.
+      const known = providers.data ?? [];
+      if (!copies.some((copy) => lacksUsableProvider(copy, known))) {
+        place(copies);
+        return;
+      }
+      requestProviderChoice({
+        title: 'Choose a provider for the copy',
+        confirmLabel: 'Duplicate',
+        onChosen: (choice) =>
+          place(
+            copies.map((copy) =>
+              lacksUsableProvider(copy, known) ? withProviderChoice(copy, choice) : copy,
+            ),
+          ),
+      });
     },
-    [nodes, editor, selectWhenAdded, readOnly],
+    [nodes, editor, selectWhenAdded, readOnly, providers.data],
   );
 
   const duplicateSelection = useCallback(
@@ -1322,6 +1342,9 @@ function CanvasInner({
               onUndoMove={undoMove}
             />
             <CanvasMinimap dark={dark} />
+
+            {/* PG-1.3 (D351): the provider-first picker Add node, drop and Duplicate open. */}
+            <ProviderPickerHost />
 
             {loopCandidate && (
               <MakeLoopEdgeDialog

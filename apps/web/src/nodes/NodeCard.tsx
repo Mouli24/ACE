@@ -34,6 +34,7 @@ import { nodeStatusLook } from '../theme/format';
 import { useWorkflowGraph } from '../workflows/hooks';
 
 import { DOC_W, STAGE_W, isStageKind, portAnchor } from './anchors';
+import { ChooseProviderButton, needsProvider } from './ChooseProvider';
 import { NodePreflightIssues } from './NodePreflightIssues';
 import { useKnowledgeBaseName, useWorkflowProjectId } from './retrieval/hooks';
 
@@ -79,6 +80,8 @@ export interface NodeCardViewProps {
   onPortKey?: (port: Port, direction: 'in' | 'out') => void;
   /** A Retrieval node's base, by name, once the project's bases have loaded (FR-RAG-006). */
   knowledgeBaseName?: string;
+  /** The node names a provider the engine no longer has (FR-PRV-005; PG-1.3's red state). */
+  providerMissing?: boolean;
 }
 
 /** The card's 1px border: handles are placed inside it, anchors are measured from outside it. */
@@ -183,7 +186,9 @@ function stageSub(node: Node, providerName: string | undefined): string {
 function StageCard(props: NodeCardViewProps) {
   const { node, state, selected, provider, providerName, stage, dark = false } = props;
   const look = th(themeProviderOf(provider), dark);
-  const ring = look.w ? '#bdb6ae' : look.c;
+  // PG-1.3 (D351): no provider, or one that is gone — a red card that asks for one.
+  const choose = needsProvider(node, props.providerMissing);
+  const ring = choose ? '#c94c27' : look.w ? '#bdb6ae' : look.c;
   const status = nodeStatusLook(state);
   const name = node.name || 'Untitled';
   const n = stage ?? '';
@@ -195,9 +200,10 @@ function StageCard(props: NodeCardViewProps) {
       data-state={state}
       data-selected={selected ? 'true' : 'false'}
       data-provider={provider ?? 'none'}
+      data-needs-provider={choose ? 'true' : undefined}
       className="relative h-[280px] w-[210px] cursor-move rounded-[10px] bg-[var(--frame)] text-[var(--ink)]"
       style={{
-        border: `1px solid ${selected ? ring : look.w ? 'var(--frameLine)' : `rgba(${look.glow},0.38)`}`,
+        border: `1px solid ${selected || choose ? ring : look.w ? 'var(--frameLine)' : `rgba(${look.glow},0.38)`}`,
         boxShadow: selected
           ? `0 0 0 2px ${ring}, 0 12px 40px -16px rgba(${look.glow},0.55)`
           : 'none',
@@ -241,6 +247,7 @@ function StageCard(props: NodeCardViewProps) {
         >
           {stageSub(node, providerName)}
         </div>
+        {choose && <ChooseProviderButton node={node} />}
       </div>
       <div
         data-testid="status-chip"
@@ -535,6 +542,7 @@ export const FlowNodeCard = memo(function FlowNodeCard({
       {...(data.feeds === undefined ? {} : { feeds: data.feeds })}
       {...(data.receives === undefined ? {} : { receives: data.receives })}
       {...(knowledgeBaseName === undefined ? {} : { knowledgeBaseName })}
+      {...(data.providerMissing ? { providerMissing: true } : {})}
     />
   );
   const width = isStageKind(node.kind) ? STAGE_W : DOC_W;

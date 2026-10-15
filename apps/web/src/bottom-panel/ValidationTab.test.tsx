@@ -36,8 +36,9 @@ describe('Bottom panel (round 1 §5 step 3, FR-WF-006)', () => {
     expect(within(list).queryByText('unconnected_required_input')).toBeNull();
     // Round 2 changed this one: an agent with no model used to be a warning ("providers arrive in
     // round 2"); now that providers exist it blocks the run, so pre-flight and the panel both call
-    // it an error (R2 §2.7 item 2, D50).
-    expect(within(list).getByText('missing_model')).toBeInTheDocument();
+    // it an error (R2 §2.7 item 2, D50). D358 (PG-1.3) names an agent with no provider at all
+    // `missing_provider`, so this providerless agent reads that.
+    expect(within(list).getByText('missing_provider')).toBeInTheDocument();
     expect(within(list).queryAllByLabelText('warning')).toHaveLength(0);
     await user.click(within(list).getAllByRole('button', { name: 'show node' })[0]!);
     expect(useSelectionStore.getState().focusedNodeId).toBe(agent.id);

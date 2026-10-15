@@ -197,9 +197,28 @@ describe('pre-flight (§2.7, FR-EXE-003)', () => {
 
     const run = await client.startRun(workflow.id);
     expect(run.status).toBe('BLOCKED');
-    expect(run.preflightIssues.map((i) => i.code)).toContain('missing_model');
+    // D358 (PG-1.3): this agent has no provider either, so the engine names it missing_provider.
+    expect(run.preflightIssues.map((i) => i.code)).toContain('missing_provider');
     await tick(120);
     expect(db.events.filter((e) => e.type === 'run.started')).toHaveLength(0);
+  });
+
+  it('PG-1.3 a provider with no model is missing_model, not missing_provider (D358)', async () => {
+    const project = db.createProject({ name: 'P' });
+    const workflow = db.createWorkflow(project.id, 'Flow');
+    const provider = db.createProvider({ type: 'mock', name: 'Mock' });
+    db.commitGraph(
+      workflow.id,
+      [input(workflow.id), agent(workflow.id, { providerId: provider.id }), output(workflow.id)],
+      [],
+      { silent: true },
+    );
+
+    const run = await client.startRun(workflow.id);
+    expect(run.status).toBe('BLOCKED');
+    const codes = run.preflightIssues.map((i) => i.code);
+    expect(codes).toContain('missing_model');
+    expect(codes).not.toContain('missing_provider');
   });
 
   it('an Input node with nothing to send is missing_input; supplying it at start clears the issue', async () => {

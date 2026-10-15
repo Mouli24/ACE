@@ -1,4 +1,4 @@
-import type { Edge, GraphOp, Model, Node, Position, Provider } from '@ace/contracts';
+import type { Edge, GraphOp, Node, Position } from '@ace/contracts';
 
 import { newId } from '../lib/ulid';
 import { applyNewNodeInit, createNode, type NewNodeInit } from '../nodes/factory';
@@ -68,23 +68,21 @@ export interface NewStagePlan {
 }
 
 /**
- * The theme's "Add node" (D332): a new Agent named "New agent" after the last stage — 320 to the
- * right and 50 up or down, alternating — or at (440, 150) on an empty board; on the first
- * CONNECTED provider (else the first one) and its first available model, as the New node dialog
- * defaulted; linked from the last stage's first output to its first input when that edge is valid.
+ * The theme's "Add node" (D332, amended by D351): a new Agent named "New agent" after the last
+ * stage — 320 to the right and 50 up or down, alternating — or at (440, 150) on an empty board;
+ * on the provider and model the person chose in the provider-first picker (PG-1.3: never a default
+ * one); linked from the last stage's first output to its first input when that edge is valid.
  */
 export function planNewStage({
   nodes,
   edges,
   workflowId,
-  providers,
-  models,
+  choice,
 }: {
   nodes: readonly Node[];
   edges: readonly Edge[];
   workflowId: string;
-  providers: readonly Provider[];
-  models: readonly Model[];
+  choice: { providerId: string; modelId: string };
 }): NewStagePlan {
   const stages = agentsOf(nodes);
   const lastId = stages[stages.length - 1]?.nodeId;
@@ -94,14 +92,11 @@ export function planNewStage({
     ? { x: last.position.x + 320, y: last.position.y + (k % 2 ? 50 : -50) }
     : FIRST_STAGE_AT;
 
-  const provider = providers.find((each) => each.status === 'CONNECTED') ?? providers[0];
-  const model =
-    provider === undefined
-      ? undefined
-      : models.find((each) => each.providerId === provider.id && each.available);
-  const init: NewNodeInit = { name: NEW_STAGE_NAME };
-  if (provider !== undefined) init.providerId = provider.id;
-  if (model !== undefined) init.modelId = model.modelId;
+  const init: NewNodeInit = {
+    name: NEW_STAGE_NAME,
+    providerId: choice.providerId,
+    modelId: choice.modelId,
+  };
   const node = applyNewNodeInit(createNode('agent', workflowId, position), init);
 
   const ops: GraphOp[] = [{ op: 'add_node', node }];
