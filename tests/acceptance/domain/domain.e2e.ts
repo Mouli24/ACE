@@ -238,8 +238,9 @@ test.describe('Domain end to end on mock-script agents', () => {
       'aria-checked',
       'true',
     );
+    // PG-3.2: the switch carries the selected run, so Ideate opens on this same run.
     await page.getByRole('radio', { name: /Ideate/ }).click();
-    await expect(page).toHaveURL(new RegExp(`/workflows/${workflowId}$`));
+    await expect(page).toHaveURL(new RegExp(`/workflows/${workflowId}\\?run=${runId}$`));
   });
 
   test('manual routing: a held envelope is approved from the conversation', async ({ page }) => {

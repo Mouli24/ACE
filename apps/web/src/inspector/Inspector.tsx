@@ -21,8 +21,8 @@ import { VerdictList } from '../guardrails/VerdictList';
 import { useProviders } from '../providers/hooks';
 import { LOCAL_COST_TEXT, UNKNOWN_COST_TITLE, costText, isLocalProvider } from '../runs/CostValue';
 import { NodeRunMenu } from '../runs/controls/NodeRunMenu';
-import { useRerunNode, useRetryNodeRun, useRuns, useStartRun, useNodeRuns } from '../runs/hooks';
-import { useRunStore } from '../runs/run-store';
+import { useRerunNode, useRetryNodeRun, useStartRun, useNodeRuns } from '../runs/hooks';
+import { useSelectedRun } from '../runs/selected-run';
 import { useWorkflowGraph } from '../workflows/hooks';
 import { PromptText } from './PromptText';
 import { SourcesSection } from './SourcesSection';
@@ -47,13 +47,8 @@ const INNER_BOX =
  */
 export function Inspector({ workflowId }: { workflowId: string }) {
   const focusedNodeId = useSelectionStore((s) => s.focusedNodeId);
-  const liveRunId = useRunStore((store) =>
-    store.workflowId === workflowId ? store.runId : undefined,
-  );
-  // The overlay adopts only a live run, so after a reload a finished one is inspected from the
-  // records: the workflow's newest run (D-091).
-  const runs = useRuns(liveRunId === undefined ? workflowId : undefined);
-  const runId = liveRunId ?? runs.data?.[0]?.id;
+  // PG-3.2: the workflow's one selected run, finished or live (D-091's newest run by default).
+  const { runId, loading: runsLoading } = useSelectedRun(workflowId);
   const nodeRuns = useNodeRuns(runId);
   const graph = useWorkflowGraph(workflowId);
   const [promptOpen, setPromptOpen] = useState(false);
@@ -77,10 +72,8 @@ export function Inspector({ workflowId }: { workflowId: string }) {
       className="flex h-full flex-col gap-4 overflow-y-auto text-[var(--ink)]"
       data-testid="inspector"
     >
-      {runId === undefined && runs.isLoading && <p className={EMPTY}>Loading runs…</p>}
-      {runId === undefined && !runs.isLoading && (
-        <p className={EMPTY}>Start a run to inspect it.</p>
-      )}
+      {runId === undefined && runsLoading && <p className={EMPTY}>Loading runs…</p>}
+      {runId === undefined && !runsLoading && <p className={EMPTY}>Start a run to inspect it.</p>}
       {runId !== undefined && focusedNodeId === undefined && (
         <p className={EMPTY}>Select a node to see what its run did.</p>
       )}

@@ -9,6 +9,7 @@ import type {
   RunAction,
   RunState,
   ServerFrame,
+  ToolCall,
   Usage,
   Verdict,
 } from '@ace/contracts';
@@ -114,6 +115,8 @@ export interface AdoptableNodeRun {
   modelUsed?: NodeRunView['modelUsed'];
   output?: Part[];
   usage: Usage;
+  /** The calls it made (round 4 §2.1); rebuilt as `tool.call` frames for Forge (PG-3.2). */
+  toolCalls?: readonly ToolCall[];
 }
 
 /** One buffer per store; `reset()` clears it rather than replacing it, so selectors stay valid. */
@@ -229,6 +232,23 @@ export const useRunStore = create<RunOverlayState>((set) => ({
           },
         } as unknown as ServerFrame);
       }
+    }
+    /*
+     * PG-3.2: every tool call the records hold, as the `tool.call` frames that carried them, in
+     * the order they were made — Forge's attribution (who wrote which file, D334) is folded from
+     * these, so it survives a reload and a finished run.
+     */
+    const calls = nodeRuns
+      .flatMap((nodeRun) =>
+        (nodeRun.toolCalls ?? []).map((toolCall) => ({ nodeRunId: nodeRun.id, toolCall })),
+      )
+      .sort((a, b) => a.toolCall.at.localeCompare(b.toolCall.at));
+    for (const { nodeRunId, toolCall } of calls) {
+      buffer.apply({
+        seq: syntheticSeq--,
+        type: 'tool.call',
+        payload: { runId: run.id, nodeRunId, toolCall },
+      } as unknown as ServerFrame);
     }
     // a WAITING node's card is anchored to its pending approval, which no node-run record carries
     for (const request of approvals) {

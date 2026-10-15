@@ -24,7 +24,7 @@ import { ChatComposer, type ChatRosterEntry } from './ChatComposer';
 import { ChatConversation } from './ChatConversation';
 import { ChatThreadList } from './ChatThreadList';
 import { useChatSessions } from './session-store';
-import { sendToNode, stopNode, useChatSocket, useThreadConversation } from './useChat';
+import { sendToNode, stopNode, useThreadConversation } from './useChat';
 import { isChatNode, useDropStaleChatTarget } from './workflow-target';
 
 /** Tabs drawn before the rest go under "More" (the theme's tabs row). */
@@ -118,8 +118,8 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
   }, [hasTarget]);
   useEffect(() => () => useWorkspaceStatus.getState().setMessageCount(null), []);
 
-  // One socket link for every session, so a reply owed to a node off screen still arrives.
-  useChatSocket(target?.id);
+  // The chat socket — one link for every session — is the workflow layout's (D354), so a reply
+  // still arrives with this column closed or in Domain.
 
   const looks = agentMap(nodes ?? []);
   const chatRoster: ChatRosterEntry[] = roster.map((entry) => ({

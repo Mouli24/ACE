@@ -24,7 +24,7 @@ vi.mock('../../runs/hooks', async (importOriginal) => ({
 afterEach(() => {
   socket.status = 'open';
   useRunStore.getState().reset();
-  useWorkspaceStatus.setState({ messageCount: null, tokens: null });
+  useWorkspaceStatus.setState({ messageCount: null });
   useEditorStatus.getState().clear();
 });
 
@@ -125,38 +125,34 @@ describe('D330 the workspace footer', () => {
       expect(screen.getByTestId('footer-tokens')).toHaveTextContent('— in / — out');
     });
 
-    it('in Ideate and Forge, this workflow’s run totals from the live overlay', () => {
-      const { workflow } = renderFooter('forge');
-      act(() =>
-        useRunStore.setState({
-          workflowId: workflow.id,
-          totals: { tokensIn: 12_345, tokensOut: 812, costUsd: 0.01 },
-        }),
-      );
-      expect(screen.getByTestId('footer-tokens')).toHaveTextContent('12.3k in / 812 out');
-    });
+    // PG-3.3: one source in every mode — the selected run's totals (PG-3.2), live from the overlay.
+    it.each(['ideate', 'forge', 'domain'] as const)(
+      'in %s, the selected run’s totals from the live overlay',
+      (mode) => {
+        const { workflow } = renderFooter(mode);
+        act(() =>
+          useRunStore.setState({
+            workflowId: workflow.id,
+            runId: 'RUN1',
+            active: true,
+            totals: { tokensIn: 12_345, tokensOut: 812, costUsd: 0.01 },
+          }),
+        );
+        expect(screen.getByTestId('footer-tokens')).toHaveTextContent('12.3k in / 812 out');
+      },
+    );
 
     it('never another workflow’s run totals', () => {
       renderFooter('ideate');
       act(() =>
         useRunStore.setState({
           workflowId: 'OTHER',
+          runId: 'RUN1',
+          active: true,
           totals: { tokensIn: 5, tokensOut: 5, costUsd: 0 },
         }),
       );
       expect(screen.getByTestId('footer-tokens')).toHaveTextContent('— in / — out');
-    });
-
-    it('in Domain, what the Domain page publishes', () => {
-      const { workflow } = renderFooter('domain');
-      act(() => {
-        useRunStore.setState({
-          workflowId: workflow.id,
-          totals: { tokensIn: 5, tokensOut: 5, costUsd: 0 },
-        });
-        useWorkspaceStatus.getState().setTokens({ in: 1_230_000, out: 45_600 });
-      });
-      expect(screen.getByTestId('footer-tokens')).toHaveTextContent('1.23M in / 45.6k out');
     });
   });
 
@@ -238,7 +234,15 @@ describe('D330 the workspace footer', () => {
   it('carries this workflow’s run state as data, drawing nothing for it', () => {
     const { workflow } = renderFooter('ideate');
     expect(footer()).not.toHaveAttribute('data-run-status');
-    act(() => useRunStore.setState({ workflowId: workflow.id, status: 'COMPLETE' }));
+    // PG-3.2: the selected run's state — here the run the overlay follows for this workflow.
+    act(() =>
+      useRunStore.setState({
+        workflowId: workflow.id,
+        runId: 'RUN1',
+        active: true,
+        status: 'COMPLETE',
+      }),
+    );
     expect(footer()).toHaveAttribute('data-run-status', 'COMPLETE');
     expect(footer()).not.toHaveTextContent(/complete/i);
     act(() => useRunStore.setState({ workflowId: 'OTHER', status: 'RUNNING' }));

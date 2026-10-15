@@ -4,8 +4,9 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
 
-import { usePauseRun, useRestartRun, useResumeRun, useStopRun } from '../../runs/hooks';
+import { usePauseRun, useRestartRun, useResumeRun, useRun, useStopRun } from '../../runs/hooks';
 import { useRunStore } from '../../runs/run-store';
+import { useSelectedRun } from '../../runs/selected-run';
 import { useStartRunFlow } from '../../runs/useStartRunFlow';
 import { StopConfirm } from './WorkspaceMenu';
 
@@ -16,8 +17,7 @@ const PILL =
  * PG-1.2 (D360): Run · Pause · Stop · Restart in the workspace header, in Ideate, Forge and Domain.
  *
  * Run starts this workflow's run (asking an empty Input node for text first, as the "…" menu does).
- * The other three act on the run the overlay holds for this workflow — its active or newest run,
- * as `WorkspaceMenu` uses it; Phase 3 (PG-3.2) makes that one selected run across the modes. Each
+ * The other three act on the workflow's one selected run (PG-3.2, `useSelectedRun`). Each
  * control is enabled only because the run's `allowedActions` names it (FR-CTL-006): the header
  * decides nothing about the run's state. Pause reads Resume while the run allows resuming. Stop
  * asks first (FR-CTL-003); Restart opens the new run (FR-CTL-004).
@@ -25,15 +25,23 @@ const PILL =
 export function HeaderRunControls({ workflowId }: { workflowId: string }) {
   const navigate = useNavigate();
   const flow = useStartRunFlow(workflowId);
-  const run = useRunStore(
-    useShallow((store) => {
-      const mine = store.workflowId === workflowId;
-      return {
-        runId: mine ? store.runId : undefined,
-        allowedActions: mine ? store.allowedActions : undefined,
-      };
-    }),
+  // PG-3.2: the one selected run; its actions from the overlay while it holds that run, else from
+  // the run's record (a run picked but not yet adopted).
+  const { runId: selectedRunId } = useSelectedRun(workflowId);
+  const held = useRunStore(
+    useShallow((store) =>
+      selectedRunId !== undefined &&
+      store.workflowId === workflowId &&
+      store.runId === selectedRunId
+        ? { allowedActions: store.allowedActions }
+        : null,
+    ),
   );
+  const record = useRun(held === null ? selectedRunId : undefined).data;
+  const run = {
+    runId: selectedRunId,
+    allowedActions: held !== null ? held.allowedActions : record?.allowedActions,
+  };
   const mutations = {
     pause: usePauseRun(),
     resume: useResumeRun(),

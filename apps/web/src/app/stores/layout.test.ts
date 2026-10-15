@@ -26,6 +26,8 @@ describe('D299 D330 the workspace layout is the person’s choice, and is rememb
     };
     expect(saved.state).toEqual({
       chatOpen: false,
+      // D356: Team is remembered on its own, untouched by Chat.
+      teamOpen: true,
       sidebarOpen: false,
       panelOpen: true,
       panelTab: 'problems',
