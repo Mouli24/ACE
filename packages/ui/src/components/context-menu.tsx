@@ -40,10 +40,17 @@ ContextMenuContent.displayName = 'ContextMenuContent';
 export const ContextMenuItem = forwardRef<
   ElementRef<typeof ContextMenuPrimitive.Item>,
   ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Item> & { destructive?: boolean }
->(({ className, destructive, ...props }, ref) => (
+>(({ className, destructive, onPointerUp, ...props }, ref) => (
   <ContextMenuPrimitive.Item
     ref={ref}
     className={cn(MENU_ITEM_CLASS, destructive && 'text-[#c94c27]', className)}
+    onPointerUp={(event) => {
+      onPointerUp?.(event);
+      // Linux opens a context menu on the right button's press, under the pointer, and Radix
+      // treats the release that follows as a click on whatever item it lands on. Only a primary
+      // button release selects (D-097).
+      if (event.button !== 0) event.preventDefault();
+    }}
     {...props}
   />
 ));
