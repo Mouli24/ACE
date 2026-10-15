@@ -676,6 +676,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
 
           const requested: ChatToolRequest[] = [];
           for await (const chunk of stream as AsyncIterable<StreamChunk>) {
+            // PG-1.6: an adapter that does not watch its signal is left at the first chunk after a stop.
+            if (stopSignal.aborted) break;
             if (chunk.type === 'text') {
               text += chunk.delta;
               tokens.push(chunk.delta);
@@ -722,6 +724,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         ...(judge === undefined ? {} : { judge }),
       });
       limitReached = loop.limitReached;
+      // PG-1.6: an adapter that finished despite the stop still ends as the stop the person asked for.
+      if (stopSignal.aborted) throw new Error('stopped');
       // D287: a result the context point blocked ends the turn as a stored error, with its reason.
       if (loop.blocked !== undefined) failure = loop.blocked;
     } catch (error) {
