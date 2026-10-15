@@ -1,5 +1,6 @@
 import {
   CONTEXT_BUDGET_SHARES,
+  outputTypesWithSchema,
   type DataType,
   type Envelope,
   type EnvelopeContract,
@@ -245,7 +246,8 @@ export function contractFor(
   maxTokens?: number,
 ): EnvelopeContract {
   return {
-    outputTypes,
+    // D353 (PG-2.1): a schema implies json, so the contract the envelope carries says so.
+    outputTypes: outputTypesWithSchema(outputTypes, jsonSchema),
     ...(jsonSchema === undefined ? {} : { jsonSchema }),
     ...(maxTokens === undefined ? {} : { maxTokens }),
   };

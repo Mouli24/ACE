@@ -1,5 +1,6 @@
 import {
   TOOL_RESULT_SUMMARY_MAX,
+  effectiveOutputTypes,
   isCliProviderType,
   validateAgainstContract,
   type Envelope,
@@ -550,8 +551,14 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
     const instructions =
       node.kind === 'agent' ? node.config.instructions : (node.config.systemPrompt ?? '');
+    /*
+     * D353 (PG-2.1): a JSON schema implies JSON output, so an Agent left at `['text']` with a schema
+     * is parsed and checked like a `json` one. Every read of the node's output types below goes
+     * through this list.
+     */
+    const effectiveTypes = effectiveOutputTypes(node.config);
     const contract: EnvelopeContract = {
-      outputTypes: node.config.outputTypes,
+      outputTypes: effectiveTypes,
       ...(node.kind === 'agent' && node.config.outputContract?.jsonSchema !== undefined
         ? { jsonSchema: node.config.outputContract.jsonSchema }
         : {}),
@@ -567,7 +574,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
      * JSON answer (13a review m2): `__memory` is a field of the JSON output, and only the JSON branch
      * below reads it, so a text-only agent is never told to write one nothing would apply.
      */
-    const memoryOn = input.memory?.enabled === true && node.config.outputTypes.includes('json');
+    const memoryOn = input.memory?.enabled === true && effectiveTypes.includes('json');
     /*
      * The schema the provider is held to. With memory on it also allows an optional `__memory` list,
      * or a provider that enforces schemas could never emit one; the answer is still validated against
@@ -648,7 +655,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
     // The `agent | model` narrowing above does not reach inside `attemptWith`, so the fields it
     // needs are captured here rather than re-narrowed there.
-    const outputTypes = node.config.outputTypes;
+    const outputTypes = effectiveTypes;
     const { temperature } = node.config.execution;
 
     /*
