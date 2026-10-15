@@ -34,12 +34,35 @@ export function createOllamaAdapter(options: OllamaOptions = {}): ProviderAdapte
     ...adapter,
     // PG-1.4 (D359): the native `/api/tags` list carries each model's size on disk. Best effort —
     // a service that does not answer it still lists its models.
+    //
+    // D-100: and what each model can do. Ollama's `format` holds any model to a JSON schema, so
+    // every model takes a schema (the executor still checks the output against it); tool calls and
+    // images are per model, read from `/api/show`'s `capabilities`. Without this every local model
+    // looked like it could do neither, and D353 blocked a schema or tools on all of them.
     listModels: async () => {
       const models = await adapter.listModels();
-      const sizes = await ollamaModelSizes(baseUrl, options.fetchImpl);
+      const [sizes, capabilities] = await Promise.all([
+        ollamaModelSizes(baseUrl, options.fetchImpl),
+        ollamaCapabilities(
+          baseUrl,
+          models.map((model) => model.modelId),
+          options.fetchImpl,
+        ),
+      ]);
       return models.map((model) => {
         const size = sizes.get(model.modelId);
-        return size === undefined ? model : { ...model, sizeBytes: size };
+        const can = capabilities.get(model.modelId);
+        const inputTypes =
+          can?.has('vision') === true && !model.inputTypes.includes('image')
+            ? [...model.inputTypes, 'image' as const]
+            : model.inputTypes;
+        return {
+          ...model,
+          inputTypes,
+          supportsJson: true,
+          supportsTools: can === undefined ? model.supportsTools : can.has('tools'),
+          ...(size === undefined ? {} : { sizeBytes: size }),
+        };
       });
     },
     // Ollama's native batch endpoint, not the OpenAI-style one this adapter otherwise speaks.
@@ -85,6 +108,46 @@ export async function ollamaModelSizes(
     for (const key of [name, model]) if (typeof key === 'string') sizes.set(key, size);
   }
   return sizes;
+}
+
+/** How many `/api/show` calls are in flight at once while a model list is read. */
+const SHOW_CONCURRENCY = 4;
+
+/**
+ * Each model's `capabilities` from Ollama's `/api/show` (D-100): `completion`, `tools`, `vision`,
+ * `embedding`, … Best effort and never throws: a model whose answer is missing or malformed is
+ * left out, and its catalogue defaults stand.
+ */
+export async function ollamaCapabilities(
+  baseUrl: string,
+  modelIds: readonly string[],
+  fetchImpl?: FetchLike,
+): Promise<Map<string, Set<string>>> {
+  const found = new Map<string, Set<string>>();
+  const queue = [...modelIds];
+  const worker = async (): Promise<void> => {
+    for (let modelId = queue.shift(); modelId !== undefined; modelId = queue.shift()) {
+      try {
+        const body = (await postJson({
+          url: `${normaliseBaseUrl(baseUrl)}/api/show`,
+          body: { model: modelId },
+          timeoutMs: DETECT_TIMEOUT_MS * 3,
+          ...(fetchImpl === undefined ? {} : { fetchImpl }),
+        })) as { capabilities?: unknown } | null;
+        const list = body?.capabilities;
+        if (Array.isArray(list)) {
+          found.set(
+            modelId,
+            new Set(list.filter((entry): entry is string => typeof entry === 'string')),
+          );
+        }
+      } catch {
+        // an older Ollama, or one model it cannot describe: keep the defaults
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(SHOW_CONCURRENCY, queue.length) }, worker));
+  return found;
 }
 
 /** How long detection waits. Short: this runs on first load and must never hold the UI up. */
