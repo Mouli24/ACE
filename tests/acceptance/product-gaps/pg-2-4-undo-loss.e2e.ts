@@ -45,7 +45,9 @@ async function writingProject(label: string): Promise<Seeded> {
       {
         name: 'Coder',
         providerId,
-        modelId: 'mock-chat',
+        // A model that takes tools: on one that does not, pre-flight blocks the write tool first
+        // (`tools_unsupported`, D353) and the checkpoint is never tried.
+        modelId: 'mock-tool',
         config: { tools: { enabled: ['write_file'], maxToolCalls: 5, allowedDomains: [] } },
       },
     ],
