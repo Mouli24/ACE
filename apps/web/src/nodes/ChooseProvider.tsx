@@ -33,6 +33,8 @@ export function ChooseProviderButton({ node }: { node: Node }) {
     requestProviderChoice({
       title: `Choose a provider for “${node.name || 'Untitled'}”`,
       confirmLabel: 'Use this model',
+      // D353: a model that cannot honour this agent's schema or tools is marked with the reason.
+      ...(node.kind === 'agent' ? { needs: node.config } : {}),
       onChosen: ({ providerId, modelId }) => {
         const latest =
           queryClient
