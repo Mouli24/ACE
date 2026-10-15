@@ -1,4 +1,4 @@
-import type { Envelope, Id, NodeRun, Part } from '@ace/contracts';
+import type { Id, NodeRun } from '@ace/contracts';
 import {
   Badge,
   Button,
@@ -9,22 +9,20 @@ import {
   DialogTitle,
   StatusRing,
 } from '@ace/ui';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
-import { PartRenderer } from '@ace/ui';
-
-import { api } from '../app/api';
-import { useArtifact } from '../artifacts';
 import { useSelectionStore } from '../app/stores/selection';
 import { IterationSelector } from '../edges/loop/IterationSelector';
 import { VerdictList } from '../guardrails/VerdictList';
 import { useProviders } from '../providers/hooks';
 import { LOCAL_COST_TEXT, UNKNOWN_COST_TITLE, costText, isLocalProvider } from '../runs/CostValue';
 import { NodeRunMenu } from '../runs/controls/NodeRunMenu';
-import { useRerunNode, useRetryNodeRun, useStartRun, useNodeRuns } from '../runs/hooks';
+import { useRerunNode, useRetryNodeRun, useRun, useStartRun, useNodeRuns } from '../runs/hooks';
 import { useSelectedRun } from '../runs/selected-run';
 import { useWorkflowGraph } from '../workflows/hooks';
+import { EnvelopeView, PartView } from './EnvelopeView';
 import { PromptText } from './PromptText';
+import { MemoryOpsList, ReusedNote } from './RecordNotes';
 import { SourcesSection } from './SourcesSection';
 import { TraceTab } from './TraceTab';
 import { ToolCallsTab } from './ToolCallsTab';
@@ -51,6 +49,19 @@ export function Inspector({ workflowId }: { workflowId: string }) {
   const { runId, loading: runsLoading } = useSelectedRun(workflowId);
   const nodeRuns = useNodeRuns(runId);
   const graph = useWorkflowGraph(workflowId);
+  const run = useRun(runId);
+  /**
+   * PG-4.1: every node of the run's snapshot by name — what the run executed (BR-04) — with the live
+   * graph's names behind it until the run is read.
+   */
+  const names = useMemo(
+    () =>
+      new Map<Id, string>([
+        ...(graph.data?.nodes ?? []).map((node): [Id, string] => [node.id, node.name]),
+        ...(run.data?.snapshot.nodes ?? []).map((node): [Id, string] => [node.id, node.name]),
+      ]),
+    [graph.data, run.data],
+  );
   const [promptOpen, setPromptOpen] = useState(false);
   /** Which node run of this node is on show; the newest until one is picked. */
   const [pickedNodeRunId, setPickedNodeRunId] = useState<Id>();
@@ -125,6 +136,9 @@ export function Inspector({ workflowId }: { workflowId: string }) {
 
           <Facts nodeRun={nodeRun} />
 
+          {/* PG-4.5: copied by Start from node, not executed — never a fresh $0 run. */}
+          <ReusedNote nodeRun={nodeRun} />
+
           {nodeRun.error && (
             <div
               role="alert"
@@ -150,7 +164,7 @@ export function Inspector({ workflowId }: { workflowId: string }) {
               </p>
             ) : (
               nodeRun.inputEnvelopes.map((envelope) => (
-                <EnvelopeView key={envelope.id} envelope={envelope} />
+                <EnvelopeView key={envelope.id} envelope={envelope} names={names} />
               ))
             )}
           </Section>
@@ -207,6 +221,13 @@ export function Inspector({ workflowId }: { workflowId: string }) {
           )}
 
           <SourcesSection nodeRun={nodeRun} />
+
+          {/* PG-4.5: what this node run remembered or forgot (FR-MEM-002). */}
+          {nodeRun.memoryOps !== undefined && nodeRun.memoryOps.length > 0 && (
+            <Section title="Memory">
+              <MemoryOpsList ops={nodeRun.memoryOps} />
+            </Section>
+          )}
 
           <Section title="Output">
             {nodeRun.output === undefined ? (
@@ -279,6 +300,11 @@ function Facts({ nodeRun }: { nodeRun: NodeRun }) {
   ];
   const rows: Array<[string, string]> = [
     ['model', nodeRun.modelUsed ? nodeRun.modelUsed.modelId : '—'],
+    // PG-4.1: the model the provider reports actually answered (an alias such as `opus` resolved).
+    [
+      'model used',
+      nodeRun.modelUsed ? (nodeRun.modelUsed.resolvedModelId ?? nodeRun.modelUsed.modelId) : '—',
+    ],
     ['via fallback', nodeRun.modelUsed ? (nodeRun.modelUsed.viaFallback ? 'yes' : 'no') : '—'],
     ['tokens in', String(nodeRun.usage.tokensIn)],
     ['tokens out', String(nodeRun.usage.tokensOut)],
@@ -315,44 +341,6 @@ function Facts({ nodeRun }: { nodeRun: NodeRun }) {
         ))}
       </dl>
     </div>
-  );
-}
-
-/** BR-02/BR-13: what the node was handed, how much of a budget it had, and how trusted it was. */
-function EnvelopeView({ envelope }: { envelope: Envelope }) {
-  return (
-    <div className={INNER_BOX} data-testid={`envelope-${envelope.id}`}>
-      <p className="m-0 font-machine text-[10.5px] text-[var(--muted)]">
-        from {envelope.fromNodeId.slice(-6)} · iteration {envelope.iteration} ·{' '}
-        <span data-testid="envelope-trust">{envelope.context.trust}</span> · budget{' '}
-        {envelope.context.budgetTokens} tokens
-      </p>
-      {envelope.context.summary && (
-        <p className="m-0 text-[var(--muted)]" data-testid="envelope-summary">
-          {envelope.context.summary}
-        </p>
-      )}
-      {envelope.reads.map((part, index) => (
-        <PartView key={index} part={part} />
-      ))}
-    </div>
-  );
-}
-
-/**
- * All seven Part types, through the shared renderers (FR-MM-006): media resolve via the content URL.
- * A Part names its artifact but carries no hash; the row does (D214), so the card is given the
- * artifact's sha256 once it is fetched — "name, size, hash" (R4 §5 item 3, D-076).
- */
-function PartView({ part }: { part: Part }) {
-  const artifact = useArtifact('artifactId' in part ? part.artifactId : undefined);
-  const hash = artifact.data?.hash;
-  return (
-    <PartRenderer
-      part={part}
-      contentUrl={(artifactId) => api().artifactContentUrl(artifactId)}
-      {...(hash === undefined ? {} : { hash })}
-    />
   );
 }
 
