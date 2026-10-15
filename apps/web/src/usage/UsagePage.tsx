@@ -209,8 +209,11 @@ function UsageResult({
   chart: ChartMode;
   onChart: (mode: ChartMode) => void;
 }) {
+  // PG-4.3: a direct-chat bucket says so; its spend is outside any run.
   const rowLabel = (bucket: UsageBucket) =>
-    groupBy.map((by) => keyLabel(by, bucket.key[by] ?? '')).join(' · ');
+    groupBy.map((by) => keyLabel(by, bucket.key[by] ?? '')).join(' · ') +
+    (bucket.source === 'chat' ? ' · chat' : '');
+  const hasChat = data.buckets.some((bucket) => bucket.source === 'chat');
 
   return (
     <>
@@ -288,11 +291,22 @@ function UsageResult({
                   data-testid={`usage-row-${i}`}
                   className="h-9 border-t border-[var(--line)]"
                 >
-                  {groupBy.map((by) => (
-                    <KeyCell key={by} by={by} raw={bucket.key[by] ?? ''} label={keyLabel} />
+                  {groupBy.map((by, index) => (
+                    <KeyCell
+                      key={by}
+                      by={by}
+                      raw={bucket.key[by] ?? ''}
+                      label={keyLabel}
+                      chat={index === 0 && bucket.source === 'chat'}
+                    />
                   ))}
                   {METRICS.map((metric) => (
-                    <ValueCell key={metric} metric={metric} value={bucket[metric]} />
+                    <ValueCell
+                      key={metric}
+                      metric={metric}
+                      value={bucket[metric]}
+                      costKnown={bucket.costKnown}
+                    />
                   ))}
                 </tr>
               ))}
@@ -307,26 +321,44 @@ function UsageResult({
                 </th>
                 <ValueCell metric="tokensIn" value={data.totals.tokensIn} />
                 <ValueCell metric="tokensOut" value={data.totals.tokensOut} />
-                <ValueCell metric="costUsd" value={data.totals.costUsd} />
+                <ValueCell
+                  metric="costUsd"
+                  value={data.totals.costUsd}
+                  costKnown={data.totals.costKnown}
+                />
                 <td className="px-3 text-right text-[var(--muted)]">—</td>
               </tr>
             </tfoot>
           </table>
         </div>
+        {hasChat && (
+          <p className="text-[11px] text-[var(--muted)]" data-testid="usage-chat-note">
+            Rows marked chat are direct-chat replies, outside any run; they count in the total.
+          </p>
+        )}
 
         {/* < 640 px: a card per bucket, the same numbers through the same formatter. */}
         <ul className="flex min-w-0 flex-col gap-[10px] sm:hidden" data-testid="usage-cards">
           {data.buckets.map((bucket, i) => (
             <UsageCard key={i} testId={`usage-card-${i}`} title={rowLabel(bucket)}>
               {METRICS.map((metric) => (
-                <CardValue key={metric} metric={metric} value={bucket[metric]} />
+                <CardValue
+                  key={metric}
+                  metric={metric}
+                  value={bucket[metric]}
+                  costKnown={bucket.costKnown}
+                />
               ))}
             </UsageCard>
           ))}
           <UsageCard testId="usage-card-totals" title="Total" strong>
             <CardValue metric="tokensIn" value={data.totals.tokensIn} />
             <CardValue metric="tokensOut" value={data.totals.tokensOut} />
-            <CardValue metric="costUsd" value={data.totals.costUsd} />
+            <CardValue
+              metric="costUsd"
+              value={data.totals.costUsd}
+              costKnown={data.totals.costKnown}
+            />
           </UsageCard>
         </ul>
       </section>
@@ -344,10 +376,13 @@ function KeyCell({
   by,
   raw,
   label,
+  chat = false,
 }: {
   by: UsageGroupBy;
   raw: string;
   label: (by: UsageGroupBy, raw: string) => string;
+  /** PG-4.3: the row is direct-chat spend. */
+  chat?: boolean;
 }) {
   const text = label(by, raw);
   return (
@@ -358,18 +393,36 @@ function KeyCell({
       title={text === raw ? undefined : raw}
     >
       {text}
+      {chat && (
+        <span
+          data-testid="usage-source-chat"
+          className="ml-2 rounded-full border border-[var(--line)] px-[6px] py-[1px] font-machine text-[9.5px] text-[var(--muted)]"
+        >
+          chat
+        </span>
+      )}
     </td>
   );
 }
 
-function ValueCell({ metric, value }: { metric: UsageMetric; value: number }) {
+function ValueCell({
+  metric,
+  value,
+  costKnown,
+}: {
+  metric: UsageMetric;
+  value: number;
+  /** PG-4.3 (D359): `false` — the cost is only its known part. */
+  costKnown?: boolean | undefined;
+}) {
   return (
     <td
       className="whitespace-nowrap px-3 text-right font-machine text-[12px] tabular-nums"
       data-testid={`usage-${metric}`}
       data-value={String(value)}
+      {...(metric === 'costUsd' && costKnown === false ? { 'data-cost-known': 'false' } : {})}
     >
-      {formatUsageValue(metric, value)}
+      {formatUsageValue(metric, value, costKnown)}
     </td>
   );
 }
@@ -396,7 +449,15 @@ function UsageCard({
 }
 
 /** One number as the theme's token tile: a muted caption over a mono value. */
-function CardValue({ metric, value }: { metric: UsageMetric; value: number }) {
+function CardValue({
+  metric,
+  value,
+  costKnown,
+}: {
+  metric: UsageMetric;
+  value: number;
+  costKnown?: boolean | undefined;
+}) {
   return (
     <div className="flex min-w-0 flex-col rounded-[9px] border border-[var(--line)] bg-[var(--surface)] px-[10px] py-[9px]">
       <dt className="text-[10.5px] text-[var(--muted)]">{USAGE_METRIC_LABEL[metric]}</dt>
@@ -405,7 +466,7 @@ function CardValue({ metric, value }: { metric: UsageMetric; value: number }) {
         data-testid={`usage-card-${metric}`}
         data-value={String(value)}
       >
-        {formatUsageValue(metric, value)}
+        {formatUsageValue(metric, value, costKnown)}
       </dd>
     </div>
   );

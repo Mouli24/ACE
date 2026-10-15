@@ -31,13 +31,26 @@ export function formatUsd(value: number): string {
   return usd.format(value);
 }
 
+/**
+ * PG-4.3 (D359): a cost that may be partly unknown — an unpriced remote model's spend is never
+ * shown as $0. Known: `$0.01`. Unknown with a known part: `$0.01 + unknown`. All unknown: `unknown`.
+ */
+export function formatCost(value: number, costKnown: boolean | undefined): string {
+  if (costKnown !== false) return formatUsd(value);
+  return value === 0 ? 'unknown' : `${formatUsd(value)} + unknown`;
+}
+
 /** `1.2K` — for the top bar, where room is short. The exact number is in its label. */
 export function formatCompact(value: number): string {
   return compact.format(value);
 }
 
-export function formatUsageValue(metric: UsageMetric, value: number): string {
-  return metric === 'costUsd' ? formatUsd(value) : formatTokens(value);
+export function formatUsageValue(
+  metric: UsageMetric,
+  value: number,
+  costKnown?: boolean,
+): string {
+  return metric === 'costUsd' ? formatCost(value, costKnown) : formatTokens(value);
 }
 
 export const USAGE_METRIC_LABEL: Readonly<Record<UsageMetric, string>> = {

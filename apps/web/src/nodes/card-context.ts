@@ -1,3 +1,4 @@
+import type { NodeEstimate } from '@ace/contracts';
 import { createContext } from 'react';
 
 import type { PortConnectState } from '../canvas/interactions/ports';
@@ -29,3 +30,11 @@ export interface NodeCardActions {
 }
 
 export const NodeActionsContext = createContext<NodeCardActions | undefined>(undefined);
+
+/**
+ * PG-4.3: each Agent and Model node's cost estimate, keyed by node id. The Canvas provides it from
+ * one estimate per graph version; a card outside a Canvas has none and shows none.
+ */
+export const NodeEstimateContext = createContext<ReadonlyMap<string, NodeEstimate> | undefined>(
+  undefined,
+);

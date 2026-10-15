@@ -14,7 +14,7 @@ import {
 } from './hooks';
 import { useRunStore } from './run-store';
 import { useOpenRunInPlace } from './useOpenRunInPlace';
-import { OpenRunEnd, useStartRunFlow } from './useStartRunFlow';
+import { OpenRunEnd, RunEstimateTag, useStartRunFlow } from './useStartRunFlow';
 
 /** Run state → how the badge reads. The enum name stays the contract (BR-03: COMPLETE ≠ HALTED). */
 const RUN_STATE_LABEL: Readonly<Record<RunState, string>> = {
@@ -137,7 +137,7 @@ export function RunBar({ workflowId }: { workflowId: string }) {
 
       {!flow.active && (
         <Button size="sm" aria-label="Start run" onClick={flow.start} disabled={flow.pending}>
-          <Icons.Play aria-hidden size={12} /> Run
+          <Icons.Play aria-hidden size={12} /> Run <RunEstimateTag estimate={flow.estimate} />
         </Button>
       )}
       {/* PG-3.5 (D323): a Domain run still open says it waits, and offers its End. */}

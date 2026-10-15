@@ -54,6 +54,7 @@ import { newId } from '../lib/ulid';
 import { cardSize } from '../nodes/anchors';
 import {
   NodeActionsContext,
+  NodeEstimateContext,
   PortConnectContext,
   type NodeCardActions,
 } from '../nodes/card-context';
@@ -71,6 +72,7 @@ import { useProject } from '../projects/hooks';
 import { ProviderPickerHost } from '../providers/ProviderModelPicker';
 import { useProviders } from '../providers/hooks';
 import { requestProviderChoice } from '../providers/provider-picker-store';
+import { useNodeEstimates } from '../runs/estimate';
 import { useStartRun } from '../runs/hooks';
 import { useRunStore } from '../runs/run-store';
 import { useGraphSync, useWorkflowGraph } from '../workflows/hooks';
@@ -147,6 +149,8 @@ const MOD = typeof navigator !== 'undefined' && /Mac|iP/.test(navigator.platform
 /** The Canvas (FR-CAN-001..013): loading gate outside, React Flow inside. */
 export function Canvas({ workflowId, readOnly = false }: CanvasProps) {
   const graph = useWorkflowGraph(workflowId);
+  // PG-4.3: one estimate per graph version, handed to every card.
+  const estimates = useNodeEstimates(workflowId);
 
   // FR-CAN-010: nodes and edges arrive in one response; nothing is drawn before both are here.
   if (!graph.data) {
@@ -164,12 +168,14 @@ export function Canvas({ workflowId, readOnly = false }: CanvasProps) {
 
   return (
     <ReactFlowProvider>
-      <CanvasInner
-        workflowId={workflowId}
-        nodes={graph.data.nodes}
-        edges={graph.data.edges}
-        readOnly={readOnly}
-      />
+      <NodeEstimateContext.Provider value={estimates}>
+        <CanvasInner
+          workflowId={workflowId}
+          nodes={graph.data.nodes}
+          edges={graph.data.edges}
+          readOnly={readOnly}
+        />
+      </NodeEstimateContext.Provider>
     </ReactFlowProvider>
   );
 }

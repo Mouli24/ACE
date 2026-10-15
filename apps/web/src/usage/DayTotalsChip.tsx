@@ -2,7 +2,14 @@ import type { UsageResponse } from '@ace/contracts';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 
-import { formatCompact, formatTokens, formatUsd, startOfUtcDay, utcDate } from './format';
+import {
+  formatCompact,
+  formatCost,
+  formatTokens,
+  formatUsd,
+  startOfUtcDay,
+  utcDate,
+} from './format';
 import { useUsage, usageQueryKey, usageRootKey } from './hooks';
 import { useSocketFrames } from './live';
 
@@ -36,8 +43,15 @@ export function DayTotalsChip() {
   });
 
   if (usage.data === undefined) return null;
-  const { tokensIn, tokensOut, costUsd } = usage.data.totals;
+  const { tokensIn, tokensOut, costUsd, costKnown } = usage.data.totals;
   const tokens = tokensIn + tokensOut;
+  // PG-4.3 (D359): part of today's spend on an unpriced model is unknown, never $0. The day's
+  // direct-chat replies are in the totals; their own buckets say how much.
+  const cost = formatCost(costUsd, costKnown);
+  const chatUsd = usage.data.buckets
+    .filter((bucket) => bucket.source === 'chat')
+    .reduce((sum, bucket) => sum + bucket.costUsd, 0);
+  const chat = chatUsd > 0 ? ` (chat ${formatUsd(chatUsd)})` : '';
 
   return (
     <Link
@@ -45,11 +59,12 @@ export function DayTotalsChip() {
       data-testid="day-totals-chip"
       data-tokens={String(tokens)}
       data-cost={String(costUsd)}
-      aria-label={`Today: ${formatTokens(tokens)} tokens, ${formatUsd(costUsd)}. Open usage`}
-      title={`Today (UTC): ${formatTokens(tokensIn)} in · ${formatTokens(tokensOut)} out · ${formatUsd(costUsd)}`}
+      data-cost-known={costKnown === false ? 'false' : 'true'}
+      aria-label={`Today: ${formatTokens(tokens)} tokens, ${cost}. Open usage`}
+      title={`Today (UTC): ${formatTokens(tokensIn)} in · ${formatTokens(tokensOut)} out · ${cost}${chat}`}
       className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-[var(--line)] px-2 py-0.5 font-machine text-[11px] text-[var(--muted)] no-underline hover:text-[var(--ink)]"
     >
-      Today: {formatCompact(tokens)} tok · {formatUsd(costUsd)}
+      Today: {formatCompact(tokens)} tok · {cost}
     </Link>
   );
 }

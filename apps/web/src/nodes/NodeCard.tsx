@@ -28,6 +28,7 @@ import {
 
 import { InputDropZone } from '../artifacts/InputDropZone';
 import { findBlockingNodeId } from '../errors/blocked';
+import { formatCostRange, money } from '../runs/estimate';
 import { NodeApproval, NodeErrorCard, UnderCard } from '../runs/NodeRunAttachments';
 import { useNodeOverlay, useRunStore } from '../runs/run-store';
 import { th, themeProviderOf } from '../theme/constants';
@@ -36,7 +37,7 @@ import { useWorkflowGraph } from '../workflows/hooks';
 
 import { DOC_W, STAGE_W, isStageKind, portAnchor } from './anchors';
 import { ChooseProviderButton, needsProvider } from './ChooseProvider';
-import { PortConnectContext } from './card-context';
+import { NodeEstimateContext, PortConnectContext } from './card-context';
 import { NodeCardButtons } from './NodeCardButtons';
 import { NodePreflightIssues } from './NodePreflightIssues';
 import { useKnowledgeBaseName, useWorkflowProjectId } from './retrieval/hooks';
@@ -193,6 +194,34 @@ function stageSub(node: Node, providerName: string | undefined): string {
 }
 
 /**
+ * PG-4.3: what one run of this node could cost — `≈ $0.002–0.01`, `free` or `?` — and its own cap
+ * when it has one. Read from the Canvas's one estimate per graph version, never fetched per card.
+ */
+function NodeEstimateTag({ nodeId }: { nodeId: string }) {
+  const estimate = useContext(NodeEstimateContext)?.get(nodeId);
+  if (estimate === undefined) return null;
+  const text = formatCostRange(estimate);
+  const title = estimate.free
+    ? 'A local model: free'
+    : estimate.unknown
+      ? 'Cost unknown: this model has no price'
+      : `Estimated cost of one run of this node: ${text}`;
+  return (
+    <div
+      data-testid={`node-estimate-${nodeId}`}
+      data-unknown={estimate.unknown ? 'true' : 'false'}
+      title={
+        estimate.maxCostUsd === undefined ? title : `${title} · capped at ${money(estimate.maxCostUsd)}`
+      }
+      className="mt-[2px] font-machine text-[9px] text-[var(--muted)]"
+    >
+      {text}
+      {estimate.maxCostUsd === undefined ? null : ` · cap ${money(estimate.maxCostUsd)}`}
+    </div>
+  );
+}
+
+/**
  * The theme's Stage card (D332) for Agent and Model nodes: 210 × 280, the provider's orb and
  * border, `STAGE n · NAME`, the provider and model, and the live status.
  */
@@ -261,6 +290,7 @@ function StageCard(props: NodeCardViewProps) {
         >
           {stageSub(node, providerName)}
         </div>
+        <NodeEstimateTag nodeId={node.id} />
         {choose && <ChooseProviderButton node={node} />}
       </div>
       <div

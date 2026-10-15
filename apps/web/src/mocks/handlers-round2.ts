@@ -24,6 +24,7 @@ import { HttpResponse, http, type HttpHandler, type PathParams } from 'msw';
 import { newId } from '../lib/ulid';
 import { DETECTED_OLLAMA } from './catalog';
 import { MOCK_CLI_SCAN } from './cli-scan';
+import { estimateMockWorkflow } from './estimate';
 import { validateGraph } from './graph-rules';
 import { type MockDb } from './db';
 import { dropMockSockets } from './fake-socket';
@@ -494,6 +495,33 @@ export function createRound2Handlers(db: MockDb): HttpHandler[] {
             ...modelIssues(nodes, db.listModels(), providerIds),
           ],
         });
+      }),
+    ),
+
+    /* ------------------------------------------------- estimate (PG-4.3) */
+    http.post(
+      `${API}/workflows/:id/estimate`,
+      guard((ctx) => {
+        const workflow = db.getWorkflow(param(ctx, 'id'));
+        if (!workflow) return notFound('Workflow');
+        const project = db.getProject(workflow.projectId);
+        const runCap = project?.maxCostPerRunUsd;
+        const dailyCap = db.settings.dailyBudgetUsd;
+        return HttpResponse.json(
+          estimateMockWorkflow({
+            workflow,
+            nodes: db.nodesOf(workflow.id),
+            edges: db.edgesOf(workflow.id),
+            models: db.listModels(),
+            providers: db.listProviders(),
+            budget: {
+              ...(runCap === undefined || runCap === null ? {} : { maxCostPerRunUsd: runCap }),
+              ...(dailyCap === undefined || dailyCap === null ? {} : { dailyBudgetUsd: dailyCap }),
+              spentTodayUsd: 0,
+              spentTodayKnown: true,
+            },
+          }),
+        );
       }),
     ),
 
