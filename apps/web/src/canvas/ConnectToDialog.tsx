@@ -7,6 +7,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  Icons,
 } from '@ace/ui';
 import { useState } from 'react';
 
@@ -99,7 +100,9 @@ export function ConnectToDialog({
                     onClose();
                   }}
                 >
-                  {portLabel(choice.from, 'out')} → {portLabel(choice.to, 'in')}
+                  {portLabel(choice.from, 'out')}
+                  <Icons.ArrowRight aria-hidden size={12} className="mx-1 inline shrink-0" />
+                  {portLabel(choice.to, 'in')}
                 </button>
               </li>
             ))}

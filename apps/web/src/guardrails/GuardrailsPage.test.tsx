@@ -158,15 +158,18 @@ describe('TC-GRD-016 all five actions are configurable on a check', () => {
 
     await actor.click(screen.getByRole('combobox', { name: 'Action for pii at input' }));
     const options = await screen.findAllByRole('option');
-    // The theme's dropdown marks the current action in its ✓ column (D328); names are the labels.
-    expect(options.map((option) => option.textContent?.replace(/^✓/, ''))).toEqual([
+    // The theme's dropdown marks the current action in its check column (D328) — an SVG icon since
+    // PG-1.2 (D360), so it adds no text; names are the labels.
+    expect(options.map((option) => option.textContent)).toEqual([
       'pass',
       'warn',
       'redact',
       'ask user',
       'block',
     ]);
-    expect(screen.getByRole('option', { name: 'warn' })).toHaveTextContent('✓warn');
+    expect(
+      screen.getByRole('option', { name: 'warn' }).querySelector('svg[aria-hidden="true"]'),
+    ).not.toBeNull();
     expect(GUARDRAIL_ACTIONS).toHaveLength(options.length);
   });
 

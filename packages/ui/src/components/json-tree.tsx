@@ -1,3 +1,4 @@
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 
 import { cn } from '../lib/cn.js';
@@ -88,7 +89,7 @@ function Node({ name, value, depth, defaultExpandedDepth }: NodeProps) {
     >
       <summary className="flex cursor-pointer list-none items-center gap-1 rounded-[4px] py-px outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] [&::-webkit-details-marker]:hidden">
         <span aria-hidden className="w-[10px] shrink-0 text-[10px] text-[var(--muted)]">
-          {open ? '▾' : '▸'}
+          {open ? <ChevronDown aria-hidden size={10} /> : <ChevronRight aria-hidden size={10} />}
         </span>
         {label}
         <span className="font-machine text-[12px] text-[var(--muted)]">{summary}</span>

@@ -1,4 +1,4 @@
-import { Badge, Tabs, TabsContent, TabsList, TabsTrigger } from '@ace/ui';
+import { Badge, Icons, Tabs, TabsContent, TabsList, TabsTrigger } from '@ace/ui';
 import { useMemo } from 'react';
 
 import { usePanelsStore, type BottomTab } from '../app/stores/panels';
@@ -116,7 +116,7 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
             onClick={toggle}
             className="grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border border-[var(--line)] bg-transparent text-[12px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
           >
-            <span aria-hidden>✕</span>
+            <Icons.X aria-hidden size={12} />
           </button>
         )}
       </div>

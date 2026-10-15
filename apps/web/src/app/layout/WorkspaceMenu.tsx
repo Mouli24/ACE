@@ -14,6 +14,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  Icons,
   cn,
   toast,
 } from '@ace/ui';
@@ -118,9 +119,9 @@ export function WorkspaceMenu({
             type="button"
             aria-label="Workspace menu"
             data-testid="workspace-menu"
-            className="h-6 cursor-pointer rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[11px] text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+            className="flex h-6 cursor-pointer items-center rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[11px] text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
           >
-            …
+            <Icons.MoreHorizontal aria-hidden size={14} />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
@@ -144,7 +145,7 @@ export function WorkspaceMenu({
                   }}
                 >
                   <span aria-hidden className="w-3 shrink-0 text-[11px] text-[#e8572e]">
-                    {selected ? '✓' : ''}
+                    {selected && <Icons.Check aria-hidden size={11} strokeWidth={2.4} />}
                   </span>
                   <span className="min-w-0 truncate">{workflow.name}</span>
                 </DropdownMenuItem>

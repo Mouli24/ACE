@@ -337,7 +337,8 @@ describe('D332 the Canvas chrome is the theme’s', () => {
     const [fit] = fits as [HTMLElement];
     expect(fit).toHaveAccessibleName('Fit to view');
     expect(fit).toHaveAttribute('title', 'Fit to screen');
-    expect(fit).toHaveTextContent('⛶');
+    // PG-1.2 (D360): an SVG icon, not the ⛶ glyph
+    expect(fit.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
     expect(screen.getByTestId('canvas-toolbar')).toContainElement(fit);
     // F is still the Canvas's own fit shortcut: it handles (and so cancels) the key
     let notCancelled = true;

@@ -140,13 +140,14 @@ describe('D332 / FR-EXE-010 the floating sheet over the Canvas', () => {
     unpadded(await screen.findByTestId('memory-tab-not-agent'));
   });
 
-  it('the 28px ✕ (“Close panel”) calls closeSheet', async () => {
+  it('the 28px close (“Close panel”) calls closeSheet', async () => {
     const { project, workflow } = seed();
     renderSheet(project.id, workflow.id);
     open('runs');
     const close = await screen.findByRole('button', { name: 'Close panel' });
     expect(close).toHaveClass('h-7', 'w-7');
-    expect(close).toHaveTextContent('✕');
+    // PG-1.2 (D360): an SVG X, not the ✕ glyph
+    expect(close.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
     await userEvent.click(close);
     expect(usePanelsStore.getState().sheetOpen).toBe(false);
     expect(screen.queryByTestId('workflow-sheet')).toBeNull();

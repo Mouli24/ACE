@@ -1,5 +1,5 @@
 import type { Project } from '@ace/contracts';
-import { cn } from '@ace/ui';
+import { Icons, cn } from '@ace/ui';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -181,7 +181,7 @@ export function ProjectsPage() {
                   <div className="mt-[3px] text-[12px] text-[var(--muted)]">{entry.sub}</div>
                 </div>
                 <div aria-hidden className="text-[16px] text-[var(--muted)]">
-                  →
+                  <Icons.ArrowRight aria-hidden size={12} />
                 </div>
               </button>
             ))}

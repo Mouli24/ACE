@@ -1,3 +1,4 @@
+import { Icons } from '@ace/ui';
 import { useState, type KeyboardEvent } from 'react';
 
 /**
@@ -67,7 +68,7 @@ export function TimelineComposer({ onSend, busy = false, placeholder }: Timeline
           className="h-9 w-9 shrink-0 cursor-pointer rounded-[9px] border-none text-[16px] font-bold text-[#fff] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-default"
           style={{ background: canSend ? '#ef6b3f' : 'var(--sendOff)' }}
         >
-          <span aria-hidden>↑</span>
+          <Icons.ArrowUp aria-hidden size={12} />
         </button>
       </div>
     </form>

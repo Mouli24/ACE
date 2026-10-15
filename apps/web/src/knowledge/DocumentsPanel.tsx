@@ -1,6 +1,6 @@
 import { isKbDocumentSettled, type Id, type KbDocument } from '@ace/contracts';
 import type { IngestProgressView } from '@ace/sdk';
-import { Badge, Button, DIALOG_CLOSE_CLASS, ProgressBar, cn, formatBytes } from '@ace/ui';
+import { Badge, Button, DIALOG_CLOSE_CLASS, Icons, ProgressBar, cn, formatBytes } from '@ace/ui';
 import { useEffect, useRef, useState } from 'react';
 
 import { AttachmentPicker } from '../artifacts';
@@ -63,7 +63,7 @@ export function DocumentsPanel({
           onClick={() => reindex.mutate()}
           data-testid="kb-reindex"
         >
-          <span aria-hidden>↺</span> Reindex
+          <Icons.RotateCw aria-hidden size={12} /> Reindex
         </Button>
       </div>
 
@@ -149,7 +149,7 @@ export function DocumentsPanel({
                     aria-label={`Delete ${doc.name}`}
                     onClick={() => setDeleting(doc)}
                   >
-                    <span aria-hidden>✕</span>
+                    <Icons.X aria-hidden size={12} />
                   </button>
                 </div>
                 {!settled && (

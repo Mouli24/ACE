@@ -67,11 +67,12 @@ describe('the phone header’s run bar (FR-EXE-001, FR-MOB-001)', () => {
     );
   });
 
-  it('shows "▶ Run" and is named "Start run"; the visible word is in the name (WCAG 2.5.3)', () => {
+  it('shows a play icon and "Run", named "Start run"; the visible word is in the name (WCAG 2.5.3)', () => {
     renderBar();
     const button = screen.getByRole('button', { name: 'Start run' });
-    expect(button).toHaveTextContent('▶ Run');
-    expect(within(button).getByText('▶')).toHaveAttribute('aria-hidden');
+    // PG-1.2 (D360): the ▶ glyph is an SVG play icon, hidden from assistive tech
+    expect(button).toHaveTextContent(/^\s*Run$/);
+    expect(button.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
     expect(button.getAttribute('aria-label')?.toLowerCase()).toContain('run');
   });
 

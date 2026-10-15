@@ -107,8 +107,14 @@
   --color-chart-7: #b27408;
   --color-chart-8: #6c55c8;
 
-  /* PG-1.2 (D360): the destructive red as text, AA (4.5:1) on card, panel and canvas (tokens.ts). */
+  /*
+   * PG-1.2 (D360): D328's accents where they carry meaning, at AA on card, panel and canvas
+   * (tokens.ts): the destructive red and the orange accent as text (4.5:1), and a stronger orange
+   * a white icon or label stands on (4.5:1). #c94c27, #ef6b3f and #e8572e stay as decoration.
+   */
   --danger-ink: #b23f1d;
+  --accent-ink: #b4441b;
+  --accent-strong: #c2410c;
 
   /* PG-1.1 (D350): port dots by data type, each >= 3:1 on card, panel and canvas (tokens.ts). */
   --port-text: #c2410c;
@@ -152,6 +158,8 @@
   --ace-hi: #ffffff10;
   --ace-ground: 0 8px 24px -12px #000000cc;
   --danger-ink: #ef7a5a;
+  --accent-ink: #f08a5d;
+  --accent-strong: #c2410c;
   --port-text: #f08a5d;
   --port-image: #a996f0;
   --port-audio: #4fc3cc;

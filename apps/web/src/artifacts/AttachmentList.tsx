@@ -1,5 +1,5 @@
 import type { Id } from '@ace/contracts';
-import { formatBytes } from '@ace/ui';
+import { Icons, formatBytes } from '@ace/ui';
 
 import { api } from '../app/api';
 import { useArtifact } from './useArtifact';
@@ -45,7 +45,7 @@ function AttachmentRow({ id, onRemove }: { id: Id; onRemove?: (id: Id) => void }
           data-testid={`attachment-download-${id}`}
           className={`${ROW_BUTTON_CLASS} no-underline hover:text-[var(--ink)]`}
         >
-          <span aria-hidden>↓</span>
+          <Icons.Download aria-hidden size={12} />
         </a>
       )}
       {onRemove && (
@@ -56,7 +56,7 @@ function AttachmentRow({ id, onRemove }: { id: Id; onRemove?: (id: Id) => void }
           className={`${ROW_BUTTON_CLASS} hover:text-[#c94c27]`}
           onClick={() => onRemove(id)}
         >
-          <span aria-hidden>✕</span>
+          <Icons.X aria-hidden size={12} />
         </button>
       )}
     </li>

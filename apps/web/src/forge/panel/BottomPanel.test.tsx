@@ -132,12 +132,13 @@ describe('D299 D334 Forge’s bottom panel in the theme', () => {
     );
   });
 
-  it('maximizes with the theme’s ⛶, pressed while maximized, and closes with the 28px ✕', async () => {
+  it('maximizes with the theme’s maximize icon, pressed while maximized, and closes with the 28px close', async () => {
     const user = userEvent.setup();
     act(() => useLayoutStore.getState().showPanel('problems'));
     renderWithQuery(<BottomPanel projectId={P} />);
     const maximize = screen.getByRole('button', { name: 'Maximize panel' });
-    expect(maximize).toHaveTextContent('⛶');
+    // PG-1.2 (D360): an SVG icon, not the ⛶ glyph
+    expect(maximize.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
     expect(maximize).toHaveClass('h-7', 'w-7', 'rounded-[7px]');
     await user.click(maximize);
     expect(screen.getByRole('region', { name: 'Panel' })).toHaveClass('flex-1');

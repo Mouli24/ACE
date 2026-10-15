@@ -6,6 +6,7 @@ import {
   ContextMenuSeparator,
   ContextMenuShortcut,
   ContextMenuTrigger,
+  Icons,
   MENU_CONTENT_CLASS,
   cn,
   toast,
@@ -1795,7 +1796,9 @@ function DropChooserMenu({
           className={cn(EDGE_MENU_ITEM, 'text-[var(--ink)]')}
           onClick={() => onPick(choice)}
         >
-          {portLabel(choice.from, 'out')} → {portLabel(choice.to, 'in')}
+          {portLabel(choice.from, 'out')}
+          <Icons.ArrowRight aria-hidden size={12} className="mx-1 inline shrink-0" />
+          {portLabel(choice.to, 'in')}
         </button>
       ))}
     </div>

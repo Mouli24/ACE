@@ -1,3 +1,4 @@
+import { Icons } from '@ace/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useInRouterContext } from 'react-router-dom';
 
@@ -51,7 +52,7 @@ export function RunChecksButton({ projectId }: { projectId: string }) {
       className={PILL}
     >
       <span aria-hidden className="text-[9px] text-[#2f9e63]">
-        ▶
+        <Icons.Play aria-hidden size={12} />
       </span>
       {running ? 'Running checks…' : 'Run checks'}
     </button>

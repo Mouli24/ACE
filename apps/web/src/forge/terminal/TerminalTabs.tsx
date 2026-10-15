@@ -6,6 +6,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  Icons,
   cn,
 } from '@ace/ui';
 import { useState } from 'react';
@@ -123,7 +124,7 @@ export function TerminalTabs({
                 onClick={() => close(tab)}
                 className={cn(SMALL_BUTTON, 'text-[12px]')}
               >
-                <span aria-hidden>×</span>
+                <Icons.X aria-hidden size={12} />
               </button>
             </div>
           );

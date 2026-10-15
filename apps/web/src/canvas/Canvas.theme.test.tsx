@@ -193,13 +193,15 @@ describe('D332 the toolbar', () => {
     await mount(workflow.id);
     const lock = screen.getByRole('button', { name: 'Lock nodes' });
     expect(lock).toHaveAttribute('aria-pressed', 'false');
-    expect(lock).toHaveTextContent('🔓︎');
+    // PG-1.2 (D360): SVG lock icons, not the 🔓︎ 🔒︎ glyphs
+    expect(lock.querySelector('[data-icon="lock-open"]')).not.toBeNull();
     expect(flowNode(nodes[1]!.id)).toHaveClass('draggable');
 
     await userEvent.click(lock);
     expect(lock).toHaveAttribute('aria-pressed', 'true');
-    expect(lock).toHaveTextContent('🔒︎');
-    expect(lock.style.color).toBe('rgb(239, 107, 63)');
+    expect(lock.querySelector('[data-icon="lock"]')).not.toBeNull();
+    // PG-1.2 (D360): the AA accent token, not #ef6b3f (2.7:1 as an icon)
+    expect(lock.style.color).toBe('var(--accent-ink)');
     expect(flowNode(nodes[1]!.id)).not.toHaveClass('draggable');
     expect(flowNode(nodes[1]!.id)).toHaveClass('nopan');
 
@@ -213,7 +215,8 @@ describe('D332 the toolbar', () => {
     const hand = screen.getByRole('button', { name: 'Hand tool' });
     await userEvent.click(hand);
     expect(hand).toHaveAttribute('aria-pressed', 'true');
-    expect(hand.style.background).toBe('rgb(239, 107, 63)');
+    // PG-1.2 (D360): white on #ef6b3f measured 2.9:1; the AA accent token carries it
+    expect(hand.style.background).toBe('var(--accent-strong)');
     expect(screen.getByTestId('canvas').style.cursor).toBe('grab');
     const node = flowNode(nodes[1]!.id);
     expect(node).not.toHaveClass('draggable');

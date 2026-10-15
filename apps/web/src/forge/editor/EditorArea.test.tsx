@@ -146,7 +146,7 @@ describe('D334 the theme’s code column', () => {
     expect(screen.queryByTestId('path-bar')).toBeNull();
   });
 
-  it('the active tab has the orange top edge; an unsaved one shows ● instead of ×', async () => {
+  it('the active tab has the orange top edge; an unsaved one shows a dot instead of the close icon', async () => {
     renderWithQuery(<EditorArea projectId={projectId} />);
     act(() => {
       openFile(projectId, 'src/app.ts');
@@ -156,8 +156,11 @@ describe('D334 the theme’s code column', () => {
     const active = (await screen.findByTestId('tab-src/index.ts')).parentElement;
     expect(active).toHaveClass('shadow-[inset_0_2px_0_#ef6b3f]', 'bg-[var(--surface)]');
     expect(screen.getByTestId('tab-src/app.ts').parentElement).toHaveClass('text-[var(--muted)]');
-    expect(screen.getByTestId('dirty-src/app.ts')).toHaveTextContent('●');
-    expect(screen.getByRole('button', { name: 'Close index.ts' })).toHaveTextContent('×');
+    // PG-1.2 (D360): the ● and × glyphs are SVG icons now
+    expect(screen.getByTestId('dirty-src/app.ts').querySelector('svg')).not.toBeNull();
+    const close = screen.getByRole('button', { name: 'Close index.ts' });
+    expect(close.querySelector('svg')).not.toBeNull();
+    expect(close.textContent?.trim()).toBe('');
     expect(await screen.findByTestId('path-bar')).toBeInTheDocument();
   });
 

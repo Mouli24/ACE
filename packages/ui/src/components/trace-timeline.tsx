@@ -1,4 +1,5 @@
 import type { TraceEntry, TraceEntryKind } from '@ace/contracts';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useId, useState } from 'react';
 
 import { cn } from '../lib/cn.js';
@@ -116,7 +117,7 @@ function TraceRow({
             !hasDetail && 'invisible',
           )}
         >
-          {open ? '▾' : '▸'}
+          {open ? <ChevronDown aria-hidden size={10} /> : <ChevronRight aria-hidden size={10} />}
         </span>
       </button>
       {hasDetail && open ? (

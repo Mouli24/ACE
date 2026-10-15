@@ -1,4 +1,5 @@
 import { slugHandle } from '@ace/contracts';
+import { Icons } from '@ace/ui';
 import { useEffect, useState } from 'react';
 
 import { useProject } from '../../projects/hooks';
@@ -157,7 +158,7 @@ function RunPipeline({ workflowId }: { workflowId: string }) {
         className="flex h-[24px] shrink-0 cursor-pointer items-center gap-[6px] whitespace-nowrap rounded-[999px] border border-[var(--line)] bg-[var(--chip)] px-[10px] font-human text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f] disabled:cursor-default disabled:opacity-[0.45] disabled:hover:bg-[var(--chip)]"
       >
         <span aria-hidden className="text-[9px] text-[#2f9e63]">
-          ▶
+          <Icons.Play aria-hidden size={12} />
         </span>
         Run pipeline
       </button>

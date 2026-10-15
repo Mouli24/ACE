@@ -1,5 +1,5 @@
 import { ERROR_KINDS, type HealthMetrics } from '@ace/contracts';
-import { Button, FIELD_LABEL_CLASS } from '@ace/ui';
+import { Button, FIELD_LABEL_CLASS, Icons } from '@ace/ui';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
@@ -61,7 +61,7 @@ export function HealthMetricsPanel() {
           disabled={health.isFetching}
           data-testid="health-refresh"
         >
-          <span aria-hidden>↺</span>
+          <Icons.RotateCw aria-hidden size={12} />
           Refresh
         </Button>
       </div>

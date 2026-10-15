@@ -1,3 +1,4 @@
+import { Check } from 'lucide-react';
 import { Fragment, useState, type ReactNode } from 'react';
 
 import { cn } from '../lib/cn.js';
@@ -112,11 +113,7 @@ export function CodeBlock({ language, text, className }: CodeBlockProps) {
           aria-label={copied ? 'Copied' : 'Copy code'}
           className="inline-flex h-[22px] cursor-pointer items-center gap-[5px] rounded-full border border-[var(--line)] bg-[var(--chip)] px-[9px] text-[10.5px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
         >
-          {copied && (
-            <span aria-hidden className="text-[#2f9e63]">
-              ✓
-            </span>
-          )}
+          {copied && <Check aria-hidden size={11} strokeWidth={2.6} className="text-[#2f9e63]" />}
           {copied ? 'Copied' : 'Copy'}
         </button>
       </div>

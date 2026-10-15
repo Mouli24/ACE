@@ -1,5 +1,5 @@
 import type { HaltReason, Id, RunAction, RunState } from '@ace/contracts';
-import { Button, cn } from '@ace/ui';
+import { Button, Icons, cn } from '@ace/ui';
 import { useNavigate } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -135,7 +135,7 @@ export function RunBar({ workflowId }: { workflowId: string }) {
 
       {!flow.active && (
         <Button size="sm" aria-label="Start run" onClick={flow.start} disabled={flow.pending}>
-          <span aria-hidden>▶</span> Run
+          <Icons.Play aria-hidden size={12} /> Run
         </Button>
       )}
 

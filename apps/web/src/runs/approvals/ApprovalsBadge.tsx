@@ -1,5 +1,13 @@
 import type { Id } from '@ace/contracts';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, cn } from '@ace/ui';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  Icons,
+  cn,
+} from '@ace/ui';
 import { useEffect, useState } from 'react';
 
 import { useIsCompact } from '../../responsive/useIsCompact';
@@ -35,7 +43,7 @@ export function ApprovalsBadge({ runId }: { runId: Id | undefined }) {
             aria-hidden
             className="flex h-6 items-center gap-[6px] rounded-full border border-[var(--line)] bg-[var(--soft)] pl-[9px] pr-[4px] text-[11px] font-semibold text-[var(--ink)]"
           >
-            ✋
+            <Icons.Hand aria-hidden size={12} />
             <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-[#ef6b3f] px-1 text-[9px] font-bold text-[#fff]">
               {pending.length}
             </span>

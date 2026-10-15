@@ -1,5 +1,5 @@
 import { SEARCH_MAX_RESULTS, searchQueryProblem, type FileSearchFile } from '@ace/contracts';
-import { Badge, cn } from '@ace/ui';
+import { Badge, Icons, cn } from '@ace/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
@@ -125,7 +125,11 @@ function FileResults({ projectId, file }: { projectId: string; file: FileSearchF
         className="flex h-[24px] w-full min-w-0 cursor-pointer items-center gap-[6px] border-none bg-transparent px-[14px] text-left text-[12px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]"
       >
         <span aria-hidden className="w-[8px] shrink-0 text-[8px] text-[var(--muted)]">
-          {open ? '▾' : '▸'}
+          {open ? (
+            <Icons.ChevronDown aria-hidden size={10} />
+          ) : (
+            <Icons.ChevronRight aria-hidden size={10} />
+          )}
         </span>
         <span
           aria-hidden
