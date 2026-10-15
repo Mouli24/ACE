@@ -198,6 +198,11 @@ export const RunSchema = z.object({
   domain: RunDomainConfigSchema.optional(),
   /** D312: the goal the run was started with — its first message, read by every node. */
   goal: z.string().optional(),
+  /**
+   * PG-5.6 (FR-BEN-008): set on a run ACE Bench queued — the experiment it belongs to. The normal
+   * run history, the timeline and Domain leave such a run out; only the bench opens it.
+   */
+  benchExperimentId: IdSchema.optional(),
 });
 export type Run = z.infer<typeof RunSchema>;
 
@@ -211,6 +216,7 @@ export const RunSummarySchema = RunSchema.pick({
   endedAt: true,
   durationMs: true,
   totals: true,
+  benchExperimentId: true,
 });
 export type RunSummary = z.infer<typeof RunSummarySchema>;
 
