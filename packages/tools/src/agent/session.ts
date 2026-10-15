@@ -45,8 +45,31 @@ export interface BackgroundProcesses {
   killAll(): Promise<void>;
 }
 
+/**
+ * PG-5.3 (D361): one agent command as it runs, for Forge's Terminal and Processes list — the
+ * engine turns these into `process.output` / `process.exited` frames tagged with the run and node.
+ */
+export interface AgentCommandWatch {
+  output(stream: 'stdout' | 'stderr', data: string): void;
+  /** `failed`: the shell never started. Called once; later calls are ignored. */
+  exited(exitCode: number | null, failed: boolean): void;
+}
+
+/** PG-5.3: told about every command a node runs, in the foreground or in the background. */
+export interface AgentCommandObserver {
+  started(spec: {
+    readonly nodeId: string;
+    readonly command: string;
+    /** Absolute: the folder the command runs in. */
+    readonly cwd: string;
+    readonly background: boolean;
+  }): AgentCommandWatch;
+}
+
 export interface AgentSession {
   readonly ledger: ReadLedger;
   readonly locks: PathLocks;
   readonly processes: BackgroundProcesses;
+  /** PG-5.3: absent, nobody watches the run's commands (tests, older callers). */
+  readonly commands?: AgentCommandObserver;
 }

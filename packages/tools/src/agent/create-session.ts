@@ -2,13 +2,15 @@ import { agentEnv } from './env.js';
 import { createBackgroundProcesses, type AgentBackgroundProcesses } from './background.js';
 import { createReadLedger } from './ledger.js';
 import { createPathLocks, projectWriteLocks } from './locks.js';
-import { type AgentSession } from './session.js';
+import { type AgentCommandObserver, type AgentSession } from './session.js';
 import { resolveAgentShell } from './shell.js';
 
 export interface CreateAgentSessionOptions {
   readonly platform?: NodeJS.Platform;
   /** The engine's own environment; only the allowlist (`agentEnv`) reaches a command. */
   readonly env?: NodeJS.ProcessEnv;
+  /** PG-5.3: shows the run's commands in Forge's Terminal and Processes list. */
+  readonly commands?: AgentCommandObserver;
 }
 
 export interface OwnedAgentSession extends AgentSession {
@@ -31,6 +33,12 @@ export function createAgentSession(options: CreateAgentSessionOptions = {}): Own
   return {
     ledger: createReadLedger({ platform }),
     locks: platform === process.platform ? projectWriteLocks : createPathLocks({ platform }),
-    processes: createBackgroundProcesses({ platform, env: agentEnv(source, platform), shell }),
+    processes: createBackgroundProcesses({
+      platform,
+      env: agentEnv(source, platform),
+      shell,
+      ...(options.commands === undefined ? {} : { observer: options.commands }),
+    }),
+    ...(options.commands === undefined ? {} : { commands: options.commands }),
   };
 }
