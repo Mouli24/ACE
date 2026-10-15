@@ -7,7 +7,7 @@ import { useWorkflowGraph } from '../workflows/hooks';
 import { ChatComposer, type ChatRosterEntry } from './ChatComposer';
 import { ChatConversation } from './ChatConversation';
 import { ChatThreadList } from './ChatThreadList';
-import { useChatSocket, useThreadConversation } from './useChat';
+import { useThreadConversation } from './useChat';
 
 /** The theme's empty state: one muted 13px line, centred (D328). */
 function Empty({ children }: { children: ReactNode }) {
@@ -36,7 +36,7 @@ export function ChatPanel({ workflowId }: { workflowId: string }) {
   const graph = useWorkflowGraph(workflowId);
   const node = graph.data?.nodes.find((each) => each.id === focusedNodeId);
   const canChat = node !== undefined && (node.kind === 'agent' || node.kind === 'model');
-  useChatSocket(canChat ? node.id : undefined);
+  // The chat socket is the workflow layout's (D354), on this same focused node at phone width.
 
   if (focusedNodeId === undefined || node === undefined) {
     return <Empty>Select an Agent or Model node to chat with it.</Empty>;

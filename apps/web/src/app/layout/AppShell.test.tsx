@@ -40,11 +40,11 @@ describe('D330 the shell picks its chrome by route', () => {
     );
   });
 
-  it('Domain, outside the workflow layout, gets the same header and footer', async () => {
+  it('Domain, inside the workflow layout (D354), gets the same header and footer', async () => {
     renderApp(`${seed().ideate}/domain`);
     expect(await screen.findByTestId('domain-page')).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Domain' })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByTestId('chat-toggle')).toHaveAccessibleName('TEAM Split');
+    expect(screen.getByTestId('team-toggle')).toHaveAccessibleName('Team');
     expect(within(screen.getByRole('contentinfo')).getByTestId('footer-mode')).toHaveTextContent(
       'Domain',
     );

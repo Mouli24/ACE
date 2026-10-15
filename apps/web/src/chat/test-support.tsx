@@ -22,6 +22,7 @@ import { useWorkspaceStatus } from '../app/stores/workspace-status';
 import { createNode } from '../nodes/factory';
 import { resetGraphSyncRegistry } from '../workflows/sync-registry';
 import { useChatSessions } from './session-store';
+import { useChatSocket } from './useChat';
 
 /**
  * A self-contained mock engine for the chat panel's component tests. The shared `test/app.tsx`
@@ -116,12 +117,25 @@ function LocationProbe() {
   return <output data-testid="location">{useLocation().pathname}</output>;
 }
 
+/**
+ * The chat socket, as the workflow layout mounts it (D354): the aside and the phone panel no
+ * longer mount it themselves, so a component test standing either up alone mounts it here — on the
+ * column's node, else the focused one.
+ */
+function ChatSocket() {
+  const chatNodeId = usePanelsStore((s) => s.chatNodeId);
+  const focusedNodeId = useSelectionStore((s) => s.focusedNodeId);
+  useChatSocket(chatNodeId ?? focusedNodeId);
+  return null;
+}
+
 /** Render inside a router (the aside's "Send to Forge →" navigates) with the location probe. */
 export function renderChat(ui: ReactElement): RenderResult {
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         {ui}
+        <ChatSocket />
         <LocationProbe />
       </MemoryRouter>
     </QueryClientProvider>,

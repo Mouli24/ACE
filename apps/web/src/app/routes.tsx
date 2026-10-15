@@ -40,11 +40,12 @@ export const routes: RouteObject[] = [
         children: [
           { index: true, element: <WorkflowPage /> },
           { path: 'forge', element: <ForgePage /> },
+          // Domain (D303, D354): the run as its team's conversation, inside the workflow layout so
+          // the sockets, the run overlay and the chat socket outlive a switch; the layout hides its
+          // chat column here and Domain shows its own Team aside. ?run= and ?node= pick run and lens.
+          { path: 'domain', element: <DomainPage /> },
         ],
       },
-      // Domain (D303): the run as its team's conversation, full screen with its own team panel —
-      // beside the workflow layout, not inside its chat column. ?run= and ?node= pick run and lens.
-      { path: 'projects/:projectId/workflows/:workflowId/domain', element: <DomainPage /> },
       {
         path: 'projects/:projectId/workflows/:workflowId/timeline',
         element: <TimelinePage />,
