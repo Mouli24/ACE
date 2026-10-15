@@ -23,6 +23,7 @@ import {
 import { parseJsonLine } from './lines.js';
 import { resolveCommand, type ResolvedCommand } from './resolve.js';
 import { runCli, type CliExit } from './runner.js';
+import { cliEnv } from './env.js';
 
 /**
  * One adapter for every coding-agent CLI (X1 spec §5, D261): spawn the real CLI in the project
@@ -57,6 +58,10 @@ export interface CliAdapterOptions {
   detect: () => Promise<CliDetection>;
   /** Finds the binary; `resolveCommand(dialect.bin)` by default. Tests point it at a fake. */
   resolve?: () => ResolvedCommand | undefined;
+  /**
+   * The CLI's exact environment, as given. Absent — always, in the engine — it is the allowlisted
+   * part of the engine's own (`cliEnv`, D-093): never another provider's key or the engine token.
+   */
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
 }
@@ -129,8 +134,9 @@ function isDirectory(path: string): boolean {
 }
 
 export function createCliAdapter(dialect: CliDialect, options: CliAdapterOptions): ProviderAdapter {
-  const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
+  // D-093: an allowlist, never the engine's whole environment
+  const env = options.env ?? cliEnv(process.env, platform, dialect.type);
   const resolve = options.resolve ?? (() => resolveCommand(dialect.bin, { env, platform }));
 
   return {
