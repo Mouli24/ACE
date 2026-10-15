@@ -265,6 +265,8 @@ export interface ChatThreadRepository {
   get(scope: Scope, id: Id): Promise<ChatThread | null>;
   /** `GET /nodes/:id/chat/threads` — the agent's threads, oldest first. */
   listByNode(scope: Scope, nodeId: Id): Promise<ChatThread[]>;
+  /** PG-1.5: every thread, oldest first — what the engine scans at start for turns left open. */
+  list(scope: Scope): Promise<ChatThread[]>;
   /** Moves `updatedAt` when a turn is added, so the thread list can sort by recency. */
   touch(scope: Scope, id: Id, updatedAt: Timestamp): Promise<ChatThread | null>;
   /** Removes the thread and every one of its messages in one transaction. */
@@ -275,6 +277,17 @@ export interface ChatMessageRepository {
   append(scope: Scope, message: ChatMessage): Promise<ChatMessage>;
   /** In the order they were sent, which is the order the conversation happened. */
   listByThread(scope: Scope, threadId: Id): Promise<ChatMessage[]>;
+  /**
+   * PG-1.6 (D352): set a turn's `supersededAt` and/or `deletedAt`. Nothing else about a stored turn
+   * ever changes. `null` when there is no such message.
+   */
+  mark(scope: Scope, id: Id, patch: ChatMessageMark): Promise<ChatMessage | null>;
+}
+
+/** PG-1.6 (D352): the two flags a message action sets on an existing turn. */
+export interface ChatMessageMark {
+  supersededAt?: Timestamp;
+  deletedAt?: Timestamp;
 }
 
 /**

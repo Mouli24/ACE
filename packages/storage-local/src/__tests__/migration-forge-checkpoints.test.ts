@@ -11,6 +11,7 @@ import {
   FORGE_CHAT_TURNS_MIGRATION_ID,
   FORGE_CHECKPOINTS_MIGRATION_ID,
   FORGE_CHECKS_MIGRATION_ID,
+  CHAT_MESSAGE_ACTIONS_MIGRATION_ID,
   FORGE_TERMINAL_MIGRATION_ID,
   MIGRATIONS,
 } from '../migrations.js';
@@ -66,11 +67,12 @@ describe('D300 migration: the checkpoints table', () => {
   it('follows the terminal’s, with the id the plan fixed; the chat turns’ and checks’ follow it', () => {
     const ids = MIGRATIONS.map((migration) => migration.id);
     expect(FORGE_CHECKPOINTS_MIGRATION_ID).toBe('20261014T100000_forge_checkpoints');
-    expect(ids.slice(-4)).toEqual([
+    expect(ids.slice(-5)).toEqual([
       FORGE_TERMINAL_MIGRATION_ID,
       FORGE_CHECKPOINTS_MIGRATION_ID,
       FORGE_CHAT_TURNS_MIGRATION_ID,
       FORGE_CHECKS_MIGRATION_ID,
+      CHAT_MESSAGE_ACTIONS_MIGRATION_ID,
     ]);
     expect([...ids].sort()).toEqual(ids);
   });
@@ -82,6 +84,7 @@ describe('D300 migration: the checkpoints table', () => {
       FORGE_CHECKPOINTS_MIGRATION_ID,
       FORGE_CHAT_TURNS_MIGRATION_ID,
       FORGE_CHECKS_MIGRATION_ID,
+      CHAT_MESSAGE_ACTIONS_MIGRATION_ID,
     ]);
     const columns = (
       after.sqlite.prepare('PRAGMA table_info(checkpoints)').all() as { name: string }[]

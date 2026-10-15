@@ -11,6 +11,7 @@ import {
   FORGE_CHECKPOINTS_MIGRATION_ID,
   FORGE_CHAT_TURNS_MIGRATION_ID,
   FORGE_CHECKS_MIGRATION_ID,
+  CHAT_MESSAGE_ACTIONS_MIGRATION_ID,
   FORGE_TERMINAL_MIGRATION_ID,
   MIGRATIONS,
 } from '../migrations.js';
@@ -58,6 +59,7 @@ describe('Domain migration', () => {
       FORGE_CHECKPOINTS_MIGRATION_ID,
       FORGE_CHAT_TURNS_MIGRATION_ID,
       FORGE_CHECKS_MIGRATION_ID,
+      CHAT_MESSAGE_ACTIONS_MIGRATION_ID,
     ]);
     expect(columnsOf(after.sqlite, 'nodes')).toContain('handle');
     expect(columnsOf(after.sqlite, 'node_runs')).toContain('trigger');

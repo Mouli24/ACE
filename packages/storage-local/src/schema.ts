@@ -557,6 +557,10 @@ export const chatMessages = sqliteTable(
     activity: text('activity'),
     /** D302/D300: the checkpoint of the files the turn changed. */
     checkpointId: text('checkpoint_id'),
+    /** PG-1.6 (D352): a retry or an edit replaced this turn; null while it stands. */
+    supersededAt: text('superseded_at'),
+    /** PG-1.6 (D352): the person deleted this turn; null while it is shown. */
+    deletedAt: text('deleted_at'),
   },
   (table) => [index('chat_messages_thread_idx').on(table.workspaceId, table.threadId, table.id)],
 );
