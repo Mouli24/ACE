@@ -190,6 +190,11 @@ export const RunSchema = z.object({
   pausedAt: TimestampSchema.optional(),
   /** Set on the new run a restart creates: same snapshot, same inputs (FR-CTL-004). */
   restartedFromRunId: IdSchema.optional(),
+  /**
+   * PG-5.4: set on the new run a replay creates (`POST /runs/:id/replay`) — the run whose recorded
+   * node outputs it was answered from. Same snapshot and inputs as that run, zero provider calls.
+   */
+  replayOf: IdSchema.optional(),
   /** Set only when `haltReason` is `budget_exceeded` (D80). */
   budgetHalt: BudgetHaltSchema.optional(),
   /** D305: why a run is BLOCKED mid-run. Absent on a run blocked at pre-flight. */
@@ -211,6 +216,7 @@ export const RunSummarySchema = RunSchema.pick({
   endedAt: true,
   durationMs: true,
   totals: true,
+  replayOf: true,
 });
 export type RunSummary = z.infer<typeof RunSummarySchema>;
 
