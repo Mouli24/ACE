@@ -120,7 +120,8 @@ None (Phase 3 had no Phase 0 red tests). The Gate 3 e2e is owed below.
 | PG-3.7 | At phone width Domain keeps the lenses on one row and Team opens and closes as a sheet | `apps/web/src/domain/DomainPage.test.tsx` |
 | D-058 | A Timeline composer send arms and begins the run store, so the Canvas overlay shows the run without a reload | `apps/web/src/timeline/TimelinePanel.test.tsx`, `apps/web/e2e/timeline.spec.ts` |
 | PG-3.5–3.7 | Acceptance walk: approve a WAITING node from Domain and from Forge; Retry a failed turn in an open Domain run | `tests/acceptance/product-gaps/pg-3-controls-everywhere.e2e.ts` |
-| D-102 | TC-TOOL-004 timed from the sandbox's start, so load cannot overrun its margin | `tests/acceptance/round-4/mouli-tests-arhant.test.ts` |
+| PG-1.5 | Domain composer: a post that meets a 409 because the run ended in the meantime keeps its text, says "This run has ended", and offers "Start a new run with this message" (the acceptance test now covers the PG-3.3 path, where the page hears the end first) | `apps/web/src/domain/Composer.test.tsx` |
+| D-102 | TC-TOOL-004 timed from the sandbox's start, so load cannot overrun its margin — both the acceptance check and `packages/tools` `runner.test.ts` ("kills `while (true) {}`"), which failed the same way in the Phase 3 gate | `tests/acceptance/round-4/mouli-tests-arhant.test.ts`, `packages/tools/src/sandbox/runner.test.ts` |
 
 ### Known gaps carried from Phase 3 (not tests)
 - PG-3.2: a mode switch passes `?run=` only when the URL already has one. With none picked, each mode works out the same default, so an unpinned view keeps following new runs.
