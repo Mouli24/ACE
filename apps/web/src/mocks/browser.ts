@@ -384,7 +384,7 @@ export async function startMocks(): Promise<{ WebSocket: typeof WebSocket }> {
       db.load();
       return db.pendingApprovals(runId).map((request) => ({
         id: request.id,
-        nodeRunId: request.nodeRunId,
+        nodeRunId: request.nodeRunId ?? '',
         nodeName: request.nodeName,
       }));
     },

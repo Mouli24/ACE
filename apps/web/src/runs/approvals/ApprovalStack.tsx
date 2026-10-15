@@ -55,7 +55,7 @@ function ApprovalRow({ request, keyboard }: { request: ApprovalRequest; keyboard
   const decide = (kind: 'approve' | 'reject') => {
     setDecided(kind);
     const variables = {
-      nodeRunId: request.nodeRunId,
+      nodeRunId: request.nodeRunId ?? '',
       ...(note.trim() ? { note: note.trim() } : {}),
     };
     const mutation = kind === 'approve' ? approve : reject;
