@@ -15,6 +15,7 @@ import type { RunControls } from './service.js';
  * the gateway imports the run service, which exports this.
  *
  *   POST /runs/:id/pause · /resume · /stop · /restart  → Run    (409 `invalid_run_state` otherwise)
+ *   POST /runs/:id/replay                              → Run    (PG-5.4, a new run, `replayOf`)
  *   POST /node-runs/:id/retry                          → NodeRun (attempt + 1)
  *   POST /runs/:id/nodes/:nodeId/rerun                 → NodeRun
  */
@@ -44,6 +45,13 @@ export function createRunControlRoutes<E extends Env>(
   routes.post('/runs/:id/restart', async (c) =>
     c.json(await controls().restart(c.req.param('id')), 201),
   );
+
+  // PG-5.4: the **new** run, with `replayOf`, answered from the recording — zero provider calls.
+  routes.post('/runs/:id/replay', async (c) => {
+    const service = controls();
+    if (service.replay === undefined) throw notImplemented('run replay');
+    return c.json(await service.replay(c.req.param('id')), 201);
+  });
 
   routes.post('/runs/:id/nodes/:nodeId/rerun', async (c) => {
     RerunRequestSchema.parse(await readBody(c));

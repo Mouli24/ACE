@@ -235,6 +235,8 @@ export const runs = sqliteTable(
     budgetHalt: text('budget_halt'),
     /** The run a restart copied its snapshot and inputs from (FR-CTL-004). */
     restartedFromRunId: text('restarted_from_run_id'),
+    /** PG-5.4: the run a replay answered its node calls from; NULL on every other run. */
+    replayOf: text('replay_of'),
     /** D305: why the run is BLOCKED mid-run; NULL for every other state. */
     blockedReason: text('blocked_reason'),
     /** D312: JSON `RunDomainConfig`; NULL on runs from before Domain. */

@@ -893,6 +893,10 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     logger: logger.child({ subsystem: 'runs' }),
     // The controls never execute anything themselves; these three are the scheduler (FR-CTL-004/005).
     driveRecordedRun: (run) => runs.driveRecordedRun(run),
+    // PG-5.4: a replay is driven by the same scheduler, answered from the source run's recording.
+    ...(runs.driveReplayRun === undefined
+      ? {}
+      : { driveReplayRun: runs.driveReplayRun.bind(runs) }),
     drivePartialRun: (plan) => runs.drivePartialRun(plan),
     envelopesFor: (run, nodeId) => runs.envelopesFor(run, nodeId),
   });

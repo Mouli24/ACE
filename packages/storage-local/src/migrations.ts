@@ -79,6 +79,12 @@ export const FORGE_CHECKS_MIGRATION_ID = '20261014T110000_forge_project_checks';
 export const CHAT_MESSAGE_ACTIONS_MIGRATION_ID = '20261015T120000_chat_message_actions';
 
 /**
+ * PG-5.4: the run a replay answered its node calls from (`Run.replayOf`). NULL on every run that is
+ * not a replay, which `toRun` leaves absent.
+ */
+export const RUN_REPLAY_OF_MIGRATION_ID = '20261016T120000_run_replay_of';
+
+/**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
  * written.
@@ -692,6 +698,14 @@ export const MIGRATIONS: readonly Migration[] = [
       -- event log); the flags keep it out of every later prompt. NULL reads as "still standing".
       ALTER TABLE chat_messages ADD COLUMN superseded_at TEXT;
       ALTER TABLE chat_messages ADD COLUMN deleted_at TEXT;
+    `,
+  },
+  {
+    id: RUN_REPLAY_OF_MIGRATION_ID,
+    up: `
+      -- PG-5.4: a replay is a new run answered from an earlier run's recorded node outputs, with
+      -- zero provider calls. The column names that earlier run; NULL on every other run.
+      ALTER TABLE runs ADD COLUMN replay_of TEXT;
     `,
   },
 ];

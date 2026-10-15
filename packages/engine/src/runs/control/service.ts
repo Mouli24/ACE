@@ -14,7 +14,7 @@ import type { ApprovalService } from '../../approvals/index.js';
 import type { DomainRegistry } from '../../domain/registry.js';
 import type { RunDomain } from '../../domain/run-domain.js';
 import type { EmittedEvent } from '../../events/index.js';
-import { HttpError, notFound } from '../../gateway/errors.js';
+import { HttpError, notFound, notImplemented } from '../../gateway/errors.js';
 import { asDelivered } from '../../envelopes/index.js';
 import { newId } from '../../ids.js';
 import type { Logger } from '../../logging/index.js';
@@ -81,6 +81,13 @@ export interface RunControlsDeps {
   drivePartialRun: (plan: PartialRunPlan) => Promise<Run>;
 
   /**
+   * PG-5.4: pre-flights and drives a replay row this service recorded — every provider call
+   * answered from the source run's recorded outputs. Resolves once it is under way. Absent,
+   * `POST /runs/:id/replay` answers `not_implemented`.
+   */
+  driveReplayRun?: (run: Run) => Promise<Run>;
+
+  /**
    * The envelopes a node would receive from the **latest** upstream outputs in this run — what a
    * re-run executes on (FR-CTL-005). Absent means the node re-runs with no reads, which is right
    * for an Input node and wrong for anything else, so the scheduler supplies it.
@@ -122,6 +129,12 @@ export interface RunControls {
   stop(runId: Id): Promise<Run>;
   /** FR-CTL-004. A new run on the same snapshot and inputs, with `restartedFromRunId`. */
   restart(runId: Id): Promise<Run>;
+  /**
+   * PG-5.4 (FR-GIT-007, Arch §20.2). A new run on the same snapshot and inputs, `replayOf` set,
+   * answered from this run's recorded node outputs with zero provider calls. Only a finished run
+   * (COMPLETE or HALTED) can be replayed; anything else answers 409 `invalid_run_state`.
+   */
+  replay?(runId: Id): Promise<Run>;
   /** FR-CTL-005. One node, on the latest upstream outputs, as a new node run. */
   rerunNode(runId: Id, nodeId: Id): Promise<NodeRun>;
   /** FR-ERR-003 / FR-ERR-004. A new node run at attempt + 1 with identical inputs. */
@@ -413,6 +426,45 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
       deps.logger?.info(
         { subsystem: 'runs', runId: started.id, restartedFromRunId: source.id },
         'run restarted',
+      );
+      return withAllowedActions(started);
+    },
+
+    async replay(runId) {
+      const source = await load(runId);
+      // Only a finished run has a whole recording; a live one is still writing it, and a run
+      // blocked at pre-flight never called anything to record.
+      if (source.status !== 'COMPLETE' && source.status !== 'HALTED') {
+        throw new HttpError(
+          'workflow',
+          'invalid_run_state',
+          `Only a finished run can be replayed — this one is ${source.status}.`,
+          { runId: source.id, status: source.status },
+        );
+      }
+      if (deps.driveReplayRun === undefined) throw notImplemented('run replay');
+
+      // BR-04: the source's snapshot and inputs. No Domain settings: a replay never stays open and
+      // has no Brain to consult — it only plays back what was recorded.
+      const created = await deps.runs.create({
+        id: nextId(),
+        workflowId: source.workflowId,
+        projectId: source.projectId,
+        status: 'PREFLIGHT',
+        snapshot: source.snapshot,
+        inputs: source.inputs,
+        preflightIssues: [],
+        totals: zeroUsage(),
+        startedAt: now(),
+        allowedActions: allowedRunActions('PREFLIGHT'),
+        replayOf: source.id,
+        ...(source.goal === undefined ? {} : { goal: source.goal }),
+      });
+
+      const started = await deps.driveReplayRun(created);
+      deps.logger?.info(
+        { subsystem: 'runs', runId: started.id, replayOf: source.id },
+        'run replayed',
       );
       return withAllowedActions(started);
     },

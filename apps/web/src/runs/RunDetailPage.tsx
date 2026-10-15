@@ -1,5 +1,5 @@
 import type { Id, NodeRun, RunAction } from '@ace/contracts';
-import { PartRenderer, StatusRing } from '@ace/ui';
+import { PartRenderer, StatusRing, toast } from '@ace/ui';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { api } from '../app/api';
@@ -21,7 +21,10 @@ import {
   useRun,
   useStopRun,
   useEndRun,
+  canReplay,
+  useReplayRun,
 } from './hooks';
+import { downloadRunExport } from './export';
 import { CostValue, costText } from './CostValue';
 import { CHIP_CLASS, RunStateChip } from './RunStateChip';
 
@@ -57,13 +60,19 @@ export function RunDetailPage() {
   const stop = useStopRun();
   const restart = useRestartRun();
   const end = useEndRun();
+  const replay = useReplayRun();
   const retry = useRetryNodeRun();
   const compact = useIsCompact();
   // The trace and the node states arrive as the workflow's run frames (FR-OBS-001); counted, so an
   // open Canvas on the same workflow keeps its own feed when this page unmounts.
   useWorkflowSubscription(run.data?.workflowId);
   const busy =
-    pause.isPending || resume.isPending || stop.isPending || restart.isPending || end.isPending;
+    pause.isPending ||
+    resume.isPending ||
+    stop.isPending ||
+    restart.isPending ||
+    end.isPending ||
+    replay.isPending;
 
   if (run.isPending) {
     return <p className="p-6 text-center text-[13px] text-[var(--muted)]">Loading run…</p>;
@@ -84,6 +93,14 @@ export function RunDetailPage() {
   const record = run.data;
   const onAction = async (action: RunAction) =>
     ({ pause, resume, stop, restart, end })[action].mutateAsync(record.id);
+
+  // PG-5.4: the run to compare with by default — the one this run replayed or restarted.
+  const compareWith = record.replayOf ?? record.restartedFromRunId;
+  const compareTo = `/runs/compare?a=${record.id}${compareWith === undefined ? '' : `&b=${compareWith}`}`;
+  const exportRun = (anonymise: boolean) =>
+    void downloadRunExport(record.id, { anonymise }).catch((error: Error) =>
+      toast.error(error.message),
+    );
 
   const providerNames = Object.fromEntries(
     (providers.data ?? []).map((provider) => [provider.id, provider.name]),
@@ -141,6 +158,56 @@ export function RunDetailPage() {
           >
             Open in Domain<span aria-hidden>&nbsp;→</span>
           </Link>
+        </div>
+        {/* PG-5.4 / PG-5.5: replay from the recording, compare, and export for judging. */}
+        <div className="flex flex-wrap items-center gap-[8px]" data-testid="run-detail-tools">
+          {record.replayOf !== undefined && (
+            <span className="text-[12px] text-[var(--muted)]" data-testid="run-detail-replay-of">
+              Replay of{' '}
+              <Link to={`/runs/${record.replayOf}`} className="font-machine">
+                run …{record.replayOf.slice(-6)}
+              </Link>{' '}
+              · answered from its recording, no provider calls
+            </span>
+          )}
+          <span className="flex-1" />
+          {canReplay(record.status) && (
+            <button
+              type="button"
+              className={ACTION_LINK}
+              data-testid="run-detail-replay"
+              disabled={busy}
+              title="Run this snapshot again from the recorded outputs — no provider is called"
+              onClick={() =>
+                replay.mutate(record.id, {
+                  onSuccess: (created) => navigate(`/runs/${created.id}`),
+                  onError: (error) => toast.error(error.message),
+                })
+              }
+            >
+              Replay run
+            </button>
+          )}
+          <Link to={compareTo} className={ACTION_LINK} data-testid="run-detail-compare">
+            Compare…
+          </Link>
+          <button
+            type="button"
+            className={ACTION_LINK}
+            data-testid="run-detail-export"
+            onClick={() => exportRun(false)}
+          >
+            Export run
+          </button>
+          <button
+            type="button"
+            className={ACTION_LINK}
+            data-testid="run-detail-export-anonymised"
+            title="Node names become Node 1…n; providers and models are removed — for blind judging"
+            onClick={() => exportRun(true)}
+          >
+            Export anonymised
+          </button>
         </div>
         <span
           className="font-machine text-[11.5px] text-[var(--muted)]"
