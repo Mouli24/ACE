@@ -1,5 +1,5 @@
 {
-  "//": "This suite drives a REAL engine and runs via `pnpm test:acceptance` from the workspace root, never `pnpm test` (CLAUDE.md \u00a72). It has no `test` script on purpose, so `pnpm -r test` skips it.",
+  "//": "This suite drives a REAL engine and runs via `pnpm test:acceptance` from the workspace root, never `pnpm test` (CLAUDE.md §2). It has no `test` script on purpose, so `pnpm -r test` skips it.",
   "name": "@ace/acceptance",
   "version": "0.0.0",
   "private": true,
@@ -15,6 +15,7 @@
   },
   "devDependencies": {
     "@ace/config": "workspace:*",
+    "@axe-core/playwright": "4.10.1",
     "@playwright/test": "^1.56.1",
     "@types/node": "^22.10.5",
     "eslint": "^10.11.0",

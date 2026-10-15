@@ -30,3 +30,4 @@ export * from './components/trace-timeline.js';
 export * from './components/source-chip.js';
 export * from './components/context-menu.js';
 export * from './components/progress-bar.js';
+export * from './icons.js';
