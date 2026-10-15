@@ -11,7 +11,7 @@ import type {
 import { Button, cn, Icons, INPUT_CLASS } from '@ace/ui';
 import { useId, useState, type ReactNode } from 'react';
 
-import { ACTIONS_CLASS, CopyButton } from '../chat/MessageActions';
+import { ACTIONS_CLASS, ActionButton, CopyButton } from '../chat/MessageActions';
 import { nameOf } from '../forge/files/paths';
 import { clockTime, initial } from '../theme/format';
 import { lookOf, plural, seconds, type DomainLooks } from './looks';
@@ -46,6 +46,11 @@ export interface ConversationProps {
    * no Retry is offered.
    */
   onRetryTurn?(turnId: Id): Promise<unknown>;
+  /**
+   * PG-3.4: follow a message's node to the canvas — the agent who wrote it, or the one node a
+   * person's message went to. Absent: not offered.
+   */
+  onShowOnCanvas?(nodeId: Id): void;
 }
 
 /** The theme's empty state: one muted 13px line, centred. */
@@ -54,6 +59,8 @@ export function DomainEmpty({ children }: { children: ReactNode }) {
 }
 
 interface Who {
+  /** The node the message is about: its author, or the one node a person's message went to. */
+  nodeId?: Id;
   name: string;
   handle?: string;
   letter: string;
@@ -73,6 +80,7 @@ export function Conversation({
   folderPath,
   onOpenFile,
   onRetryTurn,
+  onShowOnCanvas,
 }: ConversationProps) {
   const label = (nodeId: Id | undefined): string => {
     if (nodeId === undefined) return '?';
@@ -84,7 +92,9 @@ export function Conversation({
 
   const whoOf = (message: DomainMessage): Who => {
     if (message.author.kind === 'human') {
+      const only = message.to?.length === 1 ? message.to[0] : undefined;
       return {
+        ...(only === undefined ? {} : { nodeId: only }),
         name: 'You',
         letter: 'Y',
         bg: 'var(--surface)',
@@ -110,6 +120,7 @@ export function Conversation({
     if (entry !== undefined) {
       const look = lookOf(looks, nodeId, entry.name, index);
       return {
+        nodeId,
         name: entry.name,
         handle: entry.handle,
         letter: look.letter,
@@ -121,6 +132,7 @@ export function Conversation({
     // A node that is not an agent (an Input, an Output): its name, never its id when known.
     const name = names?.get(nodeId) ?? nodeId;
     return {
+      nodeId,
       name,
       letter: initial(name),
       bg: 'var(--surface)',
@@ -159,6 +171,7 @@ export function Conversation({
               folderPath={folderPath}
               onOpenFile={onOpenFile}
               onRetryTurn={onRetryTurn}
+              onShowOnCanvas={onShowOnCanvas}
             />
           )}
         </li>
@@ -215,9 +228,11 @@ interface RowProps {
   folderPath: string | undefined;
   onOpenFile: ConversationProps['onOpenFile'];
   onRetryTurn: ConversationProps['onRetryTurn'];
+  onShowOnCanvas?: ConversationProps['onShowOnCanvas'];
 }
 
-function MessageRow({ message, who, label, ...rest }: RowProps) {
+function MessageRow({ message, who, label, onShowOnCanvas, ...rest }: RowProps) {
+  const nodeId = who.nodeId;
   const to = message.type === 'envelope' ? [] : (message.to ?? []);
   return (
     <div className="flex gap-[14px]">
@@ -241,6 +256,11 @@ function MessageRow({ message, who, label, ...rest }: RowProps) {
           )}
           <div className="flex-1" />
           <div className={ACTIONS_CLASS}>
+            {nodeId !== undefined && onShowOnCanvas !== undefined && (
+              <ActionButton label="Show on canvas" onClick={() => onShowOnCanvas(nodeId)}>
+                <Icons.LocateFixed aria-hidden size={14} />
+              </ActionButton>
+            )}
             <CopyButton text={copyOf(message, rest.live)} />
           </div>
           <time dateTime={message.at} className="text-[11.5px] text-[var(--muted)]">
