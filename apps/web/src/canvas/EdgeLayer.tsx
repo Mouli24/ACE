@@ -4,6 +4,7 @@ import { memo, useMemo } from 'react';
 
 import { anchorOfPort, type Point } from '../nodes/anchors';
 import type { PortConnectState } from './interactions/ports';
+import { GHOST_EDGE_CLASS } from './run-snapshot';
 import type { AceAnyFlowEdge } from './to-flow';
 import { edgePath } from './viewport';
 
@@ -19,6 +20,8 @@ export interface EdgeStrokeProps {
   x2: number;
   y2: number;
   selected: boolean;
+  /** PG-4.4: an edge the live run still walks but the graph lost — drawn faint. */
+  ghost?: boolean;
 }
 
 /**
@@ -34,9 +37,15 @@ export const EdgeStroke = memo(function EdgeStroke({
   x2,
   y2,
   selected,
+  ghost = false,
 }: EdgeStrokeProps) {
   return (
-    <g data-testid={`edge-line-${id}`} data-selected={selected ? 'true' : 'false'}>
+    <g
+      data-testid={`edge-line-${id}`}
+      data-selected={selected ? 'true' : 'false'}
+      data-ghost={ghost ? 'true' : undefined}
+      opacity={ghost ? 0.35 : undefined}
+    >
       <path
         d={d}
         style={{
@@ -262,6 +271,7 @@ export const EdgeLayer = memo(function EdgeLayer({
         x2,
         y2,
         selected: edge.selected === true,
+        ghost: edge.className === GHOST_EDGE_CLASS,
         label,
         ...edgePath(x1, y1, x2, y2),
       },
@@ -278,7 +288,7 @@ export const EdgeLayer = memo(function EdgeLayer({
           className="pointer-events-none absolute left-0 top-0 h-px w-px overflow-visible"
           aria-hidden
         >
-          {drawn.map(({ id, d, x1, y1, x2, y2, selected }) => (
+          {drawn.map(({ id, d, x1, y1, x2, y2, selected, ghost }) => (
             <EdgeStroke
               key={id}
               id={id}
@@ -288,6 +298,7 @@ export const EdgeLayer = memo(function EdgeLayer({
               x2={x2}
               y2={y2}
               selected={selected}
+              ghost={ghost}
             />
           ))}
         </svg>

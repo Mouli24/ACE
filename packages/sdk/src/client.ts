@@ -52,6 +52,7 @@ import {
   UpdateProjectRequestSchema,
   UpdateWorkflowRequestSchema,
   ValidateWorkflowResponseSchema,
+  WorkflowEstimateSchema,
   WorkflowExportSchema,
   WorkflowGraphResponseSchema,
   WorkflowSchema,
@@ -94,6 +95,7 @@ import {
   type UpdateWorkflowRequest,
   type ValidateWorkflowResponse,
   type Workflow,
+  type WorkflowEstimate,
   type WorkflowExport,
   type WorkflowGraphResponse,
   // Forge (D299): project files
@@ -450,6 +452,9 @@ export function createAceClient(options: AceClientOptions) {
       }),
     validateWorkflow: (id: Id): Promise<ValidateWorkflowResponse> =>
       request('POST', `/workflows/${id}/validate`, ValidateWorkflowResponseSchema),
+    /** PG-4.3: what a run of this workflow could cost, and what the caps leave — before Start. */
+    estimateWorkflow: (id: Id): Promise<WorkflowEstimate> =>
+      request('POST', `/workflows/${id}/estimate`, WorkflowEstimateSchema),
     exportWorkflow: (id: Id): Promise<WorkflowExport> =>
       request('GET', `/workflows/${id}/export`, WorkflowExportSchema),
     importWorkflow: (projectId: Id, file: WorkflowExport): Promise<WorkflowGraphResponse> =>

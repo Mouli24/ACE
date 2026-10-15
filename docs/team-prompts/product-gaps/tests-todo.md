@@ -127,3 +127,35 @@ None (Phase 3 had no Phase 0 red tests). The Gate 3 e2e is owed below.
 - PG-3.2: a mode switch passes `?run=` only when the URL already has one. With none picked, each mode works out the same default, so an unpinned view keeps following new runs.
 - PG-3.3: after a D81 retry or re-run of a finished run, Domain's pill stays read-only until a later frame refetches the record.
 - PG-3.4: centring keeps the current zoom; it does not zoom in.
+
+## Phase 4
+
+Built features only (owner, 2026-10-16: no tests written, updated or run; typecheck and lint only). Every row below is owed.
+
+### Existing tests likely broken by Phase 4
+| Item | Test | Why |
+|---|---|---|
+| PG-4.2 | `apps/web/src/nodes/NodeCard.test.tsx` (~125-127) | Status chip colours are now `var(--color-status-*)`, not hex |
+| PG-4.2 | `apps/web/src/domain/TeamPanel.test.tsx` (~115-118) | IDLE/READY/WAITING/PAUSED no longer all read "Waiting" |
+| PG-4.2 | `apps/web/src/forge/layout/StatusBar.test.tsx:128` | `running-mark` colour is the RUNNING token |
+| PG-4.2 | `packages/ui/src/__tests__/tokens.test.ts`, `status.test.tsx`, `theme-css.test.ts` | New status hex values |
+| PG-4.2 | `apps/web/src/domain/Conversation.test.tsx`, `DomainPage.test.tsx`, `NodeCardOverlay.test.tsx`, `WorkflowPage.test.tsx`, `BottomPanel.test.tsx`, `ChatAside.test.tsx`, `ValidationTab.test.tsx` | Outcome glyphs became icons; the status chip changed and now also shows on document cards |
+
+### To write
+| Item | Test to write | File |
+|---|---|---|
+| PG-4.1 | `contextBudgetSplit`, `readsBudgetFor`, `envelopeUsedTokens` | `packages/contracts/src/__tests__/envelope.test.ts` |
+| PG-4.1 | A delivered envelope's `contract.maxTokens` equals the receiving node's `execution.maxTokens` | `packages/engine/src/runs/__tests__/scheduler.test.ts` |
+| PG-4.1 | Reads section; Inspector envelope view (names, used of budget, contract, model used); Domain View envelope | `apps/web/src/config-panel/ReadsSection.test.tsx`, `inspector/Inspector.test.tsx`, `domain/Conversation.test.tsx` |
+| PG-4.5 | `evaluateEnvelopes` `byEnvelope`; stored `inputEnvelopes[].guardrailVerdicts`; Inspector verdicts, memory ops and the reuse note; Domain reuse/memory on a turn | `packages/engine/src/guardrails/__tests__/evaluator.test.ts`, `runs/__tests__/scheduler-guardrails.test.ts`, `apps/web/src/inspector/RecordNotes.test.tsx`, `domain/Conversation.test.tsx` |
+| PG-4.3 | Estimator rules (local free, mock free, unpriced/missing/no-model unknown, min/max, tools and loops multiply max); the estimate route; the node cap ends FAILED GUARDRAIL_VIOLATION `node_budget_exceeded` and never refuses unknown | `packages/engine/src/runs/__tests__/estimate.test.ts`, `node-cost-cap.test.ts`, gateway tests |
+| PG-4.3 | Contract shapes: `maxCostUsd`, `WorkflowEstimate`, `UsageBucket.source/costKnown`, `DayTotals.chat`; SQLite aggregate with chat buckets and unknown; FakeRepository parity | `packages/contracts/src/__tests__/`, `packages/storage-local/src/__tests__/usage-aggregate.test.ts`, `packages/engine/src/__tests__/fake-repository.ts` |
+| PG-4.3 | SDK `estimateWorkflow`; web `estimate.tsx` helpers, start flow (over budget asks, under budget starts), header and RunBar tags, card estimate, node cap field, Usage unknown and chat | `packages/sdk`, `apps/web/src/runs/`, `nodes/NodeCard.test.tsx`, `config-panel/NodeSettingsModal.test.tsx`, `usage/` |
+| PG-4.2 | Nine distinct colours and glyphs with AA contrast in both themes; Domain failure words, halt reason and outcome marks; RunBar `budget_exceeded` not red; PAUSED/WAITING count as live | `packages/ui/src/__tests__/tokens.test.ts`, `apps/web/src/theme/format.test.ts`, `domain/*.test.tsx`, `runs/RunBar.test.tsx`, `canvas/Canvas.test.tsx` |
+| PG-4.4 | `runSnapshotOverlay` (ghost, changed, ghost edges); ghost card dimmed with no buttons, click selects only; Inspector names a deleted node from the snapshot | `apps/web/src/canvas/run-snapshot.test.ts`, `nodes/NodeCard.test.tsx`, `inspector/Inspector.test.tsx` |
+| Gate 4 | e2e on the real engine: envelopes, state and cost displays through the Gate 3 walk | `tests/acceptance/product-gaps/pg-4-gate.e2e.ts` |
+
+### Decisions taken in Phase 4 (no D-row needed unless the owner disagrees)
+- PG-4.3: a node over its own `maxCostUsd` ends FAILED with `GUARDRAIL_VIOLATION`, code `node_budget_exceeded`. `budget_exceeded` stays a run halt reason; the run then HALTs with `failure`.
+- PG-4.3: Start confirms only when an Input needs text or the estimate's max exceeds what the caps leave; otherwise the estimate is on the Run button.
+- PG-4.2: light READY was darkened to `#0b6e77` and not re-measured.

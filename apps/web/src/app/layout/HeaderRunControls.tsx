@@ -7,7 +7,8 @@ import { usePauseRun, useRestartRun, useResumeRun, useRun, useStopRun } from '..
 import { useRunStore } from '../../runs/run-store';
 import { useOpenRunInPlace } from '../../runs/useOpenRunInPlace';
 import { useSelectedRun } from '../../runs/selected-run';
-import { OpenRunEnd, useStartRunFlow } from '../../runs/useStartRunFlow';
+import { estimateTitle } from '../../runs/estimate';
+import { OpenRunEnd, RunEstimateTag, useStartRunFlow } from '../../runs/useStartRunFlow';
 import { StopConfirm } from './WorkspaceMenu';
 
 const PILL =
@@ -93,7 +94,11 @@ export function HeaderRunControls({ workflowId }: { workflowId: string }) {
         <button
           type="button"
           aria-label="Run"
-          title="Start a run of this workflow"
+          title={
+            flow.estimate === undefined
+              ? 'Start a run of this workflow'
+              : `Start a run of this workflow — ${estimateTitle(flow.estimate)}`
+          }
           data-testid="header-run-start"
           disabled={flow.active || flow.pending}
           onClick={flow.start}
@@ -101,6 +106,7 @@ export function HeaderRunControls({ workflowId }: { workflowId: string }) {
         >
           <Icons.Play aria-hidden size={12} strokeWidth={2.4} />
           Run
+          <RunEstimateTag estimate={flow.estimate} />
         </button>
       ) : (
         // PG-3.5 (D323): a run started from Domain is open until ended; say so, offer the End.

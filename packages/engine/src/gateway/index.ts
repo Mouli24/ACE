@@ -61,9 +61,11 @@ import { createGuardrailRoutes, type PolicyService } from '../guardrails/index.j
 import {
   buildRunExport,
   createRunControlRoutes,
+  estimateWorkflow,
   type RunControls,
   type RunService,
 } from '../runs/index.js';
+import { utcDay } from '../budgets/index.js';
 import { createDomainRoutes } from '../domain/routes.js';
 import type { DomainService } from '../domain/service.js';
 import type { BackupService } from '../backup/index.js';
@@ -596,6 +598,46 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.post('/workflows/:id/validate', async (c) =>
     c.json({ issues: await deps.graph.validateWorkflow(c.req.param('id')) }),
   );
+
+  /**
+   * PG-4.3: what a run of this workflow could cost, before it starts — read-only, no provider is
+   * called. The caps and today's spend ride along so the start dialog can say what is left.
+   */
+  api.post('/workflows/:id/estimate', async (c) => {
+    const { workflow, nodes, edges } = await deps.graph.getWorkflowGraph(c.req.param('id'));
+    const [catalog, providerRows, project, settings] = await Promise.all([
+      deps.repository.models.list(deps.scope, {}),
+      deps.repository.providers.list(deps.scope),
+      deps.repository.projects.get(deps.scope, workflow.projectId),
+      deps.repository.settings.get(deps.scope),
+    ]);
+    const today = utcDay(new Date());
+    const spent: { costUsd: number; costKnown?: boolean | undefined } =
+      deps.usage === undefined
+        ? {
+            costUsd:
+              (await deps.repository.nodeRuns.dailyCostUsd(deps.scope, today)) +
+              ((await deps.repository.chatMessages.dailyCostUsd?.(deps.scope, today)) ?? 0),
+          }
+        : (await deps.usage.dayTotals(today)).totals;
+    const runCap = project?.maxCostPerRunUsd;
+    const dailyCap = settings.dailyBudgetUsd;
+    return c.json(
+      estimateWorkflow({
+        workflow,
+        nodes,
+        edges,
+        catalog,
+        providers: providerRows,
+        budget: {
+          ...(runCap === undefined || runCap === null ? {} : { maxCostPerRunUsd: runCap }),
+          ...(dailyCap === undefined || dailyCap === null ? {} : { dailyBudgetUsd: dailyCap }),
+          spentTodayUsd: spent.costUsd,
+          spentTodayKnown: spent.costKnown !== false,
+        },
+      }),
+    );
+  });
 
   api.get('/workflows/:id/export', async (c) =>
     c.json(await deps.graph.exportWorkflow(c.req.param('id'))),

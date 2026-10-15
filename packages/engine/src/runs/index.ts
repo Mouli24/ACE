@@ -2,6 +2,7 @@ import {
   allowedRunActions,
   DEFAULT_CONCURRENCY,
   ENVELOPE_SUMMARY_MAX,
+  NODE_BUDGET_EXCEEDED,
   RunDomainConfigInputSchema,
   type BlockedReason,
   type BudgetHalt,
@@ -27,6 +28,7 @@ import {
   type TurnTriggerKind,
   type Usage,
   type ValidationIssue,
+  type Verdict,
 } from '@ace/contracts';
 
 import { countLoop, digestLine, routeEnvelope as routeByBrain } from '../domain/brain.js';
@@ -133,6 +135,7 @@ export * from './control/index.js';
 export * from './summary.js';
 export * from './replay.js';
 export * from './export.js';
+export * from './estimate.js';
 
 /**
  * The run service and scheduler (FR-EXE-001..012, Arch §12.2, §12.3, BR-04).
@@ -538,9 +541,12 @@ export function createRunService(deps: RunServiceDeps): RunService {
         budgetTokens,
         // BR-13: only an Input node's content is trusted.
         trust: trustForSource(from.kind),
+        // PG-4.1: the contract the receiving node's executor enforces, its `maxTokens` included,
+        // so the envelope on screen says what the node was held to.
         contract: contractFor(
           outputTypes,
           to.kind === 'agent' ? to.config.outputContract?.jsonSchema : undefined,
+          to.kind === 'agent' || to.kind === 'model' ? to.config.execution.maxTokens : undefined,
         ),
         createdAt: now(),
         ...(target === undefined ? {} : { target }),
@@ -645,6 +651,45 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const envelopesFor = new Map<Id, Envelope[]>();
     const deliveredEdges = new Set<Id>();
     const usages: Usage[] = [];
+    /**
+     * PG-4.3: what each node has spent in this run so far, every turn and iteration of it, for its
+     * own cap (`execution.maxCostUsd`). Only known cost counts (D359).
+     */
+    const spentByNode = new Map<Id, number>();
+    const noteNodeSpend = (nodeId: Id, usage: Usage): void => {
+      if (usage.costKnown === false) return;
+      spentByNode.set(nodeId, (spentByNode.get(nodeId) ?? 0) + usage.costUsd);
+    };
+    /**
+     * PG-4.3: a node whose cost in this run goes over its own cap ends FAILED rather than COMPLETED.
+     * It is a cost guardrail on one node, so it fails the way a guardrail does (`GUARDRAIL_VIOLATION`,
+     * kind `guardrail`, never retried — Arch §28), with its own code, and its answer is kept on the
+     * row but goes nowhere: what it feeds is BLOCKED (FR-ERR-006). The run's own caps stay the run
+     * halt `budget_exceeded` (FR-GRD-008). An unknown cost is never refused (D359).
+     */
+    function overNodeCap(node: Node, outcome: NodeExecutionOutcome): NodeExecutionOutcome {
+      if (outcome.status !== 'COMPLETED') return outcome;
+      if (node.kind !== 'agent' && node.kind !== 'model') return outcome;
+      const cap = node.config.execution.maxCostUsd;
+      if (cap === undefined || cap === null) return outcome;
+      if (outcome.usage.costKnown === false) return outcome;
+      const spent = (spentByNode.get(node.id) ?? 0) + outcome.usage.costUsd;
+      if (spent <= cap) return outcome;
+      const usd = (value: number): string =>
+        `$${value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
+      return {
+        ...outcome,
+        status: 'FAILED',
+        failureReason: 'GUARDRAIL_VIOLATION',
+        error: {
+          kind: 'guardrail',
+          code: NODE_BUDGET_EXCEEDED,
+          message: `This node cost ${usd(spent)} in this run, over its ${usd(cap)} cap.`,
+          retryable: false,
+          details: { capUsd: cap, costUsd: spent },
+        },
+      };
+    }
     const finalOutput: Record<Id, Part[]> = {};
     /** What arrived at each merge node, in order and with its port (FR-PAR-002, §2.4). */
     const mergeArrivals = createMergeArrivalLog();
@@ -740,6 +785,33 @@ export function createRunService(deps: RunServiceDeps): RunService {
     }
 
     /**
+     * PG-4.5 (Arch §12.4): each stored envelope carries the input-point verdicts on its reads as
+     * `guardrailVerdicts`. The row's envelopes are read fresh — a context step may have replaced
+     * them a moment ago — and only the matching ones gain the field; their reads stay as stored.
+     */
+    async function recordEnvelopeVerdicts(
+      nodeRunId: Id,
+      byEnvelope: readonly { envelopeId: Id; verdicts: Verdict[] }[],
+    ): Promise<void> {
+      if (byEnvelope.length === 0) return;
+      const row = await repository.nodeRuns.get(scope, nodeRunId);
+      if (row === null) return;
+      const verdictsOf = new Map(byEnvelope.map((entry) => [entry.envelopeId, entry.verdicts]));
+      if (!row.inputEnvelopes.some((envelope) => verdictsOf.has(envelope.id))) return;
+      await repository.nodeRuns.update(scope, nodeRunId, {
+        inputEnvelopes: row.inputEnvelopes.map((envelope) => {
+          const verdicts = verdictsOf.get(envelope.id);
+          return verdicts === undefined
+            ? envelope
+            : {
+                ...envelope,
+                guardrailVerdicts: [...(envelope.guardrailVerdicts ?? []), ...verdicts],
+              };
+        }),
+      });
+    }
+
+    /**
      * The guardrail points for one node run (FR-GRD-003, 007, 011..015, Arch §13.1).
      *
      * The executor calls these and knows nothing else about guardrails: it does not resolve a
@@ -784,6 +856,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
           ...toolFields,
           async beforePrompt(envelopes) {
             const outcome = await evaluator.evaluateEnvelopes({ target, envelopes });
+            await recordEnvelopeVerdicts(nodeRun.id, outcome.byEnvelope);
             return outcome.kind === 'failed'
               ? {
                   kind: 'failed',
@@ -1312,6 +1385,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
     ): Promise<void> {
       const usage = spentBy(nodeRun, outcome.usage);
       usages.push(usage);
+      noteNodeSpend(nodeRun.nodeId, usage);
       const startedAt = startedAtByNodeRun.get(nodeRun.id);
 
       await repository.nodeRuns.update(scope, nodeRun.id, {
@@ -1380,6 +1454,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
     ): Promise<void> {
       const usage = spentBy(nodeRun, outcome.usage);
       usages.push(usage);
+      noteNodeSpend(nodeRun.nodeId, usage);
       states.set(node.id, 'STOPPED');
       await repository.nodeRuns.update(scope, nodeRun.id, {
         error:
@@ -1847,6 +1922,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
         return;
       }
 
+      // PG-4.3: the node's own cost cap, read before the row is written so it is written once.
+      outcome = overNodeCap(node, outcome);
       await recordAttempt(nodeRun, outcome, endedAt);
 
       /*

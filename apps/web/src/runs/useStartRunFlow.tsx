@@ -1,4 +1,4 @@
-import type { Node, Part } from '@ace/contracts';
+import type { Node, Part, WorkflowEstimate } from '@ace/contracts';
 import {
   Button,
   Dialog,
@@ -14,6 +14,13 @@ import {
 import { useState, type FormEvent, type ReactNode } from 'react';
 
 import { useWorkflowGraph } from '../workflows/hooks';
+import {
+  EstimateSummary,
+  estimateTitle,
+  formatCostRange,
+  overBudget,
+  useWorkflowEstimate,
+} from './estimate';
 import { inputNodesNeedingText, useEndRun, useStartRun } from './hooks';
 import { useRunStore } from './run-store';
 
@@ -34,6 +41,8 @@ export function useStartRunFlow(workflowId: string): {
    * working: the team is idle and the run waits for a message or an End.
    */
   open: { parked: boolean; end: () => void; ending: boolean } | undefined;
+  /** PG-4.3: the run's estimate and budget, once loaded. */
+  estimate: WorkflowEstimate | undefined;
 } {
   const graph = useWorkflowGraph(workflowId);
   const startRun = useStartRun(workflowId);
@@ -52,20 +61,35 @@ export function useStartRunFlow(workflowId: string): {
       ),
   );
   const [dialogNodes, setDialogNodes] = useState<Array<{ id: string; name: string }>>();
+  // PG-4.3: what the run could cost, and what the caps leave, before it starts.
+  const estimate = useWorkflowEstimate(workflowId).data;
 
   const launch = (inputs?: Record<string, Part[]>) => {
     startRun.mutate(inputs === undefined ? {} : { inputs });
     setDialogNodes(undefined);
   };
 
+  /**
+   * An Input with nothing to send asks for text, with the estimate shown beside it; a run that could
+   * cost more than is left asks first (PG-4.3). Otherwise Start starts — the estimate and what is
+   * left are already on the Run button.
+   */
   const start = () => {
     const missing = inputNodesNeedingText((graph.data?.nodes ?? []) as Node[]);
     if (missing.length > 0) setDialogNodes(missing);
+    else if (estimate !== undefined && overBudget(estimate)) setDialogNodes([]);
     else launch();
   };
 
   const dialog = dialogNodes ? (
-    <InputDialog nodes={dialogNodes} onCancel={() => setDialogNodes(undefined)} onSubmit={launch} />
+    <InputDialog
+      nodes={dialogNodes}
+      onCancel={() => setDialogNodes(undefined)}
+      onSubmit={launch}
+      {...(estimate === undefined
+        ? {}
+        : { estimate: <EstimateSummary estimate={estimate} nodes={graph.data?.nodes ?? []} /> })}
+    />
   ) : null;
 
   const open =
@@ -77,7 +101,24 @@ export function useStartRunFlow(workflowId: string): {
           end: () => endRun.mutate(openRunId, { onError: (error) => toast.error(error.message) }),
         };
 
-  return { start, dialog, active, pending: startRun.isPending, open };
+  return { start, dialog, active, pending: startRun.isPending, open, estimate };
+}
+
+/**
+ * PG-4.3: the estimate on a Run button — a small `≈ $0.002–0.01` (or `free`, `?`) beside its label,
+ * with what is left in its title. Nothing while the estimate is loading or failed.
+ */
+export function RunEstimateTag({ estimate }: { estimate: WorkflowEstimate | undefined }) {
+  if (estimate === undefined || estimate.nodes.length === 0) return null;
+  return (
+    <span
+      data-testid="run-estimate-tag"
+      title={estimateTitle(estimate)}
+      className="font-machine text-[10px] font-normal text-[var(--muted)]"
+    >
+      {formatCostRange(estimate.total)}
+    </span>
+  );
 }
 
 /**
@@ -122,10 +163,13 @@ export function InputDialog({
   nodes,
   onCancel,
   onSubmit,
+  estimate,
 }: {
   nodes: Array<{ id: string; name: string }>;
   onCancel: () => void;
   onSubmit: (inputs: Record<string, Part[]>) => void;
+  /** PG-4.3: the run's estimate and budget, shown above Start. With no `nodes`, only it is asked. */
+  estimate?: ReactNode;
 }) {
   const [texts, setTexts] = useState<Record<string, string>>({});
   const ready = nodes.every((node) => texts[node.id]?.trim());
@@ -144,13 +188,19 @@ export function InputDialog({
       <DialogContent>
         <form onSubmit={submit} className="flex flex-col gap-4" data-testid="run-input-dialog">
           <DialogHeader>
-            <DialogTitle>What should this run start with?</DialogTitle>
+            <DialogTitle>
+              {nodes.length === 0 ? 'Start this run?' : 'What should this run start with?'}
+            </DialogTitle>
             <DialogDescription>
-              {nodes.length === 1
-                ? 'This Input node has nothing to send yet.'
-                : `${nodes.length} Input nodes have nothing to send yet.`}
+              {nodes.length === 0
+                ? 'It could cost more than the budget leaves.'
+                : nodes.length === 1
+                  ? 'This Input node has nothing to send yet.'
+                  : `${nodes.length} Input nodes have nothing to send yet.`}
             </DialogDescription>
           </DialogHeader>
+
+          {estimate}
 
           {nodes.map((node) => (
             <div key={node.id} className="flex flex-col gap-1.5">
@@ -171,7 +221,7 @@ export function InputDialog({
             <Button type="button" variant="ghost" onClick={onCancel}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!ready}>
+            <Button type="submit" disabled={!ready} autoFocus={nodes.length === 0}>
               Start run
             </Button>
           </DialogFooter>

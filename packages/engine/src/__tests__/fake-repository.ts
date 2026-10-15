@@ -1230,7 +1230,13 @@ export class FakeRepository implements Repository {
           }
           return 0;
         })
-        .map((group) => ({ key: group.key, ...group.usage, runs: group.runs.size }));
+        .map((group) => ({
+          key: group.key,
+          tokensIn: group.usage.tokensIn,
+          tokensOut: group.usage.tokensOut,
+          costUsd: group.usage.costUsd,
+          runs: group.runs.size,
+        }));
 
       const totals = buckets.reduce<Usage>(
         (sum, bucket) => ({

@@ -39,10 +39,56 @@ const GROUP_KEY_SQL: Record<UsageGroupBy, string> = {
 /** Only node runs that called a model, and that started, are counted (D234). */
 const COUNTED = `nr.workspace_id = ? AND nr.model_used IS NOT NULL AND nr.started_at IS NOT NULL`;
 
-const USAGE_SUMS = `
-  COALESCE(SUM(json_extract(nr.usage, '$.tokensIn')), 0)  AS tokensIn,
-  COALESCE(SUM(json_extract(nr.usage, '$.tokensOut')), 0) AS tokensOut,
-  COALESCE(SUM(json_extract(nr.usage, '$.costUsd')), 0)   AS costUsd`;
+/**
+ * The sums over a usage column. `unknown` is 1 when any row's cost is unknown (`costKnown: false`,
+ * which `json_extract` reads as 0) — D359, PG-4.3: such a sum is only the known part.
+ */
+const sumsOf = (column: string): string => `
+  COALESCE(SUM(json_extract(${column}, '$.tokensIn')), 0)  AS tokensIn,
+  COALESCE(SUM(json_extract(${column}, '$.tokensOut')), 0) AS tokensOut,
+  COALESCE(SUM(json_extract(${column}, '$.costUsd')), 0)   AS costUsd,
+  COALESCE(MAX(json_extract(${column}, '$.costKnown') = 0), 0) AS unknown`;
+
+const USAGE_SUMS = sumsOf('nr.usage');
+const CHAT_SUMS = sumsOf('m.usage');
+
+/**
+ * PG-4.3: the same groupings for a direct-chat reply — the provider and workflow of the node its
+ * thread talks to, the model the reply names (else the node's), the UTC day it was written.
+ */
+const CHAT_GROUP_KEY_SQL: Record<UsageGroupBy, string> = {
+  provider: `COALESCE(json_extract(n.config, '$.providerId'), '')`,
+  model: `COALESCE(m.model_id, json_extract(n.config, '$.modelId'), '')`,
+  day: `COALESCE(date(m.at), '')`,
+  workflow: `COALESCE(n.workflow_id, '')`,
+};
+
+/**
+ * Direct-chat replies that spent something (PG-2.2's rule): a turn a run wrote into its node's
+ * session (`run_id` set) is its node run's and is never counted twice.
+ */
+const CHAT_COUNTED = `m.workspace_id = ? AND m.run_id IS NULL AND m.usage IS NOT NULL`;
+const CHAT_FROM = `chat_messages m
+             LEFT JOIN chat_threads t ON t.workspace_id = m.workspace_id AND t.id = m.thread_id
+             LEFT JOIN nodes n ON n.workspace_id = m.workspace_id AND n.id = t.node_id`;
+
+interface SumRow {
+  tokensIn: number;
+  tokensOut: number;
+  costUsd: number;
+  unknown: number;
+}
+
+function usageOf(
+  row: SumRow,
+): Pick<Usage, 'tokensIn' | 'tokensOut' | 'costUsd'> & { costKnown?: false } {
+  return {
+    tokensIn: Number(row.tokensIn),
+    tokensOut: Number(row.tokensOut),
+    costUsd: Number(row.costUsd),
+    ...(Number(row.unknown) === 1 ? { costKnown: false } : {}),
+  };
+}
 
 const COMPLETE: RunState = 'COMPLETE';
 const HALTED: RunState = 'HALTED';
@@ -89,19 +135,62 @@ export function createUsageRepository(sqlite: BetterSqlite3.Database): UsageRepo
         )
         .all(...params) as Record<string, string | number>[];
 
-      const buckets: UsageBucket[] = rows.map((row) => ({
-        key: Object.fromEntries(groupBy.map((by, index) => [by, String(row[`g${index}`])])),
-        tokensIn: Number(row['tokensIn']),
-        tokensOut: Number(row['tokensOut']),
-        costUsd: Number(row['costUsd']),
+      // PG-4.3: direct-chat replies in the same range, keyed the same way, as buckets of their own.
+      const chatKeys = groupBy.map((by, index) => `${CHAT_GROUP_KEY_SQL[by]} AS g${index}`);
+      const chatParams: unknown[] = [scope.workspaceId];
+      let chatRange = '';
+      if (query.from !== undefined) {
+        chatRange += ` AND unixepoch(m.at, 'subsec') >= unixepoch(?, 'subsec')`;
+        chatParams.push(query.from);
+      }
+      if (query.to !== undefined) {
+        chatRange += ` AND unixepoch(m.at, 'subsec') < unixepoch(?, 'subsec')`;
+        chatParams.push(query.to);
+      }
+      const chatRows = sqlite
+        .prepare(
+          `SELECT ${chatKeys.join(', ')}, ${CHAT_SUMS}
+             FROM ${CHAT_FROM}
+            WHERE ${CHAT_COUNTED}${chatRange}
+            GROUP BY ${aliases}
+            ORDER BY ${aliases}`,
+        )
+        .all(...chatParams) as Record<string, string | number>[];
+
+      const keyOf = (row: Record<string, string | number>): Record<string, string> =>
+        Object.fromEntries(groupBy.map((by, index) => [by, String(row[`g${index}`])]));
+      const runBuckets: UsageBucket[] = rows.map((row) => ({
+        key: keyOf(row),
+        ...usageOf(row as unknown as SumRow),
         runs: Number(row['runs']),
       }));
+      const chatBuckets: UsageBucket[] = chatRows.map((row) => ({
+        key: keyOf(row),
+        ...usageOf(row as unknown as SumRow),
+        runs: 0,
+        source: 'chat',
+      }));
+
+      // By key, grouping by grouping; a key's node-run bucket before its chat bucket. With no chat
+      // the node runs keep SQLite's own order untouched.
+      const buckets =
+        chatBuckets.length === 0
+          ? runBuckets
+          : [...runBuckets, ...chatBuckets].sort((a, b) => {
+              for (const by of groupBy) {
+                const left = a.key[by]!;
+                const right = b.key[by]!;
+                if (left !== right) return left < right ? -1 : 1;
+              }
+              return (a.source === 'chat' ? 1 : 0) - (b.source === 'chat' ? 1 : 0);
+            });
 
       const totals = buckets.reduce<Usage>(
         (sum, bucket) => ({
           tokensIn: sum.tokensIn + bucket.tokensIn,
           tokensOut: sum.tokensOut + bucket.tokensOut,
           costUsd: sum.costUsd + bucket.costUsd,
+          ...(sum.costKnown === false || bucket.costKnown === false ? { costKnown: false } : {}),
         }),
         emptyUsage(),
       );
@@ -116,8 +205,20 @@ export function createUsageRepository(sqlite: BetterSqlite3.Database): UsageRepo
              FROM node_runs nr
             WHERE ${COUNTED} AND date(nr.started_at) = ?`,
         )
-        .get(scope.workspaceId, day) as Usage;
-      return { tokensIn: row.tokensIn, tokensOut: row.tokensOut, costUsd: row.costUsd };
+        .get(scope.workspaceId, day) as SumRow;
+      return usageOf(row);
+    },
+
+    /** PG-4.3: one UTC day of direct-chat replies, for the day total's chat part. */
+    chatDayTotals: async (scope: Scope, day: string): Promise<Usage> => {
+      const row = sqlite
+        .prepare(
+          `SELECT ${CHAT_SUMS}
+             FROM chat_messages m
+            WHERE ${CHAT_COUNTED} AND date(m.at) = ?`,
+        )
+        .get(scope.workspaceId, day) as SumRow;
+      return usageOf(row);
     },
 
     /**

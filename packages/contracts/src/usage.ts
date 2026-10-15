@@ -63,13 +63,25 @@ export const UsageBucketSchema = z.strictObject({
   tokensOut: z.number().int().min(0),
   costUsd: z.number().min(0),
   runs: z.number().int().min(0),
+  /**
+   * PG-4.3 (D359): `false` when part of the bucket's spend was on an unpriced remote model, so
+   * `costUsd` is only the known part and must not read as the whole. Absent or `true`: known.
+   */
+  costKnown: z.boolean().optional(),
+  /**
+   * PG-4.3: what spent it. Absent or `runs`: node runs, as before. `chat`: direct-chat replies (a
+   * turn a run wrote is its node run's, never counted twice); `runs` is then 0. Keyed the same way —
+   * the thread's node's provider and workflow, the reply's model and day — and summed into `totals`.
+   */
+  source: z.enum(['runs', 'chat']).optional(),
 });
 export type UsageBucket = z.infer<typeof UsageBucketSchema>;
 
 /**
  * `GET /usage` → `UsageResponse`. Buckets are ordered by key, grouping by grouping in `groupBy`
- * order, so the usage screen's table and the API compare row by row (TC-OBS-004). `totals` is the
- * exact sum of the buckets (FR-OBS-002).
+ * order — a key's node-run bucket before its chat bucket (PG-4.3) — so the usage screen's table and
+ * the API compare row by row (TC-OBS-004). `totals` is the exact sum of the buckets (FR-OBS-002),
+ * and `totals.costKnown` is `false` when any bucket's is (D359).
  */
 export const UsageResponseSchema = z.strictObject({
   buckets: z.array(UsageBucketSchema),
@@ -83,7 +95,13 @@ export type UsageResponse = z.infer<typeof UsageResponseSchema>;
  */
 export const DayTotalsSchema = z.strictObject({
   day: UsageDaySchema,
+  /**
+   * Everything the day spent, direct chat included (PG-4.3). `totals.costKnown: false` (D359) says
+   * part of it was on an unpriced model: the day's cost is then unknown, `costUsd` its known part.
+   */
   totals: UsageSchema,
+  /** PG-4.3: the direct-chat part of `totals`, for a label of its own. Absent: none recorded. */
+  chat: UsageSchema.optional(),
 });
 export type DayTotals = z.infer<typeof DayTotalsSchema>;
 

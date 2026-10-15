@@ -14,7 +14,7 @@ import {
 } from './hooks';
 import { useRunStore } from './run-store';
 import { useOpenRunInPlace } from './useOpenRunInPlace';
-import { OpenRunEnd, useStartRunFlow } from './useStartRunFlow';
+import { OpenRunEnd, RunEstimateTag, useStartRunFlow } from './useStartRunFlow';
 
 /** Run state → how the badge reads. The enum name stays the contract (BR-03: COMPLETE ≠ HALTED). */
 const RUN_STATE_LABEL: Readonly<Record<RunState, string>> = {
@@ -26,7 +26,20 @@ const RUN_STATE_LABEL: Readonly<Record<RunState, string>> = {
   HALTED: 'halted',
 };
 
-/** The run state as a theme status colour. A stopped halt reads STOPPED, any other FAILED. */
+/**
+ * How a halt reads (PG-4.2): only a failure or a crash is coloured as one. A person's stop and an
+ * engine shutdown read STOPPED; a spent budget is a limit the run reached, not a fault — it takes
+ * the amber of a held run.
+ */
+const HALT_COLOR: Readonly<Record<HaltReason, string>> = {
+  stopped: 'STOPPED',
+  shutdown: 'STOPPED',
+  budget_exceeded: 'PAUSED',
+  failure: 'FAILED',
+  crash: 'FAILED',
+};
+
+/** The run state as a theme status colour; a halt by its reason. */
 function runStateColor(status: RunState, haltReason: HaltReason | undefined): string {
   const name = {
     PREFLIGHT: 'READY',
@@ -34,7 +47,7 @@ function runStateColor(status: RunState, haltReason: HaltReason | undefined): st
     PAUSED: 'PAUSED',
     COMPLETE: 'COMPLETED',
     BLOCKED: 'BLOCKED',
-    HALTED: haltReason === 'stopped' ? 'STOPPED' : 'FAILED',
+    HALTED: haltReason === undefined ? 'FAILED' : HALT_COLOR[haltReason],
   }[status];
   return `var(--color-status-${name})`;
 }
@@ -137,7 +150,7 @@ export function RunBar({ workflowId }: { workflowId: string }) {
 
       {!flow.active && (
         <Button size="sm" aria-label="Start run" onClick={flow.start} disabled={flow.pending}>
-          <Icons.Play aria-hidden size={12} /> Run
+          <Icons.Play aria-hidden size={12} /> Run <RunEstimateTag estimate={flow.estimate} />
         </Button>
       )}
       {/* PG-3.5 (D323): a Domain run still open says it waits, and offers its End. */}

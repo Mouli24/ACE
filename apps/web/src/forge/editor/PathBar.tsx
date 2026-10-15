@@ -5,6 +5,7 @@ import { useInRouterContext } from 'react-router-dom';
 
 import { useFollowNode } from '../../app/follow-node';
 import { useProject } from '../../projects/hooks';
+import { estimateTitle } from '../../runs/estimate';
 import { OpenRunEnd, useStartRunFlow } from '../../runs/useStartRunFlow';
 import type { AgentLook } from '../../theme/agents';
 import { ago } from '../../theme/format';
@@ -218,13 +219,15 @@ function FollowLink({
 
 /** "▶ Run pipeline": the workflow's real run, refused while one is already going. */
 function RunPipeline({ workflowId }: { workflowId: string }) {
-  const { start, dialog, active, pending, open } = useStartRunFlow(workflowId);
+  const { start, dialog, active, pending, open, estimate } = useStartRunFlow(workflowId);
   // PG-3.5 (D323): a Domain run still open waits for the person — say so and offer its End.
   if (open !== undefined) return <OpenRunEnd open={open} />;
   return (
     <>
       <button
         type="button"
+        // PG-4.3: the estimate and what the budget leaves, before the run starts.
+        {...(estimate === undefined ? {} : { title: estimateTitle(estimate) })}
         onClick={start}
         disabled={active || pending}
         className="flex h-[24px] shrink-0 cursor-pointer items-center gap-[6px] whitespace-nowrap rounded-[999px] border border-[var(--line)] bg-[var(--chip)] px-[10px] font-human text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f] disabled:cursor-default disabled:opacity-[0.45] disabled:hover:bg-[var(--chip)]"

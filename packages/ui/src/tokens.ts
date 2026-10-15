@@ -24,17 +24,22 @@ export const PROVIDER_ACCENT: Readonly<Record<ProviderType, string>> = {
   gemini_cli: '#8fb0ff',
 };
 
-/** Node-state colours from the theme: done green, running accent, waiting violet, failed red. */
+/**
+ * Node-state colours (PG-4.2, D360): one per state, no two alike — idle grey, ready teal, running
+ * orange, waiting violet, done green, paused amber, stopped slate, blocked plum, failed red — each
+ * ≥ 4.5:1 on its theme's card, panel, canvas and hover fill, so the state word reads in its colour.
+ * D328's hues kept where they passed; the rest shifted to pass. Dark set here, light below.
+ */
 export const STATUS_RING: Readonly<Record<NodeState, string>> = {
   IDLE: '#a39d97',
-  READY: '#1f97a3',
-  RUNNING: '#e8572e',
-  WAITING: '#7a62d6',
-  COMPLETED: '#2f9e63',
-  PAUSED: '#a39d97',
-  STOPPED: '#a39d97',
-  BLOCKED: '#c94c27',
-  FAILED: '#c94c27',
+  READY: '#4fc3cc',
+  RUNNING: '#f08a5d',
+  WAITING: '#a996f0',
+  COMPLETED: '#4cc283',
+  PAUSED: '#e0b040',
+  STOPPED: '#8fa6c8',
+  BLOCKED: '#e07ab0',
+  FAILED: '#ff6b6b',
 };
 
 /**
@@ -65,15 +70,15 @@ export const LIGHT_PROVIDER_ACCENT: Readonly<Record<ProviderType, string>> = {
 };
 
 export const LIGHT_STATUS_RING: Readonly<Record<NodeState, string>> = {
-  IDLE: '#6f6a65',
-  READY: '#1f97a3',
-  RUNNING: '#e8572e',
-  WAITING: '#7a62d6',
-  COMPLETED: '#2f9e63',
-  PAUSED: '#6f6a65',
-  STOPPED: '#6f6a65',
-  BLOCKED: '#c94c27',
-  FAILED: '#c94c27',
+  IDLE: '#6b6661',
+  READY: '#0b6e77',
+  RUNNING: '#b4441b',
+  WAITING: '#6d52cc',
+  COMPLETED: '#1a6b3f',
+  PAUSED: '#8a5a00',
+  STOPPED: '#4a5d7a',
+  BLOCKED: '#9b3a72',
+  FAILED: '#c0262d',
 };
 
 export const LIGHT_PROVIDER_STATUS: Readonly<Record<ProviderState, string>> = {
