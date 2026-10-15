@@ -1,10 +1,13 @@
-import type { Id, NodeRun, RunAction } from '@ace/contracts';
+import type { Checkpoint, Id, NodeRun, RunAction } from '@ace/contracts';
 import { PartRenderer, StatusRing } from '@ace/ui';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useEffect } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import { api } from '../app/api';
 import { useWorkflowSubscription } from '../app/socket';
 import { ErrorsTab } from '../errors/ErrorsTab';
+import { useCheckpointEvents, useCheckpoints } from '../forge/changes/hooks';
+import { STATUS_LABEL } from '../forge/changes/present';
 import { TraceTab } from '../inspector/TraceTab';
 import { useProviders } from '../providers/hooks';
 import { TOUCH_TARGETS } from '../responsive/touch';
@@ -59,6 +62,16 @@ export function RunDetailPage() {
   const end = useEndRun();
   const retry = useRetryNodeRun();
   const compact = useIsCompact();
+  // PG-5.1: `?node=` (a link from Forge's Changes) brings that node's row into view.
+  const [search] = useSearchParams();
+  const focusNode = search.get('node') ?? undefined;
+  const loaded = run.data !== undefined;
+  useEffect(() => {
+    if (focusNode === undefined || !loaded) return;
+    document
+      .querySelector(`[data-testid="run-detail-node-${CSS.escape(focusNode)}"]`)
+      ?.scrollIntoView?.({ block: 'center' });
+  }, [focusNode, loaded]);
   // The trace and the node states arrive as the workflow's run frames (FR-OBS-001); counted, so an
   // open Canvas on the same workflow keeps its own feed when this page unmounts.
   useWorkflowSubscription(run.data?.workflowId);
@@ -240,6 +253,13 @@ export function RunDetailPage() {
         </section>
       )}
 
+      <RunChanges
+        projectId={record.projectId}
+        workflowId={record.workflowId}
+        runId={record.id}
+        nodeName={(nodeId) => record.snapshot.nodes.find((node) => node.id === nodeId)?.name}
+      />
+
       <section className="min-w-0" data-testid="run-detail-trace">
         <TraceTab runId={run.data.id} />
       </section>
@@ -257,7 +277,8 @@ export function RunDetailPage() {
                 key={node.id}
                 data-testid={`run-detail-node-${node.id}`}
                 data-state={nodeRun?.status ?? 'IDLE'}
-                className="flex min-h-[36px] min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-[var(--line)] px-[14px] py-[7px] text-[12.5px] first:border-t-0"
+                data-focused={focusNode === node.id ? 'true' : undefined}
+                className="flex min-h-[36px] min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-[var(--line)] px-[14px] py-[7px] text-[12.5px] first:border-t-0 data-[focused=true]:shadow-[inset_0_0_0_1.5px_#ef6b3f]"
               >
                 <StatusRing state={nodeRun?.status ?? 'IDLE'} showLabel />
                 <span className="min-w-0 truncate font-semibold">{node.name}</span>
@@ -281,5 +302,73 @@ export function RunDetailPage() {
         </ul>
       </section>
     </main>
+  );
+}
+
+/** The Forge link for one checkpoint: Changes opens on it, with the run and its node selected. */
+function forgeLink(workflowId: string, checkpoint: Checkpoint): string {
+  const query = new URLSearchParams({ checkpoint: checkpoint.id });
+  if (checkpoint.runId !== undefined) query.set('run', checkpoint.runId);
+  if (checkpoint.nodeId !== undefined) query.set('node', checkpoint.nodeId);
+  return `/projects/${checkpoint.projectId}/workflows/${workflowId}/forge?${query.toString()}`;
+}
+
+/**
+ * PG-5.1: what this run changed in the project folder — one checkpoint per writing node step
+ * (D341), each with a link to review, keep or revert it in Forge's Changes. Live from
+ * `checkpoint.updated`; absent when the run changed nothing.
+ */
+function RunChanges({
+  projectId,
+  workflowId,
+  runId,
+  nodeName,
+}: {
+  projectId: string;
+  workflowId: string;
+  runId: string;
+  nodeName: (nodeId: string) => string | undefined;
+}) {
+  useCheckpointEvents(projectId);
+  const list = useCheckpoints(projectId);
+  const mine = (list.data ?? [])
+    .filter((checkpoint) => checkpoint.kind === 'run' && checkpoint.runId === runId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  if (mine.length === 0) return null;
+  return (
+    <section className="flex flex-col gap-[10px]" data-testid="run-detail-checkpoints">
+      <h2 className={SECTION_LABEL}>Changes to the project</h2>
+      <ul className="m-0 flex list-none flex-col overflow-hidden rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-0">
+        {mine.map((checkpoint) => {
+          const name =
+            checkpoint.nodeId === undefined
+              ? 'The whole run'
+              : (nodeName(checkpoint.nodeId) ?? 'A node');
+          const files = checkpoint.files.length;
+          return (
+            <li
+              key={checkpoint.id}
+              data-testid={`run-detail-checkpoint-${checkpoint.id}`}
+              className="flex min-h-[36px] min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-[var(--line)] px-[14px] py-[7px] text-[12.5px] first:border-t-0"
+            >
+              <span className="min-w-0 truncate font-semibold">{name}</span>
+              <span className={`${CHIP_CLASS} bg-[var(--hover)] text-[var(--muted)]`}>
+                {STATUS_LABEL[checkpoint.status]}
+              </span>
+              <span className="font-machine text-[11px] text-[var(--muted)]">
+                {files} file{files === 1 ? '' : 's'}
+              </span>
+              <Link
+                to={forgeLink(workflowId, checkpoint)}
+                className={`${ACTION_LINK} ml-auto`}
+                data-testid={`run-detail-checkpoint-open-${checkpoint.id}`}
+              >
+                Review in Forge<span aria-hidden>&nbsp;→</span>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
