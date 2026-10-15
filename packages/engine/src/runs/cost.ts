@@ -14,6 +14,9 @@ import { providerGroup, type ModelPricing, type ProviderType, type Usage } from 
 
 export const TOKENS_PER_PRICE_UNIT = 1000;
 
+/** The price table version `@ace/providers` stamps on a manifest model with no published price. */
+export const UNPRICED_TABLE = 'unpriced';
+
 /** What the cost rule needs to know about the provider that answered. */
 export interface PricedProvider {
   type: ProviderType;
@@ -49,7 +52,10 @@ export function usageFor(
 ): Usage {
   const group = provider === undefined ? undefined : providerGroup(provider);
   if (group === 'local') return { tokensIn, tokensOut, costUsd: 0 };
-  const unknown = pricing === undefined && group !== undefined && group !== 'mock';
+  // The catalog stamps a manifest model with no published price `unpriced` at $0: that is no
+  // price either.
+  const noPrice = pricing === undefined || pricing.priceTableVersion === UNPRICED_TABLE;
+  const unknown = noPrice && group !== undefined && group !== 'mock';
   return {
     tokensIn,
     tokensOut,

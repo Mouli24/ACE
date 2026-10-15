@@ -46,6 +46,8 @@ export interface ModelInfo {
   description?: string;
   /** What an alias resolves to today (`opus` → `claude-opus-5-5`), when the provider says. */
   resolvedModelId?: string;
+  /** PG-1.4 (D359): the model's size on disk, when a local service reports it (Ollama tags). */
+  sizeBytes?: number;
 }
 
 export const FINISH_REASONS = ['stop', 'length', 'refusal', 'tool_calls', 'error'] as const;
