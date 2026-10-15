@@ -11,5 +11,7 @@ export function toSummary(run: Run): RunSummary {
     ...(run.endedAt === undefined ? {} : { endedAt: run.endedAt }),
     ...(run.durationMs === undefined ? {} : { durationMs: run.durationMs }),
     totals: run.totals,
+    // FR-BEN-008: a live `run.started` tells a client this run belongs to the bench, not the history.
+    ...(run.benchExperimentId === undefined ? {} : { benchExperimentId: run.benchExperimentId }),
   };
 }
