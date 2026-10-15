@@ -78,7 +78,7 @@ import { checkConnection, type ConnectionAttempt } from './connect';
 import { ConnectToDialog } from './ConnectToDialog';
 import { PALETTE_DRAG_TYPE, PALETTE_INIT_TYPE } from './drag';
 import { DUPLICATE_OFFSET, duplicateNodes } from './duplicate';
-import { EdgeLayer, PortDotLayer, type PortDotLook } from './EdgeLayer';
+import { EdgeLayer, PortDotLayer } from './EdgeLayer';
 import {
   MOVE_HISTORY_LIMIT,
   movesBack,
@@ -366,6 +366,9 @@ function CanvasBreadcrumb({ workflowId }: { workflowId: string }) {
 }
 
 const selectPaneDragging = (state: ReactFlowState) => state.paneDragging;
+/** Below this zoom a card's 22px buttons draw under 10px: hidden (and not painted, TC-NFR-001). */
+export const CARD_BUTTONS_MIN_ZOOM = 0.45;
+const selectFar = (state: ReactFlowState) => state.transform[2] < CARD_BUTTONS_MIN_ZOOM;
 const selectConnectFrom = (state: ReactFlowState): string =>
   state.connection.inProgress
     ? [
@@ -410,6 +413,8 @@ function CanvasInner({
   const [moveHistory, setMoveHistory] = useState<PositionSnapshot[]>([]);
   const dark = useResolvedTheme() === 'dark';
   const paneDragging = useStore(selectPaneDragging);
+  /** D360: zoomed far out, the cards' buttons would be specks; they hide until the view comes closer. */
+  const far = useStore(selectFar);
   const wrapper = useRef<HTMLDivElement>(null);
 
   useEffect(() => setMoveHistory([]), [workflowId]);
@@ -711,30 +716,6 @@ function CanvasInner({
       checkForUi,
     );
   }, [connectKey, nodes, checkForUi]);
-
-  /**
-   * D350: the ports shown above the edge layer — while a line is drawn, every candidate (dimmed
-   * when it would be refused); otherwise the hovered card's, the selected cards' and an armed one.
-   */
-  const [hoveredNodeId, setHoveredNodeId] = useState<string>();
-  const shownDots = useMemo(() => {
-    const shown = new Map<string, PortDotLook>();
-    if (connectStates !== undefined) {
-      for (const [portId, state] of connectStates) {
-        shown.set(portId, state.look === 'incompatible' ? 'dim' : 'on');
-      }
-      return shown;
-    }
-    const lit = new Set(
-      hoveredNodeId === undefined ? selectedNodeIds : [...selectedNodeIds, hoveredNodeId],
-    );
-    for (const node of nodes) {
-      if (!lit.has(node.id)) continue;
-      for (const port of [...node.inputs, ...node.outputs]) shown.set(port.id, 'on');
-    }
-    if (armedPortId !== undefined) shown.set(armedPortId, 'on');
-    return shown;
-  }, [connectStates, hoveredNodeId, selectedNodeIds, nodes, armedPortId]);
 
   /** Keyboard connect (NFR-USE-02): Enter on an output arms it, Enter on an input completes. */
   const onPortKey = useCallback(
@@ -1502,6 +1483,7 @@ function CanvasInner({
                 data-readonly={readOnly ? 'true' : undefined}
                 data-locked={locked ? 'true' : 'false'}
                 data-tool={hand ? 'hand' : 'select'}
+                data-far={far ? 'true' : undefined}
                 onDragOver={onDragOver}
                 onDrop={onDrop}
                 onContextMenu={onCanvasContextMenu}
@@ -1524,10 +1506,6 @@ function CanvasInner({
                   onPaneClick={() => setEdgeMenu(undefined)}
                   onNodeClick={onNodeClick}
                   onNodeDoubleClick={onNodeClick}
-                  onNodeMouseEnter={(_event, node) => setHoveredNodeId(node.id)}
-                  onNodeMouseLeave={(_event, node) =>
-                    setHoveredNodeId((current) => (current === node.id ? undefined : current))
-                  }
                   onMoveEnd={onMoveEnd}
                   defaultViewport={savedViewport ?? { x: 0, y: 0, zoom: 1 }}
                   deleteKeyCode={readOnly ? null : ['Delete', 'Backspace']}
@@ -1558,7 +1536,12 @@ function CanvasInner({
                   style={{ background: 'transparent' }}
                 >
                   <EdgeLayer nodes={nodes} edges={flowEdges} />
-                  <PortDotLayer nodes={nodes} shown={shownDots} />
+                  <PortDotLayer
+                    nodes={nodes}
+                    connectStates={connectStates}
+                    selectedNodeIds={selectedNodeIds}
+                    armedPortId={armedPortId}
+                  />
                   <ConnectRefusalTooltip states={connectStates} />
                 </ReactFlow>
 

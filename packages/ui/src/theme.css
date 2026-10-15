@@ -338,7 +338,6 @@
   background: transparent;
   opacity: 0;
   cursor: crosshair;
-  transition: opacity 0.12s;
 }
 .react-flow__handle.ace-port::after,
 .ace-port-dot {
@@ -351,7 +350,6 @@
   transform: translate(-50%, -50%);
   border-radius: 50%;
   background: var(--port-color, #ef6b3f);
-  box-shadow: 0 0 0 2px var(--surface);
   pointer-events: none;
 }
 .react-flow__node:hover .react-flow__handle.ace-port,
@@ -369,6 +367,20 @@
   opacity: 1;
   outline: none;
   box-shadow: 0 0 0 2px #ef6b3f;
+}
+
+/*
+ * PG-1.2 (D360): a card's Settings and More buttons hide while the Canvas is zoomed far out (the
+ * Canvas sets `data-far` under 45%), where they would draw under 10px; `display: none` also keeps
+ * 400 of them out of the 200-node pan's paint (TC-NFR-001).
+ */
+[data-far='true'] .ace-card-buttons {
+  display: none;
+}
+/* …and so does a handle's own dot (under 4px there); the dot layer above the edges still draws
+   the ports a line is being drawn to. */
+[data-far='true'] .react-flow__handle.ace-port::after {
+  display: none;
 }
 
 /* The loading placeholder: the canvas colour and the theme's dot grid at zoom 1. */

@@ -8,7 +8,7 @@ import {
   Icons,
   cn,
 } from '@ace/ui';
-import { useContext } from 'react';
+import { useContext, useState } from 'react';
 
 import { NodeActionsContext } from './card-context';
 import { isStageKind } from './anchors';
@@ -25,13 +25,39 @@ const BUTTON =
  */
 export function NodeCardButtons({ node, className }: { node: Node; className?: string }) {
   const actions = useContext(NodeActionsContext);
+  /*
+   * The menu is mounted on first use: 200 cards each holding a Radix menu cost the 200-node pan
+   * (TC-NFR-001) a third of its frame rate. Until then More is a plain button that opens it.
+   */
+  const [menuMounted, setMenuMounted] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   if (actions === undefined) return null;
   const { readOnly } = actions;
   const name = node.name || 'node';
+  const moreButton = (
+    <button
+      type="button"
+      aria-label="More"
+      aria-haspopup="menu"
+      aria-expanded={menuOpen}
+      title={`More actions for ${name}`}
+      data-testid={`node-more-${node.id}`}
+      className={BUTTON}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (!menuMounted) {
+          setMenuMounted(true);
+          setMenuOpen(true);
+        }
+      }}
+    >
+      <Icons.MoreHorizontal aria-hidden size={13} strokeWidth={2} />
+    </button>
+  );
   return (
     <div
       data-testid={`node-buttons-${node.id}`}
-      className={cn('absolute z-[1] flex items-center gap-[4px]', className)}
+      className={cn('ace-card-buttons absolute z-[1] flex items-center gap-[4px]', className)}
     >
       {!readOnly && (
         <button
@@ -48,50 +74,43 @@ export function NodeCardButtons({ node, className }: { node: Node; className?: s
           <Icons.Settings aria-hidden size={12} strokeWidth={2} />
         </button>
       )}
-      <DropdownMenu modal={false}>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            aria-label="More"
-            title={`More actions for ${name}`}
-            data-testid={`node-more-${node.id}`}
-            className={BUTTON}
+      {menuMounted ? (
+        <DropdownMenu modal={false} open={menuOpen} onOpenChange={setMenuOpen}>
+          <DropdownMenuTrigger asChild>{moreButton}</DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            collisionPadding={8}
+            aria-label={`Actions for ${name}`}
+            data-testid={`node-more-menu-${node.id}`}
             onClick={(event) => event.stopPropagation()}
           >
-            <Icons.MoreHorizontal aria-hidden size={13} strokeWidth={2} />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="end"
-          collisionPadding={8}
-          aria-label={`Actions for ${name}`}
-          data-testid={`node-more-menu-${node.id}`}
-          onClick={(event) => event.stopPropagation()}
-        >
-          {actions.openInDomain !== undefined && isStageKind(node.kind) && (
-            <DropdownMenuItem onSelect={() => actions.openInDomain?.(node.id)}>
-              Open in Domain
-            </DropdownMenuItem>
-          )}
-          {!readOnly && (
-            <>
-              <DropdownMenuItem onSelect={() => actions.connectTo(node.id)}>
-                Connect to…
+            {actions.openInDomain !== undefined && isStageKind(node.kind) && (
+              <DropdownMenuItem onSelect={() => actions.openInDomain?.(node.id)}>
+                Open in Domain
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => actions.duplicate(node.id)}>
-                Duplicate
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => actions.runFromHere(node.id)}>
-                Run from here
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem destructive onSelect={() => actions.remove(node.id)}>
-                Delete
-              </DropdownMenuItem>
-            </>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+            )}
+            {!readOnly && (
+              <>
+                <DropdownMenuItem onSelect={() => actions.connectTo(node.id)}>
+                  Connect to…
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => actions.duplicate(node.id)}>
+                  Duplicate
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => actions.runFromHere(node.id)}>
+                  Run from here
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem destructive onSelect={() => actions.remove(node.id)}>
+                  Delete
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : (
+        moreButton
+      )}
     </div>
   );
 }
