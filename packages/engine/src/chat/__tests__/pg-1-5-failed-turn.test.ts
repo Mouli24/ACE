@@ -72,16 +72,14 @@ const chatMessageFrames = (events: EngineEvent[], threadId: string) =>
   );
 
 describe('PG-1.5 a throw after acceptance ends the turn as one stored failed message', () => {
-  it.fails(
-    'a throw before the model call (reading reverted paths) stores one failed turn and emits it',
-    async () => {
-      const checkpoints: CheckpointRecorder = {
-        begin: async () => ({ id: 'cp', finish: async () => undefined }),
-        takeRevertedPaths: () => {
-          throw new Error('checkpoint notes unreadable');
-        },
-      };
-      const s = await setup({ checkpoints });
+  it('a throw before the model call (reading reverted paths) stores one failed turn and emits it', async () => {
+    const checkpoints: CheckpointRecorder = {
+      begin: async () => ({ id: 'cp', finish: async () => undefined }),
+      takeRevertedPaths: () => {
+        throw new Error('checkpoint notes unreadable');
+      },
+    };
+    const s = await setup({ checkpoints });
 
       const begun = await s.service.chat(s.agentId, { content: hi });
       await settle(begun.done);
@@ -95,21 +93,19 @@ describe('PG-1.5 a throw after acceptance ends the turn as one stored failed mes
     },
   );
 
-  it.fails(
-    'a throw while storing the reply stores one failed turn instead, and emits exactly one frame',
-    async () => {
-      const repository = new FakeRepository();
-      const append = repository.chatMessages.append;
-      let refused = false;
-      // The first agent reply cannot be written; anything after it can (the store recovered).
-      repository.chatMessages.append = async (sc, message) => {
-        if (!refused && message.role === 'agent' && message.error === undefined) {
-          refused = true;
-          throw new Error('disk full');
-        }
-        return append(sc, message);
-      };
-      const s = await setup({}, repository);
+  it('a throw while storing the reply stores one failed turn instead, and emits exactly one frame', async () => {
+    const repository = new FakeRepository();
+    const append = repository.chatMessages.append;
+    let refused = false;
+    // The first agent reply cannot be written; anything after it can (the store recovered).
+    repository.chatMessages.append = async (sc, message) => {
+      if (!refused && message.role === 'agent' && message.error === undefined) {
+        refused = true;
+        throw new Error('disk full');
+      }
+      return append(sc, message);
+    };
+    const s = await setup({}, repository);
 
       const begun = await s.service.chat(s.agentId, { content: hi });
       await settle(begun.done);
@@ -134,27 +130,25 @@ describe('PG-1.5 a throw after acceptance ends the turn as one stored failed mes
 });
 
 describe('PG-1.5 open turns are marked failed on startup', () => {
-  it.fails(
-    'a user turn with no reply after it gets one failed agent turn when the engine starts',
-    async () => {
-      const s = await setup();
-      const at = '2026-10-15T10:00:00.000Z';
-      const threadId = newId();
-      await s.repository.chatThreads.create(scope, {
-        id: threadId,
-        nodeId: s.agentId,
-        title: 'left open',
-        createdAt: at,
-        updatedAt: at,
-      });
-      await s.repository.chatMessages.append(scope, {
-        id: newId(),
-        threadId,
-        role: 'user',
-        content: hi,
-        verdicts: [],
-        at,
-      });
+  it('a user turn with no reply after it gets one failed agent turn when the engine starts', async () => {
+    const s = await setup();
+    const at = '2026-10-15T10:00:00.000Z';
+    const threadId = newId();
+    await s.repository.chatThreads.create(scope, {
+      id: threadId,
+      nodeId: s.agentId,
+      title: 'left open',
+      createdAt: at,
+      updatedAt: at,
+    });
+    await s.repository.chatMessages.append(scope, {
+      id: newId(),
+      threadId,
+      role: 'user',
+      content: hi,
+      verdicts: [],
+      at,
+    });
 
       // Proposed name (the fix may rename it): run once at engine start, like `recoverAfterCrash`.
       const recover = (s.service as unknown as Record<string, unknown>)['recoverOpenTurns'];

@@ -100,6 +100,31 @@ export class ChatInputBlockedError extends Error {
   }
 }
 
+/** PG-1.6 (D352): a message action named a message that is not in the thread (or was deleted). */
+export class ChatMessageNotFoundError extends Error {
+  override readonly name = 'ChatMessageNotFoundError';
+
+  constructor(
+    readonly threadId: Id,
+    readonly messageId: Id,
+  ) {
+    super(`Message ${messageId} was not found in chat thread ${threadId}.`);
+  }
+}
+
+/**
+ * PG-1.6 (D352): a message action the message cannot take — an edit of an agent turn, a retry of a
+ * turn with no question before it, an action on a turn already replaced. The gateway maps it to
+ * **400 `validation_failed`**.
+ */
+export class ChatActionInvalidError extends Error {
+  override readonly name = 'ChatActionInvalidError';
+
+  constructor(reason: string) {
+    super(reason);
+  }
+}
+
 /** `POST /workflows/:id/messages { run: true }` on a service built without a run starter (see report). */
 export class ChatRunNotAvailableError extends Error {
   override readonly name = 'ChatRunNotAvailableError';
