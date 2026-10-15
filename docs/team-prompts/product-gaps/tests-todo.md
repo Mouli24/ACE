@@ -82,3 +82,47 @@ None. All 27 Phase 0 red tests for PG-2.1 to PG-2.4 pass.
 - PG-2.2: the Usage dashboard and day totals do not include chat spend yet; only the `daily_budget` check does.
 - PG-2.1: tools on a model the catalogue marks `supportsTools:false` now block at pre-flight. Before, they were silently dropped. That includes CLI models and discovered models not in the manifest (D-100 fixed Ollama).
 - PG-2.3: a migrated provider that no workflow uses gets only the engine log line, not a Timeline notice.
+
+## Phase 3
+
+### Red tests still marked
+None (Phase 3 had no Phase 0 red tests). The Gate 3 e2e is owed below.
+
+### To write
+| Item | Test to write (what it asserts) | File |
+|---|---|---|
+| Gate 3 | "One run, three modes": start in Ideate, switch to Forge mid-run, then Domain, finish there, return to Ideate. The same run id, final states and token totals show in all three modes and the footer, with nothing stuck RUNNING. A walk passed on 2026-10-15; this commits it as a test. | `tests/acceptance/product-gaps/pg-3-one-spine.e2e.ts` |
+| PG-3.1 | `useWorkflowSubscription`, `useRunEvents`, `useAdoptActiveRun` and `useChatSocket` each mount once across Ideate → Forge → Domain → Ideate | `apps/web/src/workflows/WorkflowLayout.test.tsx` |
+| PG-3.1 | A chat reply streaming in Ideate keeps arriving after a switch to Domain and back | `apps/web/src/chat/ChatAside.test.tsx` |
+| PG-3.1 | Domain registers no mode shortcuts of its own; the keys fire once from Domain | `apps/web/src/domain/DomainPage.test.tsx` |
+| PG-3.2 | `useSelectedRun` default order (this client's live run, the list's live run, the newest); `?run=` wins; `?run=new` gives none | `apps/web/src/runs/selected-run.test.tsx` |
+| PG-3.2 | `workflowPath(…, carry)` keeps run and node and drops `run=new`; ModeSwitch, the shortcuts, Domain's Forge link and the footer's Problems button carry them | `apps/web/src/forge/mode.test.ts`, `apps/web/src/app/layout/ModeSwitch.test.tsx` |
+| PG-3.2 | Re-adopt on return: overlay RUNNING but record COMPLETE → after a mode switch the overlay is rebuilt and Start is enabled | `apps/web/src/runs/selected-run.test.tsx` |
+| PG-3.2 | Adoption never overwrites an armed start and keeps a live overlay's streamed text; `useFollowStartedRun` moves `?run=` to a run this client starts | `apps/web/src/runs/selected-run.test.tsx` |
+| PG-3.2 | `adopt` rebuilds `tool.call` frames in time order; Forge attribution survives a reload of a finished run | `apps/web/src/runs/run-store.test.ts`, `apps/web/src/forge/attribution.test.tsx` |
+| PG-3.2 | Inspector and header run controls act on the `?run=` run, not the newest | `apps/web/src/inspector/Inspector.test.tsx`, `apps/web/src/app/layout/HeaderRunControls.test.tsx` |
+| PG-3.3 | `withRunOverlay` lays the overlay's states and tokens over the snapshot, keeping budget, cost and est. | `apps/web/src/domain/run-overlay.test.ts` |
+| PG-3.3 | Domain hears `run.completed`: the pill shows COMPLETE, the "live" pill goes and the composer is read-only, before the record refetches | `apps/web/src/domain/DomainPage.test.tsx` |
+| PG-3.3 | `run.blocked` / `run.parked` refetch the run record | `apps/web/src/runs/live-run.test.tsx` |
+| PG-3.3 | The SSE pump closes after `run.completed` (live and in backfill), stays open on `run.blocked` and on a parked run; a re-opened run counts as live | `packages/engine/src/domain/__tests__/domain-stream.test.ts` |
+| PG-3.3 | Footer tokens and status agree across Ideate, Forge and Domain for the same selected run | `apps/web/src/app/layout/WorkspaceFooter.test.tsx` |
+| PG-3.4 | `?node=` and the selection store stay in step: the URL wins on arrival, an Ideate selection writes `?node=` (replace), Domain and Forge never write, no echo loop; `nodePath` carries the run | `apps/web/src/app/follow-node.test.tsx` |
+| PG-3.4 | Arriving with `?node=X` selects X and centres it once measured; a click that writes `?node=` does not move the view | `apps/web/src/canvas/Canvas.follow.test.tsx` |
+| PG-3.4 | Open in Domain (context menu and More) goes to `/domain?run=<selected>&node=<id>` | `apps/web/src/canvas/Canvas.test.tsx` |
+| PG-3.4 | Domain: a message's "Show on canvas", the roster's "Show <name> on canvas" with `aria-current` on the lens card, and the lens pill's button | `apps/web/src/domain/Conversation.test.tsx`, `TeamPanel.test.tsx`, `DomainPage.test.tsx` |
+| PG-3.4 | Forge: `useNodeModel` order, `filesWrittenBy`, PathBar name and Domain links in a router (plain text outside), the followed-node bar and Explorer `data-followed` | `apps/web/src/forge/attribution.test.tsx`, `forge/editor/PathBar.test.tsx`, `forge/FollowedNode.test.tsx`, `forge/explorer/FileTree.test.tsx` |
+| PG-3.4 | e2e: roster, pill and message → canvas selected and centred; canvas → Domain same run and lens; Forge bar → node. The PathBar attribution link needs a mock model that calls `write_file`. | `tests/acceptance/product-gaps/pg-3-4-follow-node.e2e.ts` |
+| PG-3.5 / D363 | Retry on a parked Domain run runs as a turn of the same drive, unblocks BLOCKED successors and parks again; retry while RUNNING is 409; a planned turn the run ends before taking is STOPPED; Restart on an open run ends it and starts a new open run, 409 with no drive held | `packages/engine/src/domain/__tests__/domain-controls-live.test.ts` |
+| PG-3.5 | `RunApprovalsDock` renders nothing with none pending, lists pending ones, and Approve/Reject call the API; it shows in Forge and above Domain's composer | `apps/web/src/runs/approvals/RunApprovalsDock.test.tsx`, `forge/ForgePage.test.tsx`, `domain/DomainPage.test.tsx` |
+| PG-3.5 | `useOpenRunInPlace` sets `?run=` and keeps the mode path (and `/runs/:id` elsewhere); the header's Restart stays in the mode; "Waiting for you — End run" / "Team working — End run" in the header, RunBar and Forge's Run pipeline | `apps/web/src/runs/useOpenRunInPlace.test.tsx`, `app/layout/HeaderRunControls.test.tsx`, `runs/RunBar.test.tsx`, `forge/editor/PathBar.test.tsx` |
+| PG-3.6 | Domain's node lens lists the node's direct threads, each opening Ideate on that thread; the chat column's Run tab shows the selected run's conversation read-only with an Open in Domain link and keeps the composer text | `apps/web/src/domain/NodeChatThreads.test.tsx`, `apps/web/src/chat/ChatAside.test.tsx` |
+| PG-3.7 | Mode links on Home (Domain entry; Recent cards), project workflow cards, Run detail (Open in Forge with `?run=`), Timeline, Import's toast, and Onboarding's "Open it in" | `apps/web/src/projects/ProjectsPage.test.tsx`, `ProjectPage.test.tsx`, `runs/RunDetailPage.test.tsx`, `timeline/TimelinePage.test.tsx`, `workflows/ImportWorkflowButton.test.tsx`, `onboarding/OnboardingPage.test.tsx` |
+| PG-3.7 | At phone width Domain keeps the lenses on one row and Team opens and closes as a sheet | `apps/web/src/domain/DomainPage.test.tsx` |
+| D-058 | A Timeline composer send arms and begins the run store, so the Canvas overlay shows the run without a reload | `apps/web/src/timeline/TimelinePanel.test.tsx`, `apps/web/e2e/timeline.spec.ts` |
+| PG-3.5–3.7 | Acceptance walk: approve a WAITING node from Domain and from Forge; Retry a failed turn in an open Domain run | `tests/acceptance/product-gaps/pg-3-controls-everywhere.e2e.ts` |
+| D-102 | TC-TOOL-004 timed from the sandbox's start, so load cannot overrun its margin | `tests/acceptance/round-4/mouli-tests-arhant.test.ts` |
+
+### Known gaps carried from Phase 3 (not tests)
+- PG-3.2: a mode switch passes `?run=` only when the URL already has one. With none picked, each mode works out the same default, so an unpinned view keeps following new runs.
+- PG-3.3: after a D81 retry or re-run of a finished run, Domain's pill stays read-only until a later frame refetches the record.
+- PG-3.4: centring keeps the current zoom; it does not zoom in.
