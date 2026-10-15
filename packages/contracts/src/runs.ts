@@ -356,3 +356,68 @@ export const AUTO_RETRY_POLICY: Readonly<Record<ErrorKind, AutoRetryMode>> = Obj
 export const RETRY_BACKOFF_BASE_MS = 500;
 export const RETRY_BACKOFF_MAX_MS = 8_000;
 export const CONTRACT_REPAIR_RETRIES = 1;
+
+/* -------------------------------------------------------------------------- */
+/* Cost before you run (PG-4.3, D359)                                          */
+/* -------------------------------------------------------------------------- */
+
+/** The code a node's own cost cap (`execution.maxCostUsd`) fails it with (PG-4.3). */
+export const NODE_BUDGET_EXCEEDED = 'node_budget_exceeded';
+
+/**
+ * What a run could cost, from the price table, before it starts. `minUsd` reads the prompts that
+ * are already known and no output; `maxUsd` every node's whole output allowance (`maxTokens`), the
+ * most its reads could bring in, every tool round it may take and every loop iteration. A local
+ * model counts 0; an unpriced remote model, or a node with no model chosen, is `unknown: true`
+ * (D359) and adds nothing to the sums, which are then the known part only.
+ */
+export const CostRangeSchema = z.strictObject({
+  minUsd: z.number().min(0),
+  maxUsd: z.number().min(0),
+  unknown: z.boolean(),
+});
+export type CostRange = z.infer<typeof CostRangeSchema>;
+
+/** Why a node's cost cannot be estimated. */
+export const ESTIMATE_UNKNOWN_REASONS = ['no_model', 'model_missing', 'unpriced'] as const;
+export const EstimateUnknownReasonSchema = z.enum(ESTIMATE_UNKNOWN_REASONS);
+export type EstimateUnknownReason = z.infer<typeof EstimateUnknownReasonSchema>;
+
+/**
+ * One Agent or Model node's estimate. `free` is a local model's (or a test provider's) $0 by rule;
+ * `reason` says why an unknown one is unknown. Nodes that call no model are not listed.
+ */
+export const NodeEstimateSchema = CostRangeSchema.extend({
+  nodeId: IdSchema,
+  free: z.boolean().optional(),
+  reason: EstimateUnknownReasonSchema.optional(),
+  /** The node's own cost cap (`execution.maxCostUsd`), when it has one. */
+  maxCostUsd: z.number().positive().optional(),
+});
+export type NodeEstimate = z.infer<typeof NodeEstimateSchema>;
+
+/**
+ * The caps a run is held to and what today has spent, for "what is left" before Start. Each cap is
+ * absent when none is set; `spentTodayKnown: false` when part of today's spend is unknown (D359).
+ */
+export const EstimateBudgetSchema = z.strictObject({
+  maxCostPerRunUsd: z.number().positive().optional(),
+  dailyBudgetUsd: z.number().positive().optional(),
+  spentTodayUsd: z.number().min(0),
+  spentTodayKnown: z.boolean(),
+});
+export type EstimateBudget = z.infer<typeof EstimateBudgetSchema>;
+
+/**
+ * `POST /workflows/:id/estimate` → `WorkflowEstimate` (PG-4.3). Read-only: it starts nothing and
+ * calls no provider. `workflowVersion` is the graph version it was computed for, so a client can
+ * tell a stale estimate after an edit.
+ */
+export const WorkflowEstimateSchema = z.strictObject({
+  workflowId: IdSchema,
+  workflowVersion: z.number().int().min(0),
+  nodes: z.array(NodeEstimateSchema),
+  total: CostRangeSchema,
+  budget: EstimateBudgetSchema,
+});
+export type WorkflowEstimate = z.infer<typeof WorkflowEstimateSchema>;
