@@ -483,11 +483,17 @@ const INLINE_BYTES = /"(bytes|base64)"\s*:|data:[a-z]+\/[a-z0-9.+-]+;base64,/i;
 /** Every file in the engine's data directory, for "never stored" checks (BR-07, FR-MM-004). */
 function dataDirFiles(): string[] {
   const files: string[] = [];
+  // The engine keeps writing while this looks: a run's checkpoint (D300) finishes after the run
+  // and rewrites its refs, so an entry can vanish between the listing and the look. Gone is skipped.
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir)) {
       const path = join(dir, entry);
-      if (statSync(path).isDirectory()) walk(path);
-      else files.push(path);
+      try {
+        if (statSync(path).isDirectory()) walk(path);
+        else files.push(path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
     }
   };
   walk(dataDir);
@@ -1005,9 +1011,15 @@ describe('TC-MM-004 envelopes carry references, never bytes', () => {
 
     // And nothing under the data directory stores them as base64 (the blob store keeps raw bytes).
     const base64 = png.toString('base64');
-    const offenders = dataDirFiles().filter((file) =>
-      readFileSync(file, 'latin1').includes(base64),
-    );
+    const offenders = dataDirFiles().filter((file) => {
+      try {
+        return readFileSync(file, 'latin1').includes(base64);
+      } catch (error) {
+        // Removed since it was listed (a checkpoint's ref rewritten, D300): it holds nothing now.
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+        throw error;
+      }
+    });
     expect(offenders, 'files holding the PNG as base64').toEqual([]);
     expectNoFrameDrift(watcher);
   }, 60_000);
