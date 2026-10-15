@@ -162,18 +162,32 @@ describe('TC-PRV-002 a key is stored, never returned', () => {
     expect(JSON.stringify(listed)).not.toContain(secret);
 
     // TC-SYS-008: not in the database file, not in any log the engine wrote (BR-07).
+    // A run's checkpoint (D300) can rewrite its refs while this looks: a file gone between the
+    // listing and the read holds nothing, and is skipped.
+    const gone = (error: unknown): boolean => (error as NodeJS.ErrnoException).code === 'ENOENT';
     const files: string[] = [];
     const walk = (dir: string): void => {
       for (const entry of readdirSync(dir)) {
         const path = join(dir, entry);
-        if (statSync(path).isDirectory()) walk(path);
-        else files.push(path);
+        try {
+          if (statSync(path).isDirectory()) walk(path);
+          else files.push(path);
+        } catch (error) {
+          if (!gone(error)) throw error;
+        }
       }
     };
     walk(dataDir);
     expect(files.length).toBeGreaterThan(0);
     for (const file of files) {
-      expect(readFileSync(file, 'latin1').includes(secret), `${file} contains the key`).toBe(false);
+      let text: string;
+      try {
+        text = readFileSync(file, 'latin1');
+      } catch (error) {
+        if (gone(error)) continue;
+        throw error;
+      }
+      expect(text.includes(secret), `${file} contains the key`).toBe(false);
     }
   });
 });
