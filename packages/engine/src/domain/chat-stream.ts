@@ -59,6 +59,31 @@ const USAGE_EVENTS: ReadonlySet<string> = new Set([
 
 export const KEEP_ALIVE_MS = 15_000;
 
+/**
+ * PG-3.3: whether the run has ended as of this event. `run.completed` ends it (COMPLETE or
+ * HALTED); a retry or a re-run reopens a finished run (D81), which shows as a node made READY or
+ * RUNNING again, or as the run starting or resuming. `run.blocked` is not an end: a run blocked
+ * mid-run (D305) resumes. Anything else leaves the answer as it was.
+ */
+export function endedAfter(event: EngineEvent, ended: boolean): boolean {
+  if (event.transient === true) return ended;
+  switch (event.type) {
+    case 'run.completed':
+      return true;
+    case 'run.started':
+    case 'run.resumed':
+      return false;
+    case 'node.state': {
+      const parsed = NodeStatePayloadSchema.safeParse(event.payload);
+      return parsed.success && (parsed.data.status === 'READY' || parsed.data.status === 'RUNNING')
+        ? false
+        : ended;
+    }
+    default:
+      return ended;
+  }
+}
+
 export async function pumpChatStream(
   source: ChatStreamSource,
   options: ChatStreamOptions,
@@ -119,9 +144,12 @@ export async function pumpChatStream(
       data: { snapshot: usageSnapshot(projection, source.context, source.pricing()) },
     });
 
+  /** PG-3.3: once the run has ended, the stream says its last and closes (see `endedAfter`). */
+  let ended = false;
   try {
     for (const event of await source.events()) {
       if (signal.aborted) return;
+      ended = endedAfter(event, ended);
       if (event.seq <= options.after) {
         note(event);
         projection.apply(event);
@@ -132,6 +160,9 @@ export async function pumpChatStream(
     await snapshot();
 
     while (!signal.aborted) {
+      // Whatever was queued while the run ended has been sent (its usage with it): nothing more
+      // will come, so the stream ends rather than keeping a connection open on a finished run.
+      if (ended && queue.length === 0) return;
       if (queue.length === 0) {
         let timer: ReturnType<typeof setTimeout> | undefined;
         await new Promise<void>((resolve) => {
@@ -147,6 +178,7 @@ export async function pumpChatStream(
       for (const event of queue.splice(0)) {
         // Already sent by the backfill, or by an earlier batch.
         if (event.transient !== true && event.seq <= projection.lastSeq()) continue;
+        ended = endedAfter(event, ended);
         usageMoved = (await send(event)) || usageMoved;
       }
       if (usageMoved) await snapshot();
