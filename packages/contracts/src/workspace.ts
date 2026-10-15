@@ -417,7 +417,18 @@ export const ProcessInputRequestSchema = z.strictObject({
 });
 export type ProcessInputRequest = z.infer<typeof ProcessInputRequestSchema>;
 
-/** One row of `GET /projects/:id/processes`. No pid crosses the wire. */
+/**
+ * PG-5.3 (D361): a command an agentic node ran with `run_command` (in the foreground or with
+ * `background: true`), shown in Forge's Terminal and Processes list read-only — the run and node
+ * that started it. It takes no input and is not stopped from Forge: stopping the run stops it.
+ */
+export const ProcessAgentSchema = z.strictObject({ runId: IdSchema, nodeId: IdSchema });
+export type ProcessAgent = z.infer<typeof ProcessAgentSchema>;
+
+/**
+ * One row of `GET /projects/:id/processes`. No pid crosses the wire. `agent` is set on an agent's
+ * command (PG-5.3); a person's own commands have none.
+ */
 export const ProcessSummarySchema = z.strictObject({
   id: IdSchema,
   projectId: IdSchema,
@@ -429,6 +440,7 @@ export const ProcessSummarySchema = z.strictObject({
   signal: z.string().nullable(),
   startedAt: TimestampSchema,
   endedAt: TimestampSchema.optional(),
+  agent: ProcessAgentSchema.optional(),
 });
 export type ProcessSummary = z.infer<typeof ProcessSummarySchema>;
 
