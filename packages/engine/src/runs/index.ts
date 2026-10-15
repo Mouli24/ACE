@@ -2930,7 +2930,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
   }
 
   /**
-   * PG-2.4 (D361): the run's checkpoint, begun before the run is RUNNING. A run that writes (a node
+   * PG-2.4 (D361): a writing run's checkpoint, begun before the run is RUNNING (`undefined` for a
+   * run that only reads: it begins its own once driving). A run that writes (a node
    * with a project-writing tool, or a CLI allowed to edit) and whose checkpoint cannot begin gets an
    * error issue and is BLOCKED with zero provider calls — unless the person chose "Run without
    * undo" for this run, which leaves a warning instead. A run that only reads keeps D300's rule:
@@ -2940,9 +2941,14 @@ export function createRunService(deps: RunServiceDeps): RunService {
     run: Run,
     providers: readonly Provider[],
     withoutUndo: boolean,
-  ): Promise<{ recording?: CheckpointRecording; issue?: ValidationIssue }> {
+  ): Promise<{ recording?: CheckpointRecording; issue?: ValidationIssue } | undefined> {
     const recorder = deps.checkpoints;
     if (recorder === undefined) return {};
+    // A run that only reads begins its checkpoint once it is driving, as before (D300), so its
+    // `POST /runs` still answers at once (D65); only a writer waits for the "before" snapshot.
+    const byId = new Map(providers.map((provider) => [provider.id, provider]));
+    const writer = run.snapshot.nodes.find((node) => nodeWrites(node, (id) => byId.get(id)));
+    if (writer === undefined) return undefined;
     let reason: string | undefined;
     let recording: CheckpointRecording | undefined;
     try {
@@ -2955,14 +2961,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
     }
     if (reason === undefined) return recording === undefined ? {} : { recording };
 
-    const byId = new Map(providers.map((provider) => [provider.id, provider]));
-    const writer = run.snapshot.nodes.find((node) => nodeWrites(node, (id) => byId.get(id)));
-    logger.warn(
-      { subsystem: 'runs', runId: run.id, reason, writing: writer !== undefined },
-      'run checkpoint not begun',
-    );
+    logger.warn({ subsystem: 'runs', runId: run.id, reason }, 'run checkpoint not begun');
     const kept = recording === undefined ? {} : { recording };
-    if (writer === undefined) return kept;
     if (withoutUndo) {
       return {
         ...kept,
@@ -3100,7 +3100,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
     let undo: { recording?: CheckpointRecording; issue?: ValidationIssue } | undefined;
     if (!issues.some((issue) => issue.severity === 'error')) {
       undo = await prepareUndo(run, providers, extra.withoutUndo === true);
-      if (undo.issue !== undefined) issues.push(undo.issue);
+      if (undo?.issue !== undefined) issues.push(undo.issue);
     }
     const ranWithoutUndo = undo?.issue?.code === 'running_without_undo';
 
@@ -3191,7 +3191,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
       });
     }
 
-    return { run: running, done: startDriving(running, extra.seed, undo ?? {}) };
+    return { run: running, done: startDriving(running, extra.seed, undo) };
   }
 
   const service: RunService = {
