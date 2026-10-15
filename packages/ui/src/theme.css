@@ -72,7 +72,7 @@
   --glow: rgba(239, 107, 63, 0.07);
   --hdr: rgba(250, 246, 243, 0.92);
   --ink: #1f1d1b;
-  --muted: #6f6a65;
+  --muted: #6b6661;
   --line: #e6e0da;
   --surface: #fff;
   --soft: rgba(255, 255, 255, 0.7);
@@ -106,6 +106,25 @@
   --color-chart-6: #d94a6b;
   --color-chart-7: #b27408;
   --color-chart-8: #6c55c8;
+
+  /*
+   * PG-1.2 (D360): D328's accents where they carry meaning, at AA on card, panel and canvas
+   * (tokens.ts): the destructive red and the orange accent as text (4.5:1), and a stronger orange
+   * a white icon or label stands on (4.5:1). #c94c27, #ef6b3f and #e8572e stay as decoration.
+   */
+  --danger-ink: #b23f1d;
+  --accent-ink: #b4441b;
+  --accent-strong: #c2410c;
+  --ok-ink: #1a6b3f;
+
+  /* PG-1.1 (D350): port dots by data type, each >= 3:1 on card, panel and canvas (tokens.ts). */
+  --port-text: #c2410c;
+  --port-image: #6d52cc;
+  --port-audio: #0e7c86;
+  --port-video: #be3a74;
+  --port-code: #2f7d4f;
+  --port-json: #946200;
+  --port-file: #5b6675;
 }
 
 /* The workspace, dark. */
@@ -139,6 +158,17 @@
   --ace-glow-k: 1;
   --ace-hi: #ffffff10;
   --ace-ground: 0 8px 24px -12px #000000cc;
+  --danger-ink: #ef7a5a;
+  --accent-ink: #f08a5d;
+  --accent-strong: #c2410c;
+  --ok-ink: #4cc283;
+  --port-text: #f08a5d;
+  --port-image: #a996f0;
+  --port-audio: #4fc3cc;
+  --port-video: #e27aa8;
+  --port-code: #5fcf8c;
+  --port-json: #e0b040;
+  --port-file: #a3adba;
 
   --color-provider-anthropic: #c2603f;
   --color-provider-google: #8fb0ff;
@@ -162,7 +192,7 @@
   --page: linear-gradient(160deg, #fbf3ee 0%, #f5f2f0 40%, #eef0f2 100%);
   --hdr: rgba(253, 249, 246, 0.85);
   --ink: #1f1d1b;
-  --muted: #6f6a65;
+  --muted: #6b6661;
   --line: #e9e3dd;
   --surface: #fff;
   --soft: rgba(255, 255, 255, 0.7);
@@ -258,12 +288,13 @@
     background-color: #151413;
     transition: background 0.3s;
   }
+  /* PG-1.2 (D360): links in the AA accent (#e8623a measured 2.96:1 on the light canvas). */
   a {
-    color: #e8623a;
+    color: var(--accent-ink);
     text-decoration: none;
   }
   a:hover {
-    color: #c94c27;
+    color: var(--ink);
   }
 }
 
@@ -291,12 +322,15 @@
 }
 
 /*
- * A port's handle: invisible, a 12px hit area centred on the theme's anchor, a crosshair to aim
- * with, and a #ef6b3f ring when focused from the keyboard or armed for a keyboard connect.
+ * A port (D350, supersedes D332's invisible handle): a 22px hit area centred on the theme's anchor,
+ * holding an 8px dot in its data type's colour (`--port-color`, set per port). Hidden at rest; it
+ * shows while its card is hovered or selected, on keyboard focus or armed for a keyboard connect
+ * (NFR-USE-02), and on every compatible port while a line is being drawn. An incompatible port is
+ * shown dimmed (its reason is in the tooltip). The dot above the edge layer is `.ace-port-dot`.
  */
 .react-flow__handle.ace-port {
-  width: 12px;
-  height: 12px;
+  width: 22px;
+  height: 22px;
   min-width: 0;
   min-height: 0;
   border: 0;
@@ -305,11 +339,48 @@
   opacity: 0;
   cursor: crosshair;
 }
+.react-flow__handle.ace-port::after,
+.ace-port-dot {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--port-color, #ef6b3f);
+  pointer-events: none;
+}
+.react-flow__node:hover .react-flow__handle.ace-port,
+.react-flow__node.selected .react-flow__handle.ace-port,
+.react-flow__handle.ace-port[data-connect='source'],
+.react-flow__handle.ace-port[data-connect='compatible'] {
+  opacity: 1;
+}
+.react-flow__node .react-flow__handle.ace-port[data-connect='incompatible'] {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
 .react-flow__handle.ace-port:focus-visible,
 .react-flow__handle.ace-port[data-armed='true'] {
   opacity: 1;
   outline: none;
   box-shadow: 0 0 0 2px #ef6b3f;
+}
+
+/*
+ * PG-1.2 (D360): a card's Settings and More buttons hide while the Canvas is zoomed far out (the
+ * Canvas sets `data-far` under 45%), where they would draw under 10px; `display: none` also keeps
+ * 400 of them out of the 200-node pan's paint (TC-NFR-001).
+ */
+[data-far='true'] .ace-card-buttons {
+  display: none;
+}
+/* …and so does a handle's own dot (under 4px there); the dot layer above the edges still draws
+   the ports a line is being drawn to. */
+[data-far='true'] .react-flow__handle.ace-port::after {
+  display: none;
 }
 
 /* The loading placeholder: the canvas colour and the theme's dot grid at zoom 1. */

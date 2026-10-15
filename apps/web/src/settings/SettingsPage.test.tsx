@@ -130,8 +130,11 @@ describe('FR-SYS-005 Settings screen', () => {
     expect(theme).toHaveTextContent('Light');
     await user.click(theme);
     const options = await screen.findAllByRole('option');
-    // the theme's ✓ column marks the current one
-    expect(options.map((option) => option.textContent)).toEqual(['Dark', '✓Light', 'System']);
+    // the theme's check column marks the current one (an SVG icon since PG-1.2, D360)
+    expect(options.map((option) => option.textContent)).toEqual(['Dark', 'Light', 'System']);
+    expect(
+      screen.getByRole('option', { name: 'Light' }).querySelector('svg[aria-hidden="true"]'),
+    ).not.toBeNull();
     await user.click(screen.getByRole('option', { name: 'Dark' }));
     // …applied at once and remembered in the browser, and still patched to the engine.
     await waitFor(() => expect(document.documentElement).toHaveAttribute('data-theme', 'dark'));

@@ -44,12 +44,13 @@ describe('TimelineComposer (FR-CHAT-003)', () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it('is the theme composer: the ↑ send keeps the name "Send to workflow" (D328)', async () => {
+  it('is the theme composer: the send arrow keeps the name "Send to workflow" (D328)', async () => {
     const user = userEvent.setup();
     render(<TimelineComposer onSend={vi.fn()} />);
     const send = screen.getByRole('button', { name: 'Send to workflow' });
     expect(send).toBe(screen.getByTestId('timeline-send'));
-    expect(send).toHaveTextContent('↑');
+    // PG-1.2 (D360): an SVG arrow, not the ↑ glyph
+    expect(send.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
     expect(send.style.background).toBe('var(--sendOff)');
     await user.type(screen.getByLabelText('Message to send to the workflow'), 'hi');
     expect(send.style.background).toBe('rgb(239, 107, 63)');

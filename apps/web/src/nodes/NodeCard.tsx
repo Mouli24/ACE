@@ -21,6 +21,7 @@ import {
   memo,
   useContext,
   useEffect,
+  type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
 } from 'react';
@@ -35,6 +36,8 @@ import { useWorkflowGraph } from '../workflows/hooks';
 
 import { DOC_W, STAGE_W, isStageKind, portAnchor } from './anchors';
 import { ChooseProviderButton, needsProvider } from './ChooseProvider';
+import { PortConnectContext } from './card-context';
+import { NodeCardButtons } from './NodeCardButtons';
 import { NodePreflightIssues } from './NodePreflightIssues';
 import { useKnowledgeBaseName, useWorkflowProjectId } from './retrieval/hooks';
 
@@ -88,8 +91,11 @@ export interface NodeCardViewProps {
 const BORDER = 1;
 
 /**
- * One port's React Flow handle (D332): invisible, a 12px hit area centred on the theme's anchor,
- * a `#ef6b3f` ring when focused from the keyboard or armed for a keyboard connect (NFR-USE-02).
+ * One port's React Flow handle (D350, supersedes D332's invisible one): a 22px target centred on the
+ * theme's anchor with an 8px dot in its data type's colour. `theme.css` shows it on hover, on a
+ * selected card, on focus or armed for a keyboard connect (NFR-USE-02), and — from
+ * `PortConnectContext` — on every compatible port while a line is drawn; an incompatible one is
+ * dimmed and says why.
  */
 function PortHandle({
   port,
@@ -111,6 +117,8 @@ function PortHandle({
   onKey?: (port: Port, direction: 'in' | 'out') => void;
 }) {
   const anchor = portAnchor(kind, direction, index, count);
+  const connecting = useContext(PortConnectContext)?.get(port.id);
+  const refused = connecting?.look === 'incompatible' ? connecting.reason : undefined;
   const label = `${port.dataType} ${direction === 'in' ? 'input' : 'output'} “${port.name}”${
     port.multi ? ', accepts many' : ''
   }`;
@@ -127,19 +135,24 @@ function PortHandle({
       type={direction === 'in' ? 'target' : 'source'}
       position={direction === 'in' ? Position.Left : Position.Right}
       className="ace-port"
-      style={{
-        left: anchor.x - BORDER,
-        top: anchor.y - BORDER,
-        right: 'auto',
-        transform: 'translate(-50%, -50%)',
-      }}
+      style={
+        {
+          left: anchor.x - BORDER,
+          top: anchor.y - BORDER,
+          right: 'auto',
+          transform: 'translate(-50%, -50%)',
+          '--port-color': `var(--port-${port.dataType})`,
+        } as CSSProperties
+      }
       tabIndex={0}
       role="button"
       aria-label={label}
+      {...(refused === undefined ? {} : { title: refused, 'aria-description': refused })}
       data-testid={`port-${port.id}`}
       data-connected={connected ? 'true' : 'false'}
       data-datatype={port.dataType}
       data-armed={armed ? 'true' : 'false'}
+      data-connect={connecting?.look ?? 'none'}
       onKeyDown={onKeyDown}
     />
   );
@@ -215,6 +228,7 @@ function StageCard(props: NodeCardViewProps) {
       >
         STAGE {n} · {name.toUpperCase()}
       </div>
+      <NodeCardButtons node={node} className="right-[16px] top-[12px]" />
       <div className="absolute right-[-9px] top-[-9px] flex h-[20px] w-[20px] items-center justify-center rounded-full border border-[var(--frameLine)] bg-[var(--surface)] text-[10px] font-semibold">
         {n}
       </div>
@@ -355,7 +369,10 @@ function DocCard(props: NodeCardViewProps) {
       className="relative w-[200px] cursor-move rounded-[8px] bg-[var(--surface)] px-[14px] pb-[10px] pt-[14px] text-[var(--ink)] shadow-[0_10px_30px_-14px_rgba(40,25,15,0.35)]"
       style={{ border: `1px solid ${selected ? '#ef6b3f' : 'var(--line)'}` }}
     >
-      <div className="text-[13px] font-bold leading-[1.25] tracking-[-0.01em]">{node.name}</div>
+      <NodeCardButtons node={node} className="right-[8px] top-[8px]" />
+      <div className="pr-[46px] text-[13px] font-bold leading-[1.25] tracking-[-0.01em]">
+        {node.name}
+      </div>
       <div
         data-testid={`node-meta-${node.id}`}
         className="mt-[4px] font-machine text-[9px] text-[var(--muted)]"

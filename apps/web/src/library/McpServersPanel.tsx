@@ -15,6 +15,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  Icons,
   Input,
   Label,
   McpServerStatusChip,
@@ -117,7 +118,7 @@ function McpServerRow({ server }: { server: McpServer }) {
         onClick={() => check.mutate(server.id)}
         data-testid={`mcp-server-check-${server.id}`}
       >
-        <span aria-hidden>↺</span> Check
+        <Icons.RotateCw aria-hidden size={12} /> Check
       </Button>
       <button
         type="button"
@@ -127,7 +128,7 @@ function McpServerRow({ server }: { server: McpServer }) {
         onClick={() => remove.mutate(server.id)}
         data-testid={`mcp-server-remove-${server.id}`}
       >
-        <span aria-hidden>✕</span>
+        <Icons.X aria-hidden size={12} />
       </button>
     </li>
   );

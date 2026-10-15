@@ -1,5 +1,5 @@
 import type { DataType, Model, Provider, RoutingPolicy } from '@ace/contracts';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, cn } from '@ace/ui';
+import { Icons, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, cn } from '@ace/ui';
 import { useId } from 'react';
 
 import { useResolvedTheme } from '../app/theme';
@@ -231,7 +231,7 @@ export function FallbackModels({
                   disabled={index === 0}
                   onClick={() => move(index, -1)}
                 >
-                  <span aria-hidden>↑</span>
+                  <Icons.ArrowUp aria-hidden size={12} />
                 </button>
                 <button
                   type="button"
@@ -240,7 +240,7 @@ export function FallbackModels({
                   disabled={index === fallbackModelIds.length - 1}
                   onClick={() => move(index, 1)}
                 >
-                  <span aria-hidden>↓</span>
+                  <Icons.ArrowDown aria-hidden size={12} />
                 </button>
                 <button
                   type="button"
@@ -248,7 +248,7 @@ export function FallbackModels({
                   aria-label={`Remove ${fallbackId}`}
                   onClick={() => onChange(fallbackModelIds.filter((value) => value !== fallbackId))}
                 >
-                  <span aria-hidden>✕</span>
+                  <Icons.X aria-hidden size={12} />
                 </button>
               </li>
             ))}

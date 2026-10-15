@@ -4,6 +4,7 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
+  Icons,
   cn,
 } from '@ace/ui';
 import { useRef, type KeyboardEvent } from 'react';
@@ -15,8 +16,8 @@ import { useCloseRequest } from './CloseDialogs';
 import { useEditorStore, useProjectEditor } from './editor-store';
 
 /**
- * The editor's tabs in the theme's strip (§6.2, D334): an orange top edge on the active tab, ● in
- * place of × while unsaved, middle-click close, and Close others / Close saved on right click.
+ * The editor's tabs in the theme's strip (§6.2, D334): an orange top edge on the active tab, a dot
+ * in place of the close icon while unsaved (icons, not glyphs: PG-1.2, D360), middle-click close, and Close others / Close saved on right click.
  */
 export function TabsBar({ projectId }: { projectId: string }) {
   const editor = useProjectEditor(projectId);
@@ -122,11 +123,11 @@ export function TabsBar({ projectId }: { projectId: string }) {
                 >
                   {file.dirty ? (
                     <span aria-hidden data-testid={`dirty-${path}`} className="text-[#ef6b3f]">
-                      ●
+                      <Icons.Circle aria-hidden size={8} fill="currentColor" strokeWidth={0} />
                     </span>
                   ) : (
                     <span aria-hidden className="text-[var(--muted)]">
-                      ×
+                      <Icons.X aria-hidden size={12} />
                     </span>
                   )}
                 </button>
@@ -196,7 +197,7 @@ export function TabsBar({ projectId }: { projectId: string }) {
               onClick={closeReview}
             >
               <span aria-hidden className="text-[var(--muted)]">
-                ×
+                <Icons.X aria-hidden size={12} />
               </span>
             </button>
           </div>

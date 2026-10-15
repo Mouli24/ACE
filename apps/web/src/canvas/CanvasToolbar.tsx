@@ -1,3 +1,4 @@
+import { Icons } from '@ace/ui';
 import { useViewport } from '@xyflow/react';
 
 export interface CanvasToolbarProps {
@@ -50,7 +51,7 @@ export function CanvasToolbar({
         className={`${BUTTON} w-[28px] text-[16px] text-[var(--ink)] hover:bg-[var(--hover)]`}
         onClick={onZoomIn}
       >
-        +
+        <Icons.Plus aria-hidden size={14} />
       </button>
       <button
         type="button"
@@ -59,7 +60,7 @@ export function CanvasToolbar({
         className={`${BUTTON} w-[28px] text-[16px] text-[var(--ink)] hover:bg-[var(--hover)]`}
         onClick={onZoomOut}
       >
-        −
+        <Icons.Minus aria-hidden size={14} />
       </button>
       <button
         type="button"
@@ -78,7 +79,7 @@ export function CanvasToolbar({
         className={`${BUTTON} w-[28px] text-[13px] text-[var(--ink)] hover:bg-[var(--hover)]`}
         onClick={onFit}
       >
-        ⛶
+        <Icons.Maximize2 aria-hidden size={12} />
       </button>
       {!readOnly && (
         <button
@@ -89,11 +90,15 @@ export function CanvasToolbar({
           className={`${BUTTON} w-[28px] text-[12px]`}
           style={{
             background: locked ? 'var(--hover)' : 'transparent',
-            color: locked ? '#ef6b3f' : 'var(--ink)',
+            color: locked ? 'var(--accent-ink)' : 'var(--ink)',
           }}
           onClick={onToggleLock}
         >
-          {locked ? '🔒︎' : '🔓︎'}
+          {locked ? (
+            <Icons.Lock aria-hidden size={13} data-icon="lock" />
+          ) : (
+            <Icons.LockOpen aria-hidden size={13} data-icon="lock-open" />
+          )}
         </button>
       )}
       <button
@@ -103,12 +108,12 @@ export function CanvasToolbar({
         aria-pressed={hand}
         className={`${BUTTON} w-[28px] text-[13px]`}
         style={{
-          background: hand ? '#ef6b3f' : 'transparent',
+          background: hand ? 'var(--accent-strong)' : 'transparent',
           color: hand ? '#fff' : 'var(--ink)',
         }}
         onClick={onToggleHand}
       >
-        ✋
+        <Icons.Hand aria-hidden size={13} />
       </button>
       {!readOnly && (
         <button
@@ -120,7 +125,7 @@ export function CanvasToolbar({
           style={{ color: canUndoMove ? 'var(--ink)' : 'var(--iconLine)' }}
           onClick={onUndoMove}
         >
-          ↶
+          <Icons.Undo2 aria-hidden size={14} />
         </button>
       )}
     </div>

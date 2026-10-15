@@ -1,3 +1,4 @@
+import { Icons } from '@ace/ui';
 import { Fragment } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -40,8 +41,13 @@ export function ProblemsCount({ projectId }: { projectId: string }) {
       className="flex shrink-0 cursor-pointer items-center gap-[8px] rounded-[4px] border-none bg-transparent px-[2px] font-machine text-[10px] text-[var(--muted)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
     >
       <span className="flex items-center gap-[4px]">
-        <span aria-hidden style={errors > 0 ? { color: '#c94c27' } : undefined}>
-          ✕
+        <span
+          aria-hidden
+          data-testid="problems-error-mark"
+          className="flex"
+          style={errors > 0 ? { color: '#c94c27' } : undefined}
+        >
+          <Icons.X aria-hidden size={10} strokeWidth={2.4} />
         </span>
         {errors}
       </span>
@@ -60,7 +66,7 @@ export function ProblemsCount({ projectId }: { projectId: string }) {
 }
 
 /**
- * `▶ N running` while the project runs processes (D301), right after the problem counts and in
+ * `▶ N running` (a play icon, PG-1.2) while the project runs processes (D301), right after the problem counts and in
  * their type; a click opens the Terminal and gives it the focus. Nothing while none runs.
  */
 export function RunningCount({ projectId }: { projectId: string }) {
@@ -79,8 +85,8 @@ export function RunningCount({ projectId }: { projectId: string }) {
       }}
       className="flex shrink-0 cursor-pointer items-center gap-[4px] rounded-[4px] border-none bg-transparent px-[2px] font-machine text-[10px] text-[var(--muted)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
     >
-      <span aria-hidden style={{ color: RUNNING }}>
-        ▶
+      <span aria-hidden data-testid="running-mark" className="flex" style={{ color: RUNNING }}>
+        <Icons.Play aria-hidden size={9} fill="currentColor" />
       </span>
       {running} running
     </button>

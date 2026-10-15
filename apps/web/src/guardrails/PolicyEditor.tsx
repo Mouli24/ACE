@@ -12,6 +12,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  Icons,
   Input,
   Label,
   Select,
@@ -277,7 +278,7 @@ function CheckRow({
           aria-label={`Remove ${check.type} at ${check.point}`}
           onClick={() => onRemove(check.id)}
         >
-          <span aria-hidden>✕</span>
+          <Icons.X aria-hidden size={12} />
         </button>
       </div>
 

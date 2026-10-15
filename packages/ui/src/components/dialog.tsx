@@ -1,4 +1,5 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog';
+import { X } from 'lucide-react';
 import {
   forwardRef,
   type ComponentPropsWithoutRef,
@@ -30,7 +31,7 @@ export const DialogOverlay = forwardRef<
 ));
 DialogOverlay.displayName = 'DialogOverlay';
 
-/** The theme's close control for a dialog: a 28px square with ✕, named "Close". */
+/** The theme's close control for a dialog: a 28px square with an X icon (PG-1.2), named "Close". */
 export const DIALOG_CLOSE_CLASS =
   'grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border border-[var(--line)] bg-transparent text-[12px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f]';
 
@@ -51,7 +52,7 @@ export const DialogContent = forwardRef<
       {children}
       {!hideClose && (
         <DialogPrimitive.Close className={cn(DIALOG_CLOSE_CLASS, 'absolute right-4 top-4')}>
-          <span aria-hidden>✕</span>
+          <X aria-hidden size={13} />
           <span className="sr-only">Close</span>
         </DialogPrimitive.Close>
       )}

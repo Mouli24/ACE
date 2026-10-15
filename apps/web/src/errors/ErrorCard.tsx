@@ -1,5 +1,5 @@
 import type { FailureReason, Id, NodeError, NodeState } from '@ace/contracts';
-import { Badge, Button, StatusRing } from '@ace/ui';
+import { Badge, Button, Icons, StatusRing } from '@ace/ui';
 
 import { ERROR_KIND_LABEL, NEXT_STEP_BY_ERROR_KIND } from './next-steps';
 
@@ -89,7 +89,7 @@ export function ErrorCard({
       <footer className="flex flex-wrap items-center gap-3">
         {onRetry && (
           <Button size="sm" variant="secondary" onClick={onRetry} disabled={retrying}>
-            <span aria-hidden>↺</span> Retry
+            <Icons.RotateCw aria-hidden size={12} /> Retry
           </Button>
         )}
         {onShowNode && (

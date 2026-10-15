@@ -1,5 +1,5 @@
 import type { InputConfig } from '@ace/contracts';
-import { cn, formatBytes } from '@ace/ui';
+import { Icons, cn, formatBytes } from '@ace/ui';
 import { useCallback, useState, type DragEvent, type ReactNode } from 'react';
 
 import { useArtifactUpload } from './useArtifactUpload';
@@ -120,7 +120,7 @@ export function InputDropZone({ nodeId, workflowId, config, children }: InputDro
                 className="shrink-0 cursor-pointer border-none bg-transparent p-0 text-[10px] leading-none text-[var(--muted)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
                 onClick={reset}
               >
-                ✕
+                <Icons.X aria-hidden size={12} />
               </button>
             </p>
           )}
