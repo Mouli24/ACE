@@ -16,6 +16,7 @@ import {
 } from '@ace/contracts';
 import { WorkspaceFsError, type RawFile } from '@ace/engine';
 
+import { projectWriteLocks, withPathLocks } from '../agent/locks.js';
 import { resolveInsideSandbox } from '../sandbox/paths.js';
 import { createIgnoreRules, type IgnoreRules } from './ignore-rules.js';
 import { assertValidName, toAbsolute } from './resolve.js';
@@ -222,7 +223,11 @@ export async function atomicWrite(
   }
 }
 
-/** `PUT /files/content`: an atomic save that never overwrites a change it has not seen. */
+/**
+ * `PUT /files/content`: an atomic save that never overwrites a change it has not seen. PG-5.2
+ * (D361): the version check and the write happen under the file's write lock — the one an agent's
+ * `write_file`/`edit_file` takes — so a save and an agent's edit of one file never interleave.
+ */
 export async function writeFile(root: string, request: SaveFileRequest): Promise<SaveFileResult> {
   const base = resolve(root);
   const absolute = toAbsolute(base, request.path, { write: true });
@@ -237,6 +242,15 @@ export async function writeFile(root: string, request: SaveFileRequest): Promise
     });
   }
 
+  return projectWriteLocks.withLock(absolute, () => saveLocked(base, absolute, request, bytes));
+}
+
+async function saveLocked(
+  base: string,
+  absolute: string,
+  request: SaveFileRequest,
+  bytes: Buffer,
+): Promise<SaveFileResult> {
   const current = await statOrNull(absolute);
   if (current !== null && !current.isFile())
     throw new WorkspaceFsError('exists', `${request.path} is a folder.`);
@@ -274,6 +288,15 @@ export async function createEntry(root: string, request: CreateEntryRequest): Pr
   const base = resolve(root);
   const absolute = toAbsolute(base, request.path, { write: true });
   for (const segment of relOf(base, absolute).split('/')) assertValidName(segment);
+  // PG-5.2: under the path's write lock, as an agent's write of the same path is
+  return projectWriteLocks.withLock(absolute, () => createLocked(base, absolute, request));
+}
+
+async function createLocked(
+  base: string,
+  absolute: string,
+  request: CreateEntryRequest,
+): Promise<FileEntry> {
   if ((await lstatOrNull(absolute)) !== null)
     throw new WorkspaceFsError('exists', `${request.path} already exists.`);
   try {
@@ -329,6 +352,19 @@ export async function moveEntry(root: string, from: string, to: string): Promise
   const source = toAbsolute(base, from, { write: true });
   const target = toAbsolute(base, to, { write: true });
   assertValidName(basename(target));
+  // PG-5.2: both ends under their write locks, taken in one order
+  return withPathLocks(projectWriteLocks, [source, target], () =>
+    moveLocked(base, from, to, source, target),
+  );
+}
+
+async function moveLocked(
+  base: string,
+  from: string,
+  to: string,
+  source: string,
+  target: string,
+): Promise<FileEntry> {
   const sourceStats = await lstatOrNull(source);
   if (sourceStats === null) throw notFound(from);
 
@@ -359,12 +395,15 @@ export async function moveEntry(root: string, from: string, to: string): Promise
  */
 export async function removeEntry(root: string, path: string): Promise<void> {
   const absolute = toAbsolute(resolve(root), path, { write: true });
-  if ((await lstatOrNull(absolute)) === null) throw notFound(path);
-  try {
-    await fs.rm(absolute, { recursive: true, force: false, maxRetries: 3 });
-  } catch (error) {
-    refusedByOs(error, path);
-  }
+  // PG-5.2: under the path's write lock, as an agent's write of the same path is
+  await projectWriteLocks.withLock(absolute, async () => {
+    if ((await lstatOrNull(absolute)) === null) throw notFound(path);
+    try {
+      await fs.rm(absolute, { recursive: true, force: false, maxRetries: 3 });
+    } catch (error) {
+      refusedByOs(error, path);
+    }
+  });
 }
 
 /**
