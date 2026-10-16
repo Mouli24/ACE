@@ -6,6 +6,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  toast,
 } from '@ace/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { forwardRef, useEffect, useState, type ComponentPropsWithoutRef } from 'react';
@@ -19,6 +20,7 @@ import { DomainRunView } from '../domain/DomainPage';
 import { RunConversationTab } from '../domain/RunConversationTab';
 import { useWorkflowMode, workflowPath } from '../forge/mode';
 import { useSocketStatus } from '../runs/hooks';
+import { useWorkflowTask } from '../runs/useWorkflowTask';
 import { agentMap, agentsOf, type AgentLook } from '../theme/agents';
 import { Avatar, Dot } from '../theme/primitives';
 import { useWorkflowGraph } from '../workflows/hooks';
@@ -108,6 +110,8 @@ export function ChatAside({
   const queryClient = useQueryClient();
   // PG-3.6: which channel the column shows — the node's direct chat, or the run's conversation.
   const [view, setView] = useState<'node' | 'run'>(expanded ? startView : 'node');
+  // `@workflow <task>`: the whole workflow runs on the task, and the Run tab shows it working.
+  const workflowTask = useWorkflowTask(workflowId);
 
   const nodes = graph.data?.nodes;
   const chatNodes = (nodes ?? []).filter(isChatNode);
@@ -244,6 +248,17 @@ export function ChatAside({
       onStop={() => {
         if (target !== undefined) void stopNode(queryClient, target.id);
       }}
+      onWorkflow={(task, extra) => {
+        workflowTask.start(task, extra).then(
+          (run) => {
+            // The run is selected (`?run=`); its conversation, then its result, is on the Run tab.
+            if (run !== undefined) setView('run');
+          },
+          (error: unknown) =>
+            toast.error(error instanceof Error ? error.message : 'The run could not be started.'),
+        );
+      }}
+      workflowBlocked={workflowTask.blocked}
     />
   );
 
@@ -372,6 +387,7 @@ export function ChatAside({
         )}
         {composer}
       </div>
+      {workflowTask.dialog}
     </aside>
   );
 }

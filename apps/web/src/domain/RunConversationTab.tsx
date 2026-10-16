@@ -9,6 +9,7 @@ import { Conversation, DomainEmpty } from './Conversation';
 import { orderedMessages } from './conversation-state';
 import { isLiveRun, useDomainConversation } from './hooks';
 import { domainLooks } from './looks';
+import { RunResult } from './RunResult';
 
 /**
  * PG-3.6: the chat column's "Run" tab — the selected run's team conversation, as Domain shows it,
@@ -22,7 +23,8 @@ export function RunConversationTab({
   projectId: string;
   workflowId: string;
 }) {
-  const runId: Id | undefined = useSelectedRun(workflowId).runId;
+  const selected = useSelectedRun(workflowId);
+  const runId: Id | undefined = selected.runId;
   const run = useRun(runId);
   const nodeRuns = useNodeRuns(runId);
   const live = run.data !== undefined && isLiveRun(run.data);
@@ -85,6 +87,15 @@ export function RunConversationTab({
             readOnly
             onRoute={() => Promise.resolve()}
             {...(nodeRuns.data === undefined ? {} : { nodeRuns: nodeRuns.data })}
+          />
+        )}
+        {/* The run's end, said plainly: its result, or why it stopped with Retry (@workflow). */}
+        {run.data !== undefined && (
+          <RunResult
+            run={run.data}
+            {...(nodeRuns.data === undefined ? {} : { nodeRuns: nodeRuns.data })}
+            onRestarted={(next) => selected.select(next.id)}
+            className="mx-[14px] mb-3 mt-1"
           />
         )}
       </div>

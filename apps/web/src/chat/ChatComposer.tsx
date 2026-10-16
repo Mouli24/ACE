@@ -1,4 +1,4 @@
-import type { Artifact, Part, RosterEntry } from '@ace/contracts';
+import { parseWorkflowAddress, type Artifact, type Part, type RosterEntry } from '@ace/contracts';
 import {
   cn,
   formatBytes,
@@ -52,6 +52,8 @@ export function ChatComposer({
   mainNodeId,
   replying = false,
   onStop,
+  onWorkflow,
+  workflowBlocked,
 }: {
   /** `targetNodeId` is set when an `@handle` names a node other than the main one. */
   onSend: (content: Part[], targetNodeId: string | undefined) => void;
@@ -65,6 +67,13 @@ export function ChatComposer({
   replying?: boolean;
   /** PG-1.6: abort the reply on its way; it is stored as `user_cancelled`. */
   onStop?: () => void;
+  /**
+   * `@workflow <task>`: run the whole workflow on the task. `extra` is what else the message
+   * carries (reference chips, attachments). Without it, `@workflow` is not offered.
+   */
+  onWorkflow?: (task: string, extra: Part[]) => void;
+  /** Why `@workflow` cannot start a run right now (one is going), or nothing. */
+  workflowBlocked?: string | undefined;
 }) {
   const [text, setText] = useState('');
   const [caret, setCaret] = useState(0);
@@ -93,15 +102,37 @@ export function ChatComposer({
     box.current?.focus();
   }, [draft]);
 
-  const at = roster.length === 0 ? undefined : handlePartial(text, caret);
-  const matches = at === undefined ? [] : handleOptions(roster, at.partial);
+  const at =
+    roster.length === 0 && onWorkflow === undefined ? undefined : handlePartial(text, caret);
+  // `@workflow` heads the picker: the whole workflow, before any one node of it.
+  const workflowOffered =
+    onWorkflow !== undefined && at !== undefined && 'workflow'.startsWith(at.partial);
+  const matches: Array<ChatRosterEntry | 'workflow'> =
+    at === undefined
+      ? []
+      : [...(workflowOffered ? ['workflow' as const] : []), ...handleOptions(roster, at.partial)];
   const pickerOpen = matches.length > 0;
   const active = Math.min(cursor, Math.max(matches.length - 1, 0));
 
+  // A message whose first address is `@workflow` starts a run of the whole workflow instead.
+  const workflow = onWorkflow === undefined ? undefined : parseWorkflowAddress(text);
+  const workflowError =
+    workflow === undefined
+      ? undefined
+      : (workflowBlocked ??
+        (workflow.task === '' ? 'Say what the workflow should do after @workflow.' : undefined));
   const preview =
-    mainNodeId === undefined ? undefined : previewChatTarget(text, roster, mainNodeId);
+    workflow !== undefined || mainNodeId === undefined
+      ? undefined
+      : previewChatTarget(text, roster, mainNodeId);
   const hasBody = text.trim().length > 0 || attachments.length > 0 || chips.length > 0;
-  const canSend = !disabled && !uploading && preview !== undefined && preview.canSend && hasBody;
+  const canSend =
+    !disabled &&
+    !uploading &&
+    hasBody &&
+    (workflow !== undefined
+      ? workflowError === undefined
+      : preview !== undefined && preview.canSend);
 
   const place = (next: string, position: number): void => {
     setText(next);
@@ -114,20 +145,28 @@ export function ChatComposer({
     requestAnimationFrame(() => element.setSelectionRange(position, position));
   };
 
-  const pick = (entry: ChatRosterEntry) => {
+  const pick = (entry: ChatRosterEntry | 'workflow') => {
     if (at === undefined) return;
-    const completed = completeHandle(text, at, caret, entry.handle);
+    const handle = entry === 'workflow' ? entry : entry.handle;
+    const completed = completeHandle(text, at, caret, handle);
     place(completed.text, completed.caret);
   };
 
   const submit = () => {
-    if (!canSend || preview === undefined) return;
-    const content: Part[] = [];
-    if (text.trim().length > 0) content.push({ type: 'text', text: text.trim() });
-    for (const chip of chips) content.push(chipPart(chip));
-    for (const artifact of attachments) content.push(partForArtifact(artifact));
-    const target = preview.targetNodeId === mainNodeId ? undefined : preview.targetNodeId;
-    onSend(content, target);
+    if (!canSend) return;
+    const extra: Part[] = [];
+    for (const chip of chips) extra.push(chipPart(chip));
+    for (const artifact of attachments) extra.push(partForArtifact(artifact));
+    if (workflow !== undefined && onWorkflow !== undefined) {
+      onWorkflow(workflow.task, extra);
+    } else {
+      if (preview === undefined) return;
+      const content: Part[] = [];
+      if (text.trim().length > 0) content.push({ type: 'text', text: text.trim() });
+      content.push(...extra);
+      const target = preview.targetNodeId === mainNodeId ? undefined : preview.targetNodeId;
+      onSend(content, target);
+    }
     setText('');
     setCaret(0);
     setAttachments([]);
@@ -155,6 +194,7 @@ export function ChatComposer({
   };
 
   const showPreview = preview !== undefined && text.trim() !== '';
+  const showWorkflow = workflow !== undefined && workflowError === undefined;
 
   return (
     <div
@@ -172,31 +212,60 @@ export function ChatComposer({
           )}
         >
           <span className={MENU_LABEL_CLASS}>Ask a node</span>
-          {matches.map((entry, index) => (
-            <button
-              key={entry.nodeId}
-              type="button"
-              role="option"
-              aria-selected={index === active}
-              data-testid={`chat-mention-option-${entry.nodeId}`}
-              data-highlighted={index === active ? '' : undefined}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => pick(entry)}
-              className={cn(MENU_ITEM_CLASS, 'text-left hover:bg-[rgba(239,107,63,0.12)]')}
-            >
-              <Avatar
-                letter={entry.letter}
-                color={entry.color}
-                size={16}
-                fontSize={8}
-                className="font-semibold"
-              />
-              <span className="min-w-0 truncate">{entry.name}</span>
-              <span className="ml-auto font-machine text-[9px] text-[var(--muted)]">
-                @{entry.handle}
-              </span>
-            </button>
-          ))}
+          {matches.map((entry, index) =>
+            entry === 'workflow' ? (
+              <button
+                key="workflow"
+                type="button"
+                role="option"
+                aria-selected={index === active}
+                data-testid="chat-mention-option-workflow"
+                data-highlighted={index === active ? '' : undefined}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => pick(entry)}
+                className={cn(MENU_ITEM_CLASS, 'text-left hover:bg-[rgba(239,107,63,0.12)]')}
+              >
+                <Avatar
+                  letter="✳"
+                  color="#7a62d6"
+                  size={16}
+                  fontSize={8}
+                  className="font-semibold"
+                />
+                <span className="min-w-0 truncate">
+                  <span className="font-machine">@workflow</span>
+                  <span className="text-[var(--muted)]">
+                    {' '}
+                    — run the whole workflow on this task
+                  </span>
+                </span>
+              </button>
+            ) : (
+              <button
+                key={entry.nodeId}
+                type="button"
+                role="option"
+                aria-selected={index === active}
+                data-testid={`chat-mention-option-${entry.nodeId}`}
+                data-highlighted={index === active ? '' : undefined}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => pick(entry)}
+                className={cn(MENU_ITEM_CLASS, 'text-left hover:bg-[rgba(239,107,63,0.12)]')}
+              >
+                <Avatar
+                  letter={entry.letter}
+                  color={entry.color}
+                  size={16}
+                  fontSize={8}
+                  className="font-semibold"
+                />
+                <span className="min-w-0 truncate">{entry.name}</span>
+                <span className="ml-auto font-machine text-[9px] text-[var(--muted)]">
+                  @{entry.handle}
+                </span>
+              </button>
+            ),
+          )}
         </div>
       )}
 
@@ -301,6 +370,12 @@ export function ChatComposer({
         />
         <div className="mt-1 flex items-center gap-[6px]">
           <span className="min-w-0 flex-1 truncate text-[10.5px]">
+            {showWorkflow && (
+              <span data-testid="chat-send-preview" className="text-[var(--muted)]">
+                to <span className="font-semibold text-[var(--ink)]">the whole workflow</span> —
+                starts a run
+              </span>
+            )}
             {showPreview && preview.canSend && (
               <span data-testid="chat-send-preview" className="text-[var(--muted)]">
                 to <span className="font-semibold text-[var(--ink)]">{preview.name}</span>
@@ -320,7 +395,9 @@ export function ChatComposer({
             type="button"
             title="Attach"
             aria-label="Attach a file"
-            disabled={disabled || uploading || mainNodeId === undefined}
+            disabled={
+              disabled || uploading || (mainNodeId === undefined && onWorkflow === undefined)
+            }
             onClick={() => fileInput.current?.click()}
             className={cn(
               FOCUS,
@@ -361,6 +438,11 @@ export function ChatComposer({
           </button>
         </div>
       </div>
+      {workflowError !== undefined && text.trim() !== '' && (
+        <p role="alert" data-testid="chat-target-error" className="text-[11px] text-[#c94c27]">
+          {workflowError}
+        </p>
+      )}
       {preview?.error !== undefined && (
         <p role="alert" data-testid="chat-target-error" className="text-[11px] text-[#c94c27]">
           {preview.error}

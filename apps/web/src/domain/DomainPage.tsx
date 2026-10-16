@@ -31,6 +31,7 @@ import { useIsCompact } from '../responsive/useIsCompact';
 import { RunApprovalsDock } from '../runs/approvals/RunApprovalsDock';
 import { useEndRun, useNodeRuns, useRetryNodeRun, useRun, useStartRun } from '../runs/hooks';
 import { useSelectedRun } from '../runs/selected-run';
+import { useWorkflowTask } from '../runs/useWorkflowTask';
 import { clockTime } from '../theme/format';
 import { Avatar } from '../theme/primitives';
 import { Composer } from './Composer';
@@ -45,6 +46,7 @@ import {
 } from './hooks';
 import { domainLooks, haltWords, lookOf, plural } from './looks';
 import { NodeChatThreads } from './NodeChatThreads';
+import { RunResult } from './RunResult';
 import { useDomainRunOverlay, withRunOverlay } from './run-overlay';
 import { TeamPanel } from './TeamPanel';
 
@@ -141,6 +143,8 @@ export function DomainRunView() {
   const budget = useSetRunBudget(runId);
   const end = useEndRun();
   const start = useStartRun(workflowId);
+  // `@workflow <task>`: the whole workflow on a task, as from the chat column.
+  const workflowTask = useWorkflowTask(workflowId);
   const retry = useRetryNodeRun();
   // PG-3.4: a message, a roster card or the lens's pill leads to its node on the canvas, this run.
   const follow = useFollowNode();
@@ -293,6 +297,17 @@ export function DomainRunView() {
               {...(nodeRuns.data === undefined ? {} : { nodeRuns: nodeRuns.data })}
             />
           )}
+          {/* The run's end, said plainly: its result, or why it stopped with Retry (@workflow). */}
+          {run.data !== undefined && node === undefined && !live && (
+            <div className={cn('mb-4 mt-1', compact ? 'px-3' : 'px-6')}>
+              <RunResult
+                run={run.data}
+                {...(nodeRuns.data === undefined ? {} : { nodeRuns: nodeRuns.data })}
+                onRestarted={(next) => select({ run: next.id, node: undefined })}
+                className="mx-auto max-w-[860px]"
+              />
+            </div>
+          )}
         </div>
 
         {/* PG-3.5: a node WAITING on an approval is answered here as on the Canvas. */}
@@ -317,8 +332,16 @@ export function DomainRunView() {
               const created = await start.mutateAsync({ goal, domain: { stayOpen: true } });
               select({ run: created.id, node: undefined });
             }}
+            onWorkflow={async (task) => {
+              const created = await workflowTask.start(task);
+              // Cancelled at the budget question: the task stays in the box.
+              if (created === undefined) throw new Error('The run was not started.');
+              select({ run: created.id, node: undefined });
+            }}
+            workflowBlocked={workflowTask.blocked}
           />
         )}
+        {workflowTask.dialog}
       </section>
       {!compact && teamOpen && (
         <TeamPanel

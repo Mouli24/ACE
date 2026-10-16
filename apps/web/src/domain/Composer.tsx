@@ -1,4 +1,11 @@
-import type { AddressingError, DeliveryMode, Id, NodeState, RosterEntry } from '@ace/contracts';
+import {
+  parseWorkflowAddress,
+  type AddressingError,
+  type DeliveryMode,
+  type Id,
+  type NodeState,
+  type RosterEntry,
+} from '@ace/contracts';
 import { AceApiError } from '@ace/sdk';
 import { Button, cn, Icons, MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from '@ace/ui';
 import { useRef, useState, type KeyboardEvent } from 'react';
@@ -33,6 +40,14 @@ export interface ComposerProps {
   readOnly?: boolean;
   onSend(body: ComposerSend): Promise<unknown>;
   onStart(goal: string): Promise<unknown>;
+  /**
+   * `@workflow <task>`: run the whole workflow on the task — a new run that completes on its own,
+   * not one that stays open. Only once the run shown has ended (or with none); without it,
+   * `@workflow` is read like any other text.
+   */
+  onWorkflow?(task: string): Promise<unknown>;
+  /** Why `@workflow` cannot start a run right now, beyond the run shown being live. */
+  workflowBlocked?: string | undefined;
 }
 
 function describe(error: AddressingError): string {
@@ -66,6 +81,8 @@ export function Composer({
   readOnly = false,
   onSend,
   onStart,
+  onWorkflow,
+  workflowBlocked,
 }: ComposerProps) {
   const [text, setText] = useState('');
   const [caret, setCaret] = useState(0);
@@ -88,11 +105,21 @@ export function Composer({
       ? base
       : previewMessage({ text, roster, states, exclude: kept, deliveryMode: mode });
 
-  const at = live && !readOnly ? partialAt(text, caret) : undefined;
+  // `@workflow <task>`: the whole workflow, as a new run (only once nothing is live).
+  const workflow = onWorkflow === undefined ? undefined : parseWorkflowAddress(text);
+  const workflowError =
+    workflow === undefined
+      ? undefined
+      : live
+        ? 'A run is going — @workflow starts a new run once this one has ended.'
+        : (workflowBlocked ??
+          (workflow.task === '' ? 'Say what the workflow should do after @workflow.' : undefined));
+
+  const at = !readOnly && (live || onWorkflow !== undefined) ? partialAt(text, caret) : undefined;
   const options =
     at === undefined
       ? []
-      : [...roster.map((entry) => entry.handle), 'all'].filter((handle) =>
+      : (live ? [...roster.map((entry) => entry.handle), 'all'] : ['workflow']).filter((handle) =>
           handle.startsWith(at.partial),
         );
 
@@ -118,7 +145,14 @@ export function Composer({
     place(next, next.length);
   };
 
-  const canSend = !readOnly && !busy && (live ? preview.canSend : text.trim() !== '');
+  const canSend =
+    !readOnly &&
+    !busy &&
+    (workflow !== undefined
+      ? workflowError === undefined
+      : live
+        ? preview.canSend
+        : text.trim() !== '');
 
   const submit = async (): Promise<void> => {
     if (!canSend) return;
@@ -126,7 +160,9 @@ export function Composer({
     setFailure(undefined);
     setUnsent(undefined);
     try {
-      if (live) {
+      if (workflow !== undefined && onWorkflow !== undefined) {
+        await onWorkflow(workflow.task);
+      } else if (live) {
         await onSend({
           text,
           deliveryMode: mode,
@@ -172,7 +208,14 @@ export function Composer({
     }
   };
 
-  const errors = live ? preview.errors.map(describe) : [];
+  const errors =
+    workflow !== undefined
+      ? workflowError === undefined
+        ? []
+        : [workflowError]
+      : live
+        ? preview.errors.map(describe)
+        : [];
   if (failure !== undefined) errors.push(failure);
   const writable = !readOnly;
 
@@ -222,12 +265,17 @@ export function Composer({
                   onClick={() => complete(handle)}
                 >
                   @{handle}
+                  {handle === 'workflow' && (
+                    <span className="ml-2 font-human text-[var(--muted)]">
+                      — run the whole workflow on this task
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>
           )}
 
-          {live && writable && preview.canSend && (
+          {live && writable && workflow === undefined && preview.canSend && (
             <div
               data-testid="composer-reaches"
               className="mt-1.5 flex flex-wrap items-center gap-1.5"
@@ -291,9 +339,11 @@ export function Composer({
           )}
           {!live && writable && (
             <p className={cn(NOTE, 'mt-1.5')}>
-              {ended
-                ? 'This run has ended — its conversation is read-only. Sending starts a new run, with your message as its goal.'
-                : 'No run is going: this starts one, with your message as its goal.'}
+              {workflow !== undefined
+                ? 'Starts a new run of the whole workflow, with your task as its goal and its input.'
+                : ended
+                  ? 'This run has ended — its conversation is read-only. Sending starts a new run, with your message as its goal.'
+                  : 'No run is going: this starts one, with your message as its goal.'}
             </p>
           )}
           {errors.length > 0 && (
