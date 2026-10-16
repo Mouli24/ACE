@@ -57,7 +57,8 @@ export function ReadsSection({
   edges: readonly Edge[];
 }) {
   const byId = new Map(nodes.map((each) => [each.id, each]));
-  const incoming = edges.filter((edge) => edge.to.nodeId === node.id);
+  // D373: a "run after" link carries nothing, so it is not something this node reads.
+  const incoming = edges.filter((edge) => edge.to.nodeId === node.id && edge.kind !== 'order');
   const split = node.kind === 'agent' ? contextBudgetSplit(node) : undefined;
   const addressable = node.kind === 'agent' || node.kind === 'model';
   const schema = node.kind === 'agent' ? node.config.outputContract?.jsonSchema : undefined;

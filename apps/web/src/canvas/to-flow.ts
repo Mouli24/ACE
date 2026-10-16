@@ -104,6 +104,9 @@ export function toFlowNodes(
  * A `kind: 'loop'` edge becomes the dashed loop edge instead (FR-CON-007). Its `loop` config is what
  * the engine stored, and `live` — the iteration the run is on — is looked up per edge rather than
  * read from a store here, so this stays pure and testable.
+ *
+ * A `kind: 'order'` edge ("run after", D373) is not handed to React Flow at all: it has no ports
+ * for React Flow to attach it to. `OrderEdgeLayer` draws it from card to card instead.
  */
 export function toFlowEdges(
   edges: readonly Edge[],
@@ -120,7 +123,8 @@ export function toFlowEdges(
     const type = providerId === undefined ? undefined : typeById.get(providerId);
     if (type !== undefined) accentOf.set(node.id, type);
   }
-  return edges.map((edge): AceAnyFlowEdge => {
+  return edges.flatMap((edge): AceAnyFlowEdge[] => {
+    if (edge.kind === 'order') return [];
     const ends = {
       id: edge.id,
       source: edge.from.nodeId,
@@ -132,26 +136,30 @@ export function toFlowEdges(
     // one; it is drawn as the data edge it structurally is rather than crashing the Canvas.
     if (edge.kind === 'loop' && edge.loop !== undefined) {
       const { iteration, running } = live(edge);
-      return {
-        ...ends,
-        type: LOOP_EDGE_TYPE,
-        data: {
-          kind: 'loop',
-          loop: edge.loop,
-          ...(iteration === undefined ? {} : { iteration }),
-          ...(running === undefined ? {} : { running }),
+      return [
+        {
+          ...ends,
+          type: LOOP_EDGE_TYPE,
+          data: {
+            kind: 'loop',
+            loop: edge.loop,
+            ...(iteration === undefined ? {} : { iteration }),
+            ...(running === undefined ? {} : { running }),
+          },
         },
-      };
+      ];
     }
     const accent = accentOf.get(edge.from.nodeId) ?? accentOf.get(edge.to.nodeId);
-    return {
-      ...ends,
-      type: 'typed',
-      data: {
-        dataType: portType.get(edge.from.portId) ?? 'text',
-        kind: edge.kind,
-        ...(accent === undefined ? {} : { accent }),
+    return [
+      {
+        ...ends,
+        type: 'typed',
+        data: {
+          dataType: portType.get(edge.from.portId) ?? 'text',
+          kind: edge.kind,
+          ...(accent === undefined ? {} : { accent }),
+        },
       },
-    };
+    ];
   });
 }
