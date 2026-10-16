@@ -27,6 +27,7 @@ import { useWorkflowGraph } from '../workflows/hooks';
 import { ChatComposer, type ChatRosterEntry } from './ChatComposer';
 import { ChatConversation } from './ChatConversation';
 import { ChatThreadList } from './ChatThreadList';
+import { useRestoreLastChat } from './last-chat';
 import { useChatSessions } from './session-store';
 import { sendToNode, stopNode, useThreadConversation } from './useChat';
 import { isChatNode, useDropStaleChatTarget } from './workflow-target';
@@ -133,6 +134,8 @@ export function ChatAside({
   // The target left the graph (or cannot chat): back to the intro state. The workflow layout runs
   // the same guard with the column closed (fix F-I2); here it keeps the column right on its own.
   useDropStaleChatTarget(workflowId);
+  // D372: after a reload, reopen the node this workflow's chat was last with.
+  useRestoreLastChat(workflowId, chatNodes);
 
   // The footer's message count (D330): nothing to count without a target, or once the column goes.
   const hasTarget = target !== undefined;
