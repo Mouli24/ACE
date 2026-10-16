@@ -1,4 +1,11 @@
-import type { ChatMessage, ChatThread, ChatThreadDetail, NodeState, Part } from '@ace/contracts';
+import type {
+  ApprovalRequest,
+  ChatMessage,
+  ChatThread,
+  ChatThreadDetail,
+  NodeState,
+  Part,
+} from '@ace/contracts';
 import { GuardrailBlockedDetailsSchema } from '@ace/contracts';
 import { AceApiError } from '@ace/sdk';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
@@ -100,6 +107,7 @@ export async function sendToNode(
         threadId: response.threadId,
         userMessage,
         speakerNodeId: targetNodeId ?? nodeId,
+        since: Date.now(),
       },
     }));
     void queryClient.invalidateQueries({ queryKey: chatKeys.threads(nodeId) });
@@ -117,6 +125,192 @@ export async function sendToNode(
       refusal === undefined ? { ...rest, error: message } : { ...rest, refusal },
     );
   }
+}
+
+/** The words an action that failed leaves on the node's session, shown like a failed send. */
+function failedAction(nodeId: string, error: unknown, fallback: string): void {
+  const message = error instanceof Error && error.message !== '' ? error.message : fallback;
+  useChatSessions
+    .getState()
+    .update(nodeId, ({ sending: _sending, ...rest }) => ({ ...rest, error: message }));
+}
+
+/** Clear what the last send or action left on the session, before a new one. */
+function clearOutcome(nodeId: string): void {
+  useChatSessions
+    .getState()
+    .update(nodeId, ({ error: _error, refusal: _refusal, ...session }) => session);
+}
+
+/**
+ * PG-1.6 (D352): re-run the turn that produced an agent message (a reply or a failed turn). The old
+ * turn arrives superseded as `chat.update`; the new reply is owed after it, in the same session.
+ */
+export async function retryMessage(
+  queryClient: QueryClient,
+  nodeId: string,
+  message: ChatMessage,
+  options: { withoutUndo?: boolean } = {},
+): Promise<void> {
+  clearOutcome(nodeId);
+  try {
+    // PG-2.4 (D361): "Run without undo" retries the stopped turn, letting it write this once.
+    const response = await api().retryChatMessage(
+      message.threadId,
+      message.id,
+      options.withoutUndo === true ? { withoutUndo: true } : {},
+    );
+    useChatSessions.getState().update(nodeId, (session) => ({
+      ...session,
+      threadId: response.threadId,
+      pending: {
+        threadId: response.threadId,
+        // The question is already in the thread, so nothing is echoed for it.
+        userMessage: {
+          id: response.messageId,
+          threadId: response.threadId,
+          role: 'user',
+          content: [],
+          verdicts: [],
+          at: new Date().toISOString(),
+        },
+        speakerNodeId: message.speakerNodeId ?? nodeId,
+        afterId: message.id,
+        since: Date.now(),
+      },
+    }));
+  } catch (error) {
+    failedAction(nodeId, error, 'The turn could not be retried.');
+  }
+  void queryClient.invalidateQueries({ queryKey: chatKeys.thread(message.threadId) });
+}
+
+/**
+ * PG-1.6 (D352): send an edited version of a user message. It and every turn after it become the
+ * earlier version; the edited text goes as a new turn. `revert` first reverts the file changes of
+ * the turns it replaces (D300's checkpoint revert), when the person asked for that.
+ */
+export async function editMessage(
+  queryClient: QueryClient,
+  nodeId: string,
+  message: ChatMessage,
+  content: Part[],
+  options: { speakerNodeId?: string; revert?: { projectId: string; checkpointIds: string[] } } = {},
+): Promise<void> {
+  clearOutcome(nodeId);
+  const failures: string[] = [];
+  for (const checkpointId of options.revert?.checkpointIds ?? []) {
+    try {
+      await api().checkpointAction(options.revert?.projectId ?? '', checkpointId, {
+        action: 'revert',
+      });
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  try {
+    const response = await api().editChatMessage(message.threadId, message.id, { content });
+    useChatSessions.getState().update(nodeId, (session) => ({
+      ...session,
+      threadId: response.threadId,
+      ...(failures.length === 0
+        ? {}
+        : { error: `Some file changes were not reverted: ${failures.join(' ')}` }),
+      pending: {
+        threadId: response.threadId,
+        userMessage: {
+          id: response.messageId,
+          threadId: response.threadId,
+          role: 'user',
+          content,
+          verdicts: [],
+          at: new Date().toISOString(),
+        },
+        speakerNodeId: options.speakerNodeId ?? nodeId,
+        since: Date.now(),
+      },
+    }));
+  } catch (error) {
+    let refusal: ChatRefusal | undefined;
+    if (AceApiError.is(error) && error.code === 'guardrail_blocked') {
+      const parsed = GuardrailBlockedDetailsSchema.safeParse(error.details);
+      refusal = { message: error.message, verdicts: parsed.success ? parsed.data.verdicts : [] };
+    }
+    if (refusal === undefined) failedAction(nodeId, error, 'The edited message was not sent.');
+    else useChatSessions.getState().update(nodeId, (session) => ({ ...session, refusal }));
+  }
+  void queryClient.invalidateQueries({ queryKey: chatKeys.thread(message.threadId) });
+}
+
+/** PG-1.6 (D352): hide one message; it never reaches a later prompt. */
+export async function deleteMessage(
+  queryClient: QueryClient,
+  nodeId: string,
+  message: ChatMessage,
+): Promise<void> {
+  clearOutcome(nodeId);
+  try {
+    await api().deleteChatMessage(message.threadId, message.id);
+  } catch (error) {
+    failedAction(nodeId, error, 'The message could not be deleted.');
+  }
+  void queryClient.invalidateQueries({ queryKey: chatKeys.thread(message.threadId) });
+}
+
+/**
+ * PG-1.6 (D352): stop the reply a node's session is waiting on. The engine stores the turn as a
+ * failed turn of kind `user_cancelled`, which settles the session when it arrives.
+ */
+export async function stopNode(queryClient: QueryClient, nodeId: string): Promise<void> {
+  const threadId = sessionOf(nodeId).pending?.threadId;
+  if (threadId === undefined) return;
+  try {
+    const { stopped } = await api().stopChatThread(threadId);
+    // Nothing was in flight: the reply already landed, so read it.
+    if (!stopped) useChatSessions.getState().settleThread(threadId);
+  } catch (error) {
+    failedAction(nodeId, error, 'The reply could not be stopped.');
+  }
+  void queryClient.invalidateQueries({ queryKey: chatKeys.thread(threadId) });
+}
+
+/** Whether an agent turn after `afterId` (not replaced) stands in these messages. */
+const repliedAfter = (messages: readonly ChatMessage[], afterId: string): boolean =>
+  messages.some(
+    (message) =>
+      message.role === 'agent' && message.id > afterId && message.supersededAt === undefined,
+  );
+
+/**
+ * PG-1.5 stall rule: "No answer — Retry". The thread is read again first — an answer that landed
+ * while its frame was lost is shown and the session settles. Only when there is still none is the
+ * question sent again, as an edit of itself, so the unanswered turn becomes the earlier version.
+ */
+export async function recoverStalled(queryClient: QueryClient, nodeId: string): Promise<void> {
+  const pending = sessionOf(nodeId).pending;
+  if (pending === undefined) return;
+  const { threadId } = pending;
+  let detail: ChatThreadDetail;
+  try {
+    detail = await queryClient.fetchQuery({
+      queryKey: chatKeys.thread(threadId),
+      queryFn: () => api().getChatThread(threadId),
+      staleTime: 0,
+    });
+  } catch (error) {
+    failedAction(nodeId, error, 'The conversation could not be read.');
+    return;
+  }
+  useChatSessions.getState().settleThread(threadId);
+  if (repliedAfter(detail.messages, pending.afterId ?? pending.userMessage.id)) return;
+  const question = detail.messages.find((message) => message.id === pending.userMessage.id);
+  if (question === undefined || question.content.length === 0) {
+    failedAction(nodeId, undefined, 'The unanswered message is no longer in this conversation.');
+    return;
+  }
+  await editMessage(queryClient, nodeId, question, question.content, {
+    ...(pending.speakerNodeId === undefined ? {} : { speakerNodeId: pending.speakerNodeId }),
+  });
 }
 
 const NO_SESSION: NodeSession = {};
@@ -173,6 +367,17 @@ export function useChatSocket(activeNodeId: string | undefined): void {
       void queryClient.invalidateQueries({ queryKey: chatKeys.thread(payload.threadId) });
       void queryClient.invalidateQueries({ queryKey: ['chat-threads'] });
     });
+    // PG-1.6 (D352): a turn was superseded or deleted; the engine's copy is what is shown.
+    const offUpdate = socket.on('chat.update', (payload) => {
+      void queryClient.invalidateQueries({ queryKey: chatKeys.thread(payload.threadId) });
+    });
+    // PG-2.2 (D359): a tool call waits on a person, or was decided.
+    const offAsk = socket.on('chat.approval_required', (payload) => {
+      void queryClient.invalidateQueries({ queryKey: chatKeys.approvals(payload.threadId) });
+    });
+    const offDecided = socket.on('chat.approval_decided', (payload) => {
+      void queryClient.invalidateQueries({ queryKey: chatKeys.approvals(payload.threadId) });
+    });
     const offState = socket.on('node.state', (payload) => {
       if (!SETTLED.has(payload.status)) return;
       void queryClient.invalidateQueries({ queryKey: chatKeys.threads(payload.nodeId) });
@@ -181,6 +386,9 @@ export function useChatSocket(activeNodeId: string | undefined): void {
     return () => {
       offToken();
       offMessage();
+      offUpdate();
+      offAsk();
+      offDecided();
       offState();
     };
   }, [queryClient]);
@@ -231,6 +439,29 @@ export interface ChatConversation {
   /** Set when the last send failed before the engine took it; cleared on the next send. */
   error: string | undefined;
   send: (content: Part[], targetNodeId?: string) => void;
+  /**
+   * PG-1.5: when the stall clock last restarted (ms) — the reply became owed, or a token arrived —
+   * while a reply is owed; undefined otherwise.
+   */
+  waitingSince: number | undefined;
+  /** PG-1.6 (D352) message actions. */
+  retry: (message: ChatMessage) => void;
+  /** PG-2.4 (D361): retry a turn stopped without a checkpoint, writing this once without undo. */
+  retryWithoutUndo: (message: ChatMessage) => void;
+  /** PG-2.2 (D359): the thread's tool calls waiting on a person. */
+  approvals: ApprovalRequest[];
+  /** PG-2.2: approve or reject one of them; the turn goes on either way. */
+  decideApproval: (request: ApprovalRequest, kind: 'approve' | 'reject') => void;
+  edit: (
+    message: ChatMessage,
+    content: Part[],
+    revert?: { projectId: string; checkpointIds: string[] },
+  ) => void;
+  remove: (message: ChatMessage) => void;
+  /** PG-1.6: stop the reply in flight. */
+  stop: () => void;
+  /** PG-1.5: "No answer — Retry": read the thread again, and send the question again if need be. */
+  recover: () => void;
   selectThread: (threadId: string) => void;
   /** Start an empty session; its first message opens a thread. */
   newThread: () => void;
@@ -248,6 +479,12 @@ export function useThreadConversation(nodeId: string): ChatConversation {
   const threads = useChatThreads(nodeId);
   const threadId = effectiveThreadId(session, threads.data);
   const detail = useChatThreadDetail(threadId);
+  // PG-2.2 (D359): what this thread's turn is waiting on; the frames re-read it.
+  const approvals = useQuery({
+    queryKey: chatKeys.approvals(threadId ?? ''),
+    queryFn: () => api().listChatApprovals(threadId ?? ''),
+    enabled: threadId !== undefined,
+  });
   const streamingText = useChatSessions((state) =>
     threadId === undefined ? '' : (state.streams[threadId] ?? ''),
   );
@@ -258,10 +495,13 @@ export function useThreadConversation(nodeId: string): ChatConversation {
     pending !== undefined && !loaded.some((message) => message.id === pending.userMessage.id)
       ? [pending.userMessage]
       : [];
-  // Engine ids are monotonic: an agent turn after the sent one is its reply (or its failure).
+  // Engine ids are monotonic: an agent turn after the sent one is its reply (or its failure). A
+  // retry's reply comes after the turn it replaces (PG-1.6); a replaced turn never counts.
   const replied =
-    pending !== undefined &&
-    loaded.some((message) => message.role === 'agent' && message.id > pending.userMessage.id);
+    pending !== undefined && repliedAfter(loaded, pending.afterId ?? pending.userMessage.id);
+  const heardAt = useChatSessions((state) =>
+    threadId === undefined ? undefined : state.heardAt[threadId],
+  );
 
   // A reply read back before its frame arrived (a frame missed during a reconnect) still settles.
   useEffect(() => {
@@ -280,6 +520,41 @@ export function useThreadConversation(nodeId: string): ChatConversation {
     refusal: session.refusal,
     error: session.error,
     send: (content, targetNodeId) => void sendToNode(queryClient, nodeId, content, targetNodeId),
+    waitingSince:
+      pending !== undefined && !replied
+        ? Math.max(pending.since ?? 0, heardAt ?? 0) || undefined
+        : undefined,
+    retry: (message) => void retryMessage(queryClient, nodeId, message),
+    retryWithoutUndo: (message) =>
+      void retryMessage(queryClient, nodeId, message, { withoutUndo: true }),
+    approvals: approvals.data ?? [],
+    decideApproval: (request, kind) => {
+      const threadOf = request.threadId ?? threadId ?? '';
+      const call =
+        kind === 'approve'
+          ? api().approveChatToolCall(threadOf, request.id)
+          : api().rejectChatToolCall(threadOf, request.id);
+      void call
+        .catch((error: unknown) =>
+          failedAction(nodeId, error, 'The decision could not be sent to the engine.'),
+        )
+        .finally(
+          () => void queryClient.invalidateQueries({ queryKey: chatKeys.approvals(threadOf) }),
+        );
+    },
+    edit: (message, content, revert) => {
+      // Whoever answered it answers the new version (D302): the first reply after it.
+      const answered = loaded.find(
+        (each) => each.role === 'agent' && each.id > message.id && each.supersededAt === undefined,
+      );
+      void editMessage(queryClient, nodeId, message, content, {
+        ...(answered?.speakerNodeId === undefined ? {} : { speakerNodeId: answered.speakerNodeId }),
+        ...(revert === undefined ? {} : { revert }),
+      });
+    },
+    remove: (message) => void deleteMessage(queryClient, nodeId, message),
+    stop: () => void stopNode(queryClient, nodeId),
+    recover: () => void recoverStalled(queryClient, nodeId),
     selectThread: (id) =>
       update(nodeId, ({ fresh: _fresh, error: _error, refusal: _refusal, ...rest }) => ({
         ...rest,

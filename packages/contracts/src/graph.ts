@@ -127,6 +127,12 @@ export const ExecutionSettingsSchema = z.object({
   maxTokens: z.number().int().min(1).max(200_000).default(DEFAULT_EXECUTION_SETTINGS.maxTokens),
   timeoutMs: z.number().int().min(1000).max(600_000).default(DEFAULT_EXECUTION_SETTINGS.timeoutMs),
   retries: z.number().int().min(0).max(5).default(DEFAULT_EXECUTION_SETTINGS.retries),
+  /**
+   * PG-4.3: what this node may spend in one run, across every turn and iteration of it. A node whose
+   * recorded cost goes over it ends FAILED (`GUARDRAIL_VIOLATION`, code `node_budget_exceeded`). An
+   * unknown cost (D359) is never refused. Absent or `null` (how a patch clears it, D72): no cap.
+   */
+  maxCostUsd: BudgetUsdSchema.nullable().optional(),
 });
 export type ExecutionSettings = z.infer<typeof ExecutionSettingsSchema>;
 
@@ -189,6 +195,55 @@ export const AgentConfigSchema = z.object({
   brain: z.boolean().optional(),
 });
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
+
+/**
+ * D353 (PG-2.1, X4): a JSON schema implies JSON output. A node's output types with its schema taken
+ * into account — `outputTypes ⊇ ['json']` whenever a `jsonSchema` is set. The one rule the
+ * executor, the envelope contract and the loop check all read, so they never disagree.
+ */
+export function outputTypesWithSchema(
+  outputTypes: readonly DataType[],
+  jsonSchema: Record<string, unknown> | undefined,
+): DataType[] {
+  if (jsonSchema === undefined || outputTypes.includes('json')) return [...outputTypes];
+  return [...outputTypes, 'json'];
+}
+
+/**
+ * D353: an Agent or Model config's effective output types (see `outputTypesWithSchema`). A Model
+ * config has no output contract, so its types stand as written.
+ */
+export function effectiveOutputTypes(config: {
+  readonly outputTypes: readonly DataType[];
+  readonly outputContract?: { readonly jsonSchema?: Record<string, unknown> | undefined } | undefined;
+}): DataType[] {
+  return outputTypesWithSchema(config.outputTypes, config.outputContract?.jsonSchema);
+}
+
+/** The `outputContract.jsonSchema` an agent config carries, read from any node's config. */
+export function outputSchemaOf(config: unknown): Record<string, unknown> | undefined {
+  if (typeof config !== 'object' || config === null) return undefined;
+  const contract = (config as { outputContract?: unknown }).outputContract;
+  if (typeof contract !== 'object' || contract === null) return undefined;
+  const schema = (contract as { jsonSchema?: unknown }).jsonSchema;
+  return typeof schema === 'object' && schema !== null && !Array.isArray(schema)
+    ? (schema as Record<string, unknown>)
+    : undefined;
+}
+
+/**
+ * Whether a node produces a json output (D353): a json output port, or an output contract whose
+ * schema makes the answer JSON whatever ports it shows.
+ */
+export function hasJsonOutput(node: {
+  readonly outputs: readonly Pick<Port, 'dataType'>[];
+  readonly config?: unknown;
+}): boolean {
+  return (
+    node.outputs.some((port) => port.dataType === 'json') ||
+    outputSchemaOf(node.config) !== undefined
+  );
+}
 
 export const InputConfigSchema = z.object({
   text: z.string().optional(),
@@ -404,7 +459,8 @@ export type LoopConfigCheck =
  * other loop edges.
  */
 export interface LoopGraph {
-  nodes: readonly Pick<Node, 'id' | 'name' | 'outputs'>[];
+  /** `config` is read only for an output contract's schema, which makes a node's answer JSON (D353). */
+  nodes: readonly (Pick<Node, 'id' | 'name' | 'outputs'> & { config?: unknown })[];
   edges: readonly Pick<Edge, 'id' | 'kind' | 'from' | 'to'>[];
 }
 
@@ -511,7 +567,8 @@ export function validateLoopConfig(
   }
 
   const source = graph.nodes.find((node) => node.id === edge.from.nodeId);
-  if (source === undefined || !source.outputs.some((port) => port.dataType === 'json')) {
+  // D353: a schema on the source makes its answer JSON, so a Review→Fix loop needs no json port.
+  if (source === undefined || !hasJsonOutput(source)) {
     const name = source === undefined ? 'The loop source' : `"${source.name}"`;
     return refuse(
       'loop_source_not_json',

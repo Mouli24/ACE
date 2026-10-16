@@ -53,6 +53,77 @@ export function routeOf(type: ProviderType): ProviderRoute {
   return ROUTE_BY_TYPE[type];
 }
 
+/**
+ * PG-1.4 (D359): how the pickers group providers — cloud APIs, local and open models, CLI agents,
+ * custom endpoints. Unlike `routeOf`, an `openai_compatible` provider is `local` only when its base
+ * URL is on this machine or the LAN (LM Studio, llama.cpp, vLLM); on any other host it is `custom`.
+ * `mock` is the test provider and has a group of its own.
+ */
+export const PROVIDER_GROUPS = ['cloud', 'local', 'cli', 'custom', 'mock'] as const;
+export type ProviderGroup = (typeof PROVIDER_GROUPS)[number];
+
+export const PROVIDER_GROUP_LABELS: Readonly<Record<ProviderGroup, string>> = {
+  cloud: 'Cloud APIs',
+  local: 'Local & open models',
+  cli: 'CLI agents',
+  custom: 'Custom endpoints',
+  mock: 'Test providers',
+};
+
+/** Loopback, `.local`, or a private-range IPv4 (10/8, 172.16/12, 192.168/16, 169.254/16). */
+export function isLocalBaseUrl(baseUrl: string): boolean {
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+  if (
+    host === '::1' ||
+    host.startsWith('fe80:') ||
+    host.startsWith('fc') ||
+    host.startsWith('fd')
+  ) {
+    return host.includes(':');
+  }
+  const octets = host.split('.').map(Number);
+  if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part))) return false;
+  const [a = -1, b = -1] = octets;
+  return (
+    a === 127 ||
+    a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254)
+  );
+}
+
+export function providerGroup(provider: {
+  type: ProviderType;
+  baseUrl?: string | undefined;
+}): ProviderGroup {
+  switch (provider.type) {
+    case 'anthropic':
+    case 'google':
+    case 'openai':
+      return 'cloud';
+    case 'ollama':
+      return 'local';
+    case 'claude_code':
+    case 'codex_cli':
+    case 'gemini_cli':
+      return 'cli';
+    case 'mock':
+      return 'mock';
+    case 'openai_compatible':
+      return provider.baseUrl === undefined || isLocalBaseUrl(provider.baseUrl)
+        ? 'local'
+        : 'custom';
+  }
+}
+
 /** What a CLI provider may do in the project folder, mapped to each CLI's own flags (D262). */
 export const CLI_PERMISSIONS = ['read_only', 'edit_files', 'full_auto'] as const;
 export const CliPermissionSchema = z.enum(CLI_PERMISSIONS);
@@ -119,7 +190,11 @@ export const CreateProviderRequestSchema = z
       });
     }
     if (cli && value.baseUrl !== undefined) {
-      ctx.addIssue({ code: 'custom', path: ['baseUrl'], message: 'A CLI provider has no base URL.' });
+      ctx.addIssue({
+        code: 'custom',
+        path: ['baseUrl'],
+        message: 'A CLI provider has no base URL.',
+      });
     }
     if (!cli && value.cliPermission !== undefined) {
       ctx.addIssue({

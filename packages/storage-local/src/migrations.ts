@@ -73,6 +73,27 @@ export const FORGE_CHAT_TURNS_MIGRATION_ID = '20261014T105000_forge_chat_turns';
 export const FORGE_CHECKS_MIGRATION_ID = '20261014T110000_forge_project_checks';
 
 /**
+ * PG-1.6 (D352): a chat turn a retry or an edit replaced (`superseded_at`), or one the person
+ * deleted (`deleted_at`). Both NULL on every turn stored before.
+ */
+export const CHAT_MESSAGE_ACTIONS_MIGRATION_ID = '20261015T120000_chat_message_actions';
+
+/**
+ * PG-5.6 (FR-BEN-001..008): ACE Bench's four tables, and `runs.bench_experiment_id`, which keeps a
+ * bench run out of the normal run history. NULL on every run stored before.
+ */
+export const BENCH_MIGRATION_ID = '20261016T120000_bench';
+
+/**
+ * PG-5.4: the run a replay answered its node calls from (`Run.replayOf`). NULL on every run that is
+ * not a replay, which `toRun` leaves absent.
+ */
+export const RUN_REPLAY_OF_MIGRATION_ID = '20261016T120000_run_replay_of';
+
+/** D359 (PG-1.4): a model's size on disk, as a local provider reports it. */
+export const MODEL_SIZE_MIGRATION_ID = '20261016T130000_model_size_bytes';
+
+/**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
  * written.
@@ -677,6 +698,103 @@ export const MIGRATIONS: readonly Migration[] = [
       -- NULL reads as absent in both (no command; format-on-save off), so no row needs a backfill.
       ALTER TABLE projects ADD COLUMN check_command TEXT;
       ALTER TABLE projects ADD COLUMN format_on_save INTEGER;
+    `,
+  },
+  {
+    id: CHAT_MESSAGE_ACTIONS_MIGRATION_ID,
+    up: `
+      -- PG-1.6 (D352): message actions. A superseded or deleted turn stays in the table (and the
+      -- event log); the flags keep it out of every later prompt. NULL reads as "still standing".
+      ALTER TABLE chat_messages ADD COLUMN superseded_at TEXT;
+      ALTER TABLE chat_messages ADD COLUMN deleted_at TEXT;
+    `,
+  },
+  {
+    id: BENCH_MIGRATION_ID,
+    up: `
+      -- PG-5.6: a task's inputs are JSON Part[]; content_hash is set once, at freeze.
+      CREATE TABLE IF NOT EXISTS bench_tasks (
+        id           TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        name         TEXT NOT NULL,
+        prompt       TEXT NOT NULL,
+        inputs       TEXT NOT NULL,
+        rubric       TEXT NOT NULL,
+        status       TEXT NOT NULL,
+        content_hash TEXT,
+        frozen_at    TEXT,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS bench_tasks_workspace_idx ON bench_tasks (workspace_id, id);
+
+      -- rules is JSON BenchRules, locked once started_at is set.
+      CREATE TABLE IF NOT EXISTS bench_experiments (
+        id               TEXT PRIMARY KEY,
+        workspace_id     TEXT NOT NULL,
+        name             TEXT NOT NULL,
+        workflow_id      TEXT NOT NULL,
+        project_id       TEXT NOT NULL,
+        task_ids         TEXT NOT NULL,
+        repetitions      INTEGER NOT NULL,
+        baseline_model   TEXT,
+        rules            TEXT NOT NULL,
+        status           TEXT NOT NULL,
+        pending_approval TEXT,
+        started_at       TEXT,
+        ended_at         TEXT,
+        created_at       TEXT NOT NULL,
+        updated_at       TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS bench_experiments_workspace_idx
+        ON bench_experiments (workspace_id, id);
+
+      -- One row per planned run. label is the blind label: the key that never leaves the engine.
+      CREATE TABLE IF NOT EXISTS bench_runs (
+        id            TEXT PRIMARY KEY,
+        workspace_id  TEXT NOT NULL,
+        experiment_id TEXT NOT NULL,
+        task_id       TEXT NOT NULL,
+        arm           TEXT NOT NULL,
+        rep           INTEGER NOT NULL,
+        ord           INTEGER NOT NULL,
+        status        TEXT NOT NULL,
+        run_id        TEXT,
+        record        TEXT,
+        label         TEXT
+      );
+      CREATE INDEX IF NOT EXISTS bench_runs_experiment_idx
+        ON bench_runs (workspace_id, experiment_id, ord);
+
+      CREATE TABLE IF NOT EXISTS bench_scores (
+        bench_run_id  TEXT PRIMARY KEY,
+        workspace_id  TEXT NOT NULL,
+        experiment_id TEXT NOT NULL,
+        label         TEXT NOT NULL,
+        score         REAL NOT NULL,
+        note          TEXT,
+        imported_at   TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS bench_scores_experiment_idx
+        ON bench_scores (workspace_id, experiment_id);
+
+      ALTER TABLE runs ADD COLUMN bench_experiment_id TEXT;
+    `,
+  },
+  {
+    id: RUN_REPLAY_OF_MIGRATION_ID,
+    up: `
+      -- PG-5.4: a replay is a new run answered from an earlier run's recorded node outputs, with
+      -- zero provider calls. The column names that earlier run; NULL on every other run.
+      ALTER TABLE runs ADD COLUMN replay_of TEXT;
+    `,
+  },
+  {
+    id: MODEL_SIZE_MIGRATION_ID,
+    up: `
+      -- D359 (PG-1.4): Model.sizeBytes, filled from Ollama's tags. NULL where the provider says
+      -- nothing (every cloud model, and every row stored before this column).
+      ALTER TABLE models ADD COLUMN size_bytes INTEGER;
     `,
   },
 ];

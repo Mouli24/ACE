@@ -1,13 +1,17 @@
-import { slugHandle } from '@ace/contracts';
+import { slugHandle, type RunState } from '@ace/contracts';
+import { Icons } from '@ace/ui';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
 
 import { CursorInfo, ProblemsCount, RunningCount } from '../../forge/layout/StatusBar';
-import type { WorkflowMode } from '../../forge/mode';
+import { workflowPath, type WorkflowMode } from '../../forge/mode';
 import { useProject } from '../../projects/hooks';
-import { useSocketStatus } from '../../runs/hooks';
+import { useRun, useSocketStatus } from '../../runs/hooks';
 import { useRunStore } from '../../runs/run-store';
+import { useSelectedRun } from '../../runs/selected-run';
 import { SocketNotice } from '../../runs/SocketNotice';
 import { fmt } from '../../theme/constants';
+import { usePanelsStore } from '../stores/panels';
 import { useWorkspaceStatus, type WorkspaceTokens } from '../stores/workspace-status';
 import { SettingsMenu } from './SettingsMenu';
 
@@ -34,11 +38,9 @@ export function WorkspaceFooter({
 }) {
   const project = useProject(projectId);
   const messageCount = useWorkspaceStatus((store) => store.messageCount);
-  const tokens = useFooterTokens(workflowId, mode);
-  // not drawn: the run's state for tests and tools, now that the header has no run chip (D330)
-  const runStatus = useRunStore((store) =>
-    store.workflowId === workflowId ? store.status : undefined,
-  );
+  // the selected run's tokens, and — not drawn — its state for tests and tools, now that the
+  // header has no run chip (D330)
+  const { tokens, status: runStatus } = useSelectedRunFacts(workflowId);
   return (
     <footer
       data-run-status={runStatus}
@@ -47,6 +49,10 @@ export function WorkspaceFooter({
       <div className="flex min-w-0 items-center gap-[6px]">
         <SettingsMenu placement="footer" />
         <Connection />
+        <span aria-hidden className="opacity-50">
+          |
+        </span>
+        <ProblemsButton projectId={projectId} workflowId={workflowId} mode={mode} />
         {project.data && (
           <>
             <span aria-hidden className="opacity-50">
@@ -83,6 +89,48 @@ export function WorkspaceFooter({
 }
 
 /**
+ * PG-1.2 (D360, over D332's "hidden until … → Problems & events"): the bottom panel's own visible
+ * button. In Ideate it opens or closes the panel on its Problems tab; from Forge or Domain it goes
+ * to Ideate with the panel open, as the "…" menu's item does.
+ */
+function ProblemsButton({
+  projectId,
+  workflowId,
+  mode,
+}: {
+  projectId: string;
+  workflowId: string;
+  mode: WorkflowMode;
+}) {
+  const navigate = useNavigate();
+  const [search] = useSearchParams();
+  const bottomOpen = usePanelsStore((store) => store.bottomOpen);
+  const setBottomTab = usePanelsStore((store) => store.setBottomTab);
+  const toggleBottom = usePanelsStore((store) => store.toggleBottom);
+  const open = mode === 'ideate' && bottomOpen;
+  return (
+    <button
+      type="button"
+      data-testid="footer-problems-events"
+      aria-pressed={open}
+      title="Problems & events"
+      onClick={() => {
+        if (open) {
+          toggleBottom();
+          return;
+        }
+        if (mode !== 'ideate') navigate(workflowPath(projectId, workflowId, 'ideate', search));
+        setBottomTab('validation');
+      }}
+      className="flex h-[18px] shrink-0 cursor-pointer items-center gap-[4px] rounded-[5px] border-none bg-transparent px-[4px] text-[10px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] aria-pressed:text-[var(--ink)]"
+    >
+      <Icons.PanelBottom aria-hidden size={11} strokeWidth={2} />
+      Problems & events
+    </button>
+  );
+}
+
+/**
  * The live socket: open is Connected; connecting or reconnecting says so; a 4403 (D301) says this
  * page's address may not connect, as an alert, since no retry fixes it; anything else is down.
  */
@@ -114,17 +162,36 @@ function Connection() {
 }
 
 /**
- * Domain's tokens are what the Domain page publishes (its usage totals); Ideate and Forge show
- * this workflow's run totals from the live overlay, as the run bar did.
+ * PG-3.3: one source in every mode — the selected run's totals and state (PG-3.2), from the run
+ * overlay while it holds that run (live as frames arrive), else from the run's record.
  */
-function useFooterTokens(workflowId: string, mode: WorkflowMode): WorkspaceTokens | null {
-  const published = useWorkspaceStatus((store) => store.tokens);
-  const run = useRunStore(
+function useSelectedRunFacts(workflowId: string): {
+  tokens: WorkspaceTokens | null;
+  status: RunState | undefined;
+} {
+  const { runId } = useSelectedRun(workflowId);
+  const held = useRunStore(
     useShallow((store) =>
-      store.workflowId === workflowId && store.totals
-        ? { in: store.totals.tokensIn, out: store.totals.tokensOut }
+      runId !== undefined && store.workflowId === workflowId && store.runId === runId
+        ? {
+            status: store.status,
+            in: store.totals?.tokensIn,
+            out: store.totals?.tokensOut,
+          }
         : null,
     ),
   );
-  return mode === 'domain' ? published : run;
+  const record = useRun(held === null ? runId : undefined).data;
+  if (held !== null) {
+    return {
+      tokens:
+        held.in === undefined || held.out === undefined ? null : { in: held.in, out: held.out },
+      status: held.status,
+    };
+  }
+  if (record === undefined || record.id !== runId) return { tokens: null, status: undefined };
+  return {
+    tokens: { in: record.totals.tokensIn, out: record.totals.tokensOut },
+    status: record.status,
+  };
 }

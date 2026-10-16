@@ -52,31 +52,36 @@ describe('D332 the theme toolbar', () => {
     for (const handler of Object.values(on)) expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('wears the theme’s glyphs and titles', () => {
+  // PG-1.2 (D360): the theme's glyphs (+ − ⛶ 🔓︎ ✋ ↶) became SVG icons — a glyph depends on the
+  // font and draws as a box on some Windows setups. Each button keeps its title and name.
+  it('wears an SVG icon and the theme’s title on every button, with no text glyph', () => {
     toolbar();
-    const glyphs = [
-      ['Zoom in', '+'],
-      ['Zoom out', '−'],
-      ['Fit to screen', '⛶'],
-      ['Lock nodes', '🔓︎'],
-      ['Hand tool', '✋'],
-      ['Undo move', '↶'],
-    ] as const;
-    for (const [title, glyph] of glyphs) {
-      expect(screen.getByTitle(title)).toHaveTextContent(glyph);
+    for (const title of [
+      'Zoom in',
+      'Zoom out',
+      'Fit to screen',
+      'Lock nodes',
+      'Hand tool',
+      'Undo move',
+    ]) {
+      const button = screen.getByTitle(title);
+      expect(button.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+      expect(button.textContent?.trim()).toBe('');
     }
   });
 
-  it('lock: 🔒︎ in #ef6b3f on --hover; hand: a white glyph on #ef6b3f', () => {
+  // PG-1.2 (D360): the pressed colours moved to AA tokens — #ef6b3f measured 2.7:1 as an icon on
+  // the light canvas and white on it 2.9:1, under WCAG 1.4.11's 3:1.
+  it('lock: the locked icon in --accent-ink on --hover; hand: a white icon on --accent-strong', () => {
     toolbar({ locked: true, hand: true });
     const lock = screen.getByRole('button', { name: 'Lock nodes' });
-    expect(lock).toHaveTextContent('🔒︎');
+    expect(lock.querySelector('[data-icon="lock"]')).not.toBeNull();
     expect(lock).toHaveAttribute('aria-pressed', 'true');
     expect(lock.style.background).toBe('var(--hover)');
-    expect(lock.style.color).toBe('rgb(239, 107, 63)');
+    expect(lock.style.color).toBe('var(--accent-ink)');
     const hand = screen.getByRole('button', { name: 'Hand tool' });
     expect(hand).toHaveAttribute('aria-pressed', 'true');
-    expect(hand.style.background).toBe('rgb(239, 107, 63)');
+    expect(hand.style.background).toBe('var(--accent-strong)');
     expect(hand.style.color).toBe('rgb(255, 255, 255)');
   });
 

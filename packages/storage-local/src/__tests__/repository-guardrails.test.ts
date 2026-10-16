@@ -1,10 +1,10 @@
+import type { RunApprovalRequest } from '@ace/engine';
 import {
   AgentConfigSchema,
   ApprovalRequestSchema,
   DEFAULT_GUARDRAIL_POLICY_NAME,
   VerdictSchema,
   defaultGuardrailChecks,
-  type ApprovalRequest,
   type GuardrailCheck,
   type Node,
   type NodeRun,
@@ -112,9 +112,9 @@ function verdict(nodeRunId: string, overrides: Partial<Verdict> = {}): Verdict {
 function approvalRequest(
   runId: string,
   nodeRunId: string,
-  overrides: Partial<ApprovalRequest> = {},
-): ApprovalRequest {
-  return ApprovalRequestSchema.parse({
+  overrides: Partial<RunApprovalRequest> = {},
+): RunApprovalRequest {
+  const parsed = ApprovalRequestSchema.parse({
     id: newId(),
     runId,
     nodeRunId,
@@ -127,6 +127,12 @@ function approvalRequest(
     requestedAt: NOW,
     ...overrides,
   });
+  // PG-2.2 (D359): a run's request always names both.
+  return {
+    ...parsed,
+    runId: overrides.runId ?? runId,
+    nodeRunId: overrides.nodeRunId ?? nodeRunId,
+  };
 }
 
 /** Compare checks ignoring the ids, which are fresh per policy by design. */
@@ -210,9 +216,7 @@ describe('FR-GRD-018 Every project gets the default policy', () => {
 
     expect(() =>
       db.sqlite
-        .prepare(
-          `UPDATE guardrail_policies SET is_project_default = 1 WHERE id = ?`,
-        )
+        .prepare(`UPDATE guardrail_policies SET is_project_default = 1 WHERE id = ?`)
         .run(other.id),
     ).toThrow(/UNIQUE/i);
   });
@@ -234,11 +238,12 @@ describe('FR-GRD-018 Every project gets the default policy', () => {
     const promoted = await db.repository.guardrailPolicies.setDefault(scope, strict.id);
 
     expect(promoted?.isProjectDefault).toBe(true);
-    expect(await db.repository.guardrailPolicies.getProjectDefault(scope, project.id)).toMatchObject(
-      { id: strict.id },
-    );
-    expect((await db.repository.guardrailPolicies.get(scope, before?.id ?? ''))?.isProjectDefault)
-      .toBe(false);
+    expect(
+      await db.repository.guardrailPolicies.getProjectDefault(scope, project.id),
+    ).toMatchObject({ id: strict.id });
+    expect(
+      (await db.repository.guardrailPolicies.get(scope, before?.id ?? ''))?.isProjectDefault,
+    ).toBe(false);
   });
 
   it('answers null for a set-default on a policy that does not exist', async () => {
@@ -295,9 +300,9 @@ describe('FR-GRD-001 Policy CRUD', () => {
     expect(listed).toHaveLength(1);
     expect(listed[0]?.version).toBe(2);
     expect(v1?.isProjectDefault).toBe(false);
-    expect(await db.repository.guardrailPolicies.getProjectDefault(scope, project.id)).toMatchObject(
-      { id, version: 2 },
-    );
+    expect(
+      await db.repository.guardrailPolicies.getProjectDefault(scope, project.id),
+    ).toMatchObject({ id, version: 2 });
 
     // Without a project id it is every policy in the workspace, latest version each.
     expect(await db.repository.guardrailPolicies.listByProject(scope)).toEqual(listed);
@@ -376,7 +381,11 @@ describe('FR-GRD-001 Policy CRUD', () => {
 describe('FR-GRD-015 Verdicts are stored on the node run and readable back', () => {
   it('appends in order and keeps the node run copy in step', async () => {
     const nodeRun = await seedNodeRun(db.repository);
-    const first = verdict(nodeRun.id, { checkType: 'secret_leak', action: 'block', point: 'output' });
+    const first = verdict(nodeRun.id, {
+      checkType: 'secret_leak',
+      action: 'block',
+      point: 'output',
+    });
     const second = verdict(nodeRun.id);
 
     await db.repository.guardrailVerdicts.append(scope, first);
@@ -406,7 +415,9 @@ describe('FR-GRD-015 Verdicts are stored on the node run and readable back', () 
 
     await db.repository.guardrailVerdicts.append(scope, passed);
 
-    expect(await db.repository.guardrailVerdicts.listByNodeRun(scope, nodeRun.id)).toEqual([passed]);
+    expect(await db.repository.guardrailVerdicts.listByNodeRun(scope, nodeRun.id)).toEqual([
+      passed,
+    ]);
     expect(passed.redactedTypes).toBeUndefined();
   });
 
@@ -451,9 +462,9 @@ describe('FR-GRD-014 A verdict cannot hold the value it redacted', () => {
   });
 
   it('refuses a verdict that carries a value, at the contract', () => {
-    expect(
-      VerdictSchema.safeParse({ ...verdict(newId()), value: 'ada@example.com' }).success,
-    ).toBe(false);
+    expect(VerdictSchema.safeParse({ ...verdict(newId()), value: 'ada@example.com' }).success).toBe(
+      false,
+    );
   });
 
   it('stores the redacted types and nothing else about what was found', async () => {
@@ -495,9 +506,9 @@ describe('FR-GRD-014 A verdict cannot hold the value it redacted', () => {
       redactedTypes: ['api_key'],
     });
 
-    await expect(
-      db.repository.guardrailVerdicts.append(scope, redacted),
-    ).resolves.toEqual(redacted);
+    await expect(db.repository.guardrailVerdicts.append(scope, redacted)).resolves.toEqual(
+      redacted,
+    );
   });
 });
 
@@ -645,7 +656,9 @@ describe('FR-GRD-013 Approvals', () => {
       preview: 'the draft ends with [api_key redacted]',
     });
     await expect(db.repository.approvals.create(scope, redacted)).resolves.toEqual(redacted);
-    expect(await db.repository.approvals.listPendingByRun(scope, nodeRun.runId)).toEqual([redacted]);
+    expect(await db.repository.approvals.listPendingByRun(scope, nodeRun.runId)).toEqual([
+      redacted,
+    ]);
   });
 
   it('refuses a decision note that carries a credential (BR-07)', async () => {

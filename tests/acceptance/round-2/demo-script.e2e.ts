@@ -172,6 +172,9 @@ test.describe('Round 2 §1 demo script, through the UI', () => {
     const { token } = engine();
 
     /* ---- Providers → add "Mock" → Test → CONNECTED, models listed ---- */
+    const before = new Set(
+      (await api<{ items: Array<{ id: string }> }>('/providers?limit=500')).items.map((p) => p.id),
+    );
     await page.goto(`/providers?token=${token}`);
     await page.getByRole('button', { name: /add provider/i }).click();
     const dialog = page.getByRole('dialog');
@@ -180,17 +183,28 @@ test.describe('Round 2 §1 demo script, through the UI', () => {
     await dialog.getByLabel('Name').fill('Mock');
     await dialog.getByRole('button', { name: 'Add provider' }).click();
 
-    const row = page.locator('[data-testid^="provider-row-"]').first();
+    // PG-1.4 (D359): the Providers page groups rows into sections, so the first row is no longer
+    // the one just added — the row is the provider this dialog created, found by its id
+    let providerId = '';
+    await expect
+      .poll(
+        async () => {
+          const { items } = await api<{ items: Array<{ id: string; name: string }> }>(
+            '/providers?limit=500',
+          );
+          providerId = items.find((p) => !before.has(p.id) && p.name === 'Mock')?.id ?? '';
+          return providerId;
+        },
+        { message: 'the new Mock provider reaches the engine' },
+      )
+      .not.toBe('');
+    const row = page.getByTestId(`provider-row-${providerId}`);
     await expect(row).toContainText('Mock');
     await row.getByRole('button', { name: 'Test' }).click();
     await expect(row.locator('[data-testid^="provider-status-"]')).toHaveAttribute(
       'data-status',
       'CONNECTED',
     );
-
-    const providerId = (
-      await api<{ items: Array<{ id: string; name: string }> }>('/providers')
-    ).items.find((provider) => provider.name === 'Mock')?.id as string;
 
     // …models listed. The catalogue needs the refresh until D-024 is fixed, so the script presses
     // the button the UI offers rather than pretending the list is there on its own.

@@ -14,6 +14,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  Icons,
   cn,
   toast,
 } from '@ace/ui';
@@ -26,14 +27,17 @@ import { DeleteProjectDialog, RenameProjectDialog } from '../../projects/Project
 import { useProject } from '../../projects/hooks';
 import { ApprovalsDialog } from '../../runs/approvals/ApprovalsBadge';
 import {
+  canReplay,
   useApprovals,
   useEndRun,
   usePauseRun,
+  useReplayRun,
   useRestartRun,
   useResumeRun,
   useStopRun,
 } from '../../runs/hooks';
 import { useRunStore } from '../../runs/run-store';
+import { useOpenRunInPlace } from '../../runs/useOpenRunInPlace';
 import { useStartRunFlow } from '../../runs/useStartRunFlow';
 import { useWorkflowImport } from '../../workflows/ImportWorkflowButton';
 import {
@@ -118,9 +122,9 @@ export function WorkspaceMenu({
             type="button"
             aria-label="Workspace menu"
             data-testid="workspace-menu"
-            className="h-6 cursor-pointer rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[11px] text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+            className="flex h-6 cursor-pointer items-center rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[11px] text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
           >
-            …
+            <Icons.MoreHorizontal aria-hidden size={14} />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
@@ -144,7 +148,7 @@ export function WorkspaceMenu({
                   }}
                 >
                   <span aria-hidden className="w-3 shrink-0 text-[11px] text-[#e8572e]">
-                    {selected ? '✓' : ''}
+                    {selected && <Icons.Check aria-hidden size={11} strokeWidth={2.4} />}
                   </span>
                   <span className="min-w-0 truncate">{workflow.name}</span>
                 </DropdownMenuItem>
@@ -234,6 +238,21 @@ export function WorkspaceMenu({
               {ACTION_LABEL[action]}
             </DropdownMenuItem>
           ))}
+          {/* PG-5.4: a finished run plays back from its recording — no provider is called. */}
+          {run.canReplay && (
+            <DropdownMenuItem
+              data-testid="menu-run-replay"
+              disabled={run.busy}
+              onSelect={run.replay}
+            >
+              Replay run
+            </DropdownMenuItem>
+          )}
+          {run.runId !== undefined && (
+            <MenuLink to={`/runs/compare?a=${run.runId}`} testId="menu-run-compare">
+              Compare with…
+            </MenuLink>
+          )}
           {run.runId !== undefined && run.approvals > 0 && (
             <DropdownMenuItem
               data-testid="menu-approvals"
@@ -368,11 +387,11 @@ function MenuLink({ to, testId, children }: { to: string; testId: string; childr
 
 /**
  * The Run section's state and actions. The controls offered are exactly `Run.allowedActions`
- * (FR-CTL-006); each sends its own mutation, and a restart opens the new run (FR-CTL-004), as the
- * run controls do.
+ * (FR-CTL-006); each sends its own mutation, and a restart selects the new run in the same mode
+ * (FR-CTL-004, PG-3.5), as the run controls do.
  */
 function useRunSection(workflowId: string) {
-  const navigate = useNavigate();
+  const openRun = useOpenRunInPlace();
   const flow = useStartRunFlow(workflowId);
   const run = useRunStore(
     useShallow((store) => {
@@ -380,6 +399,7 @@ function useRunSection(workflowId: string) {
       return {
         runId: mine ? store.runId : undefined,
         allowedActions: mine ? store.allowedActions : undefined,
+        status: mine ? store.status : undefined,
       };
     }),
   );
@@ -391,7 +411,9 @@ function useRunSection(workflowId: string) {
     restart: useRestartRun(),
     end: useEndRun(),
   };
-  const busy = Object.values(mutations).some((mutation) => mutation.isPending);
+  const replayMutation = useReplayRun();
+  const busy =
+    Object.values(mutations).some((mutation) => mutation.isPending) || replayMutation.isPending;
   const allowed = new Set<RunAction>(run.allowedActions ?? []);
 
   const fire = (action: RunAction) => {
@@ -399,7 +421,8 @@ function useRunSection(workflowId: string) {
     if (runId === undefined) return;
     mutations[action].mutate(runId, {
       onSuccess: (result) => {
-        if (action === 'restart' && result.id !== runId) navigate(`/runs/${result.id}`);
+        // PG-3.5 (D360): restart keeps the mode; the new run becomes the selected one.
+        if (action === 'restart' && result.id !== runId) openRun(result.id);
       },
       onError: (error) => toast.error(error.message),
     });
@@ -412,6 +435,16 @@ function useRunSection(workflowId: string) {
     startPending: flow.pending,
     dialog: flow.dialog,
     actions: run.runId === undefined ? [] : RUN_ACTIONS.filter((action) => allowed.has(action)),
+    canReplay: run.runId !== undefined && canReplay(run.status),
+    replay: () => {
+      const runId = run.runId;
+      if (runId === undefined) return;
+      replayMutation.mutate(runId, {
+        // The replay becomes the selected run, in the same mode (as a restart does, PG-3.5).
+        onSuccess: (result) => openRun(result.id),
+        onError: (error) => toast.error(error.message),
+      });
+    },
     approvals: approvals.data?.length ?? 0,
     busy,
     fire,
@@ -419,7 +452,7 @@ function useRunSection(workflowId: string) {
 }
 
 /** Stop asks first, in the run controls' words: it cancels calls in flight (FR-CTL-003). */
-function StopConfirm({ onCancel, onStop }: { onCancel: () => void; onStop: () => void }) {
+export function StopConfirm({ onCancel, onStop }: { onCancel: () => void; onStop: () => void }) {
   return (
     <Dialog open onOpenChange={(open) => !open && onCancel()}>
       <DialogContent>

@@ -133,7 +133,6 @@ export const settings = sqliteTable(
   (table) => [primaryKey({ columns: [table.workspaceId] })],
 );
 
-
 /* -------------------------------------------------------------------------- */
 /* Round 2 (Arch §15.3): providers, catalog, price tables, runs, node runs     */
 /* -------------------------------------------------------------------------- */
@@ -187,6 +186,8 @@ export const models = sqliteTable(
     description: text('description'),
     resolvedModelId: text('resolved_model_id'),
     unavailableReason: text('unavailable_reason'),
+    /** D359: size on disk as a local provider reports it; null where it says nothing. */
+    sizeBytes: integer('size_bytes'),
   },
   (table) => [index('models_provider_idx').on(table.workspaceId, table.providerId, table.modelId)],
 );
@@ -235,12 +236,16 @@ export const runs = sqliteTable(
     budgetHalt: text('budget_halt'),
     /** The run a restart copied its snapshot and inputs from (FR-CTL-004). */
     restartedFromRunId: text('restarted_from_run_id'),
+    /** PG-5.4: the run a replay answered its node calls from; NULL on every other run. */
+    replayOf: text('replay_of'),
     /** D305: why the run is BLOCKED mid-run; NULL for every other state. */
     blockedReason: text('blocked_reason'),
     /** D312: JSON `RunDomainConfig`; NULL on runs from before Domain. */
     domain: text('domain'),
     /** D312: the goal the run was started with. */
     goal: text('goal'),
+    /** PG-5.6 (FR-BEN-008): the bench experiment that queued this run; NULL for a normal run. */
+    benchExperimentId: text('bench_experiment_id'),
   },
   (table) => [
     index('runs_workflow_idx').on(table.workspaceId, table.workflowId, table.id),
@@ -557,6 +562,10 @@ export const chatMessages = sqliteTable(
     activity: text('activity'),
     /** D302/D300: the checkpoint of the files the turn changed. */
     checkpointId: text('checkpoint_id'),
+    /** PG-1.6 (D352): a retry or an edit replaced this turn; null while it stands. */
+    supersededAt: text('superseded_at'),
+    /** PG-1.6 (D352): the person deleted this turn; null while it is shown. */
+    deletedAt: text('deleted_at'),
   },
   (table) => [index('chat_messages_thread_idx').on(table.workspaceId, table.threadId, table.id)],
 );
@@ -728,4 +737,89 @@ export const checkpoints = sqliteTable(
   (table) => [
     index('checkpoints_project_idx').on(table.workspaceId, table.projectId, table.createdAt),
   ],
+);
+
+/* -------------------------------------------------------------------------- */
+/* ACE Bench (PG-5.6, FR-BEN-001..008)                                         */
+/* -------------------------------------------------------------------------- */
+
+export const benchTasks = sqliteTable(
+  'bench_tasks',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    name: text('name').notNull(),
+    prompt: text('prompt').notNull(),
+    /** JSON `Part[]`. */
+    inputs: text('inputs').notNull(),
+    rubric: text('rubric').notNull(),
+    status: text('status').notNull(),
+    contentHash: text('content_hash'),
+    frozenAt: text('frozen_at'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [index('bench_tasks_workspace_idx').on(table.workspaceId, table.id)],
+);
+
+export const benchExperiments = sqliteTable(
+  'bench_experiments',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    name: text('name').notNull(),
+    workflowId: text('workflow_id').notNull(),
+    projectId: text('project_id').notNull(),
+    /** JSON `Id[]`. */
+    taskIds: text('task_ids').notNull(),
+    repetitions: integer('repetitions').notNull(),
+    /** JSON `BenchModelRef`. */
+    baselineModel: text('baseline_model'),
+    /** JSON `BenchRules`. */
+    rules: text('rules').notNull(),
+    status: text('status').notNull(),
+    /** JSON `BenchPendingApproval`. */
+    pendingApproval: text('pending_approval'),
+    startedAt: text('started_at'),
+    endedAt: text('ended_at'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [index('bench_experiments_workspace_idx').on(table.workspaceId, table.id)],
+);
+
+export const benchRuns = sqliteTable(
+  'bench_runs',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    experimentId: text('experiment_id').notNull(),
+    taskId: text('task_id').notNull(),
+    arm: text('arm').notNull(),
+    rep: integer('rep').notNull(),
+    ord: integer('ord').notNull(),
+    status: text('status').notNull(),
+    runId: text('run_id'),
+    /** JSON `BenchRunRecord`. */
+    record: text('record'),
+    /** The blind label; never sent to a client. */
+    label: text('label'),
+  },
+  (table) => [
+    index('bench_runs_experiment_idx').on(table.workspaceId, table.experimentId, table.ord),
+  ],
+);
+
+export const benchScores = sqliteTable(
+  'bench_scores',
+  {
+    benchRunId: text('bench_run_id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    experimentId: text('experiment_id').notNull(),
+    label: text('label').notNull(),
+    score: real('score').notNull(),
+    note: text('note'),
+    importedAt: text('imported_at').notNull(),
+  },
+  (table) => [index('bench_scores_experiment_idx').on(table.workspaceId, table.experimentId)],
 );

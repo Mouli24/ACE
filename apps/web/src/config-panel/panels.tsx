@@ -13,6 +13,7 @@ import {
 } from '@ace/contracts';
 import { Button } from '@ace/ui';
 import type { ReactNode } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import { PolicyPicker } from '../guardrails/PolicyPicker';
 import { useWorkflowProjectId } from '../nodes/retrieval/hooks';
@@ -35,6 +36,7 @@ import {
   SelectField,
   TextAreaField,
   TextField,
+  UsdCapField,
 } from './fields';
 import { BUDGET_RANGE, EXECUTION_RANGES } from './validation';
 
@@ -86,7 +88,7 @@ function ExecutionFields({
   /** More numbers that sit in the same grid (the Agent's context budget). */
   children?: ReactNode;
 }) {
-  const set = (key: keyof AgentConfig['execution']) => (value: number) =>
+  const set = (key: 'temperature' | 'maxTokens' | 'timeoutMs' | 'retries') => (value: number) =>
     onChange({ ...execution, [key]: value });
   return (
     <div className={FIELD_GRID_CLASS} data-testid="execution-fields">
@@ -114,7 +116,59 @@ function ExecutionFields({
         range={EXECUTION_RANGES.retries}
         onCommit={set('retries')}
       />
+      <UsdCapField
+        label="Max cost per run of this node (USD)"
+        hint="Over it, the node fails with a budget reason. Blank is no cap."
+        testId="node-max-cost"
+        value={execution.maxCostUsd}
+        onCommit={(maxCostUsd) => onChange({ ...execution, maxCostUsd })}
+      />
       {children}
+    </div>
+  );
+}
+
+/**
+ * D353 (PG-2.1): what a schema means for the node, and how its last run fared against it — passed,
+ * or CONTRACT_VIOLATION with the engine's reason (BR-03 keeps that apart from RUN_FAILED).
+ */
+function OutputContractStatus({ nodeId }: { nodeId: Id }) {
+  const last = useRunStore(
+    useShallow((store) => {
+      void store.revision;
+      const run = store.nodeRun(nodeId);
+      return {
+        status: run?.status,
+        failureReason: run?.failureReason,
+        message: run?.error?.message,
+      };
+    }),
+  );
+  const verdict =
+    last.failureReason === 'CONTRACT_VIOLATION'
+      ? {
+          tone: 'fail' as const,
+          text: `CONTRACT_VIOLATION — ${last.message ?? 'the output did not match the schema.'}`,
+        }
+      : last.status === 'COMPLETED'
+        ? { tone: 'pass' as const, text: 'Passed — the output matched the schema.' }
+        : undefined;
+  return (
+    <div className="flex flex-col gap-[3px]" data-testid="output-contract-status">
+      <p className="text-[12px] text-[var(--muted)]">
+        Output will be JSON and checked against this schema
+      </p>
+      {verdict !== undefined && (
+        <p
+          className={
+            verdict.tone === 'fail' ? 'text-[12px] text-[#c94c27]' : 'text-[12px] text-[#2f7d52]'
+          }
+          data-testid="output-contract-verdict"
+          data-verdict={verdict.tone === 'fail' ? 'CONTRACT_VIOLATION' : 'passed'}
+        >
+          Last run: {verdict.text}
+        </p>
+      )}
     </div>
   );
 }
@@ -144,6 +198,7 @@ export function AgentPanel({
         modelId={config.modelId}
         inputTypes={config.inputTypes}
         outputTypes={config.outputTypes}
+        needs={config}
         onChange={patch}
       />
       <NameField
@@ -183,13 +238,17 @@ export function AgentPanel({
 
       {/*
        * D285: no input/output type pickers — a node takes text and answers in text. A structured
-       * output contract stays available for the review loop.
+       * output contract stays available for the review loop, and (D353) a schema makes the answer
+       * JSON, checked against it.
        */}
       <div className="flex min-w-0 flex-col gap-[7px]" data-testid="agent-advanced-output">
         <JsonSchemaEditor
           value={config.outputContract?.jsonSchema}
           onCommit={(jsonSchema) => patch({ outputContract: jsonSchema ? { jsonSchema } : {} })}
         />
+        {config.outputContract?.jsonSchema !== undefined && (
+          <OutputContractStatus nodeId={node.id} />
+        )}
         {/*
          * The contract a Review→Fix loop needs, in one press (§5 item 8): score, verdict and
          * issues, exactly as the contract defines them — so the loop's exit condition can read

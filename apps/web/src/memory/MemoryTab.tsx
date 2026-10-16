@@ -7,6 +7,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  Icons,
 } from '@ace/ui';
 import { useState } from 'react';
 
@@ -182,7 +183,7 @@ function AgentMemory({ node }: { node: Extract<Node, { kind: 'agent' }> }) {
                     onClick={() => setPending({ kind: 'one', entry })}
                     className="grid h-7 w-7 cursor-pointer place-items-center rounded-[7px] border border-[var(--line)] bg-transparent text-[12px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
                   >
-                    <span aria-hidden>✕</span>
+                    <Icons.X aria-hidden size={12} />
                   </button>
                 </td>
               </tr>

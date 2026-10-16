@@ -19,8 +19,8 @@ A brand-new install opens the wizard at `/onboarding`. It has three steps.
    on the [Providers](providers.md) screen and come back.
 2. **Pick a template.** Linear chain, Review and fix, Parallel research or RAG Q&A. Each card shows
    the shape of its graph. Click a card, or use the arrow keys, to choose one.
-   Every template starts on the Mock provider's models, so the first run needs no key; to use
-   another provider, change each node's model in its config afterwards.
+   Every node of the template uses the provider you chose in step 1, so on the Mock provider the
+   first run needs no key. To change a node's provider or model later, open its settings.
 3. **Create the project.** Name the project and type the first question. Nothing is created until
    you press **Create project and run**. ACE then opens the Canvas and starts the run; the top bar
    shows the run's status until it reads **run complete**.
@@ -30,8 +30,12 @@ opening `/onboarding` again in the same browser tab picks up where you stopped.
 
 ## Where to go next
 
-- [Building a workflow](building-a-workflow.md): nodes, connections and runs.
+- [Building a workflow](building-a-workflow.md): nodes, connections, cost and runs.
+- [Modes](modes.md): Ideate, Forge and Domain over one workflow and one run.
+- [Chat](chat.md): talking to a node, and what you can do with each message.
 - [Providers and models](providers.md): cloud, local and the Mock provider.
+- [Replay and compare](replay-and-compare.md): playing a run back, comparing two, exporting one.
+- [Bench](bench.md): does a workflow beat one model alone?
 - [Guardrails](guardrails.md): what is checked, and approvals.
 - [Knowledge bases](knowledge-bases.md): answering from your own documents.
 - [Tools](tools.md): built-in tools and MCP servers.

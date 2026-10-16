@@ -21,6 +21,7 @@ import {
 } from '@ace/contracts';
 import type {
   ArtifactRepository,
+  ChatMessageMark,
   ChatMessageRepository,
   ChatThreadRepository,
   McpServerPatch,
@@ -149,6 +150,8 @@ function toChatMessage(row: ChatMessageRow): ChatMessage {
     ...(row.speakerNodeId === null ? {} : { speakerNodeId: row.speakerNodeId }),
     ...(row.activity === null ? {} : { activity: JSON.parse(row.activity) }),
     ...(row.checkpointId === null ? {} : { checkpointId: row.checkpointId }),
+    ...(row.supersededAt === null ? {} : { supersededAt: row.supersededAt }),
+    ...(row.deletedAt === null ? {} : { deletedAt: row.deletedAt }),
   });
 }
 
@@ -508,6 +511,15 @@ export function createChatThreadRepository(
         .all()
         .map(toChatThread),
 
+    list: async (scope: Scope) =>
+      db
+        .select()
+        .from(chatThreads)
+        .where(eq(chatThreads.workspaceId, scope.workspaceId))
+        .orderBy(asc(chatThreads.id))
+        .all()
+        .map(toChatThread),
+
     touch: async (scope: Scope, id: Id, updatedAt) => {
       db.update(chatThreads)
         .set({ updatedAt })
@@ -558,9 +570,21 @@ export function createChatMessageRepository(db: Db): ChatMessageRepository {
               ? null
               : toJsonColumn(message.activity, `${at}.activity`),
           checkpointId: message.checkpointId ?? null,
+          supersededAt: message.supersededAt ?? null,
+          deletedAt: message.deletedAt ?? null,
         })
         .run();
       return message;
+    },
+
+    mark: async (scope: Scope, id: Id, patch: ChatMessageMark) => {
+      const set: { supersededAt?: string; deletedAt?: string } = {};
+      if (patch.supersededAt !== undefined) set.supersededAt = patch.supersededAt;
+      if (patch.deletedAt !== undefined) set.deletedAt = patch.deletedAt;
+      const where = and(eq(chatMessages.workspaceId, scope.workspaceId), eq(chatMessages.id, id));
+      if (Object.keys(set).length > 0) db.update(chatMessages).set(set).where(where).run();
+      const row = db.select().from(chatMessages).where(where).get();
+      return row === undefined ? null : toChatMessage(row);
     },
 
     listByThread: async (scope: Scope, threadId: Id) =>
@@ -573,5 +597,26 @@ export function createChatMessageRepository(db: Db): ChatMessageRepository {
         .orderBy(asc(chatMessages.id))
         .all()
         .map(toChatMessage),
+
+    /**
+     * PG-2.2: the day's direct-chat spend for the `daily_budget` check, summed in SQL as the node
+     * runs' is. A turn a run wrote into its node's session (`run_id` set) is its node run's cost.
+     */
+    dailyCostUsd: async (scope: Scope, day: string) => {
+      const row = db
+        .select({
+          total: sql<number>`COALESCE(SUM(json_extract(${chatMessages.usage}, '$.costUsd')), 0)`,
+        })
+        .from(chatMessages)
+        .where(
+          and(
+            eq(chatMessages.workspaceId, scope.workspaceId),
+            sql`${chatMessages.runId} IS NULL`,
+            sql`${chatMessages.at} LIKE ${`${day}%`}`,
+          ),
+        )
+        .get();
+      return row?.total ?? 0;
+    },
   };
 }

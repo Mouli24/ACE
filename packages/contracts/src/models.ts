@@ -47,6 +47,8 @@ export const ModelSchema = z.object({
    * `claude-opus-5-5`. Absent when `modelId` is already the full name or the provider does not say.
    */
   resolvedModelId: z.string().optional(),
+  /** PG-1.4 (D359): the model's size on disk, for a local model whose service reports it. */
+  sizeBytes: z.number().int().min(0).optional(),
   /** Why an `available: false` model cannot be used, in the provider's words or the engine's. */
   unavailableReason: z.string().optional(),
 });

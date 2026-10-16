@@ -1,5 +1,4 @@
 import {
-  CLI_PERMISSIONS,
   DEFAULT_CLI_CONCURRENCY,
   DEFAULT_CLI_PERMISSION,
   DEFAULT_OLLAMA_BASE_URL,
@@ -36,7 +35,9 @@ import { CliScanSection } from './CliScanSection';
 import { ProviderMark } from './ProviderMark';
 import { useCreateProvider, useDeleteProvider, useUpdateProvider } from './hooks';
 import {
+  OFFERED_CLI_PERMISSIONS,
   cliPermissionHint,
+  offeredCliPermission,
   CLI_PERMISSION_LABEL,
   NEEDS_API_KEY,
   NEEDS_BASE_URL,
@@ -82,26 +83,23 @@ function PermissionField({
   return (
     <div className={FIELD}>
       <Label htmlFor={id}>Permission</Label>
-      <Select value={value} onValueChange={(next) => onChange(next as CliPermission)}>
+      <Select
+        value={offeredCliPermission(value)}
+        onValueChange={(next) => onChange(next as CliPermission)}
+      >
         <SelectTrigger id={id} aria-label="Permission">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {CLI_PERMISSIONS.map((level) => (
+          {/* D355: no Full auto — it bypassed every ACE approval, budget and guardrail. */}
+          {OFFERED_CLI_PERMISSIONS.map((level) => (
             <SelectItem key={level} value={level}>
               {CLI_PERMISSION_LABEL[level]}
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
-      <p
-        data-testid="cli-permission-hint"
-        className={
-          value === 'full_auto'
-            ? 'text-[11px] leading-[1.45] text-[#c94c27]'
-            : 'text-[11px] leading-[1.45] text-[var(--muted)]'
-        }
-      >
+      <p data-testid="cli-permission-hint" className="text-[11px] leading-[1.45] text-[var(--muted)]">
         {cliPermissionHint(cliType, value)}
       </p>
     </div>
@@ -312,8 +310,9 @@ export function EditProviderDialog({
   const [apiKey, setApiKey] = useState('');
   const [concurrency, setConcurrency] = useState(String(provider.concurrency));
   const isCli = isCliProviderType(provider.type);
+  // D355: a provider still on `full_auto` is edited (and saved) as `edit_files`.
   const [permission, setPermission] = useState<CliPermission>(
-    provider.cliPermission ?? DEFAULT_CLI_PERMISSION,
+    offeredCliPermission(provider.cliPermission ?? DEFAULT_CLI_PERMISSION),
   );
 
   const submit = (event: FormEvent) => {

@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { test, type Page } from '@playwright/test';
 
 import {
-  NOT_BUILT,
   api,
   card,
   engine,
@@ -46,7 +45,9 @@ async function writingProject(label: string): Promise<Seeded> {
       {
         name: 'Coder',
         providerId,
-        modelId: 'mock-chat',
+        // A model that takes tools: on one that does not, pre-flight blocks the write tool first
+        // (`tools_unsupported`, D353) and the checkpoint is never tried.
+        modelId: 'mock-tool',
         config: { tools: { enabled: ['write_file'], maxToolCalls: 5, allowedDomains: [] } },
       },
     ],
@@ -72,7 +73,6 @@ test.describe('PG-2.4 no silent loss of undo', () => {
   test('a writing run whose checkpoint cannot begin stops and asks: Run without undo / Cancel', async ({
     page,
   }) => {
-    test.fail(NOT_BUILT, 'PG-2.4: the run goes on without a checkpoint, silently');
     const flow = await writingProject('undo-run');
     await openCanvas(page, flow.projectId, flow.workflowId);
     await expect(card(page, flow.byName('Coder').id)).toBeVisible({ timeout: 15_000 });
@@ -87,7 +87,6 @@ test.describe('PG-2.4 no silent loss of undo', () => {
   });
 
   test('a writing chat turn whose checkpoint cannot begin asks the same', async ({ page }) => {
-    test.fail(NOT_BUILT, 'PG-2.4: the chat turn goes on without a checkpoint, silently');
     const flow = await writingProject('undo-chat');
     await openCanvas(page, flow.projectId, flow.workflowId);
     const panel = await openChat(page, flow.byName('Coder').id);

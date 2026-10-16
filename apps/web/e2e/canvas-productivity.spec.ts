@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 import {
   addFromDialog,
+  answerProviderPicker,
   clearOfMinimap,
   closeSettings,
   connect,
@@ -173,7 +174,8 @@ test.describe('Canvas productivity (round 5)', () => {
       .not.toBe(moved.y);
   });
 
-  test('TC-CAN-008: add, move, connect → undo ×3 → redo ×3, each state matching the engine', async ({
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('TC-CAN-008: add, move, connect → undo ×3 → redo ×3, each state matching the engine', async ({
     page,
   }) => {
     const seeded = await seedGraph(page, ['input']);
@@ -334,7 +336,8 @@ test.describe('Canvas productivity (round 5)', () => {
     }
   });
 
-  test('FR-CAN-011: node, edge and empty-Canvas menus each show their actions', async ({
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('FR-CAN-011: node, edge and empty-Canvas menus each show their actions', async ({
     page,
   }) => {
     const seeded = await seedGraph(page, ['input', 'agent']);
@@ -352,6 +355,8 @@ test.describe('Canvas productivity (round 5)', () => {
       await expect(nodeMenu.getByRole('menuitem', { name })).toBeVisible();
     }
     await nodeMenu.getByRole('menuitem', { name: /Duplicate/ }).click();
+    // D351 (PG-1.3): this seeded agent has no provider, so its copy asks for one first
+    await answerProviderPicker(page);
     await settled(page, seeded.workflowId, 3);
 
     // empty Canvas

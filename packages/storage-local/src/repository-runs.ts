@@ -27,7 +27,7 @@ import type {
   RunRepository,
   Scope,
 } from '@ace/engine';
-import { and, asc, desc, eq, inArray, isNotNull, like, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, like, lt, or, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 
@@ -90,6 +90,7 @@ function toModel(row: ModelRow): Model {
     ...(row.description === null ? {} : { description: row.description }),
     ...(row.resolvedModelId === null ? {} : { resolvedModelId: row.resolvedModelId }),
     ...(row.unavailableReason === null ? {} : { unavailableReason: row.unavailableReason }),
+    ...(row.sizeBytes === null ? {} : { sizeBytes: row.sizeBytes }),
   });
 }
 
@@ -118,10 +119,14 @@ function toRun(row: RunRow): Run {
     ...(row.allowedActions === null ? {} : { allowedActions: JSON.parse(row.allowedActions) }),
     ...(row.budgetHalt === null ? {} : { budgetHalt: JSON.parse(row.budgetHalt) }),
     ...(row.restartedFromRunId === null ? {} : { restartedFromRunId: row.restartedFromRunId }),
+    // PG-5.4: NULL on every run that is not a replay, and absent then.
+    ...(row.replayOf === null ? {} : { replayOf: row.replayOf }),
     // Domain (D305, D312). NULL on runs from before Domain, which stays absent.
     ...(row.blockedReason === null ? {} : { blockedReason: row.blockedReason }),
     ...(row.domain === null ? {} : { domain: JSON.parse(row.domain) }),
     ...(row.goal === null ? {} : { goal: row.goal }),
+    // PG-5.6: NULL on a normal run, which stays absent.
+    ...(row.benchExperimentId === null ? {} : { benchExperimentId: row.benchExperimentId }),
   });
 }
 
@@ -256,6 +261,7 @@ export function createModelRepository(db: Db): ModelRepository {
     description: model.description ?? null,
     resolvedModelId: model.resolvedModelId ?? null,
     unavailableReason: model.unavailableReason ?? null,
+    sizeBytes: model.sizeBytes ?? null,
   });
 
   /** A JSON array column holds `["text","image"]`, so a type test is a substring test. */
@@ -385,10 +391,12 @@ export function createRunRepository(db: Db): RunRepository {
               ? null
               : toJsonColumn(run.budgetHalt, `run(${run.id}).budgetHalt`),
           restartedFromRunId: run.restartedFromRunId ?? null,
+          replayOf: run.replayOf ?? null,
           blockedReason: run.blockedReason ?? null,
           domain:
             run.domain === undefined ? null : toJsonColumn(run.domain, `run(${run.id}).domain`),
           goal: run.goal ?? null,
+          benchExperimentId: run.benchExperimentId ?? null,
         })
         .run();
       return run;
@@ -413,6 +421,8 @@ export function createRunRepository(db: Db): RunRepository {
           and(
             eq(runs.workspaceId, scope.workspaceId),
             eq(runs.workflowId, workflowId),
+            // FR-BEN-008: the normal run history never lists a bench run.
+            isNull(runs.benchExperimentId),
             page.cursor === undefined ? undefined : lt(runs.id, page.cursor),
           ),
         )

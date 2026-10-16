@@ -11,8 +11,10 @@ export type ForgePanelTab = 'terminal' | 'problems';
 const PANEL_TABS: readonly ForgePanelTab[] = ['terminal', 'problems'];
 
 interface LayoutState {
-  /** The chat column in Ideate and Forge, and Domain's Team aside: the header's Split (D330). */
+  /** The chat column in Ideate and Forge: the header's Chat toggle (D330, D356). */
   chatOpen: boolean;
+  /** Domain's Team aside: the header's Team toggle, remembered apart from Chat (D356). */
+  teamOpen: boolean;
   /** Forge's Explorer (Ctrl/⌘+B hides it). */
   sidebarOpen: boolean;
   /** Forge's bottom panel: the person's choice, closed until first opened (Ctrl/⌘+J, D299). */
@@ -20,6 +22,7 @@ interface LayoutState {
   panelTab: ForgePanelTab;
   panelMaximized: boolean;
   toggleChat(): void;
+  toggleTeam(): void;
   toggleSidebar(): void;
   togglePanel(): void;
   showPanel(tab: ForgePanelTab): void;
@@ -55,11 +58,13 @@ export const useLayoutStore = create<LayoutState>()(
   persist(
     (set) => ({
       chatOpen: true,
+      teamOpen: true,
       sidebarOpen: true,
       panelOpen: false,
       panelTab: 'problems',
       panelMaximized: false,
       toggleChat: () => set((s) => ({ chatOpen: !s.chatOpen })),
+      toggleTeam: () => set((s) => ({ teamOpen: !s.teamOpen })),
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
       togglePanel: () =>
         set((s) => ({
@@ -81,18 +86,26 @@ export const useLayoutStore = create<LayoutState>()(
       storage: createJSONStorage(storage),
       partialize: (s) => ({
         chatOpen: s.chatOpen,
+        teamOpen: s.teamOpen,
         sidebarOpen: s.sidebarOpen,
         panelOpen: s.panelOpen,
         panelTab: s.panelTab,
       }),
       // A view this build does not have — Phase 1's 'output' — would open a blank panel with no
-      // tab selected; it reads as Problems instead.
+      // tab selected; it reads as Problems instead. D356: a state saved before Team had a toggle of
+      // its own had one Split for both, so Team starts as that Split was.
       merge: (stored, current) => {
         const saved = (stored ?? {}) as Partial<LayoutState>;
         const panelTab = PANEL_TABS.includes(saved.panelTab as ForgePanelTab)
           ? (saved.panelTab as ForgePanelTab)
           : 'problems';
-        return { ...current, ...saved, panelTab };
+        const teamOpen =
+          typeof saved.teamOpen === 'boolean'
+            ? saved.teamOpen
+            : typeof saved.chatOpen === 'boolean'
+              ? saved.chatOpen
+              : current.teamOpen;
+        return { ...current, ...saved, panelTab, teamOpen };
       },
     },
   ),

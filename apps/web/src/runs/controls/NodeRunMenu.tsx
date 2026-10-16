@@ -5,6 +5,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  Icons,
 } from '@ace/ui';
 
 /**
@@ -64,7 +65,7 @@ export function NodeRunMenu({
           aria-label={`Run actions for ${nodeName}`}
           className="inline-flex h-[24px] cursor-pointer items-center rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[11px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
         >
-          <span aria-hidden>…</span>
+          <Icons.MoreHorizontal aria-hidden size={14} />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">

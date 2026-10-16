@@ -1,4 +1,11 @@
-import { isAddressableNode, type Id, type Node, type NodeState } from '@ace/contracts';
+import {
+  isAddressableNode,
+  type FailureReason,
+  type HaltReason,
+  type Id,
+  type Node,
+  type NodeState,
+} from '@ace/contracts';
 
 import { agentMap } from '../theme/agents';
 import { agentColor } from '../theme/constants';
@@ -57,33 +64,60 @@ export interface StatusPill {
   pulse: boolean;
 }
 
-const WORKING: StatusPill = {
-  label: 'Working',
-  bg: 'rgba(239,107,63,0.14)',
-  ink: '#e8572e',
-  pulse: true,
-};
-const WAITING: StatusPill = {
-  label: 'Waiting',
-  bg: 'var(--hover)',
-  ink: 'var(--muted)',
-  pulse: false,
-};
+/**
+ * PG-4.2 (D360): one pill per node state — nine words, nine colours, the canvas's own
+ * (`--color-status-*`, AA in both themes) — so a node not yet started, one ready, one held on an
+ * approval and one paused no longer all read "Waiting", and Failed never reads as Blocked.
+ */
+const pill = (state: NodeState, label: string, pulse = false): StatusPill => ({
+  label,
+  bg: `color-mix(in srgb, var(--color-status-${state}) 14%, transparent)`,
+  ink: `var(--color-status-${state})`,
+  pulse,
+});
 
 const PILLS: Record<NodeState, StatusPill> = {
-  RUNNING: WORKING,
-  IDLE: WAITING,
-  READY: WAITING,
-  WAITING,
-  PAUSED: WAITING,
-  COMPLETED: { label: 'Done', bg: 'rgba(47,158,99,0.14)', ink: '#2f9e63', pulse: false },
-  FAILED: { label: 'Failed', bg: 'var(--hover)', ink: '#c94c27', pulse: false },
-  BLOCKED: { label: 'Blocked', bg: 'var(--hover)', ink: '#c94c27', pulse: false },
-  STOPPED: { label: 'Stopped', bg: 'var(--hover)', ink: 'var(--muted)', pulse: false },
+  IDLE: pill('IDLE', 'Idle'),
+  READY: pill('READY', 'Ready'),
+  RUNNING: pill('RUNNING', 'Working', true),
+  WAITING: pill('WAITING', 'Needs approval', true),
+  PAUSED: pill('PAUSED', 'Paused'),
+  COMPLETED: pill('COMPLETED', 'Done'),
+  STOPPED: pill('STOPPED', 'Stopped'),
+  BLOCKED: pill('BLOCKED', 'Blocked'),
+  FAILED: pill('FAILED', 'Failed'),
 };
 
 export function statusPill(state: NodeState): StatusPill {
   return PILLS[state];
+}
+
+/**
+ * Each failure reason in words (PG-4.2, BR-03): the four stay distinct — a broken contract, a
+ * failed call, a guardrail and a block upstream are different stories. The enum stays the contract's.
+ */
+const FAILURE_WORDS: Readonly<Record<FailureReason, string>> = {
+  CONTRACT_VIOLATION: 'Its output did not match the contract',
+  RUN_FAILED: 'The call failed',
+  GUARDRAIL_VIOLATION: 'Stopped by a guardrail',
+  BLOCKED: 'Never ran — blocked upstream',
+};
+
+export function failureWords(reason: FailureReason): string {
+  return FAILURE_WORDS[reason];
+}
+
+/** Why a run halted, in words, for the run pill (PG-4.2). */
+const HALT_WORDS: Readonly<Record<HaltReason, string>> = {
+  stopped: 'stopped',
+  budget_exceeded: 'budget reached',
+  failure: 'a node failed',
+  shutdown: 'engine shut down',
+  crash: 'engine crashed',
+};
+
+export function haltWords(reason: HaltReason): string {
+  return HALT_WORDS[reason];
 }
 
 /** A duration as the theme writes it: whole seconds, `4s`. */

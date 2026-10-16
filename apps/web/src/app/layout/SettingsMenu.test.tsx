@@ -23,8 +23,9 @@ describe('D338 SettingsMenu', () => {
     renderGear('corner');
     const gear = screen.getByTestId('settings-menu');
     expect(gear).toHaveAccessibleName('Settings menu');
-    // a glyph like the theme's ☀ ☾, drawn as text, never as an emoji
-    expect(gear).toHaveTextContent('⚙︎');
+    // PG-1.2 (D360): an SVG gear, not the ⚙︎ glyph — a glyph draws as a box on some Windows setups
+    expect(gear.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+    expect(gear.textContent?.trim()).toBe('');
 
     await user.click(gear);
     const items = await screen.findAllByRole('menuitem');

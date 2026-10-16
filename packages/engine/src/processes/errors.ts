@@ -60,3 +60,16 @@ export const engineStopping = (): HttpError =>
     undefined,
     false,
   );
+
+/**
+ * PG-5.3 (D361): an agent's command is shown in Forge read-only — it reads no input from the
+ * terminal and is not stopped there. Stopping its run stops it (D349).
+ */
+export const agentCommandReadOnly = (processId: string): HttpError =>
+  new HttpError(
+    'invalid_config',
+    'validation_failed',
+    "This command belongs to an agent's run, so it is read-only here. Stop the run to stop it.",
+    { processId },
+    false,
+  );

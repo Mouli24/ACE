@@ -9,6 +9,7 @@ import { ProviderCallError, type ModelInfo } from '../../adapter.js';
 import { cliModel } from './adapter.js';
 import { parseJsonLine } from './lines.js';
 import type { ResolvedCommand } from './resolve.js';
+import { cliEnv } from './env.js';
 
 /**
  * Claude Code's models, as the installed CLI lists them (D286).
@@ -149,7 +150,8 @@ export function listClaudeCodeModels(
     try {
       child = spawn(command.command, [...command.prefixArgs, ...CLAUDE_MODEL_LIST_ARGS], {
         cwd: scratch,
-        env: options.env ?? process.env,
+        // D-093: Claude Code's own variables and the system's, never the engine's whole env
+        env: options.env ?? cliEnv(process.env, process.platform, 'claude_code'),
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       });

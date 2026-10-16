@@ -89,7 +89,8 @@ describe('X1 Claude Code flags (spec §5.1, verified 2026-10-06)', () => {
   it.each([
     ['read_only', ['--permission-mode', 'dontAsk', '--tools', 'Read,Grep,Glob']],
     ['edit_files', ['--permission-mode', 'acceptEdits', '--tools', 'Read,Edit,Write,Grep,Glob']],
-    ['full_auto', ['--permission-mode', 'bypassPermissions']],
+    // D355: an old full_auto row runs as edit_files — nothing builds the bypass mode.
+    ['full_auto', ['--permission-mode', 'acceptEdits', '--tools', 'Read,Edit,Write,Grep,Glob']],
   ] as const)('maps %s to its preset flags', (permission, flags) => {
     expect(claudeCodeDialect.args(req, permission)).toEqual([
       ...CLAUDE_CODE_BASE_ARGS,

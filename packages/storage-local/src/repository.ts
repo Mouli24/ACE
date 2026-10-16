@@ -25,6 +25,7 @@ import type {
   ChatMessageRepository,
   ChatThreadRepository,
   CheckpointRepository,
+  BenchRepository,
   EdgeRepository,
   GuardrailPolicyRepository,
   GuardrailVerdictRepository,
@@ -67,6 +68,7 @@ import {
   type VectorExtension,
 } from './indexes.js';
 import { createCheckpointRepository } from './repository-checkpoints.js';
+import { createBenchRepository } from './repository-bench.js';
 import {
   createApprovalRepository,
   createGuardrailPolicyRepository,
@@ -339,6 +341,9 @@ export class SqliteRepository implements Repository {
   /* IDE (D300). */
   readonly checkpoints: CheckpointRepository;
 
+  /* PG-5.6: ACE Bench. */
+  readonly bench: BenchRepository;
+
   constructor(db: Db, sqlite: BetterSqlite3.Database, options: SqliteRepositoryOptions = {}) {
     this.#db = db;
     this.#sqlite = sqlite;
@@ -421,6 +426,11 @@ export class SqliteRepository implements Repository {
     // readonly to everyone else; only here, once, are they swapped for their gated selves.
     const members = this as unknown as Record<GatedRepository, object>;
     for (const name of GATED_REPOSITORIES) members[name] = this.#gate(members[name]);
+
+    // PG-5.6: ACE Bench's store. Not a member of the engine's `Repository` port — the bench service
+    // is handed it on its own — but gated all the same, so its calls
+    // wait for a transaction that holds the connection instead of landing inside it.
+    this.bench = this.#gate(createBenchRepository(db));
 
     const hold = <T>(fn: () => Promise<T>): Promise<T> => this.#hold(() => fn());
     this.vectorIndex = new SqliteVectorIndex(sqlite, { vectorExtension, hold });

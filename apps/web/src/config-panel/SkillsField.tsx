@@ -21,12 +21,20 @@ export const SKILL_TOOLS: Readonly<Record<string, readonly string[]>> = {
 
 /**
  * Where the theme's description would misstate what ACE does. Its "Run commands" says "inside the
- * sandbox", but `run_command` is an unsandboxed shell in the project folder that asks before every
- * call (D266, D288) — a safety property the screen must not overstate.
+ * sandbox", but `run_command` is an unsandboxed shell that starts in the project folder and asks
+ * before every call (D266, D288) — a safety property the screen must not overstate. D346 (PG-5.3):
+ * it is not confined to the folder either, and the screen says so plainly.
  */
 const DESCRIPTION_OVERRIDE: Readonly<Record<string, string>> = {
-  shell: 'Run shell commands in the project folder; each one asks first',
+  shell: 'Run shell commands as you, starting in the project folder; each one asks first',
 };
+
+/**
+ * D346: what a person must know before turning shell commands on — they are not confined to the
+ * project folder. Shown under the skills while the Shell skill is on.
+ */
+export const RUN_COMMAND_REACH =
+  'Shell commands are not confined to the project folder: they run as you and can read, change or delete anything you can, anywhere on this computer. ACE asks before each one, so read the command before you approve it.';
 
 export interface Skill {
   id: string;
@@ -96,6 +104,18 @@ export function SkillsField({
           );
         })}
       </div>
+      {skills.some(
+        (skill) =>
+          skill.id === 'shell' && skill.tools.every((name) => tools.enabled.includes(name)),
+      ) && (
+        <p
+          role="note"
+          data-testid="skill-shell-reach"
+          className="m-0 rounded-[9px] border border-[rgba(201,76,39,0.35)] bg-[rgba(201,76,39,0.08)] px-3 py-2 text-[11px] leading-[1.45] text-[var(--ink)]"
+        >
+          {RUN_COMMAND_REACH}
+        </p>
+      )}
     </div>
   );
 }

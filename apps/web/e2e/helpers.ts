@@ -112,6 +112,38 @@ export async function closeSettings(page: Page): Promise<void> {
 }
 
 /**
+ * Answer the provider-first picker (PG-1.3, D351): a provider (the first, or the one named), then
+ * its first usable model (or the one named), then the confirm button. On an empty workspace the
+ * mock engine's detected Ollama is added from the picker itself (FR-PRV-007).
+ */
+export async function answerProviderPicker(
+  page: Page,
+  options: { provider?: RegExp; model?: RegExp } = {},
+): Promise<void> {
+  const picker = page.getByTestId('provider-picker');
+  await expect(picker).toBeVisible();
+  const providers = picker.getByRole('listbox', { name: /Provider/ }).getByRole('option');
+  const addOllama = picker.getByRole('button', { name: 'Add Ollama' });
+  await expect(providers.first().or(addOllama).first()).toBeVisible();
+  if ((await providers.count()) === 0) await addOllama.click();
+  const provider =
+    options.provider === undefined
+      ? providers.first()
+      : providers.filter({ hasText: options.provider }).first();
+  await provider.click();
+  const models = picker
+    .getByRole('listbox', { name: /Model/ })
+    .locator('[role="option"]:not([disabled])');
+  const model =
+    options.model === undefined
+      ? models.first()
+      : models.filter({ hasText: options.model }).first();
+  await model.click();
+  await picker.getByRole('button', { name: /^(Add node|Duplicate|Use this model)$/ }).click();
+  await expect(picker).toHaveCount(0);
+}
+
+/**
  * Add an Agent with the Canvas's "Add node" pill: it lands after the last stage, linked to it, and
  * its settings open; `name` is typed into Persona name, then the modal is closed. Only Agents can be
  * added (FR-CAN-002, `PALETTE_NODE_KINDS`).
@@ -120,6 +152,8 @@ export async function addFromDialog(page: Page, kind: Kind, name?: string): Prom
   if (kind !== 'agent') throw new Error(`only an agent can be added from the Canvas, not ${kind}`);
   await closeSettings(page);
   await page.getByTestId('new-node-button').click();
+  // D351 (PG-1.3): the provider-first picker comes before the node does.
+  await answerProviderPicker(page);
   const dialog = settingsDialog(page);
   await expect(dialog).toBeVisible();
   if (name) await dialog.getByLabel('Persona name').fill(name);

@@ -1,5 +1,5 @@
 import type { Artifact } from '@ace/contracts';
-import { Button, cn } from '@ace/ui';
+import { Button, Icons, cn } from '@ace/ui';
 import { useCallback, useId, useRef, useState, type DragEvent } from 'react';
 
 import { useArtifactUpload } from './useArtifactUpload';
@@ -86,7 +86,7 @@ export function AttachmentPicker({
         data-testid={`${testId}-button`}
         onClick={() => inputRef.current?.click()}
       >
-        <span aria-hidden>⌁</span>
+        <Icons.Paperclip aria-hidden size={12} />
         {compact ? '' : 'Choose a file'}
       </Button>
     </>
@@ -155,7 +155,7 @@ export function AttachmentPicker({
             className="shrink-0 cursor-pointer border-none bg-transparent p-0 text-[10px] text-[#c94c27] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
             onClick={reset}
           >
-            <span aria-hidden>✕</span>
+            <Icons.X aria-hidden size={12} />
           </button>
         </p>
       )}

@@ -1,5 +1,6 @@
 import {
   TOOL_RESULT_SUMMARY_MAX,
+  effectiveOutputTypes,
   isCliProviderType,
   validateAgainstContract,
   type Envelope,
@@ -34,6 +35,7 @@ import type {
   ModelRouter,
   ProducedPart,
   ProviderAdapter,
+  RouteResult,
   StreamChunk,
   ToolResult,
 } from '../ports/index.js';
@@ -50,7 +52,8 @@ import { estimateTokens } from '../envelopes/index.js';
 import { maskSecrets } from '../security/secret-patterns.js';
 import { assemblePrompt, type TeamPromptInput } from '../prompts/index.js';
 import type { RunGate } from './control/gate.js';
-import { usageFor } from './cost.js';
+import { createReplayAdapter, type ReplayAnswer } from './replay.js';
+import { usageFor, withReportedCost, type PricedProvider } from './cost.js';
 import {
   buildToolCall,
   resultText,
@@ -131,6 +134,12 @@ export interface ExecuteNodeInput {
    * parse and the output point. Absent, the answer is left as it is.
    */
   teamEnvelopes?: NodeEnvelopeRules;
+  /**
+   * PG-5.4: this node run belongs to a replay. Its provider call — or a Retrieval node's search —
+   * is answered from the source run's recording, never sent anywhere; `missing` fails the node
+   * clearly instead. Absent on every other run.
+   */
+  replay?: ReplayAnswer;
 }
 
 /** How a turn's ```ace-envelope blocks are judged (D310): a refusal is a CONTRACT_VIOLATION. */
@@ -274,6 +283,11 @@ export interface NodeExecutorDeps {
   adapterFor: (providerId: Id) => Promise<ProviderAdapter>;
   /** The catalog rows the router chooses from and the executor prices against. */
   modelsFor: () => Promise<Model[]>;
+  /**
+   * PG-1.4 (D359): the provider row a call went to, for the cost rule — a local model is $0 by
+   * rule and an unpriced remote one is `costKnown: false`. Absent, the price table alone decides.
+   */
+  providerFor?: (providerId: Id) => Promise<PricedProvider | undefined>;
   /** Runs the provider call inside that provider's concurrency gate (FR-PRV-009). */
   runGated: <T>(providerId: Id, fn: () => Promise<T>) => Promise<T>;
   /**
@@ -545,8 +559,14 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
     const instructions =
       node.kind === 'agent' ? node.config.instructions : (node.config.systemPrompt ?? '');
+    /*
+     * D353 (PG-2.1): a JSON schema implies JSON output, so an Agent left at `['text']` with a schema
+     * is parsed and checked like a `json` one. Every read of the node's output types below goes
+     * through this list.
+     */
+    const effectiveTypes = effectiveOutputTypes(node.config);
     const contract: EnvelopeContract = {
-      outputTypes: node.config.outputTypes,
+      outputTypes: effectiveTypes,
       ...(node.kind === 'agent' && node.config.outputContract?.jsonSchema !== undefined
         ? { jsonSchema: node.config.outputContract.jsonSchema }
         : {}),
@@ -562,7 +582,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
      * JSON answer (13a review m2): `__memory` is a field of the JSON output, and only the JSON branch
      * below reads it, so a text-only agent is never told to write one nothing would apply.
      */
-    const memoryOn = input.memory?.enabled === true && node.config.outputTypes.includes('json');
+    const memoryOn = input.memory?.enabled === true && effectiveTypes.includes('json');
     /*
      * The schema the provider is held to. With memory on it also allows an optional `__memory` list,
      * or a provider that enforces schemas could never emit one; the answer is still validated against
@@ -643,7 +663,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
     // The `agent | model` narrowing above does not reach inside `attemptWith`, so the fields it
     // needs are captured here rather than re-narrowed there.
-    const outputTypes = node.config.outputTypes;
+    const outputTypes = effectiveTypes;
     const { temperature } = node.config.execution;
 
     /*
@@ -691,11 +711,18 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
     // One attempt per model in the chain, plus one: the router stops before this ever binds.
     const maxAttempts = 2 + routing.fallbackModelIds.length;
+    const replayed = input.replay?.kind === 'recorded' ? input.replay : undefined;
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      const route = deps.router.resolve(routingNode, requirements, {
-        failures,
-      });
+      // PG-5.4: a replay takes the model the source run used, once — no routing, no fallback.
+      const route: RouteResult =
+        replayed !== undefined
+          ? attempt === 0
+            ? { ok: true, route: replayed.route }
+            : { ok: false, code: 'no_candidate_left', reason: 'A replay answers each call once.' }
+          : deps.router.resolve(routingNode, requirements, {
+              failures,
+            });
 
       if (!route.ok) {
         // TC-RTR-003: when the chain is exhausted the useful answer is what actually went wrong,
@@ -752,6 +779,12 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         (model) => model.providerId === chosen.providerId && model.modelId === chosen.modelId,
       );
       const pricing = catalogRow?.pricing;
+      let pricedProvider: PricedProvider | undefined;
+      try {
+        pricedProvider = await deps.providerFor?.(chosen.providerId);
+      } catch {
+        pricedProvider = undefined;
+      }
       const modelTakesTools = catalogRow?.supportsTools !== false;
 
       // A copy: a `model` chunk adds what the provider says actually answered, and the router's
@@ -812,12 +845,9 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       let sawUsage = false;
       let cachedTokensIn = 0;
       const usageNow = (): Usage => {
-        const priced = usageFor(tokensIn, tokensOut, pricing);
+        const priced = usageFor(tokensIn, tokensOut, pricing, pricedProvider);
         return {
-          ...priced,
-          ...(reportedCostUsd === undefined
-            ? {}
-            : { costUsd: reportedCostUsd, costSource: 'reported' as const }),
+          ...(reportedCostUsd === undefined ? priced : withReportedCost(priced, reportedCostUsd)),
           ...(cachedTokensIn > 0 ? { cachedTokensIn } : {}),
         };
       };
@@ -918,7 +948,12 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
          */
         async function takeTurn(continuing: boolean, withoutTools: boolean): Promise<TurnOutcome> {
           for (;;) {
-            const outcome = await deps.runGated(
+            // PG-5.4: a replay holds no provider slot — nothing is sent to the provider.
+            const gated =
+              replayed === undefined
+                ? deps.runGated
+                : <T>(_providerId: Id, fn: () => Promise<T>): Promise<T> => fn();
+            const outcome = await gated(
               chosen.providerId,
               async (): Promise<TurnOutcome | { kind: 'parked' }> => {
                 if (input.signal.aborted) return { kind: 'cancelled' };
@@ -951,7 +986,10 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
           withResults: boolean,
           withoutTools: boolean,
         ): Promise<PendingToolCall[]> {
-          adapter ??= await deps.adapterFor(chosen.providerId);
+          adapter ??=
+            replayed === undefined
+              ? await deps.adapterFor(chosen.providerId)
+              : createReplayAdapter(replayed);
           /*
            * `execution.timeoutMs` is the node's own clock for one provider turn, and it starts here —
            * once the slot is held, never while the node queued for it (D66), and never across a tool
@@ -973,7 +1011,8 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
           // A model the catalog says cannot call tools is not offered them (review I3): a local model
           // without tool support answers a request that carries them with an error.
-          const offerTools = offeredTools.length > 0 && !withoutTools && modelTakesTools;
+          const offerTools =
+            offeredTools.length > 0 && !withoutTools && modelTakesTools && replayed === undefined;
           const stream = adapter.generate(
             {
               modelId: chosen.modelId,
@@ -1742,6 +1781,21 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
   return {
     async execute(input) {
       try {
+        // PG-5.4: a replay answers from its recording; with none left, it fails without a call.
+        const replay = input.replay;
+        if (replay !== undefined && replay.kind === 'missing') {
+          await input.onStarted?.();
+          return await fail(
+            input,
+            { kind: 'workflow', code: 'replay_missing', message: replay.message, retryable: false },
+            NO_USAGE,
+            { status: 'FAILED', failureReason: 'RUN_FAILED' },
+          );
+        }
+        if (replay !== undefined && input.node.kind === 'retrieval') {
+          await input.onStarted?.();
+          return await succeed(input, replay.output, NO_USAGE);
+        }
         if (input.node.kind === 'agent' || input.node.kind === 'model') {
           return await executeAgent(input);
         }

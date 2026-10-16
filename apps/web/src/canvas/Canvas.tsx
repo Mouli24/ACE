@@ -6,6 +6,7 @@ import {
   ContextMenuSeparator,
   ContextMenuShortcut,
   ContextMenuTrigger,
+  Icons,
   MENU_CONTENT_CLASS,
   cn,
   toast,
@@ -14,6 +15,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   applyNodeChanges,
+  useConnection,
   useReactFlow,
   useStore,
   useStoreApi,
@@ -35,11 +37,13 @@ import {
   useState,
   type DragEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from 'react';
-import { Link, useInRouterContext, useNavigate, useParams } from 'react-router-dom';
+import { Link, useInRouterContext, useParams, useSearchParams } from 'react-router-dom';
 
 import { WorkspaceMenu } from '../app/layout/WorkspaceMenu';
 import { usePanelsStore } from '../app/stores/panels';
+import { useFollowNode } from '../app/follow-node';
 import { useSelectionStore } from '../app/stores/selection';
 import { useViewportStore } from '../app/stores/viewport';
 import { useResolvedTheme } from '../app/theme';
@@ -48,6 +52,12 @@ import { MakeLoopEdgeDialog, type LoopEdgeCandidate } from '../edges/loop/MakeLo
 import { canBeLoopEdge } from '../edges/loop/can-be-loop-edge';
 import { newId } from '../lib/ulid';
 import { cardSize } from '../nodes/anchors';
+import {
+  NodeActionsContext,
+  NodeEstimateContext,
+  PortConnectContext,
+  type NodeCardActions,
+} from '../nodes/card-context';
 import { CanvasDarkContext, nodeTypes, type AceFlowNode } from '../nodes/NodeCard';
 import { edgeTypes } from '../nodes/TypedEdge';
 import {
@@ -59,16 +69,22 @@ import {
   type NewNodeInit,
 } from '../nodes/factory';
 import { useProject } from '../projects/hooks';
-import { useModels, useProviders } from '../providers/hooks';
+import { ProviderPickerHost } from '../providers/ProviderModelPicker';
+import { useProviders } from '../providers/hooks';
+import { requestProviderChoice } from '../providers/provider-picker-store';
+import { useNodeEstimates } from '../runs/estimate';
+import { useRun, useStartRun } from '../runs/hooks';
 import { useRunStore } from '../runs/run-store';
 import { useGraphSync, useWorkflowGraph } from '../workflows/hooks';
 import { useCanvasApi } from './canvas-api';
 import { CanvasMinimap, rectOf } from './CanvasMinimap';
 import { CanvasToolbar } from './CanvasToolbar';
 import { checkConnection, type ConnectionAttempt } from './connect';
+import { ConnectToDialog } from './ConnectToDialog';
 import { PALETTE_DRAG_TYPE, PALETTE_INIT_TYPE } from './drag';
 import { DUPLICATE_OFFSET, duplicateNodes } from './duplicate';
-import { EdgeLayer } from './EdgeLayer';
+import { lacksUsableProvider, needsProviderChoice, withProviderChoice } from './provider-first';
+import { EdgeLayer, PortDotLayer } from './EdgeLayer';
 import {
   MOVE_HISTORY_LIMIT,
   movesBack,
@@ -86,9 +102,21 @@ import {
   writeClipboard,
   type ClipboardPayload,
 } from './interactions/clipboard';
+import {
+  dropOnCard,
+  isCardBody,
+  isClick,
+  portConnectStates,
+  portLabel,
+  type CheckConnection,
+  type ConnectChoice,
+  type ConnectFrom,
+  type PortConnectState,
+} from './interactions/ports';
 import { useGraphEditor } from './interactions/use-graph-editor';
 import { autoLayout } from './layout/auto-layout';
 import { freeSlotNear } from './placement';
+import { GHOST_EDGE_CLASS, runSnapshotOverlay } from './run-snapshot';
 import { toFlowEdges, toFlowNodes } from './to-flow';
 import {
   ZOOM_MAX,
@@ -122,6 +150,8 @@ const MOD = typeof navigator !== 'undefined' && /Mac|iP/.test(navigator.platform
 /** The Canvas (FR-CAN-001..013): loading gate outside, React Flow inside. */
 export function Canvas({ workflowId, readOnly = false }: CanvasProps) {
   const graph = useWorkflowGraph(workflowId);
+  // PG-4.3: one estimate per graph version, handed to every card.
+  const estimates = useNodeEstimates(workflowId);
 
   // FR-CAN-010: nodes and edges arrive in one response; nothing is drawn before both are here.
   if (!graph.data) {
@@ -139,12 +169,14 @@ export function Canvas({ workflowId, readOnly = false }: CanvasProps) {
 
   return (
     <ReactFlowProvider>
-      <CanvasInner
-        workflowId={workflowId}
-        nodes={graph.data.nodes}
-        edges={graph.data.edges}
-        readOnly={readOnly}
-      />
+      <NodeEstimateContext.Provider value={estimates}>
+        <CanvasInner
+          workflowId={workflowId}
+          nodes={graph.data.nodes}
+          edges={graph.data.edges}
+          readOnly={readOnly}
+        />
+      </NodeEstimateContext.Provider>
     </ReactFlowProvider>
   );
 }
@@ -177,27 +209,153 @@ function isEditable(target: EventTarget | null): boolean {
   return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
 }
 
-/** A press or click on the card itself — not on a port, not on what hangs under the card. */
-function onCard(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) return false;
+/**
+ * A press or click on the card itself — not on a port, not on the card's own buttons and menus
+ * (D360), not on what hangs under the card (D350).
+ */
+const onCard = isCardBody;
+
+/**
+ * D303: a node's lens in Domain, opened from the board — on the selected run, which goes along as
+ * `?run=` (PG-3.4).
+ */
+function useOpenInDomain(workflowId: string): (nodeId: string) => void {
+  const projectId = useWorkflowGraph(workflowId).data?.workflow.projectId;
+  const follow = useFollowNode({ projectId, workflowId });
+  return useCallback((nodeId: string) => follow(nodeId, 'domain'), [follow]);
+}
+
+function OpenInDomainItem({ workflowId, nodeId }: { workflowId: string; nodeId: string }) {
+  const open = useOpenInDomain(workflowId);
+  return <ContextMenuItem onSelect={() => open(nodeId)}>Open in Domain</ContextMenuItem>;
+}
+
+/**
+ * PG-1.2 (D360): what the cards' Settings and More buttons do. In a routed workspace More also
+ * opens the node in Domain (D303); a bare Canvas (its tests) has no router, so it offers that
+ * nowhere — as the right-click menu does.
+ */
+function CardActionsProvider({
+  value,
+  routed,
+  workflowId,
+  children,
+}: {
+  value: NodeCardActions;
+  routed: boolean;
+  workflowId: string;
+  children: ReactNode;
+}) {
+  if (!routed)
+    return <NodeActionsContext.Provider value={value}>{children}</NodeActionsContext.Provider>;
   return (
-    target.closest('[data-node-card]') !== null && target.closest('.react-flow__handle') === null
+    <RoutedCardActions value={value} workflowId={workflowId}>
+      {children}
+    </RoutedCardActions>
   );
 }
 
-/** D303: a node's lens in Domain, opened from the board. */
-function OpenInDomainItem({ workflowId, nodeId }: { workflowId: string; nodeId: string }) {
-  const navigate = useNavigate();
-  const { projectId = '' } = useParams();
-  return (
-    <ContextMenuItem
-      onSelect={() =>
-        navigate(`/projects/${projectId}/workflows/${workflowId}/domain?node=${nodeId}`)
-      }
-    >
-      Open in Domain
-    </ContextMenuItem>
+function RoutedCardActions({
+  value,
+  workflowId,
+  children,
+}: {
+  value: NodeCardActions;
+  workflowId: string;
+  children: ReactNode;
+}) {
+  const openInDomain = useOpenInDomain(workflowId);
+  const routedValue = useMemo<NodeCardActions>(
+    () => ({ ...value, openInDomain }),
+    [value, openInDomain],
   );
+  return <NodeActionsContext.Provider value={routedValue}>{children}</NodeActionsContext.Provider>;
+}
+
+/**
+ * PG-3.4: the node `?node=` names, selected and centred — on arriving in Ideate, and when the URL
+ * names a node that is not the one selected (a link, Back). A node the person just clicked is
+ * already selected when its id reaches the URL, so the view does not jump under them. Waits on
+ * React Flow's store until the node and the canvas are measured.
+ */
+function FollowNodeFromUrl({
+  focus,
+  subscribe,
+}: {
+  focus(nodeId: string): boolean;
+  subscribe(listener: () => void): () => void;
+}) {
+  const [search] = useSearchParams();
+  const wanted = search.get('node');
+  /** The node last centred; the one still to centre; whether the first URL has been read. */
+  const done = useRef<string | null>(null);
+  const pending = useRef<string | null>(null);
+  const arrived = useRef(false);
+  useEffect(() => {
+    const arriving = !arrived.current;
+    arrived.current = true;
+    if (wanted === null) {
+      done.current = null;
+      pending.current = null;
+      return;
+    }
+    if (done.current === wanted) return;
+    if (pending.current !== wanted) {
+      if (!arriving && useSelectionStore.getState().focusedNodeId === wanted) {
+        done.current = wanted;
+        return;
+      }
+      pending.current = wanted;
+    }
+    const attempt = (): void => {
+      if (done.current === wanted || !focus(wanted)) return;
+      done.current = wanted;
+      pending.current = null;
+    };
+    attempt();
+    if (done.current === wanted) return;
+    const unsubscribe = subscribe(() => {
+      attempt();
+      if (done.current === wanted) unsubscribe();
+    });
+    return unsubscribe;
+  }, [wanted, focus, subscribe]);
+  return null;
+}
+
+/**
+ * PG-1.1 (D350): while a line is drawn and it is over a port it may not end on, that port's reason,
+ * as a tooltip beside the pointer. Its own component: it follows every pointer move, and nothing
+ * else on the Canvas should.
+ */
+function ConnectRefusalTooltip({
+  states,
+}: {
+  states: ReadonlyMap<string, PortConnectState> | undefined;
+}) {
+  const connection = useConnection();
+  const flow = useReactFlow();
+  if (!connection.inProgress || connection.toHandle === null || states === undefined) return null;
+  const state = connection.toHandle.id ? states.get(connection.toHandle.id) : undefined;
+  if (state?.look !== 'incompatible') return null;
+  const at = flow.flowToScreenPosition(connection.to);
+  return (
+    <div
+      role="tooltip"
+      data-testid="connect-refusal"
+      className="pointer-events-none fixed z-[60] max-w-[260px] rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-[10px] py-[6px] text-[12px] leading-[1.4] text-[var(--ink)] shadow-[0_10px_26px_-14px_rgba(40,25,15,0.45)]"
+      style={{ left: at.x + 14, top: at.y + 14 }}
+    >
+      {state.reason}
+    </div>
+  );
+}
+
+/** A line dropped on a card that more than one input fits: where to offer the choice. */
+interface DropChooser {
+  x: number;
+  y: number;
+  choices: ConnectChoice[];
 }
 
 /**
@@ -265,6 +423,17 @@ function CanvasBreadcrumb({ workflowId }: { workflowId: string }) {
 }
 
 const selectPaneDragging = (state: ReactFlowState) => state.paneDragging;
+/** Below this zoom a card's 22px buttons draw under 10px: hidden (and not painted, TC-NFR-001). */
+export const CARD_BUTTONS_MIN_ZOOM = 0.45;
+const selectFar = (state: ReactFlowState) => state.transform[2] < CARD_BUTTONS_MIN_ZOOM;
+const selectConnectFrom = (state: ReactFlowState): string =>
+  state.connection.inProgress
+    ? [
+        state.connection.fromNode.id,
+        state.connection.fromHandle.id ?? '',
+        state.connection.fromHandle.type,
+      ].join('\u0000')
+    : '';
 
 function CanvasInner({
   workflowId,
@@ -301,6 +470,8 @@ function CanvasInner({
   const [moveHistory, setMoveHistory] = useState<PositionSnapshot[]>([]);
   const dark = useResolvedTheme() === 'dark';
   const paneDragging = useStore(selectPaneDragging);
+  /** D360: zoomed far out, the cards' buttons would be specks; they hide until the view comes closer. */
+  const far = useStore(selectFar);
   const wrapper = useRef<HTMLDivElement>(null);
 
   useEffect(() => setMoveHistory([]), [workflowId]);
@@ -352,6 +523,30 @@ function CanvasInner({
     attempt();
     return rf.subscribe(attempt);
   }, [rf, flow]);
+
+  /**
+   * PG-3.4: select a node and centre the view on it — a node followed here from Domain or Forge.
+   * `false` while it cannot be done yet (the node or the canvas not measured), so it is retried.
+   * Done once, it stands in for the first-load fit.
+   */
+  const focusNode = useCallback(
+    (nodeId: string): boolean => {
+      const target = flow.getInternalNode(nodeId);
+      const { width, height, panZoom } = rf.getState();
+      // measured: React Flow has mounted the card, and settled its first selection and view
+      if (target?.measured?.width === undefined || panZoom === null || width <= 0 || height <= 0) {
+        return false;
+      }
+      fitOnLoad.current = false;
+      setSelection([nodeId], []);
+      const { x, y } = target.internals.positionAbsolute;
+      const w = target.measured.width ?? 0;
+      const h = target.measured.height ?? 0;
+      void flow.setViewport(centreOn(flow.getViewport(), x + w / 2, y + h / 2, width, height));
+      return true;
+    },
+    [flow, rf, setSelection],
+  );
 
   /*
    * The theme's wheel (D332): Ctrl/⌘ + wheel zooms at the cursor by `exp(−deltaY·0.01)`, a plain
@@ -410,7 +605,7 @@ function CanvasInner({
   );
 
   const tryConnect = useCallback(
-    (attempt: Connection) => {
+    (attempt: ConnectionAttempt) => {
       if (readOnly) return false;
       const verdict = checkConnection(nodes, edges, attempt);
       if (!verdict.ok) {
@@ -478,12 +673,92 @@ function CanvasInner({
   );
 
   /**
+   * The one rule the Canvas shows while a line is drawn (D350): what `isValidConnection` accepts,
+   * and — where it refuses — the reason the drop would be refused with, the loop edge's own reason
+   * added when the refusal is a cycle.
+   */
+  const checkForUi = useCallback<CheckConnection>(
+    (attempt) => {
+      const verdict = checkConnection(nodes, edges, attempt);
+      if (verdict.ok) return { ok: true };
+      if (verdict.code !== 'cycle') return { ok: false, reason: verdict.reason };
+      const offer = loopOffer(attempt);
+      if (offer.candidate !== undefined) return { ok: true };
+      return {
+        ok: false,
+        reason: `${verdict.reason}${offer.reason === undefined ? '' : ` ${offer.reason}`}`,
+      };
+    },
+    [nodes, edges, loopOffer],
+  );
+
+  /** A line dropped on a card that more than one input fits (D350): the small chooser. */
+  const [dropChooser, setDropChooser] = useState<DropChooser>();
+  /** The node whose ⋯ → "Connect to…" is open (D350). */
+  const [connectFromNodeId, setConnectFromNodeId] = useState<string>();
+
+  /**
+   * D350: a line dropped anywhere on a card connects to the card's first compatible input; when
+   * more than one fits, a chooser asks which; when none does, the refusal says why.
+   */
+  const dropLineOnCard = useCallback(
+    (from: ConnectFrom, cardNodeId: string, at: { x: number; y: number }) => {
+      if (readOnly || cardNodeId === from.nodeId) return;
+      const outcome = dropOnCard(nodes, from, cardNodeId, checkForUi);
+      if (outcome.kind === 'connect') {
+        tryConnect(outcome.choice.attempt);
+        return;
+      }
+      if (outcome.kind === 'refuse') {
+        toast.error('Connection refused', { description: outcome.reason });
+        return;
+      }
+      const bounds = wrapper.current?.getBoundingClientRect();
+      setDropChooser({
+        x: at.x - (bounds?.left ?? 0),
+        y: at.y - (bounds?.top ?? 0),
+        choices: outcome.choices,
+      });
+    },
+    [readOnly, nodes, checkForUi, tryConnect],
+  );
+
+  /**
    * React Flow never calls onConnect for a drop `isValidConnection` refused, so the reason is
-   * shown here instead (FR-CON-002/003/005: refused *with* a message).
+   * shown here instead (FR-CON-002/003/005: refused *with* a message). A drop that reached no port
+   * it could end on but landed on a card connects to that card (D350).
    */
   const onConnectEnd = useCallback(
-    (_event: MouseEvent | TouchEvent, state: FinalConnectionState) => {
-      if (state.isValid !== false || !state.fromHandle || !state.toHandle) return;
+    (event: MouseEvent | TouchEvent, state: FinalConnectionState) => {
+      if (!state.fromHandle || !state.fromNode) return;
+      const sameSide = state.toHandle !== null && state.toHandle.type === state.fromHandle.type;
+      if (state.toHandle === null || sameSide) {
+        const point =
+          'changedTouches' in event
+            ? { x: event.changedTouches[0]?.clientX ?? 0, y: event.changedTouches[0]?.clientY ?? 0 }
+            : { x: event.clientX, y: event.clientY };
+        const under =
+          typeof document.elementFromPoint === 'function'
+            ? document.elementFromPoint(point.x, point.y)
+            : null;
+        const cardNodeId = under
+          ?.closest('[data-node-card]')
+          ?.closest('.react-flow__node')
+          ?.getAttribute('data-id');
+        if (cardNodeId) {
+          dropLineOnCard(
+            {
+              nodeId: state.fromNode.id,
+              portId: state.fromHandle.id ?? '',
+              type: state.fromHandle.type,
+            },
+            cardNodeId,
+            point,
+          );
+        }
+        return;
+      }
+      if (state.isValid !== false) return;
       const attempt = {
         source:
           state.fromHandle.type === 'source'
@@ -505,8 +780,23 @@ function CanvasInner({
         description: `${verdict.reason}${offer.reason === undefined ? '' : ` ${offer.reason}`}`,
       });
     },
-    [nodes, edges, loopOffer],
+    [nodes, edges, loopOffer, dropLineOnCard],
   );
+
+  /**
+   * D350: where a line is being drawn from, as one string so the Canvas re-renders when a drag
+   * starts or ends, never on a pointer move.
+   */
+  const connectKey = useStore(selectConnectFrom);
+  const connectStates = useMemo(() => {
+    if (connectKey === '') return undefined;
+    const [nodeId = '', portId = '', type] = connectKey.split('\u0000');
+    return portConnectStates(
+      nodes,
+      { nodeId, portId, type: type === 'target' ? 'target' : 'source' },
+      checkForUi,
+    );
+  }, [connectKey, nodes, checkForUi]);
 
   /** Keyboard connect (NFR-USE-02): Enter on an output arms it, Enter on an input completes. */
   const onPortKey = useCallback(
@@ -539,13 +829,48 @@ function CanvasInner({
   // Providers give the stage cards their look and sub line, and the "provider missing" note
   // (FR-NODE-010, FR-PRV-005); the model catalogue gives "Add node" its model.
   const providers = useProviders();
-  const models = useModels();
+  /*
+   * PG-4.4: while this workflow's run is live, the cards are drawn from what it executes — its
+   * snapshot (BR-04) — over the graph being edited: a node removed since is a ghost, a node edited
+   * since says so, and the edges the run still walks stay drawn.
+   */
+  const liveRunId = useRunStore((store) =>
+    store.workflowId === workflowId && store.active ? store.runId : undefined,
+  );
+  const liveRun = useRun(liveRunId);
+  const liveSnapshot =
+    liveRunId !== undefined && liveRun.data?.id === liveRunId ? liveRun.data.snapshot : undefined;
+  const drawn = useMemo(
+    () => runSnapshotOverlay(nodes, edges, liveSnapshot),
+    [nodes, edges, liveSnapshot],
+  );
   const serverNodes = useMemo(
     () =>
-      toFlowNodes(nodes, edges, armedPortId, onPortKey, providers.data ?? [], providers.isSuccess),
-    [nodes, edges, armedPortId, onPortKey, providers.data, providers.isSuccess],
+      toFlowNodes(
+        drawn.nodes,
+        drawn.edges,
+        armedPortId,
+        onPortKey,
+        providers.data ?? [],
+        providers.isSuccess,
+      ).map((node): AceFlowNode => {
+        const sinceRun = drawn.sinceRun.get(node.id);
+        if (sinceRun === undefined) return node;
+        const ghost = sinceRun === 'removed';
+        return {
+          ...node,
+          data: { ...node.data, sinceRun },
+          // A ghost is drawn, never edited: the graph no longer has it to move, wire or delete.
+          ...(ghost ? { draggable: false, connectable: false, deletable: false } : {}),
+        };
+      }),
+    [drawn, armedPortId, onPortKey, providers.data, providers.isSuccess],
   );
-  const [flowNodes, setFlowNodes] = useState<AceFlowNode[]>(serverNodes);
+  // Mounted with the selection it arrives with (PG-3.4: a node followed here from Domain or
+  // Forge), so its card is drawn selected from the first frame.
+  const [flowNodes, setFlowNodes] = useState<AceFlowNode[]>(() =>
+    serverNodes.map((node) => ({ ...node, selected: selectedNodeIds.includes(node.id) })),
+  );
 
   /**
    * Nodes to select once they are on the Canvas: what Add node, a drop, Duplicate and Paste just
@@ -632,15 +957,20 @@ function CanvasInner({
    * iteration, not one per token.
    */
   const runRevision = useRunStore((store) => store.revision);
+  // PG-4.2: a paused run, or one held on a WAITING node, is still live — not idle.
   const runIsLive = useRunStore(
-    (store) => store.workflowId === workflowId && store.status === 'RUNNING',
+    (store) =>
+      store.workflowId === workflowId &&
+      (store.status === 'RUNNING' ||
+        store.status === 'PAUSED' ||
+        (store.active && store.nodeRuns().some((run) => run.status === 'WAITING'))),
   );
 
   const flowEdges = useMemo(() => {
     // React Flow drops an edge whose endpoints it does not know yet and does not retry, so an
     // edge is handed over only once both its nodes are mounted; this memo re-runs when they are.
     const mounted = new Set(mountedIds === '' ? [] : mountedIds.split(','));
-    const connectable = edges.filter(
+    const connectable = drawn.edges.filter(
       (edge) => mounted.has(edge.from.nodeId) && mounted.has(edge.to.nodeId),
     );
     const store = useRunStore.getState();
@@ -650,20 +980,13 @@ function CanvasInner({
       const iteration = store.workflowId === workflowId ? store.iterations(edge.to.nodeId) : 0;
       return iteration > 0 ? { iteration, running: runIsLive } : { running: runIsLive };
     };
-    return toFlowEdges(connectable, nodes, live, providers.data ?? []).map((e) => ({
-      ...e,
-      selected: selectedEdgeIds.includes(e.id),
-    }));
-  }, [
-    edges,
-    nodes,
-    mountedIds,
-    selectedEdgeIds,
-    workflowId,
-    runRevision,
-    runIsLive,
-    providers.data,
-  ]);
+    return toFlowEdges(connectable, drawn.nodes, live, providers.data ?? []).map((e) =>
+      drawn.ghostEdgeIds.has(e.id)
+        ? // PG-4.4: an edge the run still walks but the graph lost — drawn faint, never edited.
+          { ...e, className: GHOST_EDGE_CLASS, selectable: false, deletable: false }
+        : { ...e, selected: selectedEdgeIds.includes(e.id) },
+    );
+  }, [drawn, mountedIds, selectedEdgeIds, workflowId, runRevision, runIsLive, providers.data]);
 
   // Edges are fully derived from the query cache, so the only change to honour is selection.
   const onEdgesChange = useCallback(
@@ -745,8 +1068,20 @@ function CanvasInner({
   );
 
   const addNodeAt = useCallback(
-    (kind: CanvasNodeKind, position: { x: number; y: number }, init?: NewNodeInit) => {
+    function addNodeAt(
+      kind: CanvasNodeKind,
+      position: { x: number; y: number },
+      init?: NewNodeInit,
+    ): Node | undefined {
       if (readOnly) return undefined;
+      // PG-1.3 (D351): an Agent/Model waits for the picker; Cancel creates nothing.
+      if (needsProviderChoice(kind, init)) {
+        requestProviderChoice({
+          ...(init?.modelId === undefined ? {} : { initial: { modelId: init.modelId } }),
+          onChosen: (choice) => addNodeAt(kind, position, { ...init, ...choice }),
+        });
+        return undefined;
+      }
       const node = applyNewNodeInit(
         createNode(kind, workflowId, {
           x: Math.round(position.x),
@@ -806,31 +1141,19 @@ function CanvasInner({
    */
   const addStage = useCallback(() => {
     if (readOnly) return;
-    const plan = planNewStage({
-      nodes,
-      edges,
-      workflowId,
-      providers: providers.data ?? [],
-      models: models.data?.items ?? [],
+    // PG-1.3 (D351): provider, then model, then the node — nothing is sent before both are chosen.
+    requestProviderChoice({
+      onChosen: (choice) => {
+        const plan = planNewStage({ nodes, edges, workflowId, choice });
+        editor.edit(plan.ops, 'Add node');
+        selectWhenAdded([plan.node.id]);
+        usePanelsStore.getState().openSettings({ kind: 'node', id: plan.node.id });
+        const { cw, ch } = canvasSize();
+        const { x, y } = plan.node.position;
+        void flow.setViewport(centreOn(flow.getViewport(), x + 105, y + 140, cw, ch));
+      },
     });
-    editor.edit(plan.ops, 'Add node');
-    selectWhenAdded([plan.node.id]);
-    usePanelsStore.getState().openSettings({ kind: 'node', id: plan.node.id });
-    const { cw, ch } = canvasSize();
-    const { x, y } = plan.node.position;
-    void flow.setViewport(centreOn(flow.getViewport(), x + 105, y + 140, cw, ch));
-  }, [
-    readOnly,
-    nodes,
-    edges,
-    workflowId,
-    providers.data,
-    models.data,
-    editor,
-    selectWhenAdded,
-    canvasSize,
-    flow,
-  ]);
+  }, [readOnly, nodes, edges, workflowId, editor, selectWhenAdded, canvasSize, flow]);
 
   /** The nodes an action applies to: the selection, or the right-clicked node when outside it. */
   const targetIds = useCallback(
@@ -845,13 +1168,35 @@ function CanvasInner({
       const selected = nodes.filter((n) => ids.includes(n.id));
       if (selected.length === 0) return;
       const copies = duplicateNodes(selected, nodes);
-      editor.edit(
-        copies.map((node) => ({ op: 'add_node' as const, node })),
-        copies.length === 1 ? 'Duplicate node' : `Duplicate ${copies.length} nodes`,
-      );
-      selectWhenAdded(copies.map((n) => n.id));
+      const place = (placed: Node[]) => {
+        editor.edit(
+          placed.map((node) => ({ op: 'add_node' as const, node })),
+          placed.length === 1 ? 'Duplicate node' : `Duplicate ${placed.length} nodes`,
+        );
+        selectWhenAdded(placed.map((n) => n.id));
+      };
+      // PG-1.3 (D351): a copy that would be born without a usable provider asks for one first.
+      const known = providers.data ?? [];
+      if (!copies.some((copy) => lacksUsableProvider(copy, known))) {
+        place(copies);
+        return;
+      }
+      const only = copies.length === 1 ? copies[0] : undefined;
+      const agentCopy = only?.kind === 'agent' ? only : undefined;
+      requestProviderChoice({
+        title: 'Choose a provider for the copy',
+        confirmLabel: 'Duplicate',
+        // D353: one agent copied — a model that cannot honour its schema or tools is marked.
+        ...(agentCopy === undefined ? {} : { needs: agentCopy.config }),
+        onChosen: (choice) =>
+          place(
+            copies.map((copy) =>
+              lacksUsableProvider(copy, known) ? withProviderChoice(copy, choice) : copy,
+            ),
+          ),
+      });
     },
-    [nodes, editor, selectWhenAdded, readOnly],
+    [nodes, editor, selectWhenAdded, readOnly, providers.data],
   );
 
   const duplicateSelection = useCallback(
@@ -976,8 +1321,12 @@ function CanvasInner({
   /* ---------------------------------------------------------------- position history (D332) */
 
   /** The theme's `nodeDown`: a press on a card, unlocked, remembers where every node stood. */
+  /** Where the last left press went down: a release more than 4 px away is a drag (D350). */
+  const pressAt = useRef<{ x: number; y: number }>(undefined);
+
   const onMouseDownCapture = useCallback(
     (event: ReactMouseEvent) => {
+      if (event.button === 0) pressAt.current = { x: event.clientX, y: event.clientY };
       if (event.button !== 0 || readOnly || hand || locked || !onCard(event.target)) return;
       const snapshot = snapshotPositions(nodes);
       setMoveHistory((history) => [...history.slice(-(MOVE_HISTORY_LIMIT - 1)), snapshot]);
@@ -996,6 +1345,33 @@ function CanvasInner({
   const canUndoMove = useMemo(
     () => moveHistory.some((snapshot) => movesBack(snapshot, nodes).length > 0),
     [moveHistory, nodes],
+  );
+
+  /** PG-1.2 (D360): the cards' Settings and More buttons. */
+  const startRun = useStartRun(workflowId);
+  const startRunMutate = startRun.mutate;
+  const cardActions = useMemo<NodeCardActions>(
+    () => ({
+      readOnly,
+      openSettings: (nodeId) => {
+        setSelection([nodeId], []);
+        if (!readOnly) usePanelsStore.getState().openSettings({ kind: 'node', id: nodeId });
+      },
+      connectTo: (nodeId) => {
+        if (!readOnly) setConnectFromNodeId(nodeId);
+      },
+      duplicate: (nodeId) => duplicateNodesById([nodeId]),
+      remove: (nodeId) => deleteElements([nodeId], []),
+      runFromHere: (nodeId) =>
+        startRunMutate(
+          { startFromNodeId: nodeId },
+          {
+            onError: (error) =>
+              toast.error('Could not start the run', { description: error.message }),
+          },
+        ),
+    }),
+    [readOnly, setSelection, duplicateNodesById, deleteElements, startRunMutate],
   );
 
   // Expose to the settings modal, the sheet and the workspace menu (outside the flow).
@@ -1032,15 +1408,21 @@ function CanvasInner({
   /**
    * D332: a click (or double-click) on a card that did not move it selects it and opens its
    * settings — locked or not. Shift/Ctrl/⌘ keep it a multi-select; the hand tool selects nothing.
+   * D350: only a click — the pointer moved at most 4 px since the press — on the card body, never
+   * on a port or one of the card's buttons (those have their own actions).
    */
   const onNodeClick = useCallback(
     (event: ReactMouseEvent, node: { id: string }) => {
       if (hand || !onCard(event.target)) return;
+      if (!isClick(pressAt.current, { x: event.clientX, y: event.clientY })) return;
       if (event.shiftKey || event.ctrlKey || event.metaKey) return;
       setSelection([node.id], []);
+      // PG-4.4: a ghost has no settings to open — the graph no longer has it; selecting it is
+      // what shows its run in the Inspector.
+      if (drawn.sinceRun.get(node.id) === 'removed') return;
       if (!readOnly) usePanelsStore.getState().openSettings({ kind: 'node', id: node.id });
     },
-    [hand, readOnly, setSelection],
+    [hand, readOnly, setSelection, drawn],
   );
 
   /* ---------------------------------------------------------------- drop from a drag source */
@@ -1161,6 +1543,14 @@ function CanvasInner({
       const target = event.target instanceof Element ? event.target : null;
       const nodeEl = target?.closest('.react-flow__node');
       const nodeId = nodeEl?.getAttribute('data-id') ?? undefined;
+      if (nodeId !== undefined && drawn.sinceRun.get(nodeId) === 'removed') {
+        // PG-4.4: a ghost card offers no actions; the right-click only selects it.
+        event.preventDefault();
+        setEdgeMenu(undefined);
+        setMenuTarget(undefined);
+        setSelection([nodeId], []);
+        return;
+      }
       if (nodeId !== undefined) {
         setEdgeMenu(undefined);
         setMenuTarget({ kind: 'node', nodeId });
@@ -1182,7 +1572,7 @@ function CanvasInner({
       }
       event.preventDefault();
     },
-    [flow, selectedNodeIds, setSelection],
+    [flow, selectedNodeIds, setSelection, drawn],
   );
 
   /** The one graph-op a confirmed loop edge needs: `add_edge` with `kind: 'loop'` (§2.6). */
@@ -1223,227 +1613,329 @@ function CanvasInner({
 
   return (
     <CanvasDarkContext.Provider value={dark}>
-      <ContextMenu
-        modal={false}
-        onOpenChange={(open) => {
-          if (!open) setMenuTarget(undefined);
-        }}
-      >
-        <ContextMenuTrigger asChild>
-          <div
-            ref={wrapper}
-            className="absolute inset-0 select-none overflow-hidden bg-[var(--canvas)] leading-[normal] text-[var(--ink)]"
-            style={{ cursor }}
-            data-testid="canvas"
-            data-readonly={readOnly ? 'true' : undefined}
-            data-locked={locked ? 'true' : 'false'}
-            data-tool={hand ? 'hand' : 'select'}
-            onDragOver={onDragOver}
-            onDrop={onDrop}
-            onContextMenu={onCanvasContextMenu}
-            onMouseDownCapture={onMouseDownCapture}
+      <PortConnectContext.Provider value={connectStates}>
+        {inRouter && <FollowNodeFromUrl focus={focusNode} subscribe={rf.subscribe} />}
+        <CardActionsProvider value={cardActions} routed={inRouter} workflowId={workflowId}>
+          <ContextMenu
+            modal={false}
+            onOpenChange={(open) => {
+              if (!open) setMenuTarget(undefined);
+            }}
           >
-            <CanvasBackdrop />
-            <ReactFlow<AceFlowNode>
-              nodes={shownNodes}
-              edges={flowEdges}
-              nodeTypes={nodeTypes}
-              edgeTypes={aceEdgeTypes}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onSelectionChange={onSelectionChange}
-              onDelete={onDelete}
-              onConnect={tryConnect}
-              onConnectEnd={onConnectEnd}
-              isValidConnection={isValidConnection}
-              onEdgeContextMenu={onEdgeContextMenu}
-              onPaneClick={() => setEdgeMenu(undefined)}
-              onNodeClick={onNodeClick}
-              onNodeDoubleClick={onNodeClick}
-              onMoveEnd={onMoveEnd}
-              defaultViewport={savedViewport ?? { x: 0, y: 0, zoom: 1 }}
-              deleteKeyCode={readOnly ? null : ['Delete', 'Backspace']}
-              nodesDraggable={!readOnly && !locked && !hand}
-              nodesConnectable={!readOnly && !hand}
-              elementsSelectable={!hand}
-              multiSelectionKeyCode={['Shift', 'Control', 'Meta']}
-              selectionKeyCode={hand ? null : 'Shift'}
-              // D332: React Flow pans on a left or middle drag; the wheel is the Canvas's own.
-              panOnDrag={[0, 1]}
-              panOnScroll={false}
-              zoomOnScroll={false}
-              zoomOnPinch={false}
-              zoomOnDoubleClick={false}
-              // Culling leaves off-screen nodes unmeasured, so a fit cannot bring them back and a
-              // node added outside the view becomes unreachable. Rendering all 200 fixture nodes
-              // costs less than the noise in TC-NFR-001, so the trade is not worth it.
-              onlyRenderVisibleElements={false}
-              minZoom={ZOOM_MIN}
-              maxZoom={ZOOM_MAX}
-              connectionLineStyle={{ stroke: '#ef6b3f', strokeWidth: 1.6, strokeDasharray: '5 5' }}
-              proOptions={{ hideAttribution: true }}
-              className="ace-canvas"
-              style={{ background: 'transparent' }}
-            >
-              <EdgeLayer nodes={nodes} edges={flowEdges} />
-            </ReactFlow>
-
-            {inRouter && !readOnly && <CanvasBreadcrumb workflowId={workflowId} />}
-
-            {!readOnly && (
-              <button
-                type="button"
-                data-testid="new-node-button"
-                title="Add an agent node"
-                onClick={addStage}
-                className="absolute right-[16px] top-[12px] z-[5] flex h-[34px] cursor-pointer items-center gap-[8px] whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--surface)] py-0 pl-[6px] pr-[16px] text-[12.5px] font-semibold text-[var(--ink)] shadow-[0_10px_26px_-14px_rgba(40,25,15,0.45)] outline-none hover:border-[#ef6b3f] hover:shadow-[0_12px_30px_-12px_rgba(239,107,63,0.45)] focus-visible:border-[#ef6b3f]"
-              >
-                <span
-                  aria-hidden
-                  className="flex h-[24px] w-[24px] items-center justify-center rounded-full bg-[#ef6b3f] text-[16px] leading-none text-[#fff] shadow-[0_0_0_3px_rgba(239,107,63,0.15)]"
-                >
-                  +
-                </span>
-                Add node
-              </button>
-            )}
-
-            <CanvasToolbar
-              readOnly={readOnly}
-              locked={locked}
-              hand={hand}
-              canUndoMove={canUndoMove}
-              onZoomIn={() => zoomBy(() => ZOOM_STEP)}
-              onZoomOut={() => zoomBy(() => 1 / ZOOM_STEP)}
-              onResetZoom={() => zoomBy((zoom) => 1 / zoom)}
-              onFit={fitAll}
-              onToggleLock={() => setLocked((on) => !on)}
-              onToggleHand={() => setHand((on) => !on)}
-              onUndoMove={undoMove}
-            />
-            <CanvasMinimap dark={dark} />
-
-            {loopCandidate && (
-              <MakeLoopEdgeDialog
-                candidate={loopCandidate}
-                onCancel={() => setLoopCandidate(undefined)}
-                onCreate={(loop) => createLoopEdge(loopCandidate, loop)}
-              />
-            )}
-
-            {edgeMenu && (
+            <ContextMenuTrigger asChild>
               <div
-                role="menu"
-                aria-label="Connection actions"
-                className={cn(MENU_CONTENT_CLASS, 'absolute')}
-                style={{ left: edgeMenu.x, top: edgeMenu.y }}
+                ref={wrapper}
+                className="absolute inset-0 select-none overflow-hidden bg-[var(--canvas)] leading-[normal] text-[var(--ink)]"
+                style={{ cursor }}
+                data-testid="canvas"
+                data-readonly={readOnly ? 'true' : undefined}
+                data-locked={locked ? 'true' : 'false'}
+                data-tool={hand ? 'hand' : 'select'}
+                data-far={far ? 'true' : undefined}
+                onDragOver={onDragOver}
+                onDrop={onDrop}
+                onContextMenu={onCanvasContextMenu}
+                onMouseDownCapture={onMouseDownCapture}
               >
-                <EdgeMenuItems
-                  edge={edges.find((edge) => edge.id === edgeMenu.edgeId)}
-                  nodes={nodes}
-                  edges={edges}
-                  readOnly={readOnly}
-                  onMakeLoop={(candidate) => {
-                    setEdgeMenu(undefined);
-                    setLoopCandidate(candidate);
+                <CanvasBackdrop />
+                <ReactFlow<AceFlowNode>
+                  nodes={shownNodes}
+                  edges={flowEdges}
+                  nodeTypes={nodeTypes}
+                  edgeTypes={aceEdgeTypes}
+                  onNodesChange={onNodesChange}
+                  onEdgesChange={onEdgesChange}
+                  onSelectionChange={onSelectionChange}
+                  onDelete={onDelete}
+                  onConnect={tryConnect}
+                  onConnectEnd={onConnectEnd}
+                  isValidConnection={isValidConnection}
+                  onEdgeContextMenu={onEdgeContextMenu}
+                  onPaneClick={() => setEdgeMenu(undefined)}
+                  onNodeClick={onNodeClick}
+                  onNodeDoubleClick={onNodeClick}
+                  onMoveEnd={onMoveEnd}
+                  defaultViewport={savedViewport ?? { x: 0, y: 0, zoom: 1 }}
+                  deleteKeyCode={readOnly ? null : ['Delete', 'Backspace']}
+                  nodesDraggable={!readOnly && !locked && !hand}
+                  nodesConnectable={!readOnly && !hand}
+                  elementsSelectable={!hand}
+                  multiSelectionKeyCode={['Shift', 'Control', 'Meta']}
+                  selectionKeyCode={hand ? null : 'Shift'}
+                  // D332: React Flow pans on a left or middle drag; the wheel is the Canvas's own.
+                  panOnDrag={[0, 1]}
+                  panOnScroll={false}
+                  zoomOnScroll={false}
+                  zoomOnPinch={false}
+                  zoomOnDoubleClick={false}
+                  // Culling leaves off-screen nodes unmeasured, so a fit cannot bring them back and a
+                  // node added outside the view becomes unreachable. Rendering all 200 fixture nodes
+                  // costs less than the noise in TC-NFR-001, so the trade is not worth it.
+                  onlyRenderVisibleElements={false}
+                  minZoom={ZOOM_MIN}
+                  maxZoom={ZOOM_MAX}
+                  connectionLineStyle={{
+                    stroke: '#ef6b3f',
+                    strokeWidth: 1.6,
+                    strokeDasharray: '5 5',
                   }}
-                  onEditLoop={(edgeId) => {
-                    setEdgeMenu(undefined);
-                    setSelection([], [edgeId]);
-                    if (!readOnly)
-                      usePanelsStore.getState().openSettings({ kind: 'edge', id: edgeId });
-                  }}
-                  onDelete={() => {
-                    deleteElements([], [edgeMenu.edgeId]);
-                    setEdgeMenu(undefined);
-                  }}
-                />
-              </div>
-            )}
-          </div>
-        </ContextMenuTrigger>
-
-        {menuTarget?.kind === 'node' && (
-          <ContextMenuContent aria-label="Node actions" data-testid="node-context-menu">
-            {!readOnly && (
-              <ContextMenuItem onSelect={() => duplicateNodesById(menuNodeIds)}>
-                Duplicate <ContextMenuShortcut>{MOD}D</ContextMenuShortcut>
-              </ContextMenuItem>
-            )}
-            <ContextMenuItem onSelect={() => copySelection(menuNodeIds)}>
-              Copy <ContextMenuShortcut>{MOD}C</ContextMenuShortcut>
-            </ContextMenuItem>
-            {!readOnly && (
-              <ContextMenuItem
-                onSelect={() => {
-                  setSelection([menuTarget.nodeId], []);
-                  usePanelsStore.getState().openSettings({ kind: 'node', id: menuTarget.nodeId });
-                }}
-              >
-                Settings
-              </ContextMenuItem>
-            )}
-            <ContextMenuItem
-              onSelect={() => {
-                setSelection([menuTarget.nodeId], []);
-                usePanelsStore.getState().openSheet('inspect');
-              }}
-            >
-              Inspect
-            </ContextMenuItem>
-            {inRouter &&
-              nodes.some(
-                (node) =>
-                  node.id === menuTarget.nodeId && (node.kind === 'agent' || node.kind === 'model'),
-              ) && <OpenInDomainItem workflowId={workflowId} nodeId={menuTarget.nodeId} />}
-            {!readOnly && (
-              <>
-                <ContextMenuSeparator />
-                <ContextMenuItem destructive onSelect={() => deleteElements(menuNodeIds, [])}>
-                  Delete <ContextMenuShortcut>Del</ContextMenuShortcut>
-                </ContextMenuItem>
-              </>
-            )}
-          </ContextMenuContent>
-        )}
-
-        {menuTarget?.kind === 'pane' && (
-          <ContextMenuContent aria-label="Canvas actions" data-testid="pane-context-menu">
-            {!readOnly && (
-              <>
-                <ContextMenuItem
-                  disabled={readClipboard() === undefined}
-                  onSelect={() => paste(menuTarget.position)}
+                  proOptions={{ hideAttribution: true }}
+                  className="ace-canvas"
+                  style={{ background: 'transparent' }}
                 >
-                  Paste <ContextMenuShortcut>{MOD}V</ContextMenuShortcut>
-                </ContextMenuItem>
-                <ContextMenuSeparator />
-                {PALETTE_NODE_KINDS.map((kind) => (
-                  <ContextMenuItem
-                    key={kind}
-                    onSelect={() => addNodeAt(kind, freeSlotNear(nodes, menuTarget.position))}
+                  <EdgeLayer nodes={drawn.nodes} edges={flowEdges} />
+                  <PortDotLayer
+                    nodes={nodes}
+                    connectStates={connectStates}
+                    selectedNodeIds={selectedNodeIds}
+                    armedPortId={armedPortId}
+                  />
+                  <ConnectRefusalTooltip states={connectStates} />
+                </ReactFlow>
+
+                {inRouter && !readOnly && <CanvasBreadcrumb workflowId={workflowId} />}
+
+                {!readOnly && (
+                  <button
+                    type="button"
+                    data-testid="new-node-button"
+                    title="Add an agent node"
+                    onClick={addStage}
+                    className="absolute right-[16px] top-[12px] z-[5] flex h-[34px] cursor-pointer items-center gap-[8px] whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--surface)] py-0 pl-[6px] pr-[16px] text-[12.5px] font-semibold text-[var(--ink)] shadow-[0_10px_26px_-14px_rgba(40,25,15,0.45)] outline-none hover:border-[#ef6b3f] hover:shadow-[0_12px_30px_-12px_rgba(239,107,63,0.45)] focus-visible:border-[#ef6b3f]"
                   >
-                    Add {NODE_KIND_LABEL[kind]}
+                    <span
+                      aria-hidden
+                      className="flex h-[24px] w-[24px] items-center justify-center rounded-full bg-[#ef6b3f] text-[16px] leading-none text-[#fff] shadow-[0_0_0_3px_rgba(239,107,63,0.15)]"
+                    >
+                      +
+                    </span>
+                    Add node
+                  </button>
+                )}
+
+                <CanvasToolbar
+                  readOnly={readOnly}
+                  locked={locked}
+                  hand={hand}
+                  canUndoMove={canUndoMove}
+                  onZoomIn={() => zoomBy(() => ZOOM_STEP)}
+                  onZoomOut={() => zoomBy(() => 1 / ZOOM_STEP)}
+                  onResetZoom={() => zoomBy((zoom) => 1 / zoom)}
+                  onFit={fitAll}
+                  onToggleLock={() => setLocked((on) => !on)}
+                  onToggleHand={() => setHand((on) => !on)}
+                  onUndoMove={undoMove}
+                />
+                <CanvasMinimap dark={dark} />
+
+                {/* PG-1.3 (D351): the provider-first picker Add node, drop and Duplicate open. */}
+                <ProviderPickerHost />
+
+                {loopCandidate && (
+                  <MakeLoopEdgeDialog
+                    candidate={loopCandidate}
+                    onCancel={() => setLoopCandidate(undefined)}
+                    onCreate={(loop) => createLoopEdge(loopCandidate, loop)}
+                  />
+                )}
+
+                {dropChooser && (
+                  <DropChooserMenu
+                    chooser={dropChooser}
+                    onPick={(choice) => {
+                      setDropChooser(undefined);
+                      tryConnect(choice.attempt);
+                    }}
+                    onClose={() => setDropChooser(undefined)}
+                  />
+                )}
+
+                {edgeMenu && (
+                  <div
+                    role="menu"
+                    aria-label="Connection actions"
+                    className={cn(MENU_CONTENT_CLASS, 'absolute')}
+                    style={{ left: edgeMenu.x, top: edgeMenu.y }}
+                  >
+                    <EdgeMenuItems
+                      edge={edges.find((edge) => edge.id === edgeMenu.edgeId)}
+                      nodes={nodes}
+                      edges={edges}
+                      readOnly={readOnly}
+                      onMakeLoop={(candidate) => {
+                        setEdgeMenu(undefined);
+                        setLoopCandidate(candidate);
+                      }}
+                      onEditLoop={(edgeId) => {
+                        setEdgeMenu(undefined);
+                        setSelection([], [edgeId]);
+                        if (!readOnly)
+                          usePanelsStore.getState().openSettings({ kind: 'edge', id: edgeId });
+                      }}
+                      onDelete={() => {
+                        deleteElements([], [edgeMenu.edgeId]);
+                        setEdgeMenu(undefined);
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            </ContextMenuTrigger>
+
+            {menuTarget?.kind === 'node' && (
+              <ContextMenuContent aria-label="Node actions" data-testid="node-context-menu">
+                {!readOnly && (
+                  <ContextMenuItem onSelect={() => duplicateNodesById(menuNodeIds)}>
+                    Duplicate <ContextMenuShortcut>{MOD}D</ContextMenuShortcut>
                   </ContextMenuItem>
-                ))}
-                <ContextMenuSeparator />
-              </>
+                )}
+                <ContextMenuItem onSelect={() => copySelection(menuNodeIds)}>
+                  Copy <ContextMenuShortcut>{MOD}C</ContextMenuShortcut>
+                </ContextMenuItem>
+                {!readOnly && (
+                  <ContextMenuItem
+                    onSelect={() => {
+                      setSelection([menuTarget.nodeId], []);
+                      usePanelsStore
+                        .getState()
+                        .openSettings({ kind: 'node', id: menuTarget.nodeId });
+                    }}
+                  >
+                    Settings
+                  </ContextMenuItem>
+                )}
+                <ContextMenuItem
+                  onSelect={() => {
+                    setSelection([menuTarget.nodeId], []);
+                    usePanelsStore.getState().openSheet('inspect');
+                  }}
+                >
+                  Inspect
+                </ContextMenuItem>
+                {inRouter &&
+                  nodes.some(
+                    (node) =>
+                      node.id === menuTarget.nodeId &&
+                      (node.kind === 'agent' || node.kind === 'model'),
+                  ) && <OpenInDomainItem workflowId={workflowId} nodeId={menuTarget.nodeId} />}
+                {!readOnly && (
+                  <>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem destructive onSelect={() => deleteElements(menuNodeIds, [])}>
+                      Delete <ContextMenuShortcut>Del</ContextMenuShortcut>
+                    </ContextMenuItem>
+                  </>
+                )}
+              </ContextMenuContent>
             )}
-            <ContextMenuItem disabled={nodes.length === 0} onSelect={selectAll}>
-              Select all <ContextMenuShortcut>{MOD}A</ContextMenuShortcut>
-            </ContextMenuItem>
-            {!readOnly && (
-              <ContextMenuItem disabled={nodes.length === 0} onSelect={autoArrange}>
-                Auto-arrange
-              </ContextMenuItem>
+
+            {menuTarget?.kind === 'pane' && (
+              <ContextMenuContent aria-label="Canvas actions" data-testid="pane-context-menu">
+                {!readOnly && (
+                  <>
+                    <ContextMenuItem
+                      disabled={readClipboard() === undefined}
+                      onSelect={() => paste(menuTarget.position)}
+                    >
+                      Paste <ContextMenuShortcut>{MOD}V</ContextMenuShortcut>
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                    {PALETTE_NODE_KINDS.map((kind) => (
+                      <ContextMenuItem
+                        key={kind}
+                        onSelect={() => addNodeAt(kind, freeSlotNear(nodes, menuTarget.position))}
+                      >
+                        Add {NODE_KIND_LABEL[kind]}
+                      </ContextMenuItem>
+                    ))}
+                    <ContextMenuSeparator />
+                  </>
+                )}
+                <ContextMenuItem disabled={nodes.length === 0} onSelect={selectAll}>
+                  Select all <ContextMenuShortcut>{MOD}A</ContextMenuShortcut>
+                </ContextMenuItem>
+                {!readOnly && (
+                  <ContextMenuItem disabled={nodes.length === 0} onSelect={autoArrange}>
+                    Auto-arrange
+                  </ContextMenuItem>
+                )}
+                <ContextMenuItem onSelect={fitAll}>
+                  Fit view <ContextMenuShortcut>F</ContextMenuShortcut>
+                </ContextMenuItem>
+              </ContextMenuContent>
             )}
-            <ContextMenuItem onSelect={fitAll}>
-              Fit view <ContextMenuShortcut>F</ContextMenuShortcut>
-            </ContextMenuItem>
-          </ContextMenuContent>
-        )}
-      </ContextMenu>
+          </ContextMenu>
+          {connectFromNodeId !== undefined && (
+            <ConnectToDialog
+              nodes={nodes}
+              fromNodeId={connectFromNodeId}
+              check={checkForUi}
+              onConnect={(choice) => tryConnect(choice.attempt)}
+              onClose={() => setConnectFromNodeId(undefined)}
+            />
+          )}
+        </CardActionsProvider>
+      </PortConnectContext.Provider>
     </CanvasDarkContext.Provider>
+  );
+}
+
+/**
+ * D350: a line dropped on a card that more than one input fits — a small menu at the drop point,
+ * one item per input. Escape or a press elsewhere closes it, connecting nothing.
+ */
+function DropChooserMenu({
+  chooser,
+  onPick,
+  onClose,
+}: {
+  chooser: DropChooser;
+  onPick: (choice: ConnectChoice) => void;
+  onClose: () => void;
+}) {
+  const menu = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    menu.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    const onDown = (event: PointerEvent) => {
+      if (event.target instanceof globalThis.Node && menu.current?.contains(event.target)) return;
+      onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('pointerdown', onDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('pointerdown', onDown, true);
+    };
+  }, [onClose]);
+  return (
+    <div
+      ref={menu}
+      role="menu"
+      aria-label="Connect to which input?"
+      data-testid="drop-chooser"
+      className={cn(MENU_CONTENT_CLASS, 'absolute z-[20]')}
+      style={{ left: chooser.x, top: chooser.y }}
+    >
+      <div className="px-[10px] py-[6px] text-[11px] font-semibold text-[var(--muted)]">
+        Connect to which input?
+      </div>
+      {chooser.choices.map((choice) => (
+        <button
+          key={`${choice.from.id}>${choice.to.id}`}
+          type="button"
+          role="menuitem"
+          className={cn(EDGE_MENU_ITEM, 'text-[var(--ink)]')}
+          onClick={() => onPick(choice)}
+        >
+          {portLabel(choice.from, 'out')}
+          <Icons.ArrowRight aria-hidden size={12} className="mx-1 inline shrink-0" />
+          {portLabel(choice.to, 'in')}
+        </button>
+      ))}
+    </div>
   );
 }
 

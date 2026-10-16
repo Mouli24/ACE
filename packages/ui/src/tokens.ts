@@ -1,4 +1,4 @@
-import type { NodeState, ProviderState, ProviderType } from '@ace/contracts';
+import type { DataType, NodeState, ProviderState, ProviderType } from '@ace/contracts';
 
 /**
  * ACE design tokens (Arch §10.1 design system, CLAUDE.md §2), in the Ace UI theme's palette (D328):
@@ -24,17 +24,22 @@ export const PROVIDER_ACCENT: Readonly<Record<ProviderType, string>> = {
   gemini_cli: '#8fb0ff',
 };
 
-/** Node-state colours from the theme: done green, running accent, waiting violet, failed red. */
+/**
+ * Node-state colours (PG-4.2, D360): one per state, no two alike — idle grey, ready teal, running
+ * orange, waiting violet, done green, paused amber, stopped slate, blocked plum, failed red — each
+ * ≥ 4.5:1 on its theme's card, panel, canvas and hover fill, so the state word reads in its colour.
+ * D328's hues kept where they passed; the rest shifted to pass. Dark set here, light below.
+ */
 export const STATUS_RING: Readonly<Record<NodeState, string>> = {
   IDLE: '#a39d97',
-  READY: '#1f97a3',
-  RUNNING: '#e8572e',
-  WAITING: '#7a62d6',
-  COMPLETED: '#2f9e63',
-  PAUSED: '#a39d97',
-  STOPPED: '#a39d97',
-  BLOCKED: '#c94c27',
-  FAILED: '#c94c27',
+  READY: '#4fc3cc',
+  RUNNING: '#f08a5d',
+  WAITING: '#a996f0',
+  COMPLETED: '#4cc283',
+  PAUSED: '#e0b040',
+  STOPPED: '#8fa6c8',
+  BLOCKED: '#e07ab0',
+  FAILED: '#ff6b6b',
 };
 
 /**
@@ -65,15 +70,15 @@ export const LIGHT_PROVIDER_ACCENT: Readonly<Record<ProviderType, string>> = {
 };
 
 export const LIGHT_STATUS_RING: Readonly<Record<NodeState, string>> = {
-  IDLE: '#6f6a65',
-  READY: '#1f97a3',
-  RUNNING: '#e8572e',
-  WAITING: '#7a62d6',
-  COMPLETED: '#2f9e63',
-  PAUSED: '#6f6a65',
-  STOPPED: '#6f6a65',
-  BLOCKED: '#c94c27',
-  FAILED: '#c94c27',
+  IDLE: '#6b6661',
+  READY: '#0b6e77',
+  RUNNING: '#b4441b',
+  WAITING: '#6d52cc',
+  COMPLETED: '#1a6b3f',
+  PAUSED: '#8a5a00',
+  STOPPED: '#4a5d7a',
+  BLOCKED: '#9b3a72',
+  FAILED: '#c0262d',
 };
 
 export const LIGHT_PROVIDER_STATUS: Readonly<Record<ProviderState, string>> = {
@@ -95,6 +100,43 @@ export const CHART_SERIES_COLORS = {
   dark: ['#e8572e', '#7a62d6', '#1f97a3', '#2f9e63', '#5b7fe0', '#d94a6b', '#b27408', '#6c55c8'],
   light: ['#e8572e', '#7a62d6', '#1f97a3', '#2f9e63', '#5b7fe0', '#d94a6b', '#b27408', '#6c55c8'],
 } as const satisfies Record<'dark' | 'light', readonly string[]>;
+
+/**
+ * PG-1.2 (D360): D328's accents where they carry meaning as text or under a white icon, shifted to
+ * WCAG AA in both themes (`theme.css`: `--danger-ink`, `--accent-ink`, `--ok-ink`,
+ * `--accent-strong`). The theme hues (#c94c27, #ef6b3f, #e8572e, #2f9e63) stay as decoration —
+ * fills, dots, borders — where the floors in `tokens.test.ts` still apply.
+ */
+export const INK_COLORS = {
+  light: { dangerInk: '#b23f1d', accentInk: '#b4441b', okInk: '#1a6b3f', accentStrong: '#c2410c' },
+  dark: { dangerInk: '#ef7a5a', accentInk: '#f08a5d', okInk: '#4cc283', accentStrong: '#c2410c' },
+} as const;
+
+/**
+ * PG-1.1 (D350): a port dot's colour comes from its data type. Each is ≥ 3:1 against the card,
+ * the panel and the canvas of its theme (WCAG 1.4.11, non-text), so a dot reads on any surface it
+ * sits on. `theme.css` exposes them as `--port-<type>`.
+ */
+export const PORT_COLORS = {
+  light: {
+    text: '#c2410c',
+    image: '#6d52cc',
+    audio: '#0e7c86',
+    video: '#be3a74',
+    code: '#2f7d4f',
+    json: '#946200',
+    file: '#5b6675',
+  },
+  dark: {
+    text: '#f08a5d',
+    image: '#a996f0',
+    audio: '#4fc3cc',
+    video: '#e27aa8',
+    code: '#5fcf8c',
+    json: '#e0b040',
+    file: '#a3adba',
+  },
+} as const satisfies Record<'dark' | 'light', Readonly<Record<DataType, string>>>;
 
 /** The CSS colour for series slot `index` (0-based), following the active theme. */
 export function chartSeriesColor(index: number): string {
@@ -140,9 +182,9 @@ const lightColor: Readonly<ThemeColors> = {
   border: '#e6e0da',
   borderStrong: '#cfc9c3',
   fg: '#1f1d1b',
-  fgSoft: '#6f6a65',
-  fgMuted: '#6f6a65',
-  fgFaint: '#6f6a65',
+  fgSoft: '#6b6661',
+  fgMuted: '#6b6661',
+  fgFaint: '#6b6661',
   accent: '#1f1d1b',
   accentFg: '#f4f0ec',
   danger: '#c94c27',

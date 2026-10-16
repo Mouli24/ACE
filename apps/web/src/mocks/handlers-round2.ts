@@ -24,6 +24,7 @@ import { HttpResponse, http, type HttpHandler, type PathParams } from 'msw';
 import { newId } from '../lib/ulid';
 import { DETECTED_OLLAMA } from './catalog';
 import { MOCK_CLI_SCAN } from './cli-scan';
+import { estimateMockWorkflow } from './estimate';
 import { validateGraph } from './graph-rules';
 import { type MockDb } from './db';
 import { dropMockSockets } from './fake-socket';
@@ -50,6 +51,29 @@ function error(status: number, kind: ErrorKind, code: string, message: string, d
 
 const notFound = (what: string) => error(404, 'workflow', 'not_found', `${what} not found.`);
 const unauthorized = () => error(401, 'auth', 'unauthorized', 'Missing or invalid session token.');
+
+/* PG-1.4 (D359): the mock engine's local runtime — installed and running, nothing loaded. */
+const mockLoaded = new Set<string>();
+
+function mockLocalRuntime(db: MockDb) {
+  const ollama = db.listProviders().find((provider) => provider.type === 'ollama');
+  return {
+    installed: true,
+    running: true,
+    startedByAce: false,
+    baseUrl: DETECTED_OLLAMA.baseUrl,
+    version: '0.mock',
+    ...(ollama === undefined ? {} : { providerId: ollama.id }),
+  };
+}
+
+function refuseNonOllama(db: MockDb, id: string) {
+  const provider = db.getProvider(id);
+  if (!provider) return notFound('Provider');
+  return provider.type === 'ollama'
+    ? undefined
+    : error(400, 'invalid_config', 'validation_failed', 'Ollama providers only.');
+}
 
 function hasToken(request: Request): boolean {
   return /^Bearer\s+\S+$/.test(request.headers.get('authorization') ?? '');
@@ -289,7 +313,17 @@ export function modelIssues(
         inputTypes: string[];
         outputTypes: string[];
       };
-      if (!config.providerId || !config.modelId) {
+      if (!config.providerId) {
+        // PG-1.3 (D358): no provider chosen yet, as the engine names it.
+        issues.push({
+          severity: 'error',
+          code: 'missing_provider',
+          message: `"${node.name}" has no provider chosen yet — choose a provider and a model.`,
+          nodeId: node.id,
+        });
+        continue;
+      }
+      if (!config.modelId) {
         issues.push({
           severity: 'error',
           code: 'missing_model',
@@ -417,7 +451,8 @@ export function createRound2Handlers(db: MockDb): HttpHandler[] {
         const existing = db.getProvider(param(ctx, 'id'));
         if (!existing) return notFound('Provider');
         const misfit = cliPatchError(existing.type, parsed.data);
-        if (misfit !== undefined) return error(400, 'invalid_config', 'validation_failed', misfit, []);
+        if (misfit !== undefined)
+          return error(400, 'invalid_config', 'validation_failed', misfit, []);
         const provider = db.updateProvider(param(ctx, 'id'), parsed.data);
         return provider ? HttpResponse.json(provider) : notFound('Provider');
       }),
@@ -460,6 +495,60 @@ export function createRound2Handlers(db: MockDb): HttpHandler[] {
       }),
     ),
 
+    /* ------------------------------------- models on this machine (PG-1.4, D359) */
+    http.get(
+      `${API}/local-runtime`,
+      guard(() => HttpResponse.json(mockLocalRuntime(db))),
+    ),
+    http.post(
+      `${API}/local-runtime/start`,
+      guard(() => HttpResponse.json(mockLocalRuntime(db))),
+    ),
+    http.get(
+      `${API}/providers/:id/local/running`,
+      guard((ctx) => {
+        const refused = refuseNonOllama(db, param(ctx, 'id'));
+        if (refused) return refused;
+        return HttpResponse.json({
+          items: [...mockLoaded].map((modelId) => ({ modelId })),
+        });
+      }),
+    ),
+    http.post(
+      `${API}/providers/:id/local/:action`,
+      guard(async (ctx) => {
+        const refused = refuseNonOllama(db, param(ctx, 'id'));
+        if (refused) return refused;
+        const action = param(ctx, 'action');
+        const body = (await ctx.request.json()) as { modelId?: string; name?: string };
+        if (action === 'pull') {
+          return HttpResponse.json(
+            { providerId: param(ctx, 'id'), name: body.name ?? '', accepted: true },
+            { status: 202 },
+          );
+        }
+        const modelId = body.modelId ?? '';
+        if (action === 'load') mockLoaded.add(modelId);
+        else mockLoaded.delete(modelId);
+        return HttpResponse.json({ modelId, loaded: action === 'load' });
+      }),
+    ),
+    http.post(
+      `${API}/providers/:id/try`,
+      guard(async (ctx) => {
+        if (!db.getProvider(param(ctx, 'id'))) return notFound('Provider');
+        const body = (await ctx.request.json()) as { prompt?: string };
+        const prompt = body.prompt ?? '';
+        const text = `Mock answer to: ${prompt}`;
+        return HttpResponse.json({
+          text,
+          tokensIn: Math.ceil(prompt.length / 4),
+          tokensOut: Math.ceil(text.length / 4),
+          ms: 5,
+        });
+      }),
+    ),
+
     /* ------------------------------------------------------- validate (FR-MOD-005) */
     /**
      * The round 1 graph checks plus the model-catalogue ones, so `unavailable_model`,
@@ -483,6 +572,33 @@ export function createRound2Handlers(db: MockDb): HttpHandler[] {
             ...modelIssues(nodes, db.listModels(), providerIds),
           ],
         });
+      }),
+    ),
+
+    /* ------------------------------------------------- estimate (PG-4.3) */
+    http.post(
+      `${API}/workflows/:id/estimate`,
+      guard((ctx) => {
+        const workflow = db.getWorkflow(param(ctx, 'id'));
+        if (!workflow) return notFound('Workflow');
+        const project = db.getProject(workflow.projectId);
+        const runCap = project?.maxCostPerRunUsd;
+        const dailyCap = db.settings.dailyBudgetUsd;
+        return HttpResponse.json(
+          estimateMockWorkflow({
+            workflow,
+            nodes: db.nodesOf(workflow.id),
+            edges: db.edgesOf(workflow.id),
+            models: db.listModels(),
+            providers: db.listProviders(),
+            budget: {
+              ...(runCap === undefined || runCap === null ? {} : { maxCostPerRunUsd: runCap }),
+              ...(dailyCap === undefined || dailyCap === null ? {} : { dailyBudgetUsd: dailyCap }),
+              spentTodayUsd: 0,
+              spentTodayKnown: true,
+            },
+          }),
+        );
       }),
     ),
 

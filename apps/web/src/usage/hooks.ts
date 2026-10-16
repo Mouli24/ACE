@@ -2,6 +2,7 @@ import type { Id, UsageGroupBy } from '@ace/contracts';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api } from '../app/api';
+import { allPages } from '../lib/pages';
 import { useProviders } from '../providers/hooks';
 import { useSocketFrames } from './live';
 
@@ -48,20 +49,6 @@ export function useRefreshUsageOnRunEnd(): void {
 export function useProviderNames(): ReadonlyMap<Id, string> {
   const providers = useProviders();
   return new Map((providers.data ?? []).map((provider) => [provider.id, provider.name]));
-}
-
-/** Every page of a cursor list (§2.8). */
-async function allPages<T>(
-  load: (cursor: string | undefined) => Promise<{ items: T[]; nextCursor?: string }>,
-): Promise<T[]> {
-  const items: T[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await load(cursor);
-    items.push(...page.items);
-    cursor = page.nextCursor;
-  } while (cursor !== undefined);
-  return items;
 }
 
 /** Workflow id → name across every project, for usage grouped by workflow. */

@@ -193,13 +193,15 @@ describe('D332 the toolbar', () => {
     await mount(workflow.id);
     const lock = screen.getByRole('button', { name: 'Lock nodes' });
     expect(lock).toHaveAttribute('aria-pressed', 'false');
-    expect(lock).toHaveTextContent('🔓︎');
+    // PG-1.2 (D360): SVG lock icons, not the 🔓︎ 🔒︎ glyphs
+    expect(lock.querySelector('[data-icon="lock-open"]')).not.toBeNull();
     expect(flowNode(nodes[1]!.id)).toHaveClass('draggable');
 
     await userEvent.click(lock);
     expect(lock).toHaveAttribute('aria-pressed', 'true');
-    expect(lock).toHaveTextContent('🔒︎');
-    expect(lock.style.color).toBe('rgb(239, 107, 63)');
+    expect(lock.querySelector('[data-icon="lock"]')).not.toBeNull();
+    // PG-1.2 (D360): the AA accent token, not #ef6b3f (2.7:1 as an icon)
+    expect(lock.style.color).toBe('var(--accent-ink)');
     expect(flowNode(nodes[1]!.id)).not.toHaveClass('draggable');
     expect(flowNode(nodes[1]!.id)).toHaveClass('nopan');
 
@@ -213,7 +215,8 @@ describe('D332 the toolbar', () => {
     const hand = screen.getByRole('button', { name: 'Hand tool' });
     await userEvent.click(hand);
     expect(hand).toHaveAttribute('aria-pressed', 'true');
-    expect(hand.style.background).toBe('rgb(239, 107, 63)');
+    // PG-1.2 (D360): white on #ef6b3f measured 2.9:1; the AA accent token carries it
+    expect(hand.style.background).toBe('var(--accent-strong)');
     expect(screen.getByTestId('canvas').style.cursor).toBe('grab');
     const node = flowNode(nodes[1]!.id);
     expect(node).not.toHaveClass('draggable');
@@ -339,7 +342,7 @@ describe('D332 click to open settings', () => {
   });
 });
 
-describe('D332 Add node', () => {
+describe('D332 Add node (provider first, D351)', () => {
   it('adds a linked "New agent" after the last stage, as one undo step, then opens its settings', async () => {
     const { workflow, nodes } = seed(['input', 'agent']);
     const provider = db.createProvider({ type: 'mock', name: 'Mock' });
@@ -347,7 +350,13 @@ describe('D332 Add node', () => {
     await mount(workflow.id);
     const last = nodes[1]!;
 
+    // D351 (PG-1.3): Add node asks for the provider and model first; nothing is sent before.
     await userEvent.click(screen.getByTestId('new-node-button'));
+    const picker = await screen.findByRole('dialog', { name: /provider/i });
+    expect(db.nodesOf(workflow.id)).toHaveLength(nodes.length);
+    await userEvent.click(await within(picker).findByRole('option', { name: /Mock/ }));
+    await userEvent.click(await within(picker).findByRole('option', { name: /Mock text/ }));
+    await userEvent.click(within(picker).getByRole('button', { name: 'Add node' }));
     await settle(workflow.id);
     const added = db.nodesOf(workflow.id).find((n) => !nodes.some((o) => o.id === n.id))!;
     expect(added.kind).toBe('agent');
@@ -355,7 +364,7 @@ describe('D332 Add node', () => {
     // the second stage: k = 2 is even, so 50 up
     expect(added.position).toEqual({ x: last.position.x + 320, y: last.position.y - 50 });
     expect(added.kind === 'agent' && added.config.providerId).toBe(provider.id);
-    expect(added.kind === 'agent' && added.config.modelId).toEqual(expect.any(String));
+    expect(added.kind === 'agent' && added.config.modelId).toBe('mock-text');
     expect(
       db
         .edgesOf(workflow.id)

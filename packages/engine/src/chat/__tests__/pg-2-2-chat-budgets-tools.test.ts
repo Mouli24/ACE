@@ -183,7 +183,7 @@ async function world(project: { maxCostPerRunUsd?: number } = {}): Promise<World
 }
 
 describe('PG-2.2 chat spend counts toward dailyBudgetUsd', () => {
-  it.fails('a priced chat turn shows in the day’s cost the daily_budget check reads', async () => {
+  it('a priced chat turn shows in the day’s cost the daily_budget check reads', async () => {
     const w = await world();
     const now = makeClock();
     const { bus } = makeBus(w.repository, now);
@@ -205,92 +205,83 @@ describe('PG-2.2 chat spend counts toward dailyBudgetUsd', () => {
 });
 
 describe('PG-2.2 a per-turn cap refuses a chat turn with the budget reason', () => {
-  it.fails(
-    'a turn over the project’s cost cap ends as a failed turn that names the budget',
-    async () => {
-      const w = await world({ maxCostPerRunUsd: 0.000001 });
-      const now = makeClock();
-      const { bus } = makeBus(w.repository, now);
-      const { adapter } = writingAdapter();
-      const service = makeChatService(w.repository, bus, {
-        workflowId: w.workflowId,
-        now,
-        adapterFor: async () => adapter,
-        modelsFor: async () => [priced(false)],
-      });
+  it('a turn over the project’s cost cap ends as a failed turn that names the budget', async () => {
+    const w = await world({ maxCostPerRunUsd: 0.000001 });
+    const now = makeClock();
+    const { bus } = makeBus(w.repository, now);
+    const { adapter } = writingAdapter();
+    const service = makeChatService(w.repository, bus, {
+      workflowId: w.workflowId,
+      now,
+      adapterFor: async () => adapter,
+      modelsFor: async () => [priced(false)],
+    });
 
-      const reply = await (await service.chat(w.agentId, { content: hi })).done;
+    const reply = await (await service.chat(w.agentId, { content: hi })).done;
 
-      expect(reply.error).toBeDefined();
-      expect(reply.error?.message ?? '').toMatch(/budget|cap/i);
-    },
-  );
+    expect(reply.error).toBeDefined();
+    expect(reply.error?.message ?? '').toMatch(/budget|cap/i);
+  });
 });
 
 describe('PG-2.2 tool-point guardrails run on chat tool calls', () => {
-  it.fails(
-    'a chat tool call passes the tool point, and a block stops the tool from running',
-    async () => {
-      const w = await world();
-      const now = makeClock();
-      const { bus } = makeBus(w.repository, now);
-      const { adapter } = writingAdapter();
-      const { provider, ran } = projectTools();
-      const { checks, seen } = recordingChecks();
-      const service = makeChatService(w.repository, bus, {
-        workflowId: w.workflowId,
-        now,
-        adapterFor: async () => adapter,
-        modelsFor: async () => [priced(true)],
-        tools: provider,
-        checks,
-        masker: NO_MASKING,
-        policies: {
-          resolve: async () => policyWith('block'),
-        } as unknown as PolicyService,
-      });
+  it('a chat tool call passes the tool point, and a block stops the tool from running', async () => {
+    const w = await world();
+    const now = makeClock();
+    const { bus } = makeBus(w.repository, now);
+    const { adapter } = writingAdapter();
+    const { provider, ran } = projectTools();
+    const { checks, seen } = recordingChecks();
+    const service = makeChatService(w.repository, bus, {
+      workflowId: w.workflowId,
+      now,
+      adapterFor: async () => adapter,
+      modelsFor: async () => [priced(true)],
+      tools: provider,
+      checks,
+      masker: NO_MASKING,
+      policies: {
+        resolve: async () => policyWith('block'),
+      } as unknown as PolicyService,
+    });
 
-      await (
-        await service.chat(w.agentId, { content: hi })
-      ).done;
+    await (
+      await service.chat(w.agentId, { content: hi })
+    ).done;
 
-      expect(seen.some((input) => input.point === 'tool')).toBe(true);
-      expect(ran).not.toContain('write_file');
-    },
-  );
+    expect(seen.some((input) => input.point === 'tool')).toBe(true);
+    expect(ran).not.toContain('write_file');
+  });
 
-  it.fails(
-    'a tool_allowed check set to ask_user asks before the chat tool runs (as runs do)',
-    async () => {
-      const w = await world();
-      const now = makeClock();
-      const { bus, events } = makeBus(w.repository, now);
-      const { adapter } = writingAdapter();
-      const { provider, ran } = projectTools();
-      const { checks } = recordingChecks();
-      const service = makeChatService(w.repository, bus, {
-        workflowId: w.workflowId,
-        now,
-        adapterFor: async () => adapter,
-        modelsFor: async () => [priced(true)],
-        tools: provider,
-        checks,
-        masker: NO_MASKING,
-        policies: {
-          resolve: async () => policyWith('ask_user'),
-        } as unknown as PolicyService,
-      });
+  it('a tool_allowed check set to ask_user asks before the chat tool runs (as runs do)', async () => {
+    const w = await world();
+    const now = makeClock();
+    const { bus, events } = makeBus(w.repository, now);
+    const { adapter } = writingAdapter();
+    const { provider, ran } = projectTools();
+    const { checks } = recordingChecks();
+    const service = makeChatService(w.repository, bus, {
+      workflowId: w.workflowId,
+      now,
+      adapterFor: async () => adapter,
+      modelsFor: async () => [priced(true)],
+      tools: provider,
+      checks,
+      masker: NO_MASKING,
+      policies: {
+        resolve: async () => policyWith('ask_user'),
+      } as unknown as PolicyService,
+    });
 
-      const begun = await service.chat(w.agentId, { content: hi });
-      await Promise.race([
-        begun.done.catch(() => undefined),
-        new Promise((resolve) => setTimeout(resolve, 300)),
-      ]);
+    const begun = await service.chat(w.agentId, { content: hi });
+    await Promise.race([
+      begun.done.catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, 300)),
+    ]);
 
-      expect(ran).not.toContain('write_file');
-      expect(events.some((event) => event.type.includes('approval'))).toBe(true);
-    },
-  );
+    expect(ran).not.toContain('write_file');
+    expect(events.some((event) => event.type.includes('approval'))).toBe(true);
+  });
 
   it('control: without a policy the chat tool runs (passes today)', async () => {
     const w = await world();

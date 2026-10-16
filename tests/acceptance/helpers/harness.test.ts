@@ -115,9 +115,10 @@ describe('round-1 fixtures', () => {
       })
     ).json()) as { issues: { severity: string; code: string }[] };
 
-    // Round-1 fixtures predate providers, and from round 2 `missing_model` is an error (§2.5).
+    // Round-1 fixtures predate providers, and from round 2 a node with no model is an error (§2.5).
+    // D358 names a node with no provider at all `missing_provider` (it was `missing_model` before).
     // That is the only thing a harness has to fill in; anything else would be a broken fixture.
     const errors = issues.filter((i) => i.severity === 'error');
-    expect(errors.map((i) => i.code).filter((code) => code !== 'missing_model')).toEqual([]);
+    expect(errors.map((i) => i.code).filter((code) => code !== 'missing_provider')).toEqual([]);
   });
 });

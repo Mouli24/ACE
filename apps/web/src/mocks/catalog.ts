@@ -1,4 +1,11 @@
-import type { DataType, Model, Provider, ProviderState, ProviderType } from '@ace/contracts';
+import {
+  providerGroup,
+  type DataType,
+  type Model,
+  type Provider,
+  type ProviderState,
+  type ProviderType,
+} from '@ace/contracts';
 
 import { newId } from '../lib/ulid';
 
@@ -16,6 +23,8 @@ interface CatalogEntry {
   supportsTools: boolean;
   supportsJson: boolean;
   available?: boolean;
+  /** PG-1.4: a local model's size on disk, as Ollama's tags report it. */
+  sizeBytes?: number;
 }
 
 export const MOCK_CATALOG: CatalogEntry[] = [
@@ -26,7 +35,8 @@ export const MOCK_CATALOG: CatalogEntry[] = [
     outputTypes: ['text'],
     contextWindow: 8192,
     supportsTools: false,
-    supportsJson: false,
+    // As the engine's mock (D353): a schema on it is allowed, and its prose is TC-EXE-005's violation.
+    supportsJson: true,
   },
   {
     modelId: 'mock-slow',
@@ -280,6 +290,7 @@ const CLOUD_CATALOG: Partial<Record<ProviderType, CatalogEntry[]>> = {
       contextWindow: 8192,
       supportsTools: false,
       supportsJson: false,
+      sizeBytes: 1_321_098_329,
     },
   ],
   openai_compatible: [
@@ -317,7 +328,9 @@ export function catalogFor(provider: Provider, now: string): Model[] {
     available: entry.available ?? true,
     source: provider.type === 'mock' ? 'manifest' : 'discovered',
     lastCheckedAt: now,
-    pricing: { ...MOCK_PRICING },
+    ...(entry.sizeBytes === undefined ? {} : { sizeBytes: entry.sizeBytes }),
+    // PG-1.4 (D359): a local model has no price — it is free by rule, as the engine records it.
+    ...(providerGroup(provider) === 'local' ? {} : { pricing: { ...MOCK_PRICING } }),
   }));
 }
 

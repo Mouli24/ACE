@@ -1,20 +1,23 @@
 import { rosterFor, slugHandle, type Node, type Part } from '@ace/contracts';
 import {
   cn,
+  Icons,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@ace/ui';
 import { useQueryClient } from '@tanstack/react-query';
-import { forwardRef, useEffect, type ComponentPropsWithoutRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { forwardRef, useEffect, useState, type ComponentPropsWithoutRef } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { useLayoutStore } from '../app/stores/layout';
 import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
 import { useWorkspaceStatus } from '../app/stores/workspace-status';
-import { workflowPath } from '../forge/mode';
+import { DomainRunView } from '../domain/DomainPage';
+import { RunConversationTab } from '../domain/RunConversationTab';
+import { useWorkflowMode, workflowPath } from '../forge/mode';
 import { useSocketStatus } from '../runs/hooks';
 import { agentMap, agentsOf, type AgentLook } from '../theme/agents';
 import { Avatar, Dot } from '../theme/primitives';
@@ -23,7 +26,7 @@ import { ChatComposer, type ChatRosterEntry } from './ChatComposer';
 import { ChatConversation } from './ChatConversation';
 import { ChatThreadList } from './ChatThreadList';
 import { useChatSessions } from './session-store';
-import { sendToNode, useChatSocket, useThreadConversation } from './useChat';
+import { sendToNode, stopNode, useThreadConversation } from './useChat';
 import { isChatNode, useDropStaleChatTarget } from './workflow-target';
 
 /** Tabs drawn before the rest go under "More" (the theme's tabs row). */
@@ -80,7 +83,17 @@ MoreTab.displayName = 'MoreTab';
  * same conversation, and the session does not switch. "Live" shows only while the socket is open.
  * The compact layout keeps `ChatPanel` (FR-MOB-003).
  */
-export function ChatAside({ workflowId }: { workflowId: string }) {
+export function ChatAside({
+  workflowId,
+  expanded = false,
+}: {
+  workflowId: string;
+  /**
+   * D367: the same chat, full screen in Domain. It opens on the tab the column had (`?chat=`), so
+   * Expand loses no message; Collapse goes back to the mode it came from.
+   */
+  expanded?: boolean;
+}) {
   const chatNodeId = usePanelsStore((s) => s.chatNodeId);
   const chatWith = usePanelsStore((s) => s.chatWith);
   const toggleChat = useLayoutStore((s) => s.toggleChat);
@@ -88,7 +101,13 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
   const graph = useWorkflowGraph(workflowId);
   const live = useSocketStatus() === 'open';
   const navigate = useNavigate();
+  const [search] = useSearchParams();
+  const mode = useWorkflowMode();
+  // D367: Domain is this chat expanded; it opens on the Run tab unless Expand named the node tab.
+  const startView = search.get('chat') === 'node' ? 'node' : 'run';
   const queryClient = useQueryClient();
+  // PG-3.6: which channel the column shows — the node's direct chat, or the run's conversation.
+  const [view, setView] = useState<'node' | 'run'>(expanded ? startView : 'node');
 
   const nodes = graph.data?.nodes;
   const chatNodes = (nodes ?? []).filter(isChatNode);
@@ -98,6 +117,7 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
   const handles = new Map(roster.map((entry) => [entry.nodeId, entry.handle]));
   const handleOf = (agent: AgentLook) => handles.get(agent.nodeId) ?? slugHandle(agent.name);
   const projectId = graph.data?.workflow.projectId;
+  const showRun = view === 'run' && projectId !== undefined;
 
   // The chat follows the Canvas: selecting an Agent or Model node opens its session (D285).
   const focusedCanChat = chatNodes.some((each) => each.id === focusedNodeId);
@@ -117,8 +137,8 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
   }, [hasTarget]);
   useEffect(() => () => useWorkspaceStatus.getState().setMessageCount(null), []);
 
-  // One socket link for every session, so a reply owed to a node off screen still arrives.
-  useChatSocket(target?.id);
+  // The chat socket — one link for every session — is the workflow layout's (D354), so a reply
+  // still arrives with this column closed or in Domain.
 
   const looks = agentMap(nodes ?? []);
   const chatRoster: ChatRosterEntry[] = roster.map((entry) => ({
@@ -207,66 +227,151 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
   const sending = useChatSessions((state) =>
     target === undefined ? false : state.sessions[target.id]?.sending === true,
   );
+  // PG-1.6: a reply on its way in the shown session can be stopped from the composer.
+  const replying = useChatSessions((state) =>
+    target === undefined ? false : state.sessions[target.id]?.pending !== undefined,
+  );
 
   // One composer for the whole column, never remounted: switching nodes keeps the text typed so
   // far, its chips and the keyboard focus while the conversation above it changes.
   const composer = (
-    <ChatComposer onSend={send} disabled={sending} roster={chatRoster} mainNodeId={target?.id} />
+    <ChatComposer
+      onSend={send}
+      disabled={sending}
+      roster={chatRoster}
+      mainNodeId={target?.id}
+      replying={replying}
+      onStop={() => {
+        if (target !== undefined) void stopNode(queryClient, target.id);
+      }}
+    />
   );
 
   return (
     <aside
       aria-label="Chat"
       data-testid="chat-aside"
-      className="relative z-[4] flex h-full min-h-0 w-[340px] shrink-0 flex-col border-l border-[var(--line)] bg-[var(--panel)] text-[var(--ink)]"
+      className={cn(
+        'relative z-[4] flex h-full min-h-0 flex-col bg-[var(--panel)] text-[var(--ink)]',
+        expanded ? 'w-full min-w-0 flex-1' : 'w-[340px] shrink-0 border-l border-[var(--line)]',
+      )}
     >
       <div className="flex items-center gap-2 px-[14px] pb-[10px] pt-[14px]">
         <h2 className="text-[14px] font-bold tracking-[-0.01em]">Team chat</h2>
         {live && (
           <span
             data-testid="chat-live"
-            className="flex items-center gap-1 text-[10px] font-semibold text-[#2f9e63]"
+            className="flex items-center gap-1 text-[10px] font-semibold text-[var(--ok-ink)]"
           >
             <Dot color="#2f9e63" size={6} pulse="livePulse 2s ease-in-out infinite" />
             Live
           </span>
         )}
         <div className="flex-1" />
-        <button
-          type="button"
-          title="Close"
-          aria-label="Close chat"
-          data-testid="chat-close"
-          onClick={toggleChat}
-          className={cn(
-            FOCUS,
-            'h-7 w-7 shrink-0 cursor-pointer rounded-[7px] border border-[var(--line)] bg-transparent text-[12px] text-[var(--ink)]',
-          )}
-        >
-          ✕
-        </button>
+        {projectId !== undefined && (
+          // D367: Domain is opened from here, full screen, showing this same chat and tab — the
+          // header switch no longer offers it. Expanded, the button collapses back.
+          <button
+            type="button"
+            title={expanded ? 'Collapse' : 'Expand to Domain'}
+            aria-label={expanded ? 'Collapse chat' : 'Expand chat to Domain'}
+            data-testid={expanded ? 'chat-collapse' : 'chat-expand'}
+            onClick={() => {
+              if (expanded) {
+                const back = search.get('from') === 'forge' ? 'forge' : 'ideate';
+                navigate(workflowPath(projectId, workflowId, back, search));
+                return;
+              }
+              const path = workflowPath(projectId, workflowId, 'domain', search);
+              const extra = new URLSearchParams({
+                chat: view,
+                from: mode === 'forge' ? 'forge' : 'ideate',
+              });
+              navigate(`${path}${path.includes('?') ? '&' : '?'}${extra.toString()}`);
+            }}
+            className={cn(
+              FOCUS,
+              'flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-[7px] border border-[var(--line)] bg-transparent text-[var(--ink)]',
+            )}
+          >
+            {expanded ? (
+              <Icons.Minimize2 aria-hidden size={13} />
+            ) : (
+              <Icons.Maximize2 aria-hidden size={13} />
+            )}
+          </button>
+        )}
+        {!expanded && (
+          <button
+            type="button"
+            title="Close"
+            aria-label="Close chat"
+            data-testid="chat-close"
+            onClick={toggleChat}
+            className={cn(
+              FOCUS,
+              'flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-[7px] border border-[var(--line)] bg-transparent text-[var(--ink)]',
+            )}
+          >
+            <Icons.X aria-hidden size={13} />
+          </button>
+        )}
       </div>
 
-      {tabs}
+      {/* PG-3.6: the node's direct chat, or the selected run's team conversation (read-only). */}
+      <div
+        role="tablist"
+        aria-label="Chat channel"
+        className="flex gap-[6px] px-[14px] pb-[10px]"
+        data-testid="chat-channel"
+      >
+        {(['node', 'run'] as const).map((each) => (
+          <button
+            key={each}
+            type="button"
+            role="tab"
+            aria-selected={view === each}
+            data-testid={`chat-channel-${each}`}
+            onClick={() => setView(each)}
+            className={tabClass(view === each)}
+          >
+            {each === 'node' ? 'Node chat' : 'Run'}
+          </button>
+        ))}
+      </div>
 
-      {target === undefined ? (
-        <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-[14px] py-[16px]">
-          <p className="text-center text-[13px] text-[var(--muted)]">
-            Select an Agent node on the Canvas, or pick one above, to see its conversation and its
-            results.
-          </p>
-        </div>
-      ) : (
-        // Keyed by node id: each session renders from its own state in the session store.
-        <TargetChat
-          key={target.id}
-          node={target}
-          onSendToForge={sendToForge}
-          speakers={looks}
-          projectId={projectId}
-        />
-      )}
-      {composer}
+      {/* D367: expanded, the Run tab is Domain itself — the live run conversation and its team. */}
+      {showRun &&
+        (expanded ? (
+          <div className="flex min-h-0 flex-1">
+            <DomainRunView />
+          </div>
+        ) : (
+          <RunConversationTab projectId={projectId} workflowId={workflowId} />
+        ))}
+      {/* Hidden, not unmounted, behind the Run tab: the composer keeps what was typed (D335). */}
+      <div className={showRun ? 'hidden' : 'contents'}>
+        {tabs}
+
+        {target === undefined ? (
+          <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-[14px] py-[16px]">
+            <p className="text-center text-[13px] text-[var(--muted)]">
+              Select an Agent node on the Canvas, or pick one above, to see its conversation and its
+              results.
+            </p>
+          </div>
+        ) : (
+          // Keyed by node id: each session renders from its own state in the session store.
+          <TargetChat
+            key={target.id}
+            node={target}
+            onSendToForge={sendToForge}
+            speakers={looks}
+            projectId={projectId}
+          />
+        )}
+        {composer}
+      </div>
     </aside>
   );
 }

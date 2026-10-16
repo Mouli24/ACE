@@ -1,4 +1,5 @@
 import type { NodeState } from '@ace/contracts';
+import { Icons, type LucideIcon } from '@ace/ui';
 
 /*
  * Formatting the Ace UI theme uses (D328): clock times like "3:38 PM", relative times like
@@ -29,22 +30,31 @@ export function initial(name: string): string {
   return letter ? letter.toUpperCase() : '?';
 }
 
-/** A node state as the theme's Stage cards show it: a word and a dot colour. */
+/**
+ * A node state as the canvas shows it (PG-4.2, D360): a word, a colour and a glyph — each its
+ * own, so no two of the nine states look alike and the colour is never the only signal. The colour
+ * is the `--color-status-*` token, which `@ace/ui/theme.css` sets per theme at WCAG AA.
+ */
 export interface NodeStatusLook {
   label: string;
   color: string;
+  icon: LucideIcon;
+  /** RUNNING and WAITING are the states that move: their glyph animates. */
+  live: boolean;
 }
 
+const tone = (state: NodeState): string => `var(--color-status-${state})`;
+
 const LOOK: Record<NodeState, NodeStatusLook> = {
-  IDLE: { label: 'Idle', color: '#a39d97' },
-  READY: { label: 'Ready', color: '#a39d97' },
-  RUNNING: { label: 'Running', color: '#ef6b3f' },
-  WAITING: { label: 'Waiting', color: '#a39d97' },
-  COMPLETED: { label: 'Done', color: '#2f9e63' },
-  PAUSED: { label: 'Paused', color: '#a39d97' },
-  STOPPED: { label: 'Stopped', color: '#a39d97' },
-  BLOCKED: { label: 'Blocked', color: '#c94c27' },
-  FAILED: { label: 'Failed', color: '#c94c27' },
+  IDLE: { label: 'Idle', color: tone('IDLE'), icon: Icons.Circle, live: false },
+  READY: { label: 'Ready', color: tone('READY'), icon: Icons.CircleDot, live: false },
+  RUNNING: { label: 'Running', color: tone('RUNNING'), icon: Icons.LoaderCircle, live: true },
+  WAITING: { label: 'Waiting', color: tone('WAITING'), icon: Icons.Hourglass, live: true },
+  COMPLETED: { label: 'Done', color: tone('COMPLETED'), icon: Icons.CircleCheck, live: false },
+  PAUSED: { label: 'Paused', color: tone('PAUSED'), icon: Icons.CirclePause, live: false },
+  STOPPED: { label: 'Stopped', color: tone('STOPPED'), icon: Icons.CircleStop, live: false },
+  BLOCKED: { label: 'Blocked', color: tone('BLOCKED'), icon: Icons.Ban, live: false },
+  FAILED: { label: 'Failed', color: tone('FAILED'), icon: Icons.CircleX, live: false },
 };
 
 export function nodeStatusLook(state: NodeState): NodeStatusLook {

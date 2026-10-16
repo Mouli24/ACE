@@ -1,4 +1,4 @@
-import { Badge, Tabs, TabsContent, TabsList, TabsTrigger, cn } from '@ace/ui';
+import { Badge, Icons, Tabs, TabsContent, TabsList, TabsTrigger, cn } from '@ace/ui';
 
 import { useLayoutStore, type ForgePanelTab } from '../../app/stores/layout';
 import { requestTerminalFocus } from '../terminal/focus';
@@ -84,7 +84,7 @@ export function BottomPanel({ projectId }: { projectId: string }) {
             className={cn(SQUARE, 'text-[13px]')}
             style={maximized ? { background: 'var(--hover)', color: '#ef6b3f' } : undefined}
           >
-            <span aria-hidden>⛶</span>
+            <Icons.Maximize2 aria-hidden size={12} />
           </button>
           <button
             type="button"
@@ -93,7 +93,7 @@ export function BottomPanel({ projectId }: { projectId: string }) {
             onClick={closePanel}
             className={cn(SQUARE, 'text-[12px]')}
           >
-            <span aria-hidden>✕</span>
+            <Icons.X aria-hidden size={12} />
           </button>
         </div>
         {/* `flex` only while active: Radix hides the inactive content with `hidden`. */}

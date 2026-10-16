@@ -58,6 +58,12 @@ export const UsageSchema = z.object({
   source: UsageSourceSchema.optional(),
   /** D306: where `costUsd` came from — the provider's own report, or the catalog's price table. */
   costSource: z.enum(['reported', 'catalog']).optional(),
+  /**
+   * PG-1.4 (D359): `false` when the model has no price — an unpriced remote model, whose spend is
+   * unknown and must never read as $0. Absent or `true`: `costUsd` is the cost (a local model's is 0
+   * by rule).
+   */
+  costKnown: z.boolean().optional(),
   /** D313: the part of `tokensIn` read from a prompt cache; `tokensIn` already includes it. */
   cachedTokensIn: z.number().int().min(0).optional(),
 });
@@ -114,9 +120,10 @@ export function allowedRunActions(
     status === 'BLOCKED' && context.blockedReason !== undefined
       ? ['resume', 'stop']
       : [...ALLOWED_RUN_ACTIONS[status]];
-  // D323: a run started from Domain stays open until the human ends it.
+  // D323: a run started from Domain stays open until the human ends it. D360: it can be restarted
+  // while open too — the engine ends it first, then starts the new run.
   const live = status === 'RUNNING' || status === 'PAUSED' || actions.includes('resume');
-  if (context.stayOpen === true && live) actions.push('end');
+  if (context.stayOpen === true && live) actions.push('restart', 'end');
   return actions;
 }
 
@@ -183,6 +190,11 @@ export const RunSchema = z.object({
   pausedAt: TimestampSchema.optional(),
   /** Set on the new run a restart creates: same snapshot, same inputs (FR-CTL-004). */
   restartedFromRunId: IdSchema.optional(),
+  /**
+   * PG-5.4: set on the new run a replay creates (`POST /runs/:id/replay`) — the run whose recorded
+   * node outputs it was answered from. Same snapshot and inputs as that run, zero provider calls.
+   */
+  replayOf: IdSchema.optional(),
   /** Set only when `haltReason` is `budget_exceeded` (D80). */
   budgetHalt: BudgetHaltSchema.optional(),
   /** D305: why a run is BLOCKED mid-run. Absent on a run blocked at pre-flight. */
@@ -191,6 +203,11 @@ export const RunSchema = z.object({
   domain: RunDomainConfigSchema.optional(),
   /** D312: the goal the run was started with — its first message, read by every node. */
   goal: z.string().optional(),
+  /**
+   * PG-5.6 (FR-BEN-008): set on a run ACE Bench queued — the experiment it belongs to. The normal
+   * run history, the timeline and Domain leave such a run out; only the bench opens it.
+   */
+  benchExperimentId: IdSchema.optional(),
 });
 export type Run = z.infer<typeof RunSchema>;
 
@@ -204,6 +221,8 @@ export const RunSummarySchema = RunSchema.pick({
   endedAt: true,
   durationMs: true,
   totals: true,
+  replayOf: true,
+  benchExperimentId: true,
 });
 export type RunSummary = z.infer<typeof RunSummarySchema>;
 
@@ -296,6 +315,12 @@ export const StartRunRequestSchema = z.object({
   goal: z.string().trim().min(1).max(MESSAGE_TEXT_MAX).optional(),
   /** D312: Domain settings. Omitted, a run is supervised, has no budget and ends as it always has. */
   domain: RunDomainConfigInputSchema.optional(),
+  /**
+   * PG-2.4 (D361): the person chose "Run without undo" after a run was BLOCKED with
+   * `checkpoint_unavailable`. One-time: only this run goes ahead when its checkpoint cannot begin,
+   * and `run.started` records the choice.
+   */
+  withoutUndo: z.boolean().optional(),
 });
 /** What a caller may send: the Domain settings it leaves out take their defaults (D312). */
 export type StartRunRequest = z.input<typeof StartRunRequestSchema>;
@@ -343,3 +368,68 @@ export const AUTO_RETRY_POLICY: Readonly<Record<ErrorKind, AutoRetryMode>> = Obj
 export const RETRY_BACKOFF_BASE_MS = 500;
 export const RETRY_BACKOFF_MAX_MS = 8_000;
 export const CONTRACT_REPAIR_RETRIES = 1;
+
+/* -------------------------------------------------------------------------- */
+/* Cost before you run (PG-4.3, D359)                                          */
+/* -------------------------------------------------------------------------- */
+
+/** The code a node's own cost cap (`execution.maxCostUsd`) fails it with (PG-4.3). */
+export const NODE_BUDGET_EXCEEDED = 'node_budget_exceeded';
+
+/**
+ * What a run could cost, from the price table, before it starts. `minUsd` reads the prompts that
+ * are already known and no output; `maxUsd` every node's whole output allowance (`maxTokens`), the
+ * most its reads could bring in, every tool round it may take and every loop iteration. A local
+ * model counts 0; an unpriced remote model, or a node with no model chosen, is `unknown: true`
+ * (D359) and adds nothing to the sums, which are then the known part only.
+ */
+export const CostRangeSchema = z.strictObject({
+  minUsd: z.number().min(0),
+  maxUsd: z.number().min(0),
+  unknown: z.boolean(),
+});
+export type CostRange = z.infer<typeof CostRangeSchema>;
+
+/** Why a node's cost cannot be estimated. */
+export const ESTIMATE_UNKNOWN_REASONS = ['no_model', 'model_missing', 'unpriced'] as const;
+export const EstimateUnknownReasonSchema = z.enum(ESTIMATE_UNKNOWN_REASONS);
+export type EstimateUnknownReason = z.infer<typeof EstimateUnknownReasonSchema>;
+
+/**
+ * One Agent or Model node's estimate. `free` is a local model's (or a test provider's) $0 by rule;
+ * `reason` says why an unknown one is unknown. Nodes that call no model are not listed.
+ */
+export const NodeEstimateSchema = CostRangeSchema.extend({
+  nodeId: IdSchema,
+  free: z.boolean().optional(),
+  reason: EstimateUnknownReasonSchema.optional(),
+  /** The node's own cost cap (`execution.maxCostUsd`), when it has one. */
+  maxCostUsd: z.number().positive().optional(),
+});
+export type NodeEstimate = z.infer<typeof NodeEstimateSchema>;
+
+/**
+ * The caps a run is held to and what today has spent, for "what is left" before Start. Each cap is
+ * absent when none is set; `spentTodayKnown: false` when part of today's spend is unknown (D359).
+ */
+export const EstimateBudgetSchema = z.strictObject({
+  maxCostPerRunUsd: z.number().positive().optional(),
+  dailyBudgetUsd: z.number().positive().optional(),
+  spentTodayUsd: z.number().min(0),
+  spentTodayKnown: z.boolean(),
+});
+export type EstimateBudget = z.infer<typeof EstimateBudgetSchema>;
+
+/**
+ * `POST /workflows/:id/estimate` → `WorkflowEstimate` (PG-4.3). Read-only: it starts nothing and
+ * calls no provider. `workflowVersion` is the graph version it was computed for, so a client can
+ * tell a stale estimate after an edit.
+ */
+export const WorkflowEstimateSchema = z.strictObject({
+  workflowId: IdSchema,
+  workflowVersion: z.number().int().min(0),
+  nodes: z.array(NodeEstimateSchema),
+  total: CostRangeSchema,
+  budget: EstimateBudgetSchema,
+});
+export type WorkflowEstimate = z.infer<typeof WorkflowEstimateSchema>;

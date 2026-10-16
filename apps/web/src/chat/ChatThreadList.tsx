@@ -1,5 +1,5 @@
 import type { ChatThread } from '@ace/contracts';
-import { cn } from '@ace/ui';
+import { cn, Icons } from '@ace/ui';
 
 import { useDeleteThread } from './useChat';
 
@@ -86,10 +86,10 @@ export function ChatThreadList({
                   onClick={() => del.mutate(thread.id)}
                   className={cn(
                     FOCUS,
-                    'flex h-[16px] w-[16px] cursor-pointer items-center justify-center rounded-full text-[9px] text-[var(--muted)] hover:text-[#c94c27]',
+                    'flex h-[16px] w-[16px] cursor-pointer items-center justify-center rounded-full text-[var(--muted)] hover:text-[#c94c27]',
                   )}
                 >
-                  ✕
+                  <Icons.X aria-hidden size={10} />
                 </button>
               </li>
             );

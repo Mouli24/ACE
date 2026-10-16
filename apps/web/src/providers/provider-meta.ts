@@ -34,18 +34,28 @@ export const providerAccent = (type: ProviderType): string => `var(--color-provi
 export const providerStatusColor = (state: ProviderState): string =>
   `var(--color-provider-status-${state})`;
 
-/** D262's three presets, as the dialogs name them. */
+/**
+ * D355 (PG-2.3): the presets a CLI provider is offered. D262's third, `full_auto`, bypassed every
+ * ACE approval, budget and guardrail; it stays in the contract only so an old row parses, and such
+ * a row runs — and is shown — as `edit_files`.
+ */
+export const OFFERED_CLI_PERMISSIONS = ['read_only', 'edit_files'] as const satisfies readonly CliPermission[];
+
+/** The preset a stored permission is shown and edited as (D355: `full_auto` reads as `edit_files`). */
+export const offeredCliPermission = (level: CliPermission): CliPermission =>
+  level === 'full_auto' ? 'edit_files' : level;
+
+/** The presets as the dialogs name them; an old `full_auto` row is named as what it runs as. */
 export const CLI_PERMISSION_LABEL: Readonly<Record<CliPermission, string>> = {
   read_only: 'Read-only',
   edit_files: 'Edit project files',
-  full_auto: 'Full auto',
+  full_auto: 'Edit project files',
 };
 
 export const CLI_PERMISSION_HINT: Readonly<Record<CliPermission, string>> = {
   read_only: 'Reads the project folder. Never writes a file or runs a command.',
   edit_files: 'Reads and edits files in the project folder. Runs no shell commands.',
-  full_auto:
-    'Runs any command on your machine without asking — on Windows with no sandbox. Use only for projects you trust.',
+  full_auto: 'Reads and edits files in the project folder. Runs no shell commands.',
 };
 
 /**
@@ -61,7 +71,8 @@ const CODEX_PERMISSION_HINT: Readonly<Partial<Record<CliPermission, string>>> = 
 
 /** What a preset lets this CLI do, as the permission field spells it out. */
 export function cliPermissionHint(type: CliProviderType, level: CliPermission): string {
+  const shown = offeredCliPermission(level);
   return (
-    (type === 'codex_cli' ? CODEX_PERMISSION_HINT[level] : undefined) ?? CLI_PERMISSION_HINT[level]
+    (type === 'codex_cli' ? CODEX_PERMISSION_HINT[shown] : undefined) ?? CLI_PERMISSION_HINT[shown]
   );
 }

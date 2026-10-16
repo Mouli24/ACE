@@ -86,24 +86,31 @@ export interface GuardrailVerdictRepository {
   listByNodeRun(scope: Scope, nodeRunId: Id): Promise<Verdict[]>;
 }
 
+/**
+ * A run's approval request: it names its run and node run. The contract's `ApprovalRequest` also
+ * covers a chat tool call's request, which names a thread instead (PG-2.2, D359) — those live in
+ * the chat service while the turn waits and are never stored in this repository.
+ */
+export type RunApprovalRequest = ApprovalRequest & { runId: Id; nodeRunId: Id };
+
 /** An approval request together with the decision, once there is one (FR-GRD-013). */
 export interface StoredApproval {
-  request: ApprovalRequest;
+  request: RunApprovalRequest;
   /** Absent while the node is WAITING. */
   decision?: ApprovalDecision;
 }
 
 export interface ApprovalRepository {
   /** Creates a pending request. The preview must already be redacted — BR-07 refuses otherwise. */
-  create(scope: Scope, request: ApprovalRequest): Promise<ApprovalRequest>;
+  create(scope: Scope, request: RunApprovalRequest): Promise<RunApprovalRequest>;
   get(scope: Scope, id: Id): Promise<StoredApproval | null>;
   /**
    * The undecided request of this node run, which is what `POST /node-runs/:id/approve` and
    * `/reject` have to find: the route names the node run, not the request.
    */
-  findPendingByNodeRun(scope: Scope, nodeRunId: Id): Promise<ApprovalRequest | null>;
+  findPendingByNodeRun(scope: Scope, nodeRunId: Id): Promise<RunApprovalRequest | null>;
   /** `GET /runs/:id/approvals` — the pending ones, oldest first. */
-  listPendingByRun(scope: Scope, runId: Id): Promise<ApprovalRequest[]>;
+  listPendingByRun(scope: Scope, runId: Id): Promise<RunApprovalRequest[]>;
   /**
    * Records the decision, its note and its time, and mirrors it onto the node run's `approvals`
    * list in the same transaction. Null when there is no such request; a request that was already

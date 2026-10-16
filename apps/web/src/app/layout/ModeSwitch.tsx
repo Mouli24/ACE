@@ -1,6 +1,6 @@
 import { cn } from '@ace/ui';
 import { useRef, type KeyboardEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { useWorkflowMode, workflowPath, type WorkflowMode } from '../../forge/mode';
 import { SHORTCUTS, shortcutLabel } from '../shortcuts';
@@ -8,19 +8,20 @@ import { SHORTCUTS, shortcutLabel } from '../shortcuts';
 const MODES: ReadonlyArray<{ mode: WorkflowMode; label: string; keys: string }> = [
   { mode: 'ideate', label: 'Ideate', keys: shortcutLabel(SHORTCUTS.ideate) },
   { mode: 'forge', label: 'Forge', keys: shortcutLabel(SHORTCUTS.forge) },
-  { mode: 'domain', label: 'Domain', keys: shortcutLabel(SHORTCUTS.domain) },
 ];
 
 /**
- * The header's `Ideate | Forge | Domain` switch (D299, D303), as the theme's segmented pill
- * (D330): a radio group, and the arrow keys move along it.
+ * The header's `Ideate | Forge` switch (D299; D367 moved Domain to the chat's Expand button), as
+ * the theme's segmented pill (D330): a radio group, and the arrow keys move along it.
  */
 export function ModeSwitch({ projectId, workflowId }: { projectId: string; workflowId: string }) {
   const mode = useWorkflowMode();
   const navigate = useNavigate();
+  const [search] = useSearchParams();
   const buttons = useRef<Array<HTMLButtonElement | null>>([]);
   const go = (next: WorkflowMode) => {
-    if (next !== mode) navigate(workflowPath(projectId, workflowId, next));
+    // PG-3.2: the selected run and node travel with the switch.
+    if (next !== mode) navigate(workflowPath(projectId, workflowId, next, search));
   };
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;

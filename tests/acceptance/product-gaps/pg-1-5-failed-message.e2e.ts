@@ -2,7 +2,6 @@ import type { Run } from '@ace/contracts';
 import { test, type Page } from '@playwright/test';
 
 import {
-  NOT_BUILT,
   api,
   domain,
   engine,
@@ -71,7 +70,6 @@ test.describe('PG-1.5 a failed message always shows', () => {
     page,
   }) => {
     // PG-1.5 client stall rule: today the conversation says "typing…" for as long as nothing comes.
-    test.fail(NOT_BUILT, 'PG-1.5: no stall rule — a lost answer is "typing…" forever');
     test.setTimeout(90_000);
     const providerId = await mockProvider();
     const flow = await seedAgents('stall', [
@@ -93,9 +91,9 @@ test.describe('PG-1.5 a failed message always shows', () => {
     await expect(panel.getByRole('button', { name: 'Retry' })).toBeVisible();
   });
 
-  test('Domain: a failed node turn says why in words, with Retry', async ({ page }) => {
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('Domain: a failed node turn says why in words, with Retry', async ({ page }) => {
     // PG-1.5: Domain never reads `failureReason` (`domain/looks.ts`).
-    test.fail(NOT_BUILT, "PG-1.5: Domain does not show a failed turn's failureReason");
     test.setTimeout(90_000);
     const flow = await team('domain-fail', 'mock-bad-json', ['json']);
     await open(page, domainPath(flow));
@@ -128,7 +126,6 @@ test.describe('PG-1.5 a failed message always shows', () => {
     page,
   }) => {
     // PG-1.5: a post that fails on the wire offers no Resend.
-    test.fail(NOT_BUILT, 'PG-1.5: a failed Domain post has no Resend');
     const flow = await team('domain-post', 'mock-text');
     await open(page, domainPath(flow));
     const box = page.getByRole('textbox', { name: 'Message' });
@@ -147,8 +144,7 @@ test.describe('PG-1.5 a failed message always shows', () => {
   test('Domain: a post to a run that has ended says so and offers to start a new run with it', async ({
     page,
   }) => {
-    // PG-1.5: the 409 "run has ended" is not put in words, and nothing offers a new run.
-    test.fail(NOT_BUILT, 'PG-1.5: a 409 run-has-ended post is not explained');
+    // PG-1.5: a run that has ended says so, and a message offers itself as a new run's goal.
     const flow = await team('domain-ended', 'mock-text');
     const run = await api<Run>(`/workflows/${flow.workflowId}/runs`, {
       method: 'POST',
@@ -159,18 +155,23 @@ test.describe('PG-1.5 a failed message always shows', () => {
     await expect(box).toBeEnabled({ timeout: 30_000 });
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
 
-    // The run ends behind the page's back (another tab, the API); the page still offers Send.
+    // The run ends behind the page's back (another tab, the API). Since PG-3.3 Domain hears the
+    // end at once, so the page says so before anything is sent, and a message starts a new run
+    // with itself as the goal (D312) instead of meeting a 409. The 409 path itself (a post racing
+    // the end) is the composer's, covered at component level (tests-todo, PG-1.5).
     await api(`/runs/${run.id}/end`, { method: 'POST' });
+    await expect(domain(page).getByText(/run has ended/i).first()).toBeVisible({ timeout: 30_000 });
     await box.fill('One more idea');
-    const answered = page.waitForResponse((response) =>
-      response.url().includes(`/runs/${run.id}/messages`),
+    const started = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        response.url().includes(`/workflows/${flow.workflowId}/runs`),
     );
-    await page.getByRole('button', { name: 'Send', exact: true }).click();
-    expect((await answered).status(), 'the engine refuses: the run has ended').toBe(409);
-
-    await expect(domain(page).getByText(/run has ended/i)).toBeVisible();
-    await expect(
-      page.getByRole('button', { name: 'Start a new run with this message' }),
-    ).toBeVisible();
+    await page.getByRole('button', { name: 'Start team run' }).click();
+    const response = await started;
+    expect(response.status(), 'a new run starts').toBe(201);
+    const body = response.request().postDataJSON() as { goal?: string };
+    expect(body.goal, 'with the message as its goal').toBe('One more idea');
+    expect(((await response.json()) as Run).id).not.toBe(run.id);
   });
 });

@@ -24,6 +24,7 @@ import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
 import type { ProcessRunner, Repository, RunningProcess, Scope } from '../ports/index.js';
 import {
+  agentCommandReadOnly,
   processLimit,
   engineStopping,
   processNotRunning,
@@ -62,6 +63,30 @@ export interface ProcessService {
   forgetProject(projectId: Id): void;
   /** Shutdown (FR-SYS-008): stops every running process; resolves when each has ended. */
   stopAll(): Promise<void>;
+  /**
+   * PG-5.3 (D361): an agentic node's `run_command` (foreground or background) as a read-only row
+   * of the project's processes, tagged with its run and node: its output goes out as
+   * `process.output` frames and its end as `process.exited`, exactly as a person's command's do.
+   * It counts toward no limit and no trust level (the run's approvals govern it, D342), takes no
+   * input, and is stopped by its run, never from Forge. The feed's calls after the end are ignored.
+   */
+  observeAgentCommand(projectId: Id, spec: AgentCommandSpec): AgentCommandFeed;
+}
+
+/** PG-5.3: what an agent's command is, as the processes list shows it. */
+export interface AgentCommandSpec {
+  runId: Id;
+  nodeId: Id;
+  command: string;
+  /** Project-relative, as the list shows it (`''` for the root). */
+  cwd: string;
+}
+
+/** PG-5.3: an agent's command reporting in as it runs. */
+export interface AgentCommandFeed {
+  output(stream: ProcessStream, data: string): void;
+  /** `failed`: the shell never started. */
+  exited(exitCode: number | null, failed: boolean): void;
 }
 
 export interface ProcessServiceDeps {
@@ -81,6 +106,12 @@ export interface ProcessServiceDeps {
   /** The most one `process.output` frame carries; a bigger batch goes out as several frames. */
   frameMaxChars?: number;
   now?: () => string;
+  /**
+   * PG-5.2 (D361): a person's own command started (`true`) or ended (`false`), so the checkpoints
+   * can book what it changes as the person's. Never told about an agent's command. A throw here
+   * is logged and changes nothing about the process.
+   */
+  onPersonCommand?: (projectId: Id, processId: Id, running: boolean) => void;
 }
 
 /**
@@ -197,6 +228,23 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
     return project;
   }
 
+  /** PG-5.2: the checkpoints hear when a person's own command starts and ends. */
+  function personCommand(summary: ProcessSummary, running: boolean): void {
+    if (summary.agent !== undefined || deps.onPersonCommand === undefined) return;
+    try {
+      deps.onPersonCommand(summary.projectId, summary.id, running);
+    } catch (error) {
+      logger.warn(
+        {
+          subsystem: 'processes',
+          processId: summary.id,
+          reason: error instanceof Error ? error.message : String(error),
+        },
+        'could not tell the checkpoints about a terminal command',
+      );
+    }
+  }
+
   function find(projectId: Id, processId: Id): Supervised {
     const record = byProject.get(projectId)?.get(processId);
     if (record === undefined) throw notFound(`Process ${processId}`);
@@ -279,6 +327,7 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
       status,
     };
     void bus.emitTransient({ type: 'process.exited', payload });
+    personCommand(record.summary, false);
     record.markEnded();
     prune(record.summary.projectId);
   }
@@ -287,6 +336,8 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
     const waits: Array<Promise<void>> = [];
     for (const record of records) {
       if (record.summary.status !== 'running') continue;
+      // An agent's command is its run's to stop (PG-5.3): it holds no handle here.
+      if (record.summary.agent !== undefined) continue;
       record.handle?.stop();
       waits.push(record.ended);
     }
@@ -332,7 +383,9 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
       if (epochOf(projectId) !== epoch) throw terminalDisabled();
 
       const records = recordsOf(projectId);
-      const running = [...records.values()].filter((r) => r.summary.status === 'running').length;
+      const running = [...records.values()].filter(
+        (r) => r.summary.status === 'running' && r.summary.agent === undefined,
+      ).length;
       if (running >= maxRunning) throw processLimit(maxRunning);
 
       const summary: ProcessSummary = {
@@ -363,6 +416,7 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
         markEnded,
       };
       records.set(summary.id, record);
+      personCommand(summary, true);
 
       try {
         record.handle = runner.start(
@@ -391,6 +445,7 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
       } catch (error) {
         // A refused working folder: nothing ran, so nothing is remembered.
         records.delete(summary.id);
+        personCommand(summary, false);
         throw error;
       }
       return { processId: summary.id };
@@ -398,12 +453,16 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
 
     async input(projectId, processId, data) {
       const record = find(projectId, processId);
+      if (record.summary.agent !== undefined) throw agentCommandReadOnly(processId);
       if (record.summary.status !== 'running') throw processNotRunning(processId);
       record.handle?.write(data);
     },
 
     async stop(projectId, processId) {
       const record = find(projectId, processId);
+      if (record.summary.agent !== undefined && record.summary.status === 'running') {
+        throw agentCommandReadOnly(processId);
+      }
       // Idempotent: a finished process is already stopped.
       if (record.summary.status === 'running') record.handle?.stop();
     },
@@ -443,6 +502,48 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
     stopAll() {
       closed = true;
       return stopRunning([...byProject.values()].flatMap((records) => [...records.values()]));
+    },
+
+    observeAgentCommand(projectId, spec) {
+      const summary: ProcessSummary = {
+        id: newId(),
+        projectId,
+        label: labelOf(spec.command),
+        command: spec.command,
+        cwd: normaliseCwd(spec.cwd),
+        status: 'running',
+        exitCode: null,
+        signal: null,
+        startedAt: now(),
+        agent: { runId: spec.runId, nodeId: spec.nodeId },
+      };
+      let markEnded: () => void = () => undefined;
+      const ended = new Promise<void>((resolve) => {
+        markEnded = resolve;
+      });
+      starts += 1;
+      const record: Supervised = {
+        summary,
+        order: starts,
+        finishOrder: 0,
+        output: '',
+        truncated: false,
+        handle: undefined,
+        batcher: createBatcher<Chunk>({ intervalMs: batchMs, flush: flushTo(summary) }),
+        ended,
+        markEnded,
+      };
+      recordsOf(projectId).set(summary.id, record);
+      return {
+        output(stream, data) {
+          if (record.summary.status !== 'running' || data === '') return;
+          keep(record, data);
+          record.batcher.push({ stream, data });
+        },
+        exited(exitCode, failed) {
+          end(record, failed ? 'failed' : 'exited', exitCode, null);
+        },
+      };
     },
   };
 }

@@ -2,6 +2,9 @@ import {
   API_BASE_PATH,
   ARTIFACT_ACCEPT_RANGES,
   ARTIFACT_UPLOAD_FIELD,
+  ApprovalDecisionRequestSchema,
+  ChatEditRequestSchema,
+  ChatRetryRequestSchema,
   ChatRequestSchema,
   CreateProjectRequestSchema,
   CreateProviderRequestSchema,
@@ -11,10 +14,14 @@ import {
   EventsQuerySchema,
   HealthResponseSchema,
   MessageQuerySchema,
+  LocalModelRequestSchema,
   ModelQuerySchema,
   PostMessageRequestSchema,
+  PullModelRequestSchema,
+  RunExportQuerySchema,
   SettingsPatchSchema,
   StartRunRequestSchema,
+  TryModelRequestSchema,
   UpdateProjectRequestSchema,
   UpdateProviderRequestSchema,
   UpdateWorkflowRequestSchema,
@@ -39,6 +46,9 @@ import {
   ChatTargetInvalidError,
   ChatThreadNodeMismatchError,
   ChatThreadNotFoundError,
+  ChatApprovalNotFoundError,
+  ChatMessageNotFoundError,
+  ChatActionInvalidError,
   ChatWorkflowNotFoundError,
   NotAnAgentNodeError,
 } from '../chat/index.js';
@@ -46,12 +56,24 @@ import type { EventBus } from '../events/index.js';
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
 import type { GraphService } from '../graph/index.js';
-import type { ProviderService } from '../providers/index.js';
+import {
+  LocalModelRefusedError,
+  ProviderActionError,
+  ProviderNotFoundError,
+  type ProviderService,
+} from '../providers/index.js';
 import type { Auth, Repository, Scope } from '../ports/index.js';
 import type { ApprovalService } from '../approvals/index.js';
 import { createApprovalRoutes } from '../approvals/routes.js';
 import { createGuardrailRoutes, type PolicyService } from '../guardrails/index.js';
-import { createRunControlRoutes, type RunControls, type RunService } from '../runs/index.js';
+import {
+  buildRunExport,
+  createRunControlRoutes,
+  estimateWorkflow,
+  type RunControls,
+  type RunService,
+} from '../runs/index.js';
+import { utcDay } from '../budgets/index.js';
 import { createDomainRoutes } from '../domain/routes.js';
 import type { DomainService } from '../domain/service.js';
 import type { BackupService } from '../backup/index.js';
@@ -62,6 +84,8 @@ import type { KnowledgeService } from '../knowledge/service.js';
 import { createMemoryRoutes } from '../memory/routes.js';
 import type { MemoryService } from '../memory/service.js';
 import { createTemplateRoutes } from '../templates/routes.js';
+import { createBenchRoutes } from '../bench/routes.js';
+import type { BenchService } from '../bench/service.js';
 import type { TemplateService } from '../templates/service.js';
 import type { TraceService } from '../trace/index.js';
 import type { UsageService } from '../usage/index.js';
@@ -181,6 +205,9 @@ export interface EngineDeps {
   processes?: ProcessService;
   /** `/projects/:id/checkpoints/*`: review, keep and revert agents' changes (D300). */
   checkpoints?: CheckpointService;
+
+  /** `/bench/*`: ACE Bench's tasks, experiments, blind export, scores and report (PG-5.6). */
+  bench?: BenchService;
 }
 
 export interface EngineVariables {
@@ -318,11 +345,14 @@ function toChatHttpError(error: unknown): unknown {
   if (
     error instanceof ChatWorkflowNotFoundError ||
     error instanceof ChatNodeNotFoundError ||
-    error instanceof ChatThreadNotFoundError
+    error instanceof ChatThreadNotFoundError ||
+    error instanceof ChatMessageNotFoundError ||
+    error instanceof ChatApprovalNotFoundError
   ) {
     return notFound(error.message.replace(/\.$/, ''));
   }
   if (
+    error instanceof ChatActionInvalidError ||
     error instanceof NotAnAgentNodeError ||
     error instanceof ChatThreadNodeMismatchError ||
     error instanceof ChatTargetInvalidError
@@ -577,6 +607,46 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     c.json({ issues: await deps.graph.validateWorkflow(c.req.param('id')) }),
   );
 
+  /**
+   * PG-4.3: what a run of this workflow could cost, before it starts — read-only, no provider is
+   * called. The caps and today's spend ride along so the start dialog can say what is left.
+   */
+  api.post('/workflows/:id/estimate', async (c) => {
+    const { workflow, nodes, edges } = await deps.graph.getWorkflowGraph(c.req.param('id'));
+    const [catalog, providerRows, project, settings] = await Promise.all([
+      deps.repository.models.list(deps.scope, {}),
+      deps.repository.providers.list(deps.scope),
+      deps.repository.projects.get(deps.scope, workflow.projectId),
+      deps.repository.settings.get(deps.scope),
+    ]);
+    const today = utcDay(new Date());
+    const spent: { costUsd: number; costKnown?: boolean | undefined } =
+      deps.usage === undefined
+        ? {
+            costUsd:
+              (await deps.repository.nodeRuns.dailyCostUsd(deps.scope, today)) +
+              ((await deps.repository.chatMessages.dailyCostUsd?.(deps.scope, today)) ?? 0),
+          }
+        : (await deps.usage.dayTotals(today)).totals;
+    const runCap = project?.maxCostPerRunUsd;
+    const dailyCap = settings.dailyBudgetUsd;
+    return c.json(
+      estimateWorkflow({
+        workflow,
+        nodes,
+        edges,
+        catalog,
+        providers: providerRows,
+        budget: {
+          ...(runCap === undefined || runCap === null ? {} : { maxCostPerRunUsd: runCap }),
+          ...(dailyCap === undefined || dailyCap === null ? {} : { dailyBudgetUsd: dailyCap }),
+          spentTodayUsd: spent.costUsd,
+          spentTodayKnown: spent.costKnown !== false,
+        },
+      }),
+    );
+  });
+
   api.get('/workflows/:id/export', async (c) =>
     c.json(await deps.graph.exportWorkflow(c.req.param('id'))),
   );
@@ -640,6 +710,82 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     c.json(await providers(c).refreshModels(c.req.param('id'))),
   );
 
+  /* ------------------------------------------- models on this machine (PG-1.4, D359) */
+
+  /**
+   * A local-model or try call: a missing provider is 404, a provider that is not Ollama 400, and
+   * a failure of the runtime or the model answered with its (masked) reason.
+   */
+  async function localAction<T>(
+    id: string,
+    action: ((id: string) => Promise<T>) | undefined,
+  ): Promise<T> {
+    if (action === undefined) throw notImplemented('Managing local models');
+    try {
+      return await action(id);
+    } catch (error) {
+      if (error instanceof ProviderNotFoundError) throw notFound(`provider ${id}`);
+      if (error instanceof LocalModelRefusedError) {
+        throw new HttpError('invalid_config', 'validation_failed', error.message);
+      }
+      if (error instanceof ProviderActionError) {
+        throw new HttpError('provider', 'internal', error.message, undefined, true);
+      }
+      throw error;
+    }
+  }
+
+  api.get('/local-runtime', async (c) => {
+    const service = providers(c);
+    if (service.localRuntime === undefined) throw notImplemented('The local runtime');
+    return c.json(await service.localRuntime());
+  });
+
+  /** Start Ollama when it is installed and stopped, and add its provider when there is none. */
+  api.post('/local-runtime/start', async (c) => {
+    const service = providers(c);
+    if (service.ensureLocalRuntime === undefined) throw notImplemented('The local runtime');
+    return c.json(await service.ensureLocalRuntime());
+  });
+
+  api.get('/providers/:id/local/running', async (c) => {
+    const service = providers(c);
+    const items = await localAction(c.req.param('id'), service.runningLocalModels?.bind(service));
+    return c.json({ items });
+  });
+
+  api.post('/providers/:id/local/load', async (c) => {
+    const { modelId } = LocalModelRequestSchema.parse(await readJson(c));
+    const service = providers(c);
+    const load = service.loadLocalModel?.bind(service);
+    return c.json(await localAction(c.req.param('id'), load && ((id) => load(id, modelId))));
+  });
+
+  api.post('/providers/:id/local/unload', async (c) => {
+    const { modelId } = LocalModelRequestSchema.parse(await readJson(c));
+    const service = providers(c);
+    const unload = service.unloadLocalModel?.bind(service);
+    return c.json(await localAction(c.req.param('id'), unload && ((id) => unload(id, modelId))));
+  });
+
+  /** 202: the pull runs on; its progress rides `model.pull` on the engine subscription. */
+  api.post('/providers/:id/local/pull', async (c) => {
+    const { name } = PullModelRequestSchema.parse(await readJson(c));
+    const service = providers(c);
+    const pull = service.pullLocalModel?.bind(service);
+    return c.json(await localAction(c.req.param('id'), pull && ((id) => pull(id, name))), 202);
+  });
+
+  /** "Try this model": one call, no tools, a 60 s limit — any provider. */
+  api.post('/providers/:id/try', async (c) => {
+    const { modelId, prompt } = TryModelRequestSchema.parse(await readJson(c));
+    const service = providers(c);
+    const tryModel = service.tryModel?.bind(service);
+    return c.json(
+      await localAction(c.req.param('id'), tryModel && ((id) => tryModel(id, modelId, prompt))),
+    );
+  });
+
   api.get('/models', async (c) => {
     const query = ModelQuerySchema.parse(c.req.query());
     const items = await providers(c).listModels(query);
@@ -693,6 +839,42 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
         payload: event.payload,
       })),
     );
+  });
+
+  /*
+   * PG-5.5 (FR-BEN-005): one run as a judging bundle — the run record, its node runs, each node's
+   * final output and its event log. `?anonymise=1` strips node names, providers and models for
+   * blind judging (TC-BEN-004). Never a secret: every string goes through the mask.
+   */
+  api.get('/runs/:id/export', async (c) => {
+    const { anonymise } = RunExportQuerySchema.parse(c.req.query());
+    const runId = c.req.param('id');
+    const run = await runs(c).getRun(runId);
+    const [nodeRuns, events, providerRows, models] = await Promise.all([
+      runs(c).listNodeRuns(runId),
+      deps.repository.events.listAfter(deps.scope, 0, { runIds: [runId] }),
+      deps.repository.providers.list(deps.scope),
+      deps.repository.models.list(deps.scope, {}),
+    ]);
+    const bundle = buildRunExport({
+      run,
+      nodeRuns,
+      events: events.map((event) => ({
+        seq: event.seq,
+        at: event.createdAt,
+        ...(event.runId === undefined ? {} : { runId: event.runId }),
+        ...(event.workflowId === undefined ? {} : { workflowId: event.workflowId }),
+        type: event.type,
+        payload: event.payload,
+      })),
+      anonymise,
+      providers: providerRows,
+      models,
+      now: () => new Date().toISOString(),
+    });
+    const name = `run-${run.id}${anonymise ? '-anonymised' : ''}.json`;
+    c.header('Content-Disposition', `attachment; filename="${name}"`);
+    return c.json(bundle);
   });
 
   api.get('/node-runs/:id', async (c) => c.json(await runs(c).getNodeRun(c.req.param('id'))));
@@ -837,6 +1019,80 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     }
   });
 
+  /* PG-1.6 (D352): message actions. Retry and edit answer 202 like `POST /nodes/:id/chat`. */
+  api.post('/chat/threads/:id/messages/:messageId/retry', async (c) => {
+    // PG-2.4 (D361): an optional `{ withoutUndo }` — Run without undo, once.
+    const request = ChatRetryRequestSchema.parse(await readJson(c));
+    try {
+      const begun = await chat(c).retryMessage(
+        c.req.param('id'),
+        c.req.param('messageId'),
+        request.withoutUndo === true ? { withoutUndo: true } : {},
+      );
+      return c.json({ threadId: begun.threadId, messageId: begun.messageId }, 202);
+    } catch (error) {
+      throw toChatHttpError(error);
+    }
+  });
+
+  /* PG-2.2 (D359): a chat tool call waiting on a person, and its decision. */
+  api.get('/chat/threads/:id/approvals', async (c) => {
+    try {
+      return c.json(await chat(c).listApprovals(c.req.param('id')));
+    } catch (error) {
+      throw toChatHttpError(error);
+    }
+  });
+
+  const decideChatApproval = (kind: 'approve' | 'reject') => async (c: Context) => {
+    const { note } = ApprovalDecisionRequestSchema.parse(await readJson(c));
+    try {
+      return c.json(
+        await chat(c).decideApproval(
+          c.req.param('id') ?? '',
+          c.req.param('requestId') ?? '',
+          kind,
+          note,
+        ),
+      );
+    } catch (error) {
+      throw toChatHttpError(error);
+    }
+  };
+  api.post('/chat/threads/:id/approvals/:requestId/approve', decideChatApproval('approve'));
+  api.post('/chat/threads/:id/approvals/:requestId/reject', decideChatApproval('reject'));
+
+  api.post('/chat/threads/:id/messages/:messageId/edit', async (c) => {
+    const request = ChatEditRequestSchema.parse(await readJson(c));
+    try {
+      const begun = await chat(c).editMessage(
+        c.req.param('id'),
+        c.req.param('messageId'),
+        request.content,
+      );
+      return c.json({ threadId: begun.threadId, messageId: begun.messageId }, 202);
+    } catch (error) {
+      throw toChatHttpError(error);
+    }
+  });
+
+  api.delete('/chat/threads/:id/messages/:messageId', async (c) => {
+    try {
+      await chat(c).deleteMessage(c.req.param('id'), c.req.param('messageId'));
+      return c.body(null, 204);
+    } catch (error) {
+      throw toChatHttpError(error);
+    }
+  });
+
+  api.post('/chat/threads/:id/stop', async (c) => {
+    try {
+      return c.json(await chat(c).stopThread(c.req.param('id')));
+    } catch (error) {
+      throw toChatHttpError(error);
+    }
+  });
+
   /*
    * Round 3's routes, three sub-routers mounted with one line each (§2.5, D121). They go on before
    * `api` is mounted so they sit inside the same `/api/v1` prefix and inherit the request-id, CORS,
@@ -865,6 +1121,8 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.route('/', createProcessRoutes(deps.processes));
   /* IDE (D300): checkpoints of agents' changes, inside the same middleware. */
   api.route('/', createCheckpointRoutes(deps.checkpoints));
+  /* PG-5.6: ACE Bench (Arch §20.2), inside the same middleware. */
+  api.route('/', createBenchRoutes(deps.bench));
 
   app.route(API_BASE_PATH, api);
 

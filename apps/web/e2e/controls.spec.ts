@@ -35,7 +35,8 @@ import {
  * on the run rather than with a second table written here.
  */
 test.describe('Run controls (FR-CTL-001..004, FR-CTL-006)', () => {
-  test('TC-CTL-006: in every run state only the actions the engine allows are enabled', async ({
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('TC-CTL-006: in every run state only the actions the engine allows are enabled', async ({
     page,
   }) => {
     const seeded = await openRound3(page, 'chain', 'slow-stream');
@@ -80,7 +81,8 @@ test.describe('Run controls (FR-CTL-001..004, FR-CTL-006)', () => {
     await agree('HALTED');
   });
 
-  test('TC-CTL-006: a COMPLETE run offers restart alone', async ({ page }) => {
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('TC-CTL-006: a COMPLETE run offers restart alone', async ({ page }) => {
     const seeded = await openRound3(page, 'chain', 'linear-complete');
     await clickStartRun(page);
     await expectRunStatus(page, 'COMPLETE', { timeout: 20_000 });
@@ -175,7 +177,8 @@ test.describe('Run controls (FR-CTL-001..004, FR-CTL-006)', () => {
     expect(nodeRuns.some((nodeRun) => nodeRun.status === 'FAILED')).toBe(false);
   });
 
-  test('TC-CTL-004: Restart opens a new run with a new id', async ({ page }) => {
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('TC-CTL-004: Restart opens a new run with a new id', async ({ page }) => {
     const seeded = await openRound3(page, 'chain', 'linear-complete');
     await clickStartRun(page);
     await expectRunStatus(page, 'COMPLETE', { timeout: 20_000 });

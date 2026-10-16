@@ -3,6 +3,8 @@ import { ViewportPortal, useStore, type ReactFlowState } from '@xyflow/react';
 import { memo, useMemo } from 'react';
 
 import { anchorOfPort, type Point } from '../nodes/anchors';
+import type { PortConnectState } from './interactions/ports';
+import { GHOST_EDGE_CLASS } from './run-snapshot';
 import type { AceAnyFlowEdge } from './to-flow';
 import { edgePath } from './viewport';
 
@@ -18,6 +20,8 @@ export interface EdgeStrokeProps {
   x2: number;
   y2: number;
   selected: boolean;
+  /** PG-4.4: an edge the live run still walks but the graph lost — drawn faint. */
+  ghost?: boolean;
 }
 
 /**
@@ -33,9 +37,15 @@ export const EdgeStroke = memo(function EdgeStroke({
   x2,
   y2,
   selected,
+  ghost = false,
 }: EdgeStrokeProps) {
   return (
-    <g data-testid={`edge-line-${id}`} data-selected={selected ? 'true' : 'false'}>
+    <g
+      data-testid={`edge-line-${id}`}
+      data-selected={selected ? 'true' : 'false'}
+      data-ghost={ghost ? 'true' : undefined}
+      opacity={ghost ? 0.35 : undefined}
+    >
       <path
         d={d}
         style={{
@@ -113,6 +123,109 @@ function labelOf(edge: AceAnyFlowEdge): EdgeLabel {
 
 const selectNodes = (state: ReactFlowState) => state.nodes;
 
+/** How a port's dot shows above the edges: fully, or dimmed (an incompatible drop, D350). */
+export type PortDotLook = 'on' | 'dim';
+
+/**
+ * D350: the ports shown above the edge layer — while a line is drawn, every candidate (dimmed when
+ * it would be refused); otherwise the selected cards' and an armed one. A hovered card's ports
+ * show through its handles (theme.css): tracking the pointer in React cost the 200-node pan its
+ * frame budget (TC-NFR-001).
+ */
+export function shownPorts(
+  nodes: readonly Node[],
+  connectStates: ReadonlyMap<string, PortConnectState> | undefined,
+  selectedNodeIds: readonly string[],
+  armedPortId: string | undefined,
+): Map<string, PortDotLook> {
+  const shown = new Map<string, PortDotLook>();
+  if (connectStates !== undefined) {
+    for (const [portId, state] of connectStates) {
+      shown.set(portId, state.look === 'incompatible' ? 'dim' : 'on');
+    }
+    return shown;
+  }
+  const lit = new Set(selectedNodeIds);
+  for (const node of nodes) {
+    if (!lit.has(node.id)) continue;
+    for (const port of [...node.inputs, ...node.outputs]) shown.set(port.id, 'on');
+  }
+  if (armedPortId !== undefined) shown.set(armedPortId, 'on');
+  return shown;
+}
+
+/**
+ * PG-1.1 (D350): ports sit above the edge layer. The edges are drawn over the nodes (D332), so a
+ * port's own handle — inside its card — would sit under any edge crossing it; this layer repeats
+ * each shown port's dot just above the edges, at the same anchor and in the same colour. It touches
+ * no pointer: the handle underneath still takes the press.
+ */
+export const PortDotLayer = memo(function PortDotLayer({
+  nodes,
+  connectStates,
+  selectedNodeIds,
+  armedPortId,
+}: {
+  nodes: readonly Node[];
+  /** While a line is drawn: every candidate port, compatible or not (D350). */
+  connectStates: ReadonlyMap<string, PortConnectState> | undefined;
+  selectedNodeIds: readonly string[];
+  armedPortId: string | undefined;
+}) {
+  const shown = useMemo(
+    () => shownPorts(nodes, connectStates, selectedNodeIds, armedPortId),
+    [nodes, connectStates, selectedNodeIds, armedPortId],
+  );
+  // nothing shown: nothing subscribed to the store either (TC-NFR-001)
+  return shown.size === 0 ? null : <PortDots nodes={nodes} shown={shown} />;
+});
+
+function PortDots({
+  nodes,
+  shown,
+}: {
+  nodes: readonly Node[];
+  shown: ReadonlyMap<string, PortDotLook>;
+}) {
+  const live = useStore(selectNodes);
+  const positions = new Map(live.map((node) => [node.id, node.position]));
+  const dots = nodes.flatMap((node) => {
+    const at = positions.get(node.id);
+    if (at === undefined) return [];
+    return [...node.inputs, ...node.outputs].flatMap((port) => {
+      const look = shown.get(port.id);
+      const anchor = look === undefined ? undefined : anchorOfPort(node, port.id);
+      return look === undefined || anchor === undefined
+        ? []
+        : [{ id: port.id, x: at.x + anchor.x, y: at.y + anchor.y, look, type: port.dataType }];
+    });
+  });
+  return (
+    <ViewportPortal>
+      <div
+        data-testid="canvas-port-dots"
+        aria-hidden
+        className="pointer-events-none absolute left-0 top-0 z-[2001]"
+      >
+        {dots.map((dot) => (
+          <span
+            key={dot.id}
+            data-testid={`port-dot-${dot.id}`}
+            data-look={dot.look}
+            className="ace-port-dot"
+            style={{
+              left: dot.x,
+              top: dot.y,
+              opacity: dot.look === 'dim' ? 0.35 : 1,
+              ['--port-color' as string]: `var(--port-${dot.type})`,
+            }}
+          />
+        ))}
+      </div>
+    </ViewportPortal>
+  );
+}
+
 /**
  * Every edge's look, drawn above the nodes as the theme draws them (D332). It lives in React Flow's
  * viewport portal — after the node layer, in the same pan and zoom — and touches no pointer: React
@@ -158,6 +271,7 @@ export const EdgeLayer = memo(function EdgeLayer({
         x2,
         y2,
         selected: edge.selected === true,
+        ghost: edge.className === GHOST_EDGE_CLASS,
         label,
         ...edgePath(x1, y1, x2, y2),
       },
@@ -174,7 +288,7 @@ export const EdgeLayer = memo(function EdgeLayer({
           className="pointer-events-none absolute left-0 top-0 h-px w-px overflow-visible"
           aria-hidden
         >
-          {drawn.map(({ id, d, x1, y1, x2, y2, selected }) => (
+          {drawn.map(({ id, d, x1, y1, x2, y2, selected, ghost }) => (
             <EdgeStroke
               key={id}
               id={id}
@@ -184,6 +298,7 @@ export const EdgeLayer = memo(function EdgeLayer({
               x2={x2}
               y2={y2}
               selected={selected}
+              ghost={ghost}
             />
           ))}
         </svg>

@@ -42,6 +42,8 @@ export interface ProjectSummary {
   live: boolean | undefined;
   /** Epoch ms of max(`lastOpenedAt`, `updatedAt`, every workflow's `updatedAt`). */
   lastActivity: number | undefined;
+  /** PG-3.7: the workflow last worked on — what the card's mode links open. */
+  workflowId: string | undefined;
 }
 
 const settled = (query: UseQueryResult) => query.isSuccess || query.isError;
@@ -123,7 +125,9 @@ export function useProjectSummaries(
       live = false;
     }
 
+    const newest = [...(workflows ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
     summaries.set(project.id, {
+      workflowId: newest?.id,
       agents,
       repo: repoQuery?.isSuccess ? repoQuery.data.repo : undefined,
       live,

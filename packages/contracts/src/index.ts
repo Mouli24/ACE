@@ -20,6 +20,7 @@ export * from './ws.js';
 /* Round 2 */
 export * from './providers.js';
 export * from './models.js';
+export * from './local-models.js';
 export * from './runs.js';
 export * from './envelope.js';
 export * from './events.js';
@@ -44,3 +45,5 @@ export * from './workspace.js';
 export * from './checkpoints.js';
 /* Domain (D303–D327) */
 export * from './domain.js';
+/* ACE Bench (PG-5.6) */
+export * from './bench.js';

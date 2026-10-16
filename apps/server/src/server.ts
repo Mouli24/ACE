@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { createWriteStream, mkdirSync, writeFileSync, type WriteStream } from 'node:fs';
 import type { Server } from 'node:http';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 
 import {
   WS_CLOSE_FORBIDDEN_ORIGIN,
@@ -41,6 +41,7 @@ import {
   createModelSummariser,
   createPolicyService,
   createCheckpointService,
+  createBenchService,
   createProcessService,
   createProviderService,
   createDomainRegistry,
@@ -119,6 +120,7 @@ import {
   cannedResultsAt,
   createAgentSession,
   createFsProjectFiles,
+  type AgentCommandObserver,
   type OwnedAgentSession,
   createGitCheckpointStore,
   createProcessRunner,
@@ -126,6 +128,7 @@ import {
 } from '@ace/tools';
 import { WebSocketServer } from 'ws';
 
+import { migrateFullAutoProviders } from './full-auto-migration.js';
 import { createPricingLoader } from './pricing.js';
 
 export const ENGINE_VERSION = '0.1.0';
@@ -273,6 +276,11 @@ export interface StartEngineOptions {
    * point it at a scripted CLI, so `pnpm test` never starts a real one.
    */
   cliResolve?: (bin: string) => ResolvedCommand | undefined;
+  /**
+   * PG-1.4 (D359): find, start and add the local Ollama without being asked — at start and on
+   * `GET /providers/detect`. Only `ace-engine` turns it on; a test engine never starts anything.
+   */
+  autoLocalRuntime?: boolean;
 }
 
 export interface RunningEngine {
@@ -391,6 +399,14 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   /* ------------------------------------------------------------------ engine */
 
   const bus = createEventBus({ repository, scope: LOCAL_SCOPE, pubsub });
+  // D355 (PG-2.3): a CLI provider an older engine left on Full auto is moved to Edit project files
+  // before any provider is built or checked, with one notice. Never the reason the engine does not
+  // start: the adapters already run an old `full_auto` row as `edit_files`.
+  try {
+    await migrateFullAutoProviders({ repository, scope: LOCAL_SCOPE, bus, logger });
+  } catch (error) {
+    logger.error({ subsystem: 'providers', err: error }, 'could not move Full auto providers');
+  }
   // D300: every agent write is checkpointed in a private git store under the data dir, outside
   // the project's own .git (design §5.1). A checkpoint left recording by the last process is
   // marked failed at startup, below.
@@ -410,6 +426,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     logger: logger.child({ subsystem: 'workspace' }),
     // D300: the person's own writes are never claimed by an agent's checkpoint
     onPersonWrite: (projectId, paths) => checkpoints.notePersonWrite(projectId, paths),
+    // PG-5.2: nor what their own terminal command changes (the processes below say when one runs)
+    onFilesChanged: (projectId, paths) => checkpoints.noteFilesChanged(projectId, paths),
   });
   // Forge's terminal (D301): a person's commands as supervised processes. Agents never get it.
   const processes = createProcessService({
@@ -418,6 +436,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     runner: createProcessRunner(),
     bus,
     logger: logger.child({ subsystem: 'processes' }),
+    onPersonCommand: (projectId, processId, running) =>
+      checkpoints.notePersonCommand(projectId, processId, running),
   });
   const hub = createWsHub({
     bus,
@@ -428,7 +448,11 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     onProjectWatch: (projectId, watched) => {
       workspace.setWatched(projectId, watched).catch((error: unknown) => {
         logger.warn(
-          { subsystem: 'workspace', projectId, reason: error instanceof Error ? error.message : String(error) },
+          {
+            subsystem: 'workspace',
+            projectId,
+            reason: error instanceof Error ? error.message : String(error),
+          },
           'could not change the project watch',
         );
       });
@@ -454,6 +478,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     factory,
     bus,
     logger: logger.child({ subsystem: 'providers' }),
+    autoLocalRuntime: options.autoLocalRuntime === true,
   });
 
   /*
@@ -635,10 +660,41 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
    * Chat turns pass no node id and get none, so they behave as before (D302).
    */
   const agentSessions = new Map<Id, OwnedAgentSession>();
-  const agentSessionFor = (runId: Id): OwnedAgentSession => {
+  /**
+   * PG-5.3 (D361): a run's commands as read-only rows of its project's processes, so Forge's
+   * Terminal and Processes list show what an agent runs. The run's project is looked up once; the
+   * feed's calls queue behind that lookup in order, and a run without a project shows nothing.
+   */
+  const agentCommandsFor = (runId: Id, projectDir: string): AgentCommandObserver => {
+    const projectId = repository.runs
+      .get(LOCAL_SCOPE, runId)
+      .then((run) => run?.projectId)
+      .catch(() => undefined);
+    return {
+      started(spec) {
+        const rel = relative(projectDir, spec.cwd);
+        const cwd = rel === '' || rel.startsWith('..') ? '' : rel.split(sep).join('/');
+        const feed = projectId.then((id) =>
+          id === undefined
+            ? undefined
+            : processes.observeAgentCommand(id, {
+                runId,
+                nodeId: spec.nodeId,
+                command: spec.command,
+                cwd,
+              }),
+        );
+        return {
+          output: (stream, data) => void feed.then((open) => open?.output(stream, data)),
+          exited: (exitCode, failed) => void feed.then((open) => open?.exited(exitCode, failed)),
+        };
+      },
+    };
+  };
+  const agentSessionFor = (runId: Id, projectDir: string): OwnedAgentSession => {
     let session = agentSessions.get(runId);
     if (session === undefined) {
-      session = createAgentSession();
+      session = createAgentSession({ commands: agentCommandsFor(runId, projectDir) });
       agentSessions.set(runId, session);
     }
     return session;
@@ -664,7 +720,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
             ...(ctx.projectDir === undefined ? {} : { projectDir: ctx.projectDir }),
             ...(ctx.nodeId === undefined || ctx.projectDir === undefined
               ? {}
-              : { nodeId: ctx.nodeId, session: agentSessionFor(ctx.runId) }),
+              : { nodeId: ctx.nodeId, session: agentSessionFor(ctx.runId, ctx.projectDir) }),
             logger: toolLogger,
             signal: ctx.signal,
           }),
@@ -884,6 +940,10 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     logger: logger.child({ subsystem: 'runs' }),
     // The controls never execute anything themselves; these three are the scheduler (FR-CTL-004/005).
     driveRecordedRun: (run) => runs.driveRecordedRun(run),
+    // PG-5.4: a replay is driven by the same scheduler, answered from the source run's recording.
+    ...(runs.driveReplayRun === undefined
+      ? {}
+      : { driveReplayRun: runs.driveReplayRun.bind(runs) }),
     drivePartialRun: (plan) => runs.drivePartialRun(plan),
     envelopesFor: (run, nodeId) => runs.envelopesFor(run, nodeId),
   });
@@ -1013,6 +1073,17 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   for (const run of recovered.reopened) await runs.resumeOpenRun(run);
 
   /*
+   * PG-1.5: a chat turn the last process accepted (202) but never answered — it died, or shut down,
+   * mid-reply — gets its failed turn now, so no client is left "typing…" forever. Never the reason
+   * the engine does not start.
+   */
+  try {
+    await chatService.recoverOpenTurns();
+  } catch (error) {
+    logger.error({ subsystem: 'chat', err: error }, 'could not close chat turns left open');
+  }
+
+  /*
    * F7: a document the last process left mid-pipeline goes back to `pending` and is queued again —
    * never stuck `parsing` — and only then does the worker start draining, outside any transaction.
    */
@@ -1022,6 +1093,16 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
 
   /* FR-PRV-004: re-check every provider on a timer, so the UI's chips stay honest. */
   const stopPeriodicChecks = providers.startPeriodicChecks();
+
+  /*
+   * PG-1.4 (D359): the local Ollama is started (hidden) when it is installed and stopped, and its
+   * provider added with its models — in the background, so a slow start never delays the engine.
+   */
+  if (options.autoLocalRuntime === true) {
+    void providers.ensureLocalRuntime().catch((error: unknown) => {
+      logger.warn({ subsystem: 'providers', err: error }, 'could not start the local Ollama');
+    });
+  }
 
   /* Arch §15.4: sweep what expired while the engine was off, then keep sweeping on a timer. */
   await sweepArtifacts();
@@ -1057,6 +1138,22 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     addDocument: (kbId, body) => knowledge.addDocument(kbId, body),
     storeArtifact: (bytes, mime, name) => artifactService.upload(bytes, { mime, name }),
   });
+
+  /*
+   * ACE Bench (PG-5.6): tasks, experiments and their runs. Bench runs are ordinary runs recorded
+   * by the bench and driven by the run service — guardrails, budgets, approvals and the event log
+   * all apply — one at a time, so concurrency never skews one arm's latency.
+   */
+  const bench = createBenchService({
+    bench: repository.bench,
+    repository,
+    scope: LOCAL_SCOPE,
+    bus,
+    logger,
+    runs,
+    buildVersion: ENGINE_VERSION,
+  });
+  await bench.start();
 
   /*
    * Backup and restore (FR-SYS-012, F12) on the live connection. `exclusive` keeps a repository
@@ -1129,6 +1226,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     processes,
     /* IDE (D300): review, keep and revert agents' changes. */
     checkpoints,
+    /* PG-5.6: ACE Bench. */
+    bench,
   });
 
   /* -------------------------------------------------------------------- http */
@@ -1232,6 +1331,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     // The document in flight finishes before the database closes; the rest are re-queued at start (F7).
     try {
       await ingestion.stop();
+      // The bench queue stops after its current run, which the run service halts next.
+      await bench.stop();
       await runs.shutdown();
       await haltActiveRuns({
         repository,
@@ -1250,6 +1351,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
       // database closes; none outlives the engine, even if an earlier step above rejected.
       workspace.stopAll();
       await processes.stopAll();
+      // PG-1.4 (D359): an Ollama this engine started stops with it; one the person started stays.
+      await providers.stopLocalRuntime().catch(() => undefined);
       await Promise.all([...agentSessions.keys()].map((runId) => endAgentSession(runId)));
     }
     hub.closeAll();

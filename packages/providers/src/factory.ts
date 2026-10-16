@@ -1,5 +1,11 @@
 import { DEFAULT_CLI_PERMISSION, type Model, type Provider, type ProviderType } from '@ace/contracts';
-import type { ModelInfo, ProviderAdapter, ProviderAdapterFactory, ProviderDetection } from '@ace/engine';
+import type {
+  LocalModelControl,
+  ModelInfo,
+  ProviderAdapter,
+  ProviderAdapterFactory,
+  ProviderDetection,
+} from '@ace/engine';
 
 import { createAnthropicAdapter } from './adapters/anthropic.js';
 import { createClaudeCodeAdapter } from './adapters/cli/claude-code.js';
@@ -10,6 +16,7 @@ import type { ResolvedCommand } from './adapters/cli/resolve.js';
 import { createGoogleAdapter } from './adapters/google.js';
 import { createMockAdapter, type MockProviderAdapter } from './adapters/mock.js';
 import { createOllamaAdapter, detectOllama, DEFAULT_OLLAMA_BASE_URL } from './adapters/ollama.js';
+import { createOllamaRuntime } from './adapters/ollama-runtime.js';
 import { createOpenAiAdapter } from './adapters/openai.js';
 import { createOpenAiCompatibleAdapter } from './adapters/openai-compatible.js';
 import { manifestFor, mergeCatalog } from './catalog/index.js';
@@ -30,6 +37,11 @@ export interface ProviderFactoryOptions {
    * model listing never starts the real CLI (D286).
    */
   cliResolve?: (bin: string) => ResolvedCommand | undefined;
+  /**
+   * PG-1.4 (D359): the local Ollama runtime — found, started and driven without a terminal. The
+   * default finds the real one; `false` leaves the factory without one.
+   */
+  localRuntime?: LocalModelControl | false;
 }
 
 /** Thrown when a provider row asks for a type this build has no adapter for. */
@@ -49,6 +61,10 @@ export function createProviderAdapterFactory(
   const fetchImpl = options.fetchImpl;
   const cli = options.cliDetector ?? createCliDetector();
   const cliResolve = options.cliResolve;
+  const local =
+    options.localRuntime === false
+      ? undefined
+      : (options.localRuntime ?? createOllamaRuntime(fetchImpl === undefined ? {} : { fetchImpl }));
 
   return {
     create(provider: Provider, apiKey: string | undefined): ProviderAdapter {
@@ -132,5 +148,7 @@ export function createProviderAdapterFactory(
 
     // The Add-provider scan is always fresh; health checks read the 60 s cache.
     detectClis: () => cli.detectAll({ force: true }),
+
+    ...(local === undefined ? {} : { local }),
   };
 }

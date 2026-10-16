@@ -111,7 +111,10 @@ describe('TC-EXE-009 the inspector shows what the node run recorded', () => {
     // BR-02/BR-13: the envelope says what came in, on what budget, and how trusted it was.
     const trust = await within(inspector).findByTestId('envelope-trust');
     expect(trust).toHaveTextContent(/trusted|untrusted/);
-    expect(within(inspector).getByText(/budget \d+ tokens/)).toBeInTheDocument();
+    // PG-4.1: the budget reads as used of budget ("≈ 12 of 4,000 tokens used").
+    expect(within(inspector).getByTestId('envelope-usage')).toHaveTextContent(
+      /≈ [\d,]+ of [\d,]+ tokens used/,
+    );
     expect(await within(inspector).findByTestId('inspector-output')).not.toBeEmptyDOMElement();
   });
 

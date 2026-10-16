@@ -416,3 +416,36 @@ describe('TC-CHAT-004/006 direct agent chat (round 4 §2.3/§2.4)', () => {
     ]);
   });
 });
+
+describe('PG-1.6 message actions (D352)', () => {
+  it('retry and edit answer 202 { threadId, messageId }; delete is 204; stop says whether it stopped', async () => {
+    const { calls, client } = recorder([
+      { status: 202, body: chatResponse },
+      { status: 202, body: chatResponse },
+      { status: 204 },
+      { body: { stopped: true } },
+    ]);
+
+    expect(await client.retryChatMessage(TH, CM)).toEqual(chatResponse);
+    expect(
+      await client.editChatMessage(TH, CM, { content: [{ type: 'text', text: 'again' }] }),
+    ).toEqual(chatResponse);
+    await expect(client.deleteChatMessage(TH, CM)).resolves.toBeUndefined();
+    expect(await client.stopChatThread(TH)).toEqual({ stopped: true });
+
+    expect(paths(calls)).toEqual([
+      `POST /chat/threads/${TH}/messages/${CM}/retry`,
+      `POST /chat/threads/${TH}/messages/${CM}/edit`,
+      `DELETE /chat/threads/${TH}/messages/${CM}`,
+      `POST /chat/threads/${TH}/stop`,
+    ]);
+    expect(calls[1]?.body).toEqual({ content: [{ type: 'text', text: 'again' }] });
+  });
+
+  it('an edit with no content is refused before it is sent', async () => {
+    const { calls, client } = recorder([{ status: 202, body: chatResponse }]);
+    const error = await client.editChatMessage(TH, CM, { content: [] }).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: 'validation_failed', status: 0 });
+    expect(calls).toHaveLength(0);
+  });
+});

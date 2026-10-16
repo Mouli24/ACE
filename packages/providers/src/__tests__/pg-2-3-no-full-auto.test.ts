@@ -39,15 +39,15 @@ describe('PG-2.3 no code path builds a bypass-everything CLI flag', () => {
     expect(files).toContain('adapters/cli/codex.ts');
   });
 
-  it.fails('no source file builds Claude Code’s bypassPermissions', () => {
+  it('no source file builds Claude Code’s bypassPermissions', () => {
     expect(filesContaining(/bypassPermissions/)).toEqual([]);
   });
 
-  it.fails('no source file builds Codex’s --dangerously-bypass-approvals-and-sandbox', () => {
+  it('no source file builds Codex’s --dangerously-bypass-approvals-and-sandbox', () => {
     expect(filesContaining(/--dangerously-bypass-approvals-and-sandbox/)).toEqual([]);
   });
 
-  it.fails('no source file builds Gemini’s yolo approval mode', () => {
+  it('no source file builds Gemini’s yolo approval mode', () => {
     expect(filesContaining(/['"]yolo['"]/)).toEqual([]);
   });
 });

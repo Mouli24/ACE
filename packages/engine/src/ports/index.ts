@@ -27,3 +27,4 @@ export * from './auth.js';
 export * from './workspace.js';
 export * from './processes.js';
 export * from './checkpoints.js';
+export * from './bench.js';

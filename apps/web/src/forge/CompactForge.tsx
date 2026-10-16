@@ -1,4 +1,4 @@
-import { Button } from '@ace/ui';
+import { Button, Icons } from '@ace/ui';
 import { useState } from 'react';
 
 import { TOUCH_TARGETS } from '../responsive/touch';
@@ -90,7 +90,7 @@ function CompactFile({
         className={`flex h-[44px] min-w-0 shrink-0 items-center gap-[6px] overflow-hidden border-b border-[var(--line)] bg-[var(--panel)] pl-[4px] pr-[14px] font-machine text-[11px] ${TOUCH_TARGETS}`}
       >
         <Button variant="ghost" size="sm" className="shrink-0 font-human" onClick={onBack}>
-          <span aria-hidden>←</span> Files
+          <Icons.ArrowLeft aria-hidden size={12} /> Files
         </Button>
         {crumbs.map((crumb, index) => {
           const last = index === crumbs.length - 1;

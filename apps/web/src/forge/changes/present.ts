@@ -11,16 +11,28 @@ import { AceApiError } from '@ace/sdk';
  * §10): where it came from, its status in words, and the note a failed one carries.
  */
 
-/** "Chat with Writer", or "Run 7KQ4R7" — the last six characters of the run's id. */
+/**
+ * "Chat with Writer", "Run 7KQ4R7" (the last six characters of the run's id), or — one writing
+ * node's step of a run (PG-5.1) — "Run 7KQ4R7 · Writer".
+ */
 export function sourceLabel(
   checkpoint: Checkpoint,
   nodeName: (nodeId: string) => string | undefined = () => undefined,
 ): string {
-  if (checkpoint.kind === 'run') {
-    return checkpoint.runId === undefined ? 'Run' : `Run ${checkpoint.runId.slice(-6)}`;
-  }
   const name = checkpoint.nodeId === undefined ? undefined : nodeName(checkpoint.nodeId);
+  if (checkpoint.kind === 'run') {
+    const run = checkpoint.runId === undefined ? 'Run' : `Run ${checkpoint.runId.slice(-6)}`;
+    return checkpoint.nodeId === undefined ? run : `${run} · ${name ?? 'a node'}`;
+  }
   return `Chat with ${name ?? 'an agent'}`;
+}
+
+/** PG-5.1: a run checkpoint's way back to its run, on that node when it is one node's step. */
+export function runLink(checkpoint: Checkpoint): string | undefined {
+  if (checkpoint.kind !== 'run' || checkpoint.runId === undefined) return undefined;
+  const node =
+    checkpoint.nodeId === undefined ? '' : `?node=${encodeURIComponent(checkpoint.nodeId)}`;
+  return `/runs/${checkpoint.runId}${node}`;
 }
 
 export const STATUS_LABEL: Record<CheckpointStatus, string> = {

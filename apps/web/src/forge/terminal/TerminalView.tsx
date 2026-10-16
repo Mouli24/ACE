@@ -1,6 +1,6 @@
 import '@xterm/xterm/css/xterm.css';
 
-import { Button } from '@ace/ui';
+import { Button, Icons } from '@ace/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
@@ -195,7 +195,7 @@ export function TerminalView({
             title="Previous match"
             onClick={() => find('previous')}
           >
-            <span aria-hidden>↑</span>
+            <Icons.ArrowUp aria-hidden size={12} />
           </Button>
           <Button
             variant="ghost"
@@ -204,7 +204,7 @@ export function TerminalView({
             title="Next match"
             onClick={() => find('next')}
           >
-            <span aria-hidden>↓</span>
+            <Icons.ArrowDown aria-hidden size={12} />
           </Button>
           <Button
             variant="ghost"
@@ -213,7 +213,7 @@ export function TerminalView({
             title="Close find"
             onClick={closeFind}
           >
-            <span aria-hidden>✕</span>
+            <Icons.X aria-hidden size={12} />
           </Button>
         </div>
       )}

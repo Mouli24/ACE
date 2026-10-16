@@ -1,10 +1,13 @@
-import type { Id, NodeRun, RunAction } from '@ace/contracts';
-import { PartRenderer, StatusRing } from '@ace/ui';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import type { Checkpoint, Id, NodeRun, RunAction } from '@ace/contracts';
+import { PartRenderer, StatusRing, toast } from '@ace/ui';
+import { useEffect } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import { api } from '../app/api';
 import { useWorkflowSubscription } from '../app/socket';
 import { ErrorsTab } from '../errors/ErrorsTab';
+import { useCheckpointEvents, useCheckpoints } from '../forge/changes/hooks';
+import { STATUS_LABEL } from '../forge/changes/present';
 import { TraceTab } from '../inspector/TraceTab';
 import { useProviders } from '../providers/hooks';
 import { TOUCH_TARGETS } from '../responsive/touch';
@@ -21,7 +24,11 @@ import {
   useRun,
   useStopRun,
   useEndRun,
+  canReplay,
+  useReplayRun,
 } from './hooks';
+import { downloadRunExport } from './export';
+import { CostValue, costText } from './CostValue';
 import { CHIP_CLASS, RunStateChip } from './RunStateChip';
 
 /** The theme's small-caps section label: JetBrains Mono 9.5px, 0.1em, muted, 500 (D328). */
@@ -56,13 +63,29 @@ export function RunDetailPage() {
   const stop = useStopRun();
   const restart = useRestartRun();
   const end = useEndRun();
+  const replay = useReplayRun();
   const retry = useRetryNodeRun();
   const compact = useIsCompact();
+  // PG-5.1: `?node=` (a link from Forge's Changes) brings that node's row into view.
+  const [search] = useSearchParams();
+  const focusNode = search.get('node') ?? undefined;
+  const loaded = run.data !== undefined;
+  useEffect(() => {
+    if (focusNode === undefined || !loaded) return;
+    document
+      .querySelector(`[data-testid="run-detail-node-${CSS.escape(focusNode)}"]`)
+      ?.scrollIntoView?.({ block: 'center' });
+  }, [focusNode, loaded]);
   // The trace and the node states arrive as the workflow's run frames (FR-OBS-001); counted, so an
   // open Canvas on the same workflow keeps its own feed when this page unmounts.
   useWorkflowSubscription(run.data?.workflowId);
   const busy =
-    pause.isPending || resume.isPending || stop.isPending || restart.isPending || end.isPending;
+    pause.isPending ||
+    resume.isPending ||
+    stop.isPending ||
+    restart.isPending ||
+    end.isPending ||
+    replay.isPending;
 
   if (run.isPending) {
     return <p className="p-6 text-center text-[13px] text-[var(--muted)]">Loading run…</p>;
@@ -83,6 +106,14 @@ export function RunDetailPage() {
   const record = run.data;
   const onAction = async (action: RunAction) =>
     ({ pause, resume, stop, restart, end })[action].mutateAsync(record.id);
+
+  // PG-5.4: the run to compare with by default — the one this run replayed or restarted.
+  const compareWith = record.replayOf ?? record.restartedFromRunId;
+  const compareTo = `/runs/compare?a=${record.id}${compareWith === undefined ? '' : `&b=${compareWith}`}`;
+  const exportRun = (anonymise: boolean) =>
+    void downloadRunExport(record.id, { anonymise }).catch((error: Error) =>
+      toast.error(error.message),
+    );
 
   const providerNames = Object.fromEntries(
     (providers.data ?? []).map((provider) => [provider.id, provider.name]),
@@ -121,10 +152,18 @@ export function RunDetailPage() {
           </span>
           <span className="flex-1" />
           <Link
-            to={`/projects/${run.data.projectId}/workflows/${run.data.workflowId}`}
+            to={`/projects/${run.data.projectId}/workflows/${run.data.workflowId}?run=${run.data.id}`}
             className={ACTION_LINK}
           >
             open the Canvas<span aria-hidden>&nbsp;→</span>
+          </Link>
+          {/* PG-3.7: every mode, the run selected in it. */}
+          <Link
+            to={`/projects/${run.data.projectId}/workflows/${run.data.workflowId}/forge?run=${run.data.id}`}
+            className={ACTION_LINK}
+            data-testid="run-detail-open-forge"
+          >
+            Open in Forge<span aria-hidden>&nbsp;→</span>
           </Link>
           <Link
             to={`/projects/${run.data.projectId}/workflows/${run.data.workflowId}/domain?run=${run.data.id}`}
@@ -133,12 +172,62 @@ export function RunDetailPage() {
             Open in Domain<span aria-hidden>&nbsp;→</span>
           </Link>
         </div>
+        {/* PG-5.4 / PG-5.5: replay from the recording, compare, and export for judging. */}
+        <div className="flex flex-wrap items-center gap-[8px]" data-testid="run-detail-tools">
+          {record.replayOf !== undefined && (
+            <span className="text-[12px] text-[var(--muted)]" data-testid="run-detail-replay-of">
+              Replay of{' '}
+              <Link to={`/runs/${record.replayOf}`} className="font-machine">
+                run …{record.replayOf.slice(-6)}
+              </Link>{' '}
+              · answered from its recording, no provider calls
+            </span>
+          )}
+          <span className="flex-1" />
+          {canReplay(record.status) && (
+            <button
+              type="button"
+              className={ACTION_LINK}
+              data-testid="run-detail-replay"
+              disabled={busy}
+              title="Run this snapshot again from the recorded outputs — no provider is called"
+              onClick={() =>
+                replay.mutate(record.id, {
+                  onSuccess: (created) => navigate(`/runs/${created.id}`),
+                  onError: (error) => toast.error(error.message),
+                })
+              }
+            >
+              Replay run
+            </button>
+          )}
+          <Link to={compareTo} className={ACTION_LINK} data-testid="run-detail-compare">
+            Compare…
+          </Link>
+          <button
+            type="button"
+            className={ACTION_LINK}
+            data-testid="run-detail-export"
+            onClick={() => exportRun(false)}
+          >
+            Export run
+          </button>
+          <button
+            type="button"
+            className={ACTION_LINK}
+            data-testid="run-detail-export-anonymised"
+            title="Node names become Node 1…n; providers and models are removed — for blind judging"
+            onClick={() => exportRun(true)}
+          >
+            Export anonymised
+          </button>
+        </div>
         <span
           className="font-machine text-[11.5px] text-[var(--muted)]"
           data-testid="run-detail-totals"
         >
-          {run.data.totals.tokensIn}↓ {run.data.totals.tokensOut}↑ $
-          {run.data.totals.costUsd.toFixed(4)}
+          {run.data.totals.tokensIn}↓ {run.data.totals.tokensOut}↑{' '}
+          <CostValue usage={run.data.totals} format={(value) => `$${value.toFixed(4)}`} />
           {run.data.totals.priceTableVersion ? ` · ${run.data.totals.priceTableVersion}` : ''}
         </span>
       </header>
@@ -231,6 +320,13 @@ export function RunDetailPage() {
         </section>
       )}
 
+      <RunChanges
+        projectId={record.projectId}
+        workflowId={record.workflowId}
+        runId={record.id}
+        nodeName={(nodeId) => record.snapshot.nodes.find((node) => node.id === nodeId)?.name}
+      />
+
       <section className="min-w-0" data-testid="run-detail-trace">
         <TraceTab runId={run.data.id} />
       </section>
@@ -248,7 +344,8 @@ export function RunDetailPage() {
                 key={node.id}
                 data-testid={`run-detail-node-${node.id}`}
                 data-state={nodeRun?.status ?? 'IDLE'}
-                className="flex min-h-[36px] min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-[var(--line)] px-[14px] py-[7px] text-[12.5px] first:border-t-0"
+                data-focused={focusNode === node.id ? 'true' : undefined}
+                className="flex min-h-[36px] min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-[var(--line)] px-[14px] py-[7px] text-[12.5px] first:border-t-0 data-[focused=true]:shadow-[inset_0_0_0_1.5px_#ef6b3f]"
               >
                 <StatusRing state={nodeRun?.status ?? 'IDLE'} showLabel />
                 <span className="min-w-0 truncate font-semibold">{node.name}</span>
@@ -263,7 +360,7 @@ export function RunDetailPage() {
                 )}
                 <span className="ml-auto font-machine text-[11px] text-[var(--muted)]">
                   {nodeRun
-                    ? `${nodeRun.usage.tokensIn}↓ ${nodeRun.usage.tokensOut}↑ $${nodeRun.usage.costUsd.toFixed(4)}`
+                    ? `${nodeRun.usage.tokensIn}↓ ${nodeRun.usage.tokensOut}↑ ${costText(nodeRun.usage, (value) => `$${value.toFixed(4)}`)}`
                     : 'not run'}
                 </span>
               </li>
@@ -272,5 +369,73 @@ export function RunDetailPage() {
         </ul>
       </section>
     </main>
+  );
+}
+
+/** The Forge link for one checkpoint: Changes opens on it, with the run and its node selected. */
+function forgeLink(workflowId: string, checkpoint: Checkpoint): string {
+  const query = new URLSearchParams({ checkpoint: checkpoint.id });
+  if (checkpoint.runId !== undefined) query.set('run', checkpoint.runId);
+  if (checkpoint.nodeId !== undefined) query.set('node', checkpoint.nodeId);
+  return `/projects/${checkpoint.projectId}/workflows/${workflowId}/forge?${query.toString()}`;
+}
+
+/**
+ * PG-5.1: what this run changed in the project folder — one checkpoint per writing node step
+ * (D341), each with a link to review, keep or revert it in Forge's Changes. Live from
+ * `checkpoint.updated`; absent when the run changed nothing.
+ */
+function RunChanges({
+  projectId,
+  workflowId,
+  runId,
+  nodeName,
+}: {
+  projectId: string;
+  workflowId: string;
+  runId: string;
+  nodeName: (nodeId: string) => string | undefined;
+}) {
+  useCheckpointEvents(projectId);
+  const list = useCheckpoints(projectId);
+  const mine = (list.data ?? [])
+    .filter((checkpoint) => checkpoint.kind === 'run' && checkpoint.runId === runId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  if (mine.length === 0) return null;
+  return (
+    <section className="flex flex-col gap-[10px]" data-testid="run-detail-checkpoints">
+      <h2 className={SECTION_LABEL}>Changes to the project</h2>
+      <ul className="m-0 flex list-none flex-col overflow-hidden rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-0">
+        {mine.map((checkpoint) => {
+          const name =
+            checkpoint.nodeId === undefined
+              ? 'The whole run'
+              : (nodeName(checkpoint.nodeId) ?? 'A node');
+          const files = checkpoint.files.length;
+          return (
+            <li
+              key={checkpoint.id}
+              data-testid={`run-detail-checkpoint-${checkpoint.id}`}
+              className="flex min-h-[36px] min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-[var(--line)] px-[14px] py-[7px] text-[12.5px] first:border-t-0"
+            >
+              <span className="min-w-0 truncate font-semibold">{name}</span>
+              <span className={`${CHIP_CLASS} bg-[var(--hover)] text-[var(--muted)]`}>
+                {STATUS_LABEL[checkpoint.status]}
+              </span>
+              <span className="font-machine text-[11px] text-[var(--muted)]">
+                {files} file{files === 1 ? '' : 's'}
+              </span>
+              <Link
+                to={forgeLink(workflowId, checkpoint)}
+                className={`${ACTION_LINK} ml-auto`}
+                data-testid={`run-detail-checkpoint-open-${checkpoint.id}`}
+              >
+                Review in Forge<span aria-hidden>&nbsp;→</span>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }

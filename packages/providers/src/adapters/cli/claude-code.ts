@@ -33,10 +33,21 @@ export const CLAUDE_CODE_BASE_ARGS = [
 ] as const;
 
 /** D262's presets. `edit_files` drops the shell entirely: on Windows there is no shell sandbox. */
+const EDIT_FILES_ARGS = [
+  '--permission-mode',
+  'acceptEdits',
+  '--tools',
+  'Read,Edit,Write,Grep,Glob',
+] as const;
+
+/**
+ * D355 (PG-2.3): no preset bypasses ACE's approvals, budgets and guardrails. `full_auto` stays in
+ * the contract only so an old row parses, and runs exactly as `edit_files`.
+ */
 const PERMISSION_ARGS: Readonly<Record<CliPermission, readonly string[]>> = {
   read_only: ['--permission-mode', 'dontAsk', '--tools', 'Read,Grep,Glob'],
-  edit_files: ['--permission-mode', 'acceptEdits', '--tools', 'Read,Edit,Write,Grep,Glob'],
-  full_auto: ['--permission-mode', 'bypassPermissions'],
+  edit_files: EDIT_FILES_ARGS,
+  full_auto: EDIT_FILES_ARGS,
 };
 
 /*

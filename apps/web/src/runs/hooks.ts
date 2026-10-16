@@ -3,11 +3,12 @@ import {
   type ApprovalDecisionRequest,
   type Id,
   type Run,
+  type RunState,
   type StartRunRequest,
 } from '@ace/contracts';
 import type { AceSocketStatus } from '@ace/sdk';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { api } from '../app/api';
 import { getSocket } from '../app/socket';
@@ -48,7 +49,14 @@ export function useRunEvents(workflowId?: Id): void {
      * (FR-CTL-006). The overlay already has them from the frame — this is for everything reading the
      * record: the history row, and any screen opened after the fact (BR-01).
      */
-    for (const type of ['run.started', 'run.paused', 'run.resumed'] as const) {
+    // PG-3.3: a block mid-run (D305) and a Domain run parking (D323) change the record too.
+    for (const type of [
+      'run.started',
+      'run.paused',
+      'run.resumed',
+      'run.blocked',
+      'run.parked',
+    ] as const) {
       offs.push(
         socket.on(type, (_payload, frame) => {
           const runId = frame.type === 'run.started' ? frame.payload.run.id : frame.payload.runId;
@@ -143,51 +151,6 @@ export function useNodeRunsOnce(runId: Id | undefined) {
   });
 }
 
-/**
- * Adopt the workflow's active run when a Canvas opens (FR-EXE-014). A reload loses the in-memory
- * overlay, and the socket cannot help: it seeds `lastSeq` from `hello`, so `resume` replays nothing
- * from before the load. The records are the way back — after which live frames carry on normally.
- */
-export function useAdoptActiveRun(workflowId: Id | undefined): void {
-  const adopt = useRunStore((store) => store.adopt);
-  /*
-   * A ref, not state: there is nothing to render here, and a `setState` after the await re-rendered
-   * the Canvas a few hundred milliseconds after mount — right where a drag-to-connect begins, which
-   * React Flow then lost. Nothing to adopt has to mean nothing happens.
-   */
-  const asked = useRef<string>();
-
-  useEffect(() => {
-    if (workflowId === undefined || asked.current === workflowId) return;
-    asked.current = workflowId;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const page = await api().listRuns(workflowId);
-        const newest = page.items[0];
-        // Only a run that is still going: a finished one belongs to the history, not the Canvas.
-        const live =
-          newest !== undefined &&
-          (newest.status === 'RUNNING' ||
-            newest.status === 'PAUSED' ||
-            newest.status === 'PREFLIGHT');
-        if (!live || cancelled) return;
-        const [run, nodeRuns, approvals] = await Promise.all([
-          api().getRun(newest.id),
-          api().listNodeRuns(newest.id),
-          api().listApprovals(newest.id),
-        ]);
-        if (!cancelled) adopt(workflowId, run, nodeRuns, approvals);
-      } catch {
-        // A workflow with no run history is the normal case; nothing to adopt is not an error.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [workflowId, adopt]);
-}
-
 /** Which Input nodes still have nothing to send — what the input dialog asks for (FR-NODE-011). */
 export function inputNodesNeedingText(
   nodes: Array<{ id: string; kind: string; name: string; config: unknown }>,
@@ -228,7 +191,8 @@ function useRunControl(action: (runId: Id) => Promise<Run>) {
        * A restart is a *new* run on the same snapshot (FR-CTL-004), so the overlay is cleared and
        * re-armed on it; pause, resume and stop keep folding the run already on screen.
        */
-      if (run.restartedFromRunId !== undefined) {
+      // PG-5.4: a replay is a new run too.
+      if (run.restartedFromRunId !== undefined || run.replayOf !== undefined) {
         arm(run.workflowId);
         begin(run.workflowId, run.id, run.status);
       }
@@ -240,6 +204,16 @@ export const usePauseRun = () => useRunControl((runId) => api().pauseRun(runId))
 export const useResumeRun = () => useRunControl((runId) => api().resumeRun(runId));
 export const useStopRun = () => useRunControl((runId) => api().stopRun(runId));
 export const useRestartRun = () => useRunControl((runId) => api().restartRun(runId));
+/**
+ * PG-5.4: replay a finished run — a new run answered from this one's recording, zero provider
+ * calls. Only COMPLETE and HALTED runs can be replayed ({@link canReplay}).
+ */
+export const useReplayRun = () => useRunControl((runId) => api().replayRun(runId));
+
+/** PG-5.4: whether a run in this state has a whole recording to replay. */
+export const canReplay = (status: RunState | undefined): boolean =>
+  status === 'COMPLETE' || status === 'HALTED';
+
 /** D323: a run started from Domain stays open until it is ended. */
 export const useEndRun = () => useRunControl((runId) => api().endRun(runId));
 
@@ -277,10 +251,18 @@ export function useRerunNode() {
  * approval frame lands, which is what `approvalRevision` tracks: the socket says when to ask, the
  * engine says what is pending (BR-01).
  */
-export function useApprovals(runId: Id | undefined) {
+export function useApprovals(runId: Id | undefined, extraRevision?: number) {
   const revision = useRunStore((store) => store.revision);
   return useQuery({
-    queryKey: [...queryKeys.approvals(runId ?? ''), revision],
+    queryKey: [
+      ...queryKeys.approvals(runId ?? ''),
+      revision,
+      // PG-3.5: a screen with a stream of its own (Domain) says when to ask again too.
+      ...(extraRevision === undefined ? [] : [extraRevision]),
+    ],
+    // A new revision keeps showing the cards it had until the engine answers again.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey.includes(runId ?? '') === true ? previous : undefined,
     queryFn: () => api().listApprovals(runId ?? ''),
     enabled: Boolean(runId),
   });

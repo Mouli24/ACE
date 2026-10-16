@@ -1,5 +1,6 @@
 import type { AceSocketStatus } from '@ace/sdk';
 import { act, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
 import { useEditorStatus } from '../../forge/editor/editor-status';
@@ -8,6 +9,7 @@ import type { WorkflowMode } from '../../forge/mode';
 import type * as RunHooks from '../../runs/hooks';
 import { useRunStore } from '../../runs/run-store';
 import { db, installMockServer, processes, renderWithQuery } from '../../test/app';
+import { usePanelsStore } from '../stores/panels';
 import { useWorkspaceStatus } from '../stores/workspace-status';
 import { WorkspaceFooter } from './WorkspaceFooter';
 
@@ -22,7 +24,7 @@ vi.mock('../../runs/hooks', async (importOriginal) => ({
 afterEach(() => {
   socket.status = 'open';
   useRunStore.getState().reset();
-  useWorkspaceStatus.setState({ messageCount: null, tokens: null });
+  useWorkspaceStatus.setState({ messageCount: null });
   useEditorStatus.getState().clear();
 });
 
@@ -123,38 +125,34 @@ describe('D330 the workspace footer', () => {
       expect(screen.getByTestId('footer-tokens')).toHaveTextContent('— in / — out');
     });
 
-    it('in Ideate and Forge, this workflow’s run totals from the live overlay', () => {
-      const { workflow } = renderFooter('forge');
-      act(() =>
-        useRunStore.setState({
-          workflowId: workflow.id,
-          totals: { tokensIn: 12_345, tokensOut: 812, costUsd: 0.01 },
-        }),
-      );
-      expect(screen.getByTestId('footer-tokens')).toHaveTextContent('12.3k in / 812 out');
-    });
+    // PG-3.3: one source in every mode — the selected run's totals (PG-3.2), live from the overlay.
+    it.each(['ideate', 'forge', 'domain'] as const)(
+      'in %s, the selected run’s totals from the live overlay',
+      (mode) => {
+        const { workflow } = renderFooter(mode);
+        act(() =>
+          useRunStore.setState({
+            workflowId: workflow.id,
+            runId: 'RUN1',
+            active: true,
+            totals: { tokensIn: 12_345, tokensOut: 812, costUsd: 0.01 },
+          }),
+        );
+        expect(screen.getByTestId('footer-tokens')).toHaveTextContent('12.3k in / 812 out');
+      },
+    );
 
     it('never another workflow’s run totals', () => {
       renderFooter('ideate');
       act(() =>
         useRunStore.setState({
           workflowId: 'OTHER',
+          runId: 'RUN1',
+          active: true,
           totals: { tokensIn: 5, tokensOut: 5, costUsd: 0 },
         }),
       );
       expect(screen.getByTestId('footer-tokens')).toHaveTextContent('— in / — out');
-    });
-
-    it('in Domain, what the Domain page publishes', () => {
-      const { workflow } = renderFooter('domain');
-      act(() => {
-        useRunStore.setState({
-          workflowId: workflow.id,
-          totals: { tokensIn: 5, tokensOut: 5, costUsd: 0 },
-        });
-        useWorkspaceStatus.getState().setTokens({ in: 1_230_000, out: 45_600 });
-      });
-      expect(screen.getByTestId('footer-tokens')).toHaveTextContent('1.23M in / 45.6k out');
     });
   });
 
@@ -236,7 +234,15 @@ describe('D330 the workspace footer', () => {
   it('carries this workflow’s run state as data, drawing nothing for it', () => {
     const { workflow } = renderFooter('ideate');
     expect(footer()).not.toHaveAttribute('data-run-status');
-    act(() => useRunStore.setState({ workflowId: workflow.id, status: 'COMPLETE' }));
+    // PG-3.2: the selected run's state — here the run the overlay follows for this workflow.
+    act(() =>
+      useRunStore.setState({
+        workflowId: workflow.id,
+        runId: 'RUN1',
+        active: true,
+        status: 'COMPLETE',
+      }),
+    );
     expect(footer()).toHaveAttribute('data-run-status', 'COMPLETE');
     expect(footer()).not.toHaveTextContent(/complete/i);
     act(() => useRunStore.setState({ workflowId: 'OTHER', status: 'RUNNING' }));
@@ -269,5 +275,24 @@ describe('D330 the workspace footer', () => {
     await screen.findByTestId('project-slug');
     expect(screen.queryByTestId('footer-running')).toBeNull();
     processes.stopProject(project.id);
+  });
+});
+
+describe('PG-1.2 a visible Problems & events button in the footer (D360)', () => {
+  afterEach(() => usePanelsStore.setState({ bottomOpen: false, bottomTab: 'validation' }));
+
+  it.each(['ideate', 'forge', 'domain'] as const)('is a named, visible button in %s', (mode) => {
+    renderFooter(mode);
+    expect(within(footer()).getByRole('button', { name: /Problems & events/ })).toBeVisible();
+  });
+
+  it('in Ideate it opens the bottom panel on Problems, and a second click closes it', async () => {
+    renderFooter('ideate');
+    const button = within(footer()).getByRole('button', { name: /Problems & events/ });
+    await userEvent.click(button);
+    expect(usePanelsStore.getState()).toMatchObject({ bottomOpen: true, bottomTab: 'validation' });
+    expect(button).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.click(button);
+    expect(usePanelsStore.getState().bottomOpen).toBe(false);
   });
 });

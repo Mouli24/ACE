@@ -177,6 +177,16 @@ export const ChatMessageSchema = z.strictObject({
   activity: z.array(ActivityItemSchema).optional(),
   /** D302/D300: the checkpoint of the files this turn changed; absent when it changed none. */
   checkpointId: IdSchema.optional(),
+  /**
+   * PG-1.6 (D352): a retry or an edit replaced this turn. It stays in the thread, collapsed as an
+   * earlier version, and is never part of a later prompt.
+   */
+  supersededAt: TimestampSchema.optional(),
+  /**
+   * PG-1.6 (D352): the person deleted this turn. `GET /chat/threads/:id` leaves it out; it stays in
+   * the event log and is never part of a later prompt.
+   */
+  deletedAt: TimestampSchema.optional(),
 });
 export type ChatMessage = z.infer<typeof ChatMessageSchema>;
 
@@ -192,6 +202,12 @@ export const ChatRequestSchema = z.strictObject({
    * an `@handle` in the message (`resolveChatTarget`). Absent: the thread's own node answers.
    */
   targetNodeId: IdSchema.optional(),
+  /**
+   * PG-2.4 (D361): the person chose "Run without undo" — this one turn may write even though its
+   * checkpoint cannot begin. Absent, such a writing turn ends as a failed turn with code
+   * `checkpoint_unavailable` before any write tool runs.
+   */
+  withoutUndo: z.boolean().optional(),
 });
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 
@@ -286,6 +302,40 @@ export const ChatResponseSchema = z.strictObject({
   messageId: IdSchema,
 });
 export type ChatResponse = z.infer<typeof ChatResponseSchema>;
+
+/**
+ * PG-1.6 (D352), message actions. Each answers like `POST /nodes/:id/chat`: 202 with the new user
+ * turn's `{ threadId, messageId }`, the reply following over the socket.
+ *
+ * - `POST /chat/threads/:id/messages/:messageId/retry` (no body): re-run the turn that produced an
+ *   agent message, or a failed one. The old reply is marked `supersededAt`; a new turn is appended.
+ * - `POST /chat/threads/:id/messages/:messageId/edit` (`ChatEditRequest`): a user message. It and
+ *   every turn after it are marked `supersededAt`, and the edited text is sent as a new turn.
+ * - `DELETE /chat/threads/:id/messages/:messageId` → 204: hides one message (`deletedAt`).
+ * - `POST /chat/threads/:id/stop` → 200 `ChatStopResponse`: aborts the turn in flight, which is
+ *   stored as a failed turn of kind `user_cancelled`.
+ *
+ * Every change to an existing row is announced by a `chat.update` frame on the thread.
+ */
+export const ChatEditRequestSchema = z.strictObject({
+  content: z.array(PartSchema).min(1),
+});
+export type ChatEditRequest = z.infer<typeof ChatEditRequestSchema>;
+
+/**
+ * `POST /chat/threads/:id/messages/:messageId/retry` body, optional. PG-2.4 (D361): `withoutUndo`
+ * retries a turn that stopped with `checkpoint_unavailable`, writing without a checkpoint this once.
+ */
+export const ChatRetryRequestSchema = z.strictObject({
+  withoutUndo: z.boolean().optional(),
+});
+export type ChatRetryRequest = z.infer<typeof ChatRetryRequestSchema>;
+
+export const ChatStopResponseSchema = z.strictObject({
+  /** `false` when no turn was in flight. */
+  stopped: z.boolean(),
+});
+export type ChatStopResponse = z.infer<typeof ChatStopResponseSchema>;
 
 /** `GET /chat/threads/:id` → `{ thread, messages: ChatMessage[] }` (§2.4). */
 export const ChatThreadDetailSchema = z.strictObject({

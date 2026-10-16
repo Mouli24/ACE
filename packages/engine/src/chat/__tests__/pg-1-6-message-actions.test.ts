@@ -12,14 +12,20 @@
  *   again.
  * - `POST /chat/threads/:id/stop` — aborts the turn in flight, stored as `user_cancelled`.
  *
- * None of the four routes exists today, so each answers 404; that is the failure these record.
+ * Phase 0 recorded each as a 404 (no route); they are green since PG-1.6 landed the routes.
  */
 import type { ChatMessage, Part } from '@ace/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { createEngineApp, type EngineApp } from '../../gateway/index.js';
 import { createGraphService } from '../../graph/index.js';
-import type { ModelInfo, ProviderAdapter, ProviderStatus, StreamChunk } from '../../ports/index.js';
+import type {
+  EngineEvent,
+  ModelInfo,
+  ProviderAdapter,
+  ProviderStatus,
+  StreamChunk,
+} from '../../ports/index.js';
 import { FakeRepository } from '../../__tests__/fake-repository.js';
 import { AUTH, JSON_HEADERS, TOKEN } from '../../__tests__/graph-helpers.js';
 import type { ChatService } from '../service.js';
@@ -45,6 +51,10 @@ interface World {
   prompts: string[];
   /** Hold the next generate() open until this resolves or the call is aborted. */
   hold: { next?: Promise<void> };
+  /** Every event the bus emitted (persisted and transient). */
+  events: EngineEvent[];
+  /** Make the next generate() throw (a provider failure stored as a failed turn, D287). */
+  fail: { next?: boolean };
 }
 
 async function world(): Promise<World> {
@@ -56,10 +66,11 @@ async function world(): Promise<World> {
   await repository.projects.create(scope, project);
   await repository.workflows.create(scope, workflow);
   await repository.nodes.insert(scope, agent);
-  const { bus } = makeBus(repository, now);
+  const { bus, events } = makeBus(repository, now);
 
   const prompts: string[] = [];
   const hold: { next?: Promise<void> } = {};
+  const fail: { next?: boolean } = {};
   let count = 0;
   const adapter: ProviderAdapter = {
     type: 'openai_compatible',
@@ -68,6 +79,10 @@ async function world(): Promise<World> {
     async *generate(request, signal): AsyncIterable<StreamChunk> {
       prompts.push(`${request.system ?? ''}\n${request.prompt}`);
       count += 1;
+      if (fail.next === true) {
+        fail.next = false;
+        throw Object.assign(new Error('upstream 500'), { status: 500 });
+      }
       const held = hold.next;
       hold.next = undefined;
       if (held !== undefined) {
@@ -102,7 +117,16 @@ async function world(): Promise<World> {
     bus,
     chat: service,
   });
-  return { app, service, repository, agentId: agent.id, prompts, hold };
+  return {
+    app,
+    service,
+    repository,
+    agentId: agent.id,
+    prompts,
+    hold,
+    events,
+    fail,
+  };
 }
 
 const post = (app: EngineApp, path: string, body?: unknown) =>
@@ -142,15 +166,21 @@ async function answered(w: World, words: string, threadId?: string) {
   return { threadId: begun.threadId, userId: begun.messageId, reply };
 }
 
-const flag = (message: ChatMessage | undefined, key: string): unknown =>
-  message === undefined ? undefined : (message as unknown as Record<string, unknown>)[key];
+/**
+ * The contract (D352, commit 3aadc6f) carries the flags as timestamps — `supersededAt` and
+ * `deletedAt` — so a flag is set when its timestamp is.
+ */
+const flag = (message: ChatMessage | undefined, key: 'superseded' | 'deleted'): boolean =>
+  message === undefined
+    ? false
+    : key === 'superseded'
+      ? message.supersededAt !== undefined
+      : message.deletedAt !== undefined;
 
 describe('PG-1.6 POST /chat/threads/:id/messages/:messageId/retry', () => {
-  it.fails(
-    're-runs the turn, appends a new reply and keeps the old one marked superseded',
-    async () => {
-      const w = await world();
-      const { threadId, reply } = await answered(w, 'hello');
+  it('re-runs the turn, appends a new reply and keeps the old one marked superseded', async () => {
+    const w = await world();
+    const { threadId, reply } = await answered(w, 'hello');
 
       const response = await post(w.app, `/chat/threads/${threadId}/messages/${reply.id}/retry`);
       expect(response.status).toBeLessThan(300);
@@ -166,11 +196,9 @@ describe('PG-1.6 POST /chat/threads/:id/messages/:messageId/retry', () => {
 });
 
 describe('PG-1.6 POST /chat/threads/:id/messages/:messageId/edit', () => {
-  it.fails(
-    'supersedes what followed the user message and sends the edited text as a new turn',
-    async () => {
-      const w = await world();
-      const { threadId, userId, reply } = await answered(w, 'first-draft');
+  it('supersedes what followed the user message and sends the edited text as a new turn', async () => {
+    const w = await world();
+    const { threadId, userId, reply } = await answered(w, 'first-draft');
 
       const response = await post(w.app, `/chat/threads/${threadId}/messages/${userId}/edit`, {
         content: text('second-draft'),
@@ -190,11 +218,9 @@ describe('PG-1.6 POST /chat/threads/:id/messages/:messageId/edit', () => {
 });
 
 describe('PG-1.6 DELETE /chat/threads/:id/messages/:messageId', () => {
-  it.fails(
-    'hides one message (the route answers, the thread no longer lists it as live)',
-    async () => {
-      const w = await world();
-      const { threadId, userId } = await answered(w, 'hide me');
+  it('hides one message (the route answers, the thread no longer lists it as live)', async () => {
+    const w = await world();
+    const { threadId, userId } = await answered(w, 'hide me');
 
       const response = await del(w.app, `/chat/threads/${threadId}/messages/${userId}`);
       expect(response.status).toBeLessThan(300);
@@ -207,7 +233,7 @@ describe('PG-1.6 DELETE /chat/threads/:id/messages/:messageId', () => {
 });
 
 describe('PG-1.6 POST /chat/threads/:id/stop', () => {
-  it.fails('aborts the turn in flight and stores it as user_cancelled', async () => {
+  it('aborts the turn in flight and stores it as user_cancelled', async () => {
     const w = await world();
     w.hold.next = new Promise<void>(() => undefined); // never answers by itself
     const begun = await w.service.chat(w.agentId, {
@@ -231,7 +257,7 @@ describe('PG-1.6 POST /chat/threads/:id/stop', () => {
 });
 
 describe('PG-1.6 a superseded or deleted message never reaches the next prompt', () => {
-  it.fails('a deleted user message is not in the next turn’s prompt', async () => {
+  it('a deleted user message is not in the next turn’s prompt', async () => {
     const w = await world();
     const first = await answered(w, 'alpha-secret-words');
 
@@ -242,7 +268,7 @@ describe('PG-1.6 a superseded or deleted message never reaches the next prompt',
     expect(w.prompts.at(-1)).not.toContain('alpha-secret-words');
   });
 
-  it.fails('a superseded reply (after an edit) is not in the next turn’s prompt', async () => {
+  it('a superseded reply (after an edit) is not in the next turn’s prompt', async () => {
     const w = await world();
     const first = await answered(w, 'first-draft');
     const oldReply = first.reply.content.map((p) => (p.type === 'text' ? p.text : '')).join('');
@@ -268,5 +294,188 @@ describe('PG-1.6 a superseded or deleted message never reaches the next prompt',
     const first = await answered(w, 'alpha-secret-words');
     await answered(w, 'next question', first.threadId);
     expect(w.prompts.at(-1)).toContain('alpha-secret-words');
+  });
+});
+
+const updates = (w: World, threadId: string): ChatMessage[] =>
+  w.events
+    .filter(
+      (event) =>
+        event.type === 'chat.update' &&
+        (event.payload as { threadId: string }).threadId === threadId,
+    )
+    .map((event) => (event.payload as { message: ChatMessage }).message);
+
+describe('PG-1.6 every changed row is announced as chat.update [D352]', () => {
+  it('retry announces the superseded reply; the route answers 202 with the question it re-asks', async () => {
+    const w = await world();
+    const { threadId, userId, reply } = await answered(w, 'hello');
+
+    const response = await post(w.app, `/chat/threads/${threadId}/messages/${reply.id}/retry`);
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ threadId, messageId: userId });
+    await waitForAgentTurns(w, threadId, 2);
+
+    const announced = updates(w, threadId);
+    expect(announced.map((m) => m.id)).toEqual([reply.id]);
+    expect(announced[0]?.supersededAt).toBeDefined();
+  });
+
+  it('edit announces the user message and the reply after it, and appends a new user turn', async () => {
+    const w = await world();
+    const { threadId, userId, reply } = await answered(w, 'first-draft');
+
+    const response = await post(w.app, `/chat/threads/${threadId}/messages/${userId}/edit`, {
+      content: text('second-draft'),
+    });
+    expect(response.status).toBe(202);
+    const body = (await response.json()) as { messageId: string };
+    expect(body.messageId).not.toBe(userId);
+    const messages = await waitForAgentTurns(w, threadId, 2);
+
+    expect(updates(w, threadId).map((m) => m.id)).toEqual([userId, reply.id]);
+    const fresh = messages.find((m) => m.id === body.messageId);
+    expect(fresh?.role).toBe('user');
+    expect(fresh?.content).toEqual(text('second-draft'));
+    expect(flag(fresh, 'superseded')).toBe(false);
+  });
+
+  it('DELETE answers 204, announces the deleted row, and GET leaves it out', async () => {
+    const w = await world();
+    const { threadId, userId } = await answered(w, 'hide me');
+
+    const response = await del(w.app, `/chat/threads/${threadId}/messages/${userId}`);
+    expect(response.status).toBe(204);
+    expect(updates(w, threadId).map((m) => [m.id, m.deletedAt !== undefined])).toEqual([
+      [userId, true],
+    ]);
+
+    const detail = await w.app.request(`/api/v1/chat/threads/${threadId}`, {
+      headers: AUTH,
+    });
+    const listed = ((await detail.json()) as { messages: ChatMessage[] }).messages;
+    expect(listed.map((m) => m.id)).not.toContain(userId);
+    // Still kept in the store: deleting is hiding.
+    const kept = await w.repository.chatMessages.listByThread(scope, threadId);
+    expect(kept.find((m) => m.id === userId)?.deletedAt).toBeDefined();
+
+    // A second delete is still deleted, and announces nothing new.
+    expect((await del(w.app, `/chat/threads/${threadId}/messages/${userId}`)).status).toBe(204);
+    expect(updates(w, threadId)).toHaveLength(1);
+  });
+});
+
+describe('PG-1.6 message actions refuse what they cannot do', () => {
+  it('404 for an unknown thread or message', async () => {
+    const w = await world();
+    const { threadId } = await answered(w, 'hello');
+    const missing = '01JBXQ8Z9KQ4R7N2VWXYZ0NONE';
+    expect((await post(w.app, `/chat/threads/${missing}/stop`)).status).toBe(404);
+    expect((await post(w.app, `/chat/threads/${threadId}/messages/${missing}/retry`)).status).toBe(
+      404,
+    );
+    expect((await del(w.app, `/chat/threads/${threadId}/messages/${missing}`)).status).toBe(404);
+    expect(
+      (
+        await post(w.app, `/chat/threads/${threadId}/messages/${missing}/edit`, {
+          content: text('x'),
+        })
+      ).status,
+    ).toBe(404);
+  });
+
+  it('400 for an edit of an agent reply, a retry of a user turn, and a retry of a superseded one', async () => {
+    const w = await world();
+    const { threadId, userId, reply } = await answered(w, 'hello');
+    expect(
+      (
+        await post(w.app, `/chat/threads/${threadId}/messages/${reply.id}/edit`, {
+          content: text('x'),
+        })
+      ).status,
+    ).toBe(400);
+    expect((await post(w.app, `/chat/threads/${threadId}/messages/${userId}/retry`)).status).toBe(
+      400,
+    );
+    expect((await post(w.app, `/chat/threads/${threadId}/messages/${reply.id}/retry`)).status).toBe(
+      202,
+    );
+    await waitForAgentTurns(w, threadId, 2);
+    expect((await post(w.app, `/chat/threads/${threadId}/messages/${reply.id}/retry`)).status).toBe(
+      400,
+    );
+  });
+
+  it('400 for an edit with no content (ChatEditRequest)', async () => {
+    const w = await world();
+    const { threadId, userId } = await answered(w, 'hello');
+    const response = await post(w.app, `/chat/threads/${threadId}/messages/${userId}/edit`, {
+      content: [],
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it('stop with nothing in flight answers 200 { stopped: false }', async () => {
+    const w = await world();
+    const { threadId } = await answered(w, 'hello');
+    const response = await post(w.app, `/chat/threads/${threadId}/stop`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ stopped: false });
+  });
+});
+
+describe('PG-1.6 retry of a failed turn and the history a retry reads', () => {
+  it('a failed turn (provider failure) is retried into an answer', async () => {
+    const w = await world();
+    w.fail.next = true;
+    const { threadId, reply } = await answered(w, 'please');
+    expect(reply.error).toBeDefined();
+
+    const response = await post(w.app, `/chat/threads/${threadId}/messages/${reply.id}/retry`);
+    expect(response.status).toBe(202);
+    const messages = await waitForAgentTurns(w, threadId, 2);
+    const live = messages.filter((m) => m.role === 'agent' && !flag(m, 'superseded'));
+    expect(live).toHaveLength(1);
+    expect(live[0]?.error).toBeUndefined();
+    // The retried prompt still carries the question.
+    expect(w.prompts.at(-1)).toContain('please');
+  });
+
+  it('a retried reply is not in the next turn’s prompt; the new one is', async () => {
+    const w = await world();
+    const first = await answered(w, 'question-one');
+    const oldText = first.reply.content.map((p) => (p.type === 'text' ? p.text : '')).join('');
+    await post(w.app, `/chat/threads/${first.threadId}/messages/${first.reply.id}/retry`);
+    const messages = await waitForAgentTurns(w, first.threadId, 2);
+    const newer = messages.find((m) => m.role === 'agent' && !flag(m, 'superseded'));
+    const newText = newer?.content.map((p) => (p.type === 'text' ? p.text : '')).join('') ?? '';
+
+    await answered(w, 'question-two', first.threadId);
+    const last = w.prompts.at(-1) ?? '';
+    expect(last).not.toContain(oldText);
+    expect(last).toContain(newText);
+  });
+});
+
+describe('PG-1.5 recoverOpenTurns closes only turns left open', () => {
+  it('leaves an answered thread alone, even one whose reply was deleted', async () => {
+    const w = await world();
+    const { threadId, reply } = await answered(w, 'hello');
+    await del(w.app, `/chat/threads/${threadId}/messages/${reply.id}`);
+    expect(await w.service.recoverOpenTurns()).toBe(0);
+  });
+
+  it('closes a retry the engine died in the middle of (the old reply superseded, no new one)', async () => {
+    const w = await world();
+    const { threadId, reply } = await answered(w, 'hello');
+    await w.repository.chatMessages.mark(scope, reply.id, {
+      supersededAt: '2026-10-15T10:00:00.000Z',
+    });
+    expect(await w.service.recoverOpenTurns()).toBe(1);
+    const messages = await messagesOf(w, threadId);
+    const closed = messages.filter((m) => m.role === 'agent' && !flag(m, 'superseded'));
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.error?.code).toBe('crash');
+    expect(closed[0]?.error?.message).toMatch(/shutdown or a crash/);
   });
 });

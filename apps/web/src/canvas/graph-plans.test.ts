@@ -1,11 +1,4 @@
-import {
-  derivePorts,
-  type Edge,
-  type GraphOp,
-  type Model,
-  type Node,
-  type Provider,
-} from '@ace/contracts';
+import { derivePorts, type Edge, type GraphOp, type Node } from '@ace/contracts';
 
 import { createNode } from '../nodes/factory';
 import {
@@ -91,24 +84,11 @@ describe('D333 removeReconnectingOps', () => {
   });
 });
 
-const provider = (over: Partial<Provider>): Provider =>
-  ({
-    id: 'p1',
-    type: 'mock',
-    name: 'Mock',
-    keySet: false,
-    status: 'UNKNOWN',
-    concurrency: 1,
-    createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z',
-    ...over,
-  }) as Provider;
-const model = (over: Partial<Model>): Model =>
-  ({ id: 'm', providerId: 'p1', modelId: 'm-1', available: true, ...over }) as Model;
+const CHOICE = { providerId: 'p1', modelId: 'm-1' };
 
 describe('D332 planNewStage (Add node)', () => {
   it('on an empty board: a "New agent" at (440, 150), nothing to link', () => {
-    const plan = planNewStage({ nodes: [], edges: [], workflowId: WF, providers: [], models: [] });
+    const plan = planNewStage({ nodes: [], edges: [], workflowId: WF, choice: CHOICE });
     expect(plan.node.kind).toBe('agent');
     expect(plan.node.name).toBe(NEW_STAGE_NAME);
     expect(plan.node.position).toEqual(FIRST_STAGE_AT);
@@ -117,7 +97,7 @@ describe('D332 planNewStage (Add node)', () => {
 
   it('after the last stage: +320 x, ±50 y alternating, linked from its first output', () => {
     const one = createNode('agent', WF, { x: 440, y: 150 });
-    let plan = planNewStage({ nodes: [one], edges: [], workflowId: WF, providers: [], models: [] });
+    let plan = planNewStage({ nodes: [one], edges: [], workflowId: WF, choice: CHOICE });
     expect(plan.node.position).toEqual({ x: 760, y: 100 });
     const edge = plan.ops.find((op) => op.op === 'add_edge');
     expect(edge).toMatchObject({
@@ -133,41 +113,22 @@ describe('D332 planNewStage (Add node)', () => {
       nodes: [one, two],
       edges: [],
       workflowId: WF,
-      providers: [],
-      models: [],
+      choice: CHOICE,
     });
     expect(plan.node.position).toEqual({ x: 1080, y: 150 });
   });
 
-  it('takes the first CONNECTED provider and its first available model', () => {
+  // D351 supersedes D332's "first CONNECTED provider" default: the plan takes only what the
+  // person chose in the provider-first picker (PG-1.3).
+  it('PG-1.3 the new agent is on the chosen provider and model, never a default one', () => {
     const plan = planNewStage({
       nodes: [],
       edges: [],
       workflowId: WF,
-      providers: [
-        provider({ id: 'p0', status: 'AUTH_FAILED' }),
-        provider({ id: 'p1', status: 'CONNECTED' }),
-      ],
-      models: [
-        model({ id: 'a', providerId: 'p0', modelId: 'other' }),
-        model({ id: 'b', providerId: 'p1', modelId: 'gone', available: false }),
-        model({ id: 'c', providerId: 'p1', modelId: 'here' }),
-      ],
+      choice: { providerId: 'p1', modelId: 'here' },
     });
     expect(plan.node.kind === 'agent' && plan.node.config.providerId).toBe('p1');
     expect(plan.node.kind === 'agent' && plan.node.config.modelId).toBe('here');
-  });
-
-  it('falls back to the first provider when none is connected', () => {
-    const plan = planNewStage({
-      nodes: [],
-      edges: [],
-      workflowId: WF,
-      providers: [provider({ id: 'p9' })],
-      models: [],
-    });
-    expect(plan.node.kind === 'agent' && plan.node.config.providerId).toBe('p9');
-    expect(plan.node.kind === 'agent' && plan.node.config.modelId).toBeUndefined();
   });
 });
 

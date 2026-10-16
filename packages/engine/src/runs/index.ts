@@ -2,6 +2,7 @@ import {
   allowedRunActions,
   DEFAULT_CONCURRENCY,
   ENVELOPE_SUMMARY_MAX,
+  NODE_BUDGET_EXCEEDED,
   RunDomainConfigInputSchema,
   type BlockedReason,
   type BudgetHalt,
@@ -18,6 +19,7 @@ import {
   type NodeState,
   type Page,
   type Part,
+  type Provider,
   type ProviderCheckResult,
   type Run,
   type RunSummary,
@@ -26,6 +28,7 @@ import {
   type TurnTriggerKind,
   type Usage,
   type ValidationIssue,
+  type Verdict,
 } from '@ace/contracts';
 
 import { countLoop, digestLine, routeEnvelope as routeByBrain } from '../domain/brain.js';
@@ -51,6 +54,7 @@ import type { TeamPromptInput } from '../prompts/index.js';
 import type { ApprovalService } from '../approvals/index.js';
 import type { BudgetService } from '../budgets/index.js';
 import type { NodeRunTurn } from '../chat/service.js';
+import { nodeWrites, undoUnavailableMessage } from '../checkpoints/writing.js';
 import { goalOf, isGoalDriven } from '../graph/validate.js';
 import { buildNodeContext } from '../context/builder.js';
 import type { ContextGuard } from '../context/guard.js';
@@ -99,6 +103,7 @@ import {
   splitOutgoing,
   type LoopContinue,
 } from '../loops/index.js';
+import { createSemaphore } from '../providers/semaphore.js';
 import { createMergeArrivalLog, executeMergeNode, isMergeReady } from '../merge/index.js';
 import { downstreamOf } from './control/graph.js';
 import { createRunGate, type RunGate, type RunGateRegistry } from './control/gate.js';
@@ -117,6 +122,7 @@ import { preflight } from './preflight.js';
 import type { ArtifactMaterialiser, ToolGuardrailEvaluator, ToolProvider } from './tool-loop.js';
 import type { ToolCall } from '@ace/contracts';
 import { toSummary } from './summary.js';
+import { createReplayBook, isReplayedKind, type ReplayBook } from './replay.js';
 
 export * from './cost.js';
 export * from './executor.js';
@@ -127,6 +133,9 @@ export * from './machines/index.js';
 export * from './lifecycle.js';
 export * from './control/index.js';
 export * from './summary.js';
+export * from './replay.js';
+export * from './export.js';
+export * from './estimate.js';
 
 /**
  * The run service and scheduler (FR-EXE-001..012, Arch §12.2, §12.3, BR-04).
@@ -167,6 +176,13 @@ export interface RunService {
    * its end (FR-CTL-004).
    */
   driveRecordedRun(run: Run): Promise<Run>;
+  /**
+   * PG-5.4: pre-flights and drives a replay row (`replayOf` set) somebody else recorded. Every
+   * provider call — and every Retrieval search — is answered from the source run's recorded node
+   * outputs: zero provider calls, no provider check, no budget, no checkpoint. A node with no
+   * recording fails clearly. Resolves once the replay is under way, like `driveRecordedRun`.
+   */
+  driveReplayRun?(run: Run): Promise<Run>;
   /**
    * Re-opens a recorded run and drives the node runs in the plan, plus everything after them when
    * the plan says so (D81, FR-CTL-005, FR-ERR-003, FR-ERR-004). Resolves once it is going again.
@@ -392,12 +408,19 @@ export function createRunService(deps: RunServiceDeps): RunService {
   const summariser = deps.summariser ?? createTruncatingSummariser();
   /** Summariser usage per run and target node, until the target's node run is recorded and takes it (F5). */
   const summaryUsage = createSummaryUsageLedger();
+  /** PG-5.4: the replays this process is driving, by replay run id, and what answers them. */
+  const replays = new Map<Id, ReplayBook>();
+  /** A replay summarises by truncation: a model summary would be a provider call. */
+  const replaySummariser = createTruncatingSummariser();
 
   const executor: NodeExecutor = createNodeExecutor({
     bus,
     logger,
     adapterFor: deps.adapterFor,
     modelsFor: () => repository.models.list(scope, {}),
+    // PG-1.4 (D359): local is $0 by rule, an unpriced remote model's cost is unknown.
+    providerFor: async (providerId) =>
+      (await repository.providers.get(scope, providerId)) ?? undefined,
     runGated: deps.runGated,
     router: deps.router,
     ...(deps.tokenBatchMs === undefined ? {} : { tokenBatchMs: deps.tokenBatchMs }),
@@ -518,16 +541,19 @@ export function createRunService(deps: RunServiceDeps): RunService {
         budgetTokens,
         // BR-13: only an Input node's content is trusted.
         trust: trustForSource(from.kind),
+        // PG-4.1: the contract the receiving node's executor enforces, its `maxTokens` included,
+        // so the envelope on screen says what the node was held to.
         contract: contractFor(
           outputTypes,
           to.kind === 'agent' ? to.config.outputContract?.jsonSchema : undefined,
+          to.kind === 'agent' || to.kind === 'model' ? to.config.execution.maxTokens : undefined,
         ),
         createdAt: now(),
         ...(target === undefined ? {} : { target }),
         ...(signal === undefined ? {} : { signal }),
         ...(sanitise === undefined ? {} : { sanitise }),
       },
-      summariser,
+      replays.has(run.id) ? replaySummariser : summariser,
     );
 
     // F5: a summarisation call is the receiving node's spend, carried until its run is recorded.
@@ -625,6 +651,45 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const envelopesFor = new Map<Id, Envelope[]>();
     const deliveredEdges = new Set<Id>();
     const usages: Usage[] = [];
+    /**
+     * PG-4.3: what each node has spent in this run so far, every turn and iteration of it, for its
+     * own cap (`execution.maxCostUsd`). Only known cost counts (D359).
+     */
+    const spentByNode = new Map<Id, number>();
+    const noteNodeSpend = (nodeId: Id, usage: Usage): void => {
+      if (usage.costKnown === false) return;
+      spentByNode.set(nodeId, (spentByNode.get(nodeId) ?? 0) + usage.costUsd);
+    };
+    /**
+     * PG-4.3: a node whose cost in this run goes over its own cap ends FAILED rather than COMPLETED.
+     * It is a cost guardrail on one node, so it fails the way a guardrail does (`GUARDRAIL_VIOLATION`,
+     * kind `guardrail`, never retried — Arch §28), with its own code, and its answer is kept on the
+     * row but goes nowhere: what it feeds is BLOCKED (FR-ERR-006). The run's own caps stay the run
+     * halt `budget_exceeded` (FR-GRD-008). An unknown cost is never refused (D359).
+     */
+    function overNodeCap(node: Node, outcome: NodeExecutionOutcome): NodeExecutionOutcome {
+      if (outcome.status !== 'COMPLETED') return outcome;
+      if (node.kind !== 'agent' && node.kind !== 'model') return outcome;
+      const cap = node.config.execution.maxCostUsd;
+      if (cap === undefined || cap === null) return outcome;
+      if (outcome.usage.costKnown === false) return outcome;
+      const spent = (spentByNode.get(node.id) ?? 0) + outcome.usage.costUsd;
+      if (spent <= cap) return outcome;
+      const usd = (value: number): string =>
+        `$${value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
+      return {
+        ...outcome,
+        status: 'FAILED',
+        failureReason: 'GUARDRAIL_VIOLATION',
+        error: {
+          kind: 'guardrail',
+          code: NODE_BUDGET_EXCEEDED,
+          message: `This node cost ${usd(spent)} in this run, over its ${usd(cap)} cap.`,
+          retryable: false,
+          details: { capUsd: cap, costUsd: spent },
+        },
+      };
+    }
     const finalOutput: Record<Id, Part[]> = {};
     /** What arrived at each merge node, in order and with its port (FR-PAR-002, §2.4). */
     const mergeArrivals = createMergeArrivalLog();
@@ -644,10 +709,17 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const plannedRuns = new Map<Id, NodeRun>();
     /** The catalogue, read once: the cost point needs the price of the model a node would use. */
     const catalog = await repository.models.list(scope, {});
+    const providerRows = await repository.providers.list(scope);
     /** D313: each provider's type, so a turn's usage says which kind of provider spent it. */
-    const providerTypes = new Map(
-      (await repository.providers.list(scope)).map((provider) => [provider.id, provider.type]),
-    );
+    const providerTypes = new Map(providerRows.map((provider) => [provider.id, provider.type]));
+    /**
+     * PG-5.1 (D341, D361): each step of a node that can write the project folder is a checkpoint
+     * of its own, `{ kind: 'run', runId, nodeId }`, so one node's work can be reverted alone. The
+     * steps of writing nodes take turns (one at a time per run), so each checkpoint holds only its
+     * own node's changes; reading nodes run alongside as before.
+     */
+    const writers = await writingNodes(run, providerRows);
+    const writeTurns = createSemaphore(1);
 
     /*
      * Domain (D309, D323). A node may take more turns than the graph gives it — a human message, a
@@ -713,6 +785,33 @@ export function createRunService(deps: RunServiceDeps): RunService {
     }
 
     /**
+     * PG-4.5 (Arch §12.4): each stored envelope carries the input-point verdicts on its reads as
+     * `guardrailVerdicts`. The row's envelopes are read fresh — a context step may have replaced
+     * them a moment ago — and only the matching ones gain the field; their reads stay as stored.
+     */
+    async function recordEnvelopeVerdicts(
+      nodeRunId: Id,
+      byEnvelope: readonly { envelopeId: Id; verdicts: Verdict[] }[],
+    ): Promise<void> {
+      if (byEnvelope.length === 0) return;
+      const row = await repository.nodeRuns.get(scope, nodeRunId);
+      if (row === null) return;
+      const verdictsOf = new Map(byEnvelope.map((entry) => [entry.envelopeId, entry.verdicts]));
+      if (!row.inputEnvelopes.some((envelope) => verdictsOf.has(envelope.id))) return;
+      await repository.nodeRuns.update(scope, nodeRunId, {
+        inputEnvelopes: row.inputEnvelopes.map((envelope) => {
+          const verdicts = verdictsOf.get(envelope.id);
+          return verdicts === undefined
+            ? envelope
+            : {
+                ...envelope,
+                guardrailVerdicts: [...(envelope.guardrailVerdicts ?? []), ...verdicts],
+              };
+        }),
+      });
+    }
+
+    /**
      * The guardrail points for one node run (FR-GRD-003, 007, 011..015, Arch §13.1).
      *
      * The executor calls these and knows nothing else about guardrails: it does not resolve a
@@ -757,6 +856,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
           ...toolFields,
           async beforePrompt(envelopes) {
             const outcome = await evaluator.evaluateEnvelopes({ target, envelopes });
+            await recordEnvelopeVerdicts(nodeRun.id, outcome.byEnvelope);
             return outcome.kind === 'failed'
               ? {
                   kind: 'failed',
@@ -857,7 +957,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
                     node,
                     envelopes,
                     memory: reader === undefined ? [] : await reader.list(node.id),
-                    search: deps.search,
+                    // PG-5.4: a replay embeds nothing — no knowledge search, which would call a provider.
+                    search: replays.has(run.id) ? undefined : deps.search,
                     guard,
                     target: targetFor(node, nodeRun),
                     signal: runSignal,
@@ -1284,6 +1385,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
     ): Promise<void> {
       const usage = spentBy(nodeRun, outcome.usage);
       usages.push(usage);
+      noteNodeSpend(nodeRun.nodeId, usage);
       const startedAt = startedAtByNodeRun.get(nodeRun.id);
 
       await repository.nodeRuns.update(scope, nodeRun.id, {
@@ -1352,6 +1454,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
     ): Promise<void> {
       const usage = spentBy(nodeRun, outcome.usage);
       usages.push(usage);
+      noteNodeSpend(nodeRun.nodeId, usage);
       states.set(node.id, 'STOPPED');
       await repository.nodeRuns.update(scope, nodeRun.id, {
         error:
@@ -1819,6 +1922,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
         return;
       }
 
+      // PG-4.3: the node's own cost cap, read before the row is written so it is written once.
+      outcome = overNodeCap(node, outcome);
       await recordAttempt(nodeRun, outcome, endedAt);
 
       /*
@@ -2149,6 +2254,21 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
     }
 
+    /**
+     * PG-5.1: one writing node step inside its own checkpoint — begun before the step's first
+     * attempt, finished once its last attempt ended (completed, failed, stopped). A checkpoint that
+     * cannot begin is stored `failed` and shown in Changes; the step goes on, as the run's own
+     * check already passed at start (D361) or the person chose to run without undo.
+     */
+    async function recordedStep(node: Node, step: () => Promise<void>): Promise<void> {
+      const recording = await beginStepCheckpoint(run, node.id);
+      try {
+        await step();
+      } finally {
+        await recording?.finish().catch(() => undefined);
+      }
+    }
+
     async function runNode(
       node: Node,
       iteration: number,
@@ -2274,7 +2394,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
       };
 
       try {
-        await attempts();
+        await (writers.has(node.id)
+          ? writeTurns.run(() => recordedStep(node, attempts))
+          : attempts());
       } finally {
         if (turnAbort !== undefined) domain?.endTurn(node.id, turnAbort);
         // DONE when the turn ended; cut short, the messages wait for the next turn (D309).
@@ -2436,6 +2558,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
                   ...(repairReason === undefined ? {} : { repairReason }),
                   ...teamFor(messagesForPrompt, envelopesForPrompt),
                   ...rulesFor(envelopesForPrompt),
+                  ...replayFor(run.id, node, iteration),
                 });
 
           // A node that failed before it got a slot (no route, say) still passes through RUNNING, so
@@ -2664,6 +2787,32 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
 
       if (!ending) {
+        // D360: a retry or a re-run a control planned on this live run, once its node is free.
+        for (const plan of domain?.plannedTurns() ?? []) {
+          if (inFlight.size >= limit) break;
+          const nodeId = plan.nodeRun.nodeId;
+          const node = nodeById.get(nodeId);
+          const state = states.get(nodeId);
+          if (node !== undefined && (inFlightNodes.has(nodeId) || BUSY_STATES.has(state ?? 'IDLE')))
+            continue;
+          domain?.takePlannedTurn(nodeId);
+          if (node === undefined) continue;
+          const row = plan.nodeRun;
+          plannedRuns.set(nodeId, row);
+          envelopesFor.set(nodeId, asDelivered(row.inputEnvelopes, nodes));
+          iterations.set(nodeId, row.iteration);
+          const key = attemptKey(nodeId, row.iteration);
+          lastAttempt.set(key, Math.max(lastAttempt.get(key) ?? 0, row.attempt));
+          // D323: what this node's failure BLOCKED is unblocked, as a turn of it would, and runs
+          // once the fresh output reaches it; what had completed runs again on that output
+          // (`rearmSuccessors`), so `withDownstream` asks nothing more of a live run.
+          for (const id of downstreamOf(nodeId, edges)) {
+            if (states.get(id) === 'BLOCKED') states.set(id, 'IDLE');
+          }
+          stateBeforeTurn.set(nodeId, state ?? 'IDLE');
+          launch(node, 'dispatch');
+        }
+
         const ready = nodes.filter(
           (node) => states.get(node.id) === 'IDLE' && isReady(node, edges, deliveredEdges),
         );
@@ -2730,6 +2879,15 @@ export function createRunService(deps: RunServiceDeps): RunService {
         await repository.nodeRuns.update(scope, row.id, { status: 'STOPPED', endedAt: now() });
         await emitNodeState(run, row, 'STOPPED');
       }
+    }
+
+    // D360: a retry or a re-run the run ended before it could take never ran — STOPPED, not left
+    // READY on a finished run. A Stop has already stopped every READY row itself.
+    for (const plan of domain?.plannedTurns() ?? []) {
+      domain?.takePlannedTurn(plan.nodeRun.nodeId);
+      if (gate.abortCause() === 'stopped') continue;
+      await repository.nodeRuns.update(scope, plan.nodeRun.id, { status: 'STOPPED', endedAt: now() });
+      await emitNodeState(run, plan.nodeRun, 'STOPPED');
     }
 
     // D309: whatever is still PENDING was never delivered — DROPPED, before the run's end is said.
@@ -2913,11 +3071,33 @@ export function createRunService(deps: RunServiceDeps): RunService {
     }
   }
 
-  /** D300: the run's checkpoint, when its project has a folder; never a reason the run fails. */
+  /**
+   * PG-5.1: the snapshot's nodes that can change the project folder, as configured (D361) — none
+   * without a recorder or a folder.
+   */
+  async function writingNodes(run: Run, providers?: readonly Provider[]): Promise<ReadonlySet<Id>> {
+    if (deps.checkpoints === undefined) return new Set();
+    const project = await repository.projects.get(scope, run.projectId);
+    if (project === null || project.folderPath === '') return new Set();
+    const rows = providers ?? (await repository.providers.list(scope));
+    const byId = new Map(rows.map((provider) => [provider.id, provider]));
+    return new Set(
+      run.snapshot.nodes
+        .filter((node) => nodeWrites(node, (id) => byId.get(id)))
+        .map((node) => node.id),
+    );
+  }
+
+  /**
+   * D300: the checkpoint of a run whose nodes only read, when its project has a folder; never a
+   * reason the run fails. A run with a writing node has none: each writing step records its own
+   * (PG-5.1), so a change is never listed twice.
+   */
   async function beginRunCheckpoint(run: Run): Promise<CheckpointRecording | undefined> {
     const recorder = deps.checkpoints;
     if (recorder === undefined) return undefined;
     try {
+      if ((await writingNodes(run)).size > 0) return undefined;
       const project = await repository.projects.get(scope, run.projectId);
       if (project === null || project.folderPath === '') return undefined;
       return await recorder.begin(run.projectId, { kind: 'run', runId: run.id });
@@ -2927,8 +3107,106 @@ export function createRunService(deps: RunServiceDeps): RunService {
     }
   }
 
-  /** Start driving a run that has been pre-flighted, and register its gate (FR-CTL-001..003). */
-  function startDriving(run: Run, seed?: DriveSeed): Promise<Run> {
+  /** PG-5.1: one writing node step's checkpoint; `undefined` without a folder or a recorder. */
+  async function beginStepCheckpoint(
+    run: Run,
+    nodeId: Id,
+  ): Promise<CheckpointRecording | undefined> {
+    const recorder = deps.checkpoints;
+    if (recorder === undefined) return undefined;
+    try {
+      const project = await repository.projects.get(scope, run.projectId);
+      if (project === null || project.folderPath === '') return undefined;
+      const recording = await recorder.begin(run.projectId, { kind: 'run', runId: run.id, nodeId });
+      if (recording.failed !== undefined) {
+        logger.warn(
+          { subsystem: 'runs', runId: run.id, nodeId, reason: recording.failed },
+          'node step checkpoint failed; its changes cannot be reverted',
+        );
+      }
+      return recording;
+    } catch (error) {
+      logger.warn(
+        { subsystem: 'runs', runId: run.id, nodeId, err: error },
+        'node step checkpoint not begun',
+      );
+      return undefined;
+    }
+  }
+
+  /**
+   * PG-2.4 (D361): a writing run's checkpoint, begun before the run is RUNNING (`undefined` for a
+   * run that only reads: it begins its own once driving). A run that writes (a node
+   * with a project-writing tool, or a CLI allowed to edit) and whose checkpoint cannot begin gets an
+   * error issue and is BLOCKED with zero provider calls — unless the person chose "Run without
+   * undo" for this run, which leaves a warning instead. A run that only reads keeps D300's rule:
+   * the failure is logged and the run goes on.
+   */
+  async function prepareUndo(
+    run: Run,
+    providers: readonly Provider[],
+    withoutUndo: boolean,
+  ): Promise<{ recording?: CheckpointRecording; issue?: ValidationIssue } | undefined> {
+    const recorder = deps.checkpoints;
+    if (recorder === undefined) return {};
+    // A run that only reads begins its checkpoint once it is driving, as before (D300), so its
+    // `POST /runs` still answers at once (D65); only a writer waits for the "before" snapshot.
+    const byId = new Map(providers.map((provider) => [provider.id, provider]));
+    const writer = run.snapshot.nodes.find((node) => nodeWrites(node, (id) => byId.get(id)));
+    if (writer === undefined) return undefined;
+    let reason: string | undefined;
+    let recording: CheckpointRecording | undefined;
+    try {
+      const project = await repository.projects.get(scope, run.projectId);
+      if (project === null || project.folderPath === '') return {};
+      recording = await recorder.begin(run.projectId, {
+        kind: 'run',
+        runId: run.id,
+        nodeId: writer.id,
+      });
+      reason = recording.failed;
+    } catch (error) {
+      reason = error instanceof Error ? error.message : String(error);
+    }
+    // PG-5.1: the store works, so each writing step will record its own checkpoint; this probe
+    // recorded nothing and is dropped once finished.
+    if (reason === undefined) {
+      await recording?.finish().catch(() => undefined);
+      return {};
+    }
+
+    logger.warn({ subsystem: 'runs', runId: run.id, reason }, 'run checkpoint not begun');
+    const kept = recording === undefined ? {} : { recording };
+    if (withoutUndo) {
+      return {
+        ...kept,
+        issue: {
+          severity: 'warning',
+          code: 'running_without_undo',
+          message: `Running without undo, as you chose: ${reason}. What this run changes cannot be reverted.`,
+          nodeId: writer.id,
+        },
+      };
+    }
+    return {
+      issue: {
+        severity: 'error',
+        code: 'checkpoint_unavailable',
+        message: undoUnavailableMessage(reason, 'run'),
+        nodeId: writer.id,
+      },
+    };
+  }
+
+  /**
+   * Start driving a run that has been pre-flighted, and register its gate (FR-CTL-001..003).
+   * `prepared` is the checkpoint `begin` already started (PG-2.4); a re-drive begins its own.
+   */
+  function startDriving(
+    run: Run,
+    seed?: DriveSeed,
+    prepared?: { recording?: CheckpointRecording },
+  ): Promise<Run> {
     const gate = createRunGate(run.id);
     const unregister = deps.gates.register(gate);
     let domain: RunDomain | undefined;
@@ -2937,7 +3215,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const done = (async (): Promise<Run> => {
       // Domain (D309, D323): the run's live conversation, with what its log says it still owes.
       domain = await deps.domains?.open(run);
-      checkpoint = await beginRunCheckpoint(run);
+      checkpoint = prepared === undefined ? await beginRunCheckpoint(run) : prepared.recording;
       return drive(run, gate, seed, domain);
     })()
       .catch(async (error: unknown) => {
@@ -2975,10 +3253,19 @@ export function createRunService(deps: RunServiceDeps): RunService {
    * it — a restart records its own run on the *source run's* snapshot (BR-04, FR-CTL-004), so it
    * must not go back to the live tables for a fresh one.
    */
+  /** PG-5.4: the recorded answer for a replayed node's call; nothing on any other run. */
+  function replayFor(runId: Id, node: Node, iteration: number): Pick<ExecuteNodeInput, 'replay'> {
+    const book = replays.get(runId);
+    if (book === undefined || !isReplayedKind(node)) return {};
+    return { replay: book.answer(node, iteration) };
+  }
+
   async function begin(
     run: Run,
-    extra: { issues?: ValidationIssue[]; seed?: DriveSeed } = {},
+    extra: { issues?: ValidationIssue[]; seed?: DriveSeed; withoutUndo?: boolean } = {},
   ): Promise<BegunRun> {
+    // PG-5.4: a replay calls no provider, so pre-flight asks none and it costs nothing to budget.
+    const replaying = replays.has(run.id);
     const workflowId = run.workflowId;
 
     const [providers, models, mcpServers] = await Promise.all([
@@ -2995,7 +3282,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
         inputs: run.inputs,
         providers,
         models,
-        checkProvider: deps.checkProvider,
+        checkProvider: replaying
+          ? () => Promise.resolve({ status: 'CONNECTED' as const, checkedAt: now() })
+          : deps.checkProvider,
         // An agent that still enables a tool the registry no longer has — its MCP server was
         // removed — is refused here, before any node runs (round 4 §2.4, BR-08, D-069).
         ...(deps.tools === undefined ? {} : { tools: deps.tools }),
@@ -3025,11 +3314,23 @@ export function createRunService(deps: RunServiceDeps): RunService {
      * `daily_budget_exceeded` and **zero** provider calls. Checked against the project's default
      * policy, because pre-flight is about the run rather than about one node.
      */
-    if (deps.budgets !== undefined) {
+    if (deps.budgets !== undefined && !replaying) {
       const policy =
         deps.policies === undefined ? null : await deps.policies.resolve(run.projectId);
       issues.push(...(await deps.budgets.preflightIssues({ projectId: run.projectId, policy })));
     }
+
+    // PG-2.4 (D361): only a run that would otherwise start begins a checkpoint; a writing run whose
+    // checkpoint cannot begin is BLOCKED here, before any provider call or file write.
+    let undo: { recording?: CheckpointRecording; issue?: ValidationIssue } | undefined;
+    if (replaying) {
+      // A replay writes nothing — no tool runs — so it records no checkpoint (D300).
+      undo = {};
+    } else if (!issues.some((issue) => issue.severity === 'error')) {
+      undo = await prepareUndo(run, providers, extra.withoutUndo === true);
+      if (undo?.issue !== undefined) issues.push(undo.issue);
+    }
+    const ranWithoutUndo = undo?.issue?.code === 'running_without_undo';
 
     // Every issue `preflight` itself raises is an error; only a `warn` daily budget can be a
     // warning, and D79 says that one reports and lets the run start.
@@ -3089,7 +3390,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
       type: 'run.started',
       workflowId,
       runId: run.id,
-      payload: { run: toSummary(running) },
+      // PG-2.4 (D361): the one-time "Run without undo" is written to the run's events.
+      payload: { run: toSummary(running), ...(ranWithoutUndo ? { withoutUndo: true } : {}) },
     });
 
     // D312: a run that came with Domain settings records them, then its goal as the first message.
@@ -3117,7 +3419,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
       });
     }
 
-    return { run: running, done: startDriving(running, extra.seed) };
+    return { run: running, done: startDriving(running, extra.seed, undo) };
   }
 
   const service: RunService = {
@@ -3168,7 +3470,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
         return tx.runs.create(scope, created);
       });
 
-      if (request.startFromNodeId === undefined) return begin(run);
+      if (request.startFromNodeId === undefined)
+        return begin(run, { withoutUndo: request.withoutUndo === true });
 
       /*
        * Start from a node (FR-EXE-013, TC-EXE-012, D83). Every node above the chosen one has its
@@ -3199,6 +3502,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
       return begin(run, {
         issues: plan.issues,
+        withoutUndo: request.withoutUndo === true,
         // The copies are already COMPLETED rows, so the generic seed marks them COMPLETED and
         // delivers their outputs; the start node is IDLE and becomes ready when they land.
         seed: { nodeRuns: [], withDownstream: false },
@@ -3207,6 +3511,21 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
     async driveRecordedRun(run) {
       return (await begin(run)).run;
+    },
+
+    async driveReplayRun(run) {
+      const sourceRunId = run.replayOf;
+      if (sourceRunId === undefined) throw new Error(`run ${run.id} is not a replay`);
+      const sourceNodeRuns = await repository.nodeRuns.listByRun(scope, sourceRunId);
+      replays.set(run.id, createReplayBook(sourceRunId, run.snapshot, sourceNodeRuns));
+      try {
+        const begun = await begin(run);
+        void begun.done.finally(() => replays.delete(run.id));
+        return begun.run;
+      } catch (error) {
+        replays.delete(run.id);
+        throw error;
+      }
     },
 
     async resumeOpenRun(run) {

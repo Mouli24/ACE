@@ -1,4 +1,4 @@
-import { DATA_TYPES, type DataType } from '@ace/contracts';
+import { BudgetUsdSchema, DATA_TYPES, type DataType } from '@ace/contracts';
 import {
   Checkbox,
   FIELD_LABEL_CLASS,
@@ -198,6 +198,57 @@ export function NumberField({
         max={range.max}
         value={field.draft}
         aria-invalid={error ? true : undefined}
+        onChange={(e) => field.change(e.target.value)}
+        onBlur={field.blur}
+        onKeyDown={blurOnEnter}
+        className={MONO_INPUT_CLASS}
+      />
+    </Field>
+  );
+}
+
+/**
+ * PG-4.3: a USD cap that may be left blank — blank is no cap and saves `null`, how a patch clears
+ * one (D72); an amount `BudgetUsdSchema` refuses (0, negative) is shown and never saved.
+ */
+export function UsdCapField({
+  label,
+  hint,
+  testId,
+  value,
+  onCommit,
+}: {
+  label: string;
+  hint: string;
+  testId?: string;
+  value: number | null | undefined;
+  onCommit: (value: number | null) => void;
+}) {
+  const id = useId();
+  const read = (raw: string): number | null | undefined => {
+    if (raw.trim() === '') return null;
+    const parsed = BudgetUsdSchema.safeParse(Number(raw));
+    return parsed.success ? parsed.data : undefined;
+  };
+  const field = useAutosaveDraft<number | null, string>({
+    value: value ?? null,
+    toDraft: (saved) => (saved === null ? '' : String(saved)),
+    parse: read,
+    onCommit,
+  });
+  const error = read(field.draft) === undefined ? 'Must be an amount above 0.' : undefined;
+  return (
+    <Field label={label} htmlFor={id} {...(error === undefined ? { hint } : { error })}>
+      <Input
+        id={id}
+        type="number"
+        inputMode="decimal"
+        step="0.01"
+        min="0"
+        placeholder="no cap"
+        value={field.draft}
+        aria-invalid={error ? true : undefined}
+        {...(testId === undefined ? {} : { 'data-testid': testId })}
         onChange={(e) => field.change(e.target.value)}
         onBlur={field.blur}
         onKeyDown={blurOnEnter}

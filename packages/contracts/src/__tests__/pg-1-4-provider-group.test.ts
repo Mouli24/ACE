@@ -1,7 +1,7 @@
 /**
  * PG-1.4 Local and open models get their own section (docs/team-prompts/product-gaps-fix-prompt.md).
  *
- * Phase 0 red test. The grouping is one pure function in `@ace/contracts`, `providerGroup(provider)`,
+ * Red in Phase 0, green from Phase 1. The grouping is one pure function in `@ace/contracts`, `providerGroup(provider)`,
  * so the engine and the web app agree:
  *
  * - cloud  — anthropic, google, openai
@@ -38,7 +38,7 @@ function groupOf(p: Provider): unknown {
 }
 
 describe('PG-1.4 providerGroup(provider)', () => {
-  it.fails.each([
+  it.each([
     ['anthropic', undefined, 'cloud'],
     ['google', undefined, 'cloud'],
     ['openai', undefined, 'cloud'],

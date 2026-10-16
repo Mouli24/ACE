@@ -15,6 +15,10 @@ import {
   type RouteEnvelopeRequest,
   type RouteEnvelopeResponse,
   ApprovalDecisionRequestSchema,
+  ApprovalDecisionSchema,
+  ChatRetryRequestSchema,
+  type ApprovalDecision,
+  type ChatRetryRequest,
   ApprovalRequestSchema,
   CreateGuardrailPolicyRequestSchema,
   CreateProviderRequestSchema,
@@ -32,6 +36,7 @@ import {
   CliDetectResponseSchema,
   ProviderSchema,
   RefreshModelsResponseSchema,
+  RunExportSchema,
   RunSchema,
   RunSummarySchema,
   StartRunRequestSchema,
@@ -47,6 +52,7 @@ import {
   UpdateProjectRequestSchema,
   UpdateWorkflowRequestSchema,
   ValidateWorkflowResponseSchema,
+  WorkflowEstimateSchema,
   WorkflowExportSchema,
   WorkflowGraphResponseSchema,
   WorkflowSchema,
@@ -71,6 +77,7 @@ import {
   type CliDetectResponse,
   type RefreshModelsResponse,
   type Run,
+  type RunExport,
   type RunSummary,
   type StartRunRequest,
   type UpdateProviderRequest,
@@ -88,6 +95,7 @@ import {
   type UpdateWorkflowRequest,
   type ValidateWorkflowResponse,
   type Workflow,
+  type WorkflowEstimate,
   type WorkflowExport,
   type WorkflowGraphResponse,
   // Forge (D299): project files
@@ -148,7 +156,11 @@ import {
   ChatResponseSchema,
   ChatThreadSchema,
   ChatThreadDetailSchema,
+  ChatEditRequestSchema,
+  ChatStopResponseSchema,
   type Artifact,
+  type ChatEditRequest,
+  type ChatStopResponse,
   type ChatRequest,
   type ChatResponse,
   type ChatThread,
@@ -194,6 +206,46 @@ import {
   type TraceEntry,
   type UpdateKnowledgeBaseRequest,
   type UsageResponse,
+} from '@ace/contracts';
+import {
+  BenchExperimentListResponseSchema,
+  BenchExperimentSchema,
+  BenchReportSchema,
+  BenchTaskListResponseSchema,
+  BenchTaskSchema,
+  BlindExportSchema,
+  CreateBenchExperimentRequestSchema,
+  CreateBenchTaskRequestSchema,
+  ImportBenchScoresRequestSchema,
+  ImportBenchScoresResponseSchema,
+  UpdateBenchExperimentRequestSchema,
+  UpdateBenchTaskRequestSchema,
+  type BenchExperiment,
+  type BenchReport,
+  type BenchTask,
+  type BlindExport,
+  type CreateBenchExperimentRequest,
+  type CreateBenchTaskRequest,
+  type ImportBenchScoresRequest,
+  type ImportBenchScoresResponse,
+  type UpdateBenchExperimentRequest,
+  type UpdateBenchTaskRequest,
+} from '@ace/contracts';
+import {
+  LocalModelActionResponseSchema,
+  LocalModelRequestSchema,
+  LocalRunningModelsResponseSchema,
+  LocalRuntimeStatusSchema,
+  PullModelAcceptedSchema,
+  PullModelRequestSchema,
+  TryModelRequestSchema,
+  TryModelResponseSchema,
+  type LocalModelActionResponse,
+  type LocalRunningModelsResponse,
+  type LocalRuntimeStatus,
+  type PullModelAccepted,
+  type TryModelRequest,
+  type TryModelResponse,
 } from '@ace/contracts';
 import { z } from 'zod';
 
@@ -416,6 +468,9 @@ export function createAceClient(options: AceClientOptions) {
       }),
     validateWorkflow: (id: Id): Promise<ValidateWorkflowResponse> =>
       request('POST', `/workflows/${id}/validate`, ValidateWorkflowResponseSchema),
+    /** PG-4.3: what a run of this workflow could cost, and what the caps leave — before Start. */
+    estimateWorkflow: (id: Id): Promise<WorkflowEstimate> =>
+      request('POST', `/workflows/${id}/estimate`, WorkflowEstimateSchema),
     exportWorkflow: (id: Id): Promise<WorkflowExport> =>
       request('GET', `/workflows/${id}/export`, WorkflowExportSchema),
     importWorkflow: (projectId: Id, file: WorkflowExport): Promise<WorkflowGraphResponse> =>
@@ -456,6 +511,38 @@ export function createAceClient(options: AceClientOptions) {
     detectClis: (): Promise<CliDetectResponse> =>
       request('GET', '/providers/detect/clis', CliDetectResponseSchema),
 
+    /* Models on this machine (PG-1.4, D359) */
+    /** Is Ollama installed and answering, and did the engine start it? Never starts anything. */
+    localRuntime: (): Promise<LocalRuntimeStatus> =>
+      request('GET', '/local-runtime', LocalRuntimeStatusSchema),
+    /** Start Ollama when installed and stopped, and add its provider when there is none. */
+    startLocalRuntime: (): Promise<LocalRuntimeStatus> =>
+      request('POST', '/local-runtime/start', LocalRuntimeStatusSchema),
+    localRunningModels: (id: Id): Promise<LocalRunningModelsResponse> =>
+      request('GET', `/providers/${id}/local/running`, LocalRunningModelsResponseSchema),
+    loadLocalModel: (id: Id, modelId: string): Promise<LocalModelActionResponse> =>
+      request('POST', `/providers/${id}/local/load`, LocalModelActionResponseSchema, {
+        schema: LocalModelRequestSchema,
+        value: { modelId },
+      }),
+    unloadLocalModel: (id: Id, modelId: string): Promise<LocalModelActionResponse> =>
+      request('POST', `/providers/${id}/local/unload`, LocalModelActionResponseSchema, {
+        schema: LocalModelRequestSchema,
+        value: { modelId },
+      }),
+    /** Answered at once (202); progress arrives as `model.pull` on the engine subscription. */
+    pullLocalModel: (id: Id, name: string): Promise<PullModelAccepted> =>
+      request('POST', `/providers/${id}/local/pull`, PullModelAcceptedSchema, {
+        schema: PullModelRequestSchema,
+        value: { name },
+      }),
+    /** One call, no tools — a cloud provider charges for it. */
+    tryModel: (id: Id, body: TryModelRequest): Promise<TryModelResponse> =>
+      request('POST', `/providers/${id}/try`, TryModelResponseSchema, {
+        schema: TryModelRequestSchema,
+        value: body,
+      }),
+
     /* Models */
     listModels: (query: ModelQuery = {}): Promise<ModelListResponse> =>
       request('GET', '/models', ModelListResponseSchema, undefined, {
@@ -494,6 +581,24 @@ export function createAceClient(options: AceClientOptions) {
     stopRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/stop`, RunSchema),
     /** Answers the **new** run, which carries `restartedFromRunId` (FR-CTL-004). */
     restartRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/restart`, RunSchema),
+    /**
+     * PG-5.4: replay a finished run — a **new** run with `replayOf`, answered from this run's
+     * recorded node outputs with zero provider calls. 409 `invalid_run_state` unless COMPLETE or
+     * HALTED.
+     */
+    replayRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/replay`, RunSchema),
+    /**
+     * PG-5.5: the run as a judging bundle — record, node runs, outputs and event log. `anonymise`
+     * strips node names, providers and models for blind judging (FR-BEN-005).
+     */
+    exportRun: (runId: Id, options: { anonymise?: boolean } = {}): Promise<RunExport> =>
+      request(
+        'GET',
+        `/runs/${runId}/export`,
+        RunExportSchema,
+        undefined,
+        options.anonymise === true ? { anonymise: '1' } : {},
+      ),
     /** D323: end a run started from Domain — in-flight turns stop, pending messages are dropped. */
     endRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/end`, RunSchema),
 
@@ -683,6 +788,57 @@ export function createAceClient(options: AceClientOptions) {
     deleteChatThread: (id: Id): Promise<void> =>
       request('DELETE', `/chat/threads/${id}`, NoContentSchema),
 
+    /*
+     * PG-1.6 (D352) message actions. Retry and edit answer 202 `{ threadId, messageId }` like
+     * `postNodeChat`; the replaced rows arrive as `chat.update`, the new reply as `chat.message`.
+     */
+    /** PG-2.4 (D361): `{ withoutUndo: true }` lets a turn stopped without a checkpoint write once. */
+    retryChatMessage: (
+      threadId: Id,
+      messageId: Id,
+      body: ChatRetryRequest = {},
+    ): Promise<ChatResponse> =>
+      request('POST', `/chat/threads/${threadId}/messages/${messageId}/retry`, ChatResponseSchema, {
+        schema: ChatRetryRequestSchema,
+        value: body,
+      }),
+    /** PG-2.2 (D359): the chat tool calls on a thread waiting on a person. */
+    listChatApprovals: (threadId: Id): Promise<ApprovalRequest[]> =>
+      request('GET', `/chat/threads/${threadId}/approvals`, ApprovalRequestListSchema),
+    /** PG-2.2 (D359): approve a chat tool call; the turn runs it and goes on. */
+    approveChatToolCall: (
+      threadId: Id,
+      requestId: Id,
+      body: ApprovalDecisionRequest = {},
+    ): Promise<ApprovalDecision> =>
+      request(
+        'POST',
+        `/chat/threads/${threadId}/approvals/${requestId}/approve`,
+        ApprovalDecisionSchema,
+        { schema: ApprovalDecisionRequestSchema, value: body },
+      ),
+    /** PG-2.2 (D359): reject a chat tool call; the turn goes on without it. */
+    rejectChatToolCall: (
+      threadId: Id,
+      requestId: Id,
+      body: ApprovalDecisionRequest = {},
+    ): Promise<ApprovalDecision> =>
+      request(
+        'POST',
+        `/chat/threads/${threadId}/approvals/${requestId}/reject`,
+        ApprovalDecisionSchema,
+        { schema: ApprovalDecisionRequestSchema, value: body },
+      ),
+    editChatMessage: (threadId: Id, messageId: Id, body: ChatEditRequest): Promise<ChatResponse> =>
+      request('POST', `/chat/threads/${threadId}/messages/${messageId}/edit`, ChatResponseSchema, {
+        schema: ChatEditRequestSchema,
+        value: body,
+      }),
+    deleteChatMessage: (threadId: Id, messageId: Id): Promise<void> =>
+      request('DELETE', `/chat/threads/${threadId}/messages/${messageId}`, NoContentSchema),
+    stopChatThread: (threadId: Id): Promise<ChatStopResponse> =>
+      request('POST', `/chat/threads/${threadId}/stop`, ChatStopResponseSchema),
+
     /* Knowledge bases (round 5 §2.1/§2.9, FR-RAG-001/002/003/004/008/009) */
 
     listKnowledgeBases: (projectId: Id): Promise<{ items: KnowledgeBase[] }> =>
@@ -815,7 +971,9 @@ export function createAceClient(options: AceClientOptions) {
     listFolder: (projectId: Id, path = ''): Promise<FolderListing> =>
       request('GET', `/projects/${projectId}/files/tree`, FolderListingSchema, undefined, { path }),
     readFile: (projectId: Id, path: string): Promise<FileContent> =>
-      request('GET', `/projects/${projectId}/files/content`, FileContentSchema, undefined, { path }),
+      request('GET', `/projects/${projectId}/files/content`, FileContentSchema, undefined, {
+        path,
+      }),
     /** The bytes of a file (image previews); an error answers as an `AceApiError` like any route. */
     readFileRaw: async (projectId: Id, path: string, signal?: AbortSignal): Promise<Blob> => {
       const response = await send(
@@ -843,7 +1001,9 @@ export function createAceClient(options: AceClientOptions) {
         value: body,
       }),
     deleteEntry: (projectId: Id, path: string): Promise<void> =>
-      request('DELETE', `/projects/${projectId}/files/entries`, NoContentSchema, undefined, { path }),
+      request('DELETE', `/projects/${projectId}/files/entries`, NoContentSchema, undefined, {
+        path,
+      }),
     listAllFiles: (projectId: Id): Promise<FileList> =>
       request('GET', `/projects/${projectId}/files/list`, FileListSchema),
     repoStatus: (projectId: Id): Promise<RepoStatus> =>
@@ -930,6 +1090,56 @@ export function createAceClient(options: AceClientOptions) {
           value: action,
         },
       ),
+
+    /* ACE Bench (PG-5.6, FR-BEN-001..008, Arch §20.2) */
+
+    listBenchTasks: async (): Promise<BenchTask[]> =>
+      (await request('GET', '/bench/tasks', BenchTaskListResponseSchema)).items,
+    getBenchTask: (id: Id): Promise<BenchTask> =>
+      request('GET', `/bench/tasks/${id}`, BenchTaskSchema),
+    createBenchTask: (body: CreateBenchTaskRequest): Promise<BenchTask> =>
+      request('POST', '/bench/tasks', BenchTaskSchema, {
+        schema: CreateBenchTaskRequestSchema,
+        value: body,
+      }),
+    /** A frozen task answers 409 `bench_task_frozen` (FR-BEN-002). */
+    updateBenchTask: (id: Id, body: UpdateBenchTaskRequest): Promise<BenchTask> =>
+      request('PATCH', `/bench/tasks/${id}`, BenchTaskSchema, {
+        schema: UpdateBenchTaskRequestSchema,
+        value: body,
+      }),
+    freezeBenchTask: (id: Id): Promise<BenchTask> =>
+      request('POST', `/bench/tasks/${id}/freeze`, BenchTaskSchema),
+
+    listBenchExperiments: async (): Promise<BenchExperiment[]> =>
+      (await request('GET', '/bench/experiments', BenchExperimentListResponseSchema)).items,
+    getBenchExperiment: (id: Id): Promise<BenchExperiment> =>
+      request('GET', `/bench/experiments/${id}`, BenchExperimentSchema),
+    createBenchExperiment: (body: CreateBenchExperimentRequest): Promise<BenchExperiment> =>
+      request('POST', '/bench/experiments', BenchExperimentSchema, {
+        schema: CreateBenchExperimentRequestSchema,
+        value: body,
+      }),
+    /** While `draft` only; after start 409 `bench_experiment_locked` (FR-BEN-007). */
+    updateBenchExperiment: (id: Id, body: UpdateBenchExperimentRequest): Promise<BenchExperiment> =>
+      request('PATCH', `/bench/experiments/${id}`, BenchExperimentSchema, {
+        schema: UpdateBenchExperimentRequestSchema,
+        value: body,
+      }),
+    startBenchExperiment: (id: Id): Promise<BenchExperiment> =>
+      request('POST', `/bench/experiments/${id}/start`, BenchExperimentSchema),
+    benchBlindExport: (id: Id): Promise<BlindExport> =>
+      request('GET', `/bench/experiments/${id}/blind-export`, BlindExportSchema),
+    importBenchScores: (
+      id: Id,
+      body: ImportBenchScoresRequest,
+    ): Promise<ImportBenchScoresResponse> =>
+      request('POST', `/bench/experiments/${id}/scores`, ImportBenchScoresResponseSchema, {
+        schema: ImportBenchScoresRequestSchema,
+        value: body,
+      }),
+    benchReport: (id: Id): Promise<BenchReport> =>
+      request('GET', `/bench/experiments/${id}/report`, BenchReportSchema),
   };
 }
 

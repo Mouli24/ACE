@@ -9,6 +9,8 @@ import { isPersistedFrame, type ChatMessage, type Id, type ServerFrame } from '@
  * replayed — so its deltas are appended as they arrive and build the streaming reply. `chat.message`
  * is persisted, so it is idempotent under a `resume` replay, and when it is the agent's turn it is
  * the streamed text settling: the stream buffer clears and the message joins the settled list.
+ * `chat.update` (PG-1.6, D352) is persisted too: it replaces a settled row by id, or drops it when
+ * the row was deleted.
  */
 export interface ThreadView {
   /** The thread these frames belong to; set from the constructor or the first frame seen. */
@@ -41,7 +43,13 @@ export class ThreadEventBuffer {
 
   /** Fold one frame in. Non-thread frames, other threads' frames, and replays are ignored. */
   apply(frame: ServerFrame): void {
-    if (frame.type !== 'chat.token' && frame.type !== 'chat.message') return;
+    if (
+      frame.type !== 'chat.token' &&
+      frame.type !== 'chat.message' &&
+      frame.type !== 'chat.update'
+    ) {
+      return;
+    }
 
     const incoming = frame.payload.threadId;
     if (this.threadId !== undefined && incoming !== this.threadId) return;
@@ -58,6 +66,19 @@ export class ThreadEventBuffer {
       if (this.seen.has(frame.seq)) return;
       this.seen.add(frame.seq);
       if (frame.seq > this.lastSeq) this.lastSeq = frame.seq;
+    }
+
+    if (frame.type === 'chat.update') {
+      // PG-1.6 (D352): an existing turn changed. A deleted one leaves the view; any other change
+      // (superseded by a retry or an edit) replaces the row where it stands.
+      const changed = frame.payload.message;
+      const at = this.messages.findIndex((message) => message.id === changed.id);
+      if (changed.deletedAt !== undefined) {
+        if (at >= 0) this.messages.splice(at, 1);
+      } else if (at >= 0) {
+        this.messages[at] = changed;
+      }
+      return;
     }
 
     this.messages.push(frame.payload.message);

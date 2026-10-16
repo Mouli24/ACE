@@ -84,9 +84,27 @@ export type GuardrailOutcome =
       error: NodeError;
     };
 
+/** PG-4.5: the input-point verdicts on one envelope's reads, for `Envelope.guardrailVerdicts`. */
+export interface EnvelopeVerdicts {
+  envelopeId: Id;
+  verdicts: Verdict[];
+}
+
 export type EnvelopeOutcome =
-  | { kind: 'continue'; envelopes: Envelope[]; verdicts: Verdict[] }
-  | { kind: 'failed'; verdicts: Verdict[]; failureReason: FailureReason; error: NodeError };
+  | {
+      kind: 'continue';
+      envelopes: Envelope[];
+      verdicts: Verdict[];
+      byEnvelope: EnvelopeVerdicts[];
+    }
+  | {
+      kind: 'failed';
+      verdicts: Verdict[];
+      failureReason: FailureReason;
+      error: NodeError;
+      /** Every envelope judged before the block, the blocking one last. */
+      byEnvelope: EnvelopeVerdicts[];
+    };
 
 export interface LoopOutcome {
   /** `undefined` means the loop may run another iteration (§2.4). */
@@ -449,21 +467,28 @@ export function createGuardrailEvaluator(deps: GuardrailEvaluatorDeps): Guardrai
       const collected: Verdict[] = [];
       const ordered = checksAt(target.policy, 'input');
       const sanitized: Envelope[] = [];
+      const byEnvelope: EnvelopeVerdicts[] = [];
 
       for (const envelope of envelopes) {
+        const before = collected.length;
         const outcome = await runPoint(target, ordered, [...envelope.reads], collected, {});
+        // PG-4.5: which verdicts were this envelope's, so its stored copy can carry them.
+        if (collected.length > before) {
+          byEnvelope.push({ envelopeId: envelope.id, verdicts: collected.slice(before) });
+        }
         if (outcome.kind === 'failed') {
           return {
             kind: 'failed',
             verdicts: collected,
             failureReason: outcome.failureReason,
             error: outcome.error,
+            byEnvelope,
           };
         }
         sanitized.push({ ...envelope, reads: outcome.parts });
       }
 
-      return { kind: 'continue', envelopes: sanitized, verdicts: collected };
+      return { kind: 'continue', envelopes: sanitized, verdicts: collected, byEnvelope };
     },
 
     async evaluateOutput({ target, parts, contract }) {
@@ -596,7 +621,7 @@ function loopStopFor(type: GuardrailCheckType): LoopStopReason {
  * it is the one that may put the node in front of a person, and there is no point asking for
  * approval of a call that a cheaper check would have blocked anyway.
  */
-const TOOL_CHECK_ORDER = [
+export const TOOL_CHECK_ORDER = [
   'tool_allowed',
   'path_confinement',
   'domain_allowlist',

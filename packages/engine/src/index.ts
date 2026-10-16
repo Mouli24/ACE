@@ -48,3 +48,5 @@ export * from './processes/routes.js';
 export * from './processes/errors.js';
 /* IDE (D300): checkpoints of agents' changes. */
 export * from './checkpoints/index.js';
+/* ACE Bench (PG-5.6). */
+export * from './bench/index.js';

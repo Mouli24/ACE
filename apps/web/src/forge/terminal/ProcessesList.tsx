@@ -43,6 +43,9 @@ function dotOf(summary: ProcessSummary): string {
  * Problems is (D334): a mono heading, then one surface card with a hairline between rows. A running
  * one no tab owns — a dev server started from another browser tab, or before a reload — shows its
  * latest line and opens in a tab with Show.
+ *
+ * PG-5.3 (D361): an agent's command (`summary.agent`) is listed too, marked as the agent's, and is
+ * read-only: Show opens its output, but there is no Stop — stopping its run stops it.
  */
 export function ProcessesList({ projectId }: { projectId: string }) {
   const list = useProcessList(projectId);
@@ -66,6 +69,7 @@ export function ProcessesList({ projectId }: { projectId: string }) {
             const running = summary.status === 'running';
             const owned = tabs.some((tab) => tab.processId === summary.id);
             const preview = running && !owned ? lastLine(unowned[summary.id]?.output) : undefined;
+            const agent = summary.agent !== undefined;
             return (
               <li
                 key={summary.id}
@@ -78,8 +82,19 @@ export function ProcessesList({ projectId }: { projectId: string }) {
                   style={{ background: dotOf(summary) }}
                 />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[var(--ink)]" title={summary.command}>
-                    {summary.label}
+                  <span className="flex min-w-0 items-center gap-[5px]">
+                    {agent && (
+                      <span
+                        data-testid={`process-agent-${summary.id}`}
+                        title={`An agent's command (run ${summary.agent?.runId.slice(-6) ?? ''}) — read-only here; stop the run to stop it`}
+                        className="shrink-0 rounded-[4px] bg-[var(--hover)] px-[4px] font-machine text-[9px] uppercase tracking-[0.06em] text-[var(--muted)]"
+                      >
+                        agent
+                      </span>
+                    )}
+                    <span className="block truncate text-[var(--ink)]" title={summary.command}>
+                      {summary.label}
+                    </span>
                   </span>
                   {preview !== undefined && (
                     <span className="block truncate font-machine text-[9.5px] text-[var(--muted)]">
@@ -102,14 +117,16 @@ export function ProcessesList({ projectId }: { projectId: string }) {
                         Show
                       </button>
                     )}
-                    <button
-                      type="button"
-                      aria-label={`Stop ${summary.label}`}
-                      onClick={() => stop.mutate(summary.id)}
-                      className={cn(ROW_ACTION, 'text-[#c94c27]')}
-                    >
-                      Stop
-                    </button>
+                    {!agent && (
+                      <button
+                        type="button"
+                        aria-label={`Stop ${summary.label}`}
+                        onClick={() => stop.mutate(summary.id)}
+                        className={cn(ROW_ACTION, 'text-[#c94c27]')}
+                      >
+                        Stop
+                      </button>
+                    )}
                   </>
                 ) : (
                   <span className="shrink-0 font-machine text-[9.5px] text-[var(--muted)]">

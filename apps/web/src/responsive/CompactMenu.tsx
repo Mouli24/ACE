@@ -4,6 +4,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  Icons,
 } from '@ace/ui';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
@@ -28,7 +29,7 @@ export function CompactMenu({ projectId, status }: { projectId?: string; status?
             aria-hidden
             className="flex h-6 items-center rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[11px] text-[var(--ink)] group-focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
           >
-            …
+            <Icons.MoreHorizontal aria-hidden size={14} />
           </span>
         </button>
       </DropdownMenuTrigger>

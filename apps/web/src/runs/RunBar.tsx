@@ -1,8 +1,8 @@
 import type { HaltReason, Id, RunAction, RunState } from '@ace/contracts';
-import { Button, cn } from '@ace/ui';
-import { useNavigate } from 'react-router-dom';
+import { Button, Icons, cn } from '@ace/ui';
 import { useShallow } from 'zustand/react/shallow';
 
+import { CostValue } from './CostValue';
 import { RunControls } from './controls/RunControls';
 import {
   usePauseRun,
@@ -13,7 +13,8 @@ import {
   useEndRun,
 } from './hooks';
 import { useRunStore } from './run-store';
-import { useStartRunFlow } from './useStartRunFlow';
+import { useOpenRunInPlace } from './useOpenRunInPlace';
+import { OpenRunEnd, RunEstimateTag, useStartRunFlow } from './useStartRunFlow';
 
 /** Run state → how the badge reads. The enum name stays the contract (BR-03: COMPLETE ≠ HALTED). */
 const RUN_STATE_LABEL: Readonly<Record<RunState, string>> = {
@@ -25,7 +26,20 @@ const RUN_STATE_LABEL: Readonly<Record<RunState, string>> = {
   HALTED: 'halted',
 };
 
-/** The run state as a theme status colour. A stopped halt reads STOPPED, any other FAILED. */
+/**
+ * How a halt reads (PG-4.2): only a failure or a crash is coloured as one. A person's stop and an
+ * engine shutdown read STOPPED; a spent budget is a limit the run reached, not a fault — it takes
+ * the amber of a held run.
+ */
+const HALT_COLOR: Readonly<Record<HaltReason, string>> = {
+  stopped: 'STOPPED',
+  shutdown: 'STOPPED',
+  budget_exceeded: 'PAUSED',
+  failure: 'FAILED',
+  crash: 'FAILED',
+};
+
+/** The run state as a theme status colour; a halt by its reason. */
 function runStateColor(status: RunState, haltReason: HaltReason | undefined): string {
   const name = {
     PREFLIGHT: 'READY',
@@ -33,7 +47,7 @@ function runStateColor(status: RunState, haltReason: HaltReason | undefined): st
     PAUSED: 'PAUSED',
     COMPLETE: 'COMPLETED',
     BLOCKED: 'BLOCKED',
-    HALTED: haltReason === 'stopped' ? 'STOPPED' : 'FAILED',
+    HALTED: haltReason === undefined ? 'FAILED' : HALT_COLOR[haltReason],
   }[status];
   return `var(--color-status-${name})`;
 }
@@ -51,7 +65,7 @@ const money = (value: number) => `$${value.toFixed(4)}`;
  * list comes from the engine through the overlay (FR-CTL-006, BR-01).
  */
 export function RunBar({ workflowId }: { workflowId: string }) {
-  const navigate = useNavigate();
+  const openRun = useOpenRunInPlace();
   const flow = useStartRunFlow(workflowId);
   const socketStatus = useSocketStatus();
 
@@ -129,15 +143,18 @@ export function RunBar({ workflowId }: { workflowId: string }) {
           data-testid="run-totals"
           className="shrink-0 whitespace-nowrap font-machine text-[10px] text-[var(--muted)]"
         >
-          {run.totals.tokensIn}↓ {run.totals.tokensOut}↑ {money(run.totals.costUsd)}
+          {run.totals.tokensIn}↓ {run.totals.tokensOut}↑{' '}
+          <CostValue usage={run.totals} format={money} />
         </span>
       )}
 
       {!flow.active && (
         <Button size="sm" aria-label="Start run" onClick={flow.start} disabled={flow.pending}>
-          <span aria-hidden>▶</span> Run
+          <Icons.Play aria-hidden size={12} /> Run <RunEstimateTag estimate={flow.estimate} />
         </Button>
       )}
+      {/* PG-3.5 (D323): a Domain run still open says it waits, and offers its End. */}
+      {flow.open !== undefined && <OpenRunEnd open={flow.open} />}
 
       <RunControls
         {...(run.runId === undefined ? {} : { runId: run.runId })}
@@ -146,7 +163,7 @@ export function RunBar({ workflowId }: { workflowId: string }) {
         {...(run.haltReason === undefined ? {} : { haltReason: run.haltReason })}
         {...(run.budgetHalt === undefined ? {} : { budgetHalt: run.budgetHalt })}
         onAction={onAction}
-        onOpenRun={(runId: Id) => navigate(`/runs/${runId}`)}
+        onOpenRun={(runId: Id) => openRun(runId)}
         busy={busy}
       />
 

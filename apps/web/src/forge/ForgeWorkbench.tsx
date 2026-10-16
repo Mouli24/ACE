@@ -1,8 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
+import { useInRouterContext } from 'react-router-dom';
 
 import { SHORTCUTS, useShortcuts } from '../app/shortcuts';
 import { useLayoutStore } from '../app/stores/layout';
+import { WorkflowUndoChoice } from '../runs/UndoChoice';
 import { askAgentAboutFile, askAgentAboutSelection } from './ask-agent';
 import { useForgeAttribution } from './attribution';
 import { saveAll, saveFile } from './editor/actions';
@@ -12,6 +14,7 @@ import { useEditorStore } from './editor/editor-store';
 import { useProjectTypes } from './editor/project-types';
 import { useEditorSync } from './editor/useEditorSync';
 import { ExplorerView } from './explorer/ExplorerView';
+import { FollowedNodeBar, useFollowedFiles } from './FollowedNode';
 import { useSideViewStore } from './explorer/side-view-store';
 import { BottomPanel } from './panel/BottomPanel';
 import { runChecks, stopFollowingChecks } from './panel/run-checks';
@@ -42,6 +45,9 @@ export function ForgeWorkbench({
   const queryClient = useQueryClient();
   const closeRequest = useCloseRequest(projectId);
   const attribution = useForgeAttribution(projectId, workflowId);
+  // PG-3.4: a node followed here — its files marked in the Explorer, its bar over the editor
+  const followed = useFollowedFiles(workflowId, attribution);
+  const routed = useInRouterContext();
   useEditorSync(projectId);
   // D299 Phase 4: the project's sources for cross-file TypeScript, once Monaco has loaded.
   useProjectTypes(projectId);
@@ -99,9 +105,19 @@ export function ForgeWorkbench({
   return (
     <div data-testid="forge" className="flex h-full min-h-0 min-w-0 flex-1">
       {explorerOpen && (
-        <ExplorerView projectId={projectId} workflowId={workflowId} live={attribution.live} />
+        <ExplorerView
+          projectId={projectId}
+          workflowId={workflowId}
+          live={attribution.live}
+          followed={followed}
+        />
       )}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        {/* PG-2.4 (D361): a writing run stopped without undo asks here too. */}
+        {workflowId !== undefined && <WorkflowUndoChoice workflowId={workflowId} />}
+        {routed && workflowId !== undefined && followed !== undefined && (
+          <FollowedNodeBar workflowId={workflowId} followed={followed} />
+        )}
         {showEditor && (
           <EditorArea projectId={projectId} workflowId={workflowId} attribution={attribution} />
         )}

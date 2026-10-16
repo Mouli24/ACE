@@ -2,15 +2,33 @@ import type {
   ArtifactRef,
   DomainMessage,
   DomainTurn,
+  Envelope,
+  FailureReason,
   Id,
+  NodeRun,
   Part,
   RosterEntry,
   RouteEnvelopeRequest,
+  TurnOutcome,
 } from '@ace/contracts';
-import { Button, cn, INPUT_CLASS } from '@ace/ui';
-import { useId, useState, type ReactNode } from 'react';
+import {
+  Button,
+  cn,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  Icons,
+  INPUT_CLASS,
+  type LucideIcon,
+} from '@ace/ui';
+import { useId, useMemo, useState, type ReactNode } from 'react';
 
+import { ACTIONS_CLASS, ActionButton, CopyButton } from '../chat/MessageActions';
 import { nameOf } from '../forge/files/paths';
+import { EnvelopeView } from '../inspector/EnvelopeView';
+import { MemoryOpsList, ReusedNote } from '../inspector/RecordNotes';
 import { clockTime, initial } from '../theme/format';
 import { lookOf, plural, seconds, type DomainLooks } from './looks';
 import { artifactTarget } from './open-artifact';
@@ -39,6 +57,22 @@ export interface ConversationProps {
   folderPath?: string;
   /** Open a project file (relative path) in Forge; without it, files open as artifacts. */
   onOpenFile?(path: string): void;
+  /**
+   * PG-1.5/PG-1.6: retry a failed node turn (its node run) with the existing node retry. Absent:
+   * no Retry is offered.
+   */
+  onRetryTurn?(turnId: Id): Promise<unknown>;
+  /**
+   * PG-3.4: follow a message's node to the canvas — the agent who wrote it, or the one node a
+   * person's message went to. Absent: not offered.
+   */
+  onShowOnCanvas?(nodeId: Id): void;
+  /**
+   * PG-4.1/PG-4.5: the run's node runs, so a delivered envelope opens the edge envelopes it
+   * travelled as (linked by `teamEnvelopeId`) and a turn shows what it remembered and whether it was
+   * reused. Absent: neither is offered.
+   */
+  nodeRuns?: readonly NodeRun[];
 }
 
 /** The theme's empty state: one muted 13px line, centred. */
@@ -47,6 +81,8 @@ export function DomainEmpty({ children }: { children: ReactNode }) {
 }
 
 interface Who {
+  /** The node the message is about: its author, or the one node a person's message went to. */
+  nodeId?: Id;
   name: string;
   handle?: string;
   letter: string;
@@ -65,7 +101,37 @@ export function Conversation({
   onRoute,
   folderPath,
   onOpenFile,
+  onRetryTurn,
+  onShowOnCanvas,
+  nodeRuns,
 }: ConversationProps) {
+  /** PG-4.1: every edge envelope a team envelope was delivered as, by `teamEnvelopeId`. */
+  const delivered = useMemo(() => {
+    const byTeam = new Map<Id, Envelope[]>();
+    const seen = new Set<Id>();
+    for (const row of nodeRuns ?? []) {
+      for (const envelope of row.inputEnvelopes) {
+        // A retry's row carries the same envelope again; it was delivered once.
+        if (envelope.teamEnvelopeId === undefined || seen.has(envelope.id)) continue;
+        seen.add(envelope.id);
+        byTeam.set(envelope.teamEnvelopeId, [
+          ...(byTeam.get(envelope.teamEnvelopeId) ?? []),
+          envelope,
+        ]);
+      }
+    }
+    return byTeam;
+  }, [nodeRuns]);
+  const nodeRunById = useMemo(
+    () => new Map((nodeRuns ?? []).map((row) => [row.id, row])),
+    [nodeRuns],
+  );
+  const allNames = useMemo(() => {
+    const map = new Map<Id, string>(names ?? []);
+    for (const entry of roster) if (!map.has(entry.nodeId)) map.set(entry.nodeId, entry.name);
+    return map;
+  }, [names, roster]);
+
   const label = (nodeId: Id | undefined): string => {
     if (nodeId === undefined) return '?';
     const entry = roster.find((each) => each.nodeId === nodeId);
@@ -76,7 +142,9 @@ export function Conversation({
 
   const whoOf = (message: DomainMessage): Who => {
     if (message.author.kind === 'human') {
+      const only = message.to?.length === 1 ? message.to[0] : undefined;
       return {
+        ...(only === undefined ? {} : { nodeId: only }),
         name: 'You',
         letter: 'Y',
         bg: 'var(--surface)',
@@ -102,6 +170,7 @@ export function Conversation({
     if (entry !== undefined) {
       const look = lookOf(looks, nodeId, entry.name, index);
       return {
+        nodeId,
         name: entry.name,
         handle: entry.handle,
         letter: look.letter,
@@ -113,6 +182,7 @@ export function Conversation({
     // A node that is not an agent (an Input, an Output): its name, never its id when known.
     const name = names?.get(nodeId) ?? nodeId;
     return {
+      nodeId,
       name,
       letter: initial(name),
       bg: 'var(--surface)',
@@ -131,7 +201,12 @@ export function Conversation({
       className="mx-auto flex max-w-[860px] flex-col gap-[28px] px-6 pb-3 pt-[28px]"
     >
       {messages.map((message) => (
-        <li key={message.id} data-testid="domain-message" data-type={message.type}>
+        <li
+          key={message.id}
+          data-testid="domain-message"
+          data-type={message.type}
+          className="group"
+        >
           {message.type === 'system' ? (
             <SystemRow message={message} />
           ) : (
@@ -145,12 +220,41 @@ export function Conversation({
               onRoute={onRoute}
               folderPath={folderPath}
               onOpenFile={onOpenFile}
+              onRetryTurn={onRetryTurn}
+              onShowOnCanvas={onShowOnCanvas}
+              envelopes={
+                message.envelope === undefined ? undefined : delivered.get(message.envelope.id)
+              }
+              nodeRun={
+                message.turn === undefined ? undefined : nodeRunById.get(message.turn.turnId)
+              }
+              names={allNames}
             />
           )}
         </li>
       ))}
     </ol>
   );
+}
+
+/**
+ * PG-1.6: what Copy takes from a Domain message — its text, or the live text of a turn still
+ * running; with neither, its output's words. Domain is a projection of the log (D303), so Copy is
+ * its only message action.
+ */
+function copyOf(message: DomainMessage, live?: string): string {
+  if (message.text !== '') return message.text;
+  if (live !== undefined && live !== '') return live;
+  return (message.output ?? [])
+    .map((part) =>
+      part.type === 'text' || part.type === 'code'
+        ? part.text
+        : part.type === 'json'
+          ? JSON.stringify(part.value, null, 2)
+          : '',
+    )
+    .filter((text) => text !== '')
+    .join('\n\n');
 }
 
 /** A system note (uncovered): one compact muted line under the avatars' column. */
@@ -160,6 +264,9 @@ function SystemRow({ message }: { message: DomainMessage }) {
   return (
     <div className="flex items-baseline gap-2 pl-[48px] text-[12px]" style={{ color: ink }}>
       <span className="min-w-0 flex-1 whitespace-pre-wrap">{message.text}</span>
+      <div className={cn(ACTIONS_CLASS, 'self-center')}>
+        <CopyButton text={copyOf(message)} />
+      </div>
       <time dateTime={message.at} className="shrink-0 text-[11.5px] text-[var(--muted)]">
         {clockTime(message.at)}
       </time>
@@ -177,9 +284,17 @@ interface RowProps {
   onRoute: ConversationProps['onRoute'];
   folderPath: string | undefined;
   onOpenFile: ConversationProps['onOpenFile'];
+  onRetryTurn: ConversationProps['onRetryTurn'];
+  onShowOnCanvas?: ConversationProps['onShowOnCanvas'];
+  /** PG-4.1: the edge envelopes this message's team envelope was delivered as. */
+  envelopes: readonly Envelope[] | undefined;
+  /** PG-4.5: the node run behind this message's turn. */
+  nodeRun: NodeRun | undefined;
+  names: ReadonlyMap<Id, string>;
 }
 
-function MessageRow({ message, who, label, ...rest }: RowProps) {
+function MessageRow({ message, who, label, onShowOnCanvas, ...rest }: RowProps) {
+  const nodeId = who.nodeId;
   const to = message.type === 'envelope' ? [] : (message.to ?? []);
   return (
     <div className="flex gap-[14px]">
@@ -202,6 +317,14 @@ function MessageRow({ message, who, label, ...rest }: RowProps) {
             <span className="text-[12px] text-[var(--muted)]">→ {to.map(label).join(', ')}</span>
           )}
           <div className="flex-1" />
+          <div className={ACTIONS_CLASS}>
+            {nodeId !== undefined && onShowOnCanvas !== undefined && (
+              <ActionButton label="Show on canvas" onClick={() => onShowOnCanvas(nodeId)}>
+                <Icons.LocateFixed aria-hidden size={14} />
+              </ActionButton>
+            )}
+            <CopyButton text={copyOf(message, rest.live)} />
+          </div>
           <time dateTime={message.at} className="text-[11.5px] text-[var(--muted)]">
             {clockTime(message.at)}
           </time>
@@ -234,6 +357,10 @@ function Body({
   onRoute,
   folderPath,
   onOpenFile,
+  onRetryTurn,
+  envelopes,
+  nodeRun,
+  names,
 }: BodyProps) {
   const auto = message.textSource === 'auto';
   if (message.type === 'envelope' && message.envelope !== undefined) {
@@ -268,6 +395,9 @@ function Body({
         {envelope.routing === 'HELD' && !readOnly && (
           <HeldActions envelopeId={envelope.id} summary={message.text} onRoute={onRoute} />
         )}
+        {envelopes !== undefined && envelopes.length > 0 && (
+          <ViewEnvelope envelopes={envelopes} names={names} />
+        )}
       </>
     );
   }
@@ -291,6 +421,14 @@ function Body({
         </div>
       )}
       {turn !== undefined && <TurnMeta turn={turn} />}
+      {/* PG-4.5: a turn copied from an earlier run says so, and what it remembered or forgot. */}
+      {nodeRun !== undefined && <ReusedNote nodeRun={nodeRun} />}
+      {nodeRun?.memoryOps !== undefined && nodeRun.memoryOps.length > 0 && (
+        <MemoryOpsList ops={nodeRun.memoryOps} />
+      )}
+      {turn !== undefined && (turn.outcome === 'FAILED' || turn.failureReason !== undefined) && (
+        <TurnFailure turn={turn} onRetry={onRetryTurn} />
+      )}
       {turn !== undefined && (turn.steps.length > 0 || output.length > 0) && (
         <WhatItDid turn={turn} output={output} />
       )}
@@ -302,6 +440,51 @@ function Body({
           onOpenFile={onOpenFile}
         />
       ))}
+    </>
+  );
+}
+
+/**
+ * PG-4.1: "View envelope" — the edge envelopes a delivered team envelope travelled as, one per
+ * receiving node, with what each was handed: sources by name, used vs budget, contract and the
+ * input-point verdicts, as the Inspector shows them.
+ */
+function ViewEnvelope({
+  envelopes,
+  names,
+}: {
+  envelopes: readonly Envelope[];
+  names: ReadonlyMap<Id, string>;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        data-testid="view-envelope"
+        onClick={() => setOpen(true)}
+        className="cursor-pointer self-start rounded-[6px] border-none bg-transparent p-0 text-[12px] font-semibold text-[#e8623a] outline-none hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+      >
+        View envelope
+      </button>
+      {open && (
+        <Dialog open onOpenChange={setOpen}>
+          <DialogContent className="max-h-[calc(100vh-48px)] max-w-[680px] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Envelope</DialogTitle>
+              <DialogDescription>
+                What each receiving node was handed: its reads, its context budget and the contract
+                its answer is held to (BR-02).
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex flex-col gap-2" data-testid="envelope-dialog">
+              {envelopes.map((envelope) => (
+                <EnvelopeView key={envelope.id} envelope={envelope} names={names} showTo />
+              ))}
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </>
   );
 }
@@ -322,13 +505,126 @@ function TurnMeta({ turn }: { turn: DomainTurn }) {
   );
 }
 
-/** The toggle's mark follows the turn: ✓ done, ● still going, ✕ ended otherwise. */
-function outcomeMark(turn: DomainTurn): { glyph: string; color: string; pulse: boolean } {
-  if (turn.outcome === 'OK') return { glyph: '✓', color: '#2f9e63', pulse: false };
-  if (turn.outcome === 'RUNNING' || turn.outcome === 'WAITING') {
-    return { glyph: '●', color: '#ef6b3f', pulse: true };
-  }
-  return { glyph: '✕', color: '#c94c27', pulse: false };
+/** PG-1.5: why a node turn failed, in words — never only the enum. */
+const FAILURE_WORDS: Readonly<Record<FailureReason, string>> = {
+  CONTRACT_VIOLATION: 'contract violation — its output did not match the output contract',
+  RUN_FAILED: 'provider failure — the model call failed',
+  GUARDRAIL_VIOLATION: 'guardrail block — a guardrail stopped it',
+  BLOCKED: 'blocked — a node before it failed',
+};
+
+/**
+ * PG-1.5/PG-1.6: a failed node turn says why, and offers Retry — the existing node retry
+ * (FR-ERR-003). The engine answers whether the run can take it (D323/D360); a refusal is shown here.
+ */
+function TurnFailure({
+  turn,
+  onRetry,
+}: {
+  turn: DomainTurn;
+  onRetry: ConversationProps['onRetryTurn'];
+}) {
+  const [busy, setBusy] = useState(false);
+  const [refused, setRefused] = useState<string>();
+  const why =
+    turn.failureReason === undefined ? 'it did not finish' : FAILURE_WORDS[turn.failureReason];
+  return (
+    <div
+      role="alert"
+      data-testid="domain-turn-failure"
+      data-reason={turn.failureReason}
+      className="flex max-w-[560px] flex-col gap-1.5 rounded-[10px] border border-[rgba(201,76,39,0.35)] bg-[rgba(201,76,39,0.06)] px-3 py-2 text-[12.5px]"
+    >
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1">
+          <span className="font-bold text-[#c94c27]">Failed: </span>
+          {why}
+        </span>
+        {onRetry !== undefined && (
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setRefused(undefined);
+              onRetry(turn.turnId)
+                .catch((error: unknown) =>
+                  setRefused(error instanceof Error ? error.message : String(error)),
+                )
+                .finally(() => setBusy(false));
+            }}
+          >
+            <Icons.RotateCcw aria-hidden size={13} />
+            Retry
+          </Button>
+        )}
+      </div>
+      {turn.error !== undefined && (
+        <p className="whitespace-pre-wrap break-words font-machine text-[11px] text-[var(--muted)]">
+          {turn.error}
+        </p>
+      )}
+      {refused !== undefined && <p className="text-[11.5px] text-[#c94c27]">{refused}</p>}
+    </div>
+  );
+}
+
+interface OutcomeMark {
+  icon: LucideIcon;
+  color: string;
+  pulse: boolean;
+  /** What the mark means, for a screen reader and a hover. */
+  label: string;
+}
+
+/**
+ * The toggle's mark follows the turn (PG-4.2): each outcome its own glyph and colour — done,
+ * working, waiting on a person, failed, stopped by a person, and interrupted (the run ended under
+ * it) — so FAILED, STOPPED and INTERRUPTED are no longer one red ✕. Colours are the node-state
+ * tokens (AA in both themes); INTERRUPTED takes the amber of a held run, not the red of a fault.
+ */
+const OUTCOME_MARKS: Readonly<Record<TurnOutcome, OutcomeMark>> = {
+  OK: {
+    icon: Icons.CircleCheck,
+    color: 'var(--color-status-COMPLETED)',
+    pulse: false,
+    label: 'Done',
+  },
+  RUNNING: {
+    icon: Icons.LoaderCircle,
+    color: 'var(--color-status-RUNNING)',
+    pulse: true,
+    label: 'Working',
+  },
+  WAITING: {
+    icon: Icons.Hourglass,
+    color: 'var(--color-status-WAITING)',
+    pulse: true,
+    label: 'Needs approval',
+  },
+  FAILED: {
+    icon: Icons.CircleX,
+    color: 'var(--color-status-FAILED)',
+    pulse: false,
+    label: 'Failed',
+  },
+  STOPPED: {
+    icon: Icons.CircleStop,
+    color: 'var(--color-status-STOPPED)',
+    pulse: false,
+    label: 'Stopped',
+  },
+  INTERRUPTED: {
+    icon: Icons.Unplug,
+    color: 'var(--color-status-PAUSED)',
+    pulse: false,
+    label: 'Interrupted',
+  },
+};
+
+function outcomeMark(turn: DomainTurn): OutcomeMark {
+  return OUTCOME_MARKS[turn.outcome];
 }
 
 /** "What it did" (D327, D336): the turn's steps with their durations, then its full output. */
@@ -348,14 +644,18 @@ function WhatItDid({ turn, output }: { turn: DomainTurn; output: Part[] }) {
         className="flex cursor-pointer items-center gap-[10px] rounded-[6px] border-none bg-transparent p-0 text-left text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
       >
         <span
-          aria-hidden
-          className="text-[13px]"
+          role="img"
+          aria-label={mark.label}
+          title={mark.label}
+          data-testid="turn-outcome-mark"
+          data-outcome={turn.outcome}
+          className="flex"
           style={{
             color: mark.color,
             animation: mark.pulse ? 'livePulse 1s ease-in-out infinite' : undefined,
           }}
         >
-          {mark.glyph}
+          <mark.icon aria-hidden size={14} strokeWidth={2.2} />
         </span>
         <span className="shrink-0 whitespace-nowrap text-[13.5px] font-bold">What it did</span>
         {turn.steps.length > 0 && (
@@ -365,8 +665,13 @@ function WhatItDid({ turn, output }: { turn: DomainTurn; output: Part[] }) {
           </span>
         )}
         <span className="flex-1" />
-        <span className="shrink-0 whitespace-nowrap text-[11.5px] text-[var(--muted)]">
-          {open ? '▾ hide' : '▸ show'}
+        <span className="flex shrink-0 items-center gap-0.5 whitespace-nowrap text-[11.5px] text-[var(--muted)]">
+          {open ? (
+            <Icons.ChevronDown aria-hidden size={12} />
+          ) : (
+            <Icons.ChevronRight aria-hidden size={12} />
+          )}
+          {open ? 'hide' : 'show'}
         </span>
       </button>
       {open && (
@@ -469,7 +774,8 @@ function OutputCard({
             className={OPEN_CLASS}
             onClick={() => onOpenFile?.(target.path)}
           >
-            Open →
+            Open
+            <Icons.ArrowRight aria-hidden size={12} className="ml-1" />
           </button>
         ) : target?.kind === 'href' ? (
           <a
@@ -479,7 +785,8 @@ function OutputCard({
             aria-label={`Open ${name}`}
             className={OPEN_CLASS}
           >
-            Open →
+            Open
+            <Icons.ArrowRight aria-hidden size={12} className="ml-1" />
           </a>
         ) : null}
       </div>

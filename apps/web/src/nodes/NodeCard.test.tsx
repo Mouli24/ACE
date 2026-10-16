@@ -6,7 +6,7 @@ import {
   type Node,
 } from '@ace/contracts';
 import { ReactFlowProvider } from '@xyflow/react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 
 import { th } from '../theme/constants';
 import { portAnchor } from './anchors';
@@ -119,35 +119,35 @@ describe('D332 the Stage card (Agent and Model nodes)', () => {
     expect(screen.getByTestId('status-chip')).toHaveAttribute('data-state', state);
   });
 
+  // PG-4.2 (D360): every state has its own colour token, so the chip is drawn in it.
   it.each([
-    ['COMPLETED', 'Done', '#2f9e63'],
-    ['RUNNING', 'Running', '#ef6b3f'],
-    ['FAILED', 'Failed', '#c94c27'],
-    ['BLOCKED', 'Blocked', '#c94c27'],
-    ['WAITING', 'Waiting', '#a39d97'],
-  ] as const)('the status row of a %s node reads "%s" beside a %s dot', (state, word, colour) => {
+    ['COMPLETED', 'Done'],
+    ['RUNNING', 'Running'],
+    ['FAILED', 'Failed'],
+    ['BLOCKED', 'Blocked'],
+    ['WAITING', 'Waiting'],
+  ] as const)('the status row of a %s node reads "%s" in its own state colour', (state, word) => {
     view({ node: agentNode, state, stage: 1 });
     const status = screen.getByTestId('status-chip');
     expect(status).toHaveTextContent(word);
-    expect((status.querySelector('span') as HTMLElement).style.background).toBe(
-      // jsdom normalises hex to rgb()
-      `rgb(${parseInt(colour.slice(1, 3), 16)}, ${parseInt(colour.slice(3, 5), 16)}, ${parseInt(
-        colour.slice(5, 7),
-        16,
-      )})`,
-    );
+    expect(status.style.color).toBe(`var(--color-status-${state})`);
   });
 
   it('FR-NODE-010 the border is the provider glow at 0.38; selected, the provider colour and ring', () => {
     const look = th({ provider: 'Claude Code' }, false);
-    const { unmount } = view({ node: agentNode, stage: 1, provider: 'anthropic' });
+    // PG-1.3 (D351): the node names its provider, as a node drawn with a provider look always does.
+    const onProvider = {
+      ...agentNode,
+      config: { ...agentNode.config, providerId: 'p-anthropic' },
+    } as Node;
+    const { unmount } = view({ node: onProvider, stage: 1, provider: 'anthropic' });
     expect(card(agentNode).style.border).toBe(
       `1px solid rgba(${look.glow.replace(/,/g, ', ')}, 0.38)`,
     );
     expect(card(agentNode).style.boxShadow).toBe('none');
     unmount();
 
-    view({ node: agentNode, stage: 1, provider: 'anthropic', selected: true });
+    view({ node: onProvider, stage: 1, provider: 'anthropic', selected: true });
     expect(card(agentNode)).toHaveAttribute('data-selected', 'true');
     expect(card(agentNode).style.boxShadow).toBe(
       '0 0 0 2px #d97757, 0 12px 40px -16px rgba(217,119,87,0.55)',
@@ -156,14 +156,39 @@ describe('D332 the Stage card (Agent and Model nodes)', () => {
     expect(card(agentNode).style.border).not.toContain('0.38');
   });
 
-  it('a Custom look (no provider, mock, Ollama) takes the frame line, and #bdb6ae when selected', () => {
-    const { unmount } = view({ node: agentNode, stage: 1 });
+  it('a Custom look (mock, Ollama) takes the frame line, and #bdb6ae when selected', () => {
+    // D351 (PG-1.3) replaces the "no provider" half of this case: that card is now red, below.
+    const onMock = { ...agentNode, config: { ...agentNode.config, providerId: 'p-mock' } } as Node;
+    const { unmount } = view({ node: onMock, stage: 1, provider: 'mock' });
     expect(card(agentNode).style.border).toBe('1px solid var(--frameLine)');
     unmount();
-    view({ node: agentNode, stage: 1, provider: 'ollama', selected: true });
+    view({ node: onMock, stage: 1, provider: 'ollama', selected: true });
     expect(card(agentNode).style.boxShadow).toBe(
       '0 0 0 2px #bdb6ae, 0 12px 40px -16px rgba(150,140,130,0.55)',
     );
+  });
+
+  it('PG-1.3 a node with no provider, or a provider that is gone, is a red "Choose a provider" card', () => {
+    const { unmount } = view({ node: agentNode, stage: 1 });
+    expect(card(agentNode)).toHaveAttribute('data-needs-provider', 'true');
+    expect(card(agentNode).style.border).toBe('1px solid rgb(201, 76, 39)');
+    expect(
+      within(card(agentNode)).getByRole('button', { name: /Choose a provider/ }),
+    ).toBeVisible();
+    unmount();
+
+    const imported = {
+      ...agentNode,
+      config: { ...agentNode.config, providerId: 'p-elsewhere', modelId: 'mock-text' },
+    } as Node;
+    const { unmount: gone } = view({ node: imported, stage: 1, providerMissing: true });
+    expect(within(card(agentNode)).getByText('Choose a provider')).toBeVisible();
+    gone();
+
+    const fine = { ...imported, config: { ...imported.config, providerId: 'p-mock' } } as Node;
+    view({ node: fine, stage: 1, provider: 'mock' });
+    expect(card(agentNode)).not.toHaveAttribute('data-needs-provider');
+    expect(within(card(agentNode)).queryByText('Choose a provider')).toBeNull();
   });
 
   it('the orb carries the provider’s gradient, ring and logo, light or dark', () => {

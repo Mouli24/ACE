@@ -148,6 +148,16 @@ export function createRunCommandTool(options: RunCommandOptions = {}): Registere
       const spec = shellInvocation(shell, parsed.data.command, env);
       const before = await snapshot(context.projectDir);
       const startedAt = Date.now();
+      // PG-5.3: an agentic run's command shows, read-only, in Forge's Terminal and Processes list
+      const watch =
+        context.session?.commands === undefined || context.nodeId === undefined
+          ? undefined
+          : context.session.commands.started({
+              nodeId: context.nodeId,
+              command: parsed.data.command,
+              cwd,
+              background: false,
+            });
 
       const outcome = await new Promise<{
         code: number | null;
@@ -189,6 +199,10 @@ export function createRunCommandTool(options: RunCommandOptions = {}): Registere
         const finish = (code: number | null, error?: Error): void => {
           if (settled) return;
           settled = true;
+          if (error !== undefined) {
+            watch?.output('stderr', `Could not start the shell: ${error.message}\n`);
+          }
+          watch?.exited(code, error !== undefined);
           clearTimeout(timer);
           for (const pending of timers) clearTimeout(pending);
           child.stdout.destroy();
@@ -205,8 +219,14 @@ export function createRunCommandTool(options: RunCommandOptions = {}): Registere
         };
         const done = (code: number | null): void => finish(code);
 
-        child.stdout.setEncoding('utf8').on('data', (chunk: string) => stdout.push(chunk));
-        child.stderr.setEncoding('utf8').on('data', (chunk: string) => stderr.push(chunk));
+        child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+          stdout.push(chunk);
+          watch?.output('stdout', chunk);
+        });
+        child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
+          stderr.push(chunk);
+          watch?.output('stderr', chunk);
+        });
         child.stdout.on('error', () => undefined);
         child.stderr.on('error', () => undefined);
         child.on('error', (error) => finish(null, error));

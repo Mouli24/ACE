@@ -1,7 +1,6 @@
 import { test, type Page } from '@playwright/test';
 
 import {
-  NOT_BUILT,
   card,
   centre,
   closeSettings,
@@ -46,7 +45,6 @@ test.describe('PG-2.1 output contracts are enforced', () => {
   test('TC-EXE-005 from the UI: a schema set in the modal turns non-JSON output into CONTRACT_VIOLATION', async ({
     page,
   }) => {
-    test.fail(NOT_BUILT, 'PG-2.1: the schema is ignored, the node completes');
     test.setTimeout(120_000);
     const providerId = await mockProvider();
     const flow = await seedAgents('contract', [
@@ -70,8 +68,9 @@ test.describe('PG-2.1 output contracts are enforced', () => {
     await startRunFromMenu(page);
     await settledRun(flow.workflowId);
 
-    // `mock-text` answers prose: against a schema that is a contract violation (BR-03).
-    await expect(card(page, writer.id).getByTestId(`failure-${writer.id}`)).toHaveAttribute(
+    // `mock-text` answers prose: against a schema that is a contract violation (BR-03). The failure
+    // note hangs under the card (`UnderCard`), outside `node-card-<id>`, so it is found by its own id.
+    await expect(page.getByTestId(`failure-${writer.id}`)).toHaveAttribute(
       'data-reason',
       'CONTRACT_VIOLATION',
     );
@@ -80,7 +79,6 @@ test.describe('PG-2.1 output contracts are enforced', () => {
   test('the contract section says the output will be JSON checked against the schema', async ({
     page,
   }) => {
-    test.fail(NOT_BUILT, 'PG-2.1: the modal does not say the schema implies JSON');
     const providerId = await mockProvider();
     const flow = await seedAgents('contract-copy', [
       { name: 'Writer', providerId, modelId: 'mock-text' },
@@ -94,7 +92,6 @@ test.describe('PG-2.1 output contracts are enforced', () => {
   });
 
   test('a Review→Fix loop can be built from the UI', async ({ page }) => {
-    test.fail(NOT_BUILT, 'PG-2.1: the loop edge is refused loop_source_not_json');
     const providerId = await mockProvider();
     const flow: Seeded = await seedAgents(
       'review-fix',

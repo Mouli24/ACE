@@ -51,7 +51,8 @@ describe('BottomPanel (theme v2)', () => {
     expect(screen.getByRole('tabpanel')).toBeInTheDocument();
     const close = screen.getByRole('button', { name: 'Close problems & events' });
     expect(close).toBe(screen.getByTestId('bottom-toggle'));
-    expect(close).toHaveTextContent('✕');
+    // PG-1.2 (D360): an SVG X, not the ✕ glyph
+    expect(close.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
     await user.click(close);
     expect(usePanelsStore.getState().bottomOpen).toBe(false);
     expect(screen.queryByRole('tabpanel')).not.toBeInTheDocument();

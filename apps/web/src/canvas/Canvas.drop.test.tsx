@@ -1,5 +1,6 @@
 import type { Node } from '@ace/contracts';
-import { act, createEvent, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, createEvent, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 import { createNode } from '../nodes/factory';
 import { db, installMockServer, renderWithQuery } from '../test/app';
@@ -43,6 +44,17 @@ function drop(data: Record<string, string>) {
 const agentsOf = (workflowId: string): Node[] =>
   db.nodesOf(workflowId).filter((n) => n.kind === 'agent');
 
+/** PG-1.3: answer the provider-first picker — no node exists until "Add node". */
+async function choose(providerName: string, modelName: string, workflowId: string) {
+  const picker = await screen.findByRole('dialog', { name: /provider/i });
+  expect(agentsOf(workflowId)).toHaveLength(0);
+  await userEvent.click(
+    await within(picker).findByRole('option', { name: new RegExp(providerName) }),
+  );
+  await userEvent.click(await within(picker).findByRole('option', { name: new RegExp(modelName) }));
+  await userEvent.click(within(picker).getByRole('button', { name: 'Add node' }));
+}
+
 describe('drop from the New node dialog (FR-CAN-002)', () => {
   it('creates a named Agent with the dragged provider and model', async () => {
     const workflowId = await mount();
@@ -58,31 +70,44 @@ describe('drop from the New node dialog (FR-CAN-002)', () => {
     expect(agent?.kind === 'agent' && agent.config.modelId).toBe('m1');
   });
 
-  it('still adds the kind with defaults when the init JSON is malformed', async () => {
+  // D351 (PG-1.3): a drop that names no provider opens the provider-first picker; nothing is
+  // created until a provider and a model are chosen, and Cancel creates nothing.
+  it('PG-1.3 malformed init JSON: the picker asks first, then adds the kind with defaults on the choice', async () => {
     const workflowId = await mount();
+    const provider = db.createProvider({ type: 'mock', name: 'Mock' });
     drop({ [PALETTE_DRAG_TYPE]: 'agent', [PALETTE_INIT_TYPE]: '{not json' });
+    await choose('Mock', 'Mock text', workflowId);
     await waitFor(() => expect(agentsOf(workflowId)).toHaveLength(1));
-    expect(agentsOf(workflowId)[0]?.name).toBe('Agent');
+    const [agent] = agentsOf(workflowId);
+    expect(agent?.name).toBe('Agent');
+    expect(agent?.kind === 'agent' && agent.config.providerId).toBe(provider.id);
+    expect(agent?.kind === 'agent' && agent.config.modelId).toBe('mock-text');
   });
 
-  it('ignores init JSON that is not an object', async () => {
+  it('PG-1.3 init JSON that is not an object is ignored; Cancel in the picker creates nothing', async () => {
     const workflowId = await mount();
+    db.createProvider({ type: 'mock', name: 'Mock' });
     drop({ [PALETTE_DRAG_TYPE]: 'agent', [PALETTE_INIT_TYPE]: 'null' });
-    await waitFor(() => expect(agentsOf(workflowId)).toHaveLength(1));
-    expect(agentsOf(workflowId)[0]?.name).toBe('Agent');
+    const picker = await screen.findByRole('dialog', { name: /provider/i });
+    await userEvent.click(within(picker).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /provider/i })).toBeNull());
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(agentsOf(workflowId)).toHaveLength(0);
   });
 
-  it('drops init fields of the wrong type; a lone modelId is ignored without a provider', async () => {
+  it('PG-1.3 init fields of the wrong type are dropped; a lone modelId does not skip the picker', async () => {
     const workflowId = await mount();
+    const provider = db.createProvider({ type: 'mock', name: 'Mock' });
     drop({
       [PALETTE_DRAG_TYPE]: 'agent',
       [PALETTE_INIT_TYPE]: JSON.stringify({ name: 5, providerId: 7, modelId: 'm1' }),
     });
+    await choose('Mock', 'Mock JSON', workflowId);
     await waitFor(() => expect(agentsOf(workflowId)).toHaveLength(1));
     const [agent] = agentsOf(workflowId);
     expect(agent?.name).toBe('Agent');
-    expect(agent?.kind === 'agent' && agent.config.providerId).toBeUndefined();
-    expect(agent?.kind === 'agent' && agent.config.modelId).toBeUndefined();
+    expect(agent?.kind === 'agent' && agent.config.providerId).toBe(provider.id);
+    expect(agent?.kind === 'agent' && agent.config.modelId).toBe('mock-json');
   });
 
   it('deleteNodes on the Canvas API removes the nodes', async () => {

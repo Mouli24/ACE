@@ -54,7 +54,17 @@ interface MockModelSpec {
 
 /** The §2.6 table, in its order. `listModels()` returns exactly this. */
 const SPECS: readonly MockModelSpec[] = [
-  { modelId: 'mock-text', displayName: 'Mock text', inputTypes: ['text'], outputTypes: ['text'] },
+  /*
+   * `supportsJson` (D353): a schema on mock-text is allowed through pre-flight, and its prose answer
+   * is then the CONTRACT_VIOLATION TC-EXE-005 asks for — a model that claims JSON and answers prose.
+   */
+  {
+    modelId: 'mock-text',
+    displayName: 'Mock text',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+    supportsJson: true,
+  },
   { modelId: 'mock-slow', displayName: 'Mock slow', inputTypes: ['text'], outputTypes: ['text'] },
   {
     modelId: 'mock-json',

@@ -7,6 +7,7 @@ import {
   ROUND_3_VALIDATION_ISSUE_CODES,
   ROUND_4_VALIDATION_ISSUE_CODES,
   ROUND_5_VALIDATION_ISSUE_CODES,
+  PRODUCT_GAPS_VALIDATION_ISSUE_CODES,
   VALIDATION_ISSUE_CODES,
   ValidationIssueCodeSchema,
   ValidationIssueSchema,
@@ -131,7 +132,23 @@ describe('FR-WF-006 ValidationIssue', () => {
       ...ROUND_3_VALIDATION_ISSUE_CODES,
       ...ROUND_4_VALIDATION_ISSUE_CODES,
       ...ROUND_5_VALIDATION_ISSUE_CODES,
+      ...PRODUCT_GAPS_VALIDATION_ISSUE_CODES,
     ]);
+  });
+
+  it('PG-1.3 adds missing_provider (D358) beside missing_model and provider_missing', () => {
+    // D353 (PG-2.1) adds the two blocked-combination codes after it, and PG-2.4 (D361)
+    // checkpoint_unavailable and running_without_undo.
+    expect([...PRODUCT_GAPS_VALIDATION_ISSUE_CODES]).toEqual([
+      'missing_provider',
+      'schema_unsupported',
+      'tools_unsupported',
+      'checkpoint_unavailable',
+      'running_without_undo',
+    ]);
+    expect(ValidationIssueCodeSchema.safeParse('missing_provider').success).toBe(true);
+    expect(VALIDATION_ISSUE_CODES).toContain('missing_model');
+    expect(VALIDATION_ISSUE_CODES).toContain('provider_missing');
   });
 
   it('adds the one code round 5 §2.4 names, and keeps not_supported_yet for later kinds', () => {

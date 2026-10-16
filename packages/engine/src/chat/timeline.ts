@@ -102,6 +102,22 @@ export async function startTimelinePopulation(
     return map.get(nodeId);
   }
 
+  /**
+   * FR-BEN-008: runId → whether ACE Bench queued it. A bench run writes no timeline row: the
+   * timeline is the workflow's own history, and the bench keeps its runs apart from it.
+   */
+  const benchByRun = new Map<Id, boolean>();
+
+  async function isBenchRun(runId: Id): Promise<boolean> {
+    let known = benchByRun.get(runId);
+    if (known === undefined) {
+      const run = await repository.runs.get(scope, runId);
+      known = run?.benchExperimentId !== undefined;
+      benchByRun.set(runId, known);
+    }
+    return known;
+  }
+
   async function write(
     type: MessageType,
     workflowId: Id,
@@ -181,6 +197,8 @@ export async function startTimelinePopulation(
     // A run event with no workflow cannot be filed on a workflow's timeline; nothing that reaches
     // here should be missing it, but skipping is safer than inventing an attribution.
     if (workflowId === undefined) return;
+    const eventRunId = runId ?? (event.payload as { runId?: Id } | undefined)?.runId ?? undefined;
+    if (eventRunId !== undefined && (await isBenchRun(eventRunId))) return;
 
     switch (event.type) {
       case 'run.started':
@@ -256,7 +274,10 @@ export async function startTimelinePopulation(
   const unsubscribe = await bus.subscribe((event) => {
     queue = queue.then(() =>
       handle(event).catch((error: unknown) => {
-        logger.error({ subsystem: 'chat', err: error, eventType: event.type }, 'timeline row failed');
+        logger.error(
+          { subsystem: 'chat', err: error, eventType: event.type },
+          'timeline row failed',
+        );
       }),
     );
   });

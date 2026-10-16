@@ -32,6 +32,7 @@ import {
   UsageSchema,
 } from './runs.js';
 import { KbDocumentStatusSchema } from './knowledge.js';
+import { ModelPullPayloadSchema } from './local-models.js';
 import { MemoryOpSchema } from './memory.js';
 import { McpServerStatusSchema, ToolCallSchema } from './tools.js';
 import { DayTotalsSchema } from './usage.js';
@@ -90,7 +91,11 @@ export const EDGE_TRANSFER_SUMMARY_MAX = 120;
 
 const PartsByNodeIdSchema = z.record(IdSchema, z.array(PartSchema));
 
-export const RunStartedPayloadSchema = z.strictObject({ run: RunSummarySchema });
+export const RunStartedPayloadSchema = z.strictObject({
+  run: RunSummarySchema,
+  /** PG-2.4 (D361): the person chose to run this one without undo; its changes are not recorded. */
+  withoutUndo: z.literal(true).optional(),
+});
 export type RunStartedPayload = z.infer<typeof RunStartedPayloadSchema>;
 
 export const RunCompletedPayloadSchema = z.strictObject({
@@ -263,6 +268,34 @@ export const ChatMessagePayloadSchema = z.strictObject({
 });
 export type ChatMessagePayload = z.infer<typeof ChatMessagePayloadSchema>;
 
+/**
+ * PG-1.6 (D352): an existing turn changed — superseded by a retry or an edit, or deleted. Carries
+ * the row as it now is; a client replaces its copy by `message.id`. Persisted on the thread, like
+ * `chat.message`. Domain's SSE `chat.update` (domain.ts) is a different stream and shape.
+ */
+export const ChatUpdatePayloadSchema = z.strictObject({
+  threadId: IdSchema,
+  message: ChatMessageSchema,
+});
+export type ChatUpdatePayload = z.infer<typeof ChatUpdatePayloadSchema>;
+
+/**
+ * PG-2.2 (D359): a chat turn's tool call waits for a person — a tool-point check set to `ask_user`.
+ * The request names the thread, never a run (FR-CHAT-005). Persisted on the thread.
+ */
+export const ChatApprovalRequiredPayloadSchema = z.strictObject({
+  threadId: IdSchema,
+  request: ApprovalRequestSchema,
+});
+export type ChatApprovalRequiredPayload = z.infer<typeof ChatApprovalRequiredPayloadSchema>;
+
+/** PG-2.2 (D359): the decision on a chat approval; a reject ends that tool call as refused. */
+export const ChatApprovalDecidedPayloadSchema = z.strictObject({
+  threadId: IdSchema,
+  decision: ApprovalDecisionSchema,
+});
+export type ChatApprovalDecidedPayload = z.infer<typeof ChatApprovalDecidedPayloadSchema>;
+
 /** Batched like `node.token`, and transient for the same reason (FR-CHAT-006). */
 export const ChatTokenPayloadSchema = z.strictObject({
   threadId: IdSchema,
@@ -357,7 +390,10 @@ export const RUN_EVENT_FRAME_SCHEMAS = [
  */
 export const THREAD_EVENT_FRAME_SCHEMAS = [
   persistedFrame('chat.message', ChatMessagePayloadSchema),
+  persistedFrame('chat.update', ChatUpdatePayloadSchema),
   transientFrame('chat.token', ChatTokenPayloadSchema),
+  persistedFrame('chat.approval_required', ChatApprovalRequiredPayloadSchema),
+  persistedFrame('chat.approval_decided', ChatApprovalDecidedPayloadSchema),
 ] as const;
 
 export const ENGINE_EVENT_FRAME_SCHEMAS = [
@@ -365,6 +401,8 @@ export const ENGINE_EVENT_FRAME_SCHEMAS = [
   persistedFrame('mcp.status', McpStatusPayloadSchema),
   persistedFrame('kb.ingest', KbIngestPayloadSchema),
   persistedFrame('memory.updated', MemoryUpdatedPayloadSchema),
+  /* PG-1.4 (D359): a model pull's progress — worth watching, not replaying. */
+  transientFrame('model.pull', ModelPullPayloadSchema),
 ] as const;
 
 /**
@@ -428,7 +466,13 @@ export const RUN_EVENT_TYPES = [
 ] as const;
 export type RunEventType = (typeof RUN_EVENT_TYPES)[number];
 
-export const THREAD_EVENT_TYPES = ['chat.message', 'chat.token'] as const;
+export const THREAD_EVENT_TYPES = [
+  'chat.message',
+  'chat.update',
+  'chat.token',
+  'chat.approval_required',
+  'chat.approval_decided',
+] as const;
 export type ThreadEventType = (typeof THREAD_EVENT_TYPES)[number];
 
 export const ENGINE_EVENT_TYPES = [
@@ -436,6 +480,7 @@ export const ENGINE_EVENT_TYPES = [
   'mcp.status',
   'kb.ingest',
   'memory.updated',
+  'model.pull',
 ] as const;
 export type EngineEventType = (typeof ENGINE_EVENT_TYPES)[number];
 
@@ -455,6 +500,7 @@ export const TRANSIENT_EVENT_TYPES = [
   'process.output',
   'process.exited',
   'checkpoint.updated',
+  'model.pull',
 ] as const;
 export type TransientEventType = (typeof TRANSIENT_EVENT_TYPES)[number];
 
@@ -462,9 +508,8 @@ export type PersistedRunEventType = Exclude<RunEventType, TransientEventType>;
 export type PersistedThreadEventType = Exclude<ThreadEventType, TransientEventType>;
 
 const isTransient = (
-  type: RunEventType | ThreadEventType | ProjectEventType,
-): type is TransientEventType =>
-  (TRANSIENT_EVENT_TYPES as readonly string[]).includes(type);
+  type: RunEventType | ThreadEventType | ProjectEventType | EngineEventType,
+): type is TransientEventType => (TRANSIENT_EVENT_TYPES as readonly string[]).includes(type);
 
 export const PERSISTED_RUN_EVENT_TYPES = RUN_EVENT_TYPES.filter(
   (type): type is PersistedRunEventType => !isTransient(type),

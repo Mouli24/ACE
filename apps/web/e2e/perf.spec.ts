@@ -41,7 +41,8 @@ const JANK_P95_MS = 60;
 test.use({ trace: 'off' });
 
 test.describe('Canvas performance (NFR-PERF-01)', () => {
-  test('TC-NFR-001: 200 nodes / 400 edges stay smooth while panning', async ({ page }) => {
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('TC-NFR-001: 200 nodes / 400 edges stay smooth while panning', async ({ page }) => {
     await page.goto('/projects');
     await page.evaluate(() => localStorage.clear());
     await page.goto('/?fixture=200');

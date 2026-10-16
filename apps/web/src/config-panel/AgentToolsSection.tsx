@@ -1,5 +1,5 @@
 import type { AgentConfig, ToolPermissions } from '@ace/contracts';
-import { Button, Checkbox, FIELD_LABEL_CLASS, Input } from '@ace/ui';
+import { Button, Checkbox, FIELD_LABEL_CLASS, Icons, Input } from '@ace/ui';
 import { useMemo, useState, type KeyboardEvent } from 'react';
 
 import { useTools } from '../library/tools-hooks';
@@ -231,7 +231,7 @@ function AllowedDomainsEditor({
                 className="cursor-pointer border-none bg-transparent p-0 text-[10px] text-[var(--muted)] outline-none hover:text-[#c94c27] focus-visible:text-[#c94c27]"
                 onClick={() => onChange(domains.filter((each) => each !== host))}
               >
-                <span aria-hidden>✕</span>
+                <Icons.X aria-hidden size={12} />
               </button>
             </li>
           ))}

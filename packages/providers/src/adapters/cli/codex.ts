@@ -24,10 +24,11 @@ import { probeCommand } from './detect.js';
  */
 export const CODEX_BASE_ARGS = ['exec', '--json', '--skip-git-repo-check', '--color', 'never'] as const;
 
+/** D355 (PG-2.3): no preset bypasses the sandbox; an old `full_auto` row runs as `edit_files`. */
 const PERMISSION_ARGS: Readonly<Record<CliPermission, readonly string[]>> = {
   read_only: ['--sandbox', 'read-only'],
   edit_files: ['--sandbox', 'workspace-write'],
-  full_auto: ['--dangerously-bypass-approvals-and-sandbox'],
+  full_auto: ['--sandbox', 'workspace-write'],
 };
 
 const messageOf = (value: unknown): string => {

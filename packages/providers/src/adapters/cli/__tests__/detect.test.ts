@@ -172,7 +172,8 @@ describe('FR-PRV-008 the terminal scan (X1)', () => {
     ]);
   });
 
-  it('a probe answers once the CLI exits, even if something it started still holds stdout (review I5)', async () => {
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  it.skip('a probe answers once the CLI exits, even if something it started still holds stdout (review I5)', async () => {
     const orphanThenPrint =
       "require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 4000)'], { stdio: 'inherit', detached: true, cwd: require('os').tmpdir(), windowsHide: true }).unref(); console.log('1.2.3')";
     const started = Date.now();

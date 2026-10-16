@@ -1,4 +1,4 @@
-import { DIALOG_CLOSE_CLASS, Tabs, TabsContent, TabsList, TabsTrigger } from '@ace/ui';
+import { DIALOG_CLOSE_CLASS, Icons, Tabs, TabsContent, TabsList, TabsTrigger } from '@ace/ui';
 
 import { usePanelsStore, type SheetTab } from '../app/stores/panels';
 import { Inspector } from '../inspector/Inspector';
@@ -66,7 +66,7 @@ export function WorkflowSheet({ workflowId }: { workflowId: string }) {
             onClick={closeToOpener}
             className={DIALOG_CLOSE_CLASS}
           >
-            <span aria-hidden>✕</span>
+            <Icons.X aria-hidden size={12} />
           </button>
         </div>
         <div

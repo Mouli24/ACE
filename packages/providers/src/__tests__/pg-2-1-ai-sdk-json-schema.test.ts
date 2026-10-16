@@ -66,7 +66,7 @@ const adapterOver = (model: MockLanguageModelV4) =>
   });
 
 describe('PG-2.1 the AI SDK adapter passes jsonSchema to the provider', () => {
-  it.fails('a request with a jsonSchema asks the model for JSON in that schema', async () => {
+  it('a request with a jsonSchema asks the model for JSON in that schema', async () => {
     const model = answersJson();
 
     await drain(

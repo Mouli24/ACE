@@ -1,4 +1,4 @@
-import { Button } from '@ace/ui';
+import { Button, Icons } from '@ace/ui';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { requestTerminalFocus } from './focus';
@@ -41,7 +41,7 @@ export function ScriptButtons({
           className="h-[22px] shrink-0 gap-[5px] px-[10px] font-machine text-[10.5px] font-medium"
         >
           <span aria-hidden className="text-[8px] text-[#ef6b3f]">
-            ▶
+            <Icons.Play aria-hidden size={12} />
           </span>
           {script.name}
         </Button>

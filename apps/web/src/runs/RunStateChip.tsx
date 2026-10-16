@@ -7,13 +7,14 @@ import type { HTMLAttributes } from 'react';
  * red when it halted or was blocked, muted otherwise. `fill` is the colour on itself at 12% — the
  * theme's `colour + '1f'` — and the quiet states use its muted pill (`--hover` under `--muted`).
  */
+// PG-1.2 (D360): the words use the AA ink tokens; the theme hues stay in the fills.
 export const RUN_STATE_LOOK: Readonly<Record<RunState, { color: string; fill: string }>> = {
   PREFLIGHT: { color: 'var(--muted)', fill: 'var(--hover)' },
-  RUNNING: { color: '#e8572e', fill: '#ef6b3f1f' },
+  RUNNING: { color: 'var(--accent-ink)', fill: '#ef6b3f1f' },
   PAUSED: { color: 'var(--muted)', fill: 'var(--hover)' },
-  COMPLETE: { color: '#2f9e63', fill: '#2f9e631f' },
-  BLOCKED: { color: '#c94c27', fill: '#c94c271f' },
-  HALTED: { color: '#c94c27', fill: '#c94c271f' },
+  COMPLETE: { color: 'var(--ok-ink)', fill: '#2f9e631f' },
+  BLOCKED: { color: 'var(--danger-ink)', fill: '#c94c271f' },
+  HALTED: { color: 'var(--danger-ink)', fill: '#c94c271f' },
 };
 
 /** The theme's mono chip: 8.5px, 0.08em, radius 4. */

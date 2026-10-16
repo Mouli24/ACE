@@ -1,20 +1,19 @@
-import type { DomainMessage, DomainStreamFrame, DomainUsageSnapshot } from '@ace/contracts';
+import type { DomainMessage, DomainStreamFrame } from '@ace/contracts';
 
 /**
  * The conversation as the page holds it (D9, D314): the server projects, the web only folds what
- * it is sent — `chat.message` appends, `chat.update` replaces by id, `usage.snapshot` replaces the
- * numbers, and `turn.token` collects a running turn's text until its message says it ended.
+ * it is sent — `chat.message` appends, `chat.update` replaces by id, and `turn.token` collects a
+ * running turn's text until its message says it ended. PG-3.3: messages only — node states and
+ * tokens are the run overlay's, and the usage snapshot is kept beside this, not in it.
  */
 export interface ConversationState {
   byId: ReadonlyMap<string, DomainMessage>;
-  usage: DomainUsageSnapshot | null;
   /** Live text per turn (node run id), while the turn is still going. */
   tokens: Readonly<Record<string, string>>;
 }
 
 export const initialConversation = (): ConversationState => ({
   byId: new Map(),
-  usage: null,
   tokens: {},
 });
 
@@ -43,8 +42,6 @@ export function applyFrame(state: ConversationState, frame: DomainStreamFrame): 
       const { [turnId]: _done, ...tokens } = state.tokens;
       return { ...state, byId, tokens };
     }
-    case 'usage.snapshot':
-      return { ...state, usage: frame.data.snapshot };
     case 'turn.token': {
       const { nodeRunId, delta } = frame.data;
       return {
@@ -53,6 +50,7 @@ export function applyFrame(state: ConversationState, frame: DomainStreamFrame): 
       };
     }
     default:
+      // `usage.snapshot` is not the conversation's: the hook keeps it beside the messages.
       return state;
   }
 }

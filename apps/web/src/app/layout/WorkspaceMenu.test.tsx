@@ -86,7 +86,9 @@ describe('D331 the workspace menu', () => {
     renderMenu(seed().ideate);
     const trigger = await screen.findByTestId('workspace-menu');
     expect(trigger).toHaveAccessibleName('Workspace menu');
-    expect(trigger).toHaveTextContent('…');
+    // PG-1.2 (D360): the "…" is an SVG icon now, not the glyph
+    expect(trigger.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+    expect(trigger.textContent?.trim()).toBe('');
     expect(trigger).toHaveClass(
       'h-6',
       'rounded-full',
@@ -102,17 +104,19 @@ describe('D331 the workspace menu', () => {
   });
 
   describe('Workflows', () => {
-    it('lists every workflow with a ✓ on the current one; picking another keeps the mode', async () => {
+    it('lists every workflow with a check on the current one; picking another keeps the mode', async () => {
       const user = userEvent.setup();
       const { project, main, second, ideate } = seed();
       const router = renderMenu(`${ideate}/forge`);
       const current = await item(user, `menu-workflow-${main.id}`);
       expect(current).toHaveAttribute('role', 'menuitemradio');
       expect(current).toHaveAttribute('aria-checked', 'true');
-      expect(current).toHaveTextContent('✓Main');
+      // PG-1.2 (D360): the ✓ is an SVG check icon now
+      expect(current).toHaveTextContent('Main');
+      expect(current.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
       const other = screen.getByTestId(`menu-workflow-${second.id}`);
       expect(other).toHaveAttribute('aria-checked', 'false');
-      expect(other).not.toHaveTextContent('✓');
+      expect(other.querySelector('svg')).toBeNull();
       await user.click(other);
       await waitFor(() =>
         expect(router.state.location.pathname).toBe(
@@ -296,7 +300,7 @@ describe('D331 the workspace menu', () => {
       }
     });
 
-    it('Pause, Resume, Restart and End send their control; a restart opens the new run', async () => {
+    it('Pause, Resume, Restart and End send their control; a restart selects the new run in place (D360)', async () => {
       const user = userEvent.setup();
       const { main, ideate } = seed();
       const answer = (status: Run['status']) =>
@@ -330,7 +334,9 @@ describe('D331 the workspace menu', () => {
       expect(within(menu).getByTestId('menu-start-run')).toBeInTheDocument();
       await user.click(within(menu).getByTestId('menu-run-restart'));
       await waitFor(() => expect(restart).toHaveBeenCalledWith(RUN_ID));
-      await waitFor(() => expect(router.state.location.pathname).toBe(`/runs/${NEW_RUN}`));
+      // PG-3.5 (D360): the restart keeps the mode — Ideate, with the new run selected.
+      await waitFor(() => expect(router.state.location.search).toBe(`?run=${NEW_RUN}`));
+      expect(router.state.location.pathname).toBe(ideate);
     });
 
     it('Stop… asks first in the run controls’ words; Keep running sends nothing', async () => {

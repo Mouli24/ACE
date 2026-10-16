@@ -1,9 +1,15 @@
 import {
+  APPROVAL_PREVIEW_MAX,
+  DEFAULT_CLI_PERMISSION,
   DEFAULT_CONTEXT_POLICY,
   DEFAULT_MAX_TOOL_CALLS,
   blockedChatReply,
   isCliProviderType,
   type ActivityItem,
+  type ApprovalDecision,
+  type ApprovalDecisionKind,
+  type ApprovalRequest,
+  type GuardrailCheck,
   type ChatMessage,
   type ChatRequest,
   type ChatThread,
@@ -26,12 +32,18 @@ import {
   type Usage,
 } from '@ace/contracts';
 
+import {
+  PROJECT_WRITING_TOOLS,
+  nodeWrites,
+  undoUnavailableMessage,
+} from '../checkpoints/writing.js';
 import type { ContextGuard } from '../context/guard.js';
 import { classifyError } from '../errors/index.js';
 import { createBatcher } from '../events/batcher.js';
 import { workflowUpdatedEvent, type EventBus } from '../events/index.js';
 import type { CheckRunner, SecretMasker } from '../guardrails/checks.js';
 import type { PolicyService } from '../guardrails/policy-service.js';
+import { guardrailStoreFor } from '../guardrails/store.js';
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
 import type {
@@ -45,13 +57,16 @@ import type {
   ToolResult,
 } from '../ports/index.js';
 import { createSemaphore, type Semaphore } from '../providers/semaphore.js';
-import { usageFor } from '../runs/cost.js';
+import { usageFor, withReportedCost, type PricedProvider } from '../runs/cost.js';
 import { CLI_SESSION_MIN_TIMEOUT_MS } from '../runs/executor.js';
-import type { ToolProvider } from '../runs/tool-loop.js';
+import { redactArgs, type ToolProvider } from '../runs/tool-loop.js';
 import { maskSecrets } from '../security/secret-patterns.js';
 import { activityItemFor } from './activity.js';
 import {
+  ChatActionInvalidError,
+  ChatApprovalNotFoundError,
   ChatInputBlockedError,
+  ChatMessageNotFoundError,
   ChatModelError,
   ChatNodeNotFoundError,
   ChatRunNotAvailableError,
@@ -61,12 +76,18 @@ import {
   ChatWorkflowNotFoundError,
   NotAnAgentNodeError,
 } from './errors.js';
-import { evaluateChatInput, evaluateChatReply, type ChatGuardrailDeps } from './guardrails.js';
+import {
+  evaluateChatInput,
+  evaluateChatReply,
+  evaluateChatTool,
+  type ChatGuardrailDeps,
+} from './guardrails.js';
 import { buildChatPrompt, revertedFilesNote } from './prompt.js';
 import {
   chatToolsFrom,
   runChatToolLoop,
   type ChatToolRequest,
+  type ChatToolStep,
   type ToolResultJudgement,
 } from './tool-loop.js';
 
@@ -157,6 +178,46 @@ export interface ChatService {
    * new one — and announce both turns on the thread (see {@link NodeRunTurn}).
    */
   recordRunTurn(turn: NodeRunTurn): Promise<{ threadId: Id }>;
+  /**
+   * PG-1.6 (D352) `POST /chat/threads/:id/messages/:messageId/retry`: re-run the turn that produced
+   * this agent message (a reply or a failed turn). The old turn is marked `supersededAt` and a new
+   * reply is appended; `messageId` is the user turn it answers.
+   */
+  retryMessage(
+    threadId: Id,
+    messageId: Id,
+    options?: { withoutUndo?: boolean },
+  ): Promise<ChatBegun>;
+  /** PG-2.2 (D359) `GET /chat/threads/:id/approvals`: the tool calls on the thread waiting on a person. */
+  listApprovals(threadId: Id): Promise<ApprovalRequest[]>;
+  /**
+   * PG-2.2 (D359) `POST /chat/threads/:id/approvals/:requestId/approve` and `/reject`: settle a chat
+   * tool call's approval. Approve runs the tool; reject refuses it and the turn goes on without it.
+   */
+  decideApproval(
+    threadId: Id,
+    requestId: Id,
+    kind: ApprovalDecisionKind,
+    note?: string,
+  ): Promise<ApprovalDecision>;
+  /**
+   * PG-1.6 (D352) `POST /chat/threads/:id/messages/:messageId/edit`: the user message and every
+   * turn after it are marked `supersededAt`, and the edited content goes as a new turn.
+   */
+  editMessage(threadId: Id, messageId: Id, content: Part[]): Promise<ChatBegun>;
+  /** PG-1.6 (D352) `DELETE /chat/threads/:id/messages/:messageId`: hide one turn (`deletedAt`). */
+  deleteMessage(threadId: Id, messageId: Id): Promise<void>;
+  /**
+   * PG-1.6 (D352) `POST /chat/threads/:id/stop`: abort the turn(s) in flight on the thread; each is
+   * stored as a failed turn of kind `user_cancelled`. `false` when nothing was in flight.
+   */
+  stopThread(threadId: Id): Promise<{ stopped: boolean }>;
+  /**
+   * PG-1.5: run once at engine start. Every user turn the last process accepted but never answered
+   * (a crash or a shutdown in the middle of it) gets one stored failed agent turn, announced as
+   * `chat.message`, so no client waits on it forever. Returns how many turns it closed.
+   */
+  recoverOpenTurns(): Promise<number>;
 }
 
 export interface ChatServiceDeps {
@@ -209,6 +270,41 @@ export interface ChatServiceDeps {
 /** Arch §24: stream frames are batched ~50 ms before they reach a client. */
 const TOKEN_BATCH_MS = 50;
 
+/**
+ * Ends a turn with a stored failed turn carrying this error, rather than the classified throw:
+ * a budget the turn crossed (PG-2.2) or a checkpoint it could not begin (PG-2.4).
+ */
+class TurnRefusal extends Error {
+  override readonly name = 'TurnRefusal';
+
+  constructor(readonly nodeError: NodeError) {
+    super(nodeError.message);
+  }
+}
+
+const money = (usd: number): string => `$${usd.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
+
+/** PG-2.2: a chat turn's caps, from the project and the settings unless the policy says otherwise. */
+interface TurnCaps {
+  /** The project's `maxCostPerRunUsd`, applied to each turn. */
+  turn?: number;
+  /** `dailyBudgetUsd`, with what today has already cost before this turn. */
+  daily?: { capUsd: number; spentUsd: number };
+}
+
+/** The budget refusal a chat turn ends with (PG-2.2), in the run's budget words. */
+function budgetError(scope: 'turn' | 'daily', costUsd: number, capUsd: number): NodeError {
+  return {
+    kind: 'guardrail',
+    code: 'budget_exceeded',
+    message:
+      scope === 'turn'
+        ? `Budget exceeded: this turn cost ${money(costUsd)}, over the project's ${money(capUsd)} cost cap.`
+        : `Budget exceeded: today has cost ${money(costUsd)}, at or over the ${money(capUsd)} daily budget.`,
+    retryable: false,
+  };
+}
+
 function titleFor(content: readonly Part[]): string {
   const firstText = content.find(
     (part): part is Extract<Part, { type: 'text' }> => part.type === 'text',
@@ -230,13 +326,71 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     return { checks: deps.checks, masker: deps.masker, now, nextId };
   }
 
-  /** Store one turn, move its thread's `updatedAt`, and announce it on the thread (FR-CHAT-006). */
-  async function store(message: ChatMessage): Promise<ChatMessage> {
+  /**
+   * Store one turn, move its thread's `updatedAt`, and announce it on the thread (FR-CHAT-006).
+   * `onAppended` is told the moment the row exists, so a caller recovering from a later throw never
+   * stores the same turn twice (PG-1.5). A thread whose `updatedAt` cannot move still announces it.
+   */
+  async function store(message: ChatMessage, onAppended?: () => void): Promise<ChatMessage> {
     await repository.chatMessages.append(scope, message);
-    await repository.chatThreads.touch(scope, message.threadId, now());
-    await bus.emit({ type: 'chat.message', payload: { threadId: message.threadId, message } });
+    onAppended?.();
+    try {
+      await repository.chatThreads.touch(scope, message.threadId, now());
+    } catch (error) {
+      logger.warn(
+        { subsystem: 'chat', threadId: message.threadId, err: error },
+        'thread not touched',
+      );
+    }
+    await bus.emit({
+      type: 'chat.message',
+      payload: { threadId: message.threadId, message },
+    });
     return message;
   }
+
+  /** PG-1.6 (D352): mark an existing turn and announce it as `chat.update` on its thread. */
+  async function markAndAnnounce(
+    message: ChatMessage,
+    patch: { supersededAt?: string; deletedAt?: string },
+  ): Promise<ChatMessage> {
+    const marked = (await repository.chatMessages.mark(scope, message.id, patch)) ?? {
+      ...message,
+      ...patch,
+    };
+    await bus.emit({
+      type: 'chat.update',
+      payload: { threadId: message.threadId, message: marked },
+    });
+    return marked;
+  }
+
+  /** A turn still part of the conversation: neither replaced by a retry or edit, nor deleted. */
+  const standing = (message: ChatMessage): boolean =>
+    message.supersededAt === undefined && message.deletedAt === undefined;
+
+  /**
+   * PG-1.6 (D352): the turns in flight on each thread, so `stopThread` can abort them. A turn is
+   * registered before it waits for its project's write queue, so a stop reaches a queued turn too.
+   */
+  const inFlight = new Map<Id, Set<AbortController>>();
+
+  /** What a turn the person stopped records (PG-1.6): Arch §28's `user_cancelled`, never retried by itself. */
+  const cancelledError = (): NodeError => ({
+    kind: 'user_cancelled',
+    code: 'stopped',
+    message: 'You stopped this reply before it finished.',
+    retryable: true,
+  });
+
+  /** What a turn the last process never answered records (PG-1.5, as D323's crashed turn). */
+  const openTurnError = (): NodeError => ({
+    kind: 'workflow',
+    code: 'crash',
+    message:
+      'The engine stopped (a shutdown or a crash) before this turn was answered, so it has no reply.',
+    retryable: true,
+  });
 
   /**
    * The agent turn that stands where a reply could not be produced: the error itself for the client
@@ -322,6 +476,139 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     return queue;
   }
 
+  /**
+   * PG-2.2: the caps a chat turn obeys. The project's `maxCostPerRunUsd` caps each turn and
+   * `dailyBudgetUsd` caps the day, chat spend included. The policy's own cost checks speak first,
+   * as they do for a run (D79): `params.usd` sets the cap, and a check that is off or only `warn`s
+   * or `pass`es does not stop a turn. With no such check the project's and settings' caps apply.
+   */
+  async function capsFor(
+    projectId: Id,
+    policy: Awaited<ReturnType<PolicyService['resolve']>> | null,
+  ): Promise<TurnCaps> {
+    const checkOf = (type: string): GuardrailCheck | undefined =>
+      policy?.checks.find((check) => check.point === 'cost' && check.type === type);
+    const stops = (check: GuardrailCheck | undefined): boolean =>
+      check === undefined || (check.enabled && check.action !== 'pass' && check.action !== 'warn');
+    const paramUsd = (check: GuardrailCheck | undefined): number | undefined => {
+      const raw = check?.params['usd'];
+      return typeof raw === 'number' && raw > 0 ? raw : undefined;
+    };
+
+    const caps: TurnCaps = {};
+    try {
+      const runCheck = checkOf('max_cost_per_run');
+      if (stops(runCheck)) {
+        const project = await repository.projects.get(scope, projectId);
+        const usd = paramUsd(runCheck) ?? project?.maxCostPerRunUsd ?? undefined;
+        if (usd !== undefined && usd !== null && usd > 0) caps.turn = usd;
+      }
+      const dailyCheck = checkOf('daily_budget');
+      if (stops(dailyCheck)) {
+        const settings = await repository.settings.get(scope);
+        const usd = paramUsd(dailyCheck) ?? settings.dailyBudgetUsd ?? undefined;
+        if (usd !== undefined && usd !== null && usd > 0) {
+          const day = now().slice(0, 10);
+          const spentUsd = await guardrailStoreFor(repository, scope).usage.costUsdForDay(
+            scope,
+            day,
+          );
+          caps.daily = { capUsd: usd, spentUsd };
+        }
+      }
+    } catch (error) {
+      logger.warn({ subsystem: 'chat', projectId, err: error }, 'chat budget caps not read');
+    }
+    return caps;
+  }
+
+  /**
+   * PG-2.2 (D359): the chat tool calls waiting on a person, by request id. They live as long as the
+   * turn waits — in this process, as a run's approval wait does (FR-SYS-009); a turn a restart cut
+   * short is closed by `recoverOpenTurns`.
+   */
+  const chatApprovals = new Map<
+    Id,
+    { request: ApprovalRequest; settle: (decision: ApprovalDecision) => void }
+  >();
+
+  /** Store-less decision: announced on the thread, then the waiting turn resumes. */
+  async function settleApproval(
+    threadId: Id,
+    requestId: Id,
+    kind: ApprovalDecisionKind,
+    note?: string,
+  ): Promise<ApprovalDecision> {
+    const pending = chatApprovals.get(requestId);
+    if (pending === undefined || pending.request.threadId !== threadId) {
+      throw new ChatApprovalNotFoundError(threadId, requestId);
+    }
+    chatApprovals.delete(requestId);
+    const decision: ApprovalDecision = {
+      requestId,
+      decision: kind,
+      ...(note === undefined ? {} : { note }),
+      decidedAt: now(),
+    };
+    try {
+      await bus.emit({ type: 'chat.approval_decided', payload: { threadId, decision } });
+    } finally {
+      pending.settle(decision);
+    }
+    return decision;
+  }
+
+  /** Ask a person about one chat tool call and wait; a stop of the turn ends the wait (PG-1.6). */
+  async function askApproval(input: {
+    threadId: Id;
+    node: ChatNode;
+    check: GuardrailCheck;
+    reason: string;
+    call: ChatToolRequest;
+    signal: AbortSignal;
+  }): Promise<ApprovalDecision> {
+    if (input.signal.aborted) throw new Error('stopped before the approval was asked');
+    const request: ApprovalRequest = {
+      id: nextId(),
+      threadId: input.threadId,
+      nodeId: input.node.id,
+      nodeName: input.node.name,
+      point: 'tool',
+      checkType: input.check.type,
+      reason: input.reason,
+      // The card shows the tool and its arguments with secret-shaped values masked (BR-07).
+      preview: maskSecrets(
+        `${input.call.name} ${JSON.stringify(redactArgs(input.call.args))}`,
+      ).slice(0, APPROVAL_PREVIEW_MAX),
+      requestedAt: now(),
+    };
+    const decided = new Promise<ApprovalDecision>((resolve, reject) => {
+      const abandon = (): void => {
+        if (!chatApprovals.has(request.id)) return;
+        void settleApproval(
+          input.threadId,
+          request.id,
+          'reject',
+          'The turn was stopped before this was decided.',
+        ).catch(() => undefined);
+        reject(new Error('stopped while waiting for an approval'));
+      };
+      chatApprovals.set(request.id, {
+        request,
+        settle: (decision) => {
+          input.signal.removeEventListener('abort', abandon);
+          resolve(decision);
+        },
+      });
+      input.signal.addEventListener('abort', abandon, { once: true });
+    });
+    await bus.emit({
+      type: 'chat.approval_required',
+      payload: { threadId: input.threadId, request },
+    });
+    return decided;
+  }
+
   /** Node id → name across the thread's workflow, so the prompt can say who said what (D302). */
   async function namesOf(workflowId: Id): Promise<Map<string, string>> {
     try {
@@ -348,19 +635,37 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     userMessageId: Id;
     userParts: readonly Part[];
     guardrails: ChatGuardrailDeps | undefined;
+    /**
+     * PG-1.6: a retry reads the thread as it stood when the turn it replaces ran — only turns
+     * before this id. Absent: the thread as it is now (D302).
+     */
+    historyBefore?: Id;
+    /** PG-2.4 (D361): the person chose "Run without undo" for this one turn. */
+    withoutUndo?: boolean;
+  }
+
+  /** Set as a reply's path runs, so a throw anywhere can be closed out exactly once (PG-1.5). */
+  interface TurnProgress {
+    /** The reply's row exists: a later throw must not store a second turn. */
+    appended: boolean;
+    /** R-1: the reverted paths taken for this turn, handed back if it never told the model. */
+    reverted: string[];
   }
 
   /**
    * The thread as it is when the turn starts (D302): a turn that waited in the write queue reads
    * the replies that landed while it waited — a queued `@reviewer` sees what the coder just did.
    * The turn's own message is the new turn, so it is left out, and so is any later user message:
-   * that is a question for a later turn.
+   * that is a question for a later turn. A superseded or deleted turn is never read (PG-1.6).
    */
-  async function historyFor(threadId: Id, userMessageId: Id): Promise<ChatMessage[]> {
+  async function historyFor(threadId: Id, userMessageId: Id, before?: Id): Promise<ChatMessage[]> {
     const messages = await repository.chatMessages.listByThread(scope, threadId);
     return messages.filter(
       (message) =>
-        message.id !== userMessageId && !(message.role === 'user' && message.id > userMessageId),
+        standing(message) &&
+        message.id !== userMessageId &&
+        !(message.role === 'user' && message.id > userMessageId) &&
+        (before === undefined || message.id < before),
     );
   }
 
@@ -370,18 +675,59 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
    * failed call is written too, as a turn carrying its `error`, so the client always hears how the
    * turn ended (D287). A turn in a project with a folder is a writing turn (D302): it waits for the
    * project's write queue and is checkpointed.
+   *
+   * PG-1.5: the whole path is wrapped. A throw anywhere — the write queue, the reverted-paths read,
+   * the output guardrail, pricing, the final store — ends the turn as one stored failed turn and one
+   * `chat.message`, never as a log line and a client left "typing…". PG-1.6: a stop aborts it, and
+   * it is stored as `user_cancelled`.
    */
-  function generateReply(context: ReplyContext): Promise<ChatMessage> {
-    if (context.workspace === undefined) return produceReply(context);
-    return writeQueue(context.projectId).run(() => produceReply(context));
-  }
-
-  async function produceReply(context: ReplyContext): Promise<ChatMessage> {
-    const { node, chosen, policy, threadId, userParts, guardrails, workspace } = context;
+  async function generateReply(context: ReplyContext): Promise<ChatMessage> {
+    const { threadId } = context;
+    const controller = new AbortController();
+    let running = inFlight.get(threadId);
+    if (running === undefined) {
+      running = new Set();
+      inFlight.set(threadId, running);
+    }
+    running.add(controller);
     // Known before the call, so the checkpoint can name the turn it belongs to.
     const replyId = nextId();
+    const progress: TurnProgress = { appended: false, reverted: [] };
+    const produce = (): Promise<ChatMessage> =>
+      produceReply(context, replyId, controller.signal, progress);
+    try {
+      return context.workspace === undefined
+        ? await produce()
+        : await writeQueue(context.projectId).run(produce);
+    } catch (error) {
+      // The reply is stored; only its announcement failed. Never a second turn for it.
+      if (progress.appended) throw error;
+      logger.error({ subsystem: 'chat', threadId, err: error }, 'chat reply path failed');
+      if (progress.reverted.length > 0) {
+        deps.checkpoints?.restoreRevertedPaths?.(threadId, progress.reverted);
+      }
+      const failure = controller.signal.aborted
+        ? cancelledError()
+        : classifyError(error, { providerId: context.chosen.providerId });
+      return store(failedTurn(threadId, failure, { speakerNodeId: context.node.id }, replyId));
+    } finally {
+      running.delete(controller);
+      if (running.size === 0) inFlight.delete(threadId);
+    }
+  }
+
+  async function produceReply(
+    context: ReplyContext,
+    replyId: Id,
+    stopSignal: AbortSignal,
+    progress: TurnProgress,
+  ): Promise<ChatMessage> {
+    const { node, chosen, policy, threadId, userParts, guardrails, workspace } = context;
+    // Stopped while it waited for the project's write queue: it never starts.
+    if (stopSignal.aborted) throw new Error('stopped before it started');
     // R-1: the files the person reverted in this thread since its last turn, told once, here.
     const reverted = deps.checkpoints?.takeRevertedPaths?.(threadId) ?? [];
+    progress.reverted = reverted;
     /* Stream: `chat.token` deltas batched ~50 ms, then the accumulated text is the reply. */
     const tokens = createBatcher<string>({
       intervalMs: batchMs,
@@ -395,6 +741,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
 
     /* D300/D302: the files before the turn, so what it changed can be reviewed and reverted. */
     let recording: CheckpointRecording | undefined;
+    /** PG-2.4 (D361): why the checkpoint could not begin; judged once the turn's tools are known. */
+    let checkpointFailure: string | undefined;
     if (workspace !== undefined && deps.checkpoints !== undefined) {
       try {
         recording = await deps.checkpoints.begin(context.projectId, {
@@ -403,10 +751,13 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
           messageId: replyId,
           nodeId: node.id,
         });
+        checkpointFailure = recording.failed;
       } catch (error) {
-        logger.warn({ subsystem: 'chat', threadId, err: error }, 'chat checkpoint did not start');
+        checkpointFailure = error instanceof Error ? error.message : String(error);
       }
     }
+    /** PG-1.4 (D359): the provider that answers, for the cost rule (local $0, unpriced unknown). */
+    let pricedProvider: PricedProvider | undefined;
 
     let text = '';
     let tokensIn = 0;
@@ -457,7 +808,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       // Inside the turn (D287 fix F-M4): a thread or catalog that cannot be read ends the turn as
       // a stored failed reply, like any other failure, rather than leaving the client "typing…".
       // Read now, holding the project's queue — never the snapshot from before the turn waited.
-      const history = await historyFor(threadId, context.userMessageId);
+      const history = await historyFor(threadId, context.userMessageId, context.historyBefore);
 
       const instructions =
         node.kind === 'agent' ? node.config.instructions : (node.config.systemPrompt ?? '');
@@ -504,14 +855,117 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
           : [];
       toolsOffered = offered.length > 0;
 
+      const providerRow = await repository.providers
+        .get(scope, chosen.providerId)
+        .catch(() => null);
+      pricedProvider = providerRow ?? undefined;
+
+      /*
+       * D300/D302, PG-2.4 (D361): a turn that can write and whose checkpoint could not begin
+       * stops here, before any model call or tool runs, unless the person chose Run without undo.
+       */
+      if (checkpointFailure !== undefined) {
+        // A writing turn: a write tool on offer, a node set up to write (as a run judges it), or
+        // a CLI whose preset may edit.
+        const writes =
+          offered.some((tool) => PROJECT_WRITING_TOOLS.includes(tool.definition.name)) ||
+          nodeWrites(node, () => providerRow ?? undefined) ||
+          (cli && (providerRow?.cliPermission ?? DEFAULT_CLI_PERMISSION) !== 'read_only');
+        logger.warn(
+          {
+            subsystem: 'chat',
+            threadId,
+            reason: checkpointFailure,
+            writes,
+            withoutUndo: context.withoutUndo === true,
+          },
+          'chat checkpoint did not start',
+        );
+        if (writes && context.withoutUndo !== true) {
+          throw new TurnRefusal({
+            kind: 'workflow',
+            code: 'checkpoint_unavailable',
+            message: undoUnavailableMessage(checkpointFailure, 'turn'),
+            retryable: true,
+          });
+        }
+      }
+
+      /* PG-2.2: the day's budget is already spent — no call is made. */
+      const caps = await capsFor(context.projectId, policy);
+      if (caps.daily !== undefined && caps.daily.spentUsd >= caps.daily.capUsd) {
+        throw new TurnRefusal(budgetError('daily', caps.daily.spentUsd, caps.daily.capUsd));
+      }
+      /** After every model call: has the turn crossed a cap? An unknown cost never counts as $0. */
+      const checkBudget = (): void => {
+        const spent = usageFor(tokensIn, tokensOut, pricing, pricedProvider);
+        const costUsd = reportedCostUsd ?? spent.costUsd;
+        const known = reportedCostUsd !== undefined || spent.costKnown !== false;
+        if (!known) return;
+        if (caps.turn !== undefined && costUsd > caps.turn) {
+          throw new TurnRefusal(budgetError('turn', costUsd, caps.turn));
+        }
+        if (caps.daily !== undefined && caps.daily.spentUsd + costUsd > caps.daily.capUsd) {
+          throw new TurnRefusal(
+            budgetError('daily', caps.daily.spentUsd + costUsd, caps.daily.capUsd),
+          );
+        }
+      };
+
+      /* PG-2.2: the tool point on every chat tool call, with the run's ask_user approvals. */
+      const offeredNames = offered.map((tool) => tool.definition.name);
+      const allowedDomains = node.kind === 'agent' ? node.config.tools.allowedDomains : [];
+      const beforeTool =
+        guardrails === undefined || policy === null
+          ? undefined
+          : async (
+              tool: (typeof offered)[number],
+              call: ChatToolRequest,
+            ): Promise<ChatToolStep> => {
+              const point = evaluateChatTool(
+                policy,
+                {
+                  definition: tool.definition,
+                  args: call.args,
+                  enabledTools: offeredNames,
+                  sandboxDir: workspace ?? '',
+                  allowedDomains,
+                },
+                guardrails,
+              );
+              toolVerdicts.push(...point.verdicts);
+              if (point.kind === 'allow') return { kind: 'allow' };
+              if (point.kind === 'block') {
+                return { kind: 'refuse', status: 'blocked', reason: point.reason };
+              }
+              const decision = await askApproval({
+                threadId,
+                node,
+                check: point.check,
+                reason: point.reason,
+                call,
+                signal: stopSignal,
+              });
+              if (decision.decision === 'approve') return { kind: 'allow' };
+              const note = decision.note === undefined ? '' : ` (${decision.note})`;
+              return {
+                kind: 'refuse',
+                status: 'refused',
+                reason: `a reviewer rejected this tool call${note}: ${point.reason}`,
+              };
+            };
+
       /** One model call, inside this provider's concurrency gate (FR-PRV-009). */
       const turn = (options: {
         tools?: ToolDefinition[];
         toolResults?: ToolResult[];
       }): Promise<ChatToolRequest[]> =>
         deps.runGated(chosen.providerId, async () => {
+          // PG-1.6: a stop aborts the call in flight, as the node's own clock does.
           const signal =
-            timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : new AbortController().signal;
+            timeoutMs > 0
+              ? AbortSignal.any([stopSignal, AbortSignal.timeout(timeoutMs)])
+              : stopSignal;
           // No `runId`: a chat belongs to no run (FR-CHAT-005); `turnId` names the turn instead.
           const stream = adapter.generate(
             {
@@ -532,6 +986,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
 
           const requested: ChatToolRequest[] = [];
           for await (const chunk of stream as AsyncIterable<StreamChunk>) {
+            // PG-1.6: an adapter that does not watch its signal is left at the first chunk after a stop.
+            if (stopSignal.aborted) break;
             if (chunk.type === 'text') {
               text += chunk.delta;
               tokens.push(chunk.delta);
@@ -558,6 +1014,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
               );
             }
           }
+          // PG-2.2: a turn over its cap makes no further call and runs no tool it asked for.
+          if (!stopSignal.aborted) checkBudget();
           return requested;
         });
 
@@ -569,19 +1027,26 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
           runId: replyId,
           sandboxDir: '',
           ...(workspace === undefined ? {} : { projectDir: workspace }),
-          signal: new AbortController().signal,
+          signal: stopSignal,
         },
         turn,
         activity,
         onCall: (tool, status) =>
           logger.info({ subsystem: 'chat', threadId, tool, status }, 'chat tool call'),
         ...(judge === undefined ? {} : { judge }),
+        ...(beforeTool === undefined ? {} : { beforeTool }),
       });
       limitReached = loop.limitReached;
+      // PG-1.6: an adapter that finished despite the stop still ends as the stop the person asked for.
+      if (stopSignal.aborted) throw new Error('stopped');
       // D287: a result the context point blocked ends the turn as a stored error, with its reason.
       if (loop.blocked !== undefined) failure = loop.blocked;
     } catch (error) {
-      failure = classifyError(error, { providerId: chosen.providerId });
+      failure = stopSignal.aborted
+        ? cancelledError()
+        : error instanceof TurnRefusal
+          ? error.nodeError
+          : classifyError(error, { providerId: chosen.providerId });
     } finally {
       // Before the closing `chat.message`: a token flushed after it would restart the stream.
       tokens.stop();
@@ -603,8 +1068,10 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     };
     const failedExtra = toolVerdicts.length === 0 ? extra : { ...extra, verdicts: toolVerdicts };
 
-    const priced = usageFor(tokensIn, tokensOut, pricing);
-    const usage = reportedCostUsd === undefined ? priced : { ...priced, costUsd: reportedCostUsd };
+    // PG-1.4 (D359): the run's cost rule — local is $0, an unpriced remote model's cost is unknown.
+    const priced = usageFor(tokensIn, tokensOut, pricing, pricedProvider);
+    const usage =
+      reportedCostUsd === undefined ? priced : withReportedCost(priced, reportedCostUsd);
 
     if (failure !== undefined) {
       logger.warn(
@@ -613,7 +1080,10 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       );
       // R-1: a failed turn may never have told the model, so the next turn tells it again
       if (reverted.length > 0) deps.checkpoints?.restoreRevertedPaths?.(threadId, reverted);
-      return store(failedTurn(threadId, failure, { usage, ...failedExtra }, replyId));
+      progress.reverted = [];
+      return store(failedTurn(threadId, failure, { usage, ...failedExtra }, replyId), () => {
+        progress.appended = true;
+      });
     }
 
     if (limitReached && toolsOffered && text.trim() === '') {
@@ -632,20 +1102,256 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       verdicts = [...toolVerdicts, ...checked.verdicts];
     }
 
-    return store({
-      id: replyId,
-      threadId,
-      role: 'agent',
-      content: replyParts,
-      verdicts,
-      usage,
-      at: now(),
-      ...(answeredBy === undefined ? {} : { modelId: answeredBy }),
-      ...extra,
+    // Told the model now: a throw from here on must not tell it again.
+    progress.reverted = [];
+    return store(
+      {
+        id: replyId,
+        threadId,
+        role: 'agent',
+        content: replyParts,
+        verdicts,
+        usage,
+        at: now(),
+        ...(answeredBy === undefined ? {} : { modelId: answeredBy }),
+        ...extra,
+      },
+      () => {
+        progress.appended = true;
+      },
+    );
+  }
+
+  /** The thread and its own node, for a message action (PG-1.6). */
+  async function threadWithNode(threadId: Id): Promise<{
+    thread: ChatThread;
+    owner: ResolvedChatNode & { node: ChatNode };
+  }> {
+    const thread = await repository.chatThreads.get(scope, threadId);
+    if (thread === null) throw new ChatThreadNotFoundError(threadId);
+    const owner = await deps.resolveNode(thread.nodeId);
+    if (owner === null) throw new ChatNodeNotFoundError(thread.nodeId);
+    if (owner.node.kind !== 'agent' && owner.node.kind !== 'model') {
+      throw new NotAnAgentNodeError(thread.nodeId);
+    }
+    return { thread, owner: { ...owner, node: owner.node } };
+  }
+
+  /**
+   * The node that answers a re-run turn (PG-1.6): the one that answered it before — an `@handle`
+   * target is kept — when it is still an agent or model node of the same workflow; otherwise the
+   * thread's own node.
+   */
+  async function speakerFor(
+    speakerNodeId: Id | undefined,
+    owner: ResolvedChatNode & { node: ChatNode },
+  ): Promise<ChatNode> {
+    if (speakerNodeId === undefined || speakerNodeId === owner.node.id) return owner.node;
+    const speaker = await deps.resolveNode(speakerNodeId);
+    if (
+      speaker === null ||
+      speaker.workflowId !== owner.workflowId ||
+      (speaker.node.kind !== 'agent' && speaker.node.kind !== 'model')
+    ) {
+      return owner.node;
+    }
+    return speaker.node;
+  }
+
+  /** Start one reply (shared by `chat`, retry and edit): route, policy, folder, then generate. */
+  async function beginReply(options: {
+    node: ChatNode;
+    thread: ChatThread;
+    owner: ResolvedChatNode;
+    userMessage: ChatMessage;
+    guardrails: ChatGuardrailDeps | undefined;
+    policy: Awaited<ReturnType<PolicyService['resolve']>> | null;
+    chosen: ModelUsed;
+    historyBefore?: Id;
+    withoutUndo?: boolean;
+  }): Promise<ChatBegun> {
+    const { thread, owner, userMessage } = options;
+    const done = generateReply({
+      node: options.node,
+      mainNodeId: thread.nodeId,
+      workflowId: owner.workflowId,
+      projectId: owner.projectId,
+      workspace: await workspaceOf(owner.projectId),
+      chosen: options.chosen,
+      policy: options.policy,
+      threadId: thread.id,
+      userMessageId: userMessage.id,
+      userParts: userMessage.content,
+      guardrails: options.guardrails,
+      ...(options.historyBefore === undefined ? {} : { historyBefore: options.historyBefore }),
+      ...(options.withoutUndo === true ? { withoutUndo: true } : {}),
     });
+    // The gateway answers 202 and does not await the reply. `generateReply` already stores a
+    // failed turn for any throw (PG-1.5); what still reaches here is a turn that could not be
+    // stored at all, which is logged rather than left an unhandled rejection.
+    done.catch((error: unknown) => {
+      logger.error({ subsystem: 'chat', err: error, threadId: thread.id }, 'chat reply failed');
+    });
+    return { threadId: thread.id, messageId: userMessage.id, done };
   }
 
   return {
+    async listApprovals(threadId) {
+      const thread = await repository.chatThreads.get(scope, threadId);
+      if (thread === null) throw new ChatThreadNotFoundError(threadId);
+      return [...chatApprovals.values()]
+        .map((pending) => pending.request)
+        .filter((request) => request.threadId === threadId);
+    },
+
+    decideApproval: (threadId, requestId, kind, note) =>
+      settleApproval(threadId, requestId, kind, note),
+
+    async retryMessage(threadId, messageId, options = {}) {
+      const { thread, owner } = await threadWithNode(threadId);
+      const messages = await repository.chatMessages.listByThread(scope, threadId);
+      const target = messages.find((message) => message.id === messageId);
+      if (target === undefined || target.deletedAt !== undefined) {
+        throw new ChatMessageNotFoundError(threadId, messageId);
+      }
+      if (target.role !== 'agent') {
+        throw new ChatActionInvalidError('Only an agent reply or a failed turn can be retried.');
+      }
+      if (target.supersededAt !== undefined) {
+        throw new ChatActionInvalidError('This turn was already replaced by a newer version.');
+      }
+      // The question it answered: the last standing user turn before it.
+      const question = messages
+        .filter((message) => message.role === 'user' && message.id < target.id && standing(message))
+        .at(-1);
+      if (question === undefined) {
+        throw new ChatActionInvalidError('There is no question before this turn to ask again.');
+      }
+
+      const node = await speakerFor(target.speakerNodeId, owner);
+      const chosen = routeFor(node);
+      const policy =
+        deps.policies === undefined ? null : await deps.policies.resolve(owner.projectId, node);
+
+      await markAndAnnounce(target, { supersededAt: now() });
+      return beginReply({
+        node,
+        thread,
+        owner,
+        userMessage: question,
+        guardrails: guardrailDeps(),
+        policy,
+        chosen,
+        historyBefore: target.id,
+        ...(options.withoutUndo === true ? { withoutUndo: true } : {}),
+      });
+    },
+
+    async editMessage(threadId, messageId, content) {
+      const { thread, owner } = await threadWithNode(threadId);
+      const messages = await repository.chatMessages.listByThread(scope, threadId);
+      const target = messages.find((message) => message.id === messageId);
+      if (target === undefined || target.deletedAt !== undefined) {
+        throw new ChatMessageNotFoundError(threadId, messageId);
+      }
+      if (target.role !== 'user') {
+        throw new ChatActionInvalidError('Only your own messages can be edited and resent.');
+      }
+      if (target.supersededAt !== undefined) {
+        throw new ChatActionInvalidError('This message was already replaced by a newer version.');
+      }
+
+      // Whoever answered it answers the new version.
+      const answered = messages.find(
+        (message) => message.role === 'agent' && message.id > target.id && standing(message),
+      );
+      const node = await speakerFor(answered?.speakerNodeId, owner);
+      const chosen = routeFor(node);
+      const policy =
+        deps.policies === undefined ? null : await deps.policies.resolve(owner.projectId, node);
+
+      /* Input point first (FR-CHAT-008): a blocked edit changes nothing, only the 422. */
+      const guardrails = guardrailDeps();
+      let inputParts: Part[] = [...content];
+      let inputVerdicts: ChatVerdict[] = [];
+      if (guardrails !== undefined) {
+        const checked = evaluateChatInput(policy, content, guardrails);
+        if (checked.kind === 'blocked') {
+          throw new ChatInputBlockedError(checked.verdicts, checked.reason);
+        }
+        inputParts = checked.parts;
+        inputVerdicts = checked.verdicts;
+      }
+
+      /* The message and every standing turn after it are the earlier version now. */
+      const at = now();
+      for (const message of messages) {
+        if (message.id >= target.id && standing(message)) {
+          await markAndAnnounce(message, { supersededAt: at });
+        }
+      }
+
+      const userMessage: ChatMessage = {
+        id: nextId(),
+        threadId: thread.id,
+        role: 'user',
+        content: inputParts,
+        verdicts: inputVerdicts,
+        at: now(),
+      };
+      await repository.chatMessages.append(scope, userMessage);
+      await repository.chatThreads.touch(scope, thread.id, now());
+      return beginReply({
+        node,
+        thread,
+        owner,
+        userMessage,
+        guardrails,
+        policy,
+        chosen,
+      });
+    },
+
+    async deleteMessage(threadId, messageId) {
+      const thread = await repository.chatThreads.get(scope, threadId);
+      if (thread === null) throw new ChatThreadNotFoundError(threadId);
+      const messages = await repository.chatMessages.listByThread(scope, threadId);
+      const target = messages.find((message) => message.id === messageId);
+      if (target === undefined) throw new ChatMessageNotFoundError(threadId, messageId);
+      // Deleting twice is still deleted: nothing to announce.
+      if (target.deletedAt !== undefined) return;
+      await markAndAnnounce(target, { deletedAt: now() });
+    },
+
+    async stopThread(threadId) {
+      const thread = await repository.chatThreads.get(scope, threadId);
+      if (thread === null) throw new ChatThreadNotFoundError(threadId);
+      const running = inFlight.get(threadId);
+      if (running === undefined || running.size === 0) return { stopped: false };
+      for (const controller of running) controller.abort();
+      return { stopped: true };
+    },
+
+    async recoverOpenTurns() {
+      let closed = 0;
+      for (const thread of await repository.chatThreads.list(scope)) {
+        // Each user turn is owed one agent turn; replies land in order behind them. A superseded
+        // turn was replaced (its replacement is counted instead); a deleted one still happened.
+        let owed = 0;
+        for (const message of await repository.chatMessages.listByThread(scope, thread.id)) {
+          if (message.supersededAt !== undefined) continue;
+          if (message.role === 'user') owed += 1;
+          else if (owed > 0) owed -= 1;
+        }
+        for (; owed > 0; owed -= 1) {
+          await store(failedTurn(thread.id, openTurnError()));
+          closed += 1;
+        }
+      }
+      if (closed > 0) logger.warn({ subsystem: 'chat', closed }, 'closed chat turns left open');
+      return closed;
+    },
+
     async postMessage(workflowId, request) {
       const workflow = await repository.workflows.get(scope, workflowId);
       if (workflow === null) throw new ChatWorkflowNotFoundError(workflowId);
@@ -805,26 +1511,16 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       await repository.chatMessages.append(scope, userMessage);
       await repository.chatThreads.touch(scope, thread.id, now());
 
-      const done = generateReply({
+      return beginReply({
         node,
-        mainNodeId: thread.nodeId,
-        workflowId,
-        projectId,
-        workspace: await workspaceOf(projectId),
-        chosen,
-        policy,
-        threadId: thread.id,
-        userMessageId: userMessage.id,
-        userParts: inputParts,
+        thread,
+        owner: { node: owner, projectId, workflowId },
+        userMessage,
         guardrails,
+        policy,
+        chosen,
+        ...(request.withoutUndo === true ? { withoutUndo: true } : {}),
       });
-      // The gateway answers 202 and does not await the reply, so its own branch logs a failure and
-      // stops it becoming an unhandled rejection; `done` itself still rejects for a caller that awaits.
-      done.catch((error: unknown) => {
-        logger.error({ subsystem: 'chat', err: error, threadId: thread.id }, 'chat reply failed');
-      });
-
-      return { threadId: thread.id, messageId: userMessage.id, done };
     },
 
     listThreads: (nodeId) => repository.chatThreads.listByNode(scope, nodeId),
@@ -833,7 +1529,11 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       const thread = await repository.chatThreads.get(scope, threadId);
       if (thread === null) throw new ChatThreadNotFoundError(threadId);
       const messages = await repository.chatMessages.listByThread(scope, threadId);
-      return { thread, messages };
+      // PG-1.6 (D352): a deleted turn is left out; a superseded one stays, as an earlier version.
+      return {
+        thread,
+        messages: messages.filter((message) => message.deletedAt === undefined),
+      };
     },
 
     async deleteThread(threadId) {

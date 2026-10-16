@@ -21,12 +21,14 @@ import {
   memo,
   useContext,
   useEffect,
+  type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
 } from 'react';
 
 import { InputDropZone } from '../artifacts/InputDropZone';
 import { findBlockingNodeId } from '../errors/blocked';
+import { formatCostRange, money } from '../runs/estimate';
 import { NodeApproval, NodeErrorCard, UnderCard } from '../runs/NodeRunAttachments';
 import { useNodeOverlay, useRunStore } from '../runs/run-store';
 import { th, themeProviderOf } from '../theme/constants';
@@ -34,6 +36,9 @@ import { nodeStatusLook } from '../theme/format';
 import { useWorkflowGraph } from '../workflows/hooks';
 
 import { DOC_W, STAGE_W, isStageKind, portAnchor } from './anchors';
+import { ChooseProviderButton, needsProvider } from './ChooseProvider';
+import { NodeEstimateContext, PortConnectContext } from './card-context';
+import { NodeCardButtons } from './NodeCardButtons';
 import { NodePreflightIssues } from './NodePreflightIssues';
 import { useKnowledgeBaseName, useWorkflowProjectId } from './retrieval/hooks';
 
@@ -56,6 +61,8 @@ export type FlowNodeData = {
   /** Keyboard connect (NFR-USE-02): the output port armed with Enter, if any. */
   armedPortId: string | undefined;
   onPortKey: (port: Port, direction: 'in' | 'out', nodeId: string) => void;
+  /** PG-4.4: set while a run is live and this node differs from the run's snapshot. */
+  sinceRun?: SinceRun;
 };
 export type AceFlowNode = FlowNode<FlowNodeData, 'ace'>;
 
@@ -79,14 +86,65 @@ export interface NodeCardViewProps {
   onPortKey?: (port: Port, direction: 'in' | 'out') => void;
   /** A Retrieval node's base, by name, once the project's bases have loaded (FR-RAG-006). */
   knowledgeBaseName?: string;
+  /** The node names a provider the engine no longer has (FR-PRV-005; PG-1.3's red state). */
+  providerMissing?: boolean;
+  /**
+   * PG-4.4: how this card differs from the live run's snapshot — `removed`, a ghost of a node the
+   * run still executes but the graph no longer has; `changed`, edited since the run froze it.
+   */
+  sinceRun?: SinceRun;
+}
+
+/** PG-4.4: a node as the live run's snapshot sees it against the graph on screen. */
+export type SinceRun = 'removed' | 'changed';
+
+/** PG-4.4: a ghost card — dimmed and desaturated, so it reads as "not on the graph any more". */
+const GHOST_STYLE: CSSProperties = { opacity: 0.5, filter: 'grayscale(0.6)' };
+
+/**
+ * PG-4.2 (D360): a node state as a glyph, a word and a colour — the state's own three, so FAILED
+ * never reads as BLOCKED nor PAUSED as IDLE. The word is in the state's colour, which the theme's
+ * tokens keep at AA; the glyph spins for RUNNING and pulses for WAITING.
+ */
+export function StatusChip({
+  state,
+  className,
+  testId,
+}: {
+  state: NodeState;
+  className?: string;
+  testId?: string;
+}) {
+  const status = nodeStatusLook(state);
+  const Glyph = status.icon;
+  const motion =
+    state === 'RUNNING'
+      ? 'motion-safe:animate-spin'
+      : state === 'WAITING'
+        ? 'motion-safe:animate-[livePulse_1.4s_ease-in-out_infinite]'
+        : '';
+  return (
+    <div
+      data-testid={testId}
+      data-state={state}
+      className={`flex items-center gap-[6px] text-[10px] font-semibold ${className ?? ''}`}
+      style={{ color: status.color }}
+    >
+      <Glyph aria-hidden size={12} strokeWidth={2.2} className={`shrink-0 ${motion}`} />
+      {status.label}
+    </div>
+  );
 }
 
 /** The card's 1px border: handles are placed inside it, anchors are measured from outside it. */
 const BORDER = 1;
 
 /**
- * One port's React Flow handle (D332): invisible, a 12px hit area centred on the theme's anchor,
- * a `#ef6b3f` ring when focused from the keyboard or armed for a keyboard connect (NFR-USE-02).
+ * One port's React Flow handle (D350, supersedes D332's invisible one): a 22px target centred on the
+ * theme's anchor with an 8px dot in its data type's colour. `theme.css` shows it on hover, on a
+ * selected card, on focus or armed for a keyboard connect (NFR-USE-02), and — from
+ * `PortConnectContext` — on every compatible port while a line is drawn; an incompatible one is
+ * dimmed and says why.
  */
 function PortHandle({
   port,
@@ -108,6 +166,8 @@ function PortHandle({
   onKey?: (port: Port, direction: 'in' | 'out') => void;
 }) {
   const anchor = portAnchor(kind, direction, index, count);
+  const connecting = useContext(PortConnectContext)?.get(port.id);
+  const refused = connecting?.look === 'incompatible' ? connecting.reason : undefined;
   const label = `${port.dataType} ${direction === 'in' ? 'input' : 'output'} “${port.name}”${
     port.multi ? ', accepts many' : ''
   }`;
@@ -124,19 +184,24 @@ function PortHandle({
       type={direction === 'in' ? 'target' : 'source'}
       position={direction === 'in' ? Position.Left : Position.Right}
       className="ace-port"
-      style={{
-        left: anchor.x - BORDER,
-        top: anchor.y - BORDER,
-        right: 'auto',
-        transform: 'translate(-50%, -50%)',
-      }}
+      style={
+        {
+          left: anchor.x - BORDER,
+          top: anchor.y - BORDER,
+          right: 'auto',
+          transform: 'translate(-50%, -50%)',
+          '--port-color': `var(--port-${port.dataType})`,
+        } as CSSProperties
+      }
       tabIndex={0}
       role="button"
       aria-label={label}
+      {...(refused === undefined ? {} : { title: refused, 'aria-description': refused })}
       data-testid={`port-${port.id}`}
       data-connected={connected ? 'true' : 'false'}
       data-datatype={port.dataType}
       data-armed={armed ? 'true' : 'false'}
+      data-connect={connecting?.look ?? 'none'}
       onKeyDown={onKeyDown}
     />
   );
@@ -177,14 +242,48 @@ function stageSub(node: Node, providerName: string | undefined): string {
 }
 
 /**
+ * PG-4.3: what one run of this node could cost — `≈ $0.002–0.01`, `free` or `?` — and its own cap
+ * when it has one. Read from the Canvas's one estimate per graph version, never fetched per card.
+ */
+function NodeEstimateTag({ nodeId }: { nodeId: string }) {
+  const estimate = useContext(NodeEstimateContext)?.get(nodeId);
+  if (estimate === undefined) return null;
+  const text = formatCostRange(estimate);
+  const title = estimate.free
+    ? 'A local model: free'
+    : estimate.unknown
+      ? estimate.reason === 'no_model'
+        ? 'Cost unknown: no model chosen'
+        : estimate.reason === 'model_missing'
+          ? 'Cost unknown: the model is not in the catalogue'
+          : 'Cost unknown: this model has no price'
+      : `Estimated cost of one run of this node: ${text}`;
+  return (
+    <div
+      data-testid={`node-estimate-${nodeId}`}
+      data-unknown={estimate.unknown ? 'true' : 'false'}
+      title={
+        estimate.maxCostUsd === undefined ? title : `${title} · capped at ${money(estimate.maxCostUsd)}`
+      }
+      className="mt-[2px] font-machine text-[9px] text-[var(--muted)]"
+    >
+      {text}
+      {estimate.maxCostUsd === undefined ? null : ` · cap ${money(estimate.maxCostUsd)}`}
+    </div>
+  );
+}
+
+/**
  * The theme's Stage card (D332) for Agent and Model nodes: 210 × 280, the provider's orb and
  * border, `STAGE n · NAME`, the provider and model, and the live status.
  */
 function StageCard(props: NodeCardViewProps) {
   const { node, state, selected, provider, providerName, stage, dark = false } = props;
   const look = th(themeProviderOf(provider), dark);
-  const ring = look.w ? '#bdb6ae' : look.c;
-  const status = nodeStatusLook(state);
+  // PG-1.3 (D351): no provider, or one that is gone — a red card that asks for one.
+  const choose = needsProvider(node, props.providerMissing);
+  const ring = choose ? '#c94c27' : look.w ? '#bdb6ae' : look.c;
+  const ghost = props.sinceRun === 'removed';
   const name = node.name || 'Untitled';
   const n = stage ?? '';
   return (
@@ -195,12 +294,15 @@ function StageCard(props: NodeCardViewProps) {
       data-state={state}
       data-selected={selected ? 'true' : 'false'}
       data-provider={provider ?? 'none'}
-      className="relative h-[280px] w-[210px] cursor-move rounded-[10px] bg-[var(--frame)] text-[var(--ink)]"
+      data-needs-provider={choose ? 'true' : undefined}
+      data-since-run={props.sinceRun}
+      className={`relative h-[280px] w-[210px] rounded-[10px] bg-[var(--frame)] text-[var(--ink)] ${ghost ? 'cursor-default' : 'cursor-move'}`}
       style={{
-        border: `1px solid ${selected ? ring : look.w ? 'var(--frameLine)' : `rgba(${look.glow},0.38)`}`,
+        border: `1px ${ghost ? 'dashed' : 'solid'} ${selected || choose ? ring : look.w ? 'var(--frameLine)' : `rgba(${look.glow},0.38)`}`,
         boxShadow: selected
           ? `0 0 0 2px ${ring}, 0 12px 40px -16px rgba(${look.glow},0.55)`
           : 'none',
+        ...(ghost ? GHOST_STYLE : {}),
       }}
     >
       <div
@@ -209,6 +311,7 @@ function StageCard(props: NodeCardViewProps) {
       >
         STAGE {n} · {name.toUpperCase()}
       </div>
+      {!ghost && <NodeCardButtons node={node} className="right-[16px] top-[12px]" />}
       <div className="absolute right-[-9px] top-[-9px] flex h-[20px] w-[20px] items-center justify-center rounded-full border border-[var(--frameLine)] bg-[var(--surface)] text-[10px] font-semibold">
         {n}
       </div>
@@ -241,19 +344,14 @@ function StageCard(props: NodeCardViewProps) {
         >
           {stageSub(node, providerName)}
         </div>
+        {!ghost && <NodeEstimateTag nodeId={node.id} />}
+        {choose && !ghost && <ChooseProviderButton node={node} />}
       </div>
-      <div
-        data-testid="status-chip"
-        data-state={state}
-        className="absolute bottom-[12px] left-[12px] right-[12px] flex items-center gap-[6px] text-[10px] text-[var(--muted)]"
-      >
-        <span
-          aria-hidden
-          className="h-[6px] w-[6px] rounded-full"
-          style={{ background: status.color }}
-        />
-        {status.label}
-      </div>
+      <StatusChip
+        state={state}
+        className="absolute bottom-[12px] left-[12px] right-[12px]"
+        testId="status-chip"
+      />
       <PortHandles {...props} />
     </div>
   );
@@ -331,6 +429,7 @@ function docDescription(node: Node, knowledgeBaseName: string | undefined): Reac
  */
 function DocCard(props: NodeCardViewProps) {
   const { node, state, selected, feeds = [], receives = [], knowledgeBaseName } = props;
+  const ghost = props.sinceRun === 'removed';
   const description = docDescription(node, knowledgeBaseName);
   const attached =
     feeds.length === 0
@@ -345,10 +444,17 @@ function DocCard(props: NodeCardViewProps) {
       data-kind={node.kind}
       data-state={state}
       data-selected={selected ? 'true' : 'false'}
-      className="relative w-[200px] cursor-move rounded-[8px] bg-[var(--surface)] px-[14px] pb-[10px] pt-[14px] text-[var(--ink)] shadow-[0_10px_30px_-14px_rgba(40,25,15,0.35)]"
-      style={{ border: `1px solid ${selected ? '#ef6b3f' : 'var(--line)'}` }}
+      data-since-run={props.sinceRun}
+      className={`relative w-[200px] rounded-[8px] bg-[var(--surface)] px-[14px] pb-[10px] pt-[14px] text-[var(--ink)] shadow-[0_10px_30px_-14px_rgba(40,25,15,0.35)] ${ghost ? 'cursor-default' : 'cursor-move'}`}
+      style={{
+        border: `1px ${ghost ? 'dashed' : 'solid'} ${selected ? '#ef6b3f' : 'var(--line)'}`,
+        ...(ghost ? GHOST_STYLE : {}),
+      }}
     >
-      <div className="text-[13px] font-bold leading-[1.25] tracking-[-0.01em]">{node.name}</div>
+      {!ghost && <NodeCardButtons node={node} className="right-[8px] top-[8px]" />}
+      <div className="pr-[46px] text-[13px] font-bold leading-[1.25] tracking-[-0.01em]">
+        {node.name}
+      </div>
       <div
         data-testid={`node-meta-${node.id}`}
         className="mt-[4px] font-machine text-[9px] text-[var(--muted)]"
@@ -373,6 +479,10 @@ function DocCard(props: NodeCardViewProps) {
             {attached}
           </div>
         </>
+      )}
+      {/* PG-4.2: a document card says its state too, once a run has touched it. */}
+      {state !== 'IDLE' && (
+        <StatusChip state={state} className="mt-[8px]" testId={`doc-status-${node.id}`} />
       )}
       <PortHandles {...props} />
     </div>
@@ -407,6 +517,8 @@ export interface NodeCardNotesProps {
   failureReason?: FailureReason;
   /** The upstream node that stopped the run, on a BLOCKED node (FR-ERR-006). */
   blockedByName?: string;
+  /** PG-4.4: the live run executes a version of this node the graph no longer shows. */
+  sinceRun?: SinceRun;
 }
 
 const NOTE = 'text-[10px] leading-[1.45] text-[var(--muted)]';
@@ -423,6 +535,7 @@ export function NodeCardNotes({
   providerMissing,
   failureReason,
   blockedByName,
+  sinceRun,
 }: NodeCardNotesProps) {
   const configuredModel =
     node.kind === 'agent' || node.kind === 'model' ? node.config.modelId : undefined;
@@ -464,6 +577,20 @@ export function NodeCardNotes({
       <p key="used" className={`${NOTE} truncate`} data-testid={`used-model-${node.id}`}>
         used: {modelUsed.modelId}
         {modelUsed.viaFallback ? ' (fallback)' : ''}
+      </p>,
+    );
+  }
+  if (sinceRun !== undefined) {
+    lines.unshift(
+      <p
+        key="since-run"
+        className={NOTE}
+        data-testid={`since-run-${node.id}`}
+        data-since={sinceRun}
+      >
+        {sinceRun === 'removed'
+          ? 'removed since this run started'
+          : 'changed since this run started'}
       </p>,
     );
   }
@@ -535,13 +662,15 @@ export const FlowNodeCard = memo(function FlowNodeCard({
       {...(data.feeds === undefined ? {} : { feeds: data.feeds })}
       {...(data.receives === undefined ? {} : { receives: data.receives })}
       {...(knowledgeBaseName === undefined ? {} : { knowledgeBaseName })}
+      {...(data.providerMissing ? { providerMissing: true } : {})}
+      {...(data.sinceRun === undefined ? {} : { sinceRun: data.sinceRun })}
     />
   );
   const width = isStageKind(node.kind) ? STAGE_W : DOC_W;
   return (
     <div className="relative" style={{ width }}>
       {/* An Input node's card is itself a file drop target (FR-MM-007); other kinds render as-is. */}
-      {node.kind === 'input' ? (
+      {node.kind === 'input' && data.sinceRun !== 'removed' ? (
         <InputDropZone nodeId={node.id} workflowId={node.workflowId} config={node.config}>
           {card}
         </InputDropZone>
@@ -556,6 +685,7 @@ export const FlowNodeCard = memo(function FlowNodeCard({
           {...(overlay.failureReason === undefined ? {} : { failureReason: overlay.failureReason })}
           {...(blockedByName === undefined ? {} : { blockedByName })}
           {...(data.providerMissing ? { providerMissing: true } : {})}
+          {...(data.sinceRun === undefined ? {} : { sinceRun: data.sinceRun })}
         />
         <NodeErrorCard node={node} />
         <NodeApproval node={node} />

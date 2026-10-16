@@ -7,7 +7,13 @@ import type {
 } from '@ace/contracts';
 
 import type { CheckOutcome, CheckRunner, SecretMasker } from '../guardrails/checks.js';
-import { OUTPUT_CHECK_ORDER, textOf, transformPart } from '../guardrails/evaluator.js';
+import {
+  OUTPUT_CHECK_ORDER,
+  TOOL_CHECK_ORDER,
+  textOf,
+  transformPart,
+} from '../guardrails/evaluator.js';
+import type { ToolPointInput } from '../runs/tool-loop.js';
 
 /**
  * The guardrail evaluation a direct chat runs (FR-CHAT-008, FR-GRD-011, D10, D86).
@@ -202,4 +208,44 @@ export function evaluateChatReply(
   }
 
   return { kind: 'ok', parts: flowing, verdicts };
+}
+
+/** What the tool point decided for one chat tool call (PG-2.2, FR-GRD-005/006). */
+export type ChatToolPointResult =
+  | { kind: 'allow'; verdicts: ChatVerdict[] }
+  | { kind: 'block'; reason: string; verdicts: ChatVerdict[] }
+  | { kind: 'ask'; check: GuardrailCheck; reason: string; verdicts: ChatVerdict[] };
+
+/**
+ * The tool point of a direct chat (PG-2.2): the run's tool-point checks, in the run's order
+ * (`TOOL_CHECK_ORDER`), over one tool call. A `warn` or `pass` lets the call run with a verdict;
+ * `ask_user` asks a person (`ask`) — the turn waits on an approval named by its thread (D359), for
+ * any tool check, since a chat turn has its person watching it; anything else blocks. The verdicts
+ * are `ChatVerdict`s that ride the reply: a chat stores no `Verdict` (FR-CHAT-005).
+ */
+export function evaluateChatTool(
+  policy: GuardrailPolicy | null,
+  bag: ToolPointInput,
+  deps: ChatGuardrailDeps,
+): ChatToolPointResult {
+  const verdicts: ChatVerdict[] = [];
+  const rank = (type: GuardrailCheckType): number => {
+    const index = (TOOL_CHECK_ORDER as readonly GuardrailCheckType[]).indexOf(type);
+    return index === -1 ? TOOL_CHECK_ORDER.length : index;
+  };
+  const checks = (policy?.checks ?? [])
+    .filter((check) => check.enabled && check.point === 'tool')
+    .sort((a, b) => rank(a.type) - rank(b.type));
+
+  for (const check of checks) {
+    const outcome = deps.checks.evaluate(check, { point: 'tool', text: '', tool: bag });
+    if (outcome === undefined || outcome.passed) continue;
+    verdicts.push(chatVerdict(check, outcome, deps));
+    if (check.action === 'pass' || check.action === 'warn') continue;
+    if (check.action === 'ask_user') {
+      return { kind: 'ask', check, reason: outcome.reason, verdicts };
+    }
+    return { kind: 'block', reason: outcome.reason, verdicts };
+  }
+  return { kind: 'allow', verdicts };
 }

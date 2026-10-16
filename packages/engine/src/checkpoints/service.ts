@@ -60,6 +60,18 @@ export interface CheckpointService extends CheckpointRecorder {
    * them — `person`: listed, never reverted (D300 fix I3).
    */
   notePersonWrite(projectId: Id, paths: readonly string[]): void;
+  /**
+   * PG-5.2 (D361): a command the person started in Forge's own terminal began (`true`) or ended
+   * (`false`). While one runs, and for a moment after the last one ends, what the watcher reports
+   * changed is booked as the person's (`noteFilesChanged`).
+   */
+  notePersonCommand(projectId: Id, processId: Id, running: boolean): void;
+  /**
+   * PG-5.2: the watcher saw these paths change. While a person's terminal command runs (or just
+   * ran), every checkpoint of the project still recording marks them `person`: listed, never
+   * reverted — the change may be theirs. Otherwise nothing happens.
+   */
+  noteFilesChanged(projectId: Id, paths: readonly string[]): void;
   /** R-1: what the person reverted in this thread's checkpoints since its last turn, once. */
   takeRevertedPaths(threadId: Id): string[];
   /** R-1: a failed turn's taken paths, back ahead of any reverted since. */
@@ -73,7 +85,16 @@ export interface CheckpointServiceDeps {
   bus: EventBus;
   logger: Logger;
   now?: () => string;
+  /** The clock the terminal's grace window reads, in milliseconds (tests). */
+  clockMs?: () => number;
 }
+
+/**
+ * PG-5.2: how long after a person's terminal command ended its file changes still count as theirs:
+ * the watcher reports a burst only after it settles (D299's debounce), so the last writes of a
+ * command that just exited arrive a little after it.
+ */
+const PERSON_COMMAND_GRACE_MS = 2_000;
 
 const STOPPED_WHILE_RECORDING =
   "the engine stopped while recording; these changes can't be told apart from yours";
@@ -237,6 +258,32 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
     revertedByThread.set(threadId, noted);
   }
 
+  /**
+   * PG-5.2: per project, the person's terminal commands running now and when the last one ended.
+   * In memory only, like the terminal's own records.
+   */
+  const personCommands = new Map<Id, { running: Set<Id>; endedAt: number }>();
+  const clockMs = deps.clockMs ?? Date.now;
+
+  function notePersonCommand(projectId: Id, processId: Id, running: boolean): void {
+    const commands = personCommands.get(projectId) ?? { running: new Set<Id>(), endedAt: 0 };
+    if (running) commands.running.add(processId);
+    else if (commands.running.delete(processId)) commands.endedAt = clockMs();
+    personCommands.set(projectId, commands);
+  }
+
+  function noteFilesChanged(projectId: Id, paths: readonly string[]): void {
+    const commands = personCommands.get(projectId);
+    if (commands === undefined) return;
+    const active =
+      commands.running.size > 0 || clockMs() - commands.endedAt <= PERSON_COMMAND_GRACE_MS;
+    if (!active) {
+      personCommands.delete(projectId);
+      return;
+    }
+    notePersonWrite(projectId, paths);
+  }
+
   /** Every checkpoint of the project still recording marks these paths the person's. */
   function notePersonWrite(projectId: Id, paths: readonly string[]): void {
     for (const recording of recordings.values()) {
@@ -334,8 +381,11 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
       announce(stored.checkpoint);
 
       let finishing: Promise<Checkpoint | undefined> | undefined;
+      const failedReason =
+        stored.checkpoint.status === 'failed' ? (stored.checkpoint.error ?? 'failed') : undefined;
       return {
         id,
+        ...(failedReason === undefined ? {} : { failed: failedReason }),
         finish: () => {
           finishing ??= serial(id, () => complete(id)).catch((error: unknown) => {
             logger.warn(
@@ -496,6 +546,8 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
     },
 
     notePersonWrite,
+    notePersonCommand,
+    noteFilesChanged,
 
     takeRevertedPaths(threadId) {
       const paths = revertedByThread.get(threadId) ?? [];

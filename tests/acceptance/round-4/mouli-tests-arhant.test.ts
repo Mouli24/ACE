@@ -36,6 +36,7 @@ import {
   derivePorts,
   maxUploadBytes,
   type AgentConfig,
+  type ApprovalRequest,
   type Artifact,
   type ChatMessage,
   type Edge,
@@ -435,7 +436,10 @@ async function runToEnd(workflowId: Id): Promise<{ run: Run; nodeRuns: NodeRun[]
 }
 
 /** Poll the pending approvals of a run until one appears (FR-GRD-013, Arch §21.2). */
-async function firstApproval(runId: Id, timeoutMs = 30_000) {
+/** A run's approval always names its run and node run; D359 made both optional for chat's. */
+type RunApproval = ApprovalRequest & { runId: Id; nodeRunId: Id };
+
+async function firstApproval(runId: Id, timeoutMs = 30_000): Promise<RunApproval> {
   let found: Awaited<ReturnType<AceClient['listApprovals']>> = [];
   await until(
     async () => {
@@ -445,7 +449,7 @@ async function firstApproval(runId: Id, timeoutMs = 30_000) {
     timeoutMs,
     `an approval request on run ${runId}`,
   );
-  return found[0] as (typeof found)[number];
+  return found[0] as RunApproval;
 }
 
 /* -------------------------------------------------------------------------- */

@@ -1,4 +1,5 @@
-import { APPROVAL_PREVIEW_MAX, type ApprovalRequest, type NodeRun, type Part } from '@ace/contracts';
+import type { RunApprovalRequest } from '../../ports/index.js';
+import { APPROVAL_PREVIEW_MAX, type NodeRun, type Part } from '@ace/contracts';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -34,15 +35,15 @@ interface Harness {
   store: FakeGuardrailStore;
   bus: RecordingBus;
   target: EvaluationTarget;
-  waited: ApprovalRequest[];
-  decided: ApprovalRequest[];
+  waited: RunApprovalRequest[];
+  decided: RunApprovalRequest[];
 }
 
 function harness(action: 'ask_user' | 'block' = 'ask_user'): Harness {
   const store = new FakeGuardrailStore();
   const bus = new RecordingBus();
-  const waited: ApprovalRequest[] = [];
-  const decided: ApprovalRequest[] = [];
+  const waited: RunApprovalRequest[] = [];
+  const decided: RunApprovalRequest[] = [];
 
   const approvals = createApprovalService({
     scope: LOCAL_SCOPE,
@@ -97,7 +98,7 @@ const text = (value: string): Part[] => [{ type: 'text', text: value }];
 const EMAIL_TEXT = 'Write to nobody@example.com about the launch.';
 
 /** Wait until the approval card exists, without racing a fixed timeout. */
-async function pending(approvals: ApprovalService, runId: string): Promise<ApprovalRequest> {
+async function pending(approvals: ApprovalService, runId: string): Promise<RunApprovalRequest> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const [request] = await approvals.listPending(runId);
     if (request !== undefined) return request;
@@ -125,7 +126,11 @@ describe('TC-GRD-008 Approval approve', () => {
     const { decision, nodeRun } = await approvals.decide(target.nodeRunId, 'approve', 'Fine by me');
 
     // FR-GRD-013: the decision is logged with its time.
-    expect(decision).toMatchObject({ requestId: request.id, decision: 'approve', note: 'Fine by me' });
+    expect(decision).toMatchObject({
+      requestId: request.id,
+      decision: 'approve',
+      note: 'Fine by me',
+    });
     expect(Date.parse(decision.decidedAt)).not.toBeNaN();
     expect(nodeRun?.id).toBe(target.nodeRunId);
     expect(decided.map((entry) => entry.id)).toEqual([request.id]);
@@ -158,7 +163,10 @@ describe('TC-GRD-008 Approval approve', () => {
     // Approving the PII did not approve everything else: the citation check still failed the node.
     expect(outcome.kind).toBe('failed');
     if (outcome.kind !== 'failed') return;
-    expect(outcome.verdicts.map((verdict) => verdict.checkType)).toEqual(['pii', 'required_citations']);
+    expect(outcome.verdicts.map((verdict) => verdict.checkType)).toEqual([
+      'pii',
+      'required_citations',
+    ]);
   });
 
   it('truncates a long preview to the contract’s limit', async () => {
@@ -245,7 +253,7 @@ describe('FR-GRD-013 Deciding twice, and deciding nothing', () => {
     const runId = id();
     const nodeRunId = id();
 
-    const request: ApprovalRequest = {
+    const request: RunApprovalRequest = {
       id: id(),
       runId,
       nodeRunId,

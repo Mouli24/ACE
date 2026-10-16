@@ -3,6 +3,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  Icons,
   cn,
 } from '@ace/ui';
 import { Link } from 'react-router-dom';
@@ -17,9 +18,6 @@ export const SETTINGS_LINKS = [
   { to: '/onboarding', label: 'Onboarding', testId: 'settings-menu-onboarding' },
   { to: '/settings', label: 'Settings', testId: 'settings-menu-settings' },
 ] as const;
-
-/** U+2699 with the text presentation selector, so it draws as a glyph like ☀ ☾, never an emoji. */
-const GEAR = '⚙︎';
 
 const TRIGGER: Readonly<Record<'footer' | 'corner', string>> = {
   // the 24px workspace footer, before the connection status
@@ -49,7 +47,7 @@ export function SettingsMenu({ placement }: { placement: 'footer' | 'corner' }) 
             TRIGGER[placement],
           )}
         >
-          <span aria-hidden>{GEAR}</span>
+          <Icons.Settings aria-hidden size={placement === 'corner' ? 16 : 11} strokeWidth={2} />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start" sideOffset={6} collisionPadding={8}>

@@ -1,6 +1,13 @@
 import {
+  CreateProviderRequestSchema,
+  DEFAULT_OLLAMA_BASE_URL,
   DEFAULT_CLI_PERMISSION,
   isCliProviderType,
+  type LocalModelActionResponse,
+  type LocalRunningModel,
+  type LocalRuntimeStatus,
+  type PullModelAccepted,
+  type TryModelResponse,
   type CliDetectResponse,
   type CreateProviderRequest,
   type Id,
@@ -18,6 +25,8 @@ import type { EventBus } from "../events/index.js";
 import { newId } from "../ids.js";
 import type { Logger } from "../logging/index.js";
 import type {
+  LocalModelControl,
+  LocalRuntimeProbe,
   ModelInfo,
   ProviderAdapter,
   ProviderAdapterFactory,
@@ -96,7 +105,31 @@ export interface ProviderService {
   adapterFor(id: Id): Promise<ProviderAdapter>;
   /** The one concurrency gate for this provider (FR-PRV-009). */
   semaphoreFor(id: Id): Promise<Semaphore>;
+
+  /* PG-1.4 (D359): models on this machine, without a terminal. */
+
+  /** `GET /local-runtime`: installed, answering, started by the engine. Never starts anything. */
+  localRuntime?(): Promise<LocalRuntimeStatus>;
+  /**
+   * Start Ollama when it is installed and not answering, then add an `ollama` provider when there
+   * is none (never a second one) and refresh its models.
+   */
+  ensureLocalRuntime?(): Promise<LocalRuntimeStatus>;
+  /** Stop the Ollama server this engine started; one the person started is left alone. */
+  stopLocalRuntime?(): Promise<void>;
+  runningLocalModels?(id: Id): Promise<LocalRunningModel[]>;
+  loadLocalModel?(id: Id, modelId: string): Promise<LocalModelActionResponse>;
+  unloadLocalModel?(id: Id, modelId: string): Promise<LocalModelActionResponse>;
+  /** Starts the pull and answers at once; progress rides `model.pull`, then the models refresh. */
+  pullLocalModel?(id: Id, name: string): Promise<PullModelAccepted>;
+  /** "Try this model": one non-streaming call, no tools, secrets masked both ways. */
+  tryModel?(id: Id, modelId: string, prompt: string): Promise<TryModelResponse>;
 }
+
+/** How long "Try this model" waits for its answer. */
+export const TRY_MODEL_TIMEOUT_MS = 60_000;
+/** The most a try may write: a sentence or a paragraph, not an essay on the person's bill. */
+export const TRY_MODEL_MAX_TOKENS = 512;
 
 export interface ProviderServiceDeps {
   repository: Repository;
@@ -107,6 +140,22 @@ export interface ProviderServiceDeps {
   logger: Logger;
   now?: () => string;
   nextId?: () => string;
+  /**
+   * PG-1.4 (D359): start the local Ollama and add its provider without being asked — on
+   * `GET /providers/detect` and when the engine starts. Off unless the engine is the product
+   * (`ace-engine`); a test engine never starts anything on the machine it runs on.
+   */
+  autoLocalRuntime?: boolean;
+}
+
+/** A local-model action asked of a provider that is not Ollama, or with no runtime wired. */
+export class LocalModelRefusedError extends Error {
+  override readonly name = "LocalModelRefusedError";
+}
+
+/** A local-model or try call the provider failed; `message` is safe to show (masked). */
+export class ProviderActionError extends Error {
+  override readonly name = "ProviderActionError";
 }
 
 export class ProviderNotFoundError extends Error {
@@ -119,7 +168,7 @@ export class ProviderNotFoundError extends Error {
 
 export function createProviderService(
   deps: ProviderServiceDeps,
-): ProviderService {
+): Required<ProviderService> {
   const { repository, scope, secrets, factory, bus, logger } = deps;
   const now = deps.now ?? (() => new Date().toISOString());
   const nextId = deps.nextId ?? newId;
@@ -130,6 +179,112 @@ export function createProviderService(
    * finishes, and caching only the result let each of them build its own gate (D-027).
    */
   const gates = new Map<Id, Promise<Semaphore>>();
+
+  const local: LocalModelControl | undefined = factory.local;
+  const autoLocal = deps.autoLocalRuntime === true;
+  /** One add at a time, so two callers never create two Ollama providers. */
+  let addingLocal: Promise<Provider | undefined> | undefined;
+  /** Pulls in flight, by provider and name, so a second click does not start a second one. */
+  const pulls = new Set<string>();
+
+  const sameUrl = (a: string, b: string): boolean =>
+    a.replace(/\/+$/, "").toLowerCase() === b.replace(/\/+$/, "").toLowerCase();
+
+  async function toStatus(probe: LocalRuntimeProbe): Promise<LocalRuntimeStatus> {
+    const rows = await repository.providers.list(scope);
+    const provider =
+      rows.find(
+        (row) =>
+          row.type === "ollama" &&
+          row.baseUrl !== undefined &&
+          sameUrl(row.baseUrl, probe.baseUrl),
+      ) ?? rows.find((row) => row.type === "ollama");
+    return {
+      installed: probe.installed,
+      running: probe.running,
+      startedByAce: probe.startedByAce,
+      baseUrl: probe.baseUrl,
+      ...(probe.binaryPath === undefined ? {} : { binaryPath: probe.binaryPath }),
+      ...(probe.version === undefined ? {} : { version: probe.version }),
+      ...(provider === undefined ? {} : { providerId: provider.id }),
+      ...(probe.error === undefined ? {} : { error: maskSecrets(probe.error) }),
+    };
+  }
+
+  /** Add the `ollama` provider for a running runtime, unless one exists. Never a duplicate. */
+  function addLocalIfMissing(probe: LocalRuntimeProbe): Promise<Provider | undefined> {
+    addingLocal ??= (async () => {
+      if (!probe.running) return undefined;
+      const existing = (await repository.providers.list(scope)).find(
+        (row) => row.type === "ollama",
+      );
+      if (existing !== undefined) return existing;
+      const created = await service.create(
+        CreateProviderRequestSchema.parse({
+          type: "ollama",
+          name: "Ollama",
+          baseUrl: probe.baseUrl,
+        }),
+      );
+      logger.info(
+        { subsystem: "providers", providerId: created.id },
+        "added the local Ollama found on this machine",
+      );
+      // CONNECTED, and its models listed (check fills an empty catalogue).
+      try {
+        await service.check(created.id);
+      } catch (error) {
+        logger.warn(
+          { subsystem: "providers", providerId: created.id, err: error },
+          "the new Ollama provider could not be checked",
+        );
+      }
+      return created;
+    })().finally(() => {
+      addingLocal = undefined;
+    });
+    return addingLocal;
+  }
+
+  /** The Ollama provider row, refused (400) for any other type or with no runtime wired. */
+  async function loadOllama(
+    id: Id,
+  ): Promise<{ provider: Provider; control: LocalModelControl; url: string }> {
+    const provider = await load(id);
+    if (provider.type !== "ollama") {
+      throw new LocalModelRefusedError(
+        `Models on this machine are managed for Ollama providers only; "${provider.name}" is ${provider.type}.`,
+      );
+    }
+    if (local === undefined) {
+      throw new LocalModelRefusedError("This engine cannot manage local models.");
+    }
+    const url = provider.baseUrl ?? (await local.status()).baseUrl;
+    return { provider, control: local, url };
+  }
+
+  /** Start the runtime when this provider is the local one and it is not answering. */
+  async function ensureFor(provider: Provider, control: LocalModelControl): Promise<boolean> {
+    const before = await control.status();
+    const url = provider.baseUrl ?? before.baseUrl;
+    if (before.running || !sameUrl(url, before.baseUrl)) return false;
+    const after = await control.ensureRunning();
+    if (!after.running) {
+      throw new ProviderActionError(
+        after.installed
+          ? maskSecrets(after.error ?? "Ollama could not be started.")
+          : "Ollama is not installed on this computer.",
+      );
+    }
+    return true;
+  }
+
+  function actionError(error: unknown, id: Id): ProviderActionError {
+    if (error instanceof ProviderActionError) return error;
+    return new ProviderActionError(
+      maskSecrets(classifyError(error, { providerId: id }).message),
+    );
+  }
 
   /** `keySet` is never trusted from the row; it is what the keychain says right now. */
   async function withKeySet(provider: Provider): Promise<Provider> {
@@ -171,7 +326,7 @@ export function createProviderService(
     });
   }
 
-  const service: ProviderService = {
+  const service: Required<ProviderService> = {
     async create(input) {
       const timestamp = now();
       const id = nextId();
@@ -438,6 +593,7 @@ export function createProviderService(
           ...(model.resolvedModelId === undefined
             ? {}
             : { resolvedModelId: model.resolvedModelId }),
+          ...(model.sizeBytes === undefined ? {} : { sizeBytes: model.sizeBytes }),
           ...(available || model.unavailableReason === undefined
             ? {}
             : { unavailableReason: model.unavailableReason }),
@@ -456,7 +612,31 @@ export function createProviderService(
 
     listModels: (query) => repository.models.list(scope, query),
 
-    detect: () => factory.detect(),
+    async detect() {
+      const found = await factory.detect();
+      // PG-1.4 (D359): an Ollama that answers is added; one installed but stopped is started, in
+      // the background — detection must never hold the UI up.
+      if (autoLocal && local !== undefined) {
+        if (found.ollama?.detected === true) {
+          try {
+            await addLocalIfMissing(await local.status());
+          } catch (error) {
+            logger.warn(
+              { subsystem: "providers", err: error },
+              "could not add the local Ollama",
+            );
+          }
+        } else {
+          void service.ensureLocalRuntime().catch((error: unknown) => {
+            logger.warn(
+              { subsystem: "providers", err: error },
+              "could not start the local Ollama",
+            );
+          });
+        }
+      }
+      return found;
+    },
 
     detectClis: async () => (await factory.detectClis?.()) ?? { items: [] },
 
@@ -480,7 +660,233 @@ export function createProviderService(
       });
       return gate;
     },
+
+    async localRuntime() {
+      if (local === undefined) {
+        return {
+          installed: false,
+          running: false,
+          startedByAce: false,
+          baseUrl: DEFAULT_OLLAMA_BASE_URL,
+        };
+      }
+      return toStatus(await local.status());
+    },
+
+    async ensureLocalRuntime() {
+      if (local === undefined) return service.localRuntime();
+      const probe = await local.ensureRunning();
+      if (probe.running) {
+        const existing = (await repository.providers.list(scope)).find(
+          (row) => row.type === "ollama",
+        );
+        if (existing === undefined) {
+          await addLocalIfMissing(probe);
+        } else {
+          // A catalogue stored by an older engine lacks sizes and capabilities (D-100): ask again.
+          try {
+            await service.check(existing.id);
+            await service.refreshModels(existing.id);
+          } catch (error) {
+            logger.warn(
+              { subsystem: "providers", providerId: existing.id, err: error },
+              "the local Ollama could not list its models",
+            );
+          }
+        }
+      }
+      return toStatus(probe);
+    },
+
+    async stopLocalRuntime() {
+      await local?.stopOwned();
+    },
+
+    async runningLocalModels(id) {
+      const { control, url } = await loadOllama(id);
+      try {
+        const items = await control.running(url);
+        return items.map((item) => ({
+          modelId: item.modelId,
+          ...(item.sizeBytes === undefined ? {} : { sizeBytes: item.sizeBytes }),
+          ...(item.sizeVramBytes === undefined
+            ? {}
+            : { sizeVramBytes: item.sizeVramBytes }),
+          ...(item.expiresAt === undefined ? {} : { expiresAt: item.expiresAt }),
+        }));
+      } catch (error) {
+        // A server that is not running has nothing loaded: an empty list, not a failure.
+        if (!(await control.status()).running) return [];
+        throw actionError(error, id);
+      }
+    },
+
+    async loadLocalModel(id, modelId) {
+      const { provider, control, url } = await loadOllama(id);
+      const startedRuntime = await ensureFor(provider, control);
+      try {
+        await control.load(url, modelId);
+      } catch (error) {
+        throw actionError(error, id);
+      }
+      logger.info(
+        { subsystem: "providers", providerId: id, modelId },
+        "loaded a local model",
+      );
+      return { modelId, loaded: true, ...(startedRuntime ? { startedRuntime } : {}) };
+    },
+
+    async unloadLocalModel(id, modelId) {
+      const { control, url } = await loadOllama(id);
+      try {
+        await control.unload(url, modelId);
+      } catch (error) {
+        // Nothing to unload from a server that is not running.
+        if (!(await control.status()).running) return { modelId, loaded: false };
+        throw actionError(error, id);
+      }
+      return { modelId, loaded: false };
+    },
+
+    async pullLocalModel(id, name) {
+      const { provider, control, url } = await loadOllama(id);
+      await ensureFor(provider, control);
+      const key = `${id} ${name}`;
+      if (pulls.has(key)) return { providerId: id, name, accepted: true };
+      pulls.add(key);
+
+      const emit = (progress: {
+        status: string;
+        completed?: number;
+        total?: number;
+        done: boolean;
+        error?: string;
+      }): void => {
+        bus
+          .emitTransient({
+            type: "model.pull",
+            payload: { providerId: id, name, ...progress },
+          })
+          .catch(() => undefined);
+      };
+      emit({ status: "starting", done: false });
+
+      // Ollama sends a line per chunk; a frame every ~250 ms is plenty for a progress bar.
+      let lastSent = 0;
+      void control
+        .pull(url, name, (progress) => {
+          const at = Date.now();
+          if (at - lastSent < 250) return;
+          lastSent = at;
+          emit({
+            status: progress.status,
+            ...(progress.completed === undefined ? {} : { completed: progress.completed }),
+            ...(progress.total === undefined ? {} : { total: progress.total }),
+            done: false,
+          });
+        })
+        .then(async () => {
+          try {
+            await service.refreshModels(id);
+          } catch (error) {
+            logger.warn(
+              { subsystem: "providers", providerId: id, err: error },
+              "pulled a model but could not refresh the catalogue",
+            );
+          }
+          logger.info(
+            { subsystem: "providers", providerId: id, name },
+            "pulled a local model",
+          );
+          emit({ status: "success", done: true });
+        })
+        .catch((error: unknown) => {
+          const message = maskSecrets(
+            error instanceof Error ? error.message : String(error),
+          );
+          logger.warn(
+            { subsystem: "providers", providerId: id, name, reason: message },
+            "a model pull failed",
+          );
+          emit({ status: "failed", done: true, error: message });
+        })
+        .finally(() => pulls.delete(key));
+
+      return { providerId: id, name, accepted: true };
+    },
+
+    async tryModel(id, modelId, prompt) {
+      const provider = await load(id);
+      if (provider.type === "ollama" && local !== undefined) {
+        await ensureFor(provider, local);
+      }
+      const adapter = await service.adapterFor(id);
+      const gate = await service.semaphoreFor(id);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), TRY_MODEL_TIMEOUT_MS);
+      const startedAt = Date.now();
+      const sent = maskSecrets(prompt);
+      let text = "";
+      let usage:
+        | { tokensIn: number; tokensOut: number; costUsd?: number }
+        | undefined;
+      try {
+        await gate.run(async () => {
+          for await (const chunk of adapter.generate(
+            {
+              modelId,
+              prompt: sent,
+              outputTypes: ["text"],
+              maxTokens: TRY_MODEL_MAX_TOKENS,
+            },
+            controller.signal,
+          )) {
+            if (chunk.type === "text") text += chunk.delta;
+            else if (chunk.type === "json") text += JSON.stringify(chunk.value);
+            else if (chunk.type === "usage") {
+              usage = {
+                tokensIn: chunk.tokensIn,
+                tokensOut: chunk.tokensOut,
+                ...(chunk.costUsd === undefined ? {} : { costUsd: chunk.costUsd }),
+              };
+            }
+          }
+        });
+      } catch (error) {
+        if (controller.signal.aborted) {
+          throw new ProviderActionError(
+            `The model did not answer within ${TRY_MODEL_TIMEOUT_MS / 1000} s.`,
+          );
+        }
+        throw actionError(error, id);
+      } finally {
+        clearTimeout(timer);
+      }
+
+      // No usage reported: estimated as the executor does, about 4 characters a token.
+      const tokensIn = usage?.tokensIn ?? Math.ceil(sent.length / 4);
+      const tokensOut = usage?.tokensOut ?? Math.ceil(text.length / 4);
+      let costUsd = usage?.costUsd;
+      if (costUsd === undefined) {
+        const model = (
+          await repository.models.list(scope, { providerId: id })
+        ).find((row) => row.modelId === modelId);
+        const pricing = model?.pricing;
+        if (pricing !== undefined && pricing.priceTableVersion !== "unpriced") {
+          costUsd =
+            (tokensIn * pricing.inputPer1k + tokensOut * pricing.outputPer1k) / 1000;
+        }
+      }
+      return {
+        text: maskSecrets(text),
+        tokensIn,
+        tokensOut,
+        ms: Date.now() - startedAt,
+        ...(costUsd === undefined ? {} : { costUsd }),
+      };
+    },
   };
+
 
   /**
    * Write the price table each model quoted, once per version (FR-OBS-003). The store ignores a

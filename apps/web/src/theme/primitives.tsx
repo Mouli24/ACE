@@ -1,4 +1,4 @@
-import { cn } from '@ace/ui';
+import { Icons, cn } from '@ace/ui';
 import type { CSSProperties, ReactNode } from 'react';
 
 import type { ProviderTheme } from './constants';
@@ -21,7 +21,7 @@ export function LogoMark({ size = 13 }: { size?: 13 | 14 }) {
 }
 
 /**
- * The ☀ / ☾ pill. `workspace` is the canvas file's (20px circles, gap 3), `home` the Home file's
+ * The sun / moon pill (SVG icons since PG-1.2, D360: the ☀ ☾ glyphs depended on the font). `workspace` is the canvas file's (20px circles, gap 3), `home` the Home file's
  * (22px circles, gap 4). The active circle is orange with white ink.
  */
 export function ThemeToggle({ variant = 'workspace' }: { variant?: 'workspace' | 'home' }) {
@@ -50,7 +50,7 @@ export function ThemeToggle({ variant = 'workspace' }: { variant?: 'workspace' |
           dark ? 'bg-transparent text-[var(--muted)]' : 'bg-[#ef6b3f] text-[#fff]',
         )}
       >
-        ☀
+        <Icons.Sun aria-hidden size={home ? 12 : 11} strokeWidth={2.2} />
       </span>
       <span
         aria-hidden
@@ -61,7 +61,7 @@ export function ThemeToggle({ variant = 'workspace' }: { variant?: 'workspace' |
           dark ? 'bg-[#ef6b3f] text-[#fff]' : 'bg-transparent text-[var(--muted)]',
         )}
       >
-        ☾
+        <Icons.Moon aria-hidden size={home ? 11 : 10} strokeWidth={2.2} />
       </span>
     </button>
   );
