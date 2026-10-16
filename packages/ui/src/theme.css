@@ -340,14 +340,15 @@
  * shown dimmed (its reason is in the tooltip). The dot above the edge layer is `.ace-port-dot`.
  */
 .react-flow__handle.ace-port {
-  width: 22px;
-  height: 22px;
+  /* D371: always there to grab — a faint dot at rest, full on hover, selection or a drag. */
+  width: 28px;
+  height: 28px;
   min-width: 0;
   min-height: 0;
   border: 0;
   border-radius: 50%;
   background: transparent;
-  opacity: 0;
+  opacity: 0.6;
   cursor: crosshair;
 }
 .react-flow__handle.ace-port::after,
@@ -356,12 +357,17 @@
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 8px;
-  height: 8px;
+  width: 12px;
+  height: 12px;
   transform: translate(-50%, -50%);
   border-radius: 50%;
   background: var(--port-color, #ef6b3f);
+  box-shadow: 0 0 0 2px var(--surface, #fff);
   pointer-events: none;
+}
+.react-flow__handle.ace-port:hover::after {
+  width: 16px;
+  height: 16px;
 }
 .react-flow__node:hover .react-flow__handle.ace-port,
 .react-flow__node.selected .react-flow__handle.ace-port,
