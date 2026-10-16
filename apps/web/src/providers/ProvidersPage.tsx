@@ -22,6 +22,7 @@ import { useState, type ReactNode } from 'react';
 import { clockTime } from '../theme/format';
 import { ModelsTab } from './ModelsTab';
 import { AddProviderDialog, DeleteProviderDialog, EditProviderDialog } from './ProviderDialogs';
+import { LocalRuntimeNote } from './LocalModels';
 import { LocalModelsList, PullModelHint } from './ProviderModelPicker';
 import { ProviderMark } from './ProviderMark';
 import { groupProviders } from './provider-groups';
@@ -162,6 +163,7 @@ function ProviderSectionView({
             No local runtime added yet. Models from Ollama or LM Studio run on your machine, for
             free.
           </p>
+          <LocalRuntimeNote className="mt-2" />
           <PullModelHint className="mt-1" />
         </div>
       )}
