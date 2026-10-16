@@ -179,6 +179,57 @@ export interface ProviderDetection {
   ollama?: { baseUrl: string; detected: boolean };
 }
 
+/** PG-1.4 (D359): what the engine found about the local Ollama runtime. */
+export interface LocalRuntimeProbe {
+  installed: boolean;
+  running: boolean;
+  /** True only for a server this engine started — one the person started is never stopped. */
+  startedByAce: boolean;
+  baseUrl: string;
+  binaryPath?: string;
+  version?: string;
+  /** Why starting it failed. */
+  error?: string;
+}
+
+/** One model Ollama holds in memory now (`/api/ps`). */
+export interface LocalRunningModelInfo {
+  modelId: string;
+  sizeBytes?: number;
+  sizeVramBytes?: number;
+  expiresAt?: string;
+}
+
+/** One progress line of a pull (`/api/pull`'s NDJSON stream). */
+export interface LocalPullProgress {
+  status: string;
+  completed?: number;
+  total?: number;
+}
+
+/**
+ * PG-1.4 (D359): the local Ollama runtime, found, started and driven without a terminal. Only
+ * `apps/server` binds it (to `@ace/providers`); the engine never spawns anything itself.
+ */
+export interface LocalModelControl {
+  /** Installed? Answering? Never starts anything. */
+  status(): Promise<LocalRuntimeProbe>;
+  /** Start `ollama serve` when it is installed and not answering, then wait until it answers. */
+  ensureRunning(): Promise<LocalRuntimeProbe>;
+  /** Stop the server this engine started, if it did. Never one the person started. */
+  stopOwned(): Promise<void>;
+  running(baseUrl: string): Promise<LocalRunningModelInfo[]>;
+  load(baseUrl: string, modelId: string): Promise<void>;
+  unload(baseUrl: string, modelId: string): Promise<void>;
+  /** Resolves when the pull finished; rejects with Ollama's reason when it failed. */
+  pull(
+    baseUrl: string,
+    name: string,
+    onProgress: (progress: LocalPullProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<void>;
+}
+
 /**
  * Builds an adapter for a stored provider row, and answers the two catalog questions the engine
  * cannot answer itself: what the manifest says, and what is running locally.
@@ -197,4 +248,6 @@ export interface ProviderAdapterFactory {
   detect(): Promise<ProviderDetection>;
   /** X1 (FR-PRV-008): which coding-agent CLIs are installed and signed in. */
   detectClis?(): Promise<CliDetectResponse>;
+  /** PG-1.4 (D359): the local Ollama runtime — absent where nothing local may be started. */
+  local?: LocalModelControl;
 }
