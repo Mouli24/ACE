@@ -66,6 +66,8 @@ import {
   PALETTE_NODE_KINDS,
   applyNewNodeInit,
   createNode,
+  NEW_NODE_NAME,
+  uniqueNodeName,
   type CanvasNodeKind,
   type NewNodeInit,
 } from '../nodes/factory';
@@ -1317,18 +1319,30 @@ function CanvasInner({
         });
         return undefined;
       }
+      // Unnamed, an Agent/Model is "New agent", "New agent 2"…: never a name already on the board.
+      const fallback = NEW_NODE_NAME[kind];
+      const named =
+        fallback === undefined || (init?.name ?? '').trim() !== ''
+          ? init
+          : {
+              ...init,
+              name: uniqueNodeName(
+                fallback,
+                nodes.map((each) => each.name),
+              ),
+            };
       const node = applyNewNodeInit(
         createNode(kind, workflowId, {
           x: Math.round(position.x),
           y: Math.round(position.y),
         }),
-        init,
+        named,
       );
       editor.edit([{ op: 'add_node', node }], 'Add node');
       selectWhenAdded([node.id]);
       return node;
     },
-    [editor, workflowId, selectWhenAdded, readOnly],
+    [editor, workflowId, selectWhenAdded, readOnly, nodes],
   );
 
   const addNodeAtCenter = useCallback(

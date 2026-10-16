@@ -1,4 +1,6 @@
-import type { GraphOp, Model, Node } from '@ace/contracts';
+import type { GraphOp, Model, Node, NodePatch } from '@ace/contracts';
+
+import { uniqueNodeName } from '../nodes/factory';
 
 /**
  * PG-1.3 (D351): "Templates ask once for one provider for every node." The wizard's first step is
@@ -8,6 +10,9 @@ import type { GraphOp, Model, Node } from '@ace/contracts';
  * Each node takes the first available model of that provider that covers its data types, else the
  * first available one; with none, the model is left empty, so pre-flight names it `missing_model`
  * rather than the run starting on a model the provider does not have.
+ *
+ * The same batch gives an Agent/Model whose name an earlier node of the template already has a
+ * numbered one ("Writer 2"): no two of the new workflow's nodes share a name.
  */
 export function templateProviderOps(
   nodes: readonly Node[],
@@ -15,16 +20,25 @@ export function templateProviderOps(
   models: readonly Model[],
 ): GraphOp[] {
   const offered = models.filter((model) => model.providerId === providerId && model.available);
+  const taken: string[] = [];
   return nodes.flatMap((node): GraphOp[] => {
-    if (node.kind !== 'agent' && node.kind !== 'model') return [];
-    if (node.config.providerId === providerId) return [];
-    const fits = offered.find(
-      (model) =>
-        node.config.inputTypes.every((type) => model.inputTypes.includes(type)) &&
-        node.config.outputTypes.every((type) => model.outputTypes.includes(type)),
-    );
-    const modelId = (fits ?? offered[0])?.modelId ?? '';
-    const config = { ...node.config, providerId, modelId } as Node['config'];
-    return [{ op: 'update_node', nodeId: node.id, patch: { config } }];
+    const before = taken.slice();
+    if (node.kind !== 'agent' && node.kind !== 'model') {
+      taken.push(node.name);
+      return [];
+    }
+    const name = uniqueNodeName(node.name, before);
+    taken.push(name);
+    const patch: NodePatch = name === node.name ? {} : { name };
+    if (node.config.providerId !== providerId) {
+      const fits = offered.find(
+        (model) =>
+          node.config.inputTypes.every((type) => model.inputTypes.includes(type)) &&
+          node.config.outputTypes.every((type) => model.outputTypes.includes(type)),
+      );
+      const modelId = (fits ?? offered[0])?.modelId ?? '';
+      patch.config = { ...node.config, providerId, modelId } as NodePatch['config'];
+    }
+    return Object.keys(patch).length === 0 ? [] : [{ op: 'update_node', nodeId: node.id, patch }];
   });
 }

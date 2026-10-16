@@ -1,6 +1,7 @@
 import { derivePorts, type Edge, type Node } from '@ace/contracts';
 
 import { newId } from '../../lib/ulid';
+import { copyNodeName } from '../../nodes/factory';
 import { DUPLICATE_OFFSET } from '../duplicate';
 import { freeSlotNear } from '../placement';
 
@@ -92,6 +93,7 @@ export function pasteNodes(
 ): { nodes: Node[]; edges: Edge[] } {
   const placed: Array<{ position: Node['position'] }> = [...existing];
   const idMap = new Map<string, string>();
+  const names = existing.map((node) => node.name);
   const nodes = payload.nodes.map((node) => {
     const id = newId();
     idMap.set(node.id, id);
@@ -99,7 +101,13 @@ export function pasteNodes(
       x: node.position.x + DUPLICATE_OFFSET,
       y: node.position.y + DUPLICATE_OFFSET,
     });
-    const copy = { ...structuredClone(node), id, workflowId, position } as Node;
+    // The copied name where it is free (another workflow), else "<name> copy", numbered.
+    const taken = names.some(
+      (each) => each.trim().toLowerCase() === node.name.trim().toLowerCase(),
+    );
+    const name = taken ? copyNodeName(node.name, names) : node.name;
+    names.push(name);
+    const copy = { ...structuredClone(node), id, workflowId, name, position } as Node;
     const withPorts = { ...copy, ...derivePorts(copy) } as Node;
     placed.push(withPorts);
     return withPorts;

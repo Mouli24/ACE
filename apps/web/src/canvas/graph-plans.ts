@@ -1,7 +1,13 @@
 import type { Edge, GraphOp, Node, Position } from '@ace/contracts';
 
 import { newId } from '../lib/ulid';
-import { applyNewNodeInit, createNode, type NewNodeInit } from '../nodes/factory';
+import {
+  applyNewNodeInit,
+  createNode,
+  NEW_NODE_NAME,
+  type NewNodeInit,
+  uniqueNodeName,
+} from '../nodes/factory';
 import { agentsOf } from '../theme/agents';
 import { checkConnection } from './connect';
 
@@ -60,7 +66,7 @@ export function removeReconnectingOps(
 
 /** Where the theme's first stage stands when there is none yet. */
 export const FIRST_STAGE_AT: Position = { x: 440, y: 150 };
-export const NEW_STAGE_NAME = 'New agent';
+export const NEW_STAGE_NAME = NEW_NODE_NAME.agent ?? 'New agent';
 
 export interface NewStagePlan {
   node: Node;
@@ -93,7 +99,11 @@ export function planNewStage({
     : FIRST_STAGE_AT;
 
   const init: NewNodeInit = {
-    name: NEW_STAGE_NAME,
+    // "New agent", then "New agent 2", "New agent 3"…: never a name the workflow already has
+    name: uniqueNodeName(
+      NEW_STAGE_NAME,
+      nodes.map((each) => each.name),
+    ),
     providerId: choice.providerId,
     modelId: choice.modelId,
   };
