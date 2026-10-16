@@ -32,6 +32,7 @@ import {
   UsageSchema,
 } from './runs.js';
 import { KbDocumentStatusSchema } from './knowledge.js';
+import { ModelPullPayloadSchema } from './local-models.js';
 import { MemoryOpSchema } from './memory.js';
 import { McpServerStatusSchema, ToolCallSchema } from './tools.js';
 import { DayTotalsSchema } from './usage.js';
@@ -400,6 +401,8 @@ export const ENGINE_EVENT_FRAME_SCHEMAS = [
   persistedFrame('mcp.status', McpStatusPayloadSchema),
   persistedFrame('kb.ingest', KbIngestPayloadSchema),
   persistedFrame('memory.updated', MemoryUpdatedPayloadSchema),
+  /* PG-1.4 (D359): a model pull's progress — worth watching, not replaying. */
+  transientFrame('model.pull', ModelPullPayloadSchema),
 ] as const;
 
 /**
@@ -477,6 +480,7 @@ export const ENGINE_EVENT_TYPES = [
   'mcp.status',
   'kb.ingest',
   'memory.updated',
+  'model.pull',
 ] as const;
 export type EngineEventType = (typeof ENGINE_EVENT_TYPES)[number];
 
@@ -496,6 +500,7 @@ export const TRANSIENT_EVENT_TYPES = [
   'process.output',
   'process.exited',
   'checkpoint.updated',
+  'model.pull',
 ] as const;
 export type TransientEventType = (typeof TRANSIENT_EVENT_TYPES)[number];
 
@@ -503,7 +508,7 @@ export type PersistedRunEventType = Exclude<RunEventType, TransientEventType>;
 export type PersistedThreadEventType = Exclude<ThreadEventType, TransientEventType>;
 
 const isTransient = (
-  type: RunEventType | ThreadEventType | ProjectEventType,
+  type: RunEventType | ThreadEventType | ProjectEventType | EngineEventType,
 ): type is TransientEventType => (TRANSIENT_EVENT_TYPES as readonly string[]).includes(type);
 
 export const PERSISTED_RUN_EVENT_TYPES = RUN_EVENT_TYPES.filter(

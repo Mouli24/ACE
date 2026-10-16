@@ -20,6 +20,7 @@ export * from './ws.js';
 /* Round 2 */
 export * from './providers.js';
 export * from './models.js';
+export * from './local-models.js';
 export * from './runs.js';
 export * from './envelope.js';
 export * from './events.js';
