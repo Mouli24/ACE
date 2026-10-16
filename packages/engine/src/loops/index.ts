@@ -304,7 +304,11 @@ export function planNextIteration(
     body,
     clearEdgeIds: edges
       .filter(
-        (edge) => edge.kind === 'data' && body.has(edge.from.nodeId) && body.has(edge.to.nodeId),
+        // D373: an order edge inside the body is a precondition again in the next iteration too.
+        (edge) =>
+          (edge.kind === 'data' || edge.kind === 'order') &&
+          body.has(edge.from.nodeId) &&
+          body.has(edge.to.nodeId),
       )
       .map((edge) => edge.id),
     mergeNodeIds: nodes.filter((node) => node.kind === 'merge' && body.has(node.id)).map((n) => n.id),
