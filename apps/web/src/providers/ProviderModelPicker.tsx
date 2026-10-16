@@ -12,12 +12,26 @@ import {
   SelectItem,
   cn,
 } from '@ace/ui';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useInRouterContext } from 'react-router-dom';
 
+import { api } from '../app/api';
 import { LOCAL_COST_TEXT } from '../runs/CostValue';
+import {
+  LocalModelActions,
+  LocalRuntimeNote,
+  PullModelForm,
+  TryModelBox,
+  useRunningLocalModels,
+} from './LocalModels';
 import { ProviderMark } from './ProviderMark';
-import { useCreateProvider, useModels, useProviderDetect, useProviders } from './hooks';
+import {
+  useCreateProvider,
+  useModels,
+  useProviderDetect,
+  useProviders,
+  useRefreshModels,
+} from './hooks';
 import { modelCapabilityBlock } from './model-capability';
 import { groupProviders, localModelFacts, pullCommand } from './provider-groups';
 import { PROVIDER_STATE_LABEL } from './provider-meta';
@@ -103,27 +117,52 @@ export function PullModelHint({ className }: { className?: string }) {
 export function LocalModelsList({ provider }: { provider: Provider }) {
   const models = useModels({ providerId: provider.id });
   const items = models.data?.items ?? [];
+  const ollama = provider.type === 'ollama';
+  const running = useRunningLocalModels(provider.id, ollama);
+  const loaded = new Set((running.data ?? []).map((item) => item.modelId));
   if (models.isPending) {
     return <p className="text-[12px] text-[var(--muted)]">Looking for models…</p>;
   }
-  if (items.length === 0) return <PullModelHint />;
   return (
-    <ul className="flex flex-col gap-[4px]" data-testid={`local-models-${provider.id}`}>
-      {items.map((model) => (
-        <li
-          key={model.id}
-          className="flex flex-wrap items-baseline gap-x-3 gap-y-[2px] text-[12px]"
-          data-testid={`local-model-${model.modelId}`}
-        >
-          <span className="font-machine text-[12px] text-[var(--ink)]">{model.modelId}</span>
-          <span className="font-machine text-[10.5px] text-[var(--muted)]">
-            {localModelFacts(model)}
-          </span>
-          <span className="text-[11px] text-[#2f7d52]">{LOCAL_COST_TEXT}</span>
-        </li>
-      ))}
-    </ul>
+    <div className="flex flex-col gap-[8px]">
+      {items.length === 0 ? (
+        <PullModelHint />
+      ) : (
+        <ul className="flex flex-col gap-[6px]" data-testid={`local-models-${provider.id}`}>
+          {items.map((model) => (
+            <li
+              key={model.id}
+              className="flex items-center gap-3 text-[12px]"
+              data-testid={`local-model-${model.modelId}`}
+            >
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate font-machine text-[12px] text-[var(--ink)]">
+                  {modelName(model)}
+                </span>
+                <span className="font-machine text-[10.5px] text-[var(--muted)]">
+                  {localModelFacts(model)} ·{' '}
+                  <span className="text-[#2f7d52]">{LOCAL_COST_TEXT}</span>
+                </span>
+              </span>
+              {ollama && (
+                <LocalModelActions
+                  provider={provider}
+                  model={model}
+                  loaded={loaded.has(model.modelId)}
+                />
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {ollama && <PullModelForm provider={provider} />}
+    </div>
   );
+}
+
+/** A model row's name: its display name, else its id (PG-1.4). */
+function modelName(model: Pick<Model, 'displayName' | 'modelId'>): string {
+  return model.displayName.trim() === '' ? model.modelId : model.displayName;
 }
 
 /* ----------------------------------------------------------------- the two-step picker */
@@ -183,17 +222,27 @@ function ModelOption({
       title={model.available ? blocked?.reason : model.unavailableReason}
       data-testid={`picker-model-${model.modelId}`}
       data-blocked={blocked?.short}
-      className={OPTION}
+      className={cn(OPTION, 'min-w-0 flex-1')}
       onClick={onSelect}
     >
-      <span className="min-w-0 flex-1 truncate">
-        {model.displayName}
-        {blocked !== undefined && (
-          <span className="text-[11px] text-[var(--muted)]"> — {blocked.short}</span>
-        )}
-      </span>
-      <span className="shrink-0 font-machine text-[10px] text-[var(--muted)]">
-        {local ? `${localModelFacts(model)} · ${LOCAL_COST_TEXT}` : model.modelId}
+      {/*
+       * PG-1.4: the name has its own line above the facts. On one line, the facts (which never
+       * shrink) took the whole width of the narrow column and squeezed the name to nothing.
+       */}
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate" data-testid={`picker-model-name-${model.modelId}`}>
+          {modelName(model)}
+          {blocked !== undefined && (
+            <span className="text-[11px] font-normal text-[var(--muted)]"> — {blocked.short}</span>
+          )}
+        </span>
+        <span className="truncate font-machine text-[10px] font-normal text-[var(--muted)]">
+          {local
+            ? `${localModelFacts(model)} · ${LOCAL_COST_TEXT}`
+            : model.modelId === modelName(model)
+              ? (model.description ?? model.modelId)
+              : model.modelId}
+        </span>
       </span>
     </button>
   );
@@ -220,6 +269,21 @@ export function ProviderModelPicker({
   const models = useModels(chosen === undefined ? {} : { providerId: chosen.id });
   const modelList = chosen === undefined ? [] : (models.data?.items ?? []);
   const local = chosen !== undefined && providerGroup(chosen) === 'local';
+  const ollama = chosen?.type === 'ollama';
+  const running = useRunningLocalModels(chosen?.id ?? '', ollama);
+  const loaded = new Set((running.data ?? []).map((item) => item.modelId));
+  const hasOllama = providers.some((provider) => provider.type === 'ollama');
+
+  // PG-1.4: a local provider's catalogue is read fresh once per open — what is on the machine
+  // changes outside ACE (a model pulled in a terminal), and an old catalogue lacked sizes (D-100).
+  const refresh = useRefreshModels();
+  const refreshed = useRef(new Set<string>());
+  const refreshModels = refresh.mutate;
+  useEffect(() => {
+    if (chosen === undefined || !local || refreshed.current.has(chosen.id)) return;
+    refreshed.current.add(chosen.id);
+    refreshModels(chosen.id);
+  }, [chosen, local, refreshModels]);
 
   return (
     <div className="grid gap-4 sm:grid-cols-2">
@@ -242,7 +306,10 @@ export function ProviderModelPicker({
               <div aria-hidden className={GROUP_HEADING}>
                 {section.label}
               </div>
-              {section.providers.length === 0 && <NoneAdded />}
+              {section.group === 'local' && !hasOllama && (
+                <LocalRuntimeNote className="px-[10px] pb-[4px]" />
+              )}
+              {section.providers.length === 0 && section.group !== 'local' && <NoneAdded />}
               {section.providers.map((provider) => (
                 <ProviderOption
                   key={provider.id}
@@ -257,19 +324,49 @@ export function ProviderModelPicker({
       </div>
 
       <div className="flex min-w-0 flex-col gap-[6px]">
-        <span id="picker-model-label" className="text-[12px] font-semibold">
-          2. Model
+        <span className="flex items-center gap-[6px]">
+          <span id="picker-model-label" className="text-[12px] font-semibold">
+            2. Model
+          </span>
+          {chosen !== undefined && (
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="h-[22px] w-[22px]"
+              aria-label="Refresh models"
+              title="Refresh this provider’s models"
+              disabled={refresh.isPending}
+              data-testid="picker-refresh-models"
+              onClick={() => refresh.mutate(chosen.id)}
+            >
+              <Icons.RefreshCw
+                aria-hidden
+                size={12}
+                className={refresh.isPending ? 'animate-spin' : undefined}
+              />
+            </Button>
+          )}
         </span>
+        {refresh.data?.warning !== undefined && (
+          <p className="text-[11px] text-[#c94c27]">{refresh.data.warning}</p>
+        )}
         {chosen === undefined ? (
           <p className="text-[12px] text-[var(--muted)]">Choose a provider first.</p>
         ) : models.isPending ? (
           <p className="text-[12px] text-[var(--muted)]">Loading models…</p>
         ) : modelList.length === 0 ? (
           local ? (
-            <PullModelHint />
+            ollama ? (
+              <p className="text-[12px] text-[var(--muted)]">
+                No models on this computer yet — pull one below.
+              </p>
+            ) : (
+              <PullModelHint />
+            )
           ) : (
             <p className="text-[12px] text-[var(--muted)]">
-              This provider lists no models yet — refresh them on the Providers screen.
+              This provider lists no models yet — press Refresh above.
             </p>
           )
         ) : (
@@ -278,18 +375,40 @@ export function ProviderModelPicker({
             aria-labelledby="picker-model-label"
             className="flex max-h-[300px] flex-col gap-[2px] overflow-y-auto"
           >
-            {modelList.map((model) => (
-              <ModelOption
-                key={model.id}
-                model={model}
-                local={local}
-                selected={model.modelId === value.modelId}
-                blocked={modelCapabilityBlock(model, needs, chosen)}
-                onSelect={() => onChange({ providerId: chosen.id, modelId: model.modelId })}
-              />
-            ))}
+            {modelList.map((model) => {
+              const option = (
+                <ModelOption
+                  key={model.id}
+                  model={model}
+                  local={local}
+                  selected={model.modelId === value.modelId}
+                  blocked={modelCapabilityBlock(model, needs, chosen)}
+                  onSelect={() => onChange({ providerId: chosen.id, modelId: model.modelId })}
+                />
+              );
+              // Load/Unload sit beside the option, never inside it: a button in a button is invalid.
+              return ollama ? (
+                <div key={model.id} className="flex min-w-0 items-center gap-[4px]">
+                  {option}
+                  <LocalModelActions
+                    provider={chosen}
+                    model={model}
+                    loaded={loaded.has(model.modelId)}
+                  />
+                </div>
+              ) : (
+                option
+              );
+            })}
           </div>
         )}
+        {chosen !== undefined && ollama && <PullModelForm provider={chosen} />}
+        {chosen !== undefined &&
+          value.modelId !== undefined &&
+          value.modelId !== '' &&
+          value.providerId === chosen.id && (
+            <TryModelBox provider={chosen} modelId={value.modelId} local={local} />
+          )}
       </div>
     </div>
   );
@@ -445,9 +564,18 @@ export function ProviderPickerDialog({
           </Button>
           <Button
             disabled={!ready}
-            onClick={() =>
-              ready && onConfirm({ providerId: value.providerId!, modelId: value.modelId! })
-            }
+            onClick={() => {
+              if (!ready) return;
+              // PG-1.4: a local model is started and loaded while the node is made, so its first
+              // run does not wait on Ollama starting or the model loading. Best effort.
+              const provider = list.find((row) => row.id === value.providerId);
+              if (provider?.type === 'ollama') {
+                void api()
+                  .loadLocalModel(provider.id, value.modelId!)
+                  .catch(() => undefined);
+              }
+              onConfirm({ providerId: value.providerId!, modelId: value.modelId! });
+            }}
           >
             {confirmLabel}
           </Button>

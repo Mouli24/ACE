@@ -90,6 +90,9 @@ export const BENCH_MIGRATION_ID = '20261016T120000_bench';
  */
 export const RUN_REPLAY_OF_MIGRATION_ID = '20261016T120000_run_replay_of';
 
+/** D359 (PG-1.4): a model's size on disk, as a local provider reports it. */
+export const MODEL_SIZE_MIGRATION_ID = '20261016T130000_model_size_bytes';
+
 /**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
@@ -784,6 +787,14 @@ export const MIGRATIONS: readonly Migration[] = [
       -- PG-5.4: a replay is a new run answered from an earlier run's recorded node outputs, with
       -- zero provider calls. The column names that earlier run; NULL on every other run.
       ALTER TABLE runs ADD COLUMN replay_of TEXT;
+    `,
+  },
+  {
+    id: MODEL_SIZE_MIGRATION_ID,
+    up: `
+      -- D359 (PG-1.4): Model.sizeBytes, filled from Ollama's tags. NULL where the provider says
+      -- nothing (every cloud model, and every row stored before this column).
+      ALTER TABLE models ADD COLUMN size_bytes INTEGER;
     `,
   },
 ];

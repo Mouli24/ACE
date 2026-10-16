@@ -186,6 +186,8 @@ export const models = sqliteTable(
     description: text('description'),
     resolvedModelId: text('resolved_model_id'),
     unavailableReason: text('unavailable_reason'),
+    /** D359: size on disk as a local provider reports it; null where it says nothing. */
+    sizeBytes: integer('size_bytes'),
   },
   (table) => [index('models_provider_idx').on(table.workspaceId, table.providerId, table.modelId)],
 );

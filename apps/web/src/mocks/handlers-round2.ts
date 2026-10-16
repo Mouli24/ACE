@@ -52,6 +52,29 @@ function error(status: number, kind: ErrorKind, code: string, message: string, d
 const notFound = (what: string) => error(404, 'workflow', 'not_found', `${what} not found.`);
 const unauthorized = () => error(401, 'auth', 'unauthorized', 'Missing or invalid session token.');
 
+/* PG-1.4 (D359): the mock engine's local runtime — installed and running, nothing loaded. */
+const mockLoaded = new Set<string>();
+
+function mockLocalRuntime(db: MockDb) {
+  const ollama = db.listProviders().find((provider) => provider.type === 'ollama');
+  return {
+    installed: true,
+    running: true,
+    startedByAce: false,
+    baseUrl: DETECTED_OLLAMA.baseUrl,
+    version: '0.mock',
+    ...(ollama === undefined ? {} : { providerId: ollama.id }),
+  };
+}
+
+function refuseNonOllama(db: MockDb, id: string) {
+  const provider = db.getProvider(id);
+  if (!provider) return notFound('Provider');
+  return provider.type === 'ollama'
+    ? undefined
+    : error(400, 'invalid_config', 'validation_failed', 'Ollama providers only.');
+}
+
 function hasToken(request: Request): boolean {
   return /^Bearer\s+\S+$/.test(request.headers.get('authorization') ?? '');
 }
@@ -469,6 +492,60 @@ export function createRound2Handlers(db: MockDb): HttpHandler[] {
       guard((ctx) => {
         const result = db.refreshModels(param(ctx, 'id'));
         return result ? HttpResponse.json(result) : notFound('Provider');
+      }),
+    ),
+
+    /* ------------------------------------- models on this machine (PG-1.4, D359) */
+    http.get(
+      `${API}/local-runtime`,
+      guard(() => HttpResponse.json(mockLocalRuntime(db))),
+    ),
+    http.post(
+      `${API}/local-runtime/start`,
+      guard(() => HttpResponse.json(mockLocalRuntime(db))),
+    ),
+    http.get(
+      `${API}/providers/:id/local/running`,
+      guard((ctx) => {
+        const refused = refuseNonOllama(db, param(ctx, 'id'));
+        if (refused) return refused;
+        return HttpResponse.json({
+          items: [...mockLoaded].map((modelId) => ({ modelId })),
+        });
+      }),
+    ),
+    http.post(
+      `${API}/providers/:id/local/:action`,
+      guard(async (ctx) => {
+        const refused = refuseNonOllama(db, param(ctx, 'id'));
+        if (refused) return refused;
+        const action = param(ctx, 'action');
+        const body = (await ctx.request.json()) as { modelId?: string; name?: string };
+        if (action === 'pull') {
+          return HttpResponse.json(
+            { providerId: param(ctx, 'id'), name: body.name ?? '', accepted: true },
+            { status: 202 },
+          );
+        }
+        const modelId = body.modelId ?? '';
+        if (action === 'load') mockLoaded.add(modelId);
+        else mockLoaded.delete(modelId);
+        return HttpResponse.json({ modelId, loaded: action === 'load' });
+      }),
+    ),
+    http.post(
+      `${API}/providers/:id/try`,
+      guard(async (ctx) => {
+        if (!db.getProvider(param(ctx, 'id'))) return notFound('Provider');
+        const body = (await ctx.request.json()) as { prompt?: string };
+        const prompt = body.prompt ?? '';
+        const text = `Mock answer to: ${prompt}`;
+        return HttpResponse.json({
+          text,
+          tokensIn: Math.ceil(prompt.length / 4),
+          tokensOut: Math.ceil(text.length / 4),
+          ms: 5,
+        });
       }),
     ),
 

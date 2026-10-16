@@ -68,7 +68,16 @@ export async function runEngine(io: CliIo = {}): Promise<{
       process.on(signal, handler);
     });
 
-  const engine = await startEngine({ dataDir: resolveDataDir(env), env });
+  const engine = await startEngine({
+    dataDir: resolveDataDir(env),
+    env,
+    // PG-1.4 (D359): the product finds and starts the local Ollama; ACE_LOCAL_RUNTIME=off opts
+    // out, and an engine a test suite starts (Vitest sets VITEST) never starts anything.
+    autoLocalRuntime:
+      env['ACE_LOCAL_RUNTIME'] !== 'off' &&
+      env['VITEST'] === undefined &&
+      process.env['VITEST'] === undefined,
+  });
   const shutdown = createShutdownHandler(engine, exit);
 
   onSignal('SIGINT', () => shutdown('SIGINT'));

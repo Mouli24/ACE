@@ -276,6 +276,11 @@ export interface StartEngineOptions {
    * point it at a scripted CLI, so `pnpm test` never starts a real one.
    */
   cliResolve?: (bin: string) => ResolvedCommand | undefined;
+  /**
+   * PG-1.4 (D359): find, start and add the local Ollama without being asked — at start and on
+   * `GET /providers/detect`. Only `ace-engine` turns it on; a test engine never starts anything.
+   */
+  autoLocalRuntime?: boolean;
 }
 
 export interface RunningEngine {
@@ -473,6 +478,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     factory,
     bus,
     logger: logger.child({ subsystem: 'providers' }),
+    autoLocalRuntime: options.autoLocalRuntime === true,
   });
 
   /*
@@ -1088,6 +1094,16 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   /* FR-PRV-004: re-check every provider on a timer, so the UI's chips stay honest. */
   const stopPeriodicChecks = providers.startPeriodicChecks();
 
+  /*
+   * PG-1.4 (D359): the local Ollama is started (hidden) when it is installed and stopped, and its
+   * provider added with its models — in the background, so a slow start never delays the engine.
+   */
+  if (options.autoLocalRuntime === true) {
+    void providers.ensureLocalRuntime().catch((error: unknown) => {
+      logger.warn({ subsystem: 'providers', err: error }, 'could not start the local Ollama');
+    });
+  }
+
   /* Arch §15.4: sweep what expired while the engine was off, then keep sweeping on a timer. */
   await sweepArtifacts();
   const sweepTimer = setInterval(
@@ -1335,6 +1351,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
       // database closes; none outlives the engine, even if an earlier step above rejected.
       workspace.stopAll();
       await processes.stopAll();
+      // PG-1.4 (D359): an Ollama this engine started stops with it; one the person started stays.
+      await providers.stopLocalRuntime().catch(() => undefined);
       await Promise.all([...agentSessions.keys()].map((runId) => endAgentSession(runId)));
     }
     hub.closeAll();

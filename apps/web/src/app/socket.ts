@@ -33,7 +33,15 @@ export function startSocket(options: StartSocketOptions): AceSocket {
     else void options.queryClient.invalidateQueries({ queryKey: queryKeys.workflow(workflowId) });
   });
   // FR-PRV-004: provider status is engine-scope and patches the cache, so no screen reloads.
-  socket.on('provider.status', (payload) => patchProviderStatus(options.queryClient, payload));
+  socket.on('provider.status', (payload) => {
+    patchProviderStatus(options.queryClient, payload);
+    // PG-1.4 (D359): a provider the engine added itself (the local Ollama) is not cached yet.
+    const cached = options.queryClient.getQueryData<{ id: string }[]>(queryKeys.providers());
+    if (cached !== undefined && !cached.some((provider) => provider.id === payload.providerId)) {
+      void options.queryClient.invalidateQueries({ queryKey: queryKeys.providers() });
+      void options.queryClient.invalidateQueries({ queryKey: queryKeys.modelsRoot() });
+    }
+  });
   socket.subscribe({ scope: 'engine' });
   socket.connect();
   return socket;

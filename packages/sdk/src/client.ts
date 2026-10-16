@@ -231,6 +231,22 @@ import {
   type UpdateBenchExperimentRequest,
   type UpdateBenchTaskRequest,
 } from '@ace/contracts';
+import {
+  LocalModelActionResponseSchema,
+  LocalModelRequestSchema,
+  LocalRunningModelsResponseSchema,
+  LocalRuntimeStatusSchema,
+  PullModelAcceptedSchema,
+  PullModelRequestSchema,
+  TryModelRequestSchema,
+  TryModelResponseSchema,
+  type LocalModelActionResponse,
+  type LocalRunningModelsResponse,
+  type LocalRuntimeStatus,
+  type PullModelAccepted,
+  type TryModelRequest,
+  type TryModelResponse,
+} from '@ace/contracts';
 import { z } from 'zod';
 
 import { openChatStream, type ChatStream, type StreamChatOptions } from './domain.js';
@@ -494,6 +510,38 @@ export function createAceClient(options: AceClientOptions) {
     /** X1 (FR-PRV-008): which coding-agent CLIs the engine's machine has, and their sign-in. */
     detectClis: (): Promise<CliDetectResponse> =>
       request('GET', '/providers/detect/clis', CliDetectResponseSchema),
+
+    /* Models on this machine (PG-1.4, D359) */
+    /** Is Ollama installed and answering, and did the engine start it? Never starts anything. */
+    localRuntime: (): Promise<LocalRuntimeStatus> =>
+      request('GET', '/local-runtime', LocalRuntimeStatusSchema),
+    /** Start Ollama when installed and stopped, and add its provider when there is none. */
+    startLocalRuntime: (): Promise<LocalRuntimeStatus> =>
+      request('POST', '/local-runtime/start', LocalRuntimeStatusSchema),
+    localRunningModels: (id: Id): Promise<LocalRunningModelsResponse> =>
+      request('GET', `/providers/${id}/local/running`, LocalRunningModelsResponseSchema),
+    loadLocalModel: (id: Id, modelId: string): Promise<LocalModelActionResponse> =>
+      request('POST', `/providers/${id}/local/load`, LocalModelActionResponseSchema, {
+        schema: LocalModelRequestSchema,
+        value: { modelId },
+      }),
+    unloadLocalModel: (id: Id, modelId: string): Promise<LocalModelActionResponse> =>
+      request('POST', `/providers/${id}/local/unload`, LocalModelActionResponseSchema, {
+        schema: LocalModelRequestSchema,
+        value: { modelId },
+      }),
+    /** Answered at once (202); progress arrives as `model.pull` on the engine subscription. */
+    pullLocalModel: (id: Id, name: string): Promise<PullModelAccepted> =>
+      request('POST', `/providers/${id}/local/pull`, PullModelAcceptedSchema, {
+        schema: PullModelRequestSchema,
+        value: { name },
+      }),
+    /** One call, no tools — a cloud provider charges for it. */
+    tryModel: (id: Id, body: TryModelRequest): Promise<TryModelResponse> =>
+      request('POST', `/providers/${id}/try`, TryModelResponseSchema, {
+        schema: TryModelRequestSchema,
+        value: body,
+      }),
 
     /* Models */
     listModels: (query: ModelQuery = {}): Promise<ModelListResponse> =>
