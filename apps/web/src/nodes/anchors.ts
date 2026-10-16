@@ -16,9 +16,13 @@ export const STAGE_H = 280;
 export const DOC_W = 200;
 export const DOC_H = 170;
 
-/** The theme's anchors: stage in `(77, 118)`, out `(133, 118)`; document in `(0, 44)`, out `(200, 44)`. */
-const STAGE_IN = { x: 77, y: 118 } as const;
-const STAGE_OUT = { x: 133, y: 118 } as const;
+/**
+ * Anchors. A stage card's ports sit on its left and right edges at mid-height (D371: the theme put
+ * them on the small icon circle, `(77, 118)` / `(133, 118)`, where nobody found them); a document
+ * card's in `(0, 44)`, out `(200, 44)`.
+ */
+const STAGE_IN = { x: 0, y: STAGE_H / 2 } as const;
+const STAGE_OUT = { x: STAGE_W, y: STAGE_H / 2 } as const;
 const DOC_IN = { x: 0, y: 44 } as const;
 const DOC_OUT = { x: DOC_W, y: 44 } as const;
 
