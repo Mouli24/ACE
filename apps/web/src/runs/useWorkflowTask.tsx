@@ -3,7 +3,7 @@ import { useRef, useState, type ReactNode } from 'react';
 
 import { useWorkflowGraph } from '../workflows/hooks';
 import { EstimateSummary, overBudget, useWorkflowEstimate } from './estimate';
-import { inputNodesNeedingText, useStartRun } from './hooks';
+import { useStartRun } from './hooks';
 import { useRunStore } from './run-store';
 import { useSelectedRun } from './selected-run';
 import { InputDialog } from './useStartRunFlow';
@@ -52,7 +52,9 @@ export function useWorkflowTask(workflowId: string): {
       ...(goal === '' ? [] : [{ type: 'text' as const, text: goal }]),
       ...extra,
     ];
-    const missing = inputNodesNeedingText((graph.data?.nodes ?? []) as Node[]);
+    // The task is what the workflow works on: every Input node gets it, replacing any text the
+    // node was saved with (a template's example, an earlier task).
+    const missing = ((graph.data?.nodes ?? []) as Node[]).filter((node) => node.kind === 'input');
     const inputs =
       value.length === 0 ? {} : Object.fromEntries(missing.map((node) => [node.id, value]));
     const run = await startRun.mutateAsync({
