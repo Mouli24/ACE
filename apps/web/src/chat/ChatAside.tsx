@@ -20,6 +20,7 @@ import { DomainRunView } from '../domain/DomainPage';
 import { RunConversationTab } from '../domain/RunConversationTab';
 import { useWorkflowMode, workflowPath } from '../forge/mode';
 import { useSocketStatus } from '../runs/hooks';
+import { useSelectedRun } from '../runs/selected-run';
 import { useWorkflowTask } from '../runs/useWorkflowTask';
 import { agentMap, agentsOf, type AgentLook } from '../theme/agents';
 import { Avatar, Dot } from '../theme/primitives';
@@ -172,6 +173,13 @@ export function ChatAside({
   const send = (content: Part[], targetNodeId: string | undefined) => {
     if (target === undefined || content.length === 0) return;
     void sendToNode(queryClient, target.id, content, targetNodeId);
+  };
+
+  /** A run turn's "See the whole run →": that run selected (`?run=`), on the Run tab. */
+  const selectedRun = useSelectedRun(workflowId);
+  const openRun = (runId: string) => {
+    selectedRun.select(runId);
+    setView('run');
   };
 
   const sendToForge =
@@ -386,6 +394,7 @@ export function ChatAside({
             onSendToForge={sendToForge}
             speakers={looks}
             projectId={projectId}
+            onOpenRun={openRun}
           />
         )}
         {composer}
@@ -400,11 +409,13 @@ function TargetChat({
   onSendToForge,
   speakers,
   projectId,
+  onOpenRun,
 }: {
   node: Node;
   onSendToForge?: () => void;
   speakers: ReadonlyMap<string, AgentLook>;
   projectId: string | undefined;
+  onOpenRun: (runId: string) => void;
 }) {
   const convo = useThreadConversation(node.id);
   const count = convo.messages.length;
@@ -425,6 +436,7 @@ function TargetChat({
         convo={convo}
         onSendToForge={onSendToForge}
         speakers={speakers}
+        onOpenRun={onOpenRun}
         {...(projectId === undefined ? {} : { projectId })}
       />
     </>
