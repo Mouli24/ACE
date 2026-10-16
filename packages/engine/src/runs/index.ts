@@ -584,6 +584,14 @@ export function createRunService(deps: RunServiceDeps): RunService {
    */
   function isReady(node: Node, edges: readonly Edge[], delivered: ReadonlySet<Id>): boolean {
     /*
+     * D373: an order edge ("run after") into this node holds it until its source has COMPLETED —
+     * every one of them, whatever the node's kind. It carries nothing, so it is released rather
+     * than delivered (`releaseOrder`), and it never counts against a port.
+     */
+    const waitsOn = edges.filter((edge) => edge.kind === 'order' && edge.to.nodeId === node.id);
+    if (waitsOn.some((edge) => !delivered.has(edge.id))) return false;
+
+    /*
      * A merge is the one node whose readiness is not a property of its ports (FR-PAR-002): both of
      * its input ports are `multi`, so the generic rule below *is* the `any` behaviour and `all`
      * would be unreachable. `isMergeReady` reads the mode instead.
@@ -1239,6 +1247,22 @@ export function createRunService(deps: RunServiceDeps): RunService {
             ...(teamEnvelopeId === undefined ? {} : { envelopeId: teamEnvelopeId }),
           },
         });
+      }
+    }
+
+    /**
+     * D373: a node that COMPLETED lets the nodes that run after it go. An order edge carries no data
+     * — no envelope, no `edge.transfer` — so it is only marked, the way a delivered data edge is
+     * counted by `isReady`. Inside a loop body, a link that leaves the body waits for the loop to
+     * stop, like the body's outward deliveries (FR-PAR-006): pass `body` to hold those back, or
+     * `only` to release exactly the links named.
+     */
+    function releaseOrder(nodeId: Id, body?: ReadonlySet<Id>, only?: readonly Edge[]): void {
+      const links =
+        only ?? edges.filter((edge) => edge.kind === 'order' && edge.from.nodeId === nodeId);
+      for (const edge of links) {
+        if (body !== undefined && !body.has(edge.to.nodeId)) continue;
+        deliveredEdges.add(edge.id);
       }
     }
 
@@ -2012,6 +2036,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
           );
           if (fresh) rearmSuccessors(node);
         }
+        // D373: whatever runs after this node may go now (a side turn is not the node's own work).
+        if (!side) releaseOrder(node.id, body);
 
         /* Every loop this node is the source of decides now (FR-PAR-003..006, FR-GRD-009). */
         const heldBack = routing !== undefined && routing.handoff === 'none';
@@ -2068,6 +2094,18 @@ export function createRunService(deps: RunServiceDeps): RunService {
             if (from === undefined) continue;
             await deliver(from, held.parts, iterations.get(held.nodeId) ?? iteration, held.edges);
           }
+          // D373: and the "run after" links leaving the body, held back the same way.
+          const stoppedBody = loops.body(loopEdge.id);
+          releaseOrder(
+            node.id,
+            undefined,
+            edges.filter(
+              (edge) =>
+                edge.kind === 'order' &&
+                stoppedBody.has(edge.from.nodeId) &&
+                !stoppedBody.has(edge.to.nodeId),
+            ),
+          );
         }
       }
 
@@ -2681,6 +2719,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
         // Its output crossed its edges in the drive that recorded it: the readiness bookkeeping is
         // rebuilt, the events are not — the transfer is already on the log, and emitting it again
         // would invent a second history for one delivery (BR-04).
+        // D373: its "run after" links were released then too; they carry nothing to rebuild.
+        releaseOrder(nodeId);
         const outgoing = edges.filter(
           (edge) => edge.kind === 'data' && edge.from.nodeId === nodeId,
         );
@@ -2716,11 +2756,13 @@ export function createRunService(deps: RunServiceDeps): RunService {
      * FR-EXE-011: COMPLETE only when every Output node finished and nothing is still going. A
      * workflow with no Output node (goal-driven nodes, D285) finishes on the nodes nothing is
      * downstream of — every one of them has to have COMPLETED. Loop edges point backwards (D73), so
-     * only data edges make a node "upstream".
+     * only data and order edges (D373) make a node "upstream".
      */
     const outputNodes = nodes.filter((node) => node.kind === 'output');
     const feeds = new Set(
-      edges.filter((edge) => edge.kind === 'data').map((edge) => edge.from.nodeId),
+      edges
+        .filter((edge) => edge.kind === 'data' || edge.kind === 'order')
+        .map((edge) => edge.from.nodeId),
     );
     const finishLine =
       outputNodes.length > 0 ? outputNodes : nodes.filter((node) => !feeds.has(node.id));

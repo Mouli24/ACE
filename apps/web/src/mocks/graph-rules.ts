@@ -2,6 +2,7 @@ import {
   derivePorts,
   isConnectionAllowed,
   validateLoopConfig,
+  validateOrderEdge,
   nodeConfigPatchSchema,
   portId,
   type Edge,
@@ -118,6 +119,13 @@ export function applyOpsWithRules(
          */
         if (edge.kind === 'loop') {
           const check = validateLoopConfig(edge, { nodes: nextNodes, edges: nextEdges });
+          if (!check.ok) return fail([issue(check.code, check.reason, { edgeId: edge.id })]);
+          nextEdges.push(edge);
+          break;
+        }
+        // D373: a "run after" link carries no data — its own rules, no port typing.
+        if (edge.kind === 'order') {
+          const check = validateOrderEdge(edge, { nodes: nextNodes, edges: nextEdges });
           if (!check.ok) return fail([issue(check.code, check.reason, { edgeId: edge.id })]);
           nextEdges.push(edge);
           break;

@@ -1,4 +1,12 @@
-import type { DataType, Edge, Node, Port, Provider, ProviderType } from '@ace/contracts';
+import {
+  runPlan,
+  type DataType,
+  type Edge,
+  type Node,
+  type Port,
+  type Provider,
+  type ProviderType,
+} from '@ace/contracts';
 
 import { LOOP_EDGE_TYPE, type AceLoopFlowEdge } from '../edges/loop/LoopEdge';
 import type { AceFlowNode } from '../nodes/NodeCard';
@@ -24,11 +32,16 @@ const providerTypes = (providers: readonly Provider[]): Map<string, ProviderType
 
 /**
  * What the cards say about their place in the graph (D332): each Agent/Model node's stage number
- * (its 1-based place in `agentsOf`), the stages every other node's data edges feed, and the data
+ * (D373: its step in the run order, `runPlan`, so the card and the Run order panel agree), the stages every other node's data edges feed, and the data
  * types arriving on an Output node.
  */
 function graphFacts(nodes: readonly Node[], edges: readonly Edge[]) {
-  const stage = new Map(agentsOf(nodes).map((agent) => [agent.nodeId, agent.index + 1]));
+  const stepOf = new Map<string, number>();
+  for (const { step, nodeIds } of runPlan(nodes, edges))
+    for (const id of nodeIds) stepOf.set(id, step);
+  const stage = new Map(
+    agentsOf(nodes).map((agent) => [agent.nodeId, stepOf.get(agent.nodeId) ?? agent.index + 1]),
+  );
   const outType = new Map<string, DataType>();
   for (const node of nodes) for (const port of node.outputs) outType.set(port.id, port.dataType);
   const feeds = new Map<string, Set<number>>();
@@ -104,6 +117,9 @@ export function toFlowNodes(
  * A `kind: 'loop'` edge becomes the dashed loop edge instead (FR-CON-007). Its `loop` config is what
  * the engine stored, and `live` — the iteration the run is on — is looked up per edge rather than
  * read from a store here, so this stays pure and testable.
+ *
+ * A `kind: 'order'` edge ("run after", D373) is not handed to React Flow at all: it has no ports
+ * for React Flow to attach it to. `OrderEdgeLayer` draws it from card to card instead.
  */
 export function toFlowEdges(
   edges: readonly Edge[],
@@ -120,7 +136,8 @@ export function toFlowEdges(
     const type = providerId === undefined ? undefined : typeById.get(providerId);
     if (type !== undefined) accentOf.set(node.id, type);
   }
-  return edges.map((edge): AceAnyFlowEdge => {
+  return edges.flatMap((edge): AceAnyFlowEdge[] => {
+    if (edge.kind === 'order') return [];
     const ends = {
       id: edge.id,
       source: edge.from.nodeId,
@@ -132,26 +149,30 @@ export function toFlowEdges(
     // one; it is drawn as the data edge it structurally is rather than crashing the Canvas.
     if (edge.kind === 'loop' && edge.loop !== undefined) {
       const { iteration, running } = live(edge);
-      return {
-        ...ends,
-        type: LOOP_EDGE_TYPE,
-        data: {
-          kind: 'loop',
-          loop: edge.loop,
-          ...(iteration === undefined ? {} : { iteration }),
-          ...(running === undefined ? {} : { running }),
+      return [
+        {
+          ...ends,
+          type: LOOP_EDGE_TYPE,
+          data: {
+            kind: 'loop',
+            loop: edge.loop,
+            ...(iteration === undefined ? {} : { iteration }),
+            ...(running === undefined ? {} : { running }),
+          },
         },
-      };
+      ];
     }
     const accent = accentOf.get(edge.from.nodeId) ?? accentOf.get(edge.to.nodeId);
-    return {
-      ...ends,
-      type: 'typed',
-      data: {
-        dataType: portType.get(edge.from.portId) ?? 'text',
-        kind: edge.kind,
-        ...(accent === undefined ? {} : { accent }),
+    return [
+      {
+        ...ends,
+        type: 'typed',
+        data: {
+          dataType: portType.get(edge.from.portId) ?? 'text',
+          kind: edge.kind,
+          ...(accent === undefined ? {} : { accent }),
+        },
       },
-    };
+    ];
   });
 }

@@ -92,7 +92,18 @@ import {
   type EdgeEnd,
   type EdgeTypeOption,
 } from './edge-edit';
-import { EdgeLayer, PortDotLayer, type EdgeEditApi, type EdgeReconnectDrag } from './EdgeLayer';
+import {
+  EdgeLayer,
+  OrderEdgeLayer,
+  PortDotLayer,
+  type EdgeEditApi,
+  type EdgeReconnectDrag,
+  type OrderEditApi,
+  type OrderLink,
+} from './EdgeLayer';
+import { RunAfterDialog } from './RunAfterDialog';
+import { RunOrderPanel } from './RunOrderPanel';
+import { addRunAfter, type RunOrderEdit } from './run-order';
 import {
   MOVE_HISTORY_LIMIT,
   movesBack,
@@ -704,6 +715,10 @@ function CanvasInner({
   const [dropChooser, setDropChooser] = useState<DropChooser>();
   /** The node whose ⋯ → "Connect to…" is open (D350). */
   const [connectFromNodeId, setConnectFromNodeId] = useState<string>();
+  /** D373: the Run order panel, the node a "Run after…" is picking for, the selected link. */
+  const [runOrderOpen, setRunOrderOpen] = useState(false);
+  const [runAfterNodeId, setRunAfterNodeId] = useState<string>();
+  const [selectedOrderId, setSelectedOrderId] = useState<string>();
 
   /**
    * D350: a line dropped anywhere on a card connects to the card's first compatible input; when
@@ -1015,6 +1030,7 @@ function CanvasInner({
 
   const onSelectionChange = useCallback(
     ({ nodes: selNodes, edges: selEdges }: OnSelectionChangeParams) => {
+      if (selNodes.length > 0 || selEdges.length > 0) setSelectedOrderId(undefined);
       setSelection(
         selNodes.map((n) => n.id),
         selEdges.map((e) => e.id),
@@ -1566,6 +1582,72 @@ function CanvasInner({
     [moveHistory, nodes],
   );
 
+  /* ------------------------------------------------- who runs when (D373) */
+
+  /** A Run order edit: its ops as one undo step, or its reason as a toast. */
+  const applyRunOrder = useCallback(
+    (outcome: RunOrderEdit) => {
+      if (readOnly) return;
+      if (!outcome.ok) {
+        toast.error('Run order not changed', { description: outcome.reason });
+        return;
+      }
+      if (outcome.ops.length > 0) editor.edit(outcome.ops, outcome.label);
+    },
+    [readOnly, editor],
+  );
+
+  /** The "run after" links as the order layer draws them; the run's lost ones faint (PG-4.4). */
+  const orderLinks = useMemo<OrderLink[]>(
+    () =>
+      drawn.edges
+        .filter((edge) => edge.kind === 'order')
+        .map((edge) => ({
+          id: edge.id,
+          fromNodeId: edge.from.nodeId,
+          toNodeId: edge.to.nodeId,
+          ...(drawn.ghostEdgeIds.has(edge.id) ? { ghost: true } : {}),
+        })),
+    [drawn],
+  );
+
+  const orderEditImpl = {
+    select: (edgeId: string) => {
+      setSelection([], []);
+      setSelectedOrderId(edgeId);
+    },
+    remove: (edgeId: string) => {
+      setSelectedOrderId((at) => (at === edgeId ? undefined : at));
+      deleteElements([], [edgeId]);
+    },
+  };
+  const orderEditRef = useRef(orderEditImpl);
+  orderEditRef.current = orderEditImpl;
+  const orderEdit = useMemo<OrderEditApi>(
+    () => ({
+      select: (edgeId) => orderEditRef.current.select(edgeId),
+      remove: (edgeId) => orderEditRef.current.remove(edgeId),
+    }),
+    [],
+  );
+
+  /** A selected link goes with Delete or Backspace, as a selected connection does (FR-CAN-009). */
+  useEffect(() => {
+    if (selectedOrderId === undefined || readOnly) return;
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSelectedOrderId(undefined);
+        return;
+      }
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+      if (isEditable(event.target)) return;
+      event.preventDefault();
+      orderEditRef.current.remove(selectedOrderId);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedOrderId, readOnly]);
+
   /** PG-1.2 (D360): the cards' Settings and More buttons. */
   const startRun = useStartRun(workflowId);
   const startRunMutate = startRun.mutate;
@@ -1581,6 +1663,9 @@ function CanvasInner({
       },
       duplicate: (nodeId) => duplicateNodesById([nodeId]),
       remove: (nodeId) => deleteElements([nodeId], []),
+      runAfter: (nodeId) => {
+        if (!readOnly) setRunAfterNodeId(nodeId);
+      },
       runFromHere: (nodeId) =>
         startRunMutate(
           { startFromNodeId: nodeId },
@@ -1872,7 +1957,10 @@ function CanvasInner({
                   onEdgeContextMenu={onEdgeContextMenu}
                   onEdgeMouseEnter={readOnly ? undefined : onEdgeMouseEnter}
                   onEdgeMouseLeave={readOnly ? undefined : onEdgeMouseLeave}
-                  onPaneClick={() => setEdgeMenu(undefined)}
+                  onPaneClick={() => {
+                    setEdgeMenu(undefined);
+                    setSelectedOrderId(undefined);
+                  }}
                   onNodeClick={onNodeClick}
                   onNodeDoubleClick={onNodeClick}
                   onMoveEnd={onMoveEnd}
@@ -1911,6 +1999,12 @@ function CanvasInner({
                     hoveredEdgeId={hoveredEdgeId}
                     reconnect={reconnect}
                   />
+                  <OrderEdgeLayer
+                    nodes={drawn.nodes}
+                    links={orderLinks}
+                    selectedIds={selectedOrderId === undefined ? [] : [selectedOrderId]}
+                    edit={readOnly || hand ? undefined : orderEdit}
+                  />
                   <PortDotLayer
                     nodes={nodes}
                     connectStates={connectStates ?? reconnectStates}
@@ -1921,6 +2015,36 @@ function CanvasInner({
                 </ReactFlow>
 
                 {inRouter && !readOnly && <CanvasBreadcrumb workflowId={workflowId} />}
+
+                <button
+                  type="button"
+                  data-testid="run-order-button"
+                  aria-label="Run order"
+                  aria-pressed={runOrderOpen}
+                  title="Who runs when"
+                  onClick={() => setRunOrderOpen((open) => !open)}
+                  className={cn(
+                    'absolute top-[12px] z-[5] flex h-[34px] cursor-pointer items-center gap-[6px] whitespace-nowrap rounded-full border bg-[var(--surface)] px-[14px] text-[12.5px] font-semibold text-[var(--ink)] shadow-[0_10px_26px_-14px_rgba(40,25,15,0.45)] outline-none hover:border-[#ef6b3f] focus-visible:border-[#ef6b3f]',
+                    readOnly ? 'right-[16px]' : 'right-[136px]',
+                    runOrderOpen ? 'border-[#ef6b3f]' : 'border-[var(--line)]',
+                  )}
+                >
+                  <Icons.ListOrdered aria-hidden size={14} />
+                  Run order
+                </button>
+                {runOrderOpen && (
+                  <RunOrderPanel
+                    workflowId={workflowId}
+                    nodes={nodes}
+                    edges={edges}
+                    readOnly={readOnly}
+                    onFocus={(nodeId) => {
+                      focusNode(nodeId);
+                    }}
+                    onEdit={applyRunOrder}
+                    onClose={() => setRunOrderOpen(false)}
+                  />
+                )}
 
                 {!readOnly && (
                   <button
@@ -2092,6 +2216,17 @@ function CanvasInner({
               </ContextMenuContent>
             )}
           </ContextMenu>
+          {runAfterNodeId !== undefined && (
+            <RunAfterDialog
+              nodes={nodes}
+              edges={edges}
+              nodeId={runAfterNodeId}
+              onPick={(afterId) =>
+                applyRunOrder(addRunAfter(workflowId, nodes, edges, runAfterNodeId, afterId))
+              }
+              onClose={() => setRunAfterNodeId(undefined)}
+            />
+          )}
           {connectFromNodeId !== undefined && (
             <ConnectToDialog
               nodes={nodes}

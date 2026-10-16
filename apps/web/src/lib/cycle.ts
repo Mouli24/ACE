@@ -2,9 +2,9 @@ import type { Edge } from '@ace/contracts';
 
 /**
  * Would a plain `data` edge from `fromNodeId` to `toNodeId` close a cycle (FR-CON-003)?
- * Depth-first search from the target along existing data edges; reaching the source means the
- * new edge would complete a loop. Loop edges do not count — they are the sanctioned way to go
- * back (D3) and are refused with `not_implemented` by the round 1 engine anyway.
+ * Depth-first search from the target along existing data and order edges (D373: a "run after"
+ * link is a dependency too); reaching the source means the new edge would complete a loop. Loop
+ * edges do not count — they are the sanctioned way to go back (D3).
  */
 export function wouldCloseCycle(
   edges: readonly Edge[],
@@ -15,7 +15,7 @@ export function wouldCloseCycle(
 
   const next = new Map<string, string[]>();
   for (const edge of edges) {
-    if (edge.kind !== 'data') continue;
+    if (edge.kind === 'loop') continue;
     const list = next.get(edge.from.nodeId) ?? [];
     list.push(edge.to.nodeId);
     next.set(edge.from.nodeId, list);

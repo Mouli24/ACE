@@ -17,7 +17,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 
-import { anchorOfPort, type Point } from '../nodes/anchors';
+import { DOC_H, DOC_W, anchorOfPort, cardSize, type Point } from '../nodes/anchors';
 import type { EdgeEnd, EdgeTypeOption } from './edge-edit';
 import type { PortConnectState } from './interactions/ports';
 import { GHOST_EDGE_CLASS } from './run-snapshot';
@@ -618,6 +618,224 @@ export const EdgeLayer = memo(function EdgeLayer({
               />,
             ];
           })}
+      </div>
+    </ViewportPortal>
+  );
+});
+
+/* -------------------------------------------------------------------------- */
+/* "Run after" links (D373)                                                    */
+/* -------------------------------------------------------------------------- */
+
+/** One order edge as the layer draws it: who waits on whom, and whether the run lost it. */
+export interface OrderLink {
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+  /** PG-4.4: a link the live run still walks but the graph lost — drawn faint, never edited. */
+  ghost?: boolean;
+}
+
+/** What the Canvas lets the layer do to a "run after" link. */
+export interface OrderEditApi {
+  select(edgeId: string): void;
+  remove(edgeId: string): void;
+}
+
+/** Where the line from a card's centre towards `toward` leaves the card's border. */
+function borderPoint(centre: Point, half: { w: number; h: number }, toward: Point): Point {
+  const dx = toward.x - centre.x;
+  const dy = toward.y - centre.y;
+  if (dx === 0 && dy === 0) return centre;
+  const t = Math.min(
+    dx === 0 ? Number.POSITIVE_INFINITY : half.w / Math.abs(dx),
+    dy === 0 ? Number.POSITIVE_INFINITY : half.h / Math.abs(dy),
+  );
+  return { x: centre.x + dx * t, y: centre.y + dy * t };
+}
+
+const ORDER_ARROW_ID = 'ace-order-arrow';
+
+/**
+ * D373: the "run after" links — not data connections, so no ports and no type: a thin grey
+ * dashed line with an arrowhead from one card's border to the other's, labelled "after". A click on
+ * the line or its label selects it; hovered, selected or focused, the label offers ✕ to remove it,
+ * and Delete or Backspace on the label removes it too.
+ */
+export const OrderEdgeLayer = memo(function OrderEdgeLayer({
+  nodes,
+  links,
+  selectedIds,
+  edit,
+}: {
+  nodes: readonly Node[];
+  links: readonly OrderLink[];
+  selectedIds: readonly string[];
+  /** Absent (read-only, or the hand tool): drawn, never edited. */
+  edit?: OrderEditApi | undefined;
+}) {
+  const live = useStore(selectNodes);
+  const [hovered, setHovered] = useState<string>();
+  const [focused, setFocused] = useState<string>();
+  if (links.length === 0) return null;
+
+  const kinds = new Map(nodes.map((node) => [node.id, node]));
+  const boxes = new Map(
+    live.map((node) => {
+      const contract = kinds.get(node.id);
+      const size =
+        contract === undefined ? { w: DOC_W, h: DOC_H } : cardSize(contract.kind, node.measured);
+      return [node.id, { x: node.position.x, y: node.position.y, ...size }];
+    }),
+  );
+  const names = new Map(nodes.map((node) => [node.id, node.name || 'Untitled']));
+  const selected = new Set(selectedIds);
+
+  const drawn = links.flatMap((link) => {
+    const a = boxes.get(link.fromNodeId);
+    const b = boxes.get(link.toNodeId);
+    if (a === undefined || b === undefined) return [];
+    const ca = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
+    const cb = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+    const start = borderPoint(ca, { w: a.w / 2, h: a.h / 2 }, cb);
+    const end = borderPoint(cb, { w: b.w / 2, h: b.h / 2 }, ca);
+    const label = `${names.get(link.toNodeId)} runs after ${names.get(link.fromNodeId)}`;
+    return [{ link, start, end, label, mx: (start.x + end.x) / 2, my: (start.y + end.y) / 2 }];
+  });
+
+  return (
+    <ViewportPortal>
+      <div
+        data-testid="canvas-order-edges"
+        className="pointer-events-none absolute left-0 top-0 z-[2000]"
+      >
+        <svg
+          className="pointer-events-none absolute left-0 top-0 h-px w-px overflow-visible"
+          aria-hidden
+        >
+          <defs>
+            <marker
+              id={ORDER_ARROW_ID}
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="7"
+              markerHeight="7"
+              orient="auto-start-reverse"
+            >
+              <path d="M 0 0 L 10 5 L 0 10 z" style={{ fill: 'var(--muted)' }} />
+            </marker>
+          </defs>
+          {drawn.map(({ link, start, end }) => {
+            const on = selected.has(link.id);
+            const d = `M ${start.x} ${start.y} L ${end.x} ${end.y}`;
+            return (
+              <g
+                key={link.id}
+                data-testid={`order-edge-${link.id}`}
+                data-selected={on ? 'true' : 'false'}
+                opacity={link.ghost === true ? 0.35 : undefined}
+              >
+                {edit !== undefined && link.ghost !== true && (
+                  <path
+                    d={d}
+                    className="nopan nodrag"
+                    style={{
+                      fill: 'none',
+                      stroke: 'transparent',
+                      strokeWidth: 12,
+                      pointerEvents: 'stroke',
+                      cursor: 'pointer',
+                    }}
+                    onMouseEnter={() => setHovered(link.id)}
+                    onMouseLeave={() => setHovered((at) => (at === link.id ? undefined : at))}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      edit.select(link.id);
+                    }}
+                  />
+                )}
+                <path
+                  d={d}
+                  markerEnd={`url(#${ORDER_ARROW_ID})`}
+                  style={{
+                    fill: 'none',
+                    stroke: on ? 'var(--ink)' : 'var(--muted)',
+                    strokeWidth: on ? 1.8 : 1.2,
+                    strokeDasharray: '4 4',
+                    opacity: on ? 0.9 : 0.7,
+                  }}
+                />
+              </g>
+            );
+          })}
+        </svg>
+        {drawn.map(({ link, mx, my, label }) => {
+          const on = selected.has(link.id);
+          const editable = edit !== undefined && link.ghost !== true;
+          const active = on || hovered === link.id || focused === link.id;
+          return (
+            <div
+              key={link.id}
+              data-testid={`order-edge-chip-${link.id}`}
+              className={cn(
+                'nopan nodrag nowheel absolute flex items-center gap-[3px]',
+                editable ? 'pointer-events-auto' : 'pointer-events-none',
+              )}
+              style={{ left: mx, top: my, transform: 'translate(-50%,-50%)' }}
+              onMouseEnter={() => setHovered(link.id)}
+              onMouseLeave={() => setHovered((at) => (at === link.id ? undefined : at))}
+              onFocus={() => setFocused(link.id)}
+              onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) {
+                  setFocused((at) => (at === link.id ? undefined : at));
+                }
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              {editable ? (
+                <button
+                  type="button"
+                  aria-label={`${label}. Select this link`}
+                  title={label}
+                  className={cn(
+                    'cursor-pointer rounded-[5px] border bg-[var(--chip)] px-[7px] py-[2px] text-[9.5px] font-medium text-[var(--muted)] outline-none focus-visible:border-[var(--ink)]',
+                    on ? 'border-[var(--ink)] text-[var(--ink)]' : 'border-[var(--frameLine)]',
+                  )}
+                  onClick={() => edit.select(link.id)}
+                  onKeyDown={(event: ReactKeyboardEvent) => {
+                    if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    edit.remove(link.id);
+                  }}
+                >
+                  after
+                </button>
+              ) : (
+                <span className={cn(CHIP, 'relative px-[7px] py-[2px]')} title={label}>
+                  after
+                </span>
+              )}
+              {editable && active && (
+                <button
+                  type="button"
+                  data-testid={`order-edge-remove-${link.id}`}
+                  aria-label={`Remove: ${label}`}
+                  title="Remove this run-after link"
+                  className="flex h-[18px] w-[18px] cursor-pointer items-center justify-center rounded-full border border-[var(--frameLine)] bg-[var(--chip)] text-[var(--muted)] outline-none hover:border-[#c94c27] hover:text-[#c94c27] focus-visible:border-[#c94c27] focus-visible:text-[#c94c27]"
+                  onClick={() => {
+                    setHovered(undefined);
+                    edit.remove(link.id);
+                  }}
+                >
+                  <Icons.X aria-hidden size={11} />
+                </button>
+              )}
+            </div>
+          );
+        })}
       </div>
     </ViewportPortal>
   );
