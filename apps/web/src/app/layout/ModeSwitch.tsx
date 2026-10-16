@@ -8,12 +8,11 @@ import { SHORTCUTS, shortcutLabel } from '../shortcuts';
 const MODES: ReadonlyArray<{ mode: WorkflowMode; label: string; keys: string }> = [
   { mode: 'ideate', label: 'Ideate', keys: shortcutLabel(SHORTCUTS.ideate) },
   { mode: 'forge', label: 'Forge', keys: shortcutLabel(SHORTCUTS.forge) },
-  { mode: 'domain', label: 'Domain', keys: shortcutLabel(SHORTCUTS.domain) },
 ];
 
 /**
- * The header's `Ideate | Forge | Domain` switch (D299, D303), as the theme's segmented pill
- * (D330): a radio group, and the arrow keys move along it.
+ * The header's `Ideate | Forge` switch (D299; D367 moved Domain to the chat's Expand button), as
+ * the theme's segmented pill (D330): a radio group, and the arrow keys move along it.
  */
 export function ModeSwitch({ projectId, workflowId }: { projectId: string; workflowId: string }) {
   const mode = useWorkflowMode();

@@ -9,7 +9,7 @@ import {
 } from '@ace/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { forwardRef, useEffect, useState, type ComponentPropsWithoutRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { useLayoutStore } from '../app/stores/layout';
 import { usePanelsStore } from '../app/stores/panels';
@@ -90,6 +90,7 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
   const graph = useWorkflowGraph(workflowId);
   const live = useSocketStatus() === 'open';
   const navigate = useNavigate();
+  const [search] = useSearchParams();
   const queryClient = useQueryClient();
   // PG-3.6: which channel the column shows — the node's direct chat, or the run's conversation.
   const [view, setView] = useState<'node' | 'run'>('node');
@@ -250,6 +251,22 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
           </span>
         )}
         <div className="flex-1" />
+        {projectId !== undefined && (
+          // D367: Domain is opened from here, full screen — the header switch no longer offers it.
+          <button
+            type="button"
+            title="Expand to Domain"
+            aria-label="Expand chat to Domain"
+            data-testid="chat-expand"
+            onClick={() => navigate(workflowPath(projectId, workflowId, 'domain', search))}
+            className={cn(
+              FOCUS,
+              'flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-[7px] border border-[var(--line)] bg-transparent text-[var(--ink)]',
+            )}
+          >
+            <Icons.Maximize2 aria-hidden size={13} />
+          </button>
+        )}
         <button
           type="button"
           title="Close"
