@@ -55,6 +55,20 @@ type End =
   | { port: Port; node: Node; added: true; patch: GraphOp }
   | { reason: string };
 
+/**
+ * Whether a model can produce (`out`) or take (`in`) a data type. Code and JSON are text to a
+ * model: any text model handles code, and JSON in; JSON out needs structured output
+ * (`supportsJson`), which a CLI model never has (D353). Media types need the catalogue to list them.
+ */
+function modelHandles(model: Model, direction: 'in' | 'out', type: DataType): boolean {
+  const types = direction === 'out' ? model.outputTypes : model.inputTypes;
+  if (types.includes(type)) return true;
+  if (!types.includes('text')) return false;
+  if (type === 'code') return true;
+  if (type === 'json') return direction === 'in' || model.supportsJson;
+  return false;
+}
+
 /** The source's output port of `type`, or the one it would get by adding the type to its config. */
 function sourceEnd(node: Node, type: DataType, models: readonly Model[]): End {
   const existing = node.outputs.find((port) => port.dataType === type);
@@ -65,7 +79,7 @@ function sourceEnd(node: Node, type: DataType, models: readonly Model[]): End {
     };
   }
   const model = modelOf(node, models);
-  if (model !== undefined && !model.outputTypes.includes(type)) {
+  if (model !== undefined && !modelHandles(model, 'out', type)) {
     return { reason: `${model.displayName} cannot produce ${type}.` };
   }
   const next = withType(node, 'outputTypes', type);
@@ -92,7 +106,7 @@ function targetEnd(node: Node, type: DataType, models: readonly Model[]): End {
     };
   }
   const model = modelOf(node, models);
-  if (model !== undefined && !model.inputTypes.includes(type)) {
+  if (model !== undefined && !modelHandles(model, 'in', type)) {
     return { reason: `${model.displayName} cannot take ${type} input.` };
   }
   const next = withType(node, 'inputTypes', type);
