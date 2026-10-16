@@ -1,4 +1,12 @@
-import type { DataType, Edge, Node, Port, Provider, ProviderType } from '@ace/contracts';
+import {
+  runPlan,
+  type DataType,
+  type Edge,
+  type Node,
+  type Port,
+  type Provider,
+  type ProviderType,
+} from '@ace/contracts';
 
 import { LOOP_EDGE_TYPE, type AceLoopFlowEdge } from '../edges/loop/LoopEdge';
 import type { AceFlowNode } from '../nodes/NodeCard';
@@ -24,11 +32,16 @@ const providerTypes = (providers: readonly Provider[]): Map<string, ProviderType
 
 /**
  * What the cards say about their place in the graph (D332): each Agent/Model node's stage number
- * (its 1-based place in `agentsOf`), the stages every other node's data edges feed, and the data
+ * (D373: its step in the run order, `runPlan`, so the card and the Run order panel agree), the stages every other node's data edges feed, and the data
  * types arriving on an Output node.
  */
 function graphFacts(nodes: readonly Node[], edges: readonly Edge[]) {
-  const stage = new Map(agentsOf(nodes).map((agent) => [agent.nodeId, agent.index + 1]));
+  const stepOf = new Map<string, number>();
+  for (const { step, nodeIds } of runPlan(nodes, edges))
+    for (const id of nodeIds) stepOf.set(id, step);
+  const stage = new Map(
+    agentsOf(nodes).map((agent) => [agent.nodeId, stepOf.get(agent.nodeId) ?? agent.index + 1]),
+  );
   const outType = new Map<string, DataType>();
   for (const node of nodes) for (const port of node.outputs) outType.set(port.id, port.dataType);
   const feeds = new Map<string, Set<number>>();
