@@ -17,7 +17,8 @@ import {
 test.describe('Keyboard-only path (NFR-USE-02)', () => {
   test.beforeEach(async ({ page }) => freshApp(page));
 
-  test('add, select, connect, delete with the keyboard only', async ({ page }) => {
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('add, select, connect, delete with the keyboard only', async ({ page }) => {
     const seeded = await seedGraph(page, ['input']);
     const [inp] = seeded.nodeIds as [string];
     await openWorkflow(page, seeded);

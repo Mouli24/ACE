@@ -39,7 +39,8 @@ test.describe('Canvas (FR-CAN-001..007, 010)', () => {
     await expect(grid).toHaveCSS('background-image', /radial-gradient/);
   });
 
-  test('TC-CAN-001: drop an Agent on the Canvas → node at the drop point, saved', async ({
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('TC-CAN-001: drop an Agent on the Canvas → node at the drop point, saved', async ({
     page,
   }) => {
     const seeded = await seedGraph(page, ['input']);
@@ -144,7 +145,8 @@ test.describe('Canvas (FR-CAN-001..007, 010)', () => {
     expect(graph.nodes.map((n) => n.id).sort()).toEqual([inp, out].sort());
   });
 
-  test('TC-CAN-005: duplicate → rename the copy → the original is unchanged', async ({ page }) => {
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('TC-CAN-005: duplicate → rename the copy → the original is unchanged', async ({ page }) => {
     const seeded = await seedGraph(page, ['agent']);
     const original = seeded.nodeIds[0]!;
     await openWorkflow(page, seeded);

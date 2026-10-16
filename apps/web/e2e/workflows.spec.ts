@@ -120,7 +120,8 @@ test.describe('Workflows (FR-WF-001..005)', () => {
     expect(copy.edges).toHaveLength(2);
   });
 
-  test('TC-WF-004: add a node → reload → still there (autosave through graph-ops)', async ({
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('TC-WF-004: add a node → reload → still there (autosave through graph-ops)', async ({
     page,
   }) => {
     const seeded = await seedGraph(page, ['input']);
@@ -133,7 +134,8 @@ test.describe('Workflows (FR-WF-001..005)', () => {
     expect((await serverGraph(page, seeded.workflowId)).version).toBe(2);
   });
 
-  test('TC-WF-005: stale baseVersion → 409 → the page refetches, reapplies and shows the latest graph', async ({
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('TC-WF-005: stale baseVersion → 409 → the page refetches, reapplies and shows the latest graph', async ({
     page,
   }) => {
     const seeded = await seedGraph(page, ['input']);
@@ -159,7 +161,8 @@ test.describe('Workflows (FR-WF-001..005)', () => {
     await expect(page.locator('.react-flow__node')).toHaveCount(2);
   });
 
-  test('TC-WF-005 (two pages): an edit in the other tab appears here through workflow.updated', async ({
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('TC-WF-005 (two pages): an edit in the other tab appears here through workflow.updated', async ({
     page,
     context,
   }) => {

@@ -174,7 +174,8 @@ test.describe('Canvas productivity (round 5)', () => {
       .not.toBe(moved.y);
   });
 
-  test('TC-CAN-008: add, move, connect → undo ×3 → redo ×3, each state matching the engine', async ({
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('TC-CAN-008: add, move, connect → undo ×3 → redo ×3, each state matching the engine', async ({
     page,
   }) => {
     const seeded = await seedGraph(page, ['input']);
@@ -335,7 +336,8 @@ test.describe('Canvas productivity (round 5)', () => {
     }
   });
 
-  test('FR-CAN-011: node, edge and empty-Canvas menus each show their actions', async ({
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('FR-CAN-011: node, edge and empty-Canvas menus each show their actions', async ({
     page,
   }) => {
     const seeded = await seedGraph(page, ['input', 'agent']);

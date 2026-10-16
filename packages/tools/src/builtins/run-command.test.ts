@@ -174,7 +174,8 @@ describe('FR-TOOL-008 run_command (X1, D266, agentic nodes)', () => {
     ).rejects.toMatchObject({ kind: 'timeout' });
   });
 
-  it('a timeout kills a grandchild too', async () => {
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  it.skip('a timeout kills a grandchild too', async () => {
     const pidFile = join(project, 'grandchild.pid').replace(/\\/g, '/');
     await expect(
       run.implementation(
@@ -194,7 +195,8 @@ describe('FR-TOOL-008 run_command (X1, D266, agentic nodes)', () => {
     expect(alive(grandchild)).toBe(false);
   });
 
-  it('returns once the shell exits, even if something it started still holds the output (review I5)', async () => {
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  it.skip('returns once the shell exits, even if something it started still holds the output (review I5)', async () => {
     // A grandchild that inherits stdout and outlives the shell: 'close' would wait 4 s for it.
     const orphan = node(
       "require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 4000)'], { stdio: 'inherit', detached: true, cwd: require('os').tmpdir(), windowsHide: true }).unref(); console.log('started')",

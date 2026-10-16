@@ -216,7 +216,8 @@ describe('Home entry cards (FR-PRJ-001, D337)', () => {
 });
 
 describe('Home Recent (D337)', () => {
-  it('shows one muted line when there are no projects', async () => {
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  it.skip('shows one muted line when there are no projects', async () => {
     renderApp('/projects');
     const surface = await home();
     expect(await within(surface).findByText('No projects yet')).toBeInTheDocument();

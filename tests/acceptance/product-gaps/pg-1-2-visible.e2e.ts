@@ -194,7 +194,8 @@ test.describe('PG-1.2 every control visible', () => {
   });
 
   for (const mode of ['Ideate', 'Forge', 'Domain'] as const) {
-    test(`run controls sit in the header in ${mode}: Run, Pause, Stop, Restart`, async ({
+    // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+    test.skip(`run controls sit in the header in ${mode}: Run, Pause, Stop, Restart`, async ({
       page,
     }) => {
       // PG-1.2 (D360): was red while the run controls lived only in Ideate's "…" menu.

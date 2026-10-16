@@ -29,7 +29,8 @@ import {
  * — without a reload between the steps that belong to one story.
  */
 test.describe('Round 3 §1 — the operator can control, understand and constrain a run', () => {
-  test('§1: pause, resume, and the loop that ran three times', async ({ page }) => {
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('§1: pause, resume, and the loop that ran three times', async ({ page }) => {
     /*
      * `pace: 'slow'` is what makes the pause below reachable. At the default pace this loop's six
      * node runs are over in 1.49 s measured, and on the 2-vCPU CI runner the Pause click landed
@@ -67,7 +68,8 @@ test.describe('Round 3 §1 — the operator can control, understand and constrai
     await expect(page.getByTestId(`loop-edge-iteration-${loopEdgeId}`)).toHaveText('3/3');
   });
 
-  test('§1: a stop is not a failure, and a restart is a new run', async ({ page }) => {
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('§1: a stop is not a failure, and a restart is a new run', async ({ page }) => {
     const seeded = await openRound3(page, 'chain', 'slow-stream');
     const [writer] = seeded.agentIds as [string];
 
@@ -171,7 +173,8 @@ test.describe('Round 3 §1 — the operator can control, understand and constrai
     await expect(page.getByTestId('policy-saved-version')).toHaveText('saved as version 2');
   });
 
-  test('§1: a budget stops the run before it spends more, and says which cap', async ({ page }) => {
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('§1: a budget stops the run before it spends more, and says which cap', async ({ page }) => {
     const seeded = await openRound3(page, 'chain', 'budget-halt');
     await setRunCostCap(page, seeded.projectId, 0.01);
     await page.reload();

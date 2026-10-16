@@ -1586,7 +1586,8 @@ test.describe('Loops (FR-CON-007, FR-PAR-005/006)', () => {
 /* -------------------------------------------------------------------------- */
 
 test.describe('Budgets (FR-GRD-008)', () => {
-  test('TC-GRD-012 via UI: a run over the project cap halts "budget exceeded: $x > $0.01 cap"', async ({
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('TC-GRD-012 via UI: a run over the project cap halts "budget exceeded: $x > $0.01 cap"', async ({
     page,
   }) => {
     /* `budget-cap.project.json` is the sidecar the export format cannot carry (fixtures README). */

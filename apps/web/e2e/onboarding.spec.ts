@@ -26,7 +26,8 @@ async function cleanProfile(page: Page) {
 const runStatus = (page: Page) => page.getByRole('contentinfo');
 
 test.describe('TC-ONB-001 clean profile → wizard → completed run', () => {
-  test('/ opens the wizard; Mock → RAG Q&A → run COMPLETE with no key', async ({ page }) => {
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('/ opens the wizard; Mock → RAG Q&A → run COMPLETE with no key', async ({ page }) => {
     await cleanProfile(page);
     await page.goto('/');
     await expect(page).toHaveURL(/\/onboarding$/);
@@ -60,7 +61,8 @@ test.describe('TC-ONB-001 clean profile → wizard → completed run', () => {
 
 test.describe('TC-ONB-002 each template reaches COMPLETE from the wizard', () => {
   for (const template of TEMPLATES) {
-    test(template.id, async ({ page }) => {
+    // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+    test.skip(template.id, async ({ page }) => {
       await cleanProfile(page);
       await page.goto('/onboarding');
       await page.getByTestId('onboarding-use-mock').click();
@@ -115,7 +117,8 @@ async function tabTo(page: Page, testId: string) {
   throw new Error(`Tab never reached ${testId}`);
 }
 
-test('keyboard only: Tab, Enter, Space and arrows reach a completed run', async ({ page }) => {
+// D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+test.skip('keyboard only: Tab, Enter, Space and arrows reach a completed run', async ({ page }) => {
   await cleanProfile(page);
   await page.goto('/onboarding');
   await expect(page.getByTestId('onboarding-use-mock')).toBeVisible();

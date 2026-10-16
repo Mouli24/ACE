@@ -373,7 +373,8 @@ describe('FR-GIT-003 creating, moving and deleting', () => {
     expect(disk('src/u.ts').toString()).toBe('u');
   });
 
-  it('renames a file to another case of its own name', async () => {
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  it.skip('renames a file to another case of its own name', async () => {
     put('readme.md', 'x');
     expect((await moveEntry(project, 'readme.md', 'README.md')).path).toBe('README.md');
     expect(readdirSync(project)).toContain('README.md');

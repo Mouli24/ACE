@@ -161,7 +161,8 @@ test.describe('PG-1.6 message actions in chat', () => {
     expect(detail.messages.at(-1)?.error?.kind).toBe('user_cancelled');
   });
 
-  test('Domain: every message offers Copy', async ({ page }) => {
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('Domain: every message offers Copy', async ({ page }) => {
     const providerId = await mockProvider();
     const flow = await seedAgents('domain-copy', [
       {

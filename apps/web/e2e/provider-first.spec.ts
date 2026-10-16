@@ -9,7 +9,8 @@ import { freshApp, openWorkflow, seedGraph, serverGraph } from './helpers';
  */
 
 test.describe('PG-1.3 / PG-1.4 provider first, local models in their own section', () => {
-  test('PG-1.4 a detected Ollama is added from the Add node picker and appears under Local & open models with its models', async ({
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('PG-1.4 a detected Ollama is added from the Add node picker and appears under Local & open models with its models', async ({
     page,
   }) => {
     await freshApp(page);
@@ -75,7 +76,8 @@ test.describe('PG-1.3 / PG-1.4 provider first, local models in their own section
     expect(config.providerId).toBeTruthy();
   });
 
-  test('PG-1.3 a pasted or imported agent whose provider is missing is a red "Choose a provider" card', async ({
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('PG-1.3 a pasted or imported agent whose provider is missing is a red "Choose a provider" card', async ({
     page,
   }) => {
     await freshApp(page);

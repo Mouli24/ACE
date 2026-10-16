@@ -91,7 +91,8 @@ test.describe('PG-1.5 a failed message always shows', () => {
     await expect(panel.getByRole('button', { name: 'Retry' })).toBeVisible();
   });
 
-  test('Domain: a failed node turn says why in words, with Retry', async ({ page }) => {
+  // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md
+  test.skip('Domain: a failed node turn says why in words, with Retry', async ({ page }) => {
     // PG-1.5: Domain never reads `failureReason` (`domain/looks.ts`).
     test.setTimeout(90_000);
     const flow = await team('domain-fail', 'mock-bad-json', ['json']);

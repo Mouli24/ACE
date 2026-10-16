@@ -119,23 +119,18 @@ describe('D332 the Stage card (Agent and Model nodes)', () => {
     expect(screen.getByTestId('status-chip')).toHaveAttribute('data-state', state);
   });
 
+  // PG-4.2 (D360): every state has its own colour token, so the chip is drawn in it.
   it.each([
-    ['COMPLETED', 'Done', '#2f9e63'],
-    ['RUNNING', 'Running', '#ef6b3f'],
-    ['FAILED', 'Failed', '#c94c27'],
-    ['BLOCKED', 'Blocked', '#c94c27'],
-    ['WAITING', 'Waiting', '#a39d97'],
-  ] as const)('the status row of a %s node reads "%s" beside a %s dot', (state, word, colour) => {
+    ['COMPLETED', 'Done'],
+    ['RUNNING', 'Running'],
+    ['FAILED', 'Failed'],
+    ['BLOCKED', 'Blocked'],
+    ['WAITING', 'Waiting'],
+  ] as const)('the status row of a %s node reads "%s" in its own state colour', (state, word) => {
     view({ node: agentNode, state, stage: 1 });
     const status = screen.getByTestId('status-chip');
     expect(status).toHaveTextContent(word);
-    expect((status.querySelector('span') as HTMLElement).style.background).toBe(
-      // jsdom normalises hex to rgb()
-      `rgb(${parseInt(colour.slice(1, 3), 16)}, ${parseInt(colour.slice(3, 5), 16)}, ${parseInt(
-        colour.slice(5, 7),
-        16,
-      )})`,
-    );
+    expect(status.style.color).toBe(`var(--color-status-${state})`);
   });
 
   it('FR-NODE-010 the border is the provider glow at 0.38; selected, the provider colour and ring', () => {
