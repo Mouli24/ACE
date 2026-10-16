@@ -25,7 +25,11 @@ export const NODE_KINDS = [
 export const NodeKindSchema = z.enum(NODE_KINDS);
 export type NodeKind = z.infer<typeof NodeKindSchema>;
 
-export const EDGE_KINDS = ['data', 'loop'] as const;
+/**
+ * `data` carries a node's output into a port; `loop` repeats a body (round 3); `order` (D373) is
+ * "run after" — a dependency between two nodes that carries nothing.
+ */
+export const EDGE_KINDS = ['data', 'loop', 'order'] as const;
 export const EdgeKindSchema = z.enum(EDGE_KINDS);
 export type EdgeKind = z.infer<typeof EdgeKindSchema>;
 
