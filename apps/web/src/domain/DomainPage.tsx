@@ -56,7 +56,7 @@ import { TeamPanel } from './TeamPanel';
  * workflow layout, which hides its chat column here; the run is the one selected run (PG-3.2) and
  * its node states and tokens are the run overlay's (PG-3.3).
  */
-export function DomainPage() {
+export function DomainRunView() {
   const { projectId = '', workflowId = '' } = useParams();
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();

@@ -15,8 +15,9 @@ import { useLayoutStore } from '../app/stores/layout';
 import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
 import { useWorkspaceStatus } from '../app/stores/workspace-status';
+import { DomainRunView } from '../domain/DomainPage';
 import { RunConversationTab } from '../domain/RunConversationTab';
-import { workflowPath } from '../forge/mode';
+import { useWorkflowMode, workflowPath } from '../forge/mode';
 import { useSocketStatus } from '../runs/hooks';
 import { agentMap, agentsOf, type AgentLook } from '../theme/agents';
 import { Avatar, Dot } from '../theme/primitives';
@@ -82,7 +83,17 @@ MoreTab.displayName = 'MoreTab';
  * same conversation, and the session does not switch. "Live" shows only while the socket is open.
  * The compact layout keeps `ChatPanel` (FR-MOB-003).
  */
-export function ChatAside({ workflowId }: { workflowId: string }) {
+export function ChatAside({
+  workflowId,
+  expanded = false,
+}: {
+  workflowId: string;
+  /**
+   * D367: the same chat, full screen in Domain. It opens on the tab the column had (`?chat=`), so
+   * Expand loses no message; Collapse goes back to the mode it came from.
+   */
+  expanded?: boolean;
+}) {
   const chatNodeId = usePanelsStore((s) => s.chatNodeId);
   const chatWith = usePanelsStore((s) => s.chatWith);
   const toggleChat = useLayoutStore((s) => s.toggleChat);
@@ -91,9 +102,12 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
   const live = useSocketStatus() === 'open';
   const navigate = useNavigate();
   const [search] = useSearchParams();
+  const mode = useWorkflowMode();
+  // D367: Domain is this chat expanded; it opens on the Run tab unless Expand named the node tab.
+  const startView = search.get('chat') === 'node' ? 'node' : 'run';
   const queryClient = useQueryClient();
   // PG-3.6: which channel the column shows — the node's direct chat, or the run's conversation.
-  const [view, setView] = useState<'node' | 'run'>('node');
+  const [view, setView] = useState<'node' | 'run'>(expanded ? startView : 'node');
 
   const nodes = graph.data?.nodes;
   const chatNodes = (nodes ?? []).filter(isChatNode);
@@ -237,7 +251,10 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
     <aside
       aria-label="Chat"
       data-testid="chat-aside"
-      className="relative z-[4] flex h-full min-h-0 w-[340px] shrink-0 flex-col border-l border-[var(--line)] bg-[var(--panel)] text-[var(--ink)]"
+      className={cn(
+        'relative z-[4] flex h-full min-h-0 flex-col bg-[var(--panel)] text-[var(--ink)]',
+        expanded ? 'w-full min-w-0 flex-1' : 'w-[340px] shrink-0 border-l border-[var(--line)]',
+      )}
     >
       <div className="flex items-center gap-2 px-[14px] pb-[10px] pt-[14px]">
         <h2 className="text-[14px] font-bold tracking-[-0.01em]">Team chat</h2>
@@ -252,34 +269,53 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
         )}
         <div className="flex-1" />
         {projectId !== undefined && (
-          // D367: Domain is opened from here, full screen — the header switch no longer offers it.
+          // D367: Domain is opened from here, full screen, showing this same chat and tab — the
+          // header switch no longer offers it. Expanded, the button collapses back.
           <button
             type="button"
-            title="Expand to Domain"
-            aria-label="Expand chat to Domain"
-            data-testid="chat-expand"
-            onClick={() => navigate(workflowPath(projectId, workflowId, 'domain', search))}
+            title={expanded ? 'Collapse' : 'Expand to Domain'}
+            aria-label={expanded ? 'Collapse chat' : 'Expand chat to Domain'}
+            data-testid={expanded ? 'chat-collapse' : 'chat-expand'}
+            onClick={() => {
+              if (expanded) {
+                const back = search.get('from') === 'forge' ? 'forge' : 'ideate';
+                navigate(workflowPath(projectId, workflowId, back, search));
+                return;
+              }
+              const path = workflowPath(projectId, workflowId, 'domain', search);
+              const extra = new URLSearchParams({
+                chat: view,
+                from: mode === 'forge' ? 'forge' : 'ideate',
+              });
+              navigate(`${path}${path.includes('?') ? '&' : '?'}${extra.toString()}`);
+            }}
             className={cn(
               FOCUS,
               'flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-[7px] border border-[var(--line)] bg-transparent text-[var(--ink)]',
             )}
           >
-            <Icons.Maximize2 aria-hidden size={13} />
+            {expanded ? (
+              <Icons.Minimize2 aria-hidden size={13} />
+            ) : (
+              <Icons.Maximize2 aria-hidden size={13} />
+            )}
           </button>
         )}
-        <button
-          type="button"
-          title="Close"
-          aria-label="Close chat"
-          data-testid="chat-close"
-          onClick={toggleChat}
-          className={cn(
-            FOCUS,
-            'flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-[7px] border border-[var(--line)] bg-transparent text-[var(--ink)]',
-          )}
-        >
-          <Icons.X aria-hidden size={13} />
-        </button>
+        {!expanded && (
+          <button
+            type="button"
+            title="Close"
+            aria-label="Close chat"
+            data-testid="chat-close"
+            onClick={toggleChat}
+            className={cn(
+              FOCUS,
+              'flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-[7px] border border-[var(--line)] bg-transparent text-[var(--ink)]',
+            )}
+          >
+            <Icons.X aria-hidden size={13} />
+          </button>
+        )}
       </div>
 
       {/* PG-3.6: the node's direct chat, or the selected run's team conversation (read-only). */}
@@ -304,7 +340,15 @@ export function ChatAside({ workflowId }: { workflowId: string }) {
         ))}
       </div>
 
-      {showRun && <RunConversationTab projectId={projectId} workflowId={workflowId} />}
+      {/* D367: expanded, the Run tab is Domain itself — the live run conversation and its team. */}
+      {showRun &&
+        (expanded ? (
+          <div className="flex min-h-0 flex-1">
+            <DomainRunView />
+          </div>
+        ) : (
+          <RunConversationTab projectId={projectId} workflowId={workflowId} />
+        ))}
       {/* Hidden, not unmounted, behind the Run tab: the composer keeps what was typed (D335). */}
       <div className={showRun ? 'hidden' : 'contents'}>
         {tabs}

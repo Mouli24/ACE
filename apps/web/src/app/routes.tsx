@@ -1,7 +1,7 @@
 import type { RouteObject } from 'react-router-dom';
 
 import { BenchPage } from '../bench/BenchPage';
-import { DomainPage } from '../domain/DomainPage';
+import { DomainPage } from '../domain/DomainRoute';
 import { HelpPage } from '../help/HelpPage';
 import { KnowledgeBasePage } from '../knowledge/KnowledgeBasePage';
 import { KnowledgeListPage } from '../knowledge/KnowledgeListPage';
