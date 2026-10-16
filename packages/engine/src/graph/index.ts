@@ -12,6 +12,7 @@ import {
   domainGraphIssues,
   nodeConfigPatchSchema,
   validateLoopConfig,
+  validateOrderEdge,
   type CursorQuery,
   type Edge,
   type GraphOp,
@@ -537,6 +538,30 @@ async function applyOp(op: GraphOp, ctx: OpContext): Promise<void> {
 
     case 'add_edge': {
       const edge = EdgeSchema.parse({ ...op.edge, workflowId });
+
+      // D373: an order edge ("run after") names two nodes on pseudo ports and carries no data, so
+      // it has no ports to find and no types to check — only its own rules. The batch-end cycle
+      // check walks it like a data edge.
+      if (edge.kind === 'order') {
+        requireValidLoop(edge, nodeById, edgeById);
+        const check = validateOrderEdge(edge, {
+          nodes: [...nodeById.values()],
+          edges: [...edgeById.values()],
+        });
+        if (!check.ok) {
+          throw validationFailed(check.reason, [
+            {
+              severity: 'error',
+              code: check.code,
+              message: check.reason,
+              edgeId: edge.id,
+            } satisfies ValidationIssue,
+          ]);
+        }
+        edgeById.set(edge.id, edge);
+        await tx.edges.insert(scope, edge);
+        return;
+      }
 
       const source = findPort(nodeById, edge.from.portId);
       const target = findPort(nodeById, edge.to.portId);

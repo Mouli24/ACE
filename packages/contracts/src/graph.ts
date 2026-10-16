@@ -546,7 +546,7 @@ export function validateLoopConfig(
       ? { ok: true }
       : refuse(
           'loop_config_on_data_edge',
-          'A data edge cannot carry a loop config — make it a loop edge instead.',
+          `A ${edge.kind} edge cannot carry a loop config — make it a loop edge instead.`,
         );
   }
 
@@ -600,6 +600,199 @@ export function validateLoopConfig(
   }
 
   return { ok: true };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Order edges — "run after" (D373, FR-EXE-*, FR-CON-*)                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The pseudo port name an order edge uses on both ends. An `Edge` always has two port ids, and an
+ * order edge carries no data, so it names `<nodeId>:out:order` and `<nodeId>:in:order` — ports no
+ * node derives (port names are data types, D18), so it can never occupy or be typed against a real
+ * one.
+ */
+export const ORDER_PORT_NAME = 'order';
+
+/** The two endpoints of an order edge "`to` runs after `from`" (D373). */
+export function orderEdgeEnds(fromNodeId: Id, toNodeId: Id): Pick<Edge, 'from' | 'to'> {
+  return {
+    from: { nodeId: fromNodeId, portId: portId(fromNodeId, 'out', ORDER_PORT_NAME) },
+    to: { nodeId: toNodeId, portId: portId(toNodeId, 'in', ORDER_PORT_NAME) },
+  };
+}
+
+/**
+ * True for an edge the scheduler waits on: a data edge or an order edge. A loop edge points
+ * backwards (D73) and is never a precondition (D373).
+ */
+export function isDependencyEdge(edge: Pick<Edge, 'kind'>): boolean {
+  return edge.kind === 'data' || edge.kind === 'order';
+}
+
+/** Why `validateOrderEdge` refused an edge. Each is also a validation issue code. */
+export const ORDER_REFUSAL_CODES = [
+  'order_edge_self',
+  'order_edge_duplicate',
+  'order_edge_ports',
+  'order_edge_unknown_node',
+  'cycle',
+] as const;
+export type OrderRefusalCode = (typeof ORDER_REFUSAL_CODES)[number];
+
+export type OrderEdgeCheck = { ok: true } | { ok: false; code: OrderRefusalCode; reason: string };
+
+/** What `validateOrderEdge` reads of a graph. */
+export interface OrderGraph {
+  nodes: readonly Pick<Node, 'id' | 'name'>[];
+  edges: readonly Pick<Edge, 'id' | 'kind' | 'from' | 'to'>[];
+}
+
+/**
+ * True when `to` is reachable from `from` along dependency edges (data and order — never loop).
+ * An order edge that would make a node wait on itself is a cycle, and only a loop edge may close
+ * one (BR-05, D373).
+ */
+export function dependsOn(
+  to: Id,
+  from: Id,
+  edges: readonly Pick<Edge, 'kind' | 'from' | 'to'>[],
+): boolean {
+  const next = new Map<Id, Id[]>();
+  for (const edge of edges) {
+    if (!isDependencyEdge(edge)) continue;
+    next.set(edge.from.nodeId, [...(next.get(edge.from.nodeId) ?? []), edge.to.nodeId]);
+  }
+  const seen = new Set<Id>();
+  const queue = [...(next.get(from) ?? [])];
+  for (let i = 0; i < queue.length; i += 1) {
+    const id = queue[i];
+    if (id === undefined || seen.has(id)) continue;
+    if (id === to) return true;
+    seen.add(id);
+    queue.push(...(next.get(id) ?? []));
+  }
+  return false;
+}
+
+/**
+ * Decide whether an order edge may exist (D373). Pure — the engine's graph-ops and the Canvas reach
+ * the same verdict: two nodes of the graph, never one onto itself, on the `order` pseudo ports, at
+ * most one order edge per pair, and no cycle through data and order edges. Any other kind of edge
+ * is not this function's to judge and passes.
+ */
+export function validateOrderEdge(
+  edge: Pick<Edge, 'id' | 'kind' | 'from' | 'to'>,
+  graph: OrderGraph,
+): OrderEdgeCheck {
+  if (edge.kind !== 'order') return { ok: true };
+
+  const nameOf = (id: Id): string => graph.nodes.find((node) => node.id === id)?.name ?? id;
+  const known = new Set(graph.nodes.map((node) => node.id));
+  if (!known.has(edge.from.nodeId) || !known.has(edge.to.nodeId)) {
+    return {
+      ok: false,
+      code: 'order_edge_unknown_node',
+      reason: 'A "run after" link must join two nodes of this workflow.',
+    };
+  }
+  if (edge.from.nodeId === edge.to.nodeId) {
+    return { ok: false, code: 'order_edge_self', reason: 'A node cannot run after itself.' };
+  }
+  const ends = orderEdgeEnds(edge.from.nodeId, edge.to.nodeId);
+  if (edge.from.portId !== ends.from.portId || edge.to.portId !== ends.to.portId) {
+    return {
+      ok: false,
+      code: 'order_edge_ports',
+      reason: `A "run after" link uses the "${ORDER_PORT_NAME}" pseudo ports, not data ports.`,
+    };
+  }
+  const others = graph.edges.filter((other) => other.id !== edge.id);
+  const duplicate = others.some(
+    (other) =>
+      other.kind === 'order' &&
+      other.from.nodeId === edge.from.nodeId &&
+      other.to.nodeId === edge.to.nodeId,
+  );
+  if (duplicate) {
+    return {
+      ok: false,
+      code: 'order_edge_duplicate',
+      reason: `"${nameOf(edge.to.nodeId)}" already runs after "${nameOf(edge.from.nodeId)}".`,
+    };
+  }
+  if (dependsOn(edge.from.nodeId, edge.to.nodeId, others)) {
+    return {
+      ok: false,
+      code: 'cycle',
+      reason:
+        `"${nameOf(edge.from.nodeId)}" already waits on "${nameOf(edge.to.nodeId)}", so this ` +
+        'would make a cycle. Only a loop edge may close one.',
+    };
+  }
+  return { ok: true };
+}
+
+/** One step of a run plan: the nodes that can run together once every earlier step is done. */
+export interface RunPlanStep {
+  /** 1-based. */
+  step: number;
+  nodeIds: Id[];
+}
+
+/**
+ * Who runs when (D373): topological levels over data and order edges, loop edges ignored. A node's
+ * step is one more than the latest step of anything it waits on, so the nodes of one step run
+ * together. Within a step nodes keep the order they were given in. A node caught in a cycle (an
+ * invalid graph) lands in one last step rather than being dropped. Pure — the web's Run order
+ * panel and the engine read the same plan.
+ */
+export function runPlan(
+  nodes: readonly Pick<Node, 'id'>[],
+  edges: readonly Pick<Edge, 'kind' | 'from' | 'to'>[],
+): RunPlanStep[] {
+  const ids = nodes.map((node) => node.id);
+  const known = new Set(ids);
+  const preds = new Map<Id, Set<Id>>(ids.map((id) => [id, new Set<Id>()]));
+  for (const edge of edges) {
+    if (!isDependencyEdge(edge)) continue;
+    if (!known.has(edge.from.nodeId) || !known.has(edge.to.nodeId)) continue;
+    if (edge.from.nodeId === edge.to.nodeId) continue;
+    preds.get(edge.to.nodeId)?.add(edge.from.nodeId);
+  }
+
+  const level = new Map<Id, number>();
+  let changed = true;
+  // A fixed point over the levels: an acyclic graph settles in at most one pass per node.
+  for (let pass = 0; changed && pass <= ids.length; pass += 1) {
+    changed = false;
+    for (const id of ids) {
+      if (level.has(id)) continue;
+      let max = 0;
+      let ready = true;
+      for (const pred of preds.get(id) ?? []) {
+        const at = level.get(pred);
+        if (at === undefined) {
+          ready = false;
+          break;
+        }
+        max = Math.max(max, at);
+      }
+      if (!ready) continue;
+      level.set(id, max + 1);
+      changed = true;
+    }
+  }
+
+  const steps: RunPlanStep[] = [];
+  const deepest = Math.max(0, ...level.values());
+  for (let step = 1; step <= deepest; step += 1) {
+    const nodeIds = ids.filter((id) => level.get(id) === step);
+    if (nodeIds.length > 0) steps.push({ step: steps.length + 1, nodeIds });
+  }
+  const stuck = ids.filter((id) => !level.has(id));
+  if (stuck.length > 0) steps.push({ step: steps.length + 1, nodeIds: stuck });
+  return steps;
 }
 
 /* -------------------------------------------------------------------------- */

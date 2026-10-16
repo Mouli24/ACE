@@ -154,6 +154,18 @@ export const PRODUCT_GAPS_VALIDATION_ISSUE_CODES = [
   'running_without_undo',
 ] as const;
 
+/**
+ * The codes the run order work adds (D373): an order edge ("run after") onto its own node, a second
+ * one between the same pair, one not on the `order` pseudo ports, or one naming a node the workflow
+ * does not have. An order edge that would close a cycle is refused as `cycle` (round 1's code).
+ */
+export const RUN_ORDER_VALIDATION_ISSUE_CODES = [
+  'order_edge_self',
+  'order_edge_duplicate',
+  'order_edge_ports',
+  'order_edge_unknown_node',
+] as const;
+
 export const VALIDATION_ISSUE_CODES = [
   ...ROUND_1_VALIDATION_ISSUE_CODES,
   ...ROUND_2_VALIDATION_ISSUE_CODES,
@@ -161,6 +173,7 @@ export const VALIDATION_ISSUE_CODES = [
   ...ROUND_4_VALIDATION_ISSUE_CODES,
   ...ROUND_5_VALIDATION_ISSUE_CODES,
   ...PRODUCT_GAPS_VALIDATION_ISSUE_CODES,
+  ...RUN_ORDER_VALIDATION_ISSUE_CODES,
 ] as const;
 export const ValidationIssueCodeSchema = z.enum(VALIDATION_ISSUE_CODES);
 export type ValidationIssueCode = z.infer<typeof ValidationIssueCodeSchema>;

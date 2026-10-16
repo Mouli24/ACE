@@ -3,6 +3,7 @@ import {
   capabilityGaps,
   isCliProviderType,
   isConnectionAllowed,
+  validateOrderEdge,
   type DataType,
   type Edge,
   type McpServer,
@@ -262,6 +263,20 @@ export function validateGraph(
     // From round 3 a loop edge is legal (FR-CON-003, FR-CON-007). Its own rules were checked by
     // `validateLoopConfig` when it was written, and `isConnectionAllowed` never applied to it.
     if (edge.kind === 'loop') continue;
+    // D373: an order edge carries no data, so no port typing — only its own rules.
+    if (edge.kind === 'order') {
+      const check = validateOrderEdge(edge, { nodes, edges });
+      // A cycle is reported once, below, for the whole graph.
+      if (!check.ok && check.code !== 'cycle') {
+        issues.push({
+          severity: 'error',
+          code: check.code,
+          message: check.reason,
+          edgeId: edge.id,
+        });
+      }
+      continue;
+    }
 
     const source = portsById.get(edge.from.portId);
     const target = portsById.get(edge.to.portId);

@@ -27,6 +27,7 @@ import { HELP_CLASS } from './fields';
 import { KindPanel } from './panels';
 import { PendingEditsProvider, usePendingEditsRegistry } from './pending-edits';
 import { ReadsSection } from './ReadsSection';
+import { RunsAfterField } from './RunsAfterField';
 
 /*
  * The node settings modal (D333; Ace Canvas.dc.html 145–353), opened by `openSettings` when a node
@@ -314,6 +315,15 @@ function NodeSettings({
         <KindPanel node={node} patch={patchConfig} rename={rename} workflowId={workflowId} />
         {/* PG-4.1: what this node will be handed, before a run. */}
         <ReadsSection node={node} nodes={nodes} edges={edges} />
+        {/* D373: who this node waits for, beyond what feeds it. */}
+        <RunsAfterField
+          workflowId={workflowId}
+          node={node}
+          nodes={nodes}
+          edges={edges}
+          readOnly={readOnly}
+          enqueue={(ops) => sync.enqueue(ops)}
+        />
         {!readOnly && (
           <button type="button" className={REMOVE_CLASS} onClick={remove}>
             Remove node from canvas

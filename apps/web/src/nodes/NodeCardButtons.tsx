@@ -94,6 +94,14 @@ export function NodeCardButtons({ node, className }: { node: Node; className?: s
                 <DropdownMenuItem onSelect={() => actions.connectTo(node.id)}>
                   Connect to…
                 </DropdownMenuItem>
+                {actions.runAfter !== undefined && (
+                  <DropdownMenuItem
+                    aria-label={`Run ${name} after another node`}
+                    onSelect={() => actions.runAfter?.(node.id)}
+                  >
+                    Run after…
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem onSelect={() => actions.duplicate(node.id)}>
                   Duplicate
                 </DropdownMenuItem>
