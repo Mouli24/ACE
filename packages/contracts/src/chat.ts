@@ -291,6 +291,37 @@ export function resolveChatTarget(
   return { targetNodeId: only };
 }
 
+/** `@workflow`: the chat's address for the whole workflow rather than one node of it. */
+export const WORKFLOW_ADDRESS = 'workflow';
+
+/** Punctuation left at the front of the task once `@workflow` is taken out (`@workflow, do…`). */
+const LEADING_JOINER = /^[\s,:;.\-–—]+/u;
+
+/**
+ * Whether a chat message is for the whole workflow: its first `@`-address — by the chat's own
+ * reading (code, scoped packages, decorators and quoted `@`s are never addresses) — is `@workflow`,
+ * in any case. `task` is the message without that token: the run's goal. `undefined` when the
+ * first address is anything else, or there is none, so `resolveChatTarget` decides as before.
+ * `@workflow` wins over a node whose handle happens to be `workflow`.
+ */
+export function parseWorkflowAddress(text: string): { task: string } | undefined {
+  const kept = chatAddressText(text);
+  for (const match of kept.matchAll(AT_TOKEN)) {
+    const start = match.index;
+    const before = kept[start - 1];
+    // An `@` inside a word (an email address) is not an address, as in Domain's parser.
+    if (before !== undefined && /[\p{L}\p{N}_.-]/u.test(before)) continue;
+    const handle = match[0].slice(1).replace(/-+$/, '').toLowerCase();
+    if (handle !== WORKFLOW_ADDRESS) return undefined;
+    const end = start + match[0].length;
+    const head = text.slice(0, start).trimEnd();
+    const tail = text.slice(end).replace(LEADING_JOINER, '');
+    const task = head === '' ? tail.trim() : `${head} ${tail}`.trim();
+    return { task };
+  }
+  return undefined;
+}
+
 /**
  * `POST /nodes/:id/chat` → 202 `{ threadId, messageId }` (§2.3). The answer comes back over the
  * socket: `chat.token` deltas on the thread's subscription, ending with `chat.message`
