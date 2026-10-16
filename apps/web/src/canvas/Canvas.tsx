@@ -37,6 +37,7 @@ import {
   useState,
   type DragEvent,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
 import { Link, useInRouterContext, useParams, useSearchParams } from 'react-router-dom';
@@ -70,7 +71,7 @@ import {
 } from '../nodes/factory';
 import { useProject } from '../projects/hooks';
 import { ProviderPickerHost } from '../providers/ProviderModelPicker';
-import { useProviders } from '../providers/hooks';
+import { useModels, useProviders } from '../providers/hooks';
 import { requestProviderChoice } from '../providers/provider-picker-store';
 import { useNodeEstimates } from '../runs/estimate';
 import { useRun, useStartRun } from '../runs/hooks';
@@ -84,7 +85,14 @@ import { ConnectToDialog } from './ConnectToDialog';
 import { PALETTE_DRAG_TYPE, PALETTE_INIT_TYPE } from './drag';
 import { DUPLICATE_OFFSET, duplicateNodes } from './duplicate';
 import { lacksUsableProvider, needsProviderChoice, withProviderChoice } from './provider-first';
-import { EdgeLayer, PortDotLayer } from './EdgeLayer';
+import {
+  edgeTypeOptions,
+  reconnectPlan,
+  withoutEdge,
+  type EdgeEnd,
+  type EdgeTypeOption,
+} from './edge-edit';
+import { EdgeLayer, PortDotLayer, type EdgeEditApi, type EdgeReconnectDrag } from './EdgeLayer';
 import {
   MOVE_HISTORY_LIMIT,
   movesBack,
@@ -1058,6 +1066,217 @@ function CanvasInner({
     [readOnly, nodes, edges, workflowId, editor],
   );
 
+  /* ------------------------------------------- editing an edge in place (FR-CON-001/004/006) */
+
+  /** The model catalogue, so the type dropdown can say a node's model cannot serve a type. */
+  const models = useModels();
+  /** The edge whose chip or handles the pointer is on; cleared a moment after it leaves. */
+  const [hoveredEdgeId, setHoveredEdgeId] = useState<string>();
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const hoverEdge = useCallback((edgeId: string | undefined) => {
+    if (hoverTimer.current !== undefined) clearTimeout(hoverTimer.current);
+    hoverTimer.current = undefined;
+    if (edgeId !== undefined) {
+      setHoveredEdgeId(edgeId);
+      return;
+    }
+    // a short grace, so the pointer can travel from the line to its chip or handles
+    hoverTimer.current = setTimeout(() => setHoveredEdgeId(undefined), 220);
+  }, []);
+  useEffect(
+    () => () => {
+      if (hoverTimer.current !== undefined) clearTimeout(hoverTimer.current);
+    },
+    [],
+  );
+
+  /** An end of a data edge being dragged to a new port (FR-CON-001). */
+  const [reconnect, setReconnect] = useState<EdgeReconnectDrag>();
+
+  /** The one rule for a moved end: `checkConnection` on the graph without the edge being moved. */
+  const reconnectCheck = useCallback(
+    (edgeId: string): CheckConnection =>
+      (attempt) => {
+        const verdict = checkConnection(nodes, withoutEdge(edges, edgeId), attempt);
+        return verdict.ok ? { ok: true } : { ok: false, reason: verdict.reason };
+      },
+    [nodes, edges],
+  );
+
+  /** The end that stays put while the other is dragged, as the start of a line. */
+  const fixedEndOf = useCallback(
+    (edgeId: string, moving: EdgeEnd): ConnectFrom | undefined => {
+      const edge = edges.find((e) => e.id === edgeId);
+      if (edge === undefined) return undefined;
+      return moving === 'target'
+        ? { nodeId: edge.from.nodeId, portId: edge.from.portId, type: 'source' }
+        : { nodeId: edge.to.nodeId, portId: edge.to.portId, type: 'target' };
+    },
+    [edges],
+  );
+
+  /**
+   * Where a dragged end was let go: on a port of the right side — that port; on a card — the card's
+   * first compatible input (or output) as a line dropped on a card picks (D350); on empty Canvas —
+   * nothing, and the edge stays as it was. One batch either way (delete + add), one undo step.
+   */
+  const finishReconnect = useCallback(
+    (edgeId: string, end: EdgeEnd, clientX: number, clientY: number) => {
+      if (readOnly) return;
+      const fixed = fixedEndOf(edgeId, end);
+      if (fixed === undefined) return;
+      const under =
+        typeof document.elementFromPoint === 'function'
+          ? document.elementFromPoint(clientX, clientY)
+          : null;
+      const handle = under?.closest('.react-flow__handle');
+      const wanted = end === 'target' ? 'target' : 'source';
+      const handleNodeId = handle?.getAttribute('data-nodeid');
+      const handlePortId = handle?.getAttribute('data-handleid');
+      let attempt: ConnectionAttempt | undefined;
+      if (handle && handle.classList.contains(wanted) && handleNodeId && handlePortId) {
+        attempt =
+          end === 'target'
+            ? {
+                source: fixed.nodeId,
+                sourceHandle: fixed.portId,
+                target: handleNodeId,
+                targetHandle: handlePortId,
+              }
+            : {
+                source: handleNodeId,
+                sourceHandle: handlePortId,
+                target: fixed.nodeId,
+                targetHandle: fixed.portId,
+              };
+      } else {
+        const cardNodeId = under
+          ?.closest('[data-node-card]')
+          ?.closest('.react-flow__node')
+          ?.getAttribute('data-id');
+        if (!cardNodeId) return; // empty Canvas: cancelled, the edge stays
+        const outcome = dropOnCard(nodes, fixed, cardNodeId, reconnectCheck(edgeId));
+        if (outcome.kind === 'refuse') {
+          toast.error('Connection refused', { description: outcome.reason });
+          return;
+        }
+        const choice = outcome.kind === 'connect' ? outcome.choice : outcome.choices[0];
+        if (choice === undefined) return;
+        attempt = choice.attempt;
+      }
+      const plan = reconnectPlan(nodes, edges, edgeId, attempt, workflowId);
+      if (plan.kind === 'refuse') {
+        toast.error('Connection refused', { description: plan.reason });
+        return;
+      }
+      if (plan.kind === 'ok') {
+        editor.edit(plan.ops, 'Reconnect');
+        setSelection([], []);
+      }
+    },
+    [readOnly, fixedEndOf, nodes, edges, reconnectCheck, workflowId, editor, setSelection],
+  );
+
+  // The drag itself: the moving end follows the pointer until it is let go (or Escape cancels).
+  const reconnectKey = reconnect === undefined ? '' : `${reconnect.edgeId}\u0000${reconnect.end}`;
+  const finishReconnectRef = useRef(finishReconnect);
+  finishReconnectRef.current = finishReconnect;
+  useEffect(() => {
+    if (reconnectKey === '') return;
+    const [edgeId = '', endRaw] = reconnectKey.split('\u0000');
+    const end: EdgeEnd = endRaw === 'source' ? 'source' : 'target';
+    const move = (event: PointerEvent) => {
+      const at = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      setReconnect((current) => current && { ...current, x: at.x, y: at.y });
+    };
+    const up = (event: PointerEvent) => {
+      setReconnect(undefined);
+      finishReconnectRef.current(edgeId, end, event.clientX, event.clientY);
+    };
+    const cancel = () => setReconnect(undefined);
+    const key = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') cancel();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
+    window.addEventListener('keydown', key);
+    return () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
+      window.removeEventListener('keydown', key);
+    };
+  }, [reconnectKey, flow]);
+
+  /** While an end is dragged, the ports it could land on light up as for a new line (D350). */
+  const reconnectStates = useMemo(() => {
+    if (reconnectKey === '') return undefined;
+    const [edgeId = '', endRaw] = reconnectKey.split('\u0000');
+    const fixed = fixedEndOf(edgeId, endRaw === 'source' ? 'source' : 'target');
+    return fixed === undefined
+      ? undefined
+      : portConnectStates(nodes, fixed, reconnectCheck(edgeId));
+  }, [reconnectKey, fixedEndOf, nodes, reconnectCheck]);
+
+  /** The live half of the edge-edit API; the API the layer holds reads it through a ref. */
+  const edgeEditImpl = {
+    typeOptions: (edgeId: string): EdgeTypeOption[] =>
+      edgeTypeOptions(nodes, edges, edgeId, models.data?.items ?? [], workflowId),
+    pickType: (edgeId: string, option: EdgeTypeOption) => {
+      if (readOnly || !option.ok || option.current) return;
+      // re-planned on the graph as it is now: the menu may have been open across a change
+      const fresh = edgeTypeOptions(
+        nodes,
+        edges,
+        edgeId,
+        models.data?.items ?? [],
+        workflowId,
+      ).find((o) => o.type === option.type);
+      if (fresh === undefined || !fresh.ok || fresh.current) {
+        if (fresh !== undefined && !fresh.ok) {
+          toast.error('Type not changed', { description: fresh.reason });
+        }
+        return;
+      }
+      editor.edit(fresh.ops, `Change connection to ${option.type}`);
+    },
+    remove: (edgeId: string) => {
+      setHoveredEdgeId(undefined);
+      deleteElements([], [edgeId]);
+    },
+    select: (edgeId: string) => setSelection([], [edgeId]),
+    startReconnect: (edgeId: string, end: EdgeEnd, event: ReactPointerEvent) => {
+      if (readOnly || event.button !== 0) return;
+      const edge = edges.find((e) => e.id === edgeId);
+      if (edge === undefined || edge.kind !== 'data') return;
+      event.preventDefault();
+      const at = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      setSelection([], [edgeId]);
+      setReconnect({ edgeId, end, x: at.x, y: at.y });
+    },
+  };
+  const edgeEditRef = useRef(edgeEditImpl);
+  edgeEditRef.current = edgeEditImpl;
+  const edgeEdit = useMemo<EdgeEditApi>(
+    () => ({
+      typeOptions: (edgeId) => edgeEditRef.current.typeOptions(edgeId),
+      pickType: (edgeId, option) => edgeEditRef.current.pickType(edgeId, option),
+      remove: (edgeId) => edgeEditRef.current.remove(edgeId),
+      select: (edgeId) => edgeEditRef.current.select(edgeId),
+      hover: (edgeId) => hoverEdge(edgeId),
+      startReconnect: (edgeId, end, event) =>
+        edgeEditRef.current.startReconnect(edgeId, end, event),
+    }),
+    [hoverEdge],
+  );
+
+  const onEdgeMouseEnter: EdgeMouseHandler = useCallback(
+    (_event, edge) => hoverEdge(edge.id),
+    [hoverEdge],
+  );
+  const onEdgeMouseLeave: EdgeMouseHandler = useCallback(() => hoverEdge(undefined), [hoverEdge]);
+
   const onDelete = useCallback(
     ({ nodes: gone, edges: cut }: { nodes: AceFlowNode[]; edges: Array<{ id: string }> }) =>
       deleteElements(
@@ -1651,6 +1870,8 @@ function CanvasInner({
                   onConnectEnd={onConnectEnd}
                   isValidConnection={isValidConnection}
                   onEdgeContextMenu={onEdgeContextMenu}
+                  onEdgeMouseEnter={readOnly ? undefined : onEdgeMouseEnter}
+                  onEdgeMouseLeave={readOnly ? undefined : onEdgeMouseLeave}
                   onPaneClick={() => setEdgeMenu(undefined)}
                   onNodeClick={onNodeClick}
                   onNodeDoubleClick={onNodeClick}
@@ -1683,10 +1904,16 @@ function CanvasInner({
                   className="ace-canvas"
                   style={{ background: 'transparent' }}
                 >
-                  <EdgeLayer nodes={drawn.nodes} edges={flowEdges} />
+                  <EdgeLayer
+                    nodes={drawn.nodes}
+                    edges={flowEdges}
+                    edit={readOnly || hand ? undefined : edgeEdit}
+                    hoveredEdgeId={hoveredEdgeId}
+                    reconnect={reconnect}
+                  />
                   <PortDotLayer
                     nodes={nodes}
-                    connectStates={connectStates}
+                    connectStates={connectStates ?? reconnectStates}
                     selectedNodeIds={selectedNodeIds}
                     armedPortId={armedPortId}
                   />
