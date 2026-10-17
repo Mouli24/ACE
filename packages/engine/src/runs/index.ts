@@ -325,6 +325,11 @@ interface TurnRouting {
   envelopeId?: Id;
   /** The edges it travels along. */
   edges: Edge[];
+  /**
+   * D-103: FLAGs to the successors the output travels to, queued only once it has crossed the
+   * edges — queued earlier, the flagged node would take a side turn before its input arrived.
+   */
+  afterHandoff?: { envelope: QueuedEnvelope; nodeIds: Id[] }[];
 }
 
 /** A ≤120-character description of what crossed an edge (FR-EXE-015, §2.4). */
@@ -1671,6 +1676,16 @@ export function createRunService(deps: RunServiceDeps): RunService {
       let handoff: TurnRouting['handoff'] = handsOn ? 'now' : 'none';
       let handoffId: Id | undefined;
       let guard: { nodeIds: Id[]; count: number } | undefined;
+      /*
+       * D-103 (D374): a node's own turn that FLAGs a node it feeds still hands that node its output.
+       * The flagged node's turn is then its dispatch turn, with the FLAG in its prompt. Held back,
+       * the successor's turn would be a side turn and its input would never arrive, so the graph
+       * could never finish.
+       */
+      const feeds = new Set(outgoing.map((edge) => edge.to.nodeId));
+      const flagsSuccessors = !waiting && !side && kinds.has('FLAG');
+      const flaggedSuccessors = new Set<Id>();
+      const afterHandoff: NonNullable<TurnRouting['afterHandoff']> = [];
       for (const send of sends) {
         const envelopeId = nextId();
         const summary = send.summary.slice(0, ENVELOPE_SUMMARY_MAX);
@@ -1731,18 +1746,25 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
         if (verdict.decision === 'FORWARDED') {
           if (send.kind !== 'HANDOFF') {
-            domain.enqueueEnvelope(
-              {
-                envelopeId,
-                kind: send.kind,
-                fromNodeId: node.id,
-                summary,
-                body,
-                at: now(),
-                ...inReplyTo,
-              },
-              send.toNodeIds,
-            );
+            const queued: QueuedEnvelope = {
+              envelopeId,
+              kind: send.kind,
+              fromNodeId: node.id,
+              summary,
+              body,
+              at: now(),
+              ...inReplyTo,
+            };
+            const later =
+              flagsSuccessors && send.kind === 'FLAG'
+                ? send.toNodeIds.filter((id) => feeds.has(id))
+                : [];
+            const rest = send.toNodeIds.filter((id) => !later.includes(id));
+            if (rest.length > 0) domain.enqueueEnvelope(queued, rest);
+            if (later.length > 0) {
+              for (const id of later) flaggedSuccessors.add(id);
+              afterHandoff.push({ envelope: queued, nodeIds: later });
+            }
           }
           continue;
         }
@@ -1772,11 +1794,17 @@ export function createRunService(deps: RunServiceDeps): RunService {
         );
       }
 
+      if (handoff === 'none' && flaggedSuccessors.size > 0) {
+        handoff = 'now';
+        along = outgoing.filter((edge) => flaggedSuccessors.has(edge.to.nodeId));
+      }
+
       return {
         waiting,
         handoff,
         edges: along,
         ...(handoffId === undefined ? {} : { envelopeId: handoffId }),
+        ...(afterHandoff.length === 0 ? {} : { afterHandoff }),
       };
     }
 
@@ -2035,6 +2063,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
             routing?.envelopeId,
           );
           if (fresh) rearmSuccessors(node);
+        }
+        // D-103: the FLAGs to the successors just handed the output, now that it is there.
+        for (const { envelope, nodeIds } of routing?.afterHandoff ?? []) {
+          domain?.enqueueEnvelope(envelope, nodeIds);
         }
         // D373: whatever runs after this node may go now (a side turn is not the node's own work).
         if (!side) releaseOrder(node.id, body);
