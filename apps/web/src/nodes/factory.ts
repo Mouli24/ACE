@@ -97,6 +97,33 @@ export function createNode(kind: CanvasNodeKind, workflowId: string, position: P
   return { ...node, ...derivePorts(node) } as Node;
 }
 
+/** The name a new Agent or Model gets when nobody names it: "New agent", "New model" (D285). */
+export const NEW_NODE_NAME: Partial<Record<CanvasNodeKind, string>> = {
+  agent: 'New agent',
+  model: 'New model',
+};
+
+const nameKey = (name: string): string => name.trim().toLowerCase();
+
+/**
+ * A name no node in `taken` has (compared trimmed, without case): `base` itself when it is free,
+ * else `base 2`, `base 3`… Existing nodes are never renamed; only the new one is numbered.
+ */
+export function uniqueNodeName(base: string, taken: Iterable<string>): string {
+  const used = new Set([...taken].map(nameKey));
+  if (!used.has(nameKey(base))) return base;
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base} ${n}`;
+    if (!used.has(nameKey(candidate))) return candidate;
+  }
+}
+
+/** A copy's name: `<name> copy`, numbered when taken; copying a copy does not stack "copy copy". */
+export function copyNodeName(name: string, taken: Iterable<string>): string {
+  const original = name.replace(/ copy(?: \d+)?$/u, '');
+  return uniqueNodeName(`${original} copy`, taken);
+}
+
 /** What the New node dialog hands over besides the kind: a name and, for model kinds, a model. */
 export interface NewNodeInit {
   name?: string;

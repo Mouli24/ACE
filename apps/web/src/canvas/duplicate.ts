@@ -1,6 +1,7 @@
 import { derivePorts, type Node } from '@ace/contracts';
 
 import { newId } from '../lib/ulid';
+import { copyNodeName } from '../nodes/factory';
 import { freeSlotNear } from './placement';
 
 /** How far a copy starts from its original before a free slot is looked for (FR-CAN-006). */
@@ -21,6 +22,11 @@ export function duplicateNodes(nodes: readonly Node[], existing: readonly Node[]
     const copy = {
       ...node,
       id: newId(),
+      // "<name> copy", numbered when the workflow already has one: no two nodes share a name
+      name: copyNodeName(
+        node.name,
+        placed.map((each) => each.name),
+      ),
       config: structuredClone(node.config),
       position,
     } as Node;

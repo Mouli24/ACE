@@ -1,15 +1,16 @@
-import type { Edge, Id } from '@ace/contracts';
+import { isDependencyEdge, type Edge, type Id } from '@ace/contracts';
 
 /**
  * Cycle detection over the graph (FR-CON-003, BR-05).
  *
- * Only `kind: 'data'` edges are walked. A loop edge is how a cycle is *allowed* to exist
- * (round 3), so counting one here would refuse the very thing that makes loops legal.
+ * Data and order edges are walked (D373: a "run after" link counts like a data dependency). A
+ * loop edge is how a cycle is *allowed* to exist (round 3), so counting one here would refuse the
+ * very thing that makes loops legal.
  */
 export function findCycle(edges: readonly Edge[]): Id[] | null {
   const adjacency = new Map<Id, Id[]>();
   for (const edge of edges) {
-    if (edge.kind !== 'data') continue;
+    if (!isDependencyEdge(edge)) continue;
     const from = adjacency.get(edge.from.nodeId) ?? [];
     from.push(edge.to.nodeId);
     adjacency.set(edge.from.nodeId, from);

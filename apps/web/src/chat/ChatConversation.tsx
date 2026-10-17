@@ -1,4 +1,5 @@
 import {
+  isAddressableNode,
   isCliProviderType,
   type ChatMessage,
   type Node,
@@ -11,6 +12,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { api } from '../app/api';
+import { useRun } from '../runs/hooks';
 import { useNodeOverlay } from '../runs/run-store';
 import { UNDO_UNAVAILABLE_TITLE, UndoChoiceButtons, undoReasonText } from '../runs/UndoChoice';
 import { formatUsd } from '../usage/format';
@@ -203,9 +205,11 @@ export function chatCostText(usage: Usage): string {
 function TurnMeta({
   message,
   onSendToForge,
+  onOpenRun,
 }: {
   message: ChatMessage;
   onSendToForge: (() => void) | undefined;
+  onOpenRun: ((runId: string) => void) | undefined;
 }) {
   const parts: ReactNode[] = [];
   if (message.modelId !== undefined) {
@@ -234,6 +238,9 @@ function TurnMeta({
         run
       </span>,
     );
+    if (onOpenRun !== undefined) {
+      parts.push(<SeeWholeRun key="see-run" runId={message.runId} onOpenRun={onOpenRun} />);
+    }
   }
   if (parts.length === 0) return null;
   return (
@@ -256,6 +263,42 @@ function TurnMeta({
   );
 }
 
+/** A run turn's way to the whole run: the chat column's Run tab on that run (`?run=`). */
+function SeeWholeRun({ runId, onOpenRun }: { runId: string; onOpenRun: (runId: string) => void }) {
+  return (
+    <button
+      type="button"
+      data-testid="chat-see-run"
+      onClick={() => onOpenRun(runId)}
+      className="cursor-pointer whitespace-nowrap border-0 bg-transparent p-0 font-semibold text-[#e8623a] hover:text-[#c94c27] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+    >
+      See the whole run →
+    </button>
+  );
+}
+
+/**
+ * Under a node's thread whose latest turn a run wrote: the node was one agent of a team, and the
+ * rest of that run's work is a click away.
+ */
+function RunHint({ runId, onOpenRun }: { runId: string; onOpenRun: (runId: string) => void }) {
+  const run = useRun(runId);
+  const agents = run.data?.snapshot.nodes.filter(isAddressableNode).length;
+  return (
+    <p
+      data-testid="chat-run-hint"
+      className="m-0 flex flex-wrap items-baseline gap-x-1 text-[11px] text-[var(--muted)]"
+    >
+      <span>
+        {agents === undefined
+          ? 'This was part of a run.'
+          : `This was part of a run — ${agents} ${agents === 1 ? 'agent' : 'agents'} worked on it.`}
+      </span>
+      <SeeWholeRun runId={runId} onOpenRun={onOpenRun} />
+    </p>
+  );
+}
+
 /** Busy states of a node's run that the chat shows (FR-EXE-009). */
 const WORKING = new Set(['RUNNING', 'WAITING']);
 
@@ -273,9 +316,12 @@ export function ChatConversation({
   onSendToForge,
   speakers,
   projectId,
+  onOpenRun,
 }: {
   node: Node;
   convo: Conversation;
+  /** A run turn's "See the whole run →": show that run's conversation (the column only). */
+  onOpenRun?: (runId: string) => void;
   /** The input box, when it belongs inside the conversation (the phone tab); the column keeps its own. */
   composer?: ReactNode;
   /** The meta line's "Send to Forge →" (the column only); absent, the chip is not drawn. */
@@ -363,6 +409,11 @@ export function ChatConversation({
                     ? UNDO_UNAVAILABLE_TITLE
                     : `${name} could not answer · ${message.error.code}`}
                 {message.runId !== undefined && <span data-testid="chat-run-badge">· run</span>}
+                {message.runId !== undefined && onOpenRun !== undefined && (
+                  <span className="ml-1">
+                    <SeeWholeRun runId={message.runId} onOpenRun={onOpenRun} />
+                  </span>
+                )}
               </div>
               <p className="whitespace-pre-wrap break-words">
                 {message.error.code === 'checkpoint_unavailable'
@@ -393,7 +444,9 @@ export function ChatConversation({
           ) : (
             <>
               <Body content={message.content} />
-              {!you && <TurnMeta message={message} onSendToForge={onSendToForge} />}
+              {!you && (
+                <TurnMeta message={message} onSendToForge={onSendToForge} onOpenRun={onOpenRun} />
+              )}
             </>
           )}
           {message.activity !== undefined && <ChatActivity items={message.activity} />}
@@ -438,6 +491,11 @@ export function ChatConversation({
     stalled,
   ]);
 
+  // The thread's latest turn came from a run: say so under it, with the way to the whole run.
+  const latestRunId = convo.messages
+    .filter((each) => each.supersededAt === undefined)
+    .at(-1)?.runId;
+
   const empty =
     convo.messages.length === 0 &&
     !convo.awaitingReply &&
@@ -473,6 +531,10 @@ export function ChatConversation({
               {item.messages.map((message) => renderTurn(message, true))}
             </EarlierVersion>
           ),
+        )}
+
+        {latestRunId !== undefined && onOpenRun !== undefined && (
+          <RunHint runId={latestRunId} onOpenRun={onOpenRun} />
         )}
 
         {convo.streamingText.length > 0 && (

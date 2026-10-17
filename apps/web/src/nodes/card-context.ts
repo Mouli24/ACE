@@ -25,6 +25,8 @@ export interface NodeCardActions {
   duplicate: (nodeId: string) => void;
   remove: (nodeId: string) => void;
   runFromHere: (nodeId: string) => void;
+  /** D373: pick a node this one runs after; undefined where no Canvas can add the link. */
+  runAfter?: (nodeId: string) => void;
   /** Agent and Model nodes have a lens in Domain (D303); undefined outside a routed workspace. */
   openInDomain?: (nodeId: string) => void;
 }
