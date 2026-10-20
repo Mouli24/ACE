@@ -8,6 +8,9 @@ import {
   type JSONValue,
   type LanguageModel,
   type ModelMessage,
+  type TextPart,
+  type ToolCallPart,
+  type ToolResultPart,
   type ToolSet,
 } from 'ai';
 
@@ -17,12 +20,14 @@ import {
   mapProviderError,
   providerStateForError,
   statusToNodeError,
+  type AgentTurn,
   type FinishReason,
   type GenerateRequest,
   type ModelInfo,
   type ProviderAdapter,
   type ProviderStatus,
   type StreamChunk,
+  type ToolResult,
 } from '../adapter.js';
 
 /**
@@ -293,6 +298,34 @@ export function toToolSet(tools: readonly ToolDefinition[] | undefined): ToolSet
 const toJsonValue = (value: unknown): JSONValue =>
   JSON.parse(JSON.stringify(value ?? null)) as JSONValue;
 
+/** A call the model made, as an assistant message part (X1 §4.4). */
+const toolCallPart = (callId: string, name: string, args: unknown): ToolCallPart => ({
+  type: 'tool-call',
+  toolCallId: callId,
+  toolName: name,
+  input: args ?? {},
+});
+
+/** What a call returned, as a `tool` message part (X1 §4.4). */
+const toolResultPart = (result: ToolResult): ToolResultPart => ({
+  type: 'tool-result',
+  toolCallId: result.callId,
+  toolName: result.name,
+  output: { type: 'json', value: toJsonValue(result.result) },
+});
+
+/** A call, said in words, for a request that defines no tools (review I1). */
+const calledText = (name: string, args: unknown): TextPart => ({
+  type: 'text',
+  text: `I called the tool ${name} with ${JSON.stringify(args ?? {})}.`,
+});
+
+/** A result, in words and still labelled untrusted (FR-TOOL-010), for a request with no tools. */
+const resultText = (result: ToolResult): TextPart => ({
+  type: 'text',
+  text: toolResultBlock(result.name, result.result),
+});
+
 /**
  * The turns so far, rebuilt from the executor's tool results (X1 §4.4): the prompt, then each call
  * the model made and what it returned. `undefined` for a first turn, which stays a single prompt.
@@ -301,34 +334,119 @@ const toJsonValue = (value: unknown): JSONValue =>
  * text instead (review I1): Anthropic rejects `tool_use`/`tool_result` blocks in a request that
  * defines no tools, and a text replay means the same thing to every provider. Each result keeps its
  * untrusted label (FR-TOOL-010), since it now sits in a user turn.
+ *
+ * Chat and non-agentic nodes still come through here; an agent node's `turns` go through
+ * {@link messagesFor} instead (D377).
  */
 export function continuationMessages(req: GenerateRequest, withTools = true): ModelMessage[] | undefined {
   if (req.toolResults === undefined || req.toolResults.length === 0) return undefined;
   const messages: ModelMessage[] = [{ role: 'user', content: req.prompt }];
   for (const result of req.toolResults) {
     if (!withTools) {
-      messages.push({
-        role: 'assistant',
-        content: [{ type: 'text', text: `I called the tool ${result.name} with ${JSON.stringify(result.args ?? {})}.` }],
-      });
-      messages.push({ role: 'user', content: [{ type: 'text', text: toolResultBlock(result.name, result.result) }] });
+      messages.push({ role: 'assistant', content: [calledText(result.name, result.args)] });
+      messages.push({ role: 'user', content: [resultText(result)] });
       continue;
     }
     messages.push({
       role: 'assistant',
-      content: [{ type: 'tool-call', toolCallId: result.callId, toolName: result.name, input: result.args ?? {} }],
+      content: [toolCallPart(result.callId, result.name, result.args)],
     });
-    messages.push({
-      role: 'tool',
-      content: [
-        {
-          type: 'tool-result',
-          toolCallId: result.callId,
-          toolName: result.name,
-          output: { type: 'json', value: toJsonValue(result.result) },
-        },
-      ],
-    });
+    messages.push({ role: 'tool', content: [toolResultPart(result)] });
+  }
+  return messages;
+}
+
+/** A turn's words, unless it said nothing — an empty or blank text block is rejected by some providers. */
+const saidText = (turn: AgentTurn): TextPart[] =>
+  turn.text.trim() === '' ? [] : [{ type: 'text', text: turn.text }];
+
+/** A turn from its neutral fields: one assistant message with its words and all its calls. */
+function rebuiltTurn(turn: AgentTurn): ModelMessage[] {
+  const content: (TextPart | ToolCallPart)[] = [
+    ...saidText(turn),
+    ...turn.toolCalls.map((call) => toolCallPart(call.callId, call.name, call.args)),
+  ];
+  return content.length === 0 ? [] : [{ role: 'assistant', content }];
+}
+
+/** The part types a recorded assistant message may carry back into a call (D377). */
+const REPLAYABLE_PART_TYPES: ReadonlySet<string> = new Set(['text', 'reasoning', 'tool-call', 'file']);
+
+/** An assistant message whose content is text, or a list of parts of a replayable type. */
+function isRecordedAssistantMessage(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const { role, content } = value as { role?: unknown; content?: unknown };
+  if (role !== 'assistant') return false;
+  if (typeof content === 'string') return true;
+  return (
+    Array.isArray(content) &&
+    content.every((part: unknown) => {
+      if (typeof part !== 'object' || part === null) return false;
+      const type = (part as { type?: unknown }).type;
+      return typeof type === 'string' && REPLAYABLE_PART_TYPES.has(type);
+    })
+  );
+}
+
+/**
+ * The provider's recorded messages, when the payload is a non-empty list of nothing but replayable
+ * assistant messages. It comes back from the engine through JSON and is never trusted as typed: any
+ * other shape — a user or system message, a stray value — is `undefined`, and the turn is rebuilt
+ * from its plain fields instead of failing the call or slipping in a message the model never sent.
+ */
+function recordedMessages(payload: unknown): ModelMessage[] | undefined {
+  if (!Array.isArray(payload) || payload.length === 0) return undefined;
+  return payload.every(isRecordedAssistantMessage) ? (payload as ModelMessage[]) : undefined;
+}
+
+/**
+ * One turn with tools on offer: the provider's own assistant messages when this adapter's type
+ * recorded them, else one assistant message with the turn's words and all its calls — then one
+ * `tool` message with all its results.
+ */
+function turnMessages(turn: AgentTurn, type: ProviderType): ModelMessage[] {
+  const recorded =
+    turn.opaque?.providerType === type ? recordedMessages(turn.opaque.payload) : undefined;
+  // A copy: the payload is the stored turn's, and the results are appended below.
+  const messages: ModelMessage[] = recorded !== undefined ? [...recorded] : rebuiltTurn(turn);
+  if (turn.results.length > 0) {
+    messages.push({ role: 'tool', content: turn.results.map(toolResultPart) });
+  }
+  return messages;
+}
+
+/**
+ * One turn with no tools on offer (review I1): its words and calls in one assistant message, its
+ * results in one user message, all as text. A recorded turn is not replayed — its tool-call parts
+ * would be rejected exactly as a rebuilt one's would.
+ */
+function turnAsText(turn: AgentTurn): ModelMessage[] {
+  const said = [...saidText(turn), ...turn.toolCalls.map((call) => calledText(call.name, call.args))];
+  const messages: ModelMessage[] = said.length === 0 ? [] : [{ role: 'assistant', content: said }];
+  if (turn.results.length > 0) {
+    messages.push({ role: 'user', content: turn.results.map(resultText) });
+  }
+  return messages;
+}
+
+/**
+ * The messages for one call (D377). With `turns`, an agent node's own history: the prompt, then
+ * each turn as {@link turnMessages} replays it — verbatim from an `opaque` record this adapter's
+ * `type` made, which is how Anthropic thinking signatures and Gemini `thoughtSignature`s round-trip,
+ * otherwise rebuilt with every call of the turn in one message. With no tools on offer every turn is
+ * text ({@link turnAsText}). Without `turns`, exactly {@link continuationMessages}, so chat and
+ * non-agentic nodes send what they always sent. `undefined` means a single prompt.
+ */
+export function messagesFor(
+  req: GenerateRequest,
+  type: ProviderType,
+  withTools = true,
+): ModelMessage[] | undefined {
+  if (req.turns === undefined) return continuationMessages(req, withTools);
+  if (req.turns.length === 0) return undefined;
+  const messages: ModelMessage[] = [{ role: 'user', content: req.prompt }];
+  for (const turn of req.turns) {
+    messages.push(...(withTools ? turnMessages(turn, type) : turnAsText(turn)));
   }
   return messages;
 }
@@ -352,7 +470,7 @@ export function createAiSdkAdapter(options: AiSdkAdapterOptions): ProviderAdapte
       return (async function* (): AsyncGenerator<StreamChunk> {
         try {
           const tools = toToolSet(req.tools);
-          const messages = continuationMessages(req, tools !== undefined);
+          const messages = messagesFor(req, options.type, tools !== undefined);
           const input = messages === undefined ? { prompt: req.prompt } : { messages };
           const result = streamText({
             model: options.model(req.modelId),
@@ -379,6 +497,11 @@ export function createAiSdkAdapter(options: AiSdkAdapterOptions): ProviderAdapte
             // and hides the failure the engine is supposed to decide about.
             maxRetries: 0,
           });
+
+          // The turn's trailer — usage, then finish — is held until the stream ends, so the turn's
+          // `opaque` record can go out after its content and before it (D377, FR-EXE-008).
+          let usage: Extract<StreamChunk, { type: 'usage' }> | undefined;
+          let finish: FinishReason | undefined;
 
           // `fullStream` rather than `textStream`: a failed call ends `textStream` silently and
           // only surfaces as a NoOutputGeneratedError with no cause, which would throw away the
@@ -411,15 +534,35 @@ export function createAiSdkAdapter(options: AiSdkAdapterOptions): ProviderAdapte
               const { inputTokens, outputTokens, inputTokenDetails } = part.totalUsage;
               if (inputTokens !== undefined || outputTokens !== undefined) {
                 const cached = inputTokenDetails?.cacheReadTokens ?? 0;
-                yield {
+                usage = {
                   type: 'usage',
                   tokensIn: inputTokens ?? 0,
                   tokensOut: outputTokens ?? 0,
                   ...(cached > 0 ? { cachedTokensIn: cached } : {}),
                 };
               }
-              yield { type: 'finish', reason: toFinishReason(part.finishReason) };
+              finish = toFinishReason(part.finishReason);
             }
+          }
+
+          if (finish !== undefined) {
+            /*
+             * D377: the turn as the provider recorded it, for the node's next call to replay — only
+             * for a request that carries `turns`, the one kind that can send it back; chat and
+             * non-agentic calls neither wait for it nor carry a copy. The AI SDK copies each part's
+             * provider metadata onto its response messages as `providerOptions` — Anthropic's
+             * thinking signature on the reasoning part, Gemini's `thoughtSignature` on the call part.
+             */
+            if (req.turns !== undefined) {
+              const recorded = (await result.response).messages.filter(
+                (message) => message.role === 'assistant',
+              );
+              if (recorded.length > 0) {
+                yield { type: 'opaque', providerType: options.type, payload: recorded };
+              }
+            }
+            if (usage !== undefined) yield usage;
+            yield { type: 'finish', reason: finish };
           }
         } catch (error) {
           throw new ProviderCallError(mapProviderError(error, { signal }));

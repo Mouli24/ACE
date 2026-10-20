@@ -140,6 +140,8 @@ describe('TC-MOD-001 the mock lists every model of §2.6', () => {
       'mock-summary',
       // D315: Domain's scriptable model.
       'mock-script',
+      // Agentic nodes Phase 2: scripted tool chains.
+      'mock-agent',
     ]);
   });
 
