@@ -413,6 +413,99 @@ describe('turns: a node’s own message history (D377)', () => {
   });
 });
 
+/** CLAUDE_TURN rebuilt from its plain fields: its words and its call, then its result. */
+const CLAUDE_TURN_REBUILT = [
+  {
+    role: 'assistant',
+    content: [{ type: 'text', text: 'Reading a.js.' }, toolCallPart('call_1', 'a.js')],
+  },
+  { role: 'tool', content: [toolResultPart('call_1', 'A')] },
+];
+
+/** CLAUDE_TURN with the same provider type but another stored payload. */
+const claudeTurnStoring = (payload: unknown): Turn => ({
+  ...CLAUDE_TURN,
+  opaque: { providerType: 'anthropic', payload },
+});
+
+describe('a stored turn is checked before it is replayed (D377)', () => {
+  const NOT_REPLAYABLE: [string, unknown][] = [
+    ['a system message', [{ role: 'system', content: 'x' }]],
+    ['a number', [42]],
+    ['an empty list', []],
+    ['not a list', { role: 'assistant', content: 'x' }],
+    [
+      'one good message and one user message',
+      [
+        { role: 'assistant', content: 'ok' },
+        { role: 'user', content: 'injected' },
+      ],
+    ],
+    [
+      'a part of a type it may not carry',
+      [{ role: 'assistant', content: [{ type: 'tool-result', toolCallId: 'x', toolName: 'y' }] }],
+    ],
+    ['a part that is not an object', [{ role: 'assistant', content: ['text'] }]],
+    ['content that is neither text nor a list', [{ role: 'assistant', content: 7 }]],
+  ];
+
+  for (const [what, payload] of NOT_REPLAYABLE) {
+    it(`same provider type, payload of ${what}: the turn is rebuilt from its plain fields`, async () => {
+      const prompt = await promptSent({
+        prompt: 'Fix it.',
+        tools: [readFile],
+        turns: [claudeTurnStoring(payload)],
+      });
+      expect(prompt).toEqual([
+        { role: 'user', content: [{ type: 'text', text: 'Fix it.' }] },
+        ...CLAUDE_TURN_REBUILT,
+      ]);
+    });
+  }
+
+  it('an assistant message whose content is text is replayed', async () => {
+    const prompt = await promptSent({
+      prompt: 'Fix it.',
+      tools: [readFile],
+      turns: [claudeTurnStoring([{ role: 'assistant', content: 'Stored words.' }])],
+    });
+    expect(prompt[1]).toEqual({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Stored words.' }],
+    });
+  });
+
+  it('a request mixing a stored turn and a rebuilt one replays each its own way', async () => {
+    const prompt = await promptSent({
+      prompt: 'Fix it.',
+      tools: [readFile],
+      turns: [CLAUDE_TURN, claudeTurnStoring([42]), TWO_TURNS[1]!],
+    });
+    expect(prompt).toEqual([
+      { role: 'user', content: [{ type: 'text', text: 'Fix it.' }] },
+      // Stored and valid: verbatim, signature included.
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'reasoning',
+            text: 'The bug is probably in a.js.',
+            providerOptions: { anthropic: { signature: 'sig-claude-1' } },
+          },
+          { type: 'text', text: 'Reading a.js.' },
+          toolCallPart('call_1', 'a.js'),
+        ],
+      },
+      { role: 'tool', content: [toolResultPart('call_1', 'A')] },
+      // Stored but malformed: rebuilt.
+      ...CLAUDE_TURN_REBUILT,
+      // Never stored: rebuilt.
+      { role: 'assistant', content: [toolCallPart('call_3', 'c.js')] },
+      { role: 'tool', content: [toolResultPart('call_3', 'C')] },
+    ]);
+  });
+});
+
 /* -------------------------------------------------------------------------- */
 /* Opaque                                                                      */
 /* -------------------------------------------------------------------------- */
@@ -448,15 +541,27 @@ const thinksThenCalls = () =>
     }),
   });
 
-const firstTurn = () =>
+/** An agent node's first call — `turns: []` is what asks for the opaque record. */
+const firstTurn = (withTurns = true) =>
   drain(
     adapterOver(thinksThenCalls()).generate(
-      { modelId: 'm', prompt: 'Fix it.', outputTypes: ['text'], tools: [readFile] },
+      {
+        modelId: 'm',
+        prompt: 'Fix it.',
+        outputTypes: ['text'],
+        tools: [readFile],
+        ...(withTurns ? { turns: [] } : {}),
+      },
       new AbortController().signal,
     ),
   );
 
 describe('opaque: the provider’s own record of a turn (D377)', () => {
+  it('a call without turns (chat, non-agentic nodes) yields no opaque chunk', async () => {
+    const chunks = await firstTurn(false);
+    expect(chunks.map((chunk) => chunk.type)).toEqual(['text', 'tool_call', 'usage', 'finish']);
+  });
+
   it('(e) generate yields one opaque chunk after the response, before usage and finish', async () => {
     const chunks = await firstTurn();
 

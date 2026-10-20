@@ -369,9 +369,34 @@ function rebuiltTurn(turn: AgentTurn): ModelMessage[] {
   return content.length === 0 ? [] : [{ role: 'assistant', content }];
 }
 
-/** The provider's recorded messages, when the payload is a non-empty list of them. */
+/** The part types a recorded assistant message may carry back into a call (D377). */
+const REPLAYABLE_PART_TYPES: ReadonlySet<string> = new Set(['text', 'reasoning', 'tool-call', 'file']);
+
+/** An assistant message whose content is text, or a list of parts of a replayable type. */
+function isRecordedAssistantMessage(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const { role, content } = value as { role?: unknown; content?: unknown };
+  if (role !== 'assistant') return false;
+  if (typeof content === 'string') return true;
+  return (
+    Array.isArray(content) &&
+    content.every((part: unknown) => {
+      if (typeof part !== 'object' || part === null) return false;
+      const type = (part as { type?: unknown }).type;
+      return typeof type === 'string' && REPLAYABLE_PART_TYPES.has(type);
+    })
+  );
+}
+
+/**
+ * The provider's recorded messages, when the payload is a non-empty list of nothing but replayable
+ * assistant messages. It comes back from the engine through JSON and is never trusted as typed: any
+ * other shape — a user or system message, a stray value — is `undefined`, and the turn is rebuilt
+ * from its plain fields instead of failing the call or slipping in a message the model never sent.
+ */
 function recordedMessages(payload: unknown): ModelMessage[] | undefined {
-  return Array.isArray(payload) && payload.length > 0 ? (payload as ModelMessage[]) : undefined;
+  if (!Array.isArray(payload) || payload.length === 0) return undefined;
+  return payload.every(isRecordedAssistantMessage) ? (payload as ModelMessage[]) : undefined;
 }
 
 /**
@@ -522,16 +547,19 @@ export function createAiSdkAdapter(options: AiSdkAdapterOptions): ProviderAdapte
 
           if (finish !== undefined) {
             /*
-             * D377: the turn as the provider recorded it, for the node's next call to replay. The
-             * AI SDK copies each part's provider metadata onto its response messages as
-             * `providerOptions` — Anthropic's thinking signature on the reasoning part, Gemini's
-             * `thoughtSignature` on the call part.
+             * D377: the turn as the provider recorded it, for the node's next call to replay — only
+             * for a request that carries `turns`, the one kind that can send it back; chat and
+             * non-agentic calls neither wait for it nor carry a copy. The AI SDK copies each part's
+             * provider metadata onto its response messages as `providerOptions` — Anthropic's
+             * thinking signature on the reasoning part, Gemini's `thoughtSignature` on the call part.
              */
-            const recorded = (await result.response).messages.filter(
-              (message) => message.role === 'assistant',
-            );
-            if (recorded.length > 0) {
-              yield { type: 'opaque', providerType: options.type, payload: recorded };
+            if (req.turns !== undefined) {
+              const recorded = (await result.response).messages.filter(
+                (message) => message.role === 'assistant',
+              );
+              if (recorded.length > 0) {
+                yield { type: 'opaque', providerType: options.type, payload: recorded };
+              }
             }
             if (usage !== undefined) yield usage;
             yield { type: 'finish', reason: finish };

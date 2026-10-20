@@ -70,7 +70,13 @@ export interface ToolResult {
  * `opaque` is the provider's own record of the same turn, from its `opaque` chunk. An adapter of
  * that `providerType` replays it verbatim, which is what carries reasoning and its signatures back
  * (Anthropic thinking, Gemini `thoughtSignature`); any other adapter rebuilds the turn from the
- * neutral fields. Nothing outside the adapter reads inside `payload`.
+ * neutral fields. Nothing outside the adapter reads inside `payload`, and an adapter checks its
+ * shape before replaying it — a payload it does not recognise is rebuilt, never sent.
+ *
+ * The executor's contract, which every provider relies on: every call in `toolCalls` has exactly
+ * one entry in `results` with the same `callId` — a call the executor refused, blocked, timed out
+ * or dropped still gets a result saying so — and a turn with results always carries the calls they
+ * answer. A provider rejects a call with no result, and a result with no call, outright.
  */
 export interface AgentTurn {
   /** What the model said this turn alongside its calls; `''` when it only called tools. */
@@ -193,7 +199,8 @@ export type StreamChunk =
   /**
    * D377: the provider's own record of the turn that just ended — for the AI SDK, its assistant
    * messages with reasoning and signatures still on them. Yielded once, after the turn's content and
-   * before its `usage` and `finish`, by an adapter that can replay it; kept as that turn's
+   * before its `usage` and `finish`, by an adapter that can replay it, and only for a request that
+   * carries `turns` (a chat or non-agentic call never gets one); kept as that turn's
    * `AgentTurn.opaque` for the node's next call. It never leaves the node (BR-02), and nothing but
    * an adapter of `providerType` reads `payload`.
    */
