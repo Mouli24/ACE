@@ -476,6 +476,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
     ...(deps.sandboxDirFor === undefined ? {} : { sandboxDirFor: deps.sandboxDirFor }),
     ...(deps.projectFolderFor === undefined ? {} : { projectFolderFor: deps.projectFolderFor }),
     ...(deps.agentEnvironment === undefined ? {} : { agentEnvironment: deps.agentEnvironment }),
+    allowlistFor: (runId) => active.get(runId)?.allowlist,
     ...(deps.artifacts === undefined ? {} : { artifacts: deps.artifacts }),
     ...(deps.recordToolCall === undefined ? {} : { recordToolCall: deps.recordToolCall }),
     ...(deps.nextId === undefined ? {} : { nextId: deps.nextId }),

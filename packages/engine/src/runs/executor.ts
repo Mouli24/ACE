@@ -368,6 +368,12 @@ export interface NodeExecutorDeps {
    * CLAUDE.md §3.4 rule 3). Absent, the OS is this process's and the shell is named generically.
    */
   agentEnvironment?: { os: NodeJS.Platform; shell: string };
+  /**
+   * D375/D376 (Task 16 follow-up): the live run's command allowlist, so a CLI-backed agentic node
+   * is given the prefixes Always allow has grown, not only the snapshot's. Absent, or once the
+   * run has ended, the node's own `workspace.allowedCommands` apply.
+   */
+  allowlistFor?: (runId: Id) => { for(nodeId: Id): readonly string[] } | undefined;
 }
 
 export interface NodeExecutor {
@@ -1291,6 +1297,22 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               runId: input.runId,
               iteration: input.iteration,
               ...(workingDir === undefined ? {} : { workingDir }),
+              // D375: a coding-agent CLI node with workspace access carries its access level and
+              // the run's live allowlist; the adapter maps them to its own flags. Off sends nothing.
+              ...(input.node.kind === 'agent' &&
+              isAgentic(input.node.config) &&
+              isCliProviderType(adapter.type) &&
+              replayed === undefined
+                ? {
+                    cliAccess: {
+                      access: agentWorkspaceOf(input.node.config).access,
+                      allowedCommands: [
+                        ...(deps.allowlistFor?.(input.runId)?.for(input.node.id) ??
+                          agentWorkspaceOf(input.node.config).allowedCommands),
+                      ],
+                    },
+                  }
+                : {}),
               ...(offerTools ? { tools: offeredTools } : {}),
               // D377: an agentic node sends its turns so far, which supersede `toolResults`.
               ...(agent !== undefined
