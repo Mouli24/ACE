@@ -3525,8 +3525,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
         // node runs (round 5 §2.4). A store without knowledge bases holds none, so none exists.
         knowledgeBaseExists: async (id) =>
           ((await repository.knowledgeBases?.get(scope, id)) ?? null) !== null,
-        // D375: a node with workspace access needs the project's folder to work in.
-        projectFolder: project?.folderPath ?? '',
+        // D375: a node with workspace access needs the project's folder to work in — unless this
+        // is a replay, which calls nothing and touches no file.
+        ...(replaying ? {} : { projectFolder: project?.folderPath ?? '' }),
         // An attached base whose embedding provider was removed cannot search: refused here too,
         // as `provider_missing` (FR-PRV-005, final-review I5).
         embeddingProviderOf: async (id) =>

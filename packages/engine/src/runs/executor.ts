@@ -1089,7 +1089,8 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
          * so no provider is ever sent a call without its result.
          */
         async function runAgentTurns(state: AgentLoopState): Promise<void> {
-          let withoutTools = false;
+          // Carried across a fallback: a node already at the policy's cap is asked without tools.
+          let withoutTools = state.toolCalls >= toolCallLimit;
           const budget = {
             contextWindow: catalogRow?.contextWindow ?? AGENT_DEFAULT_CONTEXT_WINDOW,
             fixedChars:
