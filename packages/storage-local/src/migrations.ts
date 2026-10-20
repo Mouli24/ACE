@@ -113,6 +113,12 @@ export const AGENTIC_COMMAND_APPROVALS_MIGRATION_ID = '20261020T130500_agentic_c
 export const AGENTIC_TOOL_CALL_CAP_MIGRATION_ID = '20261020T150000_agentic_tool_call_cap';
 
 /**
+ * D378 (agentic nodes): a node run's workspace summary and a tool call's changed paths. NULL on
+ * every row stored before, which reads as absent.
+ */
+export const AGENTIC_WORKSPACE_SUMMARY_MIGRATION_ID = '20261020T151000_agentic_workspace_summary';
+
+/**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
  * written.
@@ -844,6 +850,14 @@ export const MIGRATIONS: readonly Migration[] = [
     seed: (sqlite) => {
       raiseDefaultToolCallCap(sqlite);
     },
+  },
+  {
+    id: AGENTIC_WORKSPACE_SUMMARY_MIGRATION_ID,
+    up: `
+      -- D378: NodeRun.workspace (JSON WorkspaceSummary) and ToolCall.changedPaths (JSON string[]).
+      ALTER TABLE node_runs ADD COLUMN workspace_json TEXT;
+      ALTER TABLE tool_calls ADD COLUMN changed_paths_json TEXT;
+    `,
   },
 ];
 

@@ -85,6 +85,7 @@ import {
   withoutOpaque,
   type AgentLoopState,
 } from './agentic/index.js';
+import { changedPathsOf } from './agentic/summary.js';
 
 /**
  * The node executor (FR-EXE-004..010, FR-EXE-015, Arch §12.2).
@@ -1506,6 +1507,11 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             });
             return { failed: judged.failed };
           }
+          // D378: the project files an agentic node's successful call changed, for its step summary.
+          const changedPaths =
+            agent === undefined || status !== 'ok'
+              ? undefined
+              : changedPathsOf(call.name, call.args, result, workingDir);
           await logToolCall(call, {
             status,
             resultSummary:
@@ -1516,6 +1522,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             verdicts: step.verdicts ?? [],
             at,
             ...(agent === undefined ? {} : { callId: call.callId }),
+            ...(changedPaths === undefined ? {} : { changedPaths }),
           });
           return { result: judged.result };
         }

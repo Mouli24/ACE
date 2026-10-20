@@ -297,6 +297,8 @@ export const nodeRuns = sqliteTable(
     droppedSources: text('dropped_sources'),
     /** JSON `MemoryOp[]`: the `__memory` ops this node run applied, in order (§2.2, D230). */
     memoryOps: text('memory_ops'),
+    /** D378: JSON `WorkspaceSummary` — an agentic node step's files and commands. NULL otherwise. */
+    workspace: text('workspace_json'),
     startedAt: text('started_at'),
     endedAt: text('ended_at'),
     durationMs: integer('duration_ms'),
@@ -465,6 +467,8 @@ export const toolCalls = sqliteTable(
     /** JSON `Verdict[]` — the tool-point verdicts this call recorded. */
     verdicts: text('verdicts').notNull(),
     at: text('at').notNull(),
+    /** D378: JSON `string[]` — the project files an agentic node's call changed. NULL otherwise. */
+    changedPaths: text('changed_paths_json'),
   },
   (table) => [
     index('tool_calls_node_run_idx').on(table.workspaceId, table.nodeRunId, table.id),

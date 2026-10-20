@@ -164,6 +164,8 @@ export interface NodeRunPatch {
   inputEnvelopes?: NodeRun['inputEnvelopes'];
   /** D309: why the turn started. */
   trigger?: NodeRun['trigger'];
+  /** D378: an agentic node step's files and commands, written once the step ends. */
+  workspace?: NodeRun['workspace'];
 }
 /**
  * `verdicts` and `approvals` are deliberately absent: they are written through

@@ -30,6 +30,8 @@ import {
   type Usage,
   type ValidationIssue,
   type Verdict,
+  type WorkspaceSummary,
+  type Checkpoint,
 } from '@ace/contracts';
 
 import { countLoop, digestLine, routeEnvelope as routeByBrain } from '../domain/brain.js';
@@ -128,6 +130,7 @@ import {
   type RunAllowlist,
 } from './agentic/commands.js';
 import { isAgentLimitError } from './agentic/limits.js';
+import { stepActivity, summarizeStep } from './agentic/summary.js';
 import type { ToolCall } from '@ace/contracts';
 import { toSummary } from './summary.js';
 import { createReplayBook, isReplayedKind, type ReplayBook } from './replay.js';
@@ -219,6 +222,20 @@ export interface RunService {
   shutdown(): Promise<void>;
   /** How many runs are still being driven by this process. */
   activeRunCount(): number;
+}
+
+/** D378: one node step — its checkpoint recording, when it writes, and the node runs it made. */
+interface StepRecord {
+  recording?: CheckpointRecording;
+  nodeRunIds: Id[];
+}
+
+/** D378: what an agentic node's step did in the project folder, once it ended. */
+interface StepWork {
+  summary: WorkspaceSummary;
+  toolCalls: ToolCall[];
+  checkpoint?: Checkpoint;
+  projectDir?: string;
 }
 
 export interface RunServiceDeps {
@@ -521,9 +538,11 @@ export function createRunService(deps: RunServiceDeps): RunService {
       record?: boolean;
       /** The run's abort signal, so a Stop cancels a model summary under way (round 5 §2.5). */
       signal?: AbortSignal;
+      /** D378: what an agentic `from` node's step did in the project folder. */
+      workspace?: WorkspaceSummary;
     } = {},
   ): Promise<Envelope> {
-    const { record = true, signal } = options;
+    const { record = true, signal, workspace } = options;
     // An agent's reads leave room for its retrieved chunks and memory (round 5 §2.2, §2.4).
     const budgetTokens = to.kind === 'agent' ? readsBudgetFor(to) : Number.MAX_SAFE_INTEGER;
     const outputTypes =
@@ -591,6 +610,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
         ...(target === undefined ? {} : { target }),
         ...(signal === undefined ? {} : { signal }),
         ...(sanitise === undefined ? {} : { sanitise }),
+        ...(workspace === undefined ? {} : { workspace }),
       },
       replays.has(run.id) ? replaySummariser : summariser,
     );
@@ -1252,6 +1272,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
       replace = false,
       /** D310: the HANDOFF this delivery is, so the edge envelope and the transfer name it. */
       teamEnvelopeId?: Id,
+      /** D378: what an agentic node's step did in the folder, carried on each envelope. */
+      workspace?: WorkspaceSummary,
     ): Promise<void> {
       const outgoing =
         only ?? edges.filter((edge) => edge.from.nodeId === node.id && edge.kind === 'data');
@@ -1265,7 +1287,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
         if (plannedRuns.has(targetId)) continue;
 
         // Built before the list is read: another delivery may land while this one awaits.
-        const built = await envelopeBetween(run, node, target, parts, iteration, { signal });
+        const built = await envelopeBetween(run, node, target, parts, iteration, {
+          signal,
+          ...(workspace === undefined ? {} : { workspace }),
+        });
         const envelope = teamEnvelopeId === undefined ? built : { ...built, teamEnvelopeId };
         const kept = (envelopesFor.get(targetId) ?? []).filter(
           (earlier) => !replace || earlier.fromNodeId !== node.id,
@@ -1568,6 +1593,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
       outcome: NodeExecutionOutcome,
       /** Why it ended without a result; `undefined` means it produced `outcome.output`. */
       failure: NodeError | undefined,
+      /** D378: an agentic node's step — its calls and checkpoint — for "What it did" and Changes. */
+      work?: StepWork,
     ): Promise<void> {
       if (deps.recordNodeTurn === undefined || !isGoalDriven(node)) return;
 
@@ -1591,6 +1618,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
           ...(outcome.modelUsed?.resolvedModelId === undefined
             ? {}
             : { modelId: outcome.modelUsed.resolvedModelId }),
+          ...(work === undefined || work.toolCalls.length === 0
+            ? {}
+            : { activity: stepActivity(work.toolCalls, work.projectDir) }),
+          ...(work?.checkpoint === undefined ? {} : { checkpointId: work.checkpoint.id }),
         });
       } catch (error) {
         logger.warn(
@@ -1974,12 +2005,62 @@ export function createRunService(deps: RunServiceDeps): RunService {
       rearmSuccessors(from);
     }
 
+    /**
+     * D378: what an agentic node's step did in the project folder — its step checkpoint finished
+     * now (a second `finish()` answers the same), so the files it lists are final before the next
+     * node's envelope is built; its calls across every attempt; the summary written onto its last
+     * node run. `undefined` for a node with workspace access Off, and never a reason the node fails.
+     */
+    async function stepWorkOf(
+      node: Node,
+      nodeRun: NodeRun,
+      step: StepRecord | undefined,
+    ): Promise<StepWork | undefined> {
+      if (node.kind !== 'agent' || !isAgentic(node.config)) return undefined;
+      try {
+        const ids =
+          step === undefined || step.nodeRunIds.length === 0 ? [nodeRun.id] : step.nodeRunIds;
+        const toolCalls = (
+          await Promise.all(ids.map((id) => repository.toolCalls.listByNodeRun(scope, id)))
+        ).flat();
+        let checkpoint: Checkpoint | undefined;
+        let recorded = false;
+        if (step?.recording !== undefined) {
+          checkpoint = await step.recording.finish();
+          recorded = checkpoint?.status !== 'failed';
+        }
+        const summary = summarizeStep({
+          toolCalls,
+          ...(checkpoint === undefined ? {} : { checkpoint }),
+          recorded,
+        });
+        await repository.nodeRuns.update(scope, nodeRun.id, { workspace: summary });
+        const project = await repository.projects.get(scope, run.projectId);
+        const projectDir =
+          project === null || project.folderPath === '' ? undefined : project.folderPath;
+        return {
+          summary,
+          toolCalls,
+          ...(checkpoint === undefined ? {} : { checkpoint }),
+          ...(projectDir === undefined ? {} : { projectDir }),
+        };
+      } catch (error) {
+        logger.warn(
+          { subsystem: 'runs', runId: run.id, nodeId: node.id, err: error },
+          'the workspace summary of a node step could not be recorded',
+        );
+        return undefined;
+      }
+    }
+
     async function finish(
       node: Node,
       nodeRun: NodeRun,
       outcome: NodeExecutionOutcome,
       endedAt: string = now(),
       turn?: TurnContext,
+      /** D378: the step this ending closes — its checkpoint recording and its node runs. */
+      step?: StepRecord,
     ): Promise<void> {
       if (stoppedByControl()) {
         await recordStopped(node, nodeRun, outcome);
@@ -2039,6 +2120,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
         await emitNodeState(run, nodeRun, outcome.status, outcome.failureReason);
         return;
       }
+
+      // D378: an agentic node's step hands on what it did in the folder, and keeps it on its row.
+      const work = await stepWorkOf(node, nodeRun, step);
 
       // The cost point, *after* the call: a model that answered longer than its projection, or a cap
       // lowered mid-run (§2.3). The node keeps its result; the run stops dispatching.
@@ -2112,6 +2196,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
             routing?.edges ?? inside,
             fresh,
             routing?.envelopeId,
+            work?.summary,
           );
           if (fresh) rearmSuccessors(node);
         }
@@ -2200,9 +2285,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
       if (sideEnded) {
         // A side turn is a word with a teammate, not the node's own work.
       } else if (status === 'COMPLETED') {
-        await handTurnToChat(node, outcome, undefined);
+        await handTurnToChat(node, outcome, undefined, work);
       } else if (status === 'FAILED' || status === 'BLOCKED') {
-        await handTurnToChat(node, outcome, failure ?? didNotFinish(node));
+        await handTurnToChat(node, outcome, failure ?? didNotFinish(node), work);
       }
 
       // The requeue has already put the whole body back to IDLE at the next iteration, so only the
@@ -2381,10 +2466,14 @@ export function createRunService(deps: RunServiceDeps): RunService {
      * cannot begin is stored `failed` and shown in Changes; the step goes on, as the run's own
      * check already passed at start (D361) or the person chose to run without undo.
      */
-    async function recordedStep(node: Node, step: () => Promise<void>): Promise<void> {
+    async function recordedStep(
+      node: Node,
+      step: (recording?: CheckpointRecording) => Promise<void>,
+    ): Promise<void> {
       const recording = await beginStepCheckpoint(run, node.id);
       try {
-        await step();
+        // D378: the step may finish its checkpoint itself, to hand its files on; this answers the same.
+        await step(recording);
       } finally {
         await recording?.finish().catch(() => undefined);
       }
@@ -2516,7 +2605,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
       try {
         await (writers.has(node.id)
-          ? writeTurns.run(() => recordedStep(node, attempts))
+          ? writeTurns.run(() => recordedStep(node, (recording) => attempts(recording)))
           : attempts());
       } finally {
         if (turnAbort !== undefined) domain?.endTurn(node.id, turnAbort);
@@ -2530,7 +2619,12 @@ export function createRunService(deps: RunServiceDeps): RunService {
         }
       }
 
-      async function attempts(): Promise<void> {
+      async function attempts(recording?: CheckpointRecording): Promise<void> {
+        /** D378: this step — its checkpoint and every node run its attempts made. */
+        const step: StepRecord = {
+          ...(recording === undefined ? {} : { recording }),
+          nodeRunIds: [],
+        };
         const maxRetries =
           node.kind === 'agent' || node.kind === 'model' ? node.config.execution.retries : 0;
 
@@ -2553,6 +2647,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
           planned ??
           (await beginNodeRun(node, iteration, attempt, triggerFor(incoming, incomingEnvelopes)));
         lastNodeRunId = nodeRun.id;
+        step.nodeRunIds.push(nodeRun.id);
         if (planned !== undefined) {
           nodeRunByNode.set(node.id, planned);
           await emitNodeState(run, planned, 'READY');
@@ -2732,6 +2827,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
                 triggerFor(incoming, incomingEnvelopes),
               );
               lastNodeRunId = nodeRun.id;
+              step.nodeRunIds.push(nodeRun.id);
               if (nodeRun.status === 'STOPPED') {
                 states.set(node.id, 'STOPPED');
                 return;
@@ -2743,7 +2839,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
             }
           }
 
-          await finish(node, nodeRun, outcome, endedAt, turn);
+          await finish(node, nodeRun, outcome, endedAt, turn, step);
           return;
         }
       }
@@ -2835,6 +2931,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
             row.iteration,
             {
               signal,
+              ...(row.workspace === undefined ? {} : { workspace: row.workspace }),
             },
           );
           envelopesFor.set(target.id, [...(envelopesFor.get(target.id) ?? []), envelope]);
@@ -3704,6 +3801,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
         envelopes.push(
           await envelopeBetween(run, from, node, row.output ?? [], row.iteration, {
             record: false,
+            ...(row.workspace === undefined ? {} : { workspace: row.workspace }),
           }),
         );
       }

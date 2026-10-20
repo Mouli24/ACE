@@ -158,6 +158,10 @@ export interface NodeRunTurn {
   usage?: Usage;
   /** The model the provider reported actually answering (`ModelUsed.resolvedModelId`). */
   modelId?: string;
+  /** D378: what an agentic node's step did in the project folder, in order — "What it did". */
+  activity?: ActivityItem[];
+  /** D378: the step's checkpoint of the files it changed — the Changes card. */
+  checkpointId?: Id;
 }
 
 export interface ChatService {
@@ -1583,6 +1587,11 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       const extra = {
         runId: turn.runId,
         ...(turn.usage === undefined ? {} : { usage: turn.usage }),
+        // D378: whether it answered or failed, what the step did in the folder is reviewable.
+        ...(turn.activity === undefined || turn.activity.length === 0
+          ? {}
+          : { activity: turn.activity }),
+        ...(turn.checkpointId === undefined ? {} : { checkpointId: turn.checkpointId }),
       };
       await store(
         turn.error !== undefined

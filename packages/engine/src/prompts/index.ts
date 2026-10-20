@@ -6,6 +6,7 @@ import {
   type Envelope,
   type EnvelopeContract,
   type Part,
+  type WorkspaceSummary,
 } from '@ace/contracts';
 
 import { maskSecrets } from '../security/secret-patterns.js';
@@ -42,6 +43,15 @@ export const PROMPT_SECTIONS = [
  * has it between `## Context` and `## Input` — the thread is the node's own bounded context.
  */
 export const CONVERSATION_SECTION = '## Conversation';
+
+/**
+ * D378: what agentic upstream nodes did in the project folder — the files they changed, with lines
+ * added and removed, and the commands they ran, with exit codes — from their envelopes' `workspace`
+ * blocks. After `## Context`, and only when an envelope carries one: a prompt fed only by Off nodes
+ * is byte-identical to before. The paths and commands were chosen by a model, so the block is
+ * labelled untrusted (BR-13).
+ */
+export const UPSTREAM_WORKSPACE_SECTION = '## Upstream workspace';
 
 /**
  * The block appended under `## Instructions` when the agent's memory is enabled (round 5 §2.2,
@@ -159,6 +169,39 @@ function renderPart(part: Part): string {
 
 function block(label: string, body: string): string {
   return [`${label}:`, UNTRUSTED_LABEL, body].join('\n');
+}
+
+/** One upstream step's workspace block, as lines (D378). */
+function renderWorkspace(summary: WorkspaceSummary): string {
+  const lines: string[] = [];
+  if (summary.checkpointId !== undefined) lines.push(`Checkpoint: ${summary.checkpointId}`);
+  lines.push(summary.filesChanged.length === 0 ? 'Files changed: none' : 'Files changed:');
+  for (const file of summary.filesChanged) {
+    lines.push(`- ${file.path} (+${file.added} −${file.removed})`);
+  }
+  lines.push(summary.commands.length === 0 ? 'Commands run: none' : 'Commands run:');
+  for (const command of summary.commands) {
+    const exit = command.exitCode === null ? 'no exit code' : `exit ${command.exitCode}`;
+    const seconds = (command.durationMs / 1000).toFixed(1);
+    lines.push(`- ${command.command.replace(/\s+/g, ' ').trim()} (${exit}, ${seconds} s)`);
+  }
+  return lines.join('\n');
+}
+
+/** The `## Upstream workspace` body for these envelopes; `''` when none carries a block. */
+function upstreamWorkspace(envelopes: readonly Envelope[]): string {
+  const steps = envelopes.flatMap((envelope) =>
+    envelope.workspace === undefined ? [] : [envelope.workspace],
+  );
+  if (steps.length === 0) return '';
+  const body = steps
+    .map((step, index) =>
+      steps.length === 1
+        ? renderWorkspace(step)
+        : `Upstream step ${index + 1}:\n${renderWorkspace(step)}`,
+    )
+    .join('\n\n');
+  return block('What the nodes before this one did in the project folder', body);
 }
 
 /**
@@ -320,6 +363,12 @@ export function assemblePrompt(input: AssemblePromptInput): AssembledPrompt {
   const team = teamSections(input.team);
   if (team.length > 0) {
     sections.splice(PROMPT_SECTIONS.indexOf('## Instructions') + 1, 0, ...team);
+  }
+  // D378: what agentic upstream nodes did in the folder, after the context — only when they did.
+  const workspace = upstreamWorkspace(envelopes);
+  if (workspace !== '') {
+    const afterContext = sections.findIndex(([header]) => header === '## Context') + 1;
+    sections.splice(afterContext, 0, [UPSTREAM_WORKSPACE_SECTION, workspace]);
   }
   if (input.conversation !== undefined) {
     const afterContext = PROMPT_SECTIONS.indexOf('## Context') + 1;

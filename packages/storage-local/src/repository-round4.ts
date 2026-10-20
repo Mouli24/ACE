@@ -94,6 +94,8 @@ function toToolCall(row: ToolCallRow): ToolCall {
     status: row.status as ToolCallStatus,
     verdicts: JSON.parse(row.verdicts),
     at: row.at,
+    // D378: NULL on every call but an agentic node's file-changing one, which stays absent.
+    ...(row.changedPaths === null ? {} : { changedPaths: JSON.parse(row.changedPaths) }),
   });
 }
 
@@ -308,6 +310,10 @@ export function createToolCallRepository(db: Db, inTransaction: InTransaction): 
             status: call.status,
             verdicts: toJsonColumn(call.verdicts, `${at}.verdicts`),
             at: call.at,
+            changedPaths:
+              call.changedPaths === undefined
+                ? null
+                : toJsonColumn(call.changedPaths, `${at}.changedPaths`),
           })
           .run();
 

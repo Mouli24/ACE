@@ -161,6 +161,8 @@ function toNodeRun(row: NodeRunRow): NodeRun {
     ...(row.sources === null ? {} : { sources: JSON.parse(row.sources) }),
     ...(row.droppedSources === null ? {} : { droppedSources: JSON.parse(row.droppedSources) }),
     ...(row.memoryOps === null ? {} : { memoryOps: JSON.parse(row.memoryOps) }),
+    // D378: NULL on every node run but an agentic node step's, which stays absent.
+    ...(row.workspace === null ? {} : { workspace: JSON.parse(row.workspace) }),
     ...(row.startedAt === null ? {} : { startedAt: row.startedAt }),
     ...(row.endedAt === null ? {} : { endedAt: row.endedAt }),
     ...(row.durationMs === null ? {} : { durationMs: row.durationMs }),
@@ -618,6 +620,10 @@ export function createNodeRunRepository(db: Db): NodeRunRepository {
             nodeRun.memoryOps === undefined
               ? null
               : toJsonColumn(nodeRun.memoryOps, `${at}.memoryOps`),
+          workspace:
+            nodeRun.workspace === undefined
+              ? null
+              : toJsonColumn(nodeRun.workspace, `${at}.workspace`),
           startedAt: nodeRun.startedAt ?? null,
           endedAt: nodeRun.endedAt ?? null,
           durationMs: nodeRun.durationMs ?? null,
@@ -673,6 +679,10 @@ export function createNodeRunRepository(db: Db): NodeRunRepository {
           patch.memoryOps === undefined
             ? undefined
             : toJsonColumn(patch.memoryOps, `${at}.memoryOps`),
+        workspace:
+          patch.workspace === undefined
+            ? undefined
+            : toJsonColumn(patch.workspace, `${at}.workspace`),
         inputEnvelopes:
           patch.inputEnvelopes === undefined
             ? undefined
