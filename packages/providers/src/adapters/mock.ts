@@ -538,13 +538,19 @@ export function scriptTurn(script: string, turn: number): string | undefined {
  * Agentic nodes Phase 2 [D315]: `mock-agent` reads the same `[[turn N]]` sections as `mock-script`,
  * plus lines `[[tool <name> <json-object>]]`, each of which becomes a `tool_call` chunk with the
  * callId `mock-<turn>-<index>`. A section with no tool line is the final answer and ends the loop.
+ * A line that starts `[[tool ` but is not that form is a script error, never text.
  */
 const AGENT_TOOL_LINE = /^\[\[tool (\S+) (.*)\]\]$/u;
+const AGENT_TOOL_PREFIX = '[[tool ';
 
-/** The turn a request is on: the distinct `mock-<turn>-` result groups so far, plus one. */
-function agentTurnOf(results: readonly ToolResult[] | undefined): number {
+/**
+ * The turn a request is on (D377): the turns so far plus one when the request carries `turns`,
+ * else the distinct `mock-<turn>-` result groups so far, plus one.
+ */
+function agentTurnOf(req: GenerateRequest): number {
+  if (req.turns !== undefined) return req.turns.length + 1;
   const groups = new Set<string>();
-  for (const entry of results ?? []) {
+  for (const entry of req.toolResults ?? []) {
     groups.add(/^mock-(\d+)-/u.exec(entry.callId)?.[1] ?? entry.callId);
   }
   return groups.size + 1;
@@ -1008,7 +1014,7 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
       }
 
       case 'mock-agent': {
-        const turn = agentTurnOf(req.toolResults);
+        const turn = agentTurnOf(req);
         const script = scriptOf(`${req.system ?? ''}
 ${req.prompt}`);
         const lines = (scriptTurn(script, turn) ?? 'ok').split('\n');
@@ -1018,6 +1024,14 @@ ${req.prompt}`);
         for (const raw of lines) {
           const line = raw.trim();
           const match = AGENT_TOOL_LINE.exec(line);
+          if (match === null && line.startsWith(AGENT_TOOL_PREFIX)) {
+            throw new ProviderCallError({
+              kind: 'invalid_config',
+              code: 'bad_agent_script',
+              message: `mock-agent could not read the tool line ${line}: it needs the form [[tool <name> <json-object>]].`,
+              retryable: false,
+            });
+          }
           if (match === null) {
             text.push(raw);
             continue;

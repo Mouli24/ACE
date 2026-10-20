@@ -109,4 +109,50 @@ describe('mock-agent', () => {
       message: expect.stringContaining('[[tool write_file {oops}]]'),
     });
   });
+
+  it('throws invalid_config naming a [[tool line that is not the tool-line form', async () => {
+    for (const line of ['[[tool write_file]]', '[[tool write_file {"path":"a.txt"}', '[[tool ]]']) {
+      await expect(run(promptFor(`[[turn 1]]\n${line}`))).rejects.toMatchObject({
+        nodeError: { kind: 'invalid_config', code: 'bad_agent_script' },
+        message: expect.stringContaining(line),
+      });
+    }
+  });
+
+  it('D377: with turns, the turn is the number of turns so far plus one', async () => {
+    const turn = (callId: string) => ({
+      text: '',
+      toolCalls: [{ callId, name: 'x', args: {} }],
+      results: results(callId),
+    });
+    const chunks: StreamChunk[] = [];
+    for await (const chunk of adapter().generate(
+      {
+        modelId: 'mock-agent',
+        prompt: promptFor(SCRIPT),
+        outputTypes: ['text'],
+        // Turns supersede toolResults: two turns so far is turn 3, whatever toolResults says.
+        turns: [turn('a'), turn('b')],
+        toolResults: results('mock-1-0'),
+      },
+      new AbortController().signal,
+    )) {
+      chunks.push(chunk);
+    }
+    expect(calls(chunks)).toEqual([]);
+    expect(chunks.find((c) => c.type === 'usage')).toMatchObject({ tokensIn: 300 });
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: 'stop' });
+
+    const first = await (async () => {
+      const out: StreamChunk[] = [];
+      for await (const chunk of adapter().generate(
+        { modelId: 'mock-agent', prompt: promptFor(SCRIPT), outputTypes: ['text'], turns: [] },
+        new AbortController().signal,
+      )) {
+        out.push(chunk);
+      }
+      return out;
+    })();
+    expect(calls(first).map((c) => c.callId)).toEqual(['mock-1-0']);
+  });
 });
