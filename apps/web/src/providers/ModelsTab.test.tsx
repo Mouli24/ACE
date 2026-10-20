@@ -140,4 +140,23 @@ describe('D380 a person can mark a model as tool-capable', () => {
       db.listModels().find((m) => m.providerId === provider.id && m.modelId === 'mock-text'),
     ).toMatchObject({ supportsTools: true, capabilitiesSetByPerson: true });
   });
+
+  it('Reset sends nulls and the row returns to what discovery says', async () => {
+    const user = userEvent.setup();
+    const provider = db.createProvider({ type: 'mock', name: 'Mock' });
+    await openModelsTab(user);
+    await user.click(await screen.findByRole('switch', { name: 'Tools for mock-text' }));
+
+    await user.click(await screen.findByRole('button', { name: 'Reset mock-text to discovered' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('switch', { name: 'Tools for mock-text' })).toHaveAttribute(
+        'aria-checked',
+        'false',
+      ),
+    );
+    const stored = db.listModels().find((m) => m.providerId === provider.id && m.modelId === 'mock-text');
+    expect(stored?.capabilitiesSetByPerson).toBeUndefined();
+    expect(screen.queryByRole('button', { name: 'Reset mock-text to discovered' })).toBeNull();
+  });
 });

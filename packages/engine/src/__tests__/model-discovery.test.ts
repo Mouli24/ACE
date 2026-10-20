@@ -327,3 +327,48 @@ describe("D380 what the person says a model can do survives a refresh", () => {
     ).toBeNull();
   });
 });
+
+describe("D380 a person's setting can be cleared back to what discovery says", () => {
+  it("null clears each override; a refresh then shows the discovered value", async () => {
+    listing = async () => [text("gemini-new", { contextWindow: 8192 })];
+    const provider = await service.create({ type: "claude_code", name: "Claude Code", concurrency: 1 });
+    await service.refreshModels(provider.id);
+    await service.setModelCapabilities(provider.id, "gemini-new", {
+      supportsTools: true,
+      contextWindow: 1_000_000,
+    });
+
+    const half = await service.setModelCapabilities(provider.id, "gemini-new", {
+      supportsTools: null,
+    });
+    expect(half).toMatchObject({ supportsTools: false, contextWindow: 1_000_000, capabilitiesSetByPerson: true });
+
+    const cleared = await service.setModelCapabilities(provider.id, "gemini-new", {
+      contextWindow: null,
+    });
+    expect(cleared?.capabilitiesSetByPerson).toBeUndefined();
+    const { models } = await service.refreshModels(provider.id);
+    expect(models[0]).toMatchObject({ supportsTools: false, contextWindow: 8192 });
+  });
+
+  it("an unavailable refresh does not turn an override into the discovered value", async () => {
+    listing = async () => [text("opus", { contextWindow: 8192 })];
+    const provider = await service.create({ type: "claude_code", name: "Claude Code", concurrency: 1 });
+    await service.refreshModels(provider.id);
+    await service.setModelCapabilities(provider.id, "opus", { supportsTools: true, contextWindow: 500_000 });
+
+    listing = async () => {
+      throw signedOut();
+    };
+    const { models, warning } = await service.refreshModels(provider.id);
+    expect(warning).toBeDefined();
+    expect(models[0]).toMatchObject({ available: false, supportsTools: true, contextWindow: 500_000 });
+
+    const cleared = await service.setModelCapabilities(provider.id, "opus", {
+      supportsTools: null,
+      contextWindow: null,
+    });
+    expect(cleared).toMatchObject({ supportsTools: false, contextWindow: 8192 });
+    expect(cleared?.capabilitiesSetByPerson).toBeUndefined();
+  });
+});

@@ -578,14 +578,25 @@ export class MockDb {
   setModelCapabilities(
     providerId: string,
     modelId: string,
-    patch: { supportsTools?: boolean; contextWindow?: number },
+    patch: { supportsTools?: boolean | null; contextWindow?: number | null },
   ): Model | undefined {
     const index = this.state.models.findIndex(
       (m) => m.providerId === providerId && m.modelId === modelId,
     );
     const found = this.state.models[index];
-    if (found === undefined) return undefined;
-    const next: Model = { ...found, ...patch, capabilitiesSetByPerson: true };
+    const provider = this.getProvider(providerId);
+    if (found === undefined || provider === undefined) return undefined;
+    // `null` clears back to what discovery says, which the catalogue regenerates.
+    const discovered = catalogFor(provider, found.lastCheckedAt).find((m) => m.modelId === modelId);
+    const next: Model = { ...found };
+    if (patch.supportsTools === null) next.supportsTools = discovered?.supportsTools ?? false;
+    else if (patch.supportsTools !== undefined) next.supportsTools = patch.supportsTools;
+    if (patch.contextWindow === null) next.contextWindow = discovered?.contextWindow ?? found.contextWindow;
+    else if (patch.contextWindow !== undefined) next.contextWindow = patch.contextWindow;
+    const setTools = patch.supportsTools === undefined ? found.capabilitiesSetByPerson === true : patch.supportsTools !== null;
+    const setWindow = patch.contextWindow === undefined ? found.capabilitiesSetByPerson === true : patch.contextWindow !== null;
+    if (setTools || setWindow) next.capabilitiesSetByPerson = true;
+    else delete next.capabilitiesSetByPerson;
     this.state.models[index] = next;
     this.save();
     return next;

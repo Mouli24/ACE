@@ -298,9 +298,27 @@ function ModelRow({ model, provider }: { model: Model; provider: Provider | unde
         </button>
         tools / {model.supportsJson ? 'json' : '—'}
         {model.capabilitiesSetByPerson === true && (
-          <span className="ml-2" title="You set this; Refresh models keeps it.">
-            set by you
-          </span>
+          <>
+            <span className="ml-2" title="You set this; Refresh models keeps it.">
+              set by you
+            </span>
+            <button
+              type="button"
+              aria-label={`Reset ${model.modelId} to discovered`}
+              title="Go back to what the provider's discovery says"
+              disabled={patchCapabilities.isPending}
+              className="ml-2 underline disabled:opacity-60"
+              onClick={() =>
+                patchCapabilities.mutate({
+                  providerId: model.providerId,
+                  modelId: model.modelId,
+                  patch: { supportsTools: null, contextWindow: null },
+                })
+              }
+            >
+              Reset
+            </button>
+          </>
         )}
       </td>
       <td className={`${CELL} text-[11px] text-[var(--muted)]`}>{model.source}</td>

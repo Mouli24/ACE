@@ -1,4 +1,11 @@
-import { allowedRunActions, type BudgetHalt, type Model, type NodeRun, type Provider, type Run } from '@ace/contracts';
+import {
+  allowedRunActions,
+  type BudgetHalt,
+  type Model,
+  type NodeRun,
+  type Provider,
+  type Run,
+} from '@ace/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createTempDb, type TempDb } from './temp-db.js';
@@ -135,9 +142,7 @@ describe('FR-PRV-001 providers repository', () => {
   });
 
   it('returns null when updating a provider that is gone', async () => {
-    expect(
-      await db.repository.providers.update(scope, PROVIDER_ID, { updatedAt: NOW }),
-    ).toBeNull();
+    expect(await db.repository.providers.update(scope, PROVIDER_ID, { updatedAt: NOW })).toBeNull();
   });
 
   it('deletes a provider and reports whether there was one', async () => {
@@ -186,7 +191,10 @@ describe('FR-MOD-003 models repository', () => {
   });
 
   it('replaces a provider catalog rather than accumulating duplicates', async () => {
-    await db.repository.models.replaceForProvider(scope, PROVIDER_ID, [model(), model({ id: '01JBXQ8Z9KQ4R7N2VWXYZ0MDE2', modelId: 'mock-slow' })]);
+    await db.repository.models.replaceForProvider(scope, PROVIDER_ID, [
+      model(),
+      model({ id: '01JBXQ8Z9KQ4R7N2VWXYZ0MDE2', modelId: 'mock-slow' }),
+    ]);
     await db.repository.models.replaceForProvider(scope, PROVIDER_ID, [model()]);
 
     expect(await db.repository.models.list(scope, {})).toHaveLength(1);
@@ -195,7 +203,11 @@ describe('FR-MOD-003 models repository', () => {
   it('TC-MOD-003 filters by provider, data type and availability', async () => {
     await db.repository.models.replaceForProvider(scope, PROVIDER_ID, [
       model(),
-      model({ id: '01JBXQ8Z9KQ4R7N2VWXYZ0MDE2', modelId: 'mock-vision', inputTypes: ['text', 'image'] }),
+      model({
+        id: '01JBXQ8Z9KQ4R7N2VWXYZ0MDE2',
+        modelId: 'mock-vision',
+        inputTypes: ['text', 'image'],
+      }),
       model({ id: '01JBXQ8Z9KQ4R7N2VWXYZ0MDE3', modelId: 'mock-gone', available: false }),
     ]);
 
@@ -251,7 +263,10 @@ describe('FR-OBS-003 price tables are immutable once written', () => {
     await db.repository.priceTables.put(scope, { version: 'v1', data: table, createdAt: NOW });
     await db.repository.priceTables.put(scope, { version: 'v2', data: table, createdAt: NOW });
 
-    expect((await db.repository.priceTables.list(scope)).map((t) => t.version)).toEqual(['v1', 'v2']);
+    expect((await db.repository.priceTables.list(scope)).map((t) => t.version)).toEqual([
+      'v1',
+      'v2',
+    ]);
   });
 
   it('returns null for a version nobody wrote', async () => {
@@ -404,7 +419,12 @@ describe('BR-04 runs repository', () => {
   });
 
   it('FR-GRD-008 round-trips a budget halt whole, beside its halt reason', async () => {
-    const budgetHalt: BudgetHalt = { scope: 'daily', capUsd: 0.01, costUsd: 0.012, projected: true };
+    const budgetHalt: BudgetHalt = {
+      scope: 'daily',
+      capUsd: 0.01,
+      costUsd: 0.012,
+      projected: true,
+    };
     await db.repository.runs.create(
       scope,
       run({ status: 'RUNNING', allowedActions: allowedRunActions('RUNNING') }),
@@ -461,9 +481,18 @@ describe('BR-04 runs repository', () => {
   });
 
   it('lists the runs that were still going when the engine stopped (FR-SYS-009)', async () => {
-    await db.repository.runs.create(scope, run({ id: '01JBXQ8Z9KQ4R7N2VWXYZ0RN51', status: 'RUNNING' }));
-    await db.repository.runs.create(scope, run({ id: '01JBXQ8Z9KQ4R7N2VWXYZ0RN52', status: 'PREFLIGHT' }));
-    await db.repository.runs.create(scope, run({ id: '01JBXQ8Z9KQ4R7N2VWXYZ0RN53', status: 'COMPLETE' }));
+    await db.repository.runs.create(
+      scope,
+      run({ id: '01JBXQ8Z9KQ4R7N2VWXYZ0RN51', status: 'RUNNING' }),
+    );
+    await db.repository.runs.create(
+      scope,
+      run({ id: '01JBXQ8Z9KQ4R7N2VWXYZ0RN52', status: 'PREFLIGHT' }),
+    );
+    await db.repository.runs.create(
+      scope,
+      run({ id: '01JBXQ8Z9KQ4R7N2VWXYZ0RN53', status: 'COMPLETE' }),
+    );
 
     expect((await db.repository.runs.listActive(scope)).map((r) => r.id).sort()).toEqual([
       '01JBXQ8Z9KQ4R7N2VWXYZ0RN51',
@@ -528,8 +557,14 @@ describe('FR-EXE-010 node runs repository', () => {
   });
 
   it('finds the node runs still marked RUNNING after a crash (FR-SYS-009)', async () => {
-    await db.repository.nodeRuns.create(scope, nodeRun({ id: '01JBXQ8Z9KQ4R7N2VWXYZ0NRN1', status: 'RUNNING' }));
-    await db.repository.nodeRuns.create(scope, nodeRun({ id: '01JBXQ8Z9KQ4R7N2VWXYZ0NRN2', status: 'COMPLETED' }));
+    await db.repository.nodeRuns.create(
+      scope,
+      nodeRun({ id: '01JBXQ8Z9KQ4R7N2VWXYZ0NRN1', status: 'RUNNING' }),
+    );
+    await db.repository.nodeRuns.create(
+      scope,
+      nodeRun({ id: '01JBXQ8Z9KQ4R7N2VWXYZ0NRN2', status: 'COMPLETED' }),
+    );
 
     const running = await db.repository.nodeRuns.listByRun(scope, RUN_ID);
 
@@ -616,6 +651,50 @@ describe('D380 person-set model capabilities', () => {
 
     await db.repository.models.replaceForProvider(scope, PROVIDER_ID, []);
     await db.repository.models.replaceForProvider(scope, PROVIDER_ID, [model()]);
-    expect((await db.repository.models.find(scope, PROVIDER_ID, 'mock-text'))?.capabilitiesSetByPerson).toBeUndefined();
+    expect(
+      (await db.repository.models.find(scope, PROVIDER_ID, 'mock-text'))?.capabilitiesSetByPerson,
+    ).toBeUndefined();
+  });
+
+  it('null clears an override; the flag stays only while one is set', async () => {
+    await db.repository.models.replaceForProvider(scope, PROVIDER_ID, [
+      model({ supportsTools: false, contextWindow: 8192 }),
+    ]);
+    await db.repository.models.setCapabilities(scope, PROVIDER_ID, 'mock-text', {
+      supportsTools: true,
+      contextWindow: 50_000,
+    });
+
+    const one = await db.repository.models.setCapabilities(scope, PROVIDER_ID, 'mock-text', {
+      supportsTools: null,
+    });
+    expect(one).toMatchObject({
+      supportsTools: false,
+      contextWindow: 50_000,
+      capabilitiesSetByPerson: true,
+    });
+
+    const none = await db.repository.models.setCapabilities(scope, PROVIDER_ID, 'mock-text', {
+      contextWindow: null,
+    });
+    expect(none).toMatchObject({ supportsTools: false, contextWindow: 8192 });
+    expect(none?.capabilitiesSetByPerson).toBeUndefined();
+  });
+
+  it('writing back an effective-valued row keeps the discovered base', async () => {
+    await db.repository.models.replaceForProvider(scope, PROVIDER_ID, [
+      model({ supportsTools: false, contextWindow: 8192 }),
+    ]);
+    await db.repository.models.setCapabilities(scope, PROVIDER_ID, 'mock-text', {
+      supportsTools: true,
+    });
+    const effective = await db.repository.models.list(scope, {});
+
+    await db.repository.models.replaceForProvider(scope, PROVIDER_ID, effective);
+    const cleared = await db.repository.models.setCapabilities(scope, PROVIDER_ID, 'mock-text', {
+      supportsTools: null,
+    });
+
+    expect(cleared?.supportsTools).toBe(false);
   });
 });

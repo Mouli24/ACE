@@ -291,9 +291,16 @@ export function createModelRepository(db: Db): ModelRepository {
 
       for (const model of catalog) {
         const before = kept.get(model.modelId);
+        // A row passed back with the flag carries the *effective* values (D380): keep the stored
+        // discovered ones as the base, so clearing the override can still restore them.
+        const base =
+          model.capabilitiesSetByPerson === true && before !== undefined
+            ? { supportsTools: before.supportsTools, contextWindow: before.contextWindow }
+            : {};
         db.insert(models)
           .values({
             ...rowFor(scope, model),
+            ...base,
             supportsToolsOverride: before?.supportsToolsOverride ?? null,
             contextWindowOverride: before?.contextWindowOverride ?? null,
           })
@@ -313,6 +320,7 @@ export function createModelRepository(db: Db): ModelRepository {
         eq(models.modelId, modelId),
       );
       if (db.select().from(models).where(where).get() === undefined) return null;
+      // `null` clears an override back to what discovery says; absent leaves it alone.
       const set: Partial<typeof models.$inferInsert> = {
         ...(patch.supportsTools === undefined ? {} : { supportsToolsOverride: patch.supportsTools }),
         ...(patch.contextWindow === undefined ? {} : { contextWindowOverride: patch.contextWindow }),

@@ -484,28 +484,47 @@ export class FakeRepository implements Repository {
     delete: async (scope: Scope, id: Id) => this.#for(scope).providers.delete(id),
   };
 
+  /** D380: what the person set, kept apart from the stored (discovered) row like the real columns. */
+  readonly #overrides = new Map<string, { tools?: boolean; window?: number }>();
+  #overrideKey = (scope: Scope, providerId: Id, modelId: string) =>
+    `${scope.workspaceId}|${providerId}|${modelId}`;
+  #applied = (scope: Scope, model: Model): Model => {
+    const set = this.#overrides.get(this.#overrideKey(scope, model.providerId, model.modelId));
+    if (set === undefined) return model;
+    return {
+      ...model,
+      ...(set.tools === undefined ? {} : { supportsTools: set.tools }),
+      ...(set.window === undefined ? {} : { contextWindow: set.window }),
+      capabilitiesSetByPerson: true,
+    };
+  };
+
   readonly models = {
     replaceForProvider: async (scope: Scope, providerId: Id, catalog: readonly Model[]) => {
       const state = this.#for(scope);
-      const kept = new Map<string, Model>();
+      const listed = new Set(catalog.map((model) => model.modelId));
+      const stored = new Map<string, Model>();
       for (const [key, model] of state.models) {
         if (model.providerId !== providerId) continue;
-        if (model.capabilitiesSetByPerson === true) kept.set(model.modelId, model);
+        stored.set(model.modelId, model);
         state.models.delete(key);
       }
+      for (const key of [...this.#overrides.keys()]) {
+        const [workspace, provider, modelId] = key.split('|');
+        if (workspace === scope.workspaceId && provider === providerId && !listed.has(modelId ?? '')) {
+          this.#overrides.delete(key);
+        }
+      }
       for (const model of catalog) {
-        const set = kept.get(model.modelId);
-        state.models.set(
-          model.id,
-          set === undefined
-            ? model
-            : {
-                ...model,
-                supportsTools: set.supportsTools,
-                contextWindow: set.contextWindow,
-                capabilitiesSetByPerson: true,
-              },
-        );
+        const before = stored.get(model.modelId);
+        const base = { ...model };
+        delete base.capabilitiesSetByPerson;
+        // A row passed back with the flag carries effective values: keep the stored base.
+        if (model.capabilitiesSetByPerson === true && before !== undefined) {
+          base.supportsTools = before.supportsTools;
+          base.contextWindow = before.contextWindow;
+        }
+        state.models.set(model.id, base);
       }
     },
     setCapabilities: async (
@@ -514,28 +533,31 @@ export class FakeRepository implements Repository {
       modelId: string,
       patch: ModelCapabilitiesPatch,
     ) => {
-      const state = this.#for(scope);
-      const found = [...state.models.values()].find(
+      const found = [...this.#for(scope).models.values()].find(
         (model) => model.providerId === providerId && model.modelId === modelId,
       );
       if (found === undefined) return null;
-      const next: Model = {
-        ...found,
-        ...(patch.supportsTools === undefined ? {} : { supportsTools: patch.supportsTools }),
-        ...(patch.contextWindow === undefined ? {} : { contextWindow: patch.contextWindow }),
-        ...(Object.keys(patch).length === 0 ? {} : { capabilitiesSetByPerson: true as const }),
-      };
-      state.models.set(next.id, next);
-      return next;
+      const key = this.#overrideKey(scope, providerId, modelId);
+      const set = { ...this.#overrides.get(key) };
+      if (patch.supportsTools === null) delete set.tools;
+      else if (patch.supportsTools !== undefined) set.tools = patch.supportsTools;
+      if (patch.contextWindow === null) delete set.window;
+      else if (patch.contextWindow !== undefined) set.window = patch.contextWindow;
+      if (Object.keys(set).length === 0) this.#overrides.delete(key);
+      else this.#overrides.set(key, set);
+      return this.#applied(scope, found);
     },
     list: async (scope: Scope, query: ModelQuery) =>
       [...this.#for(scope).models.values()]
+        .map((model) => this.#applied(scope, model))
         .filter((model) => modelMatchesQuery(model, query))
         .sort((a, b) => a.id.localeCompare(b.id)),
-    find: async (scope: Scope, providerId: Id, modelId: string) =>
-      [...this.#for(scope).models.values()].find(
+    find: async (scope: Scope, providerId: Id, modelId: string) => {
+      const found = [...this.#for(scope).models.values()].find(
         (model) => model.providerId === providerId && model.modelId === modelId,
-      ) ?? null,
+      );
+      return found === undefined ? null : this.#applied(scope, found);
+    },
     deleteForProvider: async (scope: Scope, providerId: Id) => {
       const state = this.#for(scope);
       for (const [key, model] of state.models) {

@@ -87,7 +87,15 @@ async function build(): Promise<void> {
   const pubsub = new InProcessPubSubStub<EngineEvent>();
   const bus = createEventBus({ repository, scope, pubsub, now: () => NOW });
   const logger = createLogger({ level: 'silent', destination: { write: () => undefined } });
-  calls = { created: [], updated: [], removed: [], checked: [], refreshed: [], capabilities: [], started: [] };
+  calls = {
+    created: [],
+    updated: [],
+    removed: [],
+    checked: [],
+    refreshed: [],
+    capabilities: [],
+    started: [],
+  };
   removeResult = { ok: true };
 
   app = createEngineApp({
@@ -131,7 +139,11 @@ async function build(): Promise<void> {
       setModelCapabilities: async (id, modelId, patch) => {
         calls.capabilities.push({ id, modelId, patch });
         return id === PROVIDER_ID && modelId === 'mock-text'
-          ? { ...model(), ...patch, capabilitiesSetByPerson: true }
+          ? {
+              ...model(),
+              supportsTools: patch.supportsTools === true,
+              capabilitiesSetByPerson: true,
+            }
           : null;
       },
       detect: async () => ({ ollama: { baseUrl: 'http://127.0.0.1:11434', detected: true } }),
@@ -220,7 +232,11 @@ const post = (path: string, body?: unknown) =>
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 const patch = (path: string, body: unknown) =>
-  app.request(`/api/v1${path}`, { method: 'PATCH', headers: JSON_HEADERS, body: JSON.stringify(body) });
+  app.request(`/api/v1${path}`, {
+    method: 'PATCH',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
 const del = (path: string) => app.request(`/api/v1${path}`, { method: 'DELETE', headers: AUTH });
 
 const body = async <T>(response: Response): Promise<T> => (await response.json()) as T;
@@ -252,7 +268,11 @@ describe('§2.5 provider endpoints', () => {
   });
 
   it('TC-PRV-002 never echoes the key back', async () => {
-    const response = await post('/providers', { type: 'openai', name: 'OpenAI', apiKey: 'a-secret' });
+    const response = await post('/providers', {
+      type: 'openai',
+      name: 'OpenAI',
+      apiKey: 'a-secret',
+    });
 
     expect(await response.text()).not.toContain('a-secret');
   });
@@ -282,7 +302,9 @@ describe('§2.5 provider endpoints', () => {
     const response = await del(`/providers/${PROVIDER_ID}`);
 
     expect(response.status).toBe(409);
-    const payload = await body<{ error: { code: string; details: { nodeIds: string[] } } }>(response);
+    const payload = await body<{ error: { code: string; details: { nodeIds: string[] } } }>(
+      response,
+    );
     expect(payload.error.code).toBe('provider_in_use');
     expect(payload.error.details.nodeIds).toEqual(['01JBXQ8Z9KQ4R7N2VWXYZ0ABCD']);
   });
@@ -329,6 +351,16 @@ describe('§2.5 provider endpoints', () => {
       modelId: 'mock-text',
       patch: { supportsTools: true },
     });
+  });
+
+  it('D380 PATCH accepts null to clear an override', async () => {
+    const response = await patch(`/providers/${PROVIDER_ID}/models/mock-text`, {
+      supportsTools: null,
+      contextWindow: null,
+    });
+
+    expect(response.status).toBe(200);
+    expect(calls.capabilities[0]?.patch).toEqual({ supportsTools: null, contextWindow: null });
   });
 
   it('D380 PATCH answers 404 for a model the provider does not list', async () => {
@@ -474,7 +506,9 @@ describe('TC-EXE-013 the events endpoint replays what a client missed', () => {
       'RUNNING',
       'COMPLETED',
     ]);
-    expect(events.map((event) => event.seq)).toEqual([...events.map((e) => e.seq)].sort((a, b) => a - b));
+    expect(events.map((event) => event.seq)).toEqual(
+      [...events.map((e) => e.seq)].sort((a, b) => a - b),
+    );
   });
 
   it('returns only what came after the sequence the client has', async () => {

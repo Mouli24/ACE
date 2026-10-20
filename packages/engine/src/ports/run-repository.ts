@@ -60,7 +60,11 @@ export interface ProviderRepository {
 }
 
 export interface ModelRepository {
-  /** A refresh replaces a provider's catalog wholesale, so a withdrawn model disappears. */
+  /**
+   * A refresh replaces a provider's catalog wholesale, so a withdrawn model disappears. D380: a
+   * model passed with `capabilitiesSetByPerson` carries effective values; the stored discovered
+   * values stay as its base so an override can be cleared later.
+   */
   replaceForProvider(scope: Scope, providerId: Id, models: readonly Model[]): Promise<void>;
   list(scope: Scope, query: ModelQuery): Promise<Model[]>;
   find(scope: Scope, providerId: Id, modelId: string): Promise<Model | null>;
