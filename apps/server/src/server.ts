@@ -127,6 +127,7 @@ import {
   createGitCheckpointStore,
   createProcessRunner,
   registerBuiltinTools,
+  resolveAgentShell,
 } from '@ace/tools';
 import { WebSocketServer } from 'ws';
 
@@ -566,8 +567,14 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     },
     onDecided: async (request, decision) => {
       // Approved: the node picks up exactly where it paused. Rejected: it stays WAITING until the
-      // evaluator fails it, so the row never claims to be running something nobody allowed.
-      if (decision.decision !== 'approve') return;
+      // evaluator fails it, so the row never claims to be running something nobody allowed —
+      // except an agentic node's command (D375): a denied command is fed back to the model and
+      // the node goes on, so it is RUNNING again (and only from WAITING: never over an ending).
+      if (decision.decision !== 'approve') {
+        if (request.command === undefined) return;
+        const current = await repository.nodeRuns.get(LOCAL_SCOPE, request.nodeRunId);
+        if (current?.status !== 'WAITING') return;
+      }
       const row = await repository.nodeRuns.update(LOCAL_SCOPE, request.nodeRunId, {
         status: 'RUNNING',
       });
@@ -919,6 +926,11 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     toolGuardrails,
     // D376: an agentic node's commands are judged against its allowed commands.
     classifyCommand,
+    // D375: the OS and the shell an agentic node's rules name — the shell `run_command` runs in.
+    agentEnvironment: {
+      os: process.platform,
+      shell: resolveAgentShell({ platform: process.platform, env: process.env }).label,
+    },
     /* Round 5's context, memory, retrieval, summaries and day totals (§2.2–§2.6). */
     summariser,
     search,

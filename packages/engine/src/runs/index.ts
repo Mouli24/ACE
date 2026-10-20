@@ -4,6 +4,7 @@ import {
   ENVELOPE_SUMMARY_MAX,
   NODE_BUDGET_EXCEEDED,
   RunDomainConfigInputSchema,
+  isAgentic,
   type BlockedReason,
   type BudgetHalt,
   type CursorQuery,
@@ -126,6 +127,7 @@ import {
   type CommandClassifier,
   type RunAllowlist,
 } from './agentic/commands.js';
+import { isAgentLimitError } from './agentic/limits.js';
 import type { ToolCall } from '@ace/contracts';
 import { toSummary } from './summary.js';
 import { createReplayBook, isReplayedKind, type ReplayBook } from './replay.js';
@@ -285,6 +287,11 @@ export interface RunServiceDeps {
    * against the run's allowlist. Absent, every such command asks and none offers Always allow.
    */
   classifyCommand?: CommandClassifier;
+  /**
+   * D375: the OS and the shell an agentic node's rules name — the shell as `@ace/tools` resolves
+   * it for `run_command`. Absent, the executor names this process's OS and a generic shell.
+   */
+  agentEnvironment?: { os: NodeJS.Platform; shell: string };
 
   /*
    * Round 5's knowledge, memory, context guardrails and usage (§2.2–§2.6). Optional like the rounds
@@ -451,6 +458,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
     ...(deps.tools === undefined ? {} : { tools: deps.tools }),
     ...(deps.sandboxDirFor === undefined ? {} : { sandboxDirFor: deps.sandboxDirFor }),
     ...(deps.projectFolderFor === undefined ? {} : { projectFolderFor: deps.projectFolderFor }),
+    ...(deps.agentEnvironment === undefined ? {} : { agentEnvironment: deps.agentEnvironment }),
     ...(deps.artifacts === undefined ? {} : { artifacts: deps.artifacts }),
     ...(deps.recordToolCall === undefined ? {} : { recordToolCall: deps.recordToolCall }),
     ...(deps.nextId === undefined ? {} : { nextId: deps.nextId }),
@@ -2681,7 +2689,14 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
           if (outcome.error?.kind === 'auth') await markAuthFailed(node, outcome);
 
-          if (outcome.status === 'FAILED' && outcome.error !== undefined && !signal.aborted) {
+          if (
+            outcome.status === 'FAILED' &&
+            outcome.error !== undefined &&
+            !signal.aborted &&
+            // D375: an agentic node that hit its own limit is not repaired: a retry would start
+            // its whole loop again — every file edit and command — to hit the same limit.
+            !(node.kind === 'agent' && isAgentic(node.config) && isAgentLimitError(outcome.error))
+          ) {
             const decision = autoRetryDecision({
               error: outcome.error,
               attempt,
@@ -3387,10 +3402,11 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const replaying = replays.has(run.id);
     const workflowId = run.workflowId;
 
-    const [providers, models, mcpServers] = await Promise.all([
+    const [providers, models, mcpServers, project] = await Promise.all([
       repository.providers.list(scope),
       repository.models.list(scope, {}),
       repository.mcpServers?.list(scope),
+      repository.projects.get(scope, run.projectId),
     ]);
 
     const issues = [
@@ -3412,6 +3428,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
         // node runs (round 5 §2.4). A store without knowledge bases holds none, so none exists.
         knowledgeBaseExists: async (id) =>
           ((await repository.knowledgeBases?.get(scope, id)) ?? null) !== null,
+        // D375: a node with workspace access needs the project's folder to work in.
+        projectFolder: project?.folderPath ?? '',
         // An attached base whose embedding provider was removed cannot search: refused here too,
         // as `provider_missing` (FR-PRV-005, final-review I5).
         embeddingProviderOf: async (id) =>

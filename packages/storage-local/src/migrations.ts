@@ -1,6 +1,10 @@
 import type BetterSqlite3 from 'better-sqlite3';
 
-import { appendContextChecks, backfillDefaultPolicies } from './default-policy.js';
+import {
+  appendContextChecks,
+  backfillDefaultPolicies,
+  raiseDefaultToolCallCap,
+} from './default-policy.js';
 
 /** Named so a test can apply the chain up to, but not including, round 3 (FR-GRD-018). */
 export const ROUND_3_MIGRATION_ID = '20260926T120000_round_3_guardrails_approvals_and_budgets';
@@ -101,6 +105,12 @@ export const MODEL_CAPABILITY_OVERRIDES_MIGRATION_ID = '20261020T090000_model_ca
  * approved with Always allow and which prefix that saved. NULL on every approval stored before.
  */
 export const AGENTIC_COMMAND_APPROVALS_MIGRATION_ID = '20261020T130500_agentic_command_approvals';
+
+/**
+ * D375 (agentic nodes): the seeded default policy's `max_tool_calls` cap goes from 25 to 200, as a
+ * new policy version, wherever it still holds 25. A data step only.
+ */
+export const AGENTIC_TOOL_CALL_CAP_MIGRATION_ID = '20261020T150000_agentic_tool_call_cap';
 
 /**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
@@ -823,6 +833,17 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE approvals ADD COLUMN always INTEGER;
       ALTER TABLE approvals ADD COLUMN prefix TEXT;
     `,
+  },
+  {
+    id: AGENTIC_TOOL_CALL_CAP_MIGRATION_ID,
+    up: `
+      -- D375: no schema change; the seed raises the default policy's tool-call cap (25 -> 200).
+      SELECT 1;
+    `,
+    /** Policies still holding the seeded 25 get a new version at 200. */
+    seed: (sqlite) => {
+      raiseDefaultToolCallCap(sqlite);
+    },
   },
 ];
 

@@ -127,7 +127,18 @@ export interface ToolPointInput {
 export type ToolGuardStep =
   | { kind: 'allow'; verdicts?: Verdict[] }
   | { kind: 'block'; reason: string; verdicts?: Verdict[] }
-  | { kind: 'reject'; reason: string; verdicts?: Verdict[] };
+  | {
+      kind: 'reject';
+      reason: string;
+      verdicts?: Verdict[];
+      /** What the person wrote when they rejected it, if anything. */
+      note?: string;
+      /**
+       * D376: the rejected call was an agentic node's command (its card carried `command`). Such a
+       * reject is fed back to the model as a denied command rather than failing the node (D375).
+       */
+      command?: true;
+    };
 
 /** Which node run a tool call is being judged for, and against which policy (FR-GRD-002). */
 export interface ToolGuardrailTarget {
@@ -260,6 +271,8 @@ export function buildToolCall(input: {
   status: ToolCallStatus;
   verdicts: Verdict[];
   at: string;
+  /** D378: the project files an agentic node's call changed; absent on every other call. */
+  changedPaths?: string[];
 }): ToolCall {
   return {
     id: input.id,
@@ -271,6 +284,9 @@ export function buildToolCall(input: {
     status: input.status,
     verdicts: input.verdicts,
     at: input.at,
+    ...(input.changedPaths === undefined || input.changedPaths.length === 0
+      ? {}
+      : { changedPaths: input.changedPaths }),
   };
 }
 

@@ -1,15 +1,17 @@
-import type {
-  DataType,
-  Edge,
-  Id,
-  McpServer,
-  Model,
-  Node,
-  NodeKind,
-  Part,
-  Provider,
-  ProviderCheckResult,
-  ValidationIssue,
+import {
+  isAgentic,
+  isCliProviderType,
+  type DataType,
+  type Edge,
+  type Id,
+  type McpServer,
+  type Model,
+  type Node,
+  type NodeKind,
+  type Part,
+  type Provider,
+  type ProviderCheckResult,
+  type ValidationIssue,
 } from '@ace/contracts';
 
 import { validateGraph, type ToolLookup } from '../graph/validate.js';
@@ -78,6 +80,11 @@ export interface PreflightInput {
    * that exists.
    */
   embeddingProviderOf: (knowledgeBaseId: Id) => Promise<Id | undefined>;
+  /**
+   * D375: the run's project folder — `''` when the project has none. A node with workspace access
+   * needs one to work in (`project_folder_missing`). Absent (older harnesses), not checked.
+   */
+  projectFolder?: string;
 }
 
 /** An Input node has something to start from when its config or the request carries content. */
@@ -213,6 +220,49 @@ export async function preflight(input: PreflightInput): Promise<ValidationIssue[
   /* 7. Knowledge bases (round 5 §2.4, FR-RAG-005/006). */
   issues.push(...(await knowledgeBaseIssues(input)));
 
+  /* 8. Agentic nodes (D375): a model that can call tools, and a folder to work in. */
+  issues.push(...agenticIssues(input, providersById));
+
+  return issues;
+}
+
+/**
+ * D375 (Review Focus 1): a node with workspace access on a model whose catalog row says it cannot
+ * call tools is refused — never a silent text-only run — and so is one in a project with no
+ * folder. A node on a coding-agent CLI is not judged here: the CLI uses its own tools (its catalog
+ * rows always say `supportsTools: false`) and keeps today's single call.
+ */
+function agenticIssues(
+  input: PreflightInput,
+  providersById: ReadonlyMap<Id, Provider>,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  for (const node of input.nodes) {
+    if (node.kind !== 'agent' || !isAgentic(node.config)) continue;
+    const { providerId, modelId } = node.config;
+    const provider = providerId === undefined ? undefined : providersById.get(providerId);
+    if (provider !== undefined && isCliProviderType(provider.type)) continue;
+
+    const model = input.models.find(
+      (candidate) => candidate.providerId === providerId && candidate.modelId === modelId,
+    );
+    if (model !== undefined && !model.supportsTools) {
+      issues.push({
+        severity: 'error',
+        code: 'model_cannot_use_tools',
+        message: `${model.displayName} can't use tools. Pick another model, or turn tools on for it in Providers.`,
+        nodeId: node.id,
+      });
+    }
+    if (input.projectFolder !== undefined && input.projectFolder.trim() === '') {
+      issues.push({
+        severity: 'error',
+        code: 'project_folder_missing',
+        message: `Give the project a folder to let ${node.name} work in it.`,
+        nodeId: node.id,
+      });
+    }
+  }
   return issues;
 }
 

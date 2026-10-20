@@ -868,6 +868,9 @@ export function createToolGuardrailEvaluator(
         kind: 'reject',
         reason: `A reviewer rejected this tool call${note}: ${outcome.reason}`,
         verdicts: [...verdicts],
+        ...(decision.note === undefined ? {} : { note: decision.note }),
+        // D375/D376: an agentic node's command — the executor hands the denial back to the model.
+        ...(bag.command === undefined ? {} : { command: true as const }),
       };
     }
 

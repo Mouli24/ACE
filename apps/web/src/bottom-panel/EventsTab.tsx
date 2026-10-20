@@ -98,6 +98,7 @@ export function eventNodeIds(
       return event.payload.mentions.map((mention) => mention.nodeId);
     case 'instruction.state':
     case 'node.interrupted':
+    case 'node.turn':
       return [event.payload.nodeId];
     case 'envelope.sent':
       return [event.payload.fromNodeId, ...event.payload.toNodeIds];
@@ -216,6 +217,9 @@ export function describeEvent(event: PersistedRunEvent, nameOf: (nodeId: Id) => 
       return event.payload.graph === 'complete'
         ? 'the graph finished — the run stays open'
         : 'the graph stopped with failures — the run stays open';
+    /* Agentic nodes (D375): one model turn of a node's tool loop. */
+    case 'node.turn':
+      return `${nameOf(event.payload.nodeId)} turn ${event.payload.turn} · ${event.payload.toolCalls} tool ${event.payload.toolCalls === 1 ? 'call' : 'calls'}`;
   }
 }
 
