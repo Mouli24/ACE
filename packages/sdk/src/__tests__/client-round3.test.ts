@@ -217,6 +217,21 @@ describe('TC-GRD-008/009 approvals (round 3 §2.5, FR-GRD-013)', () => {
     expect(paths(calls)).toEqual([`GET /runs/${R}/approvals`]);
   });
 
+  it('D376 approve carries always: true, and a card carries the command it asks about', async () => {
+    const command = { text: 'npm run build', allowPrefix: 'npm run build', denylisted: false };
+    const { calls, client } = recorder([{ body: [{ ...approval, command }] }, { body: nodeRun }]);
+
+    const [pending] = await client.listApprovals(R);
+    await client.approveNodeRun(NODE_RUN, { always: true });
+
+    expect(pending?.command).toEqual(command);
+    expect(paths(calls)).toEqual([
+      `GET /runs/${R}/approvals`,
+      `POST /node-runs/${NODE_RUN}/approve`,
+    ]);
+    expect(calls[1]?.body).toEqual({ always: true });
+  });
+
   it('a preview longer than the contract allows is a defect, not a screen full of text', async () => {
     const { client } = recorder([{ body: [{ ...approval, preview: 'x'.repeat(501) }] }]);
     const error = await client.listApprovals(R).catch((e: unknown) => e);

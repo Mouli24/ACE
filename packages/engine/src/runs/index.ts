@@ -120,6 +120,12 @@ import {
 } from './executor.js';
 import { preflight } from './preflight.js';
 import type { ArtifactMaterialiser, ToolGuardrailEvaluator, ToolProvider } from './tool-loop.js';
+import {
+  createRunAllowlist,
+  toolCommandFor,
+  type CommandClassifier,
+  type RunAllowlist,
+} from './agentic/commands.js';
 import type { ToolCall } from '@ace/contracts';
 import { toSummary } from './summary.js';
 import { createReplayBook, isReplayedKind, type ReplayBook } from './replay.js';
@@ -136,6 +142,7 @@ export * from './summary.js';
 export * from './replay.js';
 export * from './export.js';
 export * from './estimate.js';
+export * from './agentic/commands.js';
 
 /**
  * The run service and scheduler (FR-EXE-001..012, Arch §12.2, §12.3, BR-04).
@@ -199,6 +206,12 @@ export interface RunService {
    * (it had one); its state is rebuilt from its rows and its log, and it parks again when idle.
    */
   resumeOpenRun(run: Run): Promise<Run>;
+
+  /**
+   * D376: the allowed commands of a run this process is driving — the snapshot's plus what Always
+   * allow added — for the approval service's `onAlways`. `undefined` once the run is not driven.
+   */
+  allowlistFor(runId: Id): RunAllowlist | undefined;
 
   /** Aborts every in-flight call and waits for the dispatch loops to unwind (FR-SYS-008). */
   shutdown(): Promise<void>;
@@ -267,6 +280,11 @@ export interface RunServiceDeps {
   recordToolCall?: (runId: Id, call: ToolCall) => Promise<void>;
   /** The tool point of the guardrail engine (FR-GRD-005/006); absent, tools run unchecked. */
   toolGuardrails?: ToolGuardrailEvaluator;
+  /**
+   * D376: `@ace/tools`' `classifyCommand`, which an agentic node's `run_command` is judged by
+   * against the run's allowlist. Absent, every such command asks and none offers Always allow.
+   */
+  classifyCommand?: CommandClassifier;
 
   /*
    * Round 5's knowledge, memory, context guardrails and usage (§2.2–§2.6). Optional like the rounds
@@ -441,7 +459,15 @@ export function createRunService(deps: RunServiceDeps): RunService {
   });
 
   /** Every run this process is currently driving, so shutdown can abort them (FR-SYS-008). */
-  const active = new Map<Id, { gate: RunGate; done: Promise<void> }>();
+  const active = new Map<
+    Id,
+    {
+      gate: RunGate;
+      done: Promise<void>;
+      /** D376: the run's allowed commands, seeded from its snapshot when it starts driving. */
+      allowlist: RunAllowlist;
+    }
+  >();
 
   async function emitNodeState(
     run: Run,
@@ -643,6 +669,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
     seed?: DriveSeed,
     /** Domain (D309, D323): this run's live conversation; absent, the run takes no messages. */
     domain?: RunDomain,
+    /** D376: the run's allowed commands, which Always allow grows while it drives. */
+    allowlist: RunAllowlist = createRunAllowlist(run.snapshot.nodes),
   ): Promise<Run> {
     const signal = gate.signal;
     const { nodes, edges } = run.snapshot;
@@ -856,7 +884,22 @@ export function createRunService(deps: RunServiceDeps): RunService {
                 const cap = toolEvaluator.toolCallCap(policy);
                 return cap === undefined ? {} : { maxToolCalls: cap };
               })(),
-              beforeTool: (bag) => toolEvaluator.evaluateTool({ target, ...bag }),
+              beforeTool: (bag) => {
+                // D376: an agentic node's command is gated against the run's allowlist as it is
+                // now, so a prefix Always allow added a moment ago already counts.
+                const command = toolCommandFor({
+                  node,
+                  toolName: bag.definition.name,
+                  args: bag.args,
+                  allowlist,
+                  ...(deps.classifyCommand === undefined ? {} : { classify: deps.classifyCommand }),
+                });
+                return toolEvaluator.evaluateTool({
+                  target,
+                  ...bag,
+                  ...(command === undefined ? {} : { command }),
+                });
+              },
             };
 
       // The input/output points need the full evaluator; the tool point can stand alone.
@@ -3283,6 +3326,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
   ): Promise<Run> {
     const gate = createRunGate(run.id);
     const unregister = deps.gates.register(gate);
+    const allowlist = createRunAllowlist(run.snapshot.nodes);
     let domain: RunDomain | undefined;
     let checkpoint: CheckpointRecording | undefined;
 
@@ -3290,7 +3334,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
       // Domain (D309, D323): the run's live conversation, with what its log says it still owes.
       domain = await deps.domains?.open(run);
       checkpoint = prepared === undefined ? await beginRunCheckpoint(run) : prepared.recording;
-      return drive(run, gate, seed, domain);
+      return drive(run, gate, seed, domain, allowlist);
     })()
       .catch(async (error: unknown) => {
         logger.error({ subsystem: 'runs', runId: run.id, err: error }, 'run failed');
@@ -3311,6 +3355,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
     active.set(run.id, {
       gate,
+      allowlist,
       done: done.then(
         () => undefined,
         () => undefined,
@@ -3684,6 +3729,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
     },
 
     activeRunCount: () => active.size,
+
+    allowlistFor: (runId) => active.get(runId)?.allowlist,
   };
 
   return service;

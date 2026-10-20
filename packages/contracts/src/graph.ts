@@ -173,12 +173,15 @@ export const TOKEN_BUDGET_MIN = 1_000;
 export const TOKEN_BUDGET_MAX = 10_000_000;
 export const ALLOWED_COMMANDS_MAX = 100;
 
+/** One allowed command, a prefix such as `pnpm test` (D348); also what Always allow saves (D376). */
+export const AllowedCommandSchema = z.string().min(1).max(200);
+
 /** A node's workspace settings: access level, turn cap, optional token budget, allow-listed commands. */
 export const AgentWorkspaceSchema = z.strictObject({
   access: WorkspaceAccessSchema,
   maxTurns: z.number().int().min(1).max(MAX_TURNS_LIMIT),
   tokenBudget: z.number().int().min(TOKEN_BUDGET_MIN).max(TOKEN_BUDGET_MAX).optional(),
-  allowedCommands: z.array(z.string().min(1).max(200)).max(ALLOWED_COMMANDS_MAX),
+  allowedCommands: z.array(AllowedCommandSchema).max(ALLOWED_COMMANDS_MAX),
 });
 export type AgentWorkspace = z.infer<typeof AgentWorkspaceSchema>;
 

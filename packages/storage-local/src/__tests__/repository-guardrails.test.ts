@@ -679,6 +679,65 @@ describe('FR-GRD-013 Approvals', () => {
   });
 });
 
+describe('D376 command approvals and Always allow', () => {
+  const command = { text: 'npm run build', allowPrefix: 'npm run build', denylisted: false };
+
+  it('keeps the command on the request through every read', async () => {
+    const nodeRun = await seedNodeRun(db.repository);
+    const request = approvalRequest(nodeRun.runId, nodeRun.id, {
+      checkType: 'destructive_action',
+      point: 'tool',
+      preview: 'run_command {"command":"npm run build"}',
+      command,
+    });
+    const denied = approvalRequest(nodeRun.runId, newId(), {
+      checkType: 'destructive_action',
+      point: 'tool',
+      command: { text: 'git push --force', denylisted: true },
+    });
+    await db.repository.approvals.create(scope, request);
+    await db.repository.approvals.create(scope, denied);
+
+    expect(await db.repository.approvals.findPendingByNodeRun(scope, nodeRun.id)).toEqual(request);
+    expect(await db.repository.approvals.listPendingByRun(scope, nodeRun.runId)).toEqual([
+      request,
+      denied,
+    ]);
+    expect((await db.repository.approvals.get(scope, request.id))?.request).toEqual(request);
+  });
+
+  it('stores always and the prefix with the decision, on the row and on the node run', async () => {
+    const nodeRun = await seedNodeRun(db.repository);
+    const request = approvalRequest(nodeRun.runId, nodeRun.id, { command });
+    await db.repository.approvals.create(scope, request);
+    const decision = {
+      requestId: request.id,
+      decision: 'approve' as const,
+      always: true as const,
+      prefix: 'npm run build',
+      decidedAt: NOW,
+    };
+
+    const decided = await db.repository.approvals.decide(scope, decision);
+
+    expect(decided?.decision).toEqual(decision);
+    expect((await db.repository.approvals.get(scope, request.id))?.decision).toEqual(decision);
+    expect((await db.repository.nodeRuns.get(scope, nodeRun.id))?.approvals).toEqual([decision]);
+  });
+
+  it('refuses a command that carries a live credential (BR-07)', async () => {
+    const nodeRun = await seedNodeRun(db.repository);
+    await expect(
+      db.repository.approvals.create(
+        scope,
+        approvalRequest(nodeRun.runId, nodeRun.id, {
+          command: { text: `curl -H "x-api-key: ${FAKE_KEY}" x`, denylisted: false },
+        }),
+      ),
+    ).rejects.toThrow(SecretWriteRejectedError);
+  });
+});
+
 describe('FR-GRD-008 Budgets', () => {
   it("sums today's node runs and ignores other days, other workspaces and unstarted runs", async () => {
     const nodeRun = await seedNodeRun(db.repository, {

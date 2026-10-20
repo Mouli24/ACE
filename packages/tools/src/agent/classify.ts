@@ -7,6 +7,11 @@
  * splitter cannot read confidently (substitution, `eval`, `bash -c`, heredocs, groups, unbalanced
  * quotes, a program read from stdin) is never auto-allowed.
  *
+ * An allowlist entry names a program on the PATH, run as itself (D376). A segment that sets
+ * environment variables first, runs a program by path, or redirects output to a file is something
+ * else, so no entry covers it and it is never offered for Always allow; nor is a prefix that starts
+ * with a wrapper or an interpreter (`sudo`, `node`, `bash`, …). Those still just ask.
+ *
  * Pure: no I/O, no platform checks. Both POSIX shells and Windows (cmd / PowerShell) syntax are
  * recognised well enough to fail closed — when in doubt the result is "ask".
  */
@@ -22,7 +27,13 @@ export interface ClassifiedSegment {
   prefix?: string;
   /** Id of the first DENYLIST rule this segment matches. */
   denied?: string;
-  /** Covered by an allowlist entry and not denied. */
+  /**
+   * D376: why no allowlist entry can cover this segment — it sets environment variables first, runs
+   * a program by path, or redirects output to a file. It still only asks; it is never auto-allowed
+   * and never offered for Always allow.
+   */
+  uncoverable?: string;
+  /** Covered by an allowlist entry, not denied and not uncoverable. */
   allowed: boolean;
 }
 
@@ -482,6 +493,101 @@ export function commandPrefix(segment: string): string | undefined {
   return program;
 }
 
+/* -------------------------------------------------------------------------------------------- */
+/* What an allowlist entry can never cover (D376)                                               */
+/* -------------------------------------------------------------------------------------------- */
+
+/**
+ * Whether a segment writes a file through a redirection — `>`, `>>`, `1>`, `2>`, `&>`, `>|`, `<>`,
+ * `>&file` — outside quotes and escapes, read the way the splitter reads them. Input (`<`) and a
+ * descriptor duplication or close (`2>&1`, `>&2`, `>&-`) write no file.
+ */
+function writesToFile(segment: string): boolean {
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < segment.length; i++) {
+    const c = segment.charAt(i);
+    const next = segment.charAt(i + 1);
+    if (inSingle) {
+      if (c === "'") inSingle = false;
+      continue;
+    }
+    if (inDouble) {
+      if (c === "\\" && next !== "") i++;
+      else if (c === '"') inDouble = false;
+      continue;
+    }
+    if (c === "\\" && BACKSLASH_ESCAPABLE.has(next)) {
+      i++;
+      continue;
+    }
+    if (c === "^" && next !== "") {
+      i++;
+      continue;
+    }
+    if (c === "'") inSingle = true;
+    else if (c === '"') inDouble = true;
+    else if (c === ">") {
+      let j = i + 1;
+      if (segment.charAt(j) === ">" || segment.charAt(j) === "|") j++;
+      if (segment.charAt(j) !== "&") return true;
+      // `>&N` / `>&-`: a duplication or a close, when nothing but a separator follows.
+      const dup = /^(\d+|-)(?=$|[\s;|&<>])/.exec(segment.slice(j + 1));
+      if (dup === null) return true;
+      i = j + dup[0].length;
+    }
+  }
+  return false;
+}
+
+/**
+ * D376: why an allowlist entry — a program on the PATH, run as itself — can never cover this
+ * segment, or `undefined`. A leading `NAME=value` (`NODE_OPTIONS`, `LD_PRELOAD`) loads other code
+ * into the allowed program; a program word with `/` or `\` is some other file of that name; an
+ * output redirection writes wherever it points (`npm test > ~/.bashrc`).
+ */
+function uncoverableReason(segment: string): string | undefined {
+  const words = tokenize(segment);
+  const first = words[0];
+  if (first !== undefined && ASSIGNMENT.test(first))
+    return "sets environment variables first";
+  if (first !== undefined && /[\\/]/.test(first))
+    return "runs a program by path";
+  if (writesToFile(segment)) return "redirects output to a file";
+  return undefined;
+}
+
+/**
+ * D376: programs whose prefix is never offered for Always allow — wrappers that run whatever follows
+ * them, and interpreters and shells that run whatever file they are given. They ask every time; an
+ * entry the person types into the node's allowed commands still covers them.
+ */
+const NEVER_OFFERED = new Set([
+  "sudo",
+  "doas",
+  "env",
+  "nohup",
+  "time",
+  "xargs",
+  "node",
+  "nodejs",
+  "python",
+  "python3",
+  "py",
+  "ruby",
+  "perl",
+  "php",
+  "deno",
+  "bun",
+  "bash",
+  "sh",
+  "zsh",
+  "fish",
+  "pwsh",
+  "powershell",
+  "cmd",
+]);
+
 /** Whole-word prefix match; the program name compares case-insensitively, the rest exactly. */
 function allowlistCovers(
   segment: string,
@@ -725,9 +831,11 @@ function deniedBy(segment: string): string | undefined {
 /**
  * Classifies a `run_command` line against a node's allowlist (D342: there is no "Full auto").
  *
- * `autoAllowed` only when the line is read confidently, no segment hits the DENYLIST and every
+ * `autoAllowed` only when the line is read confidently, no segment hits the DENYLIST or is
+ * uncoverable (D376: env assignments first, a path program, an output redirection) and every
  * segment is covered by an allowlist entry. `alwaysAllowPrefix` is offered only when the line is
- * confident, nothing is denied and all segments share one prefix.
+ * confident, nothing is denied or uncoverable, all segments share one prefix and that prefix does
+ * not start with a wrapper or an interpreter (`NEVER_OFFERED`).
  */
 export function classifyCommand(
   command: string,
@@ -739,11 +847,16 @@ export function classifyCommand(
     const prefix = commandPrefix(text);
     const rule = deniedBy(text);
     if (rule !== undefined) denied.add(rule);
-    const allowed = rule === undefined && allowlistCovers(text, allowlist);
+    const uncoverable = uncoverableReason(text);
+    const allowed =
+      rule === undefined &&
+      uncoverable === undefined &&
+      allowlistCovers(text, allowlist);
     return {
       text,
       ...(prefix !== undefined ? { prefix } : {}),
       ...(rule !== undefined ? { denied: rule } : {}),
+      ...(uncoverable !== undefined ? { uncoverable } : {}),
       allowed,
     };
   });
@@ -755,6 +868,11 @@ export function classifyCommand(
   const autoAllowed = clean && segments.every((s) => s.allowed);
   const prefixes = new Set(segments.map((s) => s.prefix));
   const only = prefixes.size === 1 ? [...prefixes][0] : undefined;
+  const offerable =
+    clean &&
+    segments.every((s) => s.uncoverable === undefined) &&
+    only !== undefined &&
+    !NEVER_OFFERED.has(only.split(" ")[0] ?? "");
   const result: Classification = {
     segments,
     confident: split.confident,
@@ -762,6 +880,6 @@ export function classifyCommand(
     denied: [...denied],
     autoAllowed,
   };
-  if (clean && only !== undefined) result.alwaysAllowPrefix = only;
+  if (offerable && only !== undefined) result.alwaysAllowPrefix = only;
   return result;
 }

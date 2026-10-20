@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import { GUARDRAIL_ACTIONS, GUARDRAIL_POINTS } from '../enums.js';
 import {
+  APPROVAL_COMMAND_MAX,
   APPROVAL_PREVIEW_MAX,
+  ApprovalCommandSchema,
   ApprovalDecisionRequestSchema,
   ApprovalDecisionSchema,
   ApprovalRequestSchema,
@@ -514,6 +516,57 @@ describe('FR-GRD-013 approvals', () => {
       note: 'looks fine',
     });
     expect(ApprovalDecisionRequestSchema.safeParse({ decision: 'approve' }).success).toBe(false);
+  });
+});
+
+describe('D376 command approvals and Always allow (agentic nodes)', () => {
+  const command = { text: 'npm run build', allowPrefix: 'npm run build', denylisted: false };
+
+  it('a request may carry the command, its Always allow prefix and whether the denylist hit', () => {
+    expect(ApprovalRequestSchema.parse({ ...approvalRequest, command })).toEqual({
+      ...approvalRequest,
+      command,
+    });
+    const denied = { text: 'git push --force', denylisted: true };
+    expect(ApprovalRequestSchema.parse({ ...approvalRequest, command: denied }).command).toEqual(
+      denied,
+    );
+    // A request without one is exactly what it was.
+    expect(ApprovalRequestSchema.parse(approvalRequest).command).toBeUndefined();
+  });
+
+  it('caps the command at 8,000 characters and the prefix at an allowed command’s 200', () => {
+    expect(APPROVAL_COMMAND_MAX).toBe(8_000);
+    const ok = (value: unknown): boolean => ApprovalCommandSchema.safeParse(value).success;
+    expect(ok({ text: 'x'.repeat(8_000), denylisted: false })).toBe(true);
+    expect(ok({ text: 'x'.repeat(8_001), denylisted: false })).toBe(false);
+    expect(ok({ ...command, allowPrefix: 'x'.repeat(200) })).toBe(true);
+    expect(ok({ ...command, allowPrefix: 'x'.repeat(201) })).toBe(false);
+    expect(ok({ ...command, allowPrefix: '' })).toBe(false);
+    expect(ok({ text: 'ls' })).toBe(false);
+    expect(ok({ ...command, extra: 1 })).toBe(false);
+  });
+
+  it('the decision body takes always: true and nothing else for it', () => {
+    expect(ApprovalDecisionRequestSchema.parse({ always: true })).toEqual({ always: true });
+    expect(ApprovalDecisionRequestSchema.parse({ note: 'ok', always: true })).toEqual({
+      note: 'ok',
+      always: true,
+    });
+    expect(ApprovalDecisionRequestSchema.safeParse({ always: false }).success).toBe(false);
+    expect(ApprovalDecisionRequestSchema.safeParse({ always: 'yes' }).success).toBe(false);
+  });
+
+  it('the decision record says always and which prefix was saved', () => {
+    const decision = {
+      requestId: APPROVAL_ID,
+      decision: 'approve',
+      always: true,
+      prefix: 'npm run build',
+      decidedAt: NOW,
+    };
+    expect(ApprovalDecisionSchema.parse(decision)).toEqual(decision);
+    expect(ApprovalDecisionSchema.safeParse({ ...decision, always: false }).success).toBe(false);
   });
 });
 

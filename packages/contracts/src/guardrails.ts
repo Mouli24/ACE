@@ -1,7 +1,13 @@
 import { z } from 'zod';
 
 import { GuardrailActionSchema, GuardrailPointSchema, type GuardrailPoint } from './enums.js';
-import { IdSchema, NodeNameSchema, TimestampSchema, type Id } from './graph.js';
+import {
+  AllowedCommandSchema,
+  IdSchema,
+  NodeNameSchema,
+  TimestampSchema,
+  type Id,
+} from './graph.js';
 
 /**
  * Guardrail policies, checks, verdicts and approvals (round 3 §2.2, round 5 §2.3,
@@ -299,6 +305,22 @@ export type ChatVerdict = z.infer<typeof ChatVerdictSchema>;
 /* -------------------------------------------------------------------------- */
 
 export const APPROVAL_PREVIEW_MAX = 500;
+/** The longest command an approval card carries — `run_command`'s own limit (D376). */
+export const APPROVAL_COMMAND_MAX = 8_000;
+
+/**
+ * D376 (agentic nodes, FR-GRD-006): the command an agentic node's `run_command` asks to run, on the
+ * card. `text` is the command line with secret-shaped values masked. `allowPrefix` is offered only
+ * when one prefix covers the whole line and nothing about it is denied or uncoverable; approving
+ * with `always: true` allows it for the rest of the run and asks for it to be saved on the node.
+ * `denylisted` says a denylist rule matched: the card asks every time.
+ */
+export const ApprovalCommandSchema = z.strictObject({
+  text: z.string().max(APPROVAL_COMMAND_MAX),
+  allowPrefix: AllowedCommandSchema.optional(),
+  denylisted: z.boolean(),
+});
+export type ApprovalCommand = z.infer<typeof ApprovalCommandSchema>;
 
 /**
  * What an `ask_user` action puts in front of the user while the node is WAITING. Emitted as
@@ -323,6 +345,8 @@ export const ApprovalRequestSchema = z
     checkType: GuardrailCheckTypeSchema,
     reason: z.string(),
     preview: z.string().max(APPROVAL_PREVIEW_MAX),
+    /** D376: present only for an agentic node's `run_command`. */
+    command: ApprovalCommandSchema.optional(),
     requestedAt: TimestampSchema,
   })
   .refine(
@@ -344,12 +368,27 @@ export const ApprovalDecisionSchema = z.strictObject({
   requestId: IdSchema,
   decision: ApprovalDecisionKindSchema,
   note: z.string().optional(),
+  /**
+   * D376: approved with Always allow; `prefix` is the prefix the person chose to always allow. It
+   * is allowed for the rest of the run; saving it on the node is best-effort, and a failed save is
+   * logged, not recorded here.
+   */
+  always: z.literal(true).optional(),
+  prefix: AllowedCommandSchema.optional(),
   decidedAt: TimestampSchema,
 });
 export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;
 
-/** `POST /node-runs/:id/approve` and `/reject` → `NodeRun`. The route is the decision. */
-export const ApprovalDecisionRequestSchema = z.strictObject({ note: z.string().optional() });
+/**
+ * `POST /node-runs/:id/approve` and `/reject` → `NodeRun`. The route is the decision. D376:
+ * `always: true` on an approve always-allows the request's `command.allowPrefix` — for the rest of
+ * the run, and on the node once the save succeeds; a request without one answers 400
+ * `validation_failed`.
+ */
+export const ApprovalDecisionRequestSchema = z.strictObject({
+  note: z.string().optional(),
+  always: z.literal(true).optional(),
+});
 export type ApprovalDecisionRequest = z.infer<typeof ApprovalDecisionRequestSchema>;
 
 /* -------------------------------------------------------------------------- */

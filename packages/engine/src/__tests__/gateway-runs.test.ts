@@ -209,6 +209,7 @@ async function build(): Promise<void> {
       },
       shutdown: async () => undefined,
       activeRunCount: () => 0,
+      allowlistFor: () => undefined,
     },
     bus,
   });

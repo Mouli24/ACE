@@ -11,6 +11,7 @@ import type {
 import { TOOL_RESULT_SUMMARY_MAX } from '@ace/contracts';
 
 import type { ProducedPart } from '../ports/index.js';
+import type { ToolCommand } from './agentic/commands.js';
 import {
   isSecretFieldName,
   looksLikeSecret,
@@ -106,6 +107,12 @@ export interface ToolPointInput {
   enabledTools: readonly string[];
   sandboxDir: string;
   allowedDomains: readonly string[];
+  /**
+   * D376: an agentic node's `run_command` line and its gate against the run's allowlist, added by
+   * the scheduler. `allow` lets `destructive_action` pass without a card; `ask` puts the command on
+   * the card. Absent for every other call, whose approval is exactly what it was.
+   */
+  command?: ToolCommand;
 }
 
 /**
