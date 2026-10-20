@@ -94,6 +94,12 @@ export const RUN_REPLAY_OF_MIGRATION_ID = '20261016T120000_run_replay_of';
 export const MODEL_SIZE_MIGRATION_ID = '20261016T130000_model_size_bytes';
 
 /**
+ * D376 (agentic nodes): the command an agentic node's approval card carries, and whether it was
+ * approved with Always allow and which prefix that saved. NULL on every approval stored before.
+ */
+export const AGENTIC_COMMAND_APPROVALS_MIGRATION_ID = '20261020T130500_agentic_command_approvals';
+
+/**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
  * written.
@@ -795,6 +801,15 @@ export const MIGRATIONS: readonly Migration[] = [
       -- D359 (PG-1.4): Model.sizeBytes, filled from Ollama's tags. NULL where the provider says
       -- nothing (every cloud model, and every row stored before this column).
       ALTER TABLE models ADD COLUMN size_bytes INTEGER;
+    `,
+  },
+  {
+    id: AGENTIC_COMMAND_APPROVALS_MIGRATION_ID,
+    up: `
+      -- D376: ApprovalRequest.command (JSON) and the decision's always/prefix. NULL reads as absent.
+      ALTER TABLE approvals ADD COLUMN command TEXT;
+      ALTER TABLE approvals ADD COLUMN always INTEGER;
+      ALTER TABLE approvals ADD COLUMN prefix TEXT;
     `,
   },
 ];

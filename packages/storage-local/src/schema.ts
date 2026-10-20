@@ -390,9 +390,14 @@ export const approvals = sqliteTable(
     reason: text('reason').notNull(),
     /** ≤ 500 chars and already redacted: a preview carrying a credential is refused (BR-07). */
     preview: text('preview').notNull(),
+    /** D376: JSON `ApprovalCommand` — an agentic node's `run_command`; NULL on every other request. */
+    command: text('command'),
     requestedAt: text('requested_at').notNull(),
     decision: text('decision'),
     note: text('note'),
+    /** D376: 1 when approved with Always allow, and the prefix it saved on the node. */
+    always: integer('always', { mode: 'boolean' }),
+    prefix: text('prefix'),
     decidedAt: text('decided_at'),
   },
   (table) => [

@@ -63,8 +63,8 @@ import {
   type ProviderService,
 } from '../providers/index.js';
 import type { Auth, Repository, Scope } from '../ports/index.js';
-import type { ApprovalService } from '../approvals/index.js';
-import { createApprovalRoutes } from '../approvals/routes.js';
+import { CANNOT_ALWAYS_ALLOW, type ApprovalService } from '../approvals/index.js';
+import { cannotAlwaysAllow, createApprovalRoutes } from '../approvals/routes.js';
 import { createGuardrailRoutes, type PolicyService } from '../guardrails/index.js';
 import {
   buildRunExport,
@@ -1045,7 +1045,9 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   });
 
   const decideChatApproval = (kind: 'approve' | 'reject') => async (c: Context) => {
-    const { note } = ApprovalDecisionRequestSchema.parse(await readJson(c));
+    const { note, always } = ApprovalDecisionRequestSchema.parse(await readJson(c));
+    // D376: Always allow saves an agentic node's command prefix; a chat asks about no command.
+    if (always === true) throw cannotAlwaysAllow(CANNOT_ALWAYS_ALLOW);
     try {
       return c.json(
         await chat(c).decideApproval(

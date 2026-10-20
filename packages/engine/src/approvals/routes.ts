@@ -5,6 +5,7 @@ import { HttpError, notImplemented } from '../gateway/errors.js';
 import { readJson } from '../gateway/read-json.js';
 import {
   ApprovalAlreadyDecidedError,
+  ApprovalAlwaysRefusedError,
   ApprovalNotFoundError,
   type ApprovalService,
 } from './index.js';
@@ -13,8 +14,9 @@ import {
  * `/runs/:id/approvals`, `/node-runs/:id/approve` and `/node-runs/:id/reject` (§2.5, FR-GRD-013).
  *
  * The route *is* the decision — there is no `{ decision }` field to get wrong — and the body carries
- * only an optional note (§2.2). The answer is the node run, so the UI has the row back without a
- * second request; the states that follow arrive as events.
+ * only an optional note (§2.2) and, since D376, `always: true` to save an agentic node's command
+ * prefix on the node. The answer is the node run, so the UI has the row back without a second
+ * request; the states that follow arrive as events.
  *
  * `GET /runs/:id/approvals` answers a **bare array**, not `{ items }`: §2.5 writes it that way and
  * D78 made that explicit, matching `/runs/:id/node-runs`.
@@ -41,6 +43,10 @@ export const alreadyDecided = (requestId: Id): HttpError =>
     { requestId },
   );
 
+/** D376: `always: true` with nothing to always-allow — a 400, and the request stays pending. */
+export const cannotAlwaysAllow = (message: string): HttpError =>
+  new HttpError('invalid_config', 'validation_failed', message);
+
 export const nodeRunNotFound = (nodeRunId: Id): HttpError =>
   new HttpError('workflow', 'not_found', `Node run ${nodeRunId} was not found.`);
 
@@ -61,16 +67,20 @@ export function createApprovalRoutes(service: ApprovalService | undefined): Appr
   );
 
   const decide = (kind: ApprovalDecisionKind) => async (c: Context) => {
-    const { note } = ApprovalDecisionRequestSchema.parse(await readJson(c));
+    const { note, always } = ApprovalDecisionRequestSchema.parse(await readJson(c));
     const nodeRunId = c.req.param('id') ?? '';
 
     try {
-      const { nodeRun } = await approvals().decide(nodeRunId, kind, note);
+      const { nodeRun } = await approvals().decide(nodeRunId, kind, {
+        ...(note === undefined ? {} : { note }),
+        ...(always === undefined ? {} : { always }),
+      });
       if (nodeRun === null) throw nodeRunNotFound(nodeRunId);
       return c.json(nodeRun);
     } catch (error) {
       if (error instanceof ApprovalNotFoundError) throw noPendingApproval(nodeRunId);
       if (error instanceof ApprovalAlreadyDecidedError) throw alreadyDecided(error.requestId);
+      if (error instanceof ApprovalAlwaysRefusedError) throw cannotAlwaysAllow(error.message);
       throw error;
     }
   };

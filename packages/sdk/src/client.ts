@@ -661,7 +661,10 @@ export function createAceClient(options: AceClientOptions) {
 
     /* Approvals (round 3 §2.5, FR-GRD-013) */
 
-    /** The route is the decision; the note is optional and is logged with it. */
+    /**
+     * The route is the decision; the note is optional and is logged with it. D376: `always: true`
+     * also saves the card's `command.allowPrefix` on the node (400 when the card offers none).
+     */
     approveNodeRun: (nodeRunId: Id, body: ApprovalDecisionRequest = {}): Promise<NodeRun> =>
       request('POST', `/node-runs/${nodeRunId}/approve`, NodeRunSchema, {
         schema: ApprovalDecisionRequestSchema,

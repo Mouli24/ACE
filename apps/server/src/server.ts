@@ -24,6 +24,7 @@ import { serve } from '@hono/node-server';
 import {
   LOCAL_SCOPE,
   controlStoresFor,
+  createAlwaysAllow,
   createApprovalService,
   createArtifactService,
   createBackupService,
@@ -118,6 +119,7 @@ import {
   McpManager,
   ToolRegistry,
   cannedResultsAt,
+  classifyCommand,
   createAgentSession,
   createFsProjectFiles,
   type AgentCommandObserver,
@@ -571,6 +573,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
       });
       await emitNodeState(request.runId, row, 'RUNNING');
     },
+    // D376: Always allow — the live run asks no more for that prefix, and the node keeps it.
+    onAlways: (runId, nodeId, prefix) => alwaysAllow(runId, nodeId, prefix),
   });
 
   const guardrails = createGuardrailEvaluator({
@@ -912,6 +916,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     artifacts: materialiser,
     recordToolCall,
     toolGuardrails,
+    // D376: an agentic node's commands are judged against its allowed commands.
+    classifyCommand,
     /* Round 5's context, memory, retrieval, summaries and day totals (§2.2–§2.6). */
     summariser,
     search,
@@ -1123,6 +1129,18 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     },
     // Round 4 §2.4 (D-069): validation checks every agent's enabled tools against the live registry.
     tools: toolProvider,
+  });
+
+  /*
+   * D376: what the approval service's `onAlways` does — the prefix joins the live run's allowlist,
+   * then the saved workflow's node through the graph service (version bump, workflow.updated). The
+   * run snapshot is never written (BR-04).
+   */
+  const alwaysAllow = createAlwaysAllow({
+    allowlistFor: (runId) => runs.allowlistFor(runId),
+    workflowOf: async (runId) => (await repository.runs.get(LOCAL_SCOPE, runId))?.workflowId,
+    graph,
+    logger: logger.child({ subsystem: 'approvals' }),
   });
 
   /*
