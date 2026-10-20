@@ -285,3 +285,45 @@ describe("FR-MOD-001 a connected provider discovers its models without a Refresh
     });
   });
 });
+
+describe("D380 what the person says a model can do survives a refresh", () => {
+  it("keeps supportsTools and contextWindow across refreshModels, and listModels flags it", async () => {
+    listing = async () => [text("gemini-new")];
+    const provider = await service.create({
+      type: "claude_code",
+      name: "Claude Code",
+      concurrency: 1,
+    });
+    await service.refreshModels(provider.id);
+
+    const set = await service.setModelCapabilities(provider.id, "gemini-new", {
+      supportsTools: true,
+      contextWindow: 1_000_000,
+    });
+    expect(set).toMatchObject({ supportsTools: true, capabilitiesSetByPerson: true });
+
+    const { models } = await service.refreshModels(provider.id);
+    const listed = await service.listModels({ providerId: provider.id });
+
+    for (const row of [models[0], listed[0]]) {
+      expect(row).toMatchObject({
+        modelId: "gemini-new",
+        supportsTools: true,
+        contextWindow: 1_000_000,
+        capabilitiesSetByPerson: true,
+      });
+    }
+  });
+
+  it("answers null for a model the provider does not list", async () => {
+    const provider = await service.create({
+      type: "claude_code",
+      name: "Claude Code",
+      concurrency: 1,
+    });
+
+    expect(
+      await service.setModelCapabilities(provider.id, "nope", { supportsTools: true }),
+    ).toBeNull();
+  });
+});

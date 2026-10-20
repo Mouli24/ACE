@@ -1,4 +1,4 @@
-import type { Id, Model, ModelQuery, Provider, UpdateProviderRequest } from '@ace/contracts';
+import type { Id, Model, ModelCapabilitiesPatch, ModelQuery, Provider, UpdateProviderRequest } from '@ace/contracts';
 import type { CreateProviderBody } from '@ace/sdk';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -86,6 +86,18 @@ export function useRefreshModels() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: Id) => api().refreshModels(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.modelsRoot() });
+    },
+  });
+}
+
+/** `PATCH /providers/:id/models/:modelId` (D380): the person's say on a model's tools and window. */
+export function usePatchModelCapabilities() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { providerId: Id; modelId: string; patch: ModelCapabilitiesPatch }) =>
+      api().patchModelCapabilities(input.providerId, input.modelId, input.patch),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.modelsRoot() });
     },

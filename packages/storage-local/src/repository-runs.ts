@@ -7,6 +7,7 @@ import {
   type DataType,
   type Id,
   type Model,
+  type ModelCapabilitiesPatch,
   type ModelQuery,
   type NodeRun,
   type Page,
@@ -80,12 +81,16 @@ function toModel(row: ModelRow): Model {
     displayName: row.displayName,
     inputTypes: JSON.parse(row.inputTypes),
     outputTypes: JSON.parse(row.outputTypes),
-    contextWindow: row.contextWindow,
-    supportsTools: row.supportsTools,
+    // D380: what the person set wins over what the catalogue says.
+    contextWindow: row.contextWindowOverride ?? row.contextWindow,
+    supportsTools: row.supportsToolsOverride ?? row.supportsTools,
     supportsJson: row.supportsJson,
     available: row.available,
     source: row.source,
     lastCheckedAt: row.lastCheckedAt,
+    ...(row.supportsToolsOverride === null && row.contextWindowOverride === null
+      ? {}
+      : { capabilitiesSetByPerson: true }),
     ...(row.pricing === null ? {} : { pricing: JSON.parse(row.pricing) }),
     ...(row.description === null ? {} : { description: row.description }),
     ...(row.resolvedModelId === null ? {} : { resolvedModelId: row.resolvedModelId }),
@@ -269,11 +274,53 @@ export function createModelRepository(db: Db): ModelRepository {
 
   return {
     replaceForProvider: async (scope: Scope, providerId: Id, catalog: readonly Model[]) => {
-      db.delete(models)
-        .where(and(eq(models.workspaceId, scope.workspaceId), eq(models.providerId, providerId)))
-        .run();
+      const where = and(
+        eq(models.workspaceId, scope.workspaceId),
+        eq(models.providerId, providerId),
+      );
+      // D380: a refresh replaces the catalogue, never what the person set on a model it still lists.
+      const kept = new Map(
+        db
+          .select()
+          .from(models)
+          .where(where)
+          .all()
+          .map((row) => [row.modelId, row] as const),
+      );
+      db.delete(models).where(where).run();
 
-      for (const model of catalog) db.insert(models).values(rowFor(scope, model)).run();
+      for (const model of catalog) {
+        const before = kept.get(model.modelId);
+        db.insert(models)
+          .values({
+            ...rowFor(scope, model),
+            supportsToolsOverride: before?.supportsToolsOverride ?? null,
+            contextWindowOverride: before?.contextWindowOverride ?? null,
+          })
+          .run();
+      }
+    },
+
+    setCapabilities: async (
+      scope: Scope,
+      providerId: Id,
+      modelId: string,
+      patch: ModelCapabilitiesPatch,
+    ) => {
+      const where = and(
+        eq(models.workspaceId, scope.workspaceId),
+        eq(models.providerId, providerId),
+        eq(models.modelId, modelId),
+      );
+      if (db.select().from(models).where(where).get() === undefined) return null;
+      const set: Partial<typeof models.$inferInsert> = {
+        ...(patch.supportsTools === undefined ? {} : { supportsToolsOverride: patch.supportsTools }),
+        ...(patch.contextWindow === undefined ? {} : { contextWindowOverride: patch.contextWindow }),
+      };
+      // An empty patch marks nothing: the row is returned as it stands.
+      if (Object.keys(set).length > 0) db.update(models).set(set).where(where).run();
+      const row = db.select().from(models).where(where).get();
+      return row === undefined ? null : toModel(row);
     },
 
     list: async (scope: Scope, query: ModelQuery) =>

@@ -24,6 +24,7 @@ import {
   type Message,
   type MessageQuery,
   type Model,
+  type ModelCapabilitiesPatch,
   type ModelQuery,
   type Node,
   type NodeRun,
@@ -486,10 +487,46 @@ export class FakeRepository implements Repository {
   readonly models = {
     replaceForProvider: async (scope: Scope, providerId: Id, catalog: readonly Model[]) => {
       const state = this.#for(scope);
+      const kept = new Map<string, Model>();
       for (const [key, model] of state.models) {
-        if (model.providerId === providerId) state.models.delete(key);
+        if (model.providerId !== providerId) continue;
+        if (model.capabilitiesSetByPerson === true) kept.set(model.modelId, model);
+        state.models.delete(key);
       }
-      for (const model of catalog) state.models.set(model.id, model);
+      for (const model of catalog) {
+        const set = kept.get(model.modelId);
+        state.models.set(
+          model.id,
+          set === undefined
+            ? model
+            : {
+                ...model,
+                supportsTools: set.supportsTools,
+                contextWindow: set.contextWindow,
+                capabilitiesSetByPerson: true,
+              },
+        );
+      }
+    },
+    setCapabilities: async (
+      scope: Scope,
+      providerId: Id,
+      modelId: string,
+      patch: ModelCapabilitiesPatch,
+    ) => {
+      const state = this.#for(scope);
+      const found = [...state.models.values()].find(
+        (model) => model.providerId === providerId && model.modelId === modelId,
+      );
+      if (found === undefined) return null;
+      const next: Model = {
+        ...found,
+        ...(patch.supportsTools === undefined ? {} : { supportsTools: patch.supportsTools }),
+        ...(patch.contextWindow === undefined ? {} : { contextWindow: patch.contextWindow }),
+        ...(Object.keys(patch).length === 0 ? {} : { capabilitiesSetByPerson: true as const }),
+      };
+      state.models.set(next.id, next);
+      return next;
     },
     list: async (scope: Scope, query: ModelQuery) =>
       [...this.#for(scope).models.values()]

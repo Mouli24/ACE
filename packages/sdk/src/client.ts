@@ -29,7 +29,9 @@ import {
   RerunRequestSchema,
   RetryRequestSchema,
   UpdateGuardrailPolicyRequestSchema,
+  ModelCapabilitiesPatchSchema,
   ModelListResponseSchema,
+  ModelSchema,
   NodeRunSchema,
   ProviderCheckResultSchema,
   ProviderDetectResponseSchema,
@@ -68,6 +70,8 @@ import {
   type PolicyTestResponse,
   type RetryRequest,
   type UpdateGuardrailPolicyRequest,
+  type Model,
+  type ModelCapabilitiesPatch,
   type ModelListResponse,
   type ModelQuery,
   type NodeRun,
@@ -505,6 +509,21 @@ export function createAceClient(options: AceClientOptions) {
       request('POST', `/providers/${id}/check`, ProviderCheckResultSchema),
     refreshModels: (id: Id): Promise<RefreshModelsResponse> =>
       request('POST', `/providers/${id}/refresh-models`, RefreshModelsResponseSchema),
+    /**
+     * D380: say whether a discovered model takes tools and how big its window is. Survives
+     * `refreshModels`; the answer is the updated model, flagged `capabilitiesSetByPerson`.
+     */
+    patchModelCapabilities: (
+      providerId: Id,
+      modelId: string,
+      patch: ModelCapabilitiesPatch,
+    ): Promise<Model> =>
+      request(
+        'PATCH',
+        `/providers/${providerId}/models/${encodeURIComponent(modelId)}`,
+        ModelSchema,
+        { schema: ModelCapabilitiesPatchSchema, value: patch },
+      ),
     detectProviders: (): Promise<ProviderDetectResponse> =>
       request('GET', '/providers/detect', ProviderDetectResponseSchema),
     /** X1 (FR-PRV-008): which coding-agent CLIs the engine's machine has, and their sign-in. */

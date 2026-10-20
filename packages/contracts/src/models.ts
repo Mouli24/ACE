@@ -51,8 +51,23 @@ export const ModelSchema = z.object({
   sizeBytes: z.number().int().min(0).optional(),
   /** Why an `available: false` model cannot be used, in the provider's words or the engine's. */
   unavailableReason: z.string().optional(),
+  /**
+   * Agentic nodes P2 (D380): the person set `supportsTools` and/or `contextWindow` on this row
+   * (`PATCH /providers/:id/models/:modelId`). A refresh never overwrites what they chose.
+   */
+  capabilitiesSetByPerson: z.literal(true).optional(),
 });
 export type Model = z.infer<typeof ModelSchema>;
+
+/**
+ * `PATCH /providers/:id/models/:modelId` (agentic nodes P2, D380): the person marks a discovered
+ * model as tool-capable and/or states its context window. Either field may be sent alone.
+ */
+export const ModelCapabilitiesPatchSchema = z.strictObject({
+  supportsTools: z.boolean().optional(),
+  contextWindow: z.number().int().min(1024).max(10_000_000).optional(),
+});
+export type ModelCapabilitiesPatch = z.infer<typeof ModelCapabilitiesPatchSchema>;
 
 /**
  * `GET /models?providerId&inputType&outputType&available` (FR-MOD-004). Every filter is optional

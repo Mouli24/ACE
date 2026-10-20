@@ -7,6 +7,7 @@ import type {
   HaltReason,
   Id,
   Model,
+  ModelCapabilitiesPatch,
   ModelQuery,
   NodeError,
   NodeRun,
@@ -64,6 +65,16 @@ export interface ModelRepository {
   list(scope: Scope, query: ModelQuery): Promise<Model[]>;
   find(scope: Scope, providerId: Id, modelId: string): Promise<Model | null>;
   deleteForProvider(scope: Scope, providerId: Id): Promise<void>;
+  /**
+   * D380: record what the person says this model can do. Applied by every read and kept by
+   * `replaceForProvider`. Resolves the updated row, or null when the provider lists no such model.
+   */
+  setCapabilities(
+    scope: Scope,
+    providerId: Id,
+    modelId: string,
+    patch: ModelCapabilitiesPatch,
+  ): Promise<Model | null>;
 }
 
 /** One frozen price table (FR-OBS-003). Written once per version and never updated. */

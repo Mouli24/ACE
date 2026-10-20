@@ -564,3 +564,58 @@ describe('X1 a CLI provider’s permission level (D262)', () => {
     expect(updated?.cliPermission).toBe('full_auto');
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* person-set model capabilities (agentic nodes P2, Task 4)                    */
+/* -------------------------------------------------------------------------- */
+
+describe('D380 person-set model capabilities', () => {
+  it('sets supportsTools / contextWindow, flags the row, and returns null for an unknown model', async () => {
+    await db.repository.models.replaceForProvider(scope, PROVIDER_ID, [model()]);
+
+    const updated = await db.repository.models.setCapabilities(scope, PROVIDER_ID, 'mock-text', {
+      supportsTools: true,
+      contextWindow: 200_000,
+    });
+
+    expect(updated).toMatchObject({
+      supportsTools: true,
+      contextWindow: 200_000,
+      capabilitiesSetByPerson: true,
+    });
+    expect(await db.repository.models.find(scope, PROVIDER_ID, 'mock-text')).toEqual(updated);
+    expect(await db.repository.models.setCapabilities(scope, PROVIDER_ID, 'nope', {})).toBeNull();
+  });
+
+  it('a patch with one field leaves the other as the catalogue has it', async () => {
+    await db.repository.models.replaceForProvider(scope, PROVIDER_ID, [model()]);
+    const before = await db.repository.models.find(scope, PROVIDER_ID, 'mock-text');
+
+    const updated = await db.repository.models.setCapabilities(scope, PROVIDER_ID, 'mock-text', {
+      supportsTools: true,
+    });
+
+    expect(updated?.contextWindow).toBe(before?.contextWindow);
+  });
+
+  it('replaceForProvider keeps what the person set, and drops it with a withdrawn model', async () => {
+    await db.repository.models.replaceForProvider(scope, PROVIDER_ID, [model()]);
+    await db.repository.models.setCapabilities(scope, PROVIDER_ID, 'mock-text', {
+      supportsTools: true,
+      contextWindow: 50_000,
+    });
+
+    await db.repository.models.replaceForProvider(scope, PROVIDER_ID, [
+      model({ supportsTools: false, contextWindow: 8192 }),
+    ]);
+    expect(await db.repository.models.find(scope, PROVIDER_ID, 'mock-text')).toMatchObject({
+      supportsTools: true,
+      contextWindow: 50_000,
+      capabilitiesSetByPerson: true,
+    });
+
+    await db.repository.models.replaceForProvider(scope, PROVIDER_ID, []);
+    await db.repository.models.replaceForProvider(scope, PROVIDER_ID, [model()]);
+    expect((await db.repository.models.find(scope, PROVIDER_ID, 'mock-text'))?.capabilitiesSetByPerson).toBeUndefined();
+  });
+});
