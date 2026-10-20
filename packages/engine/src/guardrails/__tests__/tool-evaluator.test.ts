@@ -6,7 +6,7 @@ import { LOCAL_SCOPE } from '../../ports/index.js';
 import type { ToolGuardrailTarget, ToolPointInput } from '../../runs/tool-loop.js';
 import type { CheckInput, CheckOutcome, CheckRunner } from '../checks.js';
 import { createToolGuardrailEvaluator, type ToolArgsValidator } from '../evaluator.js';
-import { FakeGuardrailStore, RecordingBus, check, id, policy } from './fakes.js';
+import { FakeGuardrailStore, RecordingBus, check, fakeAnthropicKey, id, policy } from './fakes.js';
 
 /**
  * The tool point (round 4 §2.2, FR-GRD-005/006, FR-TOOL-002, D217).
@@ -312,6 +312,119 @@ describe('FR-GRD-006/BR-14 a destructive tool asks for approval', () => {
     expect(step.kind).toBe('block');
     if (step.kind !== 'block') return;
     expect(step.reason).toContain('No approver is available');
+  });
+});
+
+describe('D376 an agentic run_command asks only when its gate says so', () => {
+  const runCommandDef = (): ToolDefinition =>
+    toolDef({
+      name: 'run_command',
+      inputSchema: { type: 'object', required: ['command'] },
+      permissions: { network: true, fsPaths: ['<project>'], destructive: true },
+    });
+
+  it('a command the allowlist covers runs with no card, and only a pass verdict says why', async () => {
+    const h = harness(toolPolicy());
+
+    const step = await h.evaluate({
+      ...bag({ definition: runCommandDef(), args: { command: 'pnpm test' } }),
+      command: { text: 'pnpm test', gate: { kind: 'allow' } },
+    });
+
+    expect(step.kind).toBe('allow');
+    expect(h.bus.ofType('node.approval_required')).toHaveLength(0);
+    expect(h.bus.ofType('guardrail.verdict')).toHaveLength(0);
+    expect(h.store.allVerdicts()).toHaveLength(1);
+    expect(h.store.allVerdicts()[0]).toMatchObject({
+      checkType: 'destructive_action',
+      action: 'pass',
+      passed: true,
+    });
+    expect(h.store.allVerdicts()[0]?.reason).toContain('allowed commands');
+    expect(step.verdicts).toEqual(h.store.allVerdicts());
+  });
+
+  it('a command it does not cover opens the card with the command and the prefix on it', async () => {
+    const h = harness(toolPolicy());
+    void approveWhenAsked(h, 'approve');
+
+    const step = await h.evaluate({
+      ...bag({ definition: runCommandDef(), args: { command: 'npm run build' } }),
+      command: {
+        text: 'npm run build',
+        gate: { kind: 'ask', allowPrefix: 'npm run build', denylisted: false },
+      },
+    });
+
+    expect(step.kind).toBe('allow');
+    const [required] = h.bus.ofType('node.approval_required');
+    const request = (required?.payload as { request: { command?: unknown; preview: string } })
+      .request;
+    expect(request.command).toEqual({
+      text: 'npm run build',
+      allowPrefix: 'npm run build',
+      denylisted: false,
+    });
+    // The preview is what it always was.
+    expect(request.preview).toBe('run_command {"command":"npm run build"}');
+  });
+
+  it('a denylisted command asks with no prefix on the card', async () => {
+    const h = harness(toolPolicy());
+    void approveWhenAsked(h, 'reject');
+
+    const step = await h.evaluate({
+      ...bag({ definition: runCommandDef(), args: { command: 'git push --force' } }),
+      command: { text: 'git push --force', gate: { kind: 'ask', denylisted: true } },
+    });
+
+    expect(step.kind).toBe('reject');
+    const [required] = h.bus.ofType('node.approval_required');
+    expect((required?.payload as { request: { command?: unknown } }).request.command).toEqual({
+      text: 'git push --force',
+      denylisted: true,
+    });
+  });
+
+  it('masks a secret in the command on the card, and offers no prefix that would carry one', async () => {
+    const h = harness(toolPolicy());
+    void approveWhenAsked(h, 'approve');
+    const key = fakeAnthropicKey();
+    const text = `${key} --version`;
+
+    await h.evaluate({
+      ...bag({ definition: runCommandDef(), args: { command: text } }),
+      command: { text, gate: { kind: 'ask', allowPrefix: key, denylisted: false } },
+    });
+
+    const [required] = h.bus.ofType('node.approval_required');
+    const command = (required?.payload as { request: { command: { text: string } } }).request
+      .command;
+    expect(command.text).not.toContain(key);
+    expect(command).not.toHaveProperty('allowPrefix');
+  });
+
+  it('an allowlist never overrides a policy that blocks destructive tools', async () => {
+    const h = harness(
+      policy({ checks: [check({ point: 'tool', type: 'destructive_action', action: 'block' })] }),
+    );
+
+    const step = await h.evaluate({
+      ...bag({ definition: runCommandDef(), args: { command: 'pnpm test' } }),
+      command: { text: 'pnpm test', gate: { kind: 'allow' } },
+    });
+
+    expect(step.kind).toBe('block');
+  });
+
+  it('a call with no command in the bag asks exactly as before, with no command on the card', async () => {
+    const h = harness(toolPolicy());
+    void approveWhenAsked(h, 'approve');
+
+    await h.evaluate(bag({ definition: runCommandDef(), args: { command: 'pnpm test' } }));
+
+    const [required] = h.bus.ofType('node.approval_required');
+    expect((required?.payload as { request: object }).request).not.toHaveProperty('command');
   });
 });
 
