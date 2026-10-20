@@ -451,7 +451,12 @@ export interface ChatConversation {
   /** PG-2.2 (D359): the thread's tool calls waiting on a person. */
   approvals: ApprovalRequest[];
   /** PG-2.2: approve or reject one of them; the turn goes on either way. */
-  decideApproval: (request: ApprovalRequest, kind: 'approve' | 'reject') => void;
+  decideApproval: (
+    request: ApprovalRequest,
+    kind: 'approve' | 'reject',
+    /** D376: also save the command's prefix on the node (approve only). */
+    always?: boolean,
+  ) => void;
   edit: (
     message: ChatMessage,
     content: Part[],
@@ -528,11 +533,11 @@ export function useThreadConversation(nodeId: string): ChatConversation {
     retryWithoutUndo: (message) =>
       void retryMessage(queryClient, nodeId, message, { withoutUndo: true }),
     approvals: approvals.data ?? [],
-    decideApproval: (request, kind) => {
+    decideApproval: (request, kind, always = false) => {
       const threadOf = request.threadId ?? threadId ?? '';
       const call =
         kind === 'approve'
-          ? api().approveChatToolCall(threadOf, request.id)
+          ? api().approveChatToolCall(threadOf, request.id, always ? { always: true } : {})
           : api().rejectChatToolCall(threadOf, request.id);
       void call
         .catch((error: unknown) =>

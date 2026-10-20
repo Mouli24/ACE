@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 
+import { useLayoutStore } from '../app/stores/layout';
 import { useIsCompact } from '../responsive/useIsCompact';
 import { RunApprovalsDock } from '../runs/approvals/RunApprovalsDock';
 import { useSelectedRun } from '../runs/selected-run';
@@ -19,6 +20,8 @@ export function ForgePage() {
   // PG-3.5: the workflow's one selected run (PG-3.2) — its approvals are answered here too.
   const { runId } = useSelectedRun(workflowId);
   const compact = useIsCompact();
+  // D376: with the Terminal panel showing, command approvals sit at its top instead.
+  const terminalShowing = useLayoutStore((s) => s.panelOpen && s.panelTab === 'terminal');
   // PG-5.1: a run's page links here with `?checkpoint=`: Changes opens on that checkpoint.
   const [search] = useSearchParams();
   const checkpoint = search.get('checkpoint') ?? undefined;
@@ -34,7 +37,7 @@ export function ForgePage() {
       ) : (
         <ForgeWorkbench projectId={projectId} workflowId={workflowId} />
       )}
-      <RunApprovalsDock runId={runId} floating />
+      <RunApprovalsDock runId={runId} floating hideCommands={!compact && terminalShowing} />
     </>
   );
 }

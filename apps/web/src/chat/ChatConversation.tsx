@@ -578,11 +578,21 @@ export function ChatConversation({
             className={CHAT_NOTE_CLASS}
           >
             <div className={CHAT_NOTE_HEAD_CLASS}>
-              {request.nodeName} wants to run a tool · approval needed
+              {request.nodeName} wants to run{' '}
+              {request.command === undefined ? 'a tool' : 'a command'} · approval needed
             </div>
-            <p className="whitespace-pre-wrap break-words">{request.reason}</p>
-            <pre className="m-0 overflow-x-auto whitespace-pre-wrap break-all rounded-[6px] bg-[var(--chip)] p-[6px] font-mono text-[11px]">
-              {request.preview}
+            {request.command === undefined ? (
+              <p className="whitespace-pre-wrap break-words">{request.reason}</p>
+            ) : (
+              request.command.denylisted && (
+                <p className="font-semibold text-[#c94c27]">This matches the risky-command list.</p>
+              )
+            )}
+            <pre
+              data-testid={request.command === undefined ? undefined : 'chat-approval-command'}
+              className="m-0 overflow-x-auto whitespace-pre-wrap break-all rounded-[6px] bg-[var(--chip)] p-[6px] font-mono text-[11px]"
+            >
+              {request.command?.text ?? request.preview}
             </pre>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <button
@@ -591,15 +601,27 @@ export function ChatConversation({
                 onClick={() => convo.decideApproval(request, 'approve')}
                 className="flex h-[28px] cursor-pointer items-center rounded-[8px] border border-[var(--line)] bg-[var(--ink)] px-[12px] text-[12px] font-semibold text-[var(--surface)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
               >
-                Approve
+                {request.command === undefined ? 'Approve' : 'Allow'}
               </button>
+              {request.command?.allowPrefix !== undefined && !request.command.denylisted && (
+                <button
+                  type="button"
+                  data-testid="chat-approval-always"
+                  onClick={() => convo.decideApproval(request, 'approve', true)}
+                  className="flex min-h-[28px] max-w-full cursor-pointer items-center rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-[12px] py-[4px] text-left text-[12px] font-semibold text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                >
+                  <span className="break-all">
+                    Always allow <span className="font-mono">{request.command.allowPrefix}</span>
+                  </span>
+                </button>
+              )}
               <button
                 type="button"
                 data-testid="chat-approval-reject"
                 onClick={() => convo.decideApproval(request, 'reject')}
                 className="flex h-[28px] cursor-pointer items-center rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-[12px] text-[12px] font-semibold text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
               >
-                Reject
+                {request.command === undefined ? 'Reject' : 'Deny'}
               </button>
             </div>
           </div>

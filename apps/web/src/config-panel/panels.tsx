@@ -2,6 +2,8 @@ import {
   REVIEW_CONTRACT_SCHEMA,
   ROUTING_POLICIES,
   TRANSFORM_OPS,
+  WORKSPACE_TOOL_NAMES,
+  agentWorkspaceOf,
   type AgentConfig,
   type Id,
   type InputConfig,
@@ -28,6 +30,7 @@ import { JsonSchemaEditor } from './JsonSchemaEditor';
 import { FallbackModels, ProviderAndModel } from './ProviderAndModel';
 import { RetrievalPanel } from './RetrievalPanel';
 import { SkillsField, useSkills } from './SkillsField';
+import { WorkspaceAccessField } from './WorkspaceAccessField';
 import {
   DataTypeGroup,
   FIELD_GRID_CLASS,
@@ -188,6 +191,7 @@ export function AgentPanel({
   projectId?: Id;
 }) {
   const skills = useSkills();
+  const workspaceOn = agentWorkspaceOf(config).access !== 'off';
   const skillTools = skills.flatMap((skill) => skill.tools);
   const reviewContract = JSON.stringify(REVIEW_CONTRACT_SCHEMA);
   const usesReviewContract = JSON.stringify(config.outputContract?.jsonSchema) === reviewContract;
@@ -217,7 +221,17 @@ export function AgentPanel({
         onCommit={(instructions) => patch({ instructions })}
         rows={8}
       />
-      <SkillsField skills={skills} tools={config.tools} onChange={(tools) => patch({ tools })} />
+      <WorkspaceAccessField
+        config={config}
+        projectId={projectId}
+        onChange={(workspace) => patch({ workspace })}
+      />
+      <SkillsField
+        skills={skills}
+        tools={config.tools}
+        hide={workspaceOn ? ['files', 'shell'] : []}
+        onChange={(tools) => patch({ tools })}
+      />
 
       <div className="flex min-w-0 flex-col gap-5">
         <SelectField
@@ -283,7 +297,8 @@ export function AgentPanel({
 
       <AgentToolsSection
         tools={config.tools}
-        exclude={skillTools}
+        exclude={workspaceOn ? [...skillTools, ...WORKSPACE_TOOL_NAMES] : skillTools}
+        hideMaxToolCalls={workspaceOn}
         onChange={(tools) => patch({ tools })}
       />
       <AgentMemoryField memory={config.memory} onChange={(memory) => patch({ memory })} />
