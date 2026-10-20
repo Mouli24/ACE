@@ -1,4 +1,4 @@
-import type { Id, Run } from '@ace/contracts';
+import { isAgentic, type AgentConfig, type Id, type NodeError, type Run } from '@ace/contracts';
 
 import type { ApprovalService } from '../approvals/index.js';
 import type { EventBus } from '../events/index.js';
@@ -50,6 +50,30 @@ const crashedTurn = {
   message: 'The engine stopped while this turn was running, so it did not finish.',
   retryable: false,
 };
+
+/**
+ * D379: what an agentic step records when the engine restarted under it. The step may have
+ * changed files and started commands, so it is BLOCKED with the reason, not quietly STOPPED.
+ * (`workflow` is the error kind the restart belongs to: there is no `run` kind.)
+ */
+const RESTART_NOTE = 'Background commands from this run were stopped.';
+const agenticRestartError = (waiting: boolean): NodeError => ({
+  kind: 'workflow',
+  code: waiting ? 'approval_lost' : 'engine_restarted',
+  message: waiting
+    ? `The approval was lost when the engine restarted. ${RESTART_NOTE}`
+    : `The engine restarted mid-step. ${RESTART_NOTE}`,
+  retryable: true,
+});
+
+/** The ids of the run's agentic nodes, read from its snapshot (the config the run executed). */
+function agenticNodeIds(run: Run): ReadonlySet<Id> {
+  const ids = new Set<Id>();
+  for (const node of run.snapshot.nodes) {
+    if (node.kind === 'agent' && isAgentic(node.config as AgentConfig)) ids.add(node.id);
+  }
+  return ids;
+}
 
 /** Mark one run halted, and announce it so a watching client stops waiting. */
 async function halt(
@@ -106,7 +130,11 @@ export async function recoverAfterCrash(deps: LifecycleDeps): Promise<RecoveryRe
     if (deps.keepOpen?.(run) === true) {
       // D323: the run carries on; only the turns that were in flight are over — FAILED `crash`.
       for (const nodeRun of await deps.repository.nodeRuns.listByRun(deps.scope, run.id)) {
-        if (nodeRun.status !== 'RUNNING' && nodeRun.status !== 'READY' && nodeRun.status !== 'WAITING') {
+        if (
+          nodeRun.status !== 'RUNNING' &&
+          nodeRun.status !== 'READY' &&
+          nodeRun.status !== 'WAITING'
+        ) {
           continue;
         }
         await deps.repository.nodeRuns.update(deps.scope, nodeRun.id, {
@@ -143,15 +171,71 @@ export async function recoverAfterCrash(deps: LifecycleDeps): Promise<RecoveryRe
         });
         result.nodeRuns.push(nodeRun.id);
       }
+      // The turns that were in flight are over, so nobody can answer their approvals either.
+      try {
+        await deps.approvals?.cancelPending(
+          run.id,
+          'The engine stopped unexpectedly before this was decided.',
+        );
+      } catch (error) {
+        deps.logger.warn(
+          { subsystem: 'runs', runId: run.id, err: error },
+          'could not reject the approvals of a re-opened run',
+        );
+      }
       result.reopened.push(run);
       continue;
     }
 
     await halt(deps, run, 'crash', endedAt);
     result.runs.push(run.id);
+    const agentic = agenticNodeIds(run);
 
     for (const nodeRun of await deps.repository.nodeRuns.listByRun(deps.scope, run.id)) {
-      if (nodeRun.status !== 'RUNNING' && nodeRun.status !== 'READY' && nodeRun.status !== 'WAITING') {
+      if (
+        nodeRun.status !== 'RUNNING' &&
+        nodeRun.status !== 'READY' &&
+        nodeRun.status !== 'WAITING'
+      ) {
+        continue;
+      }
+
+      if (agentic.has(nodeRun.nodeId) && nodeRun.status !== 'READY') {
+        // D379: an agentic step may have changed files or started commands; say why it ended.
+        const error = agenticRestartError(nodeRun.status === 'WAITING');
+        await deps.repository.nodeRuns.update(deps.scope, nodeRun.id, {
+          status: 'BLOCKED',
+          failureReason: 'BLOCKED',
+          error,
+          endedAt,
+        });
+        await deps.bus.emit({
+          type: 'node.error',
+          workflowId: run.workflowId,
+          runId: run.id,
+          payload: {
+            runId: run.id,
+            nodeRunId: nodeRun.id,
+            nodeId: nodeRun.nodeId,
+            error,
+            failureReason: 'BLOCKED',
+          },
+        });
+        await deps.bus.emit({
+          type: 'node.state',
+          workflowId: run.workflowId,
+          runId: run.id,
+          payload: {
+            runId: run.id,
+            nodeRunId: nodeRun.id,
+            nodeId: nodeRun.nodeId,
+            iteration: nodeRun.iteration,
+            attempt: nodeRun.attempt,
+            status: 'BLOCKED',
+            failureReason: 'BLOCKED',
+          },
+        });
+        result.nodeRuns.push(nodeRun.id);
         continue;
       }
 
