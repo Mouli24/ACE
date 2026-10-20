@@ -9,6 +9,7 @@ import {
   type ErrorKind,
   type RunState,
 } from './enums.js';
+import { WorkspaceSummarySchema } from './agent.js';
 import { EnvelopeSchema, PartSchema } from './envelope.js';
 import {
   BudgetUsdSchema,
@@ -294,6 +295,11 @@ export const NodeRunSchema = z.object({
   reusedFromNodeRunId: IdSchema.optional(),
   /** D309: why this turn started — a dispatch, an envelope, or the human's instruction. */
   trigger: TurnTriggerSchema.optional(),
+  /**
+   * D378: an agentic node's step — the files it changed (from its step checkpoint) and the
+   * commands it ran — written once the step ends. Absent on every node with workspace access Off.
+   */
+  workspace: WorkspaceSummarySchema.optional(),
   startedAt: TimestampSchema.optional(),
   endedAt: TimestampSchema.optional(),
   durationMs: z.number().int().min(0).optional(),

@@ -197,6 +197,16 @@ export const DEFAULT_GUARDRAIL_POLICY_NAME = 'Default';
 type DefaultCheck = Pick<GuardrailCheck, 'point' | 'type' | 'action' | 'params'>;
 
 /**
+ * The default policy's `max_tool_calls` cap. 200 since agentic nodes (D375): a node working in the
+ * project folder reads, edits and runs far more than round 4's 25 calls; its own Max turns and
+ * token budget bound it. Policies seeded with the old 25 are raised by a migration.
+ */
+export const DEFAULT_POLICY_MAX_TOOL_CALLS = 200;
+
+/** What the default policy's `max_tool_calls` cap was before agentic nodes (round 4 §2.2). */
+export const PREVIOUS_POLICY_MAX_TOOL_CALLS = 25;
+
+/**
  * §2.2's default policy, in its order, then round 5 §2.3's three context checks: warn on content
  * issues, block secret leaks and tool abuse (D10), tag every untrusted piece of context, neutralise
  * the hidden instructions in it with a warning, and redact the personal data in it (D232).
@@ -217,7 +227,12 @@ const DEFAULT_CHECKS: readonly DefaultCheck[] = [
   { point: 'cost', type: 'max_cost_per_run', action: 'block', params: {} },
   { point: 'cost', type: 'daily_budget', action: 'block', params: {} },
   { point: 'loop', type: 'max_iterations', action: 'block', params: { max: 50 } },
-  { point: 'loop', type: 'max_tool_calls', action: 'block', params: { max: 25 } },
+  {
+    point: 'loop',
+    type: 'max_tool_calls',
+    action: 'block',
+    params: { max: DEFAULT_POLICY_MAX_TOOL_CALLS },
+  },
   { point: 'loop', type: 'repeated_output', action: 'block', params: { times: 3 } },
   { point: 'tool', type: 'destructive_action', action: 'ask_user', params: {} },
   { point: 'tool', type: 'tool_allowed', action: 'block', params: {} },

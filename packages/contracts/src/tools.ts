@@ -156,6 +156,9 @@ export type ToolCallStatus = z.infer<typeof ToolCallStatusSchema>;
 /** Long enough to read in the inspector, short enough that a result cannot be smuggled in (§2.2). */
 export const TOOL_RESULT_SUMMARY_MAX = 500;
 
+/** The most paths one ToolCall says it changed (agentic nodes, D378). */
+export const TOOL_CALL_CHANGED_PATHS_MAX = 200;
+
 /**
  * One logged call (FR-TOOL-009): what was called, with which arguments (secrets redacted by the
  * data guardrail, BR-07), a summary of what came back, how long it took, and the verdicts the tool
@@ -173,6 +176,12 @@ export const ToolCallSchema = z.strictObject({
   status: ToolCallStatusSchema,
   verdicts: z.array(VerdictSchema),
   at: TimestampSchema,
+  /**
+   * D378: the project files an agentic node's call changed — a write tool's `path`, a
+   * `run_command`'s detected `changedPaths` — project-relative with `/` separators. Absent on every
+   * other call, and on every call stored before agentic nodes.
+   */
+  changedPaths: z.array(z.string().min(1)).max(TOOL_CALL_CHANGED_PATHS_MAX).optional(),
 });
 export type ToolCall = z.infer<typeof ToolCallSchema>;
 
