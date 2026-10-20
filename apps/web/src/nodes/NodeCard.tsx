@@ -7,7 +7,7 @@ import type {
   Port,
   ProviderType,
 } from '@ace/contracts';
-import { DEFAULT_SEARCH_MODE } from '@ace/contracts';
+import { DEFAULT_SEARCH_MODE, isAgentic } from '@ace/contracts';
 import {
   Handle,
   Position,
@@ -30,6 +30,7 @@ import { InputDropZone } from '../artifacts/InputDropZone';
 import { findBlockingNodeId } from '../errors/blocked';
 import { formatCostRange, money } from '../runs/estimate';
 import { NodeApproval, NodeErrorCard, UnderCard } from '../runs/NodeRunAttachments';
+import { nodeStatusActivity } from '../runs/activity-label';
 import { useNodeOverlay, useRunStore } from '../runs/run-store';
 import { th, themeProviderOf } from '../theme/constants';
 import { nodeStatusLook } from '../theme/format';
@@ -93,6 +94,8 @@ export interface NodeCardViewProps {
    * run still executes but the graph no longer has; `changed`, edited since the run froze it.
    */
   sinceRun?: SinceRun;
+  /** D381: what an agentic node is doing right now, under its status chip. */
+  activity?: string;
 }
 
 /** PG-4.4: a node as the live run's snapshot sees it against the graph on screen. */
@@ -349,9 +352,18 @@ function StageCard(props: NodeCardViewProps) {
       </div>
       <StatusChip
         state={state}
-        className="absolute bottom-[12px] left-[12px] right-[12px]"
+        className={`absolute left-[12px] right-[12px] ${props.activity === undefined ? 'bottom-[12px]' : 'bottom-[30px]'}`}
         testId="status-chip"
       />
+      {props.activity !== undefined && (
+        <div
+          data-testid={`node-activity-${node.id}`}
+          title={props.activity}
+          className="absolute bottom-[11px] left-[12px] right-[12px] truncate font-machine text-[9.5px] text-[var(--muted)]"
+        >
+          {props.activity}
+        </div>
+      )}
       <PortHandles {...props} />
     </div>
   );
@@ -519,6 +531,8 @@ export interface NodeCardNotesProps {
   blockedByName?: string;
   /** PG-4.4: the live run executes a version of this node the graph no longer shows. */
   sinceRun?: SinceRun;
+  /** D381: an agentic node's live activity; it replaces the "answer in Chat" note while it runs. */
+  activity?: string;
 }
 
 const NOTE = 'text-[10px] leading-[1.45] text-[var(--muted)]';
@@ -536,6 +550,7 @@ export function NodeCardNotes({
   failureReason,
   blockedByName,
   sinceRun,
+  activity,
 }: NodeCardNotesProps) {
   const configuredModel =
     node.kind === 'agent' || node.kind === 'model' ? node.config.modelId : undefined;
@@ -545,7 +560,7 @@ export function NodeCardNotes({
   if (state === 'RUNNING' && isStageKind(node.kind)) {
     lines.push(
       <p key="running" className={NOTE} data-testid={`running-note-${node.id}`}>
-        running — answer in Chat
+        {activity ?? 'running — answer in Chat'}
       </p>,
     );
   }
@@ -641,6 +656,11 @@ export const FlowNodeCard = memo(function FlowNodeCard({
   const node = data.node;
   const overlay = useNodeOverlay(node.id);
   const blockedByName = useBlockedByName(node, overlay.state === 'BLOCKED');
+  // D381: an agentic node says what it is doing; every other node keeps its plain status.
+  const activity =
+    node.kind === 'agent' && isAgentic(node.config)
+      ? nodeStatusActivity(overlay.state, overlay.activeTool)
+      : undefined;
   const projectId = useWorkflowProjectId(node.workflowId);
   const knowledgeBaseName = useKnowledgeBaseName(
     projectId,
@@ -656,6 +676,7 @@ export const FlowNodeCard = memo(function FlowNodeCard({
       armedPortId={data.armedPortId}
       onPortKey={(port, direction) => data.onPortKey(port, direction, node.id)}
       dark={dark}
+      {...(activity === undefined ? {} : { activity })}
       {...(data.provider === undefined ? {} : { provider: data.provider })}
       {...(data.providerName === undefined ? {} : { providerName: data.providerName })}
       {...(data.stage === undefined ? {} : { stage: data.stage })}
@@ -684,6 +705,7 @@ export const FlowNodeCard = memo(function FlowNodeCard({
           {...(overlay.modelUsed === undefined ? {} : { modelUsed: overlay.modelUsed })}
           {...(overlay.failureReason === undefined ? {} : { failureReason: overlay.failureReason })}
           {...(blockedByName === undefined ? {} : { blockedByName })}
+          {...(activity === undefined ? {} : { activity })}
           {...(data.providerMissing ? { providerMissing: true } : {})}
           {...(data.sinceRun === undefined ? {} : { sinceRun: data.sinceRun })}
         />

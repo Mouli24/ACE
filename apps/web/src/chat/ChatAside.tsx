@@ -19,6 +19,7 @@ import { useWorkspaceStatus } from '../app/stores/workspace-status';
 import { DomainRunView } from '../domain/DomainPage';
 import { RunConversationTab } from '../domain/RunConversationTab';
 import { useWorkflowMode, workflowPath } from '../forge/mode';
+import { useOpenInForge } from '../forge/open-in-forge';
 import { useSocketStatus } from '../runs/hooks';
 import { useSelectedRun } from '../runs/selected-run';
 import { useWorkflowTask } from '../runs/useWorkflowTask';
@@ -186,6 +187,8 @@ export function ChatAside({
     projectId === undefined
       ? undefined
       : () => navigate(workflowPath(projectId, workflowId, 'forge'));
+
+  const openInForge = useOpenInForge(projectId, workflowId);
 
   const shown = agents.slice(0, VISIBLE_TABS);
   const overflow = agents.slice(VISIBLE_TABS);
@@ -392,6 +395,7 @@ export function ChatAside({
             key={target.id}
             node={target}
             onSendToForge={sendToForge}
+            onOpenInForge={openInForge}
             speakers={looks}
             projectId={projectId}
             onOpenRun={openRun}
@@ -407,12 +411,14 @@ export function ChatAside({
 function TargetChat({
   node,
   onSendToForge,
+  onOpenInForge,
   speakers,
   projectId,
   onOpenRun,
 }: {
   node: Node;
   onSendToForge?: () => void;
+  onOpenInForge?: (paths: readonly string[], runId?: string) => void;
   speakers: ReadonlyMap<string, AgentLook>;
   projectId: string | undefined;
   onOpenRun: (runId: string) => void;
@@ -435,6 +441,7 @@ function TargetChat({
         node={node}
         convo={convo}
         onSendToForge={onSendToForge}
+        {...(onOpenInForge === undefined ? {} : { openInForge: onOpenInForge })}
         speakers={speakers}
         onOpenRun={onOpenRun}
         {...(projectId === undefined ? {} : { projectId })}

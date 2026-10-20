@@ -1,5 +1,6 @@
 import {
   isAddressableNode,
+  isAgentic,
   isCliProviderType,
   type ChatMessage,
   type Node,
@@ -12,7 +13,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { api } from '../app/api';
-import { useRun } from '../runs/hooks';
+import { useCheckpoint } from '../forge/changes/hooks';
+import { stepFilesOf } from '../forge/open-in-forge';
+import { useNodeRunsOnce, useRun } from '../runs/hooks';
 import { useNodeOverlay } from '../runs/run-store';
 import { UNDO_UNAVAILABLE_TITLE, UndoChoiceButtons, undoReasonText } from '../runs/UndoChoice';
 import { formatUsd } from '../usage/format';
@@ -206,10 +209,13 @@ function TurnMeta({
   message,
   onSendToForge,
   onOpenRun,
+  agenticForge,
 }: {
   message: ChatMessage;
   onSendToForge: (() => void) | undefined;
   onOpenRun: ((runId: string) => void) | undefined;
+  /** D378: an agentic node's turn offers Open in Forge, with its files, in place of Send to Forge. */
+  agenticForge: AgenticForge | undefined;
 }) {
   const parts: ReactNode[] = [];
   if (message.modelId !== undefined) {
@@ -248,7 +254,8 @@ function TurnMeta({
       <span className="min-w-0 text-[10px] text-[var(--muted)]">
         {parts.flatMap((part, index) => (index === 0 ? [part] : [' · ', part]))}
       </span>
-      {onSendToForge !== undefined && (
+      {agenticForge !== undefined && <OpenInForgeChip message={message} forge={agenticForge} />}
+      {agenticForge === undefined && onSendToForge !== undefined && (
         <button
           type="button"
           data-testid="chat-send-to-forge"
@@ -260,6 +267,36 @@ function TurnMeta({
         </button>
       )}
     </div>
+  );
+}
+
+/** What an agentic node's turns need to open their files in Forge (D378). */
+interface AgenticForge {
+  nodeId: string;
+  projectId: string;
+  open: (paths: readonly string[], runId?: string) => void;
+}
+
+/**
+ * D378: "Open in Forge" on an agentic node's turn — the files of that step: a run turn's node
+ * run (workspace summary, else its calls' changed paths), or a chat turn's checkpoint.
+ */
+function OpenInForgeChip({ message, forge }: { message: ChatMessage; forge: AgenticForge }) {
+  const nodeRuns = useNodeRunsOnce(message.runId).data;
+  const checkpoint = useCheckpoint(forge.projectId, message.checkpointId ?? '').data;
+  const nodeRun = nodeRuns?.filter((each) => each.nodeId === forge.nodeId).at(-1);
+  const fromRun = stepFilesOf(nodeRun);
+  const files = fromRun.length > 0 ? fromRun : (checkpoint?.files.map((file) => file.path) ?? []);
+  return (
+    <button
+      type="button"
+      data-testid="chat-open-in-forge"
+      onClick={() => forge.open(files, message.runId)}
+      className="flex h-[22px] shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--chip)] px-[9px] text-[10px] font-semibold text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+    >
+      Open in Forge
+      <Icons.ArrowRight aria-hidden size={11} />
+    </button>
   );
 }
 
@@ -317,9 +354,12 @@ export function ChatConversation({
   speakers,
   projectId,
   onOpenRun,
+  openInForge,
 }: {
   node: Node;
   convo: Conversation;
+  /** D378: opens files in Forge; an agentic node's turns offer it in place of Send to Forge. */
+  openInForge?: (paths: readonly string[], runId?: string) => void;
   /** A run turn's "See the whole run →": show that run's conversation (the column only). */
   onOpenRun?: (runId: string) => void;
   /** The input box, when it belongs inside the conversation (the phone tab); the column keeps its own. */
@@ -338,6 +378,13 @@ export function ChatConversation({
       : speakers?.get(speakerNodeId);
   const replying = otherSpeaker(convo.replyingNodeId);
   const replyName = replying?.name ?? node.name;
+  const agenticForge: AgenticForge | undefined =
+    node.kind === 'agent' &&
+    isAgentic(node.config) &&
+    openInForge !== undefined &&
+    projectId !== undefined
+      ? { nodeId: node.id, projectId, open: openInForge }
+      : undefined;
   const scroller = useRef<HTMLDivElement>(null);
   const run = useNodeOverlay(node.id);
   const running = WORKING.has(run.state);
@@ -445,7 +492,12 @@ export function ChatConversation({
             <>
               <Body content={message.content} />
               {!you && (
-                <TurnMeta message={message} onSendToForge={onSendToForge} onOpenRun={onOpenRun} />
+                <TurnMeta
+                  message={message}
+                  onSendToForge={onSendToForge}
+                  onOpenRun={onOpenRun}
+                  agenticForge={agenticForge}
+                />
               )}
             </>
           )}

@@ -83,7 +83,9 @@ export function PathBar({
 }) {
   const project = useProject(projectId);
   const lines = useTouchedLines(projectId, path, touch);
-  const shown = touch !== undefined && lines !== undefined;
+  // a command's change names no lines (D378), so it shows without a span
+  const viaCommand = touch?.viaCommand === true;
+  const shown = touch !== undefined && (viaCommand || lines !== undefined);
   useClock(shown);
   // PG-3.4: the model the writing node ran on
   const model = useNodeModel(workflowId, touch?.agent.nodeId, touch?.nodeRunId);
@@ -133,8 +135,11 @@ export function PathBar({
             {touch.agent.letter}
           </span>
           <span className="min-w-0 truncate">
-            <AgentName workflowId={workflowId} agent={touch.agent} /> edited lines {lines.from}–
-            {lines.to} · {ago(touch.at)}
+            <AgentName workflowId={workflowId} agent={touch.agent} />{' '}
+            {viaCommand || lines === undefined
+              ? 'changed this file via a command'
+              : `edited lines ${lines.from}–${lines.to}`}{' '}
+            · {ago(touch.at)}
             {model !== undefined && (
               <>
                 {' · '}
