@@ -403,6 +403,7 @@ export async function createApprovalRunHarness(
     nodeRuns: guardrailStore.nodeRuns,
     bus,
     onAlways: (runId, nodeId, prefix) => alwaysAllow(runId, nodeId, prefix),
+    logger,
     onWaiting: async (request) => {
       const row = await repository.nodeRuns.update(scope, request.nodeRunId, { status: 'WAITING' });
       await emitNodeState(request.runId, row, 'WAITING');

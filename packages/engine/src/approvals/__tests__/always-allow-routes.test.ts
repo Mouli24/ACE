@@ -149,6 +149,29 @@ describe('D376 Always allow, end to end', () => {
     expect(await savedNode(h, prober.id)).toEqual(before);
   });
 
+  it('a classifier that throws makes every command ask: nothing runs without a card', async () => {
+    const h = await createApprovalRunHarness({
+      classify: () => {
+        throw new Error('classifier bug');
+      },
+    });
+    await h.seed(['Builder']);
+
+    const { run, done } = await h.service.beginRun(h.workflowId, {});
+    const first = await h.waitForApproval(run.id);
+    expect(first.command).toEqual({ text: 'npm run build', denylisted: false });
+    expect(h.ran).toEqual([]);
+    expect((await h.decide(first.nodeRunId, 'approve')).status).toBe(200);
+
+    await h.waitFor(() => cards(h) === 2, 'the second command to ask too');
+    expect(h.ran).toEqual(['npm run build']);
+    const second = await h.waitForApproval(run.id);
+    expect((await h.decide(second.nodeRunId, 'approve')).status).toBe(200);
+
+    expect((await within(done, SETTLE_MS, "the run's drive")).status).toBe('COMPLETE');
+    expect(h.ran).toEqual(['npm run build', 'npm run build']);
+  });
+
   it("a non-agentic node's card is unchanged: no command on it, and nothing to always-allow", async () => {
     const h = await createApprovalRunHarness({ classify });
     await h.seed(['Cleaner']);

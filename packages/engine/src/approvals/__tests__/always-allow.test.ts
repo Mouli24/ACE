@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { describe, expect, it } from 'vitest';
 
 import { toApiError } from '../../gateway/errors.js';
+import type { Logger } from '../../logging/index.js';
 import { FakeGuardrailStore, RecordingBus, id } from '../../guardrails/__tests__/fakes.js';
 import { LOCAL_SCOPE } from '../../ports/index.js';
 import {
@@ -20,21 +21,24 @@ import { createApprovalRoutes } from '../routes.js';
  * prefix — is `always-allow-routes.test.ts`.
  */
 
-function harness() {
+function harness(options: { alwaysThrows?: boolean } = {}) {
   const store = new FakeGuardrailStore();
   const bus = new RecordingBus();
   const order: string[] = [];
   const always: { runId: string; nodeId: string; prefix: string }[] = [];
+  const warned: unknown[] = [];
   const approvals = createApprovalService({
     scope: LOCAL_SCOPE,
     approvals: store.approvals,
     nodeRuns: store.nodeRuns,
     bus,
+    logger: { warn: (...args: unknown[]) => warned.push(args) } as unknown as Pick<Logger, 'warn'>,
     onDecided: async () => {
       order.push('decided');
     },
     onAlways: async (runId, nodeId, prefix) => {
       order.push('always');
+      if (options.alwaysThrows === true) throw new Error('the graph store is gone');
       always.push({ runId, nodeId, prefix });
     },
   });
@@ -52,7 +56,7 @@ function harness() {
       body: JSON.stringify(body),
       headers: { 'content-type': 'application/json' },
     });
-  return { store, bus, approvals, order, always, post };
+  return { store, bus, approvals, order, always, warned, post };
 }
 
 const ask = (command?: ApprovalCommand): ApprovalRequestInput => ({
@@ -117,6 +121,32 @@ describe('D376 the approval service and Always allow', () => {
       always: true,
       prefix: 'npm run build',
     });
+  });
+
+  it('an onAlways that throws is logged: the decision stands, onDecided runs and the node wakes', async () => {
+    const h = harness({ alwaysThrows: true });
+    const input = ask(BUILD);
+    const { wait } = await asked(h, input);
+    h.store.nodeRunRows.set(input.nodeRunId, {
+      id: input.nodeRunId,
+      runId: input.runId,
+      nodeId: input.nodeId,
+      iteration: 1,
+      attempt: 1,
+      status: 'WAITING',
+      inputEnvelopes: [],
+      usage: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
+      verdicts: [],
+      toolCalls: [],
+    });
+
+    const response = await h.post(input.nodeRunId, 'approve', { always: true });
+
+    expect(response.status).toBe(200);
+    expect(await wait).toMatchObject({ decision: 'approve', always: true });
+    expect(h.order).toEqual(['always', 'decided']);
+    expect(h.warned).toHaveLength(1);
+    expect(await h.approvals.listPending(input.runId)).toEqual([]);
   });
 
   it('approve without always saves nothing', async () => {

@@ -575,6 +575,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     },
     // D376: Always allow — the live run asks no more for that prefix, and the node keeps it.
     onAlways: (runId, nodeId, prefix) => alwaysAllow(runId, nodeId, prefix),
+    logger: logger.child({ subsystem: 'approvals' }),
   });
 
   const guardrails = createGuardrailEvaluator({

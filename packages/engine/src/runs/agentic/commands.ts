@@ -45,17 +45,26 @@ export type CommandClassifier = (
 export type CommandGate =
   { kind: 'allow' } | { kind: 'ask'; allowPrefix?: string; denylisted: boolean };
 
+/** What a command gets when nothing can vouch for it: a card, with no Always allow on it. */
+const ask = (): CommandGate => ({ kind: 'ask', denylisted: false });
+
 /**
  * The gate for one command line against one node's allowlist (D342/D348). It fails closed: a
- * denylist hit always asks and never offers a prefix, whatever else the classification says, and a
- * prefix that could not be saved as an allowed command is not offered.
+ * classifier that throws asks, a denylist hit always asks and never offers a prefix, whatever else
+ * the classification says, and a prefix that could not be saved as an allowed command is not
+ * offered.
  */
 export function commandGate(
   command: string,
   allowlist: readonly string[],
   classify: CommandClassifier,
 ): CommandGate {
-  const classification = classify(command, allowlist);
+  let classification: CommandClassification;
+  try {
+    classification = classify(command, allowlist);
+  } catch {
+    return ask();
+  }
   const denylisted = classification.denied.length > 0;
   if (classification.autoAllowed && !denylisted) return { kind: 'allow' };
 
@@ -98,7 +107,8 @@ export interface ToolCommand {
  * The `command` for one tool call, or `undefined` for anything that is not an agentic Agent node's
  * `run_command` with a string `command` — those keep today's approval exactly. Read at call time,
  * so a prefix Always allow added a moment ago already counts. Without a classifier it asks and
- * offers nothing.
+ * offers nothing. Only `edit_commands` may run a command unasked: a node set below it since its
+ * allowed commands were saved asks every time and is offered no Always allow.
  */
 export function toolCommandFor(input: {
   node: Node;
@@ -115,10 +125,14 @@ export function toolCommandFor(input: {
     typeof args === 'object' && args !== null ? (args as { command?: unknown }).command : undefined;
   if (typeof text !== 'string') return undefined;
 
-  const gate: CommandGate =
+  const gated =
     input.classify === undefined
-      ? { kind: 'ask', denylisted: false }
+      ? ask()
       : commandGate(text, input.allowlist.for(node.id), input.classify);
+  const gate: CommandGate =
+    agentWorkspaceOf(node.config).access === 'edit_commands'
+      ? gated
+      : { kind: 'ask', denylisted: gated.kind === 'ask' && gated.denylisted };
   return { text, gate };
 }
 

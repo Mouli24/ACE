@@ -10,6 +10,7 @@ import type {
 
 import { userCancelledError } from '../errors/index.js';
 import type { EventBus } from '../events/index.js';
+import type { Logger } from '../logging/index.js';
 import { newId } from '../ids.js';
 import type { RunApprovalRequest, Scope } from '../ports/index.js';
 import type { ApprovalRepository, NodeRunLookup } from '../guardrails/ports.js';
@@ -96,7 +97,7 @@ export class ApprovalAlwaysRefusedError extends Error {
 /** How a person decided, beyond approve or reject (FR-GRD-013, D376). */
 export interface ApprovalDecisionOptions {
   note?: string;
-  /** Approve and save the request's `command.allowPrefix` on the node (D376). */
+  /** Approve and always-allow the request's `command.allowPrefix` (D376; the save is best-effort). */
   always?: boolean;
 }
 
@@ -154,6 +155,8 @@ export interface ApprovalServiceDeps {
    * the node's next identical command runs without a card.
    */
   onAlways?: (runId: Id, nodeId: Id, prefix: string) => Promise<void>;
+  /** Where a failed `onAlways` is reported; the decision stands and the node wakes regardless. */
+  logger?: Pick<Logger, 'warn'>;
   now?: () => string;
   nextId?: () => string;
 }
@@ -221,8 +224,16 @@ export function createApprovalService(deps: ApprovalServiceDeps): ApprovalServic
 
     try {
       // D376: saved before the node wakes, so its next identical command already finds the prefix.
+      // Best-effort: a failure is logged and never skips `onDecided` or the wake-up below.
       if (alwaysPrefix !== undefined) {
-        await deps.onAlways?.(request.runId, request.nodeId, alwaysPrefix);
+        try {
+          await deps.onAlways?.(request.runId, request.nodeId, alwaysPrefix);
+        } catch (error) {
+          deps.logger?.warn(
+            { subsystem: 'approvals', runId: request.runId, nodeId: request.nodeId, err: error },
+            'always allow could not be applied',
+          );
+        }
       }
       if (waiter !== undefined) await deps.onDecided?.(request, decision);
     } finally {

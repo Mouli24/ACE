@@ -271,10 +271,13 @@ describe("FR-GRD-006 command classification", () => {
       ).toBe(false);
     });
 
-    it("skips env assignments before matching", () => {
+    it("never auto-allows or offers a prefix for a line that sets env vars first (D376)", () => {
       const r = classifyCommand("NODE_ENV=test npm test", ["npm test"]);
-      expect(r.autoAllowed).toBe(true);
-      expect(r.alwaysAllowPrefix).toBe("npm test");
+      expect(r.autoAllowed).toBe(false);
+      expect(r.alwaysAllowPrefix).toBeUndefined();
+      expect(r.segments[0]?.uncoverable).toBe(
+        "sets environment variables first",
+      );
     });
 
     it("never auto-allows an unconfident line even when its words are allowlisted", () => {
@@ -341,10 +344,136 @@ describe("FR-GRD-006 command classification", () => {
       expect(r.autoAllowed).toBe(false);
     });
 
-    it("handles the Windows tsc shim prefix", () => {
+    it("reads the Windows tsc shim's prefix, but a path program is never covered (D376)", () => {
       const r = classifyCommand(".\\node_modules\\.bin\\tsc.cmd -p .", ["tsc"]);
       expect(r.segments[0]?.prefix).toBe("tsc");
+      expect(r.segments[0]?.uncoverable).toBe("runs a program by path");
+      expect(r.autoAllowed).toBe(false);
+      expect(r.alwaysAllowPrefix).toBeUndefined();
+    });
+  });
+
+  /*
+   * D376 review: an allowlist entry names a program on the PATH, run as itself. A program run from
+   * a path, a line that sets environment variables first (`NODE_OPTIONS`, `LD_PRELOAD` load code
+   * into the allowed program) and a line that writes its output to a file are each something else,
+   * so none is ever auto-allowed or offered for Always allow. They still just ask.
+   */
+  describe("what an allowlist entry can never cover (D376)", () => {
+    it.each([
+      ["./npm test", ["npm test"], "runs a program by path"],
+      ["/tmp/x/npm test", ["npm test"], "runs a program by path"],
+      ["C:\\tools\\npm test", ["npm test"], "runs a program by path"],
+      [
+        '"C:\\Program Files\\nodejs\\npm.cmd" test',
+        ["npm test"],
+        "runs a program by path",
+      ],
+      ["~/bin/git status", ["git status"], "runs a program by path"],
+      [
+        "NODE_OPTIONS=--require=./pwn.js npm test",
+        ["npm test"],
+        "sets environment variables first",
+      ],
+      [
+        "LD_PRELOAD=./x.so git status",
+        ["git status"],
+        "sets environment variables first",
+      ],
+      ["npm test > ~/.bashrc", ["npm test"], "redirects output to a file"],
+      ["npm test >> ~/.bashrc", ["npm test"], "redirects output to a file"],
+      ["npm test 1> out.txt", ["npm test"], "redirects output to a file"],
+      ["npm test 2> err.txt", ["npm test"], "redirects output to a file"],
+      ["npm test &> all.log", ["npm test"], "redirects output to a file"],
+      ["npm test >| out.txt", ["npm test"], "redirects output to a file"],
+      ["npm test>out.txt", ["npm test"], "redirects output to a file"],
+      ["npm test 2>&1 >out.txt", ["npm test"], "redirects output to a file"],
+      ["npm test >&out.txt", ["npm test"], "redirects output to a file"],
+      ["npm test <> data.txt", ["npm test"], "redirects output to a file"],
+      ["git status 2>nul", ["git status"], "redirects output to a file"],
+    ])("%s under %j asks and offers no prefix", (cmd, allowlist, why) => {
+      const r = classifyCommand(cmd, allowlist);
+      expect(r.autoAllowed).toBe(false);
+      expect(r.alwaysAllowPrefix).toBeUndefined();
+      expect(r.segments.map((s) => s.uncoverable)).toContain(why);
+      // Not allowlisted yet either: still no prefix to offer.
+      expect(classifyCommand(cmd, []).alwaysAllowPrefix).toBeUndefined();
+    });
+
+    it.each([
+      ["npm test 2>&1", ["npm test"]],
+      ["npm test 1>&2", ["npm test"]],
+      ["npm test >&2", ["npm test"]],
+      ["npm test < input.txt", ["npm test"]],
+      ['echo "a > b"', ["echo"]],
+      ["echo 'x >> y'", ["echo"]],
+      ["echo a \\> b", ["echo"]],
+      ["npm test | tee out.txt", ["npm test", "tee"]],
+      ["pnpm.cmd install", ["pnpm install"]],
+    ])("%s under %j is still auto-allowed", (cmd, allowlist) => {
+      const r = classifyCommand(cmd, allowlist);
       expect(r.autoAllowed).toBe(true);
+      expect(r.segments.every((s) => s.uncoverable === undefined)).toBe(true);
+    });
+
+    it("a pipe to tee is its own segment, which must itself be allow-listed", () => {
+      const r = classifyCommand("npm test | tee out.txt", ["npm test"]);
+      expect(r.autoAllowed).toBe(false);
+      expect(r.segments.map((s) => s.allowed)).toEqual([true, false]);
+    });
+
+    it("still offers the prefix of a benign redirection", () => {
+      expect(classifyCommand("npm test 2>&1", []).alwaysAllowPrefix).toBe(
+        "npm test",
+      );
+    });
+  });
+
+  describe("prefixes never offered for Always allow (D376)", () => {
+    it.each([
+      "sudo pnpm install",
+      "doas pnpm install",
+      "env pnpm install",
+      "nohup pnpm dev",
+      "time pnpm test",
+      "xargs rm",
+      "node pwn.js",
+      "nodejs pwn.js",
+      "python script.py",
+      "python3 -m pytest",
+      "py tool.py",
+      "ruby x.rb",
+      "perl x.pl",
+      "php x.php",
+      "deno run x.ts",
+      "bun run build",
+      "bash script.sh",
+      "sh script.sh",
+      "zsh script.sh",
+      "fish script.fish",
+      "pwsh x.ps1",
+      "powershell x.ps1",
+      "cmd",
+      "Node.exe pwn.js",
+    ])("%s asks each time and offers no prefix", (cmd) => {
+      const r = classifyCommand(cmd, []);
+      expect(r.autoAllowed).toBe(false);
+      expect(r.alwaysAllowPrefix).toBeUndefined();
+    });
+
+    it.each([
+      ["pnpm install", "pnpm install"],
+      ["npm run build", "npm run build"],
+      ["git status", "git status"],
+      ["cargo test", "cargo test"],
+    ])("%s still offers %s", (cmd, prefix) => {
+      expect(classifyCommand(cmd, []).alwaysAllowPrefix).toBe(prefix);
+    });
+
+    it("an entry the person typed themselves still covers a wrapper", () => {
+      expect(
+        classifyCommand("node build.js", ["node build.js"]).autoAllowed,
+      ).toBe(true);
     });
   });
 });

@@ -395,7 +395,7 @@ export const approvals = sqliteTable(
     requestedAt: text('requested_at').notNull(),
     decision: text('decision'),
     note: text('note'),
-    /** D376: 1 when approved with Always allow, and the prefix it saved on the node. */
+    /** D376: 1 when approved with Always allow, and the prefix the person chose to always allow. */
     always: integer('always', { mode: 'boolean' }),
     prefix: text('prefix'),
     decidedAt: text('decided_at'),

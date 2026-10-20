@@ -311,8 +311,9 @@ export const APPROVAL_COMMAND_MAX = 8_000;
 /**
  * D376 (agentic nodes, FR-GRD-006): the command an agentic node's `run_command` asks to run, on the
  * card. `text` is the command line with secret-shaped values masked. `allowPrefix` is offered only
- * when one prefix covers the whole line and no denylist rule hit it; approving with `always: true`
- * saves it on the node. `denylisted` says a denylist rule matched: the card asks every time.
+ * when one prefix covers the whole line and nothing about it is denied or uncoverable; approving
+ * with `always: true` allows it for the rest of the run and asks for it to be saved on the node.
+ * `denylisted` says a denylist rule matched: the card asks every time.
  */
 export const ApprovalCommandSchema = z.strictObject({
   text: z.string().max(APPROVAL_COMMAND_MAX),
@@ -367,7 +368,11 @@ export const ApprovalDecisionSchema = z.strictObject({
   requestId: IdSchema,
   decision: ApprovalDecisionKindSchema,
   note: z.string().optional(),
-  /** D376: approved with Always allow; `prefix` is what was saved on the node. */
+  /**
+   * D376: approved with Always allow; `prefix` is the prefix the person chose to always allow. It
+   * is allowed for the rest of the run; saving it on the node is best-effort, and a failed save is
+   * logged, not recorded here.
+   */
   always: z.literal(true).optional(),
   prefix: AllowedCommandSchema.optional(),
   decidedAt: TimestampSchema,
@@ -376,8 +381,9 @@ export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;
 
 /**
  * `POST /node-runs/:id/approve` and `/reject` → `NodeRun`. The route is the decision. D376:
- * `always: true` on an approve saves the request's `command.allowPrefix` on the node; a request
- * without one answers 400 `validation_failed`.
+ * `always: true` on an approve always-allows the request's `command.allowPrefix` — for the rest of
+ * the run, and on the node once the save succeeds; a request without one answers 400
+ * `validation_failed`.
  */
 export const ApprovalDecisionRequestSchema = z.strictObject({
   note: z.string().optional(),

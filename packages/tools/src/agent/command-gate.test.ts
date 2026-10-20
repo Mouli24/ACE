@@ -44,6 +44,27 @@ describe('D376 commandGate over classifyCommand', () => {
     });
   });
 
+  it.each([
+    ['./npm test', ['npm test']],
+    ['NODE_OPTIONS=--require=./pwn.js npm test', ['npm test']],
+    ['npm test > ~/.bashrc', ['npm test']],
+    ['sudo pnpm install', []],
+    ['node pwn.js', []],
+  ])('%s under %j asks with no Always allow (D376 review)', (command, allowlist) => {
+    expect(commandGate(command, allowlist, classifyCommand)).toEqual({
+      kind: 'ask',
+      denylisted: false,
+    });
+  });
+
+  it('pnpm install is still offered for Always allow', () => {
+    expect(commandGate('pnpm install', [], classifyCommand)).toEqual({
+      kind: 'ask',
+      allowPrefix: 'pnpm install',
+      denylisted: false,
+    });
+  });
+
   it("matches the classifications the engine's tests record", () => {
     expect(classifyCommand('pnpm test', ['pnpm test'])).toMatchObject({
       autoAllowed: true,

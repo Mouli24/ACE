@@ -101,6 +101,16 @@ describe('D376 commandGate', () => {
     ).toEqual({ kind: 'ask', denylisted: true });
   });
 
+  it('asks, offering nothing, when the classifier throws', () => {
+    const broken: CommandClassifier = () => {
+      throw new Error('classifier bug');
+    };
+    expect(commandGate('pnpm test', ['pnpm test'], broken)).toEqual({
+      kind: 'ask',
+      denylisted: false,
+    });
+  });
+
   it('offers no prefix that could not be saved as an allowed command', () => {
     const long = 'x'.repeat(201);
     expect(
@@ -227,6 +237,47 @@ describe('D376 the command in the tool bag', () => {
     expect(of(builder, 'run_command', { command: 7 })).toBeUndefined();
     expect(of(builder, 'run_command', null)).toBeUndefined();
     expect(of(input(), 'run_command', { command: 'ls' })).toBeUndefined();
+  });
+
+  it.each(['read_only', 'edit_files'] as const)(
+    'a %s node never runs a command unasked, however stale its allowed commands, and is offered nothing',
+    (access) => {
+      const downgraded = agent({ access, maxTurns: 50, allowedCommands: ['npm run build'] });
+      const allowlist = createRunAllowlist([downgraded]);
+      const of = (command: string, classify: CommandClassifier) =>
+        toolCommandFor({
+          node: downgraded,
+          toolName: 'run_command',
+          args: { command },
+          allowlist,
+          classify,
+        });
+
+      expect(of('npm run build', exact)).toEqual({
+        text: 'npm run build',
+        gate: { kind: 'ask', denylisted: false },
+      });
+      // The denylist still says so on the card.
+      expect(of('git push --force', recorded)).toEqual({
+        text: 'git push --force',
+        gate: { kind: 'ask', denylisted: true },
+      });
+    },
+  );
+
+  it('a classifier that throws makes the command ask', () => {
+    const builder = agent(commandsWs(['npm run build']));
+    expect(
+      toolCommandFor({
+        node: builder,
+        toolName: 'run_command',
+        args: { command: 'npm run build' },
+        allowlist: createRunAllowlist([builder]),
+        classify: () => {
+          throw new Error('classifier bug');
+        },
+      }),
+    ).toEqual({ text: 'npm run build', gate: { kind: 'ask', denylisted: false } });
   });
 
   it('asks, with nothing offered, when no classifier is wired', () => {
