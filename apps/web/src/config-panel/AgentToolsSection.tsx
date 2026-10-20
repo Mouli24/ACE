@@ -66,11 +66,14 @@ export function AgentToolsSection({
   tools,
   onChange,
   exclude = [],
+  hideMaxToolCalls = false,
 }: {
   tools: ToolsConfig;
   onChange: (tools: ToolsConfig) => void;
   /** Registry tools not listed here because something else toggles them (the modal's skills). */
   exclude?: readonly string[];
+  /** Workspace access replaces the call cap with Max turns (D342). */
+  hideMaxToolCalls?: boolean;
 }) {
   const registry = useTools();
 
@@ -155,12 +158,14 @@ export function AgentToolsSection({
         )}
       </div>
 
-      <NumberField
-        label="Max tool calls"
-        value={tools.maxToolCalls}
-        range={MAX_TOOL_CALLS_RANGE}
-        onCommit={(maxToolCalls) => onChange({ ...tools, maxToolCalls })}
-      />
+      {!hideMaxToolCalls && (
+        <NumberField
+          label="Max tool calls"
+          value={tools.maxToolCalls}
+          range={MAX_TOOL_CALLS_RANGE}
+          onCommit={(maxToolCalls) => onChange({ ...tools, maxToolCalls })}
+        />
+      )}
 
       <AllowedDomainsEditor
         domains={tools.allowedDomains}

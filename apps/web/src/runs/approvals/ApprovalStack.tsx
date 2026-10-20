@@ -4,7 +4,10 @@ import { useState } from 'react';
 
 import { TOUCH_TARGETS } from '../../responsive/touch';
 import { useIsCompact } from '../../responsive/useIsCompact';
+import { agentMap } from '../../theme/agents';
+import { useWorkflowGraph } from '../../workflows/hooks';
 import { useApproveNodeRun, useRejectNodeRun } from '../hooks';
+import { useRunStore } from '../run-store';
 
 /**
  * Where an `ask_user` guardrail actually reaches a person (FR-GRD-013, TC-GRD-008/009).
@@ -52,10 +55,11 @@ function ApprovalRow({ request, keyboard }: { request: ApprovalRequest; keyboard
    * The decision is remembered locally only so the card can say what was chosen in the moment
    * between the POST and `node.approval_decided` arriving. The frame is what removes the card.
    */
-  const decide = (kind: 'approve' | 'reject') => {
+  const decide = (kind: 'approve' | 'reject', always = false) => {
     setDecided(kind);
     const variables = {
       nodeRunId: request.nodeRunId ?? '',
+      ...(always && kind === 'approve' ? { always: true as const } : {}),
       ...(note.trim() ? { note: note.trim() } : {}),
     };
     const mutation = kind === 'approve' ? approve : reject;
@@ -63,6 +67,13 @@ function ApprovalRow({ request, keyboard }: { request: ApprovalRequest; keyboard
   };
 
   const tool = destructiveTool(request);
+  // D328: the node keeps one colour everywhere; without a known workflow the accent stands in.
+  const workflowId = useRunStore((store) => store.workflowId);
+  const graph = useWorkflowGraph(workflowId);
+  const nodeColor =
+    request.command === undefined
+      ? undefined
+      : agentMap(graph.data?.nodes ?? []).get(request.nodeId)?.color;
 
   return (
     <div className="flex w-full flex-col gap-1.5">
@@ -77,6 +88,8 @@ function ApprovalRow({ request, keyboard }: { request: ApprovalRequest; keyboard
         keyboard={keyboard}
         onApprove={() => decide('approve')}
         onReject={() => decide('reject')}
+        onApproveAlways={() => decide('approve', true)}
+        {...(nodeColor === undefined ? {} : { nodeColor })}
       />
     </div>
   );

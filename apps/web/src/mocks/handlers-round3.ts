@@ -6,6 +6,7 @@ import {
   RetryRequestSchema,
   UpdateGuardrailPolicyRequestSchema,
   aceError,
+  agentWorkspaceOf,
   allowedRunActions,
   zeroUsage,
   type ApiError,
@@ -249,6 +250,7 @@ export function decideApproval(
   nodeRunId: string,
   decision: ApprovalDecision['decision'],
   note?: string,
+  always = false,
 ): DecisionOutcome {
   const nodeRun = db.getNodeRun(nodeRunId);
   if (nodeRun === undefined) return { ok: false, reason: 'node_run_not_found' };
@@ -264,6 +266,24 @@ export function decideApproval(
     decidedAt: now(),
   };
   db.resolveApproval(request.id);
+  // D376: Always allow saves the card's prefix on the node, as the engine does.
+  const prefix = request.command?.allowPrefix;
+  if (decision === 'approve' && always && prefix !== undefined && !request.command?.denylisted) {
+    const nodes = db.nodesOf(run.workflowId);
+    const saved = nodes.map((node) => {
+      if (node.id !== request.nodeId || node.kind !== 'agent') return node;
+      const workspace = agentWorkspaceOf(node.config);
+      if (workspace.allowedCommands.includes(prefix)) return node;
+      return {
+        ...node,
+        config: {
+          ...node.config,
+          workspace: { ...workspace, allowedCommands: [...workspace.allowedCommands, prefix] },
+        },
+      };
+    });
+    db.commitGraph(run.workflowId, saved, db.edgesOf(run.workflowId));
+  }
 
   const approvals = [...(nodeRun.approvals ?? []), stored];
   const decided: NodeRun =
@@ -663,7 +683,13 @@ async function decide(
 ): Promise<Response> {
   const parsed = await body(ctx.request, ApprovalDecisionRequestSchema, {});
   if (!parsed.ok) return parsed.response;
-  const outcome = decideApproval(db, param(ctx, 'id'), decision, parsed.data.note);
+  const outcome = decideApproval(
+    db,
+    param(ctx, 'id'),
+    decision,
+    parsed.data.note,
+    parsed.data.always === true,
+  );
   if (outcome.ok) return HttpResponse.json(outcome.nodeRun);
   if (outcome.reason === 'no_pending_approval') {
     return invalidRunState('That approval has already been decided.');
