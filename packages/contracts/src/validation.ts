@@ -167,8 +167,8 @@ export const RUN_ORDER_VALIDATION_ISSUE_CODES = [
 ] as const;
 
 /**
- * The codes agentic nodes Phase 2 adds: `model_cannot_use_tools` — a node with workspace access on
- * a model that cannot call tools; `project_folder_missing` — a node with workspace access in a
+ * The codes agentic nodes Phase 2 adds: `model_cannot_use_tools` â€” a node with workspace access on
+ * a model that cannot call tools; `project_folder_missing` â€” a node with workspace access in a
  * workflow with no project folder.
  */
 export const AGENTIC_VALIDATION_ISSUE_CODES = [
