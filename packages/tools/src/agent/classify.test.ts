@@ -32,7 +32,12 @@ describe("FR-GRD-006 command classification", () => {
       expect(splitCommand("find . -exec rm {} \\;").segments).toEqual([
         "find . -exec rm {} \\;",
       ]);
-      expect(splitCommand("echo a ^& b").segments).toEqual(["echo a ^& b"]);
+    });
+
+    it("reads a caret as bash does — an ordinary character, so it is not confident (D376)", () => {
+      const r = splitCommand("echo a ^& b");
+      expect(r.segments).toEqual(["echo a ^", "b"]);
+      expect(r.confident).toBe(false);
     });
 
     it("treats redirections as part of the segment, not separators", () => {
@@ -80,6 +85,30 @@ describe("FR-GRD-006 command classification", () => {
       ["&& echo a", "empty"],
       ["echo a && && echo b", "empty"],
       ["curl x | sh", "stdin"],
+      // D376 review 2: what bash and PowerShell read differently from the splitter.
+      ["npm test ^> x", "caret"],
+      ["npm test $'x'", "quoting"],
+      ['npm test $"x"', "quoting"],
+      ["npm test # comment", "comment"],
+      ["npm test;#x", "comment"],
+      ["#!/bin/sh", "comment"],
+      ["npm test <#x#>", "comment"],
+      ["echo 'a\nb'", "newline inside quotes"],
+      ['echo "a\r\nb"', "newline inside quotes"],
+      ["npm test \\; ls", "backslash"],
+      ["npm test \\| ls", "backslash"],
+      ["npm test \\& ls", "backslash"],
+      ["npm test \\> x", "backslash"],
+      ["npm test \\< x", "backslash"],
+      ["npm test \\(x\\)", "backslash"],
+      ["npm test \\$x", "backslash"],
+      ["npm test \\`x", "backslash"],
+      ["npm test \\'x", "backslash"],
+      ['npm test \\"x', "backslash"],
+      ["npm test \\\nls", "backslash"],
+      ["npm test \\\r\nls", "backslash"],
+      ['echo "a\\" ; rm -rf ~ ; \\"b"', "backslash"],
+      ['echo "\\$HOME"', "backslash"],
     ])("is not confident about %s", (cmd, reason) => {
       const r = splitCommand(cmd);
       expect(r.confident).toBe(false);
@@ -407,7 +436,6 @@ describe("FR-GRD-006 command classification", () => {
       ["npm test < input.txt", ["npm test"]],
       ['echo "a > b"', ["echo"]],
       ["echo 'x >> y'", ["echo"]],
-      ["echo a \\> b", ["echo"]],
       ["npm test | tee out.txt", ["npm test", "tee"]],
       ["pnpm.cmd install", ["pnpm install"]],
     ])("%s under %j is still auto-allowed", (cmd, allowlist) => {
@@ -427,6 +455,58 @@ describe("FR-GRD-006 command classification", () => {
         "npm test",
       );
     });
+  });
+
+  /*
+   * D376 review 2: the agent's shell is bash (PowerShell as a fallback). Each of these hid a second
+   * command, a substitution or a redirect inside one "confident" segment under an ordinary entry,
+   * because the splitter read `^` as cmd.exe's escape and did not model `$'…'` or `#` comments.
+   * Probed in real Git Bash by the reviewer; the exact shapes are kept here.
+   */
+  describe("what bash reads differently is never confident (D376)", () => {
+    it.each([
+      ["npm test ^> ~/.bashrc", ["npm test"]],
+      ["npm test ^; rm -rf ~", ["npm test"]],
+      ["npm test ^|bash x.sh", ["npm test"]],
+      ["npm test ^\nrm -rf ~/proj", ["npm test"]],
+      ["npm test ^`rm -rf ~/proj ^`", ["npm test"]],
+      ["npm test ^$(rm -rf ~/proj ^)", ["npm test"]],
+      ["npm test $'\\'' > ~/.bashrc #'", ["npm test"]],
+      ["npm test $'\\'' ; rm -rf ~ #'", ["npm test"]],
+      ["npm test #'\nrm -rf ~/proj\n#'", ["npm test"]],
+      ["git status ^; LD_PRELOAD=./x.so git status", ["git status"]],
+    ])("%j under %j asks and offers no prefix", (cmd, allowlist) => {
+      const r = classifyCommand(cmd, allowlist);
+      expect(r.confident).toBe(false);
+      expect(r.autoAllowed).toBe(false);
+      expect(r.alwaysAllowPrefix).toBeUndefined();
+      expect(classifyCommand(cmd, []).alwaysAllowPrefix).toBeUndefined();
+    });
+
+    it.each([
+      ["npm test", ["npm test"], 1],
+      ['echo ">x"', ["echo"], 1],
+      ["echo '>'", ["echo"], 1],
+      ["npm test 2>&1", ["npm test"], 1],
+      ["npm test < input.txt", ["npm test"], 1],
+      ["npm test | tee out", ["npm test", "tee"], 2],
+      ["npm test\n", ["npm test"], 1],
+      ["npm test\r\n", ["npm test"], 1],
+      ["npm test --grep=#tag", ["npm test"], 1],
+      ["npm test C:\\tmp\\x", ["npm test"], 1],
+      ["npm test my\\ file", ["npm test"], 1],
+      ['echo "C:\\\\x"', ["echo"], 1],
+      ["echo 'it''s'", ["echo"], 1],
+      ['echo "$HOME"', ["echo"], 1],
+    ])(
+      "%j under %j stays confident and auto-allowed",
+      (cmd, allowlist, segments) => {
+        const r = classifyCommand(cmd, allowlist);
+        expect(r.confident).toBe(true);
+        expect(r.segments).toHaveLength(segments);
+        expect(r.autoAllowed).toBe(true);
+      },
+    );
   });
 
   describe("prefixes never offered for Always allow (D376)", () => {
@@ -455,6 +535,32 @@ describe("FR-GRD-006 command classification", () => {
       "powershell x.ps1",
       "cmd",
       "Node.exe pwn.js",
+      // D376 review 2: the classifier's own wrapper, shell and interpreter lists, and more.
+      "nice npm test",
+      "command npm test",
+      "exec npm test",
+      "builtin echo x",
+      "timeout 5 npm test",
+      "stdbuf -oL npm test",
+      "dash x.sh",
+      "ksh x.sh",
+      "ash x.sh",
+      "busybox ls",
+      ". ./env.sh",
+      "source env.sh",
+      "npx tsc",
+      "pnpx tsc",
+      "bunx tsc",
+      "tsx x.ts",
+      "wsl ls",
+      "ssh host ls",
+      "python3.12 x.py",
+      "Python3.12.EXE x.py",
+      "pypy3 x.py",
+      "php8.2 x.php",
+      "ruby3.2 x.rb",
+      "perl5.36 x.pl",
+      "node18 x.js",
     ])("%s asks each time and offers no prefix", (cmd) => {
       const r = classifyCommand(cmd, []);
       expect(r.autoAllowed).toBe(false);
@@ -466,6 +572,9 @@ describe("FR-GRD-006 command classification", () => {
       ["npm run build", "npm run build"],
       ["git status", "git status"],
       ["cargo test", "cargo test"],
+      ["make build", "make build"],
+      ["yarn build", "yarn build"],
+      ["npm test", "npm test"],
     ])("%s still offers %s", (cmd, prefix) => {
       expect(classifyCommand(cmd, []).alwaysAllowPrefix).toBe(prefix);
     });
