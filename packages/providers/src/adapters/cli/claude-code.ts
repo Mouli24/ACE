@@ -8,11 +8,40 @@ import {
   createCliAdapter,
   summariseToolOutput,
   tokenCount,
+  type CliAccess,
   type CliAdapterOptions,
   type CliDialect,
   type CliParser,
 } from './adapter.js';
 import { listClaudeCodeModels } from './claude-models.js';
+
+/**
+ * D383: the node's own level, from `claude --help` (`--permission-mode`, `--tools`,
+ * `--allowedTools`). `edit_commands` adds `Bash` to `--tools` and runs under `dontAsk`, which refuses
+ * whatever is not pre-approved (print mode cannot ask): `Edit` and `Write` are pre-approved, and so
+ * is one `Bash(<prefix>:*)` rule per allowed prefix. A command outside the list is refused by the
+ * CLI; with an empty allowlist the node behaves as `edit_files` plus a refused `Bash`. A prefix
+ * holding a parenthesis or line break could widen or break a rule, so it is skipped (fewer permissions).
+ */
+export function claudeAccessArgs(access: CliAccess): string[] {
+  if (access.access === 'read_only') return [...PERMISSION_ARGS.read_only];
+  if (access.access === 'edit_files') return [...EDIT_FILES_ARGS];
+  const rules = access.allowedCommands
+    .map((prefix) => prefix.trim())
+    .filter((prefix) => prefix !== '' && ![...prefix].some((ch) => ch === '(' || ch === ')' || ch < ' '))
+    .map((prefix) => `Bash(${prefix}:*)`);
+  return [
+    '--permission-mode',
+    'dontAsk',
+    '--tools',
+    'Read,Edit,Write,Grep,Glob,Bash',
+    '--allowedTools',
+    'Edit',
+    '--allowedTools',
+    'Write',
+    ...rules.flatMap((rule) => ['--allowedTools', rule]),
+  ];
+}
 
 /**
  * Claude Code in print mode (X1 spec §5.1). `--setting-sources ""` keeps the user's own hooks and
@@ -252,9 +281,9 @@ export const claudeCodeDialect: CliDialect = {
   type: 'claude_code',
   bin: 'claude',
   label: 'Claude Code',
-  args: (req, permission) => [
+  args: (req, permission, access) => [
     ...CLAUDE_CODE_BASE_ARGS,
-    ...PERMISSION_ARGS[permission],
+    ...(access === undefined ? PERMISSION_ARGS[permission] : claudeAccessArgs(access)),
     ...(req.modelId === 'default' ? [] : ['--model', req.modelId]),
     ...(req.system === undefined || req.system === '' ? [] : ['--append-system-prompt', req.system]),
   ],

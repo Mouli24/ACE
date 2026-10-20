@@ -179,9 +179,12 @@ export const codexDialect: CliDialect = {
   type: 'codex_cli',
   bin: 'codex',
   label: 'Codex CLI',
-  args: (req, permission) => [
+  args: (req, permission, access) => [
     ...CODEX_BASE_ARGS,
-    ...PERMISSION_ARGS[permission],
+    // D383: Codex has no per-command allowlist; `edit_files` and `edit_commands` both run in its workspace-write sandbox
+    ...(access === undefined
+      ? PERMISSION_ARGS[permission]
+      : PERMISSION_ARGS[access.access === 'read_only' ? 'read_only' : 'edit_files']),
     ...(req.modelId === 'default' ? [] : ['-m', req.modelId]),
     '-',
   ],
