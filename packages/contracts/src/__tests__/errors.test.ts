@@ -128,6 +128,7 @@ describe('FR-SYS-006 round 1 error codes', () => {
       'engine_stopping',
       'checkpoint_conflict',
       'checkpoints_unavailable',
+      'run_active',
     ]);
   });
 

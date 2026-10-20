@@ -100,6 +100,8 @@ const STOPPED_WHILE_RECORDING =
   "the engine stopped while recording; these changes can't be told apart from yours";
 /** How much of a file is searched for a NUL byte to call it binary — git's own heuristic. */
 const SNIFF_BYTES = 8000;
+/** D379: a run in these states may still add steps, so its steps are not reverted yet. */
+const ACTIVE_RUN_STATES: ReadonlySet<string> = new Set(['PREFLIGHT', 'RUNNING', 'PAUSED']);
 const OPEN: ReadonlySet<CheckpointStatus> = new Set(['recording', 'pending']);
 /** The states Keep and Revert decide; `person` and `not_revertible` are only listed. */
 const DECIDABLE: ReadonlySet<CheckpointFileState> = new Set(['pending', 'kept', 'reverted']);
@@ -462,6 +464,24 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
               ? 'This checkpoint is still recording; wait for the agent to finish.'
               : 'This checkpoint failed, so its changes cannot be kept or reverted.',
           );
+        }
+        // D379: an agent step is still being built on while its run goes; undoing it underneath
+        // the next step would corrupt that run. Keep stays allowed — it only records a decision.
+        if (
+          action.action === 'revert' &&
+          checkpoint.kind === 'run' &&
+          checkpoint.runId !== undefined
+        ) {
+          const run = await deps.repository.runs.get(scope, checkpoint.runId);
+          if (run !== null && ACTIVE_RUN_STATES.has(run.status)) {
+            throw new HttpError(
+              'workflow',
+              'run_active',
+              'Stop the run or let it finish before reverting its steps.',
+              undefined,
+              false,
+            );
+          }
         }
         const wanted = action.paths === undefined ? undefined : new Set(action.paths);
         for (const path of wanted ?? []) {
