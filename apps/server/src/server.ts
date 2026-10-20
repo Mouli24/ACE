@@ -441,6 +441,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     logger: logger.child({ subsystem: 'processes' }),
     onPersonCommand: (projectId, processId, running) =>
       checkpoints.notePersonCommand(projectId, processId, running),
+    // Task 14: Forge's Kill on a running background agent command goes to the run's agent session.
+    killAgentCommand: async (runId, sessionProcessId) =>
+      (await agentSessions.get(runId)?.processes.kill(sessionProcessId)) ?? false,
   });
   const hub = createWsHub({
     bus,
@@ -694,6 +697,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
                 nodeId: spec.nodeId,
                 command: spec.command,
                 cwd,
+                background: spec.background,
+                ...(spec.processId === undefined ? {} : { sessionProcessId: spec.processId }),
               }),
         );
         return {

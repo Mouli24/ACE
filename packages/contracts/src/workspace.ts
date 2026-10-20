@@ -420,9 +420,15 @@ export type ProcessInputRequest = z.infer<typeof ProcessInputRequestSchema>;
 /**
  * PG-5.3 (D361): a command an agentic node ran with `run_command` (in the foreground or with
  * `background: true`), shown in Forge's Terminal and Processes list read-only — the run and node
- * that started it. It takes no input and is not stopped from Forge: stopping the run stops it.
+ * that started it. It takes no input. A foreground one is stopped by stopping the run; a running background one can
+ * also be killed from Forge (Task 14).
  */
-export const ProcessAgentSchema = z.strictObject({ runId: IdSchema, nodeId: IdSchema });
+export const ProcessAgentSchema = z.strictObject({
+  runId: IdSchema,
+  nodeId: IdSchema,
+  /** `true` for a `run_command` with `background: true`: Forge's Kill can end it (Task 14). */
+  background: z.boolean(),
+});
 export type ProcessAgent = z.infer<typeof ProcessAgentSchema>;
 
 /**
