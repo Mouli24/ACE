@@ -341,6 +341,8 @@ export function useNodeOverlay(nodeId: Id): {
   modelUsed: NodeRunView['modelUsed'];
   finalOutput: Part[] | undefined;
   failureReason: FailureReason | undefined;
+  /** D381: the tool call in flight on an agentic node, until the matching `tool.call`. */
+  activeTool: { name: string; target?: string; startedAt: number } | undefined;
 } {
   return useRunStore(
     useShallow((store) => {
@@ -352,6 +354,7 @@ export function useNodeOverlay(nodeId: Id): {
         modelUsed: run?.modelUsed,
         finalOutput: store.finalOutput?.[nodeId],
         failureReason: run?.failureReason,
+        activeTool: run?.activeTool,
       };
     }),
   );

@@ -1,4 +1,4 @@
-import type { Node } from '@ace/contracts';
+import { isAgentic, type Node } from '@ace/contracts';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,6 +10,7 @@ import {
 } from '@ace/ui';
 import { useContext, useState } from 'react';
 
+import { AgenticMenuItems, RevertStepDialog } from './AgenticCardMenu';
 import { NodeActionsContext } from './card-context';
 import { isStageKind } from './anchors';
 
@@ -31,9 +32,14 @@ export function NodeCardButtons({ node, className }: { node: Node; className?: s
    */
   const [menuMounted, setMenuMounted] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // D382: the Revert step confirm outlives the menu that opened it.
+  const [revert, setRevert] = useState<{ projectId: string; checkpointId: string }>();
   if (actions === undefined) return null;
   const { readOnly } = actions;
   const name = node.name || 'node';
+  // D378: Open in Forge / Revert step belong to a node that works in the project, and need a router.
+  const agentic =
+    node.kind === 'agent' && isAgentic(node.config) && actions.openInDomain !== undefined;
   const moreButton = (
     <button
       type="button"
@@ -89,6 +95,13 @@ export function NodeCardButtons({ node, className }: { node: Node; className?: s
                 Open in Domain
               </DropdownMenuItem>
             )}
+            {agentic && (
+              <AgenticMenuItems
+                workflowId={node.workflowId}
+                nodeId={node.id}
+                onRevert={(projectId, checkpointId) => setRevert({ projectId, checkpointId })}
+              />
+            )}
             {!readOnly && (
               <>
                 <DropdownMenuItem onSelect={() => actions.connectTo(node.id)}>
@@ -118,6 +131,13 @@ export function NodeCardButtons({ node, className }: { node: Node; className?: s
         </DropdownMenu>
       ) : (
         moreButton
+      )}
+      {revert !== undefined && (
+        <RevertStepDialog
+          projectId={revert.projectId}
+          checkpointId={revert.checkpointId}
+          onClose={() => setRevert(undefined)}
+        />
       )}
     </div>
   );

@@ -36,6 +36,18 @@ export interface NodeRunView {
   modelUsed?: ModelUsed;
   output?: Part[];
   usage: Usage;
+  /** D381: the tool call in flight, from its `tool.started` to the `tool.call` that ends it. */
+  activeTool?: ActiveToolView;
+}
+
+/** A tool call an agentic node has started and not yet finished (D381). */
+export interface ActiveToolView {
+  callId: string;
+  name: string;
+  /** The path or command it works on, when the frame named one. */
+  target?: string;
+  /** When the frame arrived, epoch ms. */
+  startedAt: number;
 }
 
 export interface EdgeTransferView {
@@ -107,6 +119,7 @@ function isPersistedRunEvent(frame: ServerFrame): frame is PersistedRunEvent {
 
 /** A node the run has not touched yet is IDLE (Arch §19.1), so the Canvas can render immediately. */
 const DEFAULT_STATE: NodeState = 'IDLE';
+/** States a node run does not leave (Arch §19.1); a tool call cannot still be in flight there. */const TERMINAL_STATES: ReadonlySet<NodeState> = new Set<NodeState>([  'COMPLETED',  'FAILED',  'STOPPED',  'BLOCKED',]);
 
 /**
  * Folds the run events of §2.4 into something a screen can render, and does it idempotently: the
@@ -201,6 +214,7 @@ export class RunEventBuffer {
         view.iteration = frame.payload.iteration;
         view.attempt = frame.payload.attempt;
         view.status = frame.payload.status;
+        if (TERMINAL_STATES.has(frame.payload.status)) delete view.activeTool;
         if (frame.payload.failureReason !== undefined)
           view.failureReason = frame.payload.failureReason;
         this.noteIteration(frame.payload.nodeId, frame.payload.iteration);
@@ -212,6 +226,25 @@ export class RunEventBuffer {
           frame.payload.nodeRunId,
           (this.text.get(frame.payload.nodeRunId) ?? '') + frame.payload.delta,
         );
+        return;
+      }
+
+      case 'tool.started': {
+        const view = this.upsert(frame.payload.nodeRunId, frame.payload.nodeId);
+        view.activeTool = {
+          callId: frame.payload.callId,
+          name: frame.payload.name,
+          ...(frame.payload.target === undefined ? {} : { target: frame.payload.target }),
+          startedAt: Date.now(),
+        };
+        return;
+      }
+
+      case 'tool.call': {
+        const view = this.byNodeRunId.get(frame.payload.nodeRunId);
+        if (view?.activeTool !== undefined && view.activeTool.callId === frame.payload.callId) {
+          delete view.activeTool;
+        }
         return;
       }
 
