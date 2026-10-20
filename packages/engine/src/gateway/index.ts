@@ -23,6 +23,7 @@ import {
   StartRunRequestSchema,
   TryModelRequestSchema,
   UpdateProjectRequestSchema,
+  ModelCapabilitiesPatchSchema,
   UpdateProviderRequestSchema,
   UpdateWorkflowRequestSchema,
   artifactETag,
@@ -709,6 +710,19 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.post('/providers/:id/refresh-models', async (c) =>
     c.json(await providers(c).refreshModels(c.req.param('id'))),
   );
+
+  /**
+   * D380 (agentic nodes P2): the person says whether a discovered model takes tools, and how big
+   * its window is. Kept across a refresh. The model id is URL-encoded — ids carry `/` and `:`.
+   */
+  api.patch('/providers/:id/models/:modelId', async (c) => {
+    const patch = ModelCapabilitiesPatchSchema.parse(await readJson(c));
+    const id = c.req.param('id');
+    const modelId = c.req.param('modelId');
+    const model = await providers(c).setModelCapabilities(id, modelId, patch);
+    if (model === null) throw notFound(`model ${modelId} of provider ${id}`);
+    return c.json(model);
+  });
 
   /* ------------------------------------------- models on this machine (PG-1.4, D359) */
 

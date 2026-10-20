@@ -87,6 +87,36 @@ describe('round 2 §2.5 endpoints', () => {
     ]);
   });
 
+  it('D380 patchModelCapabilities PATCHes the encoded model id and validates the body', async () => {
+    const model = {
+      id: '01JBXQ8Z9KQ4R7N2VWXYZ0MDE1',
+      providerId: P,
+      modelId: 'models/gemini:3',
+      displayName: 'Gemini 3',
+      inputTypes: ['text'],
+      outputTypes: ['text'],
+      contextWindow: 65_536,
+      supportsTools: true,
+      supportsJson: false,
+      available: true,
+      source: 'discovered',
+      lastCheckedAt: NOW,
+      capabilitiesSetByPerson: true,
+    };
+    const { calls, client } = recorder([model]);
+
+    const updated = await client.patchModelCapabilities(P, 'models/gemini:3', {
+      supportsTools: true,
+      contextWindow: 65_536,
+    });
+
+    expect(updated.capabilitiesSetByPerson).toBe(true);
+    expect(`${calls[0]?.method} ${calls[0]?.url.replace('http://x/api/v1', '')}`).toBe(
+      `PATCH /providers/${P}/models/models%2Fgemini%3A3`,
+    );
+    await expect(client.patchModelCapabilities(P, 'm', { contextWindow: 5 })).rejects.toThrow();
+  });
+
   it('X1 detectClis asks GET /providers/detect/clis', async () => {
     const { calls, client } = recorder([{ items: [] }]);
     expect(await client.detectClis()).toEqual({ items: [] });

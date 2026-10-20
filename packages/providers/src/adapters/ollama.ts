@@ -51,7 +51,8 @@ export function createOllamaAdapter(options: OllamaOptions = {}): ProviderAdapte
       ]);
       return models.map((model) => {
         const size = sizes.get(model.modelId);
-        const can = capabilities.get(model.modelId);
+        const shown = capabilities.get(model.modelId);
+        const can = shown?.capabilities;
         const inputTypes =
           can?.has('vision') === true && !model.inputTypes.includes('image')
             ? [...model.inputTypes, 'image' as const]
@@ -61,6 +62,8 @@ export function createOllamaAdapter(options: OllamaOptions = {}): ProviderAdapte
           inputTypes,
           supportsJson: true,
           supportsTools: can === undefined ? model.supportsTools : can.has('tools'),
+          // The model's real window, not the catalogue's 8192 guess (agentic nodes P2, Task 4).
+          ...(shown?.contextLength === undefined ? {} : { contextWindow: shown.contextLength }),
           ...(size === undefined ? {} : { sizeBytes: size }),
         };
       });
@@ -110,20 +113,38 @@ export async function ollamaModelSizes(
   return sizes;
 }
 
+/** The `<arch>.context_length` entry of `/api/show`'s `model_info`, when it is a sane integer. */
+function contextLengthOf(info: unknown): number | undefined {
+  if (typeof info !== 'object' || info === null) return undefined;
+  for (const [key, value] of Object.entries(info)) {
+    if (key.endsWith('.context_length') && typeof value === 'number' && Number.isInteger(value)) {
+      return value >= 1 ? value : undefined;
+    }
+  }
+  return undefined;
+}
+
 /** How many `/api/show` calls are in flight at once while a model list is read. */
 const SHOW_CONCURRENCY = 4;
 
+/** What `/api/show` says about one model. */
+export interface OllamaShown {
+  capabilities: Set<string>;
+  /** `model_info["<arch>.context_length"]`, when Ollama reports a usable number. */
+  contextLength?: number;
+}
+
 /**
  * Each model's `capabilities` from Ollama's `/api/show` (D-100): `completion`, `tools`, `vision`,
- * `embedding`, … Best effort and never throws: a model whose answer is missing or malformed is
+ * `embedding`, … and its context length (agentic nodes P2, Task 4). Best effort and never throws: a model whose answer is missing or malformed is
  * left out, and its catalogue defaults stand.
  */
 export async function ollamaCapabilities(
   baseUrl: string,
   modelIds: readonly string[],
   fetchImpl?: FetchLike,
-): Promise<Map<string, Set<string>>> {
-  const found = new Map<string, Set<string>>();
+): Promise<Map<string, OllamaShown>> {
+  const found = new Map<string, OllamaShown>();
   const queue = [...modelIds];
   const worker = async (): Promise<void> => {
     for (let modelId = queue.shift(); modelId !== undefined; modelId = queue.shift()) {
@@ -133,13 +154,16 @@ export async function ollamaCapabilities(
           body: { model: modelId },
           timeoutMs: DETECT_TIMEOUT_MS * 3,
           ...(fetchImpl === undefined ? {} : { fetchImpl }),
-        })) as { capabilities?: unknown } | null;
+        })) as { capabilities?: unknown; model_info?: unknown } | null;
         const list = body?.capabilities;
         if (Array.isArray(list)) {
-          found.set(
-            modelId,
-            new Set(list.filter((entry): entry is string => typeof entry === 'string')),
-          );
+          const contextLength = contextLengthOf(body?.model_info);
+          found.set(modelId, {
+            capabilities: new Set(
+              list.filter((entry): entry is string => typeof entry === 'string'),
+            ),
+            ...(contextLength === undefined ? {} : { contextLength }),
+          });
         }
       } catch {
         // an older Ollama, or one model it cannot describe: keep the defaults

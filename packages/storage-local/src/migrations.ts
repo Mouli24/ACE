@@ -93,6 +93,9 @@ export const RUN_REPLAY_OF_MIGRATION_ID = '20261016T120000_run_replay_of';
 /** D359 (PG-1.4): a model's size on disk, as a local provider reports it. */
 export const MODEL_SIZE_MIGRATION_ID = '20261016T130000_model_size_bytes';
 
+/** D380 (agentic nodes P2): a person's own `supportsTools` / `contextWindow` for a model. */
+export const MODEL_CAPABILITY_OVERRIDES_MIGRATION_ID = '20261020T090000_model_capability_overrides';
+
 /**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
@@ -795,6 +798,15 @@ export const MIGRATIONS: readonly Migration[] = [
       -- D359 (PG-1.4): Model.sizeBytes, filled from Ollama's tags. NULL where the provider says
       -- nothing (every cloud model, and every row stored before this column).
       ALTER TABLE models ADD COLUMN size_bytes INTEGER;
+    `,
+  },
+  {
+    id: MODEL_CAPABILITY_OVERRIDES_MIGRATION_ID,
+    up: `
+      -- D380: the person marks a model as tool-capable and/or states its context window. NULL on
+      -- every row until they do; a catalog read applies them and refresh-models keeps them.
+      ALTER TABLE models ADD COLUMN supports_tools_override INTEGER;
+      ALTER TABLE models ADD COLUMN context_window_override INTEGER;
     `,
   },
 ];

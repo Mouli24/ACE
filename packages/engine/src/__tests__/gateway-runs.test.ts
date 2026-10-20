@@ -73,6 +73,7 @@ interface Calls {
   removed: { id: string; confirm: boolean }[];
   checked: string[];
   refreshed: string[];
+  capabilities: { id: string; modelId: string; patch: unknown }[];
   started: { workflowId: string; request: unknown }[];
 }
 
@@ -86,7 +87,15 @@ async function build(): Promise<void> {
   const pubsub = new InProcessPubSubStub<EngineEvent>();
   const bus = createEventBus({ repository, scope, pubsub, now: () => NOW });
   const logger = createLogger({ level: 'silent', destination: { write: () => undefined } });
-  calls = { created: [], updated: [], removed: [], checked: [], refreshed: [], started: [] };
+  calls = {
+    created: [],
+    updated: [],
+    removed: [],
+    checked: [],
+    refreshed: [],
+    capabilities: [],
+    started: [],
+  };
   removeResult = { ok: true };
 
   app = createEngineApp({
@@ -127,6 +136,16 @@ async function build(): Promise<void> {
         return { models: [model()], refreshedAt: NOW };
       },
       listModels: async (query) => (query.inputType === 'image' ? [] : [model()]),
+      setModelCapabilities: async (id, modelId, patch) => {
+        calls.capabilities.push({ id, modelId, patch });
+        return id === PROVIDER_ID && modelId === 'mock-text'
+          ? {
+              ...model(),
+              supportsTools: patch.supportsTools === true,
+              capabilitiesSetByPerson: true,
+            }
+          : null;
+      },
       detect: async () => ({ ollama: { baseUrl: 'http://127.0.0.1:11434', detected: true } }),
       detectClis: async () => ({
         items: [
@@ -213,7 +232,11 @@ const post = (path: string, body?: unknown) =>
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 const patch = (path: string, body: unknown) =>
-  app.request(`/api/v1${path}`, { method: 'PATCH', headers: JSON_HEADERS, body: JSON.stringify(body) });
+  app.request(`/api/v1${path}`, {
+    method: 'PATCH',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
 const del = (path: string) => app.request(`/api/v1${path}`, { method: 'DELETE', headers: AUTH });
 
 const body = async <T>(response: Response): Promise<T> => (await response.json()) as T;
@@ -245,7 +268,11 @@ describe('§2.5 provider endpoints', () => {
   });
 
   it('TC-PRV-002 never echoes the key back', async () => {
-    const response = await post('/providers', { type: 'openai', name: 'OpenAI', apiKey: 'a-secret' });
+    const response = await post('/providers', {
+      type: 'openai',
+      name: 'OpenAI',
+      apiKey: 'a-secret',
+    });
 
     expect(await response.text()).not.toContain('a-secret');
   });
@@ -275,7 +302,9 @@ describe('§2.5 provider endpoints', () => {
     const response = await del(`/providers/${PROVIDER_ID}`);
 
     expect(response.status).toBe(409);
-    const payload = await body<{ error: { code: string; details: { nodeIds: string[] } } }>(response);
+    const payload = await body<{ error: { code: string; details: { nodeIds: string[] } } }>(
+      response,
+    );
     expect(payload.error.code).toBe('provider_in_use');
     expect(payload.error.details.nodeIds).toEqual(['01JBXQ8Z9KQ4R7N2VWXYZ0ABCD']);
   });
@@ -304,6 +333,57 @@ describe('§2.5 provider endpoints', () => {
       models: [model()],
       refreshedAt: NOW,
     });
+  });
+
+  it('D380 PATCH marks a model as tool-capable and answers the updated model', async () => {
+    const response = await patch(`/providers/${PROVIDER_ID}/models/mock-text`, {
+      supportsTools: true,
+    });
+
+    expect(response.status).toBe(200);
+    expect(await body<Model>(response)).toMatchObject({
+      modelId: 'mock-text',
+      supportsTools: true,
+      capabilitiesSetByPerson: true,
+    });
+    expect(calls.capabilities[0]).toEqual({
+      id: PROVIDER_ID,
+      modelId: 'mock-text',
+      patch: { supportsTools: true },
+    });
+  });
+
+  it('D380 PATCH accepts null to clear an override', async () => {
+    const response = await patch(`/providers/${PROVIDER_ID}/models/mock-text`, {
+      supportsTools: null,
+      contextWindow: null,
+    });
+
+    expect(response.status).toBe(200);
+    expect(calls.capabilities[0]?.patch).toEqual({ supportsTools: null, contextWindow: null });
+  });
+
+  it('D380 PATCH answers 404 for a model the provider does not list', async () => {
+    const response = await patch(`/providers/${PROVIDER_ID}/models/nope`, { supportsTools: true });
+
+    expect(response.status).toBe(404);
+  });
+
+  it('D380 PATCH reaches a model id that contains a slash or colon', async () => {
+    await patch(`/providers/${PROVIDER_ID}/models/${encodeURIComponent('models/gemini:3')}`, {
+      contextWindow: 65_536,
+    });
+
+    expect(calls.capabilities[0]).toMatchObject({ modelId: 'models/gemini:3' });
+  });
+
+  it('D380 PATCH refuses an unknown field and an out-of-range window', async () => {
+    const extra = await patch(`/providers/${PROVIDER_ID}/models/mock-text`, { name: 'x' });
+    const small = await patch(`/providers/${PROVIDER_ID}/models/mock-text`, { contextWindow: 10 });
+
+    expect(extra.status).toBe(400);
+    expect(small.status).toBe(400);
+    expect(calls.capabilities).toEqual([]);
   });
 
   it('FR-PRV-007 answers the detection probe, and does not read it as a provider id', async () => {
@@ -426,7 +506,9 @@ describe('TC-EXE-013 the events endpoint replays what a client missed', () => {
       'RUNNING',
       'COMPLETED',
     ]);
-    expect(events.map((event) => event.seq)).toEqual([...events.map((e) => e.seq)].sort((a, b) => a - b));
+    expect(events.map((event) => event.seq)).toEqual(
+      [...events.map((e) => e.seq)].sort((a, b) => a - b),
+    );
   });
 
   it('returns only what came after the sequence the client has', async () => {

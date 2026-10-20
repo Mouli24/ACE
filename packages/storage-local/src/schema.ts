@@ -188,6 +188,9 @@ export const models = sqliteTable(
     unavailableReason: text('unavailable_reason'),
     /** D359: size on disk as a local provider reports it; null where it says nothing. */
     sizeBytes: integer('size_bytes'),
+    /** D380: what the person set; NULL means "as the catalogue says". A refresh keeps both. */
+    supportsToolsOverride: integer('supports_tools_override', { mode: 'boolean' }),
+    contextWindowOverride: integer('context_window_override'),
   },
   (table) => [index('models_provider_idx').on(table.workspaceId, table.providerId, table.modelId)],
 );

@@ -12,6 +12,7 @@ import {
   type CreateProviderRequest,
   type Id,
   type Model,
+  type ModelCapabilitiesPatch,
   type ModelQuery,
   type Provider,
   type ProviderCheckResult,
@@ -97,6 +98,15 @@ export interface ProviderService {
     id: Id,
   ): Promise<{ models: Model[]; refreshedAt: string; warning?: string }>;
   listModels(query: ModelQuery): Promise<Model[]>;
+  /**
+   * D380: record what the person says a model can do. The updated model, or null when the provider
+   * lists no such model. A refresh keeps it.
+   */
+  setModelCapabilities(
+    id: Id,
+    modelId: string,
+    patch: ModelCapabilitiesPatch,
+  ): Promise<Model | null>;
   detect(): Promise<ProviderDetectResponse>;
   /** X1 (FR-PRV-008): the terminal scan — installed, version and sign-in per CLI. */
   detectClis?(): Promise<CliDetectResponse>;
@@ -604,13 +614,18 @@ export function createProviderService(
       await freezePriceTables(models, refreshedAt);
 
       return {
-        models,
+        // D380: what the person set on a model is applied by the read, not by this merge.
+        models: await repository.models.list(scope, { providerId: id }),
         refreshedAt,
         ...(warning === undefined ? {} : { warning }),
       };
     },
 
     listModels: (query) => repository.models.list(scope, query),
+
+    setModelCapabilities: async (id, modelId, patch) => {
+      return repository.models.setCapabilities(scope, id, modelId, patch);
+    },
 
     async detect() {
       const found = await factory.detect();

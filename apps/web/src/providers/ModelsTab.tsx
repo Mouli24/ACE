@@ -25,7 +25,8 @@ import { useState } from 'react';
 import { LOCAL_COST_TEXT, UNKNOWN_COST_TITLE, isLocalProvider } from '../runs/CostValue';
 import { ProviderMark } from './ProviderMark';
 import { GROUP_ORDER } from './provider-groups';
-import { useModels, useRefreshModels } from './hooks';
+import { useModels, usePatchModelCapabilities, useRefreshModels } from './hooks';
+import { Toggle } from '../theme/primitives';
 import { PROVIDER_TYPE_LABEL } from './provider-meta';
 
 const ANY = 'any';
@@ -228,6 +229,7 @@ function modelSections(
 function ModelRow({ model, provider }: { model: Model; provider: Provider | undefined }) {
   const note = model.available ? model.description : model.unavailableReason;
   const local = isLocalProvider(provider);
+  const patchCapabilities = usePatchModelCapabilities();
   return (
     <tr
       className="border-t border-[var(--line)]"
@@ -276,7 +278,48 @@ function ModelRow({ model, provider }: { model: Model; provider: Provider | unde
       </td>
       <td className={`${CELL} font-machine text-[11px]`}>{model.contextWindow.toLocaleString()}</td>
       <td className={`${CELL} whitespace-nowrap font-machine text-[11px] text-[var(--muted)]`}>
-        {model.supportsTools ? 'tools' : '—'} / {model.supportsJson ? 'json' : '—'}
+        {/* D380: discovery cannot tell which models take tools, so the person can. */}
+        <button
+          type="button"
+          role="switch"
+          aria-checked={model.supportsTools}
+          aria-label={`Tools for ${model.modelId}`}
+          disabled={patchCapabilities.isPending}
+          className="mr-2 inline-flex align-middle disabled:opacity-60"
+          onClick={() =>
+            patchCapabilities.mutate({
+              providerId: model.providerId,
+              modelId: model.modelId,
+              patch: { supportsTools: !model.supportsTools },
+            })
+          }
+        >
+          <Toggle on={model.supportsTools} />
+        </button>
+        tools / {model.supportsJson ? 'json' : '—'}
+        {model.capabilitiesSetByPerson === true && (
+          <>
+            <span className="ml-2" title="You set this; Refresh models keeps it.">
+              set by you
+            </span>
+            <button
+              type="button"
+              aria-label={`Reset ${model.modelId} to discovered`}
+              title="Go back to what the provider's discovery says"
+              disabled={patchCapabilities.isPending}
+              className="ml-2 underline disabled:opacity-60"
+              onClick={() =>
+                patchCapabilities.mutate({
+                  providerId: model.providerId,
+                  modelId: model.modelId,
+                  patch: { supportsTools: null, contextWindow: null },
+                })
+              }
+            >
+              Reset
+            </button>
+          </>
+        )}
       </td>
       <td className={`${CELL} text-[11px] text-[var(--muted)]`}>{model.source}</td>
       <td className={`${CELL} whitespace-nowrap font-machine text-[11px]`}>

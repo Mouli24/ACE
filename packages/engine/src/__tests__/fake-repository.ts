@@ -24,6 +24,7 @@ import {
   type Message,
   type MessageQuery,
   type Model,
+  type ModelCapabilitiesPatch,
   type ModelQuery,
   type Node,
   type NodeRun,
@@ -483,22 +484,80 @@ export class FakeRepository implements Repository {
     delete: async (scope: Scope, id: Id) => this.#for(scope).providers.delete(id),
   };
 
+  /** D380: what the person set, kept apart from the stored (discovered) row like the real columns. */
+  readonly #overrides = new Map<string, { tools?: boolean; window?: number }>();
+  #overrideKey = (scope: Scope, providerId: Id, modelId: string) =>
+    `${scope.workspaceId}|${providerId}|${modelId}`;
+  #applied = (scope: Scope, model: Model): Model => {
+    const set = this.#overrides.get(this.#overrideKey(scope, model.providerId, model.modelId));
+    if (set === undefined) return model;
+    return {
+      ...model,
+      ...(set.tools === undefined ? {} : { supportsTools: set.tools }),
+      ...(set.window === undefined ? {} : { contextWindow: set.window }),
+      capabilitiesSetByPerson: true,
+    };
+  };
+
   readonly models = {
     replaceForProvider: async (scope: Scope, providerId: Id, catalog: readonly Model[]) => {
       const state = this.#for(scope);
+      const listed = new Set(catalog.map((model) => model.modelId));
+      const stored = new Map<string, Model>();
       for (const [key, model] of state.models) {
-        if (model.providerId === providerId) state.models.delete(key);
+        if (model.providerId !== providerId) continue;
+        stored.set(model.modelId, model);
+        state.models.delete(key);
       }
-      for (const model of catalog) state.models.set(model.id, model);
+      for (const key of [...this.#overrides.keys()]) {
+        const [workspace, provider, modelId] = key.split('|');
+        if (workspace === scope.workspaceId && provider === providerId && !listed.has(modelId ?? '')) {
+          this.#overrides.delete(key);
+        }
+      }
+      for (const model of catalog) {
+        const before = stored.get(model.modelId);
+        const base = { ...model };
+        delete base.capabilitiesSetByPerson;
+        // A row passed back with the flag carries effective values: keep the stored base.
+        if (model.capabilitiesSetByPerson === true && before !== undefined) {
+          base.supportsTools = before.supportsTools;
+          base.contextWindow = before.contextWindow;
+        }
+        state.models.set(model.id, base);
+      }
+    },
+    setCapabilities: async (
+      scope: Scope,
+      providerId: Id,
+      modelId: string,
+      patch: ModelCapabilitiesPatch,
+    ) => {
+      const found = [...this.#for(scope).models.values()].find(
+        (model) => model.providerId === providerId && model.modelId === modelId,
+      );
+      if (found === undefined) return null;
+      const key = this.#overrideKey(scope, providerId, modelId);
+      const set = { ...this.#overrides.get(key) };
+      if (patch.supportsTools === null) delete set.tools;
+      else if (patch.supportsTools !== undefined) set.tools = patch.supportsTools;
+      if (patch.contextWindow === null) delete set.window;
+      else if (patch.contextWindow !== undefined) set.window = patch.contextWindow;
+      if (Object.keys(set).length === 0) this.#overrides.delete(key);
+      else this.#overrides.set(key, set);
+      return this.#applied(scope, found);
     },
     list: async (scope: Scope, query: ModelQuery) =>
       [...this.#for(scope).models.values()]
+        .map((model) => this.#applied(scope, model))
         .filter((model) => modelMatchesQuery(model, query))
         .sort((a, b) => a.id.localeCompare(b.id)),
-    find: async (scope: Scope, providerId: Id, modelId: string) =>
-      [...this.#for(scope).models.values()].find(
+    find: async (scope: Scope, providerId: Id, modelId: string) => {
+      const found = [...this.#for(scope).models.values()].find(
         (model) => model.providerId === providerId && model.modelId === modelId,
-      ) ?? null,
+      );
+      return found === undefined ? null : this.#applied(scope, found);
+    },
     deleteForProvider: async (scope: Scope, providerId: Id) => {
       const state = this.#for(scope);
       for (const [key, model] of state.models) {

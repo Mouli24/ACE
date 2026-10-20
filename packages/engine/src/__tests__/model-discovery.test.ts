@@ -285,3 +285,90 @@ describe("FR-MOD-001 a connected provider discovers its models without a Refresh
     });
   });
 });
+
+describe("D380 what the person says a model can do survives a refresh", () => {
+  it("keeps supportsTools and contextWindow across refreshModels, and listModels flags it", async () => {
+    listing = async () => [text("gemini-new")];
+    const provider = await service.create({
+      type: "claude_code",
+      name: "Claude Code",
+      concurrency: 1,
+    });
+    await service.refreshModels(provider.id);
+
+    const set = await service.setModelCapabilities(provider.id, "gemini-new", {
+      supportsTools: true,
+      contextWindow: 1_000_000,
+    });
+    expect(set).toMatchObject({ supportsTools: true, capabilitiesSetByPerson: true });
+
+    const { models } = await service.refreshModels(provider.id);
+    const listed = await service.listModels({ providerId: provider.id });
+
+    for (const row of [models[0], listed[0]]) {
+      expect(row).toMatchObject({
+        modelId: "gemini-new",
+        supportsTools: true,
+        contextWindow: 1_000_000,
+        capabilitiesSetByPerson: true,
+      });
+    }
+  });
+
+  it("answers null for a model the provider does not list", async () => {
+    const provider = await service.create({
+      type: "claude_code",
+      name: "Claude Code",
+      concurrency: 1,
+    });
+
+    expect(
+      await service.setModelCapabilities(provider.id, "nope", { supportsTools: true }),
+    ).toBeNull();
+  });
+});
+
+describe("D380 a person's setting can be cleared back to what discovery says", () => {
+  it("null clears each override; a refresh then shows the discovered value", async () => {
+    listing = async () => [text("gemini-new", { contextWindow: 8192 })];
+    const provider = await service.create({ type: "claude_code", name: "Claude Code", concurrency: 1 });
+    await service.refreshModels(provider.id);
+    await service.setModelCapabilities(provider.id, "gemini-new", {
+      supportsTools: true,
+      contextWindow: 1_000_000,
+    });
+
+    const half = await service.setModelCapabilities(provider.id, "gemini-new", {
+      supportsTools: null,
+    });
+    expect(half).toMatchObject({ supportsTools: false, contextWindow: 1_000_000, capabilitiesSetByPerson: true });
+
+    const cleared = await service.setModelCapabilities(provider.id, "gemini-new", {
+      contextWindow: null,
+    });
+    expect(cleared?.capabilitiesSetByPerson).toBeUndefined();
+    const { models } = await service.refreshModels(provider.id);
+    expect(models[0]).toMatchObject({ supportsTools: false, contextWindow: 8192 });
+  });
+
+  it("an unavailable refresh does not turn an override into the discovered value", async () => {
+    listing = async () => [text("opus", { contextWindow: 8192 })];
+    const provider = await service.create({ type: "claude_code", name: "Claude Code", concurrency: 1 });
+    await service.refreshModels(provider.id);
+    await service.setModelCapabilities(provider.id, "opus", { supportsTools: true, contextWindow: 500_000 });
+
+    listing = async () => {
+      throw signedOut();
+    };
+    const { models, warning } = await service.refreshModels(provider.id);
+    expect(warning).toBeDefined();
+    expect(models[0]).toMatchObject({ available: false, supportsTools: true, contextWindow: 500_000 });
+
+    const cleared = await service.setModelCapabilities(provider.id, "opus", {
+      supportsTools: null,
+      contextWindow: null,
+    });
+    expect(cleared).toMatchObject({ supportsTools: false, contextWindow: 8192 });
+    expect(cleared?.capabilitiesSetByPerson).toBeUndefined();
+  });
+});
