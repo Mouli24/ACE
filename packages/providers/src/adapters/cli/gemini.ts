@@ -187,10 +187,13 @@ export const geminiDialect: CliDialect = {
   type: 'gemini_cli',
   bin: 'gemini',
   label: 'Gemini CLI',
-  args: (req, permission) => [
+  args: (req, permission, access) => [
     ...GEMINI_BASE_ARGS,
     '--approval-mode',
-    APPROVAL_MODE[permission],
+    // D383: `plan` is read-only, `auto_edit` approves edits and leaves shell tools asking, which
+    // headless refuses. Gemini has no command allowlist outside policy files, so `edit_commands`
+    // gets no more than `edit_files` and the selector disables it.
+    APPROVAL_MODE[access === undefined ? permission : access.access === 'read_only' ? 'read_only' : 'edit_files'],
     ...(req.modelId === 'default' ? [] : ['-m', req.modelId]),
   ],
   stdin: withSystem,

@@ -8,6 +8,7 @@ import type {
   ProviderState,
   ProviderType,
   ToolDefinition,
+  WorkspaceAccess,
 } from '@ace/contracts';
 
 /**
@@ -136,6 +137,13 @@ export interface GenerateRequest {
    * CLI) reads it; without it such a provider runs read-only in a fresh temp folder.
    */
   workingDir?: string;
+  /**
+   * D383: the workspace access this node asks of a coding-agent CLI, and the command prefixes it may
+   * run (`agentWorkspaceOf(config).allowedCommands`). Only a CLI adapter reads it. Absent, or
+   * `access: 'off'`, the provider's own `cliPermission` preset applies exactly as before. With no
+   * `workingDir` the adapter still runs read-only in a throwaway folder, whatever is asked here.
+   */
+  cliAccess?: { access: WorkspaceAccess; allowedCommands: string[] };
 }
 
 /**

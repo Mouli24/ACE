@@ -5,8 +5,10 @@ import {
   TOKEN_BUDGET_MIN,
   WORKSPACE_ACCESS,
   agentWorkspaceOf,
+  isCliProviderType,
   type AgentConfig,
   type AgentWorkspace,
+  type CliProviderType,
   type WorkspaceAccess,
 } from '@ace/contracts';
 import { Button, FIELD_LABEL_CLASS, Icons, Input } from '@ace/ui';
@@ -14,7 +16,7 @@ import { useState, type KeyboardEvent } from 'react';
 import { Link } from 'react-router-dom';
 
 import { useProject } from '../projects/hooks';
-import { useModels } from '../providers/hooks';
+import { useModels, useProviders } from '../providers/hooks';
 import { ERROR_CLASS, Field, HELP_CLASS, NumberField } from './fields';
 
 /**
@@ -30,6 +32,27 @@ const OPTIONS: Readonly<Record<WorkspaceAccess, { label: string; line: string }>
   edit_commands: {
     label: 'Edit + commands',
     line: "Also runs terminal commands. Each one asks first unless you've always-allowed it.",
+  },
+};
+
+/**
+ * D383: what each coding-agent CLI does at a level, from its own `--help`. `note` is shown under the
+ * selector; `unavailable` disables the level with its reason. A level absent here follows `OPTIONS`.
+ */
+const CLI_LEVELS: Readonly<
+  Record<CliProviderType, Partial<Record<WorkspaceAccess, { note?: string; unavailable?: string }>>>
+> = {
+  claude_code: {
+    edit_commands: { note: "Runs only the commands you've always-allowed; others are refused." },
+  },
+  codex_cli: {
+    edit_files: { note: 'Codex also runs commands inside its sandbox.' },
+    edit_commands: { note: 'Codex runs commands inside its sandbox; the allowed list is not used.' },
+  },
+  gemini_cli: {
+    edit_commands: {
+      unavailable: 'Gemini CLI has no per-command allowlist, so it cannot run commands here.',
+    },
   },
 };
 
@@ -201,11 +224,16 @@ export function WorkspaceAccessField({
     config.providerId === undefined ? {} : { providerId: config.providerId },
   );
   const project = useProject(projectId);
+  const providers = useProviders();
+  const providerType = (providers.data ?? []).find((each) => each.id === config.providerId)?.type;
+  // A coding-agent CLI brings its own tools, so its models report no tool support (D383).
+  const cliType = providerType !== undefined && isCliProviderType(providerType) ? providerType : undefined;
+  const cliLevels = cliType === undefined ? undefined : CLI_LEVELS[cliType];
 
   const model = (models.data?.items ?? []).find(
     (each) => each.providerId === config.providerId && each.modelId === config.modelId,
   );
-  const noTools = model?.supportsTools === false;
+  const noTools = cliType === undefined && model?.supportsTools === false;
   const noFolder = project.data !== undefined && project.data.folderPath.trim() === '';
   const disabled = noTools || noFolder;
   const set = (patch: Partial<AgentWorkspace>) => {
@@ -232,7 +260,8 @@ export function WorkspaceAccessField({
               type="button"
               role="radio"
               aria-checked={on}
-              disabled={disabled && level !== 'off'}
+              disabled={(disabled || cliLevels?.[level]?.unavailable !== undefined) && level !== 'off'}
+              title={cliLevels?.[level]?.unavailable}
               data-testid={`workspace-access-${level}`}
               onClick={() => set({ access: level })}
               className={`flex cursor-pointer flex-col gap-0.5 rounded-[9px] border bg-transparent px-3 py-2.5 text-left text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f] disabled:cursor-not-allowed disabled:opacity-50 ${
@@ -245,6 +274,18 @@ export function WorkspaceAccessField({
           );
         })}
       </div>
+      {cliLevels?.[workspace.access]?.note !== undefined && (
+        <p role="note" data-testid="workspace-cli-note" className={HELP_CLASS}>
+          {cliLevels[workspace.access]?.note}
+        </p>
+      )}
+      {Object.entries(cliLevels ?? {}).map(([level, entry]) =>
+        entry.unavailable === undefined ? null : (
+          <p key={level} role="note" data-testid={`workspace-cli-unavailable-${level}`} className={HELP_CLASS}>
+            {OPTIONS[level as WorkspaceAccess].label}: {entry.unavailable}
+          </p>
+        ),
+      )}
       {noTools && (
         <p role="note" data-testid="workspace-no-tools" className={HELP_CLASS}>
           This model can&apos;t use tools.{' '}
