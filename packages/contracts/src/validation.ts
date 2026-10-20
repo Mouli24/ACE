@@ -166,6 +166,16 @@ export const RUN_ORDER_VALIDATION_ISSUE_CODES = [
   'order_edge_unknown_node',
 ] as const;
 
+/**
+ * The codes agentic nodes Phase 2 adds: `model_cannot_use_tools` — a node with workspace access on
+ * a model that cannot call tools; `project_folder_missing` — a node with workspace access in a
+ * workflow with no project folder.
+ */
+export const AGENTIC_VALIDATION_ISSUE_CODES = [
+  'model_cannot_use_tools',
+  'project_folder_missing',
+] as const;
+
 export const VALIDATION_ISSUE_CODES = [
   ...ROUND_1_VALIDATION_ISSUE_CODES,
   ...ROUND_2_VALIDATION_ISSUE_CODES,
@@ -174,6 +184,7 @@ export const VALIDATION_ISSUE_CODES = [
   ...ROUND_5_VALIDATION_ISSUE_CODES,
   ...PRODUCT_GAPS_VALIDATION_ISSUE_CODES,
   ...RUN_ORDER_VALIDATION_ISSUE_CODES,
+  ...AGENTIC_VALIDATION_ISSUE_CODES,
 ] as const;
 export const ValidationIssueCodeSchema = z.enum(VALIDATION_ISSUE_CODES);
 export type ValidationIssueCode = z.infer<typeof ValidationIssueCodeSchema>;

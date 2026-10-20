@@ -1,5 +1,16 @@
 import { applyNewNodeInit, createNode } from './factory';
 
+describe('createNode', () => {
+  it('gives a new Agent node edit_files workspace access (agentic nodes Phase 2)', () => {
+    const node = createNode('agent', 'wf', { x: 0, y: 0 });
+    expect(node.kind === 'agent' && node.config.workspace).toEqual({
+      access: 'edit_files',
+      maxTurns: 50,
+      allowedCommands: [],
+    });
+  });
+});
+
 describe('applyNewNodeInit', () => {
   it('names the node and sets provider and model on an Agent', () => {
     const node = applyNewNodeInit(createNode('agent', 'wf', { x: 0, y: 0 }), {

@@ -163,6 +163,7 @@ describe('FR-SYS-006 contracts barrel', () => {
     ['envelope', 'CONTEXT_BUDGET_SHARES'],
     ['guardrails', 'HIDDEN_INSTRUCTION_TYPES'],
     ['validation', 'ROUND_5_VALIDATION_ISSUE_CODES'],
+    ['validation', 'AGENTIC_VALIDATION_ISSUE_CODES'],
     ['events', 'KbIngestPayloadSchema'],
     ['events', 'MemoryUpdatedPayloadSchema'],
   ])('re-exports %s -> %s', (_module, symbol) => {

@@ -6,8 +6,10 @@ import {
   ROUND_1_VALIDATION_ISSUE_CODES,
   ROUND_3_VALIDATION_ISSUE_CODES,
   ROUND_4_VALIDATION_ISSUE_CODES,
+  AGENTIC_VALIDATION_ISSUE_CODES,
   ROUND_5_VALIDATION_ISSUE_CODES,
   PRODUCT_GAPS_VALIDATION_ISSUE_CODES,
+  RUN_ORDER_VALIDATION_ISSUE_CODES,
   VALIDATION_ISSUE_CODES,
   ValidationIssueCodeSchema,
   ValidationIssueSchema,
@@ -133,6 +135,8 @@ describe('FR-WF-006 ValidationIssue', () => {
       ...ROUND_4_VALIDATION_ISSUE_CODES,
       ...ROUND_5_VALIDATION_ISSUE_CODES,
       ...PRODUCT_GAPS_VALIDATION_ISSUE_CODES,
+      ...RUN_ORDER_VALIDATION_ISSUE_CODES,
+      ...AGENTIC_VALIDATION_ISSUE_CODES,
     ]);
   });
 
@@ -149,6 +153,15 @@ describe('FR-WF-006 ValidationIssue', () => {
     expect(ValidationIssueCodeSchema.safeParse('missing_provider').success).toBe(true);
     expect(VALIDATION_ISSUE_CODES).toContain('missing_model');
     expect(VALIDATION_ISSUE_CODES).toContain('provider_missing');
+  });
+
+  it('agentic nodes Phase 2 adds model_cannot_use_tools and project_folder_missing', () => {
+    expect([...AGENTIC_VALIDATION_ISSUE_CODES]).toEqual([
+      'model_cannot_use_tools',
+      'project_folder_missing',
+    ]);
+    expect(VALIDATION_ISSUE_CODES.slice(-2)).toEqual([...AGENTIC_VALIDATION_ISSUE_CODES]);
+    expect(ValidationIssueCodeSchema.safeParse('project_folder_missing').success).toBe(true);
   });
 
   it('adds the one code round 5 §2.4 names, and keeps not_supported_yet for later kinds', () => {

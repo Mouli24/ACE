@@ -57,7 +57,7 @@ const ENUMS = [
       'custom',
     ],
   },
-  { name: 'EdgeKind', values: EDGE_KINDS, schema: EdgeKindSchema, expected: ['data', 'loop'] },
+  { name: 'EdgeKind', values: EDGE_KINDS, schema: EdgeKindSchema, expected: ['data', 'loop', 'order'] },
   {
     name: 'NodeState',
     values: NODE_STATES,
