@@ -36,7 +36,8 @@ import type { Repository, Scope } from '../../ports/index.js';
 /** `RunPatch` as the controls need it. The four round-3 fields are the ones the port still lacks. */
 export interface ControlRunPatch {
   status?: RunState;
-  haltReason?: HaltReason;
+  /** `null` clears it when a reopen makes the run RUNNING again (D81, D388). */
+  haltReason?: HaltReason | null;
   preflightIssues?: ValidationIssue[];
   totals?: Usage;
   endedAt?: Timestamp;
@@ -52,8 +53,8 @@ export interface ControlRunPatch {
   pausedAt?: Timestamp | null;
   /** `allowedRunActions(status)`, rewritten on every status change so the UI never guesses (D76). */
   allowedActions?: RunAction[];
-  /** Set only alongside `haltReason: 'budget_exceeded'` (D80). */
-  budgetHalt?: BudgetHalt;
+  /** Set only alongside `haltReason: 'budget_exceeded'` (D80); `null` clears it with it. */
+  budgetHalt?: BudgetHalt | null;
   /** Set once, on the run a restart creates (FR-CTL-004). */
   restartedFromRunId?: Id;
 

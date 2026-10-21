@@ -511,7 +511,11 @@ export class FakeRepository implements Repository {
       }
       for (const key of [...this.#overrides.keys()]) {
         const [workspace, provider, modelId] = key.split('|');
-        if (workspace === scope.workspaceId && provider === providerId && !listed.has(modelId ?? '')) {
+        if (
+          workspace === scope.workspaceId &&
+          provider === providerId &&
+          !listed.has(modelId ?? '')
+        ) {
           this.#overrides.delete(key);
         }
       }
@@ -615,7 +619,9 @@ export class FakeRepository implements Repository {
 
       const next: Run = { ...current };
       if (patch.status !== undefined) next.status = patch.status;
-      if (patch.haltReason !== undefined) next.haltReason = patch.haltReason;
+      // D388: `null` clears it when a reopened run is going again, as the SQLite store writes NULL.
+      if (patch.haltReason === null) delete next.haltReason;
+      else if (patch.haltReason !== undefined) next.haltReason = patch.haltReason;
       if (patch.preflightIssues !== undefined) next.preflightIssues = patch.preflightIssues;
       if (patch.totals !== undefined) next.totals = patch.totals;
       if (patch.endedAt !== undefined) next.endedAt = patch.endedAt;
@@ -626,7 +632,8 @@ export class FakeRepository implements Repository {
       if (patch.pausedAt === null) delete next.pausedAt;
       else if (patch.pausedAt !== undefined) next.pausedAt = patch.pausedAt;
       if (patch.allowedActions !== undefined) next.allowedActions = patch.allowedActions;
-      if (patch.budgetHalt !== undefined) next.budgetHalt = patch.budgetHalt;
+      if (patch.budgetHalt === null) delete next.budgetHalt;
+      else if (patch.budgetHalt !== undefined) next.budgetHalt = patch.budgetHalt;
       if (patch.restartedFromRunId !== undefined) {
         next.restartedFromRunId = patch.restartedFromRunId;
       }

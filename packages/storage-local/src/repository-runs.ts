@@ -324,8 +324,12 @@ export function createModelRepository(db: Db): ModelRepository {
       if (db.select().from(models).where(where).get() === undefined) return null;
       // `null` clears an override back to what discovery says; absent leaves it alone.
       const set: Partial<typeof models.$inferInsert> = {
-        ...(patch.supportsTools === undefined ? {} : { supportsToolsOverride: patch.supportsTools }),
-        ...(patch.contextWindow === undefined ? {} : { contextWindowOverride: patch.contextWindow }),
+        ...(patch.supportsTools === undefined
+          ? {}
+          : { supportsToolsOverride: patch.supportsTools }),
+        ...(patch.contextWindow === undefined
+          ? {}
+          : { contextWindowOverride: patch.contextWindow }),
       };
       // An empty patch marks nothing: the row is returned as it stands.
       if (Object.keys(set).length > 0) db.update(models).set(set).where(where).run();
@@ -534,10 +538,13 @@ export function createRunRepository(db: Db): RunRepository {
           patch.allowedActions === undefined
             ? undefined
             : toJsonColumn(patch.allowedActions, `run(${id}).allowedActions`),
+        // `null` clears it, with `haltReason`, when a reopened run is going again (D388).
         budgetHalt:
           patch.budgetHalt === undefined
             ? undefined
-            : toJsonColumn(patch.budgetHalt, `run(${id}).budgetHalt`),
+            : patch.budgetHalt === null
+              ? null
+              : toJsonColumn(patch.budgetHalt, `run(${id}).budgetHalt`),
         restartedFromRunId: patch.restartedFromRunId,
         // `null` clears the reason on a resume (D305); `undefined` leaves it alone.
         blockedReason: patch.blockedReason,

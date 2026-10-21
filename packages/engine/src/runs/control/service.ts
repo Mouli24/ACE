@@ -187,8 +187,12 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
 
     // A store that answered `null` has no row to return; the patch applied to what was read is
     // still the truth about the run. `pausedAt: null` means "clear it", so it is removed, not kept.
-    const { pausedAt, blockedReason: reason, ...rest } = patch;
+    const { pausedAt, blockedReason: reason, haltReason, budgetHalt, ...rest } = patch;
     const fallback: Run = { ...run, ...rest, status };
+    if (haltReason === null) delete fallback.haltReason;
+    else if (haltReason !== undefined) fallback.haltReason = haltReason;
+    if (budgetHalt === null) delete fallback.budgetHalt;
+    else if (budgetHalt !== undefined) fallback.budgetHalt = budgetHalt;
     if (pausedAt === null) delete fallback.pausedAt;
     else if (pausedAt !== undefined) fallback.pausedAt = pausedAt;
     if (reason === null) delete fallback.blockedReason;
@@ -740,10 +744,16 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
    * Answers the run as re-opened, which is what a continue hands back (D388).
    */
   async function reopen(run: Run, plan: PartialRunPlan): Promise<Run> {
+    // D388: a run going again is no longer halted — its old halt reason (and budget halt) would
+    // otherwise outlive it, and a run that then completes would read COMPLETE + `stopped`.
     const reopened =
       run.status === 'RUNNING' || run.status === 'PAUSED'
         ? run
-        : await patchRun(run, { status: 'RUNNING' });
+        : await patchRun(run, {
+            status: 'RUNNING',
+            ...(run.haltReason === undefined ? {} : { haltReason: null }),
+            ...(run.budgetHalt === undefined ? {} : { budgetHalt: null }),
+          });
 
     await deps.drivePartialRun({ ...plan, run: reopened });
     return reopened;

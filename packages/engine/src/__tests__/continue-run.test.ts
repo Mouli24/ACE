@@ -105,10 +105,13 @@ describe('D388 Continue a run stopped with two parallel nodes in flight', () => 
 
     const continued = await h.controls.continueRun(run.id);
     expect(continued).toMatchObject({ id: run.id, status: 'RUNNING' });
+    // A run going again is no longer halted: its old halt reason does not outlive the halt.
+    expect(continued.haltReason).toBeUndefined();
     await h.waitForEvent('run.completed', 2);
 
     const ended = await h.runRow(run.id);
     expect(ended.status).toBe('COMPLETE');
+    expect(ended.haltReason).toBeUndefined();
 
     // Both cut-off nodes again, at attempt 2, from one Continue; each provider call once more.
     for (const node of [a, b]) {
@@ -226,6 +229,8 @@ describe('D-055 a partial drive totals the whole run', () => {
 
     const ended = await h.runRow(run.id);
     expect(ended.status).toBe('COMPLETE');
+    // D81's reopen clears the `failure` halt: a completed run never reads COMPLETE + failure.
+    expect(ended.haltReason).toBeUndefined();
     const whole = { tokensIn: 5 + 2, tokensOut: 1 + 3 };
     expect(tokensOf(ended.totals)).toEqual(whole);
     expect(await spentBy(h, run.id)).toEqual(whole);

@@ -104,7 +104,8 @@ export interface RunPatch {
    * it, and BR-04 puts the snapshot in the same transaction as the row.
    */
   preflightIssues?: ValidationIssue[];
-  haltReason?: HaltReason;
+  /** `null` clears it: a run a retry, re-run or continue reopens is no longer halted (D81, D388). */
+  haltReason?: HaltReason | null;
   totals?: Usage;
   endedAt?: Timestamp;
   durationMs?: number;
@@ -113,8 +114,8 @@ export interface RunPatch {
   pausedAt?: Timestamp | null;
   /** `allowedRunActions(status)`, stamped wherever the status changes (FR-CTL-006, D71). */
   allowedActions?: RunAction[];
-  /** Set only alongside `haltReason: 'budget_exceeded'` (FR-GRD-008, D80). */
-  budgetHalt?: BudgetHalt;
+  /** Set only alongside `haltReason: 'budget_exceeded'` (FR-GRD-008, D80); `null` clears it with it. */
+  budgetHalt?: BudgetHalt | null;
   /** Set on the run a restart created: same snapshot, same inputs (FR-CTL-004). */
   restartedFromRunId?: Id;
   /** D305: why the run is BLOCKED mid-run; `null` clears it on resume. */
