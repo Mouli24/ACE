@@ -448,6 +448,12 @@ const ENDED_STATES: ReadonlySet<Run['status']> = new Set<Run['status']>([
 /** Node states that mean the run still has work in flight (Arch §19.2). */
 const BUSY_STATES: ReadonlySet<NodeState> = new Set<NodeState>(['RUNNING', 'READY', 'WAITING']);
 
+/**
+ * Node states a node does not leave again within one drive, so what it feeds never arrives from it
+ * [audit E-2]. A retry or a live re-turn starts from a new row (and unblocks what it feeds itself).
+ */
+const LOST_STATES: ReadonlySet<NodeState> = new Set<NodeState>(['FAILED', 'BLOCKED', 'STOPPED']);
+
 export function createRunService(deps: RunServiceDeps): RunService {
   const { repository, scope, bus, logger } = deps;
   const now = deps.now ?? (() => new Date().toISOString());
@@ -1336,35 +1342,77 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
     }
 
-    /** A failed node takes everything that could only be reached through it (FR-ERR-006). */
-    async function blockDownstream(node: Node): Promise<void> {
-      for (const blockedId of downstreamOf(node.id, edges)) {
-        if (states.get(blockedId) !== 'IDLE') continue;
-        const blocked = nodeById.get(blockedId);
-        if (blocked === undefined) continue;
-        if (isReady(blocked, edges, deliveredEdges)) continue;
+    /**
+     * [audit E-2] Whether an IDLE node can no longer become ready: an input it still waits on comes
+     * from a node that ended without delivering (`LOST_STATES`). A Merge in `any` mode needs only one
+     * of its data inputs, so it is lost only once every one of them is; its order edges (D373), like
+     * every other node's inputs, must all arrive.
+     */
+    function cannotBecomeReady(node: Node): boolean {
+      if (isReady(node, edges, deliveredEdges)) return false;
+      const into = edges.filter((edge) => edge.to.nodeId === node.id && edge.kind !== 'loop');
+      const lost = (edge: Edge): boolean =>
+        !deliveredEdges.has(edge.id) && LOST_STATES.has(states.get(edge.from.nodeId) ?? 'IDLE');
 
-        states.set(blockedId, 'BLOCKED');
-        const nodeRun: NodeRun = {
-          id: nextId(),
-          runId: run.id,
-          nodeId: blockedId,
-          iteration: 1,
-          attempt: 1,
-          status: 'BLOCKED',
-          failureReason: 'BLOCKED',
-          // FR-ERR-006: a BLOCKED node names what blocked it, so "Blocked by "Gatekeeper", which did
-          // not finish." is on the row rather than only in the run's shape.
-          error: upstreamFailedError(node.name, node.id).nodeError,
-          inputEnvelopes: envelopesFor.get(blockedId) ?? [],
-          usage: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
-          verdicts: [],
-          toolCalls: [],
-        };
-        await repository.nodeRuns.create(scope, nodeRun);
-        nodeRunByNode.set(blockedId, nodeRun);
-        await emitNodeState(run, nodeRun, 'BLOCKED', 'BLOCKED');
+      if (node.kind === 'merge' && node.config.mode === 'any') {
+        const data = into.filter((edge) => edge.kind === 'data');
+        if (into.some((edge) => edge.kind === 'order' && lost(edge))) return true;
+        return data.length > 0 && data.every(lost);
       }
+      return into.some(lost);
+    }
+
+    /**
+     * A failed node takes everything that could only be reached through it (FR-ERR-006).
+     *
+     * [audit E-2] The walk blocks a node only once it can no longer become ready, and goes on only
+     * from the nodes it actually blocked. It used to block every IDLE node downstream that was not
+     * ready *yet*, so a Merge in `any` mode whose healthy branch had not finished was BLOCKED by its
+     * failed one — and whether the run completed depended on which branch finished first.
+     */
+    async function blockDownstream(node: Node): Promise<void> {
+      const walk: Id[] = [node.id];
+      while (walk.length > 0) {
+        const from = walk.shift()!;
+        const targets = new Set(
+          edges
+            .filter((edge) => edge.from.nodeId === from && edge.kind !== 'loop')
+            .map((edge) => edge.to.nodeId),
+        );
+        for (const blockedId of targets) {
+          if (await blockOne(node, blockedId)) walk.push(blockedId);
+        }
+      }
+    }
+
+    /** One node `blockDownstream` reached: BLOCKED, with its row, if it can no longer run. */
+    async function blockOne(node: Node, blockedId: Id): Promise<boolean> {
+      if (states.get(blockedId) !== 'IDLE') return false;
+      const blocked = nodeById.get(blockedId);
+      if (blocked === undefined) return false;
+      if (!cannotBecomeReady(blocked)) return false;
+
+      states.set(blockedId, 'BLOCKED');
+      const nodeRun: NodeRun = {
+        id: nextId(),
+        runId: run.id,
+        nodeId: blockedId,
+        iteration: 1,
+        attempt: 1,
+        status: 'BLOCKED',
+        failureReason: 'BLOCKED',
+        // FR-ERR-006: a BLOCKED node names what blocked it, so "Blocked by "Gatekeeper", which did
+        // not finish." is on the row rather than only in the run's shape.
+        error: upstreamFailedError(node.name, node.id).nodeError,
+        inputEnvelopes: envelopesFor.get(blockedId) ?? [],
+        usage: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
+        verdicts: [],
+        toolCalls: [],
+      };
+      await repository.nodeRuns.create(scope, nodeRun);
+      nodeRunByNode.set(blockedId, nodeRun);
+      await emitNodeState(run, nodeRun, 'BLOCKED', 'BLOCKED');
+      return true;
     }
 
     /**
