@@ -8,7 +8,7 @@ import { newId } from '../lib/ulid';
 import { createFakeWebSocket } from '../mocks/fake-socket';
 import { createNode } from '../nodes/factory';
 import { db, installMockServer, queryClient, renderWithQuery, server } from '../test/app';
-import { TraceTab } from './TraceTab';
+import { TraceTab, traceQueryKey } from './TraceTab';
 
 installMockServer();
 
@@ -167,6 +167,30 @@ describe('TC-OBS-001 trace view', () => {
     await waitFor(() => expect(screen.getByText('Usage updated')).toBeInTheDocument(), {
       timeout: 1_500,
     });
+  });
+
+  it('[audit W-20] polls a live run’s trace only while the socket is not open', async () => {
+    const { run, workflow } = seedRun({ status: 'RUNNING', endedAt: undefined });
+    const pollOf = () =>
+      queryClient.getQueryCache().find({ queryKey: traceQueryKey(run.id) })?.observers[0]?.options
+        .refetchInterval;
+    const { unmount } = renderWithQuery(<TraceTab runId={run.id} />);
+    expect(await screen.findByTestId('trace-live')).toBeInTheDocument();
+    // no socket: the poll is the only way the trace moves
+    expect(pollOf()).toBe(2_000);
+    unmount();
+
+    startSocket({
+      token: 'mock',
+      queryClient,
+      url: 'ws://mock.local/ws',
+      WebSocket: createFakeWebSocket(db) as unknown as typeof WebSocket,
+    });
+    getSocket()!.subscribe({ scope: 'workflow', id: workflow.id });
+    await waitFor(() => expect(getSocket()?.status).toBe('open'));
+    renderWithQuery(<TraceTab runId={run.id} />);
+    expect(await screen.findByTestId('trace-live')).toBeInTheDocument();
+    await waitFor(() => expect(pollOf()).toBe(false));
   });
 
   it('says so when the trace cannot be loaded', async () => {
