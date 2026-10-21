@@ -819,6 +819,14 @@ export function createRunService(deps: RunServiceDeps): RunService {
       (lastAttempt.get(attemptKey(nodeId, iteration)) ?? 0) + 1;
     /** Nodes that completed an iteration in this drive: completing it again is a fresh HANDOFF. */
     const completedIterations = new Set<string>();
+    /**
+     * [audit E-13] The BLOCKED rows a retry, a continue or a live re-turn put back to IDLE so the
+     * node could run again (FR-ERR-004, D388, D360), by node. Each is settled once: blocked again it
+     * becomes BLOCKED again rather than gaining a second row at the same attempt, superseded by a
+     * new attempt it goes back to the BLOCKED it was, and one the drive never reached is too — no
+     * IDLE row outlives the drive.
+     */
+    const clearedRows = new Map<Id, NodeRun>();
     /** The state a node was in before a turn an End cut short, so the end reads the graph as it was. */
     const stateBeforeTurn = new Map<Id, NodeState>();
     /** Successors handed a fresh envelope while busy: they run again once their turn is over. */
@@ -1188,6 +1196,21 @@ export function createRunService(deps: RunServiceDeps): RunService {
      * the READY rows (D110), so a row created after the flip is one it never sees — a retry that
      * falls due while the run is paused, say.
      */
+    /**
+     * [audit E-13] Put a row a control cleared to IDLE back to the BLOCKED it was: superseded by a
+     * new attempt, or never reached by this drive. A Stop has already said the run's end, so after
+     * one the row is written and nothing announced (D-063).
+     */
+    async function restoreCleared(nodeId: Id): Promise<void> {
+      const cleared = clearedRows.get(nodeId);
+      if (cleared === undefined) return;
+      clearedRows.delete(nodeId);
+      await repository.nodeRuns.update(scope, cleared.id, { status: 'BLOCKED' });
+      if (!stoppedByControl()) {
+        await emitNodeState(run, { ...cleared, status: 'BLOCKED' }, 'BLOCKED', 'BLOCKED');
+      }
+    }
+
     async function beginNodeRun(
       node: Node,
       iteration: number,
@@ -1198,6 +1221,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
       const aborted = signal.aborted;
       const key = attemptKey(node.id, iteration);
       lastAttempt.set(key, Math.max(lastAttempt.get(key) ?? 0, attempt));
+      // [audit E-13] This attempt is the node's now; the cleared row goes back to what it was.
+      await restoreCleared(node.id);
       const nodeRun: NodeRun = {
         id: nextId(),
         runId: run.id,
@@ -1436,17 +1461,42 @@ export function createRunService(deps: RunServiceDeps): RunService {
       if (!cannotBecomeReady(blocked)) return false;
 
       states.set(blockedId, 'BLOCKED');
+      // FR-ERR-006: a BLOCKED node names what blocked it, so "Blocked by "Gatekeeper", which did
+      // not finish." is on the row rather than only in the run's shape.
+      const error = upstreamFailedError(node.name, node.id).nodeError;
+      // [audit E-13] The node's own iteration, at the next attempt (D95) — it was always written
+      // at iteration 1, attempt 1, so a second block of the same node collided with the first —
+      // and a row a control cleared for this node is blocked again rather than duplicated.
+      const iteration = iterations.get(blockedId) ?? 1;
+      const cleared = clearedRows.get(blockedId);
+      if (cleared !== undefined && cleared.iteration === iteration) {
+        clearedRows.delete(blockedId);
+        const reblocked: NodeRun = {
+          ...cleared,
+          status: 'BLOCKED',
+          failureReason: 'BLOCKED',
+          error,
+        };
+        await repository.nodeRuns.update(scope, cleared.id, {
+          status: 'BLOCKED',
+          failureReason: 'BLOCKED',
+          error,
+        });
+        nodeRunByNode.set(blockedId, reblocked);
+        await emitNodeState(run, reblocked, 'BLOCKED', 'BLOCKED');
+        return true;
+      }
+      const attempt = nextAttemptFor(blockedId, iteration);
+      lastAttempt.set(attemptKey(blockedId, iteration), attempt);
       const nodeRun: NodeRun = {
         id: nextId(),
         runId: run.id,
         nodeId: blockedId,
-        iteration: 1,
-        attempt: 1,
+        iteration,
+        attempt,
         status: 'BLOCKED',
         failureReason: 'BLOCKED',
-        // FR-ERR-006: a BLOCKED node names what blocked it, so "Blocked by "Gatekeeper", which did
-        // not finish." is on the row rather than only in the run's shape.
-        error: upstreamFailedError(node.name, node.id).nodeError,
+        error,
         inputEnvelopes: envelopesFor.get(blockedId) ?? [],
         usage: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
         verdicts: [],
@@ -2991,6 +3041,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
         }
       }
       const recorded = latestByNode(rows);
+      // [audit E-13] A latest row a control cleared to IDLE (a BLOCKED one, FR-ERR-004, D388).
+      for (const [nodeId, row] of recorded) {
+        if (row.status === 'IDLE') clearedRows.set(nodeId, row);
+      }
 
       for (const [nodeId, row] of recorded) {
         const node = nodeById.get(nodeId);
@@ -3149,7 +3203,11 @@ export function createRunService(deps: RunServiceDeps): RunService {
           // once the fresh output reaches it; what had completed runs again on that output
           // (`rearmSuccessors`), so `withDownstream` asks nothing more of a live run.
           for (const id of downstreamOf(nodeId, edges)) {
-            if (states.get(id) === 'BLOCKED') states.set(id, 'IDLE');
+            if (states.get(id) !== 'BLOCKED') continue;
+            states.set(id, 'IDLE');
+            // [audit E-13] Its BLOCKED row, which the control cleared, is settled like a seeded one.
+            const blockedRow = nodeRunByNode.get(id);
+            if (blockedRow?.status === 'BLOCKED') clearedRows.set(id, blockedRow);
           }
           stateBeforeTurn.set(nodeId, state ?? 'IDLE');
           launch(node, 'dispatch');
@@ -3249,6 +3307,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
     // D309: whatever is still PENDING was never delivered — DROPPED, before the run's end is said.
     // A Stop says its own end, and drops them itself before it does (FR-CTL-003).
     if (domain !== undefined && gate.abortCause() !== 'stopped' && !keptOpen) await domain.close();
+
+    // [audit E-13] A cleared row no attempt of this drive took is BLOCKED again, never left IDLE.
+    for (const nodeId of [...clearedRows.keys()]) await restoreCleared(nodeId);
 
     const allOutputsDone = graphComplete();
     const stillBusy = [...states.values()].some((state) => BUSY_STATES.has(state));
