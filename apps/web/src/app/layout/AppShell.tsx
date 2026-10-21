@@ -6,6 +6,8 @@ import { useBeforeUnloadGuard } from '../../forge/editor/guards';
 import { useWorkflowMode } from '../../forge/mode';
 import { useIsCompact } from '../../responsive/useIsCompact';
 import { useThemeMode } from '../../theme/mode';
+import { TokenMissing } from '../TokenMissing';
+import { useSessionStore } from '../stores/session';
 import { useApplyTheme } from '../theme';
 import { CompactTopBar } from './CompactTopBar';
 import { SettingsMenu } from './SettingsMenu';
@@ -25,14 +27,24 @@ const SCROLL = 'min-h-0 flex-1 overflow-auto';
  * The settings gear (D338) sits in the bottom-left corner: in the workspace footer, floating where
  * there is none. The phone bar's menu carries its links instead, so nothing floats over a phone
  * screen's own controls — except on Home, which has no such bar.
+ *
+ * Audit U-2: once the engine stops taking this page's token (it restarted), the whole app gives way
+ * to the session-lost screen — every screen behind it would only fail.
  */
 export function AppShell() {
   useApplyTheme();
   useBeforeUnloadGuard();
   const { dark } = useThemeMode();
+  const sessionLost = useSessionStore((store) => store.lost);
   return (
     <TooltipProvider delayDuration={200}>
-      <Chrome />
+      {sessionLost ? (
+        <Root>
+          <TokenMissing expired />
+        </Root>
+      ) : (
+        <Chrome />
+      )}
       <Toaster theme={dark ? 'dark' : 'light'} />
     </TooltipProvider>
   );

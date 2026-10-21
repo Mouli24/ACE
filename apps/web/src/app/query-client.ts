@@ -1,9 +1,17 @@
+import { AceApiError } from '@ace/sdk';
 import { toast } from '@ace/ui';
-import { MutationCache, QueryClient, type Mutation } from '@tanstack/react-query';
+import { MutationCache, QueryCache, QueryClient, type Mutation } from '@tanstack/react-query';
+
+import { isUnauthorized, markSessionLost } from './stores/session';
 
 /** An engine failure's words: the FR-SYS-006 envelope's message, or the error's own. */
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The engine answered that the thing asked for does not exist (as opposed to failing). */
+export function isNotFound(error: unknown): boolean {
+  return AceApiError.is(error) && error.status === 404;
 }
 
 type AnyMutation = Mutation<unknown, unknown, unknown, unknown>;
@@ -33,6 +41,11 @@ function alreadyShown(message: string): boolean {
  * cache, so the toast waits for them and stays away when the same words are already shown.
  */
 export function reportMutationError(error: unknown, mutation: AnyMutation): void {
+  // a stale token is the session-lost screen's to say, once, not a toast per click (U-2)
+  if (isUnauthorized(error)) {
+    markSessionLost();
+    return;
+  }
   if (mutation.options.onError !== undefined) return;
   if (mutation.meta?.['silentError'] === true) return;
   const message = errorMessage(error);
@@ -44,6 +57,11 @@ export function reportMutationError(error: unknown, mutation: AnyMutation): void
 /** The app's one query client (Arch §10.1): engine data, and what happens when a call fails. */
 export function createQueryClient(): QueryClient {
   return new QueryClient({
+    queryCache: new QueryCache({
+      onError: (error) => {
+        if (isUnauthorized(error)) markSessionLost();
+      },
+    }),
     mutationCache: new MutationCache({
       onError: (error, _variables, _context, mutation) =>
         reportMutationError(error, mutation as AnyMutation),

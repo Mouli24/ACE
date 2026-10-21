@@ -4,6 +4,8 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { ModeLinks } from '../app/ModeLinks';
+import { QueryError } from '../app/QueryError';
+import { isNotFound } from '../app/query-client';
 import { BudgetFields } from '../settings/BudgetFields';
 import { SelectField, SettingInput, type DraftRead } from '../settings/SettingFields';
 import { ago } from '../theme/format';
@@ -55,12 +57,22 @@ export function ProjectPage() {
     onStart: () => setImportError(undefined),
   });
 
+  // Audit U-2 (D-009): "not found" is the engine's 404 only; any other failure says what it was.
   if (project.isError) {
     return (
       <main className="h-full overflow-y-auto">
-        <p role="alert" className="mx-auto max-w-[960px] px-6 py-8 text-[13px] text-[#c94c27]">
-          Project not found. <Link to="/projects">Back to projects</Link>
-        </p>
+        {isNotFound(project.error) ? (
+          <p role="alert" className="mx-auto max-w-[960px] px-6 py-8 text-[13px] text-[#c94c27]">
+            Project not found. <Link to="/projects">Back to projects</Link>
+          </p>
+        ) : (
+          <QueryError
+            what="this project"
+            error={project.error}
+            onRetry={() => void project.refetch()}
+            className="mx-auto max-w-[960px] items-start px-6 py-8"
+          />
+        )}
       </main>
     );
   }

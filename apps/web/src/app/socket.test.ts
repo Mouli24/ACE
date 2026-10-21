@@ -1,4 +1,4 @@
-import type { WorkflowGraphResponse } from '@ace/contracts';
+import { WS_CLOSE_UNAUTHORIZED, type WorkflowGraphResponse } from '@ace/contracts';
 import { QueryClient } from '@tanstack/react-query';
 import { renderHook } from '@testing-library/react';
 import { setupServer } from 'msw/node';
@@ -10,6 +10,7 @@ import { getGraphSync, resetGraphSyncRegistry } from '../workflows/sync-registry
 import { queryKeys } from '../workflows/query-keys';
 import { configureApi } from './api';
 import { getSocket, startSocket, stopSocket, useWorkflowSubscription } from './socket';
+import { useSessionStore } from './stores/session';
 
 const db = new MockDb({ persist: false });
 const server = setupServer(...createHandlers(db));
@@ -93,5 +94,23 @@ describe('useWorkflowSubscription — shared by every screen watching a workflow
     canvas.unmount();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
     expect(unsubscribe).toHaveBeenCalledWith({ scope: 'workflow', id: 'wf-1' });
+  });
+});
+
+describe('audit U-2 the socket closing unauthorized', () => {
+  afterEach(() => useSessionStore.setState({ lost: false }));
+
+  it('marks the session lost (a restarted engine no longer takes the token)', async () => {
+    const FakeWebSocket = createFakeWebSocket(db);
+    startSocket({
+      token: 'mock',
+      queryClient: new QueryClient(),
+      url: 'ws://mock.local/ws',
+      WebSocket: FakeWebSocket as unknown as typeof WebSocket,
+    });
+    await tick();
+    expect(useSessionStore.getState().lost).toBe(false);
+    FakeWebSocket.instances.at(-1)?.serverClose(WS_CLOSE_UNAUTHORIZED);
+    expect(useSessionStore.getState().lost).toBe(true);
   });
 });

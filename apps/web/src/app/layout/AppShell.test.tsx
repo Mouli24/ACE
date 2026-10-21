@@ -1,7 +1,8 @@
-import { screen, within } from '@testing-library/react';
+import { act, screen, within } from '@testing-library/react';
 
 import { installMatchMedia, uninstallMatchMedia } from '../../responsive/test-support';
 import { db, installMockServer, renderApp } from '../../test/app';
+import { markSessionLost, useSessionStore } from '../stores/session';
 
 installMockServer();
 
@@ -128,5 +129,21 @@ describe('D338 the settings gear sits in the bottom-left corner', () => {
 
     renderApp('/projects');
     expect(await screen.findByTestId('settings-menu')).toHaveAttribute('data-placement', 'corner');
+  });
+});
+
+describe('audit U-2 a token the engine no longer takes', () => {
+  afterEach(() => useSessionStore.setState({ lost: false }));
+
+  it('gives the whole app over to the session-lost screen, with the engine-link copy', async () => {
+    renderApp('/projects');
+    await screen.findByTestId('settings-menu');
+    act(() => markSessionLost());
+    const screenCard = await screen.findByTestId('session-lost');
+    expect(
+      within(screenCard).getByRole('heading', { name: 'The engine restarted' }),
+    ).toBeInTheDocument();
+    expect(screenCard).toHaveTextContent('Open the new link it printed');
+    expect(screen.queryByTestId('settings-menu')).toBeNull();
   });
 });

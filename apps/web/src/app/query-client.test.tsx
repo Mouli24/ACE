@@ -1,13 +1,15 @@
+import { AceApiError } from '@ace/sdk';
 import { toast } from '@ace/ui';
 import { QueryClientProvider, useMutation, type UseMutationOptions } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { createQueryClient } from './query-client';
+import { useSessionStore } from './stores/session';
 
 const fail = () => Promise.reject(new Error('The engine said no.'));
 
-/** One button firing one failing mutation, built with `options`, and called with `call`. */
+/** One button firing one failing mutation built with `options`; `perCall` is its call's onError. */
 function Harness({
   options = {},
   perCall,
@@ -74,6 +76,42 @@ describe('audit W-1/W-2 a failed mutation nobody handles says so in a toast', ()
   it('does not repeat an error the screen already shows inline', async () => {
     await press(<Harness inline />);
     expect(await screen.findByRole('alert')).toHaveTextContent('The engine said no.');
+    await settled();
+    expect(error).not.toHaveBeenCalled();
+  });
+});
+
+describe('audit U-2 a 401 anywhere means the session is lost', () => {
+  const unauthorized = () =>
+    Promise.reject(
+      new AceApiError(401, {
+        kind: 'auth',
+        code: 'unauthorized',
+        message: 'Missing or wrong session token.',
+        retryable: false,
+      }),
+    );
+  let error: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    toast.dismiss();
+    error = vi.spyOn(toast, 'error');
+  });
+  afterEach(() => {
+    error.mockRestore();
+    useSessionStore.setState({ lost: false });
+  });
+
+  it('from a query', async () => {
+    const client = createQueryClient();
+    await client
+      .fetchQuery({ queryKey: ['x'], queryFn: unauthorized, retry: false })
+      .catch(() => undefined);
+    expect(useSessionStore.getState().lost).toBe(true);
+  });
+
+  it('from a mutation, with no toast of its own', async () => {
+    await press(<Harness options={{ mutationFn: unauthorized }} />);
+    await waitFor(() => expect(useSessionStore.getState().lost).toBe(true));
     await settled();
     expect(error).not.toHaveBeenCalled();
   });

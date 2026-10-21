@@ -6,6 +6,7 @@ import { patchProviderStatus } from '../providers/status-patch';
 import { peekGraphSync } from '../workflows/sync-registry';
 import { queryKeys } from '../workflows/query-keys';
 import { wsUrl } from './env';
+import { markSessionLost } from './stores/session';
 
 let socket: AceSocket | undefined;
 
@@ -41,6 +42,10 @@ export function startSocket(options: StartSocketOptions): AceSocket {
       void options.queryClient.invalidateQueries({ queryKey: queryKeys.providers() });
       void options.queryClient.invalidateQueries({ queryKey: queryKeys.modelsRoot() });
     }
+  });
+  // Audit U-2: a 4401 close is a token the engine no longer takes (it restarted).
+  socket.onStatus((status) => {
+    if (status === 'unauthorized') markSessionLost();
   });
   socket.subscribe({ scope: 'engine' });
   socket.connect();
