@@ -57,10 +57,15 @@ export function createRouter(catalog: CatalogReader): Router {
   /**
    * Find the row for a model id, preferring the provider the node names — a fallback entry is a
    * bare model id (§2.4), so the same id offered by two providers has to resolve somehow.
+   *
+   * [audit P-15] The node's own model is looked up on its own provider only (`ownOnly`): a row
+   * missing there must refuse, not quietly run the call on another provider — another key, another
+   * bill — that happens to list the same id.
    */
-  function find(modelId: string, preferredProviderId?: Id): RouterModel | undefined {
+  function find(modelId: string, providerId: Id, ownOnly: boolean): RouterModel | undefined {
     const rows = catalog().filter((row) => row.modelId === modelId);
-    return rows.find((row) => row.providerId === preferredProviderId) ?? rows[0];
+    const own = rows.find((row) => row.providerId === providerId);
+    return own ?? (ownOnly ? undefined : rows[0]);
   }
 
   function checkCandidate(
@@ -115,7 +120,7 @@ export function createRouter(catalog: CatalogReader): Router {
     for (const [index, modelId] of chain.entries()) {
       if (failed.has(modelId)) continue;
 
-      const model = find(modelId, node.providerId);
+      const model = find(modelId, node.providerId, index === 0);
       const refusal = checkCandidate(model, modelId, requirements);
 
       if (refusal === undefined && model !== undefined) {
