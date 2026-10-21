@@ -222,6 +222,21 @@ describe('TC-PRJ-004 Reopen last project', () => {
     const settings = await body<{ lastProjectId?: string }>(await get(h.app, '/api/v1/settings'));
     expect(settings.lastProjectId).toBe(b.id);
   });
+
+  it('[audit U-4] forgets the last project when it is deleted, and only then', async () => {
+    const a = await createProject(h.app, projectFolder());
+    const b = await createProject(h.app, projectFolder());
+    await post(h.app, `/api/v1/projects/${b.id}/open`);
+
+    // Deleting another project leaves the remembered one alone.
+    expect((await del(h.app, `/api/v1/projects/${a.id}`)).status).toBe(204);
+    const kept = await body<{ lastProjectId?: string }>(await get(h.app, '/api/v1/settings'));
+    expect(kept.lastProjectId).toBe(b.id);
+
+    expect((await del(h.app, `/api/v1/projects/${b.id}`)).status).toBe(204);
+    const cleared = await body<{ lastProjectId?: string }>(await get(h.app, '/api/v1/settings'));
+    expect(cleared.lastProjectId).toBeUndefined();
+  });
 });
 
 /* -------------------------------------------------------------------------- */

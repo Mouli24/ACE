@@ -214,6 +214,12 @@ export function createGraphService(deps: GraphServiceDeps): GraphService {
 
     async deleteProject(id) {
       if (!(await repository.projects.delete(scope, id))) throw notFound(`Project ${id}`);
+      // [audit U-4] FR-PRJ-004 reopens the last project at launch; a deleted one is forgotten, or
+      // "/" keeps sending the person to a project that is gone. `undefined` overwrites the stored
+      // id in the settings patch, which is how both stores clear an optional setting.
+      if ((await repository.settings.get(scope)).lastProjectId === id) {
+        await repository.settings.update(scope, { lastProjectId: undefined });
+      }
     },
 
     /** FR-PRJ-004: opening a project is what makes it the one reopened next launch. */
