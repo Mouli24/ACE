@@ -194,6 +194,12 @@ export function createProviderService(
   const autoLocal = deps.autoLocalRuntime === true;
   /** One add at a time, so two callers never create two Ollama providers. */
   let addingLocal: Promise<Provider | undefined> | undefined;
+  /**
+   * [audit P-13] The person removed an Ollama provider: detection stops adding (and starting) it
+   * again for as long as this engine runs. Not persisted — the settings blob has no field for it —
+   * so an engine restart offers it once more. Asking for the runtime outright clears it.
+   */
+  let localRemoved = false;
   /** Pulls in flight, by provider and name, so a second click does not start a second one. */
   const pulls = new Set<string>();
 
@@ -488,10 +494,12 @@ export function createProviderService(
 
       // The nodes are deliberately left pointing at a provider that is gone: `validate` reports
       // `provider_missing` on each of them, which is what FR-PRV-005 asks the user to see.
+      const removed = await repository.providers.get(scope, id);
       await repository.models.deleteForProvider(scope, id);
       await secrets.delete(scope, providerSecretKey(id));
       await repository.providers.delete(scope, id);
       gates.delete(id);
+      if (removed?.type === "ollama") localRemoved = true;
 
       logger.info(
         {
@@ -672,8 +680,9 @@ export function createProviderService(
     async detect() {
       const found = await factory.detect();
       // PG-1.4 (D359): an Ollama that answers is added; one installed but stopped is started, in
-      // the background — detection must never hold the UI up.
-      if (autoLocal && local !== undefined) {
+      // the background — detection must never hold the UI up. Not after the person removed it
+      // [audit P-13]: every visit to the Providers page detects.
+      if (autoLocal && local !== undefined && !localRemoved) {
         if (found.ollama?.detected === true) {
           try {
             await addLocalIfMissing(await local.status());
@@ -732,6 +741,8 @@ export function createProviderService(
 
     async ensureLocalRuntime() {
       if (local === undefined) return service.localRuntime();
+      // Asked for outright (or at start): the runtime is wanted again [audit P-13].
+      localRemoved = false;
       const probe = await local.ensureRunning();
       if (probe.running) {
         const existing = (await repository.providers.list(scope)).find(

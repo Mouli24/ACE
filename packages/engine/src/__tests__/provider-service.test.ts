@@ -453,6 +453,64 @@ describe('FR-PRV-007 local runtime detection', () => {
   });
 });
 
+describe('audit P-13 a removed Ollama is not added back by detection', () => {
+  it('stops auto-adding once the person removes it, until the runtime is asked for', async () => {
+    const repository = new FakeRepository();
+    const bus = createEventBus({
+      repository,
+      scope,
+      pubsub: new InProcessPubSubStub<EngineEvent>(),
+      now: () => NOW,
+    });
+    const probe = {
+      installed: true,
+      running: true,
+      startedByAce: false,
+      baseUrl: 'http://127.0.0.1:11434',
+    };
+    const ensureRunning = vi.fn(async () => probe);
+    const service = createProviderService({
+      repository,
+      scope,
+      secrets: fakeSecrets(),
+      bus,
+      logger: createLogger({ level: 'silent', destination: { write: () => undefined } }),
+      now: () => NOW,
+      autoLocalRuntime: true,
+      factory: {
+        create: () => stubAdapter('CONNECTED').adapter,
+        manifestFor: () => [],
+        mergeCatalog: (discovered) =>
+          discovered.map((m) => ({ ...m, source: 'discovered' as const })),
+        detect: async () => ({ ollama: { baseUrl: probe.baseUrl, detected: true } }),
+        local: {
+          status: async () => probe,
+          ensureRunning,
+          stopOwned: async () => undefined,
+          running: async () => [],
+          load: async () => undefined,
+          unload: async () => undefined,
+          pull: async () => undefined,
+        },
+      },
+    });
+    const ollamas = async () => (await service.list()).filter((p) => p.type === 'ollama');
+
+    await service.detect();
+    const [added] = await ollamas();
+    expect(added).toBeDefined();
+
+    await service.remove(added!.id, { confirm: true });
+    await service.detect();
+    await service.detect();
+    expect(await ollamas()).toHaveLength(0);
+    expect(ensureRunning).not.toHaveBeenCalled();
+
+    await service.ensureLocalRuntime();
+    expect(await ollamas()).toHaveLength(1);
+  });
+});
+
 /* -------------------------------------------------------------------------- */
 /* Concurrency                                                                 */
 /* -------------------------------------------------------------------------- */
