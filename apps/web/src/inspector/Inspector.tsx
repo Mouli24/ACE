@@ -104,9 +104,25 @@ export function Inspector({ workflowId }: { workflowId: string }) {
       {runId !== undefined && focusedNodeId === undefined && (
         <p className={EMPTY}>Select a node to see what its run did.</p>
       )}
-      {runId !== undefined && focusedNodeId !== undefined && forNode.length === 0 && (
-        <p className={EMPTY}>This node has not run yet.</p>
+      {/* [audit W-11] a read that failed is not "has not run": say so, and offer to read again */}
+      {runId !== undefined && focusedNodeId !== undefined && nodeRuns.isError && (
+        <div role="alert" data-testid="inspector-load-error" className={EMPTY}>
+          <p className="m-0">Could not read this run&apos;s records — {nodeRuns.error.message}</p>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="mt-2"
+            disabled={nodeRuns.isFetching}
+            onClick={() => void nodeRuns.refetch()}
+          >
+            Retry
+          </Button>
+        </div>
       )}
+      {runId !== undefined &&
+        focusedNodeId !== undefined &&
+        !nodeRuns.isError &&
+        forNode.length === 0 && <p className={EMPTY}>This node has not run yet.</p>}
 
       {nodeRun && focusedNodeId !== undefined && (
         <>

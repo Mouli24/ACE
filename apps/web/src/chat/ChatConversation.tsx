@@ -535,7 +535,8 @@ export function ChatConversation({
     !convo.awaitingReply &&
     !running &&
     convo.refusal === undefined &&
-    convo.error === undefined;
+    convo.error === undefined &&
+    convo.loadError === undefined;
 
   return (
     <div
@@ -547,6 +548,19 @@ export function ChatConversation({
         ref={scroller}
         className="flex min-h-0 flex-1 flex-col gap-[20px] overflow-y-auto px-[14px] py-[16px]"
       >
+        {/* [audit W-11] a conversation that could not be read is not an empty one */}
+        {convo.loadError !== undefined && (
+          <div role="alert" data-testid="chat-load-error" className={CHAT_NOTE_CLASS}>
+            <div className={CHAT_NOTE_HEAD_CLASS}>Could not read this conversation</div>
+            <div className="flex items-center gap-2">
+              <p className="min-w-0 flex-1">{convo.loadError.message}</p>
+              <ActionButton label="Retry" onClick={convo.loadError.retry}>
+                <Icons.RotateCcw aria-hidden size={14} />
+              </ActionButton>
+            </div>
+          </div>
+        )}
+
         {empty && (
           <p className="flex flex-1 items-center justify-center text-center text-[13px] text-[var(--muted)]">
             Chat with {node.name} — it answers with its model and goal. Run the workflow and its

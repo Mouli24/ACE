@@ -485,6 +485,11 @@ export interface ChatConversation {
   refusal: ChatRefusal | undefined;
   /** Set when the last send failed before the engine took it; cleared on the next send. */
   error: string | undefined;
+  /**
+   * [audit W-11] The node's threads or this thread could not be read — not the same as a chat with
+   * nothing in it. `retry` reads them again.
+   */
+  loadError: { message: string; retry: () => void } | undefined;
   send: (content: Part[], targetNodeId?: string) => void;
   /**
    * PG-1.5: when the stall clock last restarted (ms) — the reply became owed, or a token arrived —
@@ -581,6 +586,16 @@ export function useThreadConversation(nodeId: string): ChatConversation {
     sending: session.sending === true,
     refusal: session.refusal,
     error: session.error,
+    loadError:
+      threads.isError || detail.isError
+        ? {
+            message: (threads.error ?? detail.error)?.message ?? 'The engine did not answer.',
+            retry: () => {
+              if (threads.isError) void threads.refetch();
+              if (detail.isError) void detail.refetch();
+            },
+          }
+        : undefined,
     send: (content, targetNodeId) => void sendToNode(queryClient, nodeId, content, targetNodeId),
     waitingSince:
       awaited !== undefined && !replied

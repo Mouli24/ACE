@@ -217,3 +217,27 @@ describe('FR-CHAT-005 chat never reads or writes run records', () => {
     expect(hits).toEqual([]);
   });
 });
+
+/* ------------------------------------------- a conversation that cannot be read (W-11) */
+
+describe('[audit W-11] a conversation the engine could not read', () => {
+  it('says so with Retry, instead of looking like an empty chat', async () => {
+    const user = userEvent.setup();
+    const { workflowId } = seedAgentNode();
+    const list = vi
+      .spyOn(api(), 'listNodeChatThreads')
+      .mockRejectedValue(new Error('The engine is not answering.'));
+    renderChat(<ChatPanel workflowId={workflowId} />);
+
+    const alert = await screen.findByTestId('chat-load-error');
+    expect(alert).toHaveTextContent('Could not read this conversation');
+    expect(alert).toHaveTextContent('The engine is not answering.');
+    expect(screen.queryByText(/it answers with its model and goal/i)).toBeNull();
+
+    // the engine answers again; Retry reads the threads once more
+    list.mockRestore();
+    await user.click(within(alert).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByTestId('chat-load-error')).toBeNull());
+    expect(screen.getByText(/it answers with its model and goal/i)).toBeInTheDocument();
+  });
+});
