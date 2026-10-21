@@ -41,14 +41,17 @@ describe('[audit U-3] web_search reads settings.searxngUrl at each search', () =
   });
 
   it('asks SearXNG once a URL is set, and the canned index when it is not — no restart between', async () => {
-    let configured: string | undefined;
-    const backend = settingsSearchBackend(async () => configured, new CannedSearchBackend());
+    const settings: { searxngUrl?: string } = {};
+    const backend = settingsSearchBackend(
+      async () => settings.searxngUrl,
+      new CannedSearchBackend(),
+    );
 
     const canned = await backend.search(LOCAL_SCOPE, 'quarterly numbers', 2);
     expect(canned[0]?.url).toContain('example.test');
     expect(asked).toEqual([]);
 
-    configured = searxUrl;
+    settings.searxngUrl = searxUrl;
     const found = await backend.search(LOCAL_SCOPE, 'quarterly numbers', 2);
     expect(found).toEqual([
       { title: 'From SearXNG', url: 'https://found.example/a', snippet: 'snippet' },
