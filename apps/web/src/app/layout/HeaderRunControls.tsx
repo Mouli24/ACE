@@ -68,7 +68,8 @@ export function HeaderRunControls({ workflowId }: { workflowId: string }) {
     run.runId !== undefined &&
     run.status === 'HALTED' &&
     (CONTINUABLE_HALT_REASONS as readonly string[]).includes(run.haltReason ?? '');
-  const nodeRuns = useNodeRunsOnce(mayContinue ? run.runId : undefined).data;
+  const nodeRunsQuery = useNodeRunsOnce(mayContinue ? run.runId : undefined);
+  const nodeRuns = nodeRunsQuery.data;
   const canContinue =
     mayContinue &&
     run.status !== undefined &&
@@ -155,7 +156,8 @@ export function HeaderRunControls({ workflowId }: { workflowId: string }) {
           aria-label="Continue"
           title="Run the nodes that were cut off; keep what finished"
           data-testid="header-run-continue"
-          disabled={busy}
+          // held while the node runs are read again (after a click, until the retries show)
+          disabled={busy || nodeRunsQuery.isFetching}
           onClick={() => fire('continue')}
           className={cn(PILL, 'px-[10px]')}
         >
