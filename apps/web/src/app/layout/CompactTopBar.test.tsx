@@ -57,8 +57,11 @@ describe('FR-MOB-001 the phone header', () => {
       'Guardrail policies': '/guardrails',
       // the settings gear's links (D338): the phone bar has no gear in its corner
       Providers: '/providers',
-      Onboarding: '/onboarding',
       Settings: '/settings',
+      // audit U-7: the same list as the gear and the workspace menu
+      Tools: '/library/tools',
+      Bench: '/bench',
+      'Setup wizard': '/onboarding',
       Help: '/help/getting-started',
     };
     for (const [name, href] of Object.entries(routes)) {
