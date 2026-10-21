@@ -142,6 +142,69 @@ function errorCode(error: object): string | undefined {
   return typeof code === 'string' ? code : undefined;
 }
 
+/** Node's TLS verification codes: a certificate the connection refused to trust. */
+const CERTIFICATE_CODE = /CERT|SELF_SIGNED|UNABLE_TO_VERIFY/;
+
+/** How far down a `cause` chain the socket's own error is looked for. */
+const MAX_CAUSE_DEPTH = 4;
+
+/**
+ * The transport failure behind an error, wherever it sits (audit P-8). undici's `fetch` throws a
+ * bare `TypeError('fetch failed')` and keeps the socket's error — `ECONNREFUSED`, a DNS miss, a
+ * rejected certificate — on `cause`, and the AI SDK wraps that once more in an `APICallError`.
+ * Reading only the outer error made every one of them "fetch failed".
+ */
+function transportFailure(error: object): { code: string; source: object } | undefined {
+  let current: unknown = error;
+  for (let depth = 0; depth <= MAX_CAUSE_DEPTH; depth += 1) {
+    if (typeof current !== 'object' || current === null) return undefined;
+    const code = errorCode(current);
+    if (code !== undefined && (NETWORK_CODES.has(code) || CERTIFICATE_CODE.test(code))) {
+      return { code, source: current };
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+/** `host:port` off a socket error — or, for a dual-stack `AggregateError`, off its first attempt. */
+function addressOf(source: object): string | undefined {
+  const first = (source as { errors?: unknown }).errors;
+  const target =
+    Array.isArray(first) && typeof first[0] === 'object' && first[0] !== null
+      ? (first[0] as object)
+      : source;
+  const { address, port, hostname } = target as {
+    address?: unknown;
+    port?: unknown;
+    hostname?: unknown;
+  };
+  const host =
+    typeof address === 'string' ? address : typeof hostname === 'string' ? hostname : undefined;
+  if (host === undefined) return undefined;
+  return typeof port === 'number' ? `${host}:${port}` : host;
+}
+
+/** What a transport failure means, in words a person can act on (audit P-8). */
+function describeTransport(code: string, source: object): string {
+  const at = addressOf(source);
+  const where = at === undefined ? '' : ` at ${at}`;
+  if (code === 'ECONNREFUSED') return `connection refused${where}`;
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+    return at === undefined
+      ? 'the host name could not be resolved (DNS)'
+      : `the host name ${at} could not be resolved (DNS)`;
+  }
+  if (code === 'ETIMEDOUT' || code === 'UND_ERR_CONNECT_TIMEOUT') {
+    return `the connection timed out${where}`;
+  }
+  if (CERTIFICATE_CODE.test(code)) {
+    return `its TLS certificate was not trusted (${describe(source) || code})`;
+  }
+  const said = describe(source);
+  return said === '' ? `${code}${where}` : said;
+}
+
 function errorStatus(error: object): number | undefined {
   for (const key of ['status', 'statusCode'] as const) {
     const value = (error as Record<string, unknown>)[key];
@@ -174,22 +237,26 @@ export function mapProviderError(error: unknown, context: ErrorContext = {}): No
       return statusToNodeError(status, describe(error), context);
     }
 
-    const code = errorCode(error);
-    if (code !== undefined && NETWORK_CODES.has(code)) {
+    const transport = transportFailure(error);
+    if (transport !== undefined) {
       return withProvider({
         kind: 'network',
-        code,
-        message: `Could not reach the provider: ${describe(error)}`,
-        retryable: true,
+        code: transport.code,
+        message: `Could not reach the provider: ${describeTransport(transport.code, transport.source)}`,
+        // A certificate the machine does not trust will not be trusted on the next attempt either.
+        retryable: !CERTIFICATE_CODE.test(transport.code),
       });
     }
 
-    // `fetch` reports every transport failure as a TypeError with no code of its own.
+    // `fetch` reports every transport failure as a TypeError with no code of its own; whatever
+    // reason it kept (`bad port`, …) sits on `cause`.
     if (error instanceof TypeError) {
+      const cause = (error as { cause?: unknown }).cause;
+      const reason = cause instanceof Error && cause.message !== '' ? ` (${cause.message})` : '';
       return withProvider({
         kind: 'network',
         code: 'fetch_failed',
-        message: `Could not reach the provider: ${describe(error)}`,
+        message: `Could not reach the provider: ${describe(error)}${reason}`,
         retryable: true,
       });
     }

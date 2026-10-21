@@ -1,3 +1,6 @@
+import { createServer } from 'node:net';
+import type { AddressInfo } from 'node:net';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -58,6 +61,90 @@ describe('Arch §28 transport failures are network errors', () => {
 
     expect(error.kind).toBe('network');
     expect(error.retryable).toBe(true);
+  });
+});
+
+describe('audit P-8 the reason undici keeps on `cause` reaches the message', () => {
+  const refused = (): Error =>
+    Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:59999'), {
+      code: 'ECONNREFUSED',
+      address: '127.0.0.1',
+      port: 59999,
+    });
+
+  it('reads ECONNREFUSED off the cause of fetch’s bare TypeError', () => {
+    const error = mapProviderError(new TypeError('fetch failed', { cause: refused() }));
+
+    expect(error.kind).toBe('network');
+    expect(error.code).toBe('ECONNREFUSED');
+    expect(error.retryable).toBe(true);
+    expect(error.message).toBe('Could not reach the provider: connection refused at 127.0.0.1:59999');
+  });
+
+  it('reads it through the AI SDK’s wrapper too, so a refused stream is still a network error', () => {
+    const wrapped = new Error('Cannot connect to API: connect ECONNREFUSED', { cause: refused() });
+
+    const error = mapProviderError(wrapped);
+
+    expect(error.kind).toBe('network');
+    expect(error.code).toBe('ECONNREFUSED');
+  });
+
+  it('names the address of a dual-stack refusal, whose AggregateError has no message', () => {
+    const both = Object.assign(new AggregateError([refused(), refused()], ''), {
+      code: 'ECONNREFUSED',
+    });
+
+    const error = mapProviderError(new TypeError('fetch failed', { cause: both }));
+
+    expect(error.message).toContain('connection refused at 127.0.0.1:59999');
+  });
+
+  it('says a host name did not resolve', () => {
+    const dns = Object.assign(new Error('getaddrinfo ENOTFOUND llm.example.invalid'), {
+      code: 'ENOTFOUND',
+      hostname: 'llm.example.invalid',
+    });
+
+    const error = mapProviderError(new TypeError('fetch failed', { cause: dns }));
+
+    expect(error.code).toBe('ENOTFOUND');
+    expect(error.message).toContain('llm.example.invalid could not be resolved');
+  });
+
+  it('reports a rejected certificate as a network error that retrying will not fix', () => {
+    const tls = Object.assign(new Error('self-signed certificate'), {
+      code: 'DEPTH_ZERO_SELF_SIGNED_CERT',
+    });
+
+    const error = mapProviderError(new TypeError('fetch failed', { cause: tls }));
+
+    expect(error.kind).toBe('network');
+    expect(error.retryable).toBe(false);
+    expect(error.message).toContain('TLS certificate was not trusted (self-signed certificate)');
+  });
+
+  it('keeps a code-less reason (`bad port`) beside "fetch failed"', () => {
+    const error = mapProviderError(new TypeError('fetch failed', { cause: new Error('bad port') }));
+
+    expect(error.code).toBe('fetch_failed');
+    expect(error.message).toBe('Could not reach the provider: fetch failed (bad port)');
+  });
+
+  it('says "connection refused" for a real fetch to a closed local port', async () => {
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+
+    const thrown = await fetch(`http://127.0.0.1:${port}/v1/models`).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    const error = mapProviderError(thrown);
+
+    expect(error.code).toBe('ECONNREFUSED');
+    expect(error.message).toContain(`connection refused at 127.0.0.1:${port}`);
   });
 });
 
