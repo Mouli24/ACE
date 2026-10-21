@@ -190,7 +190,9 @@ export function Canvas({ workflowId, readOnly = false }: CanvasProps) {
   }
 
   return (
-    <ReactFlowProvider>
+    // [audit W-17] one React Flow store per workflow: the viewport, measured nodes and selection of
+    // the workflow just left never carry into the next one opened in the same Canvas
+    <ReactFlowProvider key={workflowId}>
       <NodeEstimateContext.Provider value={estimates}>
         <CanvasInner
           workflowId={workflowId}

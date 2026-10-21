@@ -1,12 +1,15 @@
 import type { Edge, Node } from '@ace/contracts';
 import { Toaster } from '@ace/ui';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
 import { createNode } from '../nodes/factory';
-import { db, installMockServer, renderWithQuery } from '../test/app';
+import { db, installMockServer, queryClient, renderWithQuery } from '../test/app';
+import { useWorkflowGraph } from '../workflows/hooks';
+import { queryKeys } from '../workflows/query-keys';
 import { peekGraphSync } from '../workflows/sync-registry';
 import { Canvas } from './Canvas';
 import { useCanvasApi } from './canvas-api';
@@ -197,6 +200,41 @@ describe('[audit W-6] a delete says what went and offers Undo', () => {
     await waitFor(() => expect(nodesInDb(workflow.id)).toHaveLength(2));
     await settle(workflow.id);
     expect(db.edgesOf(workflow.id).map((e) => e.id)).toEqual(edges.map((e) => e.id));
+  });
+});
+
+describe('[audit W-17] another workflow opened in the same Canvas starts fresh', () => {
+  it('gets its own React Flow store, so the last workflow’s view never carries over', async () => {
+    const first = seed(['input']);
+    const second = seed(['agent']);
+    // the second graph already read, as after a visit: no loading gate between the two
+    function Warm() {
+      useWorkflowGraph(second.workflow.id);
+      return null;
+    }
+    const { rerender } = renderWithQuery(
+      <>
+        <Canvas workflowId={first.workflow.id} />
+        <Warm />
+      </>,
+    );
+    await waitFor(() => expect(flowNode(first.nodes[0]!.id)).not.toBeNull());
+    await waitFor(() =>
+      expect(queryClient.getQueryState(queryKeys.workflow(second.workflow.id))?.status).toBe(
+        'success',
+      ),
+    );
+    const before = document.querySelector('.react-flow');
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Canvas workflowId={second.workflow.id} />
+        <Warm />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(flowNode(second.nodes[0]!.id)).not.toBeNull());
+    expect(document.querySelector('.react-flow')).not.toBe(before);
+    expect(flowNode(first.nodes[0]!.id)).toBeNull();
   });
 });
 
