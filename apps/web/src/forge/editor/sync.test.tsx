@@ -208,8 +208,10 @@ describe('D299 §5.4 no button discards unsaved text without asking', () => {
     await user.click(screen.getByRole('button', { name: 'Don’t save' }));
     expect(screen.queryByTestId('tab-a.ts')).toBeNull();
   });
+});
 
-  it('Discard and close on a deleted conflict asks first', async () => {
+describe('[audit F-4] a deleted-file conflict offers only what works', () => {
+  it('Discard and close discards and closes at once: no Save to offer, which would always fail', async () => {
     const user = userEvent.setup();
     renderApp(path);
     await screen.findByTestId('forge');
@@ -217,11 +219,34 @@ describe('D299 §5.4 no button discards unsaved text without asking', () => {
     await user.type(await screen.findByLabelText('Editing a.ts'), '!');
     agentDeletes();
     await waitFor(() => expect(conflictOf()).toBe('deleted'));
+    const put = vi.fn();
+    server.events.on('request:start', ({ request }) => {
+      if (request.method === 'PUT') put();
+    });
 
     await user.click(screen.getByRole('button', { name: 'Discard and close' }));
-    expect(
-      await screen.findByRole('dialog', { name: 'Save changes to a.ts?' }),
-    ).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId('tab-a.ts')).toBeNull());
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(useEditorStore.getState().projects[projectId]?.files['a.ts']).toBeUndefined();
+    expect(put).not.toHaveBeenCalled();
+    server.events.removeAllListeners('request:start');
+  });
+
+  it('saving names the choices on its bar: Keep mine or Discard and close', async () => {
+    const user = userEvent.setup();
+    const warning = vi.spyOn(toast, 'warning');
+    renderApp(path);
+    await screen.findByTestId('forge');
+    act(() => openFile(projectId, 'a.ts'));
+    await user.type(await screen.findByLabelText('Editing a.ts'), '!');
+    agentDeletes();
+    await waitFor(() => expect(conflictOf()).toBe('deleted'));
+    warning.mockClear();
+
+    expect(await saveFile(projectId, 'a.ts', queryClient)).toBe(false);
+    expect(warning).toHaveBeenCalledWith(
+      'a.ts was deleted on disk — choose Keep mine or Discard and close first.',
+    );
   });
 });
 

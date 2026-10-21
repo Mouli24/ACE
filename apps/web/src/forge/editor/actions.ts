@@ -146,10 +146,13 @@ async function saveOnce(
     return false;
   if (!file.dirty && !file.deletedOnDisk) return true;
   if (file.conflict !== undefined) {
+    // [audit F-4] the choices the file's conflict bar offers, and no others
     logOutput(
       projectId,
       'warn',
-      `${path} changed on disk — choose Compare, Take theirs or Keep mine first.`,
+      file.conflict === 'deleted'
+        ? `${path} was deleted on disk — choose Keep mine or Discard and close first.`
+        : `${path} changed on disk — choose Compare, Take theirs or Keep mine first.`,
     );
     return false;
   }

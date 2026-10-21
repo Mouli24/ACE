@@ -2,7 +2,7 @@ import { Button, cn } from '@ace/ui';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { nameOf } from '../files/paths';
-import { keepMine, saveFile, takeTheirs } from './actions';
+import { closeFiles, keepMine, saveFile, takeTheirs } from './actions';
 import { useCloseRequest } from './CloseDialogs';
 import type { Conflict } from './editor-store';
 
@@ -10,7 +10,10 @@ import type { Conflict } from './editor-store';
 const BAR =
   'flex min-h-[34px] shrink-0 items-center gap-[8px] border-b border-[var(--line)] bg-[var(--panel)] py-[4px] pl-[18px] pr-[12px] text-[12px] text-[var(--ink)]';
 
-/** §5.4: the disk moved on under unsaved work. Compare, Take theirs, or Keep mine (the next save wins). */
+/**
+ * §5.4: the disk moved on under unsaved work. Compare, Take theirs, or Keep mine (the next save
+ * wins); for a file deleted on disk, Discard and close, or Keep mine (the next save puts it back).
+ */
 export function ConflictBar({
   projectId,
   path,
@@ -25,10 +28,8 @@ export function ConflictBar({
   onCompare(): void;
 }) {
   const queryClient = useQueryClient();
-  const { request, dialog } = useCloseRequest(projectId);
   return (
     <div role="alert" data-testid="conflict-bar" className={BAR}>
-      {dialog}
       <span className="min-w-0 flex-1">
         {conflict === 'deleted'
           ? `${nameOf(path)} was deleted on disk while you were editing it.`
@@ -40,7 +41,9 @@ export function ConflictBar({
         </Button>
       )}
       {conflict === 'deleted' ? (
-        <Button size="sm" variant="secondary" onClick={() => request([path])}>
+        // [audit F-4] The button is the discard: it closes at once. Through the unsaved-changes
+        // dialog it offered Save, which a deleted-file conflict always refuses.
+        <Button size="sm" variant="secondary" onClick={() => closeFiles(projectId, [path])}>
           Discard and close
         </Button>
       ) : (
