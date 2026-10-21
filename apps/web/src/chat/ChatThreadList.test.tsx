@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { ChatPanel } from './ChatPanel';
@@ -69,7 +69,19 @@ describe('FR-CHAT-004 thread list: new, select and delete', () => {
     await waitFor(() => expect(db.chatThreadsOf(node.id)).toHaveLength(1));
     const threadId = db.chatThreadsOf(node.id)[0]!.id;
 
+    // [audit W-9] it asks first; Cancel keeps the thread
     await user.click(screen.getByTestId(`chat-delete-${threadId}`));
+    const confirm = await screen.findByTestId('chat-delete-confirm');
+    expect(confirm).toHaveTextContent('Delete this chat?');
+    await user.click(within(confirm).getByRole('button', { name: 'Cancel' }));
+    expect(db.chatThreadsOf(node.id)).toHaveLength(1);
+
+    await user.click(screen.getByTestId(`chat-delete-${threadId}`));
+    await user.click(
+      within(await screen.findByTestId('chat-delete-confirm')).getByRole('button', {
+        name: 'Delete chat',
+      }),
+    );
     await waitFor(() => expect(db.chatThreadsOf(node.id)).toHaveLength(0));
     await waitFor(() =>
       expect(screen.queryByTestId(`chat-thread-${threadId}`)).not.toBeInTheDocument(),

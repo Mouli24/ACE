@@ -2,6 +2,8 @@ import type { ChatMessage, Part } from '@ace/contracts';
 import { cn, Icons } from '@ace/ui';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
+import { ConfirmDelete } from './ConfirmDelete';
+
 /**
  * PG-1.6 (D352): what a chat message offers — Copy, Retry (an agent reply or a failed turn), Edit &
  * resend (your own message) and Delete — on hover or keyboard focus, and always on a touch screen,
@@ -109,6 +111,8 @@ export function MessageActions({
   onDelete,
   busy = false,
 }: MessageActionHandlers & { message: ChatMessage; busy?: boolean }) {
+  // [audit W-9] Delete asks first: a message has no undo
+  const [confirming, setConfirming] = useState(false);
   return (
     <div className={ACTIONS_CLASS} data-testid="chat-message-actions">
       <CopyButton text={copyText(message.content)} />
@@ -123,9 +127,21 @@ export function MessageActions({
         </ActionButton>
       )}
       {onDelete !== undefined && (
-        <ActionButton label="Delete" onClick={onDelete}>
+        <ActionButton label="Delete" onClick={() => setConfirming(true)}>
           <Icons.Trash2 aria-hidden size={14} />
         </ActionButton>
+      )}
+      {onDelete !== undefined && confirming && (
+        <ConfirmDelete
+          title="Delete this message?"
+          description="It is taken out of this conversation. This cannot be undone."
+          confirmLabel="Delete message"
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false);
+            onDelete();
+          }}
+        />
       )}
     </div>
   );
