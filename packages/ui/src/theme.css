@@ -28,8 +28,11 @@
   --color-fg-faint: var(--muted);
   --color-accent: var(--ink);
   --color-accent-fg: var(--canvas);
-  --color-danger: #c94c27;
+  /* audit U-5: text-danger and friends read in the AA ink (#c94c27 was 4.07:1 on the canvas) */
+  --color-danger: var(--danger-ink);
   --color-selection: #ef6b3f;
+  /* audit U-6: the keyboard focus colour, >= 3:1 on canvas, card and panel in both themes */
+  --color-focus: var(--focus);
 
   --color-provider-anthropic: #c2603f;
   --color-provider-google: #1d4fe0;
@@ -121,6 +124,8 @@
   --accent-ink: #b4441b;
   --accent-strong: #c2410c;
   --ok-ink: #1a6b3f;
+  /* Audit U-6: the focus ring (#ef6b3f is 2.71:1 on the light canvas; WCAG 1.4.11 asks 3:1). */
+  --focus: #c2410c;
 
   /* PG-1.1 (D350): port dots by data type, each >= 3:1 on card, panel and canvas (tokens.ts). */
   --port-text: #c2410c;
@@ -167,6 +172,7 @@
   --accent-ink: #f08a5d;
   --accent-strong: #c2410c;
   --ok-ink: #4cc283;
+  --focus: #ef6b3f;
   --port-text: #f08a5d;
   --port-image: #a996f0;
   --port-audio: #4fc3cc;
@@ -444,5 +450,16 @@
   .ace-spin,
   .ace-pulse {
     animation: none;
+  }
+  /*
+   * Audit U-12: and every other animation — the live dots, the orbiting tiles, Tailwind's
+   * animate-* — runs once, at once, and rests on its last frame instead of looping.
+   */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
   }
 }
