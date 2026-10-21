@@ -26,6 +26,7 @@ import type {
   ProviderRepository,
   RunPatch,
   RunRepository,
+  RunStatusGuard,
   Scope,
 } from '@ace/engine';
 import { and, asc, desc, eq, inArray, isNotNull, isNull, like, lt, or, sql } from 'drizzle-orm';
@@ -515,7 +516,7 @@ export function createRunRepository(db: Db): RunRepository {
         .all()
         .map(toRun),
 
-    update: async (scope: Scope, id: Id, patch: RunPatch) => {
+    update: async (scope: Scope, id: Id, patch: RunPatch, guard?: RunStatusGuard) => {
       const values = definedOnly({
         status: patch.status,
         haltReason: patch.haltReason,
@@ -552,18 +553,21 @@ export function createRunRepository(db: Db): RunRepository {
           patch.domain === undefined ? undefined : toJsonColumn(patch.domain, `run(${id}).domain`),
       });
 
+      const thisRun = and(eq(runs.workspaceId, scope.workspaceId), eq(runs.id, id));
+      // [audit E-5] The compare-and-set is the statement's own WHERE, so the status is checked and
+      // written in one step; a row that has moved on is left alone and the update answers `null`.
+      const guarded =
+        guard === undefined ? thisRun : and(thisRun, inArray(runs.status, [...guard.ifStatus]));
+
+      let read = guarded;
       if (Object.keys(values).length > 0) {
-        db.update(runs)
-          .set(values)
-          .where(and(eq(runs.workspaceId, scope.workspaceId), eq(runs.id, id)))
-          .run();
+        const written = db.update(runs).set(values).where(guarded).run();
+        if (guard !== undefined && written.changes === 0) return null;
+        // Written: the row is read back whatever status the patch gave it.
+        read = thisRun;
       }
 
-      const row = db
-        .select()
-        .from(runs)
-        .where(and(eq(runs.workspaceId, scope.workspaceId), eq(runs.id, id)))
-        .get();
+      const row = db.select().from(runs).where(read).get();
       return row === undefined ? null : toRun(row);
     },
   };

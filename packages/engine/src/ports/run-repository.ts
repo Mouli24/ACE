@@ -124,6 +124,17 @@ export interface RunPatch {
   domain?: RunDomainConfig;
 }
 
+/**
+ * [audit E-5] A compare-and-set on a run's status. With one, `update` checks the row's status and
+ * writes the patch in one step, and only while the status is one of `ifStatus`; a row whose status
+ * has moved on is left exactly as it is and the update answers `null`. Two controls that read the
+ * same run and both decided to write (a double Retry, a Pause landing as the run completes) can no
+ * longer both win.
+ */
+export interface RunStatusGuard {
+  ifStatus: readonly RunState[];
+}
+
 export interface RunRepository {
   create(scope: Scope, run: Run): Promise<Run>;
   get(scope: Scope, id: Id): Promise<Run | null>;
@@ -131,7 +142,8 @@ export interface RunRepository {
   listByWorkflow(scope: Scope, workflowId: Id, page: CursorQuery): Promise<Page<Run>>;
   /** Runs that were mid-flight — what crash recovery has to finish off (FR-SYS-009). */
   listActive(scope: Scope): Promise<Run[]>;
-  update(scope: Scope, id: Id, patch: RunPatch): Promise<Run | null>;
+  /** `null` when there is no such run, or when `guard` is given and the status did not match. */
+  update(scope: Scope, id: Id, patch: RunPatch, guard?: RunStatusGuard): Promise<Run | null>;
 }
 
 export interface NodeRunPatch {

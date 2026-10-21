@@ -10,6 +10,7 @@ import {
   type NodeState,
   type RetryRequest,
   type Run,
+  type RunState,
 } from '@ace/contracts';
 
 import type { ApprovalService } from '../../approvals/index.js';
@@ -22,7 +23,7 @@ import { newId } from '../../ids.js';
 import type { Logger } from '../../logging/index.js';
 import type { UsageService } from '../../usage/index.js';
 import { sumUsage } from '../cost.js';
-import { assertRunAction, withAllowedActions } from './actions.js';
+import { assertRunAction, invalidRunState, withAllowedActions } from './actions.js';
 import type { RunGateRegistry } from './gate.js';
 import { downstreamOf } from './graph.js';
 import type { ControlNodeRunStore, ControlRunStore } from './stores.js';
@@ -152,6 +153,9 @@ export interface RunControls {
   get(runId: Id): Promise<Run>;
 }
 
+/** The run states a stop may land on: going, held, or BLOCKED mid-run (D305) [audit E-5]. */
+const STOPPABLE_RUN: readonly RunState[] = ['RUNNING', 'PAUSED', 'BLOCKED'];
+
 /** Node runs a pause turns into PAUSED: dispatched, but not yet doing anything (Arch §19.1). */
 const PAUSABLE: ReadonlySet<NodeState> = new Set<NodeState>(['READY']);
 
@@ -173,17 +177,43 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
     return run;
   }
 
-  /** Patch the run and always rewrite `allowedActions` from the status it ends up with (D76). */
-  async function patchRun(run: Run, patch: Parameters<ControlRunStore['update']>[1]): Promise<Run> {
+  /**
+   * Patch the run and always rewrite `allowedActions` from the status it ends up with (D76).
+   *
+   * [audit E-5] With `guard`, the write is a compare-and-set on the status the control checked: a
+   * control reads the run, decides, and writes — and between the read and the write a second click
+   * or the drive itself may have moved the run on (two Retries both reopening it, a Pause landing
+   * on a run that has just completed). The store then writes nothing and the control answers the
+   * 409 `guard.refuse` gives against the run as it now stands.
+   */
+  async function patchRun(
+    run: Run,
+    patch: Parameters<ControlRunStore['update']>[1],
+    guard?: { ifStatus: readonly RunState[]; refuse: (current: Run) => HttpError },
+  ): Promise<Run> {
     const status = patch.status ?? run.status;
     const blockedReason =
       patch.blockedReason === null ? undefined : (patch.blockedReason ?? run.blockedReason);
-    const updated = await deps.runs.update(run.id, {
-      ...patch,
-      // D305, D323: why it is blocked, and whether it stays open, decide its controls too.
-      allowedActions: allowedRunActions(status, { blockedReason, stayOpen: run.domain?.stayOpen }),
-    });
+    const updated = await deps.runs.update(
+      run.id,
+      {
+        ...patch,
+        // D305, D323: why it is blocked, and whether it stays open, decide its controls too.
+        allowedActions: allowedRunActions(status, {
+          blockedReason,
+          stayOpen: run.domain?.stayOpen,
+        }),
+      },
+      guard === undefined ? undefined : { ifStatus: guard.ifStatus },
+    );
     if (updated !== null) return withAllowedActions(updated);
+
+    if (guard !== undefined) {
+      const current = await deps.runs.get(run.id);
+      if (current !== null && !guard.ifStatus.includes(current.status)) {
+        throw guard.refuse(withAllowedActions(current));
+      }
+    }
 
     // A store that answered `null` has no row to return; the patch applied to what was read is
     // still the truth about the run. `pausedAt: null` means "clear it", so it is removed, not kept.
@@ -277,7 +307,11 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
       deps.gates.get(runId)?.pause();
 
       const pausedAt = now();
-      const paused = await patchRun(run, { status: 'PAUSED', pausedAt });
+      const paused = await patchRun(
+        run,
+        { status: 'PAUSED', pausedAt },
+        { ifStatus: [run.status], refuse: (current) => invalidRunState(current, 'pause') },
+      );
 
       // READY means "dispatched, waiting for its provider slot" (D66). Those go to PAUSED;
       // RUNNING nodes are left to finish, which is what FR-CTL-001 asks for.
@@ -299,11 +333,15 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
       assertRunAction(run, 'resume');
 
       // D305: a run BLOCKED mid-run leaves BLOCKED the same way, and loses its reason.
-      const resumed = await patchRun(run, {
-        status: 'RUNNING',
-        pausedAt: null,
-        ...(run.blockedReason === undefined ? {} : { blockedReason: null }),
-      });
+      const resumed = await patchRun(
+        run,
+        {
+          status: 'RUNNING',
+          pausedAt: null,
+          ...(run.blockedReason === undefined ? {} : { blockedReason: null }),
+        },
+        { ifStatus: [run.status], refuse: (current) => invalidRunState(current, 'resume') },
+      );
       await moveNodeRuns(resumed, new Set<NodeState>(['PAUSED']), 'READY');
 
       // D310: resuming past the loop guard resets the held pairs and forwards what it held.
@@ -366,13 +404,20 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
       const totals = sumUsage((await deps.nodeRuns.listByRun(run.id)).map((row) => row.usage));
 
       const endedAt = now();
-      const halted = await patchRun(run, {
-        status: 'HALTED',
-        haltReason: 'stopped',
-        totals,
-        endedAt,
-        durationMs: Math.max(0, Date.parse(endedAt) - Date.parse(run.startedAt)),
-      });
+      // [audit E-5] Any status a stop is allowed from — a resume or a pause landing meanwhile does
+      // not undo it — but never over a run that already ended: a second Stop is a 409, not a second
+      // `run.completed`.
+      const halted = await patchRun(
+        run,
+        {
+          status: 'HALTED',
+          haltReason: 'stopped',
+          totals,
+          endedAt,
+          durationMs: Math.max(0, Date.parse(endedAt) - Date.parse(run.startedAt)),
+        },
+        { ifStatus: STOPPABLE_RUN, refuse: (current) => invalidRunState(current, 'stop') },
+      );
 
       // Round 5 §2.8 (FR-OBS-002): the day's totals, for the top bar, ahead of `run.completed`.
       const dayTotals = await dayTotalsAt(run.id, endedAt);
@@ -493,6 +538,9 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
       if (open !== undefined) assertNodeFree(run, open, nodeId, 'rerun');
 
       const rows = await deps.nodeRuns.listByRun(runId);
+      // [audit E-5] The run is claimed before its row is written, so a second click is refused
+      // rather than adding a second node run and a second drive.
+      const reopened = open === undefined ? await claimReopen(run) : run;
       const previous = rows.filter((row) => row.nodeId === nodeId);
       // The iteration a re-run belongs to is the latest one recorded: a re-run is not a new loop
       // iteration, it is another go at the same one.
@@ -503,27 +551,29 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
       // was given, which is what a retry uses instead (FR-ERR-003).
       const envelopes = (await deps.envelopesFor?.(run, nodeId)) ?? [];
 
-      const nodeRun = await deps.nodeRuns.create({
-        id: nextId(),
-        runId,
-        nodeId,
-        iteration,
-        // A new attempt number rather than 1, so (node, iteration, attempt) stays unique and the
-        // inspector can list the re-run beside what it replaced (D95).
-        attempt: nextAttempt(rows, nodeId, iteration),
-        status: 'READY',
-        inputEnvelopes: envelopes,
-        usage: zeroUsage(),
-        verdicts: [],
-        toolCalls: [],
-        approvals: [],
-      });
+      const nodeRun = await undoClaimOnThrow(run, reopened, () =>
+        deps.nodeRuns.create({
+          id: nextId(),
+          runId,
+          nodeId,
+          iteration,
+          // A new attempt number rather than 1, so (node, iteration, attempt) stays unique and the
+          // inspector can list the re-run beside what it replaced (D95).
+          attempt: nextAttempt(rows, nodeId, iteration),
+          status: 'READY',
+          inputEnvelopes: envelopes,
+          usage: zeroUsage(),
+          verdicts: [],
+          toolCalls: [],
+          approvals: [],
+        }),
+      );
 
       if (open !== undefined) {
         open.planTurn({ nodeRun, withDownstream: false });
         return nodeRun;
       }
-      await reopen(run, { run, nodeRuns: [nodeRun], withDownstream: false });
+      await deps.drivePartialRun({ run: reopened, nodeRuns: [nodeRun], withDownstream: false });
       return nodeRun;
     },
 
@@ -537,25 +587,30 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
       if (open === undefined) assertNotLive(run, 'retry');
       else assertNodeFree(run, open, failed.nodeId, 'retry');
       const rows = await deps.nodeRuns.listByRun(run.id);
+      // [audit E-5] Claimed first: of two Retries that both read the halted run, one reopens it
+      // and the other is refused before it writes an attempt of its own.
+      const reopened = open === undefined ? await claimReopen(run) : run;
 
       // FR-ERR-003: identical inputs. The envelopes the failed attempt was *delivered* are copied
       // across — never rebuilt, which would not be the same attempt again. Its row stores what it
       // read, context placed; that comes off and the trust is the source's again (13b fix I1,
       // BR-13), so the retry's own context step builds it afresh and a failed step leaves no stale
       // chunk on this row.
-      const retry = await deps.nodeRuns.create({
-        id: nextId(),
-        runId: run.id,
-        nodeId: failed.nodeId,
-        iteration: failed.iteration,
-        attempt: failed.attempt + 1,
-        status: 'READY',
-        inputEnvelopes: asDelivered(failed.inputEnvelopes, run.snapshot.nodes),
-        usage: zeroUsage(),
-        verdicts: [],
-        toolCalls: [],
-        approvals: [],
-      });
+      const retry = await undoClaimOnThrow(run, reopened, () =>
+        deps.nodeRuns.create({
+          id: nextId(),
+          runId: run.id,
+          nodeId: failed.nodeId,
+          iteration: failed.iteration,
+          attempt: failed.attempt + 1,
+          status: 'READY',
+          inputEnvelopes: asDelivered(failed.inputEnvelopes, run.snapshot.nodes),
+          usage: zeroUsage(),
+          verdicts: [],
+          toolCalls: [],
+          approvals: [],
+        }),
+      );
 
       // FR-ERR-004: everything reachable after it re-executes. The BLOCKED rows it left behind are
       // cleared back to IDLE first, so the scheduler sees nodes waiting for input rather than a
@@ -574,8 +629,8 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
         open.planTurn({ nodeRun: retry, withDownstream: request.withDownstream });
         return retry;
       }
-      await reopen(run, {
-        run,
+      await deps.drivePartialRun({
+        run: reopened,
         nodeRuns: [retry],
         withDownstream: request.withDownstream,
       });
@@ -600,26 +655,32 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
         );
       }
 
+      // [audit E-5] One Continue reopens the run; a second one that read it halted is refused here,
+      // before it writes retries of its own.
+      const reopened = await claimReopen(run);
+
       // FR-ERR-003 for each of them, exactly as `retryNodeRun`: attempt + 1, READY, the envelopes
       // the cut-off attempt was delivered (never rebuilt), and nothing of its own yet.
       const retries: NodeRun[] = [];
-      for (const interrupted of cut) {
-        retries.push(
-          await deps.nodeRuns.create({
-            id: nextId(),
-            runId: run.id,
-            nodeId: interrupted.nodeId,
-            iteration: interrupted.iteration,
-            attempt: interrupted.attempt + 1,
-            status: 'READY',
-            inputEnvelopes: asDelivered(interrupted.inputEnvelopes, run.snapshot.nodes),
-            usage: zeroUsage(),
-            verdicts: [],
-            toolCalls: [],
-            approvals: [],
-          }),
-        );
-      }
+      await undoClaimOnThrow(run, reopened, async () => {
+        for (const interrupted of cut) {
+          retries.push(
+            await deps.nodeRuns.create({
+              id: nextId(),
+              runId: run.id,
+              nodeId: interrupted.nodeId,
+              iteration: interrupted.iteration,
+              attempt: interrupted.attempt + 1,
+              status: 'READY',
+              inputEnvelopes: asDelivered(interrupted.inputEnvelopes, run.snapshot.nodes),
+              usage: zeroUsage(),
+              verdicts: [],
+              toolCalls: [],
+              approvals: [],
+            }),
+          );
+        }
+      });
 
       // FR-ERR-004 as `retryNodeRun({ withDownstream: true })`: a BLOCKED row after any of them goes
       // back to IDLE, so the drive sees a node waiting for input. A node being continued keeps its
@@ -638,7 +699,7 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
 
       // One reopen and one drive for all of them (D81): a reopen per node would make the run
       // RUNNING after the first, and a second drive beside the first (D309).
-      const reopened = await reopen(run, { run, nodeRuns: retries, withDownstream: true });
+      await deps.drivePartialRun({ run: reopened, nodeRuns: retries, withDownstream: true });
       deps.logger?.info(
         { subsystem: 'runs', runId, nodeRunIds: retries.map((row) => row.id) },
         'run continued',
@@ -741,22 +802,74 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
   /**
    * D81: a retry or a re-run on a finished run puts it back to RUNNING on its own snapshot, and it
    * ends again with a second `run.completed`. `allowedActions` follows the status as it changes.
-   * Answers the run as re-opened, which is what a continue hands back (D388).
+   * Answers the run as re-opened, which is what a continue hands back (D388); the caller then drives
+   * it with `drivePartialRun`.
+   *
+   * [audit E-5] It is a claim, made before the control writes anything else: a compare-and-set on
+   * the status the control read, so of two controls that read the same ended run only one reopens
+   * it. And it is refused while the drive that ended the run is still unwinding — a Stop writes
+   * HALTED at once, but its drive keeps its gate until every call has let go — because a second
+   * drive beside it would be two schedulers on one run (D309).
    */
-  async function reopen(run: Run, plan: PartialRunPlan): Promise<Run> {
+  async function claimReopen(run: Run): Promise<Run> {
+    if (run.status === 'RUNNING' || run.status === 'PAUSED') return run;
+    if (deps.gates.get(run.id) !== undefined) throw stillWindingDown(run);
     // D388: a run going again is no longer halted — its old halt reason (and budget halt) would
     // otherwise outlive it, and a run that then completes would read COMPLETE + `stopped`.
-    const reopened =
-      run.status === 'RUNNING' || run.status === 'PAUSED'
-        ? run
-        : await patchRun(run, {
-            status: 'RUNNING',
-            ...(run.haltReason === undefined ? {} : { haltReason: null }),
-            ...(run.budgetHalt === undefined ? {} : { budgetHalt: null }),
-          });
+    return patchRun(
+      run,
+      {
+        status: 'RUNNING',
+        ...(run.haltReason === undefined ? {} : { haltReason: null }),
+        ...(run.budgetHalt === undefined ? {} : { budgetHalt: null }),
+      },
+      { ifStatus: [run.status], refuse: reopenRefusal },
+    );
+  }
 
-    await deps.drivePartialRun({ ...plan, run: reopened });
-    return reopened;
+  /**
+   * [audit E-5] A claimed run whose rows then could not be written is put back as it was, rather
+   * than left RUNNING with no drive. Best effort: the write that failed may fail again, and crash
+   * recovery halts a RUNNING run nobody drives at the next start (FR-SYS-009).
+   */
+  async function undoClaimOnThrow<T>(run: Run, reopened: Run, write: () => Promise<T>): Promise<T> {
+    try {
+      return await write();
+    } catch (error) {
+      if (reopened !== run) {
+        await deps.runs
+          .update(
+            run.id,
+            {
+              status: run.status,
+              allowedActions: withAllowedActions(run).allowedActions,
+              ...(run.haltReason === undefined ? {} : { haltReason: run.haltReason }),
+              ...(run.budgetHalt === undefined ? {} : { budgetHalt: run.budgetHalt }),
+            },
+            { ifStatus: ['RUNNING'] },
+          )
+          .catch(() => null);
+      }
+      throw error;
+    }
+  }
+
+  function reopenRefusal(current: Run): HttpError {
+    return new HttpError(
+      'workflow',
+      'invalid_run_state',
+      `This run changed while it was being re-opened — it is ${current.status} now.`,
+      { runId: current.id, status: current.status, allowedActions: current.allowedActions },
+    );
+  }
+
+  function stillWindingDown(run: Run): HttpError {
+    return new HttpError(
+      'workflow',
+      'invalid_run_state',
+      'This run is still winding down after it ended — try again in a moment.',
+      { runId: run.id, status: run.status, allowedActions: withAllowedActions(run).allowedActions },
+    );
   }
 
   return controls;

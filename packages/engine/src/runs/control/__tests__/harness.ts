@@ -173,10 +173,12 @@ export function createFakeStores(seed: { runs?: Run[]; nodeRuns?: NodeRun[] } = 
       runRows.set(run.id, run);
       return run;
     },
-    update: async (runId, patch) => {
+    update: async (runId, patch, guard) => {
       runPatches.push({ runId, patch });
       const current = runRows.get(runId);
       if (current === undefined) return null;
+      // [audit E-5] The compare-and-set, as the real stores do it.
+      if (guard !== undefined && !guard.ifStatus.includes(current.status)) return null;
 
       const { pausedAt, blockedReason, haltReason, budgetHalt, ...rest } = patch;
       const next: Run = { ...current, ...rest };

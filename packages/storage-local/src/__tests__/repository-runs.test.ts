@@ -304,6 +304,32 @@ describe('BR-04 runs repository', () => {
     expect(await db.repository.runs.get(scope, RUN_ID)).toEqual(full);
   });
 
+  it('[audit E-5] a guarded update is a compare-and-set on the status', async () => {
+    await db.repository.runs.create(scope, run({ status: 'RUNNING' }));
+
+    // The status moved on (the run completed): the guarded write leaves the row alone.
+    await db.repository.runs.update(scope, RUN_ID, { status: 'COMPLETE' });
+    const refused = await db.repository.runs.update(
+      scope,
+      RUN_ID,
+      { status: 'PAUSED', pausedAt: NOW },
+      { ifStatus: ['RUNNING'] },
+    );
+    expect(refused).toBeNull();
+    const kept = await db.repository.runs.get(scope, RUN_ID);
+    expect(kept?.status).toBe('COMPLETE');
+    expect(kept?.pausedAt).toBeUndefined();
+
+    // While it matches, the write lands and the row comes back with its new status.
+    const reopened = await db.repository.runs.update(
+      scope,
+      RUN_ID,
+      { status: 'RUNNING' },
+      { ifStatus: ['COMPLETE', 'HALTED'] },
+    );
+    expect(reopened?.status).toBe('RUNNING');
+  });
+
   it('updates status, totals and the ending without touching the snapshot', async () => {
     await db.repository.runs.create(scope, run());
 

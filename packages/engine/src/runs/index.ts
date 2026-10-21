@@ -3516,7 +3516,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
       .finally(() => {
         unregister();
         if (domain !== undefined) deps.domains?.release(domain);
-        active.delete(run.id);
+        // [audit E-5] Only this drive's own entry: a drive that reopened the run after this one
+        // wrote its end has its entry under the same id, and must not lose it to this one's exit.
+        if (active.get(run.id)?.gate === gate) active.delete(run.id);
       });
 
     active.set(run.id, {
