@@ -560,8 +560,24 @@ export function createRunService(deps: RunServiceDeps): RunService {
     } = {},
   ): Promise<Envelope> {
     const { record = true, signal, workspace } = options;
-    // An agent's reads leave room for its retrieved chunks and memory (round 5 §2.2, §2.4).
-    const budgetTokens = to.kind === 'agent' ? readsBudgetFor(to) : Number.MAX_SAFE_INTEGER;
+    /*
+     * An agent's reads leave room for its retrieved chunks and memory (round 5 §2.2, §2.4).
+     * [audit E-9] And that share is for all its reads together (FR-EXE-007), so it is split evenly
+     * over the nodes that feed it — data edges, and a loop edge's critique. Each envelope was built
+     * to the whole share, so an agent with three inputs read three times its budget and had no
+     * room left for retrieved chunks or memory.
+     */
+    const feeders = new Set(
+      run.snapshot.edges
+        .filter(
+          (edge) => edge.to.nodeId === to.id && (edge.kind === 'data' || edge.kind === 'loop'),
+        )
+        .map((edge) => edge.from.nodeId),
+    ).size;
+    const budgetTokens =
+      to.kind === 'agent'
+        ? Math.max(1, Math.floor(readsBudgetFor(to) / Math.max(1, feeders)))
+        : Number.MAX_SAFE_INTEGER;
     const outputTypes =
       to.kind === 'agent' || to.kind === 'model' ? to.config.outputTypes : ['text' as const];
 
