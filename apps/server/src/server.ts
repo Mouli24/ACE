@@ -738,6 +738,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
             ...(ctx.nodeId === undefined || ctx.projectDir === undefined
               ? {}
               : { nodeId: ctx.nodeId, session: agentSessionFor(ctx.runId, ctx.projectDir) }),
+            ...(ctx.allowedDomains === undefined ? {} : { allowedDomains: ctx.allowedDomains }),
             logger: toolLogger,
             signal: ctx.signal,
           }),

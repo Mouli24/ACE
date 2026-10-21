@@ -140,6 +140,21 @@ export const SANDBOX_LANGUAGES = ['javascript', 'python', 'shell'] as const;
 export const SandboxLanguageSchema = z.enum(SANDBOX_LANGUAGES);
 export type SandboxLanguage = z.infer<typeof SandboxLanguageSchema>;
 
+/**
+ * Whether `host` (a lower-cased URL hostname) is on an agent's `tools.allowedDomains`: equal to an
+ * entry, or a subdomain of one (`api.example.com` matches `example.com`); an empty list allows
+ * nothing (FR-GRD-007). Defined once here because two packages judge hosts with it — the
+ * `domain_allowlist` guardrail on a call's URL, and `http_request`/`web_fetch` on every redirect
+ * they follow [audit S-2] — and the two must never disagree.
+ */
+export function hostIsAllowed(host: string, allowedDomains: readonly string[]): boolean {
+  return allowedDomains.some((raw) => {
+    const domain = raw.trim().toLowerCase();
+    if (domain.length === 0) return false;
+    return host === domain || host.endsWith(`.${domain}`);
+  });
+}
+
 /* -------------------------------------------------------------------------- */
 /* Tool calls (§2.2, FR-TOOL-009)                                              */
 /* -------------------------------------------------------------------------- */

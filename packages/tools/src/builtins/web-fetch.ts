@@ -2,9 +2,10 @@ import { z } from 'zod';
 
 import { type ToolDefinition } from '@ace/contracts';
 
-import { ToolError } from '../errors.js';
+import { ToolError, isToolError } from '../errors.js';
 import { type RegisteredTool } from '../registry.js';
 import { type ToolContext } from '../tool.js';
+import { guardedFetch, readCappedText } from './guarded-fetch.js';
 
 /**
  * `web_fetch { url } → { title, text }` (§2.2, FR-TOOL-005). Fetches a page and returns its readable
@@ -16,9 +17,19 @@ import { type ToolContext } from '../tool.js';
  * entities that matter and collapse whitespace. It is enough to hand a model the words on a page,
  * which is what the tool is for; a heavier parser (unpdf/mammoth/readability proper) arrives with
  * document ingestion in Round 5 (§9).
+ *
+ * Redirects are followed by `guardedFetch`, each hop re-checked against the agent's allow-list and
+ * kept off private addresses, and the body is read to {@link WEB_FETCH_BODY_CAP_BYTES} at most
+ * [audit S-2].
  */
 
 export const WEB_FETCH_TEXT_CAP = 100_000;
+
+/**
+ * The most of a page's raw body read before extraction (5 MB) [audit S-2]: room for a heavy page's
+ * markup around its text, never a whole multi-gigabyte response held in memory.
+ */
+export const WEB_FETCH_BODY_CAP_BYTES = 5 * 1024 * 1024;
 
 const FetchArgs = z.strictObject({ url: z.string().url() });
 
@@ -103,12 +114,14 @@ export function createWebFetchTool(options: { timeoutMs?: number } = {}): Regist
 
       let response: Response;
       try {
-        response = await fetch(parsed.data.url, {
-          headers: { Accept: 'text/html,text/plain' },
-          redirect: 'follow',
-          signal: timeoutSignal(context, timeoutMs),
-        });
+        response = await guardedFetch(
+          'web_fetch',
+          parsed.data.url,
+          { headers: { Accept: 'text/html,text/plain' }, signal: timeoutSignal(context, timeoutMs) },
+          context,
+        );
       } catch (error) {
+        if (isToolError(error)) throw error;
         const aborted = (error as { name?: string }).name === 'TimeoutError';
         throw new ToolError(
           aborted ? 'timeout' : 'failed',
@@ -118,7 +131,7 @@ export function createWebFetchTool(options: { timeoutMs?: number } = {}): Regist
         );
       }
 
-      const raw = await response.text();
+      const raw = await readCappedText(response, WEB_FETCH_BODY_CAP_BYTES);
       const { title, text } = extractReadable(raw);
       return { title, text: text.slice(0, WEB_FETCH_TEXT_CAP) };
     },

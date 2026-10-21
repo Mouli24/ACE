@@ -2,19 +2,21 @@ import { z } from 'zod';
 
 import { type ToolDefinition } from '@ace/contracts';
 
-import { ToolError } from '../errors.js';
+import { ToolError, isToolError } from '../errors.js';
 import { type RegisteredTool } from '../registry.js';
 import { type ToolContext } from '../tool.js';
+import { guardedFetch, readCappedText } from './guarded-fetch.js';
 
 /**
  * `http_request { method, url, headers?, body? } → { status, headers, body }` (§2.2, FR-TOOL-006).
  *
- * The tool does the call; it does **not** decide whether the host is allowed — that is the tool
- * guardrail point's `domain_allowlist` (§2.2), which runs in the executor against
- * `AgentConfig.tools.allowedDomains` before this ever runs. So the only limits baked in here are the
- * ones that protect the engine regardless of policy: a scheme that must be http/https (no `file:`),
- * a fetch timeout, and a 1 MB cap on the body it reads back (a reply larger than that is truncated,
- * not loaded whole).
+ * The tool does the call; it does **not** decide whether the host it is asked for is allowed — that
+ * is the tool guardrail point's `domain_allowlist` (§2.2), which runs in the executor against
+ * `AgentConfig.tools.allowedDomains` before this ever runs. What happens *after* that check is the
+ * tool's: every redirect is re-checked against the same list and no hop may reach a private address
+ * (`guardedFetch`, [audit S-2]). The other limits protect the engine regardless of policy: a scheme
+ * that must be http/https (no `file:`), a fetch timeout, and a 1 MB cap on the body it reads back (a
+ * reply larger than that is truncated, not loaded whole).
  */
 
 export const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] as const;
@@ -57,27 +59,6 @@ export const HTTP_REQUEST_DEFINITION: ToolDefinition = {
   source: 'builtin',
 };
 
-/** Reads at most `maxBytes` of a response body as text, then stops pulling from the stream. */
-async function readCappedText(response: Response, maxBytes: number): Promise<string> {
-  if (response.body === null) return '';
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let text = '';
-  let read = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    read += value.byteLength;
-    text += decoder.decode(value, { stream: true });
-    if (read >= maxBytes) {
-      await reader.cancel();
-      break;
-    }
-  }
-  text += decoder.decode();
-  return text.length > maxBytes ? text.slice(0, maxBytes) : text;
-}
-
 function timeoutSignal(context: ToolContext, timeoutMs: number): AbortSignal {
   const timeout = AbortSignal.timeout(timeoutMs);
   return context.signal ? AbortSignal.any([context.signal, timeout]) : timeout;
@@ -106,14 +87,19 @@ export function createHttpRequestTool(options: { timeoutMs?: number } = {}): Reg
 
       let response: Response;
       try {
-        response = await fetch(url, {
-          method,
-          headers,
-          body: method === 'GET' || method === 'HEAD' ? undefined : body,
-          redirect: 'follow',
-          signal: timeoutSignal(context, timeoutMs),
-        });
+        response = await guardedFetch(
+          'http_request',
+          url,
+          {
+            method,
+            ...(headers === undefined ? {} : { headers }),
+            ...(method === 'GET' || method === 'HEAD' || body === undefined ? {} : { body }),
+            signal: timeoutSignal(context, timeoutMs),
+          },
+          context,
+        );
       } catch (error) {
+        if (isToolError(error)) throw error;
         const aborted = (error as { name?: string }).name === 'TimeoutError';
         throw new ToolError(
           aborted ? 'timeout' : 'failed',

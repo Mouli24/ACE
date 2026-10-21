@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { startHttpServer, makeContext } from '../__tests__/helpers.js';
-import { WEB_FETCH_TEXT_CAP, createWebFetchTool, extractReadable } from './web-fetch.js';
+import { WEB_FETCH_BODY_CAP_BYTES, WEB_FETCH_TEXT_CAP, createWebFetchTool, extractReadable } from './web-fetch.js';
 
-const context = makeContext();
+// The test servers listen on 127.0.0.1, which only an IP entry on the allow-list reaches [audit S-2].
+const context = makeContext({ allowedDomains: ['127.0.0.1'] });
 let close: (() => Promise<void>) | undefined;
 afterEach(async () => {
   await close?.();
@@ -46,6 +47,46 @@ describe('TC-TOOL-005 web_fetch', () => {
     close = server.close;
     const result = (await tool.implementation({ url: server.url }, context)) as { text: string };
     expect(result.text.length).toBeLessThanOrEqual(WEB_FETCH_TEXT_CAP);
+  });
+
+  it('stops reading an endless body at the cap instead of holding it all [audit S-2]', async () => {
+    let written = 0;
+    const server = await startHttpServer((_req, res) => {
+      const chunk = `<p>${'b'.repeat(64 * 1024)}</p>`;
+      const pump = (): void => {
+        // Writes until the reader hangs up; a reader that never stops would see no end.
+        while (!res.destroyed && written < WEB_FETCH_BODY_CAP_BYTES * 4) {
+          written += chunk.length;
+          if (!res.write(chunk)) {
+            res.once('drain', pump);
+            return;
+          }
+        }
+        res.end();
+      };
+      pump();
+    });
+    close = server.close;
+
+    const result = (await tool.implementation({ url: server.url }, context)) as { text: string };
+    expect(result.text.length).toBeLessThanOrEqual(WEB_FETCH_TEXT_CAP);
+    expect(written).toBeLessThan(WEB_FETCH_BODY_CAP_BYTES * 4);
+  });
+
+  it('follows a redirect on the allow-list and refuses one off it [audit S-2]', async () => {
+    const page = await startHttpServer((_req, res) => res.end('<head><title>Moved</title></head><p>arrived</p>'));
+    const hop = await startHttpServer((req, res) => {
+      res.writeHead(302, { location: req.url === '/off' ? 'http://example.org/' : page.url });
+      res.end();
+    });
+    close = async () => {
+      await hop.close();
+      await page.close();
+    };
+
+    const result = (await tool.implementation({ url: hop.url }, context)) as { title: string; text: string };
+    expect(result).toMatchObject({ title: 'Moved', text: 'arrived' });
+    await expect(tool.implementation({ url: `${hop.url}/off` }, context)).rejects.toMatchObject({ kind: 'denied' });
   });
 
   it('decodes numeric HTML entities', () => {

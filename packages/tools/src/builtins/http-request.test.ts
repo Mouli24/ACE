@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { startHttpServer, makeContext } from '../__tests__/helpers.js';
 import { HTTP_BODY_CAP_BYTES, HTTP_REQUEST_DEFINITION, createHttpRequestTool } from './http-request.js';
 
-const context = makeContext();
+// The test servers listen on 127.0.0.1, which only an IP entry on the allow-list reaches [audit S-2].
+const context = makeContext({ allowedDomains: ['127.0.0.1'] });
 let close: (() => Promise<void>) | undefined;
 afterEach(async () => {
   await close?.();
@@ -69,6 +70,40 @@ describe('TC-TOOL-007 http_request', () => {
     await expect(tool.implementation({ method: 'GET', url: 'http://127.0.0.1:1' }, context)).rejects.toMatchObject({
       kind: 'failed',
     });
+  });
+
+  it('does not follow a redirect off the allow-list: denied, and the target is never contacted [audit S-2]', async () => {
+    let reached = false;
+    const target = await startHttpServer((_req, res) => {
+      reached = true;
+      res.end('internal');
+    });
+    const start = await startHttpServer((_req, res) => {
+      res.writeHead(302, { location: target.url.replace('127.0.0.1', 'localhost') });
+      res.end();
+    });
+    close = async () => {
+      await start.close();
+      await target.close();
+    };
+
+    await expect(tool.implementation({ method: 'GET', url: start.url }, context)).rejects.toMatchObject({
+      kind: 'denied',
+    });
+    expect(reached).toBe(false);
+  });
+
+  it('refuses a loopback URL unless the allow-list names the address itself [audit S-2]', async () => {
+    const server = await startHttpServer((_req, res) => res.end('internal'));
+    close = server.close;
+    const unlisted = makeContext({ allowedDomains: ['example.com'] });
+    try {
+      await expect(tool.implementation({ method: 'GET', url: server.url }, unlisted)).rejects.toMatchObject({
+        kind: 'denied',
+      });
+    } finally {
+      unlisted.cleanup();
+    }
   });
 
   it('reports a timeout when the server is too slow', async () => {
