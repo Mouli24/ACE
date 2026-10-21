@@ -23,12 +23,21 @@ export interface MarkdownProps {
 
 const SAFE_LINK = /^(https?:|mailto:)/i;
 
+/**
+ * A line longer than this is shown as typed, with no inline marks [audit S-10]: no answer writes
+ * 8,000 characters without a line break, and parsing marks across one is all cost and no reading.
+ */
+const INLINE_MAX_CHARS = 8_000;
+
 /** Split inline text into React nodes: `**bold**`, `*italic*`/`_italic_`, `` `code` `` and links. */
 function renderInline(text: string, keyPrefix: string): ReactNode[] {
+  if (text.length > INLINE_MAX_CHARS) return [text];
   const nodes: ReactNode[] = [];
-  // One pass, longest-delimiter-first, so `**` is not eaten by `*`.
+  // One pass, longest-delimiter-first, so `**` is not eaten by `*`. [audit S-10]: a link's text and
+  // its URL stop at the next `[` and are bounded (500 / 2,000), so an unclosed `[` or `](` scans to
+  // the next `[` at most, never to the end of the line — 20,000 `[a](` were 1.3 s a render.
   const pattern =
-    /(\*\*([^*]+)\*\*)|(`([^`]+)`)|(\*([^*]+)\*)|(_([^_]+)_)|(\[([^\]]+)\]\(([^)\s]+)\))/g;
+    /(\*\*([^*]+)\*\*)|(`([^`]+)`)|(\*([^*]+)\*)|(_([^_]+)_)|(\[([^[\]]{1,500})\]\(([^)[\s]{1,2000})\))/g;
   let last = 0;
   let match: RegExpExecArray | null;
   let i = 0;
