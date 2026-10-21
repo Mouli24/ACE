@@ -79,7 +79,10 @@ describe('Home hero (D337)', () => {
       within(surface).getByRole('heading', { level: 1, name: 'What would you like to make?' }),
     ).toBeInTheDocument();
     expect(
-      within(surface).getByText('Describe it once — Ace assembles the team and gets to work.'),
+      // audit L-11: the subtitle says what the three cards do (there is no prompt box)
+      within(surface).getByText(
+        'Sketch it on the Canvas, build it in Forge, or give a team a goal.',
+      ),
     ).toBeInTheDocument();
     expect(
       within(surface).getByRole('button', { name: 'Canvas Sketch, plan and arrange visually' }),
@@ -133,6 +136,18 @@ describe('Home hero (D337)', () => {
     await waitFor(() => expect(getSocket()?.status).toBe('open'));
     await waitFor(() => expect(queryClient.getQueryData(queryKeys.providers())).toBeDefined());
     expect(within(surface).queryByText('Agents ready')).toBeNull();
+    // a provider exists, so there is no "add one" nudge either
+    expect(within(surface).queryByTestId('home-no-provider')).toBeNull();
+  });
+
+  it('audit U-16: with no provider at all, the pill says so and leads to Providers', async () => {
+    const user = userEvent.setup();
+    const { router } = renderApp('/projects');
+    const nudge = await within(await home()).findByTestId('home-no-provider');
+    expect(nudge).toHaveAccessibleName('No model provider yet — Add one');
+    expect(nudge).toHaveAttribute('href', '/providers');
+    await user.click(nudge);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/providers'));
   });
 });
 

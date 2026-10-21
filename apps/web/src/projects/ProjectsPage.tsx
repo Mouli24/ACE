@@ -1,7 +1,7 @@
 import type { Project } from '@ace/contracts';
 import { Icons, cn } from '@ace/ui';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 import { QueryError } from '../app/QueryError';
 import { workflowPath, type WorkflowMode } from '../forge/mode';
@@ -55,13 +55,21 @@ const ENTRIES: ReadonlyArray<{
 /** One muted 13px line: Home's empty and loading states (spec §8). */
 const MUTED_LINE = 'text-center text-[13px] text-[var(--muted)]';
 
-/** "Agents ready" (D337): the engine socket is open and at least one provider is CONNECTED. */
-function useAgentsReady(): boolean {
+/** The hero's status pill (D337), above the title. */
+const PILL =
+  'relative mb-[22px] flex h-[26px] shrink-0 items-center gap-[8px] whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--soft)] pl-[8px] pr-[12px] text-[11px] text-[var(--muted)]';
+
+/**
+ * The hero's pill: "Agents ready" (D337) once the engine socket is open and at least one provider
+ * is CONNECTED — or, audit U-16, "No model provider yet" while there is none at all (the wizard
+ * may have been skipped), leading to Providers. Nothing while either is still unknown.
+ */
+function useAgentsPill(): 'ready' | 'no-provider' | undefined {
   const socket = useSocketStatus();
   const providers = useProviders();
-  return (
-    socket === 'open' && (providers.data ?? []).some((provider) => provider.status === 'CONNECTED')
-  );
+  if (providers.data?.length === 0) return 'no-provider';
+  const connected = (providers.data ?? []).some((provider) => provider.status === 'CONNECTED');
+  return socket === 'open' && connected ? 'ready' : undefined;
 }
 
 /**
@@ -72,7 +80,7 @@ function useAgentsReady(): boolean {
 export function ProjectsPage() {
   const projects = useProjects();
   const summaries = useProjectSummaries(projects.data);
-  const ready = useAgentsReady();
+  const pill = useAgentsPill();
   const navigate = useNavigate();
   const { mutate: openProject } = useOpenProject();
   const [filter, setFilter] = useState<'all' | 'live'>('all');
@@ -154,8 +162,8 @@ export function ProjectsPage() {
             aria-hidden
             className="pointer-events-none absolute left-1/2 top-[44%] h-[360px] w-[720px] max-w-full bg-[radial-gradient(closest-side,var(--glow),rgba(239,107,63,0)_100%)] [transform:translate(-50%,-50%)]"
           />
-          {ready && (
-            <div className="relative mb-[22px] flex h-[26px] shrink-0 items-center gap-[8px] whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--soft)] pl-[8px] pr-[12px] text-[11px] text-[var(--muted)]">
+          {pill === 'ready' && (
+            <div className={PILL}>
               <span
                 aria-hidden
                 className="h-[8px] w-[8px] rounded-full bg-[#ef6b3f] shadow-[0_0_0_3px_rgba(239,107,63,0.18)]"
@@ -163,11 +171,31 @@ export function ProjectsPage() {
               Agents ready
             </div>
           )}
+          {pill === 'no-provider' && (
+            <Link
+              to="/providers"
+              data-testid="home-no-provider"
+              className={cn(
+                PILL,
+                'no-underline outline-none hover:border-[var(--iconLine)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]',
+              )}
+            >
+              <span
+                aria-hidden
+                className="h-[8px] w-[8px] rounded-full border border-[var(--muted)]"
+              />
+              No model provider yet —{' '}
+              <span className="flex items-center gap-[3px] font-semibold text-[var(--accent-ink)]">
+                Add one
+                <Icons.ArrowRight aria-hidden size={11} />
+              </span>
+            </Link>
+          )}
           <h1 className="relative mb-[12px] text-balance text-center text-[length:clamp(32px,5vw,48px)] font-semibold leading-[1.05] tracking-[-0.04em]">
             What would you like to make?
           </h1>
           <p className="relative mb-[34px] text-pretty text-center text-[14px] text-[var(--muted)]">
-            Describe it once — Ace assembles the team and gets to work.
+            Sketch it on the Canvas, build it in Forge, or give a team a goal.
           </p>
           <div className="relative grid w-full max-w-[860px] grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-[16px]">
             {ENTRIES.map((entry) => (
