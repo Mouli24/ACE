@@ -9,7 +9,7 @@ import {
 } from '@ace/contracts';
 import { cn, Icons, PartRenderer } from '@ace/ui';
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 import { api } from '../app/api';
 import { useCheckpoint } from '../forge/changes/hooks';
@@ -25,6 +25,7 @@ import { clockTime } from '../theme/format';
 import { Avatar } from '../theme/primitives';
 import { ChangesCardSlot } from './ChangesCardSlot';
 import { ChatActivity } from './ChatActivity';
+import { useFollowTail } from './follow-tail';
 import {
   CHAT_NOTE_CLASS,
   CHAT_NOTE_HEAD_CLASS,
@@ -372,7 +373,7 @@ export function ChatConversation({
     openInForge !== undefined && projectId !== undefined
       ? { nodeId: node.id, projectId, open: openInForge }
       : undefined;
-  const scroller = useRef<HTMLDivElement>(null);
+  const scroller = useFollowTail<HTMLDivElement>();
   const run = useNodeOverlay(node.id);
   const running = WORKING.has(run.state);
   const runText =
@@ -511,11 +512,14 @@ export function ChatConversation({
     );
   };
 
-  // Follow the tail as turns arrive, the reply streams, the run works and typing starts or stops.
+  // Follow the tail as turns arrive, the reply streams, the run works and typing starts or stops —
+  // [audit W-13] while the reader is at the tail; another node or thread opens at its tail.
+  const follow = scroller.follow;
+  useEffect(() => follow(true), [follow, node.id, convo.threadId]);
   useEffect(() => {
-    const element = scroller.current;
-    if (element) element.scrollTop = element.scrollHeight;
+    follow();
   }, [
+    follow,
     convo.messages.length,
     convo.streamingText,
     convo.refusal,
@@ -545,7 +549,8 @@ export function ChatConversation({
       data-node-id={node.id}
     >
       <div
-        ref={scroller}
+        ref={scroller.ref}
+        onScroll={scroller.onScroll}
         className="flex min-h-0 flex-1 flex-col gap-[20px] overflow-y-auto px-[14px] py-[16px]"
       >
         {/* [audit W-11] a conversation that could not be read is not an empty one */}
