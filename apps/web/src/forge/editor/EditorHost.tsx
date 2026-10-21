@@ -120,7 +120,7 @@ export function EditorHost({ projectId, path, initial, touch }: EditorHostProps)
       contextMenuGroupId: 'navigation',
       contextMenuOrder: 0,
       run: () => {
-        askAgentAboutSelection();
+        askAgentAboutSelection(shown.current?.projectId);
       },
     });
     return () => {

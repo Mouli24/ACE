@@ -6,7 +6,8 @@ import { usePanelsStore } from '../../app/stores/panels';
 import { chipPart, useComposerChips, type ChipSource } from '../../chat/composer-chips';
 import { sendToNode } from '../../chat/useChat';
 import { isChatNodeOf } from '../../chat/workflow-target';
-import { askAgentAbout } from '../ask-agent';
+import { askAgentAbout, saveForAgent, unsavedNote } from '../ask-agent';
+import { saveFile } from '../editor/actions';
 import { languageOf } from '../editor/languages';
 import { getModel } from '../editor/models';
 
@@ -15,7 +16,9 @@ import { getModel } from '../editor/models';
  * the merge, from Run checks — to the chat's current node: what is wrong and where, with the
  * file's lines around it as a `code` part. With no node selected it waits in the composer instead,
  * for the person to pick one — and so it does when the chat's node is not one of Forge's workflow
- * (fix F-I2): a target left over from another workflow or project is never sent to.
+ * (fix F-I2): a target left over from another workflow or project is never sent to. An unsaved
+ * buffer is saved first, as the agent fixes the file on disk ([audit F-1]); when that save fails
+ * or meets a conflict, the request waits in the composer too, with a line saying so.
  */
 
 /** Lines either side of the problem's line that travel with it. */
@@ -69,6 +72,9 @@ export async function fixWithAgent(input: {
   queryClient: QueryClient;
 }): Promise<'sent' | 'prefilled'> {
   const { projectId, problem } = input;
+  const saved = await saveForAgent(projectId, problem.path, (owner, path) =>
+    saveFile(owner, path, input.queryClient),
+  );
   const text = await textOf(projectId, problem.path);
   const language = languageOf(problem.path);
   const context = text === undefined ? undefined : problemContext(text, problem.line);
@@ -79,8 +85,14 @@ export async function fixWithAgent(input: {
   const message = fixMessage(problem);
 
   const nodeId = usePanelsStore.getState().chatNodeId;
-  if (nodeId === undefined || !isChatNodeOf(input.queryClient, input.workflowId, nodeId)) {
-    useComposerChips.getState().prefill(message);
+  if (
+    !saved ||
+    nodeId === undefined ||
+    !isChatNodeOf(input.queryClient, input.workflowId, nodeId)
+  ) {
+    useComposerChips
+      .getState()
+      .prefill(saved ? message : `${message}\n${unsavedNote(problem.path)}`);
     askAgentAbout(chip);
     return 'prefilled';
   }

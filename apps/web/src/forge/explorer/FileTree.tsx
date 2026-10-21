@@ -612,7 +612,7 @@ export function FileTree({
                   <>
                     <ContextMenuSeparator />
                     {/* D302: the file, by its path, as a chip in the chat composer. */}
-                    <ContextMenuItem onSelect={() => askAgentAboutFile(target.path)}>
+                    <ContextMenuItem onSelect={() => askAgentAboutFile(target.path, projectId)}>
                       Ask Agent About This File
                     </ContextMenuItem>
                   </>

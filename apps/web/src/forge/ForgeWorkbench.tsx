@@ -5,7 +5,7 @@ import { useInRouterContext } from 'react-router-dom';
 import { SHORTCUTS, useShortcuts } from '../app/shortcuts';
 import { useLayoutStore } from '../app/stores/layout';
 import { WorkflowUndoChoice } from '../runs/UndoChoice';
-import { askAgentAboutFile, askAgentAboutSelection } from './ask-agent';
+import { askAgentAboutFile, askAgentAboutSelection, setBufferSaver } from './ask-agent';
 import { useForgeAttribution } from './attribution';
 import { saveAll, saveFile } from './editor/actions';
 import { useCloseRequest } from './editor/CloseDialogs';
@@ -53,6 +53,11 @@ export function ForgeWorkbench({
   useProjectTypes(projectId);
   // Leaving the project stops following its Run checks (fix Minor 6).
   useEffect(() => () => stopFollowingChecks(projectId), [projectId]);
+  // [audit F-1] Ask agent saves an unsaved buffer before the agent hears of it, through Save.
+  useEffect(
+    () => setBufferSaver((owner, path) => saveFile(owner, path, queryClient)),
+    [queryClient],
+  );
   const activePath = (): string | undefined =>
     useEditorStore.getState().projects[projectId]?.active;
   useShortcuts([
@@ -79,9 +84,9 @@ export function ForgeWorkbench({
       // D302: the editor's selection, or — with no editor to ask — the active file.
       SHORTCUTS.askAgent,
       () => {
-        if (askAgentAboutSelection()) return;
+        if (askAgentAboutSelection(projectId)) return;
         const active = activePath();
-        if (active !== undefined) askAgentAboutFile(active);
+        if (active !== undefined) askAgentAboutFile(active, projectId);
       },
     ],
     [
