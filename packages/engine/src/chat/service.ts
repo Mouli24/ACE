@@ -5,6 +5,7 @@ import {
   DEFAULT_MAX_TOOL_CALLS,
   agentWorkspaceOf,
   blockedChatReply,
+  estimateTokens,
   isAgentic,
   isCliProviderType,
   type WorkspaceAccess,
@@ -52,6 +53,7 @@ import type { Logger } from '../logging/index.js';
 import type {
   CheckpointRecorder,
   CheckpointRecording,
+  GenerateRequest,
   ModelRouter,
   ProviderAdapter,
   Repository,
@@ -770,6 +772,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     let text = '';
     let tokensIn = 0;
     let tokensOut = 0;
+    /** D387: part of the tokens was estimated, because a call reported no usage. */
+    let estimated = false;
     let answeredBy: string | undefined;
     /** What the provider itself said the call cost — a CLI's own figure (D263), as a run uses it. */
     let reportedCostUsd: number | undefined;
@@ -861,22 +865,38 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       pricedProvider = providerRow ?? undefined;
 
       /*
+       * D386: an agentic node on a coding-agent CLI, in a project folder, works at its own access
+       * level, as its runs do (D383) — never under the provider's preset, which may edit. An Off
+       * node sends nothing and keeps the preset.
+       */
+      const cliAccess: GenerateRequest['cliAccess'] =
+        cli && workspace !== undefined && node.kind === 'agent' && isAgentic(node.config)
+          ? {
+              access: agentWorkspaceOf(node.config).access,
+              allowedCommands: [...agentWorkspaceOf(node.config).allowedCommands],
+            }
+          : undefined;
+
+      /*
        * What the turn may do in the project folder, for the rules it is told: an API model by the
-       * tools on offer, a CLI by its provider's preset. A turn that can write is told to do the work
-       * in the files, so the person finds it in Forge rather than pasted into the reply.
+       * tools on offer, a CLI by the node's own level (D386) or else its provider's preset. A turn
+       * that can write is told to do the work in the files, so the person finds it in Forge rather
+       * than pasted into the reply.
        */
       const folderAccess: WorkspaceAccess | undefined =
         workspace === undefined
           ? undefined
-          : cli
-            ? readOnlyNode || (providerRow?.cliPermission ?? DEFAULT_CLI_PERMISSION) === 'read_only'
-              ? 'read_only'
-              : 'edit_files'
-            : !toolsOffered
-              ? undefined
-              : offered.some((tool) => PROJECT_WRITING_TOOLS.includes(tool.definition.name))
-                ? 'edit_files'
-                : 'read_only';
+          : cliAccess !== undefined
+            ? cliAccess.access
+            : cli
+              ? (providerRow?.cliPermission ?? DEFAULT_CLI_PERMISSION) === 'read_only'
+                ? 'read_only'
+                : 'edit_files'
+              : !toolsOffered
+                ? undefined
+                : offered.some((tool) => PROJECT_WRITING_TOOLS.includes(tool.definition.name))
+                  ? 'edit_files'
+                  : 'read_only';
 
       const prompt = buildChatPrompt({
         conversationId: nextId(),
@@ -912,12 +932,15 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
        * stops here, before any model call or tool runs, unless the person chose Run without undo.
        */
       if (checkpointFailure !== undefined) {
-        // A writing turn: a write tool on offer, a node set up to write (as a run judges it), or
-        // a CLI whose preset may edit.
+        // A writing turn: a CLI node at its own level (D386) unless that is Read only; otherwise a
+        // write tool on offer, a node set up to write (as a run judges it), or a CLI whose preset
+        // may edit.
         const writes =
-          offered.some((tool) => PROJECT_WRITING_TOOLS.includes(tool.definition.name)) ||
-          nodeWrites(node, () => providerRow ?? undefined) ||
-          (cli && (providerRow?.cliPermission ?? DEFAULT_CLI_PERMISSION) !== 'read_only');
+          cliAccess !== undefined
+            ? cliAccess.access !== 'read_only'
+            : offered.some((tool) => PROJECT_WRITING_TOOLS.includes(tool.definition.name)) ||
+              nodeWrites(node, () => providerRow ?? undefined) ||
+              (cli && (providerRow?.cliPermission ?? DEFAULT_CLI_PERMISSION) !== 'read_only');
         logger.warn(
           {
             subsystem: 'chat',
@@ -1002,6 +1025,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
               };
             };
 
+      const { reasoningEffort } = node.config.execution;
+
       /** One model call, inside this provider's concurrency gate (FR-PRV-009). */
       const turn = (options: {
         tools?: ToolDefinition[];
@@ -1022,9 +1047,15 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
               outputTypes: ['text'],
               temperature: node.config.execution.temperature,
               maxTokens: node.config.execution.maxTokens,
+              // D389: only when the node sets one; unset, the request is what it always was.
+              ...(reasoningEffort === undefined || reasoningEffort === null
+                ? {}
+                : { reasoningEffort }),
               turnId: replyId,
               // D302: a CLI works in the project under its preset; without a folder it is read-only.
               ...(workspace === undefined ? {} : { workingDir: workspace }),
+              // D386: …or, for an agentic node, at the node's own level.
+              ...(cliAccess === undefined ? {} : { cliAccess }),
               ...(options.tools === undefined ? {} : { tools: options.tools }),
               ...(options.toolResults === undefined ? {} : { toolResults: options.toolResults }),
             },
@@ -1032,13 +1063,18 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
           );
 
           const requested: ChatToolRequest[] = [];
+          /** D387: this call's own words and whether it reported usage, for its estimate. */
+          let callText = '';
+          let callReported = false;
           for await (const chunk of stream as AsyncIterable<StreamChunk>) {
             // PG-1.6: an adapter that does not watch its signal is left at the first chunk after a stop.
             if (stopSignal.aborted) break;
             if (chunk.type === 'text') {
               text += chunk.delta;
+              callText += chunk.delta;
               tokens.push(chunk.delta);
             } else if (chunk.type === 'usage') {
+              callReported = true;
               // Summed: every call of a tool loop is its own billed call.
               tokensIn += chunk.tokensIn;
               tokensOut += chunk.tokensOut;
@@ -1061,8 +1097,20 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
               );
             }
           }
-          // PG-2.2: a turn over its cap makes no further call and runs no tool it asked for.
-          if (!stopSignal.aborted) checkBudget();
+          if (!stopSignal.aborted) {
+            /*
+             * D387: a call that ended with no usage chunk is estimated as a run's is (D313) —
+             * characters ÷ 4 on what it was sent (system and prompt) and on what it wrote — so the
+             * caps and the usage see it. A reported zero stays a reported zero.
+             */
+            if (!callReported) {
+              estimated = true;
+              tokensIn += estimateTokens(`${prompt.system}${prompt.text}`);
+              tokensOut += estimateTokens(callText);
+            }
+            // PG-2.2: a turn over its cap makes no further call and runs no tool it asked for.
+            checkBudget();
+          }
           return requested;
         });
 
@@ -1117,8 +1165,10 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
 
     // PG-1.4 (D359): the run's cost rule — local is $0, an unpriced remote model's cost is unknown.
     const priced = usageFor(tokensIn, tokensOut, pricing, pricedProvider);
-    const usage =
+    const reported =
       reportedCostUsd === undefined ? priced : withReportedCost(priced, reportedCostUsd);
+    // D387: marked as an estimate, as a run's is (D313); a reported usage keeps its shape.
+    const usage: Usage = estimated ? { ...reported, source: 'estimated' } : reported;
 
     if (failure !== undefined) {
       logger.warn(
