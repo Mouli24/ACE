@@ -66,6 +66,16 @@ describe('TC-PRV-001 every provider type can be added from the form', () => {
     await pickType(user, 'Ollama');
     expect(screen.getByLabelText('Base URL')).toHaveValue('http://127.0.0.1:11434');
   });
+
+  it('audit P-4 shows an example base URL and says /v1 is optional', async () => {
+    const user = userEvent.setup();
+    const dialog = await openAddDialog(user);
+    await pickType(user, PROVIDER_TYPE_LABEL.openai_compatible);
+
+    const field = within(dialog).getByLabelText('Base URL');
+    expect(field).toHaveAttribute('placeholder', 'http://localhost:1234/v1');
+    expect(field).toHaveAccessibleDescription(/with or without \/v1/);
+  });
 });
 
 describe('TC-PRV-002 the UI never shows a key, only whether one is set', () => {

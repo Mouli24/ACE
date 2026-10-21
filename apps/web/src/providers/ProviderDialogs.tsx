@@ -46,6 +46,13 @@ import {
 
 const concurrencyHint = `${PROVIDER_CONCURRENCY_MIN}–${PROVIDER_CONCURRENCY_MAX} calls in flight (FR-PRV-009)`;
 
+/** [audit P-4] An example address per type; the engine reads a URL ending in /v1 as the API root. */
+const BASE_URL_PLACEHOLDER: Partial<Record<ProviderType, string>> = {
+  ollama: DEFAULT_OLLAMA_BASE_URL,
+  openai_compatible: 'http://localhost:1234/v1',
+};
+const BASE_URL_HINT = 'The server’s address, with or without /v1 — http(s) only.';
+
 /* The theme's field vocabulary (D328): label over control, 7px apart; 11px muted help under it. */
 const FIELD = 'flex flex-col gap-[7px]';
 const HELP = 'text-[11px] leading-[1.45] text-[var(--muted)]';
@@ -247,8 +254,13 @@ export function AddProviderDialog({
                   className={MONO}
                   value={baseUrl}
                   onChange={(event) => setBaseUrl(event.target.value)}
+                  placeholder={BASE_URL_PLACEHOLDER[type]}
+                  aria-describedby="provider-base-url-hint"
                   required
                 />
+                <p id="provider-base-url-hint" className={HELP}>
+                  {BASE_URL_HINT}
+                </p>
               </div>
               <div className={FIELD}>
                 <Label htmlFor="provider-optional-key">API key (optional)</Label>
@@ -377,8 +389,13 @@ export function EditProviderDialog({
                 className={MONO}
                 value={baseUrl}
                 onChange={(event) => setBaseUrl(event.target.value)}
+                placeholder={BASE_URL_PLACEHOLDER[provider.type]}
+                aria-describedby="edit-provider-base-url-hint"
                 required
               />
+              <p id="edit-provider-base-url-hint" className={HELP}>
+                {BASE_URL_HINT}
+              </p>
             </div>
           )}
 
