@@ -1,5 +1,7 @@
 import {
   allowedRunActions,
+  CONTINUABLE_HALT_REASONS,
+  interruptedNodeRuns,
   zeroUsage,
   type DayTotals,
   type Envelope,
@@ -139,6 +141,13 @@ export interface RunControls {
   rerunNode(runId: Id, nodeId: Id): Promise<NodeRun>;
   /** FR-ERR-003 / FR-ERR-004. A new node run at attempt + 1 with identical inputs. */
   retryNodeRun(nodeRunId: Id, request: RetryRequest): Promise<NodeRun>;
+  /**
+   * D388. A run cut off — HALTED `stopped`, `shutdown` or `crash` — carries on: every node run the
+   * halt interrupted gets a retry (attempt + 1, the inputs it was delivered), what they feed runs
+   * after them, and nothing that finished runs again. One drive, one reopen. 409 `invalid_run_state`
+   * for any other run, 409 `nothing_to_continue` when nothing was cut off.
+   */
+  continueRun(runId: Id): Promise<Run>;
   /** FR-CTL-006. The run with `allowedActions` filled in. */
   get(runId: Id): Promise<Run>;
 }
@@ -568,7 +577,108 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
       });
       return retry;
     },
+
+    async continueRun(runId) {
+      const run = await load(runId);
+      // D388: only a run that was cut off carries on. A `failure` halt is a Retry of the node that
+      // failed, a `budget_exceeded` one would only halt again, and a run still going (an open Domain
+      // run included, D323/D360) already has a drive — a HALTED run never does.
+      if (!wasCutOff(run)) throw continueRefusal(run);
+
+      const rows = await deps.nodeRuns.listByRun(run.id);
+      const cut = onePerNode(interruptedNodeRuns(rows));
+      if (cut.length === 0) {
+        throw new HttpError(
+          'workflow',
+          'nothing_to_continue',
+          'Nothing in this run was cut off — retry a failed node or restart the run.',
+          { runId: run.id, status: run.status, haltReason: run.haltReason },
+        );
+      }
+
+      // FR-ERR-003 for each of them, exactly as `retryNodeRun`: attempt + 1, READY, the envelopes
+      // the cut-off attempt was delivered (never rebuilt), and nothing of its own yet.
+      const retries: NodeRun[] = [];
+      for (const interrupted of cut) {
+        retries.push(
+          await deps.nodeRuns.create({
+            id: nextId(),
+            runId: run.id,
+            nodeId: interrupted.nodeId,
+            iteration: interrupted.iteration,
+            attempt: interrupted.attempt + 1,
+            status: 'READY',
+            inputEnvelopes: asDelivered(interrupted.inputEnvelopes, run.snapshot.nodes),
+            usage: zeroUsage(),
+            verdicts: [],
+            toolCalls: [],
+            approvals: [],
+          }),
+        );
+      }
+
+      // FR-ERR-004 as `retryNodeRun({ withDownstream: true })`: a BLOCKED row after any of them goes
+      // back to IDLE, so the drive sees a node waiting for input. A node being continued keeps its
+      // own rows as they are — its retry above is what runs.
+      const continued = new Set(cut.map((row) => row.nodeId));
+      const downstream = new Set<Id>();
+      for (const nodeId of continued) {
+        for (const reached of downstreamOf(nodeId, run.snapshot.edges)) downstream.add(reached);
+      }
+      for (const row of rows) {
+        if (row.status !== 'BLOCKED' || continued.has(row.nodeId)) continue;
+        if (!downstream.has(row.nodeId)) continue;
+        const cleared = await deps.nodeRuns.update(row.id, { status: 'IDLE' });
+        await emitNodeState(run, cleared ?? row, 'IDLE');
+      }
+
+      // One reopen and one drive for all of them (D81): a reopen per node would make the run
+      // RUNNING after the first, and a second drive beside the first (D309).
+      const reopened = await reopen(run, { run, nodeRuns: retries, withDownstream: true });
+      deps.logger?.info(
+        { subsystem: 'runs', runId, nodeRunIds: retries.map((row) => row.id) },
+        'run continued',
+      );
+      return reopened;
+    },
   };
+
+  /** D388: HALTED by a stop, a shutdown or a crash — cut off, rather than failed or over budget. */
+  function wasCutOff(run: Run): boolean {
+    return (
+      run.status === 'HALTED' &&
+      (CONTINUABLE_HALT_REASONS as readonly string[]).includes(run.haltReason ?? '')
+    );
+  }
+
+  function continueRefusal(run: Run): HttpError {
+    const state =
+      run.status === 'HALTED' ? `halted (${run.haltReason ?? 'no reason'})` : `is ${run.status}`;
+    return new HttpError(
+      'workflow',
+      'invalid_run_state',
+      `A run that ${state} cannot be continued — only a run that was stopped, shut down or cut off by a crash can.`,
+      {
+        runId: run.id,
+        status: run.status,
+        ...(run.haltReason === undefined ? {} : { haltReason: run.haltReason }),
+        allowedActions: withAllowedActions(run).allowedActions,
+      },
+    );
+  }
+
+  /**
+   * The drive plans one node run per node, so a node cut off in two iterations — which a single
+   * drive never leaves — carries on from the later one rather than leaving a READY row nobody runs.
+   */
+  function onePerNode(rows: readonly NodeRun[]): NodeRun[] {
+    const byNode = new Map<Id, NodeRun>();
+    for (const row of rows) {
+      const seen = byNode.get(row.nodeId);
+      if (seen === undefined || row.iteration > seen.iteration) byNode.set(row.nodeId, row);
+    }
+    return [...byNode.values()];
+  }
 
   /**
    * D309: a re-run or a retry of a run that is still going would start a second drive beside the
@@ -627,14 +737,16 @@ export function createRunControls(deps: RunControlsDeps): RunControls {
   /**
    * D81: a retry or a re-run on a finished run puts it back to RUNNING on its own snapshot, and it
    * ends again with a second `run.completed`. `allowedActions` follows the status as it changes.
+   * Answers the run as re-opened, which is what a continue hands back (D388).
    */
-  async function reopen(run: Run, plan: PartialRunPlan): Promise<void> {
+  async function reopen(run: Run, plan: PartialRunPlan): Promise<Run> {
     const reopened =
       run.status === 'RUNNING' || run.status === 'PAUSED'
         ? run
         : await patchRun(run, { status: 'RUNNING' });
 
     await deps.drivePartialRun({ ...plan, run: reopened });
+    return reopened;
   }
 
   return controls;
