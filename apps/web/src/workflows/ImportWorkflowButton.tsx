@@ -90,6 +90,14 @@ export function useWorkflowImport(
             </span>
           ),
         });
+        // [audit S-1] An imported file's allowed commands are cleared and its access to run
+        // commands taken back; the engine says what it changed, and which domains to look over.
+        if (graph.notice !== undefined) {
+          toast.warning('Check this workflow before you run it', {
+            description: graph.notice.message,
+            duration: 12_000,
+          });
+        }
       },
       onError: (e) => onError(e.message),
     });

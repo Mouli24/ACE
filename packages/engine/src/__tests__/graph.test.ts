@@ -4,11 +4,13 @@ import { join } from 'node:path';
 
 import {
   ApiErrorSchema,
+  ImportWorkflowResponseSchema,
   ProjectSchema,
   WorkflowExportSchema,
   WorkflowGraphResponseSchema,
   WorkflowSchema,
   type GraphOpsResponse,
+  type Node,
   type ValidationIssue,
 } from '@ace/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -839,6 +841,80 @@ describe('TC-WF-007 Export has no secrets', () => {
 
     expect(raw).not.toMatch(/\bsk-[A-Za-z0-9_-]{20,}/);
     expect(raw).not.toContain('apiKey');
+  });
+});
+
+describe('[audit S-1] an imported workflow cannot run commands unasked', () => {
+  it('clears allowed commands, lowers command access to edit_files, keeps domains, and says so', async () => {
+    const { project, workflow } = await seed();
+    const runner = agentNode(workflow.id);
+    const reader = agentNode(workflow.id);
+    const exported = {
+      formatVersion: 1,
+      exportedAt: '2026-10-21T10:00:00.000Z',
+      name: 'From elsewhere',
+      nodes: [
+        {
+          ...runner,
+          config: {
+            ...runner.config,
+            tools: { enabled: [], maxToolCalls: 10, allowedDomains: ['example.com'] },
+            workspace: {
+              access: 'edit_commands',
+              maxTurns: 50,
+              allowedCommands: ['rm -rf', 'curl'],
+            },
+          },
+        },
+        {
+          ...reader,
+          config: {
+            ...reader.config,
+            workspace: { access: 'read_only', maxTurns: 50, allowedCommands: [] },
+          },
+        },
+      ],
+      edges: [],
+    };
+
+    const response = await post(h.app, `/api/v1/projects/${project.id}/workflows/import`, exported);
+    expect(response.status).toBe(201);
+    const imported = ImportWorkflowResponseSchema.parse(await body(response));
+
+    const [first, second] = imported.nodes as Extract<Node, { kind: 'agent' }>[];
+    expect(first?.config.workspace).toMatchObject({ access: 'edit_files', allowedCommands: [] });
+    expect(first?.config.tools.allowedDomains).toEqual(['example.com']);
+    // A node that could not run commands is left exactly as it was.
+    expect(second?.config.workspace).toMatchObject({ access: 'read_only', allowedCommands: [] });
+
+    expect(imported.notice).toMatchObject({
+      commandsCleared: [first?.id],
+      accessLowered: [first?.id],
+      allowedDomains: ['example.com'],
+    });
+    expect(imported.notice?.message).toContain('example.com');
+
+    // What is stored is what was answered: the next run seeds its allowlist from nothing.
+    const stored = await body<{ nodes: Extract<Node, { kind: 'agent' }>[] }>(
+      await get(h.app, `/api/v1/workflows/${imported.workflow.id}`),
+    );
+    expect(stored.nodes.find((node) => node.id === first?.id)?.config.workspace).toMatchObject({
+      access: 'edit_files',
+      allowedCommands: [],
+    });
+  });
+
+  it('answers no notice when there was nothing to change or look over', async () => {
+    const { project, workflow } = await seed();
+    const input = inputNode(workflow.id);
+    await graphOps(h.app, workflow.id, 0, [addNode(input)]);
+
+    const exported = await body(await get(h.app, `/api/v1/workflows/${workflow.id}/export`));
+    const imported = ImportWorkflowResponseSchema.parse(
+      await body(await post(h.app, `/api/v1/projects/${project.id}/workflows/import`, exported)),
+    );
+
+    expect(imported.notice).toBeUndefined();
   });
 });
 
