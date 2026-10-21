@@ -7,14 +7,15 @@ import { RunApprovalsDock } from '../runs/approvals/RunApprovalsDock';
 import { useSelectedRun } from '../runs/selected-run';
 import { useChangesStore } from './changes/changes-store';
 import { CompactForge } from './CompactForge';
-import { useProjectFiles } from './files/project-socket';
 import { ForgeWorkbench } from './ForgeWorkbench';
 import { useProcessEvents } from './terminal/process-events';
 
-/** The Forge route element (D299). The project's folder is watched while it is mounted; a phone browses only. */
+/**
+ * The Forge route element (D299); a phone browses only. The project's folder is watched, and its
+ * types loaded, by the workflow layout above it, in every mode ([audit F-6]).
+ */
 export function ForgePage() {
   const { projectId = '', workflowId } = useParams();
-  useProjectFiles(projectId);
   // D301: process frames reach their tabs while Forge is open; entering re-attaches each tab.
   useProcessEvents(projectId);
   // PG-3.5: the workflow's one selected run (PG-3.2) — its approvals are answered here too.

@@ -11,7 +11,6 @@ import { saveAll, saveFile } from './editor/actions';
 import { useCloseRequest } from './editor/CloseDialogs';
 import { EditorArea } from './editor/EditorArea';
 import { useEditorStore } from './editor/editor-store';
-import { useProjectTypes } from './editor/project-types';
 import { useEditorSync } from './editor/useEditorSync';
 import { ExplorerView } from './explorer/ExplorerView';
 import { FollowedNodeBar, useFollowedFiles } from './FollowedNode';
@@ -49,8 +48,7 @@ export function ForgeWorkbench({
   const followed = useFollowedFiles(workflowId, attribution);
   const routed = useInRouterContext();
   useEditorSync(projectId);
-  // D299 Phase 4: the project's sources for cross-file TypeScript, once Monaco has loaded.
-  useProjectTypes(projectId);
+  // D299 Phase 4's cross-file types load in the workflow layout, kept across modes ([audit F-6]).
   // Leaving the project stops following its Run checks (fix Minor 6).
   useEffect(() => () => stopFollowingChecks(projectId), [projectId]);
   // [audit F-1] Ask agent saves an unsaved buffer before the agent hears of it, through Save.

@@ -25,9 +25,15 @@ function refreshStatusSoon(queryClient: QueryClient, projectId: string): void {
   );
 }
 
+/** A `.gitignore` anywhere: what it ignores decides the file list and the folders' dimming. */
+const isGitignore = (path: string): boolean =>
+  path === '.gitignore' || path.endsWith('/.gitignore');
+
 /**
  * One `files.changed` burst into the query cache: the folder showing each path, the content of a
- * changed file, everything inside a created or deleted folder, and quick open's list.
+ * changed file, everything inside a created or deleted folder, and quick open's list — and, when a
+ * `.gitignore` changed, the list and every folder, as the list never goes stale by time ([audit
+ * F-6]).
  */
 export function applyFilesChanged(queryClient: QueryClient, payload: FilesChangedPayload): void {
   const { projectId } = payload;
@@ -37,6 +43,13 @@ export function applyFilesChanged(queryClient: QueryClient, payload: FilesChange
     return;
   }
   let listChanged = false;
+  if (payload.changes.some((change) => isGitignore(change.path))) {
+    listChanged = true;
+    void queryClient.invalidateQueries({
+      predicate: ({ queryKey }) =>
+        queryKey[0] === 'files' && queryKey[1] === projectId && queryKey[2] === 'folder',
+    });
+  }
   for (const change of payload.changes) {
     void queryClient.invalidateQueries({
       queryKey: fileKeys.folder(projectId, parentOf(change.path)),
@@ -67,14 +80,19 @@ export function applyFilesChanged(queryClient: QueryClient, payload: FilesChange
  * While mounted: hold the project's scope — the engine watches its folder meanwhile — and fold
  * each `files.changed` into the cache. Mounting also refreshes every file query of the project,
  * and so does a reconnect (`hello`): frames missed while away are never replayed, because they
- * are transient. The subscription is shared with the terminal (`useProjectScope`, D301).
+ * are transient. The subscription is shared with the terminal (`useProjectScope`, D301). The
+ * workflow layout holds it in every mode ([audit F-6]), so this runs once per project visit, and
+ * its refresh joins a fetch a query that just mounted has started rather than walking again.
  */
 export function useProjectFiles(projectId: string | undefined): void {
   const queryClient = useQueryClient();
   useProjectScope(projectId);
   useEffect(() => {
     if (!projectId) return;
-    void queryClient.invalidateQueries({ queryKey: fileKeys.all(projectId) });
+    void queryClient.invalidateQueries(
+      { queryKey: fileKeys.all(projectId) },
+      { cancelRefetch: false },
+    );
     const socket = getSocket();
     if (!socket) return;
     const offChanged = socket.on('files.changed', (frame) => {

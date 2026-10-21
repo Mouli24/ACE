@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { useLayoutStore } from '../app/stores/layout';
 import { mockVersion } from '../mocks/files';
 import { useRunStore } from '../runs/run-store';
-import { db, installMockServer, renderApp } from '../test/app';
+import { db, installMockServer, renderApp, server } from '../test/app';
 import { FakeTerminal } from '../test/FakeTerminal';
 import { useComposerChips } from '../chat/composer-chips';
 import { setSelectionSource } from './ask-agent';
@@ -154,6 +154,31 @@ describe('D334 FR-GIT-003 Forge in the theme’s code view', () => {
     await user.click(pill);
     expect(await screen.findByTestId('terminal-panel')).toBeInTheDocument();
     await waitFor(() => expect(FakeTerminal.latest().focused).toBe(1));
+  });
+});
+
+describe('[audit F-6] switching modes keeps Forge’s project services', () => {
+  it('Ideate → Forge → Ideate → Forge walks the project and reads its type sources once', async () => {
+    const forgePath = seed();
+    const ideatePath = forgePath.replace(/\/forge$/, '');
+    const reads: string[] = [];
+    server.events.on('request:start', ({ request }) => {
+      const { pathname } = new URL(request.url);
+      if (pathname.endsWith('/files/list') || pathname.endsWith('/files/sources')) {
+        reads.push(pathname.slice(pathname.lastIndexOf('/') + 1));
+      }
+    });
+    const { router } = renderApp(ideatePath);
+    await act(() => router.navigate(forgePath));
+    expect(await screen.findByTestId('explorer-count')).toHaveTextContent('2 files');
+    await act(() => router.navigate(ideatePath));
+    await waitFor(() => expect(screen.queryByTestId('forge')).toBeNull());
+    await act(() => router.navigate(forgePath));
+    expect(await screen.findByTestId('explorer-count')).toHaveTextContent('2 files');
+
+    await waitFor(() => expect(reads.filter((read) => read === 'sources')).toHaveLength(1));
+    expect(reads.filter((read) => read === 'list')).toHaveLength(1);
+    server.events.removeAllListeners('request:start');
   });
 });
 

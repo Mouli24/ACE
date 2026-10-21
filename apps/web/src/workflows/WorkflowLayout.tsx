@@ -12,6 +12,7 @@ import { useComposerChips } from '../chat/composer-chips';
 import { useChatSocket } from '../chat/useChat';
 import { isChatNode, useDropStaleChatTarget } from '../chat/workflow-target';
 import { useWorkflowMode, workflowPath } from '../forge/mode';
+import { useForgeProject } from '../forge/project-services';
 import { useIsCompact } from '../responsive/useIsCompact';
 import { useRunEvents } from '../runs/hooks';
 import { useAdoptActiveRun, useFollowStartedRun } from '../runs/selected-run';
@@ -43,6 +44,8 @@ export function WorkflowLayout() {
   // PG-3.4: `?node=` and the selected node are one, in every mode.
   useNodeFocusSync(mode);
   useDropStaleChatTarget(workflowId);
+  // [audit F-6] Forge's project services outlive a mode switch: no re-walk entering Forge.
+  useForgeProject(projectId);
   useEffect(() => {
     useComposerChips.getState().enterProject(projectId);
   }, [projectId]);

@@ -53,6 +53,18 @@ describe('D299 a files.changed burst refreshes what shows it', () => {
     expect(stale(fileKeys.list(PID))).toBe(true);
   });
 
+  it('[audit F-6] a changed .gitignore refreshes the list and every folder: what they show may change', () => {
+    applyFilesChanged(client, {
+      projectId: PID,
+      changes: [{ path: 'src/.gitignore', kind: 'changed' }],
+      resync: false,
+    });
+    expect(stale(fileKeys.list(PID))).toBe(true);
+    expect(stale(fileKeys.folder(PID, ''))).toBe(true);
+    expect(stale(fileKeys.folder(PID, 'src/deep'))).toBe(true);
+    expect(stale(fileKeys.content(PID, 'README.md'))).toBe(false);
+  });
+
   it('a resync refreshes everything of the project', () => {
     applyFilesChanged(client, { projectId: PID, changes: [], resync: true });
     expect(stale(fileKeys.content(PID, 'README.md'))).toBe(true);

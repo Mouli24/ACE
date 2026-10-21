@@ -43,14 +43,25 @@ export function useFileContent(projectId: string, path: string | undefined) {
   });
 }
 
-/** Quick open's list (Ctrl/⌘+P), fetched when it opens. */
+const fileListQuery = (projectId: string) => ({
+  queryKey: fileKeys.list(projectId),
+  queryFn: () => api().listAllFiles(projectId),
+  // [audit F-6] Never stale by time: `files.changed` invalidates it when a file comes or goes, and
+  // the project's watch is held in every mode, so entering Forge again never walks the project.
+  staleTime: Infinity,
+});
+
+/** Every file of the project (a walk of up to 50,000): the Explorer's count and filter, quick open. */
 export function useFileList(projectId: string, enabled: boolean) {
-  return useQuery({
-    queryKey: fileKeys.list(projectId),
-    queryFn: () => api().listAllFiles(projectId),
-    enabled: enabled && projectId !== '',
-    staleTime: 60_000,
-  });
+  return useQuery({ ...fileListQuery(projectId), enabled: enabled && projectId !== '' });
+}
+
+/**
+ * [audit F-6] Keeps the project's file list cached while the workflow is open, in every mode — an
+ * observer that never fetches, so the list is not dropped after five minutes in Ideate.
+ */
+export function useKeepFileList(projectId: string): void {
+  useQuery({ ...fileListQuery(projectId), enabled: false });
 }
 
 /**
