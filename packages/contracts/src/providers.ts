@@ -13,8 +13,11 @@ import { IdSchema, TimestampSchema } from './graph.js';
 
 export const ProviderNameSchema = z.string().min(1).max(80);
 
-/** A provider's base URL — `openai_compatible` and `ollama` need one; the cloud types do not. */
-export const ProviderBaseUrlSchema = z.url();
+/**
+ * A provider's base URL — `openai_compatible` and `ollama` need one; the cloud types do not. Only
+ * http(s): a `file:` or `javascript:` URL is no address a provider answers on [audit P-8].
+ */
+export const ProviderBaseUrlSchema = z.url({ protocol: /^https?$/ });
 
 /* -------------------------------------------------------------------------- */
 /* CLI providers (X1, FR-PRV-008, D261–D265)                                   */
