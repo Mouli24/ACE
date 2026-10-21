@@ -9,6 +9,7 @@ import { Input, ProviderStatusChip, toast } from '@ace/ui';
 import { useId, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
+import { QueryError } from '../app/QueryError';
 import { useProviders } from '../providers/hooks';
 import { useThemeMode } from '../theme/mode';
 import { Toggle } from '../theme/primitives';
@@ -190,6 +191,16 @@ export function SettingsPage() {
     <main className="h-full overflow-y-auto">
       <div className="mx-auto flex w-full max-w-[960px] flex-col gap-6 px-6 py-8">
         <h1 className="text-[20px] font-bold tracking-[-0.01em]">Settings</h1>
+
+        {/* Audit U-9: the fields stay disabled without the engine's values; say why, and retry. */}
+        {settings.isError && (
+          <QueryError
+            what="the settings"
+            error={settings.error}
+            onRetry={() => void settings.refetch()}
+            className="items-start rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4"
+          />
+        )}
 
         <Section title="General" testId="settings-general">
           <SettingField

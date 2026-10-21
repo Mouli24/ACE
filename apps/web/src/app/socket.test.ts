@@ -114,3 +114,73 @@ describe('audit U-2 the socket closing unauthorized', () => {
     expect(useSessionStore.getState().lost).toBe(true);
   });
 });
+
+describe('audit U-9 / P-10 the socket refreshes what may be stale', () => {
+  function start(queryClient: QueryClient) {
+    const FakeWebSocket = createFakeWebSocket(db);
+    startSocket({
+      token: 'mock',
+      queryClient,
+      url: 'ws://mock.local/ws',
+      WebSocket: FakeWebSocket as unknown as typeof WebSocket,
+    });
+    return FakeWebSocket;
+  }
+
+  it('back after a drop, invalidates every query but a workflow with edits still queued', async () => {
+    const project = db.createProject({ name: 'P' });
+    const quiet = db.createWorkflow(project.id, 'Quiet');
+    const busy = db.createWorkflow(project.id, 'Busy');
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(queryKeys.projects(), []);
+    queryClient.setQueryData(queryKeys.workflow(quiet.id), {
+      workflow: quiet,
+      nodes: [],
+      edges: [],
+    });
+    queryClient.setQueryData(queryKeys.workflow(busy.id), { workflow: busy, nodes: [], edges: [] });
+    // an edit queued and not yet sent (disposed, so it stays queued for the whole test)
+    const sync = getGraphSync(busy.id, queryClient);
+    sync.enqueue([{ op: 'move_node', nodeId: 'n1', position: { x: 1, y: 2 } }]);
+    sync.dispose();
+    expect(sync.pending).toBe(1);
+    const FakeWebSocket = start(queryClient);
+    await tick();
+    expect(getSocket()?.status).toBe('open');
+    expect(queryClient.getQueryState(queryKeys.projects())?.isInvalidated).toBe(false);
+
+    FakeWebSocket.instances.at(-1)?.serverClose(1006);
+    expect(getSocket()?.status).toBe('reconnecting');
+    await vi.waitFor(() => expect(getSocket()?.status).toBe('open'), { timeout: 2000 });
+    expect(queryClient.getQueryState(queryKeys.projects())?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(queryKeys.workflow(quiet.id))?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(queryKeys.workflow(busy.id))?.isInvalidated).toBe(false);
+  });
+
+  it('the first open invalidates nothing', async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(queryKeys.projects(), []);
+    start(queryClient);
+    await tick();
+    expect(getSocket()?.status).toBe('open');
+    expect(queryClient.getQueryState(queryKeys.projects())?.isInvalidated).toBe(false);
+  });
+
+  it('a provider turning CONNECTED invalidates the model lists', async () => {
+    const provider = db.createProvider({ type: 'mock', name: 'Mock' });
+    db.setProviderStatus(provider.id, 'UNREACHABLE');
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(queryKeys.providers(), [db.getProvider(provider.id)]);
+    queryClient.setQueryData(queryKeys.models({}), []);
+    start(queryClient);
+    await tick();
+
+    db.setProviderStatus(provider.id, 'UNREACHABLE', 'still down');
+    await tick();
+    expect(queryClient.getQueryState(queryKeys.models({}))?.isInvalidated).toBe(false);
+
+    db.setProviderStatus(provider.id, 'CONNECTED');
+    await tick();
+    expect(queryClient.getQueryState(queryKeys.models({}))?.isInvalidated).toBe(true);
+  });
+});

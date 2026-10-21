@@ -320,3 +320,21 @@ describe('FR-SYS-012 Backup', () => {
     );
   });
 });
+
+describe('audit U-9 the engine cannot be read', () => {
+  it('says why the fields are disabled, and Retry loads them', async () => {
+    const user = userEvent.setup();
+    let down = true;
+    server.use(http.get('*/api/v1/settings', () => (down ? HttpResponse.error() : undefined)));
+    renderApp('/settings');
+    const error = await screen.findByTestId('query-error');
+    expect(error).toHaveTextContent('Could not load the settings: Could not reach the engine');
+    expect(error).toHaveTextContent('Is the engine running?');
+    expect(screen.getByTestId('settings-concurrency')).toBeDisabled();
+
+    down = false;
+    await user.click(within(error).getByRole('button', { name: 'Retry' }));
+    await settled('settings-concurrency');
+    expect(screen.queryByTestId('query-error')).toBeNull();
+  });
+});

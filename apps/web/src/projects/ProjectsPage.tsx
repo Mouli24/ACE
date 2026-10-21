@@ -3,6 +3,7 @@ import { Icons, cn } from '@ace/ui';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+import { QueryError } from '../app/QueryError';
 import { workflowPath, type WorkflowMode } from '../forge/mode';
 import { useProviders } from '../providers/hooks';
 import { useSocketStatus } from '../runs/hooks';
@@ -116,9 +117,12 @@ export function ProjectsPage() {
   if (projects.isPending) recent = <p className={MUTED_LINE}>Loading projects…</p>;
   else if (projects.isError)
     recent = (
-      <p role="alert" className="text-center text-[13px] text-[#c94c27]">
-        Could not load projects: {projects.error.message}
-      </p>
+      <QueryError
+        what="projects"
+        error={projects.error}
+        onRetry={() => void projects.refetch()}
+        className="items-center text-center"
+      />
     );
   else if (all.length === 0) recent = <p className={MUTED_LINE}>No projects yet</p>;
   else if (shown.length === 0) recent = <p className={MUTED_LINE}>No live projects</p>;

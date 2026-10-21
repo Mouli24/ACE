@@ -54,6 +54,17 @@ export function reportMutationError(error: unknown, mutation: AnyMutation): void
   }, SETTLE_MS);
 }
 
+/**
+ * A failed read is asked once more — unless the engine itself answered no (4xx): a 404 or a 401
+ * will not change on a second ask (L-9: every 404 was fetched twice), a timeout or a rate limit may.
+ */
+export function retryOnce(failureCount: number, error: unknown): boolean {
+  if (failureCount >= 1) return false;
+  if (!AceApiError.is(error)) return true;
+  const { status } = error;
+  return status < 400 || status >= 500 || status === 408 || status === 429;
+}
+
 /** The app's one query client (Arch §10.1): engine data, and what happens when a call fails. */
 export function createQueryClient(): QueryClient {
   return new QueryClient({
@@ -66,6 +77,6 @@ export function createQueryClient(): QueryClient {
       onError: (error, _variables, _context, mutation) =>
         reportMutationError(error, mutation as AnyMutation),
     }),
-    defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
+    defaultOptions: { queries: { retry: retryOnce, refetchOnWindowFocus: false } },
   });
 }

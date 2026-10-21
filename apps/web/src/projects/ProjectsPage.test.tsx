@@ -395,3 +395,20 @@ describe('Home Recent (D337)', () => {
     );
   });
 });
+
+describe('audit U-9 Home when the projects cannot be read', () => {
+  it('shows the engine’s words, the engine hint and Retry, which loads them', async () => {
+    const user = userEvent.setup();
+    db.createProject({ name: 'Atlas' });
+    let down = true;
+    server.use(http.get('*/api/v1/projects', () => (down ? HttpResponse.error() : undefined)));
+    renderApp('/projects');
+    const error = await within(await home()).findByTestId('query-error');
+    expect(error).toHaveTextContent('Could not load projects: Could not reach the engine');
+    expect(error).toHaveTextContent('Is the engine running?');
+
+    down = false;
+    await user.click(within(error).getByRole('button', { name: 'Retry' }));
+    expect(await within(await home()).findByText('Atlas')).toBeInTheDocument();
+  });
+});

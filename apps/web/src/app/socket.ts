@@ -1,3 +1,4 @@
+import type { Provider } from '@ace/contracts';
 import { createAceSocket, type AceSocket } from '@ace/sdk';
 import type { QueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
@@ -35,17 +36,32 @@ export function startSocket(options: StartSocketOptions): AceSocket {
   });
   // FR-PRV-004: provider status is engine-scope and patches the cache, so no screen reloads.
   socket.on('provider.status', (payload) => {
+    const cached = options.queryClient.getQueryData<Provider[]>(queryKeys.providers());
+    const before = cached?.find((provider) => provider.id === payload.providerId);
     patchProviderStatus(options.queryClient, payload);
     // PG-1.4 (D359): a provider the engine added itself (the local Ollama) is not cached yet.
-    const cached = options.queryClient.getQueryData<{ id: string }[]>(queryKeys.providers());
-    if (cached !== undefined && !cached.some((provider) => provider.id === payload.providerId)) {
+    if (cached !== undefined && before === undefined) {
       void options.queryClient.invalidateQueries({ queryKey: queryKeys.providers() });
+      void options.queryClient.invalidateQueries({ queryKey: queryKeys.modelsRoot() });
+    } else if (payload.status === 'CONNECTED' && before?.status !== 'CONNECTED') {
+      // Audit P-10: a provider that just connected has models now; an open model picker that said
+      // "No provider is connected yet" fills in without a reload.
       void options.queryClient.invalidateQueries({ queryKey: queryKeys.modelsRoot() });
     }
   });
-  // Audit U-2: a 4401 close is a token the engine no longer takes (it restarted).
+  let dropped = false;
   socket.onStatus((status) => {
+    // Audit U-2: a 4401 close is a token the engine no longer takes (it restarted).
     if (status === 'unauthorized') markSessionLost();
+    if (status === 'reconnecting') dropped = true;
+    if (status !== 'open' || !dropped) return;
+    // Audit U-9: back after a drop, whatever was read (or failed) while the engine was away is
+    // read again. A workflow with edits still queued is left to its GraphSync, which knows them.
+    dropped = false;
+    void options.queryClient.invalidateQueries({
+      predicate: ({ queryKey: [root, id] }) =>
+        !(root === 'workflow' && typeof id === 'string' && (peekGraphSync(id)?.pending ?? 0) > 0),
+    });
   });
   socket.subscribe({ scope: 'engine' });
   socket.connect();
