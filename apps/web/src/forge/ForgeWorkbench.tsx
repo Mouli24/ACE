@@ -9,6 +9,7 @@ import { askAgentAboutFile, askAgentAboutSelection, setBufferSaver } from './ask
 import { useForgeAttribution } from './attribution';
 import { saveAll, saveFile } from './editor/actions';
 import { useCloseRequest } from './editor/CloseDialogs';
+import { useCloseTabKey } from './editor/close-tab-key';
 import { EditorArea } from './editor/EditorArea';
 import { useEditorStore } from './editor/editor-store';
 import { useEditorSync } from './editor/useEditorSync';
@@ -95,14 +96,12 @@ export function ForgeWorkbench({
         void runChecks(projectId, queryClient);
       },
     ],
-    [
-      SHORTCUTS.closeTab,
-      () => {
-        const active = activePath();
-        if (active !== undefined) closeRequest.request([active]);
-      },
-    ],
   ]);
+  // Alt+W, unless the focused field means something else by it ([audit F-10]).
+  useCloseTabKey(() => {
+    const active = activePath();
+    if (active !== undefined) closeRequest.request([active]);
+  });
   const showEditor = !(panelOpen && maximized);
 
   return (

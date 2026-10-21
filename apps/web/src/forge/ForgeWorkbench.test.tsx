@@ -109,6 +109,22 @@ describe('D334 FR-GIT-003 Forge in the theme’s code view', () => {
     expect(db.filesOf(projectId)['src/app.ts']).toBeUndefined();
   });
 
+  it('[audit F-10] Alt+W closes the active tab; in a text field outside the editor it does not', async () => {
+    const user = userEvent.setup();
+    renderApp(seed());
+    await screen.findByTestId('forge');
+    act(() => openFile(projectId, 'README.md', { preview: false }));
+    await screen.findByLabelText('Editing README.md');
+
+    await user.click(screen.getByRole('textbox', { name: 'Filter files' }));
+    await user.keyboard('{Alt>}w{/Alt}');
+    expect(screen.getByTestId('tab-README.md')).toBeInTheDocument();
+
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    await user.keyboard('{Alt>}w{/Alt}');
+    await waitFor(() => expect(screen.queryByTestId('tab-README.md')).toBeNull());
+  });
+
   it('opens a file under the path bar, whose ▶ Run pipeline starts this workflow’s run', async () => {
     const user = userEvent.setup();
     renderApp(seed());
