@@ -123,6 +123,33 @@ describe('D300 Forge’s Changes view', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  it('[audit F-3] reverting one file the agent created asks first, saying it deletes it', async () => {
+    const user = userEvent.setup();
+    const { projectId } = seed();
+    const seeded = checkpoints.seed(projectId, [{ path: 'src/new.ts', after: 'fresh\n' }]);
+    const view = await open(projectId);
+
+    await user.click(await within(view).findByRole('button', { name: 'Revert src/new.ts' }));
+    let dialog = await screen.findByRole('dialog', { name: 'Revert new.ts?' });
+    expect(dialog).toHaveTextContent(
+      'The agent created this file, so reverting its change deletes',
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(fileOf(projectId, 'src/new.ts')).toBe('fresh\n');
+    expect(within(view).getByRole('button', { name: 'Revert src/new.ts' })).toBeEnabled();
+
+    await user.click(within(view).getByRole('button', { name: 'Revert src/new.ts' }));
+    dialog = await screen.findByRole('dialog', { name: 'Revert new.ts?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Revert and delete' }));
+    await waitFor(() =>
+      expect(within(view).getByTestId(`change-${seeded.id}-src/new.ts`)).toHaveTextContent(
+        'reverted',
+      ),
+    );
+    expect(fileOf(projectId, 'src/new.ts')).toBeUndefined();
+  });
+
   it('Revert all asks first: Cancel sends nothing, the confirm reverts and deletes what the agent added (fix A-M9)', async () => {
     const user = userEvent.setup();
     const { projectId } = seed();

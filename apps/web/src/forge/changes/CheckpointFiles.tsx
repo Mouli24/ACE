@@ -1,11 +1,13 @@
 import type { Checkpoint, CheckpointFile } from '@ace/contracts';
 import { cn } from '@ace/ui';
+import { useState } from 'react';
 
 import { fileIconColor } from '../../theme/constants';
 import { TONE_COLOR } from '../explorer/decorations';
 import { nameOf, parentOf } from '../files/paths';
 import { useCheckpointConflicts } from './changes-store';
 import { fileNote, fileStateLabel } from './present';
+import { RevertFileDialog, revertDeletes } from './RevertAllDialog';
 
 /** A row's quiet action, as the Processes list's: mono, small, a hover wash, the accent ring. */
 export const ROW_ACTION =
@@ -39,10 +41,11 @@ export interface CheckpointFilesProps {
 /**
  * A checkpoint's files, one row each (D300): the name (which reviews it), its folder, `+/−`, and,
  * while it waits, Keep and Revert — or what was decided. A revert the engine refused shows why,
- * on that file.
+ * on that file. A Revert that deletes the file asks first ([audit F-3]).
  */
 export function CheckpointFiles({ checkpoint, onReview, onAction, busy }: CheckpointFilesProps) {
   const conflicts = useCheckpointConflicts(checkpoint.id);
+  const [confirmDelete, setConfirmDelete] = useState<string | undefined>();
   return (
     <ul className="m-0 flex list-none flex-col p-0">
       {checkpoint.files.map((file) => {
@@ -98,7 +101,11 @@ export function CheckpointFiles({ checkpoint, onReview, onAction, busy }: Checkp
                     aria-label={`Revert ${file.path}`}
                     title="Revert"
                     disabled={busy}
-                    onClick={() => onAction('revert', file.path)}
+                    onClick={() =>
+                      revertDeletes(file)
+                        ? setConfirmDelete(file.path)
+                        : onAction('revert', file.path)
+                    }
                     className={cn(ROW_ACTION, 'text-[#c94c27] hover:text-[#c94c27]')}
                   >
                     Revert
@@ -123,6 +130,14 @@ export function CheckpointFiles({ checkpoint, onReview, onAction, busy }: Checkp
           </li>
         );
       })}
+      {confirmDelete !== undefined && onAction !== undefined && (
+        // a portal: the dialog's DOM is not the list's
+        <RevertFileDialog
+          path={confirmDelete}
+          onConfirm={() => onAction('revert', confirmDelete)}
+          onClose={() => setConfirmDelete(undefined)}
+        />
+      )}
     </ul>
   );
 }
