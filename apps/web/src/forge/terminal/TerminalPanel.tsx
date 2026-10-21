@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { Suspense, lazy, useEffect } from 'react';
 
 import { useProject } from '../../projects/hooks';
 import { ApprovalStack } from '../../runs/approvals/ApprovalStack';
@@ -7,9 +7,13 @@ import { useSelectedRun } from '../../runs/selected-run';
 import { ProcessesList } from './ProcessesList';
 import { ScriptButtons } from './ScriptButtons';
 import { TerminalTabs } from './TerminalTabs';
-import { TerminalView } from './TerminalView';
 import { TrustNotice } from './TrustNotice';
 import { useProjectTerminals, useTerminalStore } from './terminal-store';
+
+/** [audit U-8] xterm and its addons load with the first terminal shown, not with the app. */
+const TerminalView = lazy(() =>
+  import('./TerminalView').then((module) => ({ default: module.TerminalView })),
+);
 
 /**
  * D376: the selected run's pending command approvals, pinned above the terminal so a node's
@@ -62,12 +66,15 @@ export function TerminalPanel({ projectId }: { projectId: string }) {
             <ScriptButtons projectId={projectId} disabled={off} />
           </div>
           {active !== undefined ? (
-            <TerminalView
-              key={`${projectId}/${active.id}`}
-              projectId={projectId}
-              tabId={active.id}
-              disabled={off}
-            />
+            // the card's own surface while xterm loads: nothing to read yet, so nothing shown
+            <Suspense fallback={<div className="min-h-0 flex-1" />}>
+              <TerminalView
+                key={`${projectId}/${active.id}`}
+                projectId={projectId}
+                tabId={active.id}
+                disabled={off}
+              />
+            </Suspense>
           ) : (
             <p className="m-0 p-[12px] text-[12px] text-[var(--muted)]">No terminal open.</p>
           )}
