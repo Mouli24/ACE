@@ -1,12 +1,13 @@
 import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 
 import { useLayoutStore } from '../app/stores/layout';
 import { usePanelsStore } from '../app/stores/panels';
 import { useComposerChips } from '../chat/composer-chips';
 import { createNode } from '../nodes/factory';
-import { db, installMockServer, renderApp } from '../test/app';
+import { db, installMockServer, renderApp, server } from '../test/app';
 
 installMockServer();
 
@@ -142,5 +143,31 @@ describe('D299 Ideate and Forge, one click apart', () => {
     await waitFor(() =>
       expect(router.state.location.pathname).toBe(`/projects/${project.id}/workflows/${main.id}`),
     );
+  });
+});
+
+describe('audit U-2 (D-009) a workflow that fails to load is not "not found"', () => {
+  it('shows the engine’s words and Retry instead', async () => {
+    const { ideate } = seed();
+    server.use(
+      http.get('*/api/v1/workflows/:id', () =>
+        HttpResponse.json(
+          {
+            error: {
+              kind: 'workflow',
+              code: 'internal',
+              message: 'Database is locked.',
+              retryable: true,
+            },
+          },
+          { status: 500 },
+        ),
+      ),
+    );
+    renderApp(ideate);
+    const error = await screen.findByTestId('query-error');
+    expect(error).toHaveTextContent('Could not load this workflow: Database is locked.');
+    expect(screen.queryByText(/Workflow not found/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 });

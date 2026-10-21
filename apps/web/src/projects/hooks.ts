@@ -58,11 +58,15 @@ export function useDeleteProject() {
   });
 }
 
-/** `POST /projects/:id/open`: marks the last opened project (FR-PRJ-004). */
+/**
+ * `POST /projects/:id/open`: marks the last opened project (FR-PRJ-004). Bookkeeping: the caller
+ * opens the project either way and that page says what is wrong, so a failure is not toasted.
+ */
 export function useOpenProject() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api().openProject(id),
+    meta: { silentError: true },
     onSuccess: (project) => {
       queryClient.setQueryData(queryKeys.project(project.id), project);
       void queryClient.invalidateQueries({ queryKey: queryKeys.settings() });

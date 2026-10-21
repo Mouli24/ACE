@@ -1,7 +1,9 @@
 import { useEffect } from 'react';
 import { Link, Outlet, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
+import { QueryError } from '../app/QueryError';
 import { useNodeFocusSync } from '../app/follow-node';
+import { isNotFound } from '../app/query-client';
 import { SHORTCUTS, useShortcuts } from '../app/shortcuts';
 import { useWorkflowSubscription } from '../app/socket';
 import { useLayoutStore } from '../app/stores/layout';
@@ -68,6 +70,17 @@ export function WorkflowLayout() {
   ]);
 
   if (graph.isError) {
+    // Audit U-2 (D-009): "not found" is the engine's 404 only; any other failure says what it was.
+    if (!isNotFound(graph.error)) {
+      return (
+        <QueryError
+          what="this workflow"
+          error={graph.error}
+          onRetry={() => void graph.refetch()}
+          className="p-6"
+        />
+      );
+    }
     return (
       <p role="alert" className="p-6 text-[13px] text-[#c94c27]">
         Workflow not found.{' '}

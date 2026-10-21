@@ -119,9 +119,10 @@ describe('FR-SYS-005 Settings screen', () => {
     await waitFor(() => expect(db.settings.searxngUrl).toBe('http://localhost:8080'));
   });
 
-  it('saves the theme, the Docker sandbox mode and the default provider from their selects', async () => {
+  it('saves the theme from its select; Docker sandbox and Default provider are not active yet', async () => {
     const user = userEvent.setup();
-    const provider = db.createProvider({ type: 'mock', name: 'Mock' });
+    // a provider exists, and still none is offered as the default
+    db.createProvider({ type: 'mock', name: 'Mock' });
     db.patchSettings({ theme: 'system' });
     renderApp('/settings');
 
@@ -143,16 +144,17 @@ describe('FR-SYS-005 Settings screen', () => {
     expect(theme).toHaveTextContent('Dark');
     expect(screen.queryByText(/render in a later round/)).not.toBeInTheDocument();
 
-    const docker = await settled('settings-docker');
-    await user.click(docker);
-    await user.click(await screen.findByRole('option', { name: 'off' }));
-    await waitFor(() => expect(db.settings.dockerSandbox).toBe('off'));
-
-    const defaultProvider = await settled('settings-default-provider');
+    // audit U-3: the engine stores these but reads neither yet, so each shows its value, disabled,
+    // with a note — and nothing is sent
+    const docker = screen.getByTestId('settings-docker');
+    expect(docker).toHaveTextContent('auto');
+    expect(docker).toBeDisabled();
+    const defaultProvider = screen.getByTestId('settings-default-provider');
     expect(defaultProvider).toHaveTextContent('none');
-    await user.click(defaultProvider);
-    await user.click(await screen.findByRole('option', { name: 'Mock' }));
-    await waitFor(() => expect(db.settings.defaultProviderId).toBe(provider.id));
+    expect(defaultProvider).toBeDisabled();
+    expect(screen.getAllByText(/^Not active yet\./)).toHaveLength(2);
+    expect(db.settings.dockerSandbox).toBe('auto');
+    expect(db.settings.defaultProviderId).toBeUndefined();
   });
 
   it('saves the MCP switch and says telemetry is off without offering a toggle', async () => {
@@ -318,5 +320,23 @@ describe('FR-SYS-012 Backup', () => {
     expect(await screen.findByTestId('backup-import-error')).toHaveTextContent(
       'That file is not an ACE backup.',
     );
+  });
+});
+
+describe('audit U-9 the engine cannot be read', () => {
+  it('says why the fields are disabled, and Retry loads them', async () => {
+    const user = userEvent.setup();
+    let down = true;
+    server.use(http.get('*/api/v1/settings', () => (down ? HttpResponse.error() : undefined)));
+    renderApp('/settings');
+    const error = await screen.findByTestId('query-error');
+    expect(error).toHaveTextContent('Could not load the settings: Could not reach the engine');
+    expect(error).toHaveTextContent('Is the engine running?');
+    expect(screen.getByTestId('settings-concurrency')).toBeDisabled();
+
+    down = false;
+    await user.click(within(error).getByRole('button', { name: 'Retry' }));
+    await settled('settings-concurrency');
+    expect(screen.queryByTestId('query-error')).toBeNull();
   });
 });

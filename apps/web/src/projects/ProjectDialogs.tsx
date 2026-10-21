@@ -25,6 +25,8 @@ import { useCreateProject, useDeleteProject, useUpdateProject } from './hooks';
 const FIELD = 'flex flex-col gap-[7px]';
 /** An inline error line in the theme's red. */
 const ERROR_LINE = 'text-[12px] text-[#c94c27]';
+/** A field's muted help line, under its control. */
+const HINT_LINE = 'text-[11px] leading-[1.45] text-[var(--muted)]';
 
 export function CreateProjectDialog({
   onClose,
@@ -78,8 +80,13 @@ export function CreateProjectDialog({
               value={folderPath}
               onChange={(e) => setFolderPath(e.target.value)}
               aria-invalid={pathError ? true : undefined}
+              aria-describedby="project-folder-hint"
               placeholder="created if missing"
             />
+            {/* audit L-12: where a blank folder puts the project (it used to be the engine's cwd) */}
+            <p id="project-folder-hint" className={HINT_LINE}>
+              Leave it blank to keep the project in ACE’s data folder.
+            </p>
             {pathError && (
               <p role="alert" className={ERROR_LINE}>
                 {pathError}

@@ -16,6 +16,10 @@ import { ModeSwitch } from './ModeSwitch';
  * The workspace header of `Ace Canvas.dc.html` (D330) on Ideate, Forge and Domain: the mark and
  * ACE (to Home), the run controls (PG-1.2, D360), the mode switch, the Chat or Team toggle (D356),
  * the workflow's agents and the theme toggle.
+ *
+ * Audit U-17: a workflow that cannot be loaded (not found, or the engine failed) has nothing to
+ * run, switch or chat with, so the header keeps only the mark and the theme toggle around the
+ * layout's message — no live Run controls for a workflow that is not there.
  */
 export function WorkspaceHeader({
   projectId,
@@ -26,6 +30,7 @@ export function WorkspaceHeader({
   workflowId: string;
   mode: WorkflowMode;
 }) {
+  const missing = useWorkflowGraph(workflowId).isError;
   return (
     <header className="relative z-[5] grid h-[44px] shrink-0 grid-cols-[1fr_auto_1fr] items-center border-b border-[var(--line)] bg-[var(--hdr)] pl-5 pr-[14px]">
       <div className="flex items-center gap-[10px]">
@@ -37,13 +42,13 @@ export function WorkspaceHeader({
           <span className="text-[15px] font-bold tracking-[0.02em]">ACE</span>
         </Link>
         {/* PG-1.2 (D360): the run controls in every mode, over D330's header layout. */}
-        <HeaderRunControls workflowId={workflowId} />
+        {!missing && <HeaderRunControls workflowId={workflowId} />}
       </div>
       <div className="flex items-center gap-2">
-        <ModeSwitch projectId={projectId} workflowId={workflowId} />
+        {!missing && <ModeSwitch projectId={projectId} workflowId={workflowId} />}
       </div>
       <div className="flex items-center justify-end gap-2">
-        <SplitToggle mode={mode} />
+        {!missing && <SplitToggle mode={mode} />}
         <AgentStack workflowId={workflowId} />
         <ThemeToggle variant="workspace" />
       </div>

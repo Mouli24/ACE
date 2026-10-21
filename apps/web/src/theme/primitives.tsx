@@ -1,4 +1,4 @@
-import { Icons, cn } from '@ace/ui';
+import { Icons, cn, toast } from '@ace/ui';
 import type { CSSProperties, ReactNode } from 'react';
 
 import type { ProviderTheme } from './constants';
@@ -23,17 +23,29 @@ export function LogoMark({ size = 13 }: { size?: 13 | 14 }) {
 /**
  * The sun / moon pill (SVG icons since PG-1.2, D360: the ☀ ☾ glyphs depended on the font). `workspace` is the canvas file's (20px circles, gap 3), `home` the Home file's
  * (22px circles, gap 4). The active circle is orange with white ink.
+ *
+ * Audit U-15: it is the "Dark theme" switch, pressed while dark. A click while the choice is
+ * System picks dark or light for this browser and says so, rather than drop System silently.
  */
 export function ThemeToggle({ variant = 'workspace' }: { variant?: 'workspace' | 'home' }) {
-  const { dark, toggle } = useThemeMode();
+  const { mode, dark, toggle } = useThemeMode();
+  const system = mode === 'system';
+  const onClick = () => {
+    toggle();
+    if (system) {
+      toast(dark ? 'Theme set to light' : 'Theme set to dark', {
+        description: 'It was following your system. Choose System in Settings to follow it again.',
+      });
+    }
+  };
   const home = variant === 'home';
   const circle = home ? 'h-[22px] w-[22px]' : 'h-5 w-5';
   return (
     <button
       type="button"
-      onClick={toggle}
-      title="Switch theme"
-      aria-label="Switch theme"
+      onClick={onClick}
+      title={system ? 'Dark theme (following your system now)' : 'Dark theme'}
+      aria-label="Dark theme"
       aria-pressed={dark}
       data-testid="theme-toggle"
       className={cn(

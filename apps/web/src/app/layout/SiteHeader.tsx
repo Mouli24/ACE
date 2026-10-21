@@ -1,6 +1,7 @@
 import { Link, useLocation } from 'react-router-dom';
 
 import { BenchLink } from '../../bench/BenchLink';
+import type { WorkflowMode } from '../../forge/mode';
 import { LogoMark, ThemeToggle } from '../../theme/primitives';
 
 /**
@@ -29,6 +30,32 @@ const SECTIONS: ReadonlyArray<readonly [RegExp, string]> = [
 /** The section label for a path, or undefined where none applies (`/` redirects). */
 export function sectionLabel(pathname: string): string | undefined {
   return SECTIONS.find(([pattern]) => pattern.test(pathname))?.[1];
+}
+
+/** A label's name in the tab where its own capitalisation will not do. */
+const TITLES: Readonly<Record<string, string>> = {
+  ONBOARDING: 'Setup wizard',
+  GUARDRAILS: 'Guardrail policies',
+};
+const MODE_TITLES: Readonly<Record<WorkflowMode, string>> = {
+  ideate: 'Ideate',
+  forge: 'Forge',
+  domain: 'Domain',
+};
+
+/**
+ * Audit U-13: the document title for a path — "Providers · ACE", the mode inside a workflow
+ * ("Forge · ACE"), plain "ACE" where no section applies — so tabs and history tell pages apart.
+ */
+export function documentTitle(pathname: string, mode?: WorkflowMode): string {
+  const label = sectionLabel(pathname);
+  const name =
+    mode !== undefined
+      ? MODE_TITLES[mode]
+      : label === undefined
+        ? undefined
+        : (TITLES[label] ?? `${label.charAt(0)}${label.slice(1).toLowerCase()}`);
+  return name === undefined ? 'ACE' : `${name} · ACE`;
 }
 
 /**

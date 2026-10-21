@@ -8,6 +8,7 @@ import { ApprovalsBadge } from '../../runs/approvals/ApprovalsBadge';
 import { useRunStore } from '../../runs/run-store';
 import { LogoMark } from '../../theme/primitives';
 import { DayTotalsChip } from '../../usage/DayTotalsChip';
+import { useWorkflowGraph } from '../../workflows/hooks';
 import { ModeSwitch } from './ModeSwitch';
 
 /**
@@ -20,6 +21,8 @@ export function CompactTopBar() {
   const { projectId, workflowId } = useParams();
   const project = useProject(projectId);
   const runId = useRunStore((store) => store.runId);
+  // audit U-17: no mode switch or run bar for a workflow that cannot be loaded
+  const missing = useWorkflowGraph(workflowId).isError;
 
   return (
     <header
@@ -60,7 +63,7 @@ export function CompactTopBar() {
           }
         />
       </div>
-      {projectId && workflowId && (
+      {projectId && workflowId && !missing && (
         <div className="flex min-w-0 items-center gap-2 overflow-x-auto px-3 pb-2">
           <ModeSwitch projectId={projectId} workflowId={workflowId} />
           <RunBar workflowId={workflowId} />

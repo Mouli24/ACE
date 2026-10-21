@@ -74,12 +74,15 @@ describe('Home hero (D337)', () => {
     const surface = await home();
     expect(within(surface).getByText('ACE')).toBeInTheDocument();
     expect(within(surface).getByText('HOME')).toBeInTheDocument();
-    expect(within(surface).getByRole('button', { name: 'Switch theme' })).toBeInTheDocument();
+    expect(within(surface).getByRole('button', { name: 'Dark theme' })).toBeInTheDocument();
     expect(
       within(surface).getByRole('heading', { level: 1, name: 'What would you like to make?' }),
     ).toBeInTheDocument();
     expect(
-      within(surface).getByText('Describe it once — Ace assembles the team and gets to work.'),
+      // audit L-11: the subtitle says what the three cards do (there is no prompt box)
+      within(surface).getByText(
+        'Sketch it on the Canvas, build it in Forge, or give a team a goal.',
+      ),
     ).toBeInTheDocument();
     expect(
       within(surface).getByRole('button', { name: 'Canvas Sketch, plan and arrange visually' }),
@@ -133,6 +136,18 @@ describe('Home hero (D337)', () => {
     await waitFor(() => expect(getSocket()?.status).toBe('open'));
     await waitFor(() => expect(queryClient.getQueryData(queryKeys.providers())).toBeDefined());
     expect(within(surface).queryByText('Agents ready')).toBeNull();
+    // a provider exists, so there is no "add one" nudge either
+    expect(within(surface).queryByTestId('home-no-provider')).toBeNull();
+  });
+
+  it('audit U-16: with no provider at all, the pill says so and leads to Providers', async () => {
+    const user = userEvent.setup();
+    const { router } = renderApp('/projects');
+    const nudge = await within(await home()).findByTestId('home-no-provider');
+    expect(nudge).toHaveAccessibleName('No model provider yet — Add one');
+    expect(nudge).toHaveAttribute('href', '/providers');
+    await user.click(nudge);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/providers'));
   });
 });
 
@@ -393,5 +408,22 @@ describe('Home Recent (D337)', () => {
         names().filter((n) => ['Old', 'Middle', 'Fresh', 'Revived'].includes(n ?? '')),
       ).toEqual(['Revived', 'Fresh', 'Middle', 'Old']),
     );
+  });
+});
+
+describe('audit U-9 Home when the projects cannot be read', () => {
+  it('shows the engine’s words, the engine hint and Retry, which loads them', async () => {
+    const user = userEvent.setup();
+    db.createProject({ name: 'Atlas' });
+    let down = true;
+    server.use(http.get('*/api/v1/projects', () => (down ? HttpResponse.error() : undefined)));
+    renderApp('/projects');
+    const error = await within(await home()).findByTestId('query-error');
+    expect(error).toHaveTextContent('Could not load projects: Could not reach the engine');
+    expect(error).toHaveTextContent('Is the engine running?');
+
+    down = false;
+    await user.click(within(error).getByRole('button', { name: 'Retry' }));
+    expect(await within(await home()).findByText('Atlas')).toBeInTheDocument();
   });
 });
