@@ -6,6 +6,7 @@ import {
   BackupImportResponseSchema,
   DEFAULT_ALLOWED_ORIGINS,
   DEFAULT_CONCURRENCY,
+  MAX_UPLOAD_MB,
   SettingsPatchSchema,
   SettingsSchema,
   THEMES,
@@ -77,6 +78,15 @@ describe('FR-SYS-010 Settings bounds', () => {
 
   it('rejects a lastProjectId that is not a ULID', () => {
     expect(SettingsSchema.safeParse({ ...minimal, lastProjectId: 'last' }).success).toBe(false);
+  });
+
+  it('caps the upload limit at 2048 MB: a PATCH over it is refused, a stored one reads as the cap [audit S-9]', () => {
+    expect(MAX_UPLOAD_MB).toBe(2048);
+    expect(SettingsPatchSchema.safeParse({ maxUploadMb: 2048 }).success).toBe(true);
+    expect(SettingsPatchSchema.safeParse({ maxUploadMb: 2049 }).success).toBe(false);
+    expect(SettingsSchema.parse({ ...minimal, maxUploadMb: 500 }).maxUploadMb).toBe(500);
+    expect(SettingsSchema.parse({ ...minimal, maxUploadMb: 1_000_000 }).maxUploadMb).toBe(2048);
+    expect(SettingsSchema.safeParse({ ...minimal, maxUploadMb: 0 }).success).toBe(false);
   });
 });
 

@@ -28,6 +28,7 @@ import {
   UpdateWorkflowRequestSchema,
   artifactETag,
   cliPatchError,
+  maxUploadBytes,
   type Id,
   type McpServer,
   type MessageQuery,
@@ -108,6 +109,7 @@ import {
   unauthorized,
 } from './errors.js';
 import { readJson } from './read-json.js';
+import { BACKUP_IMPORT_MAX_BYTES, MULTIPART_OVERHEAD_BYTES, limitBody } from './body-limit.js';
 
 /**
  * The tool catalog `GET /tools` reads (round 4 §2.4). It is a narrow view rather than the concrete
@@ -924,7 +926,14 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
 
   /* -------------------------------------------------------------- artifacts (R4) */
 
-  api.post('/artifacts', async (c) => {
+  // [audit S-9]: refused at the body's size, before the multipart parse holds it all; the service
+  // still checks the file itself against the same limit.
+  const uploadLimit = limitBody(
+    async () => maxUploadBytes((await deps.repository.settings.get(deps.scope)).maxUploadMb),
+    MULTIPART_OVERHEAD_BYTES,
+  );
+
+  api.post('/artifacts', uploadLimit, async (c) => {
     const body = await c.req.parseBody();
     const file = body[ARTIFACT_UPLOAD_FIELD];
     if (!(file instanceof File)) {
@@ -1165,6 +1174,8 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.route('/', createMemoryRoutes(deps.memory));
   api.route('/', createUsageRoutes(deps.trace, deps.usage));
   api.route('/', createTemplateRoutes(deps.templates));
+  // [audit S-9]: a backup zip's upload is capped before the router parses it.
+  api.use('/backup/import', limitBody(() => BACKUP_IMPORT_MAX_BYTES, MULTIPART_OVERHEAD_BYTES));
   api.route('/', createBackupRoutes(deps.backup));
   /* IDE (D299): Forge's project files, inside the same middleware. */
   api.route('/', createWorkspaceRoutes(deps.workspace));
