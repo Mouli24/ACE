@@ -1537,6 +1537,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               runId: input.runId,
               nodeId: input.node.id,
               sandboxDir,
+              allowedDomains,
               signal: toolSignal,
               ...(workingDir === undefined ? {} : { projectDir: workingDir }),
             });

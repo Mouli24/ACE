@@ -56,6 +56,8 @@ export interface ToolRunContext {
   sandboxDir: string;
   /** X1: the project folder the run works in — the only folder the project tools may touch. */
   projectDir?: string;
+  /** The node's `tools.allowedDomains`, re-checked by the network tools on each redirect [audit S-2]. */
+  allowedDomains?: readonly string[];
   /** Aborted when the run is stopped, so a tool cancels within the 2 s Stop budget (FR-CTL-003). */
   signal: AbortSignal;
 }

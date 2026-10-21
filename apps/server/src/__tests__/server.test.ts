@@ -37,7 +37,11 @@ import {
   generateSessionToken,
   guardrailInputFor,
   readyLine,
+  restrictTokenFileAcl,
   startEngine,
+  tokenFileAclArgs,
+  windowsAccountName,
+  type ExecFileRunner,
   type RunningEngine,
 } from '../server.js';
 
@@ -130,6 +134,53 @@ describe('§2.10 session token handshake', () => {
     }
 
     expect(mode).toBe(0o600);
+  });
+
+  it('narrows the token file to its user and SYSTEM on Windows via icacls [audit S-4]', () => {
+    expect(tokenFileAclArgs('C:\\Users\\me\\.ace\\session-token', 'HOST\\me')).toEqual([
+      'C:\\Users\\me\\.ace\\session-token',
+      '/inheritance:r',
+      '/grant:r',
+      'HOST\\me:F',
+      '*S-1-5-18:F',
+    ]);
+    expect(windowsAccountName('me', 'HOST')).toBe('HOST\\me');
+    expect(windowsAccountName('me', undefined)).toBe('me');
+    expect(windowsAccountName('me', '')).toBe('me');
+
+    const calls: Array<[string, string[]]> = [];
+    const warnings: string[] = [];
+    const run: ExecFileRunner = (file, args, done) => {
+      calls.push([file, args]);
+      done(new Error('icacls is not there'));
+    };
+    const warn = (_payload: Record<string, unknown>, message: string): void => {
+      warnings.push(message);
+    };
+
+    restrictTokenFileAcl('/data/session-token', warn, { platform: 'linux', user: 'me', run });
+    expect(calls).toEqual([]);
+
+    // A failure is a warning, never a throw: startup goes on.
+    expect(() =>
+      restrictTokenFileAcl('C:\\d\\session-token', warn, {
+        platform: 'win32',
+        user: 'HOST\\me',
+        run,
+      }),
+    ).not.toThrow();
+    expect(calls).toEqual([['icacls', tokenFileAclArgs('C:\\d\\session-token', 'HOST\\me')]]);
+    expect(warnings).toEqual(['could not restrict the session token file to this user']);
+    expect(() =>
+      restrictTokenFileAcl('C:\\d\\session-token', warn, {
+        platform: 'win32',
+        user: 'HOST\\me',
+        run: () => {
+          throw new Error('spawn refused');
+        },
+      }),
+    ).not.toThrow();
+    expect(warnings).toHaveLength(2);
   });
 
   it('prints the line from §2.10 with the URL and the token', () => {

@@ -1121,6 +1121,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         context: {
           runId: replyId,
           sandboxDir: '',
+          allowedDomains,
           ...(workspace === undefined ? {} : { projectDir: workspace }),
           signal: stopSignal,
         },

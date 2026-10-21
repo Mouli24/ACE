@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
+import { agentEnv } from '../agent/env.js';
 import { ToolError } from '../errors.js';
 
 /**
@@ -35,7 +36,13 @@ function rpcEnvelope(id: number, method: string, params: unknown): string {
   return `${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`;
 }
 
-/** Talks to a spawned MCP server over its stdio pipes, one JSON message per line. */
+/**
+ * Talks to a spawned MCP server over its stdio pipes, one JSON message per line.
+ *
+ * The server gets the agent commands' allowlisted environment (`agentEnv`), never the engine's own:
+ * a third-party server has no business with a provider key or the engine's session token that sits
+ * in `process.env` [audit S-5]. A server that needs a key of its own takes it in its arguments.
+ */
 export class StdioTransport implements McpTransport {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<number, Pending>();
@@ -43,8 +50,12 @@ export class StdioTransport implements McpTransport {
   private buffer = '';
   private closed = false;
 
-  constructor(command: string, args: string[]) {
-    this.child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }) as ChildProcessWithoutNullStreams;
+  constructor(
+    command: string,
+    args: string[],
+    env: Record<string, string> = agentEnv(process.env, process.platform),
+  ) {
+    this.child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], env, windowsHide: true }) as ChildProcessWithoutNullStreams;
     this.child.stdout.setEncoding('utf8');
     this.child.stdout.on('data', (chunk: string) => this.onData(chunk));
     this.child.on('exit', () => this.failAll('The MCP server process exited.'));

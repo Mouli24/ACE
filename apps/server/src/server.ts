@@ -1,6 +1,8 @@
+import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createWriteStream, mkdirSync, writeFileSync, type WriteStream } from 'node:fs';
 import type { Server } from 'node:http';
+import { userInfo } from 'node:os';
 import { join, relative, sep } from 'node:path';
 
 import {
@@ -60,6 +62,7 @@ import {
   createWsHub,
   guardrailStoreFor,
   haltActiveRuns,
+  isHostAllowed,
   isOriginAllowed,
   loadEngineConfig,
   logDirectory,
@@ -337,6 +340,61 @@ export function writeSessionTokenFile(dataDir: string, token: string): string {
   return path;
 }
 
+/** `NT AUTHORITY\SYSTEM` by its well-known SID, which no Windows language translates. */
+const SYSTEM_SID = '*S-1-5-18';
+
+/**
+ * [audit S-4] The `icacls` arguments that leave `path` to `user` and SYSTEM alone: `/inheritance:r`
+ * drops every entry the file inherited from its folder, and `/grant:r` gives the two of them full
+ * control, replacing any explicit entry they had.
+ */
+export function tokenFileAclArgs(path: string, user: string): string[] {
+  return [path, '/inheritance:r', '/grant:r', `${user}:F`, `${SYSTEM_SID}:F`];
+}
+
+/** `DOMAIN\user` when Windows names a domain (or the machine), else the bare user name. */
+export function windowsAccountName(username: string, domain: string | undefined): string {
+  return domain === undefined || domain === '' ? username : `${domain}\\${username}`;
+}
+
+/** Runs a program without a shell and reports how it ended. Injected so a test runs no `icacls`. */
+export type ExecFileRunner = (
+  file: string,
+  args: string[],
+  done: (error: Error | null) => void,
+) => void;
+
+const runExecFile: ExecFileRunner = (file, args, done) => {
+  execFile(file, args, { windowsHide: true }, (error) => done(error));
+};
+
+/**
+ * [audit S-4] Windows ignores `mode: 0o600`, so the token file takes its folder's ACL — which can
+ * let other principals read it (a sandbox users group, say). After writing it, `icacls` (no shell)
+ * cuts it down to this user and SYSTEM. Best-effort and in the background: a failure is a warning,
+ * never a failed start, and only the token file is touched — never the data directory's ACL.
+ */
+export function restrictTokenFileAcl(
+  path: string,
+  warn: (payload: Record<string, unknown>, message: string) => void,
+  options: { platform?: NodeJS.Platform; user?: string; run?: ExecFileRunner } = {},
+): void {
+  if ((options.platform ?? process.platform) !== 'win32') return;
+  const failed = (error: unknown): void =>
+    warn(
+      { subsystem: 'server', err: error },
+      'could not restrict the session token file to this user',
+    );
+  try {
+    const user = options.user ?? windowsAccountName(userInfo().username, process.env['USERDOMAIN']);
+    (options.run ?? runExecFile)('icacls', tokenFileAclArgs(path, user), (error) => {
+      if (error !== null) failed(error);
+    });
+  } catch (error) {
+    failed(error);
+  }
+}
+
 /** The §2.10 line the user copies to open the app. */
 export function readyLine(url: string, webOrigin: string, token: string): string {
   return `ACE engine ready · ${url} · open ${webOrigin}/?token=${token}`;
@@ -394,7 +452,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
 
   const token = generateSessionToken();
   const auth = new SessionTokenAuth(token);
-  writeSessionTokenFile(config.dataDir, token);
+  restrictTokenFileAcl(writeSessionTokenFile(config.dataDir, token), (payload, message) =>
+    logger.warn(payload, message),
+  );
 
   // Settings must exist before the origin guard reads them on the first request.
   await repository.settings.update(LOCAL_SCOPE, { dataDir: config.dataDir });
@@ -738,6 +798,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
             ...(ctx.nodeId === undefined || ctx.projectDir === undefined
               ? {}
               : { nodeId: ctx.nodeId, session: agentSessionFor(ctx.runId, ctx.projectDir) }),
+            ...(ctx.allowedDomains === undefined ? {} : { allowedDomains: ctx.allowedDomains }),
             logger: toolLogger,
             signal: ctx.signal,
           }),
@@ -1226,6 +1287,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   // Filled once the server is bound: with `port: 0` the configured port is not the real one
   // (D301). The gateway reads this array on every request, so filling it in place is enough.
   const selfOrigins: string[] = [];
+  // [audit S-7] The Host values a request may carry, from the same bound port, filled the same way.
+  const selfHosts: string[] = [];
   const app = createEngineApp({
     repository,
     auth,
@@ -1237,6 +1300,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     runs,
     bus,
     selfOrigins,
+    selfHosts,
     /* Round 3's three sub-routers (§2.5, D121). */
     controls,
     /* Domain (D309, D323): messages to a run's nodes, and ending a run started from Domain. */
@@ -1277,6 +1341,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   const bound = server.address() as { port: number; address: string };
   const actualPort = bound.port;
   selfOrigins.push(`http://${BIND_HOST}:${actualPort}`, `http://localhost:${actualPort}`);
+  selfHosts.push(`${BIND_HOST}:${actualPort}`, `localhost:${actualPort}`, `[::1]:${actualPort}`);
   const url = `http://${BIND_HOST}:${actualPort}`;
 
   /* --------------------------------------------------------------- websocket */
@@ -1292,10 +1357,17 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
       return;
     }
     const origin = request.headers.origin;
+    const host = request.headers.host;
 
     isOriginAllowed(originDeps, origin).then(
       (allowed) => {
         wss.handleUpgrade(request, socket, head, (ws) => {
+          // [audit S-7]: a DNS-rebound page's upgrade names its own host; refused like a foreign Origin.
+          if (!isHostAllowed(selfHosts, host)) {
+            logger.warn({ subsystem: 'ws', host }, 'refused a WebSocket for a foreign host');
+            ws.close(WS_CLOSE_FORBIDDEN_ORIGIN, 'forbidden host');
+            return;
+          }
           if (!allowed) {
             // design §7: the same allow-list as REST. Completed, then closed rather than
             // destroyed, so the client learns why and does not retry (FR-SYS-003).

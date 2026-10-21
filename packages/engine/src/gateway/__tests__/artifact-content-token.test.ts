@@ -113,6 +113,22 @@ describe('FR-MM-009 the content route accepts the session token as ?token= (D-06
     expect(response.headers.get('content-type')).toBe('audio/mpeg');
   });
 
+  it('serves the bytes unsniffable, unscriptable and uncached, ranged or whole [audit S-6]', async () => {
+    const id = await stored();
+
+    const whole = await app.request(contentPath(id, `?token=${TOKEN}`));
+    const ranged = await app.request(contentPath(id, `?token=${TOKEN}`), {
+      headers: { Range: 'bytes=0-3' },
+    });
+
+    for (const response of [whole, ranged]) {
+      expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(response.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox");
+      expect(response.headers.get('cache-control')).toBe('no-store');
+    }
+    expect(ranged.status).toBe(206);
+  });
+
   it('answers a byte range the same way, so a player can seek (§2.1)', async () => {
     const id = await stored();
 

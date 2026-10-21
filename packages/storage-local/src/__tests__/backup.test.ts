@@ -526,6 +526,29 @@ describe('FR-SYS-012 refuses a zip that is not an ACE backup, leaving the data d
     expect(await engine.repository.projects.list(scope, { limit: 50 })).toEqual(projects);
   }
 
+  it('refuses a zip that unpacks past the cap before inflating it [audit S-9]', async () => {
+    const engine = await startEngine('refuse-bomb');
+    await seedData(engine);
+    const capped = createBackupStore({
+      sqlite: engine.opened.sqlite,
+      dataDir: engine.dataDir,
+      blobsDir: join(engine.dataDir, 'blobs'),
+      settings: engine.repository.settings,
+      exclusive: (fn) => engine.repository.exclusive(fn),
+      maxUnpackedBytes: 4 * 1024 * 1024,
+    });
+    const good = unzipSync(await engine.backup.exportZip());
+    // 8 MB of zeros packs to a few KB: the shape of a zip bomb, at a size a test can afford.
+    const bomb = zipSync({ ...good, 'blobs/aa/zeros': new Uint8Array(8 * 1024 * 1024) } as Zippable);
+    expect(bomb.byteLength).toBeLessThan(1024 * 1024);
+
+    await refuses({ ...engine, backup: capped }, bomb, /unpacks to more than 4194304 bytes/);
+    // Under the cap the same store restores as before.
+    await expect(capped.importZip(zipSync(good as Zippable))).resolves.toMatchObject({
+      projects: 1,
+    });
+  });
+
   it('refuses bytes that are not a zip, and a zip with no manifest', async () => {
     const engine = await startEngine('refuse1');
     await seedData(engine);

@@ -30,6 +30,12 @@ export interface ToolContext {
    * (chat turns, older callers), the project tools behave as before this feature.
    */
   readonly session?: AgentSession;
+  /**
+   * The calling agent's `tools.allowedDomains`. The tool point checks a call's URL against it; the
+   * network tools check it again on every redirect they follow, and only an IP or `localhost`
+   * entry lets them reach a private address [audit S-2]. Absent, it is the empty list.
+   */
+  readonly allowedDomains?: readonly string[];
   readonly logger: ToolLogger;
   /** Aborted when the run is stopped, so a tool cancels within the 2 s Stop budget. */
   readonly signal?: AbortSignal;

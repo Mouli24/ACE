@@ -28,6 +28,7 @@ import {
   UpdateWorkflowRequestSchema,
   artifactETag,
   cliPatchError,
+  maxUploadBytes,
   type Id,
   type McpServer,
   type MessageQuery,
@@ -99,6 +100,7 @@ import { createCheckpointRoutes } from '../checkpoints/routes.js';
 import type { CheckpointService } from '../checkpoints/service.js';
 import {
   HttpError,
+  forbiddenHost,
   forbiddenOrigin,
   notFound,
   notImplemented,
@@ -107,6 +109,7 @@ import {
   unauthorized,
 } from './errors.js';
 import { readJson } from './read-json.js';
+import { BACKUP_IMPORT_MAX_BYTES, MULTIPART_OVERHEAD_BYTES, limitBody } from './body-limit.js';
 
 /**
  * The tool catalog `GET /tools` reads (round 4 §2.4). It is a narrow view rather than the concrete
@@ -140,6 +143,12 @@ export interface EngineDeps {
   graph: GraphService;
   /** The engine's own origin, always allowed in addition to `settings.allowedOrigins`. */
   selfOrigins?: string[];
+  /**
+   * [audit S-7] The `Host` values the engine answers to (`127.0.0.1:<port>`, `localhost:<port>`,
+   * `[::1]:<port>`), filled in once the real port is bound. Absent, no Host check — an app driven
+   * through `app.request(...)` has no socket and so no address of its own.
+   */
+  selfHosts?: string[];
 
   /* Round 2. Optional so a round 1 harness still builds an app without them. */
   providers?: ProviderService;
@@ -240,6 +249,27 @@ export async function isOriginAllowed(
   if (origin === undefined || origin === '') return true;
   const settings = await deps.repository.settings.get(deps.scope);
   return settings.allowedOrigins.includes(origin) || (deps.selfOrigins ?? []).includes(origin);
+}
+
+/**
+ * [audit S-7] Is `host` (a request's `Host` header) one of the engine's own addresses? The second
+ * layer against DNS rebinding: a page on `evil.example` that re-points its name at 127.0.0.1 is
+ * same-origin to itself, sends no `Origin` on a GET and so passes the Origin rule — but its `Host`
+ * still says `evil.example`. One rule for REST (`hostGuard`) and the WebSocket upgrade. With no
+ * `selfHosts` there is nothing to compare against and every host passes.
+ */
+export function isHostAllowed(selfHosts: readonly string[] | undefined, host: string | undefined): boolean {
+  if (selfHosts === undefined) return true;
+  return host !== undefined && selfHosts.includes(host.toLowerCase());
+}
+
+/** [audit S-7]: refuse a request whose `Host` is not the engine's — before CORS answers anything. */
+function hostGuard(deps: EngineDeps): MiddlewareHandler<{ Variables: EngineVariables }> {
+  return async (c, next) => {
+    const host = c.req.header('Host');
+    if (!isHostAllowed(deps.selfHosts, host)) throw forbiddenHost(host ?? '');
+    return next();
+  };
 }
 
 /**
@@ -461,6 +491,7 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   });
 
   app.use('*', requestId());
+  app.use('*', hostGuard(deps));
   app.use('*', corsLayer(deps));
   app.use('*', originGuard(deps));
   app.use('*', authGuard(deps));
@@ -895,7 +926,14 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
 
   /* -------------------------------------------------------------- artifacts (R4) */
 
-  api.post('/artifacts', async (c) => {
+  // [audit S-9]: refused at the body's size, before the multipart parse holds it all; the service
+  // still checks the file itself against the same limit.
+  const uploadLimit = limitBody(
+    async () => maxUploadBytes((await deps.repository.settings.get(deps.scope)).maxUploadMb),
+    MULTIPART_OVERHEAD_BYTES,
+  );
+
+  api.post('/artifacts', uploadLimit, async (c) => {
     const body = await c.req.parseBody();
     const file = body[ARTIFACT_UPLOAD_FIELD];
     if (!(file instanceof File)) {
@@ -931,11 +969,17 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     if (found === null) throw notFound(`artifact ${c.req.param('id')}`);
     const { artifact, bytes } = found;
 
+    // [audit S-6]: the bytes are whatever a model or an upload produced, served on the engine's own
+    // origin with the token in the URL. Never sniffed into something else, never run as a page if
+    // opened as one (an <img>/<audio>/<video> ignores a subresource's CSP), never kept in a cache.
     const headers: Record<string, string> = {
       'Content-Type': artifact.mime,
       'Content-Disposition': `attachment; filename="${safeFilename(artifact.name)}"`,
       ETag: artifactETag(artifact.hash),
       'Accept-Ranges': ARTIFACT_ACCEPT_RANGES,
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+      'Cache-Control': 'no-store',
     };
 
     // Range → 206 with the requested slice, so audio and video can be seeked (§2.1, FR-MM-009).
@@ -1130,6 +1174,8 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.route('/', createMemoryRoutes(deps.memory));
   api.route('/', createUsageRoutes(deps.trace, deps.usage));
   api.route('/', createTemplateRoutes(deps.templates));
+  // [audit S-9]: a backup zip's upload is capped before the router parses it.
+  api.use('/backup/import', limitBody(() => BACKUP_IMPORT_MAX_BYTES, MULTIPART_OVERHEAD_BYTES));
   api.route('/', createBackupRoutes(deps.backup));
   /* IDE (D299): Forge's project files, inside the same middleware. */
   api.route('/', createWorkspaceRoutes(deps.workspace));

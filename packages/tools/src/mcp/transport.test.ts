@@ -67,6 +67,32 @@ describe('StdioTransport', () => {
     await expect(transport.request('hang', {}, 150)).rejects.toMatchObject({ kind: 'timeout' });
   });
 
+  it("spawns the server with the allowlisted env, never the engine's own [audit S-5]", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ace-mcp-env-'));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 100, retryDelay: 50 }));
+    const path = join(dir, 'env.mjs');
+    writeFileSync(
+      path,
+      `process.stdin.on('data', (c) => {
+  const req = JSON.parse(String(c).trim());
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, result: process.env }) + '\\n');
+});`,
+      'utf8',
+    );
+    process.env['ACE_S5_PROBE_KEY'] = 'probe-should-not-cross';
+    cleanups.push(() => {
+      delete process.env['ACE_S5_PROBE_KEY'];
+    });
+
+    const transport = new StdioTransport(process.execPath, [path]);
+    cleanups.push(() => transport.close());
+    const seen = (await transport.request('env', {}, 5_000)) as Record<string, string>;
+
+    expect(seen['ACE_S5_PROBE_KEY']).toBeUndefined();
+    expect(Object.keys(seen).some((key) => key.toUpperCase() === 'PATH')).toBe(true);
+    expect(seen['CI']).toBe('1');
+  });
+
   it('fails pending requests when closed', async () => {
     const transport = new StdioTransport(process.execPath, [writeQuirkyServer()]);
     const pending = transport.request('hang', {}, 5_000);
