@@ -885,3 +885,50 @@ describe('audit P-2 discovered chat models get their family’s capabilities', (
     });
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* audit P-14 a paged model listing is read to its end                          */
+/* -------------------------------------------------------------------------- */
+
+describe('audit P-14 model listings are followed across pages', () => {
+  it('anthropic: asks for 1000 a page and follows has_more from last_id', async () => {
+    const asked: string[] = [];
+    server.use(
+      http.get('https://api.anthropic.com/v1/models', ({ request }) => {
+        const url = new URL(request.url);
+        asked.push(url.search);
+        return url.searchParams.get('after_id') === 'claude-a'
+          ? HttpResponse.json({ data: [{ id: 'claude-b' }], has_more: false, last_id: 'claude-b' })
+          : HttpResponse.json({ data: [{ id: 'claude-a' }], has_more: true, last_id: 'claude-a' });
+      }),
+    );
+
+    const models = await createAnthropicAdapter({ apiKey: 'k' }).listModels();
+
+    expect(models.map((m) => m.modelId)).toEqual(['claude-a', 'claude-b']);
+    expect(asked).toEqual(['?limit=1000', '?limit=1000&after_id=claude-a']);
+  });
+
+  it('google: asks for 1000 a page and follows nextPageToken', async () => {
+    const tokens: (string | null)[] = [];
+    server.use(
+      http.get('https://generativelanguage.googleapis.com/v1beta/models', ({ request }) => {
+        const url = new URL(request.url);
+        expect(url.searchParams.get('pageSize')).toBe('1000');
+        const token = url.searchParams.get('pageToken');
+        tokens.push(token);
+        return token === 'p2'
+          ? HttpResponse.json({ models: [{ name: 'models/gemini-2.5-pro' }] })
+          : HttpResponse.json({
+              models: [{ name: 'models/gemini-2.5-flash' }],
+              nextPageToken: 'p2',
+            });
+      }),
+    );
+
+    const models = await createGoogleAdapter({ apiKey: 'k' }).listModels();
+
+    expect(models.map((m) => m.modelId)).toEqual(['gemini-2.5-flash', 'gemini-2.5-pro']);
+    expect(tokens).toEqual([null, 'p2']);
+  });
+});

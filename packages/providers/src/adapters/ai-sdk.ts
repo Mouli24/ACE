@@ -165,6 +165,9 @@ export interface HttpProbeOptions {
 /** How long a `check()` waits before calling a provider unreachable. */
 export const CHECK_TIMEOUT_MS = 10_000;
 
+/** The most pages a paginated model listing is followed for — a guard, never a limit in practice. */
+export const MAX_LIST_PAGES = 20;
+
 /**
  * One GET, turned into either a parsed body or a `ProviderCallError`. Every real adapter's
  * `check()` and `listModels()` go through this, so they cannot disagree about what a 401 means.

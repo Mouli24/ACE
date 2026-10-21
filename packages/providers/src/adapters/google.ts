@@ -8,6 +8,7 @@ import {
   createAiSdkAdapter,
   discoveredModel,
   getJson,
+  MAX_LIST_PAGES,
   notAChatModel,
   postJson,
   requireEmbedModel,
@@ -66,11 +67,28 @@ export function parseGoogleModelList(body: unknown): ModelInfo[] {
 export function createGoogleAdapter(options: GoogleOptions): ProviderAdapter {
   const baseUrl = (options.baseUrl ?? GOOGLE_BASE_URL).replace(/\/+$/, '');
 
-  const probe = async (): Promise<unknown> =>
-    getJson({
-      url: `${baseUrl}/v1beta/models?key=${encodeURIComponent(options.apiKey)}`,
+  // [audit P-14] The listing is paged (50 by default): ask for the most a page holds, and follow
+  // `nextPageToken`.
+  const page = async (pageToken?: string): Promise<unknown> => {
+    const next = pageToken === undefined ? '' : `&pageToken=${encodeURIComponent(pageToken)}`;
+    return getJson({
+      url: `${baseUrl}/v1beta/models?key=${encodeURIComponent(options.apiKey)}&pageSize=1000${next}`,
       ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
     });
+  };
+  const probe = (): Promise<unknown> => page();
+  const listAll = async (): Promise<ModelInfo[]> => {
+    const models: ModelInfo[] = [];
+    let pageToken: string | undefined;
+    for (let pages = 0; pages < MAX_LIST_PAGES; pages += 1) {
+      const body = await page(pageToken);
+      models.push(...parseGoogleModelList(body));
+      const { nextPageToken } = body as { nextPageToken?: unknown };
+      if (typeof nextPageToken !== 'string' || nextPageToken === '') break;
+      pageToken = nextPageToken;
+    }
+    return models;
+  };
 
   const provider = createGoogleGenerativeAI({
     apiKey: options.apiKey,
@@ -82,7 +100,7 @@ export function createGoogleAdapter(options: GoogleOptions): ProviderAdapter {
     type: 'google',
     model: (modelId) => provider(modelId),
     check: () => statusFromProbe(probe),
-    listModels: async (): Promise<ModelInfo[]> => parseGoogleModelList(await probe()),
+    listModels: listAll,
     embed: async (texts, embedOptions) => {
       const model = requireEmbedModel(embedOptions);
       if (texts.length === 0) return [];

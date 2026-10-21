@@ -5,6 +5,7 @@ import {
   createAiSdkAdapter,
   discoveredModel,
   getJson,
+  MAX_LIST_PAGES,
   statusFromProbe,
   withFamilyDefaults,
   type FetchLike,
@@ -43,12 +44,29 @@ export function createAnthropicAdapter(options: AnthropicOptions): ProviderAdapt
   const baseUrl = (options.baseUrl ?? ANTHROPIC_BASE_URL).replace(/\/+$/, '');
   const headers = { 'x-api-key': options.apiKey, 'anthropic-version': ANTHROPIC_VERSION };
 
-  const probe = async (): Promise<unknown> =>
-    getJson({
-      url: `${baseUrl}/v1/models`,
+  // [audit P-14] The listing is paged (20 by default): ask for the most a page holds, and follow
+  // `has_more` from `last_id`.
+  const page = async (afterId?: string): Promise<unknown> => {
+    const after = afterId === undefined ? '' : `&after_id=${encodeURIComponent(afterId)}`;
+    return getJson({
+      url: `${baseUrl}/v1/models?limit=1000${after}`,
       headers,
       ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
     });
+  };
+  const probe = (): Promise<unknown> => page();
+  const listAll = async (): Promise<ModelInfo[]> => {
+    const models: ModelInfo[] = [];
+    let afterId: string | undefined;
+    for (let pages = 0; pages < MAX_LIST_PAGES; pages += 1) {
+      const body = await page(afterId);
+      models.push(...parseAnthropicModelList(body));
+      const { has_more: more, last_id: last } = body as { has_more?: unknown; last_id?: unknown };
+      if (more !== true || typeof last !== 'string') break;
+      afterId = last;
+    }
+    return models;
+  };
 
   const provider = createAnthropic({
     apiKey: options.apiKey,
@@ -60,6 +78,6 @@ export function createAnthropicAdapter(options: AnthropicOptions): ProviderAdapt
     type: 'anthropic',
     model: (modelId) => provider(modelId),
     check: () => statusFromProbe(probe),
-    listModels: async () => parseAnthropicModelList(await probe()),
+    listModels: listAll,
   });
 }
