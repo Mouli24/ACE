@@ -9,7 +9,7 @@ import {
 } from '@ace/contracts';
 import { cn, Icons, PartRenderer } from '@ace/ui';
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { api } from '../app/api';
 import { useCheckpoint } from '../forge/changes/hooks';
@@ -430,8 +430,9 @@ export function ChatConversation({
               }}
             />
           ) : message.error !== undefined ? (
+            // [audit W-15] not an alert: a failed turn read back from history is not news; the
+            // turn that has just failed is said once, by the announcement below
             <div
-              role="alert"
               data-testid="chat-error-turn"
               data-code={message.error.code}
               data-kind={message.error.kind}
@@ -534,6 +535,30 @@ export function ChatConversation({
     .filter((each) => each.supersededAt === undefined)
     .at(-1)?.runId;
 
+  /*
+   * [audit W-15] The reply is said once, when it lands — not token by token, which is what a
+   * live region around the streaming text did. A thread opened or switched to says nothing.
+   */
+  const latestReply = convo.messages
+    .filter((each) => each.role !== 'user' && each.supersededAt === undefined)
+    .at(-1);
+  const [announcement, setAnnouncement] = useState('');
+  const announced = useRef<{ threadId: string | undefined; replyId: string | undefined }>({
+    threadId: convo.threadId,
+    replyId: latestReply?.id,
+  });
+  useEffect(() => {
+    const before = announced.current;
+    announced.current = { threadId: convo.threadId, replyId: latestReply?.id };
+    if (latestReply === undefined || before.threadId !== convo.threadId) return;
+    if (before.replyId === latestReply.id) return;
+    const who = otherSpeaker(latestReply.speakerNodeId)?.name ?? node.name;
+    setAnnouncement(
+      latestReply.error === undefined ? `${who} answered.` : `${who} could not answer.`,
+    );
+    // keyed on the reply's id alone: it is said once, whatever else re-renders
+  }, [convo.threadId, latestReply?.id]);
+
   const empty =
     convo.messages.length === 0 &&
     !convo.awaitingReply &&
@@ -590,8 +615,13 @@ export function ChatConversation({
           <RunHint runId={latestRunId} onOpenRun={onOpenRun} />
         )}
 
+        {/* [audit W-15] the text streams outside any live region; the announcement says it once */}
+        <p role="status" data-testid="chat-announce" className="sr-only">
+          {announcement}
+        </p>
+
         {convo.streamingText.length > 0 && (
-          <div aria-live="polite" data-testid="chat-streaming">
+          <div data-testid="chat-streaming">
             <Row you={false} name={replyName} speaker={replying}>
               <Body content={[{ type: 'text', text: convo.streamingText }]} />
             </Row>
@@ -599,7 +629,7 @@ export function ChatConversation({
         )}
 
         {runText.length > 0 && (
-          <div aria-live="polite" data-testid="chat-run-live">
+          <div data-testid="chat-run-live">
             <Row you={false} name={node.name}>
               <Body content={[{ type: 'text', text: runText }]} />
             </Row>

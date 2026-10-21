@@ -63,7 +63,8 @@ export function CanvasHaltNote({ workflowId }: { workflowId: string }) {
   return (
     // Below the Canvas chrome (breadcrumb ends at 38px, Add node at 46px): over it, a long note hid
     // the "…" menu, which is where Restart and Run details live once a run has halted.
-    <div className={PILL}>
+    // [audit W-15] a status: the halt is said once when it lands, without interrupting
+    <div role="status" className={PILL}>
       <HaltReasonNote
         reason={run.haltReason}
         {...(run.budgetHalt === undefined ? {} : { budgetHalt: run.budgetHalt })}
@@ -87,7 +88,7 @@ function BlockedNote({
   const resume = useResumeRun();
   const text = BLOCKED_TEXT[reason];
   return (
-    <div className={`${PILL} flex items-center gap-3`}>
+    <div role="status" className={`${PILL} flex items-center gap-3`}>
       <div data-testid="blocked-reason" data-reason={reason} className="flex items-start gap-2">
         <span
           aria-hidden

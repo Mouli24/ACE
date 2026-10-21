@@ -23,6 +23,8 @@ describe('CanvasHaltNote', () => {
     render(<CanvasHaltNote workflowId="wf1" />);
     const pill = screen.getByTestId('halt-reason').parentElement;
     expect(pill).toHaveClass('w-max', 'max-w-[calc(100%-1.5rem)]', 'left-1/2', '-translate-x-1/2');
+    // [audit W-15] a status, said once when it lands
+    expect(pill).toHaveAttribute('role', 'status');
   });
 
   it('sits below the Canvas chrome, so a long note never covers the "…" menu or Add node', () => {

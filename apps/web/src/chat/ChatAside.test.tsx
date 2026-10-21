@@ -207,6 +207,9 @@ describe('D285 each node keeps its own session', () => {
     expect(turn).toHaveTextContent('not signed in');
     await waitFor(() => expect(screen.queryByTestId('chat-streaming')).toBeNull());
     expect(screen.queryByTestId('chat-thinking')).toBeNull();
+    // [audit W-15] said once by the announcement; the turn itself is no alert to re-read on load
+    expect(turn).not.toHaveAttribute('role', 'alert');
+    expect(screen.getByTestId('chat-announce')).toHaveTextContent('could not answer.');
   });
 
   it('puts a run’s goal and result in the node’s chat, never on the Canvas', async () => {

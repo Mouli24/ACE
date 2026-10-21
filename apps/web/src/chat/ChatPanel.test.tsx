@@ -70,6 +70,9 @@ describe('TC-CHAT-006 a chat reply streams then settles', () => {
     expect(await screen.findByTestId('chat-usage')).toBeInTheDocument();
     expect(screen.queryByTestId('chat-send-to-forge')).toBeNull();
     expect(screen.getByTestId('chat-input')).toHaveAttribute('placeholder', 'Message this agent…');
+    // [audit W-15] the reply is said once when it lands, not token by token
+    expect(screen.getByTestId('chat-announce')).toHaveTextContent('Writer answered.');
+    expect(screen.getByTestId('chat-announce')).toHaveAttribute('role', 'status');
   });
 
   it('sends from the keyboard alone (Enter)', async () => {
