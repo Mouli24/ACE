@@ -55,8 +55,11 @@ export interface FileTreeProps {
   projectId: string;
   /** The tree's accessible name. */
   label: string;
-  /** A single click previews; a double click or Enter pins (§6.2's preview tab). */
-  onOpen(path: string, options: { preview: boolean }): void;
+  /**
+   * A single click previews; a double click or Enter pins (§6.2's preview tab). Space previews and
+   * keeps the focus in the tree (`focus: false`, [audit F-11]).
+   */
+  onOpen(path: string, options: { preview: boolean; focus?: boolean }): void;
   /** Non-empty: a flat list of the project's files whose path contains it (theme filter). */
   filter?: string;
   /** Path → the agent writing that file now, from the run (D334). */
@@ -213,9 +216,9 @@ export function FileTree({
     store.getState().select(projectId, path);
     rowElements.current.get(path)?.focus();
   };
-  const activate = (row: Row, preview: boolean): void => {
+  const activate = (row: Row, preview: boolean, focus = true): void => {
     if (row.folder) store.getState().toggle(projectId, row.path);
-    else onOpen(row.path, { preview });
+    else onOpen(row.path, focus ? { preview } : { preview, focus: false });
   };
 
   const commitCreate = async (
@@ -298,7 +301,7 @@ export function FileTree({
         if (row) activate(row, false);
         break;
       case ' ':
-        if (row) activate(row, true);
+        if (row) activate(row, true, false);
         break;
       case 'F2':
         if (!editable || row === undefined) return;

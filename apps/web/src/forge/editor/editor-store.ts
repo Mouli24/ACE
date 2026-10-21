@@ -42,6 +42,12 @@ export interface ProjectEditor {
   files: Record<string, OpenFile>;
   /** A position to show once the file is in the editor (Problems). */
   reveal: Reveal | undefined;
+  /**
+   * [audit F-11] Whether the editor takes the keyboard focus when it next shows the active file;
+   * false after a Space preview in the Explorer, which keeps the focus on its row, until the editor
+   * has shown that file (`focusDone`). Absent: it does.
+   */
+  focusOnShow?: boolean;
 }
 
 export const EMPTY_EDITOR: ProjectEditor = {
@@ -73,7 +79,7 @@ export function replaceablePreview(editor: ProjectEditor, path: string): string 
 
 interface EditorState {
   projects: Record<string, ProjectEditor>;
-  open(projectId: string, path: string, options?: { preview?: boolean }): void;
+  open(projectId: string, path: string, options?: { preview?: boolean; focus?: boolean }): void;
   activate(projectId: string, path: string): void;
   pin(projectId: string, path: string): void;
   closeMany(projectId: string, paths: readonly string[]): void;
@@ -92,6 +98,8 @@ interface EditorState {
   /** Show a place in a file; a review showing gives the editor area back (fix F-M2). */
   revealAt(projectId: string, reveal: Reveal): void;
   revealDone(projectId: string): void;
+  /** [audit F-11] The editor has shown the file a preview opened without the focus. */
+  focusDone(projectId: string): void;
   /** [audit F-13] The project is gone: its tabs and unsaved state go too. */
   forget(projectId: string): void;
 }
@@ -123,11 +131,13 @@ export const useEditorStore = create<EditorState>()((set) => {
     open: (projectId, path, options = {}) =>
       update(projectId, (editor) => {
         const preview = options.preview === true;
+        const focusOnShow = options.focus !== false;
         if (editor.files[path] !== undefined) {
           return {
             ...editor,
             active: path,
             preview: !preview && editor.preview === path ? undefined : editor.preview,
+            focusOnShow,
           };
         }
         const replaced = preview ? replaceablePreview(editor, path) : undefined;
@@ -143,7 +153,14 @@ export const useEditorStore = create<EditorState>()((set) => {
               : editor.tabs.indexOf(editor.active) + 1;
           tabs = [...editor.tabs.slice(0, at), path, ...editor.tabs.slice(at)];
         }
-        return { ...editor, tabs, files, active: path, preview: preview ? path : editor.preview };
+        return {
+          ...editor,
+          tabs,
+          files,
+          active: path,
+          preview: preview ? path : editor.preview,
+          focusOnShow,
+        };
       }),
 
     activate: (projectId, path) =>
@@ -240,6 +257,10 @@ export const useEditorStore = create<EditorState>()((set) => {
       update(projectId, (editor) => ({ ...editor, reveal }));
     },
     revealDone: (projectId) => update(projectId, (editor) => ({ ...editor, reveal: undefined })),
+    focusDone: (projectId) =>
+      update(projectId, (editor) =>
+        editor.focusOnShow === false ? { ...editor, focusOnShow: true } : editor,
+      ),
     forget: (projectId) =>
       set((state) => {
         if (state.projects[projectId] === undefined) return state;

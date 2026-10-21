@@ -71,6 +71,19 @@ describe('FR-GIT-003 the Explorer tree', () => {
     expect(onOpen).toHaveBeenLastCalledWith('README.md', { preview: false });
   });
 
+  it('[audit F-11] Space previews the file and keeps the focus on its row', async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    const projectId = seed();
+    renderWithQuery(<FileTree projectId={projectId} label="Files" onOpen={onOpen} />);
+    const row = await screen.findByTestId('tree-item-README.md');
+    // a click selects the row (and previews); Space then previews the selected row again
+    await user.click(row);
+    await user.keyboard(' ');
+    expect(onOpen).toHaveBeenLastCalledWith('README.md', { preview: true, focus: false });
+    expect(row).toHaveFocus();
+  });
+
   it('moves with the arrow keys: down, right into a folder, left back out', async () => {
     const user = userEvent.setup();
     const projectId = seed();

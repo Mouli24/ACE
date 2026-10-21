@@ -36,7 +36,8 @@ export const dirtyHandler =
 export function openFile(
   projectId: string,
   path: string,
-  options: { preview?: boolean } = {},
+  /** `focus: false` leaves the keyboard where it is (a Space preview, [audit F-11]). */
+  options: { preview?: boolean; focus?: boolean } = {},
 ): void {
   const before = useEditorStore.getState().projects[projectId] ?? EMPTY_EDITOR;
   const replaced =
