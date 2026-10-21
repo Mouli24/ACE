@@ -3,10 +3,12 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import type { ModelInfo, ProviderAdapter } from '../adapter.js';
 import {
   badEmbedResponse,
+  byChatName,
   checkVectors,
   createAiSdkAdapter,
   discoveredModel,
   getJson,
+  notAChatModel,
   postJson,
   requireEmbedModel,
   statusFromProbe,
@@ -26,6 +28,12 @@ export interface GoogleOptions {
   fetchImpl?: FetchLike;
 }
 
+/**
+ * The listing, as models. [audit P-6] `supportedGenerationMethods` says what each one does: a model
+ * without `generateContent` cannot chat — an embedder (`embedContent`) is kept, unavailable, for a
+ * knowledge base to pick, and one that does neither (an image or video generator) is left out. A
+ * chat model whose name says it speaks or draws is still told apart by that name.
+ */
 export function parseGoogleModelList(body: unknown): ModelInfo[] {
   const models = (body as { models?: unknown }).models;
   if (!Array.isArray(models)) return [];
@@ -34,12 +42,13 @@ export function parseGoogleModelList(body: unknown): ModelInfo[] {
     const name = (entry as { name?: unknown }).name;
     if (typeof name !== 'string') return [];
     const displayName = (entry as { displayName?: unknown }).displayName;
-    return [
-      discoveredModel(
-        name.replace(/^models\//, ''),
-        typeof displayName === 'string' ? displayName : undefined,
-      ),
-    ];
+    const model = discoveredModel(
+      name.replace(/^models\//, ''),
+      typeof displayName === 'string' ? displayName : undefined,
+    );
+    const methods = (entry as { supportedGenerationMethods?: unknown }).supportedGenerationMethods;
+    if (!Array.isArray(methods) || methods.includes('generateContent')) return [byChatName(model)];
+    return methods.includes('embedContent') ? [notAChatModel(model)] : [];
   });
 }
 

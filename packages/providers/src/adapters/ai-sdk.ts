@@ -59,6 +59,29 @@ export function discoveredModel(modelId: string, displayName?: string): ModelInf
   };
 }
 
+/**
+ * Names that mark a model that does not chat — embedders, speech, transcription, image generation,
+ * moderation [audit P-6]. A listing puts them beside the chat models with nothing else to tell
+ * them apart.
+ */
+const NON_CHAT_NAME = /embed|whisper|tts|transcribe|dall-e|image|moderation|guard|orpheus/i;
+
+/**
+ * Why a listed model cannot be chosen for a node [audit P-6]. Availability is about nodes only: a
+ * knowledge base still picks and embeds with such a model.
+ */
+export const NOT_A_CHAT_MODEL = 'Not a chat model: an agent or model node cannot use it.';
+
+/** The model, kept in the catalogue but unavailable, with {@link NOT_A_CHAT_MODEL}. */
+export function notAChatModel(model: ModelInfo): ModelInfo {
+  return { ...model, available: false, unavailableReason: NOT_A_CHAT_MODEL };
+}
+
+/** The model as its name describes it: unavailable when the name says it does not chat. */
+export function byChatName(model: ModelInfo): ModelInfo {
+  return NON_CHAT_NAME.test(model.modelId) ? notAChatModel(model) : model;
+}
+
 /** The AI SDK's finish reasons, narrowed to ours (Arch §14.2). */
 function toFinishReason(reason: string): FinishReason {
   switch (reason) {

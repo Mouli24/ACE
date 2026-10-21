@@ -1,9 +1,10 @@
-import type { ProviderAdapter } from '../adapter.js';
+import type { ModelInfo, ProviderAdapter } from '../adapter.js';
 import {
   badEmbedResponse,
   checkVectors,
   type EmbedOptions,
   getJson,
+  notAChatModel,
   postJson,
   requireEmbedModel,
   type FetchLike,
@@ -65,7 +66,7 @@ export function createOllamaAdapter(options: OllamaOptions = {}): ProviderAdapte
           can?.has('vision') === true && !model.inputTypes.includes('image')
             ? [...model.inputTypes, 'image' as const]
             : model.inputTypes;
-        return {
+        const described: ModelInfo = {
           ...model,
           inputTypes,
           supportsJson: true,
@@ -74,6 +75,12 @@ export function createOllamaAdapter(options: OllamaOptions = {}): ProviderAdapte
           ...(shown?.contextLength === undefined ? {} : { contextWindow: shown.contextLength }),
           ...(size === undefined ? {} : { sizeBytes: size }),
         };
+        // [audit P-6] `capabilities` says what the name only guesses: without `completion` the
+        // model does not chat (an embedder); with it, one named like a non-chat model still does.
+        if (can === undefined) return described;
+        if (!can.has('completion')) return notAChatModel(described);
+        const { available: _named, unavailableReason: _why, ...chat } = described;
+        return chat;
       });
     },
     // Ollama's native batch endpoint, not the OpenAI-style one this adapter otherwise speaks.

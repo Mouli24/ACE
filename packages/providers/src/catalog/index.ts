@@ -93,6 +93,11 @@ export function mergeCatalog(
             displayName: model.displayName,
             // PG-1.4: the size is the machine's word, never the manifest's.
             ...(model.sizeBytes === undefined ? {} : { sizeBytes: model.sizeBytes }),
+            // [audit P-6] So is whether a node can use it (an embedder the manifest prices).
+            ...(model.available === undefined ? {} : { available: model.available }),
+            ...(model.unavailableReason === undefined
+              ? {}
+              : { unavailableReason: model.unavailableReason }),
             source: 'discovered',
           },
     );

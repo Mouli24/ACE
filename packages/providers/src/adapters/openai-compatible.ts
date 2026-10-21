@@ -3,6 +3,7 @@ import type { ProviderType } from '@ace/contracts';
 
 import type { ModelInfo, ProviderAdapter } from '../adapter.js';
 import {
+  byChatName,
   createAiSdkAdapter,
   discoveredModel,
   embedOpenAiStyle,
@@ -26,14 +27,18 @@ export interface OpenAiCompatibleOptions {
   type?: ProviderType;
 }
 
-/** `{ data: [{ id }] }` — the listing shape every OpenAI-compatible server returns. */
+/**
+ * `{ data: [{ id }] }` — the listing shape every OpenAI-compatible server returns. It says nothing
+ * about what a model does, so an embedder, a speech or an image model is told apart by its name
+ * and kept unavailable for nodes [audit P-6].
+ */
 export function parseOpenAiModelList(body: unknown): ModelInfo[] {
   const data = (body as { data?: unknown }).data;
   if (!Array.isArray(data)) return [];
 
   return data.flatMap((entry): ModelInfo[] => {
     const id = (entry as { id?: unknown }).id;
-    return typeof id === 'string' ? [discoveredModel(id)] : [];
+    return typeof id === 'string' ? [byChatName(discoveredModel(id))] : [];
   });
 }
 

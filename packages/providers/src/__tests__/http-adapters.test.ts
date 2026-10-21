@@ -3,6 +3,7 @@ import { setupServer } from 'msw/node';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ProviderAdapter, StreamChunk } from '../adapter.js';
+import { NOT_A_CHAT_MODEL } from '../adapters/ai-sdk.js';
 import { createAnthropicAdapter } from '../adapters/anthropic.js';
 import { createGoogleAdapter } from '../adapters/google.js';
 import { createOllamaAdapter, detectOllama, ollamaRoot } from '../adapters/ollama.js';
@@ -657,5 +658,124 @@ describe('audit P-4 a base URL that already ends in /v1 is the API root', () => 
       sizeBytes: 2_000_000_000,
       supportsTools: true,
     });
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* audit P-6 a model that does not chat is not offered to a node               */
+/* -------------------------------------------------------------------------- */
+
+describe('audit P-6 non-chat models are listed but unavailable to nodes', () => {
+  const availability = (models: { modelId: string; available?: boolean }[]) =>
+    Object.fromEntries(models.map((m) => [m.modelId, m.available ?? true]));
+
+  it('openai: embedders, speech, transcription, images and moderation by name', async () => {
+    server.use(
+      http.get('https://api.openai.com/v1/models', () =>
+        HttpResponse.json({
+          data: [
+            { id: 'gpt-4o' },
+            { id: 'text-embedding-3-small' },
+            { id: 'whisper-1' },
+            { id: 'tts-1' },
+            { id: 'gpt-4o-transcribe' },
+            { id: 'dall-e-3' },
+            { id: 'gpt-image-1' },
+            { id: 'omni-moderation-latest' },
+          ],
+        }),
+      ),
+    );
+
+    const models = await createOpenAiAdapter({ apiKey: 'k' }).listModels();
+
+    expect(availability(models)).toEqual({
+      'gpt-4o': true,
+      'text-embedding-3-small': false,
+      'whisper-1': false,
+      'tts-1': false,
+      'gpt-4o-transcribe': false,
+      'dall-e-3': false,
+      'gpt-image-1': false,
+      'omni-moderation-latest': false,
+    });
+    expect(models.find((m) => m.modelId === 'whisper-1')?.unavailableReason).toBe(
+      NOT_A_CHAT_MODEL,
+    );
+  });
+
+  it('openai_compatible: a guard or speech model on a gateway', async () => {
+    server.use(
+      http.get('http://localhost:1234/v1/models', () =>
+        HttpResponse.json({
+          data: [{ id: 'llama-3.3-70b' }, { id: 'llama-guard-4-12b' }, { id: 'orpheus-v1' }],
+        }),
+      ),
+    );
+
+    const models = await createOpenAiCompatibleAdapter({
+      baseUrl: 'http://localhost:1234',
+    }).listModels();
+
+    expect(availability(models)).toEqual({
+      'llama-3.3-70b': true,
+      'llama-guard-4-12b': false,
+      'orpheus-v1': false,
+    });
+  });
+
+  it('google: generateContent chats; an embedder is kept unavailable; the rest is left out', async () => {
+    server.use(
+      http.get('https://generativelanguage.googleapis.com/v1beta/models', () =>
+        HttpResponse.json({
+          models: [
+            {
+              name: 'models/gemini-2.5-flash',
+              supportedGenerationMethods: ['generateContent', 'countTokens'],
+            },
+            { name: 'models/text-embedding-004', supportedGenerationMethods: ['embedContent'] },
+            { name: 'models/imagen-4.0-generate-001', supportedGenerationMethods: ['predict'] },
+            {
+              name: 'models/gemini-2.5-flash-preview-tts',
+              supportedGenerationMethods: ['generateContent'],
+            },
+          ],
+        }),
+      ),
+    );
+
+    const models = await createGoogleAdapter({ apiKey: 'k' }).listModels();
+
+    expect(availability(models)).toEqual({
+      'gemini-2.5-flash': true,
+      'text-embedding-004': false,
+      'gemini-2.5-flash-preview-tts': false,
+    });
+  });
+
+  it('ollama: no `completion` capability means no chat, whatever the name', async () => {
+    server.use(
+      http.get(`${LOCAL}/v1/models`, () =>
+        HttpResponse.json({
+          data: [{ id: 'nomic-embed-text' }, { id: 'llama-guard3' }, { id: 'qwen3' }],
+        }),
+      ),
+      http.get(`${LOCAL}/api/tags`, () => HttpResponse.json({ models: [] })),
+      http.post(`${LOCAL}/api/show`, async ({ request }) => {
+        const { model } = (await request.json()) as { model: string };
+        return HttpResponse.json({
+          capabilities: model === 'nomic-embed-text' ? ['embedding'] : ['completion'],
+        });
+      }),
+    );
+
+    const models = await createOllamaAdapter().listModels();
+
+    expect(availability(models)).toEqual({
+      'nomic-embed-text': false,
+      'llama-guard3': true,
+      qwen3: true,
+    });
+    expect(models.find((m) => m.modelId === 'llama-guard3')?.unavailableReason).toBeUndefined();
   });
 });
