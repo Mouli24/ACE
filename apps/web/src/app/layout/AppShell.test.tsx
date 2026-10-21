@@ -147,3 +147,27 @@ describe('audit U-2 a token the engine no longer takes', () => {
     expect(screen.queryByTestId('settings-menu')).toBeNull();
   });
 });
+
+describe('audit U-17 a workflow that cannot be loaded gets no workspace', () => {
+  it('keeps the mark and the theme toggle, with no Run controls, mode switch or Chat', async () => {
+    const { project } = seed();
+    renderApp(`/projects/${project.id}/workflows/01J9ZZZZZZZZZZZZZZZZZZZZZZ`);
+    expect(await screen.findByText(/Workflow not found\./)).toBeInTheDocument();
+    const header = screen.getByRole('banner');
+    expect(within(header).getByRole('link', { name: 'ACE' })).toBeInTheDocument();
+    expect(within(header).getByTestId('theme-toggle')).toBeInTheDocument();
+    expect(screen.queryByTestId('header-run-start')).toBeNull();
+    expect(screen.queryByTestId('mode-switch')).toBeNull();
+    expect(screen.queryByTestId('chat-toggle')).toBeNull();
+  });
+
+  it('at phone width the bar keeps no mode switch or run bar either', async () => {
+    installMatchMedia(true);
+    const { project } = seed();
+    renderApp(`/projects/${project.id}/workflows/01J9ZZZZZZZZZZZZZZZZZZZZZZ`);
+    expect(await screen.findByText(/Workflow not found\./)).toBeInTheDocument();
+    expect(screen.getByTestId('topbar-compact')).toBeInTheDocument();
+    expect(screen.queryByTestId('run-bar')).toBeNull();
+    expect(screen.queryByTestId('mode-switch')).toBeNull();
+  });
+});
