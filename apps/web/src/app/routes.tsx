@@ -22,51 +22,66 @@ import { WorkflowLayout } from '../workflows/WorkflowLayout';
 import { WorkflowPage } from '../workflows/WorkflowPage';
 import { HomeRedirect } from './HomeRedirect';
 import { AppShell } from './layout/AppShell';
+import { NotFound, RouteError } from './RouteError';
 
 /**
  * Routes (Arch §33.3): `/`, `/onboarding`, `/projects`, `/projects/:id`, the Canvas, knowledge,
  * runs, `/providers`, `/guardrails`, `/usage` (D239), `/settings`, and `/help/:page` (D240).
+ *
+ * Audit U-1: every screen sits in one pathless route whose `errorElement` draws inside the shell,
+ * so a screen that throws keeps the header; the workflow route has its own, so a Canvas crash keeps
+ * the workspace header and footer; `*` is a real "not found" page. The shell's own `errorElement`
+ * is the last resort, with no chrome left to keep.
  */
 export const routes: RouteObject[] = [
   {
     path: '/',
     element: <AppShell />,
+    errorElement: <RouteError standalone />,
     children: [
-      { index: true, element: <HomeRedirect /> },
-      { path: 'onboarding', element: <OnboardingPage /> },
-      { path: 'projects', element: <ProjectsPage /> },
-      { path: 'projects/:projectId', element: <ProjectPage /> },
       {
-        path: 'projects/:projectId/workflows/:workflowId',
-        element: <WorkflowLayout />,
+        errorElement: <RouteError />,
         children: [
-          { index: true, element: <WorkflowPage /> },
-          { path: 'forge', element: <ForgePage /> },
-          // Domain (D303, D354): the run as its team's conversation, inside the workflow layout so
-          // the sockets, the run overlay and the chat socket outlive a switch; the layout hides its
-          // chat column here and Domain shows its own Team aside. ?run= and ?node= pick run and lens.
-          { path: 'domain', element: <DomainPage /> },
+          { index: true, element: <HomeRedirect /> },
+          { path: 'onboarding', element: <OnboardingPage /> },
+          { path: 'projects', element: <ProjectsPage /> },
+          { path: 'projects/:projectId', element: <ProjectPage /> },
+          {
+            path: 'projects/:projectId/workflows/:workflowId',
+            element: <WorkflowLayout />,
+            errorElement: <RouteError />,
+            children: [
+              { index: true, element: <WorkflowPage /> },
+              { path: 'forge', element: <ForgePage /> },
+              // Domain (D303, D354): the run as its team's conversation, inside the workflow layout
+              // so the sockets, the run overlay and the chat socket outlive a switch; the layout
+              // hides its chat column here and Domain shows its own Team aside. ?run= and ?node=
+              // pick run and lens.
+              { path: 'domain', element: <DomainPage /> },
+            ],
+          },
+          {
+            path: 'projects/:projectId/workflows/:workflowId/timeline',
+            element: <TimelinePage />,
+          },
+          { path: 'projects/:projectId/runs', element: <ProjectRunsPage /> },
+          { path: 'projects/:projectId/knowledge', element: <KnowledgeListPage /> },
+          { path: 'knowledge/:kbId', element: <KnowledgeBasePage /> },
+          // PG-5.4: two runs side by side, `?a=&b=`; ranked above `runs/:runId` as a static segment.
+          { path: 'runs/compare', element: <RunComparePage /> },
+          { path: 'runs/:runId', element: <RunDetailPage /> },
+          { path: 'providers', element: <ProvidersPage /> },
+          { path: 'guardrails', element: <GuardrailsPage /> },
+          { path: 'library/tools', element: <ToolsLibraryPage /> },
+          { path: 'usage', element: <UsagePage /> },
+          // PG-5.6: ACE Bench (Arch §33.3). Its runs open from here only (FR-BEN-008).
+          { path: 'bench', element: <BenchPage /> },
+          { path: 'bench/experiments/:experimentId', element: <BenchPage /> },
+          { path: 'settings', element: <SettingsPage /> },
+          { path: 'help/:page', element: <HelpPage /> },
+          { path: '*', element: <NotFound /> },
         ],
       },
-      {
-        path: 'projects/:projectId/workflows/:workflowId/timeline',
-        element: <TimelinePage />,
-      },
-      { path: 'projects/:projectId/runs', element: <ProjectRunsPage /> },
-      { path: 'projects/:projectId/knowledge', element: <KnowledgeListPage /> },
-      { path: 'knowledge/:kbId', element: <KnowledgeBasePage /> },
-      // PG-5.4: two runs side by side, `?a=&b=`; ranked above `runs/:runId` as a static segment.
-      { path: 'runs/compare', element: <RunComparePage /> },
-      { path: 'runs/:runId', element: <RunDetailPage /> },
-      { path: 'providers', element: <ProvidersPage /> },
-      { path: 'guardrails', element: <GuardrailsPage /> },
-      { path: 'library/tools', element: <ToolsLibraryPage /> },
-      { path: 'usage', element: <UsagePage /> },
-      // PG-5.6: ACE Bench (Arch §33.3). Its runs open from here only (FR-BEN-008).
-      { path: 'bench', element: <BenchPage /> },
-      { path: 'bench/experiments/:experimentId', element: <BenchPage /> },
-      { path: 'settings', element: <SettingsPage /> },
-      { path: 'help/:page', element: <HelpPage /> },
     ],
   },
 ];
