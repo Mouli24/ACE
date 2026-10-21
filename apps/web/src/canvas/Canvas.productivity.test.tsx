@@ -1,4 +1,5 @@
 import type { Edge, Node } from '@ace/contracts';
+import { Toaster } from '@ace/ui';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -171,6 +172,34 @@ describe('TC-CAN-008 deleting is one undoable step (FR-CAN-009)', () => {
   });
 });
 
+describe('[audit W-6] a delete says what went and offers Undo', () => {
+  it('Delete shows "Node deleted" with Undo, and Undo brings the node and its edge back', async () => {
+    const { workflow, nodes, edges } = seed(['input', 'agent']);
+    renderWithQuery(
+      <>
+        <Canvas workflowId={workflow.id} />
+        <Toaster />
+      </>,
+    );
+    await waitFor(() => expect(flowNode(nodes[1]!.id)).not.toBeNull());
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    act(() => useSelectionStore.getState().setSelection([nodes[1]!.id], []));
+    await waitFor(() => expect(flowNode(nodes[1]!.id)).toHaveClass('selected'));
+    act(() => {
+      fireEvent.keyDown(flowNode(nodes[1]!.id), { key: 'Delete' });
+    });
+    await waitFor(() => expect(nodesInDb(workflow.id)).toHaveLength(1));
+    await settle(workflow.id);
+
+    const [message] = await screen.findAllByText('Node deleted');
+    const toast = message!.closest('[data-sonner-toast]') as HTMLElement;
+    await userEvent.click(within(toast).getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(nodesInDb(workflow.id)).toHaveLength(2));
+    await settle(workflow.id);
+    expect(db.edgesOf(workflow.id).map((e) => e.id)).toEqual(edges.map((e) => e.id));
+  });
+});
+
 describe('TC-CAN-007 auto-arrange (FR-CAN-008)', () => {
   it('moves every node in one batch, left to right, and is one undo step', async () => {
     const { workflow, nodes } = seed(['input', 'agent']);
@@ -334,7 +363,7 @@ describe('D332 the Canvas chrome is the theme’s', () => {
     // the tools pill (Undo, Redo, Auto-arrange, Duplicate) and the zoom pill are gone
     expect(screen.queryByTestId('canvas-tools-pill')).toBeNull();
     expect(screen.queryByTestId('canvas-zoom-pill')).toBeNull();
-    for (const name of ['Undo', 'Redo', 'Auto-arrange', 'Duplicate selected nodes']) {
+    for (const name of ['Auto-arrange', 'Duplicate selected nodes']) {
       expect(screen.queryByRole('button', { name })).toBeNull();
     }
 
@@ -350,6 +379,9 @@ describe('D332 the Canvas chrome is the theme’s', () => {
       'Lock nodes',
       'Hand tool',
       'Undo move',
+      // [audit W-6] general undo and redo are on the toolbar, not only Ctrl+Z / Ctrl+Y
+      'Undo (Ctrl+Z)',
+      'Redo (Ctrl+Y)',
     ]);
     expect(screen.getByTestId('canvas-zoom-level')).toHaveTextContent(/^\d+%$/);
 

@@ -134,7 +134,8 @@ import {
   type ConnectFrom,
   type PortConnectState,
 } from './interactions/ports';
-import { useGraphEditor } from './interactions/use-graph-editor';
+import { useHistoryStore } from './interactions/history';
+import { useGraphEditor, useHistoryDepth } from './interactions/use-graph-editor';
 import { autoLayout } from './layout/auto-layout';
 import { freeSlotNear } from './placement';
 import { GHOST_EDGE_CLASS, runSnapshotOverlay } from './run-snapshot';
@@ -1041,6 +1042,33 @@ function CanvasInner({
     [setSelection],
   );
 
+  /** [audit W-6] Whether this workflow's history has a step back / forward, for the toolbar. */
+  const { canUndo, canRedo } = useHistoryDepth(workflowId);
+
+  /**
+   * [audit W-6] A delete asks nothing first, so it says what went and offers Undo — of that
+   * delete only: once something else has been done since, the toolbar's Undo is the way back.
+   */
+  const announceUndoable = useCallback(
+    (message: string) => {
+      const entry = useHistoryStore.getState().byWorkflow[workflowId]?.past.at(-1);
+      if (entry === undefined) return;
+      toast(message, {
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            if (useHistoryStore.getState().byWorkflow[workflowId]?.past.at(-1) === entry) {
+              editor.undo();
+            } else {
+              toast.warning('Not undone — the workflow changed since. Use Undo in the toolbar.');
+            }
+          },
+        },
+      });
+    },
+    [workflowId, editor],
+  );
+
   /**
    * One deletion = one batch = one undo step (FR-CAN-009). Edges attached to a deleted node go with
    * it (the engine drops them), so only the other selected edges need their own `delete_edge`.
@@ -1070,8 +1098,17 @@ function CanvasInner({
             ? 'Delete node'
             : `Delete ${nodeIds.length} nodes`;
       editor.edit(ops, label);
+      announceUndoable(
+        nodeIds.length === 0
+          ? edgeIds.length === 1
+            ? 'Connection deleted'
+            : 'Connections deleted'
+          : nodeIds.length === 1
+            ? 'Node deleted'
+            : `${nodeIds.length} nodes deleted`,
+      );
     },
-    [editor, nodes, edges, readOnly],
+    [editor, nodes, edges, readOnly, announceUndoable],
   );
 
   /** D333: remove one node and join its incoming edges to its outgoing ones, one undo step. */
@@ -1079,9 +1116,11 @@ function CanvasInner({
     (nodeId: string) => {
       if (readOnly) return;
       const ops = removeReconnectingOps(nodes, edges, nodeId, workflowId);
-      if (ops.length > 0) editor.edit(ops, 'Remove node');
+      if (ops.length === 0) return;
+      editor.edit(ops, 'Remove node');
+      announceUndoable('Node removed');
     },
-    [readOnly, nodes, edges, workflowId, editor],
+    [readOnly, nodes, edges, workflowId, editor, announceUndoable],
   );
 
   /* ------------------------------------------- editing an edge in place (FR-CON-001/004/006) */
@@ -2077,6 +2116,11 @@ function CanvasInner({
                   locked={locked}
                   hand={hand}
                   canUndoMove={canUndoMove}
+                  canUndo={canUndo}
+                  canRedo={canRedo}
+                  mod={MOD}
+                  onUndo={undo}
+                  onRedo={redo}
                   onZoomIn={() => zoomBy(() => ZOOM_STEP)}
                   onZoomOut={() => zoomBy(() => 1 / ZOOM_STEP)}
                   onResetZoom={() => zoomBy((zoom) => 1 / zoom)}
