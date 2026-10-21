@@ -1147,6 +1147,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     },
     // Round 4 §2.4 (D-069): validation checks every agent's enabled tools against the live registry.
     tools: toolProvider,
+    // [audit E-8] A project created without a folder gets `<dataDir>/projects/<id>`, not a folder
+    // under whatever directory the engine was started from.
+    projectsRoot: join(config.dataDir, 'projects'),
   });
 
   /*

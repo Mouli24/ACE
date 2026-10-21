@@ -1,4 +1,5 @@
 import { mkdirSync, statSync, accessSync, constants, writeFileSync, unlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
@@ -61,6 +62,13 @@ export interface GraphServiceDeps {
    * servers). Absent, validation raises neither — a round 1–3 harness builds the service without it.
    */
   tools?: ToolLookup;
+  /**
+   * Where a project created without a folder gets one: `<projectsRoot>/<projectId>` [audit E-8].
+   * The server passes `<dataDir>/projects`. Absent (a test harness), it is a folder under the OS
+   * temp directory — never the process's working directory, which used to scatter project folders
+   * across whichever checkout or package the engine happened to start from.
+   */
+  projectsRoot?: string;
 }
 
 export interface GraphService {
@@ -136,6 +144,7 @@ function ensureWritableFolder(folderPath: string): void {
 export function createGraphService(deps: GraphServiceDeps): GraphService {
   const { repository, scope } = deps;
   const now = deps.now ?? (() => new Date().toISOString());
+  const projectsRoot = deps.projectsRoot ?? join(tmpdir(), 'ace-projects');
 
   async function requireWorkflow(id: Id): Promise<Workflow> {
     const workflow = await repository.workflows.get(scope, id);
@@ -155,7 +164,9 @@ export function createGraphService(deps: GraphServiceDeps): GraphService {
 
     async createProject({ name, folderPath }) {
       const id = newId();
-      const resolved = folderPath ?? join(process.cwd(), 'ace-projects', id);
+      // [audit E-8] A project that already exists keeps the folder it stored; only a new one without
+      // a folder of its own lands under `projectsRoot`.
+      const resolved = folderPath ?? join(projectsRoot, id);
       ensureWritableFolder(resolved);
 
       const timestamp = now();

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,7 +13,11 @@ import {
 } from '@ace/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { createGraphService } from '../graph/index.js';
 import { newId } from '../ids.js';
+import { createLogger } from '../logging/index.js';
+import { LOCAL_SCOPE } from '../ports/index.js';
+import { FakeRepository } from './fake-repository.js';
 import {
   addEdge,
   addNode,
@@ -86,6 +90,32 @@ describe('TC-PRJ-001 Create project', () => {
     const response = await post(h.app, '/api/v1/projects', { name: '' });
 
     expect(response.status).toBe(400);
+  });
+
+  it('[audit E-8] a project without a folder lands under projectsRoot, never the working directory', async () => {
+    const logger = createLogger({ level: 'silent', destination: { write: () => undefined } });
+    const root = join(dir, 'projects');
+    const graph = createGraphService({
+      repository: new FakeRepository(),
+      scope: LOCAL_SCOPE,
+      logger,
+      projectsRoot: root,
+    });
+
+    const project = await graph.createProject({ name: 'No folder' });
+
+    expect(project.folderPath).toBe(join(root, project.id));
+    expect(statSync(project.folderPath).isDirectory()).toBe(true);
+    expect(project.folderPath.startsWith(process.cwd())).toBe(false);
+
+    // A harness that passes no root still never writes under the working directory.
+    const bare = createGraphService({ repository: new FakeRepository(), scope: LOCAL_SCOPE, logger });
+    const fallback = await bare.createProject({ name: 'Bare' });
+    try {
+      expect(fallback.folderPath).toBe(join(tmpdir(), 'ace-projects', fallback.id));
+    } finally {
+      rmSync(fallback.folderPath, { recursive: true, force: true });
+    }
   });
 });
 
