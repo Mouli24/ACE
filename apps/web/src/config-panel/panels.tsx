@@ -1,4 +1,5 @@
 import {
+  REASONING_EFFORTS,
   REVIEW_CONTRACT_SCHEMA,
   ROUTING_POLICIES,
   TRANSFORM_OPS,
@@ -10,6 +11,8 @@ import {
   type MergeConfig,
   type ModelConfig,
   type Node,
+  type ProviderType,
+  type ReasoningEffort,
   type RetrievalConfig,
   type TransformConfig,
 } from '@ace/contracts';
@@ -21,13 +24,15 @@ import { PolicyPicker } from '../guardrails/PolicyPicker';
 import { useWorkflowProjectId } from '../nodes/retrieval/hooks';
 import { MergeModeField } from '../nodes/merge/MergeModeField';
 import { MergeSlots, type MergeSlot } from '../nodes/merge/MergeSlots';
+import { useProviders } from '../providers/hooks';
 import { useRunStore } from '../runs/run-store';
+import { EFFORT, EFFORT_LABELS } from '../theme/constants';
 import { useWorkflowGraph } from '../workflows/hooks';
 import { AgentKnowledgeBasesField, AgentMemoryField } from './AgentKnowledgeFields';
 import { AgentToolsSection } from './AgentToolsSection';
 import { InputAttachments } from './InputAttachments';
 import { JsonSchemaEditor } from './JsonSchemaEditor';
-import { FallbackModels, ProviderAndModel } from './ProviderAndModel';
+import { FallbackModels, ProviderAndModel, providerFor } from './ProviderAndModel';
 import { RetrievalPanel } from './RetrievalPanel';
 import { SkillsField, useSkills } from './SkillsField';
 import { WorkspaceAccessField } from './WorkspaceAccessField';
@@ -81,12 +86,74 @@ function NameField({
   );
 }
 
+/** The select's value for "no setting": Radix refuses an empty value, and `null` is no string. */
+const EFFORT_DEFAULT = 'default';
+const EFFORT_OPTIONS: ReadonlyArray<{
+  value: ReasoningEffort | typeof EFFORT_DEFAULT;
+  label: string;
+}> = [
+  { value: EFFORT_DEFAULT, label: EFFORT[0] },
+  ...REASONING_EFFORTS.map((value) => ({ value, label: EFFORT_LABELS[value] })),
+];
+
+/**
+ * D389: what the node's provider does with the level — every adapter maps it its own way, and
+ * Gemini CLI has no such setting at all (the select is disabled there). No provider chosen yet:
+ * a word on what it will mean.
+ */
+function effortHint(type: ProviderType | undefined): { hint: string; disabled?: true } {
+  switch (type) {
+    case 'claude_code':
+      return { hint: 'Claude Code takes every level.' };
+    case 'codex_cli':
+      return { hint: 'Codex takes Low to Extra high; Max is sent as Extra high.' };
+    case 'gemini_cli':
+      return { hint: 'Gemini CLI has no reasoning-effort setting.', disabled: true };
+    case 'mock':
+      return { hint: 'The mock provider ignores it.' };
+    case undefined:
+      return { hint: 'Applied where the provider has a reasoning setting.' };
+    default:
+      return { hint: 'Applied by models that can reason; others ignore it.' };
+  }
+}
+
+/**
+ * D389: how hard the node's model thinks before it answers. Default writes `null` — no setting, the
+ * provider's own default, the call exactly as before (D72: `null` is how a patch clears it).
+ */
+function ReasoningEffortField({
+  value,
+  providerId,
+  onChange,
+}: {
+  value: ReasoningEffort | null | undefined;
+  providerId: string | undefined;
+  onChange: (value: ReasoningEffort | null) => void;
+}) {
+  const providers = useProviders();
+  const { hint, disabled } = effortHint(providerFor(providers.data ?? [], providerId)?.type);
+  return (
+    <SelectField
+      label="Reasoning effort"
+      value={value ?? EFFORT_DEFAULT}
+      options={EFFORT_OPTIONS}
+      hint={hint}
+      disabled={disabled === true}
+      onChange={(picked) => onChange(picked === EFFORT_DEFAULT ? null : picked)}
+    />
+  );
+}
+
 function ExecutionFields({
   execution,
+  providerId,
   onChange,
   children,
 }: {
   execution: AgentConfig['execution'];
+  /** D389: the node's provider, whose kind says what the reasoning effort does. */
+  providerId: string | undefined;
   onChange: (execution: AgentConfig['execution']) => void;
   /** More numbers that sit in the same grid (the Agent's context budget). */
   children?: ReactNode;
@@ -125,6 +192,11 @@ function ExecutionFields({
         testId="node-max-cost"
         value={execution.maxCostUsd}
         onCommit={(maxCostUsd) => onChange({ ...execution, maxCostUsd })}
+      />
+      <ReasoningEffortField
+        value={execution.reasoningEffort}
+        providerId={providerId}
+        onChange={(reasoningEffort) => onChange({ ...execution, reasoningEffort })}
       />
       {children}
     </div>
@@ -286,7 +358,11 @@ export function AgentPanel({
         </Button>
       </div>
 
-      <ExecutionFields execution={config.execution} onChange={(execution) => patch({ execution })}>
+      <ExecutionFields
+        execution={config.execution}
+        providerId={config.providerId}
+        onChange={(execution) => patch({ execution })}
+      >
         <NumberField
           label="Context budget (tokens)"
           value={config.contextPolicy.budgetTokens}
@@ -362,6 +438,7 @@ export function ModelPanel({
       </div>
       <ExecutionFields
         execution={config.execution}
+        providerId={config.providerId}
         onChange={(execution) => patch({ execution })}
       />
     </>

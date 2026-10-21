@@ -180,6 +180,56 @@ describe('FR-ERR-003/004, FR-CTL-005, FR-EXE-013 the node-level controls', () =>
       'data-disabled',
     );
   });
+
+  describe('D388 a node run cut off before it finished can be retried too', () => {
+    const restarted = (code: string) => ({
+      kind: 'workflow' as const,
+      code,
+      message: 'The engine restarted under this step.',
+      retryable: false,
+    });
+    const retryItems = async (props: {
+      state: 'STOPPED' | 'BLOCKED';
+      error?: ReturnType<typeof restarted>;
+    }) => {
+      const user = userEvent.setup();
+      render(
+        <NodeRunMenu
+          nodeId={NODE}
+          nodeName="Writer"
+          nodeRunId={NODE_RUN}
+          {...props}
+          {...callbacks()}
+        />,
+      );
+      await user.click(screen.getByRole('button', { name: 'Run actions for Writer' }));
+      return [
+        await screen.findByRole('menuitem', { name: 'Retry' }),
+        screen.getByRole('menuitem', { name: 'Retry with downstream' }),
+      ];
+    };
+
+    it('offers Retry for a STOPPED node run', async () => {
+      for (const item of await retryItems({ state: 'STOPPED' })) {
+        expect(item).not.toHaveAttribute('data-disabled');
+      }
+    });
+
+    it.each(['engine_restarted', 'approval_lost'])(
+      'offers Retry for a node run left BLOCKED %s',
+      async (code) => {
+        for (const item of await retryItems({ state: 'BLOCKED', error: restarted(code) })) {
+          expect(item).not.toHaveAttribute('data-disabled');
+        }
+      },
+    );
+
+    it('not for one BLOCKED because its upstream failed — it never started', async () => {
+      for (const item of await retryItems({ state: 'BLOCKED' })) {
+        expect(item).toHaveAttribute('data-disabled');
+      }
+    });
+  });
 });
 
 describe('D328 theme pills: every control is a labelled pill', () => {

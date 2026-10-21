@@ -1,9 +1,11 @@
 import type {
   ApprovalRequest,
   BudgetHalt,
+  Envelope,
   FailureReason,
   HaltReason,
   Id,
+  NodeError,
   NodeState,
   Part,
   RunAction,
@@ -13,7 +15,7 @@ import type {
   Usage,
   Verdict,
 } from '@ace/contracts';
-import { allowedRunActions } from '@ace/contracts';
+import { EDGE_TRANSFER_SUMMARY_MAX, allowedRunActions, estimatePartsTokens } from '@ace/contracts';
 import {
   RunEventBuffer,
   type EdgeTransferView,
@@ -80,6 +82,13 @@ interface RunOverlayState {
   nodeRuns(): NodeRunView[];
   streamedText(nodeRunId: Id): string;
   lastTransfer(edgeId: Id): EdgeTransferView | undefined;
+  /**
+   * D390: what crossed this edge in the run on show, if anything — the live `edge.transfer`
+   * (FR-EXE-015), else, for an adopted run, an envelope its records say went from `fromNodeId` to
+   * `toNodeId`. `at` is set only on a live transfer: a delivery read back from the records never
+   * counts as just crossed.
+   */
+  delivery(edgeId: Id, fromNodeId: Id, toNodeId: Id): EdgeDelivery | undefined;
   /** Approvals still waiting on a person, newest last (FR-GRD-013). */
   approvals(): ApprovalRequest[];
   /** Every guardrail verdict recorded against this node run (FR-GRD-015). */
@@ -117,10 +126,46 @@ export interface AdoptableNodeRun {
   usage: Usage;
   /** The calls it made (round 4 §2.1); rebuilt as `tool.call` frames for Forge (PG-3.2). */
   toolCalls?: readonly ToolCall[];
+  /**
+   * D388: why it ended, rebuilt as a `node.error` frame — an interrupted node (BLOCKED
+   * `engine_restarted` / `approval_lost`) is only told apart from an upstream block by its code.
+   */
+  error?: NodeError;
+  /** D390: the envelopes it was delivered, so an adopted run's edges can say what crossed them. */
+  inputEnvelopes?: readonly Pick<Envelope, 'fromNodeId' | 'toNodeId' | 'reads'>[];
+}
+
+/** D390: what crossed an edge — the engine's ≤120-character summary, and when, if seen live. */
+export interface EdgeDelivery {
+  summary: string;
+  /** Epoch ms the live `edge.transfer` arrived; absent for a delivery read back from records. */
+  at?: number;
 }
 
 /** One buffer per store; `reset()` clears it rather than replacing it, so selectors stay valid. */
 const buffer = new RunEventBuffer();
+
+/**
+ * D390: an adopted run's deliveries, `from→to` → summary, from its node runs' `inputEnvelopes`.
+ * `edge.transfer` frames are not persisted per edge in a node-run record and `resume` replays
+ * nothing from before a reload, so this is how a finished run's Canvas still knows which edges
+ * carried data. Envelopes name nodes, not edges: two data edges between the same pair of nodes
+ * (different ports) read as delivered together — the engine delivers one envelope per target node.
+ */
+const adoptedDeliveries = new Map<string, string>();
+const pairKey = (fromNodeId: Id, toNodeId: Id): string => `${fromNodeId}→${toNodeId}`;
+
+/**
+ * The summary the engine's `transferSummary` writes on a live `edge.transfer` — the part kinds and
+ * a token estimate — rebuilt from a recorded envelope's reads, so an adopted run says the same.
+ */
+function deliverySummary(reads: readonly Part[]): string {
+  const kinds = [...new Set(reads.map((part) => part.type))].join(', ');
+  return `${kinds || 'nothing'} · ~${estimatePartsTokens(reads)} tokens`.slice(
+    0,
+    EDGE_TRANSFER_SUMMARY_MAX,
+  );
+}
 
 const IDLE: NodeState = 'IDLE';
 
@@ -154,6 +199,7 @@ export const useRunStore = create<RunOverlayState>((set) => ({
    */
   arm: (workflowId) => {
     buffer.reset();
+    adoptedDeliveries.clear();
     set({
       workflowId,
       runId: undefined,
@@ -197,6 +243,7 @@ export const useRunStore = create<RunOverlayState>((set) => ({
    */
   adopt: (workflowId, run, nodeRuns, approvals = []) => {
     buffer.reset();
+    adoptedDeliveries.clear();
     /*
      * Each synthetic frame needs its own seq: the buffer drops a persisted frame whose seq it has
      * already folded, so reusing one number would silently discard every frame after the first.
@@ -218,6 +265,26 @@ export const useRunStore = create<RunOverlayState>((set) => ({
           ...(nodeRun.failureReason === undefined ? {} : { failureReason: nodeRun.failureReason }),
         },
       } as unknown as ServerFrame);
+      // D388: the error is the record's too — Retry and Continue tell an interrupted node by it.
+      if (nodeRun.error !== undefined) {
+        buffer.apply({
+          seq: syntheticSeq--,
+          type: 'node.error',
+          payload: {
+            runId: run.id,
+            nodeRunId: nodeRun.id,
+            nodeId: nodeRun.nodeId,
+            error: nodeRun.error,
+            failureReason: nodeRun.failureReason,
+          },
+        } as unknown as ServerFrame);
+      }
+      for (const envelope of nodeRun.inputEnvelopes ?? []) {
+        adoptedDeliveries.set(
+          pairKey(envelope.fromNodeId, envelope.toNodeId),
+          deliverySummary(envelope.reads),
+        );
+      }
       if (nodeRun.output !== undefined) {
         buffer.apply({
           seq: syntheticSeq--,
@@ -301,6 +368,7 @@ export const useRunStore = create<RunOverlayState>((set) => ({
 
   reset: () => {
     buffer.reset();
+    adoptedDeliveries.clear();
     set({
       runId: undefined,
       status: undefined,
@@ -323,6 +391,12 @@ export const useRunStore = create<RunOverlayState>((set) => ({
   nodeRuns: () => buffer.view.nodeRuns(),
   streamedText: (nodeRunId) => buffer.view.streamedText(nodeRunId),
   lastTransfer: (edgeId) => buffer.view.lastTransfer(edgeId),
+  delivery: (edgeId, fromNodeId, toNodeId) => {
+    const live = buffer.view.lastTransfer(edgeId);
+    if (live !== undefined) return { summary: live.summary, at: live.at };
+    const recorded = adoptedDeliveries.get(pairKey(fromNodeId, toNodeId));
+    return recorded === undefined ? undefined : { summary: recorded };
+  },
   approvals: () => buffer.view.approvals(),
   verdicts: (nodeRunId) => buffer.view.verdicts(nodeRunId),
   iterations: (nodeId) => buffer.view.iterations(nodeId),

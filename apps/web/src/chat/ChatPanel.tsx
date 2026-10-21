@@ -85,7 +85,9 @@ function ChatForNode({ node, nodes }: { node: Node; nodes: readonly Node[] }) {
             placeholder="Message this agent…"
             roster={roster}
             mainNodeId={node.id}
-            replying={convo.awaitingReply}
+            // D391: Stop stays while any turn the session sent is still owed a reply.
+            replying={convo.awaitingReply || convo.queued > 0}
+            queued={convo.queued}
             onStop={convo.stop}
           />
         }

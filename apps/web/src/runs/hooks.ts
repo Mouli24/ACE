@@ -205,6 +205,13 @@ export const useResumeRun = () => useRunControl((runId) => api().resumeRun(runId
 export const useStopRun = () => useRunControl((runId) => api().stopRun(runId));
 export const useRestartRun = () => useRunControl((runId) => api().restartRun(runId));
 /**
+ * D388: carry on a run that was cut off (HALTED crash, shutdown or stopped) — every interrupted node
+ * runs again with its downstream, in one drive of the *same* run, and what finished is kept. Not a
+ * `RUN_ACTIONS` value: whether it applies is the contract's `canContinueRun`, which the engine
+ * enforces too (409 otherwise).
+ */
+export const useContinueRun = () => useRunControl((runId) => api().continueRun(runId));
+/**
  * PG-5.4: replay a finished run — a new run answered from this one's recording, zero provider
  * calls. Only COMPLETE and HALTED runs can be replayed ({@link canReplay}).
  */

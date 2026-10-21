@@ -1,5 +1,5 @@
 import { TOOL_NAME_REGEX, type ApprovalRequest } from '@ace/contracts';
-import { ApprovalCard } from '@ace/ui';
+import { ApprovalCard, Button, Icons, toast } from '@ace/ui';
 import { useState } from 'react';
 
 import { TOUCH_TARGETS } from '../../responsive/touch';
@@ -21,6 +21,12 @@ import { useRunStore } from '../run-store';
  * read first. No positioning of its own: it is anchored to its node on the Canvas, and listed behind
  * the top bar's badge and in the run view. `A` and `R` belong to one card at a time, which is what
  * `keyboard` is for.
+ *
+ * D391 (W1-7): with two or more waiting, of which two or more are not destructive, "Approve all (n)"
+ * approves those n one by one, oldest first, through the same per-approval call as each card's
+ * Approve. A destructive one is never in it — Arch §13.1, destructive always asks — so it stays
+ * pending with its card, and the button's tooltip names it. There is no Deny all: a rejection
+ * fails the node, and is decided card by card.
  */
 export function ApprovalStack({
   requests,
@@ -34,18 +40,104 @@ export function ApprovalStack({
 }) {
   // At phone width Approve and Reject are finger-sized (FR-MOB-002, TC-MOB-002).
   const compact = useIsCompact();
+  const bulk = useApproveAll(requests);
   return (
     <div
       className={`flex w-full min-w-0 flex-col gap-2 ${compact ? TOUCH_TARGETS : ''} ${className ?? ''}`}
     >
+      {bulk.offered && (
+        <Button
+          size="sm"
+          className="self-start"
+          data-testid="approve-all"
+          disabled={bulk.sending.size > 0}
+          title={bulk.title}
+          onClick={() => void bulk.approveAll()}
+        >
+          <Icons.CheckCheck aria-hidden size={13} />
+          Approve all ({bulk.approvable.length})
+        </Button>
+      )}
       {requests.map((request, index) => (
-        <ApprovalRow key={request.id} request={request} keyboard={keyboard && index === 0} />
+        <ApprovalRow
+          key={request.id}
+          request={request}
+          keyboard={keyboard && index === 0}
+          approvingAll={bulk.sending.has(request.id)}
+        />
       ))}
     </div>
   );
 }
 
-function ApprovalRow({ request, keyboard }: { request: ApprovalRequest; keyboard: boolean }) {
+/**
+ * D391: an approval Approve all never answers — the engine's `destructive_action` check asked
+ * about it (Arch §13.1: destructive always asks), or it is a command on the risky-command list
+ * (D376).
+ */
+export function isDestructiveApproval(request: ApprovalRequest): boolean {
+  return request.checkType === 'destructive_action' || request.command?.denylisted === true;
+}
+
+/** What one waiting approval is called in the Approve all tooltip: its node, and its tool if any. */
+function approvalName(request: ApprovalRequest): string {
+  const tool = destructiveTool(request)?.toolName;
+  return tool === undefined ? request.nodeName : `${request.nodeName} (${tool})`;
+}
+
+/**
+ * D391: Approve all for one stack. `approvable` is every non-destructive run approval, oldest
+ * first (the stack's order); a chat turn's (no node run) is answered in its chat. It is offered
+ * only when two or more are waiting and two or more of them are approvable — one would be the
+ * card's own Approve. Each is approved in turn with the per-approval mutation; one that fails
+ * (decided elsewhere a moment ago, say) does not stop the rest, and the failures are said once.
+ * The frames take the cards down, as for a single Approve.
+ */
+function useApproveAll(requests: readonly ApprovalRequest[]) {
+  const approve = useApproveNodeRun();
+  const [sending, setSending] = useState<ReadonlySet<string>>(() => new Set());
+  const approvable = requests.filter(
+    (request) => !isDestructiveApproval(request) && request.nodeRunId !== undefined,
+  );
+  const leftForYou = requests.filter(isDestructiveApproval);
+  const offered = requests.length >= 2 && approvable.length >= 2;
+  const title =
+    leftForYou.length === 0
+      ? `Approve all ${approvable.length}, oldest first`
+      : `Approve the ${approvable.length} that are not destructive, oldest first. Left for you to decide: ${leftForYou.map(approvalName).join(', ')}`;
+
+  const approveAll = async (): Promise<void> => {
+    const batch = approvable;
+    setSending(new Set(batch.map((request) => request.id)));
+    const failed: string[] = [];
+    for (const request of batch) {
+      try {
+        await approve.mutateAsync({ nodeRunId: request.nodeRunId ?? '' });
+      } catch (error) {
+        failed.push(`${request.nodeName}: ${error instanceof Error ? error.message : 'not sent'}`);
+      }
+    }
+    setSending(new Set());
+    if (failed.length > 0) {
+      toast.error(
+        `${failed.length} of ${batch.length} approvals were not sent — ${failed.join('; ')}`,
+      );
+    }
+  };
+
+  return { offered, approvable, title, sending, approveAll };
+}
+
+function ApprovalRow({
+  request,
+  keyboard,
+  approvingAll = false,
+}: {
+  request: ApprovalRequest;
+  keyboard: boolean;
+  /** D391: Approve all is sending this one's approval right now. */
+  approvingAll?: boolean;
+}) {
   const approve = useApproveNodeRun();
   const reject = useRejectNodeRun();
   const [note, setNote] = useState('');
@@ -81,8 +173,12 @@ function ApprovalRow({ request, keyboard }: { request: ApprovalRequest; keyboard
       <ApprovalCard
         className="w-full max-w-none"
         request={request}
-        pending={approve.isPending || reject.isPending}
-        {...(decided === undefined ? {} : { decided })}
+        pending={approve.isPending || reject.isPending || approvingAll}
+        {...(decided === undefined
+          ? approvingAll
+            ? { decided: 'approve' as const }
+            : {}
+          : { decided })}
         note={note}
         onNoteChange={setNote}
         keyboard={keyboard}

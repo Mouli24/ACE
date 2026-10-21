@@ -1,6 +1,7 @@
 import {
   APPROVAL_PREVIEW_MAX,
   ApprovalDecisionRequestSchema,
+  CONTINUABLE_HALT_REASONS,
   CreateGuardrailPolicyRequestSchema,
   PolicyTestRequestSchema,
   RetryRequestSchema,
@@ -8,6 +9,8 @@ import {
   aceError,
   agentWorkspaceOf,
   allowedRunActions,
+  canContinueRun,
+  interruptedNodeRuns,
   zeroUsage,
   type ApiError,
   type ApprovalDecision,
@@ -515,6 +518,48 @@ export function createRound3Handlers(db: MockDb): HttpHandler[] {
           return HttpResponse.json(restarted, { status: 201 });
         }),
       ),
+    ),
+
+    /*
+     * D388: carry on a run that was cut off. The rule is the contract's `canContinueRun`, the one the
+     * engine enforces: HALTED by a crash, a shutdown or a Stop (else 409 `invalid_run_state`), with
+     * an interrupted latest attempt (else 409 `nothing_to_continue`). Each interrupted node runs
+     * again on the inputs it was given, its downstream after it — a node downstream of two of them
+     * once — and what completed is kept. Answers the reopened run.
+     */
+    http.post(
+      `${API}/runs/:id/continue`,
+      guard((ctx) => {
+        const run = db.getRun(param(ctx, 'id'));
+        if (run === undefined) return notFound('Run');
+        const rows = db.listNodeRuns(run.id);
+        if (!canContinueRun(run, rows)) {
+          return run.status === 'HALTED' &&
+            (CONTINUABLE_HALT_REASONS as readonly string[]).includes(run.haltReason ?? '')
+            ? error(409, 'workflow', 'nothing_to_continue', 'Nothing in this run was cut off.')
+            : invalidRunState(
+                `A ${run.status} run${run.haltReason === undefined ? '' : ` (${run.haltReason})`} cannot be continued.`,
+              );
+        }
+        const interrupted = interruptedNodeRuns(rows);
+        const again = new Set(interrupted.map((row) => row.nodeId));
+        const claimed = new Set<string>();
+        for (const previous of interrupted) {
+          const node = nodeOf(run, previous.nodeId);
+          if (node === undefined) continue;
+          const downstream = downstreamNodes(run, node.id).filter(
+            (each) => !again.has(each.id) && !claimed.has(each.id),
+          );
+          for (const each of downstream) claimed.add(each.id);
+          startAttempt(db, run, node, {
+            attempt: previous.attempt + 1,
+            iteration: previous.iteration,
+            reads: previous.inputEnvelopes.flatMap((envelope) => envelope.reads),
+            downstream,
+          });
+        }
+        return HttpResponse.json(db.getRun(run.id) ?? run);
+      }),
     ),
 
     /* ------------------------------------------------- retry and re-run (§2.5, FR-ERR-003/004) */

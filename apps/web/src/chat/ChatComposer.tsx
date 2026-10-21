@@ -51,6 +51,7 @@ export function ChatComposer({
   roster = [],
   mainNodeId,
   replying = false,
+  queued = 0,
   onStop,
   onWorkflow,
   workflowBlocked,
@@ -63,8 +64,13 @@ export function ChatComposer({
   roster?: readonly ChatRosterEntry[];
   /** The conversation's main node; without one there is nobody to send to. */
   mainNodeId: string | undefined;
-  /** PG-1.6: a reply is on its way in this session, so Stop is offered. */
+  /** PG-1.6: a reply is on its way in this session, so Stop is offered (D391: while any is). */
   replying?: boolean;
+  /**
+   * D391: turns sent after the one being answered that still wait their turn in the engine's
+   * queue. Above zero — more than one turn outstanding — the composer says "N queued".
+   */
+  queued?: number;
   /** PG-1.6: abort the reply on its way; it is stored as `user_cancelled`. */
   onStop?: () => void;
   /**
@@ -267,6 +273,18 @@ export function ChatComposer({
             ),
           )}
         </div>
+      )}
+
+      {queued > 0 && (
+        <p
+          role="status"
+          data-testid="chat-queued"
+          title={`${queued} more ${queued === 1 ? 'message waits' : 'messages wait'} for the reply before ${queued === 1 ? 'it' : 'them'}; each is answered in turn`}
+          className="flex items-center gap-[6px] text-[10.5px] text-[var(--muted)]"
+        >
+          <Icons.ListOrdered aria-hidden size={12} />
+          {queued} queued
+        </p>
       )}
 
       {chips.length > 0 && (

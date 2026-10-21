@@ -44,7 +44,13 @@ export function NodeRunActions({ node }: { node: Node }) {
     useShallow((store) => {
       void store.revision;
       const nodeRun = store.nodeRun(node.id);
-      return { runId: store.runId, nodeRunId: nodeRun?.nodeRunId, status: nodeRun?.status };
+      return {
+        runId: store.runId,
+        nodeRunId: nodeRun?.nodeRunId,
+        status: nodeRun?.status,
+        // D388: an interrupted BLOCKED row is told apart by its code; the object is the view's own.
+        error: nodeRun?.error,
+      };
     }),
   );
   const retry = useRetryNodeRun();
@@ -61,6 +67,7 @@ export function NodeRunActions({ node }: { node: Node }) {
       nodeName={node.name}
       state={run.status}
       nodeRunId={run.nodeRunId}
+      error={run.error}
       busy={busy}
       onRetry={() => retry.mutate({ nodeRunId: run.nodeRunId!, withDownstream: false })}
       onRetryWithDownstream={() =>
