@@ -109,7 +109,11 @@ describe('TC-PRJ-001 Create project', () => {
     expect(project.folderPath.startsWith(process.cwd())).toBe(false);
 
     // A harness that passes no root still never writes under the working directory.
-    const bare = createGraphService({ repository: new FakeRepository(), scope: LOCAL_SCOPE, logger });
+    const bare = createGraphService({
+      repository: new FakeRepository(),
+      scope: LOCAL_SCOPE,
+      logger,
+    });
     const fallback = await bare.createProject({ name: 'Bare' });
     try {
       expect(fallback.folderPath).toBe(join(tmpdir(), 'ace-projects', fallback.id));

@@ -127,7 +127,12 @@ describe('[audit E-1] a Join waits for every input', () => {
     const { run, done } = await h.start();
     await h.waitForState(a.id, 'COMPLETED');
     await h.waitFor(
-      () => h.events.some((event) => event.type === 'edge.transfer' && (event.payload as { fromNodeId: string }).fromNodeId === a.id),
+      () =>
+        h.events.some(
+          (event) =>
+            event.type === 'edge.transfer' &&
+            (event.payload as { fromNodeId: string }).fromNodeId === a.id,
+        ),
       'Alpha to deliver into the Join',
     );
     expect(h.framesOf(join.id)).not.toContain('1:RUNNING');
