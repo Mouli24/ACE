@@ -17,13 +17,21 @@ import { createOpenAiCompatibleAdapter, normaliseBaseUrl } from './openai-compat
 
 export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 
+/**
+ * Ollama's own address from whatever was pasted [audit P-4]. Its OpenAI endpoint, `…/v1`, is a
+ * common paste, and the native `/api/*` routes sit beside that endpoint, not under it.
+ */
+export function ollamaRoot(baseUrl: string): string {
+  return normaliseBaseUrl(baseUrl).replace(/\/v1$/i, '');
+}
+
 export interface OllamaOptions {
   baseUrl?: string;
   fetchImpl?: FetchLike;
 }
 
 export function createOllamaAdapter(options: OllamaOptions = {}): ProviderAdapter {
-  const baseUrl = normaliseBaseUrl(options.baseUrl ?? DEFAULT_OLLAMA_BASE_URL);
+  const baseUrl = ollamaRoot(options.baseUrl ?? DEFAULT_OLLAMA_BASE_URL);
   const adapter = createOpenAiCompatibleAdapter({
     type: 'ollama',
     baseUrl,
@@ -95,7 +103,7 @@ export async function ollamaModelSizes(
   let body: unknown;
   try {
     body = await getJson({
-      url: `${normaliseBaseUrl(baseUrl)}/api/tags`,
+      url: `${ollamaRoot(baseUrl)}/api/tags`,
       timeoutMs: DETECT_TIMEOUT_MS * 3,
       ...(fetchImpl === undefined ? {} : { fetchImpl }),
     });
@@ -150,7 +158,7 @@ export async function ollamaCapabilities(
     for (let modelId = queue.shift(); modelId !== undefined; modelId = queue.shift()) {
       try {
         const body = (await postJson({
-          url: `${normaliseBaseUrl(baseUrl)}/api/show`,
+          url: `${ollamaRoot(baseUrl)}/api/show`,
           body: { model: modelId },
           timeoutMs: DETECT_TIMEOUT_MS * 3,
           ...(fetchImpl === undefined ? {} : { fetchImpl }),
@@ -190,7 +198,7 @@ export async function detectOllama(
   baseUrl: string = DEFAULT_OLLAMA_BASE_URL,
   fetchImpl?: FetchLike,
 ): Promise<OllamaDetection> {
-  const url = normaliseBaseUrl(baseUrl);
+  const url = ollamaRoot(baseUrl);
   try {
     await getJson({
       url: `${url}/v1/models`,
@@ -234,7 +242,7 @@ export async function ollamaVersion(
 ): Promise<string | undefined> {
   try {
     const body = (await getJson({
-      url: `${normaliseBaseUrl(baseUrl)}/api/version`,
+      url: `${ollamaRoot(baseUrl)}/api/version`,
       timeoutMs,
       ...(fetchImpl === undefined ? {} : { fetchImpl }),
     })) as { version?: unknown } | null;
@@ -250,7 +258,7 @@ export async function ollamaRunningModels(
   fetchImpl?: FetchLike,
 ): Promise<OllamaRunningModel[]> {
   const body = (await getJson({
-    url: `${normaliseBaseUrl(baseUrl)}/api/ps`,
+    url: `${ollamaRoot(baseUrl)}/api/ps`,
     timeoutMs: OLLAMA_SHORT_TIMEOUT_MS,
     ...(fetchImpl === undefined ? {} : { fetchImpl }),
   })) as { models?: unknown } | null;
@@ -281,7 +289,7 @@ export async function ollamaLoadModel(
   fetchImpl?: FetchLike,
 ): Promise<void> {
   await postJson({
-    url: `${normaliseBaseUrl(baseUrl)}/api/generate`,
+    url: `${ollamaRoot(baseUrl)}/api/generate`,
     body: { model: modelId, prompt: '', keep_alive: OLLAMA_KEEP_ALIVE, stream: false },
     timeoutMs: OLLAMA_LOAD_TIMEOUT_MS,
     ...(fetchImpl === undefined ? {} : { fetchImpl }),
@@ -295,7 +303,7 @@ export async function ollamaUnloadModel(
   fetchImpl?: FetchLike,
 ): Promise<void> {
   await postJson({
-    url: `${normaliseBaseUrl(baseUrl)}/api/generate`,
+    url: `${ollamaRoot(baseUrl)}/api/generate`,
     body: { model: modelId, prompt: '', keep_alive: 0, stream: false },
     timeoutMs: OLLAMA_SHORT_TIMEOUT_MS,
     ...(fetchImpl === undefined ? {} : { fetchImpl }),
@@ -332,7 +340,7 @@ export async function ollamaPullModel(
 
   try {
     touch();
-    const response = await fetchImpl(`${normaliseBaseUrl(baseUrl)}/api/pull`, {
+    const response = await fetchImpl(`${ollamaRoot(baseUrl)}/api/pull`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: name, stream: true }),

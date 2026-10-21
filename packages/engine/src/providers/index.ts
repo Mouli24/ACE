@@ -197,8 +197,10 @@ export function createProviderService(
   /** Pulls in flight, by provider and name, so a second click does not start a second one. */
   const pulls = new Set<string>();
 
-  const sameUrl = (a: string, b: string): boolean =>
-    a.replace(/\/+$/, "").toLowerCase() === b.replace(/\/+$/, "").toLowerCase();
+  // An Ollama row may hold its OpenAI endpoint, `…/v1`: the same server [audit P-4].
+  const hostOf = (url: string): string =>
+    url.replace(/\/+$/, "").replace(/\/v1$/i, "").toLowerCase();
+  const sameUrl = (a: string, b: string): boolean => hostOf(a) === hostOf(b);
 
   async function toStatus(probe: LocalRuntimeProbe): Promise<LocalRuntimeStatus> {
     const rows = await repository.providers.list(scope);

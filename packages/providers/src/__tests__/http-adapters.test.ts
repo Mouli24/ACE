@@ -5,9 +5,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { ProviderAdapter, StreamChunk } from '../adapter.js';
 import { createAnthropicAdapter } from '../adapters/anthropic.js';
 import { createGoogleAdapter } from '../adapters/google.js';
-import { createOllamaAdapter, detectOllama } from '../adapters/ollama.js';
+import { createOllamaAdapter, detectOllama, ollamaRoot } from '../adapters/ollama.js';
 import { createOpenAiAdapter } from '../adapters/openai.js';
-import { createOpenAiCompatibleAdapter } from '../adapters/openai-compatible.js';
+import { createOpenAiCompatibleAdapter, openAiApiRoot } from '../adapters/openai-compatible.js';
 
 /**
  * Recorded HTTP, never the network (CLAUDE.md §2). Every handler below is a shape one of these
@@ -560,5 +560,79 @@ describe('FR-RAG-004 embed() failures are classified like generate()', () => {
     await expect(
       embedOf(createOllamaAdapter())(['a', 'b'], { modelId: 'm' }),
     ).rejects.toMatchObject({ nodeError: { code: 'bad_embedding_response', retryable: false } });
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* audit P-4 a base URL that already names its API version                     */
+/* -------------------------------------------------------------------------- */
+
+describe('audit P-4 a base URL that already ends in /v1 is the API root', () => {
+  it.each([
+    ['http://localhost:1234', 'http://localhost:1234/v1'],
+    ['http://localhost:1234/', 'http://localhost:1234/v1'],
+    ['http://localhost:1234/v1', 'http://localhost:1234/v1'],
+    ['http://localhost:1234/v1/', 'http://localhost:1234/v1'],
+    ['https://gateway.local/v2', 'https://gateway.local/v2'],
+    ['https://openrouter.ai/api/v1', 'https://openrouter.ai/api/v1'],
+    ['https://api.groq.com/openai/v1', 'https://api.groq.com/openai/v1'],
+    [
+      'https://generativelanguage.googleapis.com/v1beta/openai',
+      'https://generativelanguage.googleapis.com/v1beta/openai',
+    ],
+  ])('reads %s as %s', (pasted, root) => {
+    expect(openAiApiRoot(pasted)).toBe(root);
+  });
+
+  it('lists and chats under a pasted …/v1 without doubling it', async () => {
+    server.use(
+      http.get('http://localhost:1234/v1/models', () =>
+        HttpResponse.json({ data: [{ id: 'local-model' }] }),
+      ),
+      http.post('http://localhost:1234/v1/chat/completions', () => sseStream()),
+    );
+    const adapter = createOpenAiCompatibleAdapter({ baseUrl: 'http://localhost:1234/v1/' });
+
+    expect((await adapter.check()).status).toBe('CONNECTED');
+    expect((await adapter.listModels()).map((m) => m.modelId)).toEqual(['local-model']);
+    const chunks = await collect(
+      adapter.generate(
+        { modelId: 'local-model', prompt: 'hi', outputTypes: ['text'] },
+        new AbortController().signal,
+      ),
+    );
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: 'stop' });
+  });
+
+  it('embeds under a gateway root such as /api/v1', async () => {
+    server.use(
+      http.post('https://router.local/api/v1/embeddings', () =>
+        HttpResponse.json({ data: [{ index: 0, embedding: [1, 0] }] }),
+      ),
+    );
+    const adapter = createOpenAiCompatibleAdapter({ baseUrl: 'https://router.local/api/v1' });
+
+    expect(await embedOf(adapter)(['a'], { modelId: 'bge' })).toEqual([[1, 0]]);
+  });
+
+  it('ollama: a pasted …/v1 still reaches the native /api routes beside it', async () => {
+    server.use(
+      http.get(`${LOCAL}/v1/models`, () => HttpResponse.json({ data: [{ id: 'llama3.2' }] })),
+      http.get(`${LOCAL}/api/tags`, () =>
+        HttpResponse.json({ models: [{ name: 'llama3.2', size: 2_000_000_000 }] }),
+      ),
+      http.post(`${LOCAL}/api/show`, () =>
+        HttpResponse.json({ capabilities: ['completion', 'tools'] }),
+      ),
+    );
+
+    const [model] = await createOllamaAdapter({ baseUrl: `${LOCAL}/v1` }).listModels();
+
+    expect(ollamaRoot(`${LOCAL}/v1/`)).toBe(LOCAL);
+    expect(model).toMatchObject({
+      modelId: 'llama3.2',
+      sizeBytes: 2_000_000_000,
+      supportsTools: true,
+    });
   });
 });

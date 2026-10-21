@@ -210,9 +210,12 @@ export function checkVectors(vectors: unknown[], expected: number): number[][] {
   });
 }
 
-/** `POST {baseUrl}/v1/embeddings` — OpenAI and every compatible server. */
+/**
+ * `POST {apiRoot}/embeddings` — OpenAI and every compatible server. `apiRoot` already carries the
+ * version (`…/v1`), as `openAiApiRoot` reads it [audit P-4].
+ */
 export async function embedOpenAiStyle(
-  baseUrl: string,
+  apiRoot: string,
   headers: Record<string, string>,
   fetchImpl: FetchLike | undefined,
   texts: string[],
@@ -221,7 +224,7 @@ export async function embedOpenAiStyle(
   const model = requireEmbedModel(options);
   if (texts.length === 0) return [];
   const body = (await postJson({
-    url: `${baseUrl}/v1/embeddings`,
+    url: `${apiRoot}/embeddings`,
     headers,
     body: { model, input: texts },
     ...(fetchImpl === undefined ? {} : { fetchImpl }),
