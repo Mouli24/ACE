@@ -19,6 +19,10 @@ export interface AgentSystemPromptInput {
   access: WorkspaceAccess;
   /** The workspace blocks of the envelopes this node reads, when any upstream node had one. */
   upstream?: WorkspaceSummary[];
+  /** A CLI (Claude Code, Codex, Gemini) works with its own file tools, not ACE's by name. */
+  ownTools?: boolean;
+  /** A chat turn: the person reads the reply, and no node comes after it. */
+  chat?: boolean;
 }
 
 /** The heading of the rules, under the node's own instructions. */
@@ -44,27 +48,46 @@ export function agentSystemPrompt(input: AgentSystemPromptInput): string {
   const commands = access === 'edit_commands';
   const os = OS_NAMES[input.os] ?? input.os;
 
+  const own = input.ownTools === true;
   const rules: string[] = [
-    `You work like a coding agent inside the project folder ${input.workspaceRoot} on ${os}, with the tools you are given. Your access: ${ACCESS_WORDS[access]}. The shell on this computer is ${input.shell}.`,
+    `You work like a coding agent inside the project folder ${input.workspaceRoot} on ${os}, with the tools you are given. Your access: ${ACCESS_WORDS[access]}.${own ? '' : ` The shell on this computer is ${input.shell}.`}`,
+    '- The person sees this folder in Forge, ACE\'s code editor. "In Forge" means in these project files (it has nothing to do with Minecraft Forge).',
     '- Give every path relative to the project folder, with forward slashes (src/app.ts). Never reach outside it.',
-    '- Look before you act: list_files, search and read_file are cheap, and guessing is not.',
+    own
+      ? '- Look before you act: list and read the files you need first rather than guessing.'
+      : '- Look before you act: list_files, search and read_file are cheap, and guessing is not.',
   ];
   if (edits) {
     rules.push(
-      '- Read a file with read_file before you edit it. If an edit says the file changed since you read it, read it again and redo the edit.',
-      '- Prefer edit_file (a small, unique oldString and its newString) to rewriting a whole file with write_file; use write_file for new files.',
+      '- Do the work in the files themselves: create and change them with your tools. Never paste a whole file or a long code block into your answer instead of writing it — code that is only in your answer is lost.',
+      '- Split a big program into several files of at most about 200 lines each, and write each one with its own call, so no single call is cut off.',
+    );
+    rules.push(
+      ...(own
+        ? ['- Read a file before you edit it, and prefer small edits to rewriting a whole file.']
+        : [
+            '- Read a file with read_file before you edit it. If an edit says the file changed since you read it, read it again and redo the edit.',
+            '- Prefer edit_file (a small, unique oldString and its newString) to rewriting a whole file with write_file; use write_file for new files.',
+          ]),
     );
   }
-  if (commands) {
+  if (commands && own) {
+    rules.push(
+      '- Commands run with no terminal attached: nothing can answer a prompt. Use non-interactive flags (-y, --yes, CI=1).',
+      '- Only the commands this node is allowed run. If one is refused, do not retry it: find another way, or say what you needed and why.',
+    );
+  } else if (commands) {
     rules.push(
       `- run_command runs in ${input.shell}, in the project folder, with no terminal attached: nothing can answer a prompt. Use non-interactive flags (-y, --yes, CI=1).`,
       '- Start servers and watchers with background: true, then check them with command_output, and stop them with kill_command once you no longer need them.',
       '- A command may wait for the person to approve it. If they deny it, do not run it again: find another way, or say what you needed and why.',
     );
   }
-  rules.push(
-    "- Stay inside this node's task and its output contract. The nodes after you have their own tasks: leave their work to them.",
-  );
+  if (input.chat !== true) {
+    rules.push(
+      "- Stay inside this node's task and its output contract. The nodes after you have their own tasks: leave their work to them.",
+    );
+  }
 
   const upstream = input.upstream ?? [];
   if (upstream.length > 0) {
@@ -75,9 +98,11 @@ export function agentSystemPrompt(input: AgentSystemPromptInput): string {
     );
   }
   rules.push(
-    "- When the task is done, answer without calling a tool. That answer is this node's output.",
+    input.chat === true
+      ? '- When the task is done, answer without calling a tool: say briefly what you created or changed, by file.'
+      : "- When the task is done, answer without calling a tool: say briefly what you created or changed, by file. That answer is this node's output.",
   );
 
-  const own = input.instructions.trimEnd();
-  return `${own === '' ? '' : `${own}\n\n`}${AGENT_RULES_HEADING}\n${rules.join('\n')}`;
+  const instructions = input.instructions.trimEnd();
+  return `${instructions === '' ? '' : `${instructions}\n\n`}${AGENT_RULES_HEADING}\n${rules.join('\n')}`;
 }

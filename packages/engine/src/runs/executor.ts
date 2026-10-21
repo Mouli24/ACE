@@ -623,6 +623,27 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
     return { state: newAgentLoopState(agentWorkspaceOf(node.config)), workspaceRoot: root };
   }
 
+  /**
+   * The project folder of an agentic node on a coding-agent CLI, which works there with its own
+   * tools — so its prompt carries the same rules of working in the folder. Otherwise `undefined`.
+   */
+  async function cliWorkspaceRoot(input: ExecuteNodeInput): Promise<string | undefined> {
+    const node = input.node;
+    if (node.kind !== 'agent' || !isAgentic(node.config) || input.replay !== undefined) {
+      return undefined;
+    }
+    const providerId = node.config.providerId;
+    if (providerId === undefined) return undefined;
+    try {
+      const provider = await deps.providerFor?.(providerId);
+      if (provider === undefined || !isCliProviderType(provider.type)) return undefined;
+      const root = await deps.projectFolderFor?.(input.runId);
+      return root === undefined || root === '' ? undefined : root;
+    } catch {
+      return undefined;
+    }
+  }
+
   async function callAgent(
     input: ExecuteNodeInput,
     used: Pick<NodeExecutionOutcome, 'sources' | 'droppedSources'>,
@@ -732,11 +753,25 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       input.repairReason === undefined
         ? instructions
         : `${instructions}\n\nYour previous answer was rejected: ${input.repairReason}\nAnswer again, satisfying the output contract exactly.`;
+    // An agentic CLI node keeps its single call, but is told the same rules, for its own tools.
+    const cliRoot = agent === undefined ? await cliWorkspaceRoot(input) : undefined;
     const prompt = assemblePrompt({
       // D375: an agentic node's instructions carry the rules of working in the project folder.
       instructions:
         agent === undefined
-          ? ownInstructions
+          ? cliRoot === undefined || node.kind !== 'agent'
+            ? ownInstructions
+            : agentSystemPrompt({
+                instructions: ownInstructions,
+                workspaceRoot: cliRoot,
+                os: deps.agentEnvironment?.os ?? process.platform,
+                shell: deps.agentEnvironment?.shell ?? 'the system shell',
+                access: agentWorkspaceOf(node.config).access,
+                ownTools: true,
+                upstream: envelopes.flatMap((envelope) =>
+                  envelope.workspace === undefined ? [] : [envelope.workspace],
+                ),
+              })
           : agentSystemPrompt({
               instructions: ownInstructions,
               workspaceRoot: agent.workspaceRoot,

@@ -3,8 +3,11 @@ import {
   DEFAULT_CLI_PERMISSION,
   DEFAULT_CONTEXT_POLICY,
   DEFAULT_MAX_TOOL_CALLS,
+  agentWorkspaceOf,
   blockedChatReply,
+  isAgentic,
   isCliProviderType,
+  type WorkspaceAccess,
   type ActivityItem,
   type ApprovalDecision,
   type ApprovalDecisionKind,
@@ -58,6 +61,7 @@ import type {
 } from '../ports/index.js';
 import { createSemaphore, type Semaphore } from '../providers/semaphore.js';
 import { usageFor, withReportedCost, type PricedProvider } from '../runs/cost.js';
+import { agentSystemPrompt } from '../runs/agentic/system-prompt.js';
 import { CLI_SESSION_MIN_TIMEOUT_MS } from '../runs/executor.js';
 import { redactArgs, type ToolProvider } from '../runs/tool-loop.js';
 import { maskSecrets } from '../security/secret-patterns.js';
@@ -774,8 +778,13 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     const activity: ActivityItem[] = [];
     let toolsOffered = false;
     let limitReached = false;
+    // D375: an agentic node's turn is bounded by its Max turns, as its run steps are.
     const maxToolCalls =
-      node.kind === 'agent' ? node.config.tools.maxToolCalls : DEFAULT_MAX_TOOL_CALLS;
+      node.kind !== 'agent'
+        ? DEFAULT_MAX_TOOL_CALLS
+        : isAgentic(node.config)
+          ? agentWorkspaceOf(node.config).maxTurns
+          : node.config.tools.maxToolCalls;
     /** The context point's verdicts on the tool results, in order; they ride the reply. */
     const toolVerdicts: ChatVerdict[] = [];
     const contextGuard = deps.contextGuard;
@@ -821,24 +830,6 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
           ? node.config.contextPolicy.budgetTokens
           : DEFAULT_CONTEXT_POLICY.budgetTokens;
 
-      const prompt = buildChatPrompt({
-        conversationId: nextId(),
-        nodeId: node.id,
-        instructions,
-        inputTypes: node.config.inputTypes,
-        budgetTokens,
-        // A failed turn is the engine speaking, not the model: it is never replayed as its answer.
-        history: history.filter((message) => message.error === undefined),
-        userParts,
-        ...(reverted.length === 0 ? {} : { note: revertedFilesNote(reverted) }),
-        now: now(),
-        speakers: {
-          names: await namesOf(context.workflowId),
-          mainNodeId: context.mainNodeId,
-          selfNodeId: node.id,
-        },
-      });
-
       const catalog = await deps.modelsFor();
       const catalogRow = catalog.find(
         (model) => model.providerId === chosen.providerId && model.modelId === chosen.modelId,
@@ -853,9 +844,14 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       });
       // D302: an API model in a project gets the non-destructive project tools, when its catalog
       // row says it can call tools; a CLI uses its own, under its provider's permission preset.
+      // A node set to Read only (D342) is not offered the writing ones.
+      const readOnlyNode =
+        node.kind === 'agent' && agentWorkspaceOf(node.config).access === 'read_only';
       const offered =
         workspace !== undefined && !cli && catalogRow?.supportsTools === true
-          ? chatToolsFrom(deps.tools)
+          ? chatToolsFrom(deps.tools).filter(
+              (tool) => !readOnlyNode || !PROJECT_WRITING_TOOLS.includes(tool.definition.name),
+            )
           : [];
       toolsOffered = offered.length > 0;
 
@@ -863,6 +859,53 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         .get(scope, chosen.providerId)
         .catch(() => null);
       pricedProvider = providerRow ?? undefined;
+
+      /*
+       * What the turn may do in the project folder, for the rules it is told: an API model by the
+       * tools on offer, a CLI by its provider's preset. A turn that can write is told to do the work
+       * in the files, so the person finds it in Forge rather than pasted into the reply.
+       */
+      const folderAccess: WorkspaceAccess | undefined =
+        workspace === undefined
+          ? undefined
+          : cli
+            ? readOnlyNode || (providerRow?.cliPermission ?? DEFAULT_CLI_PERMISSION) === 'read_only'
+              ? 'read_only'
+              : 'edit_files'
+            : !toolsOffered
+              ? undefined
+              : offered.some((tool) => PROJECT_WRITING_TOOLS.includes(tool.definition.name))
+                ? 'edit_files'
+                : 'read_only';
+
+      const prompt = buildChatPrompt({
+        conversationId: nextId(),
+        nodeId: node.id,
+        instructions:
+          folderAccess === undefined || workspace === undefined
+            ? instructions
+            : agentSystemPrompt({
+                instructions,
+                workspaceRoot: workspace,
+                os: process.platform,
+                shell: 'the system shell',
+                access: folderAccess,
+                ownTools: cli,
+                chat: true,
+              }),
+        inputTypes: node.config.inputTypes,
+        budgetTokens,
+        // A failed turn is the engine speaking, not the model: it is never replayed as its answer.
+        history: history.filter((message) => message.error === undefined),
+        userParts,
+        ...(reverted.length === 0 ? {} : { note: revertedFilesNote(reverted) }),
+        now: now(),
+        speakers: {
+          names: await namesOf(context.workflowId),
+          mainNodeId: context.mainNodeId,
+          selfNodeId: node.id,
+        },
+      });
 
       /*
        * D300/D302, PG-2.4 (D361): a turn that can write and whose checkpoint could not begin

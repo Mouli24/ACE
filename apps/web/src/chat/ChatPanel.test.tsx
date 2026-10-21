@@ -65,7 +65,7 @@ describe('TC-CHAT-006 a chat reply streams then settles', () => {
     await waitFor(() =>
       expect(screen.getByTestId('chat-conversation')).toHaveTextContent('You said: hello'),
     );
-    // the phone tab wears the aside's rows, but Forge is the column's: no "Send to Forge →" here
+    // the phone tab wears the aside's rows; there is no "Send to Forge →" anywhere
     expect(await screen.findByTestId('chat-turn-agent')).toHaveTextContent(/^✳Writer/);
     expect(await screen.findByTestId('chat-usage')).toBeInTheDocument();
     expect(screen.queryByTestId('chat-send-to-forge')).toBeNull();

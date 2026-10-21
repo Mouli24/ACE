@@ -14,7 +14,7 @@ import { activityItemFor, type ActivityStatus } from './activity.js';
  * The bounded project tool loop of an API-model chat turn (D302, design §4).
  *
  * In a project with a folder, an API model may read and change the project's files from chat, with
- * ACE's own project tools. Only the non-destructive six are offered — never `run_command` (shell
+ * ACE's own project tools. Only the non-destructive seven are offered — never `run_command` (shell
  * commands belong to CLI nodes, runs with their approval card, and the person's terminal), and
  * never a tool whose definition says it is destructive. Their paths are confined by the tools
  * themselves, exactly as in a run. The loop is the run's, cut down: generate; run each requested
@@ -29,6 +29,7 @@ import { activityItemFor, type ActivityStatus } from './activity.js';
 export const CHAT_PROJECT_TOOLS = [
   'list_files',
   'read_file',
+  'search',
   'write_file',
   'edit_file',
   'git_status',

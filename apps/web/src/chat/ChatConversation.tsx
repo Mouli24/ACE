@@ -1,6 +1,5 @@
 import {
   isAddressableNode,
-  isAgentic,
   isCliProviderType,
   type ChatMessage,
   type Node,
@@ -202,19 +201,18 @@ export function chatCostText(usage: Usage): string {
 
 /**
  * The line under an agent turn (FR-CHAT-006, D335): the model that actually answered, its tokens,
- * and whether a run of the node wrote it (D285) — then the theme's "Send to Forge →" chip. Only
+ * and whether a run of the node wrote it (D285) — then "Open in Forge →" when the turn wrote files.
+ * Agents write their work into the project themselves, so there is nothing to send to Forge. Only
  * real values: a turn with none of them has no line.
  */
 function TurnMeta({
   message,
-  onSendToForge,
   onOpenRun,
   agenticForge,
 }: {
   message: ChatMessage;
-  onSendToForge: (() => void) | undefined;
   onOpenRun: ((runId: string) => void) | undefined;
-  /** D378: an agentic node's turn offers Open in Forge, with its files, in place of Send to Forge. */
+  /** D378: opens the files the turn wrote in Forge; drawn only when it wrote some. */
   agenticForge: AgenticForge | undefined;
 }) {
   const parts: ReactNode[] = [];
@@ -254,18 +252,10 @@ function TurnMeta({
       <span className="min-w-0 text-[10px] text-[var(--muted)]">
         {parts.flatMap((part, index) => (index === 0 ? [part] : [' · ', part]))}
       </span>
-      {agenticForge !== undefined && <OpenInForgeChip message={message} forge={agenticForge} />}
-      {agenticForge === undefined && onSendToForge !== undefined && (
-        <button
-          type="button"
-          data-testid="chat-send-to-forge"
-          onClick={onSendToForge}
-          className="flex h-[22px] shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--chip)] px-[9px] text-[10px] font-semibold text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
-        >
-          Send to Forge
-          <Icons.ArrowRight aria-hidden size={11} />
-        </button>
-      )}
+      {agenticForge !== undefined &&
+        (message.runId !== undefined || message.checkpointId !== undefined) && (
+          <OpenInForgeChip message={message} forge={agenticForge} />
+        )}
     </div>
   );
 }
@@ -287,6 +277,8 @@ function OpenInForgeChip({ message, forge }: { message: ChatMessage; forge: Agen
   const nodeRun = nodeRuns?.filter((each) => each.nodeId === forge.nodeId).at(-1);
   const fromRun = stepFilesOf(nodeRun);
   const files = fromRun.length > 0 ? fromRun : (checkpoint?.files.map((file) => file.path) ?? []);
+  // A turn that wrote nothing has nothing to open.
+  if (files.length === 0) return null;
   return (
     <button
       type="button"
@@ -350,7 +342,6 @@ export function ChatConversation({
   node,
   convo,
   composer,
-  onSendToForge,
   speakers,
   projectId,
   onOpenRun,
@@ -358,14 +349,12 @@ export function ChatConversation({
 }: {
   node: Node;
   convo: Conversation;
-  /** D378: opens files in Forge; an agentic node's turns offer it in place of Send to Forge. */
+  /** D378: opens in Forge the files a turn wrote (the column only). */
   openInForge?: (paths: readonly string[], runId?: string) => void;
   /** A run turn's "See the whole run →": show that run's conversation (the column only). */
   onOpenRun?: (runId: string) => void;
   /** The input box, when it belongs inside the conversation (the phone tab); the column keeps its own. */
   composer?: ReactNode;
-  /** The meta line's "Send to Forge →" (the column only); absent, the chip is not drawn. */
-  onSendToForge?: () => void;
   /** D302: the workflow's agents by node id, to name a reply another node gave. */
   speakers?: ReadonlyMap<string, AgentLook>;
   /** The project, for a turn's Changes card (D300). */
@@ -378,11 +367,9 @@ export function ChatConversation({
       : speakers?.get(speakerNodeId);
   const replying = otherSpeaker(convo.replyingNodeId);
   const replyName = replying?.name ?? node.name;
+  // Any node's chat can write in the project (D302), so any turn that did offers its files.
   const agenticForge: AgenticForge | undefined =
-    node.kind === 'agent' &&
-    isAgentic(node.config) &&
-    openInForge !== undefined &&
-    projectId !== undefined
+    openInForge !== undefined && projectId !== undefined
       ? { nodeId: node.id, projectId, open: openInForge }
       : undefined;
   const scroller = useRef<HTMLDivElement>(null);
@@ -492,12 +479,7 @@ export function ChatConversation({
             <>
               <Body content={message.content} />
               {!you && (
-                <TurnMeta
-                  message={message}
-                  onSendToForge={onSendToForge}
-                  onOpenRun={onOpenRun}
-                  agenticForge={agenticForge}
-                />
+                <TurnMeta message={message} onOpenRun={onOpenRun} agenticForge={agenticForge} />
               )}
             </>
           )}

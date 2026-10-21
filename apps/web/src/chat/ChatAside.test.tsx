@@ -330,10 +330,9 @@ const owe = (nodeId: string, text: string) =>
   );
 
 describe('D335 the theme’s message rows', () => {
-  it('names each turn, and a reply’s meta line carries "Send to Forge" into Forge', async () => {
+  it('names each turn, and a reply that wrote no files has no Forge button', async () => {
     const user = userEvent.setup();
     const { workflowId } = seedAgentNode();
-    const { workflow } = await api().getWorkflow(workflowId);
     renderChat(<ChatAside workflowId={workflowId} />);
     await waitFor(() => expect(conversation()).toBeInTheDocument());
 
@@ -347,15 +346,10 @@ describe('D335 the theme’s message rows', () => {
     expect(agentTurn).toHaveTextContent(/^✳Writer/);
     // the real usage the engine recorded, in the theme's short form
     expect(within(agentTurn).getByTestId('chat-usage')).toHaveTextContent(/^8 in · \d+ out$/);
-    // a user turn has no meta line
-    expect(within(userTurnRow).queryByTestId('chat-send-to-forge')).toBeNull();
-
-    await user.click(within(agentTurn).getByRole('button', { name: 'Send to Forge' }));
-    await waitFor(() =>
-      expect(screen.getByTestId('location')).toHaveTextContent(
-        `/projects/${workflow.projectId}/workflows/${workflowId}/forge`,
-      ),
-    );
+    // agents write into the project themselves: nothing is sent to Forge, and a turn that wrote
+    // nothing has nothing to open there
+    expect(within(agentTurn).queryByRole('button', { name: /Send to Forge/ })).toBeNull();
+    expect(within(agentTurn).queryByTestId('chat-open-in-forge')).toBeNull();
   });
 
   it('draws a Markdown list as the theme’s bullet rows', async () => {

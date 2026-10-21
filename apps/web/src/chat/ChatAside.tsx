@@ -183,11 +183,6 @@ export function ChatAside({
     setView('run');
   };
 
-  const sendToForge =
-    projectId === undefined
-      ? undefined
-      : () => navigate(workflowPath(projectId, workflowId, 'forge'));
-
   const openInForge = useOpenInForge(projectId, workflowId);
 
   const shown = agents.slice(0, VISIBLE_TABS);
@@ -394,7 +389,6 @@ export function ChatAside({
           <TargetChat
             key={target.id}
             node={target}
-            onSendToForge={sendToForge}
             onOpenInForge={openInForge}
             speakers={looks}
             projectId={projectId}
@@ -410,14 +404,12 @@ export function ChatAside({
 
 function TargetChat({
   node,
-  onSendToForge,
   onOpenInForge,
   speakers,
   projectId,
   onOpenRun,
 }: {
   node: Node;
-  onSendToForge?: () => void;
   onOpenInForge?: (paths: readonly string[], runId?: string) => void;
   speakers: ReadonlyMap<string, AgentLook>;
   projectId: string | undefined;
@@ -440,7 +432,6 @@ function TargetChat({
       <ChatConversation
         node={node}
         convo={convo}
-        onSendToForge={onSendToForge}
         {...(onOpenInForge === undefined ? {} : { openInForge: onOpenInForge })}
         speakers={speakers}
         onOpenRun={onOpenRun}
