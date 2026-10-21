@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { db, installMockServer, renderWithQuery } from '../test/app';
-import { DeleteProjectDialog, RenameProjectDialog } from './ProjectDialogs';
+import { CreateProjectDialog, DeleteProjectDialog, RenameProjectDialog } from './ProjectDialogs';
 
 installMockServer();
 // `test/app` loads the route tree; these dialogs render no route, so Forge's page stays out of it.
@@ -51,5 +51,14 @@ describe('project dialogs (FR-PRJ-002/003)', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(onClose).toHaveBeenCalled();
     expect(db.listProjects()).toHaveLength(1);
+  });
+});
+
+describe('audit L-12 New project says where a blank folder goes', () => {
+  it('describes the folder field: blank keeps the project in ACE’s data folder', () => {
+    renderWithQuery(<CreateProjectDialog onClose={() => undefined} />);
+    expect(screen.getByLabelText('Folder path (optional)')).toHaveAccessibleDescription(
+      'Leave it blank to keep the project in ACE’s data folder.',
+    );
   });
 });
