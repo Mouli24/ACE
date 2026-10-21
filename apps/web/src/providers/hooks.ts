@@ -5,6 +5,7 @@ import type {
   ModelQuery,
   Provider,
   UpdateProviderRequest,
+  WorkflowGraphResponse,
 } from '@ace/contracts';
 import type { CreateProviderBody } from '@ace/sdk';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -107,6 +108,35 @@ export function usePatchModelCapabilities() {
       api().patchModelCapabilities(input.providerId, input.modelId, input.patch),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.modelsRoot() });
+    },
+  });
+}
+
+/**
+ * [audit P-20] Names for nodes the engine named only by id — the 409 of a provider removal
+ * (FR-PRV-005). Each workflow is read (from the cache when it is there) until every id is found, as
+ * "Node — Workflow"; an id that is never found has no entry, and the screen shows the id alone.
+ */
+export function useNodeNames(nodeIds: readonly Id[]) {
+  const queryClient = useQueryClient();
+  const wanted = [...new Set(nodeIds)].sort();
+  return useQuery({
+    queryKey: ['provider-in-use-nodes', wanted],
+    enabled: wanted.length > 0,
+    queryFn: async (): Promise<Map<Id, string>> => {
+      const names = new Map<Id, string>();
+      for (const project of (await api().listProjects()).items) {
+        for (const workflow of (await api().listWorkflows(project.id)).items) {
+          const graph =
+            queryClient.getQueryData<WorkflowGraphResponse>(queryKeys.workflow(workflow.id)) ??
+            (await api().getWorkflow(workflow.id));
+          for (const node of graph.nodes) {
+            if (wanted.includes(node.id)) names.set(node.id, `${node.name} — ${workflow.name}`);
+          }
+          if (names.size === wanted.length) return names;
+        }
+      }
+      return names;
     },
   });
 }

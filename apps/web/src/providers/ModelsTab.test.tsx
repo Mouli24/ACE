@@ -1,7 +1,8 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { http } from 'msw';
 
-import { db, installMockServer, renderApp } from '../test/app';
+import { db, installMockServer, renderApp, server } from '../test/app';
 
 installMockServer();
 
@@ -158,5 +159,31 @@ describe('D380 a person can mark a model as tool-capable', () => {
     const stored = db.listModels().find((m) => m.providerId === provider.id && m.modelId === 'mock-text');
     expect(stored?.capabilitiesSetByPerson).toBeUndefined();
     expect(screen.queryByRole('button', { name: 'Reset mock-text to discovered' })).toBeNull();
+  });
+});
+
+describe('audit P-20 the Models tab says it is loading', () => {
+  it('shows "Loading models…" until the catalog arrives', async () => {
+    const user = userEvent.setup();
+    db.createProvider({ type: 'mock', name: 'Mock' });
+    let answer: () => void = () => undefined;
+    const answered = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    server.use(
+      http.get('*/models', async () => {
+        await answered;
+        // Nothing returned: the mock engine's own handler answers.
+        return undefined;
+      }),
+    );
+    renderApp('/providers');
+
+    await user.click(await screen.findByRole('tab', { name: 'Models' }));
+
+    expect(await screen.findByText('Loading models…')).toBeInTheDocument();
+    answer();
+    expect(await screen.findByTestId('models-table')).toBeInTheDocument();
+    expect(screen.queryByText('Loading models…')).not.toBeInTheDocument();
   });
 });
