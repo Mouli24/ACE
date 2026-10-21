@@ -27,7 +27,6 @@
     "vitest": "^5.0.1"
   },
   "dependencies": {
-    "@ace/contracts": "workspace:*",
     "@ace/engine": "workspace:*",
     "@mozilla/readability": "^0.6.0",
     "linkedom": "^0.18.13",
