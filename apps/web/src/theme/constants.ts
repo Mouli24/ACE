@@ -1,4 +1,4 @@
-import type { ProviderType } from '@ace/contracts';
+import type { ProviderType, ReasoningEffort } from '@ace/contracts';
 
 import claudeLogo from './logos/claude.svg';
 import customLogo from './logos/custom.svg';
@@ -148,6 +148,17 @@ export const CTYPES: ReadonlyArray<readonly [ConnectionType, string, string]> = 
   ['Ollama', 'Models served by Ollama on your machine or a server.', ollamaLogo],
 ];
 export const EFFORT = ['Default', 'Low', 'Medium', 'High', 'XHigh', 'Max'] as const;
+/**
+ * D389: the theme's effort levels on the contract's `REASONING_EFFORTS`, in the same order. Only the
+ * theme's `XHigh` is spelled out, as "Extra high"; `EFFORT[0]` ("Default") is no setting at all.
+ */
+export const EFFORT_LABELS: Record<ReasoningEffort, string> = {
+  low: EFFORT[1],
+  medium: EFFORT[2],
+  high: EFFORT[3],
+  xhigh: 'Extra high',
+  max: EFFORT[5],
+};
 export const PERMS: Record<string, string> = {
   'Read only': 'This agent can read the workspace but cannot change files.',
   'Full access (read + write)':

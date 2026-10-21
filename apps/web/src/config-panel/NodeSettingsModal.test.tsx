@@ -1,3 +1,4 @@
+import type { ProviderType, ReasoningEffort } from '@ace/contracts';
 import { screen, waitFor, within } from '@testing-library/react';
 
 import { usePanelsStore } from '../app/stores/panels';
@@ -108,10 +109,12 @@ describe('Agent settings (FR-NODE-002/003/007/008, D333)', () => {
     expect(q.getByLabelText(/system prompt/i)).toHaveAttribute('rows', '8');
     expect(q.queryByRole('button', { name: /generate/i })).toBeNull();
     expect(q.queryByRole('button', { name: /role prompt/i })).toBeNull();
-    // D333: removed theme fields with no ACE feature
-    for (const gone of [/effort/i, /harness/i, /permissions/i, /priority/i, /citations/i]) {
+    // D333: removed theme fields with no ACE feature (D389 gave effort one: see below)
+    for (const gone of [/harness/i, /permissions/i, /priority/i, /citations/i]) {
       expect(q.queryByText(gone)).toBeNull();
     }
+    // D389: the theme's effort is the node's reasoning effort, among the execution settings
+    expect(q.getByLabelText('Reasoning effort')).toHaveTextContent('Default');
     expect(q.getByLabelText(/routing policy/i)).toBeInTheDocument();
     expect(q.queryByRole('group', { name: /input types/i })).toBeNull();
     expect(q.queryByRole('group', { name: /output types/i })).toBeNull();
@@ -269,6 +272,71 @@ describe('Agent settings (FR-NODE-002/003/007/008, D333)', () => {
       ),
     );
     expect(q.getByTestId('use-review-contract')).toBeDisabled();
+  });
+});
+
+describe('D389 reasoning effort per node', () => {
+  /** An Agent node on a provider of `type`, with `effort` already set (or not). */
+  const onProvider = (type: ProviderType, effort?: ReasoningEffort) =>
+    openNodeSettings('agent', (node) => {
+      const provider = db.createProvider({ type, name: `${type} provider` });
+      if (node.kind !== 'agent') return;
+      node.config.providerId = provider.id;
+      if (effort !== undefined) node.config.execution.reasoningEffort = effort;
+    });
+
+  it('offers Default, then Low to Max, and saves the level picked', async () => {
+    const { q, user, workflow, node } = await onProvider('claude_code');
+    const select = q.getByLabelText('Reasoning effort');
+    expect(select).toHaveTextContent('Default');
+    expect(await q.findByText('Claude Code takes every level.')).toBeInTheDocument();
+
+    await user.click(select);
+    const options = await screen.findAllByRole('option');
+    expect(options.map((option) => option.textContent)).toEqual([
+      'Default',
+      'Low',
+      'Medium',
+      'High',
+      'Extra high',
+      'Max',
+    ]);
+    await user.click(screen.getByRole('option', { name: 'High' }));
+
+    await settled(workflow.id);
+    await waitFor(() =>
+      expect(agentConfig(workflow.id, node.id).execution.reasoningEffort).toBe('high'),
+    );
+  });
+
+  it('Default writes null — the provider’s own default, no setting sent', async () => {
+    const { q, user, workflow, node } = await onProvider('codex_cli', 'max');
+    expect(q.getByLabelText('Reasoning effort')).toHaveTextContent('Max');
+    expect(
+      await q.findByText('Codex takes Low to Extra high; Max is sent as Extra high.'),
+    ).toBeInTheDocument();
+
+    await user.click(q.getByLabelText('Reasoning effort'));
+    await user.click(await screen.findByRole('option', { name: 'Default' }));
+
+    await settled(workflow.id);
+    await waitFor(() =>
+      expect(agentConfig(workflow.id, node.id).execution.reasoningEffort).toBeNull(),
+    );
+  });
+
+  it('is disabled for Gemini CLI, which has no such setting, and says so', async () => {
+    const { q } = await onProvider('gemini_cli');
+    expect(await q.findByText('Gemini CLI has no reasoning-effort setting.')).toBeInTheDocument();
+    expect(q.getByLabelText('Reasoning effort')).toBeDisabled();
+  });
+
+  it('an API provider applies it on models that can reason', async () => {
+    const { q } = await onProvider('openai');
+    expect(
+      await q.findByText('Applied by models that can reason; others ignore it.'),
+    ).toBeInTheDocument();
+    expect(q.getByLabelText('Reasoning effort')).toBeEnabled();
   });
 });
 
