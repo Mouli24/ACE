@@ -341,6 +341,9 @@ export function createApprovalService(deps: ApprovalServiceDeps): ApprovalServic
         }
       }
 
+      // [audit E-12] The run is ending: what it was for is no longer needed, and a run re-opened
+      // later learns it again with its next request.
+      workflowOfRun.delete(runId);
       return decisions;
     },
   };

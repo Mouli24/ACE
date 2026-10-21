@@ -2492,15 +2492,17 @@ export function createRunService(deps: RunServiceDeps): RunService {
     function backoff(delayMs: number): Promise<void> {
       if (delayMs <= 0 || signal.aborted) return Promise.resolve();
       return new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, delayMs);
-        signal.addEventListener(
-          'abort',
-          () => {
-            clearTimeout(timer);
-            resolve();
-          },
-          { once: true },
-        );
+        const cut = (): void => {
+          clearTimeout(timer);
+          resolve();
+        };
+        // [audit E-12] A wait that ran its course takes its listener with it: every retry of a
+        // long-lived run used to leave one on the run's signal.
+        const timer = setTimeout(() => {
+          signal.removeEventListener('abort', cut);
+          resolve();
+        }, delayMs);
+        signal.addEventListener('abort', cut, { once: true });
       });
     }
 
@@ -3485,6 +3487,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
    * just failed may fail again.
    */
   async function haltAfterThrow(run: Run, gate: RunGate): Promise<Run> {
+    // [audit E-12] What summarising cost for nodes that will now never run is not kept for ever.
+    summaryUsage.dropRun(run.id);
     try {
       await deps.approvals?.cancelPending(run.id, 'The run ended before this was decided.');
     } catch (error) {
