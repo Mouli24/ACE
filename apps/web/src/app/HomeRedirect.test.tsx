@@ -28,4 +28,14 @@ describe('FR-ONB-001 / opens the wizard for a brand-new user only', () => {
     const { router } = renderApp('/');
     await waitFor(() => expect(router.state.location.pathname).toBe(`/projects/${p.id}`));
   });
+
+  it('audit U-4: a deleted last project does not hijack / — Home opens instead', async () => {
+    db.createProject({ name: 'Kept' });
+    const gone = db.createProject({ name: 'Gone' });
+    db.deleteProject(gone.id);
+    // the engine keeps the id after the delete (the mock forgets it, so it is put back here)
+    db.patchSettings({ lastProjectId: gone.id });
+    const { router } = renderApp('/');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/projects'));
+  });
 });
