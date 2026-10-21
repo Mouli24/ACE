@@ -60,6 +60,7 @@ import {
   createWsHub,
   guardrailStoreFor,
   haltActiveRuns,
+  isHostAllowed,
   isOriginAllowed,
   loadEngineConfig,
   logDirectory,
@@ -1227,6 +1228,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   // Filled once the server is bound: with `port: 0` the configured port is not the real one
   // (D301). The gateway reads this array on every request, so filling it in place is enough.
   const selfOrigins: string[] = [];
+  // [audit S-7] The Host values a request may carry, from the same bound port, filled the same way.
+  const selfHosts: string[] = [];
   const app = createEngineApp({
     repository,
     auth,
@@ -1238,6 +1241,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     runs,
     bus,
     selfOrigins,
+    selfHosts,
     /* Round 3's three sub-routers (§2.5, D121). */
     controls,
     /* Domain (D309, D323): messages to a run's nodes, and ending a run started from Domain. */
@@ -1278,6 +1282,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   const bound = server.address() as { port: number; address: string };
   const actualPort = bound.port;
   selfOrigins.push(`http://${BIND_HOST}:${actualPort}`, `http://localhost:${actualPort}`);
+  selfHosts.push(`${BIND_HOST}:${actualPort}`, `localhost:${actualPort}`, `[::1]:${actualPort}`);
   const url = `http://${BIND_HOST}:${actualPort}`;
 
   /* --------------------------------------------------------------- websocket */
@@ -1293,10 +1298,17 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
       return;
     }
     const origin = request.headers.origin;
+    const host = request.headers.host;
 
     isOriginAllowed(originDeps, origin).then(
       (allowed) => {
         wss.handleUpgrade(request, socket, head, (ws) => {
+          // [audit S-7]: a DNS-rebound page's upgrade names its own host; refused like a foreign Origin.
+          if (!isHostAllowed(selfHosts, host)) {
+            logger.warn({ subsystem: 'ws', host }, 'refused a WebSocket for a foreign host');
+            ws.close(WS_CLOSE_FORBIDDEN_ORIGIN, 'forbidden host');
+            return;
+          }
           if (!allowed) {
             // design §7: the same allow-list as REST. Completed, then closed rather than
             // destroyed, so the client learns why and does not retry (FR-SYS-003).

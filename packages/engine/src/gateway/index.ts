@@ -99,6 +99,7 @@ import { createCheckpointRoutes } from '../checkpoints/routes.js';
 import type { CheckpointService } from '../checkpoints/service.js';
 import {
   HttpError,
+  forbiddenHost,
   forbiddenOrigin,
   notFound,
   notImplemented,
@@ -140,6 +141,12 @@ export interface EngineDeps {
   graph: GraphService;
   /** The engine's own origin, always allowed in addition to `settings.allowedOrigins`. */
   selfOrigins?: string[];
+  /**
+   * [audit S-7] The `Host` values the engine answers to (`127.0.0.1:<port>`, `localhost:<port>`,
+   * `[::1]:<port>`), filled in once the real port is bound. Absent, no Host check — an app driven
+   * through `app.request(...)` has no socket and so no address of its own.
+   */
+  selfHosts?: string[];
 
   /* Round 2. Optional so a round 1 harness still builds an app without them. */
   providers?: ProviderService;
@@ -240,6 +247,27 @@ export async function isOriginAllowed(
   if (origin === undefined || origin === '') return true;
   const settings = await deps.repository.settings.get(deps.scope);
   return settings.allowedOrigins.includes(origin) || (deps.selfOrigins ?? []).includes(origin);
+}
+
+/**
+ * [audit S-7] Is `host` (a request's `Host` header) one of the engine's own addresses? The second
+ * layer against DNS rebinding: a page on `evil.example` that re-points its name at 127.0.0.1 is
+ * same-origin to itself, sends no `Origin` on a GET and so passes the Origin rule — but its `Host`
+ * still says `evil.example`. One rule for REST (`hostGuard`) and the WebSocket upgrade. With no
+ * `selfHosts` there is nothing to compare against and every host passes.
+ */
+export function isHostAllowed(selfHosts: readonly string[] | undefined, host: string | undefined): boolean {
+  if (selfHosts === undefined) return true;
+  return host !== undefined && selfHosts.includes(host.toLowerCase());
+}
+
+/** [audit S-7]: refuse a request whose `Host` is not the engine's — before CORS answers anything. */
+function hostGuard(deps: EngineDeps): MiddlewareHandler<{ Variables: EngineVariables }> {
+  return async (c, next) => {
+    const host = c.req.header('Host');
+    if (!isHostAllowed(deps.selfHosts, host)) throw forbiddenHost(host ?? '');
+    return next();
+  };
 }
 
 /**
@@ -461,6 +489,7 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   });
 
   app.use('*', requestId());
+  app.use('*', hostGuard(deps));
   app.use('*', corsLayer(deps));
   app.use('*', originGuard(deps));
   app.use('*', authGuard(deps));
