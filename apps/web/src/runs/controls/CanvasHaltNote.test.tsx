@@ -1,12 +1,12 @@
 import { zeroUsage, type Run } from '@ace/contracts';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { api } from '../../app/api';
 import { usePanelsStore } from '../../app/stores/panels';
 import { installMockServer, renderWithQuery } from '../../test/app';
 import { useRunStore } from '../run-store';
-import { CanvasHaltNote } from './CanvasHaltNote';
+import { CanvasHaltNote, RUN_COMPLETE_MS } from './CanvasHaltNote';
 
 installMockServer();
 
@@ -128,5 +128,47 @@ describe('[audit W-16] the halt note’s advice comes with its buttons', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Continue' }));
     await waitFor(() => expect(carryOn).toHaveBeenCalledWith('run1'));
     expect(screen.queryByRole('button', { name: 'Show errors' })).toBeNull();
+  });
+});
+
+describe('[audit L-2] a run that finishes in view says so, with the way to its result', () => {
+  it('shows "Run complete" briefly, and See the result opens the Output node', async () => {
+    useRunStore.setState({ workflowId: 'wf1', runId: 'run1', status: 'RUNNING' });
+    renderWithQuery(<CanvasHaltNote workflowId="wf1" />);
+    expect(screen.queryByTestId('run-complete')).toBeNull();
+
+    act(() =>
+      useRunStore.setState({
+        status: 'COMPLETE',
+        finalOutput: { out1: [{ type: 'text', text: 'done' }] },
+      }),
+    );
+    const note = await screen.findByTestId('run-complete');
+    expect(note).toHaveTextContent('Run complete');
+    expect(note).toHaveAttribute('role', 'status');
+
+    await userEvent.click(screen.getByRole('button', { name: 'See the result' }));
+    expect(usePanelsStore.getState().settings).toEqual({ kind: 'node', id: 'out1' });
+    expect(screen.queryByTestId('run-complete')).toBeNull();
+  });
+
+  it('a run already complete when the Canvas opens says nothing', () => {
+    useRunStore.setState({ workflowId: 'wf1', runId: 'run1', status: 'COMPLETE' });
+    renderWithQuery(<CanvasHaltNote workflowId="wf1" />);
+    expect(screen.queryByTestId('run-complete')).toBeNull();
+  });
+
+  it('goes by itself after a few seconds', () => {
+    vi.useFakeTimers();
+    try {
+      useRunStore.setState({ workflowId: 'wf1', runId: 'run1', status: 'RUNNING' });
+      renderWithQuery(<CanvasHaltNote workflowId="wf1" />);
+      act(() => useRunStore.setState({ status: 'COMPLETE' }));
+      expect(screen.getByTestId('run-complete')).toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(RUN_COMPLETE_MS));
+      expect(screen.queryByTestId('run-complete')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
