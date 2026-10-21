@@ -31,7 +31,8 @@ describe('D334 FR-GIT-003 Forge in the theme’s code view', () => {
     renderApp(seed());
     const forge = await screen.findByTestId('forge');
     const explorer = within(forge).getByRole('navigation', { name: 'Explorer' });
-    expect(explorer).toHaveClass('w-[248px]', 'bg-[var(--panel)]');
+    expect(explorer).toHaveStyle({ width: '248px' });
+    expect(explorer).toHaveClass('bg-[var(--panel)]');
     expect(
       await within(explorer).findByRole('tree', { name: 'Files of Shop' }),
     ).toBeInTheDocument();

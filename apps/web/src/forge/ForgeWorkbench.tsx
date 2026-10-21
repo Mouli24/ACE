@@ -23,10 +23,10 @@ import { useQuickOpen } from './quick-open/quick-open-store';
 import { toggleTerminalFocused } from './terminal/focus';
 
 /**
- * Forge in the Ace UI theme's code view (D334, after D299): a fixed 248px Explorer beside the code
+ * Forge in the Ace UI theme's code view (D334, after D299): a 248px Explorer beside the code
  * column (tabs, path bar, editor), and under the code column the bottom panel with the Terminal and
  * Problems while the person has it open (Ctrl/⌘+J, Ctrl+` for the Terminal, or the footer's counts;
- * maximizable). Ctrl/⌘+B hides the Explorer, Ctrl/⌘+P opens any file; saving, Save all and closing
+ * maximizable); both resize from their edge ([audit F-7]). Ctrl/⌘+B hides the Explorer, Ctrl/⌘+P opens any file; saving, Save all and closing
  * a tab keep their keys. The chat aside and the footer are the workspace layout's, not Forge's.
  */
 export function ForgeWorkbench({

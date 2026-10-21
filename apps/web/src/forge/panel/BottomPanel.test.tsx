@@ -24,7 +24,8 @@ describe('D299 D334 Forge’s bottom panel in the theme', () => {
   it('is the canvas’s bottom panel: 232px on the panel colour, the views as the segmented pill', () => {
     renderWithQuery(<BottomPanel projectId={P} />);
     const panel = screen.getByRole('region', { name: 'Panel' });
-    expect(panel).toHaveClass('h-[232px]', 'bg-[var(--panel)]', 'border-t');
+    expect(panel).toHaveStyle({ height: '232px' });
+    expect(panel).toHaveClass('bg-[var(--panel)]', 'border-t');
     expect(within(panel).getByRole('tablist', { name: 'Panel views' })).toHaveClass(
       'rounded-full',
       'bg-[var(--soft)]',
