@@ -570,10 +570,12 @@ export function createProviderService(
        * naming one is refused with that reason rather than the model vanishing, and no model is
        * ever offered that nothing vouched for. [audit P-5] This holds for a provider with a
        * manifest too: swapping a listed catalogue for the manifest dropped what the key really
-       * offers, and what the person set on those models (D380). Only a catalogue that is still
-       * empty falls back to the manifest (FR-MOD-002) — a CLI has none, so it stays empty.
+       * offers, and what the person set on those models (D380). Only a catalogue the provider never
+       * listed — empty, or the manifest itself — falls back to the manifest (FR-MOD-002); a CLI
+       * has none, so it keeps what it has.
        */
-      if (warning !== undefined && (existing.length > 0 || manifest.length === 0)) {
+      const listedBefore = existing.some((model) => model.source === "discovered");
+      if (warning !== undefined && (listedBefore || manifest.length === 0)) {
         const models: Model[] = existing.map((model) => ({
           ...model,
           available: false,
