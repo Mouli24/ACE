@@ -5,7 +5,7 @@ import type { ReactElement } from 'react';
 import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 
 import { configureApi } from '../app/api';
-import { routes } from '../app/routes';
+import { preloadRoutes, routes } from '../app/routes';
 import { startSocket, stopSocket } from '../app/socket';
 import { LAYOUT_STORAGE_KEY, useLayoutStore } from '../app/stores/layout';
 import { usePanelsStore } from '../app/stores/panels';
@@ -72,6 +72,8 @@ export function installMockServer(): void {
     server.listen({ onUnhandledRequest: 'error' });
     configureApi({ token: 'mock', baseUrl: 'http://mock.local' });
   });
+  // audit U-8: the split-off screens load first, so renderApp draws them at once
+  beforeAll(() => preloadRoutes(), 30_000);
   beforeEach(() => {
     stopScenario();
     db.reset();
