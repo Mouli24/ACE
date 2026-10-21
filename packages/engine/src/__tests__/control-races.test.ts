@@ -118,7 +118,9 @@ describe('[audit E-5] controls that race', () => {
     // The run reads HALTED, but its drive still holds its gate (a Stop writes HALTED at once).
     const unregister = h.gates.register(createRunGate(run.id));
 
-    await expect(h.controls.retryNodeRun(failed.id, { withDownstream: true })).rejects.toMatchObject({
+    await expect(
+      h.controls.retryNodeRun(failed.id, { withDownstream: true }),
+    ).rejects.toMatchObject({
       code: 'invalid_run_state',
     });
     expect((await h.nodeRunsOf(run.id, writer.id)).map((row) => row.attempt)).toEqual([1]);

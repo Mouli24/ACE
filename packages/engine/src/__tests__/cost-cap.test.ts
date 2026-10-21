@@ -5,11 +5,7 @@ import { createBudgetService } from '../budgets/index.js';
 import { check, policy } from '../guardrails/__tests__/fakes.js';
 import type { PolicyService } from '../guardrails/policy-service.js';
 import { newId } from '../ids.js';
-import {
-  createRunDriverHarness,
-  deferred,
-  type RunDriverHarness,
-} from './run-driver-harness.js';
+import { createRunDriverHarness, deferred, type RunDriverHarness } from './run-driver-harness.js';
 
 /**
  * [audit E-4] The run's cost cap is a hard cap (FR-GRD-008, §2.3, D80).
