@@ -38,7 +38,8 @@ export interface LifecycleDeps {
   approvals?: Pick<ApprovalService, 'cancelPending'>;
   /**
    * D323: a run started from Domain stays open, so a restart carries it on rather than halting it.
-   * Absent, every stranded run is halted `crash` as before.
+   * Absent, every stranded run is halted `crash` as before. [audit E-7] A clean shutdown leaves
+   * such a run open too (`haltActiveRuns`), for the next start to carry on.
    */
   keepOpen?: (run: Run) => boolean;
 }
@@ -309,13 +310,15 @@ export async function recoverAfterCrash(deps: LifecycleDeps): Promise<RecoveryRe
 /**
  * FR-SYS-008 / TC-SYS-009: the engine was asked to stop. Whatever is still going is halted
  * `shutdown` — the in-flight provider calls are aborted by the run service, and this is what
- * records the outcome.
+ * records the outcome. [audit E-7] A run `keepOpen` names (D323: started from Domain) is not
+ * halted: the next start carries it on, as it does after a crash.
  */
 export async function haltActiveRuns(deps: LifecycleDeps): Promise<Id[]> {
   const endedAt = (deps.now ?? (() => new Date().toISOString()))();
   const halted: Id[] = [];
 
   for (const run of await deps.repository.runs.listActive(deps.scope)) {
+    if (deps.keepOpen?.(run) === true) continue;
     await halt(deps, run, 'shutdown', endedAt);
     halted.push(run.id);
   }

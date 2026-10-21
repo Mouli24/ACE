@@ -1379,6 +1379,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
         bus,
         logger: logger.child({ subsystem: 'runs' }),
         approvals,
+        // [audit E-7] D323: a run started from Domain stays open across a restart, clean or not.
+        keepOpen: (run) => run.domain?.stayOpen === true,
       });
 
       // Round 4: stop deriving timeline rows and close every MCP connection before the DB closes.

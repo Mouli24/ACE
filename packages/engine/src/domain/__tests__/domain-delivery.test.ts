@@ -6,6 +6,8 @@ import type {
 import { describe, expect, it } from 'vitest';
 
 import { HttpError } from '../../gateway/errors.js';
+import { createLogger } from '../../logging/index.js';
+import { haltActiveRuns } from '../../runs/lifecycle.js';
 import {
   createRunDriverHarness,
   deferred,
@@ -163,6 +165,62 @@ describe('D323 a run started from Domain stays open', () => {
     await next.post(runId, 'Review, look again');
     await next.waitForEvent('run.parked', 2);
     expect(next.calls('Review')).toBe(1);
+  });
+});
+
+describe('[audit E-7] D323 a clean shutdown leaves a Domain run open', () => {
+  it('a parked run is not halted by a shutdown, and the next start carries it on', async () => {
+    const { h } = await team();
+    const runId = await parked(h);
+
+    await h.service.shutdown();
+    // What the server does after the drives have unwound.
+    expect(
+      await haltActiveRuns({
+        repository: h.repository,
+        scope,
+        bus: h.bus,
+        logger: createLogger({ level: 'silent', destination: { write: () => undefined } }),
+        keepOpen: (run) => run.domain?.stayOpen === true,
+      }),
+    ).toEqual([]);
+    expect((await h.runRow(runId)).status).toBe('RUNNING');
+    expect(h.payloads('run.completed')).toHaveLength(0);
+
+    const next = await createRunDriverHarness({ repository: h.repository });
+    expect(await next.recover()).toEqual({ halted: [], reopened: [runId] });
+    await next.waitForEvent('run.parked');
+    await next.post(runId, 'Review, look again');
+    await next.waitForEvent('run.parked', 2);
+    expect(next.calls('Review')).toBe(1);
+  });
+
+  it('a turn in flight at shutdown ends STOPPED, and the run stays open', async () => {
+    const { h, ids } = await team();
+    const runId = await parked(h);
+    const held = deferred();
+    h.scripts.set('Review', [{ hold: held.promise }]);
+    await h.post(runId, 'Review, look again');
+    await h.waitForState(ids.review, 'RUNNING', 2);
+
+    await h.service.shutdown();
+
+    const [turn] = (await h.nodeRunsOf(runId, ids.review)).slice(-1);
+    expect(turn?.status).toBe('STOPPED');
+    expect((await h.runRow(runId)).status).toBe('RUNNING');
+    expect(h.payloads('run.completed')).toHaveLength(0);
+  });
+
+  it('a board run is still halted `shutdown`', async () => {
+    const { h, ids } = await team();
+    const held = deferred();
+    h.scripts.set('Writer', [{ hold: held.promise }]);
+    const begun = await h.start();
+    await h.waitForState(ids.writer, 'RUNNING');
+
+    await h.service.shutdown();
+
+    expect(await begun.done).toMatchObject({ status: 'HALTED', haltReason: 'shutdown' });
   });
 });
 

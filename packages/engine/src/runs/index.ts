@@ -3173,9 +3173,20 @@ export function createRunService(deps: RunServiceDeps): RunService {
       await emitNodeState(run, plan.nodeRun, 'STOPPED');
     }
 
+    /*
+     * [audit E-7] D323: a run started from Domain stays open across an engine restart, and a clean
+     * shutdown is a restart too — crash recovery already carries such a run on (`keepOpen`), and a
+     * shutdown used to halt it instead. So it is left as it stands: the turns in flight have ended
+     * STOPPED like any shutdown's, what is PENDING stays in its log for the next process, and the
+     * row keeps its status, with no `run.completed`, for the next start to drive again. An End
+     * the person asked for still ends it.
+     */
+    const keptOpen =
+      stayOpen && gate.abortCause() === 'shutdown' && domain?.endRequested() !== true;
+
     // D309: whatever is still PENDING was never delivered — DROPPED, before the run's end is said.
     // A Stop says its own end, and drops them itself before it does (FR-CTL-003).
-    if (domain !== undefined && gate.abortCause() !== 'stopped') await domain.close();
+    if (domain !== undefined && gate.abortCause() !== 'stopped' && !keptOpen) await domain.close();
 
     const allOutputsDone = graphComplete();
     const stillBusy = [...states.values()].some((state) => BUSY_STATES.has(state));
@@ -3188,7 +3199,17 @@ export function createRunService(deps: RunServiceDeps): RunService {
     // Nobody is left to answer an approval on a run that is ending, so what is still pending is
     // rejected rather than left to wait for ever (FR-GRD-013, FR-CTL-003).
     if (deps.approvals !== undefined) {
-      await deps.approvals.cancelPending(run.id, 'The run ended before this was decided.');
+      await deps.approvals.cancelPending(
+        run.id,
+        keptOpen
+          ? 'The engine was shut down before this was decided.'
+          : 'The run ended before this was decided.',
+      );
+    }
+
+    if (keptOpen) {
+      logger.info({ subsystem: 'runs', runId: run.id }, 'left a Domain run open across shutdown');
+      return (await repository.runs.get(scope, run.id)) ?? run;
     }
 
     /*
