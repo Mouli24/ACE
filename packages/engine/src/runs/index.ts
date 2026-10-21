@@ -639,8 +639,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
   /* ------------------------------------------------------------- readiness */
 
   /**
-   * A node is ready when every input port that has edges has what it needs: all of them for a
-   * single-input port, at least one for a `multi` port (§2.6 of round 1's port model, Arch §12.3).
+   * A node is ready when every data edge into it has delivered (§2.6 of round 1's port model, Arch
+   * §12.3). A `multi` port is one that *accepts* many edges, not one that runs on the first of them
+   * [audit E-1]: a Join fed by three branches used to run on whichever finished first. The one node
+   * that runs on a first arrival is a Merge in `any` mode, and it has its own rule below.
    */
   function isReady(node: Node, edges: readonly Edge[], delivered: ReadonlySet<Id>): boolean {
     /*
@@ -652,9 +654,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
     if (waitsOn.some((edge) => !delivered.has(edge.id))) return false;
 
     /*
-     * A merge is the one node whose readiness is not a property of its ports (FR-PAR-002): both of
-     * its input ports are `multi`, so the generic rule below *is* the `any` behaviour and `all`
-     * would be unreachable. `isMergeReady` reads the mode instead.
+     * A merge is the one node whose readiness is not a property of its ports (FR-PAR-002): the
+     * generic rule below is its `all` behaviour, and `any` would be unreachable. `isMergeReady`
+     * reads the mode instead.
      */
     if (node.kind === 'merge') return isMergeReady(node, edges, delivered);
 
@@ -664,21 +666,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
      * loop re-queues its target instead, which is `requeue` below.
      */
     const incoming = edges.filter((edge) => edge.to.nodeId === node.id && edge.kind === 'data');
-    if (incoming.length === 0) return true;
-
-    const byPort = new Map<string, Edge[]>();
-    for (const edge of incoming) {
-      byPort.set(edge.to.portId, [...(byPort.get(edge.to.portId) ?? []), edge]);
-    }
-
-    for (const [portId, portEdges] of byPort) {
-      const port = node.inputs.find((candidate) => candidate.id === portId);
-      const needed = port?.multi === true ? 1 : portEdges.length;
-      const arrived = portEdges.filter((edge) => delivered.has(edge.id)).length;
-      if (arrived < needed) return false;
-    }
-
-    return true;
+    return incoming.every((edge) => delivered.has(edge.id));
   }
 
   /*
