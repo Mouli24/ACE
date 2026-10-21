@@ -242,15 +242,7 @@ export function createProviderService(
         { subsystem: "providers", providerId: created.id },
         "added the local Ollama found on this machine",
       );
-      // CONNECTED, and its models listed (check fills an empty catalogue).
-      try {
-        await service.check(created.id);
-      } catch (error) {
-        logger.warn(
-          { subsystem: "providers", providerId: created.id, err: error },
-          "the new Ollama provider could not be checked",
-        );
-      }
+      // CONNECTED, and its models listed: `create` checks it [audit P-10].
       return created;
     })().finally(() => {
       addingLocal = undefined;
@@ -296,6 +288,35 @@ export function createProviderService(
     return new ProviderActionError(
       maskSecrets(classifyError(error, { providerId: id }).message),
     );
+  }
+
+  /**
+   * [audit P-10] The types that talk to a real endpoint are asked as soon as they are added or
+   * their key or address changes. A CLI lists its models on add instead (D286), and the mock
+   * provider is checked when asked (TC-PRV-003..005).
+   */
+  const checksOnSave = (type: Provider["type"]): boolean =>
+    type !== "mock" && !isCliProviderType(type);
+
+  /**
+   * Check a provider that was just saved, so it does not sit at "never checked" with an empty
+   * catalogue until the 60 s sweep — and, with `relist`, so a new key's or address's models replace
+   * the ones listed before (`check` lists only into an empty catalogue). Best effort: the save
+   * stands whatever the check says, and a check that throws is only logged [audit P-10].
+   */
+  async function checkAfterSave(id: Id, relist: boolean): Promise<void> {
+    try {
+      const listed =
+        relist &&
+        (await repository.models.list(scope, { providerId: id })).length > 0;
+      const result = await service.check(id);
+      if (result.status === "CONNECTED" && listed) await service.refreshModels(id);
+    } catch (error) {
+      logger.warn(
+        { subsystem: "providers", providerId: id, err: error },
+        "the saved provider could not be checked",
+      );
+    }
   }
 
   /** `keySet` is never trusted from the row; it is what the keychain says right now. */
@@ -384,6 +405,12 @@ export function createProviderService(
           );
         }
       }
+
+      // [audit P-10] Its status, and its models when it answers, arrive with it.
+      if (checksOnSave(input.type)) {
+        await checkAfterSave(id, false);
+        return (await service.get(id)) ?? provider;
+      }
       return provider;
     },
 
@@ -421,6 +448,15 @@ export function createProviderService(
 
       // The gate is sized from the row, so a changed limit has to drop the old one.
       if (patch.concurrency !== undefined) gates.delete(id);
+
+      // [audit P-10] A new key or address is asked at once, and lists its own models.
+      const rotated = patch.apiKey !== undefined && patch.apiKey !== "";
+      const moved =
+        patch.baseUrl !== undefined && patch.baseUrl !== existing.baseUrl;
+      if (updated !== null && (rotated || moved) && checksOnSave(updated.type)) {
+        await checkAfterSave(id, true);
+        return service.get(id);
+      }
 
       return updated === null ? null : withKeySet(updated);
     },

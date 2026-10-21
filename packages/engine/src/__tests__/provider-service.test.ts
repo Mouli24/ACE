@@ -250,6 +250,57 @@ describe('FR-PRV-005 editing and rotating', () => {
   });
 });
 
+describe('audit P-10 an HTTP provider is checked when it is saved', () => {
+  it('checks it as it is added, and lists its models when it answers', async () => {
+    const provider = await harness.created({ type: 'openai', name: 'OpenAI', apiKey: 'k' });
+
+    expect(provider).toMatchObject({ status: 'CONNECTED', lastCheckedAt: NOW });
+    expect(await harness.service.get(provider.id)).toEqual(provider);
+    expect(adapterCalls.check).toBe(1);
+    const models = await harness.service.listModels({ providerId: provider.id });
+    expect(models.map((m) => m.modelId)).toEqual(['mock-text']);
+  });
+
+  it('adds it at whatever state the check found, without listing an unreachable one', async () => {
+    adapterStatus = 'UNREACHABLE';
+    harness = await build();
+
+    const provider = await harness.created({ type: 'openai_compatible', baseUrl: 'http://x.local' });
+
+    expect(provider.status).toBe('UNREACHABLE');
+    expect(adapterCalls.listModels).toBe(0);
+  });
+
+  it('still adds it when the check itself throws', async () => {
+    vi.spyOn(harness.service, 'check').mockRejectedValueOnce(new Error('adapter blew up'));
+
+    const provider = await harness.created({ type: 'anthropic', apiKey: 'k' });
+
+    expect(provider.status).toBe('UNKNOWN');
+    expect(await harness.service.get(provider.id)).not.toBeNull();
+  });
+
+  it('re-checks and re-lists after a new key or address, but not after a rename', async () => {
+    const provider = await harness.created({ type: 'openai_compatible', baseUrl: 'http://a.local' });
+    expect(adapterCalls).toEqual({ check: 1, listModels: 1 });
+
+    await harness.service.update(provider.id, { name: 'Renamed', baseUrl: 'http://a.local' });
+    expect(adapterCalls).toEqual({ check: 1, listModels: 1 });
+
+    await harness.service.update(provider.id, { apiKey: 'rotated' });
+    expect(adapterCalls).toEqual({ check: 2, listModels: 2 });
+
+    const moved = await harness.service.update(provider.id, { baseUrl: 'http://b.local' });
+    expect(adapterCalls).toEqual({ check: 3, listModels: 3 });
+    expect(moved).toMatchObject({ baseUrl: 'http://b.local', status: 'CONNECTED' });
+  });
+
+  it('leaves the mock provider to be checked when asked', async () => {
+    expect((await harness.created()).status).toBe('UNKNOWN');
+    expect(adapterCalls.check).toBe(0);
+  });
+});
+
 describe('TC-PRV-006 removing a provider a node still uses', () => {
   async function withNodeUsing(providerId: string): Promise<void> {
     const workflow = makeWorkflow();
