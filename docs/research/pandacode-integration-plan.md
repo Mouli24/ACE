@@ -266,3 +266,36 @@ Wave 4            worktree per run · fan-out node · …
 6. **Edges.** During a run, a delivered edge is solid, a waiting edge dim, a running source's edge animated, and a failed source's edge drawn as cut.
 7. **Approve all.** It approves only the non-destructive approvals and leaves a destructive one pending.
 8. **Gates:** `pnpm build`, `pnpm typecheck` and `pnpm lint` pass; the new and touched tests pass; the app launches and the changes are seen working in it.
+
+---
+
+## Implementation status — Wave 1 (2026-10-21)
+
+Built on `feat/pandacode-evolve`, local and unpushed.
+
+| Item | Status | Commits | Verified by |
+|---|---|---|---|
+| W1-1 Chat honours the node's CLI access (D386) | Done | 547558f3 | Unit tests (`engine/src/chat/__tests__/d386-d389-chat-access-usage-effort.test.ts`). **Live, real Claude Code (Haiku):** a Read only node on a provider whose preset is Edit files was asked to create `hello.txt`. It had only Glob/Grep/Read, said it could not write, and no file was created. |
+| W1-2 Chat estimates unreported usage (D387) | Done | 547558f3 | Unit tests. Not seen live: Claude Code reports its usage, and Codex/Gemini were not run. |
+| W1-3 Continue an interrupted run, Retry on interrupted nodes (D388); D-055 | Done | c03c34c5, c2fbedf1, a77dc04a, bac5b06a, 6edec755, 16208622 | Engine control and integration tests (`engine/src/__tests__/continue-run.test.ts`, `runs/control/__tests__/service.test.ts`, `routes.test.ts`); web tests. **Live, isolated engine and the real web app:** Input → two `mock-slow` writers → Merge → Output, stopped mid-stream. The header showed Continue; clicking it ran both writers again (attempt 2) and Merge and Output once; Input was not re-run; the run ended COMPLETE; a second Continue got 409. |
+| W1-4 Chat queue state per message (D391) | Done | de786493 | `chat/session-store.test.ts`, `ChatAside.test.tsx`. Not exercised live. |
+| W1-5 Reasoning effort (D389) | Done | c03c34c5, d120e200, 547558f3, 2bed3bb9 | Provider, executor, chat and modal tests. **Live:** the setting persisted and shows in node settings. The Claude Code turn above ran with `--effort low`. |
+| W1-6 Edges show run state (D390) | Done | 8fa4d1e9 | `EdgeLayer.test.tsx`. **Live:** with the stopped run selected, the edges read delivered / cut off / waiting; after Continue, all delivered. |
+| W1-7 Approve all, non-destructive (D391) | Done | 86e40605 | `ApprovalStack.test.tsx`. Not exercised live. |
+
+**Found and fixed during the live check** (16208622): a run reopened by Continue, Retry or Re-run that then completed kept its old `haltReason` (D81's reopen only set the status). `haltReason` and `budgetHalt` now accept `null`, and reopen clears them. The halted-run advice for stopped, shutdown and crash now names Continue.
+
+**Fixed along the way** (a77dc04a): a forced downstream node in a partial drive lost the envelope a finished sibling had already delivered, so it ran on half its inputs.
+
+**Gates on the merged branch:** `pnpm build`, `pnpm typecheck` and `pnpm lint` all green.
+
+**Tests:**
+
+| Package | Result |
+|---|---|
+| providers | 508 passed |
+| apps/server | 193 passed |
+| storage-local | 313 passed |
+| engine | 2024 passed, 5 failed: `trace-usage` ×1 and `always-allow-routes` ×4. All 5 fail on the base commit too. A sixth base failure, `chat-project`, pinned the pre-D385 tool list; its fixture was updated (cbef84c3). |
+| contracts | 1282 passed, 5 failed: the event list, the transcript field and the default policy. All 5 fail on base. |
+| web (touched folders) | 787 passed, 9 failed, all pre-existing (7 are in the baseline log, plus NodeSettingsModal "Skills" ×2). The full web suite has 41 failures, all also failing on base. |
