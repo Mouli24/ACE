@@ -16,7 +16,7 @@ import { NETWORK_DENIED_MESSAGE, sandboxEnv } from './env.js';
  * files collector skips it (as it skips `.ace-deny`). The network is denied in three layers, of
  * which this file adds the third: the environment's dead proxies ({@link sandboxEnv}), the PATH
  * deny-shims that stop `curl` ({@link writeDenyShims}), and a per-language prelude that stops the
- * interpreter's own sockets — `require('node:http')` in JS, `socket` in Python. Shell has no prelude
+ * interpreter's own sockets — `require('node:http')`, DNS and UDP in JS, `socket` in Python. Shell has no prelude
  * and leans on the first two layers, which is why the shims exist.
  *
  * `node` runs from `process.execPath` (this engine's own binary, always present and absolute, so
@@ -36,12 +36,14 @@ const JS_PRELUDE = `'use strict';
 // proxy environment and the PATH deny-shims; Docker's --network none is the hard guarantee.
 //
 // Surgical on purpose: only the connection-*initiating* calls are replaced. Overriding the Socket
-// class or dns.lookup breaks Node's own bootstrap (process.stdout is a net.Socket), so those are
-// left alone and Socket.prototype.connect is neutered instead.
+// class breaks Node's own bootstrap (process.stdout is a net.Socket), so it is left alone and
+// Socket.prototype.connect is neutered instead. Name resolution and UDP are queries too — a DNS
+// lookup alone carries data out — so dns and dgram are denied as well [audit S-3].
 const MESSAGE = ${JSON.stringify(NETWORK_DENIED_MESSAGE)};
 const deny = () => {
   throw new Error(MESSAGE);
 };
+const denyAsync = () => Promise.reject(new Error(MESSAGE));
 function patch(mod, names) {
   for (const name of names) {
     if (mod && typeof mod[name] === 'function') {
@@ -60,6 +62,29 @@ try {
 } catch {}
 try { patch(require('node:http'), ['request', 'get']); } catch {}
 try { patch(require('node:https'), ['request', 'get']); } catch {}
+// Every lookup/resolve*/reverse: the module's own (bound to a default resolver once, at load),
+// the Resolver prototype (which setServers re-binds them from) and both again under dns.promises.
+function patchQueries(target, replacement) {
+  if (!target) return;
+  for (const name of Object.getOwnPropertyNames(target)) {
+    if (!/^(lookup|resolve|reverse)/.test(name)) continue;
+    try {
+      if (typeof target[name] === 'function') target[name] = replacement;
+    } catch {}
+  }
+}
+try {
+  const dns = require('node:dns');
+  patchQueries(dns, deny);
+  if (dns.Resolver) patchQueries(dns.Resolver.prototype, deny);
+  patchQueries(dns.promises, denyAsync);
+  if (dns.promises && dns.promises.Resolver) patchQueries(dns.promises.Resolver.prototype, denyAsync);
+} catch {}
+try {
+  const dgram = require('node:dgram');
+  patch(dgram, ['createSocket', '_createSocketHandle']);
+  if (dgram.Socket && dgram.Socket.prototype) patch(dgram.Socket.prototype, ['bind', 'connect', 'send', 'sendto']);
+} catch {}
 try {
   globalThis.fetch = () => Promise.reject(new Error(MESSAGE));
 } catch {}
