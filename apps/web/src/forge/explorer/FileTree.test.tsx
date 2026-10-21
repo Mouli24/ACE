@@ -8,7 +8,7 @@ import { openFile } from '../editor/actions';
 import { useEditorStore } from '../editor/editor-store';
 import { useExplorerStore } from './explorer-store';
 import { ExplorerView } from './ExplorerView';
-import { FileTree } from './FileTree';
+import { FILTER_ROWS_MAX, FileTree } from './FileTree';
 
 installMockServer();
 
@@ -201,5 +201,25 @@ describe('D334 the Explorer’s header and filter', () => {
 
     await user.clear(screen.getByRole('textbox', { name: 'Filter files' }));
     expect(await screen.findByTestId('tree-item-src')).toBeInTheDocument();
+  });
+
+  it('[audit F-8] the filter renders at most 500 files and counts the rest', async () => {
+    const user = userEvent.setup();
+    const projectId = db.createProject({ name: 'Big' }).id;
+    db.seedFiles(
+      projectId,
+      Object.fromEntries(
+        Array.from({ length: FILTER_ROWS_MAX + 120 }, (_, i) => [`gen/file-${i}.ts`, '']),
+      ),
+    );
+    renderWithQuery(<ExplorerView projectId={projectId} />);
+    const tree = await screen.findByRole('tree', { name: 'Files of Big' });
+    await screen.findByTestId('explorer-count');
+
+    await user.type(screen.getByRole('textbox', { name: 'Filter files' }), 'file-');
+    expect(await screen.findByTestId('filter-more')).toHaveTextContent(
+      '120 more — keep typing to narrow the list.',
+    );
+    expect(within(tree).getAllByRole('treeitem')).toHaveLength(FILTER_ROWS_MAX);
   });
 });

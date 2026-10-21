@@ -71,6 +71,27 @@ describe('D299 a files.changed burst refreshes what shows it', () => {
     expect(stale(fileKeys.folder(PID, ''))).toBe(true);
   });
 
+  it('[audit F-8] refreshes the file list at most once every 2 s while files keep coming', () => {
+    const spy = vi.spyOn(client, 'invalidateQueries');
+    const listCalls = () =>
+      spy.mock.calls.filter(
+        ([filters]) => JSON.stringify(filters?.queryKey) === JSON.stringify(fileKeys.list(PID)),
+      );
+    for (let i = 0; i < 5; i += 1) {
+      applyFilesChanged(client, {
+        projectId: PID,
+        changes: [{ path: `gen/${i}.js`, kind: 'created' }],
+        resync: false,
+      });
+    }
+    // the first burst at once; the rest of the churn once, when the window closes
+    expect(listCalls()).toHaveLength(1);
+    vi.advanceTimersByTime(2000);
+    expect(listCalls()).toHaveLength(2);
+    vi.advanceTimersByTime(2000);
+    expect(listCalls()).toHaveLength(2);
+  });
+
   it('refetches the repository status at most once a second', () => {
     const spy = vi.spyOn(client, 'invalidateQueries');
     for (let i = 0; i < 5; i += 1) {
