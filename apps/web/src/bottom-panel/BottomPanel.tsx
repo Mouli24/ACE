@@ -147,11 +147,7 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
           </TabsContent>
 
           <TabsContent value="events" className="min-h-0 flex-1 overflow-auto px-[16px] pb-[14px]">
-            <EventsTab
-              entries={events}
-              nodes={nodes}
-              onShowNode={showNode}
-            />
+            <EventsTab entries={events} nodes={nodes} onShowNode={showNode} />
           </TabsContent>
 
           <TabsContent value="errors" className="min-h-0 flex-1 overflow-auto px-[16px] pb-[14px]">
