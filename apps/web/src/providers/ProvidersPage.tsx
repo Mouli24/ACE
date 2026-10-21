@@ -190,6 +190,11 @@ function ProviderRow({
   children?: ReactNode;
 }) {
   const check = useCheckProvider();
+  // [audit P-7] Why a checked provider is not connected, said in the row — not only in a tooltip.
+  const why =
+    provider.lastCheckedAt !== undefined && provider.status !== 'CONNECTED'
+      ? provider.statusMessage
+      : undefined;
 
   return (
     <li
@@ -208,6 +213,14 @@ function ProviderRow({
           {PROVIDER_TYPE_LABEL[provider.type]}
           {provider.baseUrl ? ` · ${provider.baseUrl}` : ''} · {provider.concurrency} concurrent
         </p>
+        {why !== undefined && why !== '' && (
+          <p
+            data-testid={`provider-status-message-${provider.id}`}
+            className="mt-[3px] line-clamp-2 break-words text-[11px] leading-[1.45] text-[#c94c27]"
+          >
+            {why}
+          </p>
+        )}
       </div>
 
       {isCliProviderType(provider.type) ? (
@@ -243,9 +256,10 @@ function ProviderRow({
         variant="secondary"
         size="sm"
         disabled={check.isPending}
+        aria-busy={check.isPending}
         onClick={() => check.mutate(provider.id)}
       >
-        Test
+        {check.isPending ? 'Testing…' : 'Test'}
       </Button>
 
       <DropdownMenu>
@@ -267,6 +281,16 @@ function ProviderRow({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      {/* [audit P-7] A Test the engine could not run says so, rather than nothing happening. */}
+      {check.isError && (
+        <p
+          role="alert"
+          data-testid={`provider-check-error-${provider.id}`}
+          className="basis-full text-[11px] leading-[1.45] text-[#c94c27]"
+        >
+          Test failed: {check.error.message}
+        </p>
+      )}
       {children !== undefined && children !== false && (
         <div className="basis-full pl-[32px]">{children}</div>
       )}

@@ -1,10 +1,11 @@
 import { PROVIDER_TYPES } from '@ace/contracts';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { HttpResponse, http } from 'msw';
 
 import { createNode } from '../nodes/factory';
 import { installMatchMedia, uninstallMatchMedia } from '../responsive/test-support';
-import { db, installMockServer, queryClient, renderApp } from '../test/app';
+import { db, installMockServer, queryClient, renderApp, server } from '../test/app';
 import { PROVIDER_TYPE_LABEL } from './provider-meta';
 import { patchProviderStatus } from './status-patch';
 
@@ -137,6 +138,47 @@ describe('TC-PRV-003 Test renders the check result', () => {
     await waitFor(() => expect(chip).toHaveAttribute('data-status', 'AUTH_FAILED'));
     expect(chip).toHaveTextContent('auth failed');
     await waitFor(() => expect(db.getProvider(provider.id)?.statusMessage).toBeDefined());
+  });
+
+  it('audit P-7 says why in the row, not only in the chip’s tooltip', async () => {
+    const user = userEvent.setup();
+    const provider = db.createProvider({ type: 'google', name: 'Google', apiKey: 'bad' });
+    renderApp('/providers');
+
+    await user.click(await screen.findByRole('button', { name: 'Test' }));
+
+    expect(await screen.findByTestId(`provider-status-message-${provider.id}`)).toHaveTextContent(
+      'The API key was rejected.',
+    );
+  });
+
+  it('audit P-7 shows the Test as pending, then the error when the engine cannot run it', async () => {
+    const user = userEvent.setup();
+    const provider = db.createProvider({ type: 'openai', name: 'OpenAI', apiKey: 'good' });
+    let answer: () => void = () => undefined;
+    const answered = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    server.use(
+      http.post('*/providers/:id/check', async () => {
+        await answered;
+        return HttpResponse.json(
+          { error: { kind: 'provider', code: 'x', message: 'engine fell over', retryable: false } },
+          { status: 500 },
+        );
+      }),
+    );
+    renderApp('/providers');
+
+    await user.click(await screen.findByRole('button', { name: 'Test' }));
+    const pending = await screen.findByRole('button', { name: 'Testing…' });
+    expect(pending).toBeDisabled();
+    answer();
+
+    expect(await screen.findByTestId(`provider-check-error-${provider.id}`)).toHaveTextContent(
+      'Test failed: engine fell over',
+    );
+    expect(screen.getByRole('button', { name: 'Test' })).toBeEnabled();
   });
 });
 
