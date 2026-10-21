@@ -153,6 +153,13 @@ describe('D332 the Canvas block', () => {
     expect(css).toMatch(/ {2}a \{\n {4}color: var\(--accent-ink\);/);
   });
 
+  it('audit U-18 the page behind the app is the theme’s canvas, light or dark', () => {
+    expect(css).toMatch(/ {2}html,\n {2}body \{\n {4}background-color: var\(--canvas\);/);
+    expect(css).toMatch(
+      /:root\[data-theme='dark'\] body:has\(\[data-surface='home'\]\) \{\n {4}background-color: #151413;/,
+    );
+  });
+
   it.each(DATA_TYPES)('PG-1.1 --port-%s mirrors PORT_COLORS in both themes', (type) => {
     const light = block(/^:root \{/m);
     const dark = block(/^:root\[data-theme='dark'\] \{/m);

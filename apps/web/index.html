@@ -4,6 +4,33 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ACE</title>
+    <!-- the canvas colour of each theme (theme.css --canvas) until the stylesheet arrives -->
+    <style>
+      html {
+        background-color: #f4f0ec;
+      }
+      html[data-theme='dark'] {
+        background-color: #0d0c0b;
+      }
+    </style>
+    <script>
+      // Audit U-18: the stored theme (D329's `ace-theme`) is on <html> before the first paint, so
+      // neither choice flashes the other while the app loads. Mirrors theme/mode.ts and @ace/ui's
+      // applyTheme: default light; `system` follows prefers-color-scheme.
+      (function () {
+        var theme = 'light';
+        try {
+          var stored = localStorage.getItem('ace-theme');
+          if (stored === 'dark') theme = 'dark';
+          else if (stored === 'system')
+            theme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        } catch (e) {
+          // storage blocked: the default
+        }
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

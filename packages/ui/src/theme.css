@@ -286,18 +286,23 @@
 }
 
 @layer base {
-  /* The theme's body: the workspace sits on #0d0c0b, Home on #151413 (with its transition). */
+  /* The theme's body: the workspace sits on its canvas (#0d0c0b dark), Home on #151413 dark (with
+     its transition). Audit U-18: in light the boot screen is light too — it was always the dark
+     #0d0c0b until the app drew over it; index.html sets data-theme before the first paint. */
   /* The theme sets no line-height; Tailwind's preflight would make it 1.5. */
   html,
   body {
-    background-color: #0d0c0b;
+    background-color: var(--canvas);
     color: var(--ink);
     font-family: var(--font-human);
     line-height: normal;
   }
   body:has([data-surface='home']) {
-    background-color: #151413;
+    background-color: #f5f2f0;
     transition: background 0.3s;
+  }
+  :root[data-theme='dark'] body:has([data-surface='home']) {
+    background-color: #151413;
   }
   /* PG-1.2 (D360): links in the AA accent (#e8623a measured 2.96:1 on the light canvas). */
   a {
