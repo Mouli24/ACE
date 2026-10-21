@@ -307,6 +307,20 @@ describe('D332 the Document card (every other kind)', () => {
   });
 });
 
+describe('[audit W-14] a card reached by the keyboard shows where focus is', () => {
+  it('both card kinds draw the theme’s 2 px accent ring while their node wrapper has focus', () => {
+    for (const kind of ['agent', 'merge'] as const) {
+      const node = createNode(kind, WF, { x: 0, y: 0 });
+      const { unmount } = view({ node });
+      expect(card(node)).toHaveClass(
+        '[.react-flow__node:focus-visible_&]:outline-2',
+        '[.react-flow__node:focus-visible_&]:outline-[#ef6b3f]',
+      );
+      unmount();
+    }
+  });
+});
+
 /* ------------------------------------------------------------------ handles */
 
 describe('D332 ports: invisible handles at the theme’s anchors', () => {

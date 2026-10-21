@@ -143,6 +143,15 @@ export function StatusChip({
 const BORDER = 1;
 
 /**
+ * [audit W-14] The keyboard's place on the Canvas. React Flow focuses the node's wrapper and its
+ * stylesheet takes the wrapper's outline away (`.react-flow__node.selectable:focus-visible`), so a
+ * card reached by Tab showed nothing: the card draws the theme's 2 px accent ring itself, as an
+ * outline, so it never fights the selected state's box-shadow.
+ */
+const FOCUS_RING =
+  '[.react-flow__node:focus-visible_&]:outline-2 [.react-flow__node:focus-visible_&]:outline-offset-2 [.react-flow__node:focus-visible_&]:outline-solid [.react-flow__node:focus-visible_&]:outline-[#ef6b3f]';
+
+/**
  * One port's React Flow handle (D350, supersedes D332's invisible one): a 22px target centred on the
  * theme's anchor with an 8px dot in its data type's colour. `theme.css` shows it on hover, on a
  * selected card, on focus or armed for a keyboard connect (NFR-USE-02), and — from
@@ -299,7 +308,7 @@ function StageCard(props: NodeCardViewProps) {
       data-provider={provider ?? 'none'}
       data-needs-provider={choose ? 'true' : undefined}
       data-since-run={props.sinceRun}
-      className={`relative h-[280px] w-[210px] rounded-[10px] bg-[var(--frame)] text-[var(--ink)] ${ghost ? 'cursor-default' : 'cursor-move'}`}
+      className={`relative h-[280px] w-[210px] rounded-[10px] bg-[var(--frame)] text-[var(--ink)] ${FOCUS_RING} ${ghost ? 'cursor-default' : 'cursor-move'}`}
       style={{
         border: `1px ${ghost ? 'dashed' : 'solid'} ${selected || choose ? ring : look.w ? 'var(--frameLine)' : `rgba(${look.glow},0.38)`}`,
         boxShadow: selected
@@ -457,7 +466,7 @@ function DocCard(props: NodeCardViewProps) {
       data-state={state}
       data-selected={selected ? 'true' : 'false'}
       data-since-run={props.sinceRun}
-      className={`relative w-[200px] rounded-[8px] bg-[var(--surface)] px-[14px] pb-[10px] pt-[14px] text-[var(--ink)] shadow-[0_10px_30px_-14px_rgba(40,25,15,0.35)] ${ghost ? 'cursor-default' : 'cursor-move'}`}
+      className={`relative w-[200px] rounded-[8px] bg-[var(--surface)] px-[14px] pb-[10px] pt-[14px] text-[var(--ink)] shadow-[0_10px_30px_-14px_rgba(40,25,15,0.35)] ${FOCUS_RING} ${ghost ? 'cursor-default' : 'cursor-move'}`}
       style={{
         border: `1px ${ghost ? 'dashed' : 'solid'} ${selected ? '#ef6b3f' : 'var(--line)'}`,
         ...(ghost ? GHOST_STYLE : {}),
