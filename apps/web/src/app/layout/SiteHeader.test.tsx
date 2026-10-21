@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 
 import { db, installMockServer, renderApp } from '../../test/app';
 import { THEME_KEY, setThemeMode } from '../../theme/mode';
-import { sectionLabel } from './SiteHeader';
+import { documentTitle, sectionLabel } from './SiteHeader';
 
 installMockServer();
 
@@ -26,6 +26,18 @@ describe('sectionLabel', () => {
     ['/onboarding', 'ONBOARDING'],
   ])('%s reads %s', (path, label) => {
     expect(sectionLabel(path)).toBe(label);
+  });
+
+  it.each([
+    ['/providers', undefined, 'Providers · ACE'],
+    ['/guardrails', undefined, 'Guardrail policies · ACE'],
+    ['/onboarding', undefined, 'Setup wizard · ACE'],
+    ['/projects/P1/runs', undefined, 'Runs · ACE'],
+    ['/projects/P1/workflows/W1', 'ideate', 'Ideate · ACE'],
+    ['/projects/P1/workflows/W1/domain', 'domain', 'Domain · ACE'],
+    ['/', undefined, 'ACE'],
+  ] as const)('audit U-13 the tab for %s (mode %s) reads %s', (path, mode, title) => {
+    expect(documentTitle(path, mode)).toBe(title);
   });
 
   it('has none for a path it does not know', () => {

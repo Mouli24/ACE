@@ -1,4 +1,5 @@
-import { act, screen, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 import { installMatchMedia, uninstallMatchMedia } from '../../responsive/test-support';
 import { db, installMockServer, renderApp } from '../../test/app';
@@ -169,5 +170,29 @@ describe('audit U-17 a workflow that cannot be loaded gets no workspace', () => 
     expect(screen.getByTestId('topbar-compact')).toBeInTheDocument();
     expect(screen.queryByTestId('run-bar')).toBeNull();
     expect(screen.queryByTestId('mode-switch')).toBeNull();
+  });
+});
+
+describe('audit U-13 a skip link and a title per section', () => {
+  it('the skip link moves focus past the header to the screen', async () => {
+    const user = userEvent.setup();
+    renderApp('/settings');
+    await screen.findByTestId('section-label');
+    const skip = screen.getByRole('link', { name: 'Skip to content' });
+    await user.tab();
+    expect(skip).toHaveFocus();
+    await user.click(skip);
+    expect(document.activeElement).toHaveAttribute('id', 'ace-main');
+    expect(document.activeElement).toContainElement(
+      screen.getByRole('heading', { level: 1, name: 'Settings' }),
+    );
+  });
+
+  it('names the tab after the section, and the mode inside a workflow', async () => {
+    const { unmount } = renderApp('/providers');
+    await waitFor(() => expect(document.title).toBe('Providers · ACE'));
+    unmount();
+    renderApp(`${seed().ideate}/forge`);
+    await waitFor(() => expect(document.title).toBe('Forge · ACE'));
   });
 });
