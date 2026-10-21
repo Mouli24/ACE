@@ -931,11 +931,17 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     if (found === null) throw notFound(`artifact ${c.req.param('id')}`);
     const { artifact, bytes } = found;
 
+    // [audit S-6]: the bytes are whatever a model or an upload produced, served on the engine's own
+    // origin with the token in the URL. Never sniffed into something else, never run as a page if
+    // opened as one (an <img>/<audio>/<video> ignores a subresource's CSP), never kept in a cache.
     const headers: Record<string, string> = {
       'Content-Type': artifact.mime,
       'Content-Disposition': `attachment; filename="${safeFilename(artifact.name)}"`,
       ETag: artifactETag(artifact.hash),
       'Accept-Ranges': ARTIFACT_ACCEPT_RANGES,
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+      'Cache-Control': 'no-store',
     };
 
     // Range → 206 with the requested slice, so audio and video can be seeked (§2.1, FR-MM-009).
