@@ -58,6 +58,12 @@ export function readSearxngUrl(raw: string, current: string | undefined): DraftR
 
 const NO_PROVIDER = '__none__';
 
+/**
+ * Audit U-3: a setting the engine stores but does not read yet. Its field stays, shown disabled
+ * with this note, rather than promising an effect it does not have; the key is kept.
+ */
+const NOT_ACTIVE = 'Not active yet.';
+
 /** The theme select's three choices (D329), in its order. */
 const THEME_OPTIONS: readonly { value: Theme; label: string }[] = [
   { value: 'dark', label: 'Dark' },
@@ -230,17 +236,18 @@ export function SettingsPage() {
           </SettingField>
 
           <div className={FIELD_GRID}>
+            {/* Audit U-3: saved but read by nothing yet, so it is shown as it is and not offered. */}
             <SelectField
               id="settings-default-provider"
               label="Default provider"
-              hint="Used by new agents that do not name one."
+              hint={`${NOT_ACTIVE} Each agent uses the provider and model it names.`}
               testId="settings-default-provider"
               value={data?.defaultProviderId ?? NO_PROVIDER}
               options={providerOptions}
               onChange={(value) => {
                 if (value !== NO_PROVIDER) void save({ defaultProviderId: value });
               }}
-              disabled={disabled}
+              disabled
             />
 
             <SettingInput
@@ -302,15 +309,16 @@ export function SettingsPage() {
               disabled={disabled}
               placeholder="http://localhost:8080"
             />
+            {/* Audit U-3: the engine always uses the child-process sandbox for now. */}
             <SelectField<DockerSandboxMode>
               id="settings-docker"
               label="Docker sandbox"
-              hint="auto uses Docker when it is available and a limited child process otherwise."
+              hint={`${NOT_ACTIVE} Code runs in a limited child process.`}
               testId="settings-docker"
               value={data?.dockerSandbox ?? 'auto'}
               options={DOCKER_SANDBOX_MODES.map((mode) => ({ value: mode, label: mode }))}
               onChange={(dockerSandbox) => void save({ dockerSandbox })}
-              disabled={disabled}
+              disabled
             />
           </div>
           <SwitchRow
