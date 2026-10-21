@@ -3,7 +3,7 @@ import { useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
 import { usePanelsStore, type BottomTab } from '../app/stores/panels';
-import { useSelectionStore } from '../app/stores/selection';
+import { showNode } from '../canvas/canvas-api';
 import { ErrorsTab, type ErrorsTabNodeRun } from '../errors/ErrorsTab';
 import { useProviders } from '../providers/hooks';
 import { useNodeRuns, useRetryNodeRun } from '../runs/hooks';
@@ -14,7 +14,8 @@ import { TimelineTab } from './TimelineTab';
 import { ValidationTab } from './ValidationTab';
 
 /**
- * Bottom pane (Arch §33.1 step 5): Validation, Events, Errors and the round-4 Timeline.
+ * Bottom pane (Arch §33.1 step 5): Validation, Events, Errors and the round-4 Timeline. Every
+ * "show node" selects the node and centres the Canvas on it [audit W-10].
  *
  * Hidden until the workspace menu's "Problems & events" opens it (D332), so the header has no
  * collapse toggle: the tabs are the kit's segmented pill, counts are mono chips, and the theme's
@@ -23,7 +24,6 @@ import { ValidationTab } from './ValidationTab';
 export function BottomPanel({ workflowId }: { workflowId: string }) {
   const tab = usePanelsStore((s) => s.bottomTab);
   const setTab = usePanelsStore((s) => s.setBottomTab);
-  const select = useSelectionStore((s) => s.setSelection);
   const graph = useWorkflowGraph(workflowId);
   const providers = useProviders();
 
@@ -150,7 +150,7 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
             <EventsTab
               entries={events}
               nodes={nodes}
-              onShowNode={(nodeId) => select([nodeId], [])}
+              onShowNode={showNode}
             />
           </TabsContent>
 
@@ -166,7 +166,7 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
               {...(retry.isPending && retry.variables !== undefined
                 ? { retryingNodeRunId: retry.variables.nodeRunId }
                 : {})}
-              onShowNode={(nodeId) => select([nodeId], [])}
+              onShowNode={showNode}
             />
           </TabsContent>
 

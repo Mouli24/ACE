@@ -1744,6 +1744,7 @@ function CanvasInner({
         undo,
         redo,
         readOnly,
+        focusNode,
       }),
     [
       register,
@@ -1756,6 +1757,7 @@ function CanvasInner({
       undo,
       redo,
       readOnly,
+      focusNode,
     ],
   );
 

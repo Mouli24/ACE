@@ -1,4 +1,4 @@
-import { useSelectionStore } from '../app/stores/selection';
+import { showNode } from '../canvas/canvas-api';
 import { useRun } from './hooks';
 import { useRunStore } from './run-store';
 import { CHIP_CLASS } from './RunStateChip';
@@ -17,7 +17,6 @@ export function PreflightIssues({ workflowId }: { workflowId: string }) {
     store.workflowId === workflowId ? store.status : undefined,
   );
   const run = useRun(status === 'BLOCKED' ? runId : undefined);
-  const select = useSelectionStore((s) => s.setSelection);
 
   const issues = run.data?.preflightIssues ?? [];
   if (status !== 'BLOCKED' || issues.length === 0) return null;
@@ -54,7 +53,8 @@ export function PreflightIssues({ workflowId }: { workflowId: string }) {
             {issue.nodeId && (
               <button
                 type="button"
-                onClick={() => select([issue.nodeId as string], [])}
+                // [audit W-10] select it and bring it into view
+                onClick={() => showNode(issue.nodeId as string)}
                 aria-label={`show node for ${issue.code}`}
                 className="shrink-0 cursor-pointer border-none bg-transparent p-0 text-[11.5px] font-semibold text-[#e8623a] outline-none hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
               >
