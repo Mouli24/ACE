@@ -2,7 +2,7 @@ import { HttpResponse, http } from 'msw';
 import { setupServer } from 'msw/node';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import type { ProviderAdapter, StreamChunk } from '../adapter.js';
+import type { ModelInfo, ProviderAdapter, StreamChunk } from '../adapter.js';
 import { NOT_A_CHAT_MODEL } from '../adapters/ai-sdk.js';
 import { createAnthropicAdapter } from '../adapters/anthropic.js';
 import { createGoogleAdapter } from '../adapters/google.js';
@@ -777,5 +777,111 @@ describe('audit P-6 non-chat models are listed but unavailable to nodes', () => 
       qwen3: true,
     });
     expect(models.find((m) => m.modelId === 'llama-guard3')?.unavailableReason).toBeUndefined();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* audit P-2 a discovered model is described by what its listing and family say */
+/* -------------------------------------------------------------------------- */
+
+describe('audit P-2 discovered chat models get their family’s capabilities', () => {
+  const capabilities = (model: ModelInfo | undefined) => ({
+    tools: model?.supportsTools,
+    json: model?.supportsJson,
+    image: model?.inputTypes.includes('image'),
+    context: model?.contextWindow,
+  });
+
+  it('anthropic: a Claude 3+ model takes tools, a schema and images, with a 200k window', async () => {
+    server.use(
+      http.get('https://api.anthropic.com/v1/models', () =>
+        HttpResponse.json({ data: [{ id: 'claude-sonnet-4-5-20250929' }, { id: 'claude-2.1' }] }),
+      ),
+    );
+
+    const [sonnet, legacy] = await createAnthropicAdapter({ apiKey: 'k' }).listModels();
+
+    expect(capabilities(sonnet)).toEqual({ tools: true, json: true, image: true, context: 200_000 });
+    expect(sonnet?.outputTypes).toEqual(['text', 'json', 'code']);
+    expect(sonnet?.pricing).toBeUndefined();
+    expect(capabilities(legacy)).toEqual({ tools: false, json: false, image: false, context: 8192 });
+  });
+
+  it('openai: gpt-4.1, gpt-5 and o-series, but not their realtime or audio variants', async () => {
+    server.use(
+      http.get('https://api.openai.com/v1/models', () =>
+        HttpResponse.json({
+          data: [
+            { id: 'gpt-4.1-mini' },
+            { id: 'gpt-5-nano' },
+            { id: 'o4-mini' },
+            { id: 'gpt-4o-realtime-preview' },
+            { id: 'gpt-3.5-turbo' },
+          ],
+        }),
+      ),
+    );
+
+    const byId = new Map(
+      (await createOpenAiAdapter({ apiKey: 'k' }).listModels()).map((m) => [m.modelId, m]),
+    );
+
+    expect(capabilities(byId.get('gpt-4.1-mini')).context).toBe(1_047_576);
+    expect(capabilities(byId.get('gpt-5-nano'))).toEqual({
+      tools: true,
+      json: true,
+      image: true,
+      context: 400_000,
+    });
+    expect(capabilities(byId.get('o4-mini')).tools).toBe(true);
+    expect(capabilities(byId.get('gpt-4o-realtime-preview')).tools).toBe(false);
+    expect(capabilities(byId.get('gpt-3.5-turbo')).tools).toBe(false);
+  });
+
+  it('openai_compatible: a family behind a gateway’s vendor prefix', async () => {
+    server.use(
+      http.get('http://localhost:1234/v1/models', () =>
+        HttpResponse.json({ data: [{ id: 'anthropic/claude-haiku-4.5' }, { id: 'qwen3-32b' }] }),
+      ),
+    );
+
+    const [claude, qwen] = await createOpenAiCompatibleAdapter({
+      baseUrl: 'http://localhost:1234',
+    }).listModels();
+
+    expect(capabilities(claude).tools).toBe(true);
+    expect(capabilities(qwen)).toEqual({ tools: false, json: false, image: false, context: 8192 });
+  });
+
+  it('google: the listing’s inputTokenLimit is the window, and Gemini 1.5+ chats with tools', async () => {
+    server.use(
+      http.get('https://generativelanguage.googleapis.com/v1beta/models', () =>
+        HttpResponse.json({
+          models: [
+            {
+              name: 'models/gemini-2.5-pro',
+              inputTokenLimit: 1_048_576,
+              outputTokenLimit: 65_536,
+              supportedGenerationMethods: ['generateContent'],
+            },
+            {
+              name: 'models/gemma-3-27b-it',
+              inputTokenLimit: 131_072,
+              supportedGenerationMethods: ['generateContent'],
+            },
+          ],
+        }),
+      ),
+    );
+
+    const [pro, gemma] = await createGoogleAdapter({ apiKey: 'k' }).listModels();
+
+    expect(capabilities(pro)).toEqual({ tools: true, json: true, image: true, context: 1_048_576 });
+    expect(capabilities(gemma)).toEqual({
+      tools: false,
+      json: false,
+      image: false,
+      context: 131_072,
+    });
   });
 });

@@ -9,6 +9,7 @@ import {
   embedOpenAiStyle,
   getJson,
   statusFromProbe,
+  withFamilyDefaults,
   type FetchLike,
 } from './ai-sdk.js';
 
@@ -30,7 +31,8 @@ export interface OpenAiCompatibleOptions {
 /**
  * `{ data: [{ id }] }` — the listing shape every OpenAI-compatible server returns. It says nothing
  * about what a model does, so an embedder, a speech or an image model is told apart by its name
- * and kept unavailable for nodes [audit P-6].
+ * and kept unavailable for nodes [audit P-6], and a well-known chat family gets its defaults
+ * [audit P-2].
  */
 export function parseOpenAiModelList(body: unknown): ModelInfo[] {
   const data = (body as { data?: unknown }).data;
@@ -38,7 +40,7 @@ export function parseOpenAiModelList(body: unknown): ModelInfo[] {
 
   return data.flatMap((entry): ModelInfo[] => {
     const id = (entry as { id?: unknown }).id;
-    return typeof id === 'string' ? [byChatName(discoveredModel(id))] : [];
+    return typeof id === 'string' ? [withFamilyDefaults(byChatName(discoveredModel(id)))] : [];
   });
 }
 

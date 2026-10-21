@@ -1,7 +1,14 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 
 import type { ModelInfo, ProviderAdapter } from '../adapter.js';
-import { createAiSdkAdapter, discoveredModel, getJson, statusFromProbe, type FetchLike } from './ai-sdk.js';
+import {
+  createAiSdkAdapter,
+  discoveredModel,
+  getJson,
+  statusFromProbe,
+  withFamilyDefaults,
+  type FetchLike,
+} from './ai-sdk.js';
 
 /** Anthropic (FR-PRV-001). The key travels in `x-api-key`, never in a URL or a log (BR-07). */
 
@@ -23,7 +30,12 @@ export function parseAnthropicModelList(body: unknown): ModelInfo[] {
     const id = (entry as { id?: unknown }).id;
     if (typeof id !== 'string') return [];
     const displayName = (entry as { display_name?: unknown }).display_name;
-    return [discoveredModel(id, typeof displayName === 'string' ? displayName : undefined)];
+    // [audit P-2] A Claude model takes tools, a schema and images; the listing does not say so.
+    return [
+      withFamilyDefaults(
+        discoveredModel(id, typeof displayName === 'string' ? displayName : undefined),
+      ),
+    ];
   });
 }
 

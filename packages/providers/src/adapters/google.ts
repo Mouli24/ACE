@@ -12,6 +12,7 @@ import {
   postJson,
   requireEmbedModel,
   statusFromProbe,
+  withFamilyDefaults,
   type FetchLike,
 } from './ai-sdk.js';
 
@@ -33,6 +34,9 @@ export interface GoogleOptions {
  * without `generateContent` cannot chat — an embedder (`embedContent`) is kept, unavailable, for a
  * knowledge base to pick, and one that does neither (an image or video generator) is left out. A
  * chat model whose name says it speaks or draws is still told apart by that name.
+ *
+ * [audit P-2] Its `inputTokenLimit` is the model's real context window, and a Gemini 1.5+ chat
+ * model gets its family's tools, schema and image input.
  */
 export function parseGoogleModelList(body: unknown): ModelInfo[] {
   const models = (body as { models?: unknown }).models;
@@ -42,12 +46,19 @@ export function parseGoogleModelList(body: unknown): ModelInfo[] {
     const name = (entry as { name?: unknown }).name;
     if (typeof name !== 'string') return [];
     const displayName = (entry as { displayName?: unknown }).displayName;
-    const model = discoveredModel(
+    const limit = (entry as { inputTokenLimit?: unknown }).inputTokenLimit;
+    const listed = discoveredModel(
       name.replace(/^models\//, ''),
       typeof displayName === 'string' ? displayName : undefined,
     );
+    const model: ModelInfo =
+      typeof limit === 'number' && Number.isInteger(limit) && limit > 0
+        ? { ...listed, contextWindow: limit }
+        : listed;
     const methods = (entry as { supportedGenerationMethods?: unknown }).supportedGenerationMethods;
-    if (!Array.isArray(methods) || methods.includes('generateContent')) return [byChatName(model)];
+    if (!Array.isArray(methods) || methods.includes('generateContent')) {
+      return [withFamilyDefaults(byChatName(model))];
+    }
     return methods.includes('embedContent') ? [notAChatModel(model)] : [];
   });
 }
