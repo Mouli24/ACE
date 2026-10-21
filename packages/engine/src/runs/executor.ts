@@ -799,7 +799,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
     // The `agent | model` narrowing above does not reach inside `attemptWith`, so the fields it
     // needs are captured here rather than re-narrowed there.
     const outputTypes = effectiveTypes;
-    const { temperature } = node.config.execution;
+    const { temperature, reasoningEffort } = node.config.execution;
 
     /*
      * The tool set (round 4 §2.2). Only an agent node has tools; a bare model node never calls one.
@@ -1329,6 +1329,10 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               ...(providerSchema === undefined ? {} : { jsonSchema: providerSchema }),
               ...(contract.maxTokens === undefined ? {} : { maxTokens: contract.maxTokens }),
               temperature,
+              // D389: only when the node sets one; unset, the request is what it always was.
+              ...(reasoningEffort === undefined || reasoningEffort === null
+                ? {}
+                : { reasoningEffort }),
               runId: input.runId,
               iteration: input.iteration,
               ...(workingDir === undefined ? {} : { workingDir }),

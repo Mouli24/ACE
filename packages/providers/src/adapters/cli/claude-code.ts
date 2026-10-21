@@ -285,6 +285,8 @@ export const claudeCodeDialect: CliDialect = {
     ...CLAUDE_CODE_BASE_ARGS,
     ...(access === undefined ? PERMISSION_ARGS[permission] : claudeAccessArgs(access)),
     ...(req.modelId === 'default' ? [] : ['--model', req.modelId]),
+    // D389: Claude Code 2.1.304's `--effort` takes all five levels as they are; unset, none is sent.
+    ...(req.reasoningEffort === undefined ? [] : ['--effort', req.reasoningEffort]),
     ...(req.system === undefined || req.system === '' ? [] : ['--append-system-prompt', req.system]),
   ],
   stdin: (req) => req.prompt,
