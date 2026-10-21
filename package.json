@@ -8,8 +8,9 @@
     "node": ">=20.11.0"
   },
   "scripts": {
-    "dev": "concurrently --names engine,web --prefix-colors cyan,magenta \"pnpm --filter @ace/server dev\" \"pnpm --filter @ace/web dev\"",
-    "dev:engine": "pnpm --filter @ace/server dev",
+    "dev": "pnpm build:packages && concurrently --names engine,web --prefix-colors cyan,magenta \"pnpm --filter @ace/server dev\" \"pnpm --filter @ace/web dev\"",
+    "dev:engine": "pnpm build:packages && pnpm --filter @ace/server dev",
+    "build:packages": "pnpm --filter \"./packages/**\" build",
     "dev:web": "pnpm --filter @ace/web dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
@@ -21,7 +22,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test:manual-pass": "playwright test --config tests/acceptance/manual-pass.config.ts",
-  "test:acceptance:e2e": "node -e \"if(require('node:fs').existsSync('apps/web')){process.exit(1)}console.log('SKIPPED: apps/web does not exist yet (Mouli creates it in round 1, feature M1).')\" || playwright test --config tests/acceptance/playwright.config.ts"
+    "test:acceptance:e2e": "playwright test --config tests/acceptance/playwright.config.ts"
   },
   "devDependencies": {
     "concurrently": "^10.0.5",

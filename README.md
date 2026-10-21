@@ -19,8 +19,11 @@ pnpm install
 pnpm dev
 ```
 
-`pnpm dev` starts the engine (`http://127.0.0.1:4747`) and the web app (`http://localhost:5173`)
-together. The engine prints a line like
+`pnpm dev` first builds the workspace packages (`pnpm build:packages` — the engine imports their
+`dist/`, so the first start takes about a minute; later starts take a couple of seconds), then starts
+the engine (`http://127.0.0.1:4747`) and the web app (`http://localhost:5173`) together. After you
+change code under `packages/`, restart `pnpm dev` (or run `pnpm build:packages`) so the engine sees
+it. The engine prints a line like
 
 ```
 ACE engine ready · http://127.0.0.1:4747 · open http://localhost:5173/?token=<token>

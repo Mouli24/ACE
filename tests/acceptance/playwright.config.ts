@@ -8,10 +8,6 @@ import { defineConfig } from '@playwright/test';
  * directory; the web app is served by `pnpm --filter @ace/web preview` and pointed at it through
  * VITE_ACE_URL. `baseURL` carries `?token=` because that is how the web app receives the session
  * token on first load (§2.10) before stashing it in sessionStorage.
- *
- * This config exists now so Mouli's suite has somewhere to land. It cannot run until `apps/web`
- * exists, which is why the root `test:acceptance` script and CI both skip the Playwright half
- * until then.
  */
 // ACE_ACCEPTANCE_PORT moves both ports (engine = it, web = it + 1), so parallel worktrees never
 // test each other's build.
