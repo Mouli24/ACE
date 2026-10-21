@@ -1,9 +1,18 @@
-import { isAgentic, type AgentConfig, type Id, type NodeError, type Run } from '@ace/contracts';
+import {
+  allowedRunActions,
+  isAgentic,
+  type AgentConfig,
+  type Id,
+  type NodeError,
+  type NodeState,
+  type Run,
+} from '@ace/contracts';
 
 import type { ApprovalService } from '../approvals/index.js';
 import type { EventBus } from '../events/index.js';
 import type { Logger } from '../logging/index.js';
 import type { Repository, Scope } from '../ports/index.js';
+import { sumUsage } from './cost.js';
 import { toSummary } from './summary.js';
 
 /**
@@ -75,6 +84,18 @@ function agenticNodeIds(run: Run): ReadonlySet<Id> {
   return ids;
 }
 
+/**
+ * Node runs a halt leaves with nothing to run them: going, queued, waiting on a person, or held by a
+ * pause (FR-SYS-009). [audit E-6] PAUSED is one of them — a paused run that died kept its PAUSED
+ * rows, which Continue (D388) does not read as cut off, so the nodes it held never ran again.
+ */
+const UNFINISHED: ReadonlySet<NodeState> = new Set<NodeState>([
+  'RUNNING',
+  'READY',
+  'WAITING',
+  'PAUSED',
+]);
+
 /** Mark one run halted, and announce it so a watching client stops waiting. */
 async function halt(
   deps: LifecycleDeps,
@@ -82,9 +103,19 @@ async function halt(
   haltReason: 'shutdown' | 'crash',
   endedAt: string,
 ): Promise<void> {
+  /*
+   * [audit E-6] The row says what a HALTED run allows (FR-CTL-006, D76) — it kept the RUNNING
+   * run's `[pause, stop]`, or a paused one's `[resume, stop]` — and what it spent: the sum of its
+   * node runs (TC-OBS-002), because the drive that would have totalled it is gone.
+   */
+  const totals = sumUsage(
+    (await deps.repository.nodeRuns.listByRun(deps.scope, run.id)).map((row) => row.usage),
+  );
   await deps.repository.runs.update(deps.scope, run.id, {
     status: 'HALTED',
     haltReason,
+    allowedActions: allowedRunActions('HALTED', { stayOpen: run.domain?.stayOpen }),
+    totals,
     endedAt,
     durationMs: Math.max(0, Date.parse(endedAt) - Date.parse(run.startedAt)),
   });
@@ -93,7 +124,7 @@ async function halt(
     type: 'run.completed',
     workflowId: run.workflowId,
     runId: run.id,
-    payload: { runId: run.id, status: 'HALTED', haltReason, totals: run.totals },
+    payload: { runId: run.id, status: 'HALTED', haltReason, totals },
   });
 
   // Nobody is left to answer an approval on a halted run (D111, D-061). Best effort: a card that
@@ -192,15 +223,13 @@ export async function recoverAfterCrash(deps: LifecycleDeps): Promise<RecoveryRe
     const agentic = agenticNodeIds(run);
 
     for (const nodeRun of await deps.repository.nodeRuns.listByRun(deps.scope, run.id)) {
-      if (
-        nodeRun.status !== 'RUNNING' &&
-        nodeRun.status !== 'READY' &&
-        nodeRun.status !== 'WAITING'
-      ) {
-        continue;
-      }
+      if (!UNFINISHED.has(nodeRun.status)) continue;
 
-      if (agentic.has(nodeRun.nodeId) && nodeRun.status !== 'READY') {
+      // A READY or PAUSED step never started, so it changed nothing: it is STOPPED like any other.
+      if (
+        agentic.has(nodeRun.nodeId) &&
+        (nodeRun.status === 'RUNNING' || nodeRun.status === 'WAITING')
+      ) {
         // D379: an agentic step may have changed files or started commands; say why it ended.
         const error = agenticRestartError(nodeRun.status === 'WAITING');
         await deps.repository.nodeRuns.update(deps.scope, nodeRun.id, {
