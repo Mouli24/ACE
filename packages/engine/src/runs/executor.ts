@@ -135,7 +135,8 @@ export interface ExecuteNodeInput {
    * run is paused has not started — it is READY, which a pause turns PAUSED — so it hands the slot
    * straight back and waits for the resume. Absent, nothing holds it.
    */
-  gate?: Pick<RunGate, 'isPaused' | 'waitUntilDispatchable'>;
+  gate?: Pick<RunGate, 'isPaused' | 'waitUntilDispatchable'> &
+    Partial<Pick<RunGate, 'isDispatchClosed'>>;
   /**
    * Round 5: what an agent or Model node reads beyond its envelopes' own reads — retrieved chunks
    * and long-term memory — with the context guardrails over all of it (§2.2–§2.4, FR-GRD-004). The
@@ -1708,9 +1709,12 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
           result: await fail(
             input,
             userCancelledError(
-              starting === undefined
-                ? 'The run was stopped before this node run started.'
-                : 'The run was stopped before this call was made.',
+              // [audit E-4] Not stopped by anyone: a crossed cost cap closed the run to new calls.
+              !input.signal.aborted && input.gate?.isDispatchClosed?.() === true
+                ? 'The run reached its cost cap before this call was made.'
+                : starting === undefined
+                  ? 'The run was stopped before this node run started.'
+                  : 'The run was stopped before this call was made.',
             ).nodeError,
             // A stop between two turns (D-062) keeps what the turns before it spent (FR-ERR-007).
             called ? usageNow() : NO_USAGE,

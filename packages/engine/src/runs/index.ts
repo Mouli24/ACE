@@ -1,6 +1,8 @@
 import {
   allowedRunActions,
   DEFAULT_CONCURRENCY,
+  envelopeUsedTokens,
+  estimateTokens,
   ENVELOPE_SUMMARY_MAX,
   NODE_BUDGET_EXCEEDED,
   RunDomainConfigInputSchema,
@@ -55,7 +57,7 @@ import {
 import type { TeamPromptInput } from '../prompts/index.js';
 
 import type { ApprovalService } from '../approvals/index.js';
-import type { BudgetService } from '../budgets/index.js';
+import { projectedNodeCostUsd, unpricedNodes, type BudgetService } from '../budgets/index.js';
 import type { NodeRunTurn } from '../chat/service.js';
 import { nodeWrites, undoUnavailableMessage } from '../checkpoints/writing.js';
 import { goalOf, isGoalDriven } from '../graph/validate.js';
@@ -400,6 +402,11 @@ export interface DriveSeed {
  */
 function cancelledBeforeStart(): NodeError {
   return userCancelledError('The run was stopped before this node run started.').nodeError;
+}
+
+/** [audit E-4] A node run a crossed cost cap caught before it started: STOPPED, never called. */
+function capReachedBeforeStart(): NodeError {
+  return userCancelledError('The run reached its cost cap before this node run started.').nodeError;
 }
 
 /**
@@ -766,6 +773,22 @@ export function createRunService(deps: RunServiceDeps): RunService {
     /** Set once, by the first cap a node crossed; the run then dispatches nothing more (§2.3, D80). */
     let budgetHalt: BudgetHalt | undefined;
     /**
+     * [audit E-4] What each attempt that passed the cost point is projected to spend, by node run,
+     * until it records what it really spent: the totals do not hold it yet, and a parallel branch's
+     * check has to count it.
+     */
+    const inFlightSpend = new Map<Id, number>();
+    /**
+     * [audit E-4] A cap the real spend crossed: the first halt is the one reported, and from now on
+     * nothing that has not started starts — a turn queued for its provider slot, a retry, an
+     * agentic node's next turn — while what is running finishes (§2.3). It used to stop only the
+     * dispatch loop, so everything already queued still called its provider.
+     */
+    function haltForBudget(halt: BudgetHalt): void {
+      budgetHalt ??= halt;
+      gate.closeDispatch();
+    }
+    /**
      * Node runs someone else already created for this drive to execute: the row a retry, a re-run or
      * Start-from made. `dispatch` consumes the row rather than creating a second one, because the
      * client is already holding that row's id (FR-CTL-005, FR-ERR-003, FR-EXE-013).
@@ -1094,6 +1117,22 @@ export function createRunService(deps: RunServiceDeps): RunService {
     }
 
     /** The price row of the model this node would call, for the projected cost (§2.3). */
+    /**
+     * [audit E-4] The prompt a node's next call sends, estimated the way the engine estimates
+     * everything (characters ÷ 4, Arch §24): its instructions and what its envelopes carry. The
+     * context step can only fit the reads to their budget, so this errs high — the right side of a
+     * cost cap.
+     */
+    function estimatedInputTokens(node: Node, nodeRun: NodeRun): number {
+      if (node.kind !== 'agent' && node.kind !== 'model') return 0;
+      const instructions =
+        node.kind === 'agent' ? node.config.instructions : (node.config.systemPrompt ?? '');
+      return nodeRun.inputEnvelopes.reduce(
+        (total, envelope) => total + envelopeUsedTokens(envelope),
+        estimateTokens(instructions),
+      );
+    }
+
     function pricingFor(node: Node): { pricing?: (typeof catalog)[number]['pricing'] } {
       if (node.kind !== 'agent' && node.kind !== 'model') return {};
       const { providerId, modelId } = node.config;
@@ -1216,7 +1255,11 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
       await repository.nodeRuns.update(scope, nodeRun.id, {
         status: 'STOPPED',
-        error: cancelledBeforeStart(),
+        // [audit E-4] Not stopped by anyone: a cost cap closed the run to new starts.
+        error:
+          !signal.aborted && gate.isDispatchClosed()
+            ? capReachedBeforeStart()
+            : cancelledBeforeStart(),
         endedAt: now(),
       });
       await emitNodeState(run, nodeRun, 'STOPPED');
@@ -1527,6 +1570,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
     ): Promise<void> {
       const usage = spentBy(nodeRun, outcome.usage);
       usages.push(usage);
+      inFlightSpend.delete(nodeRun.id);
       noteNodeSpend(nodeRun.nodeId, usage);
       const startedAt = startedAtByNodeRun.get(nodeRun.id);
 
@@ -1596,6 +1640,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
     ): Promise<void> {
       const usage = spentBy(nodeRun, outcome.usage);
       usages.push(usage);
+      inFlightSpend.delete(nodeRun.id);
       noteNodeSpend(nodeRun.nodeId, usage);
       states.set(node.id, 'STOPPED');
       await repository.nodeRuns.update(scope, nodeRun.id, {
@@ -2169,7 +2214,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
           projectId: run.projectId,
           totals: sumUsage(usages),
         });
-        if (actual.halt !== undefined) budgetHalt ??= actual.halt;
+        if (actual.halt !== undefined) haltForBudget(actual.halt);
       }
 
       /*
@@ -2353,7 +2398,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
       // BLOCKED means "an upstream failed" (FR-ERR-006), and a stop is not a failure (FR-ERR-007):
       // once the run is aborted nothing more is blocked — nor written after its `run.completed`.
-      if (status !== 'COMPLETED' && !requeued && !signal.aborted && !sideEnded) {
+      // [audit E-4] Nor is a node a crossed cost cap kept from starting: the run dispatches nothing
+      // more, and what it feeds simply never runs, as at the cost point itself.
+      const cappedOff = status === 'STOPPED' && budgetHalt !== undefined;
+      if (status !== 'COMPLETED' && !requeued && !signal.aborted && !sideEnded && !cappedOff) {
         await blockDownstream(node);
       }
 
@@ -2646,6 +2694,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
           : attempts());
       } finally {
         if (turnAbort !== undefined) domain?.endTurn(node.id, turnAbort);
+        // [audit E-4] However the attempt ended, its projected spend is no longer in flight.
+        if (lastNodeRunId !== undefined) inFlightSpend.delete(lastNodeRunId);
         // DONE when the turn ended; cut short, the messages wait for the next turn (D309).
         if (domain !== undefined && carried.length > 0 && lastNodeRunId !== undefined) {
           await domain.turnEnded(node.id, lastNodeRunId, carried, turnCut(turn) !== undefined);
@@ -2704,15 +2754,27 @@ export function createRunService(deps: RunServiceDeps): RunService {
            * rather than FAILED: nothing about it went wrong (BR-03, FR-ERR-007).
            */
           if (deps.budgets !== undefined) {
+            // [audit E-4] The prompt counts, and so does what the calls in flight will spend. This
+            // attempt's own projection is reserved before the check is awaited, so a sibling that
+            // checks meanwhile counts it too.
+            const { pricing } = pricingFor(node);
+            const inputTokens = estimatedInputTokens(node, nodeRun);
+            const inFlightUsd = [...inFlightSpend.values()].reduce((sum, usd) => sum + usd, 0);
+            inFlightSpend.set(nodeRun.id, projectedNodeCostUsd(node, pricing, inputTokens));
             const projected = await deps.budgets.beforeDispatch({
               target: targetFor(node, nodeRun),
               projectId: run.projectId,
               totals: sumUsage(usages),
               node,
-              ...pricingFor(node),
+              ...(pricing === undefined ? {} : { pricing }),
+              inputTokens,
+              inFlightUsd,
             });
 
             if (projected.halt !== undefined) {
+              inFlightSpend.delete(nodeRun.id);
+              // Only this call is refused, and nothing new is dispatched: a call that passed its own
+              // check counted every reservation before it, so it still fits under the cap.
               budgetHalt ??= projected.halt;
               const at = now();
               await repository.nodeRuns.update(scope, nodeRun.id, {
@@ -3629,7 +3691,14 @@ export function createRunService(deps: RunServiceDeps): RunService {
     if (deps.budgets !== undefined && !replaying) {
       const policy =
         deps.policies === undefined ? null : await deps.policies.resolve(run.projectId);
-      issues.push(...(await deps.budgets.preflightIssues({ projectId: run.projectId, policy })));
+      issues.push(
+        ...(await deps.budgets.preflightIssues({
+          projectId: run.projectId,
+          policy,
+          // [audit E-4, P-3] Warned about, not refused: a cap cannot count an unpriced model.
+          unpriced: unpricedNodes(run.snapshot.nodes, providers, models),
+        })),
+      );
     }
 
     // PG-2.4 (D361): only a run that would otherwise start begins a checkpoint; a writing run whose
