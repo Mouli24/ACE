@@ -2871,6 +2871,17 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
 
       const rows = await repository.nodeRuns.listByRun(scope, run.id);
+      /*
+       * D-055: the run's totals are the sum of all its node runs (TC-OBS-002), not only of what this
+       * drive spends, so what the earlier ones spent is counted first — once. The rows this drive was
+       * handed are new and READY, spent nothing yet, and are counted as they end, like any other.
+       * The budget point and Domain's token budget read the same running sum, so a re-opened run is
+       * held to what the whole run has spent.
+       */
+      const handed = new Set<Id>(seed.nodeRuns.map((row) => row.id));
+      for (const row of rows) {
+        if (!handed.has(row.id)) usages.push(row.usage);
+      }
       // A further turn of any node takes the next attempt after every one already recorded (D95).
       for (const row of rows) {
         const key = attemptKey(row.nodeId, row.iteration);
@@ -2888,11 +2899,14 @@ export function createRunService(deps: RunServiceDeps): RunService {
         if (node === undefined) continue;
 
         if (forced.has(nodeId)) {
-          // Runs again. A forced node with no row of its own is fed by whatever re-runs above it.
+          // Runs again. A forced node with no row of its own is fed by whatever re-runs above it,
+          // and by an upstream that had completed and is not running again: that one's envelope
+          // may already be here, delivered by an earlier turn of this loop, and is kept — wiping
+          // it would run the node on half its inputs, since its edge already counts as delivered.
           states.set(nodeId, 'IDLE');
           if (!plannedRuns.has(nodeId)) {
             iterations.set(nodeId, row.iteration);
-            envelopesFor.set(nodeId, []);
+            if (!envelopesFor.has(nodeId)) envelopesFor.set(nodeId, []);
           }
           continue;
         }
@@ -3116,7 +3130,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
     for (const plan of domain?.plannedTurns() ?? []) {
       domain?.takePlannedTurn(plan.nodeRun.nodeId);
       if (gate.abortCause() === 'stopped') continue;
-      await repository.nodeRuns.update(scope, plan.nodeRun.id, { status: 'STOPPED', endedAt: now() });
+      await repository.nodeRuns.update(scope, plan.nodeRun.id, {
+        status: 'STOPPED',
+        endedAt: now(),
+      });
       await emitNodeState(run, plan.nodeRun, 'STOPPED');
     }
 
