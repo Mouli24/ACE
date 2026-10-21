@@ -119,6 +119,34 @@ describe('FR-GIT-003 the Explorer tree', () => {
     expect(useExplorerStore.getState().projects[projectId]?.selected).toBe('src');
   });
 
+  it('[audit F-14] an open folder says it is reading, and why it could not be read, under its row', async () => {
+    const user = userEvent.setup();
+    const projectId = seed();
+    let fail = (): void => undefined;
+    const failed = new Promise<void>((resolve) => {
+      fail = resolve;
+    });
+    server.use(
+      http.get('*/api/v1/projects/:id/files/tree', async ({ request }) => {
+        if (new URL(request.url).searchParams.get('path') !== 'src') return undefined;
+        await failed;
+        return HttpResponse.json(
+          { error: { kind: 'workflow', code: 'protected_path', message: 'Access is denied.' } },
+          { status: 403 },
+        );
+      }),
+    );
+    renderWithQuery(<FileTree projectId={projectId} label="Files" onOpen={vi.fn()} />);
+    await user.click(await screen.findByTestId('tree-item-src'));
+    expect(await screen.findByText('Reading the folder…')).toHaveStyle({ paddingLeft: '22px' });
+
+    fail();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Couldn.t read src: /);
+    expect(screen.queryByText('Reading the folder…')).toBeNull();
+    // the rest of the tree is still there
+    expect(screen.getByTestId('tree-item-README.md')).toBeInTheDocument();
+  });
+
   it('says so when the folder cannot be read', async () => {
     renderWithQuery(
       <FileTree projectId="01J9ZZZZZZZZZZZZZZZZZZZZZZ" label="Files" onOpen={vi.fn()} />,

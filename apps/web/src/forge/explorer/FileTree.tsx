@@ -546,6 +546,30 @@ export function FileTree({
     );
     if (editing?.mode === 'create' && query === '' && folder && editing.parent === path && isOpen)
       rendered.push(inputRow(depth + 1));
+    // [audit F-14] an open folder still listing, or unreadable, says so under its row
+    const status = folder && isOpen && query === '' ? tree.folders.get(path) : undefined;
+    if (status !== undefined) {
+      rendered.push(
+        'error' in status ? (
+          <p
+            key={`${path}\u0000status`}
+            role="alert"
+            className={cn(note, 'text-[#c94c27]')}
+            style={{ paddingLeft: 8 + (depth + 1) * 14 }}
+          >
+            Couldn’t read {name}: {messageOf(status.error)}
+          </p>
+        ) : (
+          <p
+            key={`${path}\u0000status`}
+            className={note}
+            style={{ paddingLeft: 8 + (depth + 1) * 14 }}
+          >
+            Reading the folder…
+          </p>
+        ),
+      );
+    }
   }
 
   const folderPath = project.data?.folderPath ?? '';
