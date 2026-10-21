@@ -60,22 +60,24 @@ function agentWith(modelId: string): Node {
 describe('[audit L-13] a failed node edited since its run started', () => {
   it('compares settings, not key order, position or name', () => {
     const ran = agentWith('mock-503');
-    const same: Node = {
+    const same = {
       ...ran,
       name: 'Renamed',
       position: { x: 9, y: 9 },
-      config: Object.fromEntries(Object.entries(ran.config).reverse()) as Node['config'],
-    };
+      config: Object.fromEntries(Object.entries(ran.config).reverse()),
+    } as Node;
     expect(nodeChangedSinceRun(same, [ran])).toBe(false);
-    expect(nodeChangedSinceRun({ ...ran, config: agentWith('mock-text').config }, [ran])).toBe(
-      true,
+    expect(nodeChangedSinceRun(agentWith('mock-text'), [{ ...agentWith('x'), id: 'other' }])).toBe(
+      false,
     );
+    const edited = { ...ran, config: { ...ran.config, modelId: 'mock-text' } } as Node;
+    expect(nodeChangedSinceRun(edited, [ran])).toBe(true);
     expect(nodeChangedSinceRun(ran, [])).toBe(false);
   });
 
   it('says Retry uses the run’s settings and offers a new run with the changes', async () => {
     const ran = agentWith('mock-503');
-    const now: Node = { ...ran, config: { ...ran.config, modelId: 'mock-text' } as Node['config'] };
+    const now = { ...ran, config: { ...ran.config, modelId: 'mock-text' } } as Node;
     const { workflow, run } = failedRun(ran, now);
     render(
       <QueryClientProvider client={queryClient}>
