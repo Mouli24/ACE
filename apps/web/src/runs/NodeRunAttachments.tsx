@@ -66,6 +66,7 @@ export function NodeRunActions({ node }: { node: Node }) {
   const rerun = useRerunNode();
   const start = useStartRun(node.workflowId);
   const busy = retry.isPending || rerun.isPending || start.isPending;
+  const runGoing = useRunGoing(node.workflowId);
 
   // Nothing to act on until the run has reached this node; Start from here needs a run to copy from.
   if (run.nodeRunId === undefined || run.status === undefined) return null;
@@ -78,6 +79,7 @@ export function NodeRunActions({ node }: { node: Node }) {
       nodeRunId={run.nodeRunId}
       error={run.error}
       busy={busy}
+      runGoing={runGoing}
       onRetry={() => retry.mutate({ nodeRunId: run.nodeRunId!, withDownstream: false })}
       onRetryWithDownstream={() =>
         retry.mutate({ nodeRunId: run.nodeRunId!, withDownstream: true })

@@ -1719,10 +1719,15 @@ function CanvasInner({
       runAfter: (nodeId) => {
         if (!readOnly) setRunAfterNodeId(nodeId);
       },
-      // [audit W-1] a refused start says why and puts the run on screen back (useStartRun)
-      runFromHere: (nodeId) => startRunMutate({ startFromNodeId: nodeId }),
+      // [audit W-1] a refused start says why and puts the run on screen back (useStartRun);
+      // [audit W-8] the menu holds it back while a run is going, and so does this
+      runFromHere: (nodeId) => {
+        const store = useRunStore.getState();
+        if (store.workflowId === workflowId && store.active) return;
+        startRunMutate({ startFromNodeId: nodeId });
+      },
     }),
-    [readOnly, setSelection, duplicateNodesById, deleteElements, startRunMutate],
+    [readOnly, setSelection, duplicateNodesById, deleteElements, startRunMutate, workflowId],
   );
 
   // Expose to the settings modal, the sheet and the workspace menu (outside the flow).
