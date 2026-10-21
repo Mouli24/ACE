@@ -16,6 +16,7 @@ import type { RunControls } from './service.js';
  *
  *   POST /runs/:id/pause · /resume · /stop · /restart  → Run    (409 `invalid_run_state` otherwise)
  *   POST /runs/:id/replay                              → Run    (PG-5.4, a new run, `replayOf`)
+ *   POST /runs/:id/continue                            → Run    (D388, the same run, re-opened)
  *   POST /node-runs/:id/retry                          → NodeRun (attempt + 1)
  *   POST /runs/:id/nodes/:nodeId/rerun                 → NodeRun
  */
@@ -44,6 +45,12 @@ export function createRunControlRoutes<E extends Env>(
   // The **new** run, with `restartedFromRunId` (§2.5). 201, like every other create.
   routes.post('/runs/:id/restart', async (c) =>
     c.json(await controls().restart(c.req.param('id')), 201),
+  );
+
+  // D388: the **same** run, re-opened to carry on from what was cut off — 200, nothing is created
+  // but the retries inside it. 409 `invalid_run_state` / `nothing_to_continue` otherwise.
+  routes.post('/runs/:id/continue', async (c) =>
+    c.json(await controls().continueRun(c.req.param('id'))),
   );
 
   // PG-5.4: the **new** run, with `replayOf`, answered from the recording — zero provider calls.

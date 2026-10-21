@@ -253,6 +253,7 @@ describe('FR-SYS-006 the run control routes read a body the same way', () => {
       restart: unused,
       get: unused,
       retryNodeRun: unused,
+      continueRun: unused,
       rerunNode: async (runId, nodeId) => {
         reruns.push(`${runId}/${nodeId}`);
         return { id: id() } as NodeRun;

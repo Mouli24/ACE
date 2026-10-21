@@ -53,7 +53,8 @@ function app(seed: { runs?: Run[]; nodeRuns?: NodeRun[] }): {
     gates: createRunGateRegistry(),
     now: tickingClock(),
     nextId,
-    driveRecordedRun: async (run) => (await stores.runs.update(run.id, { status: 'RUNNING' })) ?? run,
+    driveRecordedRun: async (run) =>
+      (await stores.runs.update(run.id, { status: 'RUNNING' })) ?? run,
     drivePartialRun: async (plan) => plan.run,
   });
 
@@ -62,7 +63,10 @@ function app(seed: { runs?: Run[]; nodeRuns?: NodeRun[] }): {
     const { status, body } = toApiError(error);
     return c.json(body, status as 400);
   });
-  hono.route('/api/v1', createRunControlRoutes(() => controls));
+  hono.route(
+    '/api/v1',
+    createRunControlRoutes(() => controls),
+  );
 
   return {
     stores,
@@ -85,7 +89,11 @@ describe('§2.5 POST /runs/:id/pause · /resume · /stop · /restart', () => {
     expect(response.status).toBe(200);
 
     const body = (await response.json()) as Run;
-    expect(body).toMatchObject({ id: run.id, status: 'PAUSED', allowedActions: ['resume', 'stop'] });
+    expect(body).toMatchObject({
+      id: run.id,
+      status: 'PAUSED',
+      allowedActions: ['resume', 'stop'],
+    });
   });
 
   it('resumes a paused run', async () => {
@@ -142,7 +150,9 @@ describe('§2.5 POST /node-runs/:id/retry and /runs/:id/nodes/:nodeId/rerun', ()
     const failed = makeNodeRun(run, writer.id, { status: 'FAILED', attempt: 1 });
     const { request } = app({ runs: [run], nodeRuns: [failed] });
 
-    const response = await request(`/api/v1/node-runs/${failed.id}/retry`, { withDownstream: false });
+    const response = await request(`/api/v1/node-runs/${failed.id}/retry`, {
+      withDownstream: false,
+    });
     expect(response.status).toBe(201);
 
     const body = (await response.json()) as NodeRun;
@@ -209,6 +219,55 @@ describe('§2.5 POST /node-runs/:id/retry and /runs/:id/nodes/:nodeId/rerun', ()
   });
 });
 
+describe('D388 POST /runs/:id/continue', () => {
+  it('answers 200 with the same run, re-opened, and retries what was cut off', async () => {
+    const run = makeRun({ snapshot, status: 'HALTED', haltReason: 'crash' });
+    const stopped = makeNodeRun(run, writer.id, { status: 'STOPPED' });
+    const { request, stores } = app({ runs: [run], nodeRuns: [stopped] });
+
+    const response = await request(`/api/v1/runs/${run.id}/continue`);
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as Run;
+    expect(body).toMatchObject({
+      id: run.id,
+      status: 'RUNNING',
+      allowedActions: ['pause', 'stop'],
+    });
+    const retries = [...stores.nodeRunRows.values()].filter((row) => row.status === 'READY');
+    expect(retries).toMatchObject([{ nodeId: writer.id, attempt: 2 }]);
+  });
+
+  it('answers 409 `nothing_to_continue` in the §2.3 envelope when nothing was cut off', async () => {
+    const run = makeRun({ snapshot, status: 'HALTED', haltReason: 'stopped' });
+    const { request } = app({
+      runs: [run],
+      nodeRuns: [makeNodeRun(run, writer.id, { status: 'COMPLETED' })],
+    });
+
+    const response = await request(`/api/v1/runs/${run.id}/continue`);
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as ApiError).error).toMatchObject({
+      kind: 'workflow',
+      code: 'nothing_to_continue',
+    });
+  });
+
+  it('answers 409 `invalid_run_state` for a run that halted on a failure', async () => {
+    const run = makeRun({ snapshot, status: 'HALTED', haltReason: 'failure' });
+    const { request } = app({
+      runs: [run],
+      nodeRuns: [makeNodeRun(run, writer.id, { status: 'STOPPED' })],
+    });
+
+    const response = await request(`/api/v1/runs/${run.id}/continue`);
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as ApiError;
+    expect(body.error.code).toBe('invalid_run_state');
+    expect(body.error.details).toMatchObject({ status: 'HALTED', allowedActions: ['restart'] });
+  });
+});
+
 describe('An app built without the controls answers `not_implemented`, not a 500', () => {
   it('refuses every control endpoint the way the gateway refuses a service it lacks', async () => {
     const hono = new Hono();
@@ -216,13 +275,17 @@ describe('An app built without the controls answers `not_implemented`, not a 500
       const { status, body } = toApiError(error);
       return c.json(body, status as 400);
     });
-    hono.route('/api/v1', createRunControlRoutes(() => undefined));
+    hono.route(
+      '/api/v1',
+      createRunControlRoutes(() => undefined),
+    );
 
     for (const path of [
       '/api/v1/runs/01JBXQ8Z9KQ4R7N2VWXYZ0RN55/pause',
       '/api/v1/runs/01JBXQ8Z9KQ4R7N2VWXYZ0RN55/resume',
       '/api/v1/runs/01JBXQ8Z9KQ4R7N2VWXYZ0RN55/stop',
       '/api/v1/runs/01JBXQ8Z9KQ4R7N2VWXYZ0RN55/restart',
+      '/api/v1/runs/01JBXQ8Z9KQ4R7N2VWXYZ0RN55/continue',
     ]) {
       const response = await hono.request(path, { method: 'POST' });
       expect(response.status).toBe(501);

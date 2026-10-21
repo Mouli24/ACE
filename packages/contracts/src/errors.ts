@@ -85,6 +85,13 @@ export const BENCH_ERROR_CODES = [
   'bench_experiment_locked',
 ] as const;
 
+/**
+ * D388: `POST /runs/:id/continue` on a run halted the right way, but with nothing cut off to run
+ * again (409). Only ever an HTTP answer — never stored — so an older engine on the shared database
+ * never reads it.
+ */
+export const RUN_CONTINUE_ERROR_CODES = ['nothing_to_continue'] as const;
+
 export const ERROR_CODES = [
   ...ROUND_1_ERROR_CODES,
   ...ROUND_2_ERROR_CODES,
@@ -92,6 +99,7 @@ export const ERROR_CODES = [
   ...ROUND_4_ERROR_CODES,
   ...IDE_ERROR_CODES,
   ...BENCH_ERROR_CODES,
+  ...RUN_CONTINUE_ERROR_CODES,
 ] as const;
 export const ErrorCodeSchema = z.enum(ERROR_CODES);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
@@ -129,6 +137,7 @@ export const ERROR_CODE_HTTP_STATUS: Readonly<Record<ErrorCode, number>> = {
   bench_task_frozen: 409,
   bench_task_not_frozen: 409,
   bench_experiment_locked: 409,
+  nothing_to_continue: 409,
 };
 
 /** `details` shapes §2.3 names explicitly. */
