@@ -1,8 +1,14 @@
-import type { BlockedReason } from '@ace/contracts';
+import {
+  CONTINUABLE_HALT_REASONS,
+  canContinueRun,
+  type BlockedReason,
+  type HaltReason,
+} from '@ace/contracts';
 import { toast } from '@ace/ui';
 import { useShallow } from 'zustand/react/shallow';
 
-import { useResumeRun } from '../hooks';
+import { usePanelsStore } from '../../app/stores/panels';
+import { useContinueRun, useNodeRunsOnce, useRestartRun, useResumeRun } from '../hooks';
 import { useRunStore } from '../run-store';
 import { HaltReasonNote } from './HaltReason';
 
@@ -46,6 +52,7 @@ export function CanvasHaltNote({ workflowId }: { workflowId: string }) {
         blockedReason: mine ? store.blockedReason : undefined,
         blockedDetail: mine ? store.blockedDetail : undefined,
         resumable: mine && (store.allowedActions ?? []).includes('resume'),
+        restartable: mine && (store.allowedActions ?? []).includes('restart'),
       };
     }),
   );
@@ -64,11 +71,77 @@ export function CanvasHaltNote({ workflowId }: { workflowId: string }) {
     // Below the Canvas chrome (breadcrumb ends at 38px, Add node at 46px): over it, a long note hid
     // the "…" menu, which is where Restart and Run details live once a run has halted.
     // [audit W-15] a status: the halt is said once when it lands, without interrupting
-    <div role="status" className={PILL}>
+    <div role="status" className={`${PILL} flex items-center gap-3`}>
       <HaltReasonNote
         reason={run.haltReason}
         {...(run.budgetHalt === undefined ? {} : { budgetHalt: run.budgetHalt })}
       />
+      {run.runId !== undefined && (
+        <HaltActions runId={run.runId} reason={run.haltReason} restartable={run.restartable} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * [audit W-16] The advice under a halt, as buttons: a failure opens the Errors tab (where the failed
+ * node and its Retry are); a run cut off with work left offers Continue (D388, `canContinueRun` —
+ * the rule the engine enforces); and Restart wherever the run allows it (FR-CTL-004). The header
+ * carries the same controls; this puts them where the advice is read.
+ */
+function HaltActions({
+  runId,
+  reason,
+  restartable,
+}: {
+  runId: string;
+  reason: HaltReason;
+  restartable: boolean;
+}) {
+  const restart = useRestartRun();
+  const carryOn = useContinueRun();
+  const mayContinue = (CONTINUABLE_HALT_REASONS as readonly string[]).includes(reason);
+  const nodeRuns = useNodeRunsOnce(mayContinue ? runId : undefined);
+  const canContinue =
+    mayContinue &&
+    nodeRuns.data !== undefined &&
+    canContinueRun({ status: 'HALTED', haltReason: reason }, nodeRuns.data);
+  const busy = restart.isPending || carryOn.isPending;
+  const onError = (error: Error) => toast.error(error.message);
+  return (
+    <div className="flex shrink-0 items-center gap-[6px]">
+      {reason === 'failure' && (
+        <button
+          type="button"
+          data-testid="halt-show-errors"
+          onClick={() => usePanelsStore.getState().setBottomTab('errors')}
+          className={ACTION}
+        >
+          Show errors
+        </button>
+      )}
+      {canContinue && (
+        <button
+          type="button"
+          data-testid="halt-continue"
+          disabled={busy || nodeRuns.isFetching}
+          onClick={() => carryOn.mutate(runId, { onError })}
+          className={ACTION}
+        >
+          Continue
+        </button>
+      )}
+      {restartable && (
+        <button
+          type="button"
+          data-testid="halt-restart"
+          disabled={busy}
+          onClick={() => restart.mutate(runId, { onError })}
+          className={ACTION}
+        >
+          Restart
+        </button>
+      )}
     </div>
   );
 }

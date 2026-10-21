@@ -165,6 +165,27 @@ describe('FR-EXE-003 a run refused at pre-flight shows its issues', () => {
     expect(useRunStore.getState().nodeRuns()).toHaveLength(0);
     expect(db.listRuns(workflow.id)[0]?.status).toBe('BLOCKED');
   });
+
+  it('[audit W-16] offers Validate and Run again, and can be dismissed', async () => {
+    setScenario('preflight-blocked');
+    const { project, workflow } = seedRunnableWorkflow({ inputText: 'go' });
+    const user = userEvent.setup();
+    openCanvas(project.id, workflow.id);
+    await screen.findByTestId('canvas');
+    await user.click(startButton());
+
+    const panel = await screen.findByTestId('preflight-issues');
+    await user.click(within(panel).getByRole('button', { name: 'Validate' }));
+    expect(usePanelsStore.getState()).toMatchObject({ bottomOpen: true, bottomTab: 'validation' });
+
+    // Run again is a new run of the graph as it is now, not a restart of the refused snapshot
+    await user.click(within(panel).getByRole('button', { name: 'Run again' }));
+    await waitFor(() => expect(db.listRuns(workflow.id)).toHaveLength(2));
+
+    const again = await screen.findByTestId('preflight-issues');
+    await user.click(within(again).getByRole('button', { name: 'Dismiss' }));
+    await waitFor(() => expect(screen.queryByTestId('preflight-issues')).toBeNull());
+  });
 });
 
 describe('TC-EXE-013 a socket drop mid-run leaves the overlay identical', () => {

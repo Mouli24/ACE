@@ -1,15 +1,19 @@
-import type { Run } from '@ace/contracts';
+import { zeroUsage, type Run } from '@ace/contracts';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { api } from '../../app/api';
+import { usePanelsStore } from '../../app/stores/panels';
 import { installMockServer, renderWithQuery } from '../../test/app';
 import { useRunStore } from '../run-store';
 import { CanvasHaltNote } from './CanvasHaltNote';
 
 installMockServer();
 
-afterEach(() => useRunStore.getState().reset());
+afterEach(() => {
+  useRunStore.getState().reset();
+  vi.restoreAllMocks();
+});
 
 describe('CanvasHaltNote', () => {
   it('renders the note for a HALTED run of this workflow', () => {
@@ -75,5 +79,54 @@ describe('[audit W-5] a run blocked mid-run (D305)', () => {
     useRunStore.setState({ workflowId: 'wf1', runId: 'run1', status: 'BLOCKED' });
     renderWithQuery(<CanvasHaltNote workflowId="wf1" />);
     expect(screen.queryByTestId('blocked-reason')).toBeNull();
+  });
+});
+
+describe('[audit W-16] the halt note’s advice comes with its buttons', () => {
+  it('a failure opens the Errors tab; Restart restarts', async () => {
+    useRunStore.setState({
+      workflowId: 'wf1',
+      runId: 'run1',
+      status: 'HALTED',
+      haltReason: 'failure',
+      allowedActions: ['restart'],
+    });
+    const restart = vi.spyOn(api(), 'restartRun').mockResolvedValue({} as Run);
+    renderWithQuery(<CanvasHaltNote workflowId="wf1" />);
+    expect(screen.queryByTestId('halt-continue')).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Show errors' }));
+    expect(usePanelsStore.getState()).toMatchObject({ bottomOpen: true, bottomTab: 'errors' });
+    await userEvent.click(screen.getByRole('button', { name: 'Restart' }));
+    await waitFor(() => expect(restart).toHaveBeenCalledWith('run1'));
+  });
+
+  it('a stopped run with a node cut off offers Continue (D388)', async () => {
+    useRunStore.setState({
+      workflowId: 'wf1',
+      runId: 'run1',
+      status: 'HALTED',
+      haltReason: 'stopped',
+      allowedActions: ['restart'],
+    });
+    vi.spyOn(api(), 'listNodeRuns').mockResolvedValue([
+      {
+        id: 'nr1',
+        runId: 'run1',
+        nodeId: 'n1',
+        iteration: 1,
+        attempt: 1,
+        status: 'STOPPED',
+        inputEnvelopes: [],
+        usage: zeroUsage(),
+        verdicts: [],
+        toolCalls: [],
+      },
+    ]);
+    const carryOn = vi.spyOn(api(), 'continueRun').mockResolvedValue({} as Run);
+    renderWithQuery(<CanvasHaltNote workflowId="wf1" />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(carryOn).toHaveBeenCalledWith('run1'));
+    expect(screen.queryByRole('button', { name: 'Show errors' })).toBeNull();
   });
 });
