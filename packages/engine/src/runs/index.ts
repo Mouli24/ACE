@@ -452,6 +452,9 @@ const ENDED_STATES: ReadonlySet<Run['status']> = new Set<Run['status']>([
   'BLOCKED',
 ]);
 
+/** [audit E-11] Run states whose row the drive still writes its running totals onto. */
+const LIVE_RUN_STATES: readonly Run['status'][] = ['RUNNING', 'PAUSED', 'BLOCKED'];
+
 /** Node states that mean the run still has work in flight (Arch §19.2). */
 const BUSY_STATES: ReadonlySet<NodeState> = new Set<NodeState>(['RUNNING', 'READY', 'WAITING']);
 
@@ -1662,13 +1665,21 @@ export function createRunService(deps: RunServiceDeps): RunService {
               ...(turnModelId === undefined ? {} : { modelId: turnModelId }),
               usage,
             };
+      const totals = sumUsage(usages);
+      /*
+       * [audit E-11] …and the row holds it too. It was written only when the drive ended, so a run
+       * still going — a parked Domain run above all, which may never end — read $0 on every screen
+       * that reads the row rather than the socket. Only while the run is live: an ending (a Stop's
+       * above all, D-052) owns the totals it wrote.
+       */
+      await repository.runs.update(scope, run.id, { totals }, { ifStatus: LIVE_RUN_STATES });
       await bus.emit({
         type: 'usage.updated',
         workflowId: run.workflowId,
         runId: run.id,
         payload: {
           runId: run.id,
-          totals: sumUsage(usages),
+          totals,
           ...(turn === undefined ? {} : { turn }),
         },
       });

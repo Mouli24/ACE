@@ -168,6 +168,25 @@ describe('D323 a run started from Domain stays open', () => {
   });
 });
 
+describe('[audit E-11] a run that is still going has its totals on its row', () => {
+  it('a parked Domain run reads what it has spent, not $0', async () => {
+    const { h } = await team();
+    const runId = await parked(h);
+
+    const row = await h.runRow(runId);
+    const spent = (await h.nodeRunsOf(runId)).reduce(
+      (sum, nodeRun) => ({
+        tokensIn: sum.tokensIn + nodeRun.usage.tokensIn,
+        tokensOut: sum.tokensOut + nodeRun.usage.tokensOut,
+      }),
+      { tokensIn: 0, tokensOut: 0 },
+    );
+    expect(row.status).toBe('RUNNING');
+    expect(spent.tokensIn).toBeGreaterThan(0);
+    expect({ tokensIn: row.totals.tokensIn, tokensOut: row.totals.tokensOut }).toEqual(spent);
+  });
+});
+
 describe('[audit E-7] D323 a clean shutdown leaves a Domain run open', () => {
   it('a parked run is not halted by a shutdown, and the next start carries it on', async () => {
     const { h } = await team();
