@@ -346,9 +346,13 @@ export function createProviderService(
     found: { status: ProviderState; message?: string },
     at: string,
   ): Promise<void> {
+    // [audit P-18] A provider's error text can echo what it was sent — a key in a URL, a header —
+    // and it is stored, announced and shown, so it is masked before any of that (BR-07).
+    const message =
+      found.message === undefined ? undefined : maskSecrets(found.message);
     const updated = await repository.providers.update(scope, id, {
       status: found.status,
-      statusMessage: found.message ?? null,
+      statusMessage: message ?? null,
       lastCheckedAt: at,
       updatedAt: at,
     });
@@ -360,7 +364,7 @@ export function createProviderService(
       payload: {
         providerId: id,
         status: found.status,
-        ...(found.message === undefined ? {} : { message: found.message }),
+        ...(message === undefined ? {} : { message }),
       },
     });
   }
@@ -549,7 +553,10 @@ export function createProviderService(
 
       return {
         status: status.status,
-        ...(status.message === undefined ? {} : { message: status.message }),
+        // Masked as `storeStatus` masks it [audit P-18].
+        ...(status.message === undefined
+          ? {}
+          : { message: maskSecrets(status.message) }),
         ...(status.latencyMs === undefined
           ? {}
           : { latencyMs: status.latencyMs }),

@@ -114,6 +114,8 @@ interface Harness {
 
 let harness: Harness;
 let adapterStatus: ProviderState;
+/** What the stub's check says beside its status; undefined unless a test sets it. */
+let adapterMessage: string | undefined;
 let adapterCalls: { check: number; listModels: number };
 
 async function build(): Promise<Harness> {
@@ -124,7 +126,7 @@ async function build(): Promise<Harness> {
   const events: EngineEvent[] = [];
   await bus.subscribe((event) => events.push(event));
 
-  const stub = stubAdapter(adapterStatus);
+  const stub = stubAdapter(adapterStatus, adapterMessage);
   adapterCalls = stub.calls;
 
   const service = createProviderService({
@@ -157,6 +159,7 @@ async function build(): Promise<Harness> {
 
 beforeEach(async () => {
   adapterStatus = 'CONNECTED';
+  adapterMessage = undefined;
   harness = await build();
 });
 
@@ -393,6 +396,24 @@ describe('TC-PRV-003 / TC-PRV-004 checking a provider', () => {
 
     expect(adapterCalls.check).toBe(2);
     expect(harness.events.filter((e) => e.type === 'provider.status')).toHaveLength(2);
+  });
+
+  it('audit P-18 masks a key the provider echoed before storing, announcing or returning it', async () => {
+    // Assembled at runtime: a key-shaped literal in the repo is itself banned (CLAUDE.md §2).
+    const key = ['sk', 'ant', 'e'.repeat(32)].join('-');
+    adapterStatus = 'AUTH_FAILED';
+    adapterMessage = `Provider responded 401: invalid key ${key}`;
+    harness = await build();
+    const provider = await harness.created();
+
+    const result = await harness.service.check(provider.id);
+
+    const stored = await harness.service.get(provider.id);
+    const [event] = harness.events.filter((e) => e.type === 'provider.status');
+    for (const said of [result.message, stored?.statusMessage, JSON.stringify(event?.payload)]) {
+      expect(said).toContain('invalid key');
+      expect(said).not.toContain(key);
+    }
   });
 
   it('reports a provider that is gone rather than throwing', async () => {
