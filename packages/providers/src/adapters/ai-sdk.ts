@@ -75,6 +75,13 @@ function toFinishReason(reason: string): FinishReason {
   }
 }
 
+/** D389: a node's reasoning effort as AI SDK 7's `reasoning` call option; `max` is its `xhigh`. */
+export function aiSdkReasoning(
+  effort: NonNullable<GenerateRequest['reasoningEffort']>,
+): 'low' | 'medium' | 'high' | 'xhigh' {
+  return effort === 'max' ? 'xhigh' : effort;
+}
+
 export interface FetchLike {
   (input: string, init?: RequestInit): Promise<Response>;
 }
@@ -491,6 +498,11 @@ export function createAiSdkAdapter(options: AiSdkAdapterOptions): ProviderAdapte
                 }),
             ...(req.maxTokens === undefined ? {} : { maxOutputTokens: req.maxTokens }),
             ...(req.temperature === undefined ? {} : { temperature: req.temperature }),
+            // D389: the SDK's own reasoning option, mapped per provider by the SDK; a model that
+            // cannot reason gets a warning, never an error. Unset, nothing is sent.
+            ...(req.reasoningEffort === undefined
+              ? {}
+              : { reasoning: aiSdkReasoning(req.reasoningEffort) }),
             abortSignal: signal,
             // ACE owns the retry policy (Arch §28, round 3). Left at its default the SDK would
             // quietly re-send a 503 three times, which breaks the per-provider concurrency count

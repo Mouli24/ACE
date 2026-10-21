@@ -195,6 +195,7 @@ export const geminiDialect: CliDialect = {
     // gets no more than `edit_files` and the selector disables it.
     APPROVAL_MODE[access === undefined ? permission : access.access === 'read_only' ? 'read_only' : 'edit_files'],
     ...(req.modelId === 'default' ? [] : ['-m', req.modelId]),
+    // D389: `req.reasoningEffort` is not applied — Gemini CLI has no effort flag.
   ],
   stdin: withSystem,
   env: (base) => ({ ...base, GEMINI_CLI_NO_RELAUNCH: 'true' }),
