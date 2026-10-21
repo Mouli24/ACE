@@ -82,6 +82,35 @@ export function DeletedBar({ projectId, path }: { projectId: string; path: strin
   );
 }
 
+/**
+ * [audit F-5] The disk's file is binary or over 2 MB now: Forge can't show that version, and never
+ * saves text over it. Close (Discard and close with unsaved text, at once, as F-4's) is the way out;
+ * the buffer stays to copy from meanwhile.
+ */
+export function NotTextBar({
+  projectId,
+  path,
+  kind,
+  dirty,
+}: {
+  projectId: string;
+  path: string;
+  kind: 'binary' | 'too_large';
+  dirty: boolean;
+}) {
+  return (
+    <div role="alert" data-testid="not-text-bar" className={BAR}>
+      <span className="min-w-0 flex-1">
+        {nameOf(path)} is {kind === 'binary' ? 'binary' : 'over 2 MB'} on disk now, so Forge can’t
+        show or save it.
+      </span>
+      <Button size="sm" variant="secondary" onClick={() => closeFiles(projectId, [path])}>
+        {dirty ? 'Discard and close' : 'Close'}
+      </Button>
+    </div>
+  );
+}
+
 /** The last save failed: the buffer is still unsaved, and this says why (§10). */
 export function SaveErrorBar({
   projectId,

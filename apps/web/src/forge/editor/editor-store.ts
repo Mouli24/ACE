@@ -19,6 +19,11 @@ export interface OpenFile {
   conflict: Conflict | undefined;
   /** Gone from disk while the buffer was clean: struck through until it is closed or saved. */
   deletedOnDisk: boolean;
+  /**
+   * [audit F-5] The disk's file is no longer text Forge opens — binary now, or over 2 MB: the
+   * buffer stays, a bar says so, and a save never writes over it.
+   */
+  notText?: 'binary' | 'too_large' | undefined;
   /** The last save's failure, in words (design §10). */
   error: string | undefined;
 }
@@ -81,6 +86,8 @@ interface EditorState {
   /** Buffer and disk agree again (a reload, Keep mine, Take theirs): a new base, no conflict. */
   resolved(projectId: string, path: string, baseVersion: string | null): void;
   markDeletedOnDisk(projectId: string, path: string): void;
+  /** [audit F-5] The disk holds the file as binary or too large now; `undefined`: text again. */
+  markNotText(projectId: string, path: string, kind: OpenFile['notText']): void;
   renamed(projectId: string, from: string, to: string): void;
   /** Show a place in a file; a review showing gives the editor area back (fix F-M2). */
   revealAt(projectId: string, reveal: Reveal): void;
@@ -197,6 +204,7 @@ export const useEditorStore = create<EditorState>()((set) => {
       patch(projectId, path, { baseVersion, conflict: undefined, deletedOnDisk: false }),
     markDeletedOnDisk: (projectId, path) =>
       patch(projectId, path, { deletedOnDisk: true, baseVersion: null }),
+    markNotText: (projectId, path, kind) => patch(projectId, path, { notText: kind }),
 
     renamed: (projectId, from, to) =>
       update(projectId, (editor) => {

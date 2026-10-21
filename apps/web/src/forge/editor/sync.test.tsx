@@ -98,6 +98,53 @@ describe('D299 §5.4 the disk changes under an open file', () => {
   });
 });
 
+describe('[audit F-5] files the watcher never reports still follow the disk', () => {
+  /** A change the watcher drops (an ignored path such as `.env` or `dist`): no files.changed. */
+  const unwatchedWrite = (content: string) =>
+    act(() => db.seedFiles(projectId, { 'a.ts': content }));
+
+  it('the active tab reads the disk again when it is activated, and when the window gets the focus', async () => {
+    renderApp(path);
+    await screen.findByTestId('forge');
+    db.seedFiles(projectId, { 'b.ts': 'bee' });
+    act(() => openFile(projectId, 'a.ts'));
+    await screen.findByLabelText('Editing a.ts');
+    act(() => openFile(projectId, 'b.ts'));
+    await screen.findByLabelText('Editing b.ts');
+
+    unwatchedWrite('two');
+    act(() => openFile(projectId, 'a.ts'));
+    await waitFor(() => expect(screen.getByLabelText('Editing a.ts')).toHaveValue('two'));
+
+    unwatchedWrite('three');
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => expect(screen.getByLabelText('Editing a.ts')).toHaveValue('three'));
+  });
+
+  it('a file now binary on disk gets a bar, and saving never writes text over it', async () => {
+    const user = userEvent.setup();
+    renderApp(path);
+    await screen.findByTestId('forge');
+    act(() => openFile(projectId, 'a.ts'));
+    await user.type(await screen.findByLabelText('Editing a.ts'), '!');
+
+    unwatchedWrite('\u0000binary');
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    const bar = await screen.findByTestId('not-text-bar');
+    expect(bar).toHaveTextContent('a.ts is binary on disk now, so Forge can’t show or save it.');
+    expect(await act(() => saveFile(projectId, 'a.ts', queryClient))).toBe(false);
+    expect(db.filesOf(projectId)['a.ts']?.content).toBe('\u0000binary');
+
+    await user.click(within(bar).getByRole('button', { name: 'Discard and close' }));
+    await waitFor(() => expect(screen.queryByTestId('tab-a.ts')).toBeNull());
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
 describe('review I2: a save’s cache write never loses to an older read', () => {
   /** The next content read answers late, with the text from before the save. */
   function slowStaleRead(): { served: () => boolean } {

@@ -6,7 +6,7 @@ import { useProjectReviews, useReviewStore } from '../changes/review-store';
 import { ReviewView } from '../changes/ReviewView';
 import { useFileContent } from '../files/hooks';
 import { isImagePath, nameOf } from '../files/paths';
-import { ConflictBar, DeletedBar, SaveErrorBar } from './ConflictBar';
+import { ConflictBar, DeletedBar, NotTextBar, SaveErrorBar } from './ConflictBar';
 import { useOpenFile, useProjectEditor } from './editor-store';
 import { EmptyEditor } from './EmptyEditor';
 import { FileNotice } from './FileNotice';
@@ -121,7 +121,11 @@ function TextFile({
   }
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {file?.conflict !== undefined && (
+      {/* [audit F-5] a file no longer text on disk: its bar stands for the others meanwhile */}
+      {file?.notText !== undefined && (
+        <NotTextBar projectId={projectId} path={path} kind={file.notText} dirty={file.dirty} />
+      )}
+      {file?.notText === undefined && file?.conflict !== undefined && (
         <ConflictBar
           projectId={projectId}
           path={path}
@@ -130,9 +134,9 @@ function TextFile({
           onCompare={() => setComparing((value) => !value)}
         />
       )}
-      {file?.deletedOnDisk === true && file.conflict === undefined && (
-        <DeletedBar projectId={projectId} path={path} />
-      )}
+      {file?.notText === undefined &&
+        file?.deletedOnDisk === true &&
+        file.conflict === undefined && <DeletedBar projectId={projectId} path={path} />}
       {file?.error !== undefined && (
         <SaveErrorBar projectId={projectId} path={path} message={file.error} />
       )}

@@ -145,6 +145,11 @@ async function saveOnce(
   if (file === undefined || model === undefined || file.baseVersion === undefined || file.saving)
     return false;
   if (!file.dirty && !file.deletedOnDisk) return true;
+  if (file.notText !== undefined) {
+    // [audit F-5] never a text save over a file the disk holds as binary or too large
+    logOutput(projectId, 'warn', `${path} is no longer a text file on disk; nothing was saved.`);
+    return false;
+  }
   if (file.conflict !== undefined) {
     // [audit F-4] the choices the file's conflict bar offers, and no others
     logOutput(
