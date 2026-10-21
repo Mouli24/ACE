@@ -548,12 +548,11 @@ export function createProviderService(
       try {
         discovered = await adapter.listModels();
       } catch (error) {
-        // A provider that cannot list is exactly what the manifest exists for (FR-MOD-002) — but
-        // the reason is reported, never swallowed (D286).
+        // The reason is reported, never swallowed (D286).
         warning = maskSecrets(classifyError(error, { providerId: id }).message);
         logger.warn(
           { subsystem: "providers", providerId: id, err: error },
-          "model discovery failed; falling back to the manifest",
+          "model discovery failed",
         );
       }
 
@@ -567,11 +566,14 @@ export function createProviderService(
       );
 
       /*
-       * D286: nothing to fall back on — a CLI has no manifest — so the models it last listed stay,
-       * each marked unavailable with the reason. A node naming one is refused with that reason
-       * rather than the model vanishing, and no model is ever offered that nothing vouched for.
+       * D286: the models it last listed stay, each marked unavailable with the reason. A node
+       * naming one is refused with that reason rather than the model vanishing, and no model is
+       * ever offered that nothing vouched for. [audit P-5] This holds for a provider with a
+       * manifest too: swapping a listed catalogue for the manifest dropped what the key really
+       * offers, and what the person set on those models (D380). Only a catalogue that is still
+       * empty falls back to the manifest (FR-MOD-002) — a CLI has none, so it stays empty.
        */
-      if (warning !== undefined && manifest.length === 0) {
+      if (warning !== undefined && (existing.length > 0 || manifest.length === 0)) {
         const models: Model[] = existing.map((model) => ({
           ...model,
           available: false,
