@@ -199,3 +199,76 @@ describe('D-074 a reload keeps the approval a WAITING node is anchored to (FR-GR
     expect(useRunStore.getState().approvals()).toEqual([]);
   });
 });
+
+describe('[audit W-5] a run blocked mid-run, and one that stays open (D305, D323)', () => {
+  beforeEach(() => useRunStore.getState().reset());
+
+  const started = {
+    seq: 1,
+    type: 'run.started',
+    payload: {
+      run: {
+        id: RUN,
+        workflowId: WF,
+        status: 'RUNNING',
+        startedAt: '2026-10-21T00:00:00.000Z',
+        totals: usage,
+      },
+    },
+  } as ServerFrame;
+  const blocked = (seq: number) =>
+    ({
+      seq,
+      type: 'run.blocked',
+      payload: { runId: RUN, reason: 'BUDGET_EXCEEDED', detail: '12,000 of 10,000 tokens used.' },
+    }) as ServerFrame;
+
+  it('a block keeps the run live, with its reason, its words, and Resume', () => {
+    const store = useRunStore.getState();
+    store.arm(WF);
+    store.begin(WF, RUN, 'RUNNING');
+    store.apply(started);
+    store.apply(blocked(2));
+    const after = useRunStore.getState();
+    expect(after.status).toBe('BLOCKED');
+    expect(after.active).toBe(true);
+    expect(after.blockedReason).toBe('BUDGET_EXCEEDED');
+    expect(after.blockedDetail).toBe('12,000 of 10,000 tokens used.');
+    expect(after.allowedActions).toEqual(['resume', 'stop']);
+
+    store.apply({ seq: 3, type: 'run.resumed', payload: { runId: RUN } } as ServerFrame);
+    expect(useRunStore.getState().blockedReason).toBeUndefined();
+    expect(useRunStore.getState().allowedActions).toEqual(['pause', 'stop']);
+  });
+
+  it('[audit W-4] a frame that changes no action keeps the same allowedActions array', () => {
+    const store = useRunStore.getState();
+    store.begin(WF, RUN, 'RUNNING');
+    store.apply(started);
+    store.apply(state(2, 'RUNNING'));
+    const before = useRunStore.getState().allowedActions;
+    store.apply(token('a'));
+    store.apply(token('b'));
+    expect(useRunStore.getState().allowedActions).toBe(before);
+  });
+
+  it('an adopted open Domain run keeps End through a block and a resume', () => {
+    const store = useRunStore.getState();
+    store.adopt(
+      WF,
+      {
+        id: RUN,
+        status: 'BLOCKED',
+        blockedReason: 'LOOP_GUARD',
+        domain: { routing: 'supervised', loopGuardLimit: 6, tokenBudget: null, stayOpen: true },
+        allowedActions: ['resume', 'stop', 'restart', 'end'],
+        totals: usage,
+      },
+      [],
+    );
+    expect(useRunStore.getState().active).toBe(true);
+    expect(useRunStore.getState().blockedReason).toBe('LOOP_GUARD');
+    store.apply({ seq: 9, type: 'run.resumed', payload: { runId: RUN } } as ServerFrame);
+    expect(useRunStore.getState().allowedActions).toEqual(['pause', 'stop', 'restart', 'end']);
+  });
+});

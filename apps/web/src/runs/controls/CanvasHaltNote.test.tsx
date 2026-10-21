@@ -1,7 +1,13 @@
-import { render, screen } from '@testing-library/react';
+import type { Run } from '@ace/contracts';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
+import { api } from '../../app/api';
+import { installMockServer, renderWithQuery } from '../../test/app';
 import { useRunStore } from '../run-store';
 import { CanvasHaltNote } from './CanvasHaltNote';
+
+installMockServer();
 
 afterEach(() => useRunStore.getState().reset());
 
@@ -38,5 +44,34 @@ describe('CanvasHaltNote', () => {
     useRunStore.setState({ workflowId: 'wf1', status: 'HALTED', haltReason: undefined });
     rerender(<CanvasHaltNote workflowId="wf1" />);
     expect(screen.queryByTestId('halt-reason')).toBeNull();
+  });
+});
+
+describe('[audit W-5] a run blocked mid-run (D305)', () => {
+  it('says why, in words with the engine’s detail, and offers Resume', async () => {
+    useRunStore.setState({
+      workflowId: 'wf1',
+      runId: 'run1',
+      status: 'BLOCKED',
+      blockedReason: 'LOOP_GUARD',
+      blockedDetail: 'Writer and Reviewer went back and forth 6 times.',
+      allowedActions: ['resume', 'stop'],
+    });
+    const resume = vi.spyOn(api(), 'resumeRun').mockResolvedValue({} as Run);
+    renderWithQuery(<CanvasHaltNote workflowId="wf1" />);
+    const note = screen.getByTestId('blocked-reason');
+    expect(note).toHaveAttribute('data-reason', 'LOOP_GUARD');
+    expect(note).toHaveTextContent('Run blocked — the loop guard stopped two nodes');
+    expect(note).toHaveTextContent('Writer and Reviewer went back and forth 6 times.');
+    expect(screen.queryByTestId('halt-reason')).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await waitFor(() => expect(resume).toHaveBeenCalledWith('run1'));
+  });
+
+  it('a pre-flight BLOCKED (no reason) is not a mid-run block', () => {
+    useRunStore.setState({ workflowId: 'wf1', runId: 'run1', status: 'BLOCKED' });
+    renderWithQuery(<CanvasHaltNote workflowId="wf1" />);
+    expect(screen.queryByTestId('blocked-reason')).toBeNull();
   });
 });
