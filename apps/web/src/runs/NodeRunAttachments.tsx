@@ -1,4 +1,5 @@
 import type { Node } from '@ace/contracts';
+import { Button, Icons } from '@ace/ui';
 import type { ReactNode } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -6,7 +7,15 @@ import { ErrorCard } from '../errors/ErrorCard';
 import { useProviders } from '../providers/hooks';
 import { ApprovalStack } from './approvals/ApprovalStack';
 import { NodeRunMenu } from './controls/NodeRunMenu';
-import { useRerunNode, useRetryNodeRun, useStartRun } from './hooks';
+import {
+  RUN_GOING_TITLE,
+  useRerunNode,
+  useRetryNodeRun,
+  useRun,
+  useRunGoing,
+  useStartRun,
+} from './hooks';
+import { nodeChangedSinceRun } from './node-changed';
 import { useRunStore } from './run-store';
 
 /**
@@ -84,6 +93,10 @@ export function NodeRunActions({ node }: { node: Node }) {
 /**
  * The failure, on the node it happened in (FR-ERR-002, NFR-USE-03): kind, message, provider, state,
  * a Retry button and what to do next. The same card the Errors tab shows, so the two cannot disagree.
+ *
+ * [audit L-13] Retry re-runs the run's snapshot (BR-04), so a node edited since the run started
+ * would fail the same way again. The card says so, and offers "Run again with changes": a new run
+ * of the graph as it is now, with the inputs and goal this run started with.
  */
 export function NodeErrorCard({ node }: { node: Node }) {
   const nodeRun = useRunStore(
@@ -93,6 +106,7 @@ export function NodeErrorCard({ node }: { node: Node }) {
       return run === undefined
         ? undefined
         : {
+            runId: store.runId,
             nodeRunId: run.nodeRunId,
             status: run.status,
             attempt: run.attempt,
@@ -103,11 +117,14 @@ export function NodeErrorCard({ node }: { node: Node }) {
   );
   const providers = useProviders();
   const retry = useRetryNodeRun();
+  const error = nodeRun?.status === 'FAILED' ? nodeRun.error : undefined;
+  const run = useRun(error === undefined ? undefined : nodeRun?.runId).data;
+  const start = useStartRun(node.workflowId);
+  const going = useRunGoing(node.workflowId);
 
-  if (nodeRun?.error === undefined || nodeRun.status !== 'FAILED') return null;
-  const providerName = providers.data?.find(
-    (provider) => provider.id === nodeRun.error?.providerId,
-  )?.name;
+  if (nodeRun === undefined || error === undefined) return null;
+  const providerName = providers.data?.find((provider) => provider.id === error.providerId)?.name;
+  const changed = run !== undefined && nodeChangedSinceRun(node, run.snapshot.nodes);
 
   return (
     <div className="w-full">
@@ -115,12 +132,41 @@ export function NodeErrorCard({ node }: { node: Node }) {
         nodeId={node.id}
         nodeName={node.name}
         state={nodeRun.status}
-        error={nodeRun.error}
+        error={error}
         attempt={nodeRun.attempt}
         {...(nodeRun.failureReason === undefined ? {} : { failureReason: nodeRun.failureReason })}
         {...(providerName === undefined ? {} : { providerName })}
         retrying={retry.isPending}
         onRetry={() => retry.mutate({ nodeRunId: nodeRun.nodeRunId, withDownstream: false })}
+        {...(changed && run !== undefined
+          ? {
+              notice: (
+                <p
+                  data-testid={`error-node-changed-${node.id}`}
+                  className="m-0 text-[11px] font-semibold leading-[1.45] text-[var(--ink)]"
+                >
+                  This node changed since the run started — Retry uses the run&apos;s settings.
+                </p>
+              ),
+              actions: (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  data-testid={`error-run-again-${node.id}`}
+                  disabled={going || start.isPending}
+                  {...(going ? { title: RUN_GOING_TITLE } : {})}
+                  onClick={() =>
+                    start.mutate({
+                      inputs: run.inputs,
+                      ...(run.goal === undefined ? {} : { goal: run.goal }),
+                    })
+                  }
+                >
+                  <Icons.Play aria-hidden size={12} /> Run again with changes
+                </Button>
+              ),
+            }
+          : {})}
       />
     </div>
   );

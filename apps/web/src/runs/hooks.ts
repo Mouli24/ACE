@@ -151,6 +151,18 @@ export function useNodeRunsOnce(runId: Id | undefined) {
   });
 }
 
+/**
+ * A run of this workflow is in flight — what disables the header's Run (PG-1.2). [audit W-8] Every
+ * other way to start one (Run from here, Start from this node, Run again with changes) reads the
+ * same, so a second run never starts beside the first.
+ */
+export function useRunGoing(workflowId: Id): boolean {
+  return useRunStore((store) => store.workflowId === workflowId && store.active);
+}
+
+/** [audit W-8] The title a start action carries while {@link useRunGoing} holds it back. */
+export const RUN_GOING_TITLE = 'A run is going — stop it first';
+
 /** Which Input nodes still have nothing to send — what the input dialog asks for (FR-NODE-011). */
 export function inputNodesNeedingText(
   nodes: Array<{ id: string; kind: string; name: string; config: unknown }>,
