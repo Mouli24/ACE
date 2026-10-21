@@ -8,7 +8,7 @@ import {
   statusFromProbe,
   type FetchLike,
 } from './ai-sdk.js';
-import { parseOpenAiModelList } from './openai-compatible.js';
+import { openAiApiRoot, parseOpenAiModelList } from './openai-compatible.js';
 
 /** OpenAI (FR-PRV-001). Same listing shape as any compatible server, different default host. */
 
@@ -21,18 +21,19 @@ export interface OpenAiOptions {
 }
 
 export function createOpenAiAdapter(options: OpenAiOptions): ProviderAdapter {
-  const baseUrl = (options.baseUrl ?? OPENAI_BASE_URL).replace(/\/+$/, '');
+  // A base URL that already ends in `/v1` is the root as it is [audit P-4].
+  const apiRoot = openAiApiRoot(options.baseUrl ?? OPENAI_BASE_URL);
 
   const probe = async (): Promise<unknown> =>
     getJson({
-      url: `${baseUrl}/v1/models`,
+      url: `${apiRoot}/models`,
       headers: { Authorization: `Bearer ${options.apiKey}` },
       ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
     });
 
   const provider = createOpenAI({
     apiKey: options.apiKey,
-    baseURL: `${baseUrl}/v1`,
+    baseURL: apiRoot,
     ...(options.fetchImpl === undefined ? {} : { fetch: options.fetchImpl as typeof fetch }),
   });
 
@@ -43,7 +44,7 @@ export function createOpenAiAdapter(options: OpenAiOptions): ProviderAdapter {
     listModels: async (): Promise<ModelInfo[]> => parseOpenAiModelList(await probe()),
     embed: (texts, embedOptions) =>
       embedOpenAiStyle(
-        baseUrl,
+        apiRoot,
         { Authorization: `Bearer ${options.apiKey}` },
         options.fetchImpl,
         texts,

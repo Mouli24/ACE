@@ -171,6 +171,14 @@ describe('TC-RTR-002 fallback moves to the next model on a provider failure', ()
     });
   });
 
+  it('audit P-15 never runs the node’s own model on another provider that lists the same id', () => {
+    const shared = createRouter(() => [model(PROVIDER_B, 'gpt-5-mini')]);
+
+    const result = shared.resolve(node({ modelId: 'gpt-5-mini' }), TEXT, noFailures);
+
+    expect(result).toMatchObject({ ok: false, code: 'unavailable_model' });
+  });
+
   it('skips a fallback entry the catalog does not offer rather than failing the run', () => {
     const result = router.resolve(
       node({

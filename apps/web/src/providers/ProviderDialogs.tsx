@@ -33,7 +33,7 @@ import { useState, type FormEvent } from 'react';
 
 import { CliScanSection } from './CliScanSection';
 import { ProviderMark } from './ProviderMark';
-import { useCreateProvider, useDeleteProvider, useUpdateProvider } from './hooks';
+import { useCreateProvider, useDeleteProvider, useNodeNames, useUpdateProvider } from './hooks';
 import {
   OFFERED_CLI_PERMISSIONS,
   cliPermissionHint,
@@ -45,6 +45,13 @@ import {
 } from './provider-meta';
 
 const concurrencyHint = `${PROVIDER_CONCURRENCY_MIN}–${PROVIDER_CONCURRENCY_MAX} calls in flight (FR-PRV-009)`;
+
+/** [audit P-4] An example address per type; the engine reads a URL ending in /v1 as the API root. */
+const BASE_URL_PLACEHOLDER: Partial<Record<ProviderType, string>> = {
+  ollama: DEFAULT_OLLAMA_BASE_URL,
+  openai_compatible: 'http://localhost:1234/v1',
+};
+const BASE_URL_HINT = 'The server’s address, with or without /v1 — http(s) only.';
 
 /* The theme's field vocabulary (D328): label over control, 7px apart; 11px muted help under it. */
 const FIELD = 'flex flex-col gap-[7px]';
@@ -59,12 +66,45 @@ function affectedNodeIds(error: unknown): string[] | undefined {
   return Array.isArray(details?.nodeIds) ? details.nodeIds.map(String) : [];
 }
 
+/** The form's own words for a field a refused request names. */
+const FIELD_LABEL: Readonly<Record<string, string>> = {
+  name: 'Name',
+  apiKey: 'API key',
+  baseUrl: 'Base URL',
+  concurrency: 'Concurrency',
+  cliPermission: 'Permission',
+};
+
+/**
+ * [audit P-20] What a refused request said about each field — the Zod issues the SDK or the engine
+ * put in `details` — so "does not match the contract" says which field and why.
+ */
+function issueLines(error: Error): string[] {
+  if (!AceApiError.is(error) || error.code !== 'validation_failed') return [];
+  const details: unknown = error.details;
+  if (!Array.isArray(details)) return [];
+  return details.flatMap((issue: unknown): string[] => {
+    const { path, message } = (issue ?? {}) as { path?: unknown; message?: unknown };
+    if (typeof message !== 'string') return [];
+    const field = Array.isArray(path) && path.length > 0 ? path.map(String).join('.') : '';
+    return [field === '' ? message : `${FIELD_LABEL[field] ?? field}: ${message}`];
+  });
+}
+
 function ErrorLine({ error }: { error: Error | null }) {
   if (!error) return null;
+  const issues = issueLines(error);
   return (
-    <p role="alert" className="text-[12px] text-[#c94c27]">
-      {error.message}
-    </p>
+    <div role="alert" className="text-[12px] text-[#c94c27]">
+      <p>{error.message}</p>
+      {issues.length > 0 && (
+        <ul className="mt-1 list-disc pl-4" data-testid="provider-form-issues">
+          {issues.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -247,8 +287,13 @@ export function AddProviderDialog({
                   className={MONO}
                   value={baseUrl}
                   onChange={(event) => setBaseUrl(event.target.value)}
+                  placeholder={BASE_URL_PLACEHOLDER[type]}
+                  aria-describedby="provider-base-url-hint"
                   required
                 />
+                <p id="provider-base-url-hint" className={HELP}>
+                  {BASE_URL_HINT}
+                </p>
               </div>
               <div className={FIELD}>
                 <Label htmlFor="provider-optional-key">API key (optional)</Label>
@@ -377,8 +422,13 @@ export function EditProviderDialog({
                 className={MONO}
                 value={baseUrl}
                 onChange={(event) => setBaseUrl(event.target.value)}
+                placeholder={BASE_URL_PLACEHOLDER[provider.type]}
+                aria-describedby="edit-provider-base-url-hint"
                 required
               />
+              <p id="edit-provider-base-url-hint" className={HELP}>
+                {BASE_URL_HINT}
+              </p>
             </div>
           )}
 
@@ -442,6 +492,7 @@ export function DeleteProviderDialog({
 }) {
   const remove = useDeleteProvider();
   const inUse = affectedNodeIds(remove.error);
+  const names = useNodeNames(inUse ?? []);
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -462,9 +513,17 @@ export function DeleteProviderDialog({
           >
             <p>{remove.error?.message}</p>
             {inUse.length > 0 && (
-              <ul className="flex flex-col gap-1 font-machine text-[11px] text-[var(--muted)]">
+              <ul className="flex flex-col gap-1">
+                {/* [audit P-20] The node and its workflow by name; the id tells twins apart. */}
                 {inUse.map((nodeId) => (
-                  <li key={nodeId}>{nodeId}</li>
+                  <li key={nodeId} className="flex flex-wrap items-baseline gap-x-2">
+                    {names.data?.get(nodeId) !== undefined && (
+                      <span data-testid={`provider-in-use-node-${nodeId}`}>
+                        {names.data.get(nodeId)}
+                      </span>
+                    )}
+                    <span className="font-machine text-[11px] text-[var(--muted)]">{nodeId}</span>
+                  </li>
                 ))}
               </ul>
             )}

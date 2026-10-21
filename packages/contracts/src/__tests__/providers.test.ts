@@ -69,6 +69,14 @@ describe('FR-PRV-001 Provider', () => {
       ProviderSchema.safeParse({ ...provider, baseUrl: 'http://127.0.0.1:11434' }).success,
     ).toBe(true);
   });
+
+  it('audit P-8 refuses a base URL that is not http or https', () => {
+    for (const baseUrl of ['javascript:alert(1)', 'file:///etc/passwd', 'ftp://llm.example']) {
+      expect(UpdateProviderRequestSchema.safeParse({ baseUrl }).success).toBe(false);
+    }
+    const https = UpdateProviderRequestSchema.safeParse({ baseUrl: 'https://llm.example/v1' });
+    expect(https.success).toBe(true);
+  });
 });
 
 describe('FR-PRV-002 the API key is never part of a Provider', () => {

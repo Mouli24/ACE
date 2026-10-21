@@ -59,6 +59,75 @@ export function discoveredModel(modelId: string, displayName?: string): ModelInf
   };
 }
 
+/**
+ * Well-known chat families and a realistic context window for each [audit P-2]. Every model in
+ * them takes tools, a JSON schema and an image, so a discovered one is not treated as a text-only
+ * 8k model until someone writes it into the manifest. Prices are never guessed: those stay the
+ * manifest's alone.
+ */
+const CHAT_FAMILIES: readonly { family: RegExp; contextWindow: number }[] = [
+  { family: /^claude-(?!2|instant)/, contextWindow: 200_000 },
+  { family: /^gpt-4o/, contextWindow: 128_000 },
+  { family: /^gpt-4\.1/, contextWindow: 1_047_576 },
+  { family: /^gpt-5/, contextWindow: 400_000 },
+  { family: /^o[34](?:-|$)/, contextWindow: 200_000 },
+  { family: /^gemini-(?:1\.5|[2-9])/, contextWindow: 1_048_576 },
+];
+
+/** Variants inside those families that are not plain chat: realtime, audio, search, live, … */
+const NOT_PLAIN_CHAT = /realtime|audio|search|live|transcribe|tts|deep-research|codex|image/i;
+
+const FAMILY_OUTPUT_TYPES = ['text', 'json', 'code'] as const;
+
+/**
+ * A discovered model with its family's defaults, when its id names a well-known chat family —
+ * bare (`gpt-4.1-mini`) or behind a gateway's vendor prefix (`openai/gpt-4.1-mini`). Only what
+ * the listing left at the discovery defaults is raised; a model already unavailable is left alone.
+ */
+export function withFamilyDefaults(model: ModelInfo): ModelInfo {
+  if (model.available === false) return model;
+  const id = model.modelId.replace(/^[^/]+\//, '').toLowerCase();
+  if (NOT_PLAIN_CHAT.test(id)) return model;
+  const known = CHAT_FAMILIES.find((entry) => entry.family.test(id));
+  if (known === undefined) return model;
+  return {
+    ...model,
+    inputTypes: model.inputTypes.includes('image')
+      ? model.inputTypes
+      : [...model.inputTypes, 'image'],
+    outputTypes: [...new Set([...model.outputTypes, ...FAMILY_OUTPUT_TYPES])],
+    supportsTools: true,
+    supportsJson: true,
+    contextWindow:
+      model.contextWindow === DISCOVERED_MODEL_DEFAULTS.contextWindow
+        ? known.contextWindow
+        : model.contextWindow,
+  };
+}
+
+/**
+ * Names that mark a model that does not chat — embedders, speech, transcription, image generation,
+ * moderation [audit P-6]. A listing puts them beside the chat models with nothing else to tell
+ * them apart.
+ */
+const NON_CHAT_NAME = /embed|whisper|tts|transcribe|dall-e|image|moderation|guard|orpheus/i;
+
+/**
+ * Why a listed model cannot be chosen for a node [audit P-6]. Availability is about nodes only: a
+ * knowledge base still picks and embeds with such a model.
+ */
+export const NOT_A_CHAT_MODEL = 'Not a chat model: an agent or model node cannot use it.';
+
+/** The model, kept in the catalogue but unavailable, with {@link NOT_A_CHAT_MODEL}. */
+export function notAChatModel(model: ModelInfo): ModelInfo {
+  return { ...model, available: false, unavailableReason: NOT_A_CHAT_MODEL };
+}
+
+/** The model as its name describes it: unavailable when the name says it does not chat. */
+export function byChatName(model: ModelInfo): ModelInfo {
+  return NON_CHAT_NAME.test(model.modelId) ? notAChatModel(model) : model;
+}
+
 /** The AI SDK's finish reasons, narrowed to ours (Arch §14.2). */
 function toFinishReason(reason: string): FinishReason {
   switch (reason) {
@@ -95,6 +164,9 @@ export interface HttpProbeOptions {
 
 /** How long a `check()` waits before calling a provider unreachable. */
 export const CHECK_TIMEOUT_MS = 10_000;
+
+/** The most pages a paginated model listing is followed for — a guard, never a limit in practice. */
+export const MAX_LIST_PAGES = 20;
 
 /**
  * One GET, turned into either a parsed body or a `ProviderCallError`. Every real adapter's
@@ -210,9 +282,12 @@ export function checkVectors(vectors: unknown[], expected: number): number[][] {
   });
 }
 
-/** `POST {baseUrl}/v1/embeddings` — OpenAI and every compatible server. */
+/**
+ * `POST {apiRoot}/embeddings` — OpenAI and every compatible server. `apiRoot` already carries the
+ * version (`…/v1`), as `openAiApiRoot` reads it [audit P-4].
+ */
 export async function embedOpenAiStyle(
-  baseUrl: string,
+  apiRoot: string,
   headers: Record<string, string>,
   fetchImpl: FetchLike | undefined,
   texts: string[],
@@ -221,7 +296,7 @@ export async function embedOpenAiStyle(
   const model = requireEmbedModel(options);
   if (texts.length === 0) return [];
   const body = (await postJson({
-    url: `${baseUrl}/v1/embeddings`,
+    url: `${apiRoot}/embeddings`,
     headers,
     body: { model, input: texts },
     ...(fetchImpl === undefined ? {} : { fetchImpl }),

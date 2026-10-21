@@ -150,6 +150,12 @@ export function ModelsTab({ providers }: { providers: Provider[] }) {
         </p>
       )}
 
+      {/* [audit P-20] Said while the catalog loads, rather than an empty space. */}
+      {models.isPending && (
+        <p role="status" className="py-10 text-center text-[13px] text-[var(--muted)]">
+          Loading models…
+        </p>
+      )}
       {models.isError && (
         <p role="alert" className="text-[12px] text-[#c94c27]">
           Could not load models: {models.error.message}

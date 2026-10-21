@@ -1,10 +1,11 @@
 import { PROVIDER_TYPES } from '@ace/contracts';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { HttpResponse, http } from 'msw';
 
 import { createNode } from '../nodes/factory';
 import { installMatchMedia, uninstallMatchMedia } from '../responsive/test-support';
-import { db, installMockServer, queryClient, renderApp } from '../test/app';
+import { db, installMockServer, queryClient, renderApp, server } from '../test/app';
 import { PROVIDER_TYPE_LABEL } from './provider-meta';
 import { patchProviderStatus } from './status-patch';
 
@@ -65,6 +66,69 @@ describe('TC-PRV-001 every provider type can be added from the form', () => {
     await user.click(within(banner).getByRole('button', { name: 'Add it' }));
     await pickType(user, 'Ollama');
     expect(screen.getByLabelText('Base URL')).toHaveValue('http://127.0.0.1:11434');
+  });
+
+  it('audit P-20 says which field a refused provider failed on, and why', async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.post('*/providers', () =>
+        HttpResponse.json(
+          {
+            error: {
+              kind: 'invalid_config',
+              code: 'validation_failed',
+              message: 'The request body is invalid.',
+              details: [{ path: ['concurrency'], message: 'Too big: expected number to be <=32' }],
+              retryable: false,
+            },
+          },
+          { status: 400 },
+        ),
+      ),
+    );
+    const dialog = await openAddDialog(user);
+    await pickType(user, PROVIDER_TYPE_LABEL.mock);
+
+    await user.click(within(dialog).getByRole('button', { name: 'Add provider' }));
+
+    expect(await within(dialog).findByTestId('provider-form-issues')).toHaveTextContent(
+      'Concurrency: Too big: expected number to be <=32',
+    );
+  });
+
+  it('audit P-20 asks for a name before pulling, rather than pulling the suggestion', async () => {
+    const user = userEvent.setup();
+    const pulls: string[] = [];
+    server.use(
+      http.post('*/providers/:id/local/pull', ({ request }) => {
+        pulls.push(request.url);
+        return HttpResponse.json({ error: 'not expected' }, { status: 500 });
+      }),
+    );
+    const provider = db.createProvider({
+      type: 'ollama',
+      name: 'Ollama',
+      baseUrl: 'http://127.0.0.1:11434',
+    });
+    renderApp('/providers');
+
+    const form = await screen.findByTestId(`pull-model-${provider.id}`);
+    await user.click(within(form).getByRole('button', { name: /pull a model/i }));
+
+    expect(await within(form).findByRole('alert')).toHaveTextContent(
+      'Type the name of a model to pull',
+    );
+    expect(pulls).toEqual([]);
+  });
+
+  it('audit P-4 shows an example base URL and says /v1 is optional', async () => {
+    const user = userEvent.setup();
+    const dialog = await openAddDialog(user);
+    await pickType(user, PROVIDER_TYPE_LABEL.openai_compatible);
+
+    const field = within(dialog).getByLabelText('Base URL');
+    expect(field).toHaveAttribute('placeholder', 'http://localhost:1234/v1');
+    expect(field).toHaveAccessibleDescription(/with or without \/v1/);
   });
 });
 
@@ -127,6 +191,47 @@ describe('TC-PRV-003 Test renders the check result', () => {
     await waitFor(() => expect(chip).toHaveAttribute('data-status', 'AUTH_FAILED'));
     expect(chip).toHaveTextContent('auth failed');
     await waitFor(() => expect(db.getProvider(provider.id)?.statusMessage).toBeDefined());
+  });
+
+  it('audit P-7 says why in the row, not only in the chip’s tooltip', async () => {
+    const user = userEvent.setup();
+    const provider = db.createProvider({ type: 'google', name: 'Google', apiKey: 'bad' });
+    renderApp('/providers');
+
+    await user.click(await screen.findByRole('button', { name: 'Test' }));
+
+    expect(await screen.findByTestId(`provider-status-message-${provider.id}`)).toHaveTextContent(
+      'The API key was rejected.',
+    );
+  });
+
+  it('audit P-7 shows the Test as pending, then the error when the engine cannot run it', async () => {
+    const user = userEvent.setup();
+    const provider = db.createProvider({ type: 'openai', name: 'OpenAI', apiKey: 'good' });
+    let answer: () => void = () => undefined;
+    const answered = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    server.use(
+      http.post('*/providers/:id/check', async () => {
+        await answered;
+        return HttpResponse.json(
+          { error: { kind: 'provider', code: 'x', message: 'engine fell over', retryable: false } },
+          { status: 500 },
+        );
+      }),
+    );
+    renderApp('/providers');
+
+    await user.click(await screen.findByRole('button', { name: 'Test' }));
+    const pending = await screen.findByRole('button', { name: 'Testing…' });
+    expect(pending).toBeDisabled();
+    answer();
+
+    expect(await screen.findByTestId(`provider-check-error-${provider.id}`)).toHaveTextContent(
+      'Test failed: engine fell over',
+    );
+    expect(screen.getByRole('button', { name: 'Test' })).toBeEnabled();
   });
 });
 
@@ -231,6 +336,25 @@ describe('TC-PRV-006 removing an in-use provider warns and then marks the nodes'
 
     await user.click(screen.getByRole('button', { name: 'Remove anyway' }));
     await waitFor(() => expect(db.getProvider(provider.id)).toBeUndefined());
+  });
+
+  it('audit P-20 names the node and its workflow, not only its id', async () => {
+    const user = userEvent.setup();
+    const project = db.createProject({ name: 'P' });
+    const workflow = db.createWorkflow(project.id, 'Weekly digest');
+    const provider = db.createProvider({ type: 'mock', name: 'Mock' });
+    const node = createNode('agent', workflow.id, { x: 0, y: 0 });
+    node.config = { ...node.config, providerId: provider.id } as typeof node.config;
+    db.commitGraph(workflow.id, [node], []);
+
+    renderApp('/providers');
+    await user.click(await screen.findByRole('button', { name: `Actions for ${provider.name}` }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Remove' }));
+    await user.click(screen.getByRole('button', { name: 'Remove' }));
+
+    expect(await screen.findByTestId(`provider-in-use-node-${node.id}`)).toHaveTextContent(
+      `${node.name} — Weekly digest`,
+    );
   });
 
   it('removes an unused provider on the first confirmation', async () => {

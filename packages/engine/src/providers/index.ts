@@ -194,11 +194,19 @@ export function createProviderService(
   const autoLocal = deps.autoLocalRuntime === true;
   /** One add at a time, so two callers never create two Ollama providers. */
   let addingLocal: Promise<Provider | undefined> | undefined;
+  /**
+   * [audit P-13] The person removed an Ollama provider: detection stops adding (and starting) it
+   * again for as long as this engine runs. Not persisted — the settings blob has no field for it —
+   * so an engine restart offers it once more. Asking for the runtime outright clears it.
+   */
+  let localRemoved = false;
   /** Pulls in flight, by provider and name, so a second click does not start a second one. */
   const pulls = new Set<string>();
 
-  const sameUrl = (a: string, b: string): boolean =>
-    a.replace(/\/+$/, "").toLowerCase() === b.replace(/\/+$/, "").toLowerCase();
+  // An Ollama row may hold its OpenAI endpoint, `…/v1`: the same server [audit P-4].
+  const hostOf = (url: string): string =>
+    url.replace(/\/+$/, "").replace(/\/v1$/i, "").toLowerCase();
+  const sameUrl = (a: string, b: string): boolean => hostOf(a) === hostOf(b);
 
   async function toStatus(probe: LocalRuntimeProbe): Promise<LocalRuntimeStatus> {
     const rows = await repository.providers.list(scope);
@@ -240,15 +248,7 @@ export function createProviderService(
         { subsystem: "providers", providerId: created.id },
         "added the local Ollama found on this machine",
       );
-      // CONNECTED, and its models listed (check fills an empty catalogue).
-      try {
-        await service.check(created.id);
-      } catch (error) {
-        logger.warn(
-          { subsystem: "providers", providerId: created.id, err: error },
-          "the new Ollama provider could not be checked",
-        );
-      }
+      // CONNECTED, and its models listed: `create` checks it [audit P-10].
       return created;
     })().finally(() => {
       addingLocal = undefined;
@@ -296,6 +296,35 @@ export function createProviderService(
     );
   }
 
+  /**
+   * [audit P-10] The types that talk to a real endpoint are asked as soon as they are added or
+   * their key or address changes. A CLI lists its models on add instead (D286), and the mock
+   * provider is checked when asked (TC-PRV-003..005).
+   */
+  const checksOnSave = (type: Provider["type"]): boolean =>
+    type !== "mock" && !isCliProviderType(type);
+
+  /**
+   * Check a provider that was just saved, so it does not sit at "never checked" with an empty
+   * catalogue until the 60 s sweep — and, with `relist`, so a new key's or address's models replace
+   * the ones listed before (`check` lists only into an empty catalogue). Best effort: the save
+   * stands whatever the check says, and a check that throws is only logged [audit P-10].
+   */
+  async function checkAfterSave(id: Id, relist: boolean): Promise<void> {
+    try {
+      const listed =
+        relist &&
+        (await repository.models.list(scope, { providerId: id })).length > 0;
+      const result = await service.check(id);
+      if (result.status === "CONNECTED" && listed) await service.refreshModels(id);
+    } catch (error) {
+      logger.warn(
+        { subsystem: "providers", providerId: id, err: error },
+        "the saved provider could not be checked",
+      );
+    }
+  }
+
   /** `keySet` is never trusted from the row; it is what the keychain says right now. */
   async function withKeySet(provider: Provider): Promise<Provider> {
     const key = await secrets.get(scope, providerSecretKey(provider.id));
@@ -317,9 +346,13 @@ export function createProviderService(
     found: { status: ProviderState; message?: string },
     at: string,
   ): Promise<void> {
+    // [audit P-18] A provider's error text can echo what it was sent — a key in a URL, a header —
+    // and it is stored, announced and shown, so it is masked before any of that (BR-07).
+    const message =
+      found.message === undefined ? undefined : maskSecrets(found.message);
     const updated = await repository.providers.update(scope, id, {
       status: found.status,
-      statusMessage: found.message ?? null,
+      statusMessage: message ?? null,
       lastCheckedAt: at,
       updatedAt: at,
     });
@@ -331,7 +364,7 @@ export function createProviderService(
       payload: {
         providerId: id,
         status: found.status,
-        ...(found.message === undefined ? {} : { message: found.message }),
+        ...(message === undefined ? {} : { message }),
       },
     });
   }
@@ -382,6 +415,12 @@ export function createProviderService(
           );
         }
       }
+
+      // [audit P-10] Its status, and its models when it answers, arrive with it.
+      if (checksOnSave(input.type)) {
+        await checkAfterSave(id, false);
+        return (await service.get(id)) ?? provider;
+      }
       return provider;
     },
 
@@ -420,6 +459,15 @@ export function createProviderService(
       // The gate is sized from the row, so a changed limit has to drop the old one.
       if (patch.concurrency !== undefined) gates.delete(id);
 
+      // [audit P-10] A new key or address is asked at once, and lists its own models.
+      const rotated = patch.apiKey !== undefined && patch.apiKey !== "";
+      const moved =
+        patch.baseUrl !== undefined && patch.baseUrl !== existing.baseUrl;
+      if (updated !== null && (rotated || moved) && checksOnSave(updated.type)) {
+        await checkAfterSave(id, true);
+        return service.get(id);
+      }
+
       return updated === null ? null : withKeySet(updated);
     },
 
@@ -450,10 +498,12 @@ export function createProviderService(
 
       // The nodes are deliberately left pointing at a provider that is gone: `validate` reports
       // `provider_missing` on each of them, which is what FR-PRV-005 asks the user to see.
+      const removed = await repository.providers.get(scope, id);
       await repository.models.deleteForProvider(scope, id);
       await secrets.delete(scope, providerSecretKey(id));
       await repository.providers.delete(scope, id);
       gates.delete(id);
+      if (removed?.type === "ollama") localRemoved = true;
 
       logger.info(
         {
@@ -503,7 +553,10 @@ export function createProviderService(
 
       return {
         status: status.status,
-        ...(status.message === undefined ? {} : { message: status.message }),
+        // Masked as `storeStatus` masks it [audit P-18].
+        ...(status.message === undefined
+          ? {}
+          : { message: maskSecrets(status.message) }),
         ...(status.latencyMs === undefined
           ? {}
           : { latencyMs: status.latencyMs }),
@@ -546,12 +599,11 @@ export function createProviderService(
       try {
         discovered = await adapter.listModels();
       } catch (error) {
-        // A provider that cannot list is exactly what the manifest exists for (FR-MOD-002) — but
-        // the reason is reported, never swallowed (D286).
+        // The reason is reported, never swallowed (D286).
         warning = maskSecrets(classifyError(error, { providerId: id }).message);
         logger.warn(
           { subsystem: "providers", providerId: id, err: error },
-          "model discovery failed; falling back to the manifest",
+          "model discovery failed",
         );
       }
 
@@ -565,11 +617,16 @@ export function createProviderService(
       );
 
       /*
-       * D286: nothing to fall back on — a CLI has no manifest — so the models it last listed stay,
-       * each marked unavailable with the reason. A node naming one is refused with that reason
-       * rather than the model vanishing, and no model is ever offered that nothing vouched for.
+       * D286: the models it last listed stay, each marked unavailable with the reason. A node
+       * naming one is refused with that reason rather than the model vanishing, and no model is
+       * ever offered that nothing vouched for. [audit P-5] This holds for a provider with a
+       * manifest too: swapping a listed catalogue for the manifest dropped what the key really
+       * offers, and what the person set on those models (D380). Only a catalogue the provider never
+       * listed — empty, or the manifest itself — falls back to the manifest (FR-MOD-002); a CLI
+       * has none, so it keeps what it has.
        */
-      if (warning !== undefined && manifest.length === 0) {
+      const listedBefore = existing.some((model) => model.source === "discovered");
+      if (warning !== undefined && (listedBefore || manifest.length === 0)) {
         const models: Model[] = existing.map((model) => ({
           ...model,
           available: false,
@@ -630,8 +687,9 @@ export function createProviderService(
     async detect() {
       const found = await factory.detect();
       // PG-1.4 (D359): an Ollama that answers is added; one installed but stopped is started, in
-      // the background — detection must never hold the UI up.
-      if (autoLocal && local !== undefined) {
+      // the background — detection must never hold the UI up. Not after the person removed it
+      // [audit P-13]: every visit to the Providers page detects.
+      if (autoLocal && local !== undefined && !localRemoved) {
         if (found.ollama?.detected === true) {
           try {
             await addLocalIfMissing(await local.status());
@@ -690,6 +748,8 @@ export function createProviderService(
 
     async ensureLocalRuntime() {
       if (local === undefined) return service.localRuntime();
+      // Asked for outright (or at start): the runtime is wanted again [audit P-13].
+      localRemoved = false;
       const probe = await local.ensureRunning();
       if (probe.running) {
         const existing = (await repository.providers.list(scope)).find(

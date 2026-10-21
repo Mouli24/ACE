@@ -200,6 +200,44 @@ describe("D286 refreshing a catalog keeps the provider’s own word", () => {
     ]);
     expect(warning).toContain("connection refused");
   });
+
+  it("audit P-5 a provider with a manifest keeps what it listed when a refresh fails — the manifest does not replace it", async () => {
+    manifest = [
+      {
+        ...text("gpt-x"),
+        pricing: { inputPer1k: 0.001, outputPer1k: 0.002, priceTableVersion: "v1" },
+      },
+    ];
+    listing = async () => [text("gpt-live", { contextWindow: 8192 })];
+    const provider = await service.create({
+      type: "openai",
+      name: "OpenAI",
+      concurrency: 1,
+      apiKey: "k",
+    });
+    await service.refreshModels(provider.id);
+    await service.setModelCapabilities(provider.id, "gpt-live", {
+      supportsTools: true,
+    });
+    const before = await service.listModels({ providerId: provider.id });
+
+    listing = async () => {
+      throw new Error("connection refused");
+    };
+    const { models, warning } = await service.refreshModels(provider.id);
+
+    expect(warning).toContain("connection refused");
+    expect(
+      models.map((m) => [m.modelId, m.available, m.unavailableReason]),
+    ).toEqual(before.map((m) => [m.modelId, false, warning]));
+    // The row id and what the person set on it (D380) both survive.
+    const live = models.find((m) => m.modelId === "gpt-live");
+    expect(live).toMatchObject({
+      id: before.find((m) => m.modelId === "gpt-live")?.id,
+      supportsTools: true,
+      capabilitiesSetByPerson: true,
+    });
+  });
 });
 
 describe("D286 a CLI provider arrives with its models", () => {

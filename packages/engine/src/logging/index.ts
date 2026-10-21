@@ -34,6 +34,8 @@ export function redactSecrets(value: unknown, depth = 0): unknown {
     return value.map((item) => redactSecrets(item, depth + 1));
   }
 
+  if (value instanceof Error) return redactError(value, depth);
+
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(value)) {
@@ -44,6 +46,25 @@ export function redactSecrets(value: unknown, depth = 0): unknown {
   }
 
   return value;
+}
+
+/**
+ * An error as a plain object, every part masked [audit P-9]. `message` and `stack` are not
+ * enumerable, so walking an `Error` like any other object logged it as `{}` — and the redaction runs
+ * before pino's own error serializer, which then had nothing left to read.
+ */
+function redactError(error: Error, depth: number): Record<string, unknown> {
+  // Its enumerable fields too — a `status`, a `nodeError` — walked like any object's.
+  const fields = redactSecrets(Object.fromEntries(Object.entries(error)), depth);
+  const { code } = error as { code?: unknown };
+  return {
+    ...(fields as Record<string, unknown>),
+    type: error.name,
+    message: redactSecrets(error.message, depth + 1),
+    ...(error.stack === undefined ? {} : { stack: redactSecrets(error.stack, depth + 1) }),
+    ...(code === undefined ? {} : { code: redactSecrets(code, depth + 1) }),
+    ...(error.cause === undefined ? {} : { cause: redactSecrets(error.cause, depth + 1) }),
+  };
 }
 
 export interface CreateLoggerOptions {
@@ -65,6 +86,9 @@ export function createLogger({ level = 'info', destination }: CreateLoggerOption
         // Runs for every line, including those from child loggers.
         log: (object) => redactSecrets(object) as Record<string, unknown>,
       },
+      // `err` arrives already serialised and masked by `redactSecrets`; pino's own serializer would
+      // re-read it as an error and stamp it `type: "Object"` [audit P-9].
+      serializers: { err: (value: unknown) => value },
       hooks: {
         logMethod(args, method) {
           // The message string is not part of `formatters.log`, so mask it separately.
