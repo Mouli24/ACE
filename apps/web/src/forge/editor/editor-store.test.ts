@@ -8,6 +8,19 @@ const editor = () => store().projects[P];
 
 beforeEach(() => useEditorStore.setState({ projects: {} }));
 
+describe('[audit F-13] a deleted project is forgotten', () => {
+  it('its tabs and unsaved buffers go, so nothing is left to ask about; other projects stay', () => {
+    store().open(P, 'a.ts');
+    store().setDirty(P, 'a.ts', true);
+    store().open('p2', 'b.ts');
+    expect(hasUnsavedWork(store())).toBe(true);
+    store().forget(P);
+    expect(editor()).toBeUndefined();
+    expect(hasUnsavedWork(store())).toBe(false);
+    expect(store().projects['p2']?.tabs).toEqual(['b.ts']);
+  });
+});
+
 describe('D299 FR-GIT-004 the editor’s tabs', () => {
   it('a preview open replaces the previous preview; a pinned open stays', () => {
     store().open(P, 'a.ts', { preview: true });

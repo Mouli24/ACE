@@ -238,6 +238,14 @@ export function disposeModel(projectId: string, path: string): void {
   announce(projectId, path, false);
 }
 
+/** [audit F-13] A deleted project's models all go, with their unsaved text and places. */
+export function disposeProject(projectId: string): void {
+  for (const key of [...entries.keys()]) {
+    const [owner, path = ''] = key.split('\u0000');
+    if (owner === projectId) disposeModel(projectId, path);
+  }
+}
+
 /** Tests only. */
 export function resetModels(): void {
   for (const entry of entries.values()) {

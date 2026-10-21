@@ -92,6 +92,8 @@ interface EditorState {
   /** Show a place in a file; a review showing gives the editor area back (fix F-M2). */
   revealAt(projectId: string, reveal: Reveal): void;
   revealDone(projectId: string): void;
+  /** [audit F-13] The project is gone: its tabs and unsaved state go too. */
+  forget(projectId: string): void;
 }
 
 /**
@@ -238,6 +240,12 @@ export const useEditorStore = create<EditorState>()((set) => {
       update(projectId, (editor) => ({ ...editor, reveal }));
     },
     revealDone: (projectId) => update(projectId, (editor) => ({ ...editor, reveal: undefined })),
+    forget: (projectId) =>
+      set((state) => {
+        if (state.projects[projectId] === undefined) return state;
+        const { [projectId]: _gone, ...projects } = state.projects;
+        return { projects };
+      }),
   };
 });
 

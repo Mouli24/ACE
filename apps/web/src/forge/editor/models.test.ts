@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { asMonaco, createFakeMonaco } from '../../test/fake-monaco';
 import {
   disposeModel,
+  disposeProject,
   ensureModel,
   fileUri,
   getModel,
@@ -115,6 +116,27 @@ describe('[audit F-2] the disk’s text lands as an edit, never a reset', () => 
     replaceContent(P, 'a.ts', 'a\r\nb\r\nc');
     expect(model.getValue()).toBe('a\r\nb\r\nc');
     expect(model.getEOL()).toBe('\r\n');
+  });
+});
+
+describe('[audit F-13] a deleted project’s models go', () => {
+  it('disposes every model of the project, and only those', () => {
+    const closed = vi.fn();
+    const off = onRegistryChange((projectId, path, open) => {
+      if (!open) closed(projectId, path);
+    });
+    const a = ensureModel(P, 'a.ts', 'x', 'plaintext', () => undefined);
+    const b = ensureModel(P, 'src/b.ts', 'y', 'plaintext', () => undefined);
+    const other = ensureModel('p2', 'a.ts', 'z', 'plaintext', () => undefined);
+    disposeProject(P);
+    off();
+    expect(a.isDisposed() && b.isDisposed()).toBe(true);
+    expect(getModel(P, 'a.ts')).toBeUndefined();
+    expect(other.isDisposed()).toBe(false);
+    expect(closed.mock.calls).toEqual([
+      [P, 'a.ts'],
+      [P, 'src/b.ts'],
+    ]);
   });
 });
 
