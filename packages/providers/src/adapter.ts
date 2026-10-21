@@ -120,13 +120,22 @@ function kindForStatus(status: number): { kind: ErrorKind; retryable: boolean } 
   return { kind: 'invalid_config', retryable: false };
 }
 
+/**
+ * A 400 that is really a refused key [audit P-7]: Google answers a bad key with
+ * `400 INVALID_ARGUMENT "API key not valid"`, which as `invalid_config` left the provider UNKNOWN.
+ */
+const REFUSED_KEY_MESSAGE = /api[ _-]?key not valid|API_KEY_INVALID|invalid[ _-]api[ _-]key/i;
+
 /** Build the NodeError an HTTP status deserves (Arch §28). */
 export function statusToNodeError(
   status: number,
   message: string,
   context: ErrorContext = {},
 ): NodeError {
-  const { kind, retryable } = kindForStatus(status);
+  const { kind, retryable } =
+    status === 400 && REFUSED_KEY_MESSAGE.test(message)
+      ? { kind: 'auth' as const, retryable: false }
+      : kindForStatus(status);
 
   return {
     kind,

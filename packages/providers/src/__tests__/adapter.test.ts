@@ -36,6 +36,14 @@ describe('Arch §28 HTTP status maps to an ACE error kind', () => {
     expect(error.retryable).toBe(false);
   });
 
+  it('audit P-7 treats a 400 that says the key is not valid as auth, as Google sends it', () => {
+    const error = statusToNodeError(400, 'API key not valid. Please pass a valid API key.');
+
+    expect(error.kind).toBe('auth');
+    expect(error.retryable).toBe(false);
+    expect(statusToNodeError(400, 'model not found').kind).toBe('invalid_config');
+  });
+
   it('keeps the upstream message and the provider it came from', () => {
     const error = statusToNodeError(503, 'service unavailable', { providerId: PROVIDER_ID });
 

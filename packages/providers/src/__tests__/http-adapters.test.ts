@@ -71,6 +71,29 @@ describe('TC-PRV-003 a wrong key is reported as AUTH_FAILED', () => {
 
     expect((await createGoogleAdapter({ apiKey: 'wrong' }).check()).status).toBe('AUTH_FAILED');
   });
+
+  it('audit P-7 google, which refuses a bad key with 400 INVALID_ARGUMENT', async () => {
+    server.use(
+      http.get('https://generativelanguage.googleapis.com/v1beta/models', () =>
+        HttpResponse.json(
+          {
+            error: {
+              code: 400,
+              message: 'API key not valid. Please pass a valid API key.',
+              status: 'INVALID_ARGUMENT',
+              details: [{ reason: 'API_KEY_INVALID', domain: 'googleapis.com' }],
+            },
+          },
+          { status: 400 },
+        ),
+      ),
+    );
+
+    const status = await createGoogleAdapter({ apiKey: 'wrong' }).check();
+
+    expect(status.status).toBe('AUTH_FAILED');
+    expect(status.message).toContain('API key not valid');
+  });
 });
 
 describe('TC-PRV-004 a dead endpoint is reported as UNREACHABLE', () => {
