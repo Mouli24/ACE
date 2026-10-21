@@ -127,6 +127,23 @@ describe('FR-GIT-003 listing a folder', () => {
     ]);
   });
 
+  it("[audit F-8] lists a large folder whole and in order, its entries stat'ed a few at a time", async () => {
+    for (let i = 0; i < 150; i += 1) put(`f${i}.txt`, 'x'.repeat(i % 7));
+    for (let i = 0; i < 20; i += 1) put(`d${i}/inner.txt`);
+
+    const listing = await listFolder(project, '');
+
+    expect(listing.items).toHaveLength(170);
+    expect(listing.items.slice(0, 3).map((e) => e.name)).toEqual(['d0', 'd1', 'd2']);
+    expect(listing.items.slice(19, 23).map((e) => e.name)).toEqual([
+      'd19',
+      'f0.txt',
+      'f1.txt',
+      'f2.txt',
+    ]);
+    expect(listing.items.at(-1)).toMatchObject({ name: 'f149.txt', kind: 'file', size: 149 % 7 });
+  });
+
   it('answers not_found for a missing folder and invalid_path for a file', async () => {
     put('a.txt');
     expect((await refusal(listFolder(project, 'nope'))).code).toBe('not_found');
