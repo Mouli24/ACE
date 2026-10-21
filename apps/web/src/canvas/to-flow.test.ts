@@ -47,3 +47,25 @@ describe('FR-EXE-015 toFlowEdges gives a data edge its provider accent', () => {
     expect(flow?.data).not.toHaveProperty('accent');
   });
 });
+
+describe('[audit L-4] an edge is named by its nodes, never by their ids', () => {
+  it('reads "Connection from <name> to <name>", and a loop "Loop from … back to …"', () => {
+    const writer = { ...withProvider('agent', OPENAI), name: 'Writer' };
+    const reviewer = { ...withProvider('agent', ANTHROPIC), name: 'Reviewer' };
+    const [data] = toFlowEdges([edge(writer, reviewer)], [writer, reviewer], undefined, providers);
+    expect(data?.ariaLabel).toBe('Connection from Writer to Reviewer');
+
+    const loop: Edge = {
+      ...edge(reviewer, writer),
+      kind: 'loop',
+      loop: {
+        maxIterations: 3,
+        exitCondition: { path: 'verdict', equals: 'ok' },
+        onMax: 'continue',
+      },
+    };
+    const [back] = toFlowEdges([loop], [writer, reviewer], undefined, providers);
+    expect(back?.ariaLabel).toBe('Loop from Reviewer back to Writer');
+    expect(back?.ariaLabel).not.toContain(writer.id);
+  });
+});

@@ -120,6 +120,9 @@ export function toFlowNodes(
  *
  * A `kind: 'order'` edge ("run after", D373) is not handed to React Flow at all: it has no ports
  * for React Flow to attach it to. `OrderEdgeLayer` draws it from card to card instead.
+ *
+ * [audit L-4] Each edge is named by its nodes' names ("Connection from Writer to Reviewer"):
+ * without `ariaLabel`, React Flow names it "Edge from <id> to <id>", which reads out two ULIDs.
  */
 export function toFlowEdges(
   edges: readonly Edge[],
@@ -129,6 +132,8 @@ export function toFlowEdges(
 ): AceAnyFlowEdge[] {
   const portType = new Map<string, Port['dataType']>();
   for (const node of nodes) for (const port of node.outputs) portType.set(port.id, port.dataType);
+  const nameOf = new Map(nodes.map((node): [string, string] => [node.id, node.name || 'a node']));
+  const named = (nodeId: string): string => nameOf.get(nodeId) ?? 'a node';
   const typeById = providerTypes(providers);
   const accentOf = new Map<string, ProviderType>();
   for (const node of nodes) {
@@ -144,6 +149,10 @@ export function toFlowEdges(
       sourceHandle: edge.from.portId,
       target: edge.to.nodeId,
       targetHandle: edge.to.portId,
+      ariaLabel:
+        edge.kind === 'loop'
+          ? `Loop from ${named(edge.from.nodeId)} back to ${named(edge.to.nodeId)}`
+          : `Connection from ${named(edge.from.nodeId)} to ${named(edge.to.nodeId)}`,
     };
     // A loop edge with no config cannot exist on the engine (BR-05), but a stale cache could hold
     // one; it is drawn as the data edge it structurally is rather than crashing the Canvas.
