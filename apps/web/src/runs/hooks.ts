@@ -287,7 +287,8 @@ export function useRerunNode() {
  * engine says what is pending (BR-01).
  */
 export function useApprovals(runId: Id | undefined, extraRevision?: number) {
-  const revision = useRunStore((store) => store.revision);
+  // [audit W-3] not `revision`: that moves on every streamed token, and each move was a refetch
+  const revision = useRunStore((store) => store.approvalRevision);
   return useQuery({
     queryKey: [
       ...queryKeys.approvals(runId ?? ''),

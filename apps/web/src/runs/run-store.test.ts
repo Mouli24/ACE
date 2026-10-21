@@ -272,3 +272,42 @@ describe('[audit W-5] a run blocked mid-run, and one that stays open (D305, D323
     expect(useRunStore.getState().allowedActions).toEqual(['pause', 'stop', 'restart', 'end']);
   });
 });
+
+describe('[audit W-3/W-4] narrow revisions: a token moves none of them', () => {
+  beforeEach(() => useRunStore.getState().reset());
+
+  const revisions = () => {
+    const { approvalRevision, edgeRevision, eventRevision } = useRunStore.getState();
+    return { approvalRevision, edgeRevision, eventRevision };
+  };
+
+  it('tokens leave approvals, edges and events alone; their own frames move each', () => {
+    const store = useRunStore.getState();
+    store.begin(WF, RUN, 'RUNNING');
+    store.apply(state(1, 'RUNNING'));
+    const before = revisions();
+    store.apply(token('a'));
+    store.apply(token('b'));
+    expect(revisions()).toEqual(before);
+
+    store.apply(state(2, 'COMPLETED'));
+    const afterState = revisions();
+    expect(afterState.edgeRevision).not.toBe(before.edgeRevision);
+    expect(afterState.eventRevision).not.toBe(before.eventRevision);
+    expect(afterState.approvalRevision).toBe(before.approvalRevision);
+
+    store.apply({ seq: 3, type: 'run.paused', payload: { runId: RUN } } as ServerFrame);
+    const afterRun = revisions();
+    expect(afterRun.approvalRevision).not.toBe(afterState.approvalRevision);
+    expect(afterRun.edgeRevision).toBe(afterState.edgeRevision);
+  });
+
+  it('a new fold (arm, adopt, reset) moves all three', () => {
+    const before = revisions();
+    useRunStore.getState().arm(WF);
+    const armed = revisions();
+    expect(armed.approvalRevision).not.toBe(before.approvalRevision);
+    expect(armed.edgeRevision).not.toBe(before.edgeRevision);
+    expect(armed.eventRevision).not.toBe(before.eventRevision);
+  });
+});

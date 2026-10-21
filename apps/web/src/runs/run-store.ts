@@ -17,7 +17,12 @@ import type {
   Usage,
   Verdict,
 } from '@ace/contracts';
-import { EDGE_TRANSFER_SUMMARY_MAX, allowedRunActions, estimatePartsTokens } from '@ace/contracts';
+import {
+  EDGE_TRANSFER_SUMMARY_MAX,
+  allowedRunActions,
+  estimatePartsTokens,
+  isPersistedFrame,
+} from '@ace/contracts';
 import {
   RunEventBuffer,
   type EdgeTransferView,
@@ -55,6 +60,19 @@ interface RunOverlayState {
   finalOutput: Record<Id, Part[]> | undefined;
   /** Bumped on every applied frame; the cheap way to invalidate the derived selectors. */
   revision: number;
+  /**
+   * [audit W-3] Moves only on an approval frame (`node.approval_*`) or a run frame (`run.*`) — what
+   * can change the approvals still waiting — so they are not refetched once per streamed token.
+   */
+  approvalRevision: number;
+  /**
+   * [audit W-4] Moves only on the frames that change how an edge is drawn: `node.state` (a loop's
+   * iteration, D390's flow states), `loop.iteration` and `edge.transfer`. The Canvas keys its edges
+   * on this rather than on `revision`, so a token does not rebuild every edge.
+   */
+  edgeRevision: number;
+  /** [audit W-4] Moves only on a persisted frame — what the Events tab lists. */
+  eventRevision: number;
   /**
    * How many node runs have reached a terminal state (Arch §19.1). It moves a handful of times per
    * run rather than once per token, which makes it the right thing to key a refetch on.
@@ -179,6 +197,16 @@ function deliverySummary(reads: readonly Part[]): string {
 
 const IDLE: NodeState = 'IDLE';
 
+/**
+ * [audit W-3/W-4] Where the narrow revisions come from: one rising number, so every arm, adopt and
+ * reset moves them too (a new fold is always a change) and no two folds ever share a value.
+ */
+let revisions = 0;
+const nextRevision = (): number => ++revisions;
+
+/** Frames that change how an edge is drawn (FR-PAR-005 loop chips, D390 flow states). */
+const EDGE_FRAMES: ReadonlySet<string> = new Set(['node.state', 'loop.iteration', 'edge.transfer']);
+
 /** A run that still takes controls: going, paused, or blocked mid-run with a reason (D305). */
 const isLive = (status: RunState, blockedReason: BlockedReason | undefined): boolean =>
   status === 'RUNNING' ||
@@ -211,6 +239,9 @@ export const useRunStore = create<RunOverlayState>((set) => ({
   totals: undefined,
   finalOutput: undefined,
   revision: 0,
+  approvalRevision: 0,
+  edgeRevision: 0,
+  eventRevision: 0,
   settledCount: 0,
   active: false,
   workflowId: undefined,
@@ -237,6 +268,9 @@ export const useRunStore = create<RunOverlayState>((set) => ({
       totals: undefined,
       finalOutput: undefined,
       revision: 0,
+      approvalRevision: nextRevision(),
+      edgeRevision: nextRevision(),
+      eventRevision: nextRevision(),
       settledCount: 0,
       active: true,
     });
@@ -391,6 +425,9 @@ export const useRunStore = create<RunOverlayState>((set) => ({
       totals: run.totals,
       finalOutput: run.finalOutput,
       revision: 1,
+      approvalRevision: nextRevision(),
+      edgeRevision: nextRevision(),
+      eventRevision: nextRevision(),
       settledCount: view.nodeRuns().filter((nodeRun) => TERMINAL.has(nodeRun.status)).length,
       active: isLive(run.status, run.blockedReason),
     });
@@ -418,6 +455,12 @@ export const useRunStore = create<RunOverlayState>((set) => ({
         totals: view.totals,
         finalOutput: view.finalOutput,
         revision: state.revision + 1,
+        approvalRevision:
+          frame.type.startsWith('node.approval_') || frame.type.startsWith('run.')
+            ? nextRevision()
+            : state.approvalRevision,
+        edgeRevision: EDGE_FRAMES.has(frame.type) ? nextRevision() : state.edgeRevision,
+        eventRevision: isPersistedFrame(frame) ? nextRevision() : state.eventRevision,
         // [audit W-5] a run blocked mid-run is still live (D305): it waits for Resume or Stop
         active: view.status === undefined ? state.active : isLive(view.status, view.blockedReason),
       };
@@ -439,6 +482,9 @@ export const useRunStore = create<RunOverlayState>((set) => ({
       totals: undefined,
       finalOutput: undefined,
       revision: 0,
+      approvalRevision: nextRevision(),
+      edgeRevision: nextRevision(),
+      eventRevision: nextRevision(),
       settledCount: 0,
       active: false,
       workflowId: undefined,

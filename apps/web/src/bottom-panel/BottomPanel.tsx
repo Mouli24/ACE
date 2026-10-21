@@ -1,5 +1,6 @@
 import { Badge, Icons, Tabs, TabsContent, TabsList, TabsTrigger } from '@ace/ui';
 import { useMemo } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import { usePanelsStore, type BottomTab } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
@@ -32,15 +33,30 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
    * attempt the overlay does not carry. Both agree — the fold is the same events the records were
    * written from (BR-01).
    */
-  const run = useRunStore((store) => (store.workflowId === workflowId ? store : undefined));
+  // [audit W-4] the fields this panel shows, not the whole store, which changes on every token
+  const run = useRunStore(
+    useShallow((store) =>
+      store.workflowId === workflowId
+        ? { runId: store.runId, haltReason: store.haltReason, budgetHalt: store.budgetHalt }
+        : undefined,
+    ),
+  );
   const runId = run?.runId;
-  const revision = useRunStore((store) => store.revision);
+  // what the Events tab lists moves only on a persisted frame, never on a token
+  const eventRevision = useRunStore((store) =>
+    store.workflowId === workflowId ? store.eventRevision : undefined,
+  );
   const nodeRuns = useNodeRuns(runId);
 
   const events = useMemo(
-    () => (run === undefined ? [] : run.events().map((event) => ({ event }))),
-    // `revision` is what changes when a frame lands; the store object itself is stable.
-    [run, revision],
+    () =>
+      eventRevision === undefined
+        ? []
+        : useRunStore
+            .getState()
+            .events()
+            .map((event) => ({ event })),
+    [eventRevision],
   );
 
   /** A `NodeRun` record keys itself `id`; the tab asks for `nodeRunId`, so the two are joined here. */

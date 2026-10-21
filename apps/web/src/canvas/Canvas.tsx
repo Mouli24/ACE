@@ -977,11 +977,11 @@ function CanvasInner({
   );
 
   /*
-   * The loop chip's numbers (FR-PAR-005). `revision` is what moves when a frame lands, and a loop
-   * iteration is a handful of frames per run — so reading it here costs one extra edge rebuild per
-   * iteration, not one per token.
+   * The loop chip's numbers (FR-PAR-005). [audit W-4] `edgeRevision` moves only on the frames that
+   * change an edge (`node.state`, `loop.iteration`, `edge.transfer`) — a handful per run — so the
+   * whole Canvas no longer re-renders on every streamed token, as it did keyed on `revision`.
    */
-  const runRevision = useRunStore((store) => store.revision);
+  const runRevision = useRunStore((store) => store.edgeRevision);
   // PG-4.2: a paused run, or one held on a WAITING node, is still live — not idle.
   const runIsLive = useRunStore(
     (store) =>
