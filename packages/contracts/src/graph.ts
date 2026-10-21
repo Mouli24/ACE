@@ -122,6 +122,15 @@ export const DEFAULT_EXECUTION_SETTINGS = {
   retries: 2,
 } as const;
 
+/**
+ * D389: how hard a reasoning model should think before it answers. Absent or `null` (how a patch
+ * clears it, D72) leaves the provider's own default — the call is exactly what it was before. Each
+ * adapter maps the level to its own control and ignores it where it has none (Gemini CLI, mock).
+ */
+export const REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export const ReasoningEffortSchema = z.enum(REASONING_EFFORTS);
+export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
+
 export const ExecutionSettingsSchema = z.object({
   temperature: z.number().min(0).max(2).default(DEFAULT_EXECUTION_SETTINGS.temperature),
   maxTokens: z.number().int().min(1).max(200_000).default(DEFAULT_EXECUTION_SETTINGS.maxTokens),
@@ -133,6 +142,8 @@ export const ExecutionSettingsSchema = z.object({
    * unknown cost (D359) is never refused. Absent or `null` (how a patch clears it, D72): no cap.
    */
   maxCostUsd: BudgetUsdSchema.nullable().optional(),
+  /** D389: the node's reasoning effort; absent or `null` = the provider's default. */
+  reasoningEffort: ReasoningEffortSchema.nullable().optional(),
 });
 export type ExecutionSettings = z.infer<typeof ExecutionSettingsSchema>;
 

@@ -7,6 +7,7 @@ import type {
   Provider,
   ProviderState,
   ProviderType,
+  ReasoningEffort,
   ToolDefinition,
   WorkspaceAccess,
 } from '@ace/contracts';
@@ -103,6 +104,11 @@ export interface GenerateRequest {
   jsonSchema?: Record<string, unknown>;
   maxTokens?: number;
   temperature?: number;
+  /**
+   * D389: the node's reasoning effort. Absent means the provider's default — an adapter sends
+   * nothing then, so the call is what it was before. An adapter with no such control ignores it.
+   */
+  reasoningEffort?: ReasoningEffort;
   /**
    * The tools the agent has enabled for this call (round 4 §2.6, FR-TOOL-003). When present, an
    * adapter that supports tools may answer with `tool_call` chunks instead of a final answer; when

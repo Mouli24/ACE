@@ -601,6 +601,13 @@ export function createAceClient(options: AceClientOptions) {
     /** Answers the **new** run, which carries `restartedFromRunId` (FR-CTL-004). */
     restartRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/restart`, RunSchema),
     /**
+     * D388: carry on a run that was cut off (HALTED crash/shutdown/stopped) — every interrupted
+     * node runs again with its downstream, in one drive of the same run; what finished is kept.
+     * 409 `invalid_run_state` otherwise, `nothing_to_continue` when nothing was cut off.
+     */
+    continueRun: (runId: Id): Promise<Run> =>
+      request('POST', `/runs/${runId}/continue`, RunSchema),
+    /**
      * PG-5.4: replay a finished run — a **new** run with `replayOf`, answered from this run's
      * recorded node outputs with zero provider calls. 409 `invalid_run_state` unless COMPLETE or
      * HALTED.

@@ -307,6 +307,58 @@ export const NodeRunSchema = z.object({
 export type NodeRun = z.infer<typeof NodeRunSchema>;
 
 /* -------------------------------------------------------------------------- */
+/* Continuing an interrupted run (D388)                                        */
+/* -------------------------------------------------------------------------- */
+
+/** How a run must have halted for `POST /runs/:id/continue`: cut off, not failed or over budget. */
+export const CONTINUABLE_HALT_REASONS = ['crash', 'shutdown', 'stopped'] as const;
+
+/** D379: the codes an agentic step left BLOCKED by an engine restart carries. */
+export const INTERRUPTED_ERROR_CODES = ['engine_restarted', 'approval_lost'] as const;
+
+/**
+ * A node run that was cut off rather than finished: STOPPED, or BLOCKED by an engine restart under
+ * it (D379). A BLOCKED row whose upstream failed is not — it never started.
+ */
+export function isInterruptedNodeRun(nodeRun: Pick<NodeRun, 'status' | 'error'>): boolean {
+  if (nodeRun.status === 'STOPPED') return true;
+  return (
+    nodeRun.status === 'BLOCKED' &&
+    (INTERRUPTED_ERROR_CODES as readonly string[]).includes(nodeRun.error?.code ?? '')
+  );
+}
+
+/**
+ * The latest attempt of each `node:iteration` that was interrupted — what a continue runs again.
+ * Earlier attempts are history; a node whose latest attempt finished is never picked.
+ */
+export function interruptedNodeRuns<
+  T extends Pick<NodeRun, 'nodeId' | 'iteration' | 'attempt' | 'status' | 'error'>,
+>(nodeRuns: readonly T[]): T[] {
+  const latest = new Map<string, T>();
+  for (const row of nodeRuns) {
+    const key = `${row.nodeId}:${row.iteration}`;
+    const seen = latest.get(key);
+    if (seen === undefined || row.attempt > seen.attempt) latest.set(key, row);
+  }
+  return [...latest.values()].filter(isInterruptedNodeRun);
+}
+
+/**
+ * D388: whether `POST /runs/:id/continue` would be accepted. The engine enforces the same rule; the
+ * web app shows Continue from it, because `continue` is deliberately not a `RUN_ACTIONS` value (an
+ * older engine on the shared database would refuse a run carrying an action it does not know).
+ */
+export function canContinueRun(
+  run: Pick<Run, 'status' | 'haltReason'>,
+  nodeRuns: readonly Pick<NodeRun, 'nodeId' | 'iteration' | 'attempt' | 'status' | 'error'>[],
+): boolean {
+  if (run.status !== 'HALTED') return false;
+  if (!(CONTINUABLE_HALT_REASONS as readonly string[]).includes(run.haltReason ?? '')) return false;
+  return interruptedNodeRuns(nodeRuns).length > 0;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Starting a run                                                              */
 /* -------------------------------------------------------------------------- */
 
