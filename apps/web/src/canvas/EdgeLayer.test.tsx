@@ -5,7 +5,13 @@ import { act, render, screen } from '@testing-library/react';
 import { createNode } from '../nodes/factory';
 import { useRunStore } from '../runs/run-store';
 import { EdgeChip, EdgeLayer, EdgeStroke } from './EdgeLayer';
-import { FLOW_RECENT_MS, edgeFlowState, type EdgeFlow, type EdgeRunFacts } from './edge-flow';
+import {
+  FLOW_RECENT_MS,
+  edgeFlowState,
+  edgeFlowTitle,
+  type EdgeFlow,
+  type EdgeRunFacts,
+} from './edge-flow';
 import { toFlowEdges, toFlowNodes } from './to-flow';
 import { edgePath } from './viewport';
 
@@ -156,6 +162,24 @@ describe('D390 edges show run state: the flow-state mapping', () => {
     ],
   ])('%s → %s', (_what, given, recent, expected) => {
     expect(edgeFlowState(given, recent)).toBe(expected);
+  });
+
+  it('a finished source says its output is ready until the target takes it, and nothing sent once the target ran without it', () => {
+    const done = (targetState?: NodeState): EdgeRunFacts => ({
+      sourceState: 'COMPLETED',
+      targetState,
+    });
+    // A Merge waiting for every branch, or a run stopped before the target started.
+    expect(edgeFlowTitle('waiting', done(), 'Groq writer', 'All drafts')).toBe(
+      'ready: Groq writer finished; All drafts has not taken it yet',
+    );
+    expect(edgeFlowTitle('waiting', done('IDLE'), 'Groq writer', 'All drafts')).toBe(
+      'ready: Groq writer finished; All drafts has not taken it yet',
+    );
+    // The target ran on without it: a branch the source did not take.
+    expect(edgeFlowTitle('waiting', done('COMPLETED'), 'Router', 'Branch B')).toBe(
+      'nothing sent: Router finished without sending on this edge',
+    );
   });
 });
 

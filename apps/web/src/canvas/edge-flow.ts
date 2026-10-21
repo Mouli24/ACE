@@ -14,7 +14,8 @@ import { useRunStore } from '../runs/run-store';
  *   flowing    the source is RUNNING, or the     animated dashes
  *              transfer landed under 2 s ago
  *   waiting    the source has not finished       dim, static dashes
- *              (or finished and sent nothing on this edge — a branch it did not take)
+ *              (or finished and its target has not taken the output yet — a Merge that waits
+ *              for every branch; or finished and sent nothing — a branch it did not take)
  *   cut        the source ended FAILED, STOPPED  static dashes in the failed red
  *              or BLOCKED without delivering
  *
@@ -30,12 +31,17 @@ export const FLOW_RECENT_MS = 2_000;
 export interface EdgeRunFacts {
   /** The source node's state in the run (IDLE until the run reaches it). */
   sourceState: NodeState;
+  /** The target node's state in the run; undefined until the run reaches it. */
+  targetState?: NodeState | undefined;
   /** What crossed the edge, if anything: the engine's summary of the envelope. */
   summary?: string | undefined;
 }
 
 /** A source that ended without finishing: what it did not send never will be (Arch §19.1). */
 const CUT_STATES: ReadonlySet<NodeState> = new Set<NodeState>(['FAILED', 'STOPPED', 'BLOCKED']);
+
+/** A target that has not started: a finished source's output is still on its way to it. */
+const NOT_STARTED: ReadonlySet<NodeState> = new Set<NodeState>(['IDLE', 'READY', 'PAUSED']);
 
 /**
  * The flow state of a data edge. `facts` undefined: no run of this workflow is on show. `recent`:
@@ -58,6 +64,7 @@ export function edgeFlowTitle(
   flow: EdgeFlow,
   facts: EdgeRunFacts | undefined,
   sourceName: string,
+  targetName = 'the next node',
 ): string | undefined {
   if (facts === undefined || flow === 'none') return undefined;
   const state = facts.sourceState.toLowerCase();
@@ -71,9 +78,12 @@ export function edgeFlowTitle(
     case 'cut':
       return `cut off: ${sourceName} ${state}`;
     case 'waiting':
-      return facts.sourceState === 'COMPLETED'
-        ? `nothing sent: ${sourceName} finished without sending on this edge`
-        : `waiting: ${sourceName} is ${state}`;
+      if (facts.sourceState !== 'COMPLETED') return `waiting: ${sourceName} is ${state}`;
+      // The output is there; whether it is still to be taken depends on the target. A Merge that
+      // waits for every branch (or a run stopped before the target started) has not taken it yet.
+      return facts.targetState === undefined || NOT_STARTED.has(facts.targetState)
+        ? `ready: ${sourceName} finished; ${targetName} has not taken it yet`
+        : `nothing sent: ${sourceName} finished without sending on this edge`;
   }
 }
 
@@ -92,6 +102,7 @@ export function useEdgeFlow(
   sourceNodeId: Id,
   targetNodeId: Id,
   sourceName: string,
+  targetName?: string,
 ): { flow: EdgeFlow; title: string | undefined } {
   const seen = useRunStore(
     useShallow((store) => {
@@ -102,6 +113,7 @@ export function useEdgeFlow(
       return {
         on: true as const,
         sourceState: store.nodeRun(sourceNodeId)?.status ?? ('IDLE' as NodeState),
+        targetState: store.nodeRun(targetNodeId)?.status,
         summary: delivery?.summary,
         at: delivery?.at,
       };
@@ -126,8 +138,8 @@ export function useEdgeFlow(
   }, [at]);
 
   const facts: EdgeRunFacts | undefined = seen.on
-    ? { sourceState: seen.sourceState, summary: seen.summary }
+    ? { sourceState: seen.sourceState, targetState: seen.targetState, summary: seen.summary }
     : undefined;
   const flow = edgeFlowState(facts, recent);
-  return { flow, title: edgeFlowTitle(flow, facts, sourceName) };
+  return { flow, title: edgeFlowTitle(flow, facts, sourceName, targetName) };
 }

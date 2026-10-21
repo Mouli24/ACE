@@ -138,12 +138,14 @@ const RunEdgeStroke = memo(function RunEdgeStroke({
   sourceNodeId,
   targetNodeId,
   sourceName,
+  targetName,
   ...stroke
 }: Omit<EdgeStrokeProps, 'flow' | 'title'> & {
   workflowId: string;
   sourceNodeId: string;
   targetNodeId: string;
   sourceName: string;
+  targetName: string;
 }) {
   const { flow, title } = useEdgeFlow(
     workflowId,
@@ -151,6 +153,7 @@ const RunEdgeStroke = memo(function RunEdgeStroke({
     sourceNodeId,
     targetNodeId,
     sourceName,
+    targetName,
   );
   return <EdgeStroke {...stroke} flow={flow} title={title} />;
 });
@@ -585,7 +588,11 @@ export const EdgeLayer = memo(function EdgeLayer({
       const label = labelOf(edge);
       const run =
         source !== undefined && label.kind === 'data'
-          ? { workflowId: source.workflowId, sourceName: source.name || 'Untitled' }
+          ? {
+              workflowId: source.workflowId,
+              sourceName: source.name || 'Untitled',
+              targetName: target?.name || 'the next node',
+            }
           : undefined;
       return a && b ? [{ edge, a, b, label, run }] : [];
     });
@@ -660,6 +667,7 @@ export const EdgeLayer = memo(function EdgeLayer({
                 sourceNodeId={source}
                 targetNodeId={target}
                 sourceName={run.sourceName}
+                targetName={run.targetName}
               />
             ),
           )}
