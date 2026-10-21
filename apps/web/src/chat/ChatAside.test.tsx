@@ -8,11 +8,12 @@ import { useLayoutStore } from '../app/stores/layout';
 import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
 import { useWorkspaceStatus } from '../app/stores/workspace-status';
+import { newId } from '../lib/ulid';
 import { setChatScenario } from '../mocks/handlers-round4';
 import { createNode } from '../nodes/factory';
 import { ChatAside } from './ChatAside';
 import { useComposerChips } from './composer-chips';
-import { useChatSessions } from './session-store';
+import { oweTurn, useChatSessions } from './session-store';
 import {
   checkpoints,
   db,
@@ -394,6 +395,47 @@ describe('D335 "{name} is typing…" follows the real stream only', () => {
     act(() => useChatSessions.getState().settleThread(THREAD));
     expect(screen.queryByTestId('chat-streaming')).toBeNull();
     expect(screen.queryByText(/is typing…/)).toBeNull();
+  });
+});
+
+describe('D391 each sent message waits for its own reply', () => {
+  /** The engine took one more message for this node, behind any it still owes a reply. */
+  const oweNext = (nodeId: string, text: string) =>
+    useChatSessions
+      .getState()
+      .update(nodeId, (session) =>
+        oweTurn(
+          { ...session, threadId: THREAD },
+          { threadId: THREAD, userMessage: { ...userTurn(text), id: newId() }, since: Date.now() },
+        ),
+      );
+
+  it('says "N queued" while more than one turn is outstanding, and keeps Stop until the last reply', async () => {
+    const { workflowId, node } = seedAgentNode();
+    renderChat(<ChatAside workflowId={workflowId} />);
+    await waitFor(() => expect(conversation()).toHaveAttribute('data-node-id', node.id));
+    expect(screen.queryByTestId('chat-queued')).toBeNull();
+
+    // two messages back to back: the engine answers the first while the second waits its turn
+    act(() => {
+      oweNext(node.id, 'first');
+      oweNext(node.id, 'second');
+    });
+    expect(await screen.findByTestId('chat-queued')).toHaveTextContent('1 queued');
+    expect(screen.getByTestId('chat-stop')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-thinking')).toHaveTextContent('Writer is typing…');
+
+    // the first reply settles the first message only: the second still waits, Stop stays
+    act(() => useChatSessions.getState().settleReply(THREAD, newId()));
+    expect(screen.queryByTestId('chat-queued')).toBeNull();
+    expect(screen.getByTestId('chat-stop')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-thinking')).toHaveTextContent('Writer is typing…');
+
+    // the second reply: nothing is owed any more
+    act(() => useChatSessions.getState().settleReply(THREAD, newId()));
+    expect(screen.queryByTestId('chat-stop')).toBeNull();
+    expect(screen.queryByText(/is typing…/)).toBeNull();
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
   });
 });
 

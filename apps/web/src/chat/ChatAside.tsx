@@ -30,7 +30,7 @@ import { ChatComposer, type ChatRosterEntry } from './ChatComposer';
 import { ChatConversation } from './ChatConversation';
 import { ChatThreadList } from './ChatThreadList';
 import { useRestoreLastChat } from './last-chat';
-import { useChatSessions } from './session-store';
+import { owedTurns, useChatSessions } from './session-store';
 import { sendToNode, stopNode, useThreadConversation } from './useChat';
 import { isChatNode, useDropStaleChatTarget } from './workflow-target';
 
@@ -240,9 +240,14 @@ export function ChatAside({
   const sending = useChatSessions((state) =>
     target === undefined ? false : state.sessions[target.id]?.sending === true,
   );
-  // PG-1.6: a reply on its way in the shown session can be stopped from the composer.
+  // PG-1.6: a reply on its way in the shown session can be stopped from the composer — D391:
+  // until the last turn the session sent is answered, not just the first.
   const replying = useChatSessions((state) =>
     target === undefined ? false : state.sessions[target.id]?.pending !== undefined,
+  );
+  // D391: the turns sent after the one being answered, still in the engine's queue.
+  const queued = useChatSessions((state) =>
+    target === undefined ? 0 : Math.max(0, owedTurns(state.sessions[target.id] ?? {}).length - 1),
   );
 
   // One composer for the whole column, never remounted: switching nodes keeps the text typed so
@@ -254,6 +259,7 @@ export function ChatAside({
       roster={chatRoster}
       mainNodeId={target?.id}
       replying={replying}
+      queued={queued}
       onStop={() => {
         if (target !== undefined) void stopNode(queryClient, target.id);
       }}

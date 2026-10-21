@@ -15,7 +15,17 @@ import { useShallow } from 'zustand/react/shallow';
 import { api } from '../app/api';
 import { getSocket } from '../app/socket';
 import { chatKeys } from './keys';
-import { sessionOf, useChatSessions, type ChatRefusal, type NodeSession } from './session-store';
+import {
+  owedTurns,
+  oweTurn,
+  replyAnchor,
+  sessionOf,
+  useChatSessions,
+  withOwed,
+  type ChatRefusal,
+  type NodeSession,
+  type PendingTurn,
+} from './session-store';
 
 export type { ChatRefusal } from './session-store';
 
@@ -54,6 +64,10 @@ export function effectiveThreadId(
   if (session.fresh === true) return undefined;
   return session.threadId ?? threads?.[0]?.id;
 }
+
+/** D391: the turns this session owes on one thread, oldest first. */
+const owedOn = (session: NodeSession, threadId: string | undefined): PendingTurn[] =>
+  threadId === undefined ? [] : owedTurns(session).filter((turn) => turn.threadId === threadId);
 
 /**
  * Send one message to a node, in its current session (FR-CHAT-004/006/008, D285). Every outcome is
@@ -100,16 +114,18 @@ export async function sendToNode(
       verdicts: [],
       at: new Date().toISOString(),
     };
-    update(nodeId, ({ sending: _sending, fresh: _fresh, ...rest }) => ({
-      ...rest,
-      threadId: response.threadId,
-      pending: {
-        threadId: response.threadId,
-        userMessage,
-        speakerNodeId: targetNodeId ?? nodeId,
-        since: Date.now(),
-      },
-    }));
+    // D391: owed after whatever the session already owes — a second send queues behind the first.
+    update(nodeId, ({ sending: _sending, fresh: _fresh, ...rest }) =>
+      oweTurn(
+        { ...rest, threadId: response.threadId },
+        {
+          threadId: response.threadId,
+          userMessage,
+          speakerNodeId: targetNodeId ?? nodeId,
+          since: Date.now(),
+        },
+      ),
+    );
     void queryClient.invalidateQueries({ queryKey: chatKeys.threads(nodeId) });
   } catch (error) {
     let refusal: ChatRefusal | undefined;
@@ -160,25 +176,26 @@ export async function retryMessage(
       message.id,
       options.withoutUndo === true ? { withoutUndo: true } : {},
     );
-    useChatSessions.getState().update(nodeId, (session) => ({
-      ...session,
-      threadId: response.threadId,
-      pending: {
-        threadId: response.threadId,
-        // The question is already in the thread, so nothing is echoed for it.
-        userMessage: {
-          id: response.messageId,
+    useChatSessions.getState().update(nodeId, (session) =>
+      oweTurn(
+        { ...session, threadId: response.threadId },
+        {
           threadId: response.threadId,
-          role: 'user',
-          content: [],
-          verdicts: [],
-          at: new Date().toISOString(),
+          // The question is already in the thread, so nothing is echoed for it.
+          userMessage: {
+            id: response.messageId,
+            threadId: response.threadId,
+            role: 'user',
+            content: [],
+            verdicts: [],
+            at: new Date().toISOString(),
+          },
+          speakerNodeId: message.speakerNodeId ?? nodeId,
+          afterId: message.id,
+          since: Date.now(),
         },
-        speakerNodeId: message.speakerNodeId ?? nodeId,
-        afterId: message.id,
-        since: Date.now(),
-      },
-    }));
+      ),
+    );
   } catch (error) {
     failedAction(nodeId, error, 'The turn could not be retried.');
   }
@@ -210,26 +227,35 @@ export async function editMessage(
   }
   try {
     const response = await api().editChatMessage(message.threadId, message.id, { content });
-    useChatSessions.getState().update(nodeId, (session) => ({
-      ...session,
-      threadId: response.threadId,
-      ...(failures.length === 0
-        ? {}
-        : { error: `Some file changes were not reverted: ${failures.join(' ')}` }),
-      pending: {
-        threadId: response.threadId,
-        userMessage: {
-          id: response.messageId,
+    useChatSessions.getState().update(nodeId, (session) =>
+      oweTurn(
+        // D391: the edit supersedes the message and every turn after it in its thread, so a turn
+        // still owed there is no longer awaited; the edited turn is.
+        withOwed(
+          {
+            ...session,
+            threadId: response.threadId,
+            ...(failures.length === 0
+              ? {}
+              : { error: `Some file changes were not reverted: ${failures.join(' ')}` }),
+          },
+          owedTurns(session).filter((turn) => turn.threadId !== message.threadId),
+        ),
+        {
           threadId: response.threadId,
-          role: 'user',
-          content,
-          verdicts: [],
-          at: new Date().toISOString(),
+          userMessage: {
+            id: response.messageId,
+            threadId: response.threadId,
+            role: 'user',
+            content,
+            verdicts: [],
+            at: new Date().toISOString(),
+          },
+          speakerNodeId: options.speakerNodeId ?? nodeId,
+          since: Date.now(),
         },
-        speakerNodeId: options.speakerNodeId ?? nodeId,
-        since: Date.now(),
-      },
-    }));
+      ),
+    );
   } catch (error) {
     let refusal: ChatRefusal | undefined;
     if (AceApiError.is(error) && error.code === 'guardrail_blocked') {
@@ -259,24 +285,27 @@ export async function deleteMessage(
 
 /**
  * PG-1.6 (D352): stop the reply a node's session is waiting on. The engine stores the turn as a
- * failed turn of kind `user_cancelled`, which settles the session when it arrives.
+ * failed turn of kind `user_cancelled`, which settles the session when it arrives. D391: a stop
+ * aborts every turn of the thread, the ones still queued behind it too, and each arrives as its
+ * own stopped turn — so every thread the session still owes a turn on is stopped.
  */
 export async function stopNode(queryClient: QueryClient, nodeId: string): Promise<void> {
-  const threadId = sessionOf(nodeId).pending?.threadId;
-  if (threadId === undefined) return;
-  try {
-    const { stopped } = await api().stopChatThread(threadId);
-    // Nothing was in flight: the reply already landed, so read it.
-    if (!stopped) useChatSessions.getState().settleThread(threadId);
-  } catch (error) {
-    failedAction(nodeId, error, 'The reply could not be stopped.');
+  const threadIds = [...new Set(owedTurns(sessionOf(nodeId)).map((turn) => turn.threadId))];
+  for (const threadId of threadIds) {
+    try {
+      const { stopped } = await api().stopChatThread(threadId);
+      // Nothing was in flight: the replies already landed, so read them.
+      if (!stopped) useChatSessions.getState().settleThread(threadId);
+    } catch (error) {
+      failedAction(nodeId, error, 'The reply could not be stopped.');
+    }
+    void queryClient.invalidateQueries({ queryKey: chatKeys.thread(threadId) });
   }
-  void queryClient.invalidateQueries({ queryKey: chatKeys.thread(threadId) });
 }
 
-/** Whether an agent turn after `afterId` (not replaced) stands in these messages. */
-const repliedAfter = (messages: readonly ChatMessage[], afterId: string): boolean =>
-  messages.some(
+/** The first agent turn after `afterId` (not replaced) in these messages: that turn's reply. */
+const replyAfter = (messages: readonly ChatMessage[], afterId: string): ChatMessage | undefined =>
+  messages.find(
     (message) =>
       message.role === 'agent' && message.id > afterId && message.supersededAt === undefined,
   );
@@ -285,9 +314,16 @@ const repliedAfter = (messages: readonly ChatMessage[], afterId: string): boolea
  * PG-1.5 stall rule: "No answer — Retry". The thread is read again first — an answer that landed
  * while its frame was lost is shown and the session settles. Only when there is still none is the
  * question sent again, as an edit of itself, so the unanswered turn becomes the earlier version.
+ * D391: the turn is the first one owed on the thread on screen (`threadId`), else the oldest owed;
+ * an answer found settles that turn alone.
  */
-export async function recoverStalled(queryClient: QueryClient, nodeId: string): Promise<void> {
-  const pending = sessionOf(nodeId).pending;
+export async function recoverStalled(
+  queryClient: QueryClient,
+  nodeId: string,
+  onThread?: string,
+): Promise<void> {
+  const session = sessionOf(nodeId);
+  const pending = owedOn(session, onThread)[0] ?? session.pending;
   if (pending === undefined) return;
   const { threadId } = pending;
   let detail: ChatThreadDetail;
@@ -301,8 +337,13 @@ export async function recoverStalled(queryClient: QueryClient, nodeId: string): 
     failedAction(nodeId, error, 'The conversation could not be read.');
     return;
   }
+  const answer = replyAfter(detail.messages, replyAnchor(pending));
+  if (answer !== undefined) {
+    useChatSessions.getState().settleReply(threadId, answer.id);
+    return;
+  }
+  // Asked again as an edit of itself, which supersedes it and every turn after it in the thread.
   useChatSessions.getState().settleThread(threadId);
-  if (repliedAfter(detail.messages, pending.afterId ?? pending.userMessage.id)) return;
   const question = detail.messages.find((message) => message.id === pending.userMessage.id);
   if (question === undefined || question.content.length === 0) {
     failedAction(nodeId, undefined, 'The unanswered message is no longer in this conversation.');
@@ -324,7 +365,7 @@ const SETTLED: ReadonlySet<NodeState> = new Set(['COMPLETED', 'FAILED', 'BLOCKED
  * reply is still owed on, as well as the thread being read.
  *
  * - `chat.token` builds the streaming text of its thread;
- * - `chat.message` ends it, settles whichever node was waiting, and re-reads the thread, so the
+ * - `chat.message` ends it, settles the one turn it answers (D391), and re-reads the thread, so the
  *   engine's stored turns — not a client copy — are what is shown;
  * - a node's run ending re-reads that node's chat, which already holds the run's goal and result:
  *   the engine writes them before it announces the state.
@@ -345,7 +386,7 @@ export function useChatSocket(activeNodeId: string | undefined): void {
   const owed = useChatSessions(
     useShallow((state) =>
       Object.values(state.sessions).flatMap((session) =>
-        session.pending === undefined ? [] : [session.pending.threadId],
+        owedTurns(session).map((turn) => turn.threadId),
       ),
     ),
   );
@@ -362,8 +403,9 @@ export function useChatSocket(activeNodeId: string | undefined): void {
       useChatSessions.getState().appendToken(payload.threadId, payload.delta);
     });
     const offMessage = socket.on('chat.message', (payload) => {
+      // D391: a reply settles the one turn it answers; a turn still queued behind it stays owed.
       if (payload.message.role === 'agent')
-        useChatSessions.getState().settleThread(payload.threadId);
+        useChatSessions.getState().settleReply(payload.threadId, payload.message.id);
       void queryClient.invalidateQueries({ queryKey: chatKeys.thread(payload.threadId) });
       void queryClient.invalidateQueries({ queryKey: ['chat-threads'] });
     });
@@ -428,8 +470,13 @@ export interface ChatConversation {
   messages: ChatMessage[];
   /** The reply streaming in right now (FR-CHAT-006); `''` when nothing streams. */
   streamingText: string;
-  /** A sent message's reply has not landed yet. */
+  /** A sent message's reply has not landed yet (D391: any sent message's, on this thread). */
   awaitingReply: boolean;
+  /**
+   * D391: turns the session sent after the one being answered that still wait in the engine's
+   * queue — what the composer's "N queued" says. 0 while one turn or none is outstanding.
+   */
+  queued: number;
   /** D302: the node answering the reply that is owed, when one is. */
   replyingNodeId: string | undefined;
   /** The message is on its way to the engine. */
@@ -495,23 +542,32 @@ export function useThreadConversation(nodeId: string): ChatConversation {
   );
 
   const loaded = detail.data?.messages ?? [];
-  const pending = session.pending?.threadId === threadId ? session.pending : undefined;
-  const echo =
-    pending !== undefined && !loaded.some((message) => message.id === pending.userMessage.id)
-      ? [pending.userMessage]
-      : [];
+  // D391: every turn owed on this thread, oldest first; the first is the one being answered.
+  const owedHere = owedOn(session, threadId);
+  const pending = owedHere[0];
+  // Each sent message shows until the engine's copy is read back, in the order they were sent.
+  const echo = owedHere
+    .filter((turn) => !loaded.some((message) => message.id === turn.userMessage.id))
+    .map((turn) => turn.userMessage);
   // Engine ids are monotonic: an agent turn after the sent one is its reply (or its failure). A
-  // retry's reply comes after the turn it replaces (PG-1.6); a replaced turn never counts.
-  const replied =
-    pending !== undefined && repliedAfter(loaded, pending.afterId ?? pending.userMessage.id);
+  // retry's reply comes after the turn it replaces (PG-1.6); a replaced turn never counts. D391: a
+  // turn queued behind another waits for a reply after the one that settled it (`afterId`).
+  const answer = pending === undefined ? undefined : replyAfter(loaded, replyAnchor(pending));
+  const replied = answer !== undefined;
+  // The turn whose reply is owed now: the first, or — for the moment until that reply settles it —
+  // the next.
+  const awaited = replied ? owedHere[1] : pending;
   const heardAt = useChatSessions((state) =>
     threadId === undefined ? undefined : state.heardAt[threadId],
   );
 
-  // A reply read back before its frame arrived (a frame missed during a reconnect) still settles.
+  // A reply read back before its frame arrived (a frame missed during a reconnect) still settles —
+  // the turn it answers, and only that one (D391).
+  const answerId = answer?.id;
   useEffect(() => {
-    if (replied && pending !== undefined) useChatSessions.getState().settleThread(pending.threadId);
-  }, [replied, pending]);
+    if (answerId !== undefined && pending !== undefined)
+      useChatSessions.getState().settleReply(pending.threadId, answerId);
+  }, [answerId, pending]);
 
   const update = useChatSessions.getState().update;
   return {
@@ -519,15 +575,16 @@ export function useThreadConversation(nodeId: string): ChatConversation {
     threads: threads.data ?? [],
     messages: [...loaded, ...echo],
     streamingText,
-    awaitingReply: pending !== undefined && !replied,
-    replyingNodeId: pending !== undefined && !replied ? pending.speakerNodeId : undefined,
+    awaitingReply: awaited !== undefined,
+    queued: Math.max(0, owedTurns(session).length - 1),
+    replyingNodeId: awaited?.speakerNodeId,
     sending: session.sending === true,
     refusal: session.refusal,
     error: session.error,
     send: (content, targetNodeId) => void sendToNode(queryClient, nodeId, content, targetNodeId),
     waitingSince:
-      pending !== undefined && !replied
-        ? Math.max(pending.since ?? 0, heardAt ?? 0) || undefined
+      awaited !== undefined && !replied
+        ? Math.max(awaited.since ?? 0, heardAt ?? 0) || undefined
         : undefined,
     retry: (message) => void retryMessage(queryClient, nodeId, message),
     retryWithoutUndo: (message) =>
@@ -559,7 +616,7 @@ export function useThreadConversation(nodeId: string): ChatConversation {
     },
     remove: (message) => void deleteMessage(queryClient, nodeId, message),
     stop: () => void stopNode(queryClient, nodeId),
-    recover: () => void recoverStalled(queryClient, nodeId),
+    recover: () => void recoverStalled(queryClient, nodeId, threadId),
     selectThread: (id) =>
       update(nodeId, ({ fresh: _fresh, error: _error, refusal: _refusal, ...rest }) => ({
         ...rest,
