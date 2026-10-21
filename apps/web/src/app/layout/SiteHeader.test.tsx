@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react';
+import { act, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { db, installMockServer, renderApp } from '../../test/app';
@@ -97,5 +97,28 @@ describe('D330 Home’s header on every other route', () => {
     expect(toggle).toHaveClass('gap-1');
     await user.click(toggle);
     expect(localStorage.getItem(THEME_KEY)).toBe('dark');
+  });
+
+  it('audit U-15: the toggle is "Dark theme", pressed while dark', async () => {
+    const user = userEvent.setup();
+    renderApp('/usage');
+    const toggle = within(await screen.findByRole('banner')).getByRole('button', {
+      name: 'Dark theme',
+    });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('audit U-15: leaving System says so instead of dropping it silently', async () => {
+    const user = userEvent.setup();
+    act(() => setThemeMode('system'));
+    renderApp('/usage');
+    const toggle = within(await screen.findByRole('banner')).getByTestId('theme-toggle');
+    expect(toggle).toHaveAttribute('title', 'Dark theme (following your system now)');
+    await user.click(toggle);
+    expect(localStorage.getItem(THEME_KEY)).not.toBe('system');
+    expect(await screen.findByText(/^Theme set to (dark|light)$/)).toBeInTheDocument();
+    expect(screen.getByText(/Choose System in Settings to follow it again/)).toBeInTheDocument();
   });
 });

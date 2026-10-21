@@ -74,7 +74,7 @@ describe('Home hero (D337)', () => {
     const surface = await home();
     expect(within(surface).getByText('ACE')).toBeInTheDocument();
     expect(within(surface).getByText('HOME')).toBeInTheDocument();
-    expect(within(surface).getByRole('button', { name: 'Switch theme' })).toBeInTheDocument();
+    expect(within(surface).getByRole('button', { name: 'Dark theme' })).toBeInTheDocument();
     expect(
       within(surface).getByRole('heading', { level: 1, name: 'What would you like to make?' }),
     ).toBeInTheDocument();
