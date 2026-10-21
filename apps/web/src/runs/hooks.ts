@@ -7,12 +7,14 @@ import {
   type StartRunRequest,
 } from '@ace/contracts';
 import type { AceSocketStatus } from '@ace/sdk';
+import { toast } from '@ace/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 
 import { api } from '../app/api';
 import { getSocket } from '../app/socket';
 import { queryKeys } from '../workflows/query-keys';
+import { adoptRun } from './adopt-run';
 import { useRunStore } from './run-store';
 
 /**
@@ -87,21 +89,35 @@ export function useSocketStatus(): AceSocketStatus {
 /**
  * `POST /workflows/:id/runs` (FR-EXE-001). A BLOCKED run is a normal 201 with pre-flight issues
  * (FR-EXE-003), so it is a success here and the screen renders the issues.
+ *
+ * [audit W-1] A start the engine refuses (a 409, the engine away) puts back the run that was on
+ * screen — `arm` cleared it — and says why in a toast. `quiet`: the caller says why itself (Domain's
+ * composer keeps the text and shows the reason, PG-1.5).
  */
-export function useStartRun(workflowId: Id) {
+export function useStartRun(workflowId: Id, { quiet = false }: { quiet?: boolean } = {}) {
   const arm = useRunStore((store) => store.arm);
   const begin = useRunStore((store) => store.begin);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: StartRunRequest) => api().startRun(workflowId, body),
     // Armed before the request goes out, so a frame that beats the 201 is still folded (§2.4).
-    onMutate: () => arm(workflowId),
+    onMutate: (): { workflowId: Id | undefined; runId: Id | undefined } => {
+      const { workflowId: previousWorkflowId, runId } = useRunStore.getState();
+      arm(workflowId);
+      return { workflowId: previousWorkflowId, runId };
+    },
     onSuccess: (run: Run) => {
       begin(workflowId, run.id, run.status);
       queryClient.setQueryData(queryKeys.run(run.id), run);
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs(workflowId) });
     },
-    onError: () => useRunStore.getState().reset(),
+    onError: (error, _body, previous) => {
+      useRunStore.getState().reset();
+      if (previous?.workflowId !== undefined && previous.runId !== undefined) {
+        void adoptRun(previous.workflowId, previous.runId);
+      }
+      if (!quiet) toast.error('Could not start the run', { description: error.message });
+    },
   });
 }
 

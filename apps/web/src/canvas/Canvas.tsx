@@ -1680,14 +1680,8 @@ function CanvasInner({
       runAfter: (nodeId) => {
         if (!readOnly) setRunAfterNodeId(nodeId);
       },
-      runFromHere: (nodeId) =>
-        startRunMutate(
-          { startFromNodeId: nodeId },
-          {
-            onError: (error) =>
-              toast.error('Could not start the run', { description: error.message }),
-          },
-        ),
+      // [audit W-1] a refused start says why and puts the run on screen back (useStartRun)
+      runFromHere: (nodeId) => startRunMutate({ startFromNodeId: nodeId }),
     }),
     [readOnly, setSelection, duplicateNodesById, deleteElements, startRunMutate],
   );
