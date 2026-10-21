@@ -1,9 +1,17 @@
-import type { RunAction } from '@ace/contracts';
+import { CONTINUABLE_HALT_REASONS, canContinueRun, type RunAction } from '@ace/contracts';
 import { Icons, cn, toast, type LucideIcon } from '@ace/ui';
 import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
-import { usePauseRun, useRestartRun, useResumeRun, useRun, useStopRun } from '../../runs/hooks';
+import {
+  useContinueRun,
+  useNodeRunsOnce,
+  usePauseRun,
+  useRestartRun,
+  useResumeRun,
+  useRun,
+  useStopRun,
+} from '../../runs/hooks';
 import { useRunStore } from '../../runs/run-store';
 import { useOpenRunInPlace } from '../../runs/useOpenRunInPlace';
 import { useSelectedRun } from '../../runs/selected-run';
@@ -22,6 +30,12 @@ const PILL =
  * control is enabled only because the run's `allowedActions` names it (FR-CTL-006): the header
  * decides nothing about the run's state. Pause reads Resume while the run allows resuming. Stop
  * asks first (FR-CTL-003); Restart selects the new run in the same mode (FR-CTL-004, PG-3.5).
+ *
+ * D388: Continue joins them only while the selected run was cut off with work left — HALTED by a
+ * crash, a shutdown or a Stop, with an interrupted node run. `continue` is deliberately not a
+ * `RUN_ACTIONS` value (an older engine on the shared database would refuse a run carrying an action
+ * it does not know), so the header asks the contract's `canContinueRun` — the same rule the engine
+ * enforces — over the run's recorded node runs, which it reads only for a run halted that way.
  */
 export function HeaderRunControls({ workflowId }: { workflowId: string }) {
   const openRun = useOpenRunInPlace();
@@ -34,7 +48,11 @@ export function HeaderRunControls({ workflowId }: { workflowId: string }) {
       selectedRunId !== undefined &&
       store.workflowId === workflowId &&
       store.runId === selectedRunId
-        ? { allowedActions: store.allowedActions }
+        ? {
+            allowedActions: store.allowedActions,
+            status: store.status,
+            haltReason: store.haltReason,
+          }
         : null,
     ),
   );
@@ -42,12 +60,26 @@ export function HeaderRunControls({ workflowId }: { workflowId: string }) {
   const run = {
     runId: selectedRunId,
     allowedActions: held !== null ? held.allowedActions : record?.allowedActions,
+    status: held !== null ? held.status : record?.status,
+    haltReason: held !== null ? held.haltReason : record?.haltReason,
   };
+  // D388: the node runs only matter once the run halted in a way Continue can carry on from.
+  const mayContinue =
+    run.runId !== undefined &&
+    run.status === 'HALTED' &&
+    (CONTINUABLE_HALT_REASONS as readonly string[]).includes(run.haltReason ?? '');
+  const nodeRuns = useNodeRunsOnce(mayContinue ? run.runId : undefined).data;
+  const canContinue =
+    mayContinue &&
+    run.status !== undefined &&
+    nodeRuns !== undefined &&
+    canContinueRun({ status: run.status, haltReason: run.haltReason }, nodeRuns);
   const mutations = {
     pause: usePauseRun(),
     resume: useResumeRun(),
     stop: useStopRun(),
     restart: useRestartRun(),
+    continue: useContinueRun(),
   };
   const [confirmStop, setConfirmStop] = useState(false);
   const busy = Object.values(mutations).some((mutation) => mutation.isPending);
@@ -117,6 +149,20 @@ export function HeaderRunControls({ workflowId }: { workflowId: string }) {
         : control('pause', 'Pause', Icons.Pause, () => fire('pause'))}
       {control('stop', 'Stop', Icons.Square, () => setConfirmStop(true))}
       {control('restart', 'Restart', Icons.RotateCcw, () => fire('restart'))}
+      {canContinue && (
+        <button
+          type="button"
+          aria-label="Continue"
+          title="Run the nodes that were cut off; keep what finished"
+          data-testid="header-run-continue"
+          disabled={busy}
+          onClick={() => fire('continue')}
+          className={cn(PILL, 'px-[10px]')}
+        >
+          <Icons.StepForward aria-hidden size={12} strokeWidth={2.4} />
+          Continue
+        </button>
+      )}
       {flow.dialog}
       {confirmStop && (
         <StopConfirm

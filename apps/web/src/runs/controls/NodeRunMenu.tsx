@@ -1,4 +1,4 @@
-import type { Id, NodeState } from '@ace/contracts';
+import { isInterruptedNodeRun, type Id, type NodeError, type NodeState } from '@ace/contracts';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,9 +21,11 @@ import {
  *   Start from this node  `POST /workflows/:workflowId/runs  { startFromNodeId: nodeId }`
  *
  * Unlike the run controls, these are *node* actions and the contract carries no `allowedActions` for
- * them, so what is enabled follows the FRS: a retry needs a node run that failed (FR-ERR-003/004),
- * a re-run needs a node run to take the latest upstream outputs from (FR-CTL-005), and starting
- * from a node needs neither — it starts a new run (FR-EXE-013).
+ * them, so what is enabled follows the FRS: a retry needs a node run that failed (FR-ERR-003/004)
+ * or, D388, one that was cut off before it finished — STOPPED, or BLOCKED by an engine restart
+ * under it (`isInterruptedNodeRun`; a node BLOCKED by a failed upstream never started, and is
+ * retried with that upstream) — a re-run needs a node run to take the latest upstream outputs from
+ * (FR-CTL-005), and starting from a node needs neither — it starts a new run (FR-EXE-013).
  *
  * The trigger is the theme's "…" pill (24px, hairline, soft, 11px) and the items are its menu (D328).
  */
@@ -34,6 +36,8 @@ export interface NodeRunMenuProps {
   state: NodeState;
   /** The node's latest node run, if the run has reached it. */
   nodeRunId?: Id;
+  /** D388: that node run's error, whose code tells an interrupted BLOCKED row from a blocked one. */
+  error?: NodeError | undefined;
   onRetry: () => void;
   onRetryWithDownstream: () => void;
   onRerunNode: () => void;
@@ -46,6 +50,7 @@ export function NodeRunMenu({
   nodeName,
   state,
   nodeRunId,
+  error,
   onRetry,
   onRetryWithDownstream,
   onRerunNode,
@@ -53,7 +58,8 @@ export function NodeRunMenu({
   busy,
 }: NodeRunMenuProps) {
   const hasNodeRun = nodeRunId !== undefined;
-  const canRetry = hasNodeRun && state === 'FAILED' && !busy;
+  const retryable = state === 'FAILED' || isInterruptedNodeRun({ status: state, error });
+  const canRetry = hasNodeRun && retryable && !busy;
   const canRerun = hasNodeRun && !busy;
 
   return (

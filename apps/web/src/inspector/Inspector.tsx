@@ -125,6 +125,7 @@ export function Inspector({ workflowId }: { workflowId: string }) {
               nodeName={nodeName}
               state={nodeRun.status}
               nodeRunId={nodeRun.id}
+              error={nodeRun.error}
               busy={busy}
               onRetry={() => retry.mutate({ nodeRunId: nodeRun.id, withDownstream: false })}
               onRetryWithDownstream={() =>
