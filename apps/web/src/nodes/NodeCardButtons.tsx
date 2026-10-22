@@ -10,6 +10,7 @@ import {
 } from '@ace/ui';
 import { useContext, useState } from 'react';
 
+import { RUN_GOING_TITLE, useRunGoing } from '../runs/hooks';
 import { AgenticMenuItems, RevertStepDialog } from './AgenticCardMenu';
 import { NodeActionsContext } from './card-context';
 import { isStageKind } from './anchors';
@@ -118,9 +119,10 @@ export function NodeCardButtons({ node, className }: { node: Node; className?: s
                 <DropdownMenuItem onSelect={() => actions.duplicate(node.id)}>
                   Duplicate
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => actions.runFromHere(node.id)}>
-                  Run from here
-                </DropdownMenuItem>
+                <RunFromHereItem
+                  workflowId={node.workflowId}
+                  onSelect={() => actions.runFromHere(node.id)}
+                />
                 <DropdownMenuSeparator />
                 <DropdownMenuItem destructive onSelect={() => actions.remove(node.id)}>
                   Delete
@@ -140,5 +142,22 @@ export function NodeCardButtons({ node, className }: { node: Node; className?: s
         />
       )}
     </div>
+  );
+}
+
+/**
+ * [audit W-8] "Run from here" starts a new run, so while one is going it waits, saying why — a
+ * second run would go beside the first. Its own component: only an open menu subscribes to the run.
+ */
+function RunFromHereItem({ workflowId, onSelect }: { workflowId: string; onSelect: () => void }) {
+  const going = useRunGoing(workflowId);
+  return (
+    <DropdownMenuItem
+      disabled={going}
+      {...(going ? { title: RUN_GOING_TITLE } : {})}
+      onSelect={onSelect}
+    >
+      Run from here
+    </DropdownMenuItem>
   );
 }

@@ -285,3 +285,102 @@ describe('FR-EXE-014 the round 3 frames fold idempotently', () => {
     expect(view.iterations(A)).toBe(0);
   });
 });
+
+describe('[audit W-5] a block mid-run and a parked Domain run in the RunView (D305, D323)', () => {
+  const started = scenario.slice(0, 2);
+  const blocked = (seq: number): ServerFrame =>
+    ({
+      type: 'run.blocked',
+      payload: { runId: RUN, reason: 'LOOP_GUARD', detail: 'A and B went back and forth 6 times' },
+      seq,
+    }) as ServerFrame;
+  const config = (seq: number, stayOpen: boolean): ServerFrame =>
+    ({
+      type: 'run.config',
+      payload: {
+        runId: RUN,
+        config: { routing: 'supervised', loopGuardLimit: 6, tokenBudget: null, stayOpen },
+      },
+      seq,
+    }) as ServerFrame;
+
+  it('run.blocked reads BLOCKED with its reason, and offers resume and stop', () => {
+    const view = fold([...started, blocked(3)]).view;
+    expect(view.status).toBe('BLOCKED');
+    expect(view.blockedReason).toBe('LOOP_GUARD');
+    expect(view.blockedDetail).toBe('A and B went back and forth 6 times');
+    expect(view.allowedActions).toEqual(['resume', 'stop']);
+  });
+
+  it('run.resumed leaves the block: RUNNING, no reason, pause and stop again', () => {
+    const view = fold([
+      ...started,
+      blocked(3),
+      { type: 'run.resumed', payload: { runId: RUN }, seq: 4 } as ServerFrame,
+    ]).view;
+    expect(view.status).toBe('RUNNING');
+    expect(view.blockedReason).toBeUndefined();
+    expect(view.blockedDetail).toBeUndefined();
+    expect(view.allowedActions).toEqual(['pause', 'stop']);
+  });
+
+  it('a run that stays open keeps End and Restart — running, blocked and resumed (D323)', () => {
+    const buffer = fold([...started, config(3, true)]);
+    expect(buffer.view.allowedActions).toEqual(['pause', 'stop', 'restart', 'end']);
+    buffer.apply(blocked(4));
+    expect(buffer.view.allowedActions).toEqual(['resume', 'stop', 'restart', 'end']);
+    buffer.apply({ type: 'run.resumed', payload: { runId: RUN }, seq: 5 } as ServerFrame);
+    expect(buffer.view.allowedActions).toEqual(['pause', 'stop', 'restart', 'end']);
+  });
+
+  it('a board run says it does not stay open; End is never offered', () => {
+    expect(fold([...started, config(3, false)]).view.allowedActions).toEqual(['pause', 'stop']);
+  });
+
+  it('run.parked marks the run parked and open, and a node starting work un-parks it', () => {
+    const buffer = fold([
+      ...started,
+      { type: 'run.parked', payload: { runId: RUN, graph: 'complete' }, seq: 3 } as ServerFrame,
+    ]);
+    expect(buffer.view.status).toBe('RUNNING');
+    expect(buffer.view.parked).toBe(true);
+    // only a run that stays open parks, so End is offered without its run.config
+    expect(buffer.view.allowedActions).toEqual(['pause', 'stop', 'restart', 'end']);
+    buffer.apply(state(4, RA2, 'RUNNING'));
+    expect(buffer.view.parked).toBe(false);
+  });
+
+  it('the end of the run clears the block and the parking; a pre-flight BLOCKED only restarts', () => {
+    const buffer = fold([...started, blocked(3)]);
+    buffer.apply({
+      type: 'run.completed',
+      payload: { runId: RUN, status: 'HALTED', haltReason: 'stopped', totals: usage() },
+      seq: 4,
+    } as ServerFrame);
+    expect(buffer.view.blockedReason).toBeUndefined();
+    expect(buffer.view.parked).toBe(false);
+    expect(buffer.view.allowedActions).toEqual(['restart']);
+
+    const preflight = fold([
+      {
+        type: 'run.completed',
+        payload: { runId: RUN, status: 'BLOCKED', totals: usage() },
+        seq: 1,
+      } as ServerFrame,
+    ]).view;
+    expect(preflight.blockedReason).toBeUndefined();
+    expect(preflight.allowedActions).toEqual(['restart']);
+  });
+
+  it('a replayed run.blocked changes nothing, and reset forgets the block and stay-open', () => {
+    const buffer = fold([...started, config(3, true), blocked(4)]);
+    buffer.apply({ type: 'run.resumed', payload: { runId: RUN }, seq: 5 } as ServerFrame);
+    buffer.apply(blocked(4));
+    expect(buffer.view.status).toBe('RUNNING');
+    buffer.reset();
+    expect(buffer.view.blockedReason).toBeUndefined();
+    expect(buffer.view.parked).toBe(false);
+    buffer.apply(scenario[0]!);
+    expect(buffer.view.allowedActions).toEqual(['pause', 'stop']);
+  });
+});

@@ -70,6 +70,9 @@ describe('TC-CHAT-006 a chat reply streams then settles', () => {
     expect(await screen.findByTestId('chat-usage')).toBeInTheDocument();
     expect(screen.queryByTestId('chat-send-to-forge')).toBeNull();
     expect(screen.getByTestId('chat-input')).toHaveAttribute('placeholder', 'Message this agent…');
+    // [audit W-15] the reply is said once when it lands, not token by token
+    expect(screen.getByTestId('chat-announce')).toHaveTextContent('Writer answered.');
+    expect(screen.getByTestId('chat-announce')).toHaveAttribute('role', 'status');
   });
 
   it('sends from the keyboard alone (Enter)', async () => {
@@ -215,5 +218,29 @@ describe('FR-CHAT-005 chat never reads or writes run records', () => {
     );
 
     expect(hits).toEqual([]);
+  });
+});
+
+/* ------------------------------------------- a conversation that cannot be read (W-11) */
+
+describe('[audit W-11] a conversation the engine could not read', () => {
+  it('says so with Retry, instead of looking like an empty chat', async () => {
+    const user = userEvent.setup();
+    const { workflowId } = seedAgentNode();
+    const list = vi
+      .spyOn(api(), 'listNodeChatThreads')
+      .mockRejectedValue(new Error('The engine is not answering.'));
+    renderChat(<ChatPanel workflowId={workflowId} />);
+
+    const alert = await screen.findByTestId('chat-load-error');
+    expect(alert).toHaveTextContent('Could not read this conversation');
+    expect(alert).toHaveTextContent('The engine is not answering.');
+    expect(screen.queryByText(/it answers with its model and goal/i)).toBeNull();
+
+    // the engine answers again; Retry reads the threads once more
+    list.mockRestore();
+    await user.click(within(alert).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByTestId('chat-load-error')).toBeNull());
+    expect(screen.getByText(/it answers with its model and goal/i)).toBeInTheDocument();
   });
 });

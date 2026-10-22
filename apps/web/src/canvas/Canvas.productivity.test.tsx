@@ -1,11 +1,15 @@
 import type { Edge, Node } from '@ace/contracts';
+import { Toaster } from '@ace/ui';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
 import { createNode } from '../nodes/factory';
-import { db, installMockServer, renderWithQuery } from '../test/app';
+import { db, installMockServer, queryClient, renderWithQuery } from '../test/app';
+import { useWorkflowGraph } from '../workflows/hooks';
+import { queryKeys } from '../workflows/query-keys';
 import { peekGraphSync } from '../workflows/sync-registry';
 import { Canvas } from './Canvas';
 import { useCanvasApi } from './canvas-api';
@@ -168,6 +172,69 @@ describe('TC-CAN-008 deleting is one undoable step (FR-CAN-009)', () => {
     press('y', { ctrlKey: true });
     await settle(workflow.id);
     expect(nodesInDb(workflow.id)).toHaveLength(1);
+  });
+});
+
+describe('[audit W-6] a delete says what went and offers Undo', () => {
+  it('Delete shows "Node deleted" with Undo, and Undo brings the node and its edge back', async () => {
+    const { workflow, nodes, edges } = seed(['input', 'agent']);
+    renderWithQuery(
+      <>
+        <Canvas workflowId={workflow.id} />
+        <Toaster />
+      </>,
+    );
+    await waitFor(() => expect(flowNode(nodes[1]!.id)).not.toBeNull());
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    act(() => useSelectionStore.getState().setSelection([nodes[1]!.id], []));
+    await waitFor(() => expect(flowNode(nodes[1]!.id)).toHaveClass('selected'));
+    act(() => {
+      fireEvent.keyDown(flowNode(nodes[1]!.id), { key: 'Delete' });
+    });
+    await waitFor(() => expect(nodesInDb(workflow.id)).toHaveLength(1));
+    await settle(workflow.id);
+
+    const [message] = await screen.findAllByText('Node deleted');
+    const toast = message!.closest('[data-sonner-toast]') as HTMLElement;
+    await userEvent.click(within(toast).getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(nodesInDb(workflow.id)).toHaveLength(2));
+    await settle(workflow.id);
+    expect(db.edgesOf(workflow.id).map((e) => e.id)).toEqual(edges.map((e) => e.id));
+  });
+});
+
+describe('[audit W-17] another workflow opened in the same Canvas starts fresh', () => {
+  it('gets its own React Flow store, so the last workflow’s view never carries over', async () => {
+    const first = seed(['input']);
+    const second = seed(['agent']);
+    // the second graph already read, as after a visit: no loading gate between the two
+    function Warm() {
+      useWorkflowGraph(second.workflow.id);
+      return null;
+    }
+    const { rerender } = renderWithQuery(
+      <>
+        <Canvas workflowId={first.workflow.id} />
+        <Warm />
+      </>,
+    );
+    await waitFor(() => expect(flowNode(first.nodes[0]!.id)).not.toBeNull());
+    await waitFor(() =>
+      expect(queryClient.getQueryState(queryKeys.workflow(second.workflow.id))?.status).toBe(
+        'success',
+      ),
+    );
+    const before = document.querySelector('.react-flow');
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Canvas workflowId={second.workflow.id} />
+        <Warm />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(flowNode(second.nodes[0]!.id)).not.toBeNull());
+    expect(document.querySelector('.react-flow')).not.toBe(before);
+    expect(flowNode(first.nodes[0]!.id)).toBeNull();
   });
 });
 
@@ -334,7 +401,7 @@ describe('D332 the Canvas chrome is the theme’s', () => {
     // the tools pill (Undo, Redo, Auto-arrange, Duplicate) and the zoom pill are gone
     expect(screen.queryByTestId('canvas-tools-pill')).toBeNull();
     expect(screen.queryByTestId('canvas-zoom-pill')).toBeNull();
-    for (const name of ['Undo', 'Redo', 'Auto-arrange', 'Duplicate selected nodes']) {
+    for (const name of ['Auto-arrange', 'Duplicate selected nodes']) {
       expect(screen.queryByRole('button', { name })).toBeNull();
     }
 
@@ -350,6 +417,9 @@ describe('D332 the Canvas chrome is the theme’s', () => {
       'Lock nodes',
       'Hand tool',
       'Undo move',
+      // [audit W-6] general undo and redo are on the toolbar, not only Ctrl+Z / Ctrl+Y
+      'Undo (Ctrl+Z)',
+      'Redo (Ctrl+Y)',
     ]);
     expect(screen.getByTestId('canvas-zoom-level')).toHaveTextContent(/^\d+%$/);
 

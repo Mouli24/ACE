@@ -12,9 +12,11 @@ import type { ErrorKind } from '@ace/contracts';
  */
 export const NEXT_STEP_BY_ERROR_KIND: Readonly<Record<ErrorKind, string>> = {
   user_cancelled: 'Nothing failed — you stopped this. Start the run again when you are ready.',
+  // [audit L-13] Retry re-runs the run's snapshot (BR-04): a node edited since needs a new run.
   agent:
-    "The answer did not match the node's output contract. Loosen the contract, or say the format in the instructions, then retry.",
-  provider: 'Retry, or add a fallback model on this node.',
+    "The answer did not match the node's output contract. Loosen the contract, or say the format in the instructions, then run again.",
+  provider:
+    'Retry tries the same model again. To use another model or add a fallback model, change this node, then run again.',
   auth: 'Update the provider key in Providers.',
   invalid_config: 'Open the node settings and fix the setting this names.',
   network: 'Check the endpoint in Providers, and that the service is running.',

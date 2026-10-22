@@ -141,6 +141,12 @@ describe('PG-1.6 message actions in the chat (D352)', () => {
     await user.click(
       within(screen.getByTestId('chat-turn-user')).getByRole('button', { name: 'Delete' }),
     );
+    // [audit W-9] it asks first
+    await user.click(
+      within(await screen.findByTestId('chat-delete-confirm')).getByRole('button', {
+        name: 'Delete message',
+      }),
+    );
     await waitFor(() => expect(screen.queryByTestId('chat-turn-user')).toBeNull(), SLOW);
     expect(conversation()).not.toHaveTextContent(/^forget this/);
     expect(storedOf(node.id).find((message) => message.role === 'user')?.deletedAt).toBeDefined();

@@ -142,7 +142,8 @@ export function DomainRunView() {
   const route = useRouteEnvelope(runId);
   const budget = useSetRunBudget(runId);
   const end = useEndRun();
-  const start = useStartRun(workflowId);
+  // the composer keeps a refused goal and says why (PG-1.5), so the start raises no toast of its own
+  const start = useStartRun(workflowId, { quiet: true });
   // `@workflow <task>`: the whole workflow on a task, as from the chat column.
   const workflowTask = useWorkflowTask(workflowId);
   const retry = useRetryNodeRun();

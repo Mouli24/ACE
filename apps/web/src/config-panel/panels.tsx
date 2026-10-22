@@ -18,14 +18,18 @@ import {
 } from '@ace/contracts';
 import { Button } from '@ace/ui';
 import type { ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
 
 import { PolicyPicker } from '../guardrails/PolicyPicker';
+import { PartView } from '../inspector/EnvelopeView';
 import { useWorkflowProjectId } from '../nodes/retrieval/hooks';
 import { MergeModeField } from '../nodes/merge/MergeModeField';
 import { MergeSlots, type MergeSlot } from '../nodes/merge/MergeSlots';
 import { useProviders } from '../providers/hooks';
+import { useNodeRuns } from '../runs/hooks';
 import { useRunStore } from '../runs/run-store';
+import { useSelectedRun } from '../runs/selected-run';
 import { EFFORT, EFFORT_LABELS } from '../theme/constants';
 import { useWorkflowGraph } from '../workflows/hooks';
 import { AgentKnowledgeBasesField, AgentMemoryField } from './AgentKnowledgeFields';
@@ -576,10 +580,42 @@ export function TransformPanel({
 /** The theme's empty-state line: 13px, muted, centred. */
 const EMPTY_LINE_CLASS = 'py-2 text-center text-[13px] text-[var(--muted)]';
 
-export function OutputPanel() {
+/** The theme's text link: 11.5px / 600 in the accent. */
+const LINK_CLASS =
+  'self-start whitespace-nowrap text-[11.5px] font-semibold text-[#e8623a] no-underline outline-none hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+
+/**
+ * [audit L-1] The Output node's result in the selected run (PG-3.2): what its node run recorded,
+ * read as the Inspector reads it (FR-EXE-010) and drawn with the same part renderers. The empty
+ * line shows only while that run has no output for this node.
+ */
+export function OutputPanel({ workflowId, nodeId }: { workflowId: string; nodeId: Id }) {
+  const { runId } = useSelectedRun(workflowId);
+  const nodeRuns = useNodeRuns(runId);
+  const output = (nodeRuns.data ?? []).filter((run) => run.nodeId === nodeId).at(-1)?.output;
   return (
     <Field label="Output">
-      <p className={EMPTY_LINE_CLASS}>Final result appears here after a run</p>
+      {nodeRuns.isError ? (
+        <p role="alert" className={EMPTY_LINE_CLASS}>
+          Could not read this run&apos;s output.{' '}
+          <Button variant="ghost" size="sm" onClick={() => void nodeRuns.refetch()}>
+            Retry
+          </Button>
+        </p>
+      ) : output === undefined || output.length === 0 ? (
+        <p className={EMPTY_LINE_CLASS}>Final result appears here after a run</p>
+      ) : (
+        <div data-testid="output-result" className="flex flex-col gap-2">
+          {output.map((part, index) => (
+            <PartView key={index} part={part} />
+          ))}
+        </div>
+      )}
+      {runId !== undefined && (
+        <Link to={`/runs/${runId}`} data-testid="output-see-run" className={LINK_CLASS}>
+          See the whole run →
+        </Link>
+      )}
     </Field>
   );
 }
@@ -661,7 +697,7 @@ export function KindPanel({
       return (
         <>
           {name}
-          <OutputPanel />
+          <OutputPanel workflowId={workflowId} nodeId={node.id} />
         </>
       );
     case 'retrieval':

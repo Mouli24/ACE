@@ -98,3 +98,27 @@ describe('D332 the theme toolbar', () => {
     expect(screen.queryByRole('button', { name: 'Undo move' })).toBeNull();
   });
 });
+
+describe('[audit W-6] Undo and Redo on the toolbar (FR-CAN-009)', () => {
+  it('undo and redo every edit, enabled by the history, with their shortcuts in the title', async () => {
+    const onUndo = vi.fn();
+    const onRedo = vi.fn();
+    toolbar({ canUndo: true, canRedo: false, mod: 'Ctrl+', onUndo, onRedo });
+    const undo = screen.getByRole('button', { name: 'Undo' });
+    const redo = screen.getByRole('button', { name: 'Redo' });
+    expect(undo).toHaveAttribute('title', 'Undo (Ctrl+Z)');
+    expect(undo).toHaveAttribute('aria-disabled', 'false');
+    expect(redo).toHaveAttribute('aria-disabled', 'true');
+
+    await userEvent.click(undo);
+    await userEvent.click(redo);
+    expect(onUndo).toHaveBeenCalledTimes(1);
+    expect(onRedo).not.toHaveBeenCalled();
+  });
+
+  it('a read-only Canvas has neither', () => {
+    toolbar({ readOnly: true, onUndo: vi.fn(), onRedo: vi.fn() });
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Redo' })).toBeNull();
+  });
+});

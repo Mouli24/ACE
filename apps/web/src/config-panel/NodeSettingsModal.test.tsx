@@ -1,8 +1,16 @@
-import type { ProviderType, ReasoningEffort } from '@ace/contracts';
+import {
+  allowedRunActions,
+  zeroUsage,
+  type ProviderType,
+  type ReasoningEffort,
+  type Run,
+} from '@ace/contracts';
 import { screen, waitFor, within } from '@testing-library/react';
 
 import { usePanelsStore } from '../app/stores/panels';
 import { useCanvasApi, type CanvasApi } from '../canvas/canvas-api';
+import { newId } from '../lib/ulid';
+import { createNode } from '../nodes/factory';
 import { db, installMockServer } from '../test/app';
 import {
   mountSettings,
@@ -496,6 +504,47 @@ describe('Other node kinds keep their fields in the same shell', () => {
     const { q } = await openNodeSettings('output');
     expect(q.getByText(/final result appears here after a run/i)).toBeInTheDocument();
     expect(q.getByRole('button', { name: 'Remove node from canvas' })).toBeInTheDocument();
+  });
+
+  it('[audit L-1] Output: shows the result its node run recorded in the selected run', async () => {
+    const project = db.createProject({ name: 'P' });
+    const workflow = db.createWorkflow(project.id, 'F');
+    const output = createNode('output', workflow.id, { x: 0, y: 0 });
+    db.commitGraph(workflow.id, [output], []);
+    const run: Run = {
+      id: newId(),
+      workflowId: workflow.id,
+      projectId: project.id,
+      status: 'COMPLETE',
+      allowedActions: allowedRunActions('COMPLETE'),
+      snapshot: { version: 1, nodes: [output], edges: [] },
+      inputs: {},
+      preflightIssues: [],
+      totals: zeroUsage(),
+      startedAt: new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+    };
+    db.addRun(run);
+    db.upsertNodeRun({
+      id: newId(),
+      runId: run.id,
+      nodeId: output.id,
+      iteration: 1,
+      attempt: 1,
+      status: 'COMPLETED',
+      inputEnvelopes: [],
+      output: [{ type: 'text', text: 'The final answer.' }],
+      usage: zeroUsage(),
+      verdicts: [],
+      toolCalls: [],
+    });
+    const { q } = await renderSettings(project, workflow, { kind: 'node', id: output.id });
+    expect(await q.findByText('The final answer.')).toBeInTheDocument();
+    expect(q.queryByText(/final result appears here after a run/i)).toBeNull();
+    expect(q.getByRole('link', { name: /see the whole run/i })).toHaveAttribute(
+      'href',
+      `/runs/${run.id}`,
+    );
   });
 });
 

@@ -2,7 +2,7 @@ import { Button } from '@ace/ui';
 import { useMutation } from '@tanstack/react-query';
 
 import { api } from '../app/api';
-import { useSelectionStore } from '../app/stores/selection';
+import { showNode } from '../canvas/canvas-api';
 
 /**
  * FR-WF-006: run `/validate` and list every issue with severity, message and node reference.
@@ -13,7 +13,6 @@ import { useSelectionStore } from '../app/stores/selection';
  */
 export function ValidationTab({ workflowId }: { workflowId: string }) {
   const validate = useMutation({ mutationFn: () => api().validateWorkflow(workflowId) });
-  const select = useSelectionStore((s) => s.setSelection);
   const issues = validate.data?.issues;
 
   return (
@@ -70,7 +69,8 @@ export function ValidationTab({ workflowId }: { workflowId: string }) {
                 <button
                   type="button"
                   className="shrink-0 cursor-pointer border-none bg-transparent p-0 text-[11.5px] font-semibold text-[#e8623a] outline-none hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
-                  onClick={() => select([issue.nodeId as string], [])}
+                  // [audit W-10] select it and bring it into view
+                  onClick={() => showNode(issue.nodeId as string)}
                 >
                   show node
                 </button>

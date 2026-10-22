@@ -181,6 +181,28 @@ describe('FR-ERR-003/004, FR-CTL-005, FR-EXE-013 the node-level controls', () =>
     );
   });
 
+  it('[audit W-8] while a run is going, Start from this node waits and says why', async () => {
+    const user = userEvent.setup();
+    render(
+      <NodeRunMenu
+        nodeId={NODE}
+        nodeName="Writer"
+        state="COMPLETED"
+        nodeRunId={NODE_RUN}
+        runGoing
+        {...callbacks()}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Run actions for Writer' }));
+    const start = await screen.findByRole('menuitem', { name: 'Start from this node' });
+    expect(start).toHaveAttribute('data-disabled');
+    expect(start).toHaveAttribute('title', 'A run is going — stop it first');
+    // the node's own actions are not a new run
+    expect(screen.getByRole('menuitem', { name: 'Re-run this node' })).not.toHaveAttribute(
+      'data-disabled',
+    );
+  });
+
   describe('D388 a node run cut off before it finished can be retried too', () => {
     const restarted = (code: string) => ({
       kind: 'workflow' as const,

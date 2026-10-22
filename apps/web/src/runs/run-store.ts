@@ -1,5 +1,6 @@
 import type {
   ApprovalRequest,
+  BlockedReason,
   BudgetHalt,
   Envelope,
   FailureReason,
@@ -9,13 +10,19 @@ import type {
   NodeState,
   Part,
   RunAction,
+  RunDomainConfig,
   RunState,
   ServerFrame,
   ToolCall,
   Usage,
   Verdict,
 } from '@ace/contracts';
-import { EDGE_TRANSFER_SUMMARY_MAX, allowedRunActions, estimatePartsTokens } from '@ace/contracts';
+import {
+  EDGE_TRANSFER_SUMMARY_MAX,
+  allowedRunActions,
+  estimatePartsTokens,
+  isPersistedFrame,
+} from '@ace/contracts';
 import {
   RunEventBuffer,
   type EdgeTransferView,
@@ -43,12 +50,29 @@ interface RunOverlayState {
   budgetHalt: BudgetHalt | undefined;
   /** What the run in this state accepts, from the contract's one table (FR-CTL-006, D76). */
   allowedActions: RunAction[] | undefined;
+  /** [audit W-5] D305: why the run is BLOCKED mid-run; absent for a pre-flight block. */
+  blockedReason: BlockedReason | undefined;
+  /** [audit W-5] The engine's words for that block, when a `run.blocked` frame carried them. */
+  blockedDetail: string | undefined;
   /** When the pause landed, so the run bar can say how long it has been held (FR-CTL-002). */
   pausedAt: string | undefined;
   totals: Usage | undefined;
   finalOutput: Record<Id, Part[]> | undefined;
   /** Bumped on every applied frame; the cheap way to invalidate the derived selectors. */
   revision: number;
+  /**
+   * [audit W-3] Moves only on an approval frame (`node.approval_*`) or a run frame (`run.*`) — what
+   * can change the approvals still waiting — so they are not refetched once per streamed token.
+   */
+  approvalRevision: number;
+  /**
+   * [audit W-4] Moves only on the frames that change how an edge is drawn: `node.state` (a loop's
+   * iteration, D390's flow states), `loop.iteration` and `edge.transfer`. The Canvas keys its edges
+   * on this rather than on `revision`, so a token does not rebuild every edge.
+   */
+  edgeRevision: number;
+  /** [audit W-4] Moves only on a persisted frame — what the Events tab lists. */
+  eventRevision: number;
   /**
    * How many node runs have reached a terminal state (Arch §19.1). It moves a handful of times per
    * run rather than once per token, which makes it the right thing to key a refetch on.
@@ -111,6 +135,10 @@ export interface AdoptableRun {
   pausedAt?: string;
   totals: Usage;
   finalOutput?: Record<Id, Part[]>;
+  /** [audit W-5] D305: a run blocked mid-run waits for Resume; the frames carry it on from here. */
+  blockedReason?: BlockedReason;
+  /** [audit W-5] D312: its Domain settings — whether it stays open (D323), so End stays offered. */
+  domain?: RunDomainConfig;
 }
 
 /** The parts of a `NodeRun` the overlay can rebuild a card from. */
@@ -169,6 +197,28 @@ function deliverySummary(reads: readonly Part[]): string {
 
 const IDLE: NodeState = 'IDLE';
 
+/**
+ * [audit W-3/W-4] Where the narrow revisions come from: one rising number, so every arm, adopt and
+ * reset moves them too (a new fold is always a change) and no two folds ever share a value.
+ */
+let revisions = 0;
+const nextRevision = (): number => ++revisions;
+
+/** Frames that change how an edge is drawn (FR-PAR-005 loop chips, D390 flow states). */
+const EDGE_FRAMES: ReadonlySet<string> = new Set(['node.state', 'loop.iteration', 'edge.transfer']);
+
+/** A run that still takes controls: going, paused, or blocked mid-run with a reason (D305). */
+const isLive = (status: RunState, blockedReason: BlockedReason | undefined): boolean =>
+  status === 'RUNNING' ||
+  status === 'PAUSED' ||
+  status === 'PREFLIGHT' ||
+  (status === 'BLOCKED' && blockedReason !== undefined);
+
+/** [audit W-4] Whether two action lists say the same, so a frame keeps the array it had. */
+const sameActions = (a: RunAction[] | undefined, b: RunAction[] | undefined): boolean =>
+  a === b ||
+  (a !== undefined && b !== undefined && a.length === b.length && a.every((x, i) => x === b[i]));
+
 /** Terminal node states (Arch §19.1): once a node is here its record on the engine is complete. */
 const TERMINAL: ReadonlySet<NodeState> = new Set<NodeState>([
   'COMPLETED',
@@ -183,10 +233,15 @@ export const useRunStore = create<RunOverlayState>((set) => ({
   haltReason: undefined,
   budgetHalt: undefined,
   allowedActions: undefined,
+  blockedReason: undefined,
+  blockedDetail: undefined,
   pausedAt: undefined,
   totals: undefined,
   finalOutput: undefined,
   revision: 0,
+  approvalRevision: 0,
+  edgeRevision: 0,
+  eventRevision: 0,
   settledCount: 0,
   active: false,
   workflowId: undefined,
@@ -207,10 +262,15 @@ export const useRunStore = create<RunOverlayState>((set) => ({
       haltReason: undefined,
       budgetHalt: undefined,
       allowedActions: undefined,
+      blockedReason: undefined,
+      blockedDetail: undefined,
       pausedAt: undefined,
       totals: undefined,
       finalOutput: undefined,
       revision: 0,
+      approvalRevision: nextRevision(),
+      edgeRevision: nextRevision(),
+      eventRevision: nextRevision(),
       settledCount: 0,
       active: true,
     });
@@ -317,6 +377,25 @@ export const useRunStore = create<RunOverlayState>((set) => ({
         payload: { runId: run.id, nodeRunId, toolCall },
       } as unknown as ServerFrame);
     }
+    /*
+     * [audit W-5] The run's own D305/D323 facts, as the frames that announced them, so the frames
+     * that follow (a resume, a block) are folded with them: an open Domain run keeps its End, and a
+     * run adopted while blocked reads blocked. The block's words are not on the record.
+     */
+    if (run.domain !== undefined) {
+      buffer.apply({
+        seq: syntheticSeq--,
+        type: 'run.config',
+        payload: { runId: run.id, config: run.domain },
+      } as unknown as ServerFrame);
+    }
+    if (run.status === 'BLOCKED' && run.blockedReason !== undefined) {
+      buffer.apply({
+        seq: syntheticSeq--,
+        type: 'run.blocked',
+        payload: { runId: run.id, reason: run.blockedReason, detail: '' },
+      } as unknown as ServerFrame);
+    }
     // a WAITING node's card is anchored to its pending approval, which no node-run record carries
     for (const request of approvals) {
       buffer.apply({
@@ -334,13 +413,23 @@ export const useRunStore = create<RunOverlayState>((set) => ({
       budgetHalt: run.budgetHalt,
       // The engine writes `allowedActions`; where an older engine omits it, the contract's table
       // answers the same thing from the status (D71/D76) rather than the UI guessing.
-      allowedActions: run.allowedActions ?? allowedRunActions(run.status),
+      allowedActions:
+        run.allowedActions ??
+        allowedRunActions(run.status, {
+          blockedReason: run.blockedReason,
+          stayOpen: run.domain?.stayOpen,
+        }),
+      blockedReason: run.status === 'BLOCKED' ? run.blockedReason : undefined,
+      blockedDetail: undefined,
       pausedAt: run.pausedAt,
       totals: run.totals,
       finalOutput: run.finalOutput,
       revision: 1,
+      approvalRevision: nextRevision(),
+      edgeRevision: nextRevision(),
+      eventRevision: nextRevision(),
       settledCount: view.nodeRuns().filter((nodeRun) => TERMINAL.has(nodeRun.status)).length,
-      active: run.status === 'RUNNING' || run.status === 'PAUSED' || run.status === 'PREFLIGHT',
+      active: isLive(run.status, run.blockedReason),
     });
   },
 
@@ -348,22 +437,34 @@ export const useRunStore = create<RunOverlayState>((set) => ({
     buffer.apply(frame);
     const view = buffer.view;
     const settled = view.nodeRuns().filter((run) => TERMINAL.has(run.status)).length;
-    set((state) => ({
-      settledCount: settled,
-      runId: view.runId ?? state.runId,
-      status: view.status ?? state.status,
-      haltReason: view.haltReason,
-      budgetHalt: view.budgetHalt,
-      allowedActions: view.allowedActions ?? state.allowedActions,
-      pausedAt: view.pausedAt,
-      totals: view.totals,
-      finalOutput: view.finalOutput,
-      revision: state.revision + 1,
-      active:
-        view.status === undefined
-          ? state.active
-          : view.status === 'RUNNING' || view.status === 'PAUSED' || view.status === 'PREFLIGHT',
-    }));
+    set((state) => {
+      const allowedActions = view.allowedActions ?? state.allowedActions;
+      return {
+        settledCount: settled,
+        runId: view.runId ?? state.runId,
+        status: view.status ?? state.status,
+        haltReason: view.haltReason,
+        budgetHalt: view.budgetHalt,
+        // [audit W-4] the same actions keep the same array, so a token re-renders no control
+        allowedActions: sameActions(allowedActions, state.allowedActions)
+          ? state.allowedActions
+          : allowedActions,
+        blockedReason: view.blockedReason,
+        blockedDetail: view.blockedDetail === '' ? undefined : view.blockedDetail,
+        pausedAt: view.pausedAt,
+        totals: view.totals,
+        finalOutput: view.finalOutput,
+        revision: state.revision + 1,
+        approvalRevision:
+          frame.type.startsWith('node.approval_') || frame.type.startsWith('run.')
+            ? nextRevision()
+            : state.approvalRevision,
+        edgeRevision: EDGE_FRAMES.has(frame.type) ? nextRevision() : state.edgeRevision,
+        eventRevision: isPersistedFrame(frame) ? nextRevision() : state.eventRevision,
+        // [audit W-5] a run blocked mid-run is still live (D305): it waits for Resume or Stop
+        active: view.status === undefined ? state.active : isLive(view.status, view.blockedReason),
+      };
+    });
   },
 
   reset: () => {
@@ -375,10 +476,15 @@ export const useRunStore = create<RunOverlayState>((set) => ({
       haltReason: undefined,
       budgetHalt: undefined,
       allowedActions: undefined,
+      blockedReason: undefined,
+      blockedDetail: undefined,
       pausedAt: undefined,
       totals: undefined,
       finalOutput: undefined,
       revision: 0,
+      approvalRevision: nextRevision(),
+      edgeRevision: nextRevision(),
+      eventRevision: nextRevision(),
       settledCount: 0,
       active: false,
       workflowId: undefined,

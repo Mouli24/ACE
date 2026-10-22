@@ -1,4 +1,5 @@
 import { isInterruptedNodeRun, type Id, type NodeError, type NodeState } from '@ace/contracts';
+import { RUN_GOING_TITLE } from '../hooks';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -43,6 +44,8 @@ export interface NodeRunMenuProps {
   onRerunNode: () => void;
   onStartFromNode: () => void;
   busy?: boolean;
+  /** [audit W-8] A run of the workflow is going: Start from this node would start a second. */
+  runGoing?: boolean;
 }
 
 export function NodeRunMenu({
@@ -56,6 +59,7 @@ export function NodeRunMenu({
   onRerunNode,
   onStartFromNode,
   busy,
+  runGoing = false,
 }: NodeRunMenuProps) {
   const hasNodeRun = nodeRunId !== undefined;
   const retryable = state === 'FAILED' || isInterruptedNodeRun({ status: state, error });
@@ -99,7 +103,8 @@ export function NodeRunMenu({
         </DropdownMenuItem>
         <DropdownMenuItem
           data-testid={`node-action-start-from-${nodeId}`}
-          disabled={busy === true}
+          disabled={busy === true || runGoing}
+          {...(runGoing ? { title: RUN_GOING_TITLE } : {})}
           onSelect={onStartFromNode}
         >
           Start from this node

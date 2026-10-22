@@ -25,6 +25,7 @@ import { clockTime } from '../theme/format';
 import { Avatar } from '../theme/primitives';
 import { ChangesCardSlot } from './ChangesCardSlot';
 import { ChatActivity } from './ChatActivity';
+import { useFollowTail } from './follow-tail';
 import {
   CHAT_NOTE_CLASS,
   CHAT_NOTE_HEAD_CLASS,
@@ -372,7 +373,7 @@ export function ChatConversation({
     openInForge !== undefined && projectId !== undefined
       ? { nodeId: node.id, projectId, open: openInForge }
       : undefined;
-  const scroller = useRef<HTMLDivElement>(null);
+  const scroller = useFollowTail<HTMLDivElement>();
   const run = useNodeOverlay(node.id);
   const running = WORKING.has(run.state);
   const runText =
@@ -429,8 +430,9 @@ export function ChatConversation({
               }}
             />
           ) : message.error !== undefined ? (
+            // [audit W-15] not an alert: a failed turn read back from history is not news; the
+            // turn that has just failed is said once, by the announcement below
             <div
-              role="alert"
               data-testid="chat-error-turn"
               data-code={message.error.code}
               data-kind={message.error.kind}
@@ -511,11 +513,14 @@ export function ChatConversation({
     );
   };
 
-  // Follow the tail as turns arrive, the reply streams, the run works and typing starts or stops.
+  // Follow the tail as turns arrive, the reply streams, the run works and typing starts or stops —
+  // [audit W-13] while the reader is at the tail; another node or thread opens at its tail.
+  const follow = scroller.follow;
+  useEffect(() => follow(true), [follow, node.id, convo.threadId]);
   useEffect(() => {
-    const element = scroller.current;
-    if (element) element.scrollTop = element.scrollHeight;
+    follow();
   }, [
+    follow,
     convo.messages.length,
     convo.streamingText,
     convo.refusal,
@@ -530,12 +535,37 @@ export function ChatConversation({
     .filter((each) => each.supersededAt === undefined)
     .at(-1)?.runId;
 
+  /*
+   * [audit W-15] The reply is said once, when it lands — not token by token, which is what a
+   * live region around the streaming text did. A thread opened or switched to says nothing.
+   */
+  const latestReply = convo.messages
+    .filter((each) => each.role !== 'user' && each.supersededAt === undefined)
+    .at(-1);
+  const [announcement, setAnnouncement] = useState('');
+  const announced = useRef<{ threadId: string | undefined; replyId: string | undefined }>({
+    threadId: convo.threadId,
+    replyId: latestReply?.id,
+  });
+  useEffect(() => {
+    const before = announced.current;
+    announced.current = { threadId: convo.threadId, replyId: latestReply?.id };
+    if (latestReply === undefined || before.threadId !== convo.threadId) return;
+    if (before.replyId === latestReply.id) return;
+    const who = otherSpeaker(latestReply.speakerNodeId)?.name ?? node.name;
+    setAnnouncement(
+      latestReply.error === undefined ? `${who} answered.` : `${who} could not answer.`,
+    );
+    // keyed on the reply's id alone: it is said once, whatever else re-renders
+  }, [convo.threadId, latestReply?.id]);
+
   const empty =
     convo.messages.length === 0 &&
     !convo.awaitingReply &&
     !running &&
     convo.refusal === undefined &&
-    convo.error === undefined;
+    convo.error === undefined &&
+    convo.loadError === undefined;
 
   return (
     <div
@@ -544,9 +574,23 @@ export function ChatConversation({
       data-node-id={node.id}
     >
       <div
-        ref={scroller}
+        ref={scroller.ref}
+        onScroll={scroller.onScroll}
         className="flex min-h-0 flex-1 flex-col gap-[20px] overflow-y-auto px-[14px] py-[16px]"
       >
+        {/* [audit W-11] a conversation that could not be read is not an empty one */}
+        {convo.loadError !== undefined && (
+          <div role="alert" data-testid="chat-load-error" className={CHAT_NOTE_CLASS}>
+            <div className={CHAT_NOTE_HEAD_CLASS}>Could not read this conversation</div>
+            <div className="flex items-center gap-2">
+              <p className="min-w-0 flex-1">{convo.loadError.message}</p>
+              <ActionButton label="Retry" onClick={convo.loadError.retry}>
+                <Icons.RotateCcw aria-hidden size={14} />
+              </ActionButton>
+            </div>
+          </div>
+        )}
+
         {empty && (
           <p className="flex flex-1 items-center justify-center text-center text-[13px] text-[var(--muted)]">
             Chat with {node.name} — it answers with its model and goal. Run the workflow and its
@@ -571,8 +615,13 @@ export function ChatConversation({
           <RunHint runId={latestRunId} onOpenRun={onOpenRun} />
         )}
 
+        {/* [audit W-15] the text streams outside any live region; the announcement says it once */}
+        <p role="status" data-testid="chat-announce" className="sr-only">
+          {announcement}
+        </p>
+
         {convo.streamingText.length > 0 && (
-          <div aria-live="polite" data-testid="chat-streaming">
+          <div data-testid="chat-streaming">
             <Row you={false} name={replyName} speaker={replying}>
               <Body content={[{ type: 'text', text: convo.streamingText }]} />
             </Row>
@@ -580,7 +629,7 @@ export function ChatConversation({
         )}
 
         {runText.length > 0 && (
-          <div aria-live="polite" data-testid="chat-run-live">
+          <div data-testid="chat-run-live">
             <Row you={false} name={node.name}>
               <Body content={[{ type: 'text', text: runText }]} />
             </Row>

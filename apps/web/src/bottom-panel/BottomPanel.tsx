@@ -1,8 +1,9 @@
 import { Badge, Icons, Tabs, TabsContent, TabsList, TabsTrigger } from '@ace/ui';
 import { useMemo } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import { usePanelsStore, type BottomTab } from '../app/stores/panels';
-import { useSelectionStore } from '../app/stores/selection';
+import { showNode } from '../canvas/canvas-api';
 import { ErrorsTab, type ErrorsTabNodeRun } from '../errors/ErrorsTab';
 import { useProviders } from '../providers/hooks';
 import { useNodeRuns, useRetryNodeRun } from '../runs/hooks';
@@ -13,7 +14,8 @@ import { TimelineTab } from './TimelineTab';
 import { ValidationTab } from './ValidationTab';
 
 /**
- * Bottom pane (Arch §33.1 step 5): Validation, Events, Errors and the round-4 Timeline.
+ * Bottom pane (Arch §33.1 step 5): Validation, Events, Errors and the round-4 Timeline. Every
+ * "show node" selects the node and centres the Canvas on it [audit W-10].
  *
  * Hidden until the workspace menu's "Problems & events" opens it (D332), so the header has no
  * collapse toggle: the tabs are the kit's segmented pill, counts are mono chips, and the theme's
@@ -22,7 +24,6 @@ import { ValidationTab } from './ValidationTab';
 export function BottomPanel({ workflowId }: { workflowId: string }) {
   const tab = usePanelsStore((s) => s.bottomTab);
   const setTab = usePanelsStore((s) => s.setBottomTab);
-  const select = useSelectionStore((s) => s.setSelection);
   const graph = useWorkflowGraph(workflowId);
   const providers = useProviders();
 
@@ -32,15 +33,30 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
    * attempt the overlay does not carry. Both agree — the fold is the same events the records were
    * written from (BR-01).
    */
-  const run = useRunStore((store) => (store.workflowId === workflowId ? store : undefined));
+  // [audit W-4] the fields this panel shows, not the whole store, which changes on every token
+  const run = useRunStore(
+    useShallow((store) =>
+      store.workflowId === workflowId
+        ? { runId: store.runId, haltReason: store.haltReason, budgetHalt: store.budgetHalt }
+        : undefined,
+    ),
+  );
   const runId = run?.runId;
-  const revision = useRunStore((store) => store.revision);
+  // what the Events tab lists moves only on a persisted frame, never on a token
+  const eventRevision = useRunStore((store) =>
+    store.workflowId === workflowId ? store.eventRevision : undefined,
+  );
   const nodeRuns = useNodeRuns(runId);
 
   const events = useMemo(
-    () => (run === undefined ? [] : run.events().map((event) => ({ event }))),
-    // `revision` is what changes when a frame lands; the store object itself is stable.
-    [run, revision],
+    () =>
+      eventRevision === undefined
+        ? []
+        : useRunStore
+            .getState()
+            .events()
+            .map((event) => ({ event })),
+    [eventRevision],
   );
 
   /** A `NodeRun` record keys itself `id`; the tab asks for `nodeRunId`, so the two are joined here. */
@@ -131,11 +147,7 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
           </TabsContent>
 
           <TabsContent value="events" className="min-h-0 flex-1 overflow-auto px-[16px] pb-[14px]">
-            <EventsTab
-              entries={events}
-              nodes={nodes}
-              onShowNode={(nodeId) => select([nodeId], [])}
-            />
+            <EventsTab entries={events} nodes={nodes} onShowNode={showNode} />
           </TabsContent>
 
           <TabsContent value="errors" className="min-h-0 flex-1 overflow-auto px-[16px] pb-[14px]">
@@ -150,7 +162,7 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
               {...(retry.isPending && retry.variables !== undefined
                 ? { retryingNodeRunId: retry.variables.nodeRunId }
                 : {})}
-              onShowNode={(nodeId) => select([nodeId], [])}
+              onShowNode={showNode}
             />
           </TabsContent>
 

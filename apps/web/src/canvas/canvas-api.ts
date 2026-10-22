@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 
+import { useSelectionStore } from '../app/stores/selection';
 import type { CanvasNodeKind, NewNodeInit } from '../nodes/factory';
 
 export interface CanvasApi {
@@ -19,6 +20,11 @@ export interface CanvasApi {
   redo?: () => void;
   /** FR-MOB-003: the Canvas is mounted read-only; editing actions above are no-ops. */
   readOnly?: boolean;
+  /**
+   * [audit W-10] Select a node and centre the view on it (PG-3.4); `false` while the Canvas cannot
+   * yet (the node not measured).
+   */
+  focusNode?: (nodeId: string) => boolean;
 }
 
 interface CanvasApiState {
@@ -37,3 +43,12 @@ export const useCanvasApi = create<CanvasApiState>((set) => ({
     return () => set((s) => (s.api === api ? { api: undefined } : {}));
   },
 }));
+
+/**
+ * [audit W-10] "show node": select it and bring it into view on the Canvas. Selecting alone left a
+ * node off-screen still off-screen; with no Canvas mounted (or not measured yet) it is selected.
+ */
+export function showNode(nodeId: string): void {
+  if (useCanvasApi.getState().api?.focusNode?.(nodeId) === true) return;
+  useSelectionStore.getState().setSelection([nodeId], []);
+}

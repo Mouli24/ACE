@@ -26,7 +26,8 @@ export function useWorkflowTask(workflowId: string): {
   pending: boolean;
 } {
   const graph = useWorkflowGraph(workflowId);
-  const startRun = useStartRun(workflowId);
+  // `start` rejects with the reason, and its callers say it (the chat's toast, Domain's composer)
+  const startRun = useStartRun(workflowId, { quiet: true });
   const { select } = useSelectedRun(workflowId);
   const estimate = useWorkflowEstimate(workflowId).data;
   const active = useRunStore((store) => store.workflowId === workflowId && store.active);

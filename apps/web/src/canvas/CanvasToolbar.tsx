@@ -8,6 +8,11 @@ export interface CanvasToolbarProps {
   hand: boolean;
   /** Whether the position history holds a step that would move something. */
   canUndoMove: boolean;
+  /** [audit W-6] Whether this workflow's edit history has a step back / forward (FR-CAN-009). */
+  canUndo?: boolean;
+  canRedo?: boolean;
+  /** The platform's modifier as the shortcuts read: `⌘` or `Ctrl+`. */
+  mod?: string;
   onZoomIn(): void;
   onZoomOut(): void;
   onResetZoom(): void;
@@ -15,6 +20,8 @@ export interface CanvasToolbarProps {
   onToggleLock(): void;
   onToggleHand(): void;
   onUndoMove(): void;
+  onUndo?(): void;
+  onRedo?(): void;
 }
 
 const BUTTON =
@@ -24,12 +31,18 @@ const BUTTON =
  * The theme's bottom-left toolbar (D332): zoom in, zoom out, the zoom (click: back to 100%), fit,
  * lock, the hand tool and undo-move. Its own component so the percentage — which moves on every
  * pan and zoom frame — re-renders this toolbar and nothing else (NFR-PERF-01).
+ *
+ * [audit W-6] Undo and Redo of any edit (FR-CAN-009) sit after undo-move: until now they were only
+ * Ctrl+Z and Ctrl+Y, which a person who has never been told cannot find.
  */
 export function CanvasToolbar({
   readOnly = false,
   locked,
   hand,
   canUndoMove,
+  canUndo = false,
+  canRedo = false,
+  mod = 'Ctrl+',
   onZoomIn,
   onZoomOut,
   onResetZoom,
@@ -37,6 +50,8 @@ export function CanvasToolbar({
   onToggleLock,
   onToggleHand,
   onUndoMove,
+  onUndo,
+  onRedo,
 }: CanvasToolbarProps) {
   const { zoom } = useViewport();
   return (
@@ -126,6 +141,38 @@ export function CanvasToolbar({
           onClick={onUndoMove}
         >
           <Icons.Undo2 aria-hidden size={14} />
+        </button>
+      )}
+      {!readOnly && onUndo !== undefined && (
+        <button
+          type="button"
+          title={`Undo (${mod}Z)`}
+          aria-label="Undo"
+          aria-disabled={!canUndo}
+          data-testid="canvas-undo"
+          className={`${BUTTON} w-[28px] text-[14px] hover:bg-[var(--hover)]`}
+          style={{ color: canUndo ? 'var(--ink)' : 'var(--iconLine)' }}
+          onClick={() => {
+            if (canUndo) onUndo();
+          }}
+        >
+          <Icons.Undo aria-hidden size={14} />
+        </button>
+      )}
+      {!readOnly && onRedo !== undefined && (
+        <button
+          type="button"
+          title={`Redo (${mod}Y)`}
+          aria-label="Redo"
+          aria-disabled={!canRedo}
+          data-testid="canvas-redo"
+          className={`${BUTTON} w-[28px] text-[14px] hover:bg-[var(--hover)]`}
+          style={{ color: canRedo ? 'var(--ink)' : 'var(--iconLine)' }}
+          onClick={() => {
+            if (canRedo) onRedo();
+          }}
+        >
+          <Icons.Redo aria-hidden size={14} />
         </button>
       )}
     </div>
